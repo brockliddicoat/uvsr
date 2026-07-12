@@ -306,13 +306,13 @@ enum class AgxPreset
 
 struct AgxToneMappingParameters
 {
-    float Exposure = 0.35f;
-    float Contrast = 0.95f;
-    float Saturation = 1.08f;
+    float Exposure = 0.f;
+    float Contrast = 1.f;
+    float Saturation = 1.f;
     float Warmth = 0.f;
     float Tint = 0.f;
     float Slope = 1.f;
-    float Power = 0.96f;
+    float Power = 1.f;
 };
 
 struct KodakLut
@@ -1407,7 +1407,7 @@ protected:
                 : 0.f;
 
             constexpr float loadingBarHeight = 4.f;
-            const float loadingBarWidth = std::min(float(width) * 0.42f, 520.f);
+            const float loadingBarWidth = std::min(float(width) * 0.84f, 1040.f);
             ImGui::SetCursorScreenPos(ImVec2(
                 (float(width) - loadingBarWidth) * 0.5f,
                 float(height) * 0.5f + ImGui::GetTextLineHeightWithSpacing() * 1.8f));
