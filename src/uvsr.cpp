@@ -1545,6 +1545,33 @@ private:
 
 	UIData& m_ui;
 
+    static bool DrawCollapsingHeader(
+        const char* label,
+        const char* tooltip,
+        float width)
+    {
+        ImGui::PushID(label);
+        const bool childVisible = ImGui::BeginChild(
+            "##HeaderWidth",
+            ImVec2(width, ImGui::GetFrameHeight()),
+            ImGuiChildFlags_None,
+            ImGuiWindowFlags_NoBackground |
+                ImGuiWindowFlags_NoScrollbar |
+                ImGuiWindowFlags_NoScrollWithMouse |
+                ImGuiWindowFlags_NoSavedSettings);
+
+        bool open = false;
+        if (childVisible)
+        {
+            open = ImGui::CollapsingHeader(label);
+            ImGui::SetItemTooltip(tooltip);
+        }
+
+        ImGui::EndChild();
+        ImGui::PopID();
+        return open;
+    }
+
 public:
     UIRenderer(DeviceManager* deviceManager, std::shared_ptr<UvsrSceneViewer> app, UIData& ui)
         : ImGui_Renderer(deviceManager)
@@ -1750,8 +1777,10 @@ protected:
         ImGui::Checkbox("Enable SSAO", &m_ui.EnableSsao);
         ImGui::SetItemTooltip("Add screen-space ambient occlusion in deferred mode.");
 
-        const bool tonemapperOpen = ImGui::CollapsingHeader("Tonemapper");
-        ImGui::SetItemTooltip("Expand AgX tonemapping and grading controls.");
+        const bool tonemapperOpen = DrawCollapsingHeader(
+            "Tonemapper",
+            "Expand AgX tonemapping and grading controls.",
+            settingsControlWidth);
         if (tonemapperOpen)
         {
             static const char* presetLabels[] = {
@@ -1840,8 +1869,8 @@ protected:
             }
         }
 
-        const bool skyOpen = ImGui::CollapsingHeader("Sky");
-        ImGui::SetItemTooltip("Expand procedural sky controls.");
+        const bool skyOpen = DrawCollapsingHeader(
+            "Sky", "Expand procedural sky controls.", settingsControlWidth);
         if (skyOpen)
         {
             if (!m_ui.EnableProceduralSky)
@@ -1873,9 +1902,8 @@ protected:
             m_SelectedLight = lights.front();
         }
 
-        const bool lightsOpen = !lights.empty() && ImGui::CollapsingHeader("Lights");
-        if (!lights.empty())
-            ImGui::SetItemTooltip("Expand scene-light controls.");
+        const bool lightsOpen = !lights.empty() && DrawCollapsingHeader(
+            "Lights", "Expand scene-light controls.", settingsControlWidth);
         if (lightsOpen)
         {
             ImGui::SetNextItemWidth(settingsControlWidth);
