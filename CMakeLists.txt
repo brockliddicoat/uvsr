@@ -56,12 +56,21 @@ if (NVRHI_WITH_DX12)
     )
 endif()
 
+set(UVSR_SHADER_STAGING_DIR "${CMAKE_BINARY_DIR}/uvsr_shaders")
+include(donut/compileshaders.cmake)
+donut_compile_shaders_all_platforms(
+    TARGET uvsr_shaders
+    PROJECT_NAME "UVSR"
+    CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders.cfg"
+    OUTPUT_BASE "${UVSR_SHADER_STAGING_DIR}"
+)
+
 add_executable(uvsr WIN32 src/uvsr.cpp)
 target_link_libraries(uvsr PRIVATE donut_render donut_app donut_engine)
+add_dependencies(uvsr uvsr_shaders)
 
 # Donut builds its complete shader catalog as an internal dependency. Stage it
 # outside the runtime tree, then package only the shaders instantiated by UVSR.
-set(UVSR_RUNTIME_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework/dxil")
 set(UVSR_ROOT_SHADERS
     blit_ps
     fullscreen_vs
@@ -73,26 +82,28 @@ set(UVSR_ROOT_SHADERS
 )
 set(UVSR_PASS_SHADERS
     deferred_lighting_cs
-    exposure_cs
     forward_ps
     forward_vs_buffer_loads
     gbuffer_ps
     gbuffer_vs_buffer_loads
-    histogram_cs
     material_id_ps
     pixel_readback_cs
     sky_ps
     ssao_blur_cs
     ssao_compute_cs
     ssao_deinterleave_cs
-    tonemapping_ps
 )
+
+set(UVSR_RUNTIME_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework/dxil")
+set(UVSR_RUNTIME_APP_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/uvsr/dxil")
 
 add_custom_command(TARGET uvsr POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E remove_directory
         "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "${UVSR_RUNTIME_SHADER_DIR}/passes"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${UVSR_RUNTIME_APP_SHADER_DIR}"
 )
 
 foreach(shader IN LISTS UVSR_ROOT_SHADERS)
@@ -112,6 +123,12 @@ foreach(shader IN LISTS UVSR_PASS_SHADERS)
 endforeach()
 
 add_custom_command(TARGET uvsr POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${UVSR_SHADER_STAGING_DIR}/dxil/agx_tonemapping_ps.bin"
+        "${UVSR_RUNTIME_APP_SHADER_DIR}/agx_tonemapping_ps.bin"
+)
+
+add_custom_command(TARGET uvsr POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/nvidia_bistro"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -120,4 +137,11 @@ add_custom_command(TARGET uvsr POST_BUILD
         "${CMAKE_SOURCE_DIR}/assets/scenes/nvidia_bistro/LICENSE.txt"
         "${CMAKE_SOURCE_DIR}/assets/scenes/nvidia_bistro/README.txt"
         "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/nvidia_bistro"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory
+        "${CMAKE_BINARY_DIR}/media/luts/kodak"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${CMAKE_BINARY_DIR}/media/luts/kodak"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/assets/luts/kodak"
+        "${CMAKE_BINARY_DIR}/media/luts/kodak"
 )
