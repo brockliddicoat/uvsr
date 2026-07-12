@@ -33,8 +33,6 @@
 #include <donut/core/log.h>
 #include <donut/core/string_utils.h>
 #include <donut/engine/CommonRenderPasses.h>
-#include <donut/engine/ConsoleInterpreter.h>
-#include <donut/engine/ConsoleObjects.h>
 #include <donut/engine/FramebufferFactory.h>
 #include <donut/engine/Scene.h>
 #include <donut/engine/ShaderFactory.h>
@@ -52,7 +50,6 @@
 #include <donut/app/UserInterfaceUtils.h>
 #include <donut/app/Camera.h>
 #include <donut/app/DeviceManager.h>
-#include <donut/app/imgui_console.h>
 #include <donut/app/imgui_renderer.h>
 #include <nvrhi/utils.h>
 #include <nvrhi/common/misc.h>
@@ -64,8 +61,6 @@ using namespace donut::vfs;
 using namespace donut::engine;
 using namespace donut::render;
 
-static bool g_PrintSceneGraph = false;
-static bool g_PrintFormats = false;
 static bool g_RestartRequested = false;
 
 static bool CopyBmpToClipboard(const std::filesystem::path& fileName)
@@ -175,7 +170,6 @@ public:
     nvrhi::HeapHandle Heap;
 
     std::shared_ptr<FramebufferFactory> ForwardFramebuffer;
-    std::shared_ptr<FramebufferFactory> HdrFramebuffer;
     std::shared_ptr<FramebufferFactory> LdrFramebuffer;
     std::shared_ptr<FramebufferFactory> MaterialIDFramebuffer;
     
@@ -266,9 +260,6 @@ public:
         ForwardFramebuffer->RenderTargets = { HdrColor };
         ForwardFramebuffer->DepthTarget = Depth;
 
-        HdrFramebuffer = std::make_shared<FramebufferFactory>(device);
-        HdrFramebuffer->RenderTargets = { HdrColor };
-
         LdrFramebuffer = std::make_shared<FramebufferFactory>(device);
         LdrFramebuffer->RenderTargets = { LdrColor };
 
@@ -304,13 +295,12 @@ enum class WhiteWorldMode
 struct UIData
 {
     bool                                ShowUI = true;
-	bool                                ShowConsole = false;
     bool                                UseDeferredShading = true;
     bool                                EnableSsao = true;
     SsaoParameters                      SsaoParams;
     ToneMappingParameters               ToneMappingParams;
     SkyParameters                       SkyParams;
-    bool                                ShaderReoladRequested = false;
+    bool                                ShaderReloadRequested = false;
     bool                                EnableProceduralSky = true;
     WhiteWorldMode                      WhiteWorld = WhiteWorldMode::PreserveDetail;
     bool                                UseThirdPersonCamera = false;
@@ -381,16 +371,6 @@ public:
 
         m_SceneDir = mediaDir / "glTF-Sample-Assets/Models/";
         m_SceneFilesAvailable = FindScenes(*m_NativeFs, m_SceneDir);
-        m_SceneFilesAvailable.erase(
-            std::remove_if(
-                m_SceneFilesAvailable.begin(),
-                m_SceneFilesAvailable.end(),
-                [](const std::string& scene)
-                {
-                    return scene.find("sponza_white") != std::string::npos ||
-                           scene.find("white_world") != std::string::npos;
-                }),
-            m_SceneFilesAvailable.end());
 
         if (sceneName.empty() && m_SceneFilesAvailable.empty())
         {
@@ -477,12 +457,6 @@ public:
             m_ui.ShowUI = !m_ui.ShowUI;
             return true;	
 		}
-
-		if (key == GLFW_KEY_GRAVE_ACCENT && action == GLFW_PRESS)
-        {
-			m_ui.ShowConsole = !m_ui.ShowConsole;
-			return true;
-        }
 
         if (key == GLFW_KEY_T && action == GLFW_PRESS)
         {
@@ -626,8 +600,6 @@ public:
 
         CopyThirdPersonToFirstPerson();
 
-        if (g_PrintSceneGraph)
-            PrintSceneGraph(m_Scene->GetSceneGraph()->GetRootNode());
     }
 
     void SetWhiteWorldMode(WhiteWorldMode mode)
@@ -829,7 +801,7 @@ public:
                 needNewPasses = true;
             }
 
-            if (m_ui.ShaderReoladRequested)
+            if (m_ui.ShaderReloadRequested)
             {
                 m_ShaderFactory->ClearCache();
                 needNewPasses = true;
@@ -840,7 +812,7 @@ public:
                 CreateRenderPasses(exposureResetRequired);
             }
 
-            m_ui.ShaderReoladRequested = false;
+            m_ui.ShaderReloadRequested = false;
         }
 
         m_CommandList->open();
@@ -891,12 +863,8 @@ public:
                 "GBufferFill",
                 false);
 
-            nvrhi::ITexture* ambientOcclusionTarget = nullptr;
             if (m_ui.EnableSsao && m_SsaoPass)
-            {
                 m_SsaoPass->Render(m_CommandList, m_ui.SsaoParams, *m_View);
-                ambientOcclusionTarget = m_RenderTargets->AmbientOcclusion;
-            }
 
             DeferredLightingPass::Inputs deferredInputs;
             deferredInputs.SetGBuffer(*m_RenderTargets);
@@ -1020,13 +988,9 @@ private:
     std::shared_ptr<UvsrSceneViewer> m_app;
 
 	std::shared_ptr<app::RegisteredFont> m_FontOpenSans;
-	std::shared_ptr<app::RegisteredFont> m_FontDroidMono;
-
-	std::unique_ptr<ImGui_Console> m_console;
     std::shared_ptr<engine::Light> m_SelectedLight;
 
 	UIData& m_ui;
-    nvrhi::CommandListHandle m_CommandList;
 
 public:
     UIRenderer(DeviceManager* deviceManager, std::shared_ptr<UvsrSceneViewer> app, UIData& ui)
@@ -1034,15 +998,7 @@ public:
         , m_app(app)
         , m_ui(ui)
     {
-        m_CommandList = GetDevice()->createCommandList();
-
 		m_FontOpenSans = CreateFontFromFile(*(app->GetRootFs()), "/media/fonts/OpenSans/OpenSans-Regular.ttf", 17.f);
-		m_FontDroidMono = CreateFontFromFile(*(app->GetRootFs()), "/media/fonts/DroidSans/DroidSans-Mono.ttf", 14.f);
-
-		ImGui_Console::Options opts;
-		opts.font = m_FontDroidMono;
-        auto interpreter = std::make_shared<console::Interpreter>();
-		// m_console = std::make_unique<ImGui_Console>(interpreter,opts);
 
         ImGui::GetIO().IniFilename = nullptr;
     }
@@ -1052,8 +1008,6 @@ protected:
     {
         if (!m_ui.ShowUI)
             return;
-
-        const auto& io = ImGui::GetIO();
 
         int width, height;
         GetDeviceManager()->GetWindowDimensions(width, height);
@@ -1077,11 +1031,6 @@ protected:
         }
 
         ImGui::PushFont(m_FontOpenSans->GetScaledFont());
-
-        if (m_ui.ShowConsole && m_console)
-        {
-            m_console->Render(&m_ui.ShowConsole);
-        }
 
         float const fontSize = ImGui::GetFontSize();
 
@@ -1151,7 +1100,7 @@ protected:
         }
 
         if (ImGui::Button("Reload Shaders"))
-            m_ui.ShaderReoladRequested = true;
+            m_ui.ShaderReloadRequested = true;
 
         ImGui::SameLine();
         if (ImGui::Button("Restart Renderer"))
@@ -1270,15 +1219,15 @@ protected:
     }
 };
 
-bool ProcessCommandLine(int argc, const char* const* argv, DeviceCreationParameters& deviceParams, std::string& sceneName)
+void ProcessCommandLine(int argc, const char* const* argv, DeviceCreationParameters& deviceParams, std::string& sceneName)
 {
     for (int i = 1; i < argc; i++)
     {
-        if (!strcmp(argv[i], "-width"))
+        if (!strcmp(argv[i], "-width") && i + 1 < argc)
         {
             deviceParams.backBufferWidth = std::stoi(argv[++i]);
         }
-        else if (!strcmp(argv[i], "-height"))
+        else if (!strcmp(argv[i], "-height") && i + 1 < argc)
         {
             deviceParams.backBufferHeight = std::stoi(argv[++i]);
         }
@@ -1291,21 +1240,11 @@ bool ProcessCommandLine(int argc, const char* const* argv, DeviceCreationParamet
             deviceParams.enableDebugRuntime = true;
             deviceParams.enableNvrhiValidationLayer = true;
         }
-        else if (!strcmp(argv[i], "-print-graph"))
-        {
-            g_PrintSceneGraph = true;
-        }
-        else if (!strcmp(argv[i], "-print-formats"))
-        {
-            g_PrintFormats = true;
-        }
         else if (argv[i][0] != '-')
         {
             sceneName = argv[i];
         }
     }
-
-    return true;
 }
 
 #ifdef _WIN32
@@ -1329,11 +1268,7 @@ int main(int __argc, const char* const* __argv)
     deviceParams.supportExplicitDisplayScaling = true;
     
     std::string sceneName;
-    if (!ProcessCommandLine(__argc, __argv, deviceParams, sceneName))
-    {
-        log::error("Failed to process the command line.");
-        return 1;
-    }
+    ProcessCommandLine(__argc, __argv, deviceParams, sceneName);
 
     // UVSR intentionally runs uncapped; the renderer no longer exposes or
     // maintains a runtime VSync mode.
@@ -1349,32 +1284,6 @@ int main(int __argc, const char* const* __argv)
         log::error("Cannot initialize a %s graphics device with the requested parameters", apiString);
 		return 1;
 	}
-
-    if (g_PrintFormats)
-    {
-        for (uint32_t format = 0; format < (uint32_t)nvrhi::Format::COUNT; format++)
-        {
-            auto support = deviceManager->GetDevice()->queryFormatSupport((nvrhi::Format)format);
-            const auto& formatInfo = nvrhi::getFormatInfo((nvrhi::Format)format);
-
-            char features[13];
-            features[ 0] = (support & nvrhi::FormatSupport::Buffer) != 0         ? 'B' : '.';
-            features[ 1] = (support & nvrhi::FormatSupport::IndexBuffer) != 0    ? 'I' : '.';
-            features[ 2] = (support & nvrhi::FormatSupport::VertexBuffer) != 0   ? 'V' : '.';
-            features[ 3] = (support & nvrhi::FormatSupport::Texture) != 0        ? 'T' : '.';
-            features[ 4] = (support & nvrhi::FormatSupport::DepthStencil) != 0   ? 'D' : '.';
-            features[ 5] = (support & nvrhi::FormatSupport::RenderTarget) != 0   ? 'R' : '.';
-            features[ 6] = (support & nvrhi::FormatSupport::Blendable) != 0      ? 'b' : '.';
-            features[ 7] = (support & nvrhi::FormatSupport::ShaderLoad) != 0     ? 'L' : '.';
-            features[ 8] = (support & nvrhi::FormatSupport::ShaderSample) != 0   ? 'S' : '.';
-            features[ 9] = (support & nvrhi::FormatSupport::ShaderUavLoad) != 0  ? 'l' : '.';
-            features[10] = (support & nvrhi::FormatSupport::ShaderUavStore) != 0 ? 's' : '.';
-            features[11] = (support & nvrhi::FormatSupport::ShaderAtomic) != 0   ? 'A' : '.';
-            features[12] = 0;
-
-            log::info("%17s: %s", formatInfo.name, features);
-        }
-    }
 
     {
         UIData uiData;

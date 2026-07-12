@@ -10,7 +10,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 endforeach()
-set(DONUT_SHADERS_OUTPUT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework")
+set(UVSR_DONUT_SHADER_STAGING_DIR "${CMAKE_BINARY_DIR}/donut_shaders")
+set(DONUT_SHADERS_OUTPUT_DIR "${UVSR_DONUT_SHADER_STAGING_DIR}")
 
 set(DONUT_WITH_DX11 OFF CACHE BOOL "" FORCE)
 set(DONUT_WITH_DX12 ON CACHE BOOL "" FORCE)
@@ -55,17 +56,60 @@ if (NVRHI_WITH_DX12)
     )
 endif()
 
-include(donut/compileshaders.cmake)
-donut_compile_shaders_all_platforms(
-    TARGET uvsr_shaders
-    PROJECT_NAME "UVSR"
-    CONFIG ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders.cfg
-    OUTPUT_BASE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/uvsr
-)
-
 add_executable(uvsr WIN32 src/uvsr.cpp)
 target_link_libraries(uvsr PRIVATE donut_render donut_app donut_engine)
-add_dependencies(uvsr uvsr_shaders)
+
+# Donut builds its complete shader catalog as an internal dependency. Stage it
+# outside the runtime tree, then package only the shaders instantiated by UVSR.
+set(UVSR_RUNTIME_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework/dxil")
+set(UVSR_ROOT_SHADERS
+    blit_ps
+    fullscreen_vs
+    imgui_pixel
+    imgui_vertex
+    rect_vs
+    sharpen_ps
+    skinning_cs
+)
+set(UVSR_PASS_SHADERS
+    deferred_lighting_cs
+    exposure_cs
+    forward_ps
+    forward_vs_buffer_loads
+    gbuffer_ps
+    gbuffer_vs_buffer_loads
+    histogram_cs
+    material_id_ps
+    pixel_readback_cs
+    sky_ps
+    ssao_blur_cs
+    ssao_compute_cs
+    ssao_deinterleave_cs
+    tonemapping_ps
+)
+
+add_custom_command(TARGET uvsr POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E remove_directory
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${UVSR_RUNTIME_SHADER_DIR}/passes"
+)
+
+foreach(shader IN LISTS UVSR_ROOT_SHADERS)
+    add_custom_command(TARGET uvsr POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${UVSR_DONUT_SHADER_STAGING_DIR}/dxil/${shader}.bin"
+            "${UVSR_RUNTIME_SHADER_DIR}/${shader}.bin"
+    )
+endforeach()
+
+foreach(shader IN LISTS UVSR_PASS_SHADERS)
+    add_custom_command(TARGET uvsr POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${UVSR_DONUT_SHADER_STAGING_DIR}/dxil/passes/${shader}.bin"
+            "${UVSR_RUNTIME_SHADER_DIR}/passes/${shader}.bin"
+    )
+endforeach()
 
 add_custom_command(TARGET uvsr POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
