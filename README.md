@@ -18,6 +18,8 @@ The Bistro light is normalized from its exported real-world lux value to Donut's
 
 UVSR uses an AgX display pipeline with Base, Punchy, Golden, Mix, and Custom grading presets. The Tonemapper section exposes camera white balance, EV exposure, contrast, saturation, slope, and power controls. Licensed 3D `.cube` LUTs placed in `assets/luts/kodak` are discovered at startup and applied in AgX Base space.
 
+Forward and deferred rendering share UVSR's compact metallic-roughness PBR core. Its material contract, G-buffer packing, equations, validation controls, limitations, and extension points are documented in `docs/pbr-foundation.md`.
+
 UVSR runs uncapped with a single planar view. Its UI intentionally omits VSync, stereo, and bloom controls, and provides a **Restart Renderer** button that shuts down graphics resources before relaunching the same command line.
 
 Camera control is limited to First-Person and Third-Person modes. Imported scene cameras and translucent rendering are intentionally omitted from the current baseline.
