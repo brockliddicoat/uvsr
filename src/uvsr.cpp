@@ -1396,6 +1396,28 @@ protected:
 
             DrawScreenCenteredText(messageBuffer);
 
+            const int objectsLoaded = stats.ObjectsLoaded.load();
+            const int objectsTotal = stats.ObjectsTotal.load();
+            const int texturesLoaded = m_app->GetTextureCache()->GetNumberOfLoadedTextures();
+            const int texturesTotal = m_app->GetTextureCache()->GetNumberOfRequestedTextures();
+            const int itemsLoaded = std::max(objectsLoaded, 0) + std::max(texturesLoaded, 0);
+            const int itemsTotal = std::max(objectsTotal, objectsLoaded) + std::max(texturesTotal, texturesLoaded);
+            const float loadingProgress = itemsTotal > 0
+                ? std::clamp(float(itemsLoaded) / float(itemsTotal), 0.f, 1.f)
+                : 0.f;
+
+            constexpr float loadingBarHeight = 4.f;
+            const float loadingBarWidth = std::min(float(width) * 0.42f, 520.f);
+            ImGui::SetCursorScreenPos(ImVec2(
+                (float(width) - loadingBarWidth) * 0.5f,
+                float(height) * 0.5f + ImGui::GetTextLineHeightWithSpacing() * 1.8f));
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.08f, 0.10f, 0.14f, 0.85f));
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.16f, 0.48f, 0.92f, 1.f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.f);
+            ImGui::ProgressBar(loadingProgress, ImVec2(loadingBarWidth, loadingBarHeight), "");
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(2);
+
             ImGui::PopFont();
             EndFullScreenWindow();
 
