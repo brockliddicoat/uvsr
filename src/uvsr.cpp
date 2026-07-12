@@ -306,13 +306,13 @@ enum class AgxPreset
 
 struct AgxToneMappingParameters
 {
-    float Exposure = 0.f;
-    float Contrast = 1.f;
-    float Saturation = 1.f;
+    float Exposure = 0.35f;
+    float Contrast = 0.95f;
+    float Saturation = 1.08f;
     float Warmth = 0.f;
     float Tint = 0.f;
     float Slope = 1.f;
-    float Power = 1.f;
+    float Power = 0.96f;
 };
 
 struct KodakLut
@@ -476,6 +476,7 @@ static bool LoadCubeLut(
     }
 
     uint32_t size = 0;
+    std::string title;
     float3 domainMin = 0.f;
     float3 domainMax = 1.f;
     std::vector<float4> values;
@@ -494,7 +495,9 @@ static bool LoadCubeLut(
 
         if (keyword == "TITLE")
         {
-            continue;
+            std::getline(tokens >> std::ws, title);
+            if (title.size() >= 2 && title.front() == '"' && title.back() == '"')
+                title = title.substr(1, title.size() - 2);
         }
         else if (keyword == "LUT_3D_SIZE")
         {
@@ -568,7 +571,7 @@ static bool LoadCubeLut(
     commandList->close();
     device->executeCommandList(commandList);
 
-    result.Name = path.stem().string();
+    result.Name = title.empty() ? path.stem().string() : title;
     result.Path = path;
     result.Texture = texture;
     result.Size = size;
@@ -587,27 +590,29 @@ static AgxToneMappingParameters GetAgxPresetParameters(AgxPreset preset)
         break;
 
     case AgxPreset::Punchy:
-        params.Contrast = 1.15f;
+        params.Exposure = 0.45f;
+        params.Contrast = 1.04f;
         params.Saturation = 1.20f;
-        params.Power = 1.0912f;
+        params.Power = 0.98f;
         break;
 
     case AgxPreset::Golden:
-        params.Contrast = 1.05f;
-        params.Saturation = 1.08f;
-        params.Warmth = 0.25f;
-        params.Tint = 0.04f;
-        params.Slope = 1.04f;
-        params.Power = 1.02f;
+        params.Exposure = 0.40f;
+        params.Contrast = 0.98f;
+        params.Saturation = 1.14f;
+        params.Warmth = 0.18f;
+        params.Tint = 0.03f;
+        params.Slope = 1.01f;
+        params.Power = 0.97f;
         break;
 
     case AgxPreset::Mix:
-        params.Contrast = 1.10f;
-        params.Saturation = 1.14f;
-        params.Warmth = 0.12f;
-        params.Tint = 0.02f;
-        params.Slope = 1.02f;
-        params.Power = 1.05f;
+        params.Exposure = 0.40f;
+        params.Contrast = 1.00f;
+        params.Saturation = 1.16f;
+        params.Warmth = 0.08f;
+        params.Tint = 0.01f;
+        params.Power = 0.98f;
         break;
 
     case AgxPreset::Custom:
@@ -1519,7 +1524,7 @@ protected:
         ImGui::Checkbox("Deferred Shading", &m_ui.UseDeferredShading);
         ImGui::Checkbox("Enable SSAO", &m_ui.EnableSsao);
 
-        if (ImGui::CollapsingHeader("AgX Tone Mapper"))
+        if (ImGui::CollapsingHeader("Tonemapper"))
         {
             static const char* presetLabels[] = {
                 "Base",
@@ -1554,7 +1559,7 @@ protected:
             const auto& luts = m_app->GetKodakLuts();
             const size_t selectedLut = m_app->GetSelectedKodakLut();
             ImGui::SetNextItemWidth(settingsControlWidth);
-            if (ImGui::BeginCombo("Kodak LUT", luts[selectedLut].Name.c_str()))
+            if (ImGui::BeginCombo("Lut", luts[selectedLut].Name.c_str()))
             {
                 for (size_t lutIndex = 0; lutIndex < luts.size(); ++lutIndex)
                 {
@@ -1567,7 +1572,7 @@ protected:
                 ImGui::EndCombo();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Kodak LUT (.cube)");
+                ImGui::SetTooltip("Film LUT (.cube)");
 
             AgxToneMappingParameters& params = m_ui.AgxToneMappingParams;
             bool gradeChanged = false;
@@ -1594,7 +1599,7 @@ protected:
             ImGui::TextDisabled("Ctrl+click a slider to type an exact value.");
         }
 
-        if (ImGui::CollapsingHeader("Sky Parameters"))
+        if (ImGui::CollapsingHeader("Sky"))
         {
             ImGui::Checkbox("Enable Procedural Sky", &m_ui.EnableProceduralSky);
             if (m_ui.EnableProceduralSky)
@@ -1608,6 +1613,14 @@ protected:
         }
 
         const auto& lights = m_app->GetScene()->GetSceneGraph()->GetLights();
+        if (lights.empty())
+        {
+            m_SelectedLight.reset();
+        }
+        else if (std::find(lights.begin(), lights.end(), m_SelectedLight) == lights.end())
+        {
+            m_SelectedLight = lights.front();
+        }
 
         if (!lights.empty() && ImGui::CollapsingHeader("Lights"))
         {

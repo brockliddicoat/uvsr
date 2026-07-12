@@ -16,7 +16,7 @@ Its converted Bistro materials are normalized from blend to alpha-tested in text
 
 The Bistro light is normalized from its exported real-world lux value to Donut's sample-lighting range. Direct illumination is reduced because this early renderer baseline intentionally omits shadows.
 
-UVSR uses an AgX display pipeline with Base, Punchy, Golden, Mix, and Custom grading presets. The AgX Tone Mapper section exposes camera white balance, EV exposure, contrast, saturation, slope, and power controls. Licensed Kodak 3D `.cube` LUTs placed in `assets/luts/kodak` are discovered at startup and applied in AgX Base space.
+UVSR uses an AgX display pipeline with Base, Punchy, Golden, Mix, and Custom grading presets. The Tonemapper section exposes camera white balance, EV exposure, contrast, saturation, slope, and power controls. Licensed 3D `.cube` LUTs placed in `assets/luts/kodak` are discovered at startup and applied in AgX Base space.
 
 UVSR runs uncapped with a single planar view. Its UI intentionally omits VSync, stereo, and bloom controls, and provides a **Restart Renderer** button that shuts down graphics resources before relaunching the same command line.
 
