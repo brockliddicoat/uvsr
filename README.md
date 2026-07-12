@@ -26,6 +26,8 @@ UVSR uses an AgX display pipeline with Base, Punchy, Golden, Mix, and Custom gra
 
 Forward and deferred rendering share UVSR's compact metallic-roughness PBR core. Its material contract, G-buffer packing, equations, validation controls, limitations, and extension points are documented in `docs/pbr-foundation.md`.
 
+The **Enable PBR** setting switches between that shared UVSR PBR path and Donut's legacy material-lighting path. The comparison works in both deferred and forward shading while retaining the same camera, scene, AgX grade, sky, and lights.
+
 UVSR runs uncapped with a single planar view. Its UI intentionally omits VSync, stereo, and bloom controls, and provides a **Restart Renderer** button that shuts down graphics resources before relaunching the same command line.
 
 Camera control is limited to First-Person and Third-Person modes. Imported scene cameras and translucent rendering are intentionally omitted from the current baseline.
