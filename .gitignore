@@ -3,3 +3,11 @@
 *.user
 *.suo
 *.vcxproj.user
+
+# Local Intel source export used to generate the self-contained runtime GLB.
+/assets/scenes/sponza_white/sponza_white.gltf
+/assets/scenes/sponza_white/sponza_white.bin
+
+# Local licensed scene sources and generated conversion artifacts.
+/assets/scenes/nvidia_bistro/
+/work/
