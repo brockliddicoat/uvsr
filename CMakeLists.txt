@@ -69,6 +69,12 @@ add_executable(uvsr WIN32 src/uvsr.cpp)
 target_link_libraries(uvsr PRIVATE donut_render donut_app donut_engine)
 add_dependencies(uvsr uvsr_shaders)
 
+enable_testing()
+add_executable(uvsr_pbr_tests tests/pbr_reference_tests.cpp)
+target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
+add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
+
 # Donut builds its complete shader catalog as an internal dependency. Stage it
 # outside the runtime tree, then package only the shaders instantiated by UVSR.
 set(UVSR_ROOT_SHADERS
@@ -81,10 +87,7 @@ set(UVSR_ROOT_SHADERS
     skinning_cs
 )
 set(UVSR_PASS_SHADERS
-    deferred_lighting_cs
-    forward_ps
     forward_vs_buffer_loads
-    gbuffer_ps
     gbuffer_vs_buffer_loads
     material_id_ps
     pixel_readback_cs
@@ -122,11 +125,20 @@ foreach(shader IN LISTS UVSR_PASS_SHADERS)
     )
 endforeach()
 
-add_custom_command(TARGET uvsr POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${UVSR_SHADER_STAGING_DIR}/dxil/agx_tonemapping_ps.bin"
-        "${UVSR_RUNTIME_APP_SHADER_DIR}/agx_tonemapping_ps.bin"
+set(UVSR_APP_SHADERS
+    agx_tonemapping_ps
+    pbr_deferred_lighting_cs
+    pbr_forward_ps
+    pbr_gbuffer_ps
 )
+
+foreach(shader IN LISTS UVSR_APP_SHADERS)
+    add_custom_command(TARGET uvsr POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${UVSR_SHADER_STAGING_DIR}/dxil/${shader}.bin"
+            "${UVSR_RUNTIME_APP_SHADER_DIR}/${shader}.bin"
+    )
+endforeach()
 
 add_custom_command(TARGET uvsr POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
