@@ -16,7 +16,8 @@ output gamut conversion, and display transfer happen afterward.
   base BSDF.
 - Ambient occlusion is not part of the BSDF or direct lighting. Authored
   material ambient occlusion and SSAO only modulate UVSR's approximate
-  indirect diffuse term.
+  indirect diffuse term. The converted Bistro ORM maps have no authored
+  occlusion channel, so their zero-filled red channel is intentionally ignored.
 
 ## CPU material contract
 
@@ -135,6 +136,7 @@ Deferred debug views do not add to the settings window. Use:
 - `F6`: diffuse contribution
 - `F7`: specular contribution
 - `F8`: direct-light visibility
+- `F9`: combined SSAO and authored material ambient occlusion
 
 The values still pass through the display pipeline so they can be inspected on
 the current output device. Debug modes currently apply to deferred shading;

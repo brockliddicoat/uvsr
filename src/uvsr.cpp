@@ -383,7 +383,8 @@ enum class PbrDebugView
     EncodedNormal,
     DiffuseContribution,
     SpecularContribution,
-    DirectLightVisibility
+    DirectLightVisibility,
+    AmbientOcclusion
 };
 
 static const char* GetPbrDebugViewName(PbrDebugView view)
@@ -396,7 +397,8 @@ static const char* GetPbrDebugViewName(PbrDebugView view)
         "Encoded normal",
         "Diffuse contribution",
         "Specular contribution",
-        "Direct-light visibility"
+        "Direct-light visibility",
+        "Ambient occlusion"
     };
     return names[int(view)];
 }
@@ -794,7 +796,6 @@ private:
 	std::vector<std::pair<std::shared_ptr<Material>, Material>> m_OriginalMaterials;
 	std::shared_ptr<ShaderFactory>      m_ShaderFactory;
     std::shared_ptr<DirectionalLight>   m_SunLight;
-    float                               m_SunIrradiance = 1.f;
     std::shared_ptr<InstancedOpaqueDrawStrategy> m_OpaqueDrawStrategy;
     std::unique_ptr<RenderTargets>      m_RenderTargets;
     std::shared_ptr<PbrForwardShadingPass> m_ForwardPass;
@@ -999,7 +1000,7 @@ public:
             return true;
         }
 
-        if (key >= GLFW_KEY_F1 && key <= GLFW_KEY_F8 && action == GLFW_PRESS)
+        if (key >= GLFW_KEY_F1 && key <= GLFW_KEY_F9 && action == GLFW_PRESS)
         {
             m_ui.PbrDebug = PbrDebugView(key - GLFW_KEY_F1);
             log::info("PBR debug view: %s%s",
@@ -1121,12 +1122,10 @@ public:
         if (m_CurrentSceneName.find("nvidia_bistro") != std::string::npos)
         {
             // Blender exports the Bistro directional light at roughly
-            // real-world lux (102,450), while this Donut sample's tone mapper
-            // and material response are calibrated around unit irradiance.
-            m_SunLight->irradiance = 1.f;
+            // real-world lux (102,450). UVSR currently has no sun shadows, so
+            // use the scene's established unoccluded-light calibration.
+            m_SunLight->irradiance = 0.35f;
         }
-
-        m_SunIrradiance = std::max(m_SunLight->irradiance, 0.001f);
         
         m_ThirdPersonCamera.SetRotation(dm::radians(135.f), dm::radians(20.f));
         PointThirdPersonCameraAt(m_Scene->GetSceneGraph()->GetRootNode());
@@ -1363,8 +1362,6 @@ public:
             m_AmbientTop = float3(topLuma);
             m_AmbientBottom = float3(bottomLuma);
         }
-
-        m_SunLight->irradiance = m_SunIrradiance;
 
         m_RenderTargets->Clear(m_CommandList);
 

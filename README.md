@@ -12,9 +12,15 @@ The White World mode works with arbitrary scenes without modifying source assets
 
 UVSR also forces Bistro materials to render two-sided in both textured and white-world modes because the FBX source contains thin surfaces with mixed winding.
 
-Its converted Bistro materials are normalized from blend to alpha-tested in textured mode so they write depth correctly while retaining texture cutouts.
+Its converted Bistro materials are normalized from blend to alpha-tested in textured mode so they write depth correctly while retaining texture cutouts. The source conversion mislabeled the packed roughness/metalness maps as specular-extension textures; repair freshly converted GLBs once with:
 
-The Bistro light is normalized from its exported real-world lux value to Donut's sample-lighting range. Direct illumination is reduced because this early renderer baseline intentionally omits shadows.
+```powershell
+tools\repair_bistro_orm.cmd assets/scenes/nvidia_bistro/BistroExterior.glb assets/scenes/nvidia_bistro/BistroInterior_Wine.glb
+```
+
+The repair edits only GLB metadata, preserves the original JSON chunk in a `.pre-uvsr-json` file, and deliberately ignores the maps' zero-filled red channel so SSAO remains the visibility source. Pass `--restore` to the same command to restore those original chunks.
+
+The Bistro light is normalized from its exported real-world lux value to the renderer's unoccluded-light range. This scene calibration is applied to the light itself, outside the shared BSDF, and remains editable in the Lights panel.
 
 UVSR uses an AgX display pipeline with Base, Punchy, Golden, Mix, and Custom grading presets. The Tonemapper section exposes camera white balance, EV exposure, contrast, saturation, slope, and power controls. Licensed 3D `.cube` LUTs placed in `assets/luts/kodak` are discovered at startup and applied in AgX Base space.
 

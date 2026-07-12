@@ -105,6 +105,7 @@ float3 SelectPbrDebugView(
     float3 diffuse,
     float3 specular,
     float directVisibility,
+    float ambientOcclusion,
     float3 finalLinearHdr)
 {
     if (debugView == 1u) return gbuffer.material.baseColor;
@@ -114,6 +115,7 @@ float3 SelectPbrDebugView(
     if (debugView == 5u) return diffuse;
     if (debugView == 6u) return specular;
     if (debugView == 7u) return directVisibility.xxx;
+    if (debugView == 8u) return ambientOcclusion.xxx;
     return finalLinearHdr;
 }
 
@@ -195,6 +197,12 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         ? visibilitySum / float(g_Deferred.numLights)
         : 0.0f;
     float3 outputColor = SelectPbrDebugView(
-        debugView, gbuffer, diffuse, specular, averageVisibility, finalLinearHdr);
+        debugView,
+        gbuffer,
+        diffuse,
+        specular,
+        averageVisibility,
+        ambientOcclusion * gbuffer.ambientOcclusion,
+        finalLinearHdr);
     u_Output[pixelPosition] = float4(max(outputColor, 0.0f), 0.0f);
 }
