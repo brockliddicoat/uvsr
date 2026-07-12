@@ -87,7 +87,10 @@ set(UVSR_ROOT_SHADERS
     skinning_cs
 )
 set(UVSR_PASS_SHADERS
+    deferred_lighting_cs
+    forward_ps
     forward_vs_buffer_loads
+    gbuffer_ps
     gbuffer_vs_buffer_loads
     material_id_ps
     pixel_readback_cs

@@ -222,6 +222,7 @@ public:
     nvrhi::TextureHandle MaterialIDs;
     nvrhi::TextureHandle AmbientOcclusion;
     nvrhi::TextureHandle MaterialAmbientOcclusion;
+    bool PbrEnabled = true;
 
     nvrhi::HeapHandle Heap;
 
@@ -234,33 +235,38 @@ public:
         dm::uint2 size,
         dm::uint sampleCount,
         bool enableMotionVectors,
-        bool useReverseProjection) override
+        bool useReverseProjection,
+        bool enablePbr)
     {
         GBufferRenderTargets::Init(device, size, sampleCount, enableMotionVectors, useReverseProjection);
+        PbrEnabled = enablePbr;
 
-        // Repack the existing 32-bit GBufferSpecular allocation as linear
-        // material data. This changes no per-pixel bandwidth.
-        nvrhi::TextureDesc materialDesc = GBufferSpecular->getDesc();
-        materialDesc.format = nvrhi::Format::RGBA8_UNORM;
-        materialDesc.debugName = "PbrGBufferMaterial";
-        GBufferSpecular = device->createTexture(materialDesc);
+        if (enablePbr)
+        {
+            // Repack the existing 32-bit GBufferSpecular allocation as linear
+            // material data. This changes no per-pixel bandwidth.
+            nvrhi::TextureDesc materialDesc = GBufferSpecular->getDesc();
+            materialDesc.format = nvrhi::Format::RGBA8_UNORM;
+            materialDesc.debugName = "PbrGBufferMaterial";
+            GBufferSpecular = device->createTexture(materialDesc);
 
-        nvrhi::TextureDesc materialAmbientOcclusionDesc = materialDesc;
-        materialAmbientOcclusionDesc.format = nvrhi::Format::R8_UNORM;
-        materialAmbientOcclusionDesc.clearValue = nvrhi::Color(1.f);
-        materialAmbientOcclusionDesc.debugName = "PbrMaterialAmbientOcclusion";
-        MaterialAmbientOcclusion = device->createTexture(materialAmbientOcclusionDesc);
+            nvrhi::TextureDesc materialAmbientOcclusionDesc = materialDesc;
+            materialAmbientOcclusionDesc.format = nvrhi::Format::R8_UNORM;
+            materialAmbientOcclusionDesc.clearValue = nvrhi::Color(1.f);
+            materialAmbientOcclusionDesc.debugName = "PbrMaterialAmbientOcclusion";
+            MaterialAmbientOcclusion = device->createTexture(materialAmbientOcclusionDesc);
 
-        GBufferFramebuffer = std::make_shared<FramebufferFactory>(device);
-        GBufferFramebuffer->RenderTargets = {
-            GBufferDiffuse,
-            GBufferSpecular,
-            GBufferNormals,
-            GBufferEmissive,
-            MaterialAmbientOcclusion };
-        if (enableMotionVectors)
-            GBufferFramebuffer->RenderTargets.push_back(MotionVectors);
-        GBufferFramebuffer->DepthTarget = Depth;
+            GBufferFramebuffer = std::make_shared<FramebufferFactory>(device);
+            GBufferFramebuffer->RenderTargets = {
+                GBufferDiffuse,
+                GBufferSpecular,
+                GBufferNormals,
+                GBufferEmissive,
+                MaterialAmbientOcclusion };
+            if (enableMotionVectors)
+                GBufferFramebuffer->RenderTargets.push_back(MotionVectors);
+            GBufferFramebuffer->DepthTarget = Depth;
+        }
         
         nvrhi::TextureDesc desc;
         desc.width = size.x;
@@ -348,9 +354,9 @@ public:
         MaterialIDFramebuffer->DepthTarget = Depth;
     }
 
-    [[nodiscard]] bool IsUpdateRequired(uint2 size, uint sampleCount) const
+    [[nodiscard]] bool IsUpdateRequired(uint2 size, uint sampleCount, bool enablePbr) const
     {
-        if (any(m_Size != size) || m_SampleCount != sampleCount)
+        if (any(m_Size != size) || m_SampleCount != sampleCount || PbrEnabled != enablePbr)
             return true;
 
         return false;
@@ -359,8 +365,11 @@ public:
     void Clear(nvrhi::ICommandList* commandList) override
     {
         GBufferRenderTargets::Clear(commandList);
-        commandList->clearTextureFloat(
-            MaterialAmbientOcclusion, nvrhi::AllSubresources, nvrhi::Color(1.f));
+        if (MaterialAmbientOcclusion)
+        {
+            commandList->clearTextureFloat(
+                MaterialAmbientOcclusion, nvrhi::AllSubresources, nvrhi::Color(1.f));
+        }
 
         commandList->clearTextureFloat(HdrColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
         commandList->clearTextureFloat(LdrColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
@@ -766,6 +775,7 @@ static AgxToneMappingParameters GetAgxPresetParameters(AgxPreset preset)
 struct UIData
 {
     bool                                ShowUI = true;
+    bool                                EnablePbr = true;
     bool                                UseDeferredShading = true;
     bool                                EnableSsao = true;
     SsaoParameters                      SsaoParams;
@@ -798,9 +808,9 @@ private:
     std::shared_ptr<DirectionalLight>   m_SunLight;
     std::shared_ptr<InstancedOpaqueDrawStrategy> m_OpaqueDrawStrategy;
     std::unique_ptr<RenderTargets>      m_RenderTargets;
-    std::shared_ptr<PbrForwardShadingPass> m_ForwardPass;
-    std::unique_ptr<PbrGBufferFillPass>  m_GBufferPass;
-    std::unique_ptr<PbrDeferredLightingPass> m_DeferredLightingPass;
+    std::shared_ptr<ForwardShadingPass>  m_ForwardPass;
+    std::shared_ptr<GBufferFillPass>     m_GBufferPass;
+    std::shared_ptr<DeferredLightingPass> m_DeferredLightingPass;
     std::unique_ptr<SkyPass>            m_SkyPass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
     std::unique_ptr<SsaoPass>           m_SsaoPass;
@@ -1000,7 +1010,8 @@ public:
             return true;
         }
 
-        if (key >= GLFW_KEY_F1 && key <= GLFW_KEY_F9 && action == GLFW_PRESS)
+        if (m_ui.EnablePbr &&
+            key >= GLFW_KEY_F1 && key <= GLFW_KEY_F9 && action == GLFW_PRESS)
         {
             m_ui.PbrDebug = PbrDebugView(key - GLFW_KEY_F1);
             log::info("PBR debug view: %s%s",
@@ -1257,12 +1268,18 @@ public:
     {
         ForwardShadingPass::CreateParameters ForwardParams;
         ForwardParams.trackLiveness = false;
-        m_ForwardPass = std::make_shared<PbrForwardShadingPass>(GetDevice(), m_CommonPasses);
+        if (m_ui.EnablePbr)
+            m_ForwardPass = std::make_shared<PbrForwardShadingPass>(GetDevice(), m_CommonPasses);
+        else
+            m_ForwardPass = std::make_shared<ForwardShadingPass>(GetDevice(), m_CommonPasses);
         m_ForwardPass->Init(*m_ShaderFactory, ForwardParams);
         
         GBufferFillPass::CreateParameters GBufferParams;
         GBufferParams.enableMotionVectors = false;
-        m_GBufferPass = std::make_unique<PbrGBufferFillPass>(GetDevice(), m_CommonPasses);
+        if (m_ui.EnablePbr)
+            m_GBufferPass = std::make_shared<PbrGBufferFillPass>(GetDevice(), m_CommonPasses);
+        else
+            m_GBufferPass = std::make_shared<GBufferFillPass>(GetDevice(), m_CommonPasses);
         m_GBufferPass->Init(*m_ShaderFactory, GBufferParams);
 
         GBufferParams.enableMotionVectors = false;
@@ -1271,7 +1288,10 @@ public:
 
         m_PixelReadbackPass = std::make_unique<PixelReadbackPass>(GetDevice(), m_ShaderFactory, m_RenderTargets->MaterialIDs, nvrhi::Format::RGBA32_UINT);
 
-        m_DeferredLightingPass = std::make_unique<PbrDeferredLightingPass>(GetDevice(), m_CommonPasses);
+        if (m_ui.EnablePbr)
+            m_DeferredLightingPass = std::make_shared<PbrDeferredLightingPass>(GetDevice(), m_CommonPasses);
+        else
+            m_DeferredLightingPass = std::make_shared<DeferredLightingPass>(GetDevice(), m_CommonPasses);
         m_DeferredLightingPass->Init(m_ShaderFactory);
 
         m_SkyPass = std::make_unique<SkyPass>(GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->ForwardFramebuffer, *m_View);
@@ -1314,12 +1334,14 @@ public:
 
             bool needNewPasses = false;
 
-            if (!m_RenderTargets || m_RenderTargets->IsUpdateRequired(uint2(width, height), sampleCount))
+            if (!m_RenderTargets || m_RenderTargets->IsUpdateRequired(
+                uint2(width, height), sampleCount, m_ui.EnablePbr))
             {
                 m_RenderTargets = nullptr;
                 m_BindingCache.Clear();
                 m_RenderTargets = std::make_unique<RenderTargets>();
-                m_RenderTargets->Init(GetDevice(), uint2(width, height), sampleCount, false, true);
+                m_RenderTargets->Init(
+                    GetDevice(), uint2(width, height), sampleCount, false, true, m_ui.EnablePbr);
                 
                 needNewPasses = true;
             }
@@ -1390,22 +1412,27 @@ public:
             DeferredLightingPass::Inputs deferredInputs;
             deferredInputs.SetGBuffer(*m_RenderTargets);
             deferredInputs.ambientOcclusion = m_ui.EnableSsao ? m_RenderTargets->AmbientOcclusion : nullptr;
-            // Slot 14 is unused by UVSR's current renderer and carries the
-            // separate authored material ambient-occlusion attachment.
-            deferredInputs.indirectDiffuse = m_RenderTargets->MaterialAmbientOcclusion;
+            if (m_ui.EnablePbr)
+            {
+                // Slot 14 is unused by UVSR's current renderer and carries the
+                // separate authored material ambient-occlusion attachment.
+                deferredInputs.indirectDiffuse = m_RenderTargets->MaterialAmbientOcclusion;
+            }
             deferredInputs.ambientColorTop = m_AmbientTop;
             deferredInputs.ambientColorBottom = m_AmbientBottom;
             deferredInputs.lights = &m_Scene->GetSceneGraph()->GetLights();
             deferredInputs.output = m_RenderTargets->HdrColor;
 
             // The base pass already exposes a two-component temporal offset.
-            // UVSR does not animate it, so Y carries the deferred debug mode
-            // without extending Donut's constant-buffer ABI.
+            // UVSR does not animate it, so PBR mode uses Y for its deferred
+            // debug mode without extending Donut's constant-buffer ABI.
             m_DeferredLightingPass->Render(
                 m_CommandList,
                 *m_View,
                 deferredInputs,
-                float2(0.f, float(m_ui.PbrDebug)));
+                m_ui.EnablePbr
+                    ? float2(0.f, float(m_ui.PbrDebug))
+                    : float2(0.f));
         }
         else
         {
@@ -1696,6 +1723,14 @@ protected:
             }
             ImGui::EndCombo();
         }
+
+        if (ImGui::Checkbox("Enable PBR", &m_ui.EnablePbr))
+        {
+            m_ui.PbrDebug = PbrDebugView::FinalLinearHdr;
+            log::info("PBR rendering %s", m_ui.EnablePbr ? "enabled" : "disabled");
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Compare UVSR PBR with Donut legacy shading.");
 
         ImGui::Checkbox("Deferred Shading", &m_ui.UseDeferredShading);
         ImGui::Checkbox("Enable SSAO", &m_ui.EnableSsao);

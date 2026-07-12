@@ -139,8 +139,9 @@ Deferred debug views do not add to the settings window. Use:
 - `F9`: combined SSAO and authored material ambient occlusion
 
 The values still pass through the display pipeline so they can be inspected on
-the current output device. Debug modes currently apply to deferred shading;
-forward and deferred production lighting both use the same shared BSDF.
+the current output device. Debug modes apply only to deferred PBR shading and
+are disabled when **Enable PBR** selects Donut's legacy comparison path.
+Forward and deferred production lighting both use the same shared BSDF.
 
 `tests/pbr_reference_tests.cpp` validates defaults and invalid-value repair,
 roughness extremes, dielectric and metallic behavior, dark/bright base colors,
