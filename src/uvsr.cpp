@@ -25,6 +25,9 @@
 #include <memory>
 #include <chrono>
 #include <algorithm>
+#include <fstream>
+#include <sstream>
+#include <cctype>
 #include <cfloat>
 #include <Windows.h>
 #include <GLFW/glfw3.h>
@@ -37,6 +40,7 @@
 #include <donut/engine/Scene.h>
 #include <donut/engine/ShaderFactory.h>
 #include <donut/engine/TextureCache.h>
+#include <donut/engine/View.h>
 #include <donut/render/DeferredLightingPass.h>
 #include <donut/render/DrawStrategy.h>
 #include <donut/render/ForwardShadingPass.h>
@@ -45,7 +49,6 @@
 #include <donut/render/PixelReadbackPass.h>
 #include <donut/render/SkyPass.h>
 #include <donut/render/SsaoPass.h>
-#include <donut/render/ToneMappingPasses.h>
 #include <donut/app/ApplicationBase.h>
 #include <donut/app/UserInterfaceUtils.h>
 #include <donut/app/Camera.h>
@@ -292,13 +295,336 @@ enum class WhiteWorldMode
     PreserveDetail
 };
 
+enum class AgxPreset
+{
+    Base,
+    Punchy,
+    Golden,
+    Mix,
+    Custom
+};
+
+struct AgxToneMappingParameters
+{
+    float Exposure = 0.f;
+    float Contrast = 1.f;
+    float Saturation = 1.f;
+    float Warmth = 0.f;
+    float Tint = 0.f;
+    float Slope = 1.f;
+    float Power = 1.f;
+};
+
+struct KodakLut
+{
+    std::string Name;
+    std::filesystem::path Path;
+    nvrhi::TextureHandle Texture;
+    uint32_t Size = 0;
+    float3 DomainMin = 0.f;
+    float3 DomainMax = 1.f;
+};
+
+struct alignas(16) AgxToneMappingConstants
+{
+    float4 ExposureContrastSaturationWarmth;
+    float4 TintLutSizeUseLutDither;
+    float4 Slope;
+    float4 Power;
+    float4 LutDomainMin;
+    float4 LutDomainMax;
+};
+
+class AgxToneMappingPass
+{
+private:
+    nvrhi::DeviceHandle m_Device;
+    nvrhi::ShaderHandle m_PixelShader;
+    nvrhi::BufferHandle m_ConstantBuffer;
+    nvrhi::BindingLayoutHandle m_BindingLayout;
+    nvrhi::BindingSetHandle m_BindingSet;
+    nvrhi::GraphicsPipelineHandle m_Pipeline;
+    nvrhi::ITexture* m_BoundSource = nullptr;
+    nvrhi::ITexture* m_BoundLut = nullptr;
+    nvrhi::TextureHandle m_ColorLut;
+    uint32_t m_ColorLutSize = 0;
+    float3 m_LutDomainMin = 0.f;
+    float3 m_LutDomainMax = 1.f;
+    std::shared_ptr<CommonRenderPasses> m_CommonPasses;
+    std::shared_ptr<FramebufferFactory> m_FramebufferFactory;
+
+public:
+    AgxToneMappingPass(
+        nvrhi::IDevice* device,
+        const std::shared_ptr<ShaderFactory>& shaderFactory,
+        const std::shared_ptr<CommonRenderPasses>& commonPasses,
+        const std::shared_ptr<FramebufferFactory>& framebufferFactory)
+        : m_Device(device)
+        , m_CommonPasses(commonPasses)
+        , m_FramebufferFactory(framebufferFactory)
+    {
+        m_PixelShader = shaderFactory->CreateShader(
+            "uvsr/agx_tonemapping_ps.hlsl", "main", nullptr, nvrhi::ShaderType::Pixel);
+
+        nvrhi::BufferDesc bufferDesc;
+        bufferDesc.byteSize = sizeof(AgxToneMappingConstants);
+        bufferDesc.debugName = "AgxToneMappingConstants";
+        bufferDesc.isConstantBuffer = true;
+        bufferDesc.isVolatile = true;
+        bufferDesc.maxVersions = c_MaxRenderPassConstantBufferVersions;
+        m_ConstantBuffer = device->createBuffer(bufferDesc);
+
+        nvrhi::BindingLayoutDesc layoutDesc;
+        layoutDesc.visibility = nvrhi::ShaderType::Pixel;
+        layoutDesc.bindings = {
+            nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+            nvrhi::BindingLayoutItem::Texture_SRV(0),
+            nvrhi::BindingLayoutItem::Texture_SRV(1),
+            nvrhi::BindingLayoutItem::Sampler(0)
+        };
+        m_BindingLayout = device->createBindingLayout(layoutDesc);
+
+        nvrhi::GraphicsPipelineDesc pipelineDesc;
+        pipelineDesc.primType = nvrhi::PrimitiveType::TriangleStrip;
+        pipelineDesc.VS = commonPasses->m_FullscreenVS;
+        pipelineDesc.PS = m_PixelShader;
+        pipelineDesc.bindingLayouts = { m_BindingLayout };
+        pipelineDesc.renderState.rasterState.setCullNone();
+        pipelineDesc.renderState.depthStencilState.depthTestEnable = false;
+        pipelineDesc.renderState.depthStencilState.stencilEnable = false;
+        m_Pipeline = device->createGraphicsPipeline(
+            pipelineDesc, framebufferFactory->GetFramebufferInfo());
+    }
+
+    void SetColorLut(const KodakLut* lut)
+    {
+        m_ColorLut = lut ? lut->Texture : nullptr;
+        m_ColorLutSize = lut ? lut->Size : 0;
+        m_LutDomainMin = lut ? lut->DomainMin : float3(0.f);
+        m_LutDomainMax = lut ? lut->DomainMax : float3(1.f);
+        m_BindingSet = nullptr;
+        m_BoundLut = nullptr;
+    }
+
+    void Render(
+        nvrhi::ICommandList* commandList,
+        const AgxToneMappingParameters& params,
+        const ICompositeView& compositeView,
+        nvrhi::ITexture* sourceTexture)
+    {
+        nvrhi::ITexture* lutTexture = m_ColorLut
+            ? m_ColorLut.Get()
+            : m_CommonPasses->m_BlackTexture3D.Get();
+
+        if (!m_BindingSet || m_BoundSource != sourceTexture || m_BoundLut != lutTexture)
+        {
+            nvrhi::BindingSetDesc bindingSetDesc;
+            bindingSetDesc.bindings = {
+                nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
+                nvrhi::BindingSetItem::Texture_SRV(0, sourceTexture),
+                nvrhi::BindingSetItem::Texture_SRV(1, lutTexture),
+                nvrhi::BindingSetItem::Sampler(0, m_CommonPasses->m_LinearClampSampler)
+            };
+            m_BindingSet = m_Device->createBindingSet(bindingSetDesc, m_BindingLayout);
+            m_BoundSource = sourceTexture;
+            m_BoundLut = lutTexture;
+        }
+
+        AgxToneMappingConstants constants{};
+        constants.ExposureContrastSaturationWarmth = float4(
+            params.Exposure, params.Contrast, params.Saturation, params.Warmth);
+        constants.TintLutSizeUseLutDither = float4(
+            params.Tint, float(m_ColorLutSize), m_ColorLut ? 1.f : 0.f, 1.f);
+        constants.Slope = float4(float3(params.Slope), 0.f);
+        constants.Power = float4(float3(params.Power), 0.f);
+        constants.LutDomainMin = float4(m_LutDomainMin, 0.f);
+        constants.LutDomainMax = float4(m_LutDomainMax, 0.f);
+        commandList->writeBuffer(m_ConstantBuffer, &constants, sizeof(constants));
+
+        commandList->beginMarker("AgX Tone Mapping");
+        for (uint32_t viewIndex = 0;
+            viewIndex < compositeView.GetNumChildViews(ViewType::PLANAR);
+            ++viewIndex)
+        {
+            const IView* view = compositeView.GetChildView(ViewType::PLANAR, viewIndex);
+            nvrhi::GraphicsState state;
+            state.pipeline = m_Pipeline;
+            state.framebuffer = m_FramebufferFactory->GetFramebuffer(*view);
+            state.bindings = { m_BindingSet };
+            state.viewport = view->GetViewportState();
+            commandList->setGraphicsState(state);
+
+            nvrhi::DrawArguments arguments;
+            arguments.instanceCount = 1;
+            arguments.vertexCount = 4;
+            commandList->draw(arguments);
+        }
+        commandList->endMarker();
+    }
+};
+
+static bool LoadCubeLut(
+    nvrhi::IDevice* device,
+    const std::filesystem::path& path,
+    KodakLut& result)
+{
+    std::ifstream file(path);
+    if (!file)
+    {
+        log::error("Cannot open Kodak LUT '%s'", path.generic_string().c_str());
+        return false;
+    }
+
+    uint32_t size = 0;
+    float3 domainMin = 0.f;
+    float3 domainMax = 1.f;
+    std::vector<float4> values;
+    std::string line;
+
+    while (std::getline(file, line))
+    {
+        const size_t comment = line.find('#');
+        if (comment != std::string::npos)
+            line.erase(comment);
+
+        std::istringstream tokens(line);
+        std::string keyword;
+        if (!(tokens >> keyword))
+            continue;
+
+        if (keyword == "TITLE")
+        {
+            continue;
+        }
+        else if (keyword == "LUT_3D_SIZE")
+        {
+            tokens >> size;
+            if (size < 2 || size > 128)
+            {
+                log::error("Kodak LUT '%s' has unsupported size %u (expected 2-128)",
+                    path.generic_string().c_str(), size);
+                return false;
+            }
+        }
+        else if (keyword == "LUT_1D_SIZE")
+        {
+            log::error("Kodak LUT '%s' contains an unsupported 1D table",
+                path.generic_string().c_str());
+            return false;
+        }
+        else if (keyword == "DOMAIN_MIN")
+        {
+            tokens >> domainMin.x >> domainMin.y >> domainMin.z;
+        }
+        else if (keyword == "DOMAIN_MAX")
+        {
+            tokens >> domainMax.x >> domainMax.y >> domainMax.z;
+        }
+        else
+        {
+            std::istringstream sample(line);
+            float r, g, b;
+            if (sample >> r >> g >> b)
+                values.emplace_back(r, g, b, 1.f);
+        }
+    }
+
+    const uint64_t expectedValueCount = uint64_t(size) * size * size;
+    if (size == 0 || values.size() != expectedValueCount)
+    {
+        log::error("Kodak LUT '%s' has %zu values; expected %llu",
+            path.generic_string().c_str(), values.size(), expectedValueCount);
+        return false;
+    }
+
+    nvrhi::TextureDesc textureDesc;
+    textureDesc.width = size;
+    textureDesc.height = size;
+    textureDesc.depth = size;
+    textureDesc.dimension = nvrhi::TextureDimension::Texture3D;
+    textureDesc.format = nvrhi::Format::RGBA32_FLOAT;
+    textureDesc.initialState = nvrhi::ResourceStates::Common;
+    textureDesc.debugName = path.stem().string();
+
+    nvrhi::TextureHandle texture = device->createTexture(textureDesc);
+    if (!texture)
+    {
+        log::error("Cannot create GPU texture for Kodak LUT '%s'",
+            path.generic_string().c_str());
+        return false;
+    }
+
+    nvrhi::CommandListHandle commandList = device->createCommandList();
+    commandList->open();
+    commandList->beginTrackingTextureState(
+        texture, nvrhi::AllSubresources, nvrhi::ResourceStates::Common);
+    commandList->writeTexture(
+        texture, 0, 0, values.data(),
+        size_t(size) * sizeof(float4),
+        size_t(size) * size * sizeof(float4));
+    commandList->setPermanentTextureState(
+        texture, nvrhi::ResourceStates::ShaderResource);
+    commandList->commitBarriers();
+    commandList->close();
+    device->executeCommandList(commandList);
+
+    result.Name = path.stem().string();
+    result.Path = path;
+    result.Texture = texture;
+    result.Size = size;
+    result.DomainMin = domainMin;
+    result.DomainMax = domainMax;
+    return true;
+}
+
+static AgxToneMappingParameters GetAgxPresetParameters(AgxPreset preset)
+{
+    AgxToneMappingParameters params;
+
+    switch (preset)
+    {
+    case AgxPreset::Base:
+        break;
+
+    case AgxPreset::Punchy:
+        params.Contrast = 1.15f;
+        params.Saturation = 1.20f;
+        params.Power = 1.0912f;
+        break;
+
+    case AgxPreset::Golden:
+        params.Contrast = 1.05f;
+        params.Saturation = 1.08f;
+        params.Warmth = 0.25f;
+        params.Tint = 0.04f;
+        params.Slope = 1.04f;
+        params.Power = 1.02f;
+        break;
+
+    case AgxPreset::Mix:
+        params.Contrast = 1.10f;
+        params.Saturation = 1.14f;
+        params.Warmth = 0.12f;
+        params.Tint = 0.02f;
+        params.Slope = 1.02f;
+        params.Power = 1.05f;
+        break;
+
+    case AgxPreset::Custom:
+        break;
+    }
+
+    return params;
+}
+
 struct UIData
 {
     bool                                ShowUI = true;
     bool                                UseDeferredShading = true;
     bool                                EnableSsao = true;
     SsaoParameters                      SsaoParams;
-    ToneMappingParameters               ToneMappingParams;
+    AgxToneMappingParameters            AgxToneMappingParams;
+    AgxPreset                           AgxToneMappingPreset = AgxPreset::Base;
     SkyParameters                       SkyParams;
     bool                                ShaderReloadRequested = false;
     bool                                EnableProceduralSky = true;
@@ -330,10 +656,12 @@ private:
     std::unique_ptr<GBufferFillPass>    m_GBufferPass;
     std::unique_ptr<DeferredLightingPass> m_DeferredLightingPass;
     std::unique_ptr<SkyPass>            m_SkyPass;
-    std::unique_ptr<ToneMappingPass>    m_ToneMappingPass;
+    std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
     std::unique_ptr<SsaoPass>           m_SsaoPass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
     std::unique_ptr<PixelReadbackPass>  m_PixelReadbackPass;
+    std::vector<KodakLut>               m_KodakLuts;
+    size_t                              m_SelectedKodakLut = 0;
 
     std::shared_ptr<IView>              m_View;
     
@@ -363,9 +691,11 @@ public:
 
         std::filesystem::path mediaDir = app::GetDirectoryWithExecutable().parent_path() / "media";
         std::filesystem::path frameworkShaderDir = app::GetDirectoryWithExecutable() / "shaders/framework" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
+        std::filesystem::path appShaderDir = app::GetDirectoryWithExecutable() / "shaders/uvsr" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
 
         m_RootFs->mount("/media", mediaDir);
         m_RootFs->mount("/shaders/donut", frameworkShaderDir);
+        m_RootFs->mount("/shaders/uvsr", appShaderDir);
 
         m_NativeFs = std::make_shared<NativeFileSystem>();
 
@@ -382,6 +712,7 @@ public:
 
         m_ShaderFactory = std::make_shared<ShaderFactory>(GetDevice(), m_RootFs, "/shaders");
         m_CommonPasses = std::make_shared<CommonRenderPasses>(GetDevice(), m_ShaderFactory);
+        DiscoverKodakLuts(mediaDir / "luts/kodak");
 
         m_OpaqueDrawStrategy = std::make_shared<InstancedOpaqueDrawStrategy>();
 
@@ -443,6 +774,61 @@ public:
             m_ThirdPersonCamera.GetUp());
     }
 
+    void DiscoverKodakLuts(const std::filesystem::path& directory)
+    {
+        m_KodakLuts.clear();
+        KodakLut none;
+        none.Name = "None";
+        m_KodakLuts.push_back(std::move(none));
+
+        if (!std::filesystem::exists(directory))
+            return;
+
+        std::vector<std::filesystem::path> paths;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(directory))
+        {
+            if (!entry.is_regular_file())
+                continue;
+
+            std::string extension = entry.path().extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                [](unsigned char c) { return char(std::tolower(c)); });
+            if (extension == ".cube")
+                paths.push_back(entry.path());
+        }
+
+        std::sort(paths.begin(), paths.end());
+        for (const auto& path : paths)
+        {
+            KodakLut lut;
+            if (LoadCubeLut(GetDevice(), path, lut))
+            {
+                log::info("Loaded Kodak LUT: %s (%u^3)", lut.Name.c_str(), lut.Size);
+                m_KodakLuts.push_back(std::move(lut));
+            }
+        }
+    }
+
+    const std::vector<KodakLut>& GetKodakLuts() const
+    {
+        return m_KodakLuts;
+    }
+
+    size_t GetSelectedKodakLut() const
+    {
+        return m_SelectedKodakLut;
+    }
+
+    void SetSelectedKodakLut(size_t index)
+    {
+        if (index >= m_KodakLuts.size() || index == m_SelectedKodakLut)
+            return;
+
+        m_SelectedKodakLut = index;
+        if (m_AgxToneMappingPass)
+            m_AgxToneMappingPass->SetColorLut(index == 0 ? nullptr : &m_KodakLuts[index]);
+    }
+
     void CopyCurrentViewToThirdPerson()
     {
         m_ThirdPersonCamera.LookTo(m_FirstPersonCamera.GetPosition(), m_FirstPersonCamera.GetDir(),
@@ -501,10 +887,6 @@ public:
     virtual void Animate(float fElapsedTimeSeconds) override
     { 
         GetActiveCamera().Animate(fElapsedTimeSeconds);
-
-        if(m_ToneMappingPass)
-            m_ToneMappingPass->AdvanceFrame(fElapsedTimeSeconds);
-        
     }
 
 
@@ -718,7 +1100,7 @@ public:
         return topologyChanged;
     }
 
-    void CreateRenderPasses(bool& exposureResetRequired)
+    void CreateRenderPasses()
     {
         ForwardShadingPass::CreateParameters ForwardParams;
         ForwardParams.trackLiveness = false;
@@ -746,15 +1128,10 @@ public:
             m_SsaoPass = std::make_unique<SsaoPass>(GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->Depth, m_RenderTargets->GBufferNormals, m_RenderTargets->AmbientOcclusion);
         }
 
-        nvrhi::BufferHandle exposureBuffer = nullptr;
-        if (m_ToneMappingPass)
-            exposureBuffer = m_ToneMappingPass->GetExposureBuffer();
-        else
-            exposureResetRequired = true;
-
-        ToneMappingPass::CreateParameters toneMappingParams;
-        toneMappingParams.exposureBufferOverride = exposureBuffer;
-        m_ToneMappingPass = std::make_unique<ToneMappingPass>(GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->LdrFramebuffer, *m_View, toneMappingParams);
+        m_AgxToneMappingPass = std::make_unique<AgxToneMappingPass>(
+            GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->LdrFramebuffer);
+        m_AgxToneMappingPass->SetColorLut(
+            m_SelectedKodakLut == 0 ? nullptr : &m_KodakLuts[m_SelectedKodakLut]);
 
     }
 
@@ -776,8 +1153,6 @@ public:
 
         m_Scene->RefreshSceneGraph(GetFrameIndex());
 
-        bool exposureResetRequired = false;
-        
         {
             uint width = windowWidth;
             uint height = windowHeight;
@@ -809,7 +1184,7 @@ public:
 
             if(needNewPasses)
             {
-                CreateRenderPasses(exposureResetRequired);
+                CreateRenderPasses();
             }
 
             m_ui.ShaderReloadRequested = false;
@@ -840,9 +1215,6 @@ public:
         m_SunLight->irradiance = m_SunIrradiance * 0.35f;
 
         m_RenderTargets->Clear(m_CommandList);
-
-        if (exposureResetRequired)
-            m_ToneMappingPass->ResetExposure(m_CommandList, 0.5f);
 
         ForwardShadingPass::Context forwardContext;
 
@@ -910,13 +1282,8 @@ public:
         if (m_ui.EnableProceduralSky)
             m_SkyPass->Render(m_CommandList, *m_View, *m_SunLight, m_ui.SkyParams);
 
-        auto toneMappingParams = m_ui.ToneMappingParams;
-        if (exposureResetRequired)
-        {
-            toneMappingParams.eyeAdaptationSpeedUp = 0.f;
-            toneMappingParams.eyeAdaptationSpeedDown = 0.f;
-        }
-        m_ToneMappingPass->SimpleRender(m_CommandList, toneMappingParams, *m_View, m_RenderTargets->HdrColor);
+        m_AgxToneMappingPass->Render(
+            m_CommandList, m_ui.AgxToneMappingParams, *m_View, m_RenderTargets->HdrColor);
         
         m_CommonPasses->BlitTexture(m_CommandList, framebuffer, m_RenderTargets->LdrColor, &m_BindingCache);
 
@@ -1151,6 +1518,81 @@ protected:
 
         ImGui::Checkbox("Deferred Shading", &m_ui.UseDeferredShading);
         ImGui::Checkbox("Enable SSAO", &m_ui.EnableSsao);
+
+        if (ImGui::CollapsingHeader("AgX Tone Mapper"))
+        {
+            static const char* presetLabels[] = {
+                "Base",
+                "Punchy",
+                "Golden",
+                "Mix",
+                "Custom"
+            };
+
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            if (ImGui::BeginCombo(
+                "Preset", presetLabels[int(m_ui.AgxToneMappingPreset)]))
+            {
+                for (int presetIndex = 0;
+                    presetIndex < int(std::size(presetLabels));
+                    ++presetIndex)
+                {
+                    const AgxPreset preset = AgxPreset(presetIndex);
+                    const bool selected = preset == m_ui.AgxToneMappingPreset;
+                    if (ImGui::Selectable(presetLabels[presetIndex], selected))
+                    {
+                        m_ui.AgxToneMappingPreset = preset;
+                        if (preset != AgxPreset::Custom)
+                            m_ui.AgxToneMappingParams = GetAgxPresetParameters(preset);
+                    }
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+
+            const auto& luts = m_app->GetKodakLuts();
+            const size_t selectedLut = m_app->GetSelectedKodakLut();
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            if (ImGui::BeginCombo("Kodak LUT", luts[selectedLut].Name.c_str()))
+            {
+                for (size_t lutIndex = 0; lutIndex < luts.size(); ++lutIndex)
+                {
+                    const bool selected = lutIndex == selectedLut;
+                    if (ImGui::Selectable(luts[lutIndex].Name.c_str(), selected))
+                        m_app->SetSelectedKodakLut(lutIndex);
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Kodak LUT (.cube)");
+
+            AgxToneMappingParameters& params = m_ui.AgxToneMappingParams;
+            bool gradeChanged = false;
+            gradeChanged |= ImGui::SliderFloat("Exposure", &params.Exposure, -10.f, 10.f, "%.2f EV");
+            gradeChanged |= ImGui::SliderFloat("Contrast", &params.Contrast, 0.5f, 2.f, "%.3f");
+            gradeChanged |= ImGui::SliderFloat("Saturation", &params.Saturation, 0.f, 2.f, "%.3f");
+            gradeChanged |= ImGui::SliderFloat("Warmth", &params.Warmth, -1.f, 1.f, "%.3f");
+            gradeChanged |= ImGui::SliderFloat("Tint", &params.Tint, -1.f, 1.f, "%.3f");
+            gradeChanged |= ImGui::InputFloat("Slope", &params.Slope, 0.f, 0.f, "%.4f");
+            gradeChanged |= ImGui::InputFloat("Power", &params.Power, 0.f, 0.f, "%.4f");
+
+            if (gradeChanged)
+            {
+                params.Exposure = std::clamp(params.Exposure, -10.f, 10.f);
+                params.Contrast = std::clamp(params.Contrast, 0.5f, 2.f);
+                params.Saturation = std::clamp(params.Saturation, 0.f, 2.f);
+                params.Warmth = std::clamp(params.Warmth, -1.f, 1.f);
+                params.Tint = std::clamp(params.Tint, -1.f, 1.f);
+                params.Slope = std::max(params.Slope, 0.f);
+                params.Power = std::max(params.Power, 0.01f);
+                m_ui.AgxToneMappingPreset = AgxPreset::Custom;
+            }
+
+            ImGui::TextDisabled("Ctrl+click a slider to type an exact value.");
+        }
 
         if (ImGui::CollapsingHeader("Sky Parameters"))
         {
