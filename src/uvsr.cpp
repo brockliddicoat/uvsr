@@ -1844,21 +1844,23 @@ protected:
         ImGui::SetItemTooltip("Expand procedural sky controls.");
         if (skyOpen)
         {
+            if (!m_ui.EnableProceduralSky)
+                ImGui::BeginDisabled();
+            ImGui::SliderFloat("Brightness", &m_ui.SkyParams.brightness, 0.f, 1.f);
+            ImGui::SetItemTooltip("Set sky and ambient-light brightness.");
+            ImGui::SliderFloat("Glow Size", &m_ui.SkyParams.glowSize, 0.f, 90.f);
+            ImGui::SetItemTooltip("Set the sun-glow angular size.");
+            ImGui::SliderFloat("Glow Sharpness", &m_ui.SkyParams.glowSharpness, 1.f, 10.f);
+            ImGui::SetItemTooltip("Control how tightly the sun glow falls off.");
+            ImGui::SliderFloat("Glow Intensity", &m_ui.SkyParams.glowIntensity, 0.f, 1.f);
+            ImGui::SetItemTooltip("Set the sun-glow brightness.");
+            ImGui::SliderFloat("Horizon Size", &m_ui.SkyParams.horizonSize, 0.f, 90.f);
+            ImGui::SetItemTooltip("Set the horizon transition width.");
+            if (!m_ui.EnableProceduralSky)
+                ImGui::EndDisabled();
+
             ImGui::Checkbox("Enable Procedural Sky", &m_ui.EnableProceduralSky);
             ImGui::SetItemTooltip("Render the procedural sky behind the scene.");
-            if (m_ui.EnableProceduralSky)
-            {
-                ImGui::SliderFloat("Brightness", &m_ui.SkyParams.brightness, 0.f, 1.f);
-                ImGui::SetItemTooltip("Set sky and ambient-light brightness.");
-                ImGui::SliderFloat("Glow Size", &m_ui.SkyParams.glowSize, 0.f, 90.f);
-                ImGui::SetItemTooltip("Set the sun-glow angular size.");
-                ImGui::SliderFloat("Glow Sharpness", &m_ui.SkyParams.glowSharpness, 1.f, 10.f);
-                ImGui::SetItemTooltip("Control how tightly the sun glow falls off.");
-                ImGui::SliderFloat("Glow Intensity", &m_ui.SkyParams.glowIntensity, 0.f, 1.f);
-                ImGui::SetItemTooltip("Set the sun-glow brightness.");
-                ImGui::SliderFloat("Horizon Size", &m_ui.SkyParams.horizonSize, 0.f, 90.f);
-                ImGui::SetItemTooltip("Set the horizon transition width.");
-            }
         }
 
         const auto& lights = m_app->GetScene()->GetSceneGraph()->GetLights();
