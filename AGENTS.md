@@ -1,7 +1,75 @@
 # UVSR agent guide
 
-- Build the first-party renderer target with `cmake --build build --config Release --target uvsr`.
-- The executable target is lowercase `uvsr`; the displayed project name is uppercase `UVSR`.
-- Donut is a pinned dependency. Do not edit files under `donut/`.
-- `Donut-Samples/` is local reference material, not UVSR source.
-- Use DirectX 12 as the default backend. Keep Vulkan and DX11 disabled unless a task explicitly requires them.
+## Product and scope
+
+- Treat UVSR as a focused production renderer, not a general Donut sample.
+- Follow near-YAGNI principles: keep only behavior the product currently needs.
+  Avoid speculative features, compatibility layers, unused controls, dormant
+  shaders, and abstractions with no active caller.
+- The executable and engineering slug are lowercase `uvsr`; the displayed
+  product name is uppercase `UVSR`.
+- Donut is a pinned dependency. Do not edit files under `donut/`; implement UVSR
+  behavior in first-party code or narrowly scoped build-time overrides.
+- `Donut-Samples/` is local reference material, never UVSR source.
+- DirectX 12 is the product backend. Keep Vulkan and DX11 disabled unless a task
+  explicitly requires them.
+- Bistro scene sources are licensed local assets. Do not commit files from
+  `assets/scenes/nvidia_bistro/`, generated `build/` content, or `work/`
+  artifacts.
+
+## Change discipline
+
+- Inspect `git status` and the relevant diff before editing. Preserve unrelated
+  user changes and never discard them to simplify a task.
+- Create a named checkpoint commit before broad deletion, pruning, or a risky
+  refactor. Follow it with focused commits after verification.
+- For cleanup work, trace references before deleting. Remove an obsolete feature
+  end to end: source and declarations, CPU/UI state, GPU resources, shader entry
+  points and files, `shaders.cfg`, CMake/runtime packaging, assets, tests, and
+  stale documentation.
+- Search again after removal so dead includes, constants, comments, build rules,
+  and fallback paths do not remain.
+- Ask before deleting any code, shader, or asset whose runtime, rendering, UI, or
+  packaging dependency is uncertain.
+- Do not push, publish, or open a pull request unless the user explicitly asks.
+
+## UI and rendering safeguards
+
+- Treat the existing UI layout, wording, order, widths, defaults, and alignment
+  as user-designed product behavior. Change them only when the task explicitly
+  calls for a UI change.
+- Every new or changed UVSR-owned interactive control must have a concise hover
+  tooltip that describes its effect.
+- Cleanup and infrastructure work must not silently change authored colors, AgX
+  output, SSAO, scene lighting, or other visible rendering behavior.
+- Keep the forward and deferred PBR paths on the shared UVSR material/lighting
+  contract. The PBR comparison toggle must retain the same camera, scene,
+  tonemapper, sky, and lights.
+- Preserve the display pipeline order: scene-linear HDR radiance, camera white
+  balance, exposure in EV, AgX inset transform, logarithmic encoding, contrast
+  tone scale, Base-space grade/LUT, output gamut conversion, display transfer,
+  then dithering.
+
+## Documentation
+
+- Keep the root file named lowercase `readme.md`.
+- Update `readme.md` whenever a change affects user-visible behavior, defaults,
+  controls, required assets, build/test/run steps, or intentional omissions.
+  Remove stale claims instead of preserving historical behavior.
+- Update `docs/pbr-foundation.md` when the material contract, G-buffer packing,
+  BSDF equations, debug views, limitations, or extension path changes.
+- Keep code comments focused on non-obvious invariants and workarounds; do not
+  narrate straightforward code.
+
+## Verification
+
+- Build the first-party renderer with
+  `cmake --build build --config Release --target uvsr`.
+- For PBR or rendering changes, also build `uvsr_pbr_tests` and run
+  `ctest --test-dir build -C Release --output-on-failure`.
+- Launch `build/bin/uvsr.exe` and smoke-test after runtime, rendering, shader,
+  scene-loading, or UI changes. Exercise the relevant forward/deferred, PBR
+  on/off, and SSAO combinations when they could be affected.
+- Documentation-only changes require link and diff validation, not a renderer
+  rebuild.
+- Run `git diff --check` before committing.
