@@ -1780,7 +1780,7 @@ protected:
         const bool tonemapperOpen = DrawCollapsingHeader(
             "Tonemapper",
             "Expand AgX tonemapping and grading controls.",
-            settingsControlWidth);
+            ImGui::GetContentRegionAvail().x);
         if (tonemapperOpen)
         {
             static const char* presetLabels[] = {
@@ -1870,7 +1870,7 @@ protected:
         }
 
         const bool skyOpen = DrawCollapsingHeader(
-            "Sky", "Expand procedural sky controls.", settingsControlWidth);
+            "Sky", "Expand procedural sky controls.", ImGui::GetContentRegionAvail().x);
         if (skyOpen)
         {
             if (!m_ui.EnableProceduralSky)
@@ -1903,7 +1903,7 @@ protected:
         }
 
         const bool lightsOpen = !lights.empty() && DrawCollapsingHeader(
-            "Lights", "Expand scene-light controls.", settingsControlWidth);
+            "Lights", "Expand scene-light controls.", ImGui::GetContentRegionAvail().x);
         if (lightsOpen)
         {
             ImGui::SetNextItemWidth(settingsControlWidth);
