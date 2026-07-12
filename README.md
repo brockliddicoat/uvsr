@@ -4,7 +4,7 @@
 
 UVSR is a rendering project built on NVIDIA's Donut framework and its pinned NVRHI graphics abstraction layer.
 
-The demo launches the full **NVIDIA Bistro exterior** scene by default. UVSR starts in **White World Preserve Detail**, so the Bistro geometry is shown as a neutral white-world reference while retaining normal and ambient-occlusion detail.
+The demo launches the full **NVIDIA Bistro exterior** scene by default. UVSR starts in **White World Off**, showing the scene's authored materials and textures.
 
 The scene picker also includes the converted, self-contained **NVIDIA Bistro Interior Wine** GLB.
 
@@ -30,7 +30,9 @@ The **Enable PBR** setting switches between that shared UVSR PBR path and Donut'
 
 UVSR runs uncapped with a single planar view. Its UI intentionally omits VSync, stereo, and bloom controls, and provides a **Restart Renderer** button that shuts down graphics resources before relaunching the same command line.
 
-Camera control is limited to First-Person and Third-Person modes. Imported scene cameras and translucent rendering are intentionally omitted from the current baseline.
+UVSR-owned interactive controls provide concise hover tooltips. New controls should follow the same convention.
+
+Camera control is limited to First Person and Third Person modes. Imported scene cameras and translucent rendering are intentionally omitted from the current baseline.
 
 Temporal anti-aliasing, animation playback, AA-mode selection, jitter selection, ambient-intensity scaling, and material-event instrumentation have been removed from the application.
 

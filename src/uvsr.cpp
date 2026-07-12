@@ -785,7 +785,7 @@ struct UIData
     bool                                ShaderReloadRequested = false;
     PbrDebugView                        PbrDebug = PbrDebugView::FinalLinearHdr;
     bool                                EnableProceduralSky = true;
-    WhiteWorldMode                      WhiteWorld = WhiteWorldMode::PreserveDetail;
+    WhiteWorldMode                      WhiteWorld = WhiteWorldMode::Off;
     bool                                UseThirdPersonCamera = false;
     std::shared_ptr<Material>           SelectedMaterial;
     std::shared_ptr<SceneGraphNode>     SelectedNode;
@@ -1634,7 +1634,10 @@ protected:
         const std::string currentScene = m_app->GetCurrentSceneName();
         const float folderButtonWidth = ImGui::GetFrameHeight();
         ImGui::SetNextItemWidth(-(folderButtonWidth + style.ItemSpacing.x));
-        if (ImGui::BeginCombo("##Scene", getRelativePath(currentScene)))
+        const bool sceneComboOpen = ImGui::BeginCombo("##Scene", getRelativePath(currentScene));
+        // UI convention: every UVSR-owned interactive control explains itself on hover.
+        ImGui::SetItemTooltip("Choose the scene to load.");
+        if (sceneComboOpen)
         {
             const std::vector<std::string>& scenes = m_app->GetAvailableScenes();
             for (const std::string& scene : scenes)
@@ -1673,9 +1676,11 @@ protected:
                 ImVec2(bodyMin.x + iconWidth * 0.40f, bodyMin.y),
                 iconColor, 1.5f);
         }
+        ImGui::SetItemTooltip("Open the scene folder in File Explorer.");
 
         if (ImGui::Button("Reload Shaders"))
             m_ui.ShaderReloadRequested = true;
+        ImGui::SetItemTooltip("Recompile and reload renderer shaders.");
 
         ImGui::SameLine();
         if (ImGui::Button("Restart Renderer"))
@@ -1683,11 +1688,15 @@ protected:
             g_RestartRequested = true;
             glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
         }
+        ImGui::SetItemTooltip("Restart UVSR and recreate the renderer.");
 
         ImGui::SetNextItemWidth(-FLT_MIN);
-        if (ImGui::BeginCombo("##Camera", m_ui.UseThirdPersonCamera ? "Third-Person" : "First-Person"))
+        const bool cameraComboOpen = ImGui::BeginCombo(
+            "##Camera", m_ui.UseThirdPersonCamera ? "Third Person" : "First Person");
+        ImGui::SetItemTooltip("Switch the active camera control mode.");
+        if (cameraComboOpen)
         {
-            if (ImGui::Selectable("First-Person", !m_ui.UseThirdPersonCamera))
+            if (ImGui::Selectable("First Person", !m_ui.UseThirdPersonCamera))
             {
                 if (m_ui.UseThirdPersonCamera)
                 {
@@ -1695,7 +1704,7 @@ protected:
                     m_ui.UseThirdPersonCamera = false;
                 }
             }
-            if (ImGui::Selectable("Third-Person", m_ui.UseThirdPersonCamera))
+            if (ImGui::Selectable("Third Person", m_ui.UseThirdPersonCamera))
             {
                 if (!m_ui.UseThirdPersonCamera)
                 {
@@ -1711,7 +1720,11 @@ protected:
             "White World Preserve Detail"
         };
         ImGui::SetNextItemWidth(-FLT_MIN);
-        if (ImGui::BeginCombo("##WhiteWorld", whiteWorldLabels[int(m_ui.WhiteWorld)]))
+        const bool whiteWorldComboOpen = ImGui::BeginCombo(
+            "##WhiteWorld", whiteWorldLabels[int(m_ui.WhiteWorld)]);
+        ImGui::SetItemTooltip(
+            "Override material color while optionally preserving surface detail.");
+        if (whiteWorldComboOpen)
         {
             for (int modeIndex = 0; modeIndex < int(std::size(whiteWorldLabels)); ++modeIndex)
             {
@@ -1724,18 +1737,22 @@ protected:
             ImGui::EndCombo();
         }
 
+        ImGui::Checkbox("Deferred Shading", &m_ui.UseDeferredShading);
+        ImGui::SetItemTooltip("Use deferred shading; disable for forward shading.");
+
         if (ImGui::Checkbox("Enable PBR", &m_ui.EnablePbr))
         {
             m_ui.PbrDebug = PbrDebugView::FinalLinearHdr;
             log::info("PBR rendering %s", m_ui.EnablePbr ? "enabled" : "disabled");
         }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Compare UVSR PBR with Donut legacy shading.");
+        ImGui::SetItemTooltip("Use UVSR PBR shading; disable to compare Donut legacy shading.");
 
-        ImGui::Checkbox("Deferred Shading", &m_ui.UseDeferredShading);
         ImGui::Checkbox("Enable SSAO", &m_ui.EnableSsao);
+        ImGui::SetItemTooltip("Add screen-space ambient occlusion in deferred mode.");
 
-        if (ImGui::CollapsingHeader("Tonemapper"))
+        const bool tonemapperOpen = ImGui::CollapsingHeader("Tonemapper");
+        ImGui::SetItemTooltip("Expand AgX tonemapping and grading controls.");
+        if (tonemapperOpen)
         {
             static const char* presetLabels[] = {
                 "Base",
@@ -1746,8 +1763,11 @@ protected:
             };
 
             ImGui::SetNextItemWidth(settingsControlWidth);
-            if (ImGui::BeginCombo(
-                "Preset", presetLabels[int(m_ui.AgxToneMappingPreset)]))
+            const bool presetComboOpen = ImGui::BeginCombo(
+                "Preset", presetLabels[int(m_ui.AgxToneMappingPreset)]);
+            ImGui::SetItemTooltip(
+                "Apply a predefined grade; editing a value switches to Custom.");
+            if (presetComboOpen)
             {
                 for (int presetIndex = 0;
                     presetIndex < int(std::size(presetLabels));
@@ -1770,7 +1790,10 @@ protected:
             const auto& luts = m_app->GetKodakLuts();
             const size_t selectedLut = m_app->GetSelectedKodakLut();
             ImGui::SetNextItemWidth(settingsControlWidth);
-            if (ImGui::BeginCombo("Lut", luts[selectedLut].Name.c_str()))
+            const bool lutComboOpen = ImGui::BeginCombo(
+                "Lut", luts[selectedLut].Name.c_str());
+            ImGui::SetItemTooltip("Apply a film-look LUT.");
+            if (lutComboOpen)
             {
                 for (size_t lutIndex = 0; lutIndex < luts.size(); ++lutIndex)
                 {
@@ -1782,18 +1805,27 @@ protected:
                 }
                 ImGui::EndCombo();
             }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Film LUT (.cube)");
 
             AgxToneMappingParameters& params = m_ui.AgxToneMappingParams;
             bool gradeChanged = false;
             gradeChanged |= ImGui::SliderFloat("Exposure", &params.Exposure, -10.f, 10.f, "%.2f EV");
+            ImGui::SetItemTooltip("Adjust scene exposure in EV before tonemapping.");
             gradeChanged |= ImGui::SliderFloat("Contrast", &params.Contrast, 0.5f, 2.f, "%.3f");
+            ImGui::SetItemTooltip("Adjust contrast in AgX Base space.");
             gradeChanged |= ImGui::SliderFloat("Saturation", &params.Saturation, 0.f, 2.f, "%.3f");
+            ImGui::SetItemTooltip("Adjust color saturation in AgX Base space.");
             gradeChanged |= ImGui::SliderFloat("Warmth", &params.Warmth, -1.f, 1.f, "%.3f");
+            ImGui::SetItemTooltip("Shift the grade toward warmer or cooler colors.");
             gradeChanged |= ImGui::SliderFloat("Tint", &params.Tint, -1.f, 1.f, "%.3f");
-            gradeChanged |= ImGui::InputFloat("Slope", &params.Slope, 0.f, 0.f, "%.4f");
-            gradeChanged |= ImGui::InputFloat("Power", &params.Power, 0.f, 0.f, "%.4f");
+            ImGui::SetItemTooltip("Shift the grade toward green or magenta.");
+            gradeChanged |= ImGui::SliderFloat(
+                "Slope", &params.Slope, 0.f, 2.f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetItemTooltip(
+                "Multiply the AgX Base-space grade before Power. 1.0 is neutral.");
+            gradeChanged |= ImGui::SliderFloat(
+                "Power", &params.Power, 0.01f, 2.f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetItemTooltip(
+                "Apply the grade exponent. Below 1 brightens; above 1 darkens.");
 
             if (gradeChanged)
             {
@@ -1802,24 +1834,30 @@ protected:
                 params.Saturation = std::clamp(params.Saturation, 0.f, 2.f);
                 params.Warmth = std::clamp(params.Warmth, -1.f, 1.f);
                 params.Tint = std::clamp(params.Tint, -1.f, 1.f);
-                params.Slope = std::max(params.Slope, 0.f);
-                params.Power = std::max(params.Power, 0.01f);
+                params.Slope = std::clamp(params.Slope, 0.f, 2.f);
+                params.Power = std::clamp(params.Power, 0.01f, 2.f);
                 m_ui.AgxToneMappingPreset = AgxPreset::Custom;
             }
-
-            ImGui::TextDisabled("Ctrl+click a slider to type an exact value.");
         }
 
-        if (ImGui::CollapsingHeader("Sky"))
+        const bool skyOpen = ImGui::CollapsingHeader("Sky");
+        ImGui::SetItemTooltip("Expand procedural sky controls.");
+        if (skyOpen)
         {
             ImGui::Checkbox("Enable Procedural Sky", &m_ui.EnableProceduralSky);
+            ImGui::SetItemTooltip("Render the procedural sky behind the scene.");
             if (m_ui.EnableProceduralSky)
             {
                 ImGui::SliderFloat("Brightness", &m_ui.SkyParams.brightness, 0.f, 1.f);
+                ImGui::SetItemTooltip("Set sky and ambient-light brightness.");
                 ImGui::SliderFloat("Glow Size", &m_ui.SkyParams.glowSize, 0.f, 90.f);
+                ImGui::SetItemTooltip("Set the sun-glow angular size.");
                 ImGui::SliderFloat("Glow Sharpness", &m_ui.SkyParams.glowSharpness, 1.f, 10.f);
+                ImGui::SetItemTooltip("Control how tightly the sun glow falls off.");
                 ImGui::SliderFloat("Glow Intensity", &m_ui.SkyParams.glowIntensity, 0.f, 1.f);
+                ImGui::SetItemTooltip("Set the sun-glow brightness.");
                 ImGui::SliderFloat("Horizon Size", &m_ui.SkyParams.horizonSize, 0.f, 90.f);
+                ImGui::SetItemTooltip("Set the horizon transition width.");
             }
         }
 
@@ -1833,10 +1871,16 @@ protected:
             m_SelectedLight = lights.front();
         }
 
-        if (!lights.empty() && ImGui::CollapsingHeader("Lights"))
+        const bool lightsOpen = !lights.empty() && ImGui::CollapsingHeader("Lights");
+        if (!lights.empty())
+            ImGui::SetItemTooltip("Expand scene-light controls.");
+        if (lightsOpen)
         {
             ImGui::SetNextItemWidth(settingsControlWidth);
-            if (ImGui::BeginCombo("Select Light", m_SelectedLight ? m_SelectedLight->GetName().c_str() : "(None)"))
+            const bool lightComboOpen = ImGui::BeginCombo(
+                "Select Light", m_SelectedLight ? m_SelectedLight->GetName().c_str() : "(None)");
+            ImGui::SetItemTooltip("Choose which scene light to edit.");
+            if (lightComboOpen)
             {
                 for (const auto& light : lights)
                 {
@@ -1857,8 +1901,13 @@ protected:
             }
         }
 
-        if (ImGui::Button("Screenshot"))
+        const float screenshotButtonWidth =
+            ImGui::CalcTextSize("Screenshot").x + style.FramePadding.x * 2.f;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(
+            0.f, ImGui::GetContentRegionAvail().x - screenshotButtonWidth));
+        if (ImGui::Button("Screenshot", ImVec2(screenshotButtonWidth, 0.f)))
             m_ui.CopyScreenshotToClipboard = true;
+        ImGui::SetItemTooltip("Copy the current rendered frame to the clipboard.");
 
         ImGui::End();
 
