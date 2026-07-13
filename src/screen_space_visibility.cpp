@@ -128,6 +128,32 @@ namespace uvsr
             readbackBuffer = device->createBuffer(statisticsBufferDesc);
         }
 
+        auto createDummyTexture = [device](
+            nvrhi::Format format,
+            const char* debugName)
+        {
+            nvrhi::TextureDesc desc;
+            desc.width = 1u;
+            desc.height = 1u;
+            desc.format = format;
+            desc.dimension = nvrhi::TextureDimension::Texture2D;
+            desc.mipLevels = 1u;
+            desc.isUAV = true;
+            desc.initialState = nvrhi::ResourceStates::ShaderResource;
+            desc.keepInitialState = true;
+            desc.debugName = debugName;
+            return device->createTexture(desc);
+        };
+        m_DummyAmbientVisibility = createDummyTexture(
+            nvrhi::Format::R16_FLOAT,
+            "ScreenSpaceVisibility/DummyAmbientVisibility");
+        m_DummyIndirectDiffuse = createDummyTexture(
+            nvrhi::Format::RGBA16_FLOAT,
+            "ScreenSpaceVisibility/DummyIndirectDiffuse");
+        m_DummyDebug = createDummyTexture(
+            nvrhi::Format::RGBA8_UNORM,
+            "ScreenSpaceVisibility/DummyDebug");
+
         CreatePipelines(shaderFactory);
 
         for (auto& stageQueries : m_TimerQueries)
@@ -312,15 +338,25 @@ namespace uvsr
 
     void ScreenSpaceVisibilityPass::EnsureResources(
         uint2 fullSize,
+        bool ambientEnabled,
+        bool indirectDiffuseEnabled,
+        bool traversalDebugEnabled,
         bool multipleBouncesEnabled,
         bool depthHierarchyEnabled)
     {
         const uint2 samplingSize = fullSize;
+        multipleBouncesEnabled = multipleBouncesEnabled &&
+            indirectDiffuseEnabled;
 
         if (all(m_FullSize == fullSize) && all(m_SamplingSize == samplingSize) &&
+            m_AmbientResourcesEnabled == ambientEnabled &&
+            m_IndirectDiffuseResourcesEnabled == indirectDiffuseEnabled &&
+            m_TraversalDebugResourcesEnabled == traversalDebugEnabled &&
             m_MultipleBounceResourcesEnabled == multipleBouncesEnabled &&
             m_DepthHierarchyResourcesEnabled == depthHierarchyEnabled &&
-            m_RawAmbientVisibility)
+            (!ambientEnabled || m_RawAmbientVisibility) &&
+            (!indirectDiffuseEnabled || m_RawIndirectDiffuse[0]) &&
+            (!traversalDebugEnabled || m_RawDebug))
         {
             return;
         }
@@ -328,6 +364,9 @@ namespace uvsr
         ReleaseResources();
         m_FullSize = fullSize;
         m_SamplingSize = samplingSize;
+        m_AmbientResourcesEnabled = ambientEnabled;
+        m_IndirectDiffuseResourcesEnabled = indirectDiffuseEnabled;
+        m_TraversalDebugResourcesEnabled = traversalDebugEnabled;
         m_MultipleBounceResourcesEnabled = multipleBouncesEnabled;
         m_DepthHierarchyResourcesEnabled = depthHierarchyEnabled;
 
@@ -349,8 +388,13 @@ namespace uvsr
             return m_Device->createTexture(desc);
         };
 
-        m_RawAmbientVisibility = createTexture(samplingSize, nvrhi::Format::R16_FLOAT,
-            "ScreenSpaceVisibility/RawAmbientVisibility");
+        if (ambientEnabled)
+        {
+            m_RawAmbientVisibility = createTexture(
+                samplingSize,
+                nvrhi::Format::R16_FLOAT,
+                "ScreenSpaceVisibility/RawAmbientVisibility");
+        }
 
         if (depthHierarchyEnabled)
         {
@@ -366,9 +410,12 @@ namespace uvsr
             hierarchyDesc.debugName = "ScreenSpaceVisibility/DepthHierarchy";
             m_DepthHierarchyTexture = m_Device->createTexture(hierarchyDesc);
         }
-        m_RawIndirectDiffuse[0] = createTexture(
-            samplingSize, nvrhi::Format::RGBA16_FLOAT,
-            "ScreenSpaceVisibility/IndirectDiffuseFrontier0");
+        if (indirectDiffuseEnabled)
+        {
+            m_RawIndirectDiffuse[0] = createTexture(
+                samplingSize, nvrhi::Format::RGBA16_FLOAT,
+                "ScreenSpaceVisibility/IndirectDiffuseFrontier0");
+        }
         if (multipleBouncesEnabled)
         {
             m_RawIndirectDiffuse[1] = createTexture(
@@ -378,8 +425,33 @@ namespace uvsr
                 samplingSize, nvrhi::Format::RGBA16_FLOAT,
                 "ScreenSpaceVisibility/CumulativeIndirectDiffuseIrradiance");
         }
-        m_RawDebug = createTexture(samplingSize, nvrhi::Format::RGBA8_UNORM,
-            "ScreenSpaceVisibility/RawDebug");
+        if (traversalDebugEnabled)
+        {
+            m_RawDebug = createTexture(
+                samplingSize,
+                nvrhi::Format::RGBA8_UNORM,
+                "ScreenSpaceVisibility/RawDebug");
+        }
+
+        const uint64_t pixelCount = uint64_t(samplingSize.x) *
+            uint64_t(samplingSize.y);
+        constexpr uint64_t AmbientBytesPerPixel = 2u;
+        constexpr uint64_t IndirectDiffuseBytesPerPixel = 8u;
+        constexpr uint64_t DebugBytesPerPixel = 4u;
+        constexpr uint64_t AdditionalBounceBytesPerPixel = 16u;
+        const uint64_t previousAlwaysAllocatedBytesPerPixel =
+            AmbientBytesPerPixel + IndirectDiffuseBytesPerPixel +
+            DebugBytesPerPixel +
+            (multipleBouncesEnabled ? AdditionalBounceBytesPerPixel : 0u);
+        const uint64_t activeBytesPerPixel =
+            (ambientEnabled ? AmbientBytesPerPixel : 0u) +
+            (indirectDiffuseEnabled ? IndirectDiffuseBytesPerPixel : 0u) +
+            (traversalDebugEnabled ? DebugBytesPerPixel : 0u) +
+            (multipleBouncesEnabled ? AdditionalBounceBytesPerPixel : 0u);
+        m_Timings.fullResolutionTextureBytes =
+            pixelCount * activeBytesPerPixel;
+        m_Timings.avoidedFullResolutionTextureBytes = pixelCount *
+            (previousAlwaysAllocatedBytesPerPixel - activeBytesPerPixel);
     }
 
     void ScreenSpaceVisibilityPass::ReleaseResources()
@@ -407,6 +479,9 @@ namespace uvsr
         m_SamplingSize = uint2::zero();
         m_MultipleBounceResourcesEnabled = false;
         m_DepthHierarchyResourcesEnabled = false;
+        m_AmbientResourcesEnabled = false;
+        m_IndirectDiffuseResourcesEnabled = false;
+        m_TraversalDebugResourcesEnabled = false;
         m_Timings = {};
     }
 
@@ -564,8 +639,14 @@ namespace uvsr
             settings.sampling.useDepthHierarchy &&
             !settings.indirectDiffuse.enabled &&
             !view->IsOrthographicProjection();
+        const bool traversalDebugActive =
+            settings.debug.mode >= ScreenSpaceVisibilityDebugMode::ReceiverNormal &&
+            settings.debug.mode <= ScreenSpaceVisibilityDebugMode::GtEndpointOrder;
         EnsureResources(
             fullSize,
+            settings.ambientOcclusion.enabled,
+            settings.indirectDiffuse.enabled,
+            traversalDebugActive,
             requestedBounceCount > 1u,
             useDepthHierarchyThisFrame);
         AdvanceTimers();
@@ -583,9 +664,6 @@ namespace uvsr
             "GTCosine remains gated on GTUniform promotion");
         const uint32_t estimatorIndex =
             settings.estimator == VisibilityEstimator::GTUniform ? 1u : 0u;
-        const bool traversalDebugActive =
-            settings.debug.mode >= ScreenSpaceVisibilityDebugMode::ReceiverNormal &&
-            settings.debug.mode <= ScreenSpaceVisibilityDebugMode::GtEndpointOrder;
         const uint32_t samplingVariant = consumerVariant |
             (traversalDebugActive ? 4u : 0u);
 
@@ -639,7 +717,15 @@ namespace uvsr
             ? (settings.ambientOcclusion.enabled ? "Screen-Space Visibility (AO + GI)" : "Screen-Space Visibility (GI)")
             : "Screen-Space Visibility (AO)");
 
-        nvrhi::ITexture* rawIndirectDiffuse = m_RawIndirectDiffuse[0];
+        nvrhi::ITexture* rawAmbientVisibility = m_RawAmbientVisibility
+            ? m_RawAmbientVisibility.Get()
+            : m_DummyAmbientVisibility.Get();
+        nvrhi::ITexture* rawIndirectDiffuse = m_RawIndirectDiffuse[0]
+            ? m_RawIndirectDiffuse[0].Get()
+            : m_DummyIndirectDiffuse.Get();
+        nvrhi::ITexture* rawDebug = m_RawDebug
+            ? m_RawDebug.Get()
+            : m_DummyDebug.Get();
 
         if (useDepthHierarchyThisFrame)
         {
@@ -723,9 +809,9 @@ namespace uvsr
                         m_DepthHierarchyTexture
                             ? m_DepthHierarchyTexture.Get()
                             : inputs.depth),
-                    nvrhi::BindingSetItem::Texture_UAV(0, m_RawAmbientVisibility),
-                    nvrhi::BindingSetItem::Texture_UAV(1, m_RawIndirectDiffuse[0]),
-                    nvrhi::BindingSetItem::Texture_UAV(2, m_RawDebug)
+                    nvrhi::BindingSetItem::Texture_UAV(0, rawAmbientVisibility),
+                    nvrhi::BindingSetItem::Texture_UAV(1, rawIndirectDiffuse),
+                    nvrhi::BindingSetItem::Texture_UAV(2, rawDebug)
                 };
                 bindingSet = m_Device->createBindingSet(
                     bindings, pipeline.bindingLayout);
@@ -830,13 +916,13 @@ namespace uvsr
                 bindings.bindings = {
                     nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
                     nvrhi::BindingSetItem::Texture_SRV(0, inputs.baseLighting),
-                    nvrhi::BindingSetItem::Texture_SRV(1, m_RawAmbientVisibility),
+                    nvrhi::BindingSetItem::Texture_SRV(1, rawAmbientVisibility),
                     nvrhi::BindingSetItem::Texture_SRV(2, rawIndirectDiffuse),
                     nvrhi::BindingSetItem::Texture_SRV(3, inputs.gbufferDiffuse),
                     nvrhi::BindingSetItem::Texture_SRV(4, inputs.gbufferEmissive),
                     nvrhi::BindingSetItem::Texture_SRV(5, inputs.materialAmbientOcclusion),
                     nvrhi::BindingSetItem::Texture_SRV(6, inputs.normals),
-                    nvrhi::BindingSetItem::Texture_SRV(7, m_RawDebug),
+                    nvrhi::BindingSetItem::Texture_SRV(7, rawDebug),
                     nvrhi::BindingSetItem::Texture_SRV(8, inputs.sourceRadiance),
                     nvrhi::BindingSetItem::Texture_SRV(9, inputs.gbufferSpecular),
                     nvrhi::BindingSetItem::Texture_UAV(0, inputs.output)

@@ -3004,6 +3004,14 @@ protected:
                     timings->compositionMs);
                 ImGui::SetItemTooltip(
                     "Latest GPU times. Trace groups hierarchy construction and visibility sampling.");
+                constexpr double BytesPerMiB = 1024.0 * 1024.0;
+                ImGui::Text(
+                    "Targets %.1f MiB | Avoided %.1f MiB",
+                    double(timings->fullResolutionTextureBytes) / BytesPerMiB,
+                    double(timings->avoidedFullResolutionTextureBytes) /
+                        BytesPerMiB);
+                ImGui::SetItemTooltip(
+                    "Logical full-resolution AO, GI, bounce, and traversal-debug texel payload. Avoided compares with the former always-allocate AO+GI+debug policy; it is not API-aligned residency or measured bandwidth.");
             }
 
             if (!visibility.enabled)

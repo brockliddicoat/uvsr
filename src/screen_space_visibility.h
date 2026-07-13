@@ -184,6 +184,10 @@ namespace uvsr
         float compositionMs = 0.f;
         uint32_t higherBounceEligibleReceiverCount = 0u;
         uint32_t higherBounceRejectedReceiverCount = 0u;
+        // Logical texel payload for full-resolution visibility working targets.
+        // This intentionally excludes API allocation alignment and traffic.
+        uint64_t fullResolutionTextureBytes = 0u;
+        uint64_t avoidedFullResolutionTextureBytes = 0u;
 
         [[nodiscard]] float CompleteEffectMs() const
         {
@@ -271,6 +275,9 @@ namespace uvsr
         dm::uint2 m_SamplingSize = dm::uint2::zero();
         bool m_MultipleBounceResourcesEnabled = false;
         bool m_DepthHierarchyResourcesEnabled = false;
+        bool m_AmbientResourcesEnabled = false;
+        bool m_IndirectDiffuseResourcesEnabled = false;
+        bool m_TraversalDebugResourcesEnabled = false;
 
         nvrhi::TextureHandle m_RawAmbientVisibility;
         nvrhi::TextureHandle m_DepthHierarchyTexture;
@@ -280,6 +287,11 @@ namespace uvsr
         nvrhi::TextureHandle m_RawIndirectDiffuse[2];
         nvrhi::TextureHandle m_CumulativeIndirectDiffuse;
         nvrhi::TextureHandle m_RawDebug;
+        // Binding layouts remain invariant across consumer permutations. These
+        // pass-lifetime 1x1 UAV/SRV resources stand in for compiled-out targets.
+        nvrhi::TextureHandle m_DummyAmbientVisibility;
+        nvrhi::TextureHandle m_DummyIndirectDiffuse;
+        nvrhi::TextureHandle m_DummyDebug;
 
         // Sampling resources are stable for the lifetime of this pass. Cache
         // the descriptor sets instead of allocating one per active bounce on
@@ -316,6 +328,9 @@ namespace uvsr
         void CreatePipelines(const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory);
         void EnsureResources(
             dm::uint2 fullSize,
+            bool ambientEnabled,
+            bool indirectDiffuseEnabled,
+            bool traversalDebugEnabled,
             bool multipleBouncesEnabled,
             bool depthHierarchyEnabled);
         void ReleaseResources();
