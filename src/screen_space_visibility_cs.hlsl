@@ -5,6 +5,7 @@
 #include "pbr.hlsli"
 #include "radial_visibility_mask.hlsli"
 #include "visibility_estimator_shared.h"
+#include "visibility_projection_shared.h"
 #include "screen_space_visibility_cb.h"
 
 #ifndef VISIBILITY_ESTIMATOR
@@ -187,15 +188,31 @@ bool ReconstructViewPositionFromLinearDepth(
     return IsFiniteFloat3(positionVS);
 }
 
-bool ProjectViewPosition(float3 positionVS, out float2 pixelPosition)
+bool ProjectClippedViewEndpoint(
+    float4 receiverClipPosition,
+    float3 endpointPositionVS,
+    out float2 pixelPosition)
 {
-    float4 clipPosition = mul(float4(positionVS, 1.0f), g_Visibility.view.matViewToClip);
-    if (!isfinite(clipPosition.w) || clipPosition.w <= VisibilityEpsilon)
+    float4 endpointClipPosition = mul(
+        float4(endpointPositionVS, 1.0f),
+        g_Visibility.view.matViewToClip);
+    VisibilityProjectionClipResult clipResult =
+        ComputeVisibilityProjectionEndpointClip(
+            receiverClipPosition.z,
+            receiverClipPosition.w,
+            endpointClipPosition.z,
+            endpointClipPosition.w,
+            g_Visibility.reverseDepth != 0u);
+    if (clipResult.valid == 0u)
     {
         pixelPosition = 0.0f;
         return false;
     }
 
+    float4 clipPosition = lerp(
+        receiverClipPosition,
+        endpointClipPosition,
+        clipResult.endpointScale);
     float2 ndc = clipPosition.xy / clipPosition.w;
     pixelPosition = ndc * g_Visibility.view.clipToWindowScale +
         g_Visibility.view.clipToWindowBias;
@@ -384,6 +401,29 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         viewDirection = SafeNormalize(-receiverPositionVS, float3(0.0f, 0.0f, -1.0f));
     }
 
+    // Reuse the receiver's known pixel/depth to form its homogeneous clip
+    // point. Row-vector projection stores clip w in matrix column three.
+    float4 receiverPositionH = float4(receiverPositionVS, 1.0f);
+    float receiverClipW = dot(receiverPositionH, float4(
+        g_Visibility.view.matViewToClip[0][3],
+        g_Visibility.view.matViewToClip[1][3],
+        g_Visibility.view.matViewToClip[2][3],
+        g_Visibility.view.matViewToClip[3][3]));
+    float2 receiverNdc = (receiverPixelCenter -
+        g_Visibility.view.clipToWindowBias) /
+        g_Visibility.view.clipToWindowScale;
+    float4 receiverClipPosition = float4(
+        receiverNdc * receiverClipW,
+        receiverDepth * receiverClipW,
+        receiverClipW);
+    if (!all(isfinite(receiverClipPosition)) ||
+        !(receiverClipPosition.w > VisibilityProjectionEpsilon))
+    {
+        WriteEmptyVisibilityOutput(
+            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
+        return;
+    }
+
     uint phase = g_Visibility.freezeSamplingPhase != 0u ? 0u : g_Visibility.frameIndex;
     float sliceRotation = frac(VisibilityRandom(receiverPixel, 0u, 0u) +
         AzimuthTemporalPhase(phase));
@@ -473,22 +513,15 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         {
             float projectionSide = projectionSideIndex == 0u ? -1.0f : 1.0f;
             float2 radiusEndpointPixel;
-            sideProjectionValid[projectionSideIndex] = false;
-            float endpointScale = 1.0f;
-            // A full-radius endpoint can cross the near plane even though most
-            // of that horizon side remains visible. Progressively clip only
-            // that endpoint instead of discarding the complete sampling side.
-            [unroll]
-            for (uint projectionAttempt = 0u; projectionAttempt < 4u; ++projectionAttempt)
-            {
-                sideProjectionValid[projectionSideIndex] = ProjectViewPosition(
+            // Clip the full-radius endpoint analytically in homogeneous space,
+            // then perform one perspective divide. This handles forward and
+            // reversed near planes without iterative radius shortening.
+            sideProjectionValid[projectionSideIndex] =
+                ProjectClippedViewEndpoint(
+                    receiverClipPosition,
                     receiverPositionVS + sliceTangent *
-                        (projectionSide * g_Visibility.radiusWorld * endpointScale),
+                        (projectionSide * g_Visibility.radiusWorld),
                     radiusEndpointPixel);
-                if (sideProjectionValid[projectionSideIndex])
-                    break;
-                endpointScale *= 0.5f;
-            }
             float2 projectedRadiusVector = radiusEndpointPixel - receiverPixelCenter;
             sideProjectedRadius[projectionSideIndex] = length(projectedRadiusVector);
             sideProjectionValid[projectionSideIndex] =
