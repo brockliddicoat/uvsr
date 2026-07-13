@@ -1167,10 +1167,9 @@ public:
         m_ui.EnableProceduralSky = true;
 
         // This also recreates any passes/resources that were absent because PBR,
-        // deferred rendering, temporal filtering, or white-world permutations
-        // had been disabled before the reset.
+        // deferred rendering, or white-world permutations had been disabled
+        // before the reset.
         m_ui.ShaderReloadRequested = true;
-        ResetScreenSpaceVisibilityHistory();
         ResetReconstructiveTemporalAAHistory();
         log::info("All renderer settings restored to factory defaults");
     }
@@ -1197,8 +1196,6 @@ public:
             else
                 CopyCurrentViewToThirdPerson();
             m_ui.UseThirdPersonCamera = !m_ui.UseThirdPersonCamera;
-            if (m_ScreenSpaceVisibilityPass)
-                m_ScreenSpaceVisibilityPass->ResetHistory();
             if (m_ReconstructiveTemporalAAPass)
                 m_ReconstructiveTemporalAAPass->ResetHistory();
             return true;
@@ -1463,8 +1460,6 @@ public:
         m_Scene->GetSceneGraph()->GetRootNode()->InvalidateContent();
         if (shaderModeChanged)
             m_ui.ShaderReloadRequested = true;
-        if (modeChanged && m_ScreenSpaceVisibilityPass)
-            m_ScreenSpaceVisibilityPass->ResetHistory();
         if (modeChanged && m_ReconstructiveTemporalAAPass)
             m_ReconstructiveTemporalAAPass->ResetHistory();
     }
@@ -1510,10 +1505,7 @@ public:
         m_ThirdPersonCamera.SetTargetPosition(bounds.center());
         m_ThirdPersonCamera.SetDistance(distance);
         m_ThirdPersonCamera.Animate(0.f);
-        // Retargeting is an explicit camera cut even when its world-space delta
-        // happens to sit below the pass's generic teleport heuristic.
-        if (m_ScreenSpaceVisibilityPass)
-            m_ScreenSpaceVisibilityPass->ResetHistory();
+        // Retargeting is an explicit camera cut for the display AA history.
         if (m_ReconstructiveTemporalAAPass)
             m_ReconstructiveTemporalAAPass->ResetHistory();
     }
@@ -1679,9 +1671,7 @@ public:
                 m_ui.UsesDeferredShading() &&
                 m_ui.ScreenSpaceVisibility.HasActiveConsumer();
             const bool motionVectorsRequired =
-                IsReconstructiveTemporalAAActive() ||
-                (visibilityResourcesRequired &&
-                    m_ui.ScreenSpaceVisibility.filtering.temporalEnabled);
+                IsReconstructiveTemporalAAActive();
 
             bool needNewPasses = false;
 
@@ -1805,7 +1795,7 @@ public:
                 (!finalVisibilityComposite || !allFirstBounceSourcesInactive);
             const bool exactGiTransportDebug =
                 m_ui.ScreenSpaceVisibility.debug.mode >=
-                    ScreenSpaceVisibilityDebugMode::RawIndirectDiffuse &&
+                    ScreenSpaceVisibilityDebugMode::IndirectDiffuse &&
                 m_ui.ScreenSpaceVisibility.debug.mode <=
                     ScreenSpaceVisibilityDebugMode::GiLightOnly;
             const bool writeBounceMetadata = writeSourceRadiance &&
@@ -1837,7 +1827,6 @@ public:
                     ScreenSpaceVisibilityInputs visibilityInputs;
                     visibilityInputs.depth = m_RenderTargets->Depth;
                     visibilityInputs.normals = m_RenderTargets->GBufferNormals;
-                    visibilityInputs.motionVectors = m_RenderTargets->MotionVectors;
                     visibilityInputs.sourceRadiance = m_RenderTargets->DirectDiffuseRadiance;
                     visibilityInputs.gbufferDiffuse = m_RenderTargets->GBufferDiffuse;
                     visibilityInputs.gbufferSpecular = m_RenderTargets->GBufferSpecular;
@@ -2090,12 +2079,6 @@ public:
             : nullptr;
     }
 
-    void ResetScreenSpaceVisibilityHistory()
-    {
-        if (m_ScreenSpaceVisibilityPass)
-            m_ScreenSpaceVisibilityPass->ResetHistory();
-    }
-
     void ResetReconstructiveTemporalAAHistory()
     {
         if (m_ReconstructiveTemporalAAPass)
@@ -2277,7 +2260,6 @@ protected:
                 {
                     m_app->CopyThirdPersonToFirstPerson();
                     m_ui.UseThirdPersonCamera = false;
-                    m_app->ResetScreenSpaceVisibilityHistory();
                     m_app->ResetReconstructiveTemporalAAHistory();
                 }
             }
@@ -2287,7 +2269,6 @@ protected:
                 {
                     m_app->CopyCurrentViewToThirdPerson();
                     m_ui.UseThirdPersonCamera = true;
-                    m_app->ResetScreenSpaceVisibilityHistory();
                     m_app->ResetReconstructiveTemporalAAHistory();
                 }
             }
@@ -3010,21 +2991,19 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Choose a full-resolution stochastic sample budget and filter preset.");
+                "Choose a full-resolution stochastic sample budget preset.");
 
             if (const ScreenSpaceVisibilityTimings* timings =
                 m_app->GetScreenSpaceVisibilityTimings())
             {
                 const float traceMilliseconds =
                     timings->depthHierarchyMs + timings->samplingMs;
-                const float filterMilliseconds =
-                    timings->temporalMs + timings->spatialMs;
                 ImGui::Text(
-                    "All %.2f ms | Trace %.2f ms | Filter %.2f ms | Composite %.2f ms",
+                    "All %.2f ms | Trace %.2f ms | Composite %.2f ms",
                     timings->CompleteEffectMs(), traceMilliseconds,
-                    filterMilliseconds, timings->compositionMs);
+                    timings->compositionMs);
                 ImGui::SetItemTooltip(
-                    "Latest GPU times. Trace groups hierarchy and sampling; Filter groups temporal and spatial passes.");
+                    "Latest GPU times. Trace groups hierarchy construction and visibility sampling.");
             }
 
             if (!visibility.enabled)
@@ -3090,7 +3069,7 @@ protected:
                 ImGui::SetItemTooltip(
                     "Scale only the missing-visibility adjustment on fallback indirect diffuse.");
                 ImGui::SliderFloat("Power##AmbientVisibility", &ao.power, 0.25f, 4.0f, "%.2f");
-                ImGui::SetItemTooltip("Shape ambient visibility after mask evaluation and filtering.");
+                ImGui::SetItemTooltip("Shape ambient visibility after radial-mask evaluation.");
                 if (!ao.enabled)
                     ImGui::EndDisabled();
                 ImGui::TreePop();
@@ -3146,59 +3125,12 @@ protected:
                 ImGui::TreePop();
             }
 
-            if (ImGui::TreeNodeEx("Filtering and History", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                VisibilityFilteringSettings& filtering = visibility.filtering;
-                bool filteringChanged = false;
-                filteringChanged |= ImGui::Checkbox(
-                    "Temporal Accumulation", &filtering.temporalEnabled);
-                ImGui::SetItemTooltip(
-                    "Reproject AO/GI results with motion, depth, normal, and camera-cut validation.");
-                if (!filtering.temporalEnabled)
-                    ImGui::BeginDisabled();
-                filteringChanged |= ImGui::SliderFloat(
-                    "AO Response", &filtering.aoTemporalResponse, 0.0f, 0.99f, "%.2f");
-                ImGui::SetItemTooltip("Set accepted AO history weight; higher values converge more slowly.");
-                filteringChanged |= ImGui::SliderFloat(
-                    "GI Response", &filtering.giTemporalResponse, 0.0f, 0.99f, "%.2f");
-                ImGui::SetItemTooltip("Set clamped GI history weight; higher values reduce noise but may trail.");
-                if (!filtering.temporalEnabled)
-                    ImGui::EndDisabled();
-                filteringChanged |= ImGui::Checkbox("Spatial Filter", &filtering.spatialEnabled);
-                ImGui::SetItemTooltip("Apply a depth- and normal-aware filter to accumulated AO and GI.");
-                if (!filtering.spatialEnabled)
-                    ImGui::BeginDisabled();
-                int spatialRadius = int(filtering.spatialRadius);
-                if (ImGui::SliderInt("Filter Radius", &spatialRadius, 0, 4))
-                {
-                    filtering.spatialRadius = uint32_t(spatialRadius);
-                    filteringChanged = true;
-                }
-                ImGui::SetItemTooltip("Set the bilateral filter radius at sampling resolution.");
-                if (!filtering.spatialEnabled)
-                    ImGui::EndDisabled();
-                filteringChanged |= ImGui::SliderFloat(
-                    "Depth Rejection", &filtering.depthRejection, 0.001f, 0.10f, "%.3f");
-                ImGui::SetItemTooltip("Reject history and neighbors with excessive relative view-depth change.");
-                filteringChanged |= ImGui::SliderFloat(
-                    "Normal Rejection", &filtering.normalRejection, 0.0f, 0.999f, "%.3f");
-                ImGui::SetItemTooltip("Require this minimum world-normal dot product for reuse.");
-                if (ImGui::Button("Reset History"))
-                    m_app->ResetScreenSpaceVisibilityHistory();
-                ImGui::SetItemTooltip("Discard accumulated AO and GI output history on the next frame.");
-                if (filteringChanged)
-                    visibility.quality = ScreenSpaceVisibilityQuality::Custom;
-                ImGui::TreePop();
-            }
-
             if (ImGui::TreeNode("Debug##ScreenSpaceVisibility"))
             {
                 static const char* debugLabels[] = {
                     "Final Composite",
-                    "Raw Ambient Visibility",
-                    "Filtered Ambient Visibility",
-                    "Raw Indirect Diffuse",
-                    "Filtered Indirect Diffuse",
+                    "Ambient Visibility",
+                    "Indirect Diffuse",
                     "GI Light Only",
                     "Direct-Radiance Source",
                     "Receiver Normal",
@@ -3210,9 +3142,7 @@ protected:
                     "Projected Normal",
                     "Front Horizon Angle",
                     "Back Horizon Angle",
-                    "Thickness Interval",
-                    "Temporal History Weight",
-                    "Temporal Validity"
+                    "Thickness Interval"
                 };
                 ImGui::SetNextItemWidth(settingsControlWidth);
                 if (ImGui::BeginCombo(
@@ -3229,7 +3159,7 @@ protected:
                     }
                     ImGui::EndCombo();
                 }
-                ImGui::SetItemTooltip("Visualize visibility traversal, filtering, or composition state.");
+                ImGui::SetItemTooltip("Visualize visibility traversal or composition state.");
                 ImGui::Checkbox("Freeze Sampling Phase", &visibility.debug.freezeSamplingPhase);
                 ImGui::SetItemTooltip("Hold slice rotation and radial jitter at deterministic phase zero.");
 

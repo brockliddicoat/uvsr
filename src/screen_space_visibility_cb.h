@@ -23,11 +23,6 @@ struct ScreenSpaceVisibilityConstants
     float ambientPower;
     float indirectDiffuseIntensity;
 
-    float aoTemporalResponse;
-    float giTemporalResponse;
-    float depthRejection;
-    float normalRejection;
-
     float emissiveGain;
     float minimumBounceContribution;
     float lightingExposureScale;
@@ -48,11 +43,6 @@ struct ScreenSpaceVisibilityConstants
     uint includeEmissive;
     uint distanceScaledThickness;
 
-    uint temporalEnabled;
-    uint spatialEnabled;
-    uint spatialRadius;
-    uint historyValid;
-
     uint freezeSamplingPhase;
     uint sectorHitCriterion;
     uint debugMode;
@@ -60,11 +50,8 @@ struct ScreenSpaceVisibilityConstants
 
     uint orthographicProjection;
     uint useDepthHierarchy;
-    // Motion XY is de-jittered, while AO/GI and their validation surfaces are
-    // written on the raw jittered grid. The current jitter is already carried
-    // by view.pixelOffset; retain the producer frame's jitter here so temporal
-    // reprojection can address raw history without applying the delta twice.
-    float2 previousJitter;
+    uint padding2;
+    uint padding3;
 };
 
 #endif // UVSR_SCREEN_SPACE_VISIBILITY_CB_H

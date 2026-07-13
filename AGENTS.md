@@ -17,6 +17,35 @@
   `assets/scenes/nvidia_bistro/`, generated `build/` content, or `work/`
   artifacts.
 
+## Coming Soon coordination
+
+- Treat the complete **Coming Soon** section in `readme.md` as the shared
+  coordination ledger for every unmerged project or feature and every project
+  or feature an agent is currently working on, including experiments.
+- At the start of every project or feature task, before writing implementation
+  code, inspect open pull requests, unmerged branches, and visible agent
+  worktrees; then read the entire Coming Soon section into working memory.
+  Reconcile every missing item discovered, not only the current task.
+- If the task has no entry, add or update one as the first repository edit. Name
+  its status and branch when one exists, intended scope, affected subsystems,
+  integration dependencies, and any interaction with NRA-RTAA or another listed
+  effort.
+- Cite the exact Coming Soon entry in the task's implementation plan and record
+  the overlap assessment there. Do not begin implementation until the entry and
+  plan reference both exist.
+- For work already in flight when this policy is encountered, complete the same
+  reconciliation before the next implementation edit or push.
+- Re-read Coming Soon after pulling or rebasing and before editing a subsystem
+  named by another entry. Preserve other agents' entries and work; coordinate
+  overlapping scope instead of silently replacing it.
+- Keep the same entry current when its scope, branch, or status changes. If the
+  user has authorized publication, commit and push the coordination update
+  before creating or pushing implementation commits so simultaneous agents can
+  consume it. This workflow never grants push or PR permission by itself.
+- When work merges, remove its Coming Soon entry and update the renderer baseline
+  or relevant design documentation with durable shipped behavior. Remove
+  abandoned work explicitly.
+
 ## Change discipline
 
 - Inspect `git status` and the relevant diff before editing. Preserve unrelated

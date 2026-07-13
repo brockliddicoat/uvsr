@@ -12,7 +12,6 @@
 namespace donut::engine
 {
     class ICompositeView;
-    class IView;
     class ShaderFactory;
 }
 
@@ -53,10 +52,8 @@ namespace uvsr
     enum class ScreenSpaceVisibilityDebugMode : uint32_t
     {
         FinalComposite,
-        RawAmbientVisibility,
-        FilteredAmbientVisibility,
-        RawIndirectDiffuse,
-        FilteredIndirectDiffuse,
+        AmbientVisibility,
+        IndirectDiffuse,
         GiLightOnly,
         DirectRadianceSource,
         ReceiverNormal,
@@ -68,9 +65,7 @@ namespace uvsr
         ProjectedNormal,
         FrontHorizonAngle,
         BackHorizonAngle,
-        ThicknessInterval,
-        TemporalHistoryWeight,
-        TemporalValidity
+        ThicknessInterval
     };
 
     struct SharedSamplingSettings
@@ -120,17 +115,6 @@ namespace uvsr
         float emissiveGain = 4.0f;
     };
 
-    struct VisibilityFilteringSettings
-    {
-        bool temporalEnabled = true;
-        float aoTemporalResponse = 0.90f;
-        float giTemporalResponse = 0.94f;
-        bool spatialEnabled = false;
-        uint32_t spatialRadius = 1;
-        float depthRejection = 0.02f;
-        float normalRejection = 0.85f;
-    };
-
     struct VisibilityDebugSettings
     {
         ScreenSpaceVisibilityDebugMode mode = ScreenSpaceVisibilityDebugMode::FinalComposite;
@@ -145,7 +129,6 @@ namespace uvsr
         SharedSamplingSettings sampling;
         AmbientOcclusionSettings ambientOcclusion;
         IndirectDiffuseSettings indirectDiffuse;
-        VisibilityFilteringSettings filtering;
         VisibilityDebugSettings debug;
 
         [[nodiscard]] bool HasActiveConsumer() const
@@ -162,7 +145,6 @@ namespace uvsr
     {
         nvrhi::ITexture* depth = nullptr;
         nvrhi::ITexture* normals = nullptr;
-        nvrhi::ITexture* motionVectors = nullptr;
         nvrhi::ITexture* sourceRadiance = nullptr;
         nvrhi::ITexture* gbufferDiffuse = nullptr;
         nvrhi::ITexture* gbufferSpecular = nullptr;
@@ -179,14 +161,11 @@ namespace uvsr
     {
         float depthHierarchyMs = 0.f;
         float samplingMs = 0.f;
-        float temporalMs = 0.f;
-        float spatialMs = 0.f;
         float compositionMs = 0.f;
 
         [[nodiscard]] float CompleteEffectMs() const
         {
-            return depthHierarchyMs + samplingMs + temporalMs + spatialMs +
-                compositionMs;
+            return depthHierarchyMs + samplingMs + compositionMs;
         }
     };
 
@@ -207,21 +186,16 @@ namespace uvsr
             float exposureScale,
             uint32_t frameIndex);
 
-        void ResetHistory();
         void Deactivate();
         void ResetBindingCache();
 
         [[nodiscard]] const ScreenSpaceVisibilityTimings& GetTimings() const { return m_Timings; }
-        [[nodiscard]] nvrhi::ITexture* GetAmbientVisibility() const { return m_OutputAmbientVisibility; }
-        [[nodiscard]] nvrhi::ITexture* GetIndirectDiffuseIrradiance() const { return m_OutputIndirectDiffuse; }
 
     private:
         enum class Stage : uint32_t
         {
             DepthHierarchy,
             Sampling,
-            Temporal,
-            Spatial,
             Composition,
             Count
         };
@@ -251,13 +225,10 @@ namespace uvsr
         // register and SRV footprint.
         std::array<Pipeline, 2> m_IndirectBounceSampling;
         Pipeline m_DepthHierarchy;
-        std::array<Pipeline, 4> m_Temporal;
-        std::array<Pipeline, 4> m_Denoise;
         Pipeline m_Composite;
 
         dm::uint2 m_FullSize = dm::uint2::zero();
         dm::uint2 m_SamplingSize = dm::uint2::zero();
-        bool m_TemporalResourcesEnabled = false;
         bool m_MultipleBounceResourcesEnabled = false;
         bool m_DepthHierarchyResourcesEnabled = false;
 
@@ -269,16 +240,6 @@ namespace uvsr
         nvrhi::TextureHandle m_RawIndirectDiffuse[2];
         nvrhi::TextureHandle m_CumulativeIndirectDiffuse;
         nvrhi::TextureHandle m_RawDebug;
-        nvrhi::TextureHandle m_HistoryAmbientVisibility[2];
-        nvrhi::TextureHandle m_HistoryIndirectDiffuse[2];
-        nvrhi::TextureHandle m_HistoryDepth[2];
-        nvrhi::TextureHandle m_HistoryNormal[2];
-        nvrhi::TextureHandle m_HistoryValidity;
-        nvrhi::TextureHandle m_DenoisedAmbientVisibility;
-        nvrhi::TextureHandle m_DenoisedIndirectDiffuse;
-        nvrhi::TextureHandle m_DenoisedDebug;
-        nvrhi::TextureHandle m_OutputAmbientVisibility;
-        nvrhi::TextureHandle m_OutputIndirectDiffuse;
 
         // Sampling resources are stable for the lifetime of this pass. Cache
         // the descriptor sets instead of allocating one per active bounce on
@@ -288,21 +249,9 @@ namespace uvsr
         std::array<nvrhi::BindingSetHandle, 2> m_MultiBounceFirstBindingSets;
         std::array<nvrhi::BindingSetHandle, 3> m_IndirectBounceBindingSets;
         nvrhi::BindingSetHandle m_DepthHierarchyBindingSet;
-        // Finite combinations of consumer specialization, history direction,
-        // bounce source, and filter source avoid rebuilding full-resolution
-        // descriptor sets every frame.
-        std::array<nvrhi::BindingSetHandle, 16> m_TemporalBindingSets;
-        std::array<nvrhi::BindingSetHandle, 16> m_SpatialBindingSets;
-        std::array<nvrhi::BindingSetHandle, 8> m_CompositeBindingSets;
-
-        uint32_t m_HistoryReadIndex = 0;
-        bool m_HistoryValid = false;
-        uint64_t m_HistorySignature = 0;
-        bool m_HasPreviousCamera = false;
-        dm::float3 m_PreviousCameraOrigin = dm::float3::zero();
-        dm::float3 m_PreviousCameraDirection = dm::float3(0.f, 0.f, 1.f);
-        dm::float4x4 m_PreviousProjection = dm::float4x4::identity();
-        dm::float2 m_PreviousJitter = dm::float2::zero();
+        // The first slot reads the first-bounce frontier; the second reads the
+        // cumulative resource used by a multi-bounce solve.
+        std::array<nvrhi::BindingSetHandle, 2> m_CompositeBindingSets;
 
         std::array<std::array<nvrhi::TimerQueryHandle, c_TimerLatency>,
             static_cast<size_t>(Stage::Count)> m_TimerQueries;
@@ -315,17 +264,9 @@ namespace uvsr
         void CreatePipelines(const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory);
         void EnsureResources(
             dm::uint2 fullSize,
-            bool temporalEnabled,
             bool multipleBouncesEnabled,
             bool depthHierarchyEnabled);
         void ReleaseResources();
-        bool UpdateHistoryValidity(
-            const ScreenSpaceVisibilitySettings& settings,
-            const donut::engine::IView& view,
-            float exposureScale);
-        static uint64_t ComputeHistorySignature(
-            const ScreenSpaceVisibilitySettings& settings,
-            float exposureScale);
 
         void BeginStage(nvrhi::ICommandList* commandList, Stage stage);
         void EndStage(nvrhi::ICommandList* commandList, Stage stage);

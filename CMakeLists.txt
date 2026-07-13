@@ -153,8 +153,6 @@ set(UVSR_APP_SHADERS
     screen_space_depth_hierarchy_cs
     screen_space_indirect_composite_cs
     screen_space_visibility_cs
-    screen_space_visibility_denoise_cs
-    screen_space_visibility_temporal_cs
 )
 
 foreach(shader IN LISTS UVSR_APP_SHADERS)

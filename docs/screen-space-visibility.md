@@ -17,16 +17,15 @@ occlusion pass is not instantiated or packaged by UVSR.
 
 The frame order is:
 
-1. opaque PBR G-buffer, including motion vectors;
+1. opaque PBR G-buffer, with motion vectors only when display AA needs them;
 2. deferred direct lighting and a separate configured GI-radiance source;
 3. optional single-dispatch hierarchical view-depth generation;
 4. full-resolution screen-space visibility-bitmask sampling, repeated once per
    requested GI bounce;
-5. temporal AO/GI output accumulation;
-6. depth/normal-aware spatial filtering;
-7. indirect-light composition;
-8. procedural sky;
-9. exposure, AgX, grading, and output conversion.
+5. indirect-light composition from the current-frame visibility outputs;
+6. procedural sky;
+7. downstream NRA-RTAA over the complete HDR scene when enabled;
+8. exposure, AgX, grading, and output conversion.
 
 The source-radiance UAV is written beside base lighting in the same deferred
 dispatch. It contains scene-linear, material-weighted outgoing direct diffuse
@@ -40,9 +39,9 @@ specular, fallback ambient, screen-space GI, AO, transparency, UI, tone mapping,
 and post-processing. For additional finite bounces, the visibility pass reads
 only the immediately preceding transport frontier, applies the sampled
 surface's diffuse BRDF, and writes the next ping-pong frontier. A separate UAV
-accumulates completed frontiers for filtering and composition. The pass never
+accumulates completed frontiers for composition. The pass never
 reads the final composite target and never reinjects prior-frame GI. UVSR has
-no pre-exposure; source, histories, GI, base lighting, and the composite all
+no pre-exposure; source, GI, base lighting, and the composite all
 remain unexposed scene-linear values.
 
 ### Radial mask contract
@@ -94,11 +93,11 @@ budget that is already below 8.
 
 ### Lighting semantics
 
-Raw AO is named ambient visibility and equals the average over slices of:
+AO is named ambient visibility and equals the average over slices of:
 
 `1 - popcount(mask) / 32`
 
-Strength and power are applied only after mask evaluation/filtering. Ambient
+Strength and power are applied only after mask evaluation. Ambient
 visibility modulates UVSR's sky-gradient fallback indirect diffuse and its
 approximate environment-specular response. It does not alter direct light,
 emissive radiance, the BSDF, or the new screen-space GI.
@@ -177,7 +176,7 @@ sectors. It reduces source material bandwidth and lighting arithmetic, but it
 does not remove the bounce's full-resolution dispatch or its visibility
 traversal. An independent exact receiver-material gate can skip traversal for a
 later-bounce pixel whose diffuse throughput is zero, such as a fully metallic,
-black, or material-AO-zero receiver. Raw GI, filtered GI, and GI-light-only
+black, or material-AO-zero receiver. Indirect Diffuse and GI-light-only
 diagnostics force the selected bounce chain into exact-cutoff mode. Diagnostics
 that do not consume higher-bounce GI stop after bounce one instead of doing
 invisible transport work.
@@ -195,38 +194,26 @@ surface's own displayed radiance or reflected direct-light sources.
 | base lighting | `RGBA16_FLOAT` | full, frame |
 | direct diffuse source | `RGBA16_FLOAT` | full, frame |
 | hierarchical view depth | `R16_FLOAT`, 5 mips | full to 1/16, allocated only while the opt-in hierarchy is active |
-| motion + depth delta | `RGBA16_FLOAT` | full, only while temporal filtering is active |
 | raw ambient visibility | `R16_FLOAT` | full, frame |
 | raw indirect diffuse frontier A | `RGBA16_FLOAT` | full, frame; also the one-bounce result |
 | raw indirect diffuse frontier B | `RGBA16_FLOAT` | full, frame; only for multiple bounces |
 | cumulative indirect diffuse irradiance | `RGBA16_FLOAT` | full, frame; only for multiple bounces |
 | raw traversal debug | `RGBA8_UNORM` | full, frame |
-| AO history pair | `R16_FLOAT` | full, persistent output history |
-| GI history pair | `RGBA16_FLOAT` | full, persistent output history |
-| history depth pair | `R32_FLOAT` | full, persistent validation |
-| history normal pair | `RGBA8_UNORM` | full, persistent validation |
-| history validity | `R8_UNORM` | full, frame |
-| denoised AO/GI/debug | `R16_FLOAT` / `RGBA16_FLOAT` / `RGBA8_UNORM` | full, frame |
 | final HDR composite | `RGBA16_FLOAT` | full, frame |
 
-Temporal accumulation reprojects AO/GI results, not radial masks. Motion XY is
-de-jittered previous-minus-current pixels and Z is the matching device-depth
-delta. AO/GI, depth, and normal history remain on the raw jittered producer
-grid, so their previous-frame coordinate applies `-currentJitter +
-previousJitter` exactly once after motion. Motion validity, UV bounds,
-point-validated depth/normal, projection, resolution, settings-signature, and
-camera-cut validation gate reuse. GI is clamped to a current 3x3 component
-range and uses a stronger default response than AO.
-History is discarded on disocclusion, sharp normal changes, projection/size or
-relevant-setting changes, large camera jumps, explicit reset, and pass
-recreation. Bounce count and the final/exact-GI/one-bounce-diagnostic transport
-policy are always part of the settings signature. The contribution cutoff is
-included when multiple bounces are configured; GI
-intensity and exposure join it only while a positive cutoff can actually change
-transport decisions. One-bounce or exact-cutoff rendering therefore keeps
-converged history across presentation-only intensity/exposure edits. Exposure is
-used only to budget the cutoff here; stored lighting and histories remain
+Visibility outputs are current-frame only. Composition reads the sampling
+textures directly; the pass owns no motion-vector input, output-history pair,
+validation surfaces, or denoising intermediates. The deterministic 24-frame
+sampling phase still rotates stochastic taps to avoid a fixed spatial pattern,
+but it never blends or reprojects a previous result. **Freeze Sampling Phase**
+holds that sequence at phase zero for inspection. Exposure is used only to
+budget the higher-bounce contribution cutoff; stored lighting remains
 scene-linear and unexposed.
+
+NRA-RTAA remains a separate downstream display-reconstruction pass. It receives
+the fully composed HDR scene, including visibility AO/GI and the sky, and keeps
+its own motion-vector, validation, and color-history resources. Removing the
+visibility-specific accumulator does not remove or bypass NRA-RTAA stabilization.
 
 The optional five-level depth hierarchy follows Intel XeGTAO's AO-specific design rather
 than a generic nearest-depth HZB. An 8x8 group covers a 16x16 tile, writes
@@ -239,8 +226,8 @@ a full-resolution normal/radiance source; this prevents cross-surface color
 bleeding until aligned attribute pyramids or representative-pixel provenance
 are added. Orthographic traversal also stays on exact depth.
 The hierarchy texture is not allocated on the default exact-depth path.
-Temporal, spatial, composite, depth-hierarchy, first-bounce, and fixed
-higher-bounce binding sets are cached across their finite resource rotations
+Composite, depth-hierarchy, first-bounce, and fixed higher-bounce binding sets
+are cached across their finite resource rotations
 rather than rebuilt every frame. Because the product pipeline is always full
 resolution, shaders use direct pixel addressing and contain no dormant
 representative-cell loops.
@@ -250,20 +237,15 @@ representative-cell loops.
 The default Medium preset is full resolution with one stochastic slice, 32
 first-bounce samples per pixel divided between both horizon directions, world radius
 3, constant thickness 0.5, linear sample distribution, full radial and angular
-jitter, exact depth by default, temporal responses 0.90 AO /
-0.94 GI, depth rejection 0.02, and normal dot threshold 0.85. AO, GI, and
-temporal accumulation start enabled; spatial filtering starts disabled. Its
-stored bilateral radius is 1 so enabling it explicitly does not require another
-control change. AO strength defaults to 1.0 so the visibility estimate remains
-clearly visible, while GI intensity and emissive gain default to 4. GI defaults
-to one bounce, preserving the original cost and appearance; the UI allows up to
-four. The default higher-bounce contribution cutoff is `0.001`; setting it to
-`0` requests exact-zero exits only.
+jitter, and exact depth by default. AO strength defaults to 1.0 so the visibility
+estimate remains clearly visible, while GI intensity and emissive gain default to
+4. GI defaults to one bounce, preserving the original traversal cost; the UI
+allows up to four. The default higher-bounce contribution cutoff is `0.001`;
+setting it to `0` requests exact-zero exits only.
 
 Low/Medium/High/Ultra use 16/32/48/64 total samples per pixel at full resolution.
-All quality presets leave spatial filtering disabled while retaining radius 1
-for Low/Medium/High and radius 2 for Ultra. Editing sampling or filter quality
-selects Custom without overwriting unrelated AO/GI controls.
+Editing sampling quality selects Custom without overwriting unrelated AO/GI
+controls.
 Hierarchical view depth is opt-in: at the default 3 m radius its construction
 cost exceeded its saved depth traffic in dense 1080p profiling. It remains
 available for AO-only workloads with longer projected rays.
@@ -272,9 +254,9 @@ from factory defaults, and **Reset Settings** restores the same renderer, visibi
 tonemapper, LUT, sky, and white-world settings in-session.
 
 GPU timestamp queries report hierarchy, cumulative sampling across all selected
-GI bounces, temporal, spatial, composite,
-and active complete-effect time without blocking the render thread. The
-**All** HUD row shows total time plus grouped Trace, Filter, and Composite times. The
+GI bounces, composite, and active complete-effect time without blocking the
+render thread. The **All** HUD row shows total time plus grouped Trace and
+Composite times. The
 main performance row shows resolution, frame time, FPS, current-clock memory
 bandwidth, and current-clock FP32 peak GFLOPS separated by pipes. NVIDIA values
 come from NVML; Intel values use IGCL plus configured shared-memory data from
@@ -295,7 +277,9 @@ Markers label AO-only, GI-only, and combined traversals separately.
 - The higher-bounce cutoff bounds rejected energy per receiver and bounce, not
   across the entire selected chain; nonzero values trade a bounded amount of
   indirect light per pruned bounce for lower material bandwidth and shading cost.
-- Temporal accumulation can ghost despite rejection and clamping.
+- Visibility noise and phase-to-phase shimmer are controlled only by the
+  current-frame sample budget; the visibility pass has no temporal or spatial
+  denoiser.
 - Visibility is incomplete at screen edges; out-of-bounds samples fail open.
 - No checked-in image-regression scene suite exists; the local Bistro scenes
   are the current GPU smoke-test content.
@@ -317,8 +301,8 @@ must be distinguished from unresolved; today a zero bit means either.
 Reproject masks with motion vectors, rotate sectors from the previous slice
 basis into the current canonical basis, then validate depth, normal, material,
 projection, and disocclusion. Reset invalid masks. Decay confidence and merge
-conservatively so stale occlusion cannot grow. This will be a distinct mask
-history pass, not the current AO/GI output accumulator.
+conservatively so stale occlusion cannot grow. This would be a new mask-history
+pass; the current visibility pipeline has no history.
 
 ### Spatial mask reuse
 
