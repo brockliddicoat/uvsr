@@ -512,6 +512,13 @@ enum class AgxPreset
     Custom
 };
 
+enum class RendererMode
+{
+    Deferred,
+    Forward,
+    ForwardTonemapperless
+};
+
 struct AgxToneMappingParameters
 {
     float Exposure = 0.f;
@@ -836,7 +843,7 @@ struct UIData
     std::vector<GpuAdapterChoice>       GpuAdapterChoices;
     int                                 ActiveGpuAdapterIndex = -1;
     bool                                EnablePbr = true;
-    bool                                UseDeferredShading = true;
+    RendererMode                        RenderMode = RendererMode::Deferred;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
     AgxToneMappingParameters            AgxToneMappingParams;
     AgxPreset                           AgxToneMappingPreset = AgxPreset::Base;
@@ -849,6 +856,16 @@ struct UIData
     std::shared_ptr<Material>           SelectedMaterial;
     std::shared_ptr<SceneGraphNode>     SelectedNode;
     bool                                CopyScreenshotToClipboard = false;
+
+    [[nodiscard]] bool UsesDeferredShading() const
+    {
+        return RenderMode == RendererMode::Deferred;
+    }
+
+    [[nodiscard]] bool UsesTonemapper() const
+    {
+        return RenderMode != RendererMode::ForwardTonemapperless;
+    }
 };
 
 class UvsrSceneViewer : public ApplicationBase
@@ -1054,7 +1071,7 @@ public:
         SetSelectedKodakLut(0);
 
         m_ui.EnablePbr = true;
-        m_ui.UseDeferredShading = true;
+        m_ui.RenderMode = RendererMode::Deferred;
         m_ui.PbrDebug = PbrDebugView::FinalLinearHdr;
         m_ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
         m_ui.AgxToneMappingPreset = AgxPreset::Base;
@@ -1103,7 +1120,7 @@ public:
             m_ui.PbrDebug = PbrDebugView(key - GLFW_KEY_F1);
             log::info("PBR debug view: %s%s",
                 GetPbrDebugViewName(m_ui.PbrDebug),
-                m_ui.UseDeferredShading ? "" : " (available in deferred shading)");
+                m_ui.UsesDeferredShading() ? "" : " (available in deferred shading)");
             return true;
         }
 
@@ -1486,7 +1503,7 @@ public:
 
             constexpr uint sampleCount = 1;
             const bool visibilityResourcesRequired = m_ui.EnablePbr &&
-                m_ui.UseDeferredShading &&
+                m_ui.UsesDeferredShading() &&
                 m_ui.ScreenSpaceVisibility.HasActiveConsumer();
             const bool motionVectorsRequired = visibilityResourcesRequired &&
                 m_ui.ScreenSpaceVisibility.filtering.temporalEnabled;
@@ -1558,10 +1575,10 @@ public:
 
         ForwardShadingPass::Context forwardContext;
 
-        if (!m_ui.UseDeferredShading)
+        if (!m_ui.UsesDeferredShading())
             m_ForwardPass->PrepareLights(forwardContext, m_CommandList, m_Scene->GetSceneGraph()->GetLights(), m_AmbientTop, m_AmbientBottom, {});
 
-        if (m_ui.UseDeferredShading)
+        if (m_ui.UsesDeferredShading())
         {
             GBufferFillPass::Context gbufferContext;
 
@@ -1679,10 +1696,21 @@ public:
         if (m_ui.EnableProceduralSky)
             m_SkyPass->Render(m_CommandList, *m_View, *m_SunLight, m_ui.SkyParams);
 
-        m_AgxToneMappingPass->Render(
-            m_CommandList, m_ui.AgxToneMappingParams, *m_View, m_RenderTargets->HdrColor);
-        
-        m_CommonPasses->BlitTexture(m_CommandList, framebuffer, m_RenderTargets->LdrColor, &m_BindingCache);
+        nvrhi::ITexture* displayTexture = m_RenderTargets->HdrColor;
+        if (m_ui.UsesTonemapper())
+        {
+            m_AgxToneMappingPass->Render(
+                m_CommandList, m_ui.AgxToneMappingParams, *m_View, m_RenderTargets->HdrColor);
+            displayTexture = m_RenderTargets->LdrColor;
+        }
+
+        // The tonemapperless renderer intentionally sends forward scene-linear
+        // radiance straight to the sRGB swap-chain target. The render-target
+        // conversion still applies the display transfer and clamps values to
+        // the target's representable range, but AgX, exposure, grading, LUTs,
+        // and dithering are all absent from this path.
+        m_CommonPasses->BlitTexture(
+            m_CommandList, framebuffer, displayTexture, &m_BindingCache);
 
         m_CommandList->close();
         GetDevice()->executeCommandList(m_CommandList);
@@ -2041,8 +2069,32 @@ protected:
             ImGui::EndCombo();
         }
 
-        ImGui::Checkbox("Deferred Shading", &m_ui.UseDeferredShading);
-        ImGui::SetItemTooltip("Use deferred shading; disable for forward shading.");
+        static const char* rendererModeLabels[] = {
+            "Deferred",
+            "Forward",
+            "Forward Tonemapperless"
+        };
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const bool rendererModeComboOpen = ImGui::BeginCombo(
+            "##RendererMode", rendererModeLabels[int(m_ui.RenderMode)]);
+        ImGui::SetItemTooltip(
+            "Choose deferred, forward, or forward rendering that bypasses AgX and the grading LUT.");
+        if (rendererModeComboOpen)
+        {
+            for (int modeIndex = 0; modeIndex < int(std::size(rendererModeLabels)); ++modeIndex)
+            {
+                const RendererMode mode = RendererMode(modeIndex);
+                const bool selected = mode == m_ui.RenderMode;
+                if (ImGui::Selectable(rendererModeLabels[modeIndex], selected))
+                {
+                    m_ui.RenderMode = mode;
+                    log::info("Renderer mode: %s", rendererModeLabels[modeIndex]);
+                }
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
 
         if (ImGui::Checkbox("Enable PBR", &m_ui.EnablePbr))
         {
@@ -2060,7 +2112,7 @@ protected:
         if (indirectLightingOpen)
         {
             ScreenSpaceVisibilitySettings& visibility = m_ui.ScreenSpaceVisibility;
-            const bool visibilityAvailable = m_ui.UseDeferredShading && m_ui.EnablePbr;
+            const bool visibilityAvailable = m_ui.UsesDeferredShading() && m_ui.EnablePbr;
             if (!visibilityAvailable)
                 ImGui::BeginDisabled();
 

@@ -13,6 +13,11 @@ is also available from the scene picker.
   sky start enabled.
 - Screen-space temporal accumulation starts enabled; its optional spatial
   bilateral filter starts disabled to preserve fine image detail.
+- The renderer selector provides **Deferred**, **Forward**, and **Forward
+  Tonemapperless** modes. The tonemapperless mode renders with the forward path
+  and sends its scene-linear HDR result directly to the sRGB display target,
+  bypassing AgX, exposure, grading, LUTs, and dithering; out-of-range values are
+  clipped by the display target.
 - Renderer settings always start from factory defaults; **Reset All Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
