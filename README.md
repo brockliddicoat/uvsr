@@ -7,7 +7,7 @@ NVRHI graphics abstraction layer. It launches the NVIDIA Bistro exterior scene
 with its authored materials by default; the converted Bistro Interior Wine scene
 is also available from the scene picker.
 
-## Renderer baseline
+## Renderer Baseline
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
@@ -90,7 +90,7 @@ entries are not promises that the work will merge.
   Integration.** Remove the broken Forward Tonemapperless mode and its display-
   pipeline bypass, leaving supported Forward and Deferred rendering on the
   normal AgX path. Its current checkout is stacked on the visibility cleanup and
-  overlaps that branch in `src/uvsr.cpp` and `readme.md`, so integration must
+  overlaps that branch in `src/uvsr.cpp` and `README.md`, so integration must
   preserve both changes.
 - **Texture Filtering, Specular AA, and NRD Denoising — Active Development**
   (`feat/filtering-specular-aa-nrd`). Improve Intel Arc-focused anisotropic
@@ -105,7 +105,7 @@ entries are not promises that the work will merge.
   before deciding whether this experimental path is safe to merge. The branch
   predates the visibility cleanup and requires rebase plus RTAA revalidation.
 
-### How work gets listed
+### How Work Gets Listed
 
 This README-first workflow is how every project or feature gets onto Coming
 Soon:
@@ -132,7 +132,7 @@ Soon:
    renderer baseline or design documentation. Abandoned work is removed
    explicitly rather than left as a stale promise.
 
-## Build and run
+## Build and Run
 
 Requirements:
 
@@ -188,7 +188,7 @@ cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibil
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-## Bistro material preparation
+## Bistro Material Preparation
 
 UVSR renders Bistro materials two-sided because the FBX source contains thin
 surfaces with mixed winding. The repair identifies the small set of base-color
@@ -216,7 +216,7 @@ does not inherit the source scene's strong amber cast. This scene-specific
 calibration is applied to the light, outside the shared BSDF, and remains
 editable in **Lights**.
 
-## Documentation and conventions
+## Documentation and Conventions
 
 The [PBR foundation](docs/pbr-foundation.md) documents the material contract,
 G-buffer packing, equations, debug views, validation controls, limitations, and
@@ -235,7 +235,7 @@ provide concise hover tooltips; new controls should follow the same convention.
 The bottom action row exposes equally sized **Reload Shaders**, **Reset Settings**,
 **Restart**, and **Screenshot** buttons.
 
-## Intentional omissions
+## Intentional Omissions
 
 The current baseline intentionally omits:
 
@@ -248,7 +248,7 @@ The current baseline intentionally omits:
 - Light-probe capture, filtering, image-based lighting, probe textures, and
   probe controls
 
-## Repository naming
+## Repository Naming
 
 Use the lowercase engineering slug `uvsr` for repository URLs, terminal
 commands, package names, and folder paths:
