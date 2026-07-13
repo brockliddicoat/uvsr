@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <string>
 
 using namespace donut;
 using namespace donut::engine;
@@ -132,84 +133,111 @@ namespace uvsr
             destination.pipeline = m_Device->createComputePipeline(pipelineDesc);
         };
 
-        for (uint32_t variant = 0; variant < m_Sampling.size(); ++variant)
+        for (uint32_t estimatorIndex = 0;
+            estimatorIndex < ImplementedVisibilityEstimatorCount;
+            ++estimatorIndex)
         {
-            // Render() releases the pass when neither AO nor GI has a consumer,
-            // so the 0/4 no-consumer variants are unreachable.
-            if ((variant & 3u) == 0u)
-                continue;
+            for (uint32_t variant = 0;
+                variant < m_Sampling[estimatorIndex].size();
+                ++variant)
+            {
+                // Render() releases the pass when neither AO nor GI has a
+                // consumer, so the 0/4 no-consumer variants are unreachable.
+                if ((variant & 3u) == 0u)
+                    continue;
 
-            std::vector<ShaderMacro> macros;
-            macros.emplace_back("ENABLE_AO", (variant & 1u) != 0u ? "1" : "0");
-            macros.emplace_back("ENABLE_GI", (variant & 2u) != 0u ? "1" : "0");
-            macros.emplace_back("ENABLE_TRAVERSAL_DEBUG", (variant & 4u) != 0u ? "1" : "0");
-            macros.emplace_back("ENABLE_BOUNCE_METADATA", "0");
-            createPipeline(m_Sampling[variant], "uvsr/screen_space_visibility_cs.hlsl", {
-                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(1),
-                nvrhi::BindingLayoutItem::Texture_SRV(2),
-                nvrhi::BindingLayoutItem::Texture_SRV(3),
-                nvrhi::BindingLayoutItem::Texture_UAV(0),
-                nvrhi::BindingLayoutItem::Texture_UAV(1),
-                nvrhi::BindingLayoutItem::Texture_UAV(2)
-            }, &macros);
+                std::vector<ShaderMacro> macros;
+                macros.emplace_back(
+                    "VISIBILITY_ESTIMATOR", std::to_string(estimatorIndex));
+                macros.emplace_back("ENABLE_AO", (variant & 1u) != 0u ? "1" : "0");
+                macros.emplace_back("ENABLE_GI", (variant & 2u) != 0u ? "1" : "0");
+                macros.emplace_back("ENABLE_TRAVERSAL_DEBUG", (variant & 4u) != 0u ? "1" : "0");
+                macros.emplace_back("ENABLE_BOUNCE_METADATA", "0");
+                createPipeline(
+                    m_Sampling[estimatorIndex][variant],
+                    "uvsr/screen_space_visibility_cs.hlsl",
+                    {
+                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(1),
+                        nvrhi::BindingLayoutItem::Texture_SRV(2),
+                        nvrhi::BindingLayoutItem::Texture_SRV(3),
+                        nvrhi::BindingLayoutItem::Texture_UAV(0),
+                        nvrhi::BindingLayoutItem::Texture_UAV(1),
+                        nvrhi::BindingLayoutItem::Texture_UAV(2)
+                    },
+                    &macros);
+            }
         }
 
-        for (uint32_t variant = 0;
-            variant < m_MultiBounceFirstSampling.size();
-            ++variant)
+        for (uint32_t estimatorIndex = 0;
+            estimatorIndex < ImplementedVisibilityEstimatorCount;
+            ++estimatorIndex)
         {
-            std::vector<ShaderMacro> macros;
-            macros.emplace_back("ENABLE_AO", (variant & 1u) != 0u ? "1" : "0");
-            macros.emplace_back("ENABLE_GI", "1");
-            // Traversal-debug views never consume higher-bounce GI and are
-            // clamped to one bounce, so metadata needs no debug permutation.
-            macros.emplace_back("ENABLE_TRAVERSAL_DEBUG", "0");
-            macros.emplace_back("ENABLE_BOUNCE_METADATA", "1");
-            createPipeline(
-                m_MultiBounceFirstSampling[variant],
-                "uvsr/screen_space_visibility_cs.hlsl",
-                {
-                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                    nvrhi::BindingLayoutItem::Texture_SRV(0),
-                    nvrhi::BindingLayoutItem::Texture_SRV(1),
-                    nvrhi::BindingLayoutItem::Texture_SRV(2),
-                    nvrhi::BindingLayoutItem::Texture_SRV(3),
-                    nvrhi::BindingLayoutItem::Texture_UAV(0),
-                    nvrhi::BindingLayoutItem::Texture_UAV(1),
-                    nvrhi::BindingLayoutItem::Texture_UAV(2)
-                },
-                &macros);
+            for (uint32_t variant = 0;
+                variant < m_MultiBounceFirstSampling[estimatorIndex].size();
+                ++variant)
+            {
+                std::vector<ShaderMacro> macros;
+                macros.emplace_back(
+                    "VISIBILITY_ESTIMATOR", std::to_string(estimatorIndex));
+                macros.emplace_back("ENABLE_AO", (variant & 1u) != 0u ? "1" : "0");
+                macros.emplace_back("ENABLE_GI", "1");
+                // Traversal-debug views never consume higher-bounce GI and are
+                // clamped to one bounce, so metadata needs no debug permutation.
+                macros.emplace_back("ENABLE_TRAVERSAL_DEBUG", "0");
+                macros.emplace_back("ENABLE_BOUNCE_METADATA", "1");
+                createPipeline(
+                    m_MultiBounceFirstSampling[estimatorIndex][variant],
+                    "uvsr/screen_space_visibility_cs.hlsl",
+                    {
+                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(1),
+                        nvrhi::BindingLayoutItem::Texture_SRV(2),
+                        nvrhi::BindingLayoutItem::Texture_SRV(3),
+                        nvrhi::BindingLayoutItem::Texture_UAV(0),
+                        nvrhi::BindingLayoutItem::Texture_UAV(1),
+                        nvrhi::BindingLayoutItem::Texture_UAV(2)
+                    },
+                    &macros);
+            }
         }
 
-        for (uint32_t variant = 0;
-            variant < m_IndirectBounceSampling.size();
-            ++variant)
+        for (uint32_t estimatorIndex = 0;
+            estimatorIndex < ImplementedVisibilityEstimatorCount;
+            ++estimatorIndex)
         {
-            std::vector<ShaderMacro> indirectBounceMacros;
-            indirectBounceMacros.emplace_back("ENABLE_AO", "0");
-            indirectBounceMacros.emplace_back("ENABLE_GI", "1");
-            indirectBounceMacros.emplace_back("ENABLE_TRAVERSAL_DEBUG", "0");
-            indirectBounceMacros.emplace_back("ENABLE_BOUNCE_REINJECTION", "1");
-            indirectBounceMacros.emplace_back(
-                "INITIALIZE_BOUNCE_CUMULATIVE", variant == 0u ? "1" : "0");
-            createPipeline(
-                m_IndirectBounceSampling[variant],
-                "uvsr/screen_space_visibility_cs.hlsl",
-                {
-                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(1),
-                nvrhi::BindingLayoutItem::Texture_SRV(2),
-                nvrhi::BindingLayoutItem::Texture_SRV(3),
-                nvrhi::BindingLayoutItem::Texture_SRV(4),
-                nvrhi::BindingLayoutItem::Texture_SRV(5),
-                nvrhi::BindingLayoutItem::Texture_SRV(6),
-                nvrhi::BindingLayoutItem::Texture_UAV(0),
-                nvrhi::BindingLayoutItem::Texture_UAV(1)
-                },
-                &indirectBounceMacros);
+            for (uint32_t variant = 0;
+                variant < m_IndirectBounceSampling[estimatorIndex].size();
+                ++variant)
+            {
+                std::vector<ShaderMacro> indirectBounceMacros;
+                indirectBounceMacros.emplace_back(
+                    "VISIBILITY_ESTIMATOR", std::to_string(estimatorIndex));
+                indirectBounceMacros.emplace_back("ENABLE_AO", "0");
+                indirectBounceMacros.emplace_back("ENABLE_GI", "1");
+                indirectBounceMacros.emplace_back("ENABLE_TRAVERSAL_DEBUG", "0");
+                indirectBounceMacros.emplace_back("ENABLE_BOUNCE_REINJECTION", "1");
+                indirectBounceMacros.emplace_back(
+                    "INITIALIZE_BOUNCE_CUMULATIVE", variant == 0u ? "1" : "0");
+                createPipeline(
+                    m_IndirectBounceSampling[estimatorIndex][variant],
+                    "uvsr/screen_space_visibility_cs.hlsl",
+                    {
+                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(1),
+                        nvrhi::BindingLayoutItem::Texture_SRV(2),
+                        nvrhi::BindingLayoutItem::Texture_SRV(3),
+                        nvrhi::BindingLayoutItem::Texture_SRV(4),
+                        nvrhi::BindingLayoutItem::Texture_SRV(5),
+                        nvrhi::BindingLayoutItem::Texture_SRV(6),
+                        nvrhi::BindingLayoutItem::Texture_UAV(0),
+                        nvrhi::BindingLayoutItem::Texture_UAV(1)
+                    },
+                    &indirectBounceMacros);
+            }
         }
 
         createPipeline(m_DepthHierarchy, "uvsr/screen_space_depth_hierarchy_cs.hlsl", {
@@ -308,12 +336,15 @@ namespace uvsr
 
     void ScreenSpaceVisibilityPass::ReleaseResources()
     {
-        for (nvrhi::BindingSetHandle& bindingSet : m_SamplingBindingSets)
-            bindingSet = nullptr;
-        for (nvrhi::BindingSetHandle& bindingSet : m_MultiBounceFirstBindingSets)
-            bindingSet = nullptr;
-        for (nvrhi::BindingSetHandle& bindingSet : m_IndirectBounceBindingSets)
-            bindingSet = nullptr;
+        for (auto& estimatorBindingSets : m_SamplingBindingSets)
+            for (nvrhi::BindingSetHandle& bindingSet : estimatorBindingSets)
+                bindingSet = nullptr;
+        for (auto& estimatorBindingSets : m_MultiBounceFirstBindingSets)
+            for (nvrhi::BindingSetHandle& bindingSet : estimatorBindingSets)
+                bindingSet = nullptr;
+        for (auto& estimatorBindingSets : m_IndirectBounceBindingSets)
+            for (nvrhi::BindingSetHandle& bindingSet : estimatorBindingSets)
+                bindingSet = nullptr;
         m_DepthHierarchyBindingSet = nullptr;
         for (nvrhi::BindingSetHandle& bindingSet : m_CompositeBindingSets)
             bindingSet = nullptr;
@@ -338,12 +369,15 @@ namespace uvsr
 
     void ScreenSpaceVisibilityPass::ResetBindingCache()
     {
-        for (nvrhi::BindingSetHandle& bindingSet : m_SamplingBindingSets)
-            bindingSet = nullptr;
-        for (nvrhi::BindingSetHandle& bindingSet : m_MultiBounceFirstBindingSets)
-            bindingSet = nullptr;
-        for (nvrhi::BindingSetHandle& bindingSet : m_IndirectBounceBindingSets)
-            bindingSet = nullptr;
+        for (auto& estimatorBindingSets : m_SamplingBindingSets)
+            for (nvrhi::BindingSetHandle& bindingSet : estimatorBindingSets)
+                bindingSet = nullptr;
+        for (auto& estimatorBindingSets : m_MultiBounceFirstBindingSets)
+            for (nvrhi::BindingSetHandle& bindingSet : estimatorBindingSets)
+                bindingSet = nullptr;
+        for (auto& estimatorBindingSets : m_IndirectBounceBindingSets)
+            for (nvrhi::BindingSetHandle& bindingSet : estimatorBindingSets)
+                bindingSet = nullptr;
         m_DepthHierarchyBindingSet = nullptr;
         for (nvrhi::BindingSetHandle& bindingSet : m_CompositeBindingSets)
             bindingSet = nullptr;
@@ -471,9 +505,13 @@ namespace uvsr
         const uint32_t consumerVariant =
             (settings.ambientOcclusion.enabled ? 1u : 0u) |
             (settings.indirectDiffuse.enabled ? 2u : 0u);
+        assert(settings.estimator != VisibilityEstimator::GTCosine &&
+            "GTCosine remains gated on GTUniform promotion");
+        const uint32_t estimatorIndex =
+            settings.estimator == VisibilityEstimator::GTUniform ? 1u : 0u;
         const bool traversalDebugActive =
             settings.debug.mode >= ScreenSpaceVisibilityDebugMode::ReceiverNormal &&
-            settings.debug.mode <= ScreenSpaceVisibilityDebugMode::ThicknessInterval;
+            settings.debug.mode <= ScreenSpaceVisibilityDebugMode::GtEndpointOrder;
         const uint32_t samplingVariant = consumerVariant |
             (traversalDebugActive ? 4u : 0u);
 
@@ -577,11 +615,11 @@ namespace uvsr
             const uint32_t multiBounceVariant =
                 settings.ambientOcclusion.enabled ? 1u : 0u;
             Pipeline& pipeline = writeBounceMetadata
-                ? m_MultiBounceFirstSampling[multiBounceVariant]
-                : m_Sampling[samplingVariant];
+                ? m_MultiBounceFirstSampling[estimatorIndex][multiBounceVariant]
+                : m_Sampling[estimatorIndex][samplingVariant];
             nvrhi::BindingSetHandle& bindingSet = writeBounceMetadata
-                ? m_MultiBounceFirstBindingSets[multiBounceVariant]
-                : m_SamplingBindingSets[samplingVariant];
+                ? m_MultiBounceFirstBindingSets[estimatorIndex][multiBounceVariant]
+                : m_SamplingBindingSets[estimatorIndex][samplingVariant];
             if (!bindingSet)
             {
                 nvrhi::BindingSetDesc bindings;
@@ -625,9 +663,10 @@ namespace uvsr
             commandList->writeBuffer(m_ConstantBuffer, &constants, sizeof(constants));
 
             nvrhi::BindingSetHandle& bindingSet =
-                m_IndirectBounceBindingSets[bounceIndex - 1u];
+                m_IndirectBounceBindingSets[estimatorIndex][bounceIndex - 1u];
             const uint32_t pipelineVariant = bounceIndex > 1u ? 1u : 0u;
-            Pipeline& pipeline = m_IndirectBounceSampling[pipelineVariant];
+            Pipeline& pipeline =
+                m_IndirectBounceSampling[estimatorIndex][pipelineVariant];
             if (!bindingSet)
             {
                 nvrhi::BindingSetDesc bindings;

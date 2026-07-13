@@ -4,8 +4,12 @@
 #include <donut/shaders/binding_helpers.hlsli>
 #include "pbr.hlsli"
 #include "radial_visibility_mask.hlsli"
+#include "visibility_estimator_shared.h"
 #include "screen_space_visibility_cb.h"
 
+#ifndef VISIBILITY_ESTIMATOR
+#define VISIBILITY_ESTIMATOR 0
+#endif
 #ifndef ENABLE_AO
 #define ENABLE_AO 1
 #endif
@@ -24,6 +28,9 @@
 #ifndef ENABLE_BOUNCE_METADATA
 #define ENABLE_BOUNCE_METADATA 0
 #endif
+
+#define VisibilityEstimator_PaperAngular 0
+#define VisibilityEstimator_GTUniform 1
 
 cbuffer c_Visibility : register(b0)
 {
@@ -186,19 +193,15 @@ bool ProjectViewPosition(float3 positionVS, out float2 pixelPosition)
     return all(isfinite(pixelPosition));
 }
 
-VisibilityInterval BuildVisibilityInterval(
-    float3 frontDelta,
+VisibilityInterval BuildPaperVisibilityInterval(
     float3 frontDirection,
+    float3 backDirection,
     float3 viewDirection,
-    float effectiveThickness,
     float samplingSide,
     float projectedNormalAngle,
     out float frontAngle,
     out float backAngle)
 {
-    float3 backDelta = frontDelta - viewDirection * effectiveThickness;
-    float3 backDirection = SafeNormalize(backDelta, frontDirection);
-
     frontAngle = VisibilityFastAcos(dot(frontDirection, viewDirection));
     backAngle = VisibilityFastAcos(dot(backDirection, viewDirection));
 
@@ -347,6 +350,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     uint newlyCoveredSectorCount = 0u;
     uint alreadyCoveredSectorCount = 0u;
     uint accumulatedMaskPopulation = 0u;
+    uint gtEndpointOrderFailureCount = 0u;
     float frontAngleSum = 0.0f;
     float backAngleSum = 0.0f;
     float thicknessAngleSum = 0.0f;
@@ -360,9 +364,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         float slicePhase = (float(sliceIndex) + sliceRotation) /
             float(g_Visibility.sliceCount);
         float sliceAzimuth = slicePhase * VisibilityPi;
-        // Restore the paper/authors' coherent image-plane slice construction.
-        // The previous partial GT-VBAO conversion changed the slice basis but
-        // retained receiver-ray thickness, biasing off-axis angular intervals.
+        // Both estimators consume the same coherent image-plane slice. Their
+        // projected-normal representation and measure remain compile-time
+        // contracts rather than a runtime hybrid.
         float3 screenSliceDirection = float3(
             cos(sliceAzimuth), sin(sliceAzimuth), 0.0f);
         float3 slicePlaneNormal = SafeNormalize(
@@ -373,7 +377,16 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         float sectorPhase = VisibilityRandom(
             receiverPixel, 2u + sliceIndex, phase);
 
-        float3 projectedNormal = receiverNormalVS - slicePlaneNormal *
+        float3 projectedNormal;
+#if VISIBILITY_ESTIMATOR == VisibilityEstimator_GTUniform
+        SliceMeasure sliceMeasure = BuildSliceMeasure(
+            viewDirection, sliceTangent, receiverNormalVS);
+        projectedNormal = sliceMeasure.valid != 0u
+            ? sliceMeasure.cosGamma * sliceMeasure.V -
+                sliceMeasure.sinGamma * sliceMeasure.S
+            : viewDirection;
+#else
+        projectedNormal = receiverNormalVS - slicePlaneNormal *
             dot(receiverNormalVS, slicePlaneNormal);
         float projectedNormalLengthSquared = dot(projectedNormal, projectedNormal);
         float projectedNormalAngle = 0.0f;
@@ -389,6 +402,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         {
             projectedNormal = viewDirection;
         }
+#endif
 
         if (traversalDebugActive && sliceIndex == 0u)
         {
@@ -545,18 +559,42 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     continue;
                 }
                 float3 directionToSample = frontDelta * rsqrt(frontLengthSquared);
-
-                float frontAngle;
-                float backAngle;
-                VisibilityInterval interval = BuildVisibilityInterval(
-                    frontDelta,
-                    directionToSample,
+                float3 backDelta = ComputeBackDelta(
+                    receiverPositionVS,
+                    samplePositionVS,
                     viewDirection,
                     effectiveThickness,
+                    g_Visibility.orthographicProjection != 0u);
+                float3 backDirection = SafeNormalize(
+                    backDelta, directionToSample);
+
+                float frontAngle = 0.0f;
+                float backAngle = 0.0f;
+                VisibilityInterval interval;
+#if VISIBILITY_ESTIMATOR == VisibilityEstimator_GTUniform
+                GtIntervalBuildResult gtInterval = BuildGtIntervalDebug(
+                    directionToSample,
+                    backDirection,
+                    sliceMeasure);
+                interval = gtInterval.interval;
+#if ENABLE_TRAVERSAL_DEBUG
+                gtEndpointOrderFailureCount +=
+                    gtInterval.endpointOrderValid == 0u ? 1u : 0u;
+                frontAngle = VisibilityFastAcos(
+                    dot(directionToSample, viewDirection));
+                backAngle = VisibilityFastAcos(
+                    dot(backDirection, viewDirection));
+#endif
+#else
+                interval = BuildPaperVisibilityInterval(
+                    directionToSample,
+                    backDirection,
+                    viewDirection,
                     samplingSide,
                     projectedNormalAngle,
                     frontAngle,
                     backAngle);
+#endif
                 uint candidateBits = g_Visibility.sectorHitCriterion ==
                     SectorHitCriterion_Round
                     ? MakeStochasticSectorRangeMask(interval, sectorPhase)
@@ -665,10 +703,18 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 if (!any(weightedSource > 0.0f))
                     continue;
 
+#if VISIBILITY_ESTIMATOR == VisibilityEstimator_GTUniform
+                sliceIndirectDiffuse += sourceRadiance *
+                    ComputeGtUniformGiSampleWeight(
+                        newSectorCount,
+                        receiverCosine,
+                        sourceCosine);
+#else
                 float angularCoverage = float(newSectorCount) /
                     float(RadialVisibilitySectorCount);
                 sliceIndirectDiffuse += weightedSource * receiverCosine *
                     angularCoverage;
+#endif
 #endif
             }
 
@@ -680,7 +726,11 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         }
 
 #if ENABLE_AO
+#if VISIBILITY_ESTIMATOR == VisibilityEstimator_GTUniform
+        ambientVisibilitySum += ResolveGtUniformAmbientVisibility(visibilityMask);
+#else
         ambientVisibilitySum += GetSliceVisibility(visibilityMask);
+#endif
 #endif
 #if ENABLE_GI
         indirectDiffuseSum += sliceIndirectDiffuse;
@@ -691,11 +741,17 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 
     float inverseSliceCount = 1.0f / float(g_Visibility.sliceCount);
     float ambientVisibility = saturate(ambientVisibilitySum * inverseSliceCount);
-    float3 indirectDiffuse =
-        // Algorithm 1's accumulator is pi-normalized incident diffuse. Store
-        // explicit irradiance so the composite's Lambertian 1/pi reproduces
-        // the paper-scale result instead of making GI an extra 1/pi darker.
-        max(indirectDiffuseSum * (VisibilityPi * inverseSliceCount), 0.0f);
+    // PaperAngular preserves Algorithm 1's pi normalization. GTUniform bits
+    // are equal mass under p(omega)=1/(2*pi), retain the explicit receiver
+    // cosine, and therefore require 2*pi. These are compile-time formulations,
+    // not selectable pieces of one hybrid estimator.
+#if VISIBILITY_ESTIMATOR == VisibilityEstimator_GTUniform
+    float irradianceNormalization = GetGtUniformIrradianceNormalization();
+#else
+    float irradianceNormalization = VisibilityPi;
+#endif
+    float3 indirectDiffuse = max(indirectDiffuseSum *
+        (irradianceNormalization * inverseSliceCount), 0.0f);
     if (!IsFiniteFloat3(indirectDiffuse))
         indirectDiffuse = 0.0f;
 
@@ -731,6 +787,12 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         debugValue = (backAngleSum / angleNormalization).xxx;
     else if (g_Visibility.debugMode == 14u)
         debugValue = (thicknessAngleSum / angleNormalization).xxx;
+    else if (g_Visibility.debugMode == 15u)
+        debugValue = float3(
+            float(gtEndpointOrderFailureCount) /
+                max(float(validSampleCount), 1.0f),
+            0.0f,
+            0.0f);
 
 #if ENABLE_AO
     u_AmbientVisibility[dispatchPixel] = ambientVisibility;

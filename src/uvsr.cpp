@@ -3013,6 +3013,41 @@ protected:
             {
                 SharedSamplingSettings& sampling = visibility.sampling;
                 bool samplingChanged = false;
+                static const char* estimatorLabels[] = {
+                    "Paper Angular",
+                    "GT Uniform",
+                    "GT Cosine (Gated)"
+                };
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (ImGui::BeginCombo(
+                    "Estimator",
+                    estimatorLabels[int(visibility.estimator)]))
+                {
+                    for (int estimatorIndex = 0;
+                        estimatorIndex < int(std::size(estimatorLabels));
+                        ++estimatorIndex)
+                    {
+                        const bool implemented = estimatorIndex <
+                            int(ImplementedVisibilityEstimatorCount);
+                        if (!implemented)
+                            ImGui::BeginDisabled();
+                        const auto estimator = VisibilityEstimator(estimatorIndex);
+                        const bool selected = visibility.estimator == estimator;
+                        if (ImGui::Selectable(
+                                estimatorLabels[estimatorIndex], selected) &&
+                            implemented)
+                        {
+                            visibility.estimator = estimator;
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                        if (!implemented)
+                            ImGui::EndDisabled();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "A/B the shipping paper-angular estimator against the complete no-acos GTUniform formulation. GTCosine remains disabled until GTUniform clears reference, image-quality, and hardware promotion gates.");
                 samplingChanged |= ImGui::SliderFloat(
                     "Radius", &sampling.radius, 0.01f, std::max(m_app->GetSceneDiagonal() * 0.1f, 1.f), "%.3f");
                 ImGui::SetItemTooltip("Set the world-space radius projected into screen space.");
@@ -3142,7 +3177,8 @@ protected:
                     "Projected Normal",
                     "Front Horizon Angle",
                     "Back Horizon Angle",
-                    "Thickness Interval"
+                    "Thickness Interval",
+                    "GT Endpoint Order Failures"
                 };
                 ImGui::SetNextItemWidth(settingsControlWidth);
                 if (ImGui::BeginCombo(
