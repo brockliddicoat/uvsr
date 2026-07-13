@@ -31,6 +31,9 @@
 #ifndef ENABLE_BOUNCE_STATISTICS
 #define ENABLE_BOUNCE_STATISTICS 0
 #endif
+#ifndef STATIC_SLICE_COUNT
+#define STATIC_SLICE_COUNT 0
+#endif
 
 #define VisibilityEstimator_PaperAngular 0
 #define VisibilityEstimator_GTUniform 1
@@ -400,11 +403,21 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     float3 debugProjectedNormal = receiverNormalVS;
     float3 debugSourceNormal = 0.0f;
 
+#if STATIC_SLICE_COUNT
+    static const uint activeSliceCount = 1u;
+    [unroll]
+#else
+    uint activeSliceCount = max(g_Visibility.sliceCount, 1u);
     [loop]
-    for (uint sliceIndex = 0u; sliceIndex < g_Visibility.sliceCount; ++sliceIndex)
+#endif
+    for (uint sliceIndex = 0u; sliceIndex < activeSliceCount; ++sliceIndex)
     {
+#if STATIC_SLICE_COUNT
+        float slicePhase = sliceRotation;
+#else
         float slicePhase = (float(sliceIndex) + sliceRotation) /
-            float(g_Visibility.sliceCount);
+            float(activeSliceCount);
+#endif
         float sliceAzimuth = slicePhase * VisibilityPi;
         // Both estimators consume the same coherent image-plane slice. Their
         // projected-normal representation and measure remain compile-time
@@ -781,7 +794,11 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             accumulatedMaskPopulation += CountOccludedSectors(visibilityMask);
     }
 
-    float inverseSliceCount = 1.0f / float(g_Visibility.sliceCount);
+#if STATIC_SLICE_COUNT
+    static const float inverseSliceCount = 1.0f;
+#else
+    float inverseSliceCount = 1.0f / float(activeSliceCount);
+#endif
     float ambientVisibility = saturate(ambientVisibilitySum * inverseSliceCount);
     // PaperAngular preserves Algorithm 1's pi normalization. GTUniform bits
     // are equal mass under p(omega)=1/(2*pi), retain the explicit receiver
@@ -797,9 +814,13 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     if (!IsFiniteFloat3(indirectDiffuse))
         indirectDiffuse = 0.0f;
 
-    float maximumSamples = float(g_Visibility.sliceCount * g_Visibility.sampleCount);
-    float maximumSectors = float(g_Visibility.sliceCount *
-        RadialVisibilitySectorCount);
+#if STATIC_SLICE_COUNT
+    float maximumSamples = float(g_Visibility.sampleCount);
+    float maximumSectors = float(RadialVisibilitySectorCount);
+#else
+    float maximumSamples = float(activeSliceCount * g_Visibility.sampleCount);
+    float maximumSectors = float(activeSliceCount * RadialVisibilitySectorCount);
+#endif
     float sampleNormalization = max(maximumSamples, 1.0f);
     float sectorNormalization = max(maximumSectors, 1.0f);
     float angleNormalization = max(float(validSampleCount) * VisibilityPi, VisibilityPi);

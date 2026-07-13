@@ -3199,6 +3199,22 @@ protected:
                 ImGui::Checkbox("Freeze Sampling Phase", &visibility.debug.freezeSamplingPhase);
                 ImGui::SetItemTooltip("Hold slice rotation and radial jitter at deterministic phase zero.");
 
+                int developerSliceCount = int(std::clamp(
+                    visibility.debug.developerSliceCount, 1u, 8u));
+                if (ImGui::SliderInt(
+                        "Developer Slices",
+                        &developerSliceCount,
+                        1,
+                        8,
+                        "%d",
+                        ImGuiSliderFlags_AlwaysClamp))
+                {
+                    visibility.debug.developerSliceCount =
+                        uint32_t(developerSliceCount);
+                }
+                ImGui::SetItemTooltip(
+                    "One uses UVSR's statically unrolled production shader. Values 2-8 select the separate general multi-slice validation path and multiply traversal work.");
+
                 const bool canCollectHigherBounceStatistics =
                     visibility.indirectDiffuse.enabled &&
                     visibility.indirectDiffuse.bounceCount > 1u;

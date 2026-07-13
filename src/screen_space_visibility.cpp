@@ -168,17 +168,21 @@ namespace uvsr
                 variant < m_Sampling[estimatorIndex].size();
                 ++variant)
             {
+                const uint32_t slicePermutation = variant / 8u;
+                const uint32_t samplingVariant = variant % 8u;
                 // Render() releases the pass when neither AO nor GI has a
                 // consumer, so the 0/4 no-consumer variants are unreachable.
-                if ((variant & 3u) == 0u)
+                if ((samplingVariant & 3u) == 0u)
                     continue;
 
                 std::vector<ShaderMacro> macros;
                 macros.emplace_back(
                     "VISIBILITY_ESTIMATOR", std::to_string(estimatorIndex));
-                macros.emplace_back("ENABLE_AO", (variant & 1u) != 0u ? "1" : "0");
-                macros.emplace_back("ENABLE_GI", (variant & 2u) != 0u ? "1" : "0");
-                macros.emplace_back("ENABLE_TRAVERSAL_DEBUG", (variant & 4u) != 0u ? "1" : "0");
+                macros.emplace_back(
+                    "STATIC_SLICE_COUNT", slicePermutation == 0u ? "1" : "0");
+                macros.emplace_back("ENABLE_AO", (samplingVariant & 1u) != 0u ? "1" : "0");
+                macros.emplace_back("ENABLE_GI", (samplingVariant & 2u) != 0u ? "1" : "0");
+                macros.emplace_back("ENABLE_TRAVERSAL_DEBUG", (samplingVariant & 4u) != 0u ? "1" : "0");
                 macros.emplace_back("ENABLE_BOUNCE_METADATA", "0");
                 createPipeline(
                     m_Sampling[estimatorIndex][variant],
@@ -205,10 +209,14 @@ namespace uvsr
                 variant < m_MultiBounceFirstSampling[estimatorIndex].size();
                 ++variant)
             {
+                const uint32_t slicePermutation = variant / 2u;
+                const uint32_t samplingVariant = variant % 2u;
                 std::vector<ShaderMacro> macros;
                 macros.emplace_back(
                     "VISIBILITY_ESTIMATOR", std::to_string(estimatorIndex));
-                macros.emplace_back("ENABLE_AO", (variant & 1u) != 0u ? "1" : "0");
+                macros.emplace_back(
+                    "STATIC_SLICE_COUNT", slicePermutation == 0u ? "1" : "0");
+                macros.emplace_back("ENABLE_AO", (samplingVariant & 1u) != 0u ? "1" : "0");
                 macros.emplace_back("ENABLE_GI", "1");
                 // Traversal-debug views never consume higher-bounce GI and are
                 // clamped to one bounce, so metadata needs no debug permutation.
@@ -239,11 +247,15 @@ namespace uvsr
                 variant < m_IndirectBounceSampling[estimatorIndex].size();
                 ++variant)
             {
-                const bool initializeCumulative = (variant & 1u) == 0u;
-                const bool collectReceiverStatistics = (variant & 2u) != 0u;
+                const uint32_t slicePermutation = variant / 4u;
+                const uint32_t bounceVariant = variant % 4u;
+                const bool initializeCumulative = (bounceVariant & 1u) == 0u;
+                const bool collectReceiverStatistics = (bounceVariant & 2u) != 0u;
                 std::vector<ShaderMacro> indirectBounceMacros;
                 indirectBounceMacros.emplace_back(
                     "VISIBILITY_ESTIMATOR", std::to_string(estimatorIndex));
+                indirectBounceMacros.emplace_back(
+                    "STATIC_SLICE_COUNT", slicePermutation == 0u ? "1" : "0");
                 indirectBounceMacros.emplace_back("ENABLE_AO", "0");
                 indirectBounceMacros.emplace_back("ENABLE_GI", "1");
                 indirectBounceMacros.emplace_back("ENABLE_TRAVERSAL_DEBUG", "0");
@@ -599,7 +611,9 @@ namespace uvsr
         constants.ambientColorTop = ambientColorTop;
         constants.ambientColorBottom = ambientColorBottom;
         constants.frameIndex = settings.debug.freezeSamplingPhase ? 0u : frameIndex;
-        constants.sliceCount = 1u;
+        constants.sliceCount = std::clamp(
+            settings.debug.developerSliceCount, 1u, 8u);
+        const uint32_t slicePermutation = constants.sliceCount > 1u ? 1u : 0u;
         const uint32_t primarySampleCount = std::clamp(
             settings.sampling.sampleCount, 1u, 64u);
         constants.sampleCount = primarySampleCount;
@@ -685,12 +699,18 @@ namespace uvsr
             const bool writeBounceMetadata = activeBounceCount > 1u;
             const uint32_t multiBounceVariant =
                 settings.ambientOcclusion.enabled ? 1u : 0u;
+            const uint32_t sliceSamplingOffset = slicePermutation * 8u;
+            const uint32_t sliceMultiBounceOffset = slicePermutation * 2u;
             Pipeline& pipeline = writeBounceMetadata
-                ? m_MultiBounceFirstSampling[estimatorIndex][multiBounceVariant]
-                : m_Sampling[estimatorIndex][samplingVariant];
+                ? m_MultiBounceFirstSampling[estimatorIndex]
+                    [multiBounceVariant + sliceMultiBounceOffset]
+                : m_Sampling[estimatorIndex]
+                    [samplingVariant + sliceSamplingOffset];
             nvrhi::BindingSetHandle& bindingSet = writeBounceMetadata
-                ? m_MultiBounceFirstBindingSets[estimatorIndex][multiBounceVariant]
-                : m_SamplingBindingSets[estimatorIndex][samplingVariant];
+                ? m_MultiBounceFirstBindingSets[estimatorIndex]
+                    [multiBounceVariant + sliceMultiBounceOffset]
+                : m_SamplingBindingSets[estimatorIndex]
+                    [samplingVariant + sliceSamplingOffset];
             if (!bindingSet)
             {
                 nvrhi::BindingSetDesc bindings;
@@ -735,12 +755,15 @@ namespace uvsr
 
             const uint32_t statisticsBindingOffset =
                 collectHigherBounceStatisticsThisFrame ? 3u : 0u;
+            const uint32_t sliceBindingOffset = slicePermutation * 6u;
             nvrhi::BindingSetHandle& bindingSet =
                 m_IndirectBounceBindingSets[estimatorIndex]
-                    [bounceIndex - 1u + statisticsBindingOffset];
+                    [bounceIndex - 1u + statisticsBindingOffset +
+                        sliceBindingOffset];
             const uint32_t pipelineVariant =
                 (bounceIndex > 1u ? 1u : 0u) |
-                (collectHigherBounceStatisticsThisFrame ? 2u : 0u);
+                (collectHigherBounceStatisticsThisFrame ? 2u : 0u) |
+                (slicePermutation * 4u);
             Pipeline& pipeline =
                 m_IndirectBounceSampling[estimatorIndex][pipelineVariant];
             if (!bindingSet)

@@ -19,6 +19,7 @@ namespace uvsr
 {
     inline constexpr uint32_t MaxIndirectDiffuseBounceCount = 4;
     inline constexpr uint32_t ImplementedVisibilityEstimatorCount = 2;
+    inline constexpr uint32_t VisibilitySlicePermutationCount = 2;
     // Kept bit-identical to lighting_contribution.hlsli so CPU scene systems
     // can feed conservative source-availability facts into the shared shader
     // gate. Unknown sources are represented by a clear bit and stay active.
@@ -134,6 +135,9 @@ namespace uvsr
         // Uses a dedicated later-bounce permutation so production traversal
         // pays no wave-reduction or atomic-counter cost.
         bool collectHigherBounceReceiverStatistics = false;
+        // One selects the production static specialization. Values above one
+        // select the separate general developer/HQ slice permutation.
+        uint32_t developerSliceCount = 1u;
         SectorHitCriterion sectorHitCriterion = SectorHitCriterion::Round;
     };
 
@@ -240,12 +244,16 @@ namespace uvsr
 
         // AO, GI and traversal-debug specialization prevents the full sampling
         // kernel from carrying every consumer's registers and texture traffic.
-        std::array<std::array<Pipeline, 8>, ImplementedVisibilityEstimatorCount>
+        // The upper eight slots retain the general developer multi-slice path;
+        // the lower eight are statically specialized to one production slice.
+        std::array<std::array<Pipeline, 8 * VisibilitySlicePermutationCount>,
+            ImplementedVisibilityEstimatorCount>
             m_Sampling;
         // The packed receiver metadata needed by a later bounce has its own GI
         // specialization. One-bounce rendering therefore avoids even the
         // receiver source-alpha read and metadata output arithmetic.
-        std::array<std::array<Pipeline, 2>, ImplementedVisibilityEstimatorCount>
+        std::array<std::array<Pipeline, 2 * VisibilitySlicePermutationCount>,
+            ImplementedVisibilityEstimatorCount>
             m_MultiBounceFirstSampling;
         // Later bounces use GI-only specializations. Bounce two initializes the
         // cumulative target; bounces three and four add to it in place. Keeping
@@ -253,7 +261,8 @@ namespace uvsr
         // register and SRV footprint.
         // Bits 0 and 1 select cumulative initialization and the opt-in
         // receiver-gate statistics permutation respectively.
-        std::array<std::array<Pipeline, 4>, ImplementedVisibilityEstimatorCount>
+        std::array<std::array<Pipeline, 4 * VisibilitySlicePermutationCount>,
+            ImplementedVisibilityEstimatorCount>
             m_IndirectBounceSampling;
         Pipeline m_DepthHierarchy;
         Pipeline m_Composite;
@@ -276,13 +285,16 @@ namespace uvsr
         // the descriptor sets instead of allocating one per active bounce on
         // every frame. The three later-bounce slots encode the fixed resource
         // rotations for requested bounces two through four.
-        std::array<std::array<nvrhi::BindingSetHandle, 8>,
+        std::array<std::array<nvrhi::BindingSetHandle,
+            8 * VisibilitySlicePermutationCount>,
             ImplementedVisibilityEstimatorCount> m_SamplingBindingSets;
-        std::array<std::array<nvrhi::BindingSetHandle, 2>,
+        std::array<std::array<nvrhi::BindingSetHandle,
+            2 * VisibilitySlicePermutationCount>,
             ImplementedVisibilityEstimatorCount> m_MultiBounceFirstBindingSets;
         // Three fixed bounce rotations, followed by the same rotations with
         // the statistics UAV bound.
-        std::array<std::array<nvrhi::BindingSetHandle, 6>,
+        std::array<std::array<nvrhi::BindingSetHandle,
+            6 * VisibilitySlicePermutationCount>,
             ImplementedVisibilityEstimatorCount> m_IndirectBounceBindingSets;
         nvrhi::BindingSetHandle m_DepthHierarchyBindingSet;
         // The first slot reads the first-bounce frontier; the second reads the
