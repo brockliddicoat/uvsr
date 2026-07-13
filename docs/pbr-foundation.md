@@ -54,8 +54,11 @@ evaluated yet.
 
 The original four material targets total 24 bytes per pixel. UVSR changes
 their interpretation without increasing their sizes, then adds one `R8_UNORM`
-attachment to preserve authored material ambient occlusion. Total material
-G-buffer bandwidth is 25 bytes per pixel, excluding depth.
+attachment for authored material ambient occlusion, one `RG32_UINT` attachment
+for stable material/instance identity, and one `R8_UNORM` application-reactive
+mask. Total always-on PBR G-buffer storage is 34 bytes per pixel, excluding
+depth. The identity attachment doubles as the picking source, avoiding a
+second geometry draw in the normal deferred PBR path.
 
 | Target | Format | Channels |
 |---|---|---|
@@ -64,7 +67,9 @@ G-buffer bandwidth is 25 bytes per pixel, excluding depth.
 | G2 | `RGBA16_SNORM` | Linear shading normal in RGB; perceptual roughness in A |
 | G3 | `RGBA16_FLOAT` | Scene-linear emissive radiance in RGB; metalness in A |
 | G4 | `R8_UNORM` | Authored material ambient occlusion for approximate indirect diffuse only |
-| G5 (conditional) | `RGBA16_FLOAT` | Previous-minus-current pixel motion in XY; previous-minus-current device-depth delta in Z; A unused |
+| G5 | `RG32_UINT` | Stable scene material ID in R; stable mesh-instance ID in G |
+| G6 | `R8_UNORM` | Explicit reactive contribution from alpha coverage, emissive shading, and reactive transport features |
+| G7 (conditional) | `RGBA16_FLOAT` | Current-to-previous pixel motion in XY; previous-minus-current device-depth delta in Z; validity in A |
 
 Base-color quantization follows ordinary sRGB8 material storage. Geometric
 normals have 8 bits per octahedral component; this is sufficient for
@@ -72,10 +77,15 @@ back-side validity checks but not intended for high-frequency shading.
 Shading normals and perceptual roughness use signed 16-bit normalized storage.
 Emission and metalness use half floats. IOR has 256 steps over `[1,3]`, which
 provides finer common-dielectric F0 precision than storing raw F0 in UNORM8.
-Feature flags are exact at eight bits. Material ambient occlusion has eight
-linear bits. G5 is present only while screen-space temporal filtering is active;
-preserving Z makes disocclusion validation projection-correct under camera
-motion. It is not counted in the 25-byte material G-buffer total.
+Feature flags are exact at eight bits. Material ambient occlusion and the
+reactive contribution have eight linear bits. The 32-bit identity channels
+avoid false temporal matches and picking aliases in scenes with more than
+65,535 materials or instances. G7 is present while either NRA-RTAA or screen-
+space temporal filtering needs velocity. Its XY convention is
+current-to-previous in pixels and Donut's writer removes projection jitter
+exactly once. Preserving Z makes disocclusion validation projection-correct
+under camera motion; A distinguishes a valid zero velocity from cleared or
+behind-camera data. G7 is not counted in the 34-byte always-on total.
 
 The deferred decoder normalizes both normals and flips an invalid shading
 normal back into the geometric-normal hemisphere. The BSDF rejects light or
