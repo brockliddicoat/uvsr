@@ -20,6 +20,39 @@ using namespace donut::math;
 namespace
 {
     constexpr uint32_t kThreadGroupSize = 8;
+    constexpr uint32_t kMinimumSecondaryBounceSamples = 8;
+
+    bool IsExactGiTransportDebug(
+        uvsr::ScreenSpaceVisibilityDebugMode mode)
+    {
+        return mode >= uvsr::ScreenSpaceVisibilityDebugMode::RawIndirectDiffuse &&
+            mode <= uvsr::ScreenSpaceVisibilityDebugMode::GiLightOnly;
+    }
+
+    uint32_t GetBounceTransportPolicy(
+        uvsr::ScreenSpaceVisibilityDebugMode mode)
+    {
+        if (mode == uvsr::ScreenSpaceVisibilityDebugMode::FinalComposite)
+            return 0u;
+        return IsExactGiTransportDebug(mode) ? 1u : 2u;
+    }
+
+    uint32_t GetIndirectBounceSampleCount(
+        uint32_t primarySampleCount,
+        uint32_t bounceIndex)
+    {
+        primarySampleCount = std::clamp(primarySampleCount, 1u, 64u);
+        if (bounceIndex == 0u)
+            return primarySampleCount;
+
+        // Higher-order diffuse transport carries progressively less energy and
+        // spatial detail. Halve its stochastic budget per bounce, but retain a
+        // small floor for stable thin-emitter discovery. Never raise a custom
+        // primary budget that was already below the floor.
+        const uint32_t minimumSampleCount = std::min(
+            primarySampleCount, kMinimumSecondaryBounceSamples);
+        return std::max(primarySampleCount >> bounceIndex, minimumSampleCount);
+    }
 
     uint64_t HashBytes(uint64_t hash, const void* data, size_t size)
     {
@@ -155,11 +188,70 @@ namespace uvsr
 
         for (uint32_t variant = 0; variant < m_Sampling.size(); ++variant)
         {
+            // Render() releases the pass when neither AO nor GI has a consumer,
+            // so the 0/4 no-consumer variants are unreachable.
+            if ((variant & 3u) == 0u)
+                continue;
+
             std::vector<ShaderMacro> macros;
             macros.emplace_back("ENABLE_AO", (variant & 1u) != 0u ? "1" : "0");
             macros.emplace_back("ENABLE_GI", (variant & 2u) != 0u ? "1" : "0");
             macros.emplace_back("ENABLE_TRAVERSAL_DEBUG", (variant & 4u) != 0u ? "1" : "0");
+            macros.emplace_back("ENABLE_BOUNCE_METADATA", "0");
             createPipeline(m_Sampling[variant], "uvsr/screen_space_visibility_cs.hlsl", {
+                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                nvrhi::BindingLayoutItem::Texture_SRV(0),
+                nvrhi::BindingLayoutItem::Texture_SRV(1),
+                nvrhi::BindingLayoutItem::Texture_SRV(2),
+                nvrhi::BindingLayoutItem::Texture_SRV(3),
+                nvrhi::BindingLayoutItem::Texture_UAV(0),
+                nvrhi::BindingLayoutItem::Texture_UAV(1),
+                nvrhi::BindingLayoutItem::Texture_UAV(2)
+            }, &macros);
+        }
+
+        for (uint32_t variant = 0;
+            variant < m_MultiBounceFirstSampling.size();
+            ++variant)
+        {
+            std::vector<ShaderMacro> macros;
+            macros.emplace_back("ENABLE_AO", (variant & 1u) != 0u ? "1" : "0");
+            macros.emplace_back("ENABLE_GI", "1");
+            // Traversal-debug views never consume higher-bounce GI and are
+            // clamped to one bounce, so metadata needs no debug permutation.
+            macros.emplace_back("ENABLE_TRAVERSAL_DEBUG", "0");
+            macros.emplace_back("ENABLE_BOUNCE_METADATA", "1");
+            createPipeline(
+                m_MultiBounceFirstSampling[variant],
+                "uvsr/screen_space_visibility_cs.hlsl",
+                {
+                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(1),
+                    nvrhi::BindingLayoutItem::Texture_SRV(2),
+                    nvrhi::BindingLayoutItem::Texture_SRV(3),
+                    nvrhi::BindingLayoutItem::Texture_UAV(0),
+                    nvrhi::BindingLayoutItem::Texture_UAV(1),
+                    nvrhi::BindingLayoutItem::Texture_UAV(2)
+                },
+                &macros);
+        }
+
+        for (uint32_t variant = 0;
+            variant < m_IndirectBounceSampling.size();
+            ++variant)
+        {
+            std::vector<ShaderMacro> indirectBounceMacros;
+            indirectBounceMacros.emplace_back("ENABLE_AO", "0");
+            indirectBounceMacros.emplace_back("ENABLE_GI", "1");
+            indirectBounceMacros.emplace_back("ENABLE_TRAVERSAL_DEBUG", "0");
+            indirectBounceMacros.emplace_back("ENABLE_BOUNCE_REINJECTION", "1");
+            indirectBounceMacros.emplace_back(
+                "INITIALIZE_BOUNCE_CUMULATIVE", variant == 0u ? "1" : "0");
+            createPipeline(
+                m_IndirectBounceSampling[variant],
+                "uvsr/screen_space_visibility_cs.hlsl",
+                {
                 nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
                 nvrhi::BindingLayoutItem::Texture_SRV(0),
                 nvrhi::BindingLayoutItem::Texture_SRV(1),
@@ -167,10 +259,11 @@ namespace uvsr
                 nvrhi::BindingLayoutItem::Texture_SRV(3),
                 nvrhi::BindingLayoutItem::Texture_SRV(4),
                 nvrhi::BindingLayoutItem::Texture_SRV(5),
+                nvrhi::BindingLayoutItem::Texture_SRV(6),
                 nvrhi::BindingLayoutItem::Texture_UAV(0),
-                nvrhi::BindingLayoutItem::Texture_UAV(1),
-                nvrhi::BindingLayoutItem::Texture_UAV(2)
-            }, &macros);
+                nvrhi::BindingLayoutItem::Texture_UAV(1)
+                },
+                &indirectBounceMacros);
         }
 
         createPipeline(m_DepthHierarchy, "uvsr/screen_space_depth_hierarchy_cs.hlsl", {
@@ -181,6 +274,9 @@ namespace uvsr
 
         for (uint32_t variant = 0; variant < m_Temporal.size(); ++variant)
         {
+            if (variant == 0u)
+                continue;
+
             std::vector<ShaderMacro> macros;
             macros.emplace_back("ENABLE_AO", (variant & 1u) != 0u ? "1" : "0");
             macros.emplace_back("ENABLE_GI", (variant & 2u) != 0u ? "1" : "0");
@@ -209,7 +305,6 @@ namespace uvsr
                 nvrhi::BindingLayoutItem::Texture_SRV(2),
                 nvrhi::BindingLayoutItem::Texture_SRV(3),
                 nvrhi::BindingLayoutItem::Texture_SRV(4),
-                nvrhi::BindingLayoutItem::Texture_SRV(5),
                 nvrhi::BindingLayoutItem::Texture_UAV(0),
                 nvrhi::BindingLayoutItem::Texture_UAV(1),
                 nvrhi::BindingLayoutItem::Texture_UAV(2)
@@ -237,14 +332,16 @@ namespace uvsr
 
     void ScreenSpaceVisibilityPass::EnsureResources(
         uint2 fullSize,
-        bool temporalEnabled)
+        bool temporalEnabled,
+        bool multipleBouncesEnabled,
+        bool depthHierarchyEnabled)
     {
-        constexpr uint32_t scale = 1u;
         const uint2 samplingSize = fullSize;
 
         if (all(m_FullSize == fullSize) && all(m_SamplingSize == samplingSize) &&
-            m_ResolutionScale == scale &&
             m_TemporalResourcesEnabled == temporalEnabled &&
+            m_MultipleBounceResourcesEnabled == multipleBouncesEnabled &&
+            m_DepthHierarchyResourcesEnabled == depthHierarchyEnabled &&
             m_RawAmbientVisibility)
         {
             return;
@@ -253,8 +350,9 @@ namespace uvsr
         ReleaseResources();
         m_FullSize = fullSize;
         m_SamplingSize = samplingSize;
-        m_ResolutionScale = scale;
         m_TemporalResourcesEnabled = temporalEnabled;
+        m_MultipleBounceResourcesEnabled = multipleBouncesEnabled;
+        m_DepthHierarchyResourcesEnabled = depthHierarchyEnabled;
 
         auto createTexture = [this](
             uint2 size,
@@ -277,19 +375,32 @@ namespace uvsr
         m_RawAmbientVisibility = createTexture(samplingSize, nvrhi::Format::R16_FLOAT,
             "ScreenSpaceVisibility/RawAmbientVisibility");
 
-        nvrhi::TextureDesc hierarchyDesc;
-        hierarchyDesc.width = std::max((fullSize.x + 15u) & ~15u, 16u);
-        hierarchyDesc.height = std::max((fullSize.y + 15u) & ~15u, 16u);
-        hierarchyDesc.format = nvrhi::Format::R16_FLOAT;
-        hierarchyDesc.dimension = nvrhi::TextureDimension::Texture2D;
-        hierarchyDesc.mipLevels = 5;
-        hierarchyDesc.isUAV = true;
-        hierarchyDesc.initialState = nvrhi::ResourceStates::ShaderResource;
-        hierarchyDesc.keepInitialState = true;
-        hierarchyDesc.debugName = "ScreenSpaceVisibility/DepthHierarchy";
-        m_DepthHierarchyTexture = m_Device->createTexture(hierarchyDesc);
-        m_RawIndirectDiffuse = createTexture(samplingSize, nvrhi::Format::RGBA16_FLOAT,
-            "ScreenSpaceVisibility/RawIndirectDiffuseIrradiance");
+        if (depthHierarchyEnabled)
+        {
+            nvrhi::TextureDesc hierarchyDesc;
+            hierarchyDesc.width = std::max((fullSize.x + 15u) & ~15u, 16u);
+            hierarchyDesc.height = std::max((fullSize.y + 15u) & ~15u, 16u);
+            hierarchyDesc.format = nvrhi::Format::R16_FLOAT;
+            hierarchyDesc.dimension = nvrhi::TextureDimension::Texture2D;
+            hierarchyDesc.mipLevels = 5;
+            hierarchyDesc.isUAV = true;
+            hierarchyDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+            hierarchyDesc.keepInitialState = true;
+            hierarchyDesc.debugName = "ScreenSpaceVisibility/DepthHierarchy";
+            m_DepthHierarchyTexture = m_Device->createTexture(hierarchyDesc);
+        }
+        m_RawIndirectDiffuse[0] = createTexture(
+            samplingSize, nvrhi::Format::RGBA16_FLOAT,
+            "ScreenSpaceVisibility/IndirectDiffuseFrontier0");
+        if (multipleBouncesEnabled)
+        {
+            m_RawIndirectDiffuse[1] = createTexture(
+                samplingSize, nvrhi::Format::RGBA16_FLOAT,
+                "ScreenSpaceVisibility/IndirectDiffuseFrontier1");
+            m_CumulativeIndirectDiffuse = createTexture(
+                samplingSize, nvrhi::Format::RGBA16_FLOAT,
+                "ScreenSpaceVisibility/CumulativeIndirectDiffuseIrradiance");
+        }
         m_RawDebug = createTexture(samplingSize, nvrhi::Format::RGBA8_UNORM,
             "ScreenSpaceVisibility/RawDebug");
 
@@ -330,9 +441,25 @@ namespace uvsr
 
     void ScreenSpaceVisibilityPass::ReleaseResources()
     {
+        for (nvrhi::BindingSetHandle& bindingSet : m_SamplingBindingSets)
+            bindingSet = nullptr;
+        for (nvrhi::BindingSetHandle& bindingSet : m_MultiBounceFirstBindingSets)
+            bindingSet = nullptr;
+        for (nvrhi::BindingSetHandle& bindingSet : m_IndirectBounceBindingSets)
+            bindingSet = nullptr;
+        m_DepthHierarchyBindingSet = nullptr;
+        for (nvrhi::BindingSetHandle& bindingSet : m_TemporalBindingSets)
+            bindingSet = nullptr;
+        for (nvrhi::BindingSetHandle& bindingSet : m_SpatialBindingSets)
+            bindingSet = nullptr;
+        for (nvrhi::BindingSetHandle& bindingSet : m_CompositeBindingSets)
+            bindingSet = nullptr;
+
         m_RawAmbientVisibility = nullptr;
         m_DepthHierarchyTexture = nullptr;
-        m_RawIndirectDiffuse = nullptr;
+        for (nvrhi::TextureHandle& rawIndirectDiffuse : m_RawIndirectDiffuse)
+            rawIndirectDiffuse = nullptr;
+        m_CumulativeIndirectDiffuse = nullptr;
         m_RawDebug = nullptr;
         for (uint32_t index = 0; index < 2; ++index)
         {
@@ -349,8 +476,9 @@ namespace uvsr
         m_OutputIndirectDiffuse = nullptr;
         m_FullSize = uint2::zero();
         m_SamplingSize = uint2::zero();
-        m_ResolutionScale = 0;
         m_TemporalResourcesEnabled = false;
+        m_MultipleBounceResourcesEnabled = false;
+        m_DepthHierarchyResourcesEnabled = false;
         m_Timings = {};
         ResetHistory();
     }
@@ -370,11 +498,25 @@ namespace uvsr
 
     void ScreenSpaceVisibilityPass::ResetBindingCache()
     {
+        for (nvrhi::BindingSetHandle& bindingSet : m_SamplingBindingSets)
+            bindingSet = nullptr;
+        for (nvrhi::BindingSetHandle& bindingSet : m_MultiBounceFirstBindingSets)
+            bindingSet = nullptr;
+        for (nvrhi::BindingSetHandle& bindingSet : m_IndirectBounceBindingSets)
+            bindingSet = nullptr;
+        m_DepthHierarchyBindingSet = nullptr;
+        for (nvrhi::BindingSetHandle& bindingSet : m_TemporalBindingSets)
+            bindingSet = nullptr;
+        for (nvrhi::BindingSetHandle& bindingSet : m_SpatialBindingSets)
+            bindingSet = nullptr;
+        for (nvrhi::BindingSetHandle& bindingSet : m_CompositeBindingSets)
+            bindingSet = nullptr;
         ResetHistory();
     }
 
     uint64_t ScreenSpaceVisibilityPass::ComputeHistorySignature(
-        const ScreenSpaceVisibilitySettings& settings)
+        const ScreenSpaceVisibilitySettings& settings,
+        float exposureScale)
     {
         uint64_t hash = 1469598103934665603ull;
         hash = HashValue(hash, settings.sampling.sampleCount);
@@ -387,8 +529,41 @@ namespace uvsr
         hash = HashValue(hash, settings.sampling.radialJitter);
         hash = HashValue(hash, settings.ambientOcclusion.enabled);
         hash = HashValue(hash, settings.indirectDiffuse.enabled);
-        hash = HashValue(hash, settings.indirectDiffuse.includeEmissive);
-        hash = HashValue(hash, settings.indirectDiffuse.emissiveGain);
+        hash = HashValue(hash, settings.indirectDiffuse.bounceCount);
+        const uint32_t bounceTransportPolicy =
+            GetBounceTransportPolicy(settings.debug.mode);
+        if (settings.indirectDiffuse.enabled &&
+            settings.indirectDiffuse.bounceCount > 1u)
+        {
+            // Final, exact-GI diagnostic, and unrelated one-bounce diagnostic
+            // modes produce different histories even when the cutoff is zero.
+            hash = HashValue(hash, bounceTransportPolicy);
+        }
+        const float effectiveContributionCutoff =
+            bounceTransportPolicy == 0u
+                ? std::max(
+                    settings.indirectDiffuse.minimumBounceContribution, 0.f)
+                : 0.f;
+        const bool contributionGateAffectsTransport =
+            settings.indirectDiffuse.enabled &&
+            settings.indirectDiffuse.bounceCount > 1u &&
+            effectiveContributionCutoff > 0.f;
+        if (settings.indirectDiffuse.enabled &&
+            settings.indirectDiffuse.bounceCount > 1u)
+        {
+            hash = HashValue(hash, effectiveContributionCutoff);
+        }
+        if (contributionGateAffectsTransport)
+        {
+            hash = HashValue(hash, settings.indirectDiffuse.intensity);
+            hash = HashValue(hash, exposureScale);
+        }
+        if (settings.indirectDiffuse.enabled)
+        {
+            hash = HashValue(hash, settings.indirectDiffuse.includeEmissive);
+            if (settings.indirectDiffuse.includeEmissive)
+                hash = HashValue(hash, settings.indirectDiffuse.emissiveGain);
+        }
         hash = HashValue(hash, settings.filtering.temporalEnabled);
         hash = HashValue(hash, settings.filtering.aoTemporalResponse);
         hash = HashValue(hash, settings.filtering.giTemporalResponse);
@@ -401,9 +576,10 @@ namespace uvsr
 
     bool ScreenSpaceVisibilityPass::UpdateHistoryValidity(
         const ScreenSpaceVisibilitySettings& settings,
-        const IView& view)
+        const IView& view,
+        float exposureScale)
     {
-        const uint64_t signature = ComputeHistorySignature(settings);
+        const uint64_t signature = ComputeHistorySignature(settings, exposureScale);
         bool valid = m_HistoryValid && signature == m_HistorySignature;
 
         const float3 cameraOrigin = view.GetViewOrigin();
@@ -502,6 +678,7 @@ namespace uvsr
         const ScreenSpaceVisibilityInputs& inputs,
         float3 ambientColorTop,
         float3 ambientColorBottom,
+        float exposureScale,
         uint32_t frameIndex)
     {
         if (!settings.HasActiveConsumer())
@@ -520,10 +697,52 @@ namespace uvsr
         const IView* view = compositeView.GetChildView(ViewType::PLANAR, 0);
         const nvrhi::TextureDesc& depthDesc = inputs.depth->getDesc();
         const uint2 fullSize(depthDesc.width, depthDesc.height);
-        EnsureResources(fullSize, settings.filtering.temporalEnabled);
+        const uint32_t requestedBounceCount = settings.indirectDiffuse.enabled
+            ? std::clamp(settings.indirectDiffuse.bounceCount,
+                1u, MaxIndirectDiffuseBounceCount)
+            : 1u;
+        uint32_t knownInactiveLightingSources =
+            inputs.knownInactiveLightingSources & LightingSource_All;
+        if (!settings.indirectDiffuse.includeEmissive ||
+            !(settings.indirectDiffuse.emissiveGain > 0.f))
+        {
+            knownInactiveLightingSources |= LightingSource_Emissive;
+        }
+        const uint32_t firstBounceSources =
+            LightingSource_Direct | LightingSource_Emissive;
+        if ((knownInactiveLightingSources & firstBounceSources) ==
+            firstBounceSources)
+        {
+            knownInactiveLightingSources |= LightingSource_IndirectDiffuse;
+        }
+        // Configuration controls allocation lifetime. Proven scene inactivity
+        // and a zero final GI scale can still terminate the higher-bounce chain
+        // for this frame without reallocating textures or invalidating caches.
+        const bool diagnosticNeedsExactBounceChain =
+            IsExactGiTransportDebug(settings.debug.mode);
+        const bool finalCompositeNeedsHigherBounces =
+            settings.debug.mode == ScreenSpaceVisibilityDebugMode::FinalComposite &&
+            (knownInactiveLightingSources & LightingSource_IndirectDiffuse) == 0u &&
+            settings.indirectDiffuse.intensity > 0.f;
+        const bool higherBouncesCanReachConsumer =
+            diagnosticNeedsExactBounceChain || finalCompositeNeedsHigherBounces;
+        const uint32_t activeBounceCount = higherBouncesCanReachConsumer
+            ? requestedBounceCount
+            : 1u;
+        const bool useDepthHierarchyThisFrame =
+            settings.sampling.useDepthHierarchy &&
+            !settings.indirectDiffuse.enabled &&
+            !view->IsOrthographicProjection();
+        EnsureResources(
+            fullSize,
+            settings.filtering.temporalEnabled,
+            requestedBounceCount > 1u,
+            useDepthHierarchyThisFrame);
         AdvanceTimers();
 
-        const bool historyValid = UpdateHistoryValidity(settings, *view);
+        exposureScale = std::max(exposureScale, 0.f);
+        const bool historyValid = UpdateHistoryValidity(
+            settings, *view, exposureScale);
         const uint32_t historyWriteIndex = 1u - m_HistoryReadIndex;
         const uint32_t consumerVariant =
             (settings.ambientOcclusion.enabled ? 1u : 0u) |
@@ -551,12 +770,20 @@ namespace uvsr
         constants.depthRejection = std::max(settings.filtering.depthRejection, 1e-6f);
         constants.normalRejection = std::clamp(settings.filtering.normalRejection, -1.f, 1.f);
         constants.emissiveGain = std::max(settings.indirectDiffuse.emissiveGain, 0.f);
+        constants.minimumBounceContribution =
+            diagnosticNeedsExactBounceChain
+                ? 0.f
+                : std::max(
+                    settings.indirectDiffuse.minimumBounceContribution, 0.f);
+        constants.lightingExposureScale = exposureScale;
         constants.ambientColorTop = ambientColorTop;
         constants.ambientColorBottom = ambientColorBottom;
         constants.frameIndex = settings.debug.freezeSamplingPhase ? 0u : frameIndex;
         constants.sliceCount = 1u;
-        constants.sampleCount = std::clamp(settings.sampling.sampleCount, 1u, 64u);
-        constants.resolutionScale = m_ResolutionScale;
+        const uint32_t primarySampleCount = std::clamp(
+            settings.sampling.sampleCount, 1u, 64u);
+        constants.sampleCount = primarySampleCount;
+        constants.knownInactiveLightingSources = knownInactiveLightingSources;
         constants.enableAmbientOcclusion = settings.ambientOcclusion.enabled ? 1u : 0u;
         constants.enableIndirectDiffuse = settings.indirectDiffuse.enabled ? 1u : 0u;
         constants.includeEmissive = settings.indirectDiffuse.includeEmissive ? 1u : 0u;
@@ -570,8 +797,6 @@ namespace uvsr
         constants.debugMode = static_cast<uint32_t>(settings.debug.mode);
         constants.reverseDepth = view->IsReverseDepth() ? 1u : 0u;
         constants.orthographicProjection = view->IsOrthographicProjection() ? 1u : 0u;
-        const bool useDepthHierarchyThisFrame = settings.sampling.useDepthHierarchy &&
-            !settings.indirectDiffuse.enabled && !view->IsOrthographicProjection();
         constants.useDepthHierarchy = useDepthHierarchyThisFrame ? 1u : 0u;
         commandList->writeBuffer(m_ConstantBuffer, &constants, sizeof(constants));
 
@@ -585,29 +810,35 @@ namespace uvsr
             : "Screen-Space Visibility (AO)");
 
         nvrhi::ITexture* currentAmbientVisibility = m_RawAmbientVisibility;
-        nvrhi::ITexture* currentIndirectDiffuse = m_RawIndirectDiffuse;
+        nvrhi::ITexture* rawIndirectDiffuse = m_RawIndirectDiffuse[0];
+        nvrhi::ITexture* currentIndirectDiffuse = rawIndirectDiffuse;
         nvrhi::ITexture* currentDebug = m_RawDebug;
         bool temporalExecuted = false;
 
         if (useDepthHierarchyThisFrame)
         {
-            nvrhi::BindingSetDesc bindings;
-            bindings.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
-                nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth)
-            };
-            for (uint32_t mipLevel = 0; mipLevel < 5; ++mipLevel)
+            if (!m_DepthHierarchyBindingSet)
             {
-                bindings.bindings.push_back(
-                    nvrhi::BindingSetItem::Texture_UAV(0, m_DepthHierarchyTexture)
-                        .setArrayElement(mipLevel)
-                        .setSubresources(nvrhi::TextureSubresourceSet(mipLevel, 1, 0, 1)));
+                nvrhi::BindingSetDesc bindings;
+                bindings.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
+                    nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth)
+                };
+                for (uint32_t mipLevel = 0; mipLevel < 5; ++mipLevel)
+                {
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            0, m_DepthHierarchyTexture)
+                            .setArrayElement(mipLevel)
+                            .setSubresources(nvrhi::TextureSubresourceSet(
+                                mipLevel, 1, 0, 1)));
+                }
+                m_DepthHierarchyBindingSet = m_Device->createBindingSet(
+                    bindings, m_DepthHierarchy.bindingLayout);
             }
-            nvrhi::BindingSetHandle bindingSet = m_Device->createBindingSet(
-                bindings, m_DepthHierarchy.bindingLayout);
             nvrhi::ComputeState state;
             state.pipeline = m_DepthHierarchy.pipeline;
-            state.bindings = { bindingSet };
+            state.bindings = { m_DepthHierarchyBindingSet };
             commandList->beginMarker("XeGTAO View-Depth Hierarchy");
             BeginStage(commandList, Stage::DepthHierarchy);
             commandList->setComputeState(state);
@@ -621,57 +852,138 @@ namespace uvsr
             m_Timings.depthHierarchyMs = 0.f;
         }
 
+        commandList->beginMarker(activeBounceCount > 1u
+            ? "Visibility Sampling (Multiple Bounces)"
+            : "Visibility Sampling");
+        BeginStage(commandList, Stage::Sampling);
+
+        // Keep the default one-bounce path on the original compact shader.
+        // Packed receiver metadata is emitted only when a later bounce will
+        // consume it this frame; both variants retain the same four-SRV layout.
         {
-            nvrhi::BindingSetDesc bindings;
-            bindings.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
-                nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth),
-                nvrhi::BindingSetItem::Texture_SRV(1, inputs.normals),
-                nvrhi::BindingSetItem::Texture_SRV(2, inputs.sourceRadiance),
-                nvrhi::BindingSetItem::Texture_SRV(3, inputs.gbufferEmissive),
-                nvrhi::BindingSetItem::Texture_SRV(4, m_DepthHierarchyTexture),
-                nvrhi::BindingSetItem::Texture_SRV(5, inputs.gbufferSpecular),
-                nvrhi::BindingSetItem::Texture_UAV(0, m_RawAmbientVisibility),
-                nvrhi::BindingSetItem::Texture_UAV(1, m_RawIndirectDiffuse),
-                nvrhi::BindingSetItem::Texture_UAV(2, m_RawDebug)
-            };
-            Pipeline& pipeline = m_Sampling[samplingVariant];
-            nvrhi::BindingSetHandle bindingSet = m_Device->createBindingSet(
-                bindings, pipeline.bindingLayout);
+            const bool writeBounceMetadata = activeBounceCount > 1u;
+            const uint32_t multiBounceVariant =
+                settings.ambientOcclusion.enabled ? 1u : 0u;
+            Pipeline& pipeline = writeBounceMetadata
+                ? m_MultiBounceFirstSampling[multiBounceVariant]
+                : m_Sampling[samplingVariant];
+            nvrhi::BindingSetHandle& bindingSet = writeBounceMetadata
+                ? m_MultiBounceFirstBindingSets[multiBounceVariant]
+                : m_SamplingBindingSets[samplingVariant];
+            if (!bindingSet)
+            {
+                nvrhi::BindingSetDesc bindings;
+                bindings.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
+                    nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth),
+                    nvrhi::BindingSetItem::Texture_SRV(1, inputs.normals),
+                    nvrhi::BindingSetItem::Texture_SRV(2, inputs.sourceRadiance),
+                    nvrhi::BindingSetItem::Texture_SRV(3,
+                        m_DepthHierarchyTexture
+                            ? m_DepthHierarchyTexture.Get()
+                            : inputs.depth),
+                    nvrhi::BindingSetItem::Texture_UAV(0, m_RawAmbientVisibility),
+                    nvrhi::BindingSetItem::Texture_UAV(1, m_RawIndirectDiffuse[0]),
+                    nvrhi::BindingSetItem::Texture_UAV(2, m_RawDebug)
+                };
+                bindingSet = m_Device->createBindingSet(
+                    bindings, pipeline.bindingLayout);
+            }
+
             nvrhi::ComputeState state;
             state.pipeline = pipeline.pipeline;
             state.bindings = { bindingSet };
-            commandList->beginMarker("Visibility Sampling");
-            BeginStage(commandList, Stage::Sampling);
             commandList->setComputeState(state);
             commandList->dispatch(samplingDispatchX, samplingDispatchY, 1);
-            EndStage(commandList, Stage::Sampling);
-            commandList->endMarker();
         }
+
+        // Higher-order diffuse transport carries less energy and fine detail,
+        // so halve its sampling budget toward a small floor. Secondary passes
+        // transport only the incremental frontier B(n)=T(B(n-1)); a separate
+        // UAV accumulates C(n)=C(n-1)+B(n). This makes source-sample energy
+        // gates decay with bounce order without risking FP16 cancellation.
+        for (uint32_t bounceIndex = 1u;
+            bounceIndex < activeBounceCount;
+            ++bounceIndex)
+        {
+            const uint32_t outputIndex = bounceIndex & 1u;
+            const uint32_t previousIndex = 1u - outputIndex;
+            constants.sampleCount = GetIndirectBounceSampleCount(
+                primarySampleCount, bounceIndex);
+            commandList->writeBuffer(m_ConstantBuffer, &constants, sizeof(constants));
+
+            nvrhi::BindingSetHandle& bindingSet =
+                m_IndirectBounceBindingSets[bounceIndex - 1u];
+            const uint32_t pipelineVariant = bounceIndex > 1u ? 1u : 0u;
+            Pipeline& pipeline = m_IndirectBounceSampling[pipelineVariant];
+            if (!bindingSet)
+            {
+                nvrhi::BindingSetDesc bindings;
+                bindings.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
+                    nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth),
+                    nvrhi::BindingSetItem::Texture_SRV(1, inputs.normals),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        2, m_RawIndirectDiffuse[previousIndex]),
+                    nvrhi::BindingSetItem::Texture_SRV(3,
+                        m_DepthHierarchyTexture
+                            ? m_DepthHierarchyTexture.Get()
+                            : inputs.depth),
+                    nvrhi::BindingSetItem::Texture_SRV(4, inputs.gbufferDiffuse),
+                    nvrhi::BindingSetItem::Texture_SRV(5, inputs.gbufferEmissive),
+                    nvrhi::BindingSetItem::Texture_SRV(6, inputs.materialAmbientOcclusion),
+                    nvrhi::BindingSetItem::Texture_UAV(
+                        0, m_RawIndirectDiffuse[outputIndex]),
+                    nvrhi::BindingSetItem::Texture_UAV(
+                        1, m_CumulativeIndirectDiffuse)
+                };
+                bindingSet = m_Device->createBindingSet(
+                    bindings, pipeline.bindingLayout);
+            }
+
+            nvrhi::ComputeState state;
+            state.pipeline = pipeline.pipeline;
+            state.bindings = { bindingSet };
+            commandList->setComputeState(state);
+            commandList->dispatch(samplingDispatchX, samplingDispatchY, 1);
+        }
+        if (activeBounceCount > 1u)
+            rawIndirectDiffuse = m_CumulativeIndirectDiffuse;
+        EndStage(commandList, Stage::Sampling);
+        commandList->endMarker();
+        currentIndirectDiffuse = rawIndirectDiffuse;
 
         if (settings.filtering.temporalEnabled)
         {
-            nvrhi::BindingSetDesc bindings;
-            bindings.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
-                nvrhi::BindingSetItem::Texture_SRV(0, m_RawAmbientVisibility),
-                nvrhi::BindingSetItem::Texture_SRV(1, m_RawIndirectDiffuse),
-                nvrhi::BindingSetItem::Texture_SRV(2, m_HistoryAmbientVisibility[m_HistoryReadIndex]),
-                nvrhi::BindingSetItem::Texture_SRV(3, m_HistoryIndirectDiffuse[m_HistoryReadIndex]),
-                nvrhi::BindingSetItem::Texture_SRV(4, inputs.depth),
-                nvrhi::BindingSetItem::Texture_SRV(5, inputs.normals),
-                nvrhi::BindingSetItem::Texture_SRV(6, m_HistoryDepth[m_HistoryReadIndex]),
-                nvrhi::BindingSetItem::Texture_SRV(7, m_HistoryNormal[m_HistoryReadIndex]),
-                nvrhi::BindingSetItem::Texture_SRV(8, inputs.motionVectors),
-                nvrhi::BindingSetItem::Texture_UAV(0, m_HistoryAmbientVisibility[historyWriteIndex]),
-                nvrhi::BindingSetItem::Texture_UAV(1, m_HistoryIndirectDiffuse[historyWriteIndex]),
-                nvrhi::BindingSetItem::Texture_UAV(2, m_HistoryDepth[historyWriteIndex]),
-                nvrhi::BindingSetItem::Texture_UAV(3, m_HistoryNormal[historyWriteIndex]),
-                nvrhi::BindingSetItem::Texture_UAV(4, m_HistoryValidity)
-            };
             Pipeline& pipeline = m_Temporal[consumerVariant];
-            nvrhi::BindingSetHandle bindingSet = m_Device->createBindingSet(
-                bindings, pipeline.bindingLayout);
+            const uint32_t temporalBindingIndex = consumerVariant * 4u +
+                m_HistoryReadIndex * 2u +
+                (activeBounceCount > 1u ? 1u : 0u);
+            nvrhi::BindingSetHandle& bindingSet =
+                m_TemporalBindingSets[temporalBindingIndex];
+            if (!bindingSet)
+            {
+                nvrhi::BindingSetDesc bindings;
+                bindings.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
+                    nvrhi::BindingSetItem::Texture_SRV(0, m_RawAmbientVisibility),
+                    nvrhi::BindingSetItem::Texture_SRV(1, rawIndirectDiffuse),
+                    nvrhi::BindingSetItem::Texture_SRV(2, m_HistoryAmbientVisibility[m_HistoryReadIndex]),
+                    nvrhi::BindingSetItem::Texture_SRV(3, m_HistoryIndirectDiffuse[m_HistoryReadIndex]),
+                    nvrhi::BindingSetItem::Texture_SRV(4, inputs.depth),
+                    nvrhi::BindingSetItem::Texture_SRV(5, inputs.normals),
+                    nvrhi::BindingSetItem::Texture_SRV(6, m_HistoryDepth[m_HistoryReadIndex]),
+                    nvrhi::BindingSetItem::Texture_SRV(7, m_HistoryNormal[m_HistoryReadIndex]),
+                    nvrhi::BindingSetItem::Texture_SRV(8, inputs.motionVectors),
+                    nvrhi::BindingSetItem::Texture_UAV(0, m_HistoryAmbientVisibility[historyWriteIndex]),
+                    nvrhi::BindingSetItem::Texture_UAV(1, m_HistoryIndirectDiffuse[historyWriteIndex]),
+                    nvrhi::BindingSetItem::Texture_UAV(2, m_HistoryDepth[historyWriteIndex]),
+                    nvrhi::BindingSetItem::Texture_UAV(3, m_HistoryNormal[historyWriteIndex]),
+                    nvrhi::BindingSetItem::Texture_UAV(4, m_HistoryValidity)
+                };
+                bindingSet = m_Device->createBindingSet(
+                    bindings, pipeline.bindingLayout);
+            }
             nvrhi::ComputeState state;
             state.pipeline = pipeline.pipeline;
             state.bindings = { bindingSet };
@@ -691,25 +1003,36 @@ namespace uvsr
             m_HistoryValid = false;
         }
 
-        if (settings.filtering.spatialEnabled)
+        // Radius zero is exactly the center-value copy performed by the
+        // spatial shader, so retain the current resources and skip a complete
+        // full-resolution dispatch and descriptor allocation.
+        if (settings.filtering.spatialEnabled && constants.spatialRadius > 0u)
         {
-            nvrhi::BindingSetDesc bindings;
-            bindings.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
-                nvrhi::BindingSetItem::Texture_SRV(0, currentAmbientVisibility),
-                nvrhi::BindingSetItem::Texture_SRV(1, currentIndirectDiffuse),
-                nvrhi::BindingSetItem::Texture_SRV(2, inputs.depth),
-                nvrhi::BindingSetItem::Texture_SRV(3, inputs.normals),
-                nvrhi::BindingSetItem::Texture_SRV(4, m_RawDebug),
-                nvrhi::BindingSetItem::Texture_SRV(5,
-                    m_HistoryValidity ? m_HistoryValidity.Get() : m_RawAmbientVisibility.Get()),
-                nvrhi::BindingSetItem::Texture_UAV(0, m_DenoisedAmbientVisibility),
-                nvrhi::BindingSetItem::Texture_UAV(1, m_DenoisedIndirectDiffuse),
-                nvrhi::BindingSetItem::Texture_UAV(2, m_DenoisedDebug)
-            };
             Pipeline& pipeline = m_Denoise[consumerVariant];
-            nvrhi::BindingSetHandle bindingSet = m_Device->createBindingSet(
-                bindings, pipeline.bindingLayout);
+            const uint32_t spatialSourceVariant = temporalExecuted
+                ? 2u + historyWriteIndex
+                : (activeBounceCount > 1u ? 1u : 0u);
+            const uint32_t spatialBindingIndex =
+                consumerVariant * 4u + spatialSourceVariant;
+            nvrhi::BindingSetHandle& bindingSet =
+                m_SpatialBindingSets[spatialBindingIndex];
+            if (!bindingSet)
+            {
+                nvrhi::BindingSetDesc bindings;
+                bindings.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
+                    nvrhi::BindingSetItem::Texture_SRV(0, currentAmbientVisibility),
+                    nvrhi::BindingSetItem::Texture_SRV(1, currentIndirectDiffuse),
+                    nvrhi::BindingSetItem::Texture_SRV(2, inputs.depth),
+                    nvrhi::BindingSetItem::Texture_SRV(3, inputs.normals),
+                    nvrhi::BindingSetItem::Texture_SRV(4, m_RawDebug),
+                    nvrhi::BindingSetItem::Texture_UAV(0, m_DenoisedAmbientVisibility),
+                    nvrhi::BindingSetItem::Texture_UAV(1, m_DenoisedIndirectDiffuse),
+                    nvrhi::BindingSetItem::Texture_UAV(2, m_DenoisedDebug)
+                };
+                bindingSet = m_Device->createBindingSet(
+                    bindings, pipeline.bindingLayout);
+            }
             nvrhi::ComputeState state;
             state.pipeline = pipeline.pipeline;
             state.bindings = { bindingSet };
@@ -732,26 +1055,39 @@ namespace uvsr
         m_OutputIndirectDiffuse = currentIndirectDiffuse;
 
         {
-            nvrhi::BindingSetDesc bindings;
-            bindings.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
-                nvrhi::BindingSetItem::Texture_SRV(0, inputs.baseLighting),
-                nvrhi::BindingSetItem::Texture_SRV(1, currentAmbientVisibility),
-                nvrhi::BindingSetItem::Texture_SRV(2, currentIndirectDiffuse),
-                nvrhi::BindingSetItem::Texture_SRV(3, inputs.gbufferDiffuse),
-                nvrhi::BindingSetItem::Texture_SRV(4, inputs.gbufferEmissive),
-                nvrhi::BindingSetItem::Texture_SRV(5, inputs.materialAmbientOcclusion),
-                nvrhi::BindingSetItem::Texture_SRV(6, inputs.normals),
-                nvrhi::BindingSetItem::Texture_SRV(7, m_RawAmbientVisibility),
-                nvrhi::BindingSetItem::Texture_SRV(8, m_RawIndirectDiffuse),
-                nvrhi::BindingSetItem::Texture_SRV(9, currentDebug),
-                nvrhi::BindingSetItem::Texture_SRV(10, inputs.sourceRadiance),
-                nvrhi::BindingSetItem::Texture_SRV(11,
-                    m_HistoryValidity ? m_HistoryValidity.Get() : m_RawAmbientVisibility.Get()),
-                nvrhi::BindingSetItem::Texture_SRV(12, inputs.gbufferSpecular),
-                nvrhi::BindingSetItem::Texture_UAV(0, inputs.output)
-            };
-            nvrhi::BindingSetHandle bindingSet = m_Device->createBindingSet(bindings, m_Composite.bindingLayout);
+            uint32_t filteredSourceVariant = 0u;
+            if (settings.filtering.spatialEnabled && constants.spatialRadius > 0u)
+                filteredSourceVariant = 3u;
+            else if (temporalExecuted)
+                filteredSourceVariant = 1u + historyWriteIndex;
+            const uint32_t compositeBindingIndex = filteredSourceVariant * 2u +
+                (activeBounceCount > 1u ? 1u : 0u);
+            nvrhi::BindingSetHandle& bindingSet =
+                m_CompositeBindingSets[compositeBindingIndex];
+            if (!bindingSet)
+            {
+                nvrhi::BindingSetDesc bindings;
+                bindings.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
+                    nvrhi::BindingSetItem::Texture_SRV(0, inputs.baseLighting),
+                    nvrhi::BindingSetItem::Texture_SRV(1, currentAmbientVisibility),
+                    nvrhi::BindingSetItem::Texture_SRV(2, currentIndirectDiffuse),
+                    nvrhi::BindingSetItem::Texture_SRV(3, inputs.gbufferDiffuse),
+                    nvrhi::BindingSetItem::Texture_SRV(4, inputs.gbufferEmissive),
+                    nvrhi::BindingSetItem::Texture_SRV(5, inputs.materialAmbientOcclusion),
+                    nvrhi::BindingSetItem::Texture_SRV(6, inputs.normals),
+                    nvrhi::BindingSetItem::Texture_SRV(7, m_RawAmbientVisibility),
+                    nvrhi::BindingSetItem::Texture_SRV(8, rawIndirectDiffuse),
+                    nvrhi::BindingSetItem::Texture_SRV(9, currentDebug),
+                    nvrhi::BindingSetItem::Texture_SRV(10, inputs.sourceRadiance),
+                    nvrhi::BindingSetItem::Texture_SRV(11,
+                        m_HistoryValidity ? m_HistoryValidity.Get() : m_RawAmbientVisibility.Get()),
+                    nvrhi::BindingSetItem::Texture_SRV(12, inputs.gbufferSpecular),
+                    nvrhi::BindingSetItem::Texture_UAV(0, inputs.output)
+                };
+                bindingSet = m_Device->createBindingSet(
+                    bindings, m_Composite.bindingLayout);
+            }
             nvrhi::ComputeState state;
             state.pipeline = m_Composite.pipeline;
             state.bindings = { bindingSet };

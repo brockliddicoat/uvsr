@@ -5,6 +5,7 @@
 #include <donut/render/DeferredLightingPass.h>
 #include <nvrhi/nvrhi.h>
 
+#include <array>
 #include <memory>
 
 namespace donut::engine
@@ -20,13 +21,18 @@ namespace donut::engine
 class PbrDeferredLightingPass final
 {
 private:
+    struct Pipeline
+    {
+        nvrhi::ShaderHandle shader;
+        nvrhi::ComputePipelineHandle pso;
+        nvrhi::BindingLayoutHandle bindingLayout;
+    };
+
     nvrhi::DeviceHandle m_Device;
-    nvrhi::ShaderHandle m_ComputeShader;
-    nvrhi::SamplerHandle m_ShadowSampler;
     nvrhi::SamplerHandle m_ShadowSamplerComparison;
     nvrhi::BufferHandle m_DeferredLightingCB;
-    nvrhi::ComputePipelineHandle m_Pso;
-    nvrhi::BindingLayoutHandle m_BindingLayout;
+    // No source UAV, compact one-bounce source, and packed multi-bounce source.
+    std::array<Pipeline, 3> m_Pipelines;
     donut::engine::BindingCache m_BindingSets;
     std::shared_ptr<donut::engine::CommonRenderPasses> m_CommonPasses;
 
@@ -44,6 +50,7 @@ public:
         nvrhi::ITexture* sourceRadianceOutput,
         bool separateIndirect,
         bool writeSourceRadiance,
+        bool writeBounceMetadata,
         bool includeEmissiveSource,
         float emissiveSourceGain,
         donut::math::float2 randomOffset = donut::math::float2::zero());

@@ -46,8 +46,9 @@
   output, screen-space indirect lighting, scene lighting, or other visible
   rendering behavior.
 - Keep the forward and deferred PBR paths on the shared UVSR material/lighting
-  contract. The PBR comparison toggle must retain the same camera, scene,
-  tonemapper, sky, and lights.
+  contract. The PBR comparison implementation is retained for possible future
+  experiments, but its production UI control is hidden. If restored, the
+  toggle must retain the same camera, scene, tonemapper, sky, and lights.
 - Preserve the display pipeline order: scene-linear HDR radiance, camera white
   balance, exposure in EV, AgX inset transform, logarithmic encoding, contrast
   tone scale, Base-space grade/LUT, output gamut conversion, display transfer,
@@ -73,9 +74,12 @@
   `cmake --build build --config Release --target uvsr`.
 - For PBR or rendering changes, also build `uvsr_pbr_tests` and run
   `ctest --test-dir build -C Release --output-on-failure`.
-- Launch `build/bin/uvsr.exe` and smoke-test after runtime, rendering, shader,
-  scene-loading, or UI changes. Exercise the relevant forward/deferred, PBR
-  on/off, and screen-space AO/GI combinations when they could be affected.
+- Launch through `tools/launch_uvsr.ps1 -Experiment "<specific test>"` and
+  smoke-test after runtime, rendering, shader, scene-loading, or UI changes.
+  Never launch the bare executable during agent work: every renderer taskbar
+  title must identify the experiment being run. Exercise the relevant
+  forward/deferred and screen-space AO/GI combinations when they could be
+  affected.
 - Documentation-only changes require link and diff validation, not a renderer
   rebuild.
 - Run `git diff --check` before committing.

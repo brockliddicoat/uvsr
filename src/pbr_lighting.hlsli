@@ -17,7 +17,6 @@ PbrLightSample SamplePbrLight(LightConstants light, float3 surfacePosition, floa
     {
         sample.directionToLight = -PbrSafeNormalize(light.direction, float3(0.0f, -1.0f, 0.0f));
         sample.incidentRadiance = max(light.color * light.intensity, 0.0f);
-        sample.distance = 3.402823466e+38f;
         return sample;
     }
 
@@ -28,16 +27,18 @@ PbrLightSample SamplePbrLight(LightConstants light, float3 surfacePosition, floa
     float distanceSquared = max(dot(surfaceToLight, surfaceToLight), UVSR_MIN_LIGHT_DISTANCE_SQUARED);
     float inverseDistance = rsqrt(distanceSquared);
     sample.directionToLight = surfaceToLight * inverseDistance;
-    sample.distance = sqrt(distanceSquared);
 
     // Donut defines intensity for positional lights as luminous intensity.
     // The point-source incident radiance therefore follows inverse-square falloff.
     float rangeWeight = 1.0f;
     if (light.angularSizeOrInvRange > 0.0f)
     {
-        float normalizedDistance = sample.distance * light.angularSizeOrInvRange;
-        rangeWeight = saturate(1.0f - normalizedDistance * normalizedDistance);
+        float inverseRangeSquared = light.angularSizeOrInvRange *
+            light.angularSizeOrInvRange;
+        rangeWeight = saturate(1.0f - distanceSquared * inverseRangeSquared);
         rangeWeight *= rangeWeight;
+        if (!(rangeWeight > 0.0f))
+            return sample;
     }
 
     float spotWeight = 1.0f;
@@ -48,6 +49,8 @@ PbrLightSample SamplePbrLight(LightConstants light, float3 surfacePosition, floa
         float cosInner = cos(light.innerAngle * 0.5f);
         float cosOuter = cos(light.outerAngle * 0.5f);
         spotWeight = saturate((cosTheta - cosOuter) / max(cosInner - cosOuter, UVSR_MIN_PDF));
+        if (!(spotWeight > 0.0f))
+            return sample;
         spotWeight *= spotWeight * (3.0f - 2.0f * spotWeight);
     }
 

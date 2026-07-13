@@ -11,16 +11,17 @@ Primary references:
 ## Current implementation
 
 UVSR's deferred PBR path owns one HLSL visibility traversal that produces both
-ambient visibility and single-bounce diffuse irradiance. It is a first-party
-DirectX 12/NVRHI compute pipeline; Donut's legacy screen-space occlusion pass
-is not instantiated or packaged by UVSR.
+ambient visibility and configurable one-to-four-bounce diffuse irradiance. It
+is a first-party DirectX 12/NVRHI compute pipeline; Donut's legacy screen-space
+occlusion pass is not instantiated or packaged by UVSR.
 
 The frame order is:
 
 1. opaque PBR G-buffer, including motion vectors;
 2. deferred direct lighting and a separate configured GI-radiance source;
 3. optional single-dispatch hierarchical view-depth generation;
-4. full-resolution screen-space visibility-bitmask sampling;
+4. full-resolution screen-space visibility-bitmask sampling, repeated once per
+   requested GI bounce;
 5. temporal AO/GI output accumulation;
 6. depth/normal-aware spatial filtering;
 7. indirect-light composition;
@@ -29,15 +30,20 @@ The frame order is:
 
 The source-radiance UAV is written beside base lighting in the same deferred
 dispatch. It contains scene-linear, material-weighted outgoing direct diffuse
-radiance plus the enabled/gained emissive source term. Alpha flags a two-sided
-emissive card, allowing the stochastic traversal to fetch one HDR texel rather
-than separate direct, emissive, and feature targets. The source excludes
-specular, fallback ambient,
-screen-space GI, AO, transparency, UI, tone mapping, and post-processing. The
-visibility pass therefore never reads the target that its composite modifies
-and cannot feed current-frame GI back into itself. UVSR has no pre-exposure;
-source, histories, GI, base lighting, and the composite all remain unexposed
-scene-linear values.
+radiance plus the enabled/gained emissive source term. Alpha always carries
+outgoing sidedness; only the active multi-bounce specialization also packs exact
+surface-sidedness and diffuse-activity flags. This lets the stochastic traversal
+fetch one HDR texel rather than separate direct, emissive, and feature targets.
+Later frontiers preserve the surface flags, so receiver-material early outs need
+no repeated G-buffer reads. The source excludes
+specular, fallback ambient, screen-space GI, AO, transparency, UI, tone mapping,
+and post-processing. For additional finite bounces, the visibility pass reads
+only the immediately preceding transport frontier, applies the sampled
+surface's diffuse BRDF, and writes the next ping-pong frontier. A separate UAV
+accumulates completed frontiers for filtering and composition. The pass never
+reads the final composite target and never reinjects prior-frame GI. UVSR has
+no pre-exposure; source, histories, GI, base lighting, and the composite all
+remain unexposed scene-linear values.
 
 ### Radial mask contract
 
@@ -80,9 +86,11 @@ averaged.
   receiver depth; no distance-falloff heuristic is hidden in mask accumulation.
 
 Sampling is always full resolution. Quality is controlled by stochastic sample
-count rather than render resolution. The UI reports the actual total depth-tap
+count rather than render resolution. The UI reports the first-bounce depth-tap
 budget. The paper's 16-sample configuration means 16 samples on each horizon
-side and therefore maps to 32 Samples Per Pixel in UVSR.
+side and therefore maps to 32 Samples Per Pixel in UVSR. Each later GI bounce
+halves that budget toward an 8-sample floor without increasing a custom primary
+budget that is already below 8.
 
 ### Lighting semantics
 
@@ -105,16 +113,93 @@ one-sided; a source texel containing a double-sided emissive card uses the
 absolute area cosine. Screen-space AO is not multiplied into GI. Metals receive
 no ordinary diffuse GI.
 
+**Bounces** selects one through four finite diffuse-light traversals. Bounce one
+uses only the configured direct/emissive source and produces frontier `B1`.
+Each later bounce converts only the preceding frontier to outgoing radiance
+with the sampled source's `baseColor * (1 - metalness) / PI` and authored
+material AO, then evaluates the same transport operator again:
+
+- `C1 = B1`
+- `Bn = T(B(n-1))` for `n > 1`
+- `Cn = C(n-1) + Bn`
+
+Separating frontier transport from the cumulative result prevents a lower-order
+bounce from being transported and counted again at every iteration. GI
+Intensity remains a final receiver-side scale and is not fed back per bounce.
+Bounce one uses the original AO/GI/debug specialization and full selected sample
+count. Later bounces use a fixed GI-only reinjection shader and halve the sample
+budget toward 8. At Medium, one through four bounces therefore use 32, 48, 56,
+and 64 cumulative taps per pixel instead of 32, 64, 96, and 128. Every bounce
+still incurs a full-resolution dispatch, so it is not free, but the dominant
+stochastic traversal work grows sublinearly.
+
+### Contribution-aware early outs
+
+`src/lighting_contribution.hlsli` defines the shared lighting contribution gate
+used by screen-space GI and forward/deferred direct lighting. Source activity is
+represented by composable direct, emissive, environment, indirect-diffuse, and
+indirect-specular bits. A scope is skipped only when every relevant source is
+known inactive; missing or not-yet-integrated scene data defaults to potentially
+active. Debug consumers can force selected sources active. Local hard-rejection
+reasons such as zero/non-finite signal, back-facing geometry, zero visibility,
+out-of-influence lights, and materials without a contributing lobe remain local
+to the operation that proved them. This lets future scene, material, clustering,
+visibility, residency, probe, or cache systems contribute tighter facts without
+making independent lighting systems incorrectly suppress one another.
+
+The bit positions live in `src/lighting_contribution_shared.h`, shared by C++,
+HLSL, and the reference tests. `ScreenSpaceVisibilityInputs` carries a
+`knownInactiveLightingSources` mask from CPU scene data into the same gate. UVSR
+currently proves direct light inactive for an empty scene-light list and proves
+emissive light inactive when that source is disabled or has zero gain. When all
+first-bounce sources are proven inactive, production rendering skips the entire
+higher-bounce dispatch chain. A zero final GI intensity does the same because no
+higher bounce can reach the final composite. Allocation still follows the
+configured bounce count, so frame-local activity does not churn resources.
+Future clustering, probe, cache, visibility, or residency systems can contribute
+additional proven-inactive bits through the same input.
+
+**Bounce Contribution Cutoff** applies only to bounces after the first. For each
+eligible source sample, UVSR bounds its peak final-image contribution using the
+current GI intensity and exposure, before tone mapping; cosine, angular coverage,
+diffuse reflectance, and material AO cannot increase that bound. A source whose
+bound cannot exceed the cutoff skips material and normal fetches. A tighter
+second test after diffuse-material evaluation can still skip the normal fetch
+and remaining shading math. Newly claimed angular sectors are disjoint and
+their normalized weights sum to at most one, so the cutoff also bounds the
+aggregate rejected final-image energy at one receiver within one higher bounce.
+Across several pruned bounces, omitted energy can accumulate up to one such
+bound per bounce. A cutoff of `0` retains only exact-zero, non-finite, and hard
+material/geometry exits.
+
+The source-sample cutoff runs after depth traversal has found newly claimed mask
+sectors. It reduces source material bandwidth and lighting arithmetic, but it
+does not remove the bounce's full-resolution dispatch or its visibility
+traversal. An independent exact receiver-material gate can skip traversal for a
+later-bounce pixel whose diffuse throughput is zero, such as a fully metallic,
+black, or material-AO-zero receiver. Raw GI, filtered GI, and GI-light-only
+diagnostics force the selected bounce chain into exact-cutoff mode. Diagnostics
+that do not consume higher-bounce GI stop after bounce one instead of doing
+invisible transport work.
+
+**Emissive Material Light Strength** in the **Lights** drawer multiplies only
+the emissive term in the configured source-radiance target. Increasing it makes
+the angularly attenuated contribution remain visible over a wider receiver area,
+up to the shared world-space sampling radius, without changing the emissive
+surface's own displayed radiance or reflected direct-light sources.
+
 ### Resources
 
 | Resource | Format | Resolution/lifetime |
 |---|---|---|
 | base lighting | `RGBA16_FLOAT` | full, frame |
 | direct diffuse source | `RGBA16_FLOAT` | full, frame |
-| hierarchical view depth | `R16_FLOAT`, 5 mips | full to 1/16, frame |
+| hierarchical view depth | `R16_FLOAT`, 5 mips | full to 1/16, allocated only while the opt-in hierarchy is active |
 | motion + depth delta | `RGBA16_FLOAT` | full, only while temporal filtering is active |
 | raw ambient visibility | `R16_FLOAT` | full, frame |
-| raw indirect diffuse irradiance | `RGBA16_FLOAT` | full, frame |
+| raw indirect diffuse frontier A | `RGBA16_FLOAT` | full, frame; also the one-bounce result |
+| raw indirect diffuse frontier B | `RGBA16_FLOAT` | full, frame; only for multiple bounces |
+| cumulative indirect diffuse irradiance | `RGBA16_FLOAT` | full, frame; only for multiple bounces |
 | raw traversal debug | `RGBA8_UNORM` | full, frame |
 | AO history pair | `R16_FLOAT` | full, persistent output history |
 | GI history pair | `RGBA16_FLOAT` | full, persistent output history |
@@ -132,7 +217,14 @@ current 3x3 component range and uses a stronger
 default response than AO.
 History is discarded on disocclusion, sharp normal changes, projection/size or
 relevant-setting changes, large camera jumps, explicit reset, and pass
-recreation.
+recreation. Bounce count and the final/exact-GI/one-bounce-diagnostic transport
+policy are always part of the settings signature. The contribution cutoff is
+included when multiple bounces are configured; GI
+intensity and exposure join it only while a positive cutoff can actually change
+transport decisions. One-bounce or exact-cutoff rendering therefore keeps
+converged history across presentation-only intensity/exposure edits. Exposure is
+used only to budget the cutoff here; stored lighting and histories remain
+scene-linear and unexposed.
 
 The optional five-level depth hierarchy follows Intel XeGTAO's AO-specific design rather
 than a generic nearest-depth HZB. An 8x8 group covers a 16x16 tile, writes
@@ -144,17 +236,25 @@ loads. Combined GI uses exact depth because coarse depth cannot safely identify
 a full-resolution normal/radiance source; this prevents cross-surface color
 bleeding until aligned attribute pyramids or representative-pixel provenance
 are added. Orthographic traversal also stays on exact depth.
+The hierarchy texture is not allocated on the default exact-depth path.
+Temporal, spatial, composite, depth-hierarchy, first-bounce, and fixed
+higher-bounce binding sets are cached across their finite resource rotations
+rather than rebuilt every frame. Because the product pipeline is always full
+resolution, shaders use direct pixel addressing and contain no dormant
+representative-cell loops.
 
 ### Defaults and presets
 
 The default Medium preset is full resolution with one stochastic slice, 32
-total samples per pixel divided between both horizon directions, world radius
+first-bounce samples per pixel divided between both horizon directions, world radius
 3, constant thickness 0.5, linear sample distribution, full radial and angular
 jitter, exact depth by default, temporal responses 0.90 AO /
 0.94 GI, bilateral radius 1, depth rejection 0.02, and normal dot threshold
 0.85. AO and GI start enabled; AO strength defaults to 1.0 so the visibility
 estimate remains clearly visible, while GI intensity and emissive gain default
-to 4.
+to 4. GI defaults to one bounce, preserving the original cost and appearance;
+the UI allows up to four. The default higher-bounce contribution cutoff is
+`0.001`; setting it to `0` requests exact-zero exits only.
 
 Low/Medium/High/Ultra use 16/32/48/64 total samples per pixel at full resolution.
 Editing sampling or filter quality selects Custom without overwriting unrelated
@@ -163,12 +263,13 @@ Hierarchical view depth is opt-in: at the default 3 m radius its construction
 cost exceeded its saved depth traffic in dense 1080p profiling. It remains
 available for AO-only workloads with longer projected rays.
 Settings intentionally do not persist between launches. Every process starts
-from factory defaults, and **Reset All** restores the same renderer, visibility,
+from factory defaults, and **Reset Settings** restores the same renderer, visibility,
 tonemapper, LUT, sky, and white-world settings in-session.
 
-GPU timestamp queries report hierarchy, sampling, temporal, spatial, composite,
-and active complete-effect time without blocking the render thread. The compact
-The **All** HUD row shows total time plus grouped Trace, Filter, and Composite times. The
+GPU timestamp queries report hierarchy, cumulative sampling across all selected
+GI bounces, temporal, spatial, composite,
+and active complete-effect time without blocking the render thread. The
+**All** HUD row shows total time plus grouped Trace, Filter, and Composite times. The
 main performance row shows resolution, frame time, FPS, current-clock memory
 bandwidth, and current-clock FP32 peak GFLOPS separated by pipes. NVIDIA values
 come from NVML; Intel values use IGCL plus configured shared-memory data from
@@ -184,6 +285,11 @@ Markers label AO-only, GI-only, and combined traversals separately.
 - Constant thickness cannot match every object.
 - Sparse steps can miss very small bright sources.
 - Large radii increase bandwidth and cache pressure.
+- Every additional GI bounce incurs another full-resolution traversal dispatch,
+  although its progressive sample budget makes stochastic work grow sublinearly.
+- The higher-bounce cutoff bounds rejected energy per receiver and bounce, not
+  across the entire selected chain; nonzero values trade a bounded amount of
+  indirect light per pruned bounce for lower material bandwidth and shading cost.
 - Temporal accumulation can ghost despite rejection and clamping.
 - Visibility is incomplete at screen edges; out-of-bounds samples fail open.
 - No checked-in image-regression scene suite exists; the local Bistro scenes

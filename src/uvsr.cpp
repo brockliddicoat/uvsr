@@ -25,10 +25,12 @@
 #include <memory>
 #include <chrono>
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <cctype>
 #include <cfloat>
+#include <cstdlib>
 #include <Windows.h>
 #include <GLFW/glfw3.h>
 
@@ -1233,7 +1235,19 @@ public:
         }
         
         m_ThirdPersonCamera.SetRotation(dm::radians(135.f), dm::radians(20.f));
-        PointThirdPersonCameraAt(m_Scene->GetSceneGraph()->GetRootNode());
+        std::shared_ptr<SceneGraphNode> cameraTarget = m_Scene->GetSceneGraph()->GetRootNode();
+        // Prefer the compact asteroid core when present so the initial view
+        // includes the full rocky platform instead of tightly framing only the
+        // temple. Older Jungle Ruins exports retain the pyramid marker fallback.
+        float cameraDistanceScale = 1.f;
+        if (auto asteroid = FindDescendantByName(cameraTarget, "UVSR_AsteroidCore"))
+        {
+            cameraTarget = asteroid;
+            cameraDistanceScale = 1.45f;
+        }
+        else if (auto pyramid = FindDescendantByName(cameraTarget, "Pyramid_EmitterShell"))
+            cameraTarget = pyramid;
+        PointThirdPersonCameraAt(cameraTarget, cameraDistanceScale);
 
         m_ui.UseThirdPersonCamera = string_utils::ends_with(m_CurrentSceneName, ".gltf")
             || string_utils::ends_with(m_CurrentSceneName, ".glb");
@@ -1339,12 +1353,45 @@ public:
             m_ScreenSpaceVisibilityPass->ResetHistory();
     }
 
-    void PointThirdPersonCameraAt(const std::shared_ptr<SceneGraphNode>& node)
+    static std::shared_ptr<SceneGraphNode> FindDescendantByName(
+        const std::shared_ptr<SceneGraphNode>& node,
+        const std::string& name)
     {
+        if (!node || node->GetName() == name)
+            return node;
+
+        for (size_t childIndex = 0; childIndex < node->GetNumChildren(); ++childIndex)
+        {
+            SceneGraphNode* child = node->GetChild(childIndex);
+            if (!child)
+                continue;
+
+            if (auto found = FindDescendantByName(child->shared_from_this(), name))
+                return found;
+        }
+
+        return nullptr;
+    }
+
+    void PointThirdPersonCameraAt(
+        const std::shared_ptr<SceneGraphNode>& node,
+        float distanceScale = 1.f)
+    {
+        if (!node)
+            return;
+
         dm::box3 bounds = node->GetGlobalBoundingBox();
-        m_ThirdPersonCamera.SetTargetPosition(bounds.center());
+        if (bounds.isempty()
+            || !all(dm::isfinite(bounds.m_mins))
+            || !all(dm::isfinite(bounds.m_maxs)))
+            return;
+
         float radius = length(bounds.diagonal()) * 0.5f;
-        float distance = radius / sinf(dm::radians(m_CameraVerticalFov * 0.5f));
+        float distance = radius * distanceScale / sinf(dm::radians(m_CameraVerticalFov * 0.5f));
+        if (!std::isfinite(distance) || distance <= 0.f)
+            return;
+
+        m_ThirdPersonCamera.SetTargetPosition(bounds.center());
         m_ThirdPersonCamera.SetDistance(distance);
         m_ThirdPersonCamera.Animate(0.f);
     }
@@ -1400,14 +1447,14 @@ public:
             return;
         }
 
-        auto previousView = std::make_shared<PlanarView>();
-        previousView->SetViewport(currentView->GetViewport());
-        previousView->SetPixelOffset(currentView->GetPixelOffset());
-        previousView->SetMatrices(
+        if (!m_PreviousView)
+            m_PreviousView = std::make_shared<PlanarView>();
+        m_PreviousView->SetViewport(currentView->GetViewport());
+        m_PreviousView->SetPixelOffset(currentView->GetPixelOffset());
+        m_PreviousView->SetMatrices(
             currentView->GetViewMatrix(),
             currentView->GetProjectionMatrix(false));
-        previousView->UpdateCache();
-        m_PreviousView = std::move(previousView);
+        m_PreviousView->UpdateCache();
     }
 
     void CreateRenderPasses()
@@ -1585,15 +1632,43 @@ public:
             }
             deferredInputs.ambientColorTop = m_AmbientTop;
             deferredInputs.ambientColorBottom = m_AmbientBottom;
-            deferredInputs.lights = &m_Scene->GetSceneGraph()->GetLights();
+            const auto& sceneLights = m_Scene->GetSceneGraph()->GetLights();
+            deferredInputs.lights = &sceneLights;
 
             const bool runScreenSpaceVisibility = m_ui.EnablePbr &&
                 m_ui.PbrDebug == PbrDebugView::FinalLinearHdr &&
                 m_ui.ScreenSpaceVisibility.HasActiveConsumer();
+            uint32_t knownInactiveLightingSources = 0u;
+            if (sceneLights.empty())
+                knownInactiveLightingSources |= LightingSource_Direct;
+            if (!m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive ||
+                !(m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain > 0.f))
+            {
+                knownInactiveLightingSources |= LightingSource_Emissive;
+            }
+            const bool allFirstBounceSourcesInactive =
+                (knownInactiveLightingSources &
+                    (LightingSource_Direct | LightingSource_Emissive)) ==
+                (LightingSource_Direct | LightingSource_Emissive);
+            const bool finalVisibilityComposite =
+                m_ui.ScreenSpaceVisibility.debug.mode ==
+                    ScreenSpaceVisibilityDebugMode::FinalComposite;
             const bool writeSourceRadiance = runScreenSpaceVisibility &&
                 (m_ui.ScreenSpaceVisibility.indirectDiffuse.enabled ||
                     m_ui.ScreenSpaceVisibility.debug.mode ==
-                        ScreenSpaceVisibilityDebugMode::DirectRadianceSource);
+                        ScreenSpaceVisibilityDebugMode::DirectRadianceSource) &&
+                (!finalVisibilityComposite || !allFirstBounceSourcesInactive);
+            const bool exactGiTransportDebug =
+                m_ui.ScreenSpaceVisibility.debug.mode >=
+                    ScreenSpaceVisibilityDebugMode::RawIndirectDiffuse &&
+                m_ui.ScreenSpaceVisibility.debug.mode <=
+                    ScreenSpaceVisibilityDebugMode::GiLightOnly;
+            const bool writeBounceMetadata = writeSourceRadiance &&
+                m_ui.ScreenSpaceVisibility.indirectDiffuse.enabled &&
+                m_ui.ScreenSpaceVisibility.indirectDiffuse.bounceCount > 1u &&
+                (exactGiTransportDebug ||
+                    (finalVisibilityComposite &&
+                        m_ui.ScreenSpaceVisibility.indirectDiffuse.intensity > 0.f));
             deferredInputs.output = runScreenSpaceVisibility
                 ? m_RenderTargets->BaseLighting.Get()
                 : m_RenderTargets->HdrColor.Get();
@@ -1607,6 +1682,7 @@ public:
                     m_RenderTargets->DirectDiffuseRadiance,
                     runScreenSpaceVisibility,
                     writeSourceRadiance,
+                    writeBounceMetadata,
                     m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive,
                     m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain,
                     float2(0.f, float(m_ui.PbrDebug)));
@@ -1625,6 +1701,8 @@ public:
                         m_RenderTargets->MaterialAmbientOcclusion;
                     visibilityInputs.baseLighting = m_RenderTargets->BaseLighting;
                     visibilityInputs.output = m_RenderTargets->HdrColor;
+                    visibilityInputs.knownInactiveLightingSources =
+                        knownInactiveLightingSources;
                     m_ScreenSpaceVisibilityPass->Render(
                         m_CommandList,
                         m_ui.ScreenSpaceVisibility,
@@ -1632,6 +1710,7 @@ public:
                         visibilityInputs,
                         m_AmbientTop,
                         m_AmbientBottom,
+                        std::exp2(m_ui.AgxToneMappingParams.Exposure),
                         uint32_t(GetFrameIndex()));
                 }
                 else
@@ -1686,7 +1765,8 @@ public:
 
         m_CommandList->close();
         GetDevice()->executeCommandList(m_CommandList);
-        CaptureCurrentViewForMotionVectors();
+        if (m_RenderTargets->MotionVectorsEnabled)
+            CaptureCurrentViewForMotionVectors();
 
         if (m_ui.CopyScreenshotToClipboard)
         {
@@ -1851,32 +1931,38 @@ protected:
 
         ImGui::SetNextWindowPos(ImVec2(fontSize * 0.6f, fontSize * 0.6f), 0);
         ImGui::Begin("Settings", 0, ImGuiWindowFlags_AlwaysAutoResize);
-        ImGui::Text("Renderer: %s", GetDeviceManager()->GetRendererString());
-        double frameTime = GetDeviceManager()->GetAverageFrameTimeSeconds();
-        if (frameTime > 0.0)
-        {
-            const GpuPerformanceMetrics gpuMetrics = QueryGpuPerformanceMetrics(
-                GetDeviceManager()->GetRendererString());
-            if (gpuMetrics.valid)
-            {
-                ImGui::Text("%d x %d | %.3f ms | %.1f FPS | %.1f GB/s | %.0f GFLOPS",
-                    width, height, frameTime * 1e3, 1.0 / frameTime,
-                    gpuMetrics.memoryBandwidthGBps, gpuMetrics.gpuGFlops);
-            }
-            else
-            {
-                ImGui::Text("%d x %d | %.3f ms | %.1f FPS | -- GB/s | -- GFLOPS",
-                    width, height, frameTime * 1e3, 1.0 / frameTime);
-            }
-            ImGui::SetItemTooltip(
-                "Current-clock theoretical memory bandwidth and FP32 peak for supported Intel and NVIDIA adapters, not measured workload utilization.");
-        }
-
         const ImGuiStyle& style = ImGui::GetStyle();
         const float settingsControlWidth =
             ImGui::CalcTextSize("Reload Shaders").x + style.FramePadding.x * 2.f +
             style.ItemSpacing.x +
             ImGui::CalcTextSize("Restart Renderer").x + style.FramePadding.x * 2.f;
+
+        const bool generalOpen = DrawCollapsingHeader(
+            "General",
+            "Expand renderer, hardware, scene, camera, material override, and rendering-path controls.",
+            ImGuiTreeNodeFlags_DefaultOpen);
+        if (generalOpen)
+        {
+            ImGui::Text("Renderer: %s", GetDeviceManager()->GetRendererString());
+            double frameTime = GetDeviceManager()->GetAverageFrameTimeSeconds();
+            if (frameTime > 0.0)
+            {
+                const GpuPerformanceMetrics gpuMetrics = QueryGpuPerformanceMetrics(
+                    GetDeviceManager()->GetRendererString());
+                if (gpuMetrics.valid)
+                {
+                    ImGui::Text("%d x %d | %.3f ms | %.1f FPS | %.1f GB/s | %.0f GFLOPS",
+                        width, height, frameTime * 1e3, 1.0 / frameTime,
+                        gpuMetrics.memoryBandwidthGBps, gpuMetrics.gpuGFlops);
+                }
+                else
+                {
+                    ImGui::Text("%d x %d | %.3f ms | %.1f FPS | -- GB/s | -- GFLOPS",
+                        width, height, frameTime * 1e3, 1.0 / frameTime);
+                }
+                ImGui::SetItemTooltip(
+                    "Current-clock theoretical memory bandwidth and FP32 peak for supported Intel and NVIDIA adapters, not measured workload utilization.");
+            }
 
         if (!m_ui.GpuAdapterChoices.empty())
         {
@@ -1917,8 +2003,78 @@ protected:
                 "Choose the GPU used by UVSR. Changing adapters restarts the renderer immediately.");
         }
 
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const bool cameraComboOpen = ImGui::BeginCombo(
+            "##Camera", m_ui.UseThirdPersonCamera ? "Third Person" : "First Person");
+        ImGui::SetItemTooltip("Switch the active camera control mode.");
+        if (cameraComboOpen)
+        {
+            if (ImGui::Selectable("First Person", !m_ui.UseThirdPersonCamera))
+            {
+                if (m_ui.UseThirdPersonCamera)
+                {
+                    m_app->CopyThirdPersonToFirstPerson();
+                    m_ui.UseThirdPersonCamera = false;
+                    m_app->ResetScreenSpaceVisibilityHistory();
+                }
+            }
+            if (ImGui::Selectable("Third Person", m_ui.UseThirdPersonCamera))
+            {
+                if (!m_ui.UseThirdPersonCamera)
+                {
+                    m_app->CopyCurrentViewToThirdPerson();
+                    m_ui.UseThirdPersonCamera = true;
+                    m_app->ResetScreenSpaceVisibilityHistory();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        static const char* whiteWorldLabels[] = {
+            "White World Off",
+            "White World On",
+            "White World Preserve Normals",
+            "White World Preserve Emissives"
+        };
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const bool whiteWorldComboOpen = ImGui::BeginCombo(
+            "##WhiteWorld", whiteWorldLabels[int(m_ui.WhiteWorld)]);
+        ImGui::SetItemTooltip(
+            "Override material color while optionally preserving surface detail or colored GI sources.");
+        if (whiteWorldComboOpen)
+        {
+            for (int modeIndex = 0; modeIndex < int(std::size(whiteWorldLabels)); ++modeIndex)
+            {
+                const bool selected = modeIndex == int(m_ui.WhiteWorld);
+                if (ImGui::Selectable(whiteWorldLabels[modeIndex], selected))
+                    m_app->SetWhiteWorldMode(WhiteWorldMode(modeIndex));
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+
+        static const char* renderingPathLabels[] = {
+            "Forward Rendering",
+            "Deferred Rendering"
+        };
+        const int selectedRenderingPath = m_ui.UseDeferredShading ? 1 : 0;
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::BeginCombo(
+                "##RenderingPath", renderingPathLabels[selectedRenderingPath]))
+        {
+            for (int pathIndex = 0; pathIndex < int(std::size(renderingPathLabels)); ++pathIndex)
+            {
+                const bool selected = pathIndex == selectedRenderingPath;
+                if (ImGui::Selectable(renderingPathLabels[pathIndex], selected))
+                    m_ui.UseDeferredShading = pathIndex == 1;
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip("Choose forward or deferred rendering.");
+
         const std::string sceneDir = m_app->GetSceneDir().generic_string();
-        
         auto getRelativePath = [&sceneDir](std::string const& name)
         {
             return donut::string_utils::starts_with(name, sceneDir)
@@ -1973,88 +2129,25 @@ protected:
         }
         ImGui::SetItemTooltip("Open the scene folder in File Explorer.");
 
-        if (ImGui::Button("Reload Shaders"))
-            m_ui.ShaderReloadRequested = true;
-        ImGui::SetItemTooltip("Recompile and reload renderer shaders.");
-
-        ImGui::SameLine();
-        if (ImGui::Button("Restart Renderer"))
+        // Keep the legacy-lighting comparison path available for future
+        // experiments without exposing it in the production settings UI.
+        // Set this to true to restore the control and its existing behavior.
+        constexpr bool ShowPbrComparisonControl = false;
+        if (ShowPbrComparisonControl)
         {
-            g_RestartRequested = true;
-            glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
-        }
-        ImGui::SetItemTooltip("Restart UVSR and recreate the renderer.");
-
-        ImGui::SameLine();
-        if (ImGui::Button("Reset All Settings", ImVec2(-FLT_MIN, 0.f)))
-            m_app->ResetAllRendererSettings();
-        ImGui::SetItemTooltip(
-            "Restore factory renderer, visibility, tonemapper, LUT, sky, and white-world settings. Camera and scene edits are left in place.");
-
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        const bool cameraComboOpen = ImGui::BeginCombo(
-            "##Camera", m_ui.UseThirdPersonCamera ? "Third Person" : "First Person");
-        ImGui::SetItemTooltip("Switch the active camera control mode.");
-        if (cameraComboOpen)
-        {
-            if (ImGui::Selectable("First Person", !m_ui.UseThirdPersonCamera))
+            if (ImGui::Checkbox("Enable PBR", &m_ui.EnablePbr))
             {
-                if (m_ui.UseThirdPersonCamera)
-                {
-                    m_app->CopyThirdPersonToFirstPerson();
-                    m_ui.UseThirdPersonCamera = false;
-                    m_app->ResetScreenSpaceVisibilityHistory();
-                }
+                if (!m_ui.EnablePbr && m_ui.WhiteWorld != WhiteWorldMode::Off)
+                    m_app->SetWhiteWorldMode(WhiteWorldMode::Off);
+                m_ui.PbrDebug = PbrDebugView::FinalLinearHdr;
+                log::info("PBR rendering %s", m_ui.EnablePbr ? "enabled" : "disabled");
             }
-            if (ImGui::Selectable("Third Person", m_ui.UseThirdPersonCamera))
-            {
-                if (!m_ui.UseThirdPersonCamera)
-                {
-                    m_app->CopyCurrentViewToThirdPerson();
-                    m_ui.UseThirdPersonCamera = true;
-                    m_app->ResetScreenSpaceVisibilityHistory();
-                }
-            }
-            ImGui::EndCombo();
+            ImGui::SetItemTooltip("Use UVSR PBR shading; disable to compare Donut legacy shading.");
         }
-        static const char* whiteWorldLabels[] = {
-            "White World Off",
-            "White World On",
-            "White World Preserve Normals",
-            "White World Preserve Emissives"
-        };
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        const bool whiteWorldComboOpen = ImGui::BeginCombo(
-            "##WhiteWorld", whiteWorldLabels[int(m_ui.WhiteWorld)]);
-        ImGui::SetItemTooltip(
-            "Override material color while optionally preserving surface detail or colored GI sources.");
-        if (whiteWorldComboOpen)
-        {
-            for (int modeIndex = 0; modeIndex < int(std::size(whiteWorldLabels)); ++modeIndex)
-            {
-                const bool selected = modeIndex == int(m_ui.WhiteWorld);
-                if (ImGui::Selectable(whiteWorldLabels[modeIndex], selected))
-                    m_app->SetWhiteWorldMode(WhiteWorldMode(modeIndex));
-                if (selected)
-                    ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
         }
-
-        ImGui::Checkbox("Deferred Shading", &m_ui.UseDeferredShading);
-        ImGui::SetItemTooltip("Use deferred shading; disable for forward shading.");
-
-        if (ImGui::Checkbox("Enable PBR", &m_ui.EnablePbr))
-        {
-            if (!m_ui.EnablePbr && m_ui.WhiteWorld != WhiteWorldMode::Off)
-                m_app->SetWhiteWorldMode(WhiteWorldMode::Off);
-            m_ui.PbrDebug = PbrDebugView::FinalLinearHdr;
-            log::info("PBR rendering %s", m_ui.EnablePbr ? "enabled" : "disabled");
-        }
-        ImGui::SetItemTooltip("Use UVSR PBR shading; disable to compare Donut legacy shading.");
 
         const bool indirectLightingOpen = DrawCollapsingHeader(
-            "Screen-Space Indirect Lighting",
+            "Visibility",
             "Configure the shared visibility traversal used by ambient occlusion and diffuse GI.",
             ImGuiTreeNodeFlags_DefaultOpen);
         if (indirectLightingOpen)
@@ -2136,7 +2229,7 @@ protected:
                     samplingChanged = true;
                 }
                 ImGui::SetItemTooltip(
-                    "Total stochastic depth taps per pixel, divided between the two near-to-far horizon directions.");
+                    "First-bounce stochastic depth taps per pixel, divided between the two near-to-far horizon directions. Later GI bounces progressively halve this budget toward 8 samples.");
                 samplingChanged |= ImGui::SliderFloat(
                     "Step Distribution", &sampling.stepDistributionExponent, 0.5f, 4.0f, "%.2f");
                 ImGui::SetItemTooltip("Bias radial samples toward the receiving pixel.");
@@ -2177,16 +2270,36 @@ protected:
                 IndirectDiffuseSettings& gi = visibility.indirectDiffuse;
                 ImGui::Checkbox("Enabled##IndirectDiffuse", &gi.enabled);
                 ImGui::SetItemTooltip(
-                    "Accumulate one-bounce diffuse irradiance only from newly claimed mask sectors.");
+                    "Accumulate diffuse irradiance only from newly claimed mask sectors.");
                 if (!gi.enabled)
                     ImGui::BeginDisabled();
+                int bounceCount = int(std::clamp(
+                    gi.bounceCount, 1u, MaxIndirectDiffuseBounceCount));
+                if (ImGui::SliderInt(
+                        "Bounces##IndirectDiffuse",
+                        &bounceCount,
+                        1,
+                        int(MaxIndirectDiffuseBounceCount),
+                        "%d",
+                        ImGuiSliderFlags_AlwaysClamp))
+                {
+                    gi.bounceCount = uint32_t(bounceCount);
+                }
+                ImGui::SetItemTooltip(
+                    "Choose 1-4 finite diffuse-light bounces. Later bounces run GI-only traversals and progressively halve the selected sample budget toward 8, reducing their cost while preserving full quality for bounce one.");
+                ImGui::SliderFloat(
+                    "Bounce Contribution Cutoff",
+                    &gi.minimumBounceContribution,
+                    0.0f,
+                    0.02f,
+                    "%.5f");
+                ImGui::SetItemTooltip(
+                    "Skip higher-bounce source energy whose conservative exposed scene-linear contribution cannot exceed this value before tone mapping. Set 0 for exact-zero exits only; GI-result diagnostics use the exact selected chain, while unrelated diagnostics skip secondary bounces.");
                 ImGui::SliderFloat("Intensity##IndirectDiffuse", &gi.intensity, 0.0f, 10.0f, "%.2f");
                 ImGui::SetItemTooltip("Scale material-applied screen-space indirect diffuse.");
                 ImGui::Checkbox("Include Emissive Sources", &gi.includeEmissive);
-                ImGui::SetItemTooltip("Allow visible emissive G-buffer surfaces to illuminate receivers.");
-                ImGui::SliderFloat("Emissive Gain", &gi.emissiveGain, 0.0f, 16.0f, "%.2f");
                 ImGui::SetItemTooltip(
-                    "Boost emissive source radiance independently from reflected direct diffuse.");
+                    "Allow visible emissive G-buffer surfaces to illuminate receivers; set their global light strength in Lights.");
                 bool giLightOnly = visibility.debug.mode ==
                     ScreenSpaceVisibilityDebugMode::GiLightOnly;
                 if (ImGui::Checkbox("GI Light Only", &giLightOnly))
@@ -2444,40 +2557,71 @@ protected:
             m_SelectedLight = lights.front();
         }
 
-        const bool lightsOpen = !lights.empty() && DrawCollapsingHeader(
-            "Lights", "Expand scene-light controls.");
+        const bool lightsOpen = DrawCollapsingHeader(
+            "Lights", "Expand scene-light and emissive-material lighting controls.");
         if (lightsOpen)
         {
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            const bool lightComboOpen = ImGui::BeginCombo(
-                "Select Light", m_SelectedLight ? m_SelectedLight->GetName().c_str() : "(None)");
-            ImGui::SetItemTooltip("Choose which scene light to edit.");
-            if (lightComboOpen)
-            {
-                for (const auto& light : lights)
-                {
-                    bool selected = m_SelectedLight == light;
-                    ImGui::Selectable(light->GetName().c_str(), &selected);
-                    if (selected)
-                    {
-                        m_SelectedLight = light;
-                        ImGui::SetItemDefaultFocus();
-                    }
-                }
-                ImGui::EndCombo();
-            }
+            IndirectDiffuseSettings& gi = m_ui.ScreenSpaceVisibility.indirectDiffuse;
+            ImGui::SliderFloat(
+                "Emissive Material Light Strength", &gi.emissiveGain, 0.0f, 16.0f, "%.2f");
+            ImGui::SetItemTooltip(
+                "Globally scale light cast by emissive materials. Higher values expand the visibly illuminated area up to the Visibility sampling radius without changing the emissive surface itself.");
 
-            if (m_SelectedLight)
+            if (!lights.empty())
             {
-                app::LightEditor(*m_SelectedLight);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                const bool lightComboOpen = ImGui::BeginCombo(
+                    "Select Light", m_SelectedLight ? m_SelectedLight->GetName().c_str() : "(None)");
+                ImGui::SetItemTooltip("Choose which scene light to edit.");
+                if (lightComboOpen)
+                {
+                    for (const auto& light : lights)
+                    {
+                        bool selected = m_SelectedLight == light;
+                        ImGui::Selectable(light->GetName().c_str(), &selected);
+                        if (selected)
+                        {
+                            m_SelectedLight = light;
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+
+                if (m_SelectedLight)
+                {
+                    app::LightEditor(*m_SelectedLight);
+                }
             }
         }
 
-        const float screenshotButtonWidth =
-            ImGui::CalcTextSize("Screenshot").x + style.FramePadding.x * 2.f;
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(
-            0.f, ImGui::GetContentRegionAvail().x - screenshotButtonWidth));
-        if (ImGui::Button("Screenshot", ImVec2(screenshotButtonWidth, 0.f)))
+        constexpr float ActionButtonCount = 4.f;
+        const float actionButtonWidth = std::max(
+            1.f,
+            (ImGui::GetContentRegionAvail().x -
+                style.ItemSpacing.x * (ActionButtonCount - 1.f)) /
+                ActionButtonCount);
+
+        if (ImGui::Button("Reload Shaders", ImVec2(actionButtonWidth, 0.f)))
+            m_ui.ShaderReloadRequested = true;
+        ImGui::SetItemTooltip("Recompile and reload renderer shaders.");
+
+        ImGui::SameLine();
+        if (ImGui::Button("Reset Settings", ImVec2(actionButtonWidth, 0.f)))
+            m_app->ResetAllRendererSettings();
+        ImGui::SetItemTooltip(
+            "Restore factory renderer, visibility, tonemapper, LUT, sky, and white-world settings. Camera and scene edits are left in place.");
+
+        ImGui::SameLine();
+        if (ImGui::Button("Restart", ImVec2(actionButtonWidth, 0.f)))
+        {
+            g_RestartRequested = true;
+            glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
+        }
+        ImGui::SetItemTooltip("Restart UVSR and recreate the renderer.");
+
+        ImGui::SameLine();
+        if (ImGui::Button("Screenshot", ImVec2(actionButtonWidth, 0.f)))
             m_ui.CopyScreenshotToClipboard = true;
         ImGui::SetItemTooltip("Copy the current rendered frame to the clipboard.");
 
@@ -2663,6 +2807,16 @@ int main(int __argc, const char* const* __argv)
     std::string sceneName;
     std::string experimentName;
     ProcessCommandLine(__argc, __argv, deviceParams, sceneName, experimentName);
+    if (experimentName.empty())
+    {
+        // The launcher uses an environment variable so experiment descriptions
+        // containing spaces reach WinMain without another layer of Windows
+        // command-line quoting. An explicit argument remains the override for
+        // direct and IDE-driven launches.
+        const char* environmentExperiment = std::getenv("UVSR_EXPERIMENT");
+        if (environmentExperiment && environmentExperiment[0] != '\0')
+            experimentName = environmentExperiment;
+    }
 
     // UVSR intentionally runs uncapped; the renderer no longer exposes or
     // maintains a runtime VSync mode.
@@ -2678,7 +2832,7 @@ int main(int __argc, const char* const* __argv)
 
     const char* apiString = nvrhi::utils::GraphicsAPIToString(deviceManager->GetGraphicsAPI());
 
-    std::string windowTitle = "UVSR Renderer, " + std::string(apiString);
+    std::string windowTitle = "UVSR Renderer " + std::string(apiString);
     if (!experimentName.empty())
         windowTitle += " (" + experimentName + ")";
 
