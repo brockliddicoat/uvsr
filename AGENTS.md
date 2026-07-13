@@ -86,8 +86,10 @@
 ## Documentation
 
 - Keep the root file named lowercase `readme.md`.
-- Use title capitalization for every bold phrase in `readme.md`; capitalize
-  principal words consistently when adding or revising bold text.
+- Use title capitalization for prominent bold text in `readme.md`, such as the
+  document title, section or project headings, and bold list-item headings.
+  Leave inline UI labels, control names, and product names at their established
+  casing.
 - Update `readme.md` whenever a change affects user-visible behavior, defaults,
   controls, required assets, build/test/run steps, or intentional omissions.
   Remove stale claims instead of preserving historical behavior.
