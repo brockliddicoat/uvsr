@@ -28,6 +28,9 @@
 #ifndef ENABLE_BOUNCE_METADATA
 #define ENABLE_BOUNCE_METADATA 0
 #endif
+#ifndef ENABLE_BOUNCE_STATISTICS
+#define ENABLE_BOUNCE_STATISTICS 0
+#endif
 
 #define VisibilityEstimator_PaperAngular 0
 #define VisibilityEstimator_GTUniform 1
@@ -47,6 +50,9 @@ Texture2D<float4> t_Emissive : register(t5);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t6);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_BounceFrontier : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
+#if ENABLE_BOUNCE_STATISTICS
+RWBuffer<uint> u_HigherBounceReceiverStatistics : register(u2);
+#endif
 #else
 Texture2D<float4> t_SourceRadiance : register(t2);
 Texture2D<float> t_DepthHierarchy : register(t3);
@@ -214,10 +220,12 @@ VisibilityInterval BuildPaperVisibilityInterval(
     return MakeVisibilityInterval(min(front01, back01), max(front01, back01));
 }
 
-void WriteEmptyVisibilityOutput(uint2 pixel, bool traversalDebugActive)
+void WriteEmptyVisibilityOutput(
+    uint2 pixel,
+    bool traversalDebugActive,
+    float4 previousFrontier)
 {
 #if ENABLE_BOUNCE_REINJECTION
-    float4 previousFrontier = t_PreviousBounceFrontier[pixel];
     u_BounceFrontier[pixel] = 0.0f;
 #if INITIALIZE_BOUNCE_CUMULATIVE
     // Bounce two initializes C2 from B1 even when this receiver cannot launch
@@ -247,6 +255,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     uint2 receiverPixel = dispatchPixel;
     float receiverDepth = t_Depth[receiverPixel];
     float2 receiverPixelCenter = float2(receiverPixel) + 0.5f;
+    float4 previousReceiverFrontier = 0.0f;
 
     const bool traversalDebugActive = ENABLE_TRAVERSAL_DEBUG != 0;
 #if ENABLE_BOUNCE_REINJECTION
@@ -279,10 +288,11 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     const bool giSourcePotential = LightingHasPotentialSource(
         firstBounceContributionGate, firstBounceSources);
 #endif
-#if !ENABLE_AO
+#if !ENABLE_AO && !ENABLE_BOUNCE_REINJECTION
     if (!giSourcePotential)
     {
-        WriteEmptyVisibilityOutput(dispatchPixel, traversalDebugActive);
+        WriteEmptyVisibilityOutput(
+            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
         return;
     }
 #endif
@@ -290,14 +300,60 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 
     if (!IsValidDepth(receiverDepth) || !(g_Visibility.radiusWorld > VisibilityEpsilon))
     {
-        WriteEmptyVisibilityOutput(dispatchPixel, traversalDebugActive);
+        // The first-bounce frontier is guaranteed empty at an ineligible
+        // depth, so bounce two can initialize its cumulative output from zero
+        // without performing a frontier read that cannot carry energy.
+        WriteEmptyVisibilityOutput(
+            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
         return;
     }
+
+#if ENABLE_BOUNCE_REINJECTION
+    // Read the packed receiver transport fact as soon as basic depth/radius
+    // eligibility is known. This gate precedes position reconstruction, normal
+    // loading/transformation, and slice setup. The same value is passed to
+    // every inactive-output path and later resolve, so there is one receiver
+    // frontier read per eligible higher-bounce pixel.
+    previousReceiverFrontier = t_PreviousBounceFrontier[receiverPixel];
+    uint receiverFrontierMetadata = (uint)round(
+        max(previousReceiverFrontier.a, 0.0f));
+    bool receiverRejectsDiffuseTransport =
+        (receiverFrontierMetadata & PbrGiMetadata_DiffuseActive) == 0u;
+#if ENABLE_BOUNCE_STATISTICS
+    uint waveEligibleReceiverCount = WaveActiveCountBits(true);
+    uint waveRejectedReceiverCount = WaveActiveCountBits(
+        receiverRejectsDiffuseTransport);
+    if (WaveIsFirstLane())
+    {
+        InterlockedAdd(
+            u_HigherBounceReceiverStatistics[0],
+            waveEligibleReceiverCount);
+        InterlockedAdd(
+            u_HigherBounceReceiverStatistics[1],
+            waveRejectedReceiverCount);
+    }
+#endif
+    if (receiverRejectsDiffuseTransport)
+    {
+        WriteEmptyVisibilityOutput(
+            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
+        return;
+    }
+#if !ENABLE_AO
+    if (!giSourcePotential)
+    {
+        WriteEmptyVisibilityOutput(
+            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
+        return;
+    }
+#endif
+#endif
 
     float3 receiverPositionVS;
     if (!ReconstructViewPositionSafe(receiverPixelCenter, receiverDepth, receiverPositionVS))
     {
-        WriteEmptyVisibilityOutput(dispatchPixel, traversalDebugActive);
+        WriteEmptyVisibilityOutput(
+            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
         return;
     }
 
@@ -306,25 +362,11 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         g_Visibility.view.matWorldToView).xyz;
     if (dot(receiverNormalVS, receiverNormalVS) <= VisibilityEpsilon * VisibilityEpsilon)
     {
-        WriteEmptyVisibilityOutput(dispatchPixel, traversalDebugActive);
+        WriteEmptyVisibilityOutput(
+            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
         return;
     }
     receiverNormalVS = SafeNormalize(receiverNormalVS, float3(0.0f, 0.0f, -1.0f));
-
-#if ENABLE_BOUNCE_REINJECTION
-    // Source generation cached this exact, frame-local material fact in the
-    // frontier metadata. One existing frontier read now replaces three
-    // full-screen G-buffer reads at the front of every later bounce.
-    float4 previousReceiverFrontier =
-        t_PreviousBounceFrontier[receiverPixel];
-    uint receiverFrontierMetadata = (uint)round(
-        max(previousReceiverFrontier.a, 0.0f));
-    if ((receiverFrontierMetadata & PbrGiMetadata_DiffuseActive) == 0u)
-    {
-        WriteEmptyVisibilityOutput(dispatchPixel, traversalDebugActive);
-        return;
-    }
-#endif
 
     float3 viewDirection;
     if (g_Visibility.orthographicProjection != 0u)

@@ -3199,6 +3199,34 @@ protected:
                 ImGui::Checkbox("Freeze Sampling Phase", &visibility.debug.freezeSamplingPhase);
                 ImGui::SetItemTooltip("Hold slice rotation and radial jitter at deterministic phase zero.");
 
+                const bool canCollectHigherBounceStatistics =
+                    visibility.indirectDiffuse.enabled &&
+                    visibility.indirectDiffuse.bounceCount > 1u;
+                if (!canCollectHigherBounceStatistics)
+                    ImGui::BeginDisabled();
+                ImGui::Checkbox(
+                    "Higher-Bounce Receiver Statistics",
+                    &visibility.debug.collectHigherBounceReceiverStatistics);
+                ImGui::SetItemTooltip(
+                    "Use a diagnostic-only higher-bounce shader permutation to count depth-eligible receiver attempts rejected by diffuse-transport metadata. Production traversal carries no counter work.");
+                if (visibility.debug.collectHigherBounceReceiverStatistics &&
+                    canCollectHigherBounceStatistics)
+                {
+                    if (const ScreenSpaceVisibilityTimings* timings =
+                        m_app->GetScreenSpaceVisibilityTimings())
+                    {
+                        ImGui::Text(
+                            "Early receiver exits: %u / %u (%.1f%%)",
+                            timings->higherBounceRejectedReceiverCount,
+                            timings->higherBounceEligibleReceiverCount,
+                            timings->HigherBounceReceiverRejectionPercent());
+                        ImGui::SetItemTooltip(
+                            "Counts every depth-eligible receiver attempt across the active higher-bounce dispatches; readback follows the existing delayed GPU timer ring.");
+                    }
+                }
+                if (!canCollectHigherBounceStatistics)
+                    ImGui::EndDisabled();
+
                 static const char* criterionLabels[] = { "Round", "Ceil", "Floor" };
                 ImGui::SetNextItemWidth(settingsControlWidth);
                 if (ImGui::BeginCombo(

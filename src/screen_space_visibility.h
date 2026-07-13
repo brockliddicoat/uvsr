@@ -131,6 +131,9 @@ namespace uvsr
     {
         ScreenSpaceVisibilityDebugMode mode = ScreenSpaceVisibilityDebugMode::FinalComposite;
         bool freezeSamplingPhase = false;
+        // Uses a dedicated later-bounce permutation so production traversal
+        // pays no wave-reduction or atomic-counter cost.
+        bool collectHigherBounceReceiverStatistics = false;
         SectorHitCriterion sectorHitCriterion = SectorHitCriterion::Round;
     };
 
@@ -175,10 +178,20 @@ namespace uvsr
         float depthHierarchyMs = 0.f;
         float samplingMs = 0.f;
         float compositionMs = 0.f;
+        uint32_t higherBounceEligibleReceiverCount = 0u;
+        uint32_t higherBounceRejectedReceiverCount = 0u;
 
         [[nodiscard]] float CompleteEffectMs() const
         {
             return depthHierarchyMs + samplingMs + compositionMs;
+        }
+
+        [[nodiscard]] float HigherBounceReceiverRejectionPercent() const
+        {
+            return higherBounceEligibleReceiverCount > 0u
+                ? 100.f * float(higherBounceRejectedReceiverCount) /
+                    float(higherBounceEligibleReceiverCount)
+                : 0.f;
         }
     };
 
@@ -238,7 +251,9 @@ namespace uvsr
         // cumulative target; bounces three and four add to it in place. Keeping
         // both variants out of m_Sampling preserves the original one-bounce
         // register and SRV footprint.
-        std::array<std::array<Pipeline, 2>, ImplementedVisibilityEstimatorCount>
+        // Bits 0 and 1 select cumulative initialization and the opt-in
+        // receiver-gate statistics permutation respectively.
+        std::array<std::array<Pipeline, 4>, ImplementedVisibilityEstimatorCount>
             m_IndirectBounceSampling;
         Pipeline m_DepthHierarchy;
         Pipeline m_Composite;
@@ -265,7 +280,9 @@ namespace uvsr
             ImplementedVisibilityEstimatorCount> m_SamplingBindingSets;
         std::array<std::array<nvrhi::BindingSetHandle, 2>,
             ImplementedVisibilityEstimatorCount> m_MultiBounceFirstBindingSets;
-        std::array<std::array<nvrhi::BindingSetHandle, 3>,
+        // Three fixed bounce rotations, followed by the same rotations with
+        // the statistics UAV bound.
+        std::array<std::array<nvrhi::BindingSetHandle, 6>,
             ImplementedVisibilityEstimatorCount> m_IndirectBounceBindingSets;
         nvrhi::BindingSetHandle m_DepthHierarchyBindingSet;
         // The first slot reads the first-bounce frontier; the second reads the
@@ -277,6 +294,10 @@ namespace uvsr
         std::array<std::array<bool, c_TimerLatency>,
             static_cast<size_t>(Stage::Count)> m_TimerPending{};
         std::array<bool, static_cast<size_t>(Stage::Count)> m_TimerActive{};
+        nvrhi::BufferHandle m_HigherBounceStatisticsBuffer;
+        std::array<nvrhi::BufferHandle, c_TimerLatency>
+            m_HigherBounceStatisticsReadbackBuffers;
+        std::array<bool, c_TimerLatency> m_HigherBounceStatisticsPending{};
         uint32_t m_TimerFrame = 0;
         ScreenSpaceVisibilityTimings m_Timings;
 

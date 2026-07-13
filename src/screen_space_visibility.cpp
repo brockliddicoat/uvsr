@@ -101,6 +101,33 @@ namespace uvsr
         constantBufferDesc.maxVersions = engine::c_MaxRenderPassConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(constantBufferDesc);
 
+        // Two uints hold the number of depth-eligible later-bounce receiver
+        // attempts and the subset rejected by diffuse-transport metadata. The
+        // tiny ring is read only after the matching sampling timer proves the
+        // command list complete.
+        nvrhi::BufferDesc statisticsBufferDesc;
+        statisticsBufferDesc.byteSize = sizeof(uint32_t) * 2u;
+        statisticsBufferDesc.format = nvrhi::Format::R32_UINT;
+        statisticsBufferDesc.canHaveUAVs = true;
+        statisticsBufferDesc.canHaveTypedViews = true;
+        statisticsBufferDesc.initialState = nvrhi::ResourceStates::CopySource;
+        statisticsBufferDesc.keepInitialState = true;
+        statisticsBufferDesc.debugName =
+            "ScreenSpaceVisibility/HigherBounceReceiverStatistics";
+        m_HigherBounceStatisticsBuffer =
+            device->createBuffer(statisticsBufferDesc);
+
+        statisticsBufferDesc.canHaveUAVs = false;
+        statisticsBufferDesc.canHaveTypedViews = false;
+        statisticsBufferDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
+        statisticsBufferDesc.debugName =
+            "ScreenSpaceVisibility/HigherBounceReceiverStatisticsReadback";
+        for (nvrhi::BufferHandle& readbackBuffer :
+            m_HigherBounceStatisticsReadbackBuffers)
+        {
+            readbackBuffer = device->createBuffer(statisticsBufferDesc);
+        }
+
         CreatePipelines(shaderFactory);
 
         for (auto& stageQueries : m_TimerQueries)
@@ -116,7 +143,7 @@ namespace uvsr
         auto createPipeline = [this, &shaderFactory](
             Pipeline& destination,
             const char* shaderName,
-            std::initializer_list<nvrhi::BindingLayoutItem> bindings,
+            const std::vector<nvrhi::BindingLayoutItem>& bindings,
             const std::vector<ShaderMacro>* macros = nullptr)
         {
             destination.shader = shaderFactory->CreateShader(
@@ -124,7 +151,7 @@ namespace uvsr
 
             nvrhi::BindingLayoutDesc layoutDesc;
             layoutDesc.visibility = nvrhi::ShaderType::Compute;
-            layoutDesc.bindings.assign(bindings.begin(), bindings.end());
+            layoutDesc.bindings = bindings;
             destination.bindingLayout = m_Device->createBindingLayout(layoutDesc);
 
             nvrhi::ComputePipelineDesc pipelineDesc;
@@ -212,6 +239,8 @@ namespace uvsr
                 variant < m_IndirectBounceSampling[estimatorIndex].size();
                 ++variant)
             {
+                const bool initializeCumulative = (variant & 1u) == 0u;
+                const bool collectReceiverStatistics = (variant & 2u) != 0u;
                 std::vector<ShaderMacro> indirectBounceMacros;
                 indirectBounceMacros.emplace_back(
                     "VISIBILITY_ESTIMATOR", std::to_string(estimatorIndex));
@@ -220,22 +249,29 @@ namespace uvsr
                 indirectBounceMacros.emplace_back("ENABLE_TRAVERSAL_DEBUG", "0");
                 indirectBounceMacros.emplace_back("ENABLE_BOUNCE_REINJECTION", "1");
                 indirectBounceMacros.emplace_back(
-                    "INITIALIZE_BOUNCE_CUMULATIVE", variant == 0u ? "1" : "0");
+                    "INITIALIZE_BOUNCE_CUMULATIVE",
+                    initializeCumulative ? "1" : "0");
+                indirectBounceMacros.emplace_back(
+                    "ENABLE_BOUNCE_STATISTICS",
+                    collectReceiverStatistics ? "1" : "0");
+                std::vector<nvrhi::BindingLayoutItem> bindings = {
+                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(1),
+                    nvrhi::BindingLayoutItem::Texture_SRV(2),
+                    nvrhi::BindingLayoutItem::Texture_SRV(3),
+                    nvrhi::BindingLayoutItem::Texture_SRV(4),
+                    nvrhi::BindingLayoutItem::Texture_SRV(5),
+                    nvrhi::BindingLayoutItem::Texture_SRV(6),
+                    nvrhi::BindingLayoutItem::Texture_UAV(0),
+                    nvrhi::BindingLayoutItem::Texture_UAV(1)
+                };
+                if (collectReceiverStatistics)
+                    bindings.push_back(nvrhi::BindingLayoutItem::TypedBuffer_UAV(2));
                 createPipeline(
                     m_IndirectBounceSampling[estimatorIndex][variant],
                     "uvsr/screen_space_visibility_cs.hlsl",
-                    {
-                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                        nvrhi::BindingLayoutItem::Texture_SRV(0),
-                        nvrhi::BindingLayoutItem::Texture_SRV(1),
-                        nvrhi::BindingLayoutItem::Texture_SRV(2),
-                        nvrhi::BindingLayoutItem::Texture_SRV(3),
-                        nvrhi::BindingLayoutItem::Texture_SRV(4),
-                        nvrhi::BindingLayoutItem::Texture_SRV(5),
-                        nvrhi::BindingLayoutItem::Texture_SRV(6),
-                        nvrhi::BindingLayoutItem::Texture_UAV(0),
-                        nvrhi::BindingLayoutItem::Texture_UAV(1)
-                    },
+                    bindings,
                     &indirectBounceMacros);
             }
         }
@@ -400,6 +436,23 @@ namespace uvsr
             m_Device->resetTimerQuery(query);
             m_TimerPending[stageIndex][slot] = false;
 
+            if (static_cast<Stage>(stageIndex) == Stage::Sampling &&
+                m_HigherBounceStatisticsPending[slot])
+            {
+                void* mappedData = m_Device->mapBuffer(
+                    m_HigherBounceStatisticsReadbackBuffers[slot],
+                    nvrhi::CpuAccessMode::Read);
+                if (mappedData)
+                {
+                    const auto* values = static_cast<const uint32_t*>(mappedData);
+                    m_Timings.higherBounceEligibleReceiverCount = values[0];
+                    m_Timings.higherBounceRejectedReceiverCount = values[1];
+                    m_Device->unmapBuffer(
+                        m_HigherBounceStatisticsReadbackBuffers[slot]);
+                }
+                m_HigherBounceStatisticsPending[slot] = false;
+            }
+
             switch (static_cast<Stage>(stageIndex))
             {
             case Stage::DepthHierarchy: m_Timings.depthHierarchyMs = milliseconds; break;
@@ -482,12 +535,16 @@ namespace uvsr
         // for this frame without reallocating textures or invalidating caches.
         const bool diagnosticNeedsExactBounceChain =
             IsExactGiTransportDebug(settings.debug.mode);
+        const bool statisticsNeedBounceChain =
+            settings.debug.collectHigherBounceReceiverStatistics &&
+            requestedBounceCount > 1u;
         const bool finalCompositeNeedsHigherBounces =
             settings.debug.mode == ScreenSpaceVisibilityDebugMode::FinalComposite &&
             (knownInactiveLightingSources & LightingSource_IndirectDiffuse) == 0u &&
             settings.indirectDiffuse.intensity > 0.f;
         const bool higherBouncesCanReachConsumer =
-            diagnosticNeedsExactBounceChain || finalCompositeNeedsHigherBounces;
+            diagnosticNeedsExactBounceChain || finalCompositeNeedsHigherBounces ||
+            statisticsNeedBounceChain;
         const uint32_t activeBounceCount = higherBouncesCanReachConsumer
             ? requestedBounceCount
             : 1u;
@@ -500,6 +557,11 @@ namespace uvsr
             requestedBounceCount > 1u,
             useDepthHierarchyThisFrame);
         AdvanceTimers();
+        if (!settings.debug.collectHigherBounceReceiverStatistics)
+        {
+            m_Timings.higherBounceEligibleReceiverCount = 0u;
+            m_Timings.higherBounceRejectedReceiverCount = 0u;
+        }
 
         exposureScale = std::max(exposureScale, 0.f);
         const uint32_t consumerVariant =
@@ -606,6 +668,15 @@ namespace uvsr
             ? "Visibility Sampling (Multiple Bounces)"
             : "Visibility Sampling");
         BeginStage(commandList, Stage::Sampling);
+        // Tie statistics collection to an available timer slot. The readback
+        // for that slot is mapped only after its sampling query reports GPU
+        // completion, avoiding a CPU/GPU synchronization point.
+        const bool collectHigherBounceStatisticsThisFrame =
+            settings.debug.collectHigherBounceReceiverStatistics &&
+            activeBounceCount > 1u &&
+            m_TimerActive[static_cast<size_t>(Stage::Sampling)];
+        if (collectHigherBounceStatisticsThisFrame)
+            commandList->clearBufferUInt(m_HigherBounceStatisticsBuffer, 0u);
 
         // Keep the default one-bounce path on the original compact shader.
         // Packed receiver metadata is emitted only when a later bounce will
@@ -662,9 +733,14 @@ namespace uvsr
                 primarySampleCount, bounceIndex);
             commandList->writeBuffer(m_ConstantBuffer, &constants, sizeof(constants));
 
+            const uint32_t statisticsBindingOffset =
+                collectHigherBounceStatisticsThisFrame ? 3u : 0u;
             nvrhi::BindingSetHandle& bindingSet =
-                m_IndirectBounceBindingSets[estimatorIndex][bounceIndex - 1u];
-            const uint32_t pipelineVariant = bounceIndex > 1u ? 1u : 0u;
+                m_IndirectBounceBindingSets[estimatorIndex]
+                    [bounceIndex - 1u + statisticsBindingOffset];
+            const uint32_t pipelineVariant =
+                (bounceIndex > 1u ? 1u : 0u) |
+                (collectHigherBounceStatisticsThisFrame ? 2u : 0u);
             Pipeline& pipeline =
                 m_IndirectBounceSampling[estimatorIndex][pipelineVariant];
             if (!bindingSet)
@@ -688,6 +764,12 @@ namespace uvsr
                     nvrhi::BindingSetItem::Texture_UAV(
                         1, m_CumulativeIndirectDiffuse)
                 };
+                if (collectHigherBounceStatisticsThisFrame)
+                {
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::TypedBuffer_UAV(
+                            2, m_HigherBounceStatisticsBuffer));
+                }
                 bindingSet = m_Device->createBindingSet(
                     bindings, pipeline.bindingLayout);
             }
@@ -700,6 +782,17 @@ namespace uvsr
         }
         if (activeBounceCount > 1u)
             rawIndirectDiffuse = m_CumulativeIndirectDiffuse;
+        if (collectHigherBounceStatisticsThisFrame)
+        {
+            const uint32_t statisticsSlot = m_TimerFrame % c_TimerLatency;
+            commandList->copyBuffer(
+                m_HigherBounceStatisticsReadbackBuffers[statisticsSlot],
+                0u,
+                m_HigherBounceStatisticsBuffer,
+                0u,
+                sizeof(uint32_t) * 2u);
+            m_HigherBounceStatisticsPending[statisticsSlot] = true;
+        }
         EndStage(commandList, Stage::Sampling);
         commandList->endMarker();
 
