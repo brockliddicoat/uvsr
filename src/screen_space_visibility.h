@@ -12,7 +12,6 @@
 namespace donut::engine
 {
     class ICompositeView;
-    class IView;
     class ShaderFactory;
 }
 
