@@ -14,6 +14,16 @@ namespace uvsr
         Custom = 3
     };
 
+    // Temporal presets describe the desired response. This independent profile
+    // selects statically compiled implementation cost, so clarity/stability can
+    // be tuned without forcing an expensive path on low-throughput GPUs.
+    enum class ReconstructiveTemporalPerformanceProfile : uint32_t
+    {
+        Performance = 0,
+        Balanced = 1,
+        MaximumQuality = 2
+    };
+
     enum class JitterSequence : uint32_t
     {
         R2 = 0,
@@ -68,6 +78,8 @@ namespace uvsr
     {
         bool enabled = true;
         ReconstructiveTemporalPreset preset = ReconstructiveTemporalPreset::MediumTemporal;
+        ReconstructiveTemporalPerformanceProfile performanceProfile =
+            ReconstructiveTemporalPerformanceProfile::Balanced;
 
         // Projection jitter. jitterScale is measured in pixels and is bounded
         // to one so the generated offset never exceeds half a pixel per axis.
@@ -89,8 +101,10 @@ namespace uvsr
         bool validateMaterialIdentity = true;
         bool validateObjectIdentity = false;
 
-        // Reactive shading. The first-party PBR G-buffer supplies the explicit
-        // mask, while the analytical estimate catches unmarked shading changes.
+        // Reactive shading. The explicit target is reserved for a producer
+        // with concrete transient/unreliable transport; the current opaque PBR
+        // producer writes neutral values. The analytical estimate is motion-
+        // corroborated so stationary subpixel phases remain accumulatable.
         bool explicitReactiveMaskEnabled = true;
         bool automaticReactiveMaskEnabled = true;
         float automaticReactiveStrength = 0.80f;
@@ -184,6 +198,8 @@ namespace uvsr
 
     [[nodiscard]] const char* GetReconstructiveTemporalPresetName(
         ReconstructiveTemporalPreset preset) noexcept;
+    [[nodiscard]] const char* GetReconstructiveTemporalPerformanceProfileName(
+        ReconstructiveTemporalPerformanceProfile profile) noexcept;
     [[nodiscard]] const char* GetJitterSequenceName(JitterSequence sequence) noexcept;
     [[nodiscard]] const char* GetHistorySampleFilterName(
         HistorySampleFilter filter) noexcept;

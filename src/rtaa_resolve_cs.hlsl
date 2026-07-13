@@ -3,12 +3,22 @@
 #include <donut/shaders/binding_helpers.hlsli>
 #include "reconstructive_temporal_aa_cb.h"
 
+#if defined(RTAA_VARIANT)
+#define RTAA_CATMULL_ROM (RTAA_VARIANT & 1)
+#define RTAA_RESURRECTION ((RTAA_VARIANT >> 1) & 1)
+#define RTAA_PERFORMANCE_TIER (RTAA_VARIANT >> 2)
+#endif
+
 #ifndef RTAA_CATMULL_ROM
 #define RTAA_CATMULL_ROM 1
 #endif
 
 #ifndef RTAA_RESURRECTION
 #define RTAA_RESURRECTION 1
+#endif
+
+#ifndef RTAA_PERFORMANCE_TIER
+#define RTAA_PERFORMANCE_TIER 2
 #endif
 
 cbuffer c_ReconstructiveTemporalAA : register(b0)
@@ -20,12 +30,9 @@ SamplerState s_LinearClamp : register(s0);
 
 Texture2D<float4> t_CurrentColor : register(t0);
 Texture2D<float>  t_CurrentDepth : register(t1);
-Texture2D<float4> t_CurrentNormals : register(t2);
-Texture2D<float4> t_CurrentDiffuse : register(t3);
 Texture2D<float4> t_CurrentSpecular : register(t4);
-Texture2D<float4> t_CurrentEmissive : register(t5);
 Texture2D<uint2>  t_CurrentSurfaceIds : register(t6);
-Texture2D<float4> t_Prepared : register(t7);
+Texture2D<float2> t_Prepared : register(t7);
 Texture2D<float4> t_Classification : register(t8);
 Texture2D<float4> t_RawMotion : register(t9);
 
@@ -49,7 +56,8 @@ Texture2D<uint2>  t_PersistentHistorySurface1 : register(t22);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_HistoryColor : register(u0);
 // Mean and second moment of log2(1 + luminance).
 VK_IMAGE_FORMAT("rg16f") RWTexture2D<float2> u_HistoryMoments : register(u1);
-// Normalized history count, confidence, reactive value, and motion factor.
+// Normalized history count, confidence, thin-lock lifetime, and packed
+// reactive/motion nibbles.
 VK_IMAGE_FORMAT("rgba8") RWTexture2D<float4> u_HistoryMetadata : register(u2);
 VK_IMAGE_FORMAT("r32f") RWTexture2D<float> u_HistoryDepth : register(u3);
 // R is the exact 32-bit material ID. G packs an octahedral UNORM8x2 normal in
@@ -59,7 +67,12 @@ VK_IMAGE_FORMAT("rg32ui") RWTexture2D<uint2> u_HistorySurface : register(u4);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Debug : register(u5);
 
 static const uint RtaaGroupSize = 8u;
-static const uint RtaaTileSize = 12u;
+#if RTAA_PERFORMANCE_TIER >= 2
+static const uint RtaaTileHalo = 2u;
+#else
+static const uint RtaaTileHalo = 1u;
+#endif
+static const uint RtaaTileSize = RtaaGroupSize + 2u * RtaaTileHalo;
 static const uint RtaaTileElementCount = RtaaTileSize * RtaaTileSize;
 static const float RtaaEpsilon = 1e-6f;
 
@@ -113,6 +126,61 @@ float SmoothRange(float value, float lower, float upper)
     return saturate((value - lower) / max(upper - lower, RtaaEpsilon));
 }
 
+// Metadata A carries two independent 4-bit values without adding a texture:
+// reactive shading in the low nibble and motion factor in the high nibble.
+// Metadata B remains a full 8-bit lock lifetime so every supported 2..64 phase
+// jitter cycle can expire predictably. Coverage magnitude is independently
+// stored in color alpha.
+float EncodeReactiveAndMotion(float reactive, float motionFactor)
+{
+    uint reactiveBits = (uint)round(saturate(reactive) * 15.0f);
+    uint motionBits = (uint)round(saturate(motionFactor) * 15.0f);
+    return float((motionBits << 4u) | reactiveBits) / 255.0f;
+}
+
+float DecodeMotionFactor(float packed)
+{
+    uint bits = (uint)round(saturate(packed) * 255.0f);
+    return float((bits >> 4u) & 15u) / 15.0f;
+}
+
+float LoadInterpolatedStationaryThinLock(float2 pixelCenter)
+{
+    pixelCenter = clamp(pixelCenter, 0.5f, g_Rtaa.resolution - 0.5f);
+    float2 exactCenter = floor(pixelCenter) + 0.5f;
+    if (all(abs(pixelCenter - exactCenter) < 1e-5f))
+    {
+        float4 metadata = saturate(t_ImmediateHistoryMetadata.Load(
+            int3(int2(floor(pixelCenter)), 0)));
+        return DecodeMotionFactor(metadata.a) < 0.10f
+            ? metadata.b : 0.0f;
+    }
+
+    int2 basePixel = int2(floor(pixelCenter - 0.5f));
+    int2 maximumPixel = int2(g_Rtaa.resolution) - 1;
+    float2 fraction = saturate(pixelCenter -
+        (float2(basePixel) + 0.5f));
+    float interpolatedLifetime = 0.0f;
+    [unroll]
+    for (int y = 0; y < 2; ++y)
+    {
+        [unroll]
+        for (int x = 0; x < 2; ++x)
+        {
+            int2 samplePixel = clamp(basePixel + int2(x, y), 0,
+                maximumPixel);
+            float4 metadata = saturate(t_ImmediateHistoryMetadata.Load(
+                int3(samplePixel, 0)));
+            float weight = (x == 0 ? 1.0f - fraction.x : fraction.x) *
+                (y == 0 ? 1.0f - fraction.y : fraction.y);
+            if (DecodeMotionFactor(metadata.a) < 0.10f)
+                interpolatedLifetime += metadata.b * weight;
+        }
+    }
+    return interpolatedLifetime > (1.0f / 255.0f)
+        ? saturate(interpolatedLifetime) : 0.0f;
+}
+
 bool DeviceDepthToViewDepth(
     float deviceDepth,
     PlanarViewConstants view,
@@ -154,13 +222,14 @@ bool ReconstructWorldPosition(
 bool ProjectWorldToHistory(
     float3 worldPosition,
     PlanarViewConstants view,
-    out float2 pixelCenter,
+    out float2 resolvedColorCenter,
+    out float2 rawAuxiliaryCenter,
     out float expectedDeviceDepth)
 {
-    // History color is resolved onto the non-jittered display grid, while its
-    // stored depth came from the jittered scene render. Use the no-offset clip
-    // position for history coordinates and the offset clip position for the
-    // expected depth; this applies projection jitter exactly once.
+    // Resolved color/metadata and raw depth/surface occupy different coordinate
+    // spaces. Match immediate p+motion for the resolved grid by preserving the
+    // current subpixel phase; raw auxiliaries use the jitter of the history view
+    // that produced them.
     float4 clipNoOffset = mul(float4(worldPosition, 1.0f),
         view.matWorldToClipNoOffset);
     float4 clipWithOffset = mul(float4(worldPosition, 1.0f),
@@ -168,15 +237,22 @@ bool ProjectWorldToHistory(
     if (!all(isfinite(clipNoOffset)) || !all(isfinite(clipWithOffset)) ||
         clipNoOffset.w <= RtaaEpsilon || clipWithOffset.w <= RtaaEpsilon)
     {
-        pixelCenter = 0.0f;
+        resolvedColorCenter = 0.0f;
+        rawAuxiliaryCenter = 0.0f;
         expectedDeviceDepth = 0.0f;
         return false;
     }
 
-    float2 ndc = clipNoOffset.xy / clipNoOffset.w;
-    pixelCenter = ndc * view.clipToWindowScale + view.clipToWindowBias;
+    float2 noOffsetNdc = clipNoOffset.xy / clipNoOffset.w;
+    float2 rawNdc = clipWithOffset.xy / clipWithOffset.w;
+    float2 noOffsetCenter = noOffsetNdc * view.clipToWindowScale +
+        view.clipToWindowBias;
+    resolvedColorCenter = noOffsetCenter + g_Rtaa.currentJitter;
+    rawAuxiliaryCenter = rawNdc * view.clipToWindowScale +
+        view.clipToWindowBias;
     expectedDeviceDepth = clipWithOffset.z / clipWithOffset.w;
-    return all(isfinite(pixelCenter)) && isfinite(expectedDeviceDepth);
+    return all(isfinite(resolvedColorCenter)) &&
+        all(isfinite(rawAuxiliaryCenter)) && isfinite(expectedDeviceDepth);
 }
 
 float2 EncodeOctahedralNormal(float3 normal)
@@ -263,6 +339,14 @@ float3 CompressedYCoCgToRgb(float3 value)
 float4 SampleHistoryColor(Texture2D<float4> textureObject, float2 pixelCenter)
 {
     pixelCenter = clamp(pixelCenter, 0.5f, g_Rtaa.resolution - 0.5f);
+    float2 exactCenter = floor(pixelCenter) + 0.5f;
+    if (all(abs(pixelCenter - exactCenter) < 1e-5f))
+    {
+        float4 exact = textureObject.Load(int3(int2(floor(pixelCenter)), 0));
+        exact.rgb = SanitizeHdr(exact.rgb);
+        exact.a = isfinite(exact.a) ? saturate(exact.a) : 0.0f;
+        return exact;
+    }
 #if RTAA_CATMULL_ROM
     // Nine bilinear samples implement the separable 4x4 Catmull-Rom kernel.
     // Negative lobes are retained through filtering, then HDR is sanitized once
@@ -305,12 +389,10 @@ float4 SampleHistoryColor(Texture2D<float4> textureObject, float2 pixelCenter)
 }
 
 float ComputeDepthConfidence(
-    float2 previousPixelCenter,
     float actualDeviceDepth,
     float expectedDeviceDepth,
-    float3 currentWorld,
-    float3 currentNormal,
-    PlanarViewConstants historyView)
+    PlanarViewConstants historyView,
+    float toleranceScale)
 {
     if (!IsValidDeviceDepth(actualDeviceDepth) ||
         !IsValidDeviceDepth(expectedDeviceDepth))
@@ -331,38 +413,28 @@ float ComputeDepthConfidence(
     float threshold = max(g_Rtaa.depthThresholdAbsolute +
         g_Rtaa.depthThresholdRelative * max(actualViewDepth, expectedViewDepth),
         RtaaEpsilon);
-    // A one-pixel depth quantization error becomes a larger position error on
-    // a grazing plane. Permit at most 2x tolerance there, while the independent
-    // normal/material gates still prevent this allowance from crossing edges.
-    float3 viewDirection = historyView.cameraDirectionOrPosition.w > 0.5f
-        ? SafeNormal(historyView.cameraDirectionOrPosition.xyz - currentWorld)
-        : SafeNormal(-historyView.cameraDirectionOrPosition.xyz);
-    float grazingCosine = abs(dot(SafeNormal(currentNormal), viewDirection));
-    float grazingScale = lerp(2.0f, 1.0f,
-        SmoothRange(grazingCosine, 0.05f, 0.35f));
-    threshold *= grazingScale;
+    threshold *= clamp(toleranceScale, 1.0f, 2.0f);
     float viewError = abs(actualViewDepth - expectedViewDepth);
     float viewConfidence = 1.0f - SmoothRange(
         viewError, threshold, threshold * 2.0f);
+    return saturate(viewConfidence);
+}
 
-    // The additional FP32 world-space comparison catches parallax cases where
-    // similar device-depth values belong to different surfaces. Both positions
-    // are reconstructed in the same historical view, so animated-object motion
-    // remains valid when motion.z supplied the expected historical depth.
-    float3 actualWorld;
-    float3 expectedWorld;
-    float worldConfidence = 0.0f;
-    if (ReconstructWorldPosition(previousPixelCenter, actualDeviceDepth,
-            historyView, actualWorld) &&
-        ReconstructWorldPosition(previousPixelCenter, expectedDeviceDepth,
-            historyView, expectedWorld))
-    {
-        float worldError = length(actualWorld - expectedWorld);
-        worldConfidence = 1.0f - SmoothRange(
-            worldError, threshold, threshold * 2.0f);
-    }
-
-    return saturate(min(viewConfidence, worldConfidence));
+float ComputeGrazingDepthToleranceScale(
+    float3 worldPosition,
+    float3 geometricNormal,
+    PlanarViewConstants historyView)
+{
+    // A point-loaded auxiliary depth represents the nearest historical texel,
+    // while resolved color is sampled fractionally. Bound the resulting
+    // one-texel error on grazing planes without reviving the former redundant
+    // world-position reconstruction/comparison.
+    float3 viewDirection = historyView.cameraDirectionOrPosition.w > 0.5f
+        ? SafeNormal(historyView.cameraDirectionOrPosition.xyz - worldPosition)
+        : SafeNormal(-historyView.cameraDirectionOrPosition.xyz);
+    float grazingCosine = abs(dot(SafeNormal(geometricNormal), viewDirection));
+    return lerp(2.0f, 1.0f,
+        SmoothRange(grazingCosine, 0.05f, 0.35f));
 }
 
 uint TileIndex(int2 tilePixel)
@@ -372,7 +444,7 @@ uint TileIndex(int2 tilePixel)
 
 void LoadSharedTile(uint2 groupId, uint linearThreadIndex)
 {
-    int2 tileOrigin = int2(groupId * RtaaGroupSize) - 2;
+    int2 tileOrigin = int2(groupId * RtaaGroupSize) - int(RtaaTileHalo);
     int2 maximumPixel = int2(g_Rtaa.resolution) - 1;
     for (uint tileIndex = linearThreadIndex;
         tileIndex < RtaaTileElementCount;
@@ -385,24 +457,32 @@ void LoadSharedTile(uint2 groupId, uint linearThreadIndex)
 
         float3 color = SanitizeHdr(
             t_CurrentColor.Load(int3(sourcePixel, 0)).rgb);
-        float3 normal = SafeNormal(
-            t_CurrentNormals.Load(int3(sourcePixel, 0)).xyz);
         float deviceDepth = t_CurrentDepth.Load(int3(sourcePixel, 0));
+        bool depthValid = IsValidDeviceDepth(deviceDepth);
+        float3 normal = 0.0f;
         float viewDepth = 0.0f;
-        if (!IsValidDeviceDepth(deviceDepth) ||
-            !DeviceDepthToViewDepth(deviceDepth, g_Rtaa.currentView, viewDepth))
+        uint2 surface = uint2(0xffffffffu, 0u);
+        float authoredThinCandidate = 0.0f;
+        if (depthValid)
         {
-            viewDepth = 0.0f;
+            float2 encodedGeometricNormal =
+                t_CurrentSpecular.Load(int3(sourcePixel, 0)).rg;
+            normal = DecodeOctahedralNormal(encodedGeometricNormal);
+            if (!DeviceDepthToViewDepth(deviceDepth,
+                    g_Rtaa.currentView, viewDepth))
+            {
+                viewDepth = 0.0f;
+            }
+            surface = t_CurrentSurfaceIds.Load(int3(sourcePixel, 0));
+            authoredThinCandidate = saturate(
+                t_Classification.Load(int3(sourcePixel, 0)).a);
         }
 
         // Alpha carries the exact center device depth so Resolve can persist
         // center geometry without a redundant full-resolution depth load.
         s_CurrentColor[tileIndex] = float4(color, deviceDepth);
         s_NormalViewDepth[tileIndex] = float4(normal, viewDepth);
-        s_SurfaceIds[tileIndex] = t_CurrentSurfaceIds.Load(
-            int3(sourcePixel, 0));
-        float authoredThinCandidate = saturate(
-            t_Classification.Load(int3(sourcePixel, 0)).a);
+        s_SurfaceIds[tileIndex] = surface;
         s_ThinCandidate[tileIndex] = authoredThinCandidate;
         s_CombinedThinCandidate[tileIndex] = authoredThinCandidate;
     }
@@ -445,6 +525,96 @@ void ComputeNeighborhoodStatistics(
     rgbMean *= 1.0f / 9.0f;
 }
 
+float ComputeCoverageEdgeCandidate(
+    int2 tileCenter,
+    float centerViewDepth,
+    float3 centerNormal,
+    uint2 centerSurface)
+{
+    static const int2 Offsets[4] = {
+        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
+    };
+    float centerLuma = Luminance(
+        s_CurrentColor[TileIndex(tileCenter)].rgb);
+    bool centerValid = centerViewDepth > 0.0f;
+    float result = 0.0f;
+
+    [unroll]
+    for (uint neighborIndex = 0u; neighborIndex < 4u; ++neighborIndex)
+    {
+        uint index = TileIndex(tileCenter + Offsets[neighborIndex]);
+        float4 neighborNormalDepth = s_NormalViewDepth[index];
+        bool neighborValid = neighborNormalDepth.w > 0.0f;
+        float depthEdge = centerValid != neighborValid ? 1.0f : 0.0f;
+        if (centerValid && neighborValid)
+        {
+            float relativeDepth = abs(neighborNormalDepth.w - centerViewDepth) /
+                max(centerViewDepth, 0.1f);
+            depthEdge = saturate(relativeDepth /
+                max(g_Rtaa.thinDepthThreshold, 0.005f));
+        }
+
+        float normalEdge = centerValid && neighborValid
+            ? saturate((1.0f - dot(centerNormal,
+                neighborNormalDepth.xyz)) * 4.0f) : depthEdge;
+        uint2 neighborSurface = s_SurfaceIds[index];
+        float identityEdge =
+            (g_Rtaa.enableMaterialValidation != 0u &&
+                neighborSurface.x != centerSurface.x) ||
+            (g_Rtaa.enableObjectValidation != 0u &&
+                neighborSurface.y != centerSurface.y) ? 1.0f : 0.0f;
+        float neighborLuma = Luminance(s_CurrentColor[index].rgb);
+        float lumaEdge = saturate(abs(neighborLuma - centerLuma) /
+            max(1.0f + max(neighborLuma, centerLuma), RtaaEpsilon) /
+            max(g_Rtaa.thinContrastThreshold, 0.05f));
+        result = max(result, max(max(depthEdge, normalEdge),
+            max(identityEdge, lumaEdge)));
+    }
+    return saturate(result);
+}
+
+float ComputeCoverageHistoryNeighborMatch(
+    int2 tileCenter,
+    bool historyDepthValid,
+    float3 historyNormal,
+    uint historyMaterialId,
+    uint historyObjectToken)
+{
+    float result = 0.0f;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            if (x == 0 && y == 0)
+                continue;
+
+            uint index = TileIndex(tileCenter + int2(x, y));
+            float4 neighborNormalDepth = s_NormalViewDepth[index];
+            bool neighborDepthValid = neighborNormalDepth.w > 0.0f;
+            if (!historyDepthValid)
+            {
+                result = max(result, neighborDepthValid ? 0.0f : 1.0f);
+                continue;
+            }
+            if (!neighborDepthValid)
+                continue;
+
+            uint2 neighborSurface = s_SurfaceIds[index];
+            float materialMatch = g_Rtaa.enableMaterialValidation == 0u ||
+                neighborSurface.x == historyMaterialId ? 1.0f : 0.0f;
+            float objectMatch = g_Rtaa.enableObjectValidation == 0u ||
+                HashToWord(neighborSurface.y) == historyObjectToken ? 1.0f : 0.0f;
+            float normalMatch = SmoothRange(dot(neighborNormalDepth.xyz,
+                historyNormal), g_Rtaa.normalRejectCosine,
+                g_Rtaa.normalAcceptCosine);
+            result = max(result, materialMatch * objectMatch * normalMatch);
+        }
+    }
+    return saturate(result);
+}
+
 float3 ClipLineToBox(
     float3 history,
     float3 center,
@@ -479,68 +649,75 @@ float ComputeStructuralThinCandidate(
     float3 centerNormal,
     uint2 centerSurface)
 {
+#if RTAA_PERFORMANCE_TIER == 0
+    return 0.0f;
+#else
     if (g_Rtaa.enableThinGeometry == 0u || centerViewDepth <= 0.0f)
         return 0.0f;
 
-    static const int2 NeighborOffsets[8] = {
-        int2(-1, -1), int2(0, -1), int2(1, -1),
-        int2(-1,  0),              int2(1,  0),
-        int2(-1,  1), int2(0,  1), int2(1,  1)
+    static const int2 PairOffsets[8] = {
+        int2(-1, 0), int2(1, 0),
+        int2(0, -1), int2(0, 1),
+        int2(-1, -1), int2(1, 1),
+        int2(1, -1), int2(-1, 1)
     };
 
-    float centerLogLuma = log2(1.0f + Luminance(
-        s_CurrentColor[TileIndex(tileCenter)].rgb));
-    float edgeSignals[8];
-    float gateSignals[8];
+    float centerLuma = Luminance(s_CurrentColor[TileIndex(tileCenter)].rgb);
+    float result = 0.0f;
     [unroll]
-    for (uint neighborIndex = 0u; neighborIndex < 8u; ++neighborIndex)
+    for (uint pairIndex = 0u; pairIndex < 4u; ++pairIndex)
     {
-        uint index = TileIndex(tileCenter + NeighborOffsets[neighborIndex]);
-        float4 neighborNormalDepth = s_NormalViewDepth[index];
-        bool neighborDepthValid = neighborNormalDepth.w > 0.0f;
-        float depthSignal = neighborDepthValid
-            ? saturate(abs(neighborNormalDepth.w - centerViewDepth) /
-                max(centerViewDepth, 0.1f) /
+        uint index0 = TileIndex(tileCenter + PairOffsets[pairIndex * 2u]);
+        uint index1 = TileIndex(tileCenter + PairOffsets[pairIndex * 2u + 1u]);
+        float4 neighbor0 = s_NormalViewDepth[index0];
+        float4 neighbor1 = s_NormalViewDepth[index1];
+        bool valid0 = neighbor0.w > 0.0f;
+        bool valid1 = neighbor1.w > 0.0f;
+
+        // A planar depth slope has near-zero second derivative and must not be
+        // mistaken for a thin strip. Curvature or two genuine opposing surface
+        // changes are required.
+        float curvature = valid0 && valid1
+            ? saturate(abs(neighbor0.w + neighbor1.w -
+                2.0f * centerViewDepth) / max(centerViewDepth, 0.1f) /
                 max(g_Rtaa.thinDepthThreshold, RtaaEpsilon))
-            : 1.0f;
-        float normalSignal = neighborDepthValid &&
-            dot(centerNormal, centerNormal) > 0.0f &&
-            dot(neighborNormalDepth.xyz, neighborNormalDepth.xyz) > 0.0f
-            ? saturate(1.0f - abs(dot(centerNormal,
-                neighborNormalDepth.xyz)))
-            : 1.0f;
-        float neighborLogLuma = log2(1.0f + Luminance(
-            s_CurrentColor[index].rgb));
-        float contrastSignal = saturate(abs(neighborLogLuma -
-            centerLogLuma) / max(g_Rtaa.thinContrastThreshold, RtaaEpsilon));
-        uint2 neighborSurface = s_SurfaceIds[index];
-        float materialSignal = g_Rtaa.enableMaterialValidation != 0u &&
-            neighborSurface.x != centerSurface.x ? 1.0f : 0.0f;
-        float objectSignal = g_Rtaa.enableObjectValidation != 0u &&
-            neighborSurface.y != centerSurface.y ? 1.0f : 0.0f;
-        float authoredSignal = max(
-            s_ThinCandidate[TileIndex(tileCenter)], s_ThinCandidate[index]);
+            : (!valid0 && !valid1 ? 1.0f : 0.0f);
 
-        // A lone depth edge is a normal polygon silhouette. Thin structure is
-        // accepted only when two opposing edges exist and at least one current
-        // color/normal/identity/authored signal corroborates them.
-        edgeSignals[neighborIndex] = max(depthSignal, normalSignal);
-        gateSignals[neighborIndex] = max(max(contrastSignal, normalSignal),
-            max(max(materialSignal, objectSignal), authoredSignal));
+        uint2 surface0 = s_SurfaceIds[index0];
+        uint2 surface1 = s_SurfaceIds[index1];
+        float identity0 =
+            (g_Rtaa.enableMaterialValidation != 0u &&
+                surface0.x != centerSurface.x) ||
+            (g_Rtaa.enableObjectValidation != 0u &&
+                surface0.y != centerSurface.y) ? 1.0f : 0.0f;
+        float identity1 =
+            (g_Rtaa.enableMaterialValidation != 0u &&
+                surface1.x != centerSurface.x) ||
+            (g_Rtaa.enableObjectValidation != 0u &&
+                surface1.y != centerSurface.y) ? 1.0f : 0.0f;
+        float normal0 = valid0
+            ? saturate((1.0f - dot(centerNormal, neighbor0.xyz)) * 4.0f) : 1.0f;
+        float normal1 = valid1
+            ? saturate((1.0f - dot(centerNormal, neighbor1.xyz)) * 4.0f) : 1.0f;
+        float luma0 = Luminance(s_CurrentColor[index0].rgb);
+        float luma1 = Luminance(s_CurrentColor[index1].rgb);
+        float contrast0 = saturate(abs(luma0 - centerLuma) /
+            max(1.0f + max(luma0, centerLuma), RtaaEpsilon) /
+            max(g_Rtaa.thinContrastThreshold, RtaaEpsilon));
+        float contrast1 = saturate(abs(luma1 - centerLuma) /
+            max(1.0f + max(luma1, centerLuma), RtaaEpsilon) /
+            max(g_Rtaa.thinContrastThreshold, RtaaEpsilon));
+        float authored0 = max(s_ThinCandidate[TileIndex(tileCenter)],
+            s_ThinCandidate[index0]);
+        float authored1 = max(s_ThinCandidate[TileIndex(tileCenter)],
+            s_ThinCandidate[index1]);
+        float edge0 = max(max(identity0, normal0), max(contrast0, authored0));
+        float edge1 = max(max(identity1, normal1), max(contrast1, authored1));
+        result = max(result, min(edge0, edge1) * max(curvature,
+            min(max(identity0, authored0), max(identity1, authored1))));
     }
-
-    float opposingEdges = 0.0f;
-    opposingEdges = max(opposingEdges, min(edgeSignals[3], edgeSignals[4]));
-    opposingEdges = max(opposingEdges, min(edgeSignals[1], edgeSignals[6]));
-    opposingEdges = max(opposingEdges, min(edgeSignals[0], edgeSignals[7]));
-    opposingEdges = max(opposingEdges, min(edgeSignals[2], edgeSignals[5]));
-
-    float corroboration = 0.0f;
-    [unroll]
-    for (uint signalIndex = 0u; signalIndex < 8u; ++signalIndex)
-        corroboration = max(corroboration, gateSignals[signalIndex]);
-
-    return saturate(opposingEdges * corroboration);
+    return saturate(result);
+#endif
 }
 
 void BuildSharedThinCandidates(uint2 threadId)
@@ -548,7 +725,7 @@ void BuildSharedThinCandidates(uint2 threadId)
     // One lane owns one output candidate. Computing the 36 halo candidates as
     // well would add 56% more structural evaluations merely to diffuse across
     // an 8-pixel group boundary; authored halo evidence remains available.
-    int2 tilePixel = int2(threadId) + 2;
+    int2 tilePixel = int2(threadId) + int(RtaaTileHalo);
     uint tileIndex = TileIndex(tilePixel);
     float4 normalDepth = s_NormalViewDepth[tileIndex];
     float structural = ComputeStructuralThinCandidate(
@@ -566,6 +743,9 @@ float DiffuseThinCandidate(
     float centerCandidate)
 {
     float result = centerCandidate;
+#if RTAA_PERFORMANCE_TIER < 2
+    return g_Rtaa.enableThinGeometry != 0u ? result : 0.0f;
+#else
     if (g_Rtaa.enableThinGeometry == 0u ||
         g_Rtaa.enableThinDiffusion == 0u || centerViewDepth <= 0.0f)
     {
@@ -605,6 +785,7 @@ float DiffuseThinCandidate(
         }
     }
     return saturate(result);
+#endif
 }
 
 void ComputeSharedEdgeDirection(
@@ -670,20 +851,69 @@ float3 ComputeSpatialFallback(
     if (centerViewDepth <= 0.0f)
         return centerColor;
 
+#if RTAA_PERFORMANCE_TIER == 0
+    static const int2 CrossOffsets[5] = {
+        int2(0, 0), int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
+    };
+    float3 weightedColor = centerColor;
+    float totalWeight = 1.0f;
+    [unroll]
+    for (uint sampleIndex = 1u; sampleIndex < 5u; ++sampleIndex)
+    {
+        uint index = TileIndex(tileCenter + CrossOffsets[sampleIndex]);
+        float4 neighborNormalDepth = s_NormalViewDepth[index];
+        uint2 neighborSurface = s_SurfaceIds[index];
+        if (neighborNormalDepth.w <= 0.0f ||
+            (g_Rtaa.enableMaterialValidation != 0u &&
+                neighborSurface.x != centerSurface.x) ||
+            (g_Rtaa.enableObjectValidation != 0u &&
+                neighborSurface.y != centerSurface.y))
+        {
+            continue;
+        }
+        float relativeDepthDifference = abs(neighborNormalDepth.w -
+            centerViewDepth) / max(centerViewDepth, 0.1f);
+        float normalDifference = 1.0f - saturate(dot(
+            centerNormal, neighborNormalDepth.xyz));
+        float weight = rcp(2.0f + g_Rtaa.spatialDepthWeight *
+            relativeDepthDifference + g_Rtaa.spatialNormalWeight *
+            normalDifference);
+        weightedColor += s_CurrentColor[index].rgb * weight;
+        totalWeight += weight;
+    }
+    return SanitizeHdr(weightedColor / totalWeight);
+#else
+#if RTAA_PERFORMANCE_TIER == 1
+    int radius = 1;
+#else
     int radius = int(clamp(g_Rtaa.spatialFallbackRadius, 1u, 2u));
+#endif
     float centerLogLuma = log2(1.0f + Luminance(centerColor));
     float3 weightedColor = 0.0f;
     float totalWeight = 0.0f;
     float2 edgeDirection;
     float edgeStrength;
+#if RTAA_PERFORMANCE_TIER >= 2
     ComputeSharedEdgeDirection(tileCenter, centerViewDepth, centerNormal,
         centerSurface, edgeDirection, edgeStrength);
+#else
+    edgeDirection = 0.0f;
+    edgeStrength = 0.0f;
+#endif
 
     [unroll]
+#if RTAA_PERFORMANCE_TIER >= 2
     for (int y = -2; y <= 2; ++y)
+#else
+    for (int y = -1; y <= 1; ++y)
+#endif
     {
         [unroll]
+#if RTAA_PERFORMANCE_TIER >= 2
         for (int x = -2; x <= 2; ++x)
+#else
+        for (int x = -1; x <= 1; ++x)
+#endif
         {
             if (abs(x) > radius || abs(y) > radius)
                 continue;
@@ -741,17 +971,22 @@ float3 ComputeSpatialFallback(
     return totalWeight > RtaaEpsilon
         ? SanitizeHdr(weightedColor / totalWeight)
         : centerColor;
+#endif
 }
 
-float ComputeAutomaticReactive(float3 currentColor, float3 historyColor)
+float ComputeAutomaticReactive(
+    float3 unclippedHistory,
+    float3 historyInsideBroadNeighborhood)
 {
     if (g_Rtaa.enableAutomaticReactive == 0u)
         return 0.0f;
 
-    float3 current = RgbToCompressedYCoCg(currentColor);
-    float3 history = RgbToCompressedYCoCg(historyColor);
-    float lumaDifference = abs(current.x - history.x);
-    float chromaDifference = length(current.yz - history.yz);
+    // Only unexplained history outside the broad current 3x3 range is reactive.
+    // Ordinary jittered edge/texture variation lies inside that neighborhood
+    // and must accumulate instead of being mistaken for animated shading.
+    float3 residual = unclippedHistory - historyInsideBroadNeighborhood;
+    float lumaDifference = abs(residual.x);
+    float chromaDifference = length(residual.yz);
     float lumaReactive = SmoothRange(lumaDifference,
         g_Rtaa.automaticReactiveLumaThreshold,
         g_Rtaa.automaticReactiveLumaThreshold * 2.0f);
@@ -796,28 +1031,35 @@ ResurrectionCandidate EvaluatePersistentHistory(
     if ((g_Rtaa.persistentValidMask & validityBit) == 0u)
         return result;
 
-    float2 historyPixelCenter;
+    float2 historyColorCenter;
+    float2 historyAuxiliaryCenter;
     float expectedDepth;
     if (!ProjectWorldToHistory(currentWorld, historyView,
-            historyPixelCenter, expectedDepth))
+            historyColorCenter, historyAuxiliaryCenter, expectedDepth))
     {
         return result;
     }
 
-    bool inside = all(historyPixelCenter >= 0.5f) &&
-        all(historyPixelCenter <= g_Rtaa.resolution - 0.5f);
-    if (!inside)
+    bool colorInside = all(historyColorCenter >= 0.5f) &&
+        all(historyColorCenter <= g_Rtaa.resolution - 0.5f);
+    bool auxiliaryInside = all(historyAuxiliaryCenter >= 0.5f) &&
+        all(historyAuxiliaryCenter <= g_Rtaa.resolution - 0.5f);
+    if (!colorInside || !auxiliaryInside)
         return result;
 
-    int2 historyPixel = clamp(int2(floor(historyPixelCenter)), 0,
+    int2 historyColorPixel = clamp(int2(floor(historyColorCenter)), 0,
         int2(g_Rtaa.resolution) - 1);
-    float actualDepth = depthTexture.Load(int3(historyPixel, 0));
-    float depthConfidence = ComputeDepthConfidence(historyPixelCenter,
-        actualDepth, expectedDepth, currentWorld, currentNormal, historyView);
+    int2 historyAuxiliaryPixel = clamp(int2(floor(historyAuxiliaryCenter)), 0,
+        int2(g_Rtaa.resolution) - 1);
+    float actualDepth = depthTexture.Load(int3(historyAuxiliaryPixel, 0));
+    float depthConfidence = ComputeDepthConfidence(
+        actualDepth, expectedDepth, historyView,
+        ComputeGrazingDepthToleranceScale(
+            currentWorld, currentNormal, historyView));
     if (depthConfidence <= 0.0f)
         return result;
 
-    uint2 storedSurface = surfaceTexture.Load(int3(historyPixel, 0));
+    uint2 storedSurface = surfaceTexture.Load(int3(historyAuxiliaryPixel, 0));
     float3 historyNormal;
     uint historyMaterialId;
     uint historyObjectToken;
@@ -836,7 +1078,7 @@ ResurrectionCandidate EvaluatePersistentHistory(
     }
 
     float4 historySample = SampleHistoryColor(colorTexture,
-        historyPixelCenter);
+        historyColorCenter);
     float3 candidateYCoCg = RgbToCompressedYCoCg(historySample.rgb);
     float lumaError = abs(candidateYCoCg.x - currentYCoCg.x) /
         max(g_Rtaa.automaticReactiveLumaThreshold, RtaaEpsilon);
@@ -863,7 +1105,7 @@ ResurrectionCandidate EvaluatePersistentHistory(
     result.match = currentMatch * lerp(1.0f, immediateAgreement, 0.25f) *
         betterThanImmediate;
 
-    float4 metadata = metadataTexture.Load(int3(historyPixel, 0));
+    float4 metadata = metadataTexture.Load(int3(historyColorPixel, 0));
     result.confidence = saturate(depthConfidence * normalConfidence *
         materialMatch * objectMatch * metadata.g * result.match);
     result.historyCount = metadata.r * max(float(g_Rtaa.maxHistorySamples), 1.0f);
@@ -895,25 +1137,30 @@ void main(
     uint linearThreadIndex = threadId.y * RtaaGroupSize + threadId.x;
     LoadSharedTile(groupId, linearThreadIndex);
     GroupMemoryBarrierWithGroupSync();
+#if RTAA_PERFORMANCE_TIER > 0
     BuildSharedThinCandidates(threadId);
+#if RTAA_PERFORMANCE_TIER >= 2
     GroupMemoryBarrierWithGroupSync();
+#endif
+#endif
 
-    // Both barriers must execute for every lane. Bounds rejection is therefore
-    // deliberately after the cooperative tile and structural-classification
-    // phases, which also cover odd native dimensions without out-of-range
-    // texture accesses.
+    // Every barrier selected by the static tier must execute for every lane.
+    // Bounds rejection is therefore deliberately after the cooperative tile
+    // and structural-classification phases, which also cover odd native
+    // dimensions without out-of-range texture accesses.
     if (any(pixel >= uint2(g_Rtaa.resolution)))
         return;
 
     int2 outputPixel = int2(pixel);
-    int2 tileCenter = int2(threadId) + 2;
+    int2 tileCenter = int2(threadId) + int(RtaaTileHalo);
     uint centerTileIndex = TileIndex(tileCenter);
     float3 currentColor = s_CurrentColor[centerTileIndex].rgb;
-    float4 prepared = t_Prepared.Load(int3(outputPixel, 0));
+    float2 prepared = t_Prepared.Load(int3(outputPixel, 0));
     float4 classification = saturate(
         t_Classification.Load(int3(outputPixel, 0)));
-    int2 sourceOffset = int2(round(classification.rg * 2.0f - 1.0f));
-    sourceOffset = clamp(sourceOffset, -1, 1);
+    uint sourceIndex = min((uint)round(classification.r * 8.0f), 8u);
+    int2 sourceOffset = int2(int(sourceIndex % 3u) - 1,
+        int(sourceIndex / 3u) - 1);
     int2 sourcePixel = clamp(outputPixel + sourceOffset, 0,
         int2(g_Rtaa.resolution) - 1);
 
@@ -927,103 +1174,268 @@ void main(
     uint2 currentSurface = s_SurfaceIds[centerTileIndex];
     uint currentMaterialId = currentSurface.x;
     uint currentObjectToken = HashToWord(currentSurface.y);
-    float velocityConfidence = saturate(prepared.w);
+    float velocityConfidence = classification.g;
     float2 dilatedMotion = prepared.xy;
 
-    // Sky/background has no stable geometric surface to validate. In final
-    // production modes, write a fresh current sample and skip all history,
-    // clipping, fallback, and resurrection work after the required group
-    // barrier. Full diagnostic modes continue below so their inputs remain
-    // visible over background pixels.
-    if (!IsValidDeviceDepth(currentDeviceDepth) && g_Rtaa.writeDebug == 0u)
-    {
-        float backgroundLogLuma = log2(1.0f + Luminance(currentColor));
-        float backgroundMotionFactor = SmoothRange(length(dilatedMotion),
-            g_Rtaa.motionWeightStartPixels, g_Rtaa.motionWeightEndPixels);
-        u_HistoryColor[pixel] = float4(currentColor, 0.0f);
-        u_HistoryMoments[pixel] = float2(backgroundLogLuma,
-            backgroundLogLuma * backgroundLogLuma);
-        u_HistoryMetadata[pixel] = saturate(float4(
-            rcp(max(float(g_Rtaa.maxHistorySamples), 1.0f)),
-            0.0f, classification.b, backgroundMotionFactor));
-        u_HistoryDepth[pixel] = 0.0f;
-        u_HistorySurface[pixel] = PackHistorySurface(
-            currentNormal, currentMaterialId, currentObjectToken);
-        return;
-    }
-
-    // The G-buffer producer explicitly de-jitters motion. Preserve its verified
-    // convention verbatim: current-to-previous pixels, previous = current +
-    // motion. Adding currentJitter-previousJitter here would double-correct it.
+    // Motion is de-jittered, so resolved color uses current+motion. Raw depth
+    // and surface history were copied from the jittered G-buffer and must use a
+    // separate coordinate with the previous-current jitter delta applied once.
     float2 previousPixelCenter = float2(outputPixel) + 0.5f + dilatedMotion;
-    float2 previousUv = previousPixelCenter * g_Rtaa.invResolution;
-    bool previousInside = all(previousPixelCenter >= 0.5f) &&
-        all(previousPixelCenter <= g_Rtaa.resolution - 0.5f);
-    int2 previousPixel = clamp(int2(floor(previousPixelCenter)), 0,
-        int2(g_Rtaa.resolution) - 1);
+    float2 previousAuxiliaryCenter = previousPixelCenter -
+        g_Rtaa.currentJitter + g_Rtaa.previousJitter;
 
-    float4 historyColorSample = float4(currentColor, 0.0f);
-    float2 historyMoments = 0.0f;
-    float4 historyMetadata = 0.0f;
-    float historyDeviceDepth = 0.0f;
-    uint2 historySurface = uint2(0xffffffffu, 0u);
-    if (g_Rtaa.historyValid != 0u && previousInside)
+    bool currentDepthValid = IsValidDeviceDepth(currentDeviceDepth);
+    bool backgroundProductionWritten = false;
+    float3 backgroundProductionOutput = currentColor;
+    bool pureBackground = !currentDepthValid;
+    [unroll]
+    for (int backgroundY = -1; backgroundY <= 1; ++backgroundY)
     {
-        historyColorSample = SampleHistoryColor(
-            t_ImmediateHistoryColor, previousPixelCenter);
-        historyMoments = t_ImmediateHistoryMoments.Load(
-            int3(previousPixel, 0));
-        historyMetadata = saturate(t_ImmediateHistoryMetadata.Load(
-            int3(previousPixel, 0)));
-        historyDeviceDepth = t_ImmediateHistoryDepth.Load(
-            int3(previousPixel, 0));
-        historySurface = t_ImmediateHistorySurface.Load(
-            int3(previousPixel, 0));
+        [unroll]
+        for (int backgroundX = -1; backgroundX <= 1; ++backgroundX)
+        {
+            if (backgroundX == 0 && backgroundY == 0)
+                continue;
+            pureBackground = pureBackground &&
+                s_NormalViewDepth[TileIndex(tileCenter +
+                    int2(backgroundX, backgroundY))].w <= 0.0f;
+        }
     }
 
-    // Current world position always describes the center surface. The selected
-    // source owns only dilated motion; older-history reprojection and surface
-    // storage remain tied to the pixel being resolved.
-    float3 currentWorld = 0.0f;
-    bool currentWorldValid = IsValidDeviceDepth(currentDeviceDepth) &&
-        ReconstructWorldPosition(float2(outputPixel) + 0.5f,
-            currentDeviceDepth, g_Rtaa.currentView, currentWorld);
+    // Uniform clear-depth regions still accumulate the reprojected sky, but do
+    // not pay geometric validation, neighborhood statistics, thin analysis, or
+    // fallback. A historical geometry sample deliberately falls through so a
+    // previous thin-coverage lock can resolve a subpixel disappearance.
+    if (pureBackground)
+    {
+        bool backgroundColorInside = all(previousPixelCenter >= 0.5f) &&
+            all(previousPixelCenter <= g_Rtaa.resolution - 0.5f);
+        bool backgroundAuxiliaryInside = all(previousAuxiliaryCenter >= 0.5f) &&
+            all(previousAuxiliaryCenter <= g_Rtaa.resolution - 0.5f);
+        int2 backgroundColorPixel = clamp(int2(floor(previousPixelCenter)), 0,
+            int2(g_Rtaa.resolution) - 1);
+        int2 backgroundAuxiliaryPixel = clamp(
+            int2(floor(previousAuxiliaryCenter)), 0,
+            int2(g_Rtaa.resolution) - 1);
+        float clearDepth = g_Rtaa.reverseZ != 0u ? 0.0f : 1.0f;
+        float backgroundHistoryDepth = clearDepth;
+        if (g_Rtaa.historyValid != 0u && backgroundAuxiliaryInside)
+        {
+            backgroundHistoryDepth = t_ImmediateHistoryDepth.Load(
+                int3(backgroundAuxiliaryPixel, 0));
+        }
+        float backgroundResolvedDepth = backgroundHistoryDepth;
+        if (g_Rtaa.historyValid != 0u && backgroundColorInside &&
+            any(backgroundColorPixel != backgroundAuxiliaryPixel))
+        {
+            backgroundResolvedDepth = t_ImmediateHistoryDepth.Load(
+                int3(backgroundColorPixel, 0));
+        }
 
+        bool backgroundColorHistoryAvailable = g_Rtaa.historyValid != 0u &&
+            backgroundColorInside;
+        bool backgroundHistoryUsable = backgroundColorHistoryAvailable &&
+            backgroundAuxiliaryInside && velocityConfidence > 0.0f;
+        float4 backgroundHistory = float4(currentColor, 0.0f);
+        if (backgroundColorHistoryAvailable)
+        {
+            backgroundHistory = SampleHistoryColor(
+                t_ImmediateHistoryColor, previousPixelCenter);
+        }
+        float4 backgroundMetadata = 0.0f;
+        if (backgroundColorHistoryAvailable)
+        {
+            backgroundMetadata = saturate(
+                t_ImmediateHistoryMetadata.Load(
+                    int3(backgroundColorPixel, 0)));
+        }
+
+        bool historicalGeometry = g_Rtaa.historyValid != 0u &&
+            ((backgroundAuxiliaryInside &&
+                IsValidDeviceDepth(backgroundHistoryDepth)) ||
+             (backgroundColorInside &&
+                IsValidDeviceDepth(backgroundResolvedDepth)));
+        // Coverage magnitude and lock lifetime are deliberately independent.
+        // Residual alpha keeps the full path active long enough to clip a lock
+        // that has expired; only metadata B can grant temporal trust.
+        float backgroundLockLifetime = backgroundMetadata.b;
+        if (backgroundLockLifetime <= 0.0f &&
+            backgroundHistory.a > (1.0f / 255.0f))
+        {
+            backgroundLockLifetime = LoadInterpolatedStationaryThinLock(
+                previousPixelCenter);
+        }
+        bool historicalCoverage = backgroundColorHistoryAvailable &&
+            (backgroundLockLifetime > 0.0f ||
+                backgroundHistory.a > (1.0f / 255.0f));
+        if (!historicalGeometry && !historicalCoverage)
+        {
+            float2 backgroundMoments = 0.0f;
+            if (g_Rtaa.historyValid != 0u && backgroundColorInside)
+            {
+                backgroundMoments = t_ImmediateHistoryMoments.Load(
+                    int3(backgroundColorPixel, 0));
+            }
+
+            float backgroundMotionFactor = SmoothRange(length(dilatedMotion),
+                g_Rtaa.motionWeightStartPixels,
+                g_Rtaa.motionWeightEndPixels);
+            float backgroundReactive = classification.b;
+            float backgroundBaseWeight = lerp(g_Rtaa.stableCurrentWeight,
+                g_Rtaa.movingCurrentWeight, backgroundMotionFactor);
+            backgroundBaseWeight = lerp(backgroundBaseWeight,
+                g_Rtaa.reactiveCurrentWeight, backgroundReactive);
+            float backgroundMaximumSamples = max(1.0f, round(lerp(
+                float(max(g_Rtaa.maxHistorySamples, 1u)),
+                float(max(g_Rtaa.maxMovingHistorySamples, 1u)),
+                backgroundMotionFactor)));
+            float backgroundHistoryCount = backgroundMetadata.r *
+                max(float(g_Rtaa.maxHistorySamples), 1.0f);
+            float backgroundSampleWeight = rcp(min(backgroundHistoryCount,
+                backgroundMaximumSamples) + 1.0f);
+            float backgroundCurrentWeight = max(
+                saturate(backgroundBaseWeight), backgroundSampleWeight);
+            float stableBackground = (1.0f - backgroundMotionFactor) *
+                (1.0f - backgroundReactive);
+            backgroundCurrentWeight = lerp(backgroundCurrentWeight,
+                backgroundSampleWeight, saturate(stableBackground));
+            if (!backgroundHistoryUsable)
+                backgroundCurrentWeight = 1.0f;
+
+            float3 backgroundOutput = SanitizeHdr(lerp(
+                backgroundHistory.rgb, currentColor,
+                saturate(backgroundCurrentWeight)));
+            bool backgroundAccepted = backgroundHistoryUsable &&
+                backgroundCurrentWeight < 0.999f;
+            float backgroundNewCount = backgroundAccepted
+                ? min(backgroundHistoryCount + 1.0f,
+                    backgroundMaximumSamples) : 1.0f;
+            backgroundNewCount = lerp(backgroundNewCount, 1.0f,
+                saturate(backgroundReactive * 0.5f));
+            float backgroundLogLuma = log2(1.0f +
+                Luminance(currentColor));
+            float2 backgroundCurrentMoments = float2(backgroundLogLuma,
+                backgroundLogLuma * backgroundLogLuma);
+            float2 backgroundOutputMoments = backgroundAccepted
+                ? lerp(backgroundMoments, backgroundCurrentMoments,
+                    saturate(backgroundCurrentWeight))
+                : backgroundCurrentMoments;
+            if (!all(isfinite(backgroundOutputMoments)))
+                backgroundOutputMoments = backgroundCurrentMoments;
+
+            u_HistoryColor[pixel] = float4(backgroundOutput, 0.0f);
+            u_HistoryMoments[pixel] = backgroundOutputMoments;
+            u_HistoryMetadata[pixel] = saturate(float4(
+                backgroundNewCount /
+                    max(float(g_Rtaa.maxHistorySamples), 1.0f),
+                backgroundHistoryUsable ? 1.0f : 0.0f,
+                0.0f,
+                EncodeReactiveAndMotion(backgroundReactive,
+                    backgroundMotionFactor)));
+            u_HistoryDepth[pixel] = clearDepth;
+            u_HistorySurface[pixel] = uint2(0xffffffffu, 0u);
+            backgroundProductionWritten = true;
+            backgroundProductionOutput = backgroundOutput;
+            if (g_Rtaa.writeDebug == 0u)
+                return;
+        }
+    }
+
+    float3 currentWorld = 0.0f;
+    bool currentWorldValid = false;
     float expectedPreviousDepth = 0.0f;
     bool expectedPreviousDepthValid = false;
-    float4 selectedRawMotion = t_RawMotion.Load(int3(sourcePixel, 0));
-    // motion.z is the selected source's previous-current device-depth delta.
-    // It is valid for the center surface only when no neighboring velocity was
-    // borrowed. For a dilated sample, project the center world position below;
-    // that expected depth will reject foreground motion on background pixels.
-    if (all(sourceOffset == 0) && selectedRawMotion.w > 0.5f &&
-        all(isfinite(selectedRawMotion.xyz)))
+    float4 selectedRawMotion = 0.0f;
+    if (currentDepthValid)
+        selectedRawMotion = t_RawMotion.Load(int3(sourcePixel, 0));
+    if (currentDepthValid && all(sourceOffset == 0) &&
+        selectedRawMotion.w > 0.5f && all(isfinite(selectedRawMotion.xyz)))
     {
         expectedPreviousDepth = currentDeviceDepth + selectedRawMotion.z;
         expectedPreviousDepthValid = IsValidDeviceDepth(expectedPreviousDepth);
     }
-    if (!expectedPreviousDepthValid && currentWorldValid)
+    if (!expectedPreviousDepthValid && currentDepthValid)
     {
-        float2 projectedPixel;
-        expectedPreviousDepthValid = ProjectWorldToHistory(currentWorld,
-            g_Rtaa.immediateHistoryView, projectedPixel,
-            expectedPreviousDepth) && IsValidDeviceDepth(expectedPreviousDepth);
+        currentWorldValid = ReconstructWorldPosition(
+            float2(outputPixel) + 0.5f, currentDeviceDepth,
+            g_Rtaa.currentView, currentWorld);
+        float2 projectedColorCenter;
+        float2 projectedAuxiliaryCenter;
+        expectedPreviousDepthValid = currentWorldValid &&
+            ProjectWorldToHistory(currentWorld,
+                g_Rtaa.immediateHistoryView, projectedColorCenter,
+                projectedAuxiliaryCenter, expectedPreviousDepth) &&
+                IsValidDeviceDepth(expectedPreviousDepth);
+        if (expectedPreviousDepthValid)
+        {
+            previousPixelCenter = projectedColorCenter;
+            previousAuxiliaryCenter = projectedAuxiliaryCenter;
+        }
     }
 
-    float depthConfidence = previousInside && expectedPreviousDepthValid
-        ? ComputeDepthConfidence(previousPixelCenter, historyDeviceDepth,
-            expectedPreviousDepth, currentWorld, currentNormal,
-            g_Rtaa.immediateHistoryView)
-        : 0.0f;
+    float2 previousUv = previousPixelCenter * g_Rtaa.invResolution;
+    bool previousInside = all(previousPixelCenter >= 0.5f) &&
+        all(previousPixelCenter <= g_Rtaa.resolution - 0.5f);
+    bool previousAuxiliaryInside = all(previousAuxiliaryCenter >= 0.5f) &&
+        all(previousAuxiliaryCenter <= g_Rtaa.resolution - 0.5f);
+    int2 previousPixel = clamp(int2(floor(previousPixelCenter)), 0,
+        int2(g_Rtaa.resolution) - 1);
+    int2 previousAuxiliaryPixel = clamp(
+        int2(floor(previousAuxiliaryCenter)), 0,
+        int2(g_Rtaa.resolution) - 1);
+
+    float2 historyMoments = 0.0f;
+    float4 historyMetadata = 0.0f;
+    if (g_Rtaa.historyValid != 0u && previousInside)
+    {
+        historyMoments = t_ImmediateHistoryMoments.Load(
+            int3(previousPixel, 0));
+        historyMetadata = saturate(t_ImmediateHistoryMetadata.Load(
+            int3(previousPixel, 0)));
+    }
+    float historyDeviceDepth = g_Rtaa.reverseZ != 0u ? 0.0f : 1.0f;
+    uint2 historySurface = uint2(0xffffffffu, 0u);
+    if (g_Rtaa.historyValid != 0u && previousAuxiliaryInside)
+    {
+        historyDeviceDepth = t_ImmediateHistoryDepth.Load(
+            int3(previousAuxiliaryPixel, 0));
+        historySurface = t_ImmediateHistorySurface.Load(
+            int3(previousAuxiliaryPixel, 0));
+    }
+
+    bool historyDepthValid = IsValidDeviceDepth(historyDeviceDepth);
+    float grazingDepthScale = 1.0f;
+    float depthConfidence = currentDepthValid && historyDepthValid &&
+        previousAuxiliaryInside && expectedPreviousDepthValid
+        ? ComputeDepthConfidence(historyDeviceDepth, expectedPreviousDepth,
+            g_Rtaa.immediateHistoryView, grazingDepthScale) : 0.0f;
+    if (depthConfidence < 1.0f && currentDepthValid && historyDepthValid &&
+        previousAuxiliaryInside && expectedPreviousDepthValid)
+    {
+        if (!currentWorldValid)
+        {
+            currentWorldValid = ReconstructWorldPosition(
+                float2(outputPixel) + 0.5f, currentDeviceDepth,
+                g_Rtaa.currentView, currentWorld);
+        }
+        if (currentWorldValid)
+        {
+            grazingDepthScale = ComputeGrazingDepthToleranceScale(
+                currentWorld, currentNormal, g_Rtaa.immediateHistoryView);
+            depthConfidence = ComputeDepthConfidence(historyDeviceDepth,
+                expectedPreviousDepth, g_Rtaa.immediateHistoryView,
+                grazingDepthScale);
+        }
+    }
     float3 previousNormal;
     uint previousMaterialId;
     uint previousObjectToken;
     UnpackHistorySurface(historySurface, previousNormal,
         previousMaterialId, previousObjectToken);
-    float normalConfidence = previousInside
+    float normalConfidence = currentDepthValid && historyDepthValid &&
+        previousAuxiliaryInside
         ? SmoothRange(dot(currentNormal, previousNormal),
-            g_Rtaa.normalRejectCosine, g_Rtaa.normalAcceptCosine)
-        : 0.0f;
+            g_Rtaa.normalRejectCosine, g_Rtaa.normalAcceptCosine) : 0.0f;
     float rawMaterialMatch = currentMaterialId == previousMaterialId
         ? 1.0f : 0.0f;
     float rawObjectMatch = currentObjectToken == previousObjectToken
@@ -1033,48 +1445,71 @@ void main(
     float objectMatch = g_Rtaa.enableObjectValidation == 0u
         ? 1.0f : rawObjectMatch;
 
-    // Confidence is established from this frame's geometric evidence. Feeding
-    // the prior confidence back multiplicatively creates a zero fixed point:
-    // reset writes zero, so the first otherwise-valid frame can never begin
-    // accumulation. Prior metadata still supplies sample count and diagnostics,
-    // but cannot permanently veto freshly validated history.
+    float motionMagnitude = length(dilatedMotion);
+    float motionFactor = SmoothRange(motionMagnitude,
+        g_Rtaa.motionWeightStartPixels, g_Rtaa.motionWeightEndPixels);
+    float coverageMotionGate = 1.0f - SmoothRange(motionMagnitude, 0.25f,
+        max(g_Rtaa.motionWeightStartPixels, 0.75f));
+    float geometricConfidence = saturate(velocityConfidence * depthConfidence *
+        normalConfidence * materialMatch * objectMatch);
+    float backgroundConfidence = !currentDepthValid && !historyDepthValid &&
+        previousAuxiliaryInside
+        ? lerp(velocityConfidence, 1.0f, coverageMotionGate) : 0.0f;
+    float coverageEdge = ComputeCoverageEdgeCandidate(tileCenter,
+        currentViewDepth, currentNormal, currentSurface);
+    float previousCoverageLifetime = historyMetadata.b;
+    float previousMotionFactor = DecodeMotionFactor(historyMetadata.a);
+    if (g_Rtaa.historyValid != 0u && g_Rtaa.enableThinGeometry != 0u &&
+        !currentDepthValid && previousInside &&
+        previousCoverageLifetime <= 0.0f)
+    {
+        previousCoverageLifetime = LoadInterpolatedStationaryThinLock(
+            previousPixelCenter);
+        if (previousCoverageLifetime > 0.0f)
+            previousMotionFactor = 0.0f;
+    }
+    float previousCoverageLock = 0.0f;
+    if (g_Rtaa.historyValid != 0u && g_Rtaa.enableThinGeometry != 0u &&
+        !currentDepthValid && previousInside &&
+        previousCoverageLifetime > 0.0f && previousMotionFactor < 0.10f &&
+        coverageMotionGate > 0.0f)
+    {
+        previousCoverageLock = 1.0f;
+    }
+    float coverageTransition = currentDepthValid != historyDepthValid ||
+        (currentDepthValid && historyDepthValid &&
+            (materialMatch == 0.0f || objectMatch == 0.0f)) ||
+        previousCoverageLock > (1.0f / 255.0f) ? 1.0f : 0.0f;
+    float borrowedCoverage = any(sourceOffset != 0) ? 1.0f : 0.0f;
+    float coverageCandidate = max(max(coverageEdge, borrowedCoverage),
+        previousCoverageLock);
+    float coverageNeighborMatch = 0.0f;
+    if (coverageTransition > 0.0f && coverageCandidate > 0.0f &&
+        coverageMotionGate > 0.0f)
+    {
+        coverageNeighborMatch = ComputeCoverageHistoryNeighborMatch(
+            tileCenter, historyDepthValid, previousNormal,
+            previousMaterialId, previousObjectToken);
+    }
+    float coverageSupport = max(coverageNeighborMatch, previousCoverageLock);
+    float coverageOverrideSignal = coverageTransition * coverageCandidate *
+        coverageSupport * coverageMotionGate;
+    float coverageConfidence = previousInside
+        ? coverageOverrideSignal * velocityConfidence * 0.90f : 0.0f;
+    float stableCoverageSignal = max(coverageEdge * geometricConfidence,
+        coverageOverrideSignal);
     float combinedHistoryConfidence = g_Rtaa.historyValid != 0u &&
-        previousInside ? saturate(velocityConfidence * depthConfidence *
-            normalConfidence * materialMatch * objectMatch) : 0.0f;
+        previousInside ? saturate(max(geometricConfidence,
+            max(backgroundConfidence, coverageConfidence))) : 0.0f;
 
-    float explicitReactive = classification.b;
-    float automaticReactive = combinedHistoryConfidence > 0.0f
-        ? ComputeAutomaticReactive(currentColor, historyColorSample.rgb)
-        : 0.0f;
-    float finalReactive = saturate(max(explicitReactive, automaticReactive));
-
-    float combinedThinCandidate = s_CombinedThinCandidate[centerTileIndex];
-    float thinCandidate = DiffuseThinCandidate(tileCenter,
-        currentViewDepth, currentNormal, currentSurface,
-        combinedThinCandidate);
-    float previousThinCoverage = historyColorSample.a;
-    float thinHistoryWeight = saturate((1.0f -
-        g_Rtaa.thinCoverageCurrentWeight) * combinedHistoryConfidence *
-        (1.0f - finalReactive));
-    float accumulatedThinCoverage = g_Rtaa.enableThinGeometry != 0u
-        ? saturate(lerp(thinCandidate, previousThinCoverage,
-            thinHistoryWeight)) : 0.0f;
-
-    // Thin relaxation is bounded by every hard geometric test. It can soften
-    // clipping for a validated subpixel strip, but cannot revive a disoccluded,
-    // normal-incompatible, or cross-material sample.
-    float hardGeometricConfidence = saturate(velocityConfidence *
-        depthConfidence * normalConfidence * materialMatch * objectMatch);
-    float thinRelaxation = accumulatedThinCoverage *
-        saturate(g_Rtaa.thinMaxRelaxation);
-    // Add a small fractional recovery only when every geometric gate has some
-    // support. Multiplying by hardGeometricConfidence keeps a zero depth,
-    // normal, material, or object gate at zero; the remaining headroom term
-    // makes this an actual bounded relaxation instead of a no-op max(a,a*x).
-    float thinConfidenceBoost = hardGeometricConfidence * thinRelaxation *
-        historyMetadata.g * (1.0f - combinedHistoryConfidence);
-    combinedHistoryConfidence = saturate(combinedHistoryConfidence +
-        thinConfidenceBoost);
+    // Filtered color is issued only after cheap depth/surface/coverage gates.
+    // Rejected disocclusions therefore avoid nine Catmull sampler operations.
+    float4 historyColorSample = float4(currentColor, 0.0f);
+    if (combinedHistoryConfidence > 0.0f)
+    {
+        historyColorSample = SampleHistoryColor(
+            t_ImmediateHistoryColor, previousPixelCenter);
+    }
 
     float3 neighborhoodMean;
     float3 neighborhoodVariance;
@@ -1084,6 +1519,59 @@ void main(
     ComputeNeighborhoodStatistics(tileCenter, neighborhoodMean,
         neighborhoodVariance, neighborhoodMinimum, neighborhoodMaximum,
         neighborhoodRgbMean);
+
+    float3 unclippedHistoryYCoCg = RgbToCompressedYCoCg(
+        historyColorSample.rgb);
+    float3 broadNeighborhoodHistory = ClipLineToBox(unclippedHistoryYCoCg,
+        neighborhoodMean, neighborhoodMinimum, neighborhoodMaximum);
+    float explicitReactive = classification.b;
+    float automaticReactive = combinedHistoryConfidence > 0.0f
+        ? ComputeAutomaticReactive(unclippedHistoryYCoCg,
+            broadNeighborhoodHistory) * motionFactor : 0.0f;
+    float finalReactive = saturate(max(explicitReactive, automaticReactive));
+
+    float combinedThinCandidate = s_CombinedThinCandidate[centerTileIndex];
+    float thinCandidate = DiffuseThinCandidate(tileCenter,
+        currentViewDepth, currentNormal, currentSurface,
+        combinedThinCandidate);
+    // Persist the already-computed silhouette evidence in every tier. This is
+    // cheaper and more reliable than probing the filtered color footprint's
+    // raw depth, and protects ordinary one-sided opaque edges as well as wires.
+    thinCandidate = max(thinCandidate,
+        currentDepthValid ? coverageEdge : 0.0f);
+    float previousThinCoverage = historyColorSample.a;
+    float thinHistoryWeight = saturate((1.0f -
+        g_Rtaa.thinCoverageCurrentWeight) * combinedHistoryConfidence *
+        (1.0f - finalReactive));
+    float accumulatedThinCoverage = g_Rtaa.enableThinGeometry != 0u
+        ? saturate(lerp(thinCandidate, previousThinCoverage,
+            thinHistoryWeight)) : 0.0f;
+    if (!currentDepthValid && previousCoverageLifetime <= 0.0f)
+    {
+        // The full path has now clipped expired coverage color to background.
+        // Clear residual alpha immediately so the next frame can return to the
+        // uniform-background fast path instead of paying an exponential tail.
+        accumulatedThinCoverage = 0.0f;
+    }
+    float currentCoverageLock = g_Rtaa.enableThinGeometry != 0u &&
+        thinCandidate > (1.0f / 255.0f) ? 1.0f : 0.0f;
+    float canInheritCoverageLock = !currentDepthValid ||
+        geometricConfidence > 0.5f ? 1.0f : 0.0f;
+    float newCoverageLifetime = g_Rtaa.enableThinGeometry != 0u
+        ? (currentCoverageLock > 0.0f ? 1.0f :
+            max(previousCoverageLifetime -
+                g_Rtaa.thinLockDecayPerFrame, 0.0f) *
+                canInheritCoverageLock) : 0.0f;
+    newCoverageLifetime *= coverageMotionGate * (1.0f - finalReactive);
+    // A trusted thin surface may receive a tiny, bounded confidence lift, but
+    // cannot revive a hard depth/normal/identity rejection. Previous-frame
+    // confidence prevents one-frame structural noise from opening the gate.
+    float thinConfidenceBoost = geometricConfidence *
+        saturate(accumulatedThinCoverage) *
+        saturate(g_Rtaa.thinMaxRelaxation) * historyMetadata.g *
+        (1.0f - combinedHistoryConfidence) * (1.0f - finalReactive);
+    combinedHistoryConfidence = saturate(
+        combinedHistoryConfidence + thinConfidenceBoost);
 
     float3 sigma = sqrt(max(neighborhoodVariance, 0.0f)) *
         max(g_Rtaa.varianceSigma, 0.0f);
@@ -1098,29 +1586,24 @@ void main(
     lowerBound = lerp(lowerBound, neighborhoodMinimum, clipExpansion);
     upperBound = lerp(upperBound, neighborhoodMaximum, clipExpansion);
 
-    float3 unclippedHistoryYCoCg = RgbToCompressedYCoCg(
-        historyColorSample.rgb);
     float3 clippedHistoryYCoCg = ClipLineToBox(unclippedHistoryYCoCg,
         neighborhoodMean, lowerBound, upperBound);
+    // If a stationary, previously classified thin feature is completely absent
+    // from the current 3x3 footprint, min/max clipping collapses to background
+    // and would erase its radiance despite reviving its coverage lock. Retain a
+    // bounded fraction of the unclipped accumulation only for that trusted
+    // low-motion lock; prior motion metadata and the coverage gate suppress
+    // moving-object trails.
+    float uncoveredCoveragePreservation = !currentDepthValid
+        ? previousCoverageLock * coverageMotionGate * (1.0f - finalReactive)
+        : 0.0f;
+    clippedHistoryYCoCg = lerp(clippedHistoryYCoCg,
+        unclippedHistoryYCoCg, saturate(uncoveredCoveragePreservation));
     float3 immediateClippedHistory = CompressedYCoCgToRgb(
         clippedHistoryYCoCg);
     float clipDistance = length(unclippedHistoryYCoCg -
         clippedHistoryYCoCg) /
         max(length(unclippedHistoryYCoCg - neighborhoodMean), RtaaEpsilon);
-    float clipConfidence = 1.0f - saturate(clipDistance * 0.5f);
-    combinedHistoryConfidence *= clipConfidence;
-
-    // Fallback is a rejection path, not a permanent spatial blur. It reaches
-    // full strength below 0.25 confidence and fades out completely by 0.75.
-    float fallbackContribution = g_Rtaa.enableSpatialFallback != 0u
-        ? 1.0f - SmoothRange(combinedHistoryConfidence, 0.25f, 0.75f)
-        : 0.0f;
-    float3 spatialFallback = fallbackContribution > 0.0f
-        ? ComputeSpatialFallback(tileCenter, currentColor, currentViewDepth,
-            currentNormal, currentSurface, accumulatedThinCoverage)
-        : currentColor;
-    float3 resolvedCurrent = SanitizeHdr(lerp(currentColor,
-        spatialFallback, fallbackContribution));
 
     float3 historyForAccumulation = immediateClippedHistory;
     float2 historyMomentsForAccumulation = historyMoments;
@@ -1132,10 +1615,46 @@ void main(
     float3 resurrectionColor = 0.0f;
 
 #if RTAA_RESURRECTION
-    resurrectionEligibility = g_Rtaa.enableResurrection != 0u &&
-        g_Rtaa.persistentValidMask != 0u && currentWorldValid &&
+    // Persistent reprojection has no multi-frame object-motion chain. Restrict
+    // it to surfaces whose immediate motion agrees with projecting the current
+    // world position through the previous camera; otherwise a moving/skinned
+    // object could resurrect stale same-material color from an older location.
+    bool resurrectionRequested = g_Rtaa.enableResurrection != 0u &&
+        g_Rtaa.persistentValidMask != 0u && currentDepthValid &&
         (combinedHistoryConfidence < g_Rtaa.resurrectionMatchThreshold ||
-            clipDistance > 0.5f) ? 1.0f : 0.0f;
+            clipDistance > 0.5f);
+    if (resurrectionRequested && !currentWorldValid)
+    {
+        currentWorldValid = ReconstructWorldPosition(
+            float2(outputPixel) + 0.5f, currentDeviceDepth,
+            g_Rtaa.currentView, currentWorld);
+    }
+    float staticSurfaceForResurrection = 0.0f;
+    if (resurrectionRequested && currentWorldValid &&
+        expectedPreviousDepthValid)
+    {
+        float2 cameraOnlyColorCenter;
+        float2 cameraOnlyAuxiliaryCenter;
+        float cameraOnlyDepth;
+        if (ProjectWorldToHistory(currentWorld,
+                g_Rtaa.immediateHistoryView, cameraOnlyColorCenter,
+                cameraOnlyAuxiliaryCenter, cameraOnlyDepth))
+        {
+            float cameraMotionError = length(cameraOnlyColorCenter -
+                (float2(outputPixel) + 0.5f + dilatedMotion));
+            float cameraGrazingDepthScale =
+                ComputeGrazingDepthToleranceScale(currentWorld,
+                    currentNormal, g_Rtaa.immediateHistoryView);
+            float cameraDepthAgreement = ComputeDepthConfidence(
+                expectedPreviousDepth, cameraOnlyDepth,
+                g_Rtaa.immediateHistoryView, cameraGrazingDepthScale);
+            staticSurfaceForResurrection =
+                (cameraMotionError <= 0.125f && cameraDepthAgreement > 0.5f)
+                ? 1.0f : 0.0f;
+        }
+    }
+    resurrectionEligibility = resurrectionRequested && currentWorldValid &&
+        staticSurfaceForResurrection > 0.0f ? 1.0f : 0.0f;
     if (resurrectionEligibility > 0.0f)
     {
         ResurrectionCandidate candidate0 = EvaluatePersistentHistory(
@@ -1175,9 +1694,18 @@ void main(
     }
 #endif
 
-    float motionMagnitude = length(dilatedMotion);
-    float motionFactor = SmoothRange(motionMagnitude,
-        g_Rtaa.motionWeightStartPixels, g_Rtaa.motionWeightEndPixels);
+    // Spatial work is delayed until resurrection has had a chance to restore a
+    // valid temporal sample. This avoids paying the fallback only to discard it.
+    float fallbackContribution = g_Rtaa.enableSpatialFallback != 0u
+        ? 1.0f - SmoothRange(combinedHistoryConfidence, 0.25f, 0.75f)
+        : 0.0f;
+    float3 spatialFallback = fallbackContribution > 0.0f
+        ? ComputeSpatialFallback(tileCenter, currentColor, currentViewDepth,
+            currentNormal, currentSurface, accumulatedThinCoverage)
+        : currentColor;
+    float3 resolvedCurrent = SanitizeHdr(lerp(currentColor,
+        spatialFallback, fallbackContribution));
+
     float baseCurrentWeight = lerp(g_Rtaa.stableCurrentWeight,
         g_Rtaa.movingCurrentWeight, motionFactor);
     baseCurrentWeight = lerp(baseCurrentWeight,
@@ -1192,6 +1720,14 @@ void main(
         sampleLimitedWeight);
     currentWeight = lerp(currentWeight, 1.0f,
         1.0f - saturate(combinedHistoryConfidence));
+    // Once a stationary edge is geometrically validated or conservatively
+    // recovered as a true coverage transition, acceptance confidence must not
+    // reintroduce asymmetric sample-following. Apply count-driven convergence
+    // after the disocclusion safety gate; real motion/reactivity fades it out.
+    float stableCoverage = stableCoverageSignal * (1.0f - motionFactor) *
+        (1.0f - finalReactive);
+    currentWeight = lerp(currentWeight, sampleLimitedWeight,
+        saturate(stableCoverage));
     if (resurrectionSource > 0.0f)
     {
         // Older history can help a rejected pixel, but stale illumination is
@@ -1225,20 +1761,24 @@ void main(
     float4 outputMetadata = saturate(float4(
         newHistoryCount / metadataCountDenominator,
         combinedHistoryConfidence,
-        finalReactive,
-        motionFactor));
+        newCoverageLifetime,
+        EncodeReactiveAndMotion(finalReactive, motionFactor)));
     uint2 outputSurface = PackHistorySurface(currentNormal,
         currentMaterialId, currentObjectToken);
 
     // History writes are unconditional and precede debug selection. Debugging
     // therefore cannot freeze, replace, clamp, or otherwise contaminate the
     // state consumed by a later frame.
-    u_HistoryColor[pixel] = float4(outputColor, accumulatedThinCoverage);
-    u_HistoryMoments[pixel] = outputMoments;
-    u_HistoryMetadata[pixel] = outputMetadata;
-    u_HistoryDepth[pixel] = IsValidDeviceDepth(currentDeviceDepth)
-        ? currentDeviceDepth : 0.0f;
-    u_HistorySurface[pixel] = outputSurface;
+    if (!backgroundProductionWritten)
+    {
+        u_HistoryColor[pixel] = float4(outputColor,
+            accumulatedThinCoverage);
+        u_HistoryMoments[pixel] = outputMoments;
+        u_HistoryMetadata[pixel] = outputMetadata;
+        u_HistoryDepth[pixel] = IsValidDeviceDepth(currentDeviceDepth)
+            ? currentDeviceDepth : (g_Rtaa.reverseZ != 0u ? 0.0f : 1.0f);
+        u_HistorySurface[pixel] = outputSurface;
+    }
 
     if (g_Rtaa.writeDebug != 0u)
     {
@@ -1289,7 +1829,7 @@ void main(
             debugColor = VisualizeMotion(dilatedMotion);
             break;
         case RTAA_DEBUG_VELOCITY_SOURCE_PIXEL:
-            debugColor = float3(classification.rg,
+            debugColor = float3((float2(sourceOffset) + 1.0f) * 0.5f,
                 all(sourceOffset == 0) ? 1.0f : 0.0f);
             break;
         case RTAA_DEBUG_VELOCITY_CONFIDENCE:
@@ -1383,7 +1923,8 @@ void main(
         case RTAA_DEBUG_FINAL_OUTPUT:
         case RTAA_DEBUG_FINAL_NRA_RTAA_OUTPUT:
         default:
-            debugColor = outputColor;
+            debugColor = backgroundProductionWritten
+                ? backgroundProductionOutput : outputColor;
             break;
         }
 

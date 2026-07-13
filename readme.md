@@ -12,10 +12,13 @@ is also available from the scene picker.
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
 - Native-Resolution Analytical Reconstructive Temporal Anti-Aliasing (NRA-RTAA)
-  starts enabled on the deferred UVSR PBR path. Its **Aliasing** drawer provides
-  Heavy, Medium, and clarity-biased Light presets, analytical validation and
-  rejection controls, 32 debug views, memory estimates, and GPU timings. All
-  scene color and history resources remain at the display resolution.
+  starts enabled on the deferred UVSR PBR path. Its **Aliasing** drawer separates
+  Heavy, Medium, and clarity-biased Light temporal-response presets from an
+  independent, statically compiled **Performance Profile** selector with
+  Performance, Balanced, and Maximum Quality tiers. The factory default is
+  Medium Temporal plus Balanced. Analytical validation and rejection controls,
+  32 debug views, memory estimates, and GPU timings remain available, and all
+  scene color and history resources stay at display resolution.
 - Renderer settings always start from factory defaults; **Reset All Settings**
   restores those defaults in-session, and settings are not carried between
   launches.

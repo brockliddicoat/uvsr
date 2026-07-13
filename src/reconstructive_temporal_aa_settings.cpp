@@ -28,6 +28,18 @@ namespace
         return false;
     }
 
+    bool IsValid(ReconstructiveTemporalPerformanceProfile profile)
+    {
+        switch (profile)
+        {
+        case ReconstructiveTemporalPerformanceProfile::Performance:
+        case ReconstructiveTemporalPerformanceProfile::Balanced:
+        case ReconstructiveTemporalPerformanceProfile::MaximumQuality:
+            return true;
+        }
+        return false;
+    }
+
     bool IsValid(JitterSequence sequence)
     {
         return sequence == JitterSequence::R2 || sequence == JitterSequence::Halton23;
@@ -109,6 +121,24 @@ namespace
         return result;
     }
 
+    std::pair<double, double> RawJitterSample(
+        JitterSequence sequence, uint32_t phase)
+    {
+        if (sequence == JitterSequence::Halton23)
+        {
+            const uint32_t sequenceIndex = phase + 1u;
+            return { Halton(sequenceIndex, 2u) - 0.5,
+                Halton(sequenceIndex, 3u) - 0.5 };
+        }
+
+        constexpr double PlasticConstant = 1.3247179572447458;
+        constexpr double AlphaX = 1.0 / PlasticConstant;
+        constexpr double AlphaY = 1.0 / (PlasticConstant * PlasticConstant);
+        const double sequenceIndex = static_cast<double>(phase + 1u);
+        return { Fraction(0.5 + AlphaX * sequenceIndex) - 0.5,
+            Fraction(0.5 + AlphaY * sequenceIndex) - 0.5 };
+    }
+
     float CurrentWeightFromTimeConstant(float deltaSeconds, float responseMs)
     {
         if (std::isnan(deltaSeconds) || deltaSeconds <= 0.0f)
@@ -145,7 +175,8 @@ namespace uvsr
         // Presets define every image-quality setting so switching away from
         // Custom cannot retain a hidden stale value. Enabled state, force reset,
         // zero-jitter freeze, held phase, and the active debug view remain
-        // user-controlled.
+        // user-controlled. The independent performance profile is preserved as
+        // well, so Heavy/Medium/Light never silently change GPU cost tier.
         ApplyCommonPresetValues(settings);
 
         switch (preset)
@@ -218,6 +249,8 @@ namespace uvsr
         // production preset.
         if (!IsValid(settings.preset))
             settings.preset = ReconstructiveTemporalPreset::Custom;
+        if (!IsValid(settings.performanceProfile))
+            settings.performanceProfile = defaults.performanceProfile;
         if (!IsValid(settings.jitterSequence))
             settings.jitterSequence = defaults.jitterSequence;
         if (!IsValid(settings.historyFilter))
@@ -379,28 +412,38 @@ namespace uvsr
             ? sanitized.heldJitterPhase
             : static_cast<uint32_t>(
                 frameIndex % static_cast<uint64_t>(sanitized.jitterPeriod));
-        double x = 0.0;
-        double y = 0.0;
+        // A truncated low-discrepancy sequence is not generally zero-mean (the
+        // production eight-point R2 prefix was biased by about a tenth pixel).
+        // Center and uniformly rescale the selected finite cycle so every
+        // period has exactly zero directional bias while retaining its ordering.
+        double meanX = 0.0;
+        double meanY = 0.0;
+        for (uint32_t samplePhase = 0; samplePhase < sanitized.jitterPeriod;
+            ++samplePhase)
+        {
+            const auto [sampleX, sampleY] = RawJitterSample(
+                sanitized.jitterSequence, samplePhase);
+            meanX += sampleX;
+            meanY += sampleY;
+        }
+        meanX /= static_cast<double>(sanitized.jitterPeriod);
+        meanY /= static_cast<double>(sanitized.jitterPeriod);
 
-        if (sanitized.jitterSequence == JitterSequence::Halton23)
+        double maximumMagnitude = 0.0;
+        for (uint32_t samplePhase = 0; samplePhase < sanitized.jitterPeriod;
+            ++samplePhase)
         {
-            // Halton index zero is the origin, so use one-based indices and
-            // center the [0,1) radical inverses around the pixel center.
-            const uint32_t sequenceIndex = phase + 1u;
-            x = Halton(sequenceIndex, 2u) - 0.5;
-            y = Halton(sequenceIndex, 3u) - 0.5;
+            const auto [sampleX, sampleY] = RawJitterSample(
+                sanitized.jitterSequence, samplePhase);
+            maximumMagnitude = std::max(maximumMagnitude,
+                std::max(std::abs(sampleX - meanX), std::abs(sampleY - meanY)));
         }
-        else
-        {
-            // Additive recurrence using the generalized golden ratio (plastic
-            // constant). A half-domain seed avoids beginning at a corner.
-            constexpr double PlasticConstant = 1.3247179572447458;
-            constexpr double AlphaX = 1.0 / PlasticConstant;
-            constexpr double AlphaY = 1.0 / (PlasticConstant * PlasticConstant);
-            const double sequenceIndex = static_cast<double>(phase + 1u);
-            x = Fraction(0.5 + AlphaX * sequenceIndex) - 0.5;
-            y = Fraction(0.5 + AlphaY * sequenceIndex) - 0.5;
-        }
+        const double finiteCycleScale = maximumMagnitude > 0.5
+            ? 0.5 / maximumMagnitude : 1.0;
+        const auto [rawX, rawY] = RawJitterSample(
+            sanitized.jitterSequence, phase);
+        const double x = (rawX - meanX) * finiteCycleScale;
+        const double y = (rawY - meanY) * finiteCycleScale;
 
         const double scale = static_cast<double>(sanitized.jitterScale);
         ReconstructiveTemporalJitter jitter;
@@ -418,6 +461,21 @@ namespace uvsr
         case ReconstructiveTemporalPreset::MediumTemporal: return "Medium Temporal";
         case ReconstructiveTemporalPreset::LightTemporal: return "Light Temporal";
         case ReconstructiveTemporalPreset::Custom: return "Custom";
+        }
+        return "Unknown";
+    }
+
+    const char* GetReconstructiveTemporalPerformanceProfileName(
+        ReconstructiveTemporalPerformanceProfile profile) noexcept
+    {
+        switch (profile)
+        {
+        case ReconstructiveTemporalPerformanceProfile::Performance:
+            return "Performance";
+        case ReconstructiveTemporalPerformanceProfile::Balanced:
+            return "Balanced";
+        case ReconstructiveTemporalPerformanceProfile::MaximumQuality:
+            return "Maximum Quality";
         }
         return "Unknown";
     }

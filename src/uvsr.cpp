@@ -1823,10 +1823,8 @@ public:
             ReconstructiveTemporalAAPass::Inputs rtaaInputs;
             rtaaInputs.sceneColor = m_RenderTargets->HdrColor;
             rtaaInputs.depth = m_RenderTargets->Depth;
-            rtaaInputs.normals = m_RenderTargets->GBufferNormals;
             rtaaInputs.gbufferDiffuse = m_RenderTargets->GBufferDiffuse;
             rtaaInputs.gbufferSpecular = m_RenderTargets->GBufferSpecular;
-            rtaaInputs.gbufferEmissive = m_RenderTargets->GBufferEmissive;
             rtaaInputs.surfaceIds = m_RenderTargets->MaterialIDs;
             rtaaInputs.motionVectors = m_RenderTargets->MotionVectors;
             rtaaInputs.explicitReactiveMask = m_RenderTargets->ReactiveMask;
@@ -1849,14 +1847,18 @@ public:
                 rtaa.debugMode == ReconstructiveTemporalDebugMode::FinalOutput ||
                 rtaa.debugMode ==
                     ReconstructiveTemporalDebugMode::FinalNraRtaaOutput;
-            sharpening.enabled = rtaa.sharpeningEnabled && finalOutput;
+            const bool profileAllowsSharpening = rtaa.performanceProfile !=
+                ReconstructiveTemporalPerformanceProfile::Performance;
+            sharpening.enabled = rtaa.sharpeningEnabled &&
+                profileAllowsSharpening && finalOutput;
             sharpening.diagnosticBypass = !finalOutput &&
                 rtaa.debugMode !=
                     ReconstructiveTemporalDebugMode::SharpeningContribution;
             sharpening.debugContribution = rtaa.debugMode ==
                 ReconstructiveTemporalDebugMode::SharpeningContribution;
             if (sharpening.debugContribution)
-                sharpening.enabled = rtaa.sharpeningEnabled;
+                sharpening.enabled = rtaa.sharpeningEnabled &&
+                    profileAllowsSharpening;
             sharpening.strength = rtaa.sharpeningStrength;
             sharpening.motionSuppression = rtaa.sharpeningMotionSuppression;
             sharpening.reactiveSuppression = rtaa.sharpeningReactiveSuppression;
@@ -2328,6 +2330,32 @@ protected:
             ImGui::SetItemTooltip(
                 "Choose stability-, balance-, or clarity-biased analytical settings; manual edits select Custom.");
 
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            if (ImGui::BeginCombo(
+                "Performance Profile##RTAA",
+                GetReconstructiveTemporalPerformanceProfileName(
+                    rtaa.performanceProfile)))
+            {
+                for (uint32_t profileIndex = 0; profileIndex < 3; ++profileIndex)
+                {
+                    const auto profile =
+                        ReconstructiveTemporalPerformanceProfile(profileIndex);
+                    const bool selected = rtaa.performanceProfile == profile;
+                    if (ImGui::Selectable(
+                        GetReconstructiveTemporalPerformanceProfileName(profile),
+                        selected))
+                    {
+                        rtaa.performanceProfile = profile;
+                        rtaa.forceHistoryReset = true;
+                    }
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip(
+                "Select a statically compiled GPU-cost tier independently of Heavy, Medium, or Light temporal response. Performance and Balanced use bilinear history; Maximum Quality enables the selected filter, thin diffusion, and optional resurrection.");
+
             if (const ReconstructiveTemporalAATimings* timings =
                 m_app->GetReconstructiveTemporalAATimings())
             {
@@ -2459,7 +2487,7 @@ protected:
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip(
-                    "Use bilinear history sampling or the optimized Catmull-Rom reconstruction filter.");
+                    "Choose the Maximum Quality history filter. Performance and Balanced use their statically compiled bilinear path.");
                 advancedChanged |= ImGui::Checkbox(
                     "Velocity Dilation##RTAA", &rtaa.velocityDilationEnabled);
                 ImGui::SetItemTooltip(
@@ -2520,12 +2548,12 @@ protected:
                     "Explicit Reactive Mask##RTAA",
                     &rtaa.explicitReactiveMaskEnabled);
                 ImGui::SetItemTooltip(
-                    "Consume the PBR material-authored alpha, emissive, and reactive-feature mask.");
+                    "Consume an application-authored transient transport mask. The current depth-writing PBR producer stays neutral so stable alpha-tested and emissive details can accumulate.");
                 advancedChanged |= ImGui::Checkbox(
                     "Automatic Reactive Mask##RTAA",
                     &rtaa.automaticReactiveMaskEnabled);
                 ImGui::SetItemTooltip(
-                    "Estimate shading change from bounded log-luminance and chroma differences.");
+                    "Estimate motion-corroborated shading change from bounded log-luminance and chroma residuals; stationary residuals remain governed by neighborhood clipping.");
                 advancedChanged |= ImGui::SliderFloat(
                     "Automatic Strength##RTAA",
                     &rtaa.automaticReactiveStrength, 0.f, 2.f, "%.3f");
@@ -2575,7 +2603,7 @@ protected:
                     "Cluster Diffusion##RTAAThin",
                     &rtaa.thinGeometryClusterDiffusion);
                 ImGui::SetItemTooltip(
-                    "Diffuse thin classification through a gated shared-memory 3x3 cluster.");
+                    "Diffuse thin classification through a gated shared-memory 3x3 cluster in Maximum Quality. Balanced keeps center structural evidence; Performance keeps authored plus cheap silhouette coverage.");
                 ImGui::TreePop();
             }
 
@@ -2673,7 +2701,7 @@ protected:
                     advancedChanged = true;
                 }
                 ImGui::SetItemTooltip(
-                    "Choose a 3x3 fallback or the Heavy-quality 5x5 kernel.");
+                    "Choose the Maximum Quality 3x3 or 5x5 kernel. Balanced uses fixed 3x3; Performance uses a low-cost cross.");
                 advancedChanged |= ImGui::SliderFloat(
                     "Depth Weight##RTAASpatial",
                     &rtaa.spatialDepthWeight, 0.f, 256.f, "%.2f");
@@ -2698,7 +2726,7 @@ protected:
                 advancedChanged |= ImGui::Checkbox(
                     "Enabled##RTAAResurrection", &rtaa.resurrectionEnabled);
                 ImGui::SetItemTooltip(
-                    "Conditionally inspect older validated history after immediate history fails.");
+                    "Conditionally inspect older validated history after immediate history fails. Compiled out unless Maximum Quality is selected.");
                 if (!rtaa.resurrectionEnabled)
                     ImGui::BeginDisabled();
                 int persistentCount = int(std::max(rtaa.persistentFrameCount, 1u));
@@ -2740,7 +2768,7 @@ protected:
                 advancedChanged |= ImGui::Checkbox(
                     "Enabled##RTAASharpen", &rtaa.sharpeningEnabled);
                 ImGui::SetItemTooltip(
-                    "Apply conservative luminance sharpening fused into AgX after accumulation.");
+                    "Apply conservative luminance sharpening fused into AgX after accumulation. Performance disables the extra neighborhood reads.");
                 advancedChanged |= ImGui::SliderFloat(
                     "Strength##RTAASharpen",
                     &rtaa.sharpeningStrength, 0.f, 1.f, "%.3f");
