@@ -88,11 +88,13 @@ modes. Empty, complete, reversed, clamped, non-finite, and boundary intervals
 avoid shift-by-32 and other undefined operations.
 
 Masks are current-frame and register-local. No persistent mask texture is
-allocated. Production uses one randomly rotated slice per pixel and frame, as
-in the paper benchmarks. A six-phase azimuth sequence and four-phase radial
-sequence form a 24-frame low-discrepancy schedule over stable per-pixel spatial
-noise. Both sides jointly form the slice; only the final per-slice estimator is
-averaged.
+allocated. Production uses a statically specialized, unrolled one-slice shader
+with one randomly rotated slice per pixel and frame, as in the paper
+benchmarks. **Developer Slices** values from two through eight select a separate
+general loop permutation for validation and multiply traversal work. A
+six-phase azimuth sequence and four-phase radial sequence form a 24-frame
+low-discrepancy schedule over stable per-pixel spatial noise. Both sides jointly
+form the slice; only the final per-slice estimator is averaged.
 
 ### Coordinates, depth, and thickness
 
@@ -107,6 +109,12 @@ averaged.
 - Slice azimuths rotate around `V`, not around the surface normal.
 - Projection through `matViewToClip` converts the world radius to pixels, so
   perspective and orthographic projection share one path.
+- A desired radial endpoint is transformed to homogeneous clip space once and
+  clipped analytically along the receiver-to-endpoint segment against positive
+  `w` and the active D3D near plane (`z >= 0` for forward depth or `w - z >= 0`
+  for reversed depth). The shortened endpoint is then projected once. This
+  replaces iterative projection-and-halving retries while preserving
+  perspective, orthographic, forward-depth, and reversed-depth behavior.
 - Under perspective, finite thickness extends the sampled front point along
   that point's own camera ray, preserving its projected `xy/w`. Orthographic
   projection uses the camera's constant away direction. Optional distance
@@ -201,6 +209,14 @@ Across several pruned bounces, omitted energy can accumulate up to one such
 bound per bounce. A cutoff of `0` retains only exact-zero, non-finite, and hard
 material/geometry exits.
 
+Before any later-bounce position reconstruction, normal fetch, or slice setup,
+the shader reads the previous frontier's packed receiver metadata and exits
+when diffuse throughput is proven inactive. The opt-in **Higher-Bounce Receiver
+Statistics** permutation uses one wave-aggregated pair of counters to report
+depth-eligible attempts and diffuse-inactive rejections. Its copy/readback uses
+the existing delayed sampling-timer ring; production permutations contain no
+counter or wave-statistics work.
+
 The source-sample cutoff runs after depth traversal has found newly claimed mask
 sectors. It reduces source material bandwidth and lighting arithmetic, but it
 does not remove the bounce's full-resolution dispatch or its visibility
@@ -224,12 +240,34 @@ surface's own displayed radiance or reflected direct-light sources.
 | base lighting | `RGBA16_FLOAT` | full, frame |
 | direct diffuse source | `RGBA16_FLOAT` | full, frame |
 | hierarchical view depth | `R16_FLOAT`, 5 mips | full to 1/16, allocated only while the opt-in hierarchy is active |
-| raw ambient visibility | `R16_FLOAT` | full, frame |
-| raw indirect diffuse frontier A | `RGBA16_FLOAT` | full, frame; also the one-bounce result |
+| raw ambient visibility | `R16_FLOAT` | full, frame; allocated only while AO is enabled |
+| raw indirect diffuse frontier A | `RGBA16_FLOAT` | full, frame; allocated only while GI is enabled, also the one-bounce result |
 | raw indirect diffuse frontier B | `RGBA16_FLOAT` | full, frame; only for multiple bounces |
 | cumulative indirect diffuse irradiance | `RGBA16_FLOAT` | full, frame; only for multiple bounces |
-| raw traversal debug | `RGBA8_UNORM` | full, frame |
+| raw traversal debug | `RGBA8_UNORM` | full, frame; only for a traversal-debug view |
 | final HDR composite | `RGBA16_FLOAT` | full, frame |
+
+Compiled-out outputs bind three persistent 1x1 format-matching UAV/SRV dummy
+textures, so shader binding layouts remain invariant without allocating dormant
+full-resolution targets or rebuilding them every frame. The dummies have 14
+bytes of logical texel payload in total and are excluded from the table below.
+
+The HUD's **Targets** and **Avoided** values are exact logical texel payloads,
+not API-aligned residency, heap commitment, or measured memory traffic. The
+former one-bounce policy always allocated AO, GI, and traversal debug for 14
+bytes per pixel. With no traversal debug active:
+
+| One-bounce configuration | Active bytes/pixel | 1920x1080 active | 1920x1080 avoided | 3840x2160 active | 3840x2160 avoided |
+|---|---:|---:|---:|---:|---:|
+| Former always-allocate baseline | 14 | 27.69 MiB | 0 MiB | 110.74 MiB | 0 MiB |
+| AO + GI | 10 | 19.78 MiB | 7.91 MiB | 79.10 MiB | 31.64 MiB |
+| AO only | 2 | 3.96 MiB | 23.73 MiB | 15.82 MiB | 94.92 MiB |
+| GI only | 8 | 15.82 MiB | 11.87 MiB | 63.28 MiB | 47.46 MiB |
+
+An active traversal-debug target adds 4 bytes per pixel (7.91 MiB at 1080p or
+31.64 MiB at 4K). Selecting multiple GI bounces adds two `RGBA16_FLOAT`
+targets, or 16 bytes per pixel (31.64 MiB at 1080p or 126.56 MiB at 4K), under
+both the former and current policies.
 
 Visibility outputs are current-frame only. Composition reads the sampling
 textures directly; the pass owns no motion-vector input, output-history pair,
@@ -295,6 +333,9 @@ SMBIOS when the active adapter is integrated. They describe theoretical
 capability at the current clocks, not measured workload utilization;
 unsupported adapters show `--`.
 Markers label AO-only, GI-only, and combined traversals separately.
+The HUD also reports the active and avoided logical target payload described in
+the resource table. Higher-bounce receiver counts appear only when their
+diagnostic permutation is explicitly enabled.
 
 ## Screen-space limitations
 
@@ -315,6 +356,10 @@ Markers label AO-only, GI-only, and combined traversals separately.
 - The checked-in deterministic estimator suite is CPU/slice-space rather than a
   renderer image-regression corpus; local Bistro scenes remain the current GPU
   smoke-test content.
+- The checked-in visibility-projection suite covers forward/reversed depth,
+  perspective/orthographic paths, positive-`w` and near-plane crossings,
+  near-plane receivers, very large finite radii, side symmetry, and invalid or
+  non-finite inputs.
 
 ## Upgrade path to unified visibility
 

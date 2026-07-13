@@ -21,6 +21,10 @@ is also available from the scene picker.
   scene color and history resources stay at display resolution.
 - Screen-space visibility feeds current-frame AO/GI directly into composition;
   it has no temporal accumulation or spatial filtering stage.
+- The production visibility traversal uses a statically specialized one-slice
+  shader. A separate **Developer Slices** path retains the general two-to-eight
+  slice loop for validation without carrying its dynamic loop setup in the
+  shipping configuration.
 - The **Visibility > Shared Visibility Sampling > Estimator** control A/Bs the
   default Paper Angular formulation against a complete no-`acos` GT Uniform
   permutation with matching equal-mass AO/GI weighting and normalization. GT
@@ -64,6 +68,15 @@ is also available from the scene picker.
   selected chain, while unrelated diagnostics skip invisible secondary work.
   The gate saves source material/lighting work but each active bounce still
   dispatches and performs its visibility traversal.
+- Later bounces reject receivers with proven-zero diffuse throughput before
+  view-position reconstruction, normal fetches, or slice setup. Opt-in
+  **Higher-Bounce Receiver Statistics** uses a diagnostic-only shader
+  permutation; production traversal carries no counter or readback work.
+- Full-resolution AO, GI, traversal-debug, and extra-bounce targets exist only
+  while their consumers are configured. The Visibility HUD reports their
+  exact logical texel payload and the payload avoided relative to the former
+  always-allocate policy; those values are not API-aligned residency or
+  measured bandwidth.
 - Proven scene-wide source inactivity and zero final GI intensity terminate the
   complete higher-bounce dispatch chain. The shared CPU/HLSL activity mask is
   extensible to future clustering, probe, cache, visibility, and residency data;
@@ -96,9 +109,12 @@ entries are not promises that the work will merge.
   `agent/visibility-reference` branch owns shared CPU/HLSL estimator math,
   tests, fixtures, and benchmark schema; the integration branch now owns the
   compiled runtime estimator permutations, sampled-ray thickness, UI, and
-  design documentation; a later
-  `agent/visibility-hot-loop` branch owns measured higher-bounce and resource
-  optimizations. `GTCosine` remains gated on uniform-reference promotion. This
+  design documentation. The `agent/visibility-hot-loop` branch implements
+  early higher-bounce receiver rejection and diagnostics, a statically
+  specialized production slice, analytic homogeneous endpoint clipping, and
+  consumer-driven target allocation; validation is active and no runtime
+  speedup is claimed yet. `GTCosine` remains gated on uniform-reference
+  promotion. This
   overlaps the filtering/specular-AA/NRD effort at GI source/output, normal, and
   confidence contracts; consumes PBR/G-buffer and finite multibounce contracts
   without repacking them initially; leaves NRA-RTAA as the sole downstream
@@ -223,11 +239,11 @@ Direct and IDE-driven launches can instead supply the description through
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the PBR, radial-visibility, estimator, and NRA-RTAA reference
-tests separately:
+Build and run the PBR, radial-visibility, estimator, visibility-projection, and
+NRA-RTAA reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_rtaa_reference_tests
+cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_rtaa_reference_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 

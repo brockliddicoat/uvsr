@@ -62,6 +62,14 @@ CPU tests prove that perspective front and back points retain identical `xy/w`,
 that thickness moves away from the camera, and that forward/reversed depth do
 not alter this view-space construction.
 
+`src/visibility_projection_shared.h` is likewise compiled as C++ and HLSL. It
+clips a desired radial endpoint analytically against positive homogeneous `w`
+and the active D3D near plane before the one endpoint projection/divide. The
+`uvsr_visibility_projection_tests` target covers perspective forward and
+reversed depth, orthographic projection, camera-plane and near-plane crossings,
+near-plane receivers, very large finite radii, both-side symmetry, and invalid
+or non-finite inputs.
+
 ## Deterministic reference suite
 
 `uvsr_visibility_estimator_tests` prepares the same receiver, radial source
@@ -103,6 +111,24 @@ Across 2,048 coherent sector phases per fixture, the initial CPU baseline is:
 These values establish estimator bias only. They are not renderer image-quality
 or performance evidence.
 
+## Static one-slice shader evidence
+
+DXC 1.9.2602 compiled the same GTUniform AO+GI shader at shader model 6.5 and
+`-O3` with either the production static one-slice permutation or the general
+developer permutation. Counts below come from DXIL text and are compiler-IR
+evidence, not hardware timing or vendor register allocation:
+
+| Permutation | DXIL bytes | Counted LLVM-like instructions | DX operations | Phi nodes | Branches | Floating divides | Unsigned divides |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Static one slice | 23,224 | 1,974 | 420 | 178 | 281 | 38 | 1 |
+| General slices | 23,360 | 2,022 | 422 | 194 | 285 | 40 | 1 |
+| Static delta | -136 | -48 | -2 | -16 | -4 | -2 | 0 |
+
+The static assembly does not extract the runtime slice-count field and has only
+the radial-loop metadata branch; the general form loads/clamps that field and
+retains a second loop metadata branch. This does not establish register count,
+occupancy, cache behavior, GPU time, or a user-visible speedup.
+
 ## Promotion status
 
 GTUniform remains non-default until all required runtime permutations compile
@@ -113,16 +139,24 @@ fields so an incomplete CPU-only record cannot be mistaken for promotion data.
 
 ### Local Integration Check — 2026-07-13
 
-- Release renderer and all four CTest targets passed with MSVC 19.44.
-- ShaderMake compiled every affected PaperAngular and GTUniform AO, GI,
-  combined, debug, metadata, and reinjection permutation.
-- An unattended default-frame smoke test remained healthy for 35 seconds at
-  1920x1080 on an NVIDIA GeForce RTX 4090 Laptop GPU. The captured configuration
-  was deferred AO+GI, PaperAngular, 32 SPP, radius 3, thickness 0.5, one bounce,
-  exact depth, perspective projection, and Medium/Balanced NRA-RTAA.
+- The Release renderer and all five CTest targets passed with MSVC 19.44. The
+  set covers PBR, radial masks, estimator reference truth, analytic visibility
+  projection, and NRA-RTAA.
+- ShaderMake compiled every affected PaperAngular and GTUniform AO-only,
+  GI-only, combined, traversal-debug, metadata, reinjection, static/general
+  slice, and diagnostic statistics permutation.
+- Four unattended D3D12 smoke configurations each remained healthy for 25
+  seconds at the 1920x1080 startup resolution on an NVIDIA GeForce RTX 4090
+  Laptop GPU: the final default PaperAngular AO+GI one-bounce static path;
+  GTUniform AO-only with the optional depth hierarchy; GTUniform GI-only with
+  four bounces; and that four-bounce case with two developer slices plus the
+  delayed receiver-statistics permutation. Temporary factory-default edits
+  used to select those passive configurations were restored exactly before the
+  final Release build and test run.
 - The Windows input-automation helper's activation step reproducibly faults in
-  pinned GLFW's `_glfwPollEventsWin32`; passive frame capture works. Therefore
-  this check does not claim Paper/GT screenshots, per-stage timings, HDR-FLIP,
-  disocclusion, register, occupancy, or traffic evidence.
+  pinned GLFW's `_glfwPollEventsWin32`; passive execution remains healthy.
+  Therefore this check does not claim matched Paper/GT screenshots, per-stage
+  timings, HDR-FLIP, disocclusion, register count, occupancy, measured traffic,
+  runtime orthographic coverage, or multi-adapter evidence.
 
 The estimator remains non-default and unpromoted.
