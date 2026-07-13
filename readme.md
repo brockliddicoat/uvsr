@@ -2,10 +2,6 @@
 
 **Unified Visibility Stochastic Rendering**
 
-**Total line count:** 8,972 first-party source lines across `src/`, `tests/`,
-`tools/`, and `CMakeLists.txt` (excluding Donut, assets, generated files, and
-documentation).
-
 UVSR is a DirectX 12 renderer built on NVIDIA's pinned Donut framework and its
 NVRHI graphics abstraction layer. It launches the NVIDIA Bistro exterior scene
 with its authored materials by default; the converted Bistro Interior Wine scene
@@ -23,8 +19,8 @@ is also available from the scene picker.
   Medium Temporal plus Balanced. Analytical validation and rejection controls,
   32 debug views, memory estimates, and GPU timings remain available, and all
   scene color and history resources stay at display resolution.
-- Screen-space temporal accumulation starts enabled; its optional spatial
-  bilateral filter starts disabled to preserve fine image detail.
+- Screen-space visibility feeds current-frame AO/GI directly into composition;
+  it has no temporal accumulation or spatial filtering stage.
 - The renderer selector provides **Deferred**, **Forward**, and **Forward
   Tonemapperless** modes. The tonemapperless mode renders with the forward path
   and sends its scene-linear HDR result directly to the sRGB display target,
@@ -35,7 +31,7 @@ is also available from the scene picker.
   launches.
 - The HUD performance row reports resolution, frame time, FPS, current-clock
   memory bandwidth, and current-clock FP32 peak GFLOPS. The **All** row stays
-  compact with total, Trace, Filter, and Composite GPU timings.
+  compact with total, Trace, and Composite GPU timings.
 - UVSR's shared forward/deferred metallic-roughness PBR path is always enabled
   in the production UI. The legacy Donut comparison path remains implemented
   for possible future experiments, but its control is hidden.
@@ -170,8 +166,7 @@ extension points.
 
 The [screen-space visibility design](docs/screen-space-visibility.md) documents
 the shared 32-sector AO/GI traversal, resources, coordinate/radiance contracts,
-filtering, controls, limitations, and the upgrade path to persistent unified
-visibility.
+controls, limitations, and the upgrade path to persistent unified visibility.
 
 The [NRA-RTAA design](docs/nra-rtaa.md) documents pipeline placement, motion
 and jitter conventions, validation and reconstruction behavior, resource

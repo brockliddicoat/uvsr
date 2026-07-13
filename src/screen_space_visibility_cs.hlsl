@@ -248,7 +248,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     const bool traversalDebugActive = ENABLE_TRAVERSAL_DEBUG != 0;
 #if ENABLE_BOUNCE_REINJECTION
     const bool forceBounceActivity =
-        g_Visibility.debugMode >= 3u && g_Visibility.debugMode <= 5u;
+        g_Visibility.debugMode >= 2u && g_Visibility.debugMode <= 3u;
     LightingContributionGate bounceContributionGate = MakeLightingContributionGate(
         g_Visibility.knownInactiveLightingSources,
         forceBounceActivity ? LightingSource_IndirectDiffuse : 0u,
@@ -707,29 +707,29 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     float angleNormalization = max(float(validSampleCount) * VisibilityPi, VisibilityPi);
 
     float3 debugValue = 0.0f;
-    if (traversalDebugActive && g_Visibility.debugMode == 7u)
+    if (traversalDebugActive && g_Visibility.debugMode == 5u)
         debugValue = receiverNormalVS * 0.5f + 0.5f;
-    else if (g_Visibility.debugMode == 8u)
+    else if (g_Visibility.debugMode == 6u)
         debugValue = debugSourceNormal * 0.5f + 0.5f;
-    else if (g_Visibility.debugMode == 9u)
+    else if (g_Visibility.debugMode == 7u)
         debugValue = float(validSampleCount).xxx / sampleNormalization;
-    else if (g_Visibility.debugMode == 10u)
+    else if (g_Visibility.debugMode == 8u)
         debugValue = float3(
             float(newlyCoveredSectorCount) / sectorNormalization,
             float(alreadyCoveredSectorCount) / max(
                 float(newlyCoveredSectorCount + alreadyCoveredSectorCount), 1.0f),
             0.0f);
-    else if (g_Visibility.debugMode == 11u)
+    else if (g_Visibility.debugMode == 9u)
         debugValue = float(accumulatedMaskPopulation).xxx / sectorNormalization;
-    else if (g_Visibility.debugMode == 12u)
+    else if (g_Visibility.debugMode == 10u)
         debugValue = debugSliceOrientation * 0.5f + 0.5f;
-    else if (g_Visibility.debugMode == 13u)
+    else if (g_Visibility.debugMode == 11u)
         debugValue = debugProjectedNormal * 0.5f + 0.5f;
-    else if (g_Visibility.debugMode == 14u)
+    else if (g_Visibility.debugMode == 12u)
         debugValue = (frontAngleSum / angleNormalization).xxx;
-    else if (g_Visibility.debugMode == 15u)
+    else if (g_Visibility.debugMode == 13u)
         debugValue = (backAngleSum / angleNormalization).xxx;
-    else if (g_Visibility.debugMode == 16u)
+    else if (g_Visibility.debugMode == 14u)
         debugValue = (thicknessAngleSum / angleNormalization).xxx;
 
 #if ENABLE_AO

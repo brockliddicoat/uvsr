@@ -7,9 +7,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cmath>
-#include <cstring>
-#include <limits>
 
 using namespace donut;
 using namespace donut::engine;
@@ -25,16 +22,8 @@ namespace
     bool IsExactGiTransportDebug(
         uvsr::ScreenSpaceVisibilityDebugMode mode)
     {
-        return mode >= uvsr::ScreenSpaceVisibilityDebugMode::RawIndirectDiffuse &&
+        return mode >= uvsr::ScreenSpaceVisibilityDebugMode::IndirectDiffuse &&
             mode <= uvsr::ScreenSpaceVisibilityDebugMode::GiLightOnly;
-    }
-
-    uint32_t GetBounceTransportPolicy(
-        uvsr::ScreenSpaceVisibilityDebugMode mode)
-    {
-        if (mode == uvsr::ScreenSpaceVisibilityDebugMode::FinalComposite)
-            return 0u;
-        return IsExactGiTransportDebug(mode) ? 1u : 2u;
     }
 
     uint32_t GetIndirectBounceSampleCount(
@@ -54,37 +43,6 @@ namespace
         return std::max(primarySampleCount >> bounceIndex, minimumSampleCount);
     }
 
-    uint64_t HashBytes(uint64_t hash, const void* data, size_t size)
-    {
-        const auto* bytes = static_cast<const uint8_t*>(data);
-        for (size_t index = 0; index < size; ++index)
-        {
-            hash ^= bytes[index];
-            hash *= 1099511628211ull;
-        }
-        return hash;
-    }
-
-    template <typename T>
-    uint64_t HashValue(uint64_t hash, const T& value)
-    {
-        return HashBytes(hash, &value, sizeof(value));
-    }
-
-    float SquaredDistance(float3 a, float3 b)
-    {
-        const float3 difference = a - b;
-        return dot(difference, difference);
-    }
-
-    float SafeDirectionDot(float3 a, float3 b)
-    {
-        const float aLengthSquared = dot(a, a);
-        const float bLengthSquared = dot(b, b);
-        if (aLengthSquared <= 1e-12f || bLengthSquared <= 1e-12f)
-            return -1.f;
-        return dot(a, b) / std::sqrt(aLengthSquared * bLengthSquared);
-    }
 }
 
 namespace uvsr
@@ -110,30 +68,18 @@ namespace uvsr
         {
         case ScreenSpaceVisibilityQuality::Low:
             settings.sampling.sampleCount = 16;
-            settings.filtering.temporalEnabled = true;
-            settings.filtering.spatialEnabled = false;
-            settings.filtering.spatialRadius = 1;
             break;
 
         case ScreenSpaceVisibilityQuality::Medium:
             settings.sampling.sampleCount = 32;
-            settings.filtering.temporalEnabled = true;
-            settings.filtering.spatialEnabled = false;
-            settings.filtering.spatialRadius = 1;
             break;
 
         case ScreenSpaceVisibilityQuality::High:
             settings.sampling.sampleCount = 48;
-            settings.filtering.temporalEnabled = true;
-            settings.filtering.spatialEnabled = false;
-            settings.filtering.spatialRadius = 1;
             break;
 
         case ScreenSpaceVisibilityQuality::Ultra:
             settings.sampling.sampleCount = 64;
-            settings.filtering.temporalEnabled = true;
-            settings.filtering.spatialEnabled = false;
-            settings.filtering.spatialRadius = 2;
             break;
 
         case ScreenSpaceVisibilityQuality::Custom:
@@ -272,45 +218,6 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_UAV(0).setSize(5)
         });
 
-        for (uint32_t variant = 0; variant < m_Temporal.size(); ++variant)
-        {
-            if (variant == 0u)
-                continue;
-
-            std::vector<ShaderMacro> macros;
-            macros.emplace_back("ENABLE_AO", (variant & 1u) != 0u ? "1" : "0");
-            macros.emplace_back("ENABLE_GI", (variant & 2u) != 0u ? "1" : "0");
-            createPipeline(m_Temporal[variant], "uvsr/screen_space_visibility_temporal_cs.hlsl", {
-                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(1),
-                nvrhi::BindingLayoutItem::Texture_SRV(2),
-                nvrhi::BindingLayoutItem::Texture_SRV(3),
-                nvrhi::BindingLayoutItem::Texture_SRV(4),
-                nvrhi::BindingLayoutItem::Texture_SRV(5),
-                nvrhi::BindingLayoutItem::Texture_SRV(6),
-                nvrhi::BindingLayoutItem::Texture_SRV(7),
-                nvrhi::BindingLayoutItem::Texture_SRV(8),
-                nvrhi::BindingLayoutItem::Texture_UAV(0),
-                nvrhi::BindingLayoutItem::Texture_UAV(1),
-                nvrhi::BindingLayoutItem::Texture_UAV(2),
-                nvrhi::BindingLayoutItem::Texture_UAV(3),
-                nvrhi::BindingLayoutItem::Texture_UAV(4)
-            }, &macros);
-
-            createPipeline(m_Denoise[variant], "uvsr/screen_space_visibility_denoise_cs.hlsl", {
-                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(1),
-                nvrhi::BindingLayoutItem::Texture_SRV(2),
-                nvrhi::BindingLayoutItem::Texture_SRV(3),
-                nvrhi::BindingLayoutItem::Texture_SRV(4),
-                nvrhi::BindingLayoutItem::Texture_UAV(0),
-                nvrhi::BindingLayoutItem::Texture_UAV(1),
-                nvrhi::BindingLayoutItem::Texture_UAV(2)
-            }, &macros);
-        }
-
         createPipeline(m_Composite, "uvsr/screen_space_indirect_composite_cs.hlsl", {
             nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
             nvrhi::BindingLayoutItem::Texture_SRV(0),
@@ -323,23 +230,18 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(7),
             nvrhi::BindingLayoutItem::Texture_SRV(8),
             nvrhi::BindingLayoutItem::Texture_SRV(9),
-            nvrhi::BindingLayoutItem::Texture_SRV(10),
-            nvrhi::BindingLayoutItem::Texture_SRV(11),
-            nvrhi::BindingLayoutItem::Texture_SRV(12),
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         });
     }
 
     void ScreenSpaceVisibilityPass::EnsureResources(
         uint2 fullSize,
-        bool temporalEnabled,
         bool multipleBouncesEnabled,
         bool depthHierarchyEnabled)
     {
         const uint2 samplingSize = fullSize;
 
         if (all(m_FullSize == fullSize) && all(m_SamplingSize == samplingSize) &&
-            m_TemporalResourcesEnabled == temporalEnabled &&
             m_MultipleBounceResourcesEnabled == multipleBouncesEnabled &&
             m_DepthHierarchyResourcesEnabled == depthHierarchyEnabled &&
             m_RawAmbientVisibility)
@@ -350,7 +252,6 @@ namespace uvsr
         ReleaseResources();
         m_FullSize = fullSize;
         m_SamplingSize = samplingSize;
-        m_TemporalResourcesEnabled = temporalEnabled;
         m_MultipleBounceResourcesEnabled = multipleBouncesEnabled;
         m_DepthHierarchyResourcesEnabled = depthHierarchyEnabled;
 
@@ -403,40 +304,6 @@ namespace uvsr
         }
         m_RawDebug = createTexture(samplingSize, nvrhi::Format::RGBA8_UNORM,
             "ScreenSpaceVisibility/RawDebug");
-
-        for (uint32_t index = 0; temporalEnabled && index < 2; ++index)
-        {
-            const char* suffix = index == 0 ? "0" : "1";
-            std::string name = "ScreenSpaceVisibility/HistoryAmbientVisibility";
-            name += suffix;
-            m_HistoryAmbientVisibility[index] = createTexture(
-                samplingSize, nvrhi::Format::R16_FLOAT, name.c_str());
-            name = "ScreenSpaceVisibility/HistoryIndirectDiffuse";
-            name += suffix;
-            m_HistoryIndirectDiffuse[index] = createTexture(
-                samplingSize, nvrhi::Format::RGBA16_FLOAT, name.c_str());
-            name = "ScreenSpaceVisibility/HistoryDepth";
-            name += suffix;
-            m_HistoryDepth[index] = createTexture(
-                samplingSize, nvrhi::Format::R32_FLOAT, name.c_str());
-            name = "ScreenSpaceVisibility/HistoryNormal";
-            name += suffix;
-            m_HistoryNormal[index] = createTexture(
-                samplingSize, nvrhi::Format::RGBA8_UNORM, name.c_str());
-        }
-
-        if (temporalEnabled)
-        {
-            m_HistoryValidity = createTexture(samplingSize, nvrhi::Format::R8_UNORM,
-                "ScreenSpaceVisibility/HistoryValidity");
-        }
-        m_DenoisedAmbientVisibility = createTexture(samplingSize, nvrhi::Format::R16_FLOAT,
-            "ScreenSpaceVisibility/DenoisedAmbientVisibility");
-        m_DenoisedIndirectDiffuse = createTexture(samplingSize, nvrhi::Format::RGBA16_FLOAT,
-            "ScreenSpaceVisibility/DenoisedIndirectDiffuse");
-        m_DenoisedDebug = createTexture(samplingSize, nvrhi::Format::RGBA8_UNORM,
-            "ScreenSpaceVisibility/DenoisedDebug");
-        ResetHistory();
     }
 
     void ScreenSpaceVisibilityPass::ReleaseResources()
@@ -448,10 +315,6 @@ namespace uvsr
         for (nvrhi::BindingSetHandle& bindingSet : m_IndirectBounceBindingSets)
             bindingSet = nullptr;
         m_DepthHierarchyBindingSet = nullptr;
-        for (nvrhi::BindingSetHandle& bindingSet : m_TemporalBindingSets)
-            bindingSet = nullptr;
-        for (nvrhi::BindingSetHandle& bindingSet : m_SpatialBindingSets)
-            bindingSet = nullptr;
         for (nvrhi::BindingSetHandle& bindingSet : m_CompositeBindingSets)
             bindingSet = nullptr;
 
@@ -461,35 +324,11 @@ namespace uvsr
             rawIndirectDiffuse = nullptr;
         m_CumulativeIndirectDiffuse = nullptr;
         m_RawDebug = nullptr;
-        for (uint32_t index = 0; index < 2; ++index)
-        {
-            m_HistoryAmbientVisibility[index] = nullptr;
-            m_HistoryIndirectDiffuse[index] = nullptr;
-            m_HistoryDepth[index] = nullptr;
-            m_HistoryNormal[index] = nullptr;
-        }
-        m_HistoryValidity = nullptr;
-        m_DenoisedAmbientVisibility = nullptr;
-        m_DenoisedIndirectDiffuse = nullptr;
-        m_DenoisedDebug = nullptr;
-        m_OutputAmbientVisibility = nullptr;
-        m_OutputIndirectDiffuse = nullptr;
         m_FullSize = uint2::zero();
         m_SamplingSize = uint2::zero();
-        m_TemporalResourcesEnabled = false;
         m_MultipleBounceResourcesEnabled = false;
         m_DepthHierarchyResourcesEnabled = false;
         m_Timings = {};
-        ResetHistory();
-    }
-
-    void ScreenSpaceVisibilityPass::ResetHistory()
-    {
-        m_HistoryReadIndex = 0;
-        m_HistoryValid = false;
-        m_HistorySignature = 0;
-        m_HasPreviousCamera = false;
-        m_PreviousJitter = float2::zero();
     }
 
     void ScreenSpaceVisibilityPass::Deactivate()
@@ -506,119 +345,8 @@ namespace uvsr
         for (nvrhi::BindingSetHandle& bindingSet : m_IndirectBounceBindingSets)
             bindingSet = nullptr;
         m_DepthHierarchyBindingSet = nullptr;
-        for (nvrhi::BindingSetHandle& bindingSet : m_TemporalBindingSets)
-            bindingSet = nullptr;
-        for (nvrhi::BindingSetHandle& bindingSet : m_SpatialBindingSets)
-            bindingSet = nullptr;
         for (nvrhi::BindingSetHandle& bindingSet : m_CompositeBindingSets)
             bindingSet = nullptr;
-        ResetHistory();
-    }
-
-    uint64_t ScreenSpaceVisibilityPass::ComputeHistorySignature(
-        const ScreenSpaceVisibilitySettings& settings,
-        float exposureScale)
-    {
-        uint64_t hash = 1469598103934665603ull;
-        hash = HashValue(hash, settings.sampling.sampleCount);
-        hash = HashValue(hash, settings.sampling.radius);
-        hash = HashValue(hash, settings.sampling.thickness);
-        hash = HashValue(hash, settings.sampling.distanceScaledThickness);
-        hash = HashValue(hash, settings.sampling.thicknessDistanceScale);
-        hash = HashValue(hash, settings.sampling.useDepthHierarchy);
-        hash = HashValue(hash, settings.sampling.stepDistributionExponent);
-        hash = HashValue(hash, settings.sampling.radialJitter);
-        hash = HashValue(hash, settings.ambientOcclusion.enabled);
-        hash = HashValue(hash, settings.indirectDiffuse.enabled);
-        hash = HashValue(hash, settings.indirectDiffuse.bounceCount);
-        const uint32_t bounceTransportPolicy =
-            GetBounceTransportPolicy(settings.debug.mode);
-        if (settings.indirectDiffuse.enabled &&
-            settings.indirectDiffuse.bounceCount > 1u)
-        {
-            // Final, exact-GI diagnostic, and unrelated one-bounce diagnostic
-            // modes produce different histories even when the cutoff is zero.
-            hash = HashValue(hash, bounceTransportPolicy);
-        }
-        const float effectiveContributionCutoff =
-            bounceTransportPolicy == 0u
-                ? std::max(
-                    settings.indirectDiffuse.minimumBounceContribution, 0.f)
-                : 0.f;
-        const bool contributionGateAffectsTransport =
-            settings.indirectDiffuse.enabled &&
-            settings.indirectDiffuse.bounceCount > 1u &&
-            effectiveContributionCutoff > 0.f;
-        if (settings.indirectDiffuse.enabled &&
-            settings.indirectDiffuse.bounceCount > 1u)
-        {
-            hash = HashValue(hash, effectiveContributionCutoff);
-        }
-        if (contributionGateAffectsTransport)
-        {
-            hash = HashValue(hash, settings.indirectDiffuse.intensity);
-            hash = HashValue(hash, exposureScale);
-        }
-        if (settings.indirectDiffuse.enabled)
-        {
-            hash = HashValue(hash, settings.indirectDiffuse.includeEmissive);
-            if (settings.indirectDiffuse.includeEmissive)
-                hash = HashValue(hash, settings.indirectDiffuse.emissiveGain);
-        }
-        hash = HashValue(hash, settings.filtering.temporalEnabled);
-        hash = HashValue(hash, settings.filtering.aoTemporalResponse);
-        hash = HashValue(hash, settings.filtering.giTemporalResponse);
-        hash = HashValue(hash, settings.filtering.depthRejection);
-        hash = HashValue(hash, settings.filtering.normalRejection);
-        hash = HashValue(hash, settings.debug.freezeSamplingPhase);
-        hash = HashValue(hash, settings.debug.sectorHitCriterion);
-        return hash;
-    }
-
-    bool ScreenSpaceVisibilityPass::UpdateHistoryValidity(
-        const ScreenSpaceVisibilitySettings& settings,
-        const IView& view,
-        float exposureScale)
-    {
-        const uint64_t signature = ComputeHistorySignature(settings, exposureScale);
-        bool valid = m_HistoryValid && signature == m_HistorySignature;
-
-        const float3 cameraOrigin = view.GetViewOrigin();
-        const float3 cameraDirection = view.GetViewDirection();
-        const float4x4 projection = view.GetProjectionMatrix(false);
-
-        if (!m_HasPreviousCamera)
-        {
-            valid = false;
-        }
-        else
-        {
-            const float cutDistance = std::max(settings.sampling.radius * 4.f, 1.f);
-            if (SquaredDistance(cameraOrigin, m_PreviousCameraOrigin) > cutDistance * cutDistance)
-                valid = false;
-            if (SafeDirectionDot(cameraDirection, m_PreviousCameraDirection) < 0.75f)
-                valid = false;
-
-            float maximumProjectionDifference = 0.f;
-            for (uint32_t row = 0; row < 4; ++row)
-            {
-                for (uint32_t column = 0; column < 4; ++column)
-                {
-                    maximumProjectionDifference = std::max(maximumProjectionDifference,
-                        std::abs(projection[row][column] - m_PreviousProjection[row][column]));
-                }
-            }
-            if (maximumProjectionDifference > 1e-4f)
-                valid = false;
-        }
-
-        m_HistorySignature = signature;
-        m_PreviousCameraOrigin = cameraOrigin;
-        m_PreviousCameraDirection = cameraDirection;
-        m_PreviousProjection = projection;
-        m_PreviousJitter = view.GetPixelOffset();
-        m_HasPreviousCamera = true;
-        return valid;
     }
 
     void ScreenSpaceVisibilityPass::AdvanceTimers()
@@ -642,8 +370,6 @@ namespace uvsr
             {
             case Stage::DepthHierarchy: m_Timings.depthHierarchyMs = milliseconds; break;
             case Stage::Sampling: m_Timings.samplingMs = milliseconds; break;
-            case Stage::Temporal: m_Timings.temporalMs = milliseconds; break;
-            case Stage::Spatial: m_Timings.spatialMs = milliseconds; break;
             case Stage::Composition: m_Timings.compositionMs = milliseconds; break;
             default: break;
             }
@@ -690,7 +416,7 @@ namespace uvsr
         }
 
         assert(commandList);
-        assert(inputs.depth && inputs.normals && inputs.motionVectors);
+        assert(inputs.depth && inputs.normals);
         assert(inputs.sourceRadiance && inputs.gbufferDiffuse && inputs.gbufferSpecular &&
             inputs.gbufferEmissive);
         assert(inputs.materialAmbientOcclusion && inputs.baseLighting && inputs.output);
@@ -737,20 +463,11 @@ namespace uvsr
             !view->IsOrthographicProjection();
         EnsureResources(
             fullSize,
-            settings.filtering.temporalEnabled,
             requestedBounceCount > 1u,
             useDepthHierarchyThisFrame);
         AdvanceTimers();
 
         exposureScale = std::max(exposureScale, 0.f);
-        // Capture the history producer's jitter before validity bookkeeping
-        // advances the stored camera state to this frame.
-        const float2 historyJitter = m_HasPreviousCamera
-            ? m_PreviousJitter
-            : view->GetPixelOffset();
-        const bool historyValid = UpdateHistoryValidity(
-            settings, *view, exposureScale);
-        const uint32_t historyWriteIndex = 1u - m_HistoryReadIndex;
         const uint32_t consumerVariant =
             (settings.ambientOcclusion.enabled ? 1u : 0u) |
             (settings.indirectDiffuse.enabled ? 2u : 0u);
@@ -762,9 +479,6 @@ namespace uvsr
 
         ScreenSpaceVisibilityConstants constants{};
         view->FillPlanarViewConstants(constants.view);
-        constants.previousJitter = historyValid
-            ? historyJitter
-            : view->GetPixelOffset();
         constants.fullResolution = float2(fullSize);
         constants.samplingResolution = float2(m_SamplingSize);
         constants.radiusWorld = std::max(settings.sampling.radius, 0.f);
@@ -775,10 +489,6 @@ namespace uvsr
         constants.ambientStrength = std::max(settings.ambientOcclusion.strength, 0.f);
         constants.ambientPower = std::max(settings.ambientOcclusion.power, 0.01f);
         constants.indirectDiffuseIntensity = std::max(settings.indirectDiffuse.intensity, 0.f);
-        constants.aoTemporalResponse = std::clamp(settings.filtering.aoTemporalResponse, 0.f, 0.99f);
-        constants.giTemporalResponse = std::clamp(settings.filtering.giTemporalResponse, 0.f, 0.99f);
-        constants.depthRejection = std::max(settings.filtering.depthRejection, 1e-6f);
-        constants.normalRejection = std::clamp(settings.filtering.normalRejection, -1.f, 1.f);
         constants.emissiveGain = std::max(settings.indirectDiffuse.emissiveGain, 0.f);
         constants.minimumBounceContribution =
             diagnosticNeedsExactBounceChain
@@ -798,10 +508,6 @@ namespace uvsr
         constants.enableIndirectDiffuse = settings.indirectDiffuse.enabled ? 1u : 0u;
         constants.includeEmissive = settings.indirectDiffuse.includeEmissive ? 1u : 0u;
         constants.distanceScaledThickness = settings.sampling.distanceScaledThickness ? 1u : 0u;
-        constants.temporalEnabled = settings.filtering.temporalEnabled ? 1u : 0u;
-        constants.spatialEnabled = settings.filtering.spatialEnabled ? 1u : 0u;
-        constants.spatialRadius = std::clamp(settings.filtering.spatialRadius, 0u, 4u);
-        constants.historyValid = historyValid ? 1u : 0u;
         constants.freezeSamplingPhase = settings.debug.freezeSamplingPhase ? 1u : 0u;
         constants.sectorHitCriterion = static_cast<uint32_t>(settings.debug.sectorHitCriterion);
         constants.debugMode = static_cast<uint32_t>(settings.debug.mode);
@@ -819,11 +525,7 @@ namespace uvsr
             ? (settings.ambientOcclusion.enabled ? "Screen-Space Visibility (AO + GI)" : "Screen-Space Visibility (GI)")
             : "Screen-Space Visibility (AO)");
 
-        nvrhi::ITexture* currentAmbientVisibility = m_RawAmbientVisibility;
         nvrhi::ITexture* rawIndirectDiffuse = m_RawIndirectDiffuse[0];
-        nvrhi::ITexture* currentIndirectDiffuse = rawIndirectDiffuse;
-        nvrhi::ITexture* currentDebug = m_RawDebug;
-        bool temporalExecuted = false;
 
         if (useDepthHierarchyThisFrame)
         {
@@ -961,117 +663,10 @@ namespace uvsr
             rawIndirectDiffuse = m_CumulativeIndirectDiffuse;
         EndStage(commandList, Stage::Sampling);
         commandList->endMarker();
-        currentIndirectDiffuse = rawIndirectDiffuse;
-
-        if (settings.filtering.temporalEnabled)
-        {
-            Pipeline& pipeline = m_Temporal[consumerVariant];
-            const uint32_t temporalBindingIndex = consumerVariant * 4u +
-                m_HistoryReadIndex * 2u +
-                (activeBounceCount > 1u ? 1u : 0u);
-            nvrhi::BindingSetHandle& bindingSet =
-                m_TemporalBindingSets[temporalBindingIndex];
-            if (!bindingSet)
-            {
-                nvrhi::BindingSetDesc bindings;
-                bindings.bindings = {
-                    nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
-                    nvrhi::BindingSetItem::Texture_SRV(0, m_RawAmbientVisibility),
-                    nvrhi::BindingSetItem::Texture_SRV(1, rawIndirectDiffuse),
-                    nvrhi::BindingSetItem::Texture_SRV(2, m_HistoryAmbientVisibility[m_HistoryReadIndex]),
-                    nvrhi::BindingSetItem::Texture_SRV(3, m_HistoryIndirectDiffuse[m_HistoryReadIndex]),
-                    nvrhi::BindingSetItem::Texture_SRV(4, inputs.depth),
-                    nvrhi::BindingSetItem::Texture_SRV(5, inputs.normals),
-                    nvrhi::BindingSetItem::Texture_SRV(6, m_HistoryDepth[m_HistoryReadIndex]),
-                    nvrhi::BindingSetItem::Texture_SRV(7, m_HistoryNormal[m_HistoryReadIndex]),
-                    nvrhi::BindingSetItem::Texture_SRV(8, inputs.motionVectors),
-                    nvrhi::BindingSetItem::Texture_UAV(0, m_HistoryAmbientVisibility[historyWriteIndex]),
-                    nvrhi::BindingSetItem::Texture_UAV(1, m_HistoryIndirectDiffuse[historyWriteIndex]),
-                    nvrhi::BindingSetItem::Texture_UAV(2, m_HistoryDepth[historyWriteIndex]),
-                    nvrhi::BindingSetItem::Texture_UAV(3, m_HistoryNormal[historyWriteIndex]),
-                    nvrhi::BindingSetItem::Texture_UAV(4, m_HistoryValidity)
-                };
-                bindingSet = m_Device->createBindingSet(
-                    bindings, pipeline.bindingLayout);
-            }
-            nvrhi::ComputeState state;
-            state.pipeline = pipeline.pipeline;
-            state.bindings = { bindingSet };
-            commandList->beginMarker("Visibility Temporal Output Accumulation");
-            BeginStage(commandList, Stage::Temporal);
-            commandList->setComputeState(state);
-            commandList->dispatch(samplingDispatchX, samplingDispatchY, 1);
-            EndStage(commandList, Stage::Temporal);
-            commandList->endMarker();
-            currentAmbientVisibility = m_HistoryAmbientVisibility[historyWriteIndex];
-            currentIndirectDiffuse = m_HistoryIndirectDiffuse[historyWriteIndex];
-            temporalExecuted = true;
-        }
-        else
-        {
-            m_Timings.temporalMs = 0.f;
-            m_HistoryValid = false;
-        }
-
-        // Radius zero is exactly the center-value copy performed by the
-        // spatial shader, so retain the current resources and skip a complete
-        // full-resolution dispatch and descriptor allocation.
-        if (settings.filtering.spatialEnabled && constants.spatialRadius > 0u)
-        {
-            Pipeline& pipeline = m_Denoise[consumerVariant];
-            const uint32_t spatialSourceVariant = temporalExecuted
-                ? 2u + historyWriteIndex
-                : (activeBounceCount > 1u ? 1u : 0u);
-            const uint32_t spatialBindingIndex =
-                consumerVariant * 4u + spatialSourceVariant;
-            nvrhi::BindingSetHandle& bindingSet =
-                m_SpatialBindingSets[spatialBindingIndex];
-            if (!bindingSet)
-            {
-                nvrhi::BindingSetDesc bindings;
-                bindings.bindings = {
-                    nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
-                    nvrhi::BindingSetItem::Texture_SRV(0, currentAmbientVisibility),
-                    nvrhi::BindingSetItem::Texture_SRV(1, currentIndirectDiffuse),
-                    nvrhi::BindingSetItem::Texture_SRV(2, inputs.depth),
-                    nvrhi::BindingSetItem::Texture_SRV(3, inputs.normals),
-                    nvrhi::BindingSetItem::Texture_SRV(4, m_RawDebug),
-                    nvrhi::BindingSetItem::Texture_UAV(0, m_DenoisedAmbientVisibility),
-                    nvrhi::BindingSetItem::Texture_UAV(1, m_DenoisedIndirectDiffuse),
-                    nvrhi::BindingSetItem::Texture_UAV(2, m_DenoisedDebug)
-                };
-                bindingSet = m_Device->createBindingSet(
-                    bindings, pipeline.bindingLayout);
-            }
-            nvrhi::ComputeState state;
-            state.pipeline = pipeline.pipeline;
-            state.bindings = { bindingSet };
-            commandList->beginMarker("Visibility Spatial Filter");
-            BeginStage(commandList, Stage::Spatial);
-            commandList->setComputeState(state);
-            commandList->dispatch(samplingDispatchX, samplingDispatchY, 1);
-            EndStage(commandList, Stage::Spatial);
-            commandList->endMarker();
-            currentAmbientVisibility = m_DenoisedAmbientVisibility;
-            currentIndirectDiffuse = m_DenoisedIndirectDiffuse;
-            currentDebug = m_DenoisedDebug;
-        }
-        else
-        {
-            m_Timings.spatialMs = 0.f;
-        }
-
-        m_OutputAmbientVisibility = currentAmbientVisibility;
-        m_OutputIndirectDiffuse = currentIndirectDiffuse;
 
         {
-            uint32_t filteredSourceVariant = 0u;
-            if (settings.filtering.spatialEnabled && constants.spatialRadius > 0u)
-                filteredSourceVariant = 3u;
-            else if (temporalExecuted)
-                filteredSourceVariant = 1u + historyWriteIndex;
-            const uint32_t compositeBindingIndex = filteredSourceVariant * 2u +
-                (activeBounceCount > 1u ? 1u : 0u);
+            const uint32_t compositeBindingIndex =
+                activeBounceCount > 1u ? 1u : 0u;
             nvrhi::BindingSetHandle& bindingSet =
                 m_CompositeBindingSets[compositeBindingIndex];
             if (!bindingSet)
@@ -1080,19 +675,15 @@ namespace uvsr
                 bindings.bindings = {
                     nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
                     nvrhi::BindingSetItem::Texture_SRV(0, inputs.baseLighting),
-                    nvrhi::BindingSetItem::Texture_SRV(1, currentAmbientVisibility),
-                    nvrhi::BindingSetItem::Texture_SRV(2, currentIndirectDiffuse),
+                    nvrhi::BindingSetItem::Texture_SRV(1, m_RawAmbientVisibility),
+                    nvrhi::BindingSetItem::Texture_SRV(2, rawIndirectDiffuse),
                     nvrhi::BindingSetItem::Texture_SRV(3, inputs.gbufferDiffuse),
                     nvrhi::BindingSetItem::Texture_SRV(4, inputs.gbufferEmissive),
                     nvrhi::BindingSetItem::Texture_SRV(5, inputs.materialAmbientOcclusion),
                     nvrhi::BindingSetItem::Texture_SRV(6, inputs.normals),
-                    nvrhi::BindingSetItem::Texture_SRV(7, m_RawAmbientVisibility),
-                    nvrhi::BindingSetItem::Texture_SRV(8, rawIndirectDiffuse),
-                    nvrhi::BindingSetItem::Texture_SRV(9, currentDebug),
-                    nvrhi::BindingSetItem::Texture_SRV(10, inputs.sourceRadiance),
-                    nvrhi::BindingSetItem::Texture_SRV(11,
-                        m_HistoryValidity ? m_HistoryValidity.Get() : m_RawAmbientVisibility.Get()),
-                    nvrhi::BindingSetItem::Texture_SRV(12, inputs.gbufferSpecular),
+                    nvrhi::BindingSetItem::Texture_SRV(7, m_RawDebug),
+                    nvrhi::BindingSetItem::Texture_SRV(8, inputs.sourceRadiance),
+                    nvrhi::BindingSetItem::Texture_SRV(9, inputs.gbufferSpecular),
                     nvrhi::BindingSetItem::Texture_UAV(0, inputs.output)
                 };
                 bindingSet = m_Device->createBindingSet(
@@ -1110,12 +701,6 @@ namespace uvsr
         }
 
         commandList->endMarker();
-
-        if (temporalExecuted)
-        {
-            m_HistoryReadIndex = historyWriteIndex;
-            m_HistoryValid = true;
-        }
         ++m_TimerFrame;
     }
 }
