@@ -81,25 +81,25 @@ that has not merged into `main`, plus every project or feature an agent is
 currently working on. An entry is not shipped on `main`, and experimental
 entries are not promises that the work will merge.
 
-- **Visibility-pipeline simplification — [draft PR #3](https://github.com/brockliddicoat/uvsr/pull/3)**
+- **Visibility-Pipeline Simplification — [Draft PR #3](https://github.com/brockliddicoat/uvsr/pull/3)**
   (`agent/visibility-cleanup-coming-soon`). Remove only the visibility bitmask's
   temporal AO/GI accumulator and bilateral spatial filter, then feed current-
   frame visibility directly into composition. NRA-RTAA remains the independent
   downstream anti-aliasing and temporal-reconstruction stage.
-- **Forward renderer simplification — local implementation complete; awaiting
-  integration.** Remove the broken Forward Tonemapperless mode and its display-
+- **Forward Renderer Simplification — Local Implementation Complete; Awaiting
+  Integration.** Remove the broken Forward Tonemapperless mode and its display-
   pipeline bypass, leaving supported Forward and Deferred rendering on the
   normal AgX path. Its current checkout is stacked on the visibility cleanup and
   overlaps that branch in `src/uvsr.cpp` and `readme.md`, so integration must
   preserve both changes.
-- **Texture filtering, specular AA, and NRD denoising — active development**
+- **Texture Filtering, Specular AA, and NRD Denoising — Active Development**
   (`feat/filtering-specular-aa-nrd`). Improve Intel Arc-focused anisotropic
   sampling and mip correctness, add material specular anti-aliasing, and
   integrate NRD diffuse-GI denoising with NRA-RTAA. This overlaps PBR materials,
   visibility GI outputs, motion/history contracts, and renderer settings. The
   branch is based on the unmerged visibility-pipeline simplification and must be
   integrated after it or rebased deliberately.
-- **RTAA-compatible GPU HZB occlusion culling — experimental validation**
+- **RTAA-Compatible GPU HZB Occlusion Culling — Experimental Validation**
   (`experiment/hzb-main-post-rtaa`). Evaluate main/post HZB culling, repaired
   indirect G-buffer draws, conservative history fallbacks, and GPU telemetry
   before deciding whether this experimental path is safe to merge. The branch
