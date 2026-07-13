@@ -82,7 +82,8 @@ Label an experimental run in the window and task title with:
 ```
 
 The title reports the active graphics API at runtime, for example
-`UVSR Renderer, D3D12 (testing program title on task title)`.
+`UVSR Renderer D3D12 (testing program title on task title, 4:32 AM)`. The time
+is captured when the experiment process launches and displayed in local time.
 
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.

@@ -24,6 +24,8 @@
 #include <vector>
 #include <memory>
 #include <chrono>
+#include <ctime>
+#include <iomanip>
 #include <algorithm>
 #include <fstream>
 #include <sstream>
@@ -3339,6 +3341,24 @@ void ProcessCommandLine(
     }
 }
 
+std::string FormatExperimentLaunchTime(
+    const std::chrono::system_clock::time_point& launchTime)
+{
+    const std::time_t timestamp = std::chrono::system_clock::to_time_t(launchTime);
+    std::tm localTime{};
+#ifdef _WIN32
+    localtime_s(&localTime, &timestamp);
+#else
+    localtime_r(&timestamp, &localTime);
+#endif
+
+    const int hour = localTime.tm_hour % 12 == 0 ? 12 : localTime.tm_hour % 12;
+    std::ostringstream formattedTime;
+    formattedTime << hour << ':' << std::setfill('0') << std::setw(2)
+        << localTime.tm_min << (localTime.tm_hour < 12 ? " AM" : " PM");
+    return formattedTime.str();
+}
+
 bool SelectGraphicsAdapter(
     DeviceManager* deviceManager,
     DeviceCreationParameters& deviceParams,
@@ -3437,10 +3457,12 @@ bool SelectGraphicsAdapter(
 #ifdef _WIN32
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+    const auto launchTime = std::chrono::system_clock::now();
     nvrhi::GraphicsAPI api = app::GetGraphicsAPIFromCommandLine(__argc, __argv);
 #else //  _WIN32
 int main(int __argc, const char* const* __argv)
 {
+    const auto launchTime = std::chrono::system_clock::now();
     nvrhi::GraphicsAPI api = nvrhi::GraphicsAPI::VULKAN;
 #endif //  _WIN32
 
@@ -3472,9 +3494,10 @@ int main(int __argc, const char* const* __argv)
 
     const char* apiString = nvrhi::utils::GraphicsAPIToString(deviceManager->GetGraphicsAPI());
 
-    std::string windowTitle = "UVSR Renderer, " + std::string(apiString);
+    std::string windowTitle = "UVSR Renderer " + std::string(apiString);
     if (!experimentName.empty())
-        windowTitle += " (" + experimentName + ")";
+        windowTitle += " (" + experimentName + ", "
+            + FormatExperimentLaunchTime(launchTime) + ")";
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, windowTitle.c_str()))
 	{
