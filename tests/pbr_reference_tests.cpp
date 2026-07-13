@@ -65,6 +65,16 @@ namespace
         return incidentRadiance * bsdf * std::max(cosine, 0.f) *
             std::clamp(visibility, 0.f, 1.f);
     }
+
+    float IndirectComposite(
+        float directAndEmissive,
+        float fallbackIndirect,
+        float ambientVisibility,
+        float screenSpaceGi)
+    {
+        return directAndEmissive + fallbackIndirect *
+            std::clamp(ambientVisibility, 0.f, 1.f) + screenSpaceGi;
+    }
 }
 
 int main()
@@ -135,10 +145,23 @@ int main()
     Require(DirectLight(5.f, bsdf, 0.75f, 0.f) == 0.f, "zero visibility blocks direct light");
     Require(Near(DirectLight(5.f, bsdf, 0.75f, 0.5f), visible * 0.5f),
         "half visibility halves direct light");
-    const float directWithAmbientOcclusionZero = visible;
-    const float directWithAmbientOcclusionOne = visible;
-    Require(directWithAmbientOcclusionZero == directWithAmbientOcclusionOne,
-        "ambient occlusion does not alter direct light");
+    const float directAndEmissive = visible + 2.f;
+    const float fallbackIndirect = 0.75f;
+    const float screenSpaceGi = 0.5f;
+    const float compositeOccluded = IndirectComposite(
+        directAndEmissive, fallbackIndirect, 0.f, screenSpaceGi);
+    const float compositeVisible = IndirectComposite(
+        directAndEmissive, fallbackIndirect, 1.f, screenSpaceGi);
+    Require(Near(compositeVisible - compositeOccluded, fallbackIndirect),
+        "ambient visibility changes only fallback indirect");
+    Require(Near(compositeOccluded - directAndEmissive, screenSpaceGi),
+        "ambient visibility does not multiply screen-space GI");
+    Require(Near(compositeVisible - fallbackIndirect - screenSpaceGi, directAndEmissive),
+        "ambient visibility does not alter direct light or emission");
+
+    const float backFacingSourceCosine = std::max(-0.25f, 0.f);
+    Require(backFacingSourceCosine == 0.f,
+        "back-facing source contributes no diffuse GI radiance");
 
     // Geometric-normal validity, no-light, and emission-only behavior.
     const float geometricNormalDotLight = -0.2f;

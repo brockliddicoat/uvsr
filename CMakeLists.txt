@@ -65,7 +65,11 @@ donut_compile_shaders_all_platforms(
     OUTPUT_BASE "${UVSR_SHADER_STAGING_DIR}"
 )
 
-add_executable(uvsr WIN32 src/uvsr.cpp)
+add_executable(uvsr WIN32
+    src/uvsr.cpp
+    src/pbr_deferred_lighting_pass.cpp
+    src/screen_space_visibility.cpp
+)
 target_link_libraries(uvsr PRIVATE donut_render donut_app donut_engine)
 add_dependencies(uvsr uvsr_shaders)
 
@@ -74,6 +78,10 @@ add_executable(uvsr_pbr_tests tests/pbr_reference_tests.cpp)
 target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
 add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
+
+add_executable(uvsr_radial_visibility_tests tests/radial_visibility_mask_tests.cpp)
+target_include_directories(uvsr_radial_visibility_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(NAME uvsr_radial_visibility_reference COMMAND uvsr_radial_visibility_tests)
 
 # Donut builds its complete shader catalog as an internal dependency. Stage it
 # outside the runtime tree, then package only the shaders instantiated by UVSR.
@@ -95,9 +103,6 @@ set(UVSR_PASS_SHADERS
     material_id_ps
     pixel_readback_cs
     sky_ps
-    ssao_blur_cs
-    ssao_compute_cs
-    ssao_deinterleave_cs
 )
 
 set(UVSR_RUNTIME_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework/dxil")
@@ -133,6 +138,11 @@ set(UVSR_APP_SHADERS
     pbr_deferred_lighting_cs
     pbr_forward_ps
     pbr_gbuffer_ps
+    screen_space_depth_hierarchy_cs
+    screen_space_indirect_composite_cs
+    screen_space_visibility_cs
+    screen_space_visibility_denoise_cs
+    screen_space_visibility_temporal_cs
 )
 
 foreach(shader IN LISTS UVSR_APP_SHADERS)
@@ -152,6 +162,12 @@ add_custom_command(TARGET uvsr POST_BUILD
         "${CMAKE_SOURCE_DIR}/assets/scenes/nvidia_bistro/LICENSE.txt"
         "${CMAKE_SOURCE_DIR}/assets/scenes/nvidia_bistro/README.txt"
         "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/nvidia_bistro"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/horizon_gi_benchmark"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/assets/scenes/horizon_gi_benchmark/HorizonGIBenchmark.glb"
+        "${CMAKE_SOURCE_DIR}/assets/scenes/horizon_gi_benchmark/README.md"
+        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/horizon_gi_benchmark"
     COMMAND ${CMAKE_COMMAND} -E remove_directory
         "${CMAKE_BINARY_DIR}/media/luts/kodak"
     COMMAND ${CMAKE_COMMAND} -E make_directory

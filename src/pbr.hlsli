@@ -18,7 +18,7 @@ static const uint PbrFeature_Refraction = 1u << 3;
 static const uint PbrFeature_Scattering = 1u << 4;
 static const uint PbrFeature_ThinFilmIridescence = 1u << 5;
 static const uint PbrFeature_Absorption = 1u << 6;
-static const uint PbrFeature_Dispersion = 1u << 7;
+static const uint PbrFeature_DoubleSided = 1u << 7;
 
 struct PbrMaterialParameters
 {

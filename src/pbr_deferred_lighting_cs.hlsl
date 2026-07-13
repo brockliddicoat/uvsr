@@ -3,15 +3,17 @@
 #include <donut/shaders/gbuffer.hlsli>
 #include <donut/shaders/utils.hlsli>
 #include <donut/shaders/shadows.hlsli>
-#include <donut/shaders/deferred_lighting_cb.h>
 #include <donut/shaders/binding_helpers.hlsli>
+#include "pbr_deferred_lighting_cb.h"
 #include "pbr_gbuffer.hlsli"
 #include "pbr_lighting.hlsli"
 
 cbuffer c_Deferred : register(b0)
 {
-    DeferredLightingConstants g_Deferred;
+    PbrDeferredLightingConstants g_PbrDeferred;
 };
+
+#define g_Deferred g_PbrDeferred.deferred
 
 Texture2DArray t_ShadowMapArray : register(t0);
 TextureCubeArray t_DiffuseLightProbe : register(t1);
@@ -31,9 +33,9 @@ Texture2D t_GBuffer3 : register(t12);
 Texture2D t_MaterialAmbientOcclusion : register(t14);
 Texture2D t_IndirectSpecular : register(t15);
 Texture2D t_ShadowBuffer : register(t16);
-Texture2D t_AmbientOcclusion : register(t17);
 
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Output : register(u0);
+VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_SourceRadiance : register(u1);
 
 float GetRandom(float2 position)
 {
@@ -105,7 +107,6 @@ float3 SelectPbrDebugView(
     float3 diffuse,
     float3 specular,
     float directVisibility,
-    float ambientOcclusion,
     float3 finalLinearHdr)
 {
     if (debugView == 1u) return gbuffer.material.baseColor;
@@ -115,7 +116,6 @@ float3 SelectPbrDebugView(
     if (debugView == 5u) return diffuse;
     if (debugView == 6u) return specular;
     if (debugView == 7u) return directVisibility.xxx;
-    if (debugView == 8u) return ambientOcclusion.xxx;
     return finalLinearHdr;
 }
 
@@ -167,10 +167,6 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         visibilitySum += direct.visibility;
     }
 
-    float ambientOcclusion = g_Deferred.enableAmbientOcclusion != 0
-        ? saturate(t_AmbientOcclusion[pixelPosition].x)
-        : 1.0f;
-
     // This sky-color term is an explicit approximation of missing indirect
     // diffuse irradiance. Ambient occlusion affects only this approximation.
     float hemisphere = gbuffer.shadingNormal.y * 0.5f + 0.5f;
@@ -180,13 +176,26 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         hemisphere);
     float3 diffuseReflectance = gbuffer.material.baseColor * (1.0f - gbuffer.material.metalness);
     float3 indirectDiffuse = approximateIndirectIrradiance * diffuseReflectance *
-        ambientOcclusion * gbuffer.ambientOcclusion;
+        gbuffer.ambientOcclusion;
 
     float3 indirectSpecular = 0.0f;
     if (g_Deferred.indirectSpecularScale > 0.0f)
         indirectSpecular = t_IndirectSpecular[pixelPosition].rgb * g_Deferred.indirectSpecularScale;
 
-    float3 diffuse = directDiffuse + indirectDiffuse;
+    // Build the complete configured GI source once in the coherent deferred
+    // pass. The stochastic visibility traversal can then fetch one HDR texel
+    // instead of separate direct and emissive targets at every claimed sector.
+    float3 sourceEmissive = g_PbrDeferred.includeEmissiveSource != 0
+        ? max(gbuffer.material.emissive, 0.0f) * g_PbrDeferred.emissiveSourceGain
+        : 0.0f;
+    float3 sourceRadiance = max(directDiffuse, 0.0f) + sourceEmissive;
+    if (any(isnan(sourceRadiance)) || any(isinf(sourceRadiance)))
+        sourceRadiance = 0.0f;
+    bool doubleSidedEmissive = any(sourceEmissive > 0.0f) &&
+        (gbuffer.material.featureMask & PbrFeature_DoubleSided) != 0u;
+
+    float3 diffuse = directDiffuse +
+        (g_PbrDeferred.separateIndirect != 0 ? 0.0f : indirectDiffuse);
     float3 specular = directSpecular + indirectSpecular;
     float3 finalLinearHdr = max(diffuse + specular + gbuffer.material.emissive, 0.0f);
     if (any(isnan(finalLinearHdr)) || any(isinf(finalLinearHdr)))
@@ -202,7 +211,9 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         diffuse,
         specular,
         averageVisibility,
-        ambientOcclusion * gbuffer.ambientOcclusion,
         finalLinearHdr);
-    u_Output[pixelPosition] = float4(max(outputColor, 0.0f), 0.0f);
+    u_Output[pixelPosition] = float4(min(max(outputColor, 0.0f), 65504.0f), 0.0f);
+    if (g_PbrDeferred.writeSourceRadiance != 0)
+        u_SourceRadiance[pixelPosition] = float4(
+            min(sourceRadiance, 65504.0f), doubleSidedEmissive ? 1.0f : 0.0f);
 }

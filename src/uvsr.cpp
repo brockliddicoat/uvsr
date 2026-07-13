@@ -48,7 +48,6 @@
 #include <donut/render/GBufferFillPass.h>
 #include <donut/render/PixelReadbackPass.h>
 #include <donut/render/SkyPass.h>
-#include <donut/render/SsaoPass.h>
 #include <donut/app/ApplicationBase.h>
 #include <donut/app/UserInterfaceUtils.h>
 #include <donut/app/Camera.h>
@@ -58,6 +57,8 @@
 #include <nvrhi/common/misc.h>
 
 #include "pbr_material.h"
+#include "pbr_deferred_lighting_pass.h"
+#include "screen_space_visibility.h"
 
 using namespace donut;
 using namespace donut::math;
@@ -65,13 +66,21 @@ using namespace donut::app;
 using namespace donut::vfs;
 using namespace donut::engine;
 using namespace donut::render;
+using namespace uvsr;
 
 static bool g_RestartRequested = false;
 
 class PbrGBufferFillPass final : public GBufferFillPass
 {
 public:
-    using GBufferFillPass::GBufferFillPass;
+    PbrGBufferFillPass(
+        nvrhi::IDevice* device,
+        const std::shared_ptr<CommonRenderPasses>& commonPasses,
+        bool whiteWorld)
+        : GBufferFillPass(device, commonPasses)
+        , m_WhiteWorld(whiteWorld)
+    {
+    }
 
 protected:
     nvrhi::ShaderHandle CreatePixelShader(
@@ -82,15 +91,26 @@ protected:
         std::vector<ShaderMacro> macros;
         macros.emplace_back("MOTION_VECTORS", params.enableMotionVectors ? "1" : "0");
         macros.emplace_back("ALPHA_TESTED", alphaTested ? "1" : "0");
+        macros.emplace_back("WHITE_WORLD", m_WhiteWorld ? "1" : "0");
         return shaderFactory.CreateShader(
             "uvsr/pbr_gbuffer_ps.hlsl", "main", &macros, nvrhi::ShaderType::Pixel);
     }
+
+private:
+    bool m_WhiteWorld = false;
 };
 
 class PbrForwardShadingPass final : public ForwardShadingPass
 {
 public:
-    using ForwardShadingPass::ForwardShadingPass;
+    PbrForwardShadingPass(
+        nvrhi::IDevice* device,
+        const std::shared_ptr<CommonRenderPasses>& commonPasses,
+        bool whiteWorld)
+        : ForwardShadingPass(device, commonPasses)
+        , m_WhiteWorld(whiteWorld)
+    {
+    }
 
 protected:
     nvrhi::ShaderHandle CreatePixelShader(
@@ -100,22 +120,13 @@ protected:
     {
         std::vector<ShaderMacro> macros;
         macros.emplace_back("TRANSMISSIVE_MATERIAL", transmissiveMaterial ? "1" : "0");
+        macros.emplace_back("WHITE_WORLD", m_WhiteWorld ? "1" : "0");
         return shaderFactory.CreateShader(
             "uvsr/pbr_forward_ps.hlsl", "main", &macros, nvrhi::ShaderType::Pixel);
     }
-};
 
-class PbrDeferredLightingPass final : public DeferredLightingPass
-{
-public:
-    using DeferredLightingPass::DeferredLightingPass;
-
-protected:
-    nvrhi::ShaderHandle CreateComputeShader(ShaderFactory& shaderFactory) override
-    {
-        return shaderFactory.CreateShader(
-            "uvsr/pbr_deferred_lighting_cs.hlsl", "main", nullptr, nvrhi::ShaderType::Compute);
-    }
+private:
+    bool m_WhiteWorld = false;
 };
 
 static bool CopyBmpToClipboard(const std::filesystem::path& fileName)
@@ -218,11 +229,14 @@ class RenderTargets : public GBufferRenderTargets
 {
 public:
     nvrhi::TextureHandle HdrColor;
+    nvrhi::TextureHandle BaseLighting;
+    nvrhi::TextureHandle DirectDiffuseRadiance;
     nvrhi::TextureHandle LdrColor;
     nvrhi::TextureHandle MaterialIDs;
-    nvrhi::TextureHandle AmbientOcclusion;
     nvrhi::TextureHandle MaterialAmbientOcclusion;
     bool PbrEnabled = true;
+    bool VisibilityResourcesEnabled = false;
+    bool MotionVectorsEnabled = false;
 
     nvrhi::HeapHandle Heap;
 
@@ -236,10 +250,13 @@ public:
         dm::uint sampleCount,
         bool enableMotionVectors,
         bool useReverseProjection,
-        bool enablePbr)
+        bool enablePbr,
+        bool enableVisibilityResources)
     {
         GBufferRenderTargets::Init(device, size, sampleCount, enableMotionVectors, useReverseProjection);
         PbrEnabled = enablePbr;
+        VisibilityResourcesEnabled = enableVisibilityResources;
+        MotionVectorsEnabled = enableMotionVectors;
 
         if (enablePbr)
         {
@@ -255,6 +272,14 @@ public:
             materialAmbientOcclusionDesc.clearValue = nvrhi::Color(1.f);
             materialAmbientOcclusionDesc.debugName = "PbrMaterialAmbientOcclusion";
             MaterialAmbientOcclusion = device->createTexture(materialAmbientOcclusionDesc);
+
+            if (enableMotionVectors)
+            {
+                nvrhi::TextureDesc motionDesc = MotionVectors->getDesc();
+                motionDesc.format = nvrhi::Format::RGBA16_FLOAT;
+                motionDesc.debugName = "PbrGBufferMotionVectorsWithDepth";
+                MotionVectors = device->createTexture(motionDesc);
+            }
 
             GBufferFramebuffer = std::make_shared<FramebufferFactory>(device);
             GBufferFramebuffer->RenderTargets = {
@@ -287,6 +312,15 @@ public:
         desc.debugName = "HdrColor";
         HdrColor = device->createTexture(desc);
 
+        if (enableVisibilityResources)
+        {
+            desc.debugName = "ScreenSpaceVisibility/BaseLighting";
+            BaseLighting = device->createTexture(desc);
+
+            desc.debugName = "ScreenSpaceVisibility/DirectDiffuseRadiance";
+            DirectDiffuseRadiance = device->createTexture(desc);
+        }
+
         desc.format = nvrhi::Format::RG16_UINT;
         desc.isUAV = false;
         desc.debugName = "MaterialIDs";
@@ -301,20 +335,14 @@ public:
         desc.debugName = "LdrColor";
         LdrColor = device->createTexture(desc);
 
-        desc.format = nvrhi::Format::R8_UNORM;
-        desc.isUAV = true;
-        desc.debugName = "AmbientOcclusion";
-        AmbientOcclusion = device->createTexture(desc);
-
         if (desc.isVirtual)
         {
             uint64_t heapSize = 0;
-            nvrhi::ITexture* const textures[] = {
-                HdrColor,
-                MaterialIDs,
-                LdrColor,
-                AmbientOcclusion
-            };
+            std::vector<nvrhi::ITexture*> textures = { HdrColor, MaterialIDs, LdrColor };
+            if (BaseLighting)
+                textures.push_back(BaseLighting);
+            if (DirectDiffuseRadiance)
+                textures.push_back(DirectDiffuseRadiance);
 
             for (auto texture : textures)
             {
@@ -354,9 +382,17 @@ public:
         MaterialIDFramebuffer->DepthTarget = Depth;
     }
 
-    [[nodiscard]] bool IsUpdateRequired(uint2 size, uint sampleCount, bool enablePbr) const
+    [[nodiscard]] bool IsUpdateRequired(
+        uint2 size,
+        uint sampleCount,
+        bool enablePbr,
+        bool enableVisibilityResources,
+        bool enableMotionVectors) const
     {
-        if (any(m_Size != size) || m_SampleCount != sampleCount || PbrEnabled != enablePbr)
+        if (any(m_Size != size) || m_SampleCount != sampleCount ||
+            PbrEnabled != enablePbr ||
+            VisibilityResourcesEnabled != enableVisibilityResources ||
+            MotionVectorsEnabled != enableMotionVectors)
             return true;
 
         return false;
@@ -372,6 +408,11 @@ public:
         }
 
         commandList->clearTextureFloat(HdrColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
+        if (BaseLighting)
+            commandList->clearTextureFloat(BaseLighting, nvrhi::AllSubresources, nvrhi::Color(0.f));
+        if (DirectDiffuseRadiance)
+            commandList->clearTextureFloat(
+                DirectDiffuseRadiance, nvrhi::AllSubresources, nvrhi::Color(0.f));
         commandList->clearTextureFloat(LdrColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
     }
 };
@@ -392,8 +433,7 @@ enum class PbrDebugView
     EncodedNormal,
     DiffuseContribution,
     SpecularContribution,
-    DirectLightVisibility,
-    AmbientOcclusion
+    DirectLightVisibility
 };
 
 static const char* GetPbrDebugViewName(PbrDebugView view)
@@ -406,8 +446,7 @@ static const char* GetPbrDebugViewName(PbrDebugView view)
         "Encoded normal",
         "Diffuse contribution",
         "Specular contribution",
-        "Direct-light visibility",
-        "Ambient occlusion"
+        "Direct-light visibility"
     };
     return names[int(view)];
 }
@@ -777,8 +816,7 @@ struct UIData
     bool                                ShowUI = true;
     bool                                EnablePbr = true;
     bool                                UseDeferredShading = true;
-    bool                                EnableSsao = true;
-    SsaoParameters                      SsaoParams;
+    ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
     AgxToneMappingParameters            AgxToneMappingParams;
     AgxPreset                           AgxToneMappingPreset = AgxPreset::Base;
     SkyParameters                       SkyParams;
@@ -811,15 +849,17 @@ private:
     std::shared_ptr<ForwardShadingPass>  m_ForwardPass;
     std::shared_ptr<GBufferFillPass>     m_GBufferPass;
     std::shared_ptr<DeferredLightingPass> m_DeferredLightingPass;
+    std::unique_ptr<PbrDeferredLightingPass> m_PbrDeferredLightingPass;
     std::unique_ptr<SkyPass>            m_SkyPass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
-    std::unique_ptr<SsaoPass>           m_SsaoPass;
+    std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
     std::unique_ptr<PixelReadbackPass>  m_PixelReadbackPass;
     std::vector<KodakLut>               m_KodakLuts;
     size_t                              m_SelectedKodakLut = 0;
 
     std::shared_ptr<IView>              m_View;
+    std::shared_ptr<PlanarView>         m_PreviousView;
     
     nvrhi::CommandListHandle            m_CommandList;
     FirstPersonCamera                   m_FirstPersonCamera;
@@ -985,6 +1025,30 @@ public:
             m_AgxToneMappingPass->SetColorLut(index == 0 ? nullptr : &m_KodakLuts[index]);
     }
 
+    void ResetAllRendererSettings()
+    {
+        // Restore modes through their public setters first so material shader
+        // permutations and LUT bindings cannot retain state from the old setup.
+        SetWhiteWorldMode(WhiteWorldMode::Off);
+        SetSelectedKodakLut(0);
+
+        m_ui.EnablePbr = true;
+        m_ui.UseDeferredShading = true;
+        m_ui.PbrDebug = PbrDebugView::FinalLinearHdr;
+        m_ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
+        m_ui.AgxToneMappingPreset = AgxPreset::Base;
+        m_ui.AgxToneMappingParams = GetAgxPresetParameters(AgxPreset::Base);
+        m_ui.SkyParams = SkyParameters{};
+        m_ui.EnableProceduralSky = true;
+
+        // This also recreates any passes/resources that were absent because PBR,
+        // deferred rendering, temporal filtering, or white-world permutations
+        // had been disabled before the reset.
+        m_ui.ShaderReloadRequested = true;
+        ResetScreenSpaceVisibilityHistory();
+        log::info("All renderer settings restored to factory defaults");
+    }
+
     void CopyCurrentViewToThirdPerson()
     {
         m_ThirdPersonCamera.LookTo(m_FirstPersonCamera.GetPosition(), m_FirstPersonCamera.GetDir(),
@@ -1007,11 +1071,13 @@ public:
             else
                 CopyCurrentViewToThirdPerson();
             m_ui.UseThirdPersonCamera = !m_ui.UseThirdPersonCamera;
+            if (m_ScreenSpaceVisibilityPass)
+                m_ScreenSpaceVisibilityPass->ResetHistory();
             return true;
         }
 
         if (m_ui.EnablePbr &&
-            key >= GLFW_KEY_F1 && key <= GLFW_KEY_F9 && action == GLFW_PRESS)
+            key >= GLFW_KEY_F1 && key <= GLFW_KEY_F8 && action == GLFW_PRESS)
         {
             m_ui.PbrDebug = PbrDebugView(key - GLFW_KEY_F1);
             log::info("PBR debug view: %s%s",
@@ -1060,12 +1126,15 @@ public:
     {
         if (m_ForwardPass) m_ForwardPass->ResetBindingCache();
         if (m_DeferredLightingPass) m_DeferredLightingPass->ResetBindingCache();
+        if (m_PbrDeferredLightingPass) m_PbrDeferredLightingPass->ResetBindingCache();
+        if (m_ScreenSpaceVisibilityPass) m_ScreenSpaceVisibilityPass->ResetBindingCache();
         if (m_GBufferPass) m_GBufferPass->ResetBindingCache();
         m_BindingCache.Clear();
         m_SunLight.reset();
         m_ui.SelectedMaterial = nullptr;
         m_ui.SelectedNode = nullptr;
         m_OriginalMaterials.clear();
+        m_PreviousView.reset();
 
     }
 
@@ -1134,8 +1203,12 @@ public:
         {
             // Blender exports the Bistro directional light at roughly
             // real-world lux (102,450). UVSR currently has no sun shadows, so
-            // use the scene's established unoccluded-light calibration.
+            // use the scene's established unoccluded-light calibration. Its
+            // authored RGB is strongly amber and contaminated the neutral
+            // white-world diagnostic, so keep the calibrated intensity but use
+            // a neutral illuminant for this renderer benchmark.
             m_SunLight->irradiance = 0.35f;
+            m_SunLight->color = dm::colors::white;
         }
         
         m_ThirdPersonCamera.SetRotation(dm::radians(135.f), dm::radians(20.f));
@@ -1150,6 +1223,9 @@ public:
 
     void SetWhiteWorldMode(WhiteWorldMode mode)
     {
+        const bool modeChanged = m_ui.WhiteWorld != mode;
+        const bool shaderModeChanged = (m_ui.WhiteWorld == WhiteWorldMode::Off) !=
+            (mode == WhiteWorldMode::Off);
         m_ui.WhiteWorld = mode;
 
         const bool enabled = mode != WhiteWorldMode::Off;
@@ -1173,7 +1249,8 @@ public:
             // The Bistro FBX contains thin architectural surfaces with mixed
             // winding. Keep both sides visible in textured and white-world modes so
             // back-face culling cannot erase legitimate facade/interior faces.
-            material->doubleSided = true;
+            if (normalizeBistroAlphaDepth)
+                material->doubleSided = true;
 
             if (!enabled && normalizeBistroAlphaDepth &&
                 (material->domain == MaterialDomain::AlphaBlended ||
@@ -1185,7 +1262,22 @@ public:
 
             if (enabled)
             {
-                material->domain = MaterialDomain::Opaque;
+                const bool originalUsesAlpha =
+                    original.domain == MaterialDomain::AlphaTested ||
+                    original.domain == MaterialDomain::AlphaBlended ||
+                    original.domain == MaterialDomain::TransmissiveAlphaTested ||
+                    original.domain == MaterialDomain::TransmissiveAlphaBlended;
+                const bool hasSeparateOpacity = originalUsesAlpha &&
+                    original.enableOpacityTexture && original.opacityTexture;
+                const bool hasBaseAlpha = originalUsesAlpha && !hasSeparateOpacity &&
+                    original.enableBaseOrDiffuseTexture && original.baseOrDiffuseTexture;
+
+                // Preserve the coverage source but normalize all alpha domains
+                // to depth-writing alpha test. WHITE_WORLD shader permutations
+                // replace sampled RGB with white before material evaluation.
+                material->domain = originalUsesAlpha
+                    ? MaterialDomain::AlphaTested
+                    : MaterialDomain::Opaque;
                 material->useSpecularGlossModel = false;
                 material->baseOrDiffuseColor = dm::float3(1.f);
                 material->specularColor = dm::float3(0.04f);
@@ -1193,15 +1285,18 @@ public:
                 material->emissiveIntensity = 1.f;
                 material->metalness = 0.f;
                 material->roughness = 0.72f;
-                material->opacity = 1.f;
+                material->opacity = originalUsesAlpha ? original.opacity : 1.f;
+                material->alphaCutoff = originalUsesAlpha
+                    ? std::clamp(original.alphaCutoff, 0.01f, 0.99f)
+                    : 0.5f;
                 material->transmissionFactor = 0.f;
-                material->enableBaseOrDiffuseTexture = false;
+                material->enableBaseOrDiffuseTexture = hasBaseAlpha;
                 material->enableMetalRoughOrSpecularTexture = false;
                 material->enableEmissiveTexture = false;
                 material->enableTransmissionTexture = false;
-                material->enableOpacityTexture = false;
+                material->enableOpacityTexture = hasSeparateOpacity;
                 material->enableNormalTexture = preserveDetailMaps && original.enableNormalTexture;
-                material->enableOcclusionTexture = preserveDetailMaps && original.enableOcclusionTexture;
+                material->enableOcclusionTexture = false;
                 material->enableSubsurfaceScattering = false;
                 material->enableHair = false;
             }
@@ -1210,6 +1305,10 @@ public:
         }
 
         m_Scene->GetSceneGraph()->GetRootNode()->InvalidateContent();
+        if (shaderModeChanged)
+            m_ui.ShaderReloadRequested = true;
+        if (modeChanged && m_ScreenSpaceVisibilityPass)
+            m_ScreenSpaceVisibilityPass->ResetHistory();
     }
 
     void PointThirdPersonCameraAt(const std::shared_ptr<SceneGraphNode>& node)
@@ -1264,20 +1363,41 @@ public:
         return topologyChanged;
     }
 
+    void CaptureCurrentViewForMotionVectors()
+    {
+        const auto currentView = std::dynamic_pointer_cast<PlanarView>(m_View);
+        if (!currentView)
+        {
+            m_PreviousView.reset();
+            return;
+        }
+
+        auto previousView = std::make_shared<PlanarView>();
+        previousView->SetViewport(currentView->GetViewport());
+        previousView->SetPixelOffset(currentView->GetPixelOffset());
+        previousView->SetMatrices(
+            currentView->GetViewMatrix(),
+            currentView->GetProjectionMatrix(false));
+        previousView->UpdateCache();
+        m_PreviousView = std::move(previousView);
+    }
+
     void CreateRenderPasses()
     {
         ForwardShadingPass::CreateParameters ForwardParams;
         ForwardParams.trackLiveness = false;
         if (m_ui.EnablePbr)
-            m_ForwardPass = std::make_shared<PbrForwardShadingPass>(GetDevice(), m_CommonPasses);
+            m_ForwardPass = std::make_shared<PbrForwardShadingPass>(
+                GetDevice(), m_CommonPasses, m_ui.WhiteWorld != WhiteWorldMode::Off);
         else
             m_ForwardPass = std::make_shared<ForwardShadingPass>(GetDevice(), m_CommonPasses);
         m_ForwardPass->Init(*m_ShaderFactory, ForwardParams);
         
         GBufferFillPass::CreateParameters GBufferParams;
-        GBufferParams.enableMotionVectors = false;
+        GBufferParams.enableMotionVectors = m_RenderTargets->MotionVectorsEnabled;
         if (m_ui.EnablePbr)
-            m_GBufferPass = std::make_shared<PbrGBufferFillPass>(GetDevice(), m_CommonPasses);
+            m_GBufferPass = std::make_shared<PbrGBufferFillPass>(
+                GetDevice(), m_CommonPasses, m_ui.WhiteWorld != WhiteWorldMode::Off);
         else
             m_GBufferPass = std::make_shared<GBufferFillPass>(GetDevice(), m_CommonPasses);
         m_GBufferPass->Init(*m_ShaderFactory, GBufferParams);
@@ -1289,18 +1409,24 @@ public:
         m_PixelReadbackPass = std::make_unique<PixelReadbackPass>(GetDevice(), m_ShaderFactory, m_RenderTargets->MaterialIDs, nvrhi::Format::RGBA32_UINT);
 
         if (m_ui.EnablePbr)
-            m_DeferredLightingPass = std::make_shared<PbrDeferredLightingPass>(GetDevice(), m_CommonPasses);
+        {
+            m_DeferredLightingPass.reset();
+            m_PbrDeferredLightingPass = std::make_unique<PbrDeferredLightingPass>(
+                GetDevice(), m_CommonPasses);
+            m_PbrDeferredLightingPass->Init(m_ShaderFactory);
+            m_ScreenSpaceVisibilityPass = std::make_unique<ScreenSpaceVisibilityPass>(
+                GetDevice(), m_ShaderFactory);
+        }
         else
+        {
+            m_PbrDeferredLightingPass.reset();
+            m_ScreenSpaceVisibilityPass.reset();
             m_DeferredLightingPass = std::make_shared<DeferredLightingPass>(GetDevice(), m_CommonPasses);
-        m_DeferredLightingPass->Init(m_ShaderFactory);
+            m_DeferredLightingPass->Init(m_ShaderFactory);
+        }
 
         m_SkyPass = std::make_unique<SkyPass>(GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->ForwardFramebuffer, *m_View);
         
-        if (m_RenderTargets->GetSampleCount() == 1)
-        {
-            m_SsaoPass = std::make_unique<SsaoPass>(GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->Depth, m_RenderTargets->GBufferNormals, m_RenderTargets->AmbientOcclusion);
-        }
-
         m_AgxToneMappingPass = std::make_unique<AgxToneMappingPass>(
             GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->LdrFramebuffer);
         m_AgxToneMappingPass->SetColorLut(
@@ -1331,17 +1457,26 @@ public:
             uint height = windowHeight;
 
             constexpr uint sampleCount = 1;
+            const bool visibilityResourcesRequired = m_ui.EnablePbr &&
+                m_ui.UseDeferredShading &&
+                m_ui.ScreenSpaceVisibility.HasActiveConsumer();
+            const bool motionVectorsRequired = visibilityResourcesRequired &&
+                m_ui.ScreenSpaceVisibility.filtering.temporalEnabled;
 
             bool needNewPasses = false;
 
             if (!m_RenderTargets || m_RenderTargets->IsUpdateRequired(
-                uint2(width, height), sampleCount, m_ui.EnablePbr))
+                uint2(width, height), sampleCount, m_ui.EnablePbr,
+                visibilityResourcesRequired, motionVectorsRequired))
             {
                 m_RenderTargets = nullptr;
                 m_BindingCache.Clear();
                 m_RenderTargets = std::make_unique<RenderTargets>();
                 m_RenderTargets->Init(
-                    GetDevice(), uint2(width, height), sampleCount, false, true, m_ui.EnablePbr);
+                    GetDevice(), uint2(width, height), sampleCount,
+                    motionVectorsRequired, true, m_ui.EnablePbr,
+                    visibilityResourcesRequired);
+                m_PreviousView.reset();
                 
                 needNewPasses = true;
             }
@@ -1349,6 +1484,7 @@ public:
             if (SetupView())
             {
                 needNewPasses = true;
+                m_PreviousView.reset();
             }
 
             if (m_ui.ShaderReloadRequested)
@@ -1397,7 +1533,7 @@ public:
             GBufferFillPass::Context gbufferContext;
 
             RenderCompositeView(m_CommandList,
-                m_View.get(), m_View.get(),
+                m_View.get(), m_PreviousView ? m_PreviousView.get() : m_View.get(),
                 *m_RenderTargets->GBufferFramebuffer, 
                 m_Scene->GetSceneGraph()->GetRootNode(),
                 *m_OpaqueDrawStrategy,
@@ -1406,12 +1542,8 @@ public:
                 "GBufferFill",
                 false);
 
-            if (m_ui.EnableSsao && m_SsaoPass)
-                m_SsaoPass->Render(m_CommandList, m_ui.SsaoParams, *m_View);
-
             DeferredLightingPass::Inputs deferredInputs;
             deferredInputs.SetGBuffer(*m_RenderTargets);
-            deferredInputs.ambientOcclusion = m_ui.EnableSsao ? m_RenderTargets->AmbientOcclusion : nullptr;
             if (m_ui.EnablePbr)
             {
                 // Slot 14 is unused by UVSR's current renderer and carries the
@@ -1421,18 +1553,64 @@ public:
             deferredInputs.ambientColorTop = m_AmbientTop;
             deferredInputs.ambientColorBottom = m_AmbientBottom;
             deferredInputs.lights = &m_Scene->GetSceneGraph()->GetLights();
-            deferredInputs.output = m_RenderTargets->HdrColor;
 
-            // The base pass already exposes a two-component temporal offset.
-            // UVSR does not animate it, so PBR mode uses Y for its deferred
-            // debug mode without extending Donut's constant-buffer ABI.
-            m_DeferredLightingPass->Render(
-                m_CommandList,
-                *m_View,
-                deferredInputs,
-                m_ui.EnablePbr
-                    ? float2(0.f, float(m_ui.PbrDebug))
-                    : float2(0.f));
+            const bool runScreenSpaceVisibility = m_ui.EnablePbr &&
+                m_ui.PbrDebug == PbrDebugView::FinalLinearHdr &&
+                m_ui.ScreenSpaceVisibility.HasActiveConsumer();
+            const bool writeSourceRadiance = runScreenSpaceVisibility &&
+                (m_ui.ScreenSpaceVisibility.indirectDiffuse.enabled ||
+                    m_ui.ScreenSpaceVisibility.debug.mode ==
+                        ScreenSpaceVisibilityDebugMode::DirectRadianceSource);
+            deferredInputs.output = runScreenSpaceVisibility
+                ? m_RenderTargets->BaseLighting.Get()
+                : m_RenderTargets->HdrColor.Get();
+
+            if (m_ui.EnablePbr)
+            {
+                m_PbrDeferredLightingPass->Render(
+                    m_CommandList,
+                    *m_View,
+                    deferredInputs,
+                    m_RenderTargets->DirectDiffuseRadiance,
+                    runScreenSpaceVisibility,
+                    writeSourceRadiance,
+                    m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive,
+                    m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain,
+                    float2(0.f, float(m_ui.PbrDebug)));
+
+                if (runScreenSpaceVisibility)
+                {
+                    ScreenSpaceVisibilityInputs visibilityInputs;
+                    visibilityInputs.depth = m_RenderTargets->Depth;
+                    visibilityInputs.normals = m_RenderTargets->GBufferNormals;
+                    visibilityInputs.motionVectors = m_RenderTargets->MotionVectors;
+                    visibilityInputs.sourceRadiance = m_RenderTargets->DirectDiffuseRadiance;
+                    visibilityInputs.gbufferDiffuse = m_RenderTargets->GBufferDiffuse;
+                    visibilityInputs.gbufferSpecular = m_RenderTargets->GBufferSpecular;
+                    visibilityInputs.gbufferEmissive = m_RenderTargets->GBufferEmissive;
+                    visibilityInputs.materialAmbientOcclusion =
+                        m_RenderTargets->MaterialAmbientOcclusion;
+                    visibilityInputs.baseLighting = m_RenderTargets->BaseLighting;
+                    visibilityInputs.output = m_RenderTargets->HdrColor;
+                    m_ScreenSpaceVisibilityPass->Render(
+                        m_CommandList,
+                        m_ui.ScreenSpaceVisibility,
+                        *m_View,
+                        visibilityInputs,
+                        m_AmbientTop,
+                        m_AmbientBottom,
+                        uint32_t(GetFrameIndex()));
+                }
+                else
+                {
+                    m_ScreenSpaceVisibilityPass->Deactivate();
+                }
+            }
+            else
+            {
+                m_DeferredLightingPass->Render(
+                    m_CommandList, *m_View, deferredInputs, float2(0.f));
+            }
         }
         else
         {
@@ -1475,6 +1653,7 @@ public:
 
         m_CommandList->close();
         GetDevice()->executeCommandList(m_CommandList);
+        CaptureCurrentViewForMotionVectors();
 
         if (m_ui.CopyScreenshotToClipboard)
         {
@@ -1533,6 +1712,24 @@ public:
         return m_ShaderFactory;
     }
 
+    float GetSceneDiagonal() const
+    {
+        return m_SceneDiagonal;
+    }
+
+    const ScreenSpaceVisibilityTimings* GetScreenSpaceVisibilityTimings() const
+    {
+        return m_ScreenSpaceVisibilityPass
+            ? &m_ScreenSpaceVisibilityPass->GetTimings()
+            : nullptr;
+    }
+
+    void ResetScreenSpaceVisibilityHistory()
+    {
+        if (m_ScreenSpaceVisibilityPass)
+            m_ScreenSpaceVisibilityPass->ResetHistory();
+    }
+
 };
 
 class UIRenderer : public ImGui_Renderer
@@ -1548,7 +1745,8 @@ private:
     static bool DrawCollapsingHeader(
         const char* label,
         const char* tooltip,
-        float width)
+        float width,
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None)
     {
         ImGui::PushID(label);
         const bool childVisible = ImGui::BeginChild(
@@ -1563,7 +1761,7 @@ private:
         bool open = false;
         if (childVisible)
         {
-            open = ImGui::CollapsingHeader(label);
+            open = ImGui::CollapsingHeader(label, flags);
             ImGui::SetItemTooltip(tooltip);
         }
 
@@ -1717,6 +1915,11 @@ protected:
         }
         ImGui::SetItemTooltip("Restart UVSR and recreate the renderer.");
 
+        if (ImGui::Button("Reset All", ImVec2(settingsControlWidth, 0.f)))
+            m_app->ResetAllRendererSettings();
+        ImGui::SetItemTooltip(
+            "Restore factory renderer, visibility, tonemapper, LUT, sky, and white-world settings. Camera and scene edits are left in place.");
+
         ImGui::SetNextItemWidth(-FLT_MIN);
         const bool cameraComboOpen = ImGui::BeginCombo(
             "##Camera", m_ui.UseThirdPersonCamera ? "Third Person" : "First Person");
@@ -1729,6 +1932,7 @@ protected:
                 {
                     m_app->CopyThirdPersonToFirstPerson();
                     m_ui.UseThirdPersonCamera = false;
+                    m_app->ResetScreenSpaceVisibilityHistory();
                 }
             }
             if (ImGui::Selectable("Third Person", m_ui.UseThirdPersonCamera))
@@ -1737,6 +1941,7 @@ protected:
                 {
                     m_app->CopyCurrentViewToThirdPerson();
                     m_ui.UseThirdPersonCamera = true;
+                    m_app->ResetScreenSpaceVisibilityHistory();
                 }
             }
             ImGui::EndCombo();
@@ -1744,7 +1949,7 @@ protected:
         static const char* whiteWorldLabels[] = {
             "White World Off",
             "White World On",
-            "White World Preserve Detail"
+            "White World Preserve Normals"
         };
         ImGui::SetNextItemWidth(-FLT_MIN);
         const bool whiteWorldComboOpen = ImGui::BeginCombo(
@@ -1769,13 +1974,273 @@ protected:
 
         if (ImGui::Checkbox("Enable PBR", &m_ui.EnablePbr))
         {
+            if (!m_ui.EnablePbr && m_ui.WhiteWorld != WhiteWorldMode::Off)
+                m_app->SetWhiteWorldMode(WhiteWorldMode::Off);
             m_ui.PbrDebug = PbrDebugView::FinalLinearHdr;
             log::info("PBR rendering %s", m_ui.EnablePbr ? "enabled" : "disabled");
         }
         ImGui::SetItemTooltip("Use UVSR PBR shading; disable to compare Donut legacy shading.");
 
-        ImGui::Checkbox("Enable SSAO", &m_ui.EnableSsao);
-        ImGui::SetItemTooltip("Add screen-space ambient occlusion in deferred mode.");
+        const bool indirectLightingOpen = DrawCollapsingHeader(
+            "Screen-Space Indirect Lighting",
+            "Configure the shared visibility traversal used by ambient occlusion and diffuse GI.",
+            ImGui::GetContentRegionAvail().x,
+            ImGuiTreeNodeFlags_DefaultOpen);
+        if (indirectLightingOpen)
+        {
+            ScreenSpaceVisibilitySettings& visibility = m_ui.ScreenSpaceVisibility;
+            const bool visibilityAvailable = m_ui.UseDeferredShading && m_ui.EnablePbr;
+            if (!visibilityAvailable)
+                ImGui::BeginDisabled();
+
+            ImGui::Checkbox("Enabled##ScreenSpaceVisibility", &visibility.enabled);
+            ImGui::SetItemTooltip(
+                "Enable the shared screen-space visibility producer and indirect-light composite.");
+
+            static const char* qualityLabels[] = {
+                "Low", "Medium", "High", "Ultra", "Custom"
+            };
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            if (ImGui::BeginCombo("Quality", qualityLabels[int(visibility.quality)]))
+            {
+                for (int qualityIndex = 0; qualityIndex < int(std::size(qualityLabels)); ++qualityIndex)
+                {
+                    const auto quality = ScreenSpaceVisibilityQuality(qualityIndex);
+                    const bool selected = visibility.quality == quality;
+                    if (ImGui::Selectable(qualityLabels[qualityIndex], selected))
+                        ApplyScreenSpaceVisibilityQualityPreset(visibility, quality);
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip(
+                "Choose a full-resolution stochastic sample budget and filter preset.");
+
+            if (const ScreenSpaceVisibilityTimings* timings =
+                m_app->GetScreenSpaceVisibilityTimings())
+            {
+                ImGui::Text("VBIL %.2f ms", timings->CompleteEffectMs());
+                ImGui::SetItemTooltip(
+                    "Latest total GPU time. Includes hierarchy, sampling, temporal, spatial, and composite passes.");
+            }
+
+            if (!visibility.enabled)
+                ImGui::BeginDisabled();
+
+            if (ImGui::TreeNodeEx("Shared Visibility Sampling", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                SharedSamplingSettings& sampling = visibility.sampling;
+                bool samplingChanged = false;
+                samplingChanged |= ImGui::SliderFloat(
+                    "Radius", &sampling.radius, 0.01f, std::max(m_app->GetSceneDiagonal() * 0.1f, 1.f), "%.3f");
+                ImGui::SetItemTooltip("Set the world-space radius projected into screen space.");
+                samplingChanged |= ImGui::SliderFloat(
+                    "Thickness", &sampling.thickness, 0.0f, std::max(m_app->GetSceneDiagonal() * 0.02f, 0.5f), "%.3f");
+                ImGui::SetItemTooltip(
+                    "Set finite occluder thickness in UVSR world units; thin surfaces leave light paths open.");
+                samplingChanged |= ImGui::Checkbox(
+                    "Distance-Scaled Thickness", &sampling.distanceScaledThickness);
+                ImGui::SetItemTooltip("Increase finite thickness gradually with view distance.");
+                if (!sampling.distanceScaledThickness)
+                    ImGui::BeginDisabled();
+                samplingChanged |= ImGui::SliderFloat(
+                    "Thickness Distance Scale", &sampling.thicknessDistanceScale,
+                    0.0f, 0.02f, "%.5f");
+                ImGui::SetItemTooltip("Control the per-view-depth thickness increase.");
+                if (!sampling.distanceScaledThickness)
+                    ImGui::EndDisabled();
+
+                int sampleCount = int(sampling.sampleCount);
+                if (ImGui::SliderInt("Samples Per Pixel", &sampleCount, 1, 32))
+                {
+                    sampling.sampleCount = uint32_t(sampleCount);
+                    samplingChanged = true;
+                }
+                ImGui::SetItemTooltip(
+                    "Total stochastic depth taps per pixel, divided between the two near-to-far horizon directions.");
+                samplingChanged |= ImGui::SliderFloat(
+                    "Step Distribution", &sampling.stepDistributionExponent, 0.5f, 4.0f, "%.2f");
+                ImGui::SetItemTooltip("Bias radial samples toward the receiving pixel.");
+                samplingChanged |= ImGui::SliderFloat(
+                    "Sample Jitter", &sampling.radialJitter, 0.0f, 1.0f, "%.2f");
+                ImGui::SetItemTooltip(
+                    "Blend from centered samples to the deterministic spatiotemporal radial jitter sequence.");
+
+                samplingChanged |= ImGui::Checkbox(
+                    "Hierarchical View Depth", &sampling.useDepthHierarchy);
+                ImGui::SetItemTooltip(
+                    "Use the single-dispatch XeGTAO-style five-level view-depth pyramid for distant samples.");
+
+                if (samplingChanged)
+                    visibility.quality = ScreenSpaceVisibilityQuality::Custom;
+                ImGui::TreePop();
+            }
+
+            if (ImGui::TreeNodeEx("Ambient Occlusion", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                AmbientOcclusionSettings& ao = visibility.ambientOcclusion;
+                ImGui::Checkbox("Enabled##AmbientVisibility", &ao.enabled);
+                ImGui::SetItemTooltip("Consume the final radial masks as scalar ambient visibility.");
+                if (!ao.enabled)
+                    ImGui::BeginDisabled();
+                ImGui::SliderFloat("Strength", &ao.strength, 0.0f, 2.0f, "%.2f");
+                ImGui::SetItemTooltip(
+                    "Scale only the missing-visibility adjustment on fallback indirect diffuse.");
+                ImGui::SliderFloat("Power##AmbientVisibility", &ao.power, 0.25f, 4.0f, "%.2f");
+                ImGui::SetItemTooltip("Shape ambient visibility after mask evaluation and filtering.");
+                if (!ao.enabled)
+                    ImGui::EndDisabled();
+                ImGui::TreePop();
+            }
+
+            if (ImGui::TreeNodeEx("Indirect Diffuse GI", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                IndirectDiffuseSettings& gi = visibility.indirectDiffuse;
+                ImGui::Checkbox("Enabled##IndirectDiffuse", &gi.enabled);
+                ImGui::SetItemTooltip(
+                    "Accumulate one-bounce diffuse irradiance only from newly claimed mask sectors.");
+                if (!gi.enabled)
+                    ImGui::BeginDisabled();
+                ImGui::SliderFloat("Intensity##IndirectDiffuse", &gi.intensity, 0.0f, 10.0f, "%.2f");
+                ImGui::SetItemTooltip("Scale material-applied screen-space indirect diffuse.");
+                ImGui::Checkbox("Include Emissive Sources", &gi.includeEmissive);
+                ImGui::SetItemTooltip("Allow visible emissive G-buffer surfaces to illuminate receivers.");
+                ImGui::SliderFloat("Emissive Gain", &gi.emissiveGain, 0.0f, 16.0f, "%.2f");
+                ImGui::SetItemTooltip(
+                    "Boost emissive source radiance independently from reflected direct diffuse.");
+                bool giLightOnly = visibility.debug.mode ==
+                    ScreenSpaceVisibilityDebugMode::GiLightOnly;
+                if (ImGui::Checkbox("GI Light Only", &giLightOnly))
+                {
+                    visibility.debug.mode = giLightOnly
+                        ? ScreenSpaceVisibilityDebugMode::GiLightOnly
+                        : ScreenSpaceVisibilityDebugMode::FinalComposite;
+                }
+                ImGui::SetItemTooltip(
+                    "Show indirect irradiance before receiver albedo, metalness, and the diffuse BRDF.");
+                if (!gi.enabled)
+                    ImGui::EndDisabled();
+                ImGui::TreePop();
+            }
+
+            if (ImGui::TreeNodeEx("Filtering and History", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                VisibilityFilteringSettings& filtering = visibility.filtering;
+                bool filteringChanged = false;
+                filteringChanged |= ImGui::Checkbox(
+                    "Temporal Accumulation", &filtering.temporalEnabled);
+                ImGui::SetItemTooltip(
+                    "Reproject AO/GI results with motion, depth, normal, and camera-cut validation.");
+                if (!filtering.temporalEnabled)
+                    ImGui::BeginDisabled();
+                filteringChanged |= ImGui::SliderFloat(
+                    "AO Response", &filtering.aoTemporalResponse, 0.0f, 0.99f, "%.2f");
+                ImGui::SetItemTooltip("Set accepted AO history weight; higher values converge more slowly.");
+                filteringChanged |= ImGui::SliderFloat(
+                    "GI Response", &filtering.giTemporalResponse, 0.0f, 0.99f, "%.2f");
+                ImGui::SetItemTooltip("Set clamped GI history weight; higher values reduce noise but may trail.");
+                if (!filtering.temporalEnabled)
+                    ImGui::EndDisabled();
+                filteringChanged |= ImGui::Checkbox("Spatial Filter", &filtering.spatialEnabled);
+                ImGui::SetItemTooltip("Apply a depth- and normal-aware filter to accumulated AO and GI.");
+                if (!filtering.spatialEnabled)
+                    ImGui::BeginDisabled();
+                int spatialRadius = int(filtering.spatialRadius);
+                if (ImGui::SliderInt("Filter Radius", &spatialRadius, 0, 4))
+                {
+                    filtering.spatialRadius = uint32_t(spatialRadius);
+                    filteringChanged = true;
+                }
+                ImGui::SetItemTooltip("Set the bilateral filter radius at sampling resolution.");
+                if (!filtering.spatialEnabled)
+                    ImGui::EndDisabled();
+                filteringChanged |= ImGui::SliderFloat(
+                    "Depth Rejection", &filtering.depthRejection, 0.001f, 0.10f, "%.3f");
+                ImGui::SetItemTooltip("Reject history and neighbors with excessive relative view-depth change.");
+                filteringChanged |= ImGui::SliderFloat(
+                    "Normal Rejection", &filtering.normalRejection, 0.0f, 0.999f, "%.3f");
+                ImGui::SetItemTooltip("Require this minimum world-normal dot product for reuse.");
+                if (ImGui::Button("Reset History"))
+                    m_app->ResetScreenSpaceVisibilityHistory();
+                ImGui::SetItemTooltip("Discard accumulated AO and GI output history on the next frame.");
+                if (filteringChanged)
+                    visibility.quality = ScreenSpaceVisibilityQuality::Custom;
+                ImGui::TreePop();
+            }
+
+            if (ImGui::TreeNode("Debug##ScreenSpaceVisibility"))
+            {
+                static const char* debugLabels[] = {
+                    "Final Composite",
+                    "Raw Ambient Visibility",
+                    "Filtered Ambient Visibility",
+                    "Raw Indirect Diffuse",
+                    "Filtered Indirect Diffuse",
+                    "GI Light Only",
+                    "Direct-Radiance Source",
+                    "Receiver Normal",
+                    "Sampled Source Normal",
+                    "Sample Count",
+                    "Newly Covered Sectors",
+                    "Final Mask Popcount",
+                    "Current Slice Orientation",
+                    "Projected Normal",
+                    "Front Horizon Angle",
+                    "Back Horizon Angle",
+                    "Thickness Interval",
+                    "Temporal History Weight",
+                    "Temporal Validity"
+                };
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (ImGui::BeginCombo(
+                    "Debug Mode", debugLabels[int(visibility.debug.mode)]))
+                {
+                    for (int index = 0; index < int(std::size(debugLabels)); ++index)
+                    {
+                        const auto mode = ScreenSpaceVisibilityDebugMode(index);
+                        const bool selected = visibility.debug.mode == mode;
+                        if (ImGui::Selectable(debugLabels[index], selected))
+                            visibility.debug.mode = mode;
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip("Visualize visibility traversal, filtering, or composition state.");
+                ImGui::Checkbox("Freeze Sampling Phase", &visibility.debug.freezeSamplingPhase);
+                ImGui::SetItemTooltip("Hold slice rotation and radial jitter at deterministic phase zero.");
+
+                static const char* criterionLabels[] = { "Round", "Ceil", "Floor" };
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (ImGui::BeginCombo(
+                    "Sector Hit Criterion",
+                    criterionLabels[int(visibility.debug.sectorHitCriterion)]))
+                {
+                    for (int index = 0; index < int(std::size(criterionLabels)); ++index)
+                    {
+                        const auto criterion = SectorHitCriterion(index);
+                        const bool selected = visibility.debug.sectorHitCriterion == criterion;
+                        if (ImGui::Selectable(criterionLabels[index], selected))
+                            visibility.debug.sectorHitCriterion = criterion;
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Choose developer validation semantics; Round is the production paper criterion.");
+                ImGui::TreePop();
+            }
+
+            if (!visibility.enabled)
+                ImGui::EndDisabled();
+            if (!visibilityAvailable)
+            {
+                ImGui::EndDisabled();
+                ImGui::TextDisabled("Requires deferred UVSR PBR rendering.");
+            }
+        }
 
         const bool tonemapperOpen = DrawCollapsingHeader(
             "Tonemapper",
@@ -1956,9 +2421,6 @@ protected:
             
             ImGui::End();
         }
-
-        if (!m_ui.UseDeferredShading)
-            m_ui.EnableSsao = false;
 
         ImGui::PopFont();
     }

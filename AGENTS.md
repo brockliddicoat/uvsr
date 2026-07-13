@@ -43,7 +43,8 @@
 - Every new or changed UVSR-owned interactive control must have a concise hover
   tooltip that describes its effect.
 - Cleanup and infrastructure work must not silently change authored colors, AgX
-  output, SSAO, scene lighting, or other visible rendering behavior.
+  output, screen-space indirect lighting, scene lighting, or other visible
+  rendering behavior.
 - Keep the forward and deferred PBR paths on the shared UVSR material/lighting
   contract. The PBR comparison toggle must retain the same camera, scene,
   tonemapper, sky, and lights.
@@ -74,7 +75,7 @@
   `ctest --test-dir build -C Release --output-on-failure`.
 - Launch `build/bin/uvsr.exe` and smoke-test after runtime, rendering, shader,
   scene-loading, or UI changes. Exercise the relevant forward/deferred, PBR
-  on/off, and SSAO combinations when they could be affected.
+  on/off, and screen-space AO/GI combinations when they could be affected.
 - Documentation-only changes require link and diff validation, not a renderer
   rebuild.
 - Run `git diff --check` before committing.

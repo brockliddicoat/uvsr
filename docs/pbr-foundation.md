@@ -15,9 +15,10 @@ output gamut conversion, and display transfer happen afterward.
   alpha testing remains active; transmission/refraction is not part of the
   base BSDF.
 - Ambient occlusion is not part of the BSDF or direct lighting. Authored
-  material ambient occlusion and SSAO only modulate UVSR's approximate
-  indirect diffuse term. The converted Bistro ORM maps have no authored
-  occlusion channel, so their zero-filled red channel is intentionally ignored.
+  material occlusion and screen-space ambient visibility modulate only
+  approximate indirect diffuse. Screen-space GI is added separately and is not
+  multiplied by ambient visibility. The converted Bistro ORM maps have no
+  authored occlusion channel, so their zero-filled red channel is ignored.
 
 ## CPU material contract
 
@@ -63,6 +64,7 @@ G-buffer bandwidth is 25 bytes per pixel, excluding depth.
 | G2 | `RGBA16_SNORM` | Linear shading normal in RGB; perceptual roughness in A |
 | G3 | `RGBA16_FLOAT` | Scene-linear emissive radiance in RGB; metalness in A |
 | G4 | `R8_UNORM` | Authored material ambient occlusion for approximate indirect diffuse only |
+| G5 (conditional) | `RGBA16_FLOAT` | Previous-minus-current pixel motion in XY; previous-minus-current device-depth delta in Z; A unused |
 
 Base-color quantization follows ordinary sRGB8 material storage. Geometric
 normals have 8 bits per octahedral component; this is sufficient for
@@ -71,7 +73,9 @@ Shading normals and perceptual roughness use signed 16-bit normalized storage.
 Emission and metalness use half floats. IOR has 256 steps over `[1,3]`, which
 provides finer common-dielectric F0 precision than storing raw F0 in UNORM8.
 Feature flags are exact at eight bits. Material ambient occlusion has eight
-linear bits.
+linear bits. G5 is present only while screen-space temporal filtering is active;
+preserving Z makes disocclusion validation projection-correct under camera
+motion. It is not counted in the 25-byte material G-buffer total.
 
 The deferred decoder normalizes both normals and flips an invalid shading
 normal back into the geometric-normal hemisphere. The BSDF rejects light or
@@ -136,7 +140,10 @@ Deferred debug views do not add to the settings window. Use:
 - `F6`: diffuse contribution
 - `F7`: specular contribution
 - `F8`: direct-light visibility
-- `F9`: combined SSAO and authored material ambient occlusion
+
+Visibility, GI-light-only, mask, slice, horizon, and history debug modes live in
+the **Screen-Space Indirect Lighting > Debug** section. See
+`docs/screen-space-visibility.md` for the complete list and value conventions.
 
 The values still pass through the display pipeline so they can be inspected on
 the current output device. Debug modes apply only to deferred PBR shading and

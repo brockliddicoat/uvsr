@@ -9,12 +9,15 @@ is also available from the scene picker.
 
 ## Renderer baseline
 
-- Deferred shading, UVSR PBR, SSAO, and the procedural sky start enabled.
+- Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
+  sky start enabled.
+- Renderer settings always start from factory defaults; **Reset All** restores
+  those defaults in-session, and settings are not carried between launches.
 - **Enable PBR** switches between UVSR's shared forward/deferred
   metallic-roughness PBR path and Donut's legacy material-lighting path while
   retaining the same camera, scene, tone grade, sky, and lights.
 - **White World Off** is the default. **White World On** and **White World
-  Preserve Detail** override material color without modifying source assets.
+  Preserve Normals** override material color without modifying source assets.
 - Camera controls are limited to **First Person** and **Third Person**.
 - The first scene light is selected automatically in the **Lights** panel.
 - The AgX display pipeline provides Base, Punchy, Golden, Mix, and Custom
@@ -57,18 +60,28 @@ cmake --build build --config Release --target uvsr
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the PBR reference tests separately:
+The scene picker also includes `HorizonGIBenchmark.glb`, a lightweight
+reconstruction of the procedural Screen Space Horizon GI room with dense pegs,
+thin geometry, deep corners, and three colored emissive panels. See its
+[asset notes](assets/scenes/horizon_gi_benchmark/README.md) or regenerate it
+with `tools/generate_horizon_gi_benchmark.py`.
+
+Build and run the PBR and radial-visibility reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_pbr_tests
+cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
 ## Bistro material preparation
 
 UVSR renders Bistro materials two-sided because the FBX source contains thin
-surfaces with mixed winding. Converted blend materials are normalized to
-alpha-tested materials so they write depth while preserving texture cutouts.
+surfaces with mixed winding. The repair identifies the small set of base-color
+images with real binary/fractional alpha, converts those materials to
+depth-writing alpha test, and restores opaque domain for the exporter-mislabeled
+remainder while preserving genuine Water/Ice/Wine blend materials. White World
+samples only real coverage alpha and overrides RGB in a
+shader permutation, so foliage cutouts survive without leaking albedo.
 
 Some source conversions label packed roughness/metalness maps as specular
 extension textures. Repair freshly converted GLBs once with:
@@ -78,13 +91,15 @@ tools\repair_bistro_orm.cmd assets/scenes/nvidia_bistro/BistroExterior.glb asset
 ```
 
 The repair changes only GLB metadata, saves the original JSON chunk in a
-`.pre-uvsr-json` file, and ignores the maps' zero-filled red channel so SSAO
-remains the visibility source. Pass `--restore` to the same command to restore
-the original chunks.
+`.pre-uvsr-json` file, and ignores the maps' zero-filled red channel so authored
+material occlusion is not fabricated. Screen-space ambient visibility remains a
+separate renderer input. Pass `--restore` to restore the original chunks.
 
 The Bistro light is normalized from its exported real-world lux value to the
-renderer's unoccluded-light range. This scene-specific calibration is applied to
-the light, outside the shared BSDF, and remains editable in **Lights**.
+renderer's unoccluded-light range and uses a neutral illuminant so White World
+does not inherit the source scene's strong amber cast. This scene-specific
+calibration is applied to the light, outside the shared BSDF, and remains
+editable in **Lights**.
 
 ## Documentation and conventions
 
@@ -92,10 +107,15 @@ The [PBR foundation](docs/pbr-foundation.md) documents the material contract,
 G-buffer packing, equations, debug views, validation controls, limitations, and
 extension points.
 
+The [screen-space visibility design](docs/screen-space-visibility.md) documents
+the shared 32-sector AO/GI traversal, resources, coordinate/radiance contracts,
+filtering, controls, limitations, and the upgrade path to persistent unified
+visibility.
+
 UVSR runs uncapped with a single planar view. UVSR-owned interactive controls
 provide concise hover tooltips; new controls should follow the same convention.
-The renderer exposes **Reload Shaders**, **Restart Renderer**, and **Screenshot**
-controls in the main settings panel.
+The renderer exposes **Reload Shaders**, **Restart Renderer**, **Reset All**, and
+**Screenshot** controls in the main settings panel.
 
 ## Intentional omissions
 
@@ -104,7 +124,7 @@ The current baseline intentionally omits:
 - DirectX 11 and Vulkan backends
 - VSync, stereo, and bloom controls
 - Imported scene cameras and translucent rendering
-- Temporal anti-aliasing, animation playback, AA and jitter selection,
+- Temporal anti-aliasing, animation playback, AA and camera-jitter selection,
   ambient-intensity scaling, and material-event instrumentation
 - Shadow rendering and shadow-map debugging
 - Light-probe capture, filtering, image-based lighting, probe textures, and
