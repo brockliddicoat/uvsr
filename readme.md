@@ -74,6 +74,64 @@ is also available from the scene picker.
   3D `.cube` LUTs can be placed in `assets/luts/kodak`; see the
   [LUT notes](assets/luts/kodak/README.md) for the supported format.
 
+## Coming Soon
+
+Coming Soon is UVSR's shared coordination ledger for every project or feature
+that has not merged into `main`, plus every project or feature an agent is
+currently working on. An entry is not shipped on `main`, and experimental
+entries are not promises that the work will merge.
+
+- **Visibility-pipeline simplification — ready for review**
+  (`agent/visibility-cleanup-coming-soon`). Remove only the visibility bitmask's
+  temporal AO/GI accumulator and bilateral spatial filter, then feed current-
+  frame visibility directly into composition. NRA-RTAA remains the independent
+  downstream anti-aliasing and temporal-reconstruction stage.
+- **Forward renderer simplification — local implementation complete; awaiting
+  integration.** Remove the broken Forward Tonemapperless mode and its display-
+  pipeline bypass, leaving supported Forward and Deferred rendering on the
+  normal AgX path. Its current checkout is stacked on the visibility cleanup and
+  overlaps that branch in `src/uvsr.cpp` and `readme.md`, so integration must
+  preserve both changes.
+- **Texture filtering, specular AA, and NRD denoising — active development**
+  (`feat/filtering-specular-aa-nrd`). Improve Intel Arc-focused anisotropic
+  sampling and mip correctness, add material specular anti-aliasing, and
+  integrate NRD diffuse-GI denoising with NRA-RTAA. This overlaps PBR materials,
+  visibility GI outputs, motion/history contracts, and renderer settings. The
+  branch is based on the unmerged visibility-pipeline simplification and must be
+  integrated after it or rebased deliberately.
+- **RTAA-compatible GPU HZB occlusion culling — experimental validation**
+  (`experiment/hzb-main-post-rtaa`). Evaluate main/post HZB culling, repaired
+  indirect G-buffer draws, conservative history fallbacks, and GPU telemetry
+  before deciding whether this experimental path is safe to merge. The branch
+  predates the visibility cleanup and requires rebase plus RTAA revalidation.
+
+### How work gets listed
+
+This README-first workflow is how every project or feature gets onto Coming
+Soon:
+
+1. Before writing implementation code, the owning agent reads this entire
+   section into working memory and checks open pull requests, unmerged branches,
+   and visible agent worktrees for overlapping or missing work. An agent
+   resuming an in-flight project performs this reconciliation before its next
+   code edit.
+2. The agent imports every missing unmerged or current-agent project it finds.
+   If its own project is absent, adding or updating that entry is its first
+   repository change. Each entry includes status, branch when one exists,
+   intended scope, affected subsystems, and integration dependencies.
+3. The agent cites the exact Coming Soon entry in its implementation plan and
+   records any overlap or coordination needed with another entry. Implementation
+   does not begin until both the entry and plan reference exist.
+4. Scope and status changes update the same entry. When publication is
+   authorized, commit and push the coordination update before creating or
+   pushing implementation commits so simultaneous agents can see it. For pre-
+   existing implementation, reconcile and publish the ledger before the next
+   code edit or implementation push. This rule does not grant permission to
+   push by itself.
+5. A merge removes the entry and moves durable user-facing behavior into the
+   renderer baseline or design documentation. Abandoned work is removed
+   explicitly rather than left as a stale promise.
+
 ## Build and run
 
 Requirements:
