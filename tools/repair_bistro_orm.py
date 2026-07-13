@@ -5,7 +5,7 @@ KHR_materials_specular.specularTexture. Donut correctly ignores that texture
 for the metallic-roughness workflow, leaving glTF's default metalness of one.
 This tool moves the texture reference to metallicRoughnessTexture. The
 converted files contain zero in the red channel, so it must not be bound as
-ambient-occlusion visibility; UVSR's SSAO remains a separate visibility input.
+authored material occlusion; UVSR's screen-space visibility remains separate.
 """
 
 from __future__ import annotations
@@ -18,12 +18,28 @@ from pathlib import Path
 
 GLB_MAGIC = b"glTF"
 JSON_CHUNK_TYPE = 0x4E4F534A
-REPAIR_VERSION = 3
+REPAIR_VERSION = 4
 
 EXPECTED_ASSETS = {
     "BistroExterior.glb": {
         "material_count": 132,
         "dielectric_materials": {"Paris_LiquorBottle_01_Labels"},
+        # The Blender export marks every material BLEND. Only these base-color
+        # images contain a nontrivial alpha channel (both 0 and 255); treating
+        # the other 120 materials as alpha-tested creates patterned holes.
+        "alpha_tested_materials": {
+            "Foliage_Bux_Hedges46.DoubleSided",
+            "Foliage_Flowers.DoubleSided",
+            "Foliage_Ivy_leaf_a.DoubleSided",
+            "Foliage_Leaves.DoubleSided",
+            "Foliage_Linde_Tree_Large_Green_Leaves.DoubleSided",
+            "Foliage_Linde_Tree_Large_Orange_Leaves.DoubleSided",
+            "LanternEmissive",
+            "MASTER_Curtains",
+            "MASTER_Forge_Metal",
+            "MASTER_Side_Letters",
+        },
+        "blended_materials": set(),
     },
     "BistroInterior_Wine.glb": {
         "material_count": 74,
@@ -33,6 +49,18 @@ EXPECTED_ASSETS = {
             "Paris_Table_cloth_01",
             "Beer",
             "Lightbulb",
+            "Red_Wine",
+            "White_Wine",
+        },
+        "alpha_tested_materials": {
+            "MASTER_Interior_01_Paris_Lantern1",
+            "Plants_plants.DoubleSided",
+            "Plates_Details",
+        },
+        "blended_materials": {
+            "Water",
+            "Ice",
+            "Beer",
             "Red_Wine",
             "White_Wine",
         },
@@ -80,6 +108,32 @@ def repair_glb(path: Path) -> int:
 
         repaired_materials: set[int] = set()
         for material_index, material in enumerate(document.get("materials", [])):
+            material_name = material.get("name")
+            if material_name in expected["alpha_tested_materials"]:
+                desired_alpha_mode = "MASK"
+            elif material_name in expected["blended_materials"]:
+                desired_alpha_mode = "BLEND"
+            else:
+                desired_alpha_mode = "OPAQUE"
+            if desired_alpha_mode == "MASK":
+                if material.get("alphaMode") != "MASK":
+                    material["alphaMode"] = "MASK"
+                    repaired_materials.add(material_index)
+                if material.get("alphaCutoff", 0.5) != 0.5:
+                    material["alphaCutoff"] = 0.5
+                    repaired_materials.add(material_index)
+            elif desired_alpha_mode == "BLEND":
+                if material.get("alphaMode") != "BLEND":
+                    material["alphaMode"] = "BLEND"
+                    repaired_materials.add(material_index)
+                if material.pop("alphaCutoff", None) is not None:
+                    repaired_materials.add(material_index)
+            else:
+                if material.pop("alphaMode", None) is not None:
+                    repaired_materials.add(material_index)
+                if material.pop("alphaCutoff", None) is not None:
+                    repaired_materials.add(material_index)
+
             extensions = material.get("extensions", {})
             specular = extensions.get("KHR_materials_specular", {})
             texture_info = specular.get("specularTexture")

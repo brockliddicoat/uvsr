@@ -32,6 +32,8 @@ uint GetPbrFeatureMask()
         featureMask |= PbrFeature_Translucency | PbrFeature_Scattering;
     if (g_Material.transmissionFactor > 0.0f)
         featureMask |= PbrFeature_Refraction;
+    if ((g_Material.flags & MaterialFlags_DoubleSided) != 0)
+        featureMask |= PbrFeature_DoubleSided;
     return featureMask;
 }
 
@@ -51,6 +53,11 @@ void main(
 {
     MaterialTextureSample textures = SampleMaterialTexturesAuto(
         i_vtx.texCoord, g_Material.normalTextureTransformScale);
+#if WHITE_WORLD
+    // Retain base alpha for cutout coverage while preventing sampled RGB from
+    // leaking into the white reference material.
+    textures.baseOrDiffuse.rgb = 1.0f;
+#endif
     MaterialSample surface = EvaluateSceneMaterial(
         i_vtx.normal, i_vtx.tangent, g_Material, textures);
 

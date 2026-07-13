@@ -105,6 +105,9 @@ void main(
 {
     MaterialTextureSample textures = SampleMaterialTexturesAuto(
         i_vtx.texCoord, g_Material.normalTextureTransformScale);
+#if WHITE_WORLD
+    textures.baseOrDiffuse.rgb = 1.0f;
+#endif
     MaterialSample sampledMaterial = EvaluateSceneMaterial(
         i_vtx.normal, i_vtx.tangent, g_Material, textures);
 
