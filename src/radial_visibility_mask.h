@@ -21,6 +21,22 @@ struct RadialVisibilityMask
     uint32_t occludedBits = 0u;
 };
 
+// Keep this value type field-for-field compatible with the HLSL contract in
+// radial_visibility_mask.hlsli. Estimator reference code can therefore build
+// an interval once and submit it to the same quantization API used by shaders.
+struct VisibilityInterval
+{
+    float minimumAngle01 = 0.f;
+    float maximumAngle01 = 0.f;
+};
+
+constexpr VisibilityInterval MakeVisibilityInterval(
+    float minimumAngle01,
+    float maximumAngle01) noexcept
+{
+    return { minimumAngle01, maximumAngle01 };
+}
+
 namespace radial_visibility_detail
 {
     constexpr uint32_t MakeLowBitMask(uint32_t bitCount) noexcept
@@ -121,6 +137,26 @@ inline uint32_t MakeStochasticSectorRangeMask(
         return 0u;
 
     return radial_visibility_detail::MakeLowBitMask(endSector - firstSector) << firstSector;
+}
+
+inline uint32_t MakeSectorRangeMask(
+    VisibilityInterval interval,
+    SectorHitCriterion criterion = SectorHitCriterion::Round) noexcept
+{
+    return MakeSectorRangeMask(
+        interval.minimumAngle01,
+        interval.maximumAngle01,
+        criterion);
+}
+
+inline uint32_t MakeStochasticSectorRangeMask(
+    VisibilityInterval interval,
+    float sectorPhase) noexcept
+{
+    return MakeStochasticSectorRangeMask(
+        interval.minimumAngle01,
+        interval.maximumAngle01,
+        sectorPhase);
 }
 
 constexpr uint32_t GetNewlyCoveredBits(uint32_t candidateBits, uint32_t existingBits) noexcept
