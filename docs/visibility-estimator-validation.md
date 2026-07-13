@@ -110,3 +110,19 @@ and the benchmark record includes HDR-FLIP, NRA-RTAA disocclusion behavior,
 GPU timestamps, register count, occupancy, measured traffic, and memory on the
 available adapters. The benchmark JSON schema deliberately requires those
 fields so an incomplete CPU-only record cannot be mistaken for promotion data.
+
+### Local Integration Check — 2026-07-13
+
+- Release renderer and all four CTest targets passed with MSVC 19.44.
+- ShaderMake compiled every affected PaperAngular and GTUniform AO, GI,
+  combined, debug, metadata, and reinjection permutation.
+- An unattended default-frame smoke test remained healthy for 35 seconds at
+  1920x1080 on an NVIDIA GeForce RTX 4090 Laptop GPU. The captured configuration
+  was deferred AO+GI, PaperAngular, 32 SPP, radius 3, thickness 0.5, one bounce,
+  exact depth, perspective projection, and Medium/Balanced NRA-RTAA.
+- The Windows input-automation helper's activation step reproducibly faults in
+  pinned GLFW's `_glfwPollEventsWin32`; passive frame capture works. Therefore
+  this check does not claim Paper/GT screenshots, per-stage timings, HDR-FLIP,
+  disocclusion, register, occupancy, or traffic evidence.
+
+The estimator remains non-default and unpromoted.

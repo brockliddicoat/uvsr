@@ -44,6 +44,31 @@ reads the final composite target and never reinjects prior-frame GI. UVSR has
 no pre-exposure; source, GI, base lighting, and the composite all
 remain unexposed scene-linear values.
 
+### Estimator A/B Contract
+
+The **Estimator** control selects a complete compile-time formulation:
+
+- **Paper Angular** is the current default and regression baseline. It maps
+  front/back horizons with two fast-`acos` evaluations, uses linear projected
+  angle sectors, explicit receiver/source cosines, and PI normalization.
+- **GT Uniform** constructs the projected-normal slice measure, maps directions
+  directly to uniform-solid-angle CDF mass without `acos`, quantizes 32
+  equal-mass sectors, resolves AO as open mass, retains receiver/source cosines,
+  and uses `2 * PI` irradiance normalization.
+- **GT Cosine** is represented in the API but disabled in UI. It remains gated
+  until a cosine-weighted CDF, sector meaning, GI weight, and normalization are
+  derived and pass the same reference and hardware promotion suite.
+
+The estimator is part of shader permutation identity, including AO-only,
+GI-only, combined, traversal-debug, first-bounce metadata, and later-bounce
+reinjection variants. Runtime branches cannot combine the GT CDF with paper GI
+weighting. The executable C++/HLSL equations live in
+`src/visibility_estimator_shared.h`; `src/visibility_estimator_cpu.h` supplies
+only the CPU dependency adapter. See
+[`visibility-estimator-validation.md`](visibility-estimator-validation.md) for
+the derivation, 15 deterministic fixtures, numeric baseline, and promotion
+gates.
+
 ### Radial mask contract
 
 `src/radial_visibility_mask.hlsli` has no texture dependency. Its reusable
@@ -51,10 +76,12 @@ contract is:
 
 `VisibilityInterval -> candidate bits -> newly covered bits -> accumulated mask`
 
-Each active slice owns one register-local `uint` with 32 uniform sectors. A
-zero bit is unoccluded; a one bit is occluded or already claimed by a nearer
-sample. Samples execute near-to-far on both sides of a slice. AO consumes the
-final union, while GI reads source normal/radiance only when
+Each active slice owns one register-local `uint` with 32 sectors. PaperAngular
+interprets them as equal projected-angle intervals; GTUniform interprets them
+as equal uniform-hemisphere probability mass. A zero bit is unoccluded; a one
+bit is occluded or already claimed by a nearer sample. Samples execute
+near-to-far on both sides of a slice. AO consumes the final union, while GI
+reads source normal/radiance only when
 `candidate & ~occludedBits` is nonzero. Round-to-nearest sector-span
 quantization is production default; Ceil and Floor are developer validation
 modes. Empty, complete, reversed, clamped, non-finite, and boundary intervals
@@ -80,9 +107,11 @@ averaged.
 - Slice azimuths rotate around `V`, not around the surface normal.
 - Projection through `matViewToClip` converts the world radius to pixels, so
   perspective and orthographic projection share one path.
-- Finite thickness offsets the reconstructed front delta by `-V * thickness`.
-  Optional distance scaling uses the sampled occluder's view depth, not the
-  receiver depth; no distance-falloff heuristic is hidden in mask accumulation.
+- Under perspective, finite thickness extends the sampled front point along
+  that point's own camera ray, preserving its projected `xy/w`. Orthographic
+  projection uses the camera's constant away direction. Optional distance
+  scaling uses the sampled occluder's view depth, not the receiver depth; no
+  distance-falloff heuristic is hidden in mask accumulation.
 
 Sampling is always full resolution. Quality is controlled by stochastic sample
 count rather than render resolution. The UI reports the first-bounce depth-tap
@@ -103,14 +132,15 @@ approximate environment-specular response. It does not alter direct light,
 emissive radiance, the BSDF, or the new screen-space GI.
 
 The GI output convention is diffuse irradiance. A sample contributes source
-radiance times receiver cosine, source-facing cosine, and newly covered angular
-fraction. The Algorithm 1 accumulator is multiplied by PI before storage so the
-receiver's `baseColor * (1 - metalness) / PI` reproduces the paper-scale result
-without an accidental extra 1/PI attenuation. There is no distance attenuation
-or division by radial samples/sides. Direct and ordinary emissive sources remain
-one-sided; a source texel containing a double-sided emissive card uses the
-absolute area cosine. Screen-space AO is not multiplied into GI. Metals receive
-no ordinary diffuse GI.
+radiance times receiver cosine, source-facing cosine, and newly covered sector
+measure. PaperAngular multiplies the Algorithm 1 accumulator by PI. GTUniform
+sectors represent `p(omega) = 1 / (2 * PI)`, so the matching accumulator uses
+`2 * PI`; its receiver cosine is explicit because the uniform CDF has not
+already absorbed it. There is no distance attenuation or division by radial
+samples/sides. Direct and ordinary emissive sources remain one-sided; a source
+texel containing a double-sided emissive card uses the absolute area cosine.
+Screen-space AO is not multiplied into GI. Metals receive no ordinary diffuse
+GI.
 
 **Bounces** selects one through four finite diffuse-light traversals. Bounce one
 uses only the configured direct/emissive source and produces frontier `B1`.
@@ -234,14 +264,15 @@ representative-cell loops.
 
 ### Defaults and presets
 
-The default Medium preset is full resolution with one stochastic slice, 32
-first-bounce samples per pixel divided between both horizon directions, world radius
-3, constant thickness 0.5, linear sample distribution, full radial and angular
-jitter, and exact depth by default. AO strength defaults to 1.0 so the visibility
-estimate remains clearly visible, while GI intensity and emissive gain default to
-4. GI defaults to one bounce, preserving the original traversal cost; the UI
-allows up to four. The default higher-bounce contribution cutoff is `0.001`;
-setting it to `0` requests exact-zero exits only.
+The default estimator remains PaperAngular pending the documented GTUniform
+hardware promotion gates. The default Medium preset is full resolution with one
+stochastic slice, 32 first-bounce samples per pixel divided between both horizon
+directions, world radius 3, constant thickness 0.5, linear sample distribution,
+full radial and angular jitter, and exact depth by default. AO strength defaults
+to 1.0 so the visibility estimate remains clearly visible, while GI intensity
+and emissive gain default to 4. GI defaults to one bounce, preserving the
+original traversal cost; the UI allows up to four. The default higher-bounce
+contribution cutoff is `0.001`; setting it to `0` requests exact-zero exits only.
 
 Low/Medium/High/Ultra use 16/32/48/64 total samples per pixel at full resolution.
 Editing sampling quality selects Custom without overwriting unrelated AO/GI
@@ -281,8 +312,9 @@ Markers label AO-only, GI-only, and combined traversals separately.
   current-frame sample budget; the visibility pass has no temporal or spatial
   denoiser.
 - Visibility is incomplete at screen edges; out-of-bounds samples fail open.
-- No checked-in image-regression scene suite exists; the local Bistro scenes
-  are the current GPU smoke-test content.
+- The checked-in deterministic estimator suite is CPU/slice-space rather than a
+  renderer image-regression corpus; local Bistro scenes remain the current GPU
+  smoke-test content.
 
 ## Upgrade path to unified visibility
 

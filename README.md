@@ -21,6 +21,11 @@ is also available from the scene picker.
   scene color and history resources stay at display resolution.
 - Screen-space visibility feeds current-frame AO/GI directly into composition;
   it has no temporal accumulation or spatial filtering stage.
+- The **Visibility > Shared Visibility Sampling > Estimator** control A/Bs the
+  default Paper Angular formulation against a complete no-`acos` GT Uniform
+  permutation with matching equal-mass AO/GI weighting and normalization. GT
+  Cosine remains visibly gated until the uniform path clears the documented
+  image-quality and multi-adapter performance gates.
 - The renderer selector provides **Deferred**, **Forward**, and **Forward
   Tonemapperless** modes. The tonemapperless mode renders with the forward path
   and sends its scene-linear HDR result directly to the sRGB display target,
@@ -81,15 +86,17 @@ that has not merged into `main`, plus every project or feature an agent is
 currently working on. An entry is not shipped on `main`, and experimental
 entries are not promises that the work will merge.
 
-- **GT Visibility Estimator and Reference Suite — Active Development**
+- **GT Visibility Estimator and Reference Suite — Runtime A/B Implemented;
+  Validation Active**
   (`agent/visibility-gt-estimator`). Establish deterministic CPU and brute-force
   reference truth, correct perspective thickness along each sampled point's
   camera ray, and add an explicit `PaperAngular`/`GTUniform` A/B estimator whose
   slice measure, no-`acos` CDF, stochastic sector lattice, AO resolve, GI
-  weighting, and normalization agree. Stacked worktrees isolate
-  `agent/visibility-reference` to shared CPU/HLSL estimator math, tests, fixtures,
-  and benchmark schema; the integration branch owns runtime estimator plumbing,
-  visibility shaders, UI, and design documentation; a later
+  weighting, and normalization agree. The published
+  `agent/visibility-reference` branch owns shared CPU/HLSL estimator math,
+  tests, fixtures, and benchmark schema; the integration branch now owns the
+  compiled runtime estimator permutations, sampled-ray thickness, UI, and
+  design documentation; a later
   `agent/visibility-hot-loop` branch owns measured higher-bounce and resource
   optimizations. `GTCosine` remains gated on uniform-reference promotion. This
   overlaps the filtering/specular-AA/NRD effort at GI source/output, normal, and
@@ -216,11 +223,11 @@ Direct and IDE-driven launches can instead supply the description through
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the PBR, radial-visibility, and NRA-RTAA reference tests
-separately:
+Build and run the PBR, radial-visibility, estimator, and NRA-RTAA reference
+tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_rtaa_reference_tests
+cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_rtaa_reference_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
