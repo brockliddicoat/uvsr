@@ -1,5 +1,4 @@
-#include "radial_visibility_mask.h"
-#include "visibility_estimator_shared.h"
+#include "visibility_estimator_cpu.h"
 
 #include <algorithm>
 #include <array>

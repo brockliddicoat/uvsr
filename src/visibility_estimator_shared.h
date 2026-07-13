@@ -7,12 +7,6 @@
 
 #ifdef __cplusplus
 
-#include "radial_visibility_mask.h"
-
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-
 using VisibilityEstimatorUint = std::uint32_t;
 
 struct VisibilityEstimatorFloat3
@@ -146,8 +140,6 @@ inline float VisibilityEstimatorRsqrt(float value) noexcept
 }
 
 #else
-
-#include "radial_visibility_mask.hlsli"
 
 #define VisibilityEstimatorUint uint
 #define VisibilityEstimatorFloat3 float3
