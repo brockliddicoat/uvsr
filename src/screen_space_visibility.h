@@ -60,12 +60,12 @@ namespace uvsr
         // Total stochastic depth fetches per pixel. Samples are divided between
         // the two ordered horizon directions, with the odd sample alternating
         // sides across the spatiotemporal phase sequence.
-        uint32_t sampleCount = 16;
+        uint32_t sampleCount = 32;
         float radius = 3.0f;
-        float thickness = 0.2f;
+        float thickness = 0.5f;
         bool distanceScaledThickness = false;
         float thicknessDistanceScale = 0.0025f;
-        float stepDistributionExponent = 2.0f;
+        float stepDistributionExponent = 1.0f;
         float radialJitter = 1.0f;
         // The compact five-level hierarchy is useful for long AO rays, but its
         // full-screen construction costs more than it saves for the default

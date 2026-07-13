@@ -318,21 +318,18 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         float slicePhase = (float(sliceIndex) + sliceRotation) /
             float(g_Visibility.sliceCount);
         float sliceAzimuth = slicePhase * VisibilityPi;
-        // GT-VBAO samples the slice in a local frame around V before projecting
-        // it into screen space. Uniform image-plane angles are not uniform
-        // around V under perspective and visibly over-sample off-axis slices.
-        float3 basisReference = abs(viewDirection.z) < 0.999f
-            ? float3(0.0f, 0.0f, 1.0f)
-            : float3(0.0f, 1.0f, 0.0f);
-        float3 sliceBasisX = SafeNormalize(cross(basisReference, viewDirection),
-            float3(1.0f, 0.0f, 0.0f));
-        float3 sliceBasisY = SafeNormalize(cross(viewDirection, sliceBasisX),
+        // Restore the paper/authors' coherent image-plane slice construction.
+        // The previous partial GT-VBAO conversion changed the slice basis but
+        // retained receiver-ray thickness, biasing off-axis angular intervals.
+        float3 screenSliceDirection = float3(
+            cos(sliceAzimuth), sin(sliceAzimuth), 0.0f);
+        float3 slicePlaneNormal = SafeNormalize(
+            cross(screenSliceDirection, viewDirection),
             float3(0.0f, 1.0f, 0.0f));
         float3 sliceTangent = SafeNormalize(
-            sliceBasisX * cos(sliceAzimuth) + sliceBasisY * sin(sliceAzimuth),
-            sliceBasisX);
-        float3 slicePlaneNormal = SafeNormalize(
-            cross(sliceTangent, viewDirection), sliceBasisY);
+            cross(viewDirection, slicePlaneNormal), screenSliceDirection);
+        float sectorPhase = VisibilityRandom(
+            receiverPixel, 2u + sliceIndex, phase);
 
         float3 projectedNormal = receiverNormalVS - slicePlaneNormal *
             dot(receiverNormalVS, slicePlaneNormal);
@@ -436,7 +433,10 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 
                 float samplingSide = sideIndex == 0u ? -1.0f : 1.0f;
                 float sampleDistance = distributedStep * sideProjectedRadius[sideIndex];
-                sampleDistance = max(sampleDistance, 1.0f);
+                // Preserve one unique-pixel opportunity per stochastic step.
+                // A constant one-pixel floor collapsed several early quadratic
+                // steps onto the same texel and silently reduced thin-surface SPP.
+                sampleDistance = max(sampleDistance, float(stepIndex + 1u));
                 float2 samplePixelFloat = receiverPixelCenter +
                     sidePixelDirection[sideIndex] * sampleDistance;
                 if (any(samplePixelFloat < g_Visibility.view.viewportOrigin) ||
@@ -512,8 +512,10 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     projectedNormalAngle,
                     frontAngle,
                     backAngle);
-                uint candidateBits = MakeSectorRangeMask(
-                    interval, g_Visibility.sectorHitCriterion);
+                uint candidateBits = g_Visibility.sectorHitCriterion ==
+                    SectorHitCriterion_Round
+                    ? MakeStochasticSectorRangeMask(interval, sectorPhase)
+                    : MakeSectorRangeMask(interval, g_Visibility.sectorHitCriterion);
                 if (candidateBits == 0u)
                     continue;
 

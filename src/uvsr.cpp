@@ -58,6 +58,7 @@
 
 #include "pbr_material.h"
 #include "pbr_deferred_lighting_pass.h"
+#include "gpu_performance_monitor.h"
 #include "screen_space_visibility.h"
 
 using namespace donut;
@@ -69,6 +70,14 @@ using namespace donut::render;
 using namespace uvsr;
 
 static bool g_RestartRequested = false;
+static int g_RestartAdapterIndex = -1;
+
+struct GpuAdapterChoice
+{
+    int adapterIndex = -1;
+    std::string name;
+    uint64_t dedicatedVideoMemory = 0;
+};
 
 class PbrGBufferFillPass final : public GBufferFillPass
 {
@@ -195,6 +204,15 @@ static bool CopyBmpToClipboard(const std::filesystem::path& fileName)
 static bool RestartCurrentProcess()
 {
     std::wstring commandLine = GetCommandLineW();
+    if (g_RestartAdapterIndex >= 0)
+    {
+        // ProcessCommandLine applies options from left to right, so appending
+        // the requested adapter also replaces an older -adapter option carried
+        // by a previous renderer restart without rewriting unrelated arguments.
+        commandLine += L" -adapter ";
+        commandLine += std::to_wstring(g_RestartAdapterIndex);
+    }
+
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');
 
@@ -421,7 +439,8 @@ enum class WhiteWorldMode
 {
     Off,
     On,
-    PreserveDetail
+    PreserveDetail,
+    PreserveLighting
 };
 
 enum class PbrDebugView
@@ -814,6 +833,8 @@ static AgxToneMappingParameters GetAgxPresetParameters(AgxPreset preset)
 struct UIData
 {
     bool                                ShowUI = true;
+    std::vector<GpuAdapterChoice>       GpuAdapterChoices;
+    int                                 ActiveGpuAdapterIndex = -1;
     bool                                EnablePbr = true;
     bool                                UseDeferredShading = true;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
@@ -1230,6 +1251,7 @@ public:
 
         const bool enabled = mode != WhiteWorldMode::Off;
         const bool preserveDetailMaps = mode == WhiteWorldMode::PreserveDetail;
+        const bool preserveLighting = mode == WhiteWorldMode::PreserveLighting;
 
         if (!m_Scene)
             return;
@@ -1281,8 +1303,12 @@ public:
                 material->useSpecularGlossModel = false;
                 material->baseOrDiffuseColor = dm::float3(1.f);
                 material->specularColor = dm::float3(0.04f);
-                material->emissiveColor = dm::float3(0.f);
-                material->emissiveIntensity = 1.f;
+                material->emissiveColor = preserveLighting
+                    ? original.emissiveColor
+                    : dm::float3(0.f);
+                material->emissiveIntensity = preserveLighting
+                    ? original.emissiveIntensity
+                    : 1.f;
                 material->metalness = 0.f;
                 material->roughness = 0.72f;
                 material->opacity = originalUsesAlpha ? original.opacity : 1.f;
@@ -1292,11 +1318,13 @@ public:
                 material->transmissionFactor = 0.f;
                 material->enableBaseOrDiffuseTexture = hasBaseAlpha;
                 material->enableMetalRoughOrSpecularTexture = false;
-                material->enableEmissiveTexture = false;
+                material->enableEmissiveTexture =
+                    preserveLighting && original.enableEmissiveTexture;
                 material->enableTransmissionTexture = false;
                 material->enableOpacityTexture = hasSeparateOpacity;
                 material->enableNormalTexture = preserveDetailMaps && original.enableNormalTexture;
-                material->enableOcclusionTexture = false;
+                material->enableOcclusionTexture =
+                    preserveDetailMaps && original.enableOcclusionTexture;
                 material->enableSubsurfaceScattering = false;
                 material->enableHair = false;
             }
@@ -1517,8 +1545,13 @@ public:
             // tint into otherwise white reference surfaces.
             const float topLuma = dot(m_AmbientTop, float3(0.2126f, 0.7152f, 0.0722f));
             const float bottomLuma = dot(m_AmbientBottom, float3(0.2126f, 0.7152f, 0.0722f));
-            m_AmbientTop = float3(topLuma);
-            m_AmbientBottom = float3(bottomLuma);
+            // White World is the paper/reference inspection mode. Keep direct
+            // light untouched, but give the neutral indirect term enough range
+            // for ambient visibility to be legible instead of limiting AO to a
+            // barely visible 3-6% sky contribution.
+            constexpr float WhiteWorldIndirectReferenceScale = 4.0f;
+            m_AmbientTop = float3(topLuma * WhiteWorldIndirectReferenceScale);
+            m_AmbientBottom = float3(bottomLuma * WhiteWorldIndirectReferenceScale);
         }
 
         m_RenderTargets->Clear(m_CommandList);
@@ -1745,28 +1778,10 @@ private:
     static bool DrawCollapsingHeader(
         const char* label,
         const char* tooltip,
-        float width,
         ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None)
     {
-        ImGui::PushID(label);
-        const bool childVisible = ImGui::BeginChild(
-            "##HeaderWidth",
-            ImVec2(width, ImGui::GetFrameHeight()),
-            ImGuiChildFlags_None,
-            ImGuiWindowFlags_NoBackground |
-                ImGuiWindowFlags_NoScrollbar |
-                ImGuiWindowFlags_NoScrollWithMouse |
-                ImGuiWindowFlags_NoSavedSettings);
-
-        bool open = false;
-        if (childVisible)
-        {
-            open = ImGui::CollapsingHeader(label, flags);
-            ImGui::SetItemTooltip(tooltip);
-        }
-
-        ImGui::EndChild();
-        ImGui::PopID();
+        const bool open = ImGui::CollapsingHeader(label, flags);
+        ImGui::SetItemTooltip(tooltip);
         return open;
     }
 
@@ -1839,13 +1854,68 @@ protected:
         ImGui::Text("Renderer: %s", GetDeviceManager()->GetRendererString());
         double frameTime = GetDeviceManager()->GetAverageFrameTimeSeconds();
         if (frameTime > 0.0)
-            ImGui::Text("%.3f ms/frame (%.1f FPS)  |  %d x %d", frameTime * 1e3, 1.0 / frameTime, width, height);
+        {
+            const GpuPerformanceMetrics gpuMetrics = QueryGpuPerformanceMetrics(
+                GetDeviceManager()->GetRendererString());
+            if (gpuMetrics.valid)
+            {
+                ImGui::Text("%d x %d | %.3f ms | %.1f FPS | %.1f GB/s | %.0f GFLOPS",
+                    width, height, frameTime * 1e3, 1.0 / frameTime,
+                    gpuMetrics.memoryBandwidthGBps, gpuMetrics.gpuGFlops);
+            }
+            else
+            {
+                ImGui::Text("%d x %d | %.3f ms | %.1f FPS | -- GB/s | -- GFLOPS",
+                    width, height, frameTime * 1e3, 1.0 / frameTime);
+            }
+            ImGui::SetItemTooltip(
+                "Current-clock theoretical memory bandwidth and FP32 peak for supported Intel and NVIDIA adapters, not measured workload utilization.");
+        }
 
         const ImGuiStyle& style = ImGui::GetStyle();
         const float settingsControlWidth =
             ImGui::CalcTextSize("Reload Shaders").x + style.FramePadding.x * 2.f +
             style.ItemSpacing.x +
             ImGui::CalcTextSize("Restart Renderer").x + style.FramePadding.x * 2.f;
+
+        if (!m_ui.GpuAdapterChoices.empty())
+        {
+            const GpuAdapterChoice* activeAdapter = nullptr;
+            for (const GpuAdapterChoice& adapter : m_ui.GpuAdapterChoices)
+            {
+                if (adapter.adapterIndex == m_ui.ActiveGpuAdapterIndex)
+                {
+                    activeAdapter = &adapter;
+                    break;
+                }
+            }
+
+            ImGui::TextUnformatted("Graphics Adapter");
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            const char* activeAdapterName = activeAdapter
+                ? activeAdapter->name.c_str()
+                : "Unknown adapter";
+            if (ImGui::BeginCombo("##GraphicsAdapter", activeAdapterName))
+            {
+                for (const GpuAdapterChoice& adapter : m_ui.GpuAdapterChoices)
+                {
+                    const bool selected =
+                        adapter.adapterIndex == m_ui.ActiveGpuAdapterIndex;
+                    if (ImGui::Selectable(adapter.name.c_str(), selected) && !selected)
+                    {
+                        g_RestartAdapterIndex = adapter.adapterIndex;
+                        g_RestartRequested = true;
+                        glfwSetWindowShouldClose(
+                            GetDeviceManager()->GetWindow(), GLFW_TRUE);
+                    }
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip(
+                "Choose the GPU used by UVSR. Changing adapters restarts the renderer immediately.");
+        }
 
         const std::string sceneDir = m_app->GetSceneDir().generic_string();
         
@@ -1915,7 +1985,8 @@ protected:
         }
         ImGui::SetItemTooltip("Restart UVSR and recreate the renderer.");
 
-        if (ImGui::Button("Reset All", ImVec2(settingsControlWidth, 0.f)))
+        ImGui::SameLine();
+        if (ImGui::Button("Reset All Settings", ImVec2(-FLT_MIN, 0.f)))
             m_app->ResetAllRendererSettings();
         ImGui::SetItemTooltip(
             "Restore factory renderer, visibility, tonemapper, LUT, sky, and white-world settings. Camera and scene edits are left in place.");
@@ -1949,13 +2020,14 @@ protected:
         static const char* whiteWorldLabels[] = {
             "White World Off",
             "White World On",
-            "White World Preserve Normals"
+            "White World Preserve Normals",
+            "White World Preserve Emissives"
         };
         ImGui::SetNextItemWidth(-FLT_MIN);
         const bool whiteWorldComboOpen = ImGui::BeginCombo(
             "##WhiteWorld", whiteWorldLabels[int(m_ui.WhiteWorld)]);
         ImGui::SetItemTooltip(
-            "Override material color while optionally preserving surface detail.");
+            "Override material color while optionally preserving surface detail or colored GI sources.");
         if (whiteWorldComboOpen)
         {
             for (int modeIndex = 0; modeIndex < int(std::size(whiteWorldLabels)); ++modeIndex)
@@ -1984,7 +2056,6 @@ protected:
         const bool indirectLightingOpen = DrawCollapsingHeader(
             "Screen-Space Indirect Lighting",
             "Configure the shared visibility traversal used by ambient occlusion and diffuse GI.",
-            ImGui::GetContentRegionAvail().x,
             ImGuiTreeNodeFlags_DefaultOpen);
         if (indirectLightingOpen)
         {
@@ -2020,9 +2091,16 @@ protected:
             if (const ScreenSpaceVisibilityTimings* timings =
                 m_app->GetScreenSpaceVisibilityTimings())
             {
-                ImGui::Text("VBIL %.2f ms", timings->CompleteEffectMs());
+                const float traceMilliseconds =
+                    timings->depthHierarchyMs + timings->samplingMs;
+                const float filterMilliseconds =
+                    timings->temporalMs + timings->spatialMs;
+                ImGui::Text(
+                    "All %.2f ms | Trace %.2f ms | Filter %.2f ms | Composite %.2f ms",
+                    timings->CompleteEffectMs(), traceMilliseconds,
+                    filterMilliseconds, timings->compositionMs);
                 ImGui::SetItemTooltip(
-                    "Latest total GPU time. Includes hierarchy, sampling, temporal, spatial, and composite passes.");
+                    "Latest GPU times. Trace groups hierarchy and sampling; Filter groups temporal and spatial passes.");
             }
 
             if (!visibility.enabled)
@@ -2052,7 +2130,7 @@ protected:
                     ImGui::EndDisabled();
 
                 int sampleCount = int(sampling.sampleCount);
-                if (ImGui::SliderInt("Samples Per Pixel", &sampleCount, 1, 32))
+                if (ImGui::SliderInt("Samples Per Pixel", &sampleCount, 1, 64))
                 {
                     sampling.sampleCount = uint32_t(sampleCount);
                     samplingChanged = true;
@@ -2244,8 +2322,7 @@ protected:
 
         const bool tonemapperOpen = DrawCollapsingHeader(
             "Tonemapper",
-            "Expand AgX tonemapping and grading controls.",
-            ImGui::GetContentRegionAvail().x);
+            "Expand AgX tonemapping and grading controls.");
         if (tonemapperOpen)
         {
             static const char* presetLabels[] = {
@@ -2335,7 +2412,7 @@ protected:
         }
 
         const bool skyOpen = DrawCollapsingHeader(
-            "Sky", "Expand procedural sky controls.", ImGui::GetContentRegionAvail().x);
+            "Sky", "Expand procedural sky controls.");
         if (skyOpen)
         {
             if (!m_ui.EnableProceduralSky)
@@ -2368,7 +2445,7 @@ protected:
         }
 
         const bool lightsOpen = !lights.empty() && DrawCollapsingHeader(
-            "Lights", "Expand scene-light controls.", ImGui::GetContentRegionAvail().x);
+            "Lights", "Expand scene-light controls.");
         if (lightsOpen)
         {
             ImGui::SetNextItemWidth(settingsControlWidth);
@@ -2426,7 +2503,12 @@ protected:
     }
 };
 
-void ProcessCommandLine(int argc, const char* const* argv, DeviceCreationParameters& deviceParams, std::string& sceneName)
+void ProcessCommandLine(
+    int argc,
+    const char* const* argv,
+    DeviceCreationParameters& deviceParams,
+    std::string& sceneName,
+    std::string& experimentName)
 {
     for (int i = 1; i < argc; i++)
     {
@@ -2447,11 +2529,115 @@ void ProcessCommandLine(int argc, const char* const* argv, DeviceCreationParamet
             deviceParams.enableDebugRuntime = true;
             deviceParams.enableNvrhiValidationLayer = true;
         }
+        else if (!strcmp(argv[i], "-adapter") && i + 1 < argc)
+        {
+            deviceParams.adapterIndex = std::stoi(argv[++i]);
+        }
+        else if ((!strcmp(argv[i], "--experiment") || !strcmp(argv[i], "-experiment"))
+            && i + 1 < argc)
+        {
+            experimentName = argv[++i];
+        }
         else if (argv[i][0] != '-')
         {
             sceneName = argv[i];
         }
     }
+}
+
+bool SelectGraphicsAdapter(
+    DeviceManager* deviceManager,
+    DeviceCreationParameters& deviceParams,
+    std::vector<GpuAdapterChoice>& adapterChoices)
+{
+    // Donut's DX12 fallback selects DXGI adapter zero. On hybrid laptops that
+    // is commonly the integrated GPU even when a much faster discrete GPU is
+    // available. Enumerate once before device creation and prefer the usable
+    // adapter with the most dedicated video memory. This is stable across
+    // machines and avoids hard-coding a vendor name or a machine-specific
+    // adapter index.
+    if (!deviceManager->CreateInstance(deviceParams))
+    {
+        log::error("Cannot initialize DXGI while selecting a graphics adapter");
+        return false;
+    }
+
+    std::vector<AdapterInfo> adapters;
+    if (!deviceManager->EnumerateAdapters(adapters) || adapters.empty())
+    {
+        log::error("Cannot enumerate DXGI graphics adapters");
+        return false;
+    }
+
+    adapterChoices.clear();
+    const bool automaticSelection = deviceParams.adapterIndex < 0;
+    int bestAdapterIndex = -1;
+    uint64_t bestDedicatedVideoMemory = 0;
+    for (size_t index = 0; index < adapters.size(); ++index)
+    {
+        const AdapterInfo& adapter = adapters[index];
+        nvrhi::RefCountPtr<IDXGIAdapter1> adapter1;
+        DXGI_ADAPTER_DESC1 adapterDescription{};
+        if (FAILED(adapter.dxgiAdapter->QueryInterface(IID_PPV_ARGS(&adapter1))) ||
+            FAILED(adapter1->GetDesc1(&adapterDescription)) ||
+            (adapterDescription.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0)
+        {
+            continue;
+        }
+
+        if (FAILED(D3D12CreateDevice(
+                adapter.dxgiAdapter,
+                deviceParams.featureLevel,
+                __uuidof(ID3D12Device),
+                nullptr)))
+        {
+            continue;
+        }
+
+        adapterChoices.push_back(GpuAdapterChoice{
+            static_cast<int>(index),
+            adapter.name,
+            adapter.dedicatedVideoMemory
+        });
+
+        if (automaticSelection &&
+            (bestAdapterIndex < 0 || adapter.dedicatedVideoMemory > bestDedicatedVideoMemory))
+        {
+            bestAdapterIndex = static_cast<int>(index);
+            bestDedicatedVideoMemory = adapter.dedicatedVideoMemory;
+        }
+    }
+
+    if (adapterChoices.empty())
+    {
+        log::error("No enumerated adapter supports the requested D3D12 feature level");
+        return false;
+    }
+
+    if (automaticSelection)
+        deviceParams.adapterIndex = bestAdapterIndex;
+
+    const auto selectedChoice = std::find_if(
+        adapterChoices.begin(),
+        adapterChoices.end(),
+        [&deviceParams](const GpuAdapterChoice& choice)
+        {
+            return choice.adapterIndex == deviceParams.adapterIndex;
+        });
+    if (selectedChoice == adapterChoices.end())
+    {
+        log::error(
+            "Requested DXGI adapter %d is unavailable or does not support the requested D3D12 feature level",
+            deviceParams.adapterIndex);
+        return false;
+    }
+
+    log::info(
+        "Selected graphics adapter %d: %s (%llu MiB dedicated VRAM)",
+        selectedChoice->adapterIndex,
+        selectedChoice->name.c_str(),
+        static_cast<unsigned long long>(selectedChoice->dedicatedVideoMemory / (1024ull * 1024ull)));
+    return true;
 }
 
 #ifdef _WIN32
@@ -2475,16 +2661,26 @@ int main(int __argc, const char* const* __argv)
     deviceParams.supportExplicitDisplayScaling = true;
     
     std::string sceneName;
-    ProcessCommandLine(__argc, __argv, deviceParams, sceneName);
+    std::string experimentName;
+    ProcessCommandLine(__argc, __argv, deviceParams, sceneName, experimentName);
 
     // UVSR intentionally runs uncapped; the renderer no longer exposes or
     // maintains a runtime VSync mode.
     deviceParams.vsyncEnabled = false;
     
     DeviceManager* deviceManager = DeviceManager::Create(api);
+    std::vector<GpuAdapterChoice> adapterChoices;
+    if (!SelectGraphicsAdapter(deviceManager, deviceParams, adapterChoices))
+    {
+        delete deviceManager;
+        return 1;
+    }
+
     const char* apiString = nvrhi::utils::GraphicsAPIToString(deviceManager->GetGraphicsAPI());
 
-    std::string windowTitle = "UVSR NVIDIA Bistro (" + std::string(apiString) + ")";
+    std::string windowTitle = "UVSR Renderer, " + std::string(apiString);
+    if (!experimentName.empty())
+        windowTitle += " (" + experimentName + ")";
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, windowTitle.c_str()))
 	{
@@ -2494,6 +2690,8 @@ int main(int __argc, const char* const* __argv)
 
     {
         UIData uiData;
+        uiData.GpuAdapterChoices = std::move(adapterChoices);
+        uiData.ActiveGpuAdapterIndex = deviceParams.adapterIndex;
 
         std::shared_ptr<UvsrSceneViewer> demo = std::make_shared<UvsrSceneViewer>(deviceManager, uiData, sceneName);
         std::shared_ptr<UIRenderer> gui = std::make_shared<UIRenderer>(deviceManager, demo, uiData);

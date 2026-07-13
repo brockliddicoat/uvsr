@@ -134,6 +134,41 @@ uint MakeSectorRangeMask(VisibilityInterval interval)
     return MakeSectorRangeMask(interval, SectorHitCriterion_Round);
 }
 
+// GT-VBAO-style point-sample quantization for the production Round path.
+// Shifting both endpoints by the same sub-sector phase makes intervals below
+// one sector contribute with probability proportional to their angular span,
+// instead of deterministically dropping thin and distant occluders forever.
+uint MakeStochasticSectorRangeMask(
+    VisibilityInterval interval,
+    float sectorPhase)
+{
+    if (!isfinite(interval.minimumAngle01) ||
+        !isfinite(interval.maximumAngle01) ||
+        !isfinite(sectorPhase))
+    {
+        return 0u;
+    }
+
+    float minimum = saturate(min(
+        interval.minimumAngle01, interval.maximumAngle01));
+    float maximum = saturate(max(
+        interval.minimumAngle01, interval.maximumAngle01));
+    if (!(maximum > minimum))
+        return 0u;
+
+    float phase = frac(sectorPhase);
+    uint firstSector = (uint)clamp(
+        floor(minimum * float(RadialVisibilitySectorCount) + phase),
+        0.0f, float(RadialVisibilitySectorCount));
+    uint endSector = (uint)clamp(
+        floor(maximum * float(RadialVisibilitySectorCount) + phase),
+        0.0f, float(RadialVisibilitySectorCount));
+    if (endSector <= firstSector)
+        return 0u;
+
+    return RadialVisibilityMakeLowBitMask(endSector - firstSector) << firstSector;
+}
+
 uint GetNewlyCoveredBits(uint candidateBits, uint existingBits)
 {
     return candidateBits & ~existingBits;

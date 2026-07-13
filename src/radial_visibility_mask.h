@@ -90,6 +90,39 @@ inline uint32_t MakeSectorRangeMask(
     return radial_visibility_detail::MakeLowBitMask(endSector - firstSector) << firstSector;
 }
 
+inline uint32_t MakeStochasticSectorRangeMask(
+    float minimumAngle01,
+    float maximumAngle01,
+    float sectorPhase) noexcept
+{
+    if (!std::isfinite(minimumAngle01) ||
+        !std::isfinite(maximumAngle01) ||
+        !std::isfinite(sectorPhase))
+    {
+        return 0u;
+    }
+
+    double minimum = std::clamp(static_cast<double>(minimumAngle01), 0.0, 1.0);
+    double maximum = std::clamp(static_cast<double>(maximumAngle01), 0.0, 1.0);
+    if (maximum < minimum)
+        std::swap(minimum, maximum);
+    if (!(maximum > minimum))
+        return 0u;
+
+    double phase = static_cast<double>(sectorPhase) -
+        std::floor(static_cast<double>(sectorPhase));
+    const uint32_t firstSector = static_cast<uint32_t>(std::clamp(
+        std::floor(minimum * RadialVisibilitySectorCount + phase),
+        0.0, static_cast<double>(RadialVisibilitySectorCount)));
+    const uint32_t endSector = static_cast<uint32_t>(std::clamp(
+        std::floor(maximum * RadialVisibilitySectorCount + phase),
+        0.0, static_cast<double>(RadialVisibilitySectorCount)));
+    if (endSector <= firstSector)
+        return 0u;
+
+    return radial_visibility_detail::MakeLowBitMask(endSector - firstSector) << firstSector;
+}
+
 constexpr uint32_t GetNewlyCoveredBits(uint32_t candidateBits, uint32_t existingBits) noexcept
 {
     return candidateBits & ~existingBits;

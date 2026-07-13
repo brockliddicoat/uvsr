@@ -65,10 +65,10 @@ namespace uvsr
         if (quality != ScreenSpaceVisibilityQuality::Custom)
         {
             settings.sampling.radius = 3.0f;
-            settings.sampling.thickness = 0.2f;
+            settings.sampling.thickness = 0.5f;
             settings.sampling.distanceScaledThickness = false;
             settings.sampling.thicknessDistanceScale = 0.0025f;
-            settings.sampling.stepDistributionExponent = 2.0f;
+            settings.sampling.stepDistributionExponent = 1.0f;
             settings.sampling.radialJitter = 1.0f;
             settings.sampling.useDepthHierarchy = false;
         }
@@ -76,28 +76,28 @@ namespace uvsr
         switch (quality)
         {
         case ScreenSpaceVisibilityQuality::Low:
-            settings.sampling.sampleCount = 8;
-            settings.filtering.temporalEnabled = true;
-            settings.filtering.spatialEnabled = true;
-            settings.filtering.spatialRadius = 1;
-            break;
-
-        case ScreenSpaceVisibilityQuality::Medium:
             settings.sampling.sampleCount = 16;
             settings.filtering.temporalEnabled = true;
             settings.filtering.spatialEnabled = true;
             settings.filtering.spatialRadius = 1;
             break;
 
+        case ScreenSpaceVisibilityQuality::Medium:
+            settings.sampling.sampleCount = 32;
+            settings.filtering.temporalEnabled = true;
+            settings.filtering.spatialEnabled = true;
+            settings.filtering.spatialRadius = 1;
+            break;
+
         case ScreenSpaceVisibilityQuality::High:
-            settings.sampling.sampleCount = 24;
+            settings.sampling.sampleCount = 48;
             settings.filtering.temporalEnabled = true;
             settings.filtering.spatialEnabled = true;
             settings.filtering.spatialRadius = 1;
             break;
 
         case ScreenSpaceVisibilityQuality::Ultra:
-            settings.sampling.sampleCount = 32;
+            settings.sampling.sampleCount = 64;
             settings.filtering.temporalEnabled = true;
             settings.filtering.spatialEnabled = true;
             settings.filtering.spatialRadius = 2;
@@ -230,6 +230,7 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(9),
             nvrhi::BindingLayoutItem::Texture_SRV(10),
             nvrhi::BindingLayoutItem::Texture_SRV(11),
+            nvrhi::BindingLayoutItem::Texture_SRV(12),
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         });
     }
@@ -554,7 +555,7 @@ namespace uvsr
         constants.ambientColorBottom = ambientColorBottom;
         constants.frameIndex = settings.debug.freezeSamplingPhase ? 0u : frameIndex;
         constants.sliceCount = 1u;
-        constants.sampleCount = std::clamp(settings.sampling.sampleCount, 1u, 32u);
+        constants.sampleCount = std::clamp(settings.sampling.sampleCount, 1u, 64u);
         constants.resolutionScale = m_ResolutionScale;
         constants.enableAmbientOcclusion = settings.ambientOcclusion.enabled ? 1u : 0u;
         constants.enableIndirectDiffuse = settings.indirectDiffuse.enabled ? 1u : 0u;
@@ -747,6 +748,7 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(10, inputs.sourceRadiance),
                 nvrhi::BindingSetItem::Texture_SRV(11,
                     m_HistoryValidity ? m_HistoryValidity.Get() : m_RawAmbientVisibility.Get()),
+                nvrhi::BindingSetItem::Texture_SRV(12, inputs.gbufferSpecular),
                 nvrhi::BindingSetItem::Texture_UAV(0, inputs.output)
             };
             nvrhi::BindingSetHandle bindingSet = m_Device->createBindingSet(bindings, m_Composite.bindingLayout);

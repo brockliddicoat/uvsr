@@ -269,6 +269,31 @@ namespace
         }
     }
 
+    void TestStochasticPointQuantization()
+    {
+        constexpr float SectorWidth = 1.f /
+            static_cast<float>(RadialVisibilitySectorCount);
+        const float minimum = 5.10f * SectorWidth;
+        const float maximum = 5.35f * SectorWidth;
+
+        RequireEqual(
+            MakeStochasticSectorRangeMask(minimum, maximum, 0.0f),
+            0u,
+            "A sub-sector interval may miss the unshifted point lattice");
+        RequireEqual(
+            MakeStochasticSectorRangeMask(minimum, maximum, 0.75f),
+            0x00000020u,
+            "A shifted point lattice probabilistically retains a thin interval");
+        RequireEqual(
+            MakeStochasticSectorRangeMask(0.f, 1.f, 0.37f),
+            RadialVisibilityFullMask,
+            "Stochastic quantization preserves a full interval");
+        RequireEqual(
+            MakeStochasticSectorRangeMask(minimum, maximum, 1.75f),
+            MakeStochasticSectorRangeMask(minimum, maximum, 0.75f),
+            "Stochastic sector phase wraps at one");
+    }
+
     void TestAccumulation()
     {
         RadialVisibilityMask mask;
@@ -377,6 +402,7 @@ int main()
     TestSectorBoundaryIntervals();
     TestHitCriteria();
     TestRangeNormalization();
+    TestStochasticPointQuantization();
     TestAccumulation();
     TestCountsAndVisibility();
 

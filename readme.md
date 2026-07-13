@@ -11,13 +11,19 @@ is also available from the scene picker.
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
-- Renderer settings always start from factory defaults; **Reset All** restores
-  those defaults in-session, and settings are not carried between launches.
+- Renderer settings always start from factory defaults; **Reset All Settings**
+  restores those defaults in-session, and settings are not carried between
+  launches.
+- The HUD performance row reports resolution, frame time, FPS, current-clock
+  memory bandwidth, and current-clock FP32 peak GFLOPS. The **All** row stays
+  compact with total, Trace, Filter, and Composite GPU timings.
 - **Enable PBR** switches between UVSR's shared forward/deferred
   metallic-roughness PBR path and Donut's legacy material-lighting path while
   retaining the same camera, scene, tone grade, sky, and lights.
-- **White World Off** is the default. **White World On** and **White World
-  Preserve Normals** override material color without modifying source assets.
+- **White World Off** is the default. **White World On**, **White World Preserve
+  Normals**, and **White World Preserve Emissives** override material color
+  without modifying source assets. The last mode keeps authored emissive color
+  alongside the scene's colored direct lights so GI sources remain easy to read.
 - Camera controls are limited to **First Person** and **Third Person**.
 - The first scene light is selected automatically in the **Lights** panel.
 - The AgX display pipeline provides Base, Punchy, Golden, Mix, and Custom
@@ -36,6 +42,10 @@ Requirements:
 - CMake 3.24 or newer
 - A C++17-capable Visual Studio toolchain
 - Git submodules initialized
+
+At startup, UVSR selects the D3D12-capable adapter with the most dedicated
+video memory. The **Graphics Adapter** selector lists every compatible GPU and
+restarts the renderer immediately on the selected adapter.
 
 The Bistro source assets are licensed local content and are intentionally
 gitignored. Before building, place these files in
@@ -56,6 +66,15 @@ cmake -S . -B build
 cmake --build build --config Release --target uvsr
 .\build\bin\uvsr.exe
 ```
+
+Label an experimental run in the window and task title with:
+
+```powershell
+.\build\bin\uvsr.exe --experiment "testing program title on task title"
+```
+
+The title reports the active graphics API at runtime, for example
+`UVSR Renderer, D3D12 (testing program title on task title)`.
 
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.

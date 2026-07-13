@@ -66,6 +66,7 @@ donut_compile_shaders_all_platforms(
 )
 
 add_executable(uvsr WIN32
+    src/gpu_performance_monitor.cpp
     src/uvsr.cpp
     src/pbr_deferred_lighting_pass.cpp
     src/screen_space_visibility.cpp

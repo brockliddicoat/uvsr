@@ -133,18 +133,19 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float3 debugSum = centerDebug;
     float weightSum = 1.0f;
 
-    // Cross-bilateral filtering reduces the default radius-one footprint from
-    // nine neighbors to five. The sampling phase rotates independently per
-    // frame, so temporal accumulation supplies the missing diagonal coverage
-    // without the old 9/25-tap cost or diagonal silhouette bleeding.
-    static const int2 FilterDirections[4] = {
-        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
+    // Restore the complete radius-one neighborhood. Diagonal chair rails and
+    // other thin geometry cannot rely on temporal rotation alone for stable
+    // edge-aware reconstruction.
+    static const int2 FilterDirections[8] = {
+        int2(-1, -1), int2(0, -1), int2(1, -1),
+        int2(-1,  0),                 int2(1,  0),
+        int2(-1,  1), int2(0,  1), int2(1,  1)
     };
     [loop]
     for (int distance = 1; distance <= radius; ++distance)
     {
         [unroll]
-        for (uint directionIndex = 0u; directionIndex < 4u; ++directionIndex)
+        for (uint directionIndex = 0u; directionIndex < 8u; ++directionIndex)
         {
             int2 neighbor = int2(pixel) + FilterDirections[directionIndex] * distance;
             if (any(neighbor < 0) || any(neighbor >= int2(g_Visibility.samplingResolution)))

@@ -157,12 +157,14 @@ void main(uint2 pixel : SV_DispatchThreadID)
         {
             // Build the current-frame clamp only after reprojection passes its
             // cheap bounds/depth/normal tests. Rejected and first-frame pixels
-            // avoid all four neighboring AO/GI signal reads.
-            static const int2 ClampOffsets[4] = {
-                int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
+            // avoid all eight neighboring AO/GI signal reads.
+            static const int2 ClampOffsets[8] = {
+                int2(-1, -1), int2(0, -1), int2(1, -1),
+                int2(-1,  0),                 int2(1,  0),
+                int2(-1,  1), int2(0,  1), int2(1,  1)
             };
             [unroll]
-            for (uint offsetIndex = 0u; offsetIndex < 4u; ++offsetIndex)
+            for (uint offsetIndex = 0u; offsetIndex < 8u; ++offsetIndex)
             {
                 int2 neighbor = clamp(int2(pixel) + ClampOffsets[offsetIndex], 0,
                     int2(g_Visibility.samplingResolution) - 1);
