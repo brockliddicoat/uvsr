@@ -151,14 +151,16 @@ The default Medium preset is full resolution with one stochastic slice, 32
 total samples per pixel divided between both horizon directions, world radius
 3, constant thickness 0.5, linear sample distribution, full radial and angular
 jitter, exact depth by default, temporal responses 0.90 AO /
-0.94 GI, bilateral radius 1, depth rejection 0.02, and normal dot threshold
-0.85. AO and GI start enabled; AO strength defaults to 1.0 so the visibility
-estimate remains clearly visible, while GI intensity and emissive gain default
-to 4.
+0.94 GI, depth rejection 0.02, and normal dot threshold 0.85. AO, GI, and
+temporal accumulation start enabled; spatial filtering starts disabled. Its
+stored bilateral radius is 1 so enabling it explicitly does not require another
+control change. AO strength defaults to 1.0 so the visibility estimate remains
+clearly visible, while GI intensity and emissive gain default to 4.
 
 Low/Medium/High/Ultra use 16/32/48/64 total samples per pixel at full resolution.
-Editing sampling or filter quality selects Custom without overwriting unrelated
-AO/GI controls.
+All quality presets leave spatial filtering disabled while retaining radius 1
+for Low/Medium/High and radius 2 for Ultra. Editing sampling or filter quality
+selects Custom without overwriting unrelated AO/GI controls.
 Hierarchical view depth is opt-in: at the default 3 m radius its construction
 cost exceeded its saved depth traffic in dense 1080p profiling. It remains
 available for AO-only workloads with longer projected rays.

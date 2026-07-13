@@ -11,6 +11,8 @@ is also available from the scene picker.
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
+- Screen-space temporal accumulation starts enabled; its optional spatial
+  bilateral filter starts disabled to preserve fine image detail.
 - Renderer settings always start from factory defaults; **Reset All Settings**
   restores those defaults in-session, and settings are not carried between
   launches.

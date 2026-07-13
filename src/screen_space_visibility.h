@@ -96,7 +96,7 @@ namespace uvsr
         bool temporalEnabled = true;
         float aoTemporalResponse = 0.90f;
         float giTemporalResponse = 0.94f;
-        bool spatialEnabled = true;
+        bool spatialEnabled = false;
         uint32_t spatialRadius = 1;
         float depthRejection = 0.02f;
         float normalRejection = 0.85f;
