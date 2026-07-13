@@ -19,7 +19,7 @@
 
 ## Coming Soon coordination
 
-- Treat the complete **Coming Soon** section in `readme.md` as the shared
+- Treat the complete **Coming Soon** section in `README.md` as the shared
   coordination ledger for every unmerged project or feature and every project
   or feature an agent is currently working on, including experiments.
 - At the start of every project or feature task, before writing implementation
@@ -54,6 +54,15 @@
   refactor. Follow it with focused commits after verification.
 - Format every commit subject in lowercase as `<type>: <description>`, where
   `<type>` is a one-word summary such as `fix`, `feat`, `docs`, or `checkpoint`.
+- Before pushing an agent branch, review every agent-authored commit that is not
+  in its target branch and rewrite any nonconforming subject to the required
+  lowercase format. Do not rewrite already-published or merged history without
+  the user's explicit authorization.
+- When the user explicitly authorizes a GitHub update, use a lowercase
+  `<type>: <description>` pull-request title. If creating a merge commit, set
+  its subject to `merge: pull request #<number> <description>` in lowercase
+  (for example, `merge: pull request #5 update renderer documentation`) instead
+  of accepting GitHub's generated `Merge pull request #...` subject.
 - For cleanup work, trace references before deleting. Remove an obsolete feature
   end to end: source and declarations, CPU/UI state, GPU resources, shader entry
   points and files, `shaders.cfg`, CMake/runtime packaging, assets, tests, and
@@ -85,12 +94,12 @@
 
 ## Documentation
 
-- Keep the root file named lowercase `readme.md`.
-- Use title capitalization for prominent bold text in `readme.md`, such as the
-  document title, section or project headings, and bold list-item headings.
-  Leave inline UI labels, control names, and product names at their established
-  casing.
-- Update `readme.md` whenever a change affects user-visible behavior, defaults,
+- Keep the root file named `README.md`.
+- Use title capitalization for Markdown headings and prominent bold text in
+  `README.md`, including the document title, section or project headings, and
+  bold list-item headings. Leave inline UI labels, control names, and product
+  names at their established casing.
+- Update `README.md` whenever a change affects user-visible behavior, defaults,
   controls, required assets, build/test/run steps, or intentional omissions.
   Remove stale claims instead of preserving historical behavior.
 - Update `docs/pbr-foundation.md` when the material contract, G-buffer packing,
