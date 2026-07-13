@@ -23,6 +23,8 @@
   user changes and never discard them to simplify a task.
 - Create a named checkpoint commit before broad deletion, pruning, or a risky
   refactor. Follow it with focused commits after verification.
+- Format every commit subject in lowercase as `<type>: <description>`, where
+  `<type>` is a one-word summary such as `fix`, `feat`, `docs`, or `checkpoint`.
 - For cleanup work, trace references before deleting. Remove an obsolete feature
   end to end: source and declarations, CPU/UI state, GPU resources, shader entry
   points and files, `shaders.cfg`, CMake/runtime packaging, assets, tests, and
@@ -58,8 +60,11 @@
   Remove stale claims instead of preserving historical behavior.
 - Update `docs/pbr-foundation.md` when the material contract, G-buffer packing,
   BSDF equations, debug views, limitations, or extension path changes.
-- Keep code comments focused on non-obvious invariants and workarounds; do not
-  narrate straightforward code.
+- Prefer extensive, high-signal code comments that preserve implementation
+  reasoning: design intent, invariants, assumptions, tradeoffs, edge cases,
+  failure modes, and non-obvious cross-component interactions. Optimize comments
+  for human debuggability and future LLM inference, while avoiding comments that
+  merely restate straightforward syntax.
 
 ## Verification
 
