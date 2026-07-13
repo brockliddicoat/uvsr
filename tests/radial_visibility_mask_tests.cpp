@@ -39,6 +39,32 @@ namespace
         return std::abs(actual - expected) <= tolerance;
     }
 
+    struct Float2
+    {
+        float x;
+        float y;
+    };
+
+    Float2 ReprojectTemporalHistory(
+        Float2 currentPixelCenter,
+        Float2 deJitteredMotion,
+        Float2 currentJitter,
+        Float2 previousJitter)
+    {
+        return {
+            currentPixelCenter.x + deJitteredMotion.x -
+                currentJitter.x + previousJitter.x,
+            currentPixelCenter.y + deJitteredMotion.y -
+                currentJitter.y + previousJitter.y
+        };
+    }
+
+    bool IsValidTemporalMotion(const std::array<float, 4>& motion)
+    {
+        return motion[3] > 0.5f && std::isfinite(motion[0]) &&
+            std::isfinite(motion[1]) && std::isfinite(motion[2]);
+    }
+
     uint32_t ExpectedRangeMask(uint32_t firstSector, uint32_t sectorCount)
     {
         if (sectorCount == 0u)
@@ -395,6 +421,42 @@ namespace
         Require(Near(GetSliceVisibility(alternating), 0.5f),
             "Half mask visibility is one half");
     }
+
+    void TestTemporalReprojectionCoordinates()
+    {
+        const Float2 currentPixelCenter{ 640.5f, 360.5f };
+        const Float2 motion{ 2.25f, -1.75f };
+
+        const Float2 equalJitter{ 0.25f, -0.125f };
+        const Float2 equalGrid = ReprojectTemporalHistory(
+            currentPixelCenter, motion, equalJitter, equalJitter);
+        Require(Near(equalGrid.x, currentPixelCenter.x + motion.x) &&
+            Near(equalGrid.y, currentPixelCenter.y + motion.y),
+            "equal jitters reduce raw-history reprojection to current plus motion");
+
+        const Float2 currentJitter{ 0.45f, -0.40f };
+        const Float2 previousJitter{ -0.45f, 0.40f };
+        const Float2 stationaryGrid = ReprojectTemporalHistory(
+            currentPixelCenter, { 0.0f, 0.0f },
+            currentJitter, previousJitter);
+        Require(Near(stationaryGrid.x, currentPixelCenter.x - 0.90f) &&
+            Near(stationaryGrid.y, currentPixelCenter.y + 0.80f),
+            "opposing jitters address the raw producer grid with previous-current delta");
+
+        const Float2 movingGrid = ReprojectTemporalHistory(
+            currentPixelCenter, motion, currentJitter, previousJitter);
+        Require(Near(movingGrid.x, currentPixelCenter.x + motion.x - 0.90f) &&
+            Near(movingGrid.y, currentPixelCenter.y + motion.y + 0.80f),
+            "de-jittered motion and the raw-grid jitter delta are each applied once");
+
+        Require(IsValidTemporalMotion({ 0.0f, 0.0f, 0.0f, 1.0f }),
+            "a finite static surface has valid zero motion");
+        Require(!IsValidTemporalMotion({ 0.0f, 0.0f, 0.0f, 0.0f }),
+            "a cleared or behind-camera sample cannot masquerade as static motion");
+        Require(!IsValidTemporalMotion({
+            std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f, 1.0f }),
+            "non-finite motion is rejected even when its validity bit is set");
+    }
 }
 
 int main()
@@ -405,6 +467,7 @@ int main()
     TestStochasticPointQuantization();
     TestAccumulation();
     TestCountsAndVisibility();
+    TestTemporalReprojectionCoordinates();
 
     std::cout << "UVSR radial visibility mask validation passed\n";
     return EXIT_SUCCESS;

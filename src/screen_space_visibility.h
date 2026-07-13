@@ -302,6 +302,7 @@ namespace uvsr
         dm::float3 m_PreviousCameraOrigin = dm::float3::zero();
         dm::float3 m_PreviousCameraDirection = dm::float3(0.f, 0.f, 1.f);
         dm::float4x4 m_PreviousProjection = dm::float4x4::identity();
+        dm::float2 m_PreviousJitter = dm::float2::zero();
 
         std::array<std::array<nvrhi::TimerQueryHandle, c_TimerLatency>,
             static_cast<size_t>(Stage::Count)> m_TimerQueries;

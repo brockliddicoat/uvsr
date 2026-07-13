@@ -60,8 +60,11 @@ struct ScreenSpaceVisibilityConstants
 
     uint orthographicProjection;
     uint useDepthHierarchy;
-    uint padding3;
-    uint padding4;
+    // Motion XY is de-jittered, while AO/GI and their validation surfaces are
+    // written on the raw jittered grid. The current jitter is already carried
+    // by view.pixelOffset; retain the producer frame's jitter here so temporal
+    // reprojection can address raw history without applying the delta twice.
+    float2 previousJitter;
 };
 
 #endif // UVSR_SCREEN_SPACE_VISIBILITY_CB_H

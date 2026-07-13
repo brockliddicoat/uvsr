@@ -210,11 +210,13 @@ surface's own displayed radiance or reflected direct-light sources.
 | final HDR composite | `RGBA16_FLOAT` | full, frame |
 
 Temporal accumulation reprojects AO/GI results, not radial masks. Motion XY is
-previous-minus-current pixels and Z is the matching device-depth delta. It uses
-that motion, UV bounds, point-validated depth/normal, projection,
-resolution, settings-signature, and camera-cut validation. GI is clamped to a
-current 3x3 component range and uses a stronger
-default response than AO.
+de-jittered previous-minus-current pixels and Z is the matching device-depth
+delta. AO/GI, depth, and normal history remain on the raw jittered producer
+grid, so their previous-frame coordinate applies `-currentJitter +
+previousJitter` exactly once after motion. Motion validity, UV bounds,
+point-validated depth/normal, projection, resolution, settings-signature, and
+camera-cut validation gate reuse. GI is clamped to a current 3x3 component
+range and uses a stronger default response than AO.
 History is discarded on disocclusion, sharp normal changes, projection/size or
 relevant-setting changes, large camera jumps, explicit reset, and pass
 recreation. Bounce count and the final/exact-GI/one-bounce-diagnostic transport

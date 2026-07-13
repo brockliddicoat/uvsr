@@ -117,7 +117,11 @@ void main(uint2 pixel : SV_DispatchThreadID)
     if (g_Visibility.temporalEnabled != 0u && g_Visibility.historyValid != 0u)
     {
         int2 previousHistoryPixel = 0;
-        float3 motion = t_MotionVectors[fullPixel].xyz;
+        float4 motion = t_MotionVectors[fullPixel];
+        // Alpha distinguishes valid static zero velocity from a cleared or
+        // behind-camera motion sample. Reject invalid motion before it can
+        // masquerade as a stable surface with motion.xyz == 0.
+        bool motionValid = motion.w > 0.5f && all(isfinite(motion.xyz));
         float2 normalizedMotion =
             motion.xy / max(g_Visibility.fullResolution, 1.0f) * 96.0f;
         float motionLengthSquared = dot(normalizedMotion, normalizedMotion);
@@ -125,10 +129,14 @@ void main(uint2 pixel : SV_DispatchThreadID)
             motionLengthSquared < 1.0f
             ? sqrt(max(motionLengthSquared, 0.0f))
             : 1.0f;
-        float2 previousFullCenter = float2(fullPixel) + 0.5f + motion.xy;
+        // Donut motion is de-jittered current-to-previous displacement. The
+        // visibility signal, depth, and normal histories are raw surfaces on
+        // the jittered producer grid, so apply previous-current jitter once.
+        float2 previousFullCenter = float2(fullPixel) + 0.5f + motion.xy -
+            g_Visibility.view.pixelOffset + g_Visibility.previousJitter;
         bool inside = all(previousFullCenter >= 0.5f) &&
             all(previousFullCenter <= g_Visibility.fullResolution - 0.5f);
-        historyAccepted = inside && motionRejection < 1.0f;
+        historyAccepted = motionValid && inside && motionRejection < 1.0f;
 
         if (historyAccepted)
         {

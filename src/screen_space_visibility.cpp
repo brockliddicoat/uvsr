@@ -489,6 +489,7 @@ namespace uvsr
         m_HistoryValid = false;
         m_HistorySignature = 0;
         m_HasPreviousCamera = false;
+        m_PreviousJitter = float2::zero();
     }
 
     void ScreenSpaceVisibilityPass::Deactivate()
@@ -615,6 +616,7 @@ namespace uvsr
         m_PreviousCameraOrigin = cameraOrigin;
         m_PreviousCameraDirection = cameraDirection;
         m_PreviousProjection = projection;
+        m_PreviousJitter = view.GetPixelOffset();
         m_HasPreviousCamera = true;
         return valid;
     }
@@ -741,6 +743,11 @@ namespace uvsr
         AdvanceTimers();
 
         exposureScale = std::max(exposureScale, 0.f);
+        // Capture the history producer's jitter before validity bookkeeping
+        // advances the stored camera state to this frame.
+        const float2 historyJitter = m_HasPreviousCamera
+            ? m_PreviousJitter
+            : view->GetPixelOffset();
         const bool historyValid = UpdateHistoryValidity(
             settings, *view, exposureScale);
         const uint32_t historyWriteIndex = 1u - m_HistoryReadIndex;
@@ -755,6 +762,9 @@ namespace uvsr
 
         ScreenSpaceVisibilityConstants constants{};
         view->FillPlanarViewConstants(constants.view);
+        constants.previousJitter = historyValid
+            ? historyJitter
+            : view->GetPixelOffset();
         constants.fullResolution = float2(fullSize);
         constants.samplingResolution = float2(m_SamplingSize);
         constants.radiusWorld = std::max(settings.sampling.radius, 0.f);
