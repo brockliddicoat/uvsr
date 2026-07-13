@@ -23,6 +23,13 @@ is also available from the scene picker.
   Medium Temporal plus Balanced. Analytical validation and rejection controls,
   32 debug views, memory estimates, and GPU timings remain available, and all
   scene color and history resources stay at display resolution.
+- Screen-space temporal accumulation starts enabled; its optional spatial
+  bilateral filter starts disabled to preserve fine image detail.
+- The renderer selector provides **Deferred**, **Forward**, and **Forward
+  Tonemapperless** modes. The tonemapperless mode renders with the forward path
+  and sends its scene-linear HDR result directly to the sRGB display target,
+  bypassing AgX, exposure, grading, LUTs, and dithering; out-of-range values are
+  clipped by the display target.
 - Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
@@ -39,8 +46,6 @@ is also available from the scene picker.
   Normals**, and **White World Preserve Emissives** override material color
   without modifying source assets. The last mode keeps authored emissive color
   alongside the scene's colored direct lights so GI sources remain easy to read.
-  The rendering-path dropdown selects **Forward Rendering** or
-  **Deferred Rendering**.
 - Camera controls are limited to **First Person** and **Third Person**.
 - The first scene light is selected automatically in the **Lights** panel.
 - **Emissive Material Light Strength** in **Lights** globally scales how much

@@ -111,28 +111,28 @@ namespace uvsr
         case ScreenSpaceVisibilityQuality::Low:
             settings.sampling.sampleCount = 16;
             settings.filtering.temporalEnabled = true;
-            settings.filtering.spatialEnabled = true;
+            settings.filtering.spatialEnabled = false;
             settings.filtering.spatialRadius = 1;
             break;
 
         case ScreenSpaceVisibilityQuality::Medium:
             settings.sampling.sampleCount = 32;
             settings.filtering.temporalEnabled = true;
-            settings.filtering.spatialEnabled = true;
+            settings.filtering.spatialEnabled = false;
             settings.filtering.spatialRadius = 1;
             break;
 
         case ScreenSpaceVisibilityQuality::High:
             settings.sampling.sampleCount = 48;
             settings.filtering.temporalEnabled = true;
-            settings.filtering.spatialEnabled = true;
+            settings.filtering.spatialEnabled = false;
             settings.filtering.spatialRadius = 1;
             break;
 
         case ScreenSpaceVisibilityQuality::Ultra:
             settings.sampling.sampleCount = 64;
             settings.filtering.temporalEnabled = true;
-            settings.filtering.spatialEnabled = true;
+            settings.filtering.spatialEnabled = false;
             settings.filtering.spatialRadius = 2;
             break;
 
