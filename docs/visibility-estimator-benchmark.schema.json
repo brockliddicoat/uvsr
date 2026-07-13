@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/brockliddicoat/uvsr/blob/main/docs/visibility-estimator-benchmark.schema.json",
+  "title": "UVSR visibility estimator benchmark",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "revision",
+    "timestampUtc",
+    "adapter",
+    "driver",
+    "scene",
+    "camera",
+    "configuration",
+    "estimators"
+  ],
+  "properties": {
+    "revision": { "type": "string", "minLength": 7 },
+    "timestampUtc": { "type": "string", "format": "date-time" },
+    "adapter": { "type": "string", "minLength": 1 },
+    "driver": { "type": "string", "minLength": 1 },
+    "scene": { "type": "string", "minLength": 1 },
+    "camera": { "type": "string", "minLength": 1 },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height",
+        "preset",
+        "radiusWorld",
+        "thicknessWorld",
+        "samplesPerPixel",
+        "bounceCount",
+        "rtaaMode",
+        "projection",
+        "samplingPhase"
+      ],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "preset": { "type": "string", "minLength": 1 },
+        "radiusWorld": { "type": "number", "exclusiveMinimum": 0 },
+        "thicknessWorld": { "type": "number", "minimum": 0 },
+        "samplesPerPixel": { "type": "integer", "minimum": 1 },
+        "bounceCount": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "rtaaMode": { "type": "string", "minLength": 1 },
+        "projection": { "enum": ["perspective", "orthographic"] },
+        "samplingPhase": { "enum": ["frozen", "rotating"] },
+        "depthPath": { "enum": ["exact", "hierarchy"] },
+        "rendererPath": { "enum": ["deferred", "forward"] },
+        "consumers": { "enum": ["ao", "gi", "ao+gi"] }
+      }
+    },
+    "estimators": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "signedMeanAoBias",
+          "aoRmse",
+          "giLuminanceRmse",
+          "giChromaError",
+          "p95Error",
+          "p99Error",
+          "hdrFlipError",
+          "staticTemporalVariance",
+          "disocclusionError",
+          "gpuMilliseconds",
+          "registerCount",
+          "occupancyPercent",
+          "logicalTrafficBytes",
+          "measuredTrafficBytes",
+          "resourceMemoryBytes"
+        ],
+        "properties": {
+          "name": { "enum": ["PaperAngular", "GTUniform", "GTCosine"] },
+          "signedMeanAoBias": { "type": "number" },
+          "aoRmse": { "type": "number", "minimum": 0 },
+          "giLuminanceRmse": { "type": "number", "minimum": 0 },
+          "giChromaError": { "type": "number", "minimum": 0 },
+          "p95Error": { "type": "number", "minimum": 0 },
+          "p99Error": { "type": "number", "minimum": 0 },
+          "hdrFlipError": { "type": "number", "minimum": 0 },
+          "staticTemporalVariance": { "type": "number", "minimum": 0 },
+          "disocclusionError": { "type": "number", "minimum": 0 },
+          "gpuMilliseconds": { "type": "number", "minimum": 0 },
+          "registerCount": { "type": "integer", "minimum": 0 },
+          "occupancyPercent": { "type": "number", "minimum": 0, "maximum": 100 },
+          "logicalTrafficBytes": { "type": "integer", "minimum": 0 },
+          "measuredTrafficBytes": { "type": "integer", "minimum": 0 },
+          "resourceMemoryBytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "screenshots": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "errorMaps": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "notes": { "type": "string" }
+  }
+}

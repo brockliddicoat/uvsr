@@ -86,6 +86,18 @@ add_executable(uvsr_radial_visibility_tests tests/radial_visibility_mask_tests.c
 target_include_directories(uvsr_radial_visibility_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 add_test(NAME uvsr_radial_visibility_reference COMMAND uvsr_radial_visibility_tests)
 
+add_executable(uvsr_visibility_estimator_tests
+    tests/visibility_estimator_reference_tests.cpp
+)
+target_include_directories(
+    uvsr_visibility_estimator_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_visibility_estimator_reference
+    COMMAND uvsr_visibility_estimator_tests
+)
+
 add_executable(uvsr_rtaa_reference_tests
     tests/rtaa_reference_tests.cpp
     src/reconstructive_temporal_aa_settings.cpp
