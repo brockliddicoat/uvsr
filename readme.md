@@ -15,6 +15,14 @@ is also available from the scene picker.
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
+- Native-Resolution Analytical Reconstructive Temporal Anti-Aliasing (NRA-RTAA)
+  starts enabled on the deferred UVSR PBR path. Its **Aliasing** drawer separates
+  Heavy, Medium, and clarity-biased Light temporal-response presets from an
+  independent, statically compiled **Performance Profile** selector with
+  Performance, Balanced, and Maximum Quality tiers. The factory default is
+  Medium Temporal plus Balanced. Analytical validation and rejection controls,
+  32 debug views, memory estimates, and GPU timings remain available, and all
+  scene color and history resources stay at display resolution.
 - Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
@@ -105,17 +113,19 @@ The launcher requires a description and puts it in the window and task title:
 ```
 
 The title reports the active graphics API at runtime, for example
-`UVSR Renderer D3D12 (testing program title on task title)`.
+`UVSR Renderer D3D12 (testing program title on task title, 4:32 AM)`. The time
+is captured when the experiment process launches and displayed in local time.
 Direct and IDE-driven launches can instead supply the description through
 `--experiment "description"` or the `UVSR_EXPERIMENT` environment variable.
 
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the PBR and radial-visibility reference tests separately:
+Build and run the PBR, radial-visibility, and NRA-RTAA reference tests
+separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests
+cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_rtaa_reference_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
@@ -158,6 +168,10 @@ the shared 32-sector AO/GI traversal, resources, coordinate/radiance contracts,
 filtering, controls, limitations, and the upgrade path to persistent unified
 visibility.
 
+The [NRA-RTAA design](docs/nra-rtaa.md) documents pipeline placement, motion
+and jitter conventions, validation and reconstruction behavior, resource
+packing, memory costs, presets, timing interpretation, and current limitations.
+
 UVSR runs uncapped with a single planar view. UVSR-owned interactive controls
 provide concise hover tooltips; new controls should follow the same convention.
 The bottom action row exposes equally sized **Reload Shaders**, **Reset Settings**,
@@ -170,8 +184,8 @@ The current baseline intentionally omits:
 - DirectX 11 and Vulkan backends
 - VSync, stereo, and bloom controls
 - Imported scene cameras and translucent rendering
-- Temporal anti-aliasing, animation playback, AA and camera-jitter selection,
-  ambient-intensity scaling, and material-event instrumentation
+- Animation playback, ambient-intensity scaling, and material-event
+  instrumentation
 - Shadow rendering and shadow-map debugging
 - Light-probe capture, filtering, image-based lighting, probe textures, and
   probe controls
