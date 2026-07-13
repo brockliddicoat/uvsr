@@ -2,6 +2,10 @@
 
 **Unified Visibility Stochastic Rendering**
 
+**Total line count:** 8,972 first-party source lines across `src/`, `tests/`,
+`tools/`, and `CMakeLists.txt` (excluding Donut, assets, generated files, and
+documentation).
+
 UVSR is a DirectX 12 renderer built on NVIDIA's pinned Donut framework and its
 NVRHI graphics abstraction layer. It launches the NVIDIA Bistro exterior scene
 with its authored materials by default; the converted Bistro Interior Wine scene
@@ -11,21 +15,48 @@ is also available from the scene picker.
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
-- Renderer settings always start from factory defaults; **Reset All Settings**
+- Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
 - The HUD performance row reports resolution, frame time, FPS, current-clock
   memory bandwidth, and current-clock FP32 peak GFLOPS. The **All** row stays
   compact with total, Trace, Filter, and Composite GPU timings.
-- **Enable PBR** switches between UVSR's shared forward/deferred
-  metallic-roughness PBR path and Donut's legacy material-lighting path while
-  retaining the same camera, scene, tone grade, sky, and lights.
+- UVSR's shared forward/deferred metallic-roughness PBR path is always enabled
+  in the production UI. The legacy Donut comparison path remains implemented
+  for possible future experiments, but its control is hidden.
+- The top **General** drawer contains renderer and performance information, GPU
+  selection, camera mode, White World, and rendering-path selection, with the
+  scene picker at the bottom.
 - **White World Off** is the default. **White World On**, **White World Preserve
   Normals**, and **White World Preserve Emissives** override material color
   without modifying source assets. The last mode keeps authored emissive color
   alongside the scene's colored direct lights so GI sources remain easy to read.
+  The rendering-path dropdown selects **Forward Rendering** or
+  **Deferred Rendering**.
 - Camera controls are limited to **First Person** and **Third Person**.
 - The first scene light is selected automatically in the **Lights** panel.
+- **Emissive Material Light Strength** in **Lights** globally scales how much
+  light emissive materials contribute to GI without changing the visible
+  emissive surfaces themselves. Raising it expands the visibly illuminated area
+  up to the screen-space **Visibility** sampling radius.
+- **Bounces** in **Indirect Diffuse GI** selects one through four finite diffuse
+  bounces. One is the default and keeps the original compact shader path. Later
+  bounces transport only the newest light frontier and accumulate it separately;
+  their GI-only sample budgets halve toward 8 taps, so stochastic work grows
+  sublinearly while bounce one stays at full quality.
+- **Bounce Contribution Cutoff** skips higher-bounce source shading whose
+  conservative exposed upper bound is too small to matter. The default is
+  `0.001`; zero keeps exact-zero exits only. GI-result diagnostics use the exact
+  selected chain, while unrelated diagnostics skip invisible secondary work.
+  The gate saves source material/lighting work but each active bounce still
+  dispatches and performs its visibility traversal.
+- Proven scene-wide source inactivity and zero final GI intensity terminate the
+  complete higher-bounce dispatch chain. The shared CPU/HLSL activity mask is
+  extensible to future clustering, probe, cache, visibility, and residency data;
+  unknown sources always remain active.
+- A shared, future-extensible contribution-gate contract also gives forward and
+  deferred direct lighting exact early outs for zero, out-of-influence,
+  back-facing, or fully occluded lights before unnecessary shadow/BSDF work.
 - The AgX display pipeline provides Base, Punchy, Golden, Mix, and Custom
   presets. Its controls are Exposure, Contrast, Saturation, Warmth, Tint, Slope,
   and Power.
@@ -64,17 +95,19 @@ Configure and build a Release executable from PowerShell:
 git submodule update --init --recursive
 cmake -S . -B build
 cmake --build build --config Release --target uvsr
-.\build\bin\uvsr.exe
+.\tools\launch_uvsr.ps1 -Experiment "testing program title on task title"
 ```
 
-Label an experimental run in the window and task title with:
+The launcher requires a description and puts it in the window and task title:
 
 ```powershell
-.\build\bin\uvsr.exe --experiment "testing program title on task title"
+.\tools\launch_uvsr.ps1 -Experiment "testing program title on task title"
 ```
 
 The title reports the active graphics API at runtime, for example
-`UVSR Renderer, D3D12 (testing program title on task title)`.
+`UVSR Renderer D3D12 (testing program title on task title)`.
+Direct and IDE-driven launches can instead supply the description through
+`--experiment "description"` or the `UVSR_EXPERIMENT` environment variable.
 
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
@@ -127,8 +160,8 @@ visibility.
 
 UVSR runs uncapped with a single planar view. UVSR-owned interactive controls
 provide concise hover tooltips; new controls should follow the same convention.
-The renderer exposes **Reload Shaders**, **Restart Renderer**, **Reset All**, and
-**Screenshot** controls in the main settings panel.
+The bottom action row exposes equally sized **Reload Shaders**, **Reset Settings**,
+**Restart**, and **Screenshot** buttons.
 
 ## Intentional omissions
 
