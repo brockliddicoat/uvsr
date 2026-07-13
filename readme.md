@@ -81,7 +81,7 @@ that has not merged into `main`, plus every project or feature an agent is
 currently working on. An entry is not shipped on `main`, and experimental
 entries are not promises that the work will merge.
 
-- **Visibility-pipeline simplification — ready for review**
+- **Visibility-pipeline simplification — [draft PR #3](https://github.com/brockliddicoat/uvsr/pull/3)**
   (`agent/visibility-cleanup-coming-soon`). Remove only the visibility bitmask's
   temporal AO/GI accumulator and bilateral spatial filter, then feed current-
   frame visibility directly into composition. NRA-RTAA remains the independent
