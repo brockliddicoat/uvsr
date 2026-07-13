@@ -60,12 +60,6 @@ cmake --build build --config Release --target uvsr
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-The scene picker also includes `HorizonGIBenchmark.glb`, a lightweight
-reconstruction of the procedural Screen Space Horizon GI room with dense pegs,
-thin geometry, deep corners, and three colored emissive panels. See its
-[asset notes](assets/scenes/horizon_gi_benchmark/README.md) or regenerate it
-with `tools/generate_horizon_gi_benchmark.py`.
-
 Build and run the PBR and radial-visibility reference tests separately:
 
 ```powershell
