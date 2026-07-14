@@ -10,30 +10,24 @@ cbuffer c_ReconstructiveTemporalAA : register(b0)
 
 Texture2D<float>  t_Depth : register(t0);
 Texture2D<float4> t_Motion : register(t1);
-Texture2D<float4> t_HdrColor : register(t2);
-Texture2D<float4> t_Normals : register(t3);
-Texture2D<float4> t_Diffuse : register(t4);
-Texture2D<float4> t_Specular : register(t5);
-Texture2D<float4> t_Emissive : register(t6);
-Texture2D<uint2>  t_SurfaceIds : register(t7);
-Texture2D<float>  t_ExplicitReactive : register(t8);
+Texture2D<float4> t_Diffuse : register(t2);
+Texture2D<float4> t_Specular : register(t3);
+Texture2D<float>  t_ExplicitReactive : register(t4);
 
-// xy: de-jittered current-to-previous motion in pixels
-// z:  device depth belonging to the selected velocity source
-// w:  velocity confidence (center > dilated neighbor > camera reconstruction)
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Prepared : register(u0);
+// rg: de-jittered current-to-previous motion in pixels. Source ownership and
+// confidence are packed into Classification, reducing this transient to 4 B/px.
+VK_IMAGE_FORMAT("rg16f") RWTexture2D<float2> u_Prepared : register(u0);
 
-// rg: selected source offset encoded from [-1, 1] to [0, 1]
-// b:  explicit/material reactive classification
-// a:  current-frame thin-geometry candidate
+// r: selected 3x3 source index [0,8] encoded to UNORM (center = 4)
+// g: velocity confidence (center > dilated neighbor > camera reconstruction)
+// b: explicit application-authored reactive classification
+// a: current-frame thin-geometry candidate
 VK_IMAGE_FORMAT("rgba8") RWTexture2D<float4> u_Classification : register(u1);
 
 static const float RtaaEpsilon = 1e-6f;
 static const uint RtaaFeatureTranslucency = 1u << 2;
 static const uint RtaaFeatureRefraction = 1u << 3;
 static const uint RtaaFeatureScattering = 1u << 4;
-static const uint RtaaFeatureThinFilm = 1u << 5;
-static const uint RtaaFeatureAbsorption = 1u << 6;
 static const uint RtaaFeatureDoubleSided = 1u << 7;
 
 bool IsInside(int2 pixel)
@@ -59,24 +53,6 @@ bool IsCloser(float candidate, float reference)
     return g_Rtaa.reverseZ != 0u
         ? candidate > reference
         : candidate < reference;
-}
-
-float Luminance(float3 color)
-{
-    return dot(color, float3(0.2126f, 0.7152f, 0.0722f));
-}
-
-float3 SanitizeHdr(float3 color)
-{
-    return all(isfinite(color)) ? max(color, 0.0f) : 0.0f;
-}
-
-float3 SafeNormal(float3 value)
-{
-    float lengthSquared = dot(value, value);
-    return lengthSquared > 1e-12f && isfinite(lengthSquared)
-        ? value * rsqrt(lengthSquared)
-        : 0.0f;
 }
 
 bool DeviceDepthToViewDepth(
@@ -178,34 +154,53 @@ bool ReconstructCameraMotion(
     return all(isfinite(motion));
 }
 
-float ComputeReactiveClassification(
-    int2 pixel,
-    float3 hdrColor,
-    float4 diffuse,
-    float4 specular,
-    float4 emissive)
+bool ReconstructBackgroundMotion(int2 pixel, out float2 motion)
 {
-    float explicitReactive = g_Rtaa.enableExplicitReactive != 0u
+    motion = 0.0f;
+    if (g_Rtaa.historyValid == 0u)
+        return false;
+
+    // Reconstruct a ray at a finite reference depth, then project a distant
+    // point. Camera translation becomes negligible while rotation remains
+    // exact enough for procedural sky/background reprojection.
+    float3 rayPoint;
+    if (!ReconstructWorldPosition(float2(pixel) + 0.5f, 0.5f,
+            g_Rtaa.currentView, rayPoint))
+    {
+        return false;
+    }
+
+    float3 cameraOrigin = g_Rtaa.currentView.cameraDirectionOrPosition.xyz;
+    float3 direction = rayPoint - cameraOrigin;
+    float lengthSquared = dot(direction, direction);
+    if (!isfinite(lengthSquared) || lengthSquared <= RtaaEpsilon)
+        return false;
+
+    float3 distantWorld = cameraOrigin + direction *
+        (100000.0f * rsqrt(lengthSquared));
+    float2 currentNoOffset;
+    float2 previousNoOffset;
+    if (!ProjectWorldNoOffset(distantWorld, g_Rtaa.currentView,
+            currentNoOffset) ||
+        !ProjectWorldNoOffset(distantWorld, g_Rtaa.immediateHistoryView,
+            previousNoOffset))
+    {
+        return false;
+    }
+
+    motion = previousNoOffset - currentNoOffset;
+    return all(isfinite(motion));
+}
+
+float ComputeReactiveClassification(int2 pixel)
+{
+    // Material feature presence is not temporal change. The explicit input is
+    // reserved for a producer that knows a pixel has animated shading,
+    // composition without reliable depth/motion, or another concrete contract
+    // violation. Final-color neighborhood residuals are handled in Resolve.
+    return g_Rtaa.enableExplicitReactive != 0u
         ? saturate(t_ExplicitReactive.Load(int3(pixel, 0)))
         : 0.0f;
-
-    uint featureMask = (uint)round(saturate(specular.a) * 255.0f);
-    uint reactiveFeatures = RtaaFeatureTranslucency | RtaaFeatureRefraction |
-        RtaaFeatureScattering | RtaaFeatureThinFilm | RtaaFeatureAbsorption;
-    float materialReactive = (featureMask & reactiveFeatures) != 0u
-        ? 0.75f : 0.0f;
-
-    // Alpha and emissive classifications are intentionally bounded. They raise
-    // current-frame contribution but do not by themselves invalidate geometry;
-    // Resolve keeps geometric confidence and shading reactivity independent.
-    float alphaReactive = saturate((1.0f - saturate(diffuse.a)) * 2.0f);
-    float emissiveLuma = Luminance(SanitizeHdr(emissive.rgb));
-    float sceneLuma = Luminance(hdrColor);
-    float emissiveReactive = saturate(emissiveLuma /
-        max(1.0f + sceneLuma, RtaaEpsilon));
-
-    return max(max(explicitReactive, materialReactive),
-        max(alphaReactive, emissiveReactive));
 }
 
 float ComputeAuthoredThinCandidate(
@@ -237,13 +232,15 @@ void main(uint2 pixel : SV_DispatchThreadID)
     int2 centerPixel = int2(pixel);
     int2 sourcePixel = centerPixel;
     float centerDepth = t_Depth.Load(int3(centerPixel, 0));
+    bool centerDepthValid = IsValidDeviceDepth(centerDepth);
     float sourceDepth = centerDepth;
-    bool sourceDepthValid = IsValidDeviceDepth(sourceDepth);
+    bool sourceDepthValid = centerDepthValid;
 
-    // Velocity dilation selects the nearest geometric owner, never the largest
-    // vector. Largest-velocity dilation pulls foreground motion across unrelated
-    // background and is a primary source of silhouette ghosting.
-    if (g_Rtaa.enableVelocityDilation != 0u)
+    // A valid center surface owns its own motion. Searching for a merely closer
+    // neighbor on every sloped wall both wastes eight depth reads and borrows the
+    // wrong velocity over broad regions. Dilation is reserved for uncovered
+    // background/silhouette samples where no center surface exists.
+    if (!sourceDepthValid && g_Rtaa.enableVelocityDilation != 0u)
     {
         [unroll]
         for (int y = -1; y <= 1; ++y)
@@ -251,6 +248,8 @@ void main(uint2 pixel : SV_DispatchThreadID)
             [unroll]
             for (int x = -1; x <= 1; ++x)
             {
+                if (x == 0 && y == 0)
+                    continue;
                 int2 candidatePixel = centerPixel + int2(x, y);
                 if (!IsInside(candidatePixel))
                     continue;
@@ -269,7 +268,9 @@ void main(uint2 pixel : SV_DispatchThreadID)
         }
     }
 
-    float4 rawMotion = t_Motion.Load(int3(sourcePixel, 0));
+    float4 rawMotion = 0.0f;
+    if (sourceDepthValid)
+        rawMotion = t_Motion.Load(int3(sourcePixel, 0));
     bool rawMotionValid = sourceDepthValid && IsValidMotion(rawMotion);
     float2 selectedMotion = rawMotionValid ? rawMotion.xy : 0.0f;
     bool cameraReconstructed = false;
@@ -277,6 +278,12 @@ void main(uint2 pixel : SV_DispatchThreadID)
     {
         cameraReconstructed = ReconstructCameraMotion(
             sourcePixel, sourceDepth, selectedMotion);
+    }
+    bool backgroundReconstructed = false;
+    if (!sourceDepthValid)
+    {
+        backgroundReconstructed = ReconstructBackgroundMotion(
+            centerPixel, selectedMotion);
     }
 
     int2 sourceOffset = clamp(sourcePixel - centerPixel, -1, 1);
@@ -286,22 +293,23 @@ void main(uint2 pixel : SV_DispatchThreadID)
         velocityConfidence = sourceIsCenter ? 1.0f : 0.85f;
     else if (cameraReconstructed)
         velocityConfidence = sourceIsCenter ? 0.60f : 0.50f;
+    else if (backgroundReconstructed)
+        velocityConfidence = 0.75f;
 
-    float3 hdrColor = SanitizeHdr(t_HdrColor.Load(int3(centerPixel, 0)).rgb);
-    float4 diffuse = t_Diffuse.Load(int3(centerPixel, 0));
-    float4 specular = t_Specular.Load(int3(centerPixel, 0));
-    float4 emissive = t_Emissive.Load(int3(centerPixel, 0));
-    float3 normal = SafeNormal(t_Normals.Load(int3(centerPixel, 0)).xyz);
-    uint2 surface = t_SurfaceIds.Load(int3(centerPixel, 0));
+    float reactive = 0.0f;
+    float thinCandidate = 0.0f;
+    if (centerDepthValid)
+    {
+        float4 diffuse = t_Diffuse.Load(int3(centerPixel, 0));
+        float4 specular = t_Specular.Load(int3(centerPixel, 0));
+        reactive = ComputeReactiveClassification(centerPixel);
+        thinCandidate = ComputeAuthoredThinCandidate(diffuse, specular);
+    }
 
-    float reactive = ComputeReactiveClassification(
-        centerPixel, hdrColor, diffuse, specular, emissive);
-    float thinCandidate = ComputeAuthoredThinCandidate(diffuse, specular);
-
-    float2 encodedOffset = (float2(sourceOffset) + 1.0f) * 0.5f;
-    float storedDepth = sourceDepthValid ? sourceDepth : 0.0f;
-    u_Prepared[pixel] = float4(
-        selectedMotion, storedDepth, saturate(velocityConfidence));
+    uint sourceIndex = uint(sourceOffset.y + 1) * 3u +
+        uint(sourceOffset.x + 1);
+    float encodedSourceIndex = float(sourceIndex) * (1.0f / 8.0f);
+    u_Prepared[pixel] = selectedMotion;
     u_Classification[pixel] = saturate(float4(
-        encodedOffset, reactive, thinCandidate));
+        encodedSourceIndex, velocityConfidence, reactive, thinCandidate));
 }

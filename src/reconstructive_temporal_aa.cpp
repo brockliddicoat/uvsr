@@ -23,6 +23,32 @@ namespace
     constexpr uint64_t kFNVOffsetBasis = 1469598103934665603ull;
     constexpr uint64_t kFNVPrime = 1099511628211ull;
 
+    uint32_t GetPerformanceTier(
+        const uvsr::ReconstructiveTemporalAASettings& settings)
+    {
+        return static_cast<uint32_t>(settings.performanceProfile);
+    }
+
+    bool UsesMaximumQuality(
+        const uvsr::ReconstructiveTemporalAASettings& settings)
+    {
+        return settings.performanceProfile ==
+            uvsr::ReconstructiveTemporalPerformanceProfile::MaximumQuality;
+    }
+
+    uvsr::HistorySampleFilter GetEffectiveHistoryFilter(
+        const uvsr::ReconstructiveTemporalAASettings& settings)
+    {
+        return UsesMaximumQuality(settings)
+            ? settings.historyFilter : uvsr::HistorySampleFilter::Bilinear;
+    }
+
+    bool UsesResurrection(
+        const uvsr::ReconstructiveTemporalAASettings& settings)
+    {
+        return UsesMaximumQuality(settings) && settings.resurrectionEnabled;
+    }
+
     uint64_t HashBytes(uint64_t hash, const void* data, size_t size)
     {
         const auto* bytes = static_cast<const uint8_t*>(data);
@@ -155,7 +181,7 @@ namespace uvsr
         auto createPipeline = [this, &shaderFactory](
             Pipeline& destination,
             const char* shaderName,
-            std::initializer_list<nvrhi::BindingLayoutItem> bindings,
+            const std::vector<nvrhi::BindingLayoutItem>& bindings,
             const std::vector<ShaderMacro>* macros = nullptr)
         {
             destination.shader = shaderFactory->CreateShader(
@@ -179,29 +205,27 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(2),
             nvrhi::BindingLayoutItem::Texture_SRV(3),
             nvrhi::BindingLayoutItem::Texture_SRV(4),
-            nvrhi::BindingLayoutItem::Texture_SRV(5),
-            nvrhi::BindingLayoutItem::Texture_SRV(6),
-            nvrhi::BindingLayoutItem::Texture_SRV(7),
-            nvrhi::BindingLayoutItem::Texture_SRV(8),
             nvrhi::BindingLayoutItem::Texture_UAV(0),
             nvrhi::BindingLayoutItem::Texture_UAV(1)
         });
 
-        for (uint32_t variant = 0; variant < m_ResolvePipelines.size(); ++variant)
+        // Performance/Balanced force bilinear and compile out resurrection.
+        // Maximum Quality supports both filters and optional resurrection.
+        // Building only reachable variants avoids six dead shader blobs/PSOs.
+        constexpr std::array<uint32_t, 6> ResolveVariants = {
+            0u, 4u, 8u, 9u, 10u, 11u
+        };
+        for (uint32_t variant : ResolveVariants)
         {
             std::vector<ShaderMacro> macros;
-            macros.emplace_back("RTAA_CATMULL_ROM", (variant & 1u) != 0u ? "1" : "0");
-            macros.emplace_back("RTAA_RESURRECTION", (variant & 2u) != 0u ? "1" : "0");
+            macros.emplace_back("RTAA_VARIANT", std::to_string(variant));
 
-            createPipeline(m_ResolvePipelines[variant], "uvsr/rtaa_resolve_cs.hlsl", {
+            std::vector<nvrhi::BindingLayoutItem> resolveBindings = {
                 nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
                 nvrhi::BindingLayoutItem::Sampler(0),
                 nvrhi::BindingLayoutItem::Texture_SRV(0),
                 nvrhi::BindingLayoutItem::Texture_SRV(1),
-                nvrhi::BindingLayoutItem::Texture_SRV(2),
-                nvrhi::BindingLayoutItem::Texture_SRV(3),
                 nvrhi::BindingLayoutItem::Texture_SRV(4),
-                nvrhi::BindingLayoutItem::Texture_SRV(5),
                 nvrhi::BindingLayoutItem::Texture_SRV(6),
                 nvrhi::BindingLayoutItem::Texture_SRV(7),
                 nvrhi::BindingLayoutItem::Texture_SRV(8),
@@ -210,22 +234,22 @@ namespace uvsr
                 nvrhi::BindingLayoutItem::Texture_SRV(11),
                 nvrhi::BindingLayoutItem::Texture_SRV(12),
                 nvrhi::BindingLayoutItem::Texture_SRV(13),
-                nvrhi::BindingLayoutItem::Texture_SRV(14),
-                nvrhi::BindingLayoutItem::Texture_SRV(15),
-                nvrhi::BindingLayoutItem::Texture_SRV(16),
-                nvrhi::BindingLayoutItem::Texture_SRV(17),
-                nvrhi::BindingLayoutItem::Texture_SRV(18),
-                nvrhi::BindingLayoutItem::Texture_SRV(19),
-                nvrhi::BindingLayoutItem::Texture_SRV(20),
-                nvrhi::BindingLayoutItem::Texture_SRV(21),
-                nvrhi::BindingLayoutItem::Texture_SRV(22),
-                nvrhi::BindingLayoutItem::Texture_UAV(0),
-                nvrhi::BindingLayoutItem::Texture_UAV(1),
-                nvrhi::BindingLayoutItem::Texture_UAV(2),
-                nvrhi::BindingLayoutItem::Texture_UAV(3),
-                nvrhi::BindingLayoutItem::Texture_UAV(4),
-                nvrhi::BindingLayoutItem::Texture_UAV(5)
-            }, &macros);
+                nvrhi::BindingLayoutItem::Texture_SRV(14)
+            };
+            if ((variant & 2u) != 0u)
+            {
+                for (uint32_t slot = 15u; slot <= 22u; ++slot)
+                    resolveBindings.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(slot));
+            }
+            for (uint32_t slot = 0u; slot <= 5u; ++slot)
+            {
+                resolveBindings.push_back(
+                    nvrhi::BindingLayoutItem::Texture_UAV(slot));
+            }
+
+            createPipeline(m_ResolvePipelines[variant],
+                "uvsr/rtaa_resolve_cs.hlsl", resolveBindings, &macros);
         }
     }
 
@@ -241,7 +265,7 @@ namespace uvsr
         uint2 resolution,
         const ReconstructiveTemporalAASettings& settings)
     {
-        const uint32_t persistentCount = settings.resurrectionEnabled
+        const uint32_t persistentCount = UsesResurrection(settings)
             ? std::min(settings.persistentFrameCount, 2u)
             : 0u;
         const uint32_t persistentInterval = std::clamp(
@@ -275,7 +299,7 @@ namespace uvsr
             m_History.clear();
 
             m_Resolution = resolution;
-            m_PreparedData = createTexture(resolution, nvrhi::Format::RGBA16_FLOAT,
+            m_PreparedData = createTexture(resolution, nvrhi::Format::RG16_FLOAT,
                 "NRA-RTAA/PreparedData");
             m_Classification = createTexture(resolution, nvrhi::Format::RGBA8_UNORM,
                 "NRA-RTAA/Classification");
@@ -328,27 +352,30 @@ namespace uvsr
         m_MemoryStats.resolution = resolution;
         m_MemoryStats.historySlotCount = historySlotCount;
         m_MemoryStats.persistentHistoryCount = persistentCount;
-        m_MemoryStats.transientBytes = pixelCount * 12ull;
+        m_MemoryStats.transientBytes = pixelCount * 8ull;
         m_MemoryStats.historyBytes = pixelCount * 28ull * historySlotCount;
         m_MemoryStats.debugBytes = 8ull +
             (needsFullDebug ? pixelCount * 8ull : 0ull);
         m_MemoryStats.totalBytes = m_MemoryStats.transientBytes +
             m_MemoryStats.historyBytes + m_MemoryStats.debugBytes;
-        // Steady-state logical texel footprint before cache reuse. Prepare is
-        // 52 B plus the optional 3x3 depth dilation. Resolve amortizes its
-        // 12x12 shared tile over an 8x8 group (92 B including direct prepared,
-        // classification, and raw-motion reads),
-        // then reads a 4-texel bilinear or 16-texel Catmull history footprint
-        // plus 20 B of immediate metadata/depth/surface. Conditional persistent
-        // resurrection reads remain scene-dependent and are excluded.
-        const float prepareReadBytes = 52.f +
-            (settings.velocityDilationEnabled ? 36.f : 0.f);
+        // Steady-state logical texel footprint before cache reuse. Prepare's
+        // valid-center path reads depth, RGBA16F motion, diffuse, and specular
+        // (20 B); uncovered pixels may conditionally inspect eight more depths.
+        // Resolve amortizes a 10x10 or 12x12 28-B shared tile over each 8x8
+        // group, then directly reads prepared/classification/raw motion (16 B).
+        // Immediate history adds a 4-texel bilinear or 16-texel Catmull color
+        // footprint plus 20 B of metadata/depth/surface. Conditional dilation
+        // and persistent resurrection reads are scene-dependent and excluded.
+        const float prepareReadBytes = 20.f;
+        const HistorySampleFilter effectiveFilter = GetEffectiveHistoryFilter(settings);
         const float immediateHistoryReadBytes =
-            settings.historyFilter == HistorySampleFilter::CatmullRom
+            effectiveFilter == HistorySampleFilter::CatmullRom
             ? 148.f : 52.f;
+        const float resolveBaseReadBytes = UsesMaximumQuality(settings)
+            ? 79.f : 60.f;
         m_MemoryStats.approximateReadBytesPerPixel = prepareReadBytes +
-            92.f + immediateHistoryReadBytes;
-        m_MemoryStats.approximateWriteBytesPerPixel = needsFullDebug ? 48.f : 40.f;
+            resolveBaseReadBytes + immediateHistoryReadBytes;
+        m_MemoryStats.approximateWriteBytesPerPixel = needsFullDebug ? 44.f : 36.f;
 
         return historyResourcesChanged;
     }
@@ -445,6 +472,7 @@ namespace uvsr
     {
         uint64_t hash = kFNVOffsetBasis;
         hash = HashValue(hash, settings.preset);
+        hash = HashValue(hash, settings.performanceProfile);
         hash = HashValue(hash, settings.jitterSequence);
         hash = HashValue(hash, settings.jitterPeriod);
         hash = HashValue(hash, settings.jitterScale);
@@ -669,12 +697,11 @@ namespace uvsr
         }
 
         assert(commandList);
-        assert(inputs.sceneColor && inputs.depth && inputs.normals &&
-            inputs.gbufferDiffuse && inputs.gbufferSpecular &&
-            inputs.gbufferEmissive && inputs.surfaceIds && inputs.motionVectors);
-        if (!commandList || !inputs.sceneColor || !inputs.depth || !inputs.normals ||
+        assert(inputs.sceneColor && inputs.depth && inputs.gbufferDiffuse &&
+            inputs.gbufferSpecular && inputs.surfaceIds && inputs.motionVectors);
+        if (!commandList || !inputs.sceneColor || !inputs.depth ||
             !inputs.gbufferDiffuse || !inputs.gbufferSpecular ||
-            !inputs.gbufferEmissive || !inputs.surfaceIds || !inputs.motionVectors)
+            !inputs.surfaceIds || !inputs.motionVectors)
         {
             ResetHistory();
             m_Output = inputs.sceneColor;
@@ -690,10 +717,8 @@ namespace uvsr
         const bool inputsMatch = resolution.x > 0 && resolution.y > 0 &&
             viewMatches &&
             TextureMatches(inputs.depth, resolution) &&
-            TextureMatches(inputs.normals, resolution) &&
             TextureMatches(inputs.gbufferDiffuse, resolution) &&
             TextureMatches(inputs.gbufferSpecular, resolution) &&
-            TextureMatches(inputs.gbufferEmissive, resolution) &&
             TextureMatches(inputs.surfaceIds, resolution) &&
             TextureMatches(inputs.motionVectors, resolution) &&
             (!inputs.explicitReactiveMask ||
@@ -735,15 +760,17 @@ namespace uvsr
         }
 
         m_Weights = ComputeReconstructiveTemporalWeights(settings, deltaSeconds);
-        const float prepareReadBytes = 52.f +
-            (settings.velocityDilationEnabled ? 36.f : 0.f) +
+        const float prepareReadBytes = 20.f +
             (inputs.explicitReactiveMask && settings.explicitReactiveMaskEnabled
                 ? 1.f : 0.f);
+        const HistorySampleFilter effectiveFilter = GetEffectiveHistoryFilter(settings);
         const float immediateHistoryReadBytes =
-            settings.historyFilter == HistorySampleFilter::CatmullRom
+            effectiveFilter == HistorySampleFilter::CatmullRom
             ? 148.f : 52.f;
+        const float resolveBaseReadBytes = UsesMaximumQuality(settings)
+            ? 79.f : 60.f;
         m_MemoryStats.approximateReadBytesPerPixel = prepareReadBytes +
-            92.f + immediateHistoryReadBytes;
+            resolveBaseReadBytes + immediateHistoryReadBytes;
 
         HistorySlot& immediateStorage = m_History[SlotAtAge(1)];
         HistorySlot* immediate = historyValid ? GetValidSlotAtAge(1) : nullptr;
@@ -793,6 +820,13 @@ namespace uvsr
         constants.thinDepthThreshold = settings.thinGeometryDepthRange;
         constants.thinContrastThreshold = settings.thinGeometryContrastThreshold;
         constants.thinMaxRelaxation = settings.thinGeometryMaximumRelaxation;
+        const float thinLockFrames =
+            static_cast<float>(std::max(settings.jitterPeriod, 1u)) + 2.f;
+        // The lifetime is stored in R8. Quantize the decrement upward once on
+        // the CPU so repeated UNORM writes can neither stall nor outlive the
+        // configured jitter cycle through nearest-even rounding.
+        constants.thinLockDecayPerFrame =
+            std::ceil(255.f / thinLockFrames) / 255.f;
         constants.varianceSigma = settings.varianceClipSigma;
         constants.varianceLumaScale = settings.luminanceClipStrength;
         constants.varianceChromaScale = settings.chromaClipStrength;
@@ -815,9 +849,10 @@ namespace uvsr
             inputs.explicitReactiveMask ? 1u : 0u;
         constants.enableAutomaticReactive = settings.automaticReactiveMaskEnabled ? 1u : 0u;
         constants.enableThinGeometry = settings.thinGeometryEnabled ? 1u : 0u;
-        constants.enableThinDiffusion = settings.thinGeometryClusterDiffusion ? 1u : 0u;
+        constants.enableThinDiffusion = UsesMaximumQuality(settings) &&
+            settings.thinGeometryClusterDiffusion ? 1u : 0u;
         constants.enableSpatialFallback = settings.spatialFallbackEnabled ? 1u : 0u;
-        constants.enableResurrection = settings.resurrectionEnabled &&
+        constants.enableResurrection = UsesResurrection(settings) &&
             persistentValidMask != 0u ? 1u : 0u;
         constants.persistentValidMask = persistentValidMask;
         constants.writeDebug = DebugNeedsFullResolution(settings.debugMode) ? 1u : 0u;
@@ -827,7 +862,7 @@ namespace uvsr
             kThreadGroupSize;
         const uint32_t dispatchY = (resolution.y + kThreadGroupSize - 1u) /
             kThreadGroupSize;
-        // t8 is scalar. When the optional mask is absent, bind the compatible
+        // t4 is scalar. When the optional mask is absent, bind the compatible
         // depth SRV; enableExplicitReactive guarantees that it is never read.
         nvrhi::ITexture* reactiveTexture = inputs.explicitReactiveMask
             ? inputs.explicitReactiveMask : inputs.depth;
@@ -841,13 +876,9 @@ namespace uvsr
                 nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
                 nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth),
                 nvrhi::BindingSetItem::Texture_SRV(1, inputs.motionVectors),
-                nvrhi::BindingSetItem::Texture_SRV(2, inputs.sceneColor),
-                nvrhi::BindingSetItem::Texture_SRV(3, inputs.normals),
-                nvrhi::BindingSetItem::Texture_SRV(4, inputs.gbufferDiffuse),
-                nvrhi::BindingSetItem::Texture_SRV(5, inputs.gbufferSpecular),
-                nvrhi::BindingSetItem::Texture_SRV(6, inputs.gbufferEmissive),
-                nvrhi::BindingSetItem::Texture_SRV(7, inputs.surfaceIds),
-                nvrhi::BindingSetItem::Texture_SRV(8, reactiveTexture),
+                nvrhi::BindingSetItem::Texture_SRV(2, inputs.gbufferDiffuse),
+                nvrhi::BindingSetItem::Texture_SRV(3, inputs.gbufferSpecular),
+                nvrhi::BindingSetItem::Texture_SRV(4, reactiveTexture),
                 nvrhi::BindingSetItem::Texture_UAV(0, m_PreparedData),
                 nvrhi::BindingSetItem::Texture_UAV(1, m_Classification)
             };
@@ -869,11 +900,12 @@ namespace uvsr
         HistorySlot& persistentStorage1 = persistent1 ? *persistent1 : persistentStorage0;
         nvrhi::ITexture* debugTarget = m_DebugOutput
             ? m_DebugOutput.Get() : m_DebugSink.Get();
-        const bool useResurrection = settings.resurrectionEnabled &&
+        const bool useResurrection = UsesResurrection(settings) &&
             persistentValidMask != 0u;
         const uint32_t resolveVariant =
-            (settings.historyFilter == HistorySampleFilter::CatmullRom ? 1u : 0u) |
-            (useResurrection ? 2u : 0u);
+            (effectiveFilter == HistorySampleFilter::CatmullRom ? 1u : 0u) |
+            (useResurrection ? 2u : 0u) |
+            (GetPerformanceTier(settings) << 2u);
         Pipeline& resolvePipeline = m_ResolvePipelines[resolveVariant];
 
         {
@@ -883,10 +915,7 @@ namespace uvsr
                 nvrhi::BindingSetItem::Sampler(0, m_LinearClampSampler),
                 nvrhi::BindingSetItem::Texture_SRV(0, inputs.sceneColor),
                 nvrhi::BindingSetItem::Texture_SRV(1, inputs.depth),
-                nvrhi::BindingSetItem::Texture_SRV(2, inputs.normals),
-                nvrhi::BindingSetItem::Texture_SRV(3, inputs.gbufferDiffuse),
                 nvrhi::BindingSetItem::Texture_SRV(4, inputs.gbufferSpecular),
-                nvrhi::BindingSetItem::Texture_SRV(5, inputs.gbufferEmissive),
                 nvrhi::BindingSetItem::Texture_SRV(6, inputs.surfaceIds),
                 nvrhi::BindingSetItem::Texture_SRV(7, m_PreparedData),
                 nvrhi::BindingSetItem::Texture_SRV(8, m_Classification),
@@ -895,7 +924,11 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(11, immediateStorage.moments),
                 nvrhi::BindingSetItem::Texture_SRV(12, immediateStorage.metadata),
                 nvrhi::BindingSetItem::Texture_SRV(13, immediateStorage.depth),
-                nvrhi::BindingSetItem::Texture_SRV(14, immediateStorage.normalMaterial),
+                nvrhi::BindingSetItem::Texture_SRV(14, immediateStorage.normalMaterial)
+            };
+            if (useResurrection)
+            {
+                bindings.bindings.insert(bindings.bindings.end(), {
                 nvrhi::BindingSetItem::Texture_SRV(15, persistentStorage0.color),
                 nvrhi::BindingSetItem::Texture_SRV(16, persistentStorage0.metadata),
                 nvrhi::BindingSetItem::Texture_SRV(17, persistentStorage0.depth),
@@ -903,14 +936,17 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(19, persistentStorage1.color),
                 nvrhi::BindingSetItem::Texture_SRV(20, persistentStorage1.metadata),
                 nvrhi::BindingSetItem::Texture_SRV(21, persistentStorage1.depth),
-                nvrhi::BindingSetItem::Texture_SRV(22, persistentStorage1.normalMaterial),
+                nvrhi::BindingSetItem::Texture_SRV(22, persistentStorage1.normalMaterial)
+                });
+            }
+            bindings.bindings.insert(bindings.bindings.end(), {
                 nvrhi::BindingSetItem::Texture_UAV(0, writeSlot.color),
                 nvrhi::BindingSetItem::Texture_UAV(1, writeSlot.moments),
                 nvrhi::BindingSetItem::Texture_UAV(2, writeSlot.metadata),
                 nvrhi::BindingSetItem::Texture_UAV(3, writeSlot.depth),
                 nvrhi::BindingSetItem::Texture_UAV(4, writeSlot.normalMaterial),
                 nvrhi::BindingSetItem::Texture_UAV(5, debugTarget)
-            };
+            });
             nvrhi::BindingSetHandle bindingSet = m_Device->createBindingSet(
                 bindings, resolvePipeline.bindingLayout);
             nvrhi::ComputeState state;
@@ -938,6 +974,8 @@ namespace uvsr
         m_Output = m_DebugOutput ? m_DebugOutput.Get() : writeSlot.color.Get();
 
         const bool sharpeningRunsThisFrame = settings.sharpeningEnabled &&
+            settings.performanceProfile !=
+                ReconstructiveTemporalPerformanceProfile::Performance &&
             (settings.debugMode == ReconstructiveTemporalDebugMode::FinalOutput ||
              settings.debugMode == ReconstructiveTemporalDebugMode::FinalNraRtaaOutput ||
              settings.debugMode == ReconstructiveTemporalDebugMode::SharpeningContribution);
