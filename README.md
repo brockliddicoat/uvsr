@@ -99,8 +99,8 @@ that has not merged into `main`, plus every project or feature an agent is
 currently working on. An entry is not shipped on `main`, and experimental
 entries are not promises that the work will merge.
 
-- **GT Visibility Estimator and Reference Suite — Runtime A/B Implemented;
-  Validation Active**
+- **Visibility Reconstruction Reset and Adaptive Sampling — Active Cleanup and
+  Implementation**
   (`agent/visibility-gt-estimator`). Establish deterministic CPU and brute-force
   reference truth, correct perspective thickness along each sampled point's
   camera ray, and add an explicit `PaperAngular`/`GTUniform` A/B estimator whose
@@ -113,23 +113,19 @@ entries are not promises that the work will merge.
   early higher-bounce receiver rejection and diagnostics, a statically
   specialized production slice, analytic homogeneous endpoint clipping, and
   consumer-driven target allocation; validation is active and no runtime
-  speedup is claimed yet. `GTCosine` remains gated on uniform-reference
-  promotion. This
-  overlaps the filtering/specular-AA/NRD effort at GI source/output, normal, and
-  confidence contracts; consumes PBR/G-buffer and finite multibounce contracts
-  without repacking them initially; leaves NRA-RTAA as the sole downstream
-  scene temporal reconstruction; and preserves AO-only hierarchy plus exact GI
-  depth until coarse-reject/exact-accept metadata exists.
-- **RTAA Intel Performance and Stability — Active Local Implementation.**
-  Optimize NRA-RTAA's shared-tile color statistics, production shader
-  permutations, Performance-tier resources, Prepare/Resolve scheduling,
-  stable-interior rejection paths, native FP16 fallback, timing telemetry, and
-  temporal reconstruction correctness on weak Intel GPUs. This changes
-  `src/rtaa_*`, RTAA CPU/resource plumbing, shader packaging, tests, and the
-  **Aliasing** UI. It consumes motion/G-buffer contracts that the listed
-  filtering/specular-AA/NRD effort may change, and the HZB experiment must
-  revalidate its RTAA history assumptions after integration; it does not own
-  visibility traversal or visibility-output filtering.
+  speedup is claimed yet. The current phase retires failed NRA-RTAA v1 and its
+  debug-only surface after preserving a postmortem, completes the joint-cosine
+  CDF estimator, and replaces fixed per-pixel work with stochastic confidence-
+  driven sample and refinement budgets. It also adds a documented
+  spatiotemporal-blue-noise schedule, conditional SSRT3-style visibility
+  reconstruction, and full/half/quarter-resolution AO/GI paths with joint
+  bilateral upsampling. This owns visibility traversal/output resources,
+  estimator math and tests, motion/history/confidence contracts, shader
+  packaging, and the **Visibility** UI. It overlaps the filtering/specular-AA
+  effort at GI source/output and normals, supersedes that effort's planned NRD
+  diffuse-GI integration, consumes the existing PBR/G-buffer and finite
+  multibounce contracts without repacking them, and must leave inactive
+  reconstruction paths at zero allocation and zero dispatch cost.
 - **Forward Renderer Simplification — Local Implementation Complete; Awaiting
   Integration.** Remove the broken Forward Tonemapperless mode and its display-
   pipeline bypass, leaving supported Forward and Deferred rendering on the
@@ -137,31 +133,32 @@ entries are not promises that the work will merge.
   `main`. It overlaps the GT-estimator UI integration and bilateral-grid local
   tone mapping in `src/uvsr.cpp`, `README.md`, `UsesTonemapper()` eligibility,
   and AgX display integration, so those changes must be rebased deliberately.
-- **Texture Filtering, Specular AA, and NRD Denoising — Active Development**
+- **Texture Filtering and Specular AA — Active Development**
   (`feat/filtering-specular-aa-nrd`). Improve Intel Arc-focused anisotropic
-  sampling and mip correctness, add material specular anti-aliasing, and
-  integrate NRD diffuse-GI denoising with NRA-RTAA. This overlaps PBR materials,
-  G-buffer packing, visibility GI outputs, motion/history/confidence contracts,
-  and renderer settings. The local branch started from the now-merged visibility
-  simplification but predates current `main`; it must be rebased deliberately
-  and preserve the GT estimator's source-radiance, normal, sidedness, and
-  estimator-selection contracts.
+  sampling and mip correctness and add material specular anti-aliasing. The
+  former NRD diffuse-GI scope is superseded by the active visibility
+  reconstruction work. This still overlaps PBR materials, G-buffer packing,
+  normals, and renderer settings. The local branch started from the now-merged
+  visibility simplification but predates current `main`; it must be rebased
+  deliberately and preserve the visibility estimator's source-radiance,
+  normal, sidedness, and estimator-selection contracts.
 - **Bilateral-Grid Local Tone Mapping — Active Development**
   (`agent/bilateral-grid-local-tone-mapping`). Add a first-party D3D12 GPU
   bilateral-grid analysis pass over the final scene-linear display source after
-  NRA-RTAA and before AgX, then apply one scalar local-EV correction inside the
-  existing AgX display pass. This owns `src/local_tone_mapping*`, AgX bindings,
+  visibility composition and before AgX, then apply one scalar local-EV
+  correction inside the existing AgX display pass. This owns
+  `src/local_tone_mapping*`, AgX bindings,
   display eligibility, reference tests, and its UI. It overlaps Forward
   Tonemapperless removal and filtering/NRD renderer settings, and may extend the
   higher-bounce contribution cutoff conservatively without changing visibility
   estimator math or adding motion-reprojected local-exposure history.
-- **RTAA-Compatible GPU HZB Occlusion Culling — Experimental Validation**
+- **GPU HZB Occlusion Culling — Experimental Validation**
   (`experiment/hzb-main-post-rtaa`). Evaluate main/post HZB culling, repaired
-  indirect G-buffer draws, conservative history fallbacks, and GPU telemetry
-  before deciding whether this experimental path is safe to merge. Its visible
-  branch predates the visibility cleanup and current `main`, has no configured
-  remote, and requires a deliberate rebase plus revalidation against both the
-  active RTAA work and the GT estimator's projection/depth assumptions. It does
+  indirect G-buffer draws, conservative fallbacks, and GPU telemetry before
+  deciding whether this experimental path is safe to merge. Its visible branch
+  predates the visibility cleanup and current `main`, has no configured remote,
+  and requires a deliberate rebase plus revalidation against the visibility
+  estimator's projection/depth assumptions after NRA-RTAA v1 removal. It does
   not authorize coarse radiance sampling for visibility GI.
 
 ### How Work Gets Listed
