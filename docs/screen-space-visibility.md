@@ -373,6 +373,40 @@ and age in companion channels. Canonical orientation must be independent of a
 frame's random rotation. Extend the binary representation only if known-visible
 must be distinguished from unresolved; today a zero bit means either.
 
+### Shared-mask consumers and conditional lifetime
+
+Keep the current register-local mask whenever every consumer can execute in the
+visibility dispatch. Directional ambient, conservative rough-specular
+visibility, and transport-confidence production should consume that mask in
+place where practical, avoiding a texture write, later read, and persistent
+allocation.
+
+Temporal reprojection, spatial reuse, unresolved-sector world fallback, path
+guiding, radiance-cache visibility, and other cross-pass or cross-frame users
+require a persistent canonical mask texture or texture array. Allocate that
+cache only while at least one such consumer is active, and share one validated
+representation instead of letting each consumer allocate or retrace its own.
+When no persistent consumer is active, retain the zero-allocation register-only
+path. A single randomly rotating slice cannot be transformed into an arbitrary
+new slice by bit rotation; persistent reuse requires a canonical directional
+basis and explicit basis conversion.
+
+### Future payload telemetry
+
+When persistent masks are implemented, split the visibility HUD payload into:
+
+- **Outputs:** exact logical AO, GI, traversal-debug, and bounce payload.
+- **Mask Cache:** exact logical persistent directional-mask and metadata
+  payload.
+- **Avoided:** exact logical allocation omitted because its consumers are
+  inactive, preserving the current arithmetic meaning.
+- **Shared:** a separately labeled estimate of duplicate payload or traversal
+  avoided by several consumers sharing one mask contract.
+
+Do not fold hypothetical traffic, recomputation, API-aligned residency, or the
+estimated **Shared** value into **Avoided**. The latter must remain auditable
+from active resource formats, dimensions, and lifetimes.
+
 ### Temporal mask reprojection
 
 Reproject masks with motion vectors, rotate sectors from the previous slice
@@ -404,13 +438,18 @@ that radiance cannot feed itself without limit.
 
 ### Future consumers and exact next steps
 
-1. Allocate/capture canonical integer slice masks plus phase/confidence.
-2. Add validated temporal reprojection and sector-basis rotation.
-3. Add validated spatial reorientation/reuse without silhouette dilation.
-4. Add unresolved-sector world-space visibility/radiance queries.
-5. Add confidence-decayed cyclic reinjection with explicit energy bounds.
-6. Consume sector directions for directional ambient sampling.
-7. Derive conservative rough-specular visibility from directional masks,
+1. Define each consumer as same-dispatch or persistent and fuse same-dispatch
+   consumers into the register-local path where practical.
+2. Allocate/capture canonical integer slice masks plus phase/confidence only
+   for active persistent consumers.
+3. Extend payload telemetry with separate exact output/mask-cache/avoided
+   values and a clearly estimated shared-work value.
+4. Add validated temporal reprojection and sector-basis rotation.
+5. Add validated spatial reorientation/reuse without silhouette dilation.
+6. Add unresolved-sector world-space visibility/radiance queries.
+7. Add confidence-decayed cyclic reinjection with explicit energy bounds.
+8. Consume sector directions for directional ambient sampling.
+9. Derive conservative rough-specular visibility from directional masks,
    validated separately from diffuse AO.
-8. Expose the same contract to path guiding, radiance-cache visibility, and
+10. Expose the same contract to path guiding, radiance-cache visibility, and
    screen/world transport handoff.
