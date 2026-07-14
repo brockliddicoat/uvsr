@@ -113,24 +113,6 @@ float EvaluateLightVisibility(
     return saturate(visibility);
 }
 
-float3 SelectPbrDebugView(
-    uint debugView,
-    PbrGBufferData gbuffer,
-    float3 diffuse,
-    float3 specular,
-    float directVisibility,
-    float3 finalLinearHdr)
-{
-    if (debugView == 1u) return gbuffer.material.baseColor;
-    if (debugView == 2u) return gbuffer.material.metalness.xxx;
-    if (debugView == 3u) return gbuffer.material.perceptualRoughness.xxx;
-    if (debugView == 4u) return gbuffer.shadingNormal * 0.5f + 0.5f;
-    if (debugView == 5u) return diffuse;
-    if (debugView == 6u) return specular;
-    if (debugView == 7u) return directVisibility.xxx;
-    return finalLinearHdr;
-}
-
 [numthreads(16, 16, 1)]
 void main(int2 i_globalIdx : SV_DispatchThreadID)
 {
@@ -156,20 +138,8 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
     PbrGBufferData gbuffer = DecodePbrGBuffer(
         gbufferChannels, t_MaterialAmbientOcclusion[pixelPosition].x);
 
-    uint debugView = (uint)round(max(g_Deferred.randomOffset.y, 0.0f));
-#if !WRITE_SOURCE_RADIANCE
-    if (debugView >= 1u && debugView <= 4u)
-    {
-        float3 debugColor = SelectPbrDebugView(
-            debugView, gbuffer, 0.0f, 0.0f, 0.0f, 0.0f);
-        u_Output[pixelPosition] = float4(debugColor, 0.0f);
-        return;
-    }
-#endif
-
     float3 directDiffuse = 0.0f;
     float3 directSpecular = 0.0f;
-    float visibilitySum = 0.0f;
     if (g_Deferred.numLights > 0u)
     {
         float3 surfaceWorldPosition = ReconstructWorldPosition(
@@ -190,10 +160,8 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
 
         float angle = GetRandom(i_globalIdx.xy + float2(g_Deferred.randomOffset.x, 0.0f));
         float2 sinCosRotation = float2(sin(angle), cos(angle));
-        const bool preserveVisibilityDebug = debugView == 7u;
         LightingContributionGate exactDirectGate = MakeLightingContributionGate(
             0u,
-            preserveVisibilityDebug ? LightingSource_Direct : 0u,
             0.0f,
             1.0f);
 
@@ -212,30 +180,22 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                 LightingSource_Direct,
                 lightSample.incidentRadiance,
                 1.0f);
-            if (!preserveVisibilityDebug)
-            {
-                if (!LightingShouldEvaluate(lightRejection))
-                    continue;
-                lightRejection = ClassifyPbrDirectSurfacePrepared(
-                    preparedSurface, lightSample.directionToLight);
-                if (!LightingShouldEvaluate(lightRejection))
-                    continue;
-            }
+            if (!LightingShouldEvaluate(lightRejection))
+                continue;
+            lightRejection = ClassifyPbrDirectSurfacePrepared(
+                preparedSurface, lightSample.directionToLight);
+            if (!LightingShouldEvaluate(lightRejection))
+                continue;
 
             visibility = EvaluateLightVisibility(
                 light, surfaceWorldPosition, sinCosRotation, visibility);
             if (!(visibility > 0.0f))
                 continue;
             lightSample.visibility = visibility;
-            PbrDirectLighting direct;
-            if (preserveVisibilityDebug)
-                direct = EvaluateDirectLight(gbuffer.material, surface, lightSample);
-            else
-                direct = EvaluateDirectLightPrevalidated(
-                    preparedMaterial, preparedSurface, lightSample);
+            PbrDirectLighting direct = EvaluateDirectLightPrevalidated(
+                preparedMaterial, preparedSurface, lightSample);
             directDiffuse += direct.diffuse;
             directSpecular += direct.specular;
-            visibilitySum += direct.visibility;
         }
     }
 
@@ -297,17 +257,8 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
     if (any(isnan(finalLinearHdr)) || any(isinf(finalLinearHdr)))
         finalLinearHdr = 0.0f;
 
-    float averageVisibility = g_Deferred.numLights > 0u
-        ? visibilitySum / float(g_Deferred.numLights)
-        : 0.0f;
-    float3 outputColor = SelectPbrDebugView(
-        debugView,
-        gbuffer,
-        diffuse,
-        specular,
-        averageVisibility,
-        finalLinearHdr);
-    u_Output[pixelPosition] = float4(min(max(outputColor, 0.0f), 65504.0f), 0.0f);
+    u_Output[pixelPosition] = float4(
+        min(max(finalLinearHdr, 0.0f), 65504.0f), 0.0f);
 #if WRITE_SOURCE_RADIANCE
     u_SourceRadiance[pixelPosition] = float4(
         min(sourceRadiance, 65504.0f), float(sourceMetadata));

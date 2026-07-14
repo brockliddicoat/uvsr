@@ -30,11 +30,15 @@
         "preset",
         "radiusWorld",
         "thicknessWorld",
-        "samplesPerPixel",
+        "minimumSamplesPerPixel",
+        "maximumSamplesPerPixel",
+        "maximumRefinementSlices",
         "bounceCount",
-        "rtaaMode",
         "projection",
-        "samplingPhase"
+        "resolution",
+        "scheduler",
+        "temporalReconstruction",
+        "spatialFilter"
       ],
       "properties": {
         "width": { "type": "integer", "minimum": 1 },
@@ -42,11 +46,15 @@
         "preset": { "type": "string", "minLength": 1 },
         "radiusWorld": { "type": "number", "exclusiveMinimum": 0 },
         "thicknessWorld": { "type": "number", "minimum": 0 },
-        "samplesPerPixel": { "type": "integer", "minimum": 1 },
+        "minimumSamplesPerPixel": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "maximumSamplesPerPixel": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "maximumRefinementSlices": { "type": "integer", "minimum": 1, "maximum": 4 },
         "bounceCount": { "type": "integer", "minimum": 1, "maximum": 4 },
-        "rtaaMode": { "type": "string", "minLength": 1 },
         "projection": { "enum": ["perspective", "orthographic"] },
-        "samplingPhase": { "enum": ["frozen", "rotating"] },
+        "resolution": { "enum": ["full", "half", "quarter"] },
+        "scheduler": { "enum": ["hash-baseline", "spatiotemporal-blue-noise"] },
+        "temporalReconstruction": { "type": "boolean" },
+        "spatialFilter": { "enum": ["joint-bilateral", "gaussian-joint-bilateral"] },
         "depthPath": { "enum": ["exact", "hierarchy"] },
         "rendererPath": { "enum": ["deferred", "forward"] },
         "consumers": { "enum": ["ao", "gi", "ao+gi"] }
@@ -54,7 +62,7 @@
     },
     "estimators": {
       "type": "array",
-      "minItems": 2,
+      "minItems": 3,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -77,7 +85,7 @@
           "resourceMemoryBytes"
         ],
         "properties": {
-          "name": { "enum": ["PaperAngular", "GTUniform", "GTCosine"] },
+          "name": { "enum": ["UniformProjectedAngle", "UniformSolidAngle", "CosineWeightedSolidAngle"] },
           "signedMeanAoBias": { "type": "number" },
           "aoRmse": { "type": "number", "minimum": 0 },
           "giLuminanceRmse": { "type": "number", "minimum": 0 },

@@ -7,23 +7,15 @@
 #include <utility>
 
 constexpr uint32_t RadialVisibilitySectorCount = 32u;
-constexpr uint32_t RadialVisibilityFullMask = std::numeric_limits<uint32_t>::max();
-
-enum class SectorHitCriterion : uint8_t
-{
-    Round,
-    Ceil,
-    Floor
-};
+constexpr uint32_t RadialVisibilityFullMask =
+    std::numeric_limits<uint32_t>::max();
 
 struct RadialVisibilityMask
 {
     uint32_t occludedBits = 0u;
 };
 
-// Keep this value type field-for-field compatible with the HLSL contract in
-// radial_visibility_mask.hlsli. Estimator reference code can therefore build
-// an interval once and submit it to the same quantization API used by shaders.
+// Keep this value type field-for-field compatible with the HLSL contract.
 struct VisibilityInterval
 {
     float minimumAngle01 = 0.f;
@@ -43,69 +35,15 @@ namespace radial_visibility_detail
     {
         if (bitCount == 0u)
             return 0u;
-
         if (bitCount >= RadialVisibilitySectorCount)
             return RadialVisibilityFullMask;
-
         return (uint32_t{ 1 } << bitCount) - 1u;
     }
-
 }
 
-inline uint32_t MakeSectorRangeMask(
-    float minimumAngle01,
-    float maximumAngle01,
-    SectorHitCriterion criterion = SectorHitCriterion::Round) noexcept
-{
-    if (!std::isfinite(minimumAngle01) || !std::isfinite(maximumAngle01))
-        return 0u;
-
-    double minimum = std::clamp(static_cast<double>(minimumAngle01), 0.0, 1.0);
-    double maximum = std::clamp(static_cast<double>(maximumAngle01), 0.0, 1.0);
-    if (maximum < minimum)
-        std::swap(minimum, maximum);
-
-    const double span = maximum - minimum;
-    if (!(span > 0.0))
-        return 0u;
-
-    const double scaledMinimum = minimum * static_cast<double>(RadialVisibilitySectorCount);
-    const double scaledMaximum = maximum * static_cast<double>(RadialVisibilitySectorCount);
-    double firstSectorValue = 0.0;
-    double endSectorValue = 0.0;
-
-    switch (criterion)
-    {
-    case SectorHitCriterion::Ceil:
-        // Claim every sector with positive angular overlap.
-        firstSectorValue = std::floor(scaledMinimum);
-        endSectorValue = std::ceil(scaledMaximum);
-        break;
-    case SectorHitCriterion::Floor:
-        // Claim only sectors completely contained by the interval.
-        firstSectorValue = std::ceil(scaledMinimum);
-        endSectorValue = std::floor(scaledMaximum);
-        break;
-    case SectorHitCriterion::Round:
-    default:
-        // A sector is hit when at least half of its angular width is covered.
-        if (span * static_cast<double>(RadialVisibilitySectorCount) < 0.5)
-            return 0u;
-        firstSectorValue = std::ceil(scaledMinimum - 0.5);
-        endSectorValue = std::floor(scaledMaximum + 0.5);
-        break;
-    }
-
-    const uint32_t firstSector = static_cast<uint32_t>(std::clamp(
-        firstSectorValue, 0.0, static_cast<double>(RadialVisibilitySectorCount)));
-    const uint32_t endSector = static_cast<uint32_t>(std::clamp(
-        endSectorValue, 0.0, static_cast<double>(RadialVisibilitySectorCount)));
-    if (endSector <= firstSector)
-        return 0u;
-
-    return radial_visibility_detail::MakeLowBitMask(endSector - firstSector) << firstSector;
-}
-
+// Quantize an interval against one coherently shifted point lattice. Thin
+// intervals survive with probability proportional to their angular measure,
+// while one shared phase preserves front/back ordering and contiguous bits.
 inline uint32_t MakeStochasticSectorRangeMask(
     float minimumAngle01,
     float maximumAngle01,
@@ -118,14 +56,16 @@ inline uint32_t MakeStochasticSectorRangeMask(
         return 0u;
     }
 
-    double minimum = std::clamp(static_cast<double>(minimumAngle01), 0.0, 1.0);
-    double maximum = std::clamp(static_cast<double>(maximumAngle01), 0.0, 1.0);
+    double minimum = std::clamp(
+        static_cast<double>(minimumAngle01), 0.0, 1.0);
+    double maximum = std::clamp(
+        static_cast<double>(maximumAngle01), 0.0, 1.0);
     if (maximum < minimum)
         std::swap(minimum, maximum);
     if (!(maximum > minimum))
         return 0u;
 
-    double phase = static_cast<double>(sectorPhase) -
+    const double phase = static_cast<double>(sectorPhase) -
         std::floor(static_cast<double>(sectorPhase));
     const uint32_t firstSector = static_cast<uint32_t>(std::clamp(
         std::floor(minimum * RadialVisibilitySectorCount + phase),
@@ -136,17 +76,8 @@ inline uint32_t MakeStochasticSectorRangeMask(
     if (endSector <= firstSector)
         return 0u;
 
-    return radial_visibility_detail::MakeLowBitMask(endSector - firstSector) << firstSector;
-}
-
-inline uint32_t MakeSectorRangeMask(
-    VisibilityInterval interval,
-    SectorHitCriterion criterion = SectorHitCriterion::Round) noexcept
-{
-    return MakeSectorRangeMask(
-        interval.minimumAngle01,
-        interval.maximumAngle01,
-        criterion);
+    return radial_visibility_detail::MakeLowBitMask(
+        endSector - firstSector) << firstSector;
 }
 
 inline uint32_t MakeStochasticSectorRangeMask(
@@ -159,7 +90,9 @@ inline uint32_t MakeStochasticSectorRangeMask(
         sectorPhase);
 }
 
-constexpr uint32_t GetNewlyCoveredBits(uint32_t candidateBits, uint32_t existingBits) noexcept
+constexpr uint32_t GetNewlyCoveredBits(
+    uint32_t candidateBits,
+    uint32_t existingBits) noexcept
 {
     return candidateBits & ~existingBits;
 }
@@ -168,12 +101,14 @@ inline uint32_t AccumulateOccluder(
     RadialVisibilityMask& mask,
     uint32_t candidateBits) noexcept
 {
-    const uint32_t newlyCoveredBits = GetNewlyCoveredBits(candidateBits, mask.occludedBits);
+    const uint32_t newlyCoveredBits =
+        GetNewlyCoveredBits(candidateBits, mask.occludedBits);
     mask.occludedBits |= candidateBits;
     return newlyCoveredBits;
 }
 
-constexpr uint32_t CountOccludedSectors(RadialVisibilityMask mask) noexcept
+constexpr uint32_t CountOccludedSectors(
+    RadialVisibilityMask mask) noexcept
 {
     uint32_t bits = mask.occludedBits;
     uint32_t count = 0u;

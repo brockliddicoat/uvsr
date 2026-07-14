@@ -41,17 +41,14 @@ uint GetPbrFeatureMask()
 void main(
     in float4 i_position : SV_Position,
     in SceneVertex i_vtx,
-    in uint i_instance : INSTANCE,
     in bool i_isFrontFace : SV_IsFrontFace,
     out float4 o_channel0 : SV_Target0,
     out float4 o_channel1 : SV_Target1,
     out float4 o_channel2 : SV_Target2,
     out float4 o_channel3 : SV_Target3,
-    out float o_materialAmbientOcclusion : SV_Target4,
-    out uint2 o_surfaceIDs : SV_Target5,
-    out float o_reactiveMask : SV_Target6
+    out float o_materialAmbientOcclusion : SV_Target4
 #if MOTION_VECTORS
-    , out float4 o_motion : SV_Target7
+    , out float4 o_motion : SV_Target5
 #endif
 )
 {
@@ -99,24 +96,6 @@ void main(
         o_channel2,
         o_channel3,
         o_materialAmbientOcclusion);
-
-    // Material IDs are stable scene identifiers and the instance index is
-    // stable for the lifetime of the loaded scene. Writing both with the main
-    // G-buffer avoids a second geometry pass and gives temporal validation a
-    // real surface identity instead of a transient draw index. The RG32_UINT
-    // target preserves both components without truncation. RTAA keeps the full
-    // material ID and stores an optional compact instance token in history.
-    o_surfaceIDs = uint2(
-        uint(max(g_Material.materialID, 0)),
-        g_Push.startInstanceLocation + i_instance);
-
-    // This deferred producer contains depth-writing opaque and alpha-tested
-    // surfaces. Feature presence, surviving cutout opacity, and static emissive
-    // intensity do not prove temporal change; marking them reactive prevents
-    // the accumulation needed by foliage, coated surfaces, and small lights.
-    // Keep the producer neutral until a later composition/material path has a
-    // concrete unreliable-motion or animated-shading signal to author here.
-    o_reactiveMask = 0.0f;
 
 #if MOTION_VECTORS
     // The alpha channel distinguishes a valid zero velocity from the cleared

@@ -3,9 +3,9 @@
 
 #include <donut/shaders/view_cb.h>
 
-// Shared by every stage of the current-frame screen-space visibility pipeline.
-// Persistent radial masks intentionally are not represented here: the current
-// implementation keeps one 32-bit mask per slice in registers.
+// Shared by sampling, temporal reconstruction, bilateral filtering, and
+// composition. Directional masks remain register-local and are never written
+// to a persistent texture by the default path.
 struct ScreenSpaceVisibilityConstants
 {
     PlanarViewConstants view;
@@ -15,43 +15,48 @@ struct ScreenSpaceVisibilityConstants
 
     float radiusWorld;
     float thicknessWorld;
-    float thicknessDistanceScale;
     float stepDistributionExponent;
+    float adaptiveStrength;
 
-    float radialJitter;
     float ambientStrength;
-    float ambientPower;
     float indirectDiffuseIntensity;
-
     float emissiveGain;
     float minimumBounceContribution;
+
     float lightingExposureScale;
-    float paddingSampling2;
+    float temporalResponse;
+    float spatialRadius;
+    float padding0;
 
     float3 ambientColorTop;
-    float padding0;
-    float3 ambientColorBottom;
     float padding1;
+    float3 ambientColorBottom;
+    float padding2;
 
     uint frameIndex;
-    uint sliceCount;
-    uint sampleCount;
-    uint knownInactiveLightingSources;
+    uint minimumSampleCount;
+    uint maximumSampleCount;
+    uint maximumRefinementSlices;
 
+    uint knownInactiveLightingSources;
     uint enableAmbientOcclusion;
     uint enableIndirectDiffuse;
     uint includeEmissive;
-    uint distanceScaledThickness;
 
-    uint freezeSamplingPhase;
-    uint sectorHitCriterion;
-    uint debugMode;
     uint reverseDepth;
-
     uint orthographicProjection;
     uint useDepthHierarchy;
-    uint padding2;
+    uint resolutionScale;
+
+    uint sampleScheduler;
+    uint adaptiveSamplingEnabled;
+    uint feedbackValid;
+    uint historyValid;
+
+    uint collectSamplingStatistics;
     uint padding3;
+    uint padding4;
+    uint padding5;
 };
 
 #endif // UVSR_SCREEN_SPACE_VISIBILITY_CB_H

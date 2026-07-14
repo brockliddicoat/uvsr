@@ -443,7 +443,7 @@ namespace
         float maximumSignedAngle = 0.f;
         VisibilityInterval gtInterval;
         VisibilityInterval gtCosineInterval;
-        VisibilityInterval paperInterval;
+        VisibilityInterval projectedAngleInterval;
         bool doubleSided = false;
     };
 
@@ -463,7 +463,7 @@ namespace
         return value >= 0.f ? result : VisibilityEstimatorPi - result;
     }
 
-    VisibilityInterval BuildPaperInterval(
+    VisibilityInterval BuildProjectedAngleInterval(
         Float3 frontDirection,
         Float3 backDirection,
         const SliceMeasure& measure)
@@ -561,12 +561,12 @@ namespace
                 sample.thickness,
                 fixture.orthographic);
             Float3 backDirection = Normalize(backDelta, frontDirection);
-            GtIntervalBuildResult gtBuild = BuildGtIntervalDebug(
+            GtIntervalBuildResult gtBuild = BuildGtIntervalDetails(
                 frontDirection, backDirection, measure);
             Require(gtBuild.endpointOrderValid != 0u,
                 std::string(fixture.name) +
                     ": GT endpoints follow the documented side convention");
-            GtIntervalBuildResult gtCosineBuild = BuildGtCosineIntervalDebug(
+            GtIntervalBuildResult gtCosineBuild = BuildGtCosineIntervalDetails(
                 frontDirection, backDirection, measure);
             Require(gtCosineBuild.endpointOrderValid != 0u,
                 std::string(fixture.name) +
@@ -592,7 +592,7 @@ namespace
                 geometricInterval.second,
                 gtBuild.interval,
                 gtCosineBuild.interval,
-                BuildPaperInterval(frontDirection, backDirection, measure),
+                BuildProjectedAngleInterval(frontDirection, backDirection, measure),
                 sample.doubleSided
             });
         }
@@ -783,9 +783,9 @@ namespace
 
     enum class PacketEstimator
     {
-        PaperAngular,
-        GTUniform,
-        GTCosine
+        UniformProjectedAngle,
+        UniformSolidAngle,
+        CosineWeightedSolidAngle
     };
 
     Evaluation EvaluatePacket(
@@ -797,10 +797,10 @@ namespace
         Float3 irradiance{};
         for (const PreparedSample& sample : fixture.samples)
         {
-            VisibilityInterval interval = sample.paperInterval;
-            if (estimator == PacketEstimator::GTUniform)
+            VisibilityInterval interval = sample.projectedAngleInterval;
+            if (estimator == PacketEstimator::UniformSolidAngle)
                 interval = sample.gtInterval;
-            else if (estimator == PacketEstimator::GTCosine)
+            else if (estimator == PacketEstimator::CosineWeightedSolidAngle)
                 interval = sample.gtCosineInterval;
             const uint32_t candidateBits = MakeStochasticSectorRangeMask(
                 interval, sectorPhase);
@@ -820,13 +820,13 @@ namespace
                 static_cast<float>(RadialVisibilitySectorCount);
             float normalization = VisibilityEstimatorPi;
             float sampleWeight = coverage * receiverCosine * sourceCosine;
-            if (estimator == PacketEstimator::GTUniform)
+            if (estimator == PacketEstimator::UniformSolidAngle)
             {
                 normalization = GetGtUniformIrradianceNormalization();
                 sampleWeight = ComputeGtUniformGiSampleWeight(
                     newSectorCount, receiverCosine, sourceCosine);
             }
-            else if (estimator == PacketEstimator::GTCosine)
+            else if (estimator == PacketEstimator::CosineWeightedSolidAngle)
             {
                 normalization = GetGtCosineIrradianceNormalization();
                 sampleWeight = ComputeGtCosineGiSampleWeight(
@@ -839,9 +839,9 @@ namespace
 
         Evaluation result;
         result.ambientVisibility = GetSliceVisibility(mask);
-        if (estimator == PacketEstimator::GTUniform)
+        if (estimator == PacketEstimator::UniformSolidAngle)
             result.ambientVisibility = ResolveGtUniformAmbientVisibility(mask);
-        else if (estimator == PacketEstimator::GTCosine)
+        else if (estimator == PacketEstimator::CosineWeightedSolidAngle)
             result.ambientVisibility = ResolveGtCosineAmbientVisibility(
                 mask, fixture.measure);
         result.irradiance = irradiance;
@@ -971,7 +971,7 @@ namespace
 
     void TestDeterministicReferenceSuite()
     {
-        MetricSet paperMetrics;
+        MetricSet projectedAngleMetrics;
         MetricSet uniformMetrics;
         MetricSet cosineMetrics;
         std::cout << std::fixed << std::setprecision(7);
@@ -981,24 +981,25 @@ namespace
             PreparedFixture prepared = PrepareFixture(fixture);
             Evaluation reference = EvaluateDenseReference(prepared);
             Evaluation cosineReference = EvaluateDenseCosineReference(prepared);
-            PhaseStatistics paper = EvaluateAcrossPhases(
-                prepared, PacketEstimator::PaperAngular);
+            PhaseStatistics projectedAngle = EvaluateAcrossPhases(
+                prepared, PacketEstimator::UniformProjectedAngle);
             PhaseStatistics uniform = EvaluateAcrossPhases(
-                prepared, PacketEstimator::GTUniform);
+                prepared, PacketEstimator::UniformSolidAngle);
             PhaseStatistics cosine = EvaluateAcrossPhases(
-                prepared, PacketEstimator::GTCosine);
-            AppendMetrics(paperMetrics, reference, paper);
+                prepared, PacketEstimator::CosineWeightedSolidAngle);
+            AppendMetrics(projectedAngleMetrics, reference, projectedAngle);
             AppendMetrics(uniformMetrics, reference, uniform);
             AppendMetrics(cosineMetrics, cosineReference, cosine);
 
             std::cout << "scene=\"" << fixture.name << "\""
                 << " reference_ao=" << reference.ambientVisibility
-                << " paper_ao=" << paper.mean.ambientVisibility
+                << " projected_angle_ao=" << projectedAngle.mean.ambientVisibility
                 << " gt_uniform_ao=" << uniform.mean.ambientVisibility
                 << " gt_cosine_reference_ao=" << cosineReference.ambientVisibility
                 << " gt_cosine_ao=" << cosine.mean.ambientVisibility
                 << " reference_gi_luma=" << Luminance(reference.irradiance)
-                << " paper_gi_luma=" << Luminance(paper.mean.irradiance)
+                << " projected_angle_gi_luma="
+                << Luminance(projectedAngle.mean.irradiance)
                 << " gt_uniform_gi_luma=" << Luminance(uniform.mean.irradiance)
                 << " gt_cosine_reference_gi_luma="
                 << Luminance(cosineReference.irradiance)
@@ -1007,10 +1008,10 @@ namespace
 
             Require(std::isfinite(uniform.mean.ambientVisibility) &&
                 VisibilityEstimatorIsFinite3(uniform.mean.irradiance),
-                std::string(fixture.name) + ": GTUniform result remains finite");
+                std::string(fixture.name) + ": Uniform Solid Angle result remains finite");
             Require(std::isfinite(cosine.mean.ambientVisibility) &&
                 VisibilityEstimatorIsFinite3(cosine.mean.irradiance),
-                std::string(fixture.name) + ": GTCosine result remains finite");
+                std::string(fixture.name) + ": Cosine-Weighted Solid Angle result remains finite");
             if (fixture.receiverDiffuseScale == 0.f)
             {
                 Require(Near(uniform.mean.composite, Float3{}, 1e-7f),
@@ -1022,46 +1023,48 @@ namespace
             }
         }
 
-        PrintSummary("PaperAngular", paperMetrics);
-        PrintSummary("GTUniform", uniformMetrics);
-        PrintSummary("GTCosine", cosineMetrics);
+        PrintSummary("Uniform Projected Angle", projectedAngleMetrics);
+        PrintSummary("Uniform Solid Angle", uniformMetrics);
+        PrintSummary("Cosine-Weighted Solid Angle", cosineMetrics);
 
         const float uniformAoRmse = RootMeanSquare(uniformMetrics.signedAmbientBias);
-        const float paperAoRmse = RootMeanSquare(paperMetrics.signedAmbientBias);
+        const float projectedAngleAoRmse = RootMeanSquare(
+            projectedAngleMetrics.signedAmbientBias);
         const float uniformGiLuminanceRmse = RootMeanSquare(
             uniformMetrics.giLuminanceError);
-        const float paperGiLuminanceRmse = RootMeanSquare(
-            paperMetrics.giLuminanceError);
+        const float projectedAngleGiLuminanceRmse = RootMeanSquare(
+            projectedAngleMetrics.giLuminanceError);
         Require(uniformAoRmse < 0.0125f,
-            "GTUniform averaged AO agrees with the explicit-direction reference");
-        Require(uniformAoRmse <= paperAoRmse + 1e-5f,
-            "GTUniform does not increase aggregate AO bias against reference");
+            "Uniform Solid Angle averaged AO agrees with the explicit-direction reference");
+        Require(uniformAoRmse <= projectedAngleAoRmse + 1e-5f,
+            "Uniform Solid Angle does not increase aggregate AO bias against reference");
         Require(Percentile(uniformMetrics.absoluteAmbientError, 0.99f) < 0.025f,
-            "GTUniform 99th-percentile AO error remains within one sector");
+            "Uniform Solid Angle 99th-percentile AO error remains within one sector");
         Require(uniformGiLuminanceRmse < 0.001f,
-            "GTUniform GI agrees with the sampled-source reference");
-        Require(uniformGiLuminanceRmse <= paperGiLuminanceRmse + 1e-5f,
-            "GTUniform does not increase aggregate GI luminance error");
+            "Uniform Solid Angle GI agrees with the sampled-source reference");
+        Require(uniformGiLuminanceRmse <=
+                projectedAngleGiLuminanceRmse + 1e-5f,
+            "Uniform Solid Angle does not increase aggregate GI luminance error");
         Require(Mean(uniformMetrics.giChromaError) < 0.001f,
-            "GTUniform preserves sampled-source chroma");
+            "Uniform Solid Angle preserves sampled-source chroma");
         Require(Near(
                 GetGtUniformIrradianceNormalization(),
                 VisibilityEstimatorTwoPi,
                 1e-7f),
-            "GTUniform irradiance normalization is two pi");
+            "Uniform Solid Angle irradiance normalization is two pi");
         Require(RootMeanSquare(cosineMetrics.signedAmbientBias) < 0.001f,
-            "GTCosine averaged AO agrees with joint-cosine quadrature");
+            "Cosine-Weighted Solid Angle averaged AO agrees with joint-cosine quadrature");
         Require(Percentile(cosineMetrics.absoluteAmbientError, 0.99f) < 0.002f,
-            "GTCosine AO quantization remains unbiased across sector phases");
+            "Cosine-Weighted Solid Angle AO quantization remains unbiased across sector phases");
         Require(RootMeanSquare(cosineMetrics.giLuminanceError) < 0.002f,
-            "GTCosine GI agrees with joint-cosine quadrature");
+            "Cosine-Weighted Solid Angle GI agrees with joint-cosine quadrature");
         Require(Mean(cosineMetrics.giChromaError) < 0.001f,
-            "GTCosine preserves sampled-source chroma");
+            "Cosine-Weighted Solid Angle preserves sampled-source chroma");
         Require(Near(
                 GetGtCosineIrradianceNormalization(),
                 VisibilityEstimatorPi,
                 1e-7f),
-            "GTCosine irradiance normalization is pi without double cosine");
+            "Cosine-Weighted Solid Angle irradiance normalization is pi without double cosine");
     }
 
     void TestFiniteMultibounceEnergy()

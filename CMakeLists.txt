@@ -67,8 +67,6 @@ donut_compile_shaders_all_platforms(
 
 add_executable(uvsr WIN32
     src/gpu_performance_monitor.cpp
-    src/reconstructive_temporal_aa.cpp
-    src/reconstructive_temporal_aa_settings.cpp
     src/uvsr.cpp
     src/pbr_deferred_lighting_pass.cpp
     src/screen_space_visibility.cpp
@@ -109,13 +107,6 @@ add_test(
     NAME uvsr_visibility_projection_reference
     COMMAND uvsr_visibility_projection_tests
 )
-
-add_executable(uvsr_rtaa_reference_tests
-    tests/rtaa_reference_tests.cpp
-    src/reconstructive_temporal_aa_settings.cpp
-)
-target_include_directories(uvsr_rtaa_reference_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-add_test(NAME uvsr_rtaa_reference COMMAND uvsr_rtaa_reference_tests)
 
 # Donut builds its complete shader catalog as an internal dependency. Stage it
 # outside the runtime tree, then package only the shaders instantiated by UVSR.
@@ -172,11 +163,11 @@ set(UVSR_APP_SHADERS
     pbr_deferred_lighting_cs
     pbr_forward_ps
     pbr_gbuffer_ps
-    rtaa_prepare_cs
-    rtaa_resolve_cs
     screen_space_depth_hierarchy_cs
     screen_space_indirect_composite_cs
+    screen_space_visibility_filter_cs
     screen_space_visibility_cs
+    screen_space_visibility_temporal_cs
 )
 
 foreach(shader IN LISTS UVSR_APP_SHADERS)

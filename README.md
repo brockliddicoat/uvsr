@@ -11,25 +11,29 @@ is also available from the scene picker.
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
-- Native-Resolution Analytical Reconstructive Temporal Anti-Aliasing (NRA-RTAA)
-  starts enabled on the deferred UVSR PBR path. Its **Aliasing** drawer separates
-  Heavy, Medium, and clarity-biased Light temporal-response presets from an
-  independent, statically compiled **Performance Profile** selector with
-  Performance, Balanced, and Maximum Quality tiers. The factory default is
-  Medium Temporal plus Balanced. Analytical validation and rejection controls,
-  32 debug views, memory estimates, and GPU timings remain available, and all
-  scene color and history resources stay at display resolution.
-- Screen-space visibility feeds current-frame AO/GI directly into composition;
-  it has no temporal accumulation or spatial filtering stage.
-- The production visibility traversal uses a statically specialized one-slice
-  shader. A separate **Developer Slices** path retains the general two-to-eight
-  slice loop for validation without carrying its dynamic loop setup in the
-  shipping configuration.
-- The **Visibility > Shared Visibility Sampling > Estimator** control A/Bs the
-  default Paper Angular formulation against a complete no-`acos` GT Uniform
-  permutation with matching equal-mass AO/GI weighting and normalization. GT
-  Cosine remains visibly gated until the uniform path clears the documented
-  image-quality and multi-adapter performance gates.
+- NRA-RTAA v1 is retired and removed. Its failure analysis remains in the
+  [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) so a successor starts
+  from a proven reprojection base instead of restoring the failed subsystem.
+- Screen-space visibility traces AO/GI at selectable full, half, or quarter
+  linear resolution. Full resolution can composite raw output; reconstruction
+  adds SSRT3-style temporal accumulation and either compact or Gaussian joint-
+  bilateral filtering. Reduced modes always use the selected joint filter to
+  upsample to full resolution.
+- Every eligible pixel receives one base slice and a configurable minimum depth-
+  tap budget. Depth/normal edges, disocclusions, unstable history, low
+  confidence, and reprojected neighboring GI contribution stochastically raise
+  the budget toward **Maximum Samples / Pixel** and **Maximum Refinement
+  Slices**. The sample profiler is opt-in so production traversal has no atomic
+  counter traffic.
+- The **Estimator** control exposes **Uniform Projected Angle**, **Uniform Solid
+  Angle**, and **Cosine-Weighted Solid Angle**. Uniform Projected Angle remains
+  the default. The cosine path is fully compiled and uses the complete joint-cosine
+  CDF, projected slice mass, `pi` GI normalization, and no duplicate receiver-
+  cosine factor.
+- The **Sample Scheduler** compares an independent hash baseline with a
+  first-party progressive 64x64 spatiotemporal-blue-noise rank field. Both use
+  nested radial and slice prefixes, so increasing a limit appends samples rather
+  than moving lower-budget samples.
 - The renderer selector provides **Deferred**, **Forward**, and **Forward
   Tonemapperless** modes. The tonemapperless mode renders with the forward path
   and sends its scene-linear HDR result directly to the sRGB display target,
@@ -39,8 +43,10 @@ is also available from the scene picker.
   restores those defaults in-session, and settings are not carried between
   launches.
 - The HUD performance row reports resolution, frame time, FPS, current-clock
-  memory bandwidth, and current-clock FP32 peak GFLOPS. The **All** row stays
-  compact with total, Trace, and Composite GPU timings.
+  memory bandwidth, and current-clock FP32 peak GFLOPS. Visibility reports Trace,
+  Temporal, Filter, and Composite GPU timings plus exact logical **Outputs**,
+  **Working**, **Mask Cache**, and **Avoided** payloads. **Shared** is explicitly
+  an estimate of duplicate mask payload avoided by shared AO/GI traversal.
 - UVSR's shared forward/deferred metallic-roughness PBR path is always enabled
   in the production UI. The legacy Donut comparison path remains implemented
   for possible future experiments, but its control is hidden.
@@ -53,32 +59,31 @@ is also available from the scene picker.
   alongside the scene's colored direct lights so GI sources remain easy to read.
 - Camera controls are limited to **First Person** and **Third Person**.
 - The first scene light is selected automatically in the **Lights** panel.
-- **Emissive Material Light Strength** in **Lights** globally scales how much
-  light emissive materials contribute to GI without changing the visible
-  emissive surfaces themselves. Raising it expands the visibly illuminated area
-  up to the screen-space **Visibility** sampling radius.
+- **Emissive Source Gain** in **Visibility > Indirect Diffuse GI** globally
+  scales how much light emissive materials contribute to GI without changing
+  the visible emissive surfaces themselves. Raising it expands the visibly
+  illuminated area up to the screen-space sampling radius.
 - **Bounces** in **Indirect Diffuse GI** selects one through four finite diffuse
   bounces. One is the default and keeps the original compact shader path. Later
   bounces transport only the newest light frontier and accumulate it separately;
-  their GI-only sample budgets halve toward 8 taps, so stochastic work grows
+  their GI-only sample budgets halve toward 8 taps without raising a lower
+  first-bounce limit, so stochastic work grows
   sublinearly while bounce one stays at full quality.
 - **Bounce Contribution Cutoff** skips higher-bounce source shading whose
   conservative exposed upper bound is too small to matter. The default is
-  `0.001`; zero keeps exact-zero exits only. GI-result diagnostics use the exact
-  selected chain, while unrelated diagnostics skip invisible secondary work.
-  The gate saves source material/lighting work but each active bounce still
-  dispatches and performs its visibility traversal.
+  `0.001`; zero keeps exact-zero exits only. The gate saves source material and
+  lighting work, but each active bounce still dispatches and performs its
+  visibility traversal.
 - Later bounces reject receivers with proven-zero diffuse throughput before
-  view-position reconstruction, normal fetches, or slice setup. Opt-in
-  **Higher-Bounce Receiver Statistics** uses a diagnostic-only shader
-  permutation; production traversal carries no counter or readback work.
-- Full-resolution AO, GI, traversal-debug, and extra-bounce targets exist only
-  while their consumers are configured. The Visibility HUD reports their
-  exact logical texel payload and the payload avoided relative to the former
-  always-allocate policy; those values are not API-aligned residency or
-  measured bandwidth.
-- Proven scene-wide source inactivity and zero final GI intensity terminate the
-  complete higher-bounce dispatch chain. The shared CPU/HLSL activity mask is
+  view-position reconstruction, normal fetches, or slice setup.
+- AO, GI, the GI source-radiance target, adaptive feedback, temporal history,
+  filtered outputs, depth hierarchy, and extra-bounce targets exist only while
+  their consumers require them. AO strength zero or GI intensity zero removes
+  that consumer while the other effect can continue independently. The default
+  directional mask remains register-local and consumes zero persistent mask-
+  cache bytes.
+- Proven scene-wide source inactivity terminates the complete higher-bounce
+  dispatch chain. The shared CPU/HLSL activity mask is
   extensible to future clustering, probe, cache, visibility, and residency data;
   unknown sources always remain active.
 - A shared, future-extensible contribution-gate contract also gives forward and
@@ -103,7 +108,7 @@ entries are not promises that the work will merge.
   Implementation**
   (`agent/visibility-gt-estimator`). Establish deterministic CPU and brute-force
   reference truth, correct perspective thickness along each sampled point's
-  camera ray, and add an explicit `PaperAngular`/`GTUniform` A/B estimator whose
+  camera ray, and add explicit projected-angle/solid-angle A/B estimators whose
   slice measure, no-`acos` CDF, stochastic sector lattice, AO resolve, GI
   weighting, and normalization agree. The published
   `agent/visibility-reference` branch owns shared CPU/HLSL estimator math,
@@ -227,6 +232,11 @@ The launcher requires a description and puts it in the window and task title:
 .\tools\launch_uvsr.ps1 -Experiment "testing program title on task title"
 ```
 
+After building, Windows users can also double-click
+`Launch UVSR Visibility Candidate.cmd`. It delegates to the same required
+experiment launcher with this branch's fixed AO/GI candidate label; optional
+renderer arguments can be appended from a terminal.
+
 The title reports the active graphics API at runtime, for example
 `UVSR Renderer D3D12 (testing program title on task title, 4:32 AM)`. The time
 is captured when the experiment process launches and displayed in local time.
@@ -236,11 +246,11 @@ Direct and IDE-driven launches can instead supply the description through
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the PBR, radial-visibility, estimator, visibility-projection, and
-NRA-RTAA reference tests separately:
+Build and run the PBR, radial-visibility, estimator, and visibility-projection
+reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_rtaa_reference_tests
+cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
@@ -275,16 +285,14 @@ editable in **Lights**.
 ## Documentation and Conventions
 
 The [PBR foundation](docs/pbr-foundation.md) documents the material contract,
-G-buffer packing, equations, debug views, validation controls, limitations, and
-extension points.
+G-buffer packing, equations, validation, limitations, and extension points.
 
 The [screen-space visibility design](docs/screen-space-visibility.md) documents
 the shared 32-sector AO/GI traversal, resources, coordinate/radiance contracts,
 controls, limitations, and the upgrade path to persistent unified visibility.
 
-The [NRA-RTAA design](docs/nra-rtaa.md) documents pipeline placement, motion
-and jitter conventions, validation and reconstruction behavior, resource
-packing, memory costs, presets, timing interpretation, and current limitations.
+The [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) preserves why the
+retired anti-aliasing experiment failed and the required order for any successor.
 
 UVSR runs uncapped with a single planar view. UVSR-owned interactive controls
 provide concise hover tooltips; new controls should follow the same convention.

@@ -152,7 +152,7 @@ void main(
         PbrPreparedSurface preparedSurface = PreparePbrSurface(surface);
         PbrPreparedMaterial preparedMaterial = PreparePbrMaterial(material);
         LightingContributionGate exactDirectGate = MakeLightingContributionGate(
-            0u, 0u, 0.0f, 1.0f);
+            0u, 0.0f, 1.0f);
         [loop]
         for (uint lightIndex = 0; lightIndex < g_ForwardLight.numLights; ++lightIndex)
         {

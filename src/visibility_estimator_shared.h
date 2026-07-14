@@ -345,7 +345,8 @@ UVSR_VISIBILITY_INLINE SliceMeasure BuildSliceMeasure(
         VisibilityEstimatorMin(1.0f,
             -VisibilityEstimatorDot(projectedNormal, measure.S)));
     // Visible G-buffer surfaces are expected to be face-forward with respect
-    // to V. Preserve GTUniform's historical behavior for malformed normals,
+    // to V. Preserve Uniform Solid Angle's historical behavior for malformed
+    // normals,
     // but make their joint-cosine mass zero instead of integrating a wrapped
     // hemisphere with invalid sector semantics.
     if (measure.cosGamma >= 0.0f)
@@ -423,7 +424,7 @@ UVSR_VISIBILITY_INLINE VisibilityEstimatorUint GtUniformEndpointOrderIsConsisten
     return ordered ? 1u : 0u;
 }
 
-UVSR_VISIBILITY_INLINE GtIntervalBuildResult BuildGtIntervalDebug(
+UVSR_VISIBILITY_INLINE GtIntervalBuildResult BuildGtIntervalDetails(
     VisibilityEstimatorFloat3 frontDirection,
     VisibilityEstimatorFloat3 backDirection,
     SliceMeasure measure)
@@ -448,7 +449,7 @@ UVSR_VISIBILITY_INLINE VisibilityInterval BuildGtInterval(
     VisibilityEstimatorFloat3 backDirection,
     SliceMeasure measure)
 {
-    return BuildGtIntervalDebug(frontDirection, backDirection, measure).interval;
+    return BuildGtIntervalDetails(frontDirection, backDirection, measure).interval;
 }
 
 UVSR_VISIBILITY_INLINE VisibilityEstimatorUint BuildGtStochasticEndpointMask(
@@ -515,7 +516,7 @@ UVSR_VISIBILITY_INLINE float MapDirectionToCosineSliceMass(
         VisibilityEstimatorMax(conditionalMass, VisibilityEstimatorEpsilon));
 }
 
-UVSR_VISIBILITY_INLINE GtIntervalBuildResult BuildGtCosineIntervalDebug(
+UVSR_VISIBILITY_INLINE GtIntervalBuildResult BuildGtCosineIntervalDetails(
     VisibilityEstimatorFloat3 frontDirection,
     VisibilityEstimatorFloat3 backDirection,
     SliceMeasure measure)
@@ -540,7 +541,7 @@ UVSR_VISIBILITY_INLINE VisibilityInterval BuildGtCosineInterval(
     VisibilityEstimatorFloat3 backDirection,
     SliceMeasure measure)
 {
-    return BuildGtCosineIntervalDebug(
+    return BuildGtCosineIntervalDetails(
         frontDirection, backDirection, measure).interval;
 }
 
@@ -569,10 +570,11 @@ UVSR_VISIBILITY_INLINE float ComputeGtUniformGiSampleWeight(
 
 UVSR_VISIBILITY_INLINE float GetGtUniformIrradianceNormalization()
 {
-    // Equal-mass GTUniform sectors sample p(omega)=1/(2*pi) on the receiver
-    // hemisphere. Diffuse irradiance therefore multiplies their mean
-    // L_i * cos(theta_receiver) by 2*pi. GTCosine will use a different CDF and
-    // omit this receiver cosine rather than reusing this normalization.
+    // Equal-mass Uniform Solid Angle sectors sample p(omega)=1/(2*pi) on the
+    // receiver hemisphere. Diffuse irradiance therefore multiplies their mean
+    // L_i * cos(theta_receiver) by 2*pi. Cosine-Weighted Solid Angle uses a
+    // different CDF and omits this receiver cosine rather than reusing this
+    // normalization.
     return VisibilityEstimatorTwoPi;
 }
 

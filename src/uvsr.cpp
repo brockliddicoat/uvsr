@@ -63,7 +63,6 @@
 #include "pbr_material.h"
 #include "pbr_deferred_lighting_pass.h"
 #include "gpu_performance_monitor.h"
-#include "reconstructive_temporal_aa.h"
 #include "screen_space_visibility.h"
 
 using namespace donut;
@@ -257,9 +256,9 @@ public:
     nvrhi::TextureHandle LdrColor;
     nvrhi::TextureHandle MaterialIDs;
     nvrhi::TextureHandle MaterialAmbientOcclusion;
-    nvrhi::TextureHandle ReactiveMask;
     bool PbrEnabled = true;
     bool VisibilityResourcesEnabled = false;
+    bool VisibilitySourceRadianceEnabled = false;
     bool MotionVectorsEnabled = false;
 
     nvrhi::HeapHandle Heap;
@@ -275,36 +274,15 @@ public:
         bool enableMotionVectors,
         bool useReverseProjection,
         bool enablePbr,
-        bool enableVisibilityResources)
+        bool enableVisibilityResources,
+        bool enableVisibilitySourceRadiance)
     {
         GBufferRenderTargets::Init(device, size, sampleCount, enableMotionVectors, useReverseProjection);
         PbrEnabled = enablePbr;
         VisibilityResourcesEnabled = enableVisibilityResources;
+        VisibilitySourceRadianceEnabled =
+            enableVisibilityResources && enableVisibilitySourceRadiance;
         MotionVectorsEnabled = enableMotionVectors;
-
-        // Stable material and instance identity is part of the primary PBR
-        // G-buffer contract. The target is also reused by picking, so making it
-        // always current removes the pick-only duplicate geometry draw in the
-        // normal deferred PBR configuration.
-        nvrhi::TextureDesc surfaceIdDesc;
-        surfaceIdDesc.width = size.x;
-        surfaceIdDesc.height = size.y;
-        surfaceIdDesc.isRenderTarget = true;
-        surfaceIdDesc.useClearValue = true;
-        surfaceIdDesc.clearValue = nvrhi::Color(0xffffffffu);
-        surfaceIdDesc.sampleCount = sampleCount;
-        surfaceIdDesc.dimension = sampleCount > 1
-            ? nvrhi::TextureDimension::Texture2DMS
-            : nvrhi::TextureDimension::Texture2D;
-        surfaceIdDesc.keepInitialState = true;
-        surfaceIdDesc.isVirtual = device->queryFeatureSupport(nvrhi::Feature::VirtualResources);
-        // Keep the full stable scene identifiers. Truncating either component
-        // to 16 bits can alias unrelated materials or instances, which would
-        // make temporal surface validation accept contaminated history.
-        surfaceIdDesc.format = nvrhi::Format::RG32_UINT;
-        surfaceIdDesc.initialState = nvrhi::ResourceStates::RenderTarget;
-        surfaceIdDesc.debugName = "MaterialAndInstanceIDs";
-        MaterialIDs = device->createTexture(surfaceIdDesc);
 
         if (enablePbr)
         {
@@ -321,11 +299,6 @@ public:
             materialAmbientOcclusionDesc.debugName = "PbrMaterialAmbientOcclusion";
             MaterialAmbientOcclusion = device->createTexture(materialAmbientOcclusionDesc);
 
-            nvrhi::TextureDesc reactiveMaskDesc = materialAmbientOcclusionDesc;
-            reactiveMaskDesc.clearValue = nvrhi::Color(0.f);
-            reactiveMaskDesc.debugName = "PbrExplicitReactiveMask";
-            ReactiveMask = device->createTexture(reactiveMaskDesc);
-
             if (enableMotionVectors)
             {
                 nvrhi::TextureDesc motionDesc = MotionVectors->getDesc();
@@ -340,9 +313,7 @@ public:
                 GBufferSpecular,
                 GBufferNormals,
                 GBufferEmissive,
-                MaterialAmbientOcclusion,
-                MaterialIDs,
-                ReactiveMask };
+                MaterialAmbientOcclusion };
             if (enableMotionVectors)
                 GBufferFramebuffer->RenderTargets.push_back(MotionVectors);
             GBufferFramebuffer->DepthTarget = Depth;
@@ -372,9 +343,21 @@ public:
             desc.debugName = "ScreenSpaceVisibility/BaseLighting";
             BaseLighting = device->createTexture(desc);
 
-            desc.debugName = "ScreenSpaceVisibility/DirectDiffuseRadiance";
-            DirectDiffuseRadiance = device->createTexture(desc);
+            if (VisibilitySourceRadianceEnabled)
+            {
+                desc.debugName = "ScreenSpaceVisibility/DirectDiffuseRadiance";
+                DirectDiffuseRadiance = device->createTexture(desc);
+            }
         }
+
+        // Picking is deliberately kept out of the every-frame G-buffer. The
+        // failed NRA-RTAA v1 needed stable surface IDs every frame; now a
+        // compact target plus the existing on-demand material-ID pass avoids
+        // an otherwise permanent MRT write and restores the original cost.
+        desc.format = nvrhi::Format::RG16_UINT;
+        desc.isUAV = false;
+        desc.debugName = "MaterialIDs";
+        MaterialIDs = device->createTexture(desc);
 
         // The render targets below this point are non-MSAA
         desc.sampleCount = 1;
@@ -437,11 +420,14 @@ public:
         uint sampleCount,
         bool enablePbr,
         bool enableVisibilityResources,
+        bool enableVisibilitySourceRadiance,
         bool enableMotionVectors) const
     {
         if (any(m_Size != size) || m_SampleCount != sampleCount ||
             PbrEnabled != enablePbr ||
             VisibilityResourcesEnabled != enableVisibilityResources ||
+            VisibilitySourceRadianceEnabled !=
+                (enableVisibilityResources && enableVisibilitySourceRadiance) ||
             MotionVectorsEnabled != enableMotionVectors)
             return true;
 
@@ -456,12 +442,6 @@ public:
             commandList->clearTextureFloat(
                 MaterialAmbientOcclusion, nvrhi::AllSubresources, nvrhi::Color(1.f));
         }
-
-        if (ReactiveMask)
-            commandList->clearTextureFloat(
-                ReactiveMask, nvrhi::AllSubresources, nvrhi::Color(0.f));
-        commandList->clearTextureUInt(
-            MaterialIDs, nvrhi::AllSubresources, 0xffffffffu);
 
         commandList->clearTextureFloat(HdrColor, nvrhi::AllSubresources, nvrhi::Color(0.f));
         if (BaseLighting)
@@ -480,33 +460,6 @@ enum class WhiteWorldMode
     PreserveDetail,
     PreserveLighting
 };
-
-enum class PbrDebugView
-{
-    FinalLinearHdr,
-    BaseColor,
-    Metalness,
-    PerceptualRoughness,
-    EncodedNormal,
-    DiffuseContribution,
-    SpecularContribution,
-    DirectLightVisibility
-};
-
-static const char* GetPbrDebugViewName(PbrDebugView view)
-{
-    static const char* names[] = {
-        "Final linear HDR",
-        "Base color",
-        "Metalness",
-        "Perceptual roughness",
-        "Encoded normal",
-        "Diffuse contribution",
-        "Specular contribution",
-        "Direct-light visibility"
-    };
-    return names[int(view)];
-}
 
 static void ApplyPbrMaterialParameters(Material& material, float ior = 1.5f)
 {
@@ -586,21 +539,6 @@ struct alignas(16) AgxToneMappingConstants
     float4 Power;
     float4 LutDomainMin;
     float4 LutDomainMax;
-    float4 RtaaSharpening;
-    float4 RtaaSharpeningSuppression;
-    float4 RtaaDisplayFlags;
-};
-
-struct AgxSharpeningParameters
-{
-    bool enabled = false;
-    bool diagnosticBypass = false;
-    bool debugContribution = false;
-    float strength = 0.f;
-    float motionSuppression = 1.f;
-    float reactiveSuppression = 1.f;
-    float varianceSuppression = 1.f;
-    float haloClamp = 0.f;
 };
 
 class AgxToneMappingPass
@@ -614,8 +552,6 @@ private:
     nvrhi::GraphicsPipelineHandle m_Pipeline;
     nvrhi::ITexture* m_BoundSource = nullptr;
     nvrhi::ITexture* m_BoundLut = nullptr;
-    nvrhi::ITexture* m_BoundRtaaMetadata = nullptr;
-    nvrhi::ITexture* m_BoundRtaaMoments = nullptr;
     nvrhi::TextureHandle m_ColorLut;
     uint32_t m_ColorLutSize = 0;
     float3 m_LutDomainMin = 0.f;
@@ -650,8 +586,6 @@ public:
             nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
             nvrhi::BindingLayoutItem::Texture_SRV(0),
             nvrhi::BindingLayoutItem::Texture_SRV(1),
-            nvrhi::BindingLayoutItem::Texture_SRV(2),
-            nvrhi::BindingLayoutItem::Texture_SRV(3),
             nvrhi::BindingLayoutItem::Sampler(0)
         };
         m_BindingLayout = device->createBindingLayout(layoutDesc);
@@ -682,35 +616,24 @@ public:
         nvrhi::ICommandList* commandList,
         const AgxToneMappingParameters& params,
         const ICompositeView& compositeView,
-        nvrhi::ITexture* sourceTexture,
-        nvrhi::ITexture* rtaaMetadata = nullptr,
-        nvrhi::ITexture* rtaaMoments = nullptr,
-        const AgxSharpeningParameters& sharpening = {})
+        nvrhi::ITexture* sourceTexture)
     {
         nvrhi::ITexture* lutTexture = m_ColorLut
             ? m_ColorLut.Get()
             : m_CommonPasses->m_BlackTexture3D.Get();
 
-        nvrhi::ITexture* metadataTexture = rtaaMetadata ? rtaaMetadata : sourceTexture;
-        nvrhi::ITexture* momentsTexture = rtaaMoments ? rtaaMoments : sourceTexture;
-
-        if (!m_BindingSet || m_BoundSource != sourceTexture || m_BoundLut != lutTexture ||
-            m_BoundRtaaMetadata != metadataTexture || m_BoundRtaaMoments != momentsTexture)
+        if (!m_BindingSet || m_BoundSource != sourceTexture || m_BoundLut != lutTexture)
         {
             nvrhi::BindingSetDesc bindingSetDesc;
             bindingSetDesc.bindings = {
                 nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
                 nvrhi::BindingSetItem::Texture_SRV(0, sourceTexture),
                 nvrhi::BindingSetItem::Texture_SRV(1, lutTexture),
-                nvrhi::BindingSetItem::Texture_SRV(2, metadataTexture),
-                nvrhi::BindingSetItem::Texture_SRV(3, momentsTexture),
                 nvrhi::BindingSetItem::Sampler(0, m_CommonPasses->m_LinearClampSampler)
             };
             m_BindingSet = m_Device->createBindingSet(bindingSetDesc, m_BindingLayout);
             m_BoundSource = sourceTexture;
             m_BoundLut = lutTexture;
-            m_BoundRtaaMetadata = metadataTexture;
-            m_BoundRtaaMoments = momentsTexture;
         }
 
         AgxToneMappingConstants constants{};
@@ -722,21 +645,6 @@ public:
         constants.Power = float4(float3(params.Power), 0.f);
         constants.LutDomainMin = float4(m_LutDomainMin, 0.f);
         constants.LutDomainMax = float4(m_LutDomainMax, 0.f);
-        const nvrhi::TextureDesc& sourceDesc = sourceTexture->getDesc();
-        constants.RtaaSharpening = float4(
-            1.f / std::max(float(sourceDesc.width), 1.f),
-            1.f / std::max(float(sourceDesc.height), 1.f),
-            std::max(sharpening.strength, 0.f),
-            std::max(sharpening.haloClamp, 0.f));
-        constants.RtaaSharpeningSuppression = float4(
-            std::max(sharpening.motionSuppression, 0.f),
-            std::max(sharpening.reactiveSuppression, 0.f),
-            std::max(sharpening.varianceSuppression, 0.f),
-            sharpening.enabled ? 1.f : 0.f);
-        constants.RtaaDisplayFlags = float4(
-            sharpening.diagnosticBypass ? 1.f : 0.f,
-            sharpening.debugContribution ? 1.f : 0.f,
-            0.f, 0.f);
         commandList->writeBuffer(m_ConstantBuffer, &constants, sizeof(constants));
 
         commandList->beginMarker("AgX Tone Mapping");
@@ -928,12 +836,10 @@ struct UIData
     bool                                EnablePbr = true;
     RendererMode                        RenderMode = RendererMode::Deferred;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
-    ReconstructiveTemporalAASettings    ReconstructiveTemporalAA;
     AgxToneMappingParameters            AgxToneMappingParams;
     AgxPreset                           AgxToneMappingPreset = AgxPreset::Base;
     SkyParameters                       SkyParams;
     bool                                ShaderReloadRequested = false;
-    PbrDebugView                        PbrDebug = PbrDebugView::FinalLinearHdr;
     bool                                EnableProceduralSky = true;
     WhiteWorldMode                      WhiteWorld = WhiteWorldMode::Off;
     bool                                UseThirdPersonCamera = false;
@@ -975,7 +881,6 @@ private:
     std::unique_ptr<SkyPass>            m_SkyPass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
-    std::unique_ptr<ReconstructiveTemporalAAPass> m_ReconstructiveTemporalAAPass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
     std::unique_ptr<PixelReadbackPass>  m_PixelReadbackPass;
     std::vector<KodakLut>               m_KodakLuts;
@@ -995,7 +900,6 @@ private:
     float3                              m_AmbientBottom = 0.f;
     uint2                               m_PickPosition = 0u;
     bool                                m_Pick = false;
-    float                               m_LastFrameDeltaSeconds = 1.f / 60.f;
     
 
     UIData&                             m_ui;
@@ -1158,9 +1062,7 @@ public:
 
         m_ui.EnablePbr = true;
         m_ui.RenderMode = RendererMode::Deferred;
-        m_ui.PbrDebug = PbrDebugView::FinalLinearHdr;
         m_ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
-        m_ui.ReconstructiveTemporalAA = ReconstructiveTemporalAASettings{};
         m_ui.AgxToneMappingPreset = AgxPreset::Base;
         m_ui.AgxToneMappingParams = GetAgxPresetParameters(AgxPreset::Base);
         m_ui.SkyParams = SkyParameters{};
@@ -1170,7 +1072,6 @@ public:
         // deferred rendering, or white-world permutations had been disabled
         // before the reset.
         m_ui.ShaderReloadRequested = true;
-        ResetReconstructiveTemporalAAHistory();
         log::info("All renderer settings restored to factory defaults");
     }
 
@@ -1196,18 +1097,6 @@ public:
             else
                 CopyCurrentViewToThirdPerson();
             m_ui.UseThirdPersonCamera = !m_ui.UseThirdPersonCamera;
-            if (m_ReconstructiveTemporalAAPass)
-                m_ReconstructiveTemporalAAPass->ResetHistory();
-            return true;
-        }
-
-        if (m_ui.EnablePbr &&
-            key >= GLFW_KEY_F1 && key <= GLFW_KEY_F8 && action == GLFW_PRESS)
-        {
-            m_ui.PbrDebug = PbrDebugView(key - GLFW_KEY_F1);
-            log::info("PBR debug view: %s%s",
-                GetPbrDebugViewName(m_ui.PbrDebug),
-                m_ui.UsesDeferredShading() ? "" : " (available in deferred shading)");
             return true;
         }
 
@@ -1242,15 +1131,7 @@ public:
     }
 
     virtual void Animate(float fElapsedTimeSeconds) override
-    { 
-        if (std::isfinite(fElapsedTimeSeconds) && fElapsedTimeSeconds > 0.f)
-        {
-            // Clamp only pathological pauses. The exact current-frame delta,
-            // not the smoothed HUD value, drives RTAA's CPU-side exponential
-            // response weights.
-            m_LastFrameDeltaSeconds = std::clamp(
-                fElapsedTimeSeconds, 1.f / 1000.f, 0.25f);
-        }
+    {
         GetActiveCamera().Animate(fElapsedTimeSeconds);
     }
 
@@ -1260,8 +1141,11 @@ public:
         if (m_ForwardPass) m_ForwardPass->ResetBindingCache();
         if (m_DeferredLightingPass) m_DeferredLightingPass->ResetBindingCache();
         if (m_PbrDeferredLightingPass) m_PbrDeferredLightingPass->ResetBindingCache();
-        if (m_ScreenSpaceVisibilityPass) m_ScreenSpaceVisibilityPass->ResetBindingCache();
-        if (m_ReconstructiveTemporalAAPass) m_ReconstructiveTemporalAAPass->Deactivate();
+        if (m_ScreenSpaceVisibilityPass)
+        {
+            m_ScreenSpaceVisibilityPass->ResetBindingCache();
+            m_ScreenSpaceVisibilityPass->ResetHistory();
+        }
         if (m_GBufferPass) m_GBufferPass->ResetBindingCache();
         m_BindingCache.Clear();
         m_SunLight.reset();
@@ -1374,6 +1258,9 @@ public:
             (mode == WhiteWorldMode::Off);
         m_ui.WhiteWorld = mode;
 
+        if (modeChanged && m_ScreenSpaceVisibilityPass)
+            m_ScreenSpaceVisibilityPass->ResetHistory();
+
         const bool enabled = mode != WhiteWorldMode::Off;
         const bool preserveDetailMaps = mode == WhiteWorldMode::PreserveDetail;
         const bool preserveLighting = mode == WhiteWorldMode::PreserveLighting;
@@ -1460,8 +1347,6 @@ public:
         m_Scene->GetSceneGraph()->GetRootNode()->InvalidateContent();
         if (shaderModeChanged)
             m_ui.ShaderReloadRequested = true;
-        if (modeChanged && m_ReconstructiveTemporalAAPass)
-            m_ReconstructiveTemporalAAPass->ResetHistory();
     }
 
     static std::shared_ptr<SceneGraphNode> FindDescendantByName(
@@ -1505,9 +1390,6 @@ public:
         m_ThirdPersonCamera.SetTargetPosition(bounds.center());
         m_ThirdPersonCamera.SetDistance(distance);
         m_ThirdPersonCamera.Animate(0.f);
-        // Retargeting is an explicit camera cut for the display AA history.
-        if (m_ReconstructiveTemporalAAPass)
-            m_ReconstructiveTemporalAAPass->ResetHistory();
     }
 
     std::shared_ptr<TextureCache> GetTextureCache()
@@ -1518,18 +1400,6 @@ public:
     std::shared_ptr<Scene> GetScene()
     {
         return m_Scene;
-    }
-
-    bool IsReconstructiveTemporalAAActive() const
-    {
-        // The forward and Donut-legacy comparison paths do not expose the
-        // complete depth/normal/identity/motion contract required for safe
-        // analytical reconstruction. Bypass RTAA there instead of accepting
-        // ambiguous history.
-        return m_ui.ReconstructiveTemporalAA.enabled &&
-            m_ui.EnablePbr &&
-            m_ui.UsesDeferredShading() &&
-            m_ui.PbrDebug == PbrDebugView::FinalLinearHdr;
     }
 
     bool SetupView()
@@ -1554,12 +1424,7 @@ public:
         float4x4 projection = perspProjD3DStyleReverse(verticalFov, renderTargetSize.x / renderTargetSize.y, sceneScaleNear);
 
         planarView->SetViewport(nvrhi::Viewport(renderTargetSize.x, renderTargetSize.y));
-        const bool rtaaActive = IsReconstructiveTemporalAAActive();
-        const ReconstructiveTemporalJitter jitter = rtaaActive
-            ? GenerateReconstructiveTemporalJitter(
-                m_ui.ReconstructiveTemporalAA, uint64_t(GetFrameIndex()))
-            : ReconstructiveTemporalJitter{};
-        planarView->SetPixelOffset(float2(jitter.x, jitter.y));
+        planarView->SetPixelOffset(float2(0.f));
 
         planarView->SetMatrices(viewMatrix, projection);
         planarView->UpdateCache();
@@ -1622,15 +1487,11 @@ public:
             m_PbrDeferredLightingPass->Init(m_ShaderFactory);
             m_ScreenSpaceVisibilityPass = std::make_unique<ScreenSpaceVisibilityPass>(
                 GetDevice(), m_ShaderFactory);
-            m_ReconstructiveTemporalAAPass =
-                std::make_unique<ReconstructiveTemporalAAPass>(
-                    GetDevice(), m_ShaderFactory);
         }
         else
         {
             m_PbrDeferredLightingPass.reset();
             m_ScreenSpaceVisibilityPass.reset();
-            m_ReconstructiveTemporalAAPass.reset();
             m_DeferredLightingPass = std::make_shared<DeferredLightingPass>(GetDevice(), m_CommonPasses);
             m_DeferredLightingPass->Init(m_ShaderFactory);
         }
@@ -1661,6 +1522,8 @@ public:
         nvrhi::Viewport renderViewport = windowViewport;
 
         m_Scene->RefreshSceneGraph(GetFrameIndex());
+        const auto& sceneLights =
+            m_Scene->GetSceneGraph()->GetLights();
 
         {
             uint width = windowWidth;
@@ -1670,14 +1533,22 @@ public:
             const bool visibilityResourcesRequired = m_ui.EnablePbr &&
                 m_ui.UsesDeferredShading() &&
                 m_ui.ScreenSpaceVisibility.HasActiveConsumer();
-            const bool motionVectorsRequired =
-                IsReconstructiveTemporalAAActive();
+            const bool visibilitySourceRadianceRequired =
+                visibilityResourcesRequired &&
+                m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
+                (!sceneLights.empty() ||
+                    (m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive &&
+                        m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain > 0.f));
+            const bool motionVectorsRequired = visibilityResourcesRequired &&
+                m_ui.ScreenSpaceVisibility.RequiresMotionVectors();
 
             bool needNewPasses = false;
 
             if (!m_RenderTargets || m_RenderTargets->IsUpdateRequired(
                 uint2(width, height), sampleCount, m_ui.EnablePbr,
-                visibilityResourcesRequired, motionVectorsRequired))
+                visibilityResourcesRequired,
+                visibilitySourceRadianceRequired,
+                motionVectorsRequired))
             {
                 m_RenderTargets = nullptr;
                 m_BindingCache.Clear();
@@ -1685,7 +1556,8 @@ public:
                 m_RenderTargets->Init(
                     GetDevice(), uint2(width, height), sampleCount,
                     motionVectorsRequired, true, m_ui.EnablePbr,
-                    visibilityResourcesRequired);
+                    visibilityResourcesRequired,
+                    visibilitySourceRadianceRequired);
                 m_PreviousView.reset();
                 
                 needNewPasses = true;
@@ -1767,11 +1639,9 @@ public:
             }
             deferredInputs.ambientColorTop = m_AmbientTop;
             deferredInputs.ambientColorBottom = m_AmbientBottom;
-            const auto& sceneLights = m_Scene->GetSceneGraph()->GetLights();
             deferredInputs.lights = &sceneLights;
 
             const bool runScreenSpaceVisibility = m_ui.EnablePbr &&
-                m_ui.PbrDebug == PbrDebugView::FinalLinearHdr &&
                 m_ui.ScreenSpaceVisibility.HasActiveConsumer();
             uint32_t knownInactiveLightingSources = 0u;
             if (sceneLights.empty())
@@ -1785,25 +1655,11 @@ public:
                 (knownInactiveLightingSources &
                     (LightingSource_Direct | LightingSource_Emissive)) ==
                 (LightingSource_Direct | LightingSource_Emissive);
-            const bool finalVisibilityComposite =
-                m_ui.ScreenSpaceVisibility.debug.mode ==
-                    ScreenSpaceVisibilityDebugMode::FinalComposite;
             const bool writeSourceRadiance = runScreenSpaceVisibility &&
-                (m_ui.ScreenSpaceVisibility.indirectDiffuse.enabled ||
-                    m_ui.ScreenSpaceVisibility.debug.mode ==
-                        ScreenSpaceVisibilityDebugMode::DirectRadianceSource) &&
-                (!finalVisibilityComposite || !allFirstBounceSourcesInactive);
-            const bool exactGiTransportDebug =
-                m_ui.ScreenSpaceVisibility.debug.mode >=
-                    ScreenSpaceVisibilityDebugMode::IndirectDiffuse &&
-                m_ui.ScreenSpaceVisibility.debug.mode <=
-                    ScreenSpaceVisibilityDebugMode::GiLightOnly;
+                m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
+                !allFirstBounceSourcesInactive;
             const bool writeBounceMetadata = writeSourceRadiance &&
-                m_ui.ScreenSpaceVisibility.indirectDiffuse.enabled &&
-                m_ui.ScreenSpaceVisibility.indirectDiffuse.bounceCount > 1u &&
-                (exactGiTransportDebug ||
-                    (finalVisibilityComposite &&
-                        m_ui.ScreenSpaceVisibility.indirectDiffuse.intensity > 0.f));
+                m_ui.ScreenSpaceVisibility.indirectDiffuse.bounceCount > 1u;
             deferredInputs.output = runScreenSpaceVisibility
                 ? m_RenderTargets->BaseLighting.Get()
                 : m_RenderTargets->HdrColor.Get();
@@ -1820,13 +1676,15 @@ public:
                     writeBounceMetadata,
                     m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive,
                     m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain,
-                    float2(0.f, float(m_ui.PbrDebug)));
+                    float2(0.f));
 
                 if (runScreenSpaceVisibility)
                 {
                     ScreenSpaceVisibilityInputs visibilityInputs;
                     visibilityInputs.depth = m_RenderTargets->Depth;
                     visibilityInputs.normals = m_RenderTargets->GBufferNormals;
+                    visibilityInputs.motionVectors =
+                        m_RenderTargets->MotionVectors;
                     visibilityInputs.sourceRadiance = m_RenderTargets->DirectDiffuseRadiance;
                     visibilityInputs.gbufferDiffuse = m_RenderTargets->GBufferDiffuse;
                     visibilityInputs.gbufferSpecular = m_RenderTargets->GBufferSpecular;
@@ -1873,24 +1731,19 @@ public:
 
         if(m_Pick)
         {
-            const bool primaryGBufferHasSurfaceIds =
-                m_ui.EnablePbr && m_ui.UsesDeferredShading();
-            if (!primaryGBufferHasSurfaceIds)
-            {
-                m_CommandList->clearTextureUInt(
-                    m_RenderTargets->MaterialIDs,
-                    nvrhi::AllSubresources, 0xffffffffu);
+            m_CommandList->clearTextureUInt(
+                m_RenderTargets->MaterialIDs,
+                nvrhi::AllSubresources, 0xffffu);
 
-                MaterialIDPass::Context materialIdContext;
-                RenderCompositeView(m_CommandList,
-                    m_View.get(), m_View.get(),
-                    *m_RenderTargets->MaterialIDFramebuffer,
-                    m_Scene->GetSceneGraph()->GetRootNode(),
-                    *m_OpaqueDrawStrategy,
-                    *m_MaterialIDPass,
-                    materialIdContext,
-                    "MaterialID");
-            }
+            MaterialIDPass::Context materialIdContext;
+            RenderCompositeView(m_CommandList,
+                m_View.get(), m_View.get(),
+                *m_RenderTargets->MaterialIDFramebuffer,
+                m_Scene->GetSceneGraph()->GetRootNode(),
+                *m_OpaqueDrawStrategy,
+                *m_MaterialIDPass,
+                materialIdContext,
+                "MaterialID");
             
             m_PixelReadbackPass->Capture(m_CommandList, m_PickPosition);
         }
@@ -1898,75 +1751,12 @@ public:
         if (m_ui.EnableProceduralSky)
             m_SkyPass->Render(m_CommandList, *m_View, *m_SunLight, m_ui.SkyParams);
 
-        nvrhi::ITexture* displaySource = m_RenderTargets->HdrColor;
-        nvrhi::ITexture* rtaaMetadata = nullptr;
-        nvrhi::ITexture* rtaaMoments = nullptr;
-        AgxSharpeningParameters sharpening;
-        const bool rtaaActive = IsReconstructiveTemporalAAActive() &&
-            m_ReconstructiveTemporalAAPass;
-        if (rtaaActive)
-        {
-            ReconstructiveTemporalAAPass::Inputs rtaaInputs;
-            rtaaInputs.sceneColor = m_RenderTargets->HdrColor;
-            rtaaInputs.depth = m_RenderTargets->Depth;
-            rtaaInputs.gbufferDiffuse = m_RenderTargets->GBufferDiffuse;
-            rtaaInputs.gbufferSpecular = m_RenderTargets->GBufferSpecular;
-            rtaaInputs.surfaceIds = m_RenderTargets->MaterialIDs;
-            rtaaInputs.motionVectors = m_RenderTargets->MotionVectors;
-            rtaaInputs.explicitReactiveMask = m_RenderTargets->ReactiveMask;
-            m_ReconstructiveTemporalAAPass->Render(
-                m_CommandList,
-                m_ui.ReconstructiveTemporalAA,
-                *m_View,
-                m_PreviousView.get(),
-                rtaaInputs,
-                m_LastFrameDeltaSeconds,
-                uint64_t(GetFrameIndex()));
-
-            displaySource = m_ReconstructiveTemporalAAPass->GetOutput();
-            rtaaMetadata = m_ReconstructiveTemporalAAPass->GetHistoryMetadata();
-            rtaaMoments = m_ReconstructiveTemporalAAPass->GetHistoryMoments();
-
-            const ReconstructiveTemporalAASettings& rtaa =
-                m_ui.ReconstructiveTemporalAA;
-            const bool finalOutput =
-                rtaa.debugMode == ReconstructiveTemporalDebugMode::FinalOutput ||
-                rtaa.debugMode ==
-                    ReconstructiveTemporalDebugMode::FinalNraRtaaOutput;
-            const bool profileAllowsSharpening = rtaa.performanceProfile !=
-                ReconstructiveTemporalPerformanceProfile::Performance;
-            sharpening.enabled = rtaa.sharpeningEnabled &&
-                profileAllowsSharpening && finalOutput;
-            sharpening.diagnosticBypass = !finalOutput &&
-                rtaa.debugMode !=
-                    ReconstructiveTemporalDebugMode::SharpeningContribution;
-            sharpening.debugContribution = rtaa.debugMode ==
-                ReconstructiveTemporalDebugMode::SharpeningContribution;
-            if (sharpening.debugContribution)
-                sharpening.enabled = rtaa.sharpeningEnabled &&
-                    profileAllowsSharpening;
-            sharpening.strength = rtaa.sharpeningStrength;
-            sharpening.motionSuppression = rtaa.sharpeningMotionSuppression;
-            sharpening.reactiveSuppression = rtaa.sharpeningReactiveSuppression;
-            sharpening.varianceSuppression = rtaa.sharpeningVarianceSuppression;
-            sharpening.haloClamp = rtaa.sharpeningHaloClamp;
-
-            m_ReconstructiveTemporalAAPass->BeginFusedSharpeningTimer(m_CommandList);
-        }
-        else if (m_ReconstructiveTemporalAAPass)
-        {
-            m_ReconstructiveTemporalAAPass->Deactivate();
-        }
-
-        nvrhi::ITexture* displayTexture = displaySource;
+        nvrhi::ITexture* displayTexture = m_RenderTargets->HdrColor;
         if (m_ui.UsesTonemapper())
         {
             m_AgxToneMappingPass->Render(
                 m_CommandList, m_ui.AgxToneMappingParams, *m_View,
-                displaySource, rtaaMetadata, rtaaMoments, sharpening);
-
-            if (rtaaActive)
-                m_ReconstructiveTemporalAAPass->EndFusedSharpeningTimer(m_CommandList);
+                m_RenderTargets->HdrColor);
 
             displayTexture = m_RenderTargets->LdrColor;
         }
@@ -2046,46 +1836,11 @@ public:
         return m_SceneDiagonal;
     }
 
-    float GetLastFrameDeltaSeconds() const
-    {
-        return m_LastFrameDeltaSeconds;
-    }
-
     const ScreenSpaceVisibilityTimings* GetScreenSpaceVisibilityTimings() const
     {
         return m_ScreenSpaceVisibilityPass
             ? &m_ScreenSpaceVisibilityPass->GetTimings()
             : nullptr;
-    }
-
-    const ReconstructiveTemporalAATimings* GetReconstructiveTemporalAATimings() const
-    {
-        return m_ReconstructiveTemporalAAPass
-            ? &m_ReconstructiveTemporalAAPass->GetTimings()
-            : nullptr;
-    }
-
-    const ReconstructiveTemporalWeights* GetReconstructiveTemporalAAWeights() const
-    {
-        return m_ReconstructiveTemporalAAPass
-            ? &m_ReconstructiveTemporalAAPass->GetWeights()
-            : nullptr;
-    }
-
-    const ReconstructiveTemporalAAMemoryStats* GetReconstructiveTemporalAAMemoryStats() const
-    {
-        return m_ReconstructiveTemporalAAPass
-            ? &m_ReconstructiveTemporalAAPass->GetMemoryStats()
-            : nullptr;
-    }
-
-    void ResetReconstructiveTemporalAAHistory()
-    {
-        if (m_ReconstructiveTemporalAAPass)
-            m_ReconstructiveTemporalAAPass->ResetHistory();
-        // Also cover a reset requested before the pass exists, such as while a
-        // scene is loading or immediately after a renderer setting reset.
-        m_ui.ReconstructiveTemporalAA.forceHistoryReset = true;
     }
 
 };
@@ -2260,7 +2015,6 @@ protected:
                 {
                     m_app->CopyThirdPersonToFirstPerson();
                     m_ui.UseThirdPersonCamera = false;
-                    m_app->ResetReconstructiveTemporalAAHistory();
                 }
             }
             if (ImGui::Selectable("Third Person", m_ui.UseThirdPersonCamera))
@@ -2269,7 +2023,6 @@ protected:
                 {
                     m_app->CopyCurrentViewToThirdPerson();
                     m_ui.UseThirdPersonCamera = true;
-                    m_app->ResetReconstructiveTemporalAAHistory();
                 }
             }
             ImGui::EndCombo();
@@ -2391,571 +2144,10 @@ protected:
             {
                 if (!m_ui.EnablePbr && m_ui.WhiteWorld != WhiteWorldMode::Off)
                     m_app->SetWhiteWorldMode(WhiteWorldMode::Off);
-                m_ui.PbrDebug = PbrDebugView::FinalLinearHdr;
                 log::info("PBR rendering %s", m_ui.EnablePbr ? "enabled" : "disabled");
             }
             ImGui::SetItemTooltip("Use UVSR PBR shading; disable to compare Donut legacy shading.");
         }
-        }
-
-        const bool aliasingOpen = ImGui::CollapsingHeader(
-            "Aliasing",
-            ImGuiTreeNodeFlags_DefaultOpen);
-        ImGui::SetItemTooltip(
-            "Configure native-resolution analytical reconstructive temporal anti-aliasing.");
-        if (aliasingOpen)
-        {
-            ReconstructiveTemporalAASettings& rtaa =
-                m_ui.ReconstructiveTemporalAA;
-            bool advancedChanged = false;
-
-            if (ImGui::Checkbox("Enabled##RTAA", &rtaa.enabled))
-                m_app->ResetReconstructiveTemporalAAHistory();
-            ImGui::SetItemTooltip(
-                "Enable RTAA for the deferred UVSR PBR final-color path.");
-            ImGui::TextUnformatted("Technique: Reconstructive TAA");
-            ImGui::SetItemTooltip(
-                "Native-resolution Analytical Reconstructive Temporal Anti-Aliasing (NRA-RTAA).");
-
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (ImGui::BeginCombo(
-                "Preset##RTAA",
-                GetReconstructiveTemporalPresetName(rtaa.preset)))
-            {
-                for (uint32_t presetIndex = 0; presetIndex < 4; ++presetIndex)
-                {
-                    const auto preset =
-                        ReconstructiveTemporalPreset(presetIndex);
-                    const bool selected = rtaa.preset == preset;
-                    if (ImGui::Selectable(
-                        GetReconstructiveTemporalPresetName(preset), selected))
-                    {
-                        ApplyReconstructiveTemporalPreset(rtaa, preset);
-                        rtaa.forceHistoryReset = true;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::SetItemTooltip(
-                "Choose stability-, balance-, or clarity-biased analytical settings; manual edits select Custom.");
-
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (ImGui::BeginCombo(
-                "Performance Profile##RTAA",
-                GetReconstructiveTemporalPerformanceProfileName(
-                    rtaa.performanceProfile)))
-            {
-                for (uint32_t profileIndex = 0; profileIndex < 3; ++profileIndex)
-                {
-                    const auto profile =
-                        ReconstructiveTemporalPerformanceProfile(profileIndex);
-                    const bool selected = rtaa.performanceProfile == profile;
-                    if (ImGui::Selectable(
-                        GetReconstructiveTemporalPerformanceProfileName(profile),
-                        selected))
-                    {
-                        rtaa.performanceProfile = profile;
-                        rtaa.forceHistoryReset = true;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::SetItemTooltip(
-                "Select a statically compiled GPU-cost tier independently of Heavy, Medium, or Light temporal response. Performance and Balanced use bilinear history; Maximum Quality enables the selected filter, thin diffusion, and optional resurrection.");
-
-            if (const ReconstructiveTemporalAATimings* timings =
-                m_app->GetReconstructiveTemporalAATimings())
-            {
-                ImGui::Text(
-                    "GPU %.2f ms | Prepare %.2f | Resolve %.2f | AgX+sharpen %.2f",
-                    timings->totalMs, timings->prepareMs, timings->resolveMs,
-                    timings->fusedSharpeningMs);
-                ImGui::SetItemTooltip(
-                    "Latest GPU intervals. Resurrection is a conditional read included in Resolve. AgX+sharpen is the measured fused display-pass interval, an upper bound rather than isolated sharpening cost.");
-            }
-            else
-            {
-                ImGui::TextUnformatted("GPU -- ms");
-            }
-
-            if (ImGui::Button("Reset History##RTAA"))
-                m_app->ResetReconstructiveTemporalAAHistory();
-            ImGui::SetItemTooltip(
-                "Discard all immediate and persistent RTAA history on the next frame.");
-#if defined(_DEBUG)
-            ImGui::SameLine();
-            if (ImGui::Checkbox("Freeze Jitter", &rtaa.freezeJitter))
-                rtaa.forceHistoryReset = true;
-            ImGui::SetItemTooltip(
-                "Developer mode: hold projection jitter at exactly zero.");
-#endif
-
-            const bool rtaaAvailable = m_ui.EnablePbr &&
-                m_ui.UsesDeferredShading() &&
-                m_ui.PbrDebug == PbrDebugView::FinalLinearHdr;
-            if (!rtaaAvailable)
-            {
-                ImGui::TextDisabled(
-                    "Requires deferred UVSR PBR with Final linear HDR output.");
-            }
-
-            if (ImGui::TreeNodeEx(
-                "Projection Jitter", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                ImGui::SetNextItemWidth(settingsControlWidth);
-                if (ImGui::BeginCombo(
-                    "Sequence##RTAA", GetJitterSequenceName(rtaa.jitterSequence)))
-                {
-                    for (uint32_t value = 0; value < 2; ++value)
-                    {
-                        const auto sequence = JitterSequence(value);
-                        const bool selected = sequence == rtaa.jitterSequence;
-                        if (ImGui::Selectable(
-                            GetJitterSequenceName(sequence), selected))
-                        {
-                            rtaa.jitterSequence = sequence;
-                            advancedChanged = true;
-                        }
-                        if (selected)
-                            ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
-                ImGui::SetItemTooltip(
-                    "Select deterministic R2 or Halton base-2/3 subpixel sampling.");
-
-                int jitterPeriod = int(rtaa.jitterPeriod);
-                if (ImGui::SliderInt(
-                    "Sequence Length##RTAA", &jitterPeriod, 2, 64))
-                {
-                    rtaa.jitterPeriod = uint32_t(jitterPeriod);
-                    advancedChanged = true;
-                }
-                ImGui::SetItemTooltip(
-                    "Set the deterministic phase period; two positions are diagnostic-only.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Jitter Scale##RTAA", &rtaa.jitterScale, 0.f, 1.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Scale the centered projection offset up to half a pixel per axis.");
-
-#if defined(_DEBUG)
-                advancedChanged |= ImGui::Checkbox(
-                    "Hold Sequence Phase##RTAA", &rtaa.holdJitterPhase);
-                ImGui::SetItemTooltip(
-                    "Developer mode: repeat one real sequence sample; unlike Freeze Jitter, this does not force a zero offset.");
-                ImGui::BeginDisabled(!rtaa.holdJitterPhase);
-                int heldJitterPhase = int(rtaa.heldJitterPhase);
-                if (ImGui::SliderInt(
-                    "Held Phase##RTAA", &heldJitterPhase, 0,
-                    std::max(int(rtaa.jitterPeriod) - 1, 0)))
-                {
-                    rtaa.heldJitterPhase = uint32_t(heldJitterPhase);
-                    advancedChanged = true;
-                }
-                ImGui::SetItemTooltip(
-                    "Select the deterministic sequence index repeated while phase hold is enabled.");
-                ImGui::EndDisabled();
-#endif
-
-                bool visualizeJitter = rtaa.debugMode ==
-                    ReconstructiveTemporalDebugMode::CurrentJitter;
-                if (ImGui::Checkbox("Visualize Jitter##RTAA", &visualizeJitter))
-                {
-                    rtaa.debugMode = visualizeJitter
-                        ? ReconstructiveTemporalDebugMode::CurrentJitter
-                        : ReconstructiveTemporalDebugMode::FinalOutput;
-                }
-                ImGui::SetItemTooltip(
-                    "Show the current centered jitter position without changing temporal history.");
-                ImGui::TreePop();
-            }
-
-            if (ImGui::TreeNodeEx(
-                "Motion and Reprojection", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                ImGui::SetNextItemWidth(settingsControlWidth);
-                if (ImGui::BeginCombo(
-                    "History Filter##RTAA",
-                    GetHistorySampleFilterName(rtaa.historyFilter)))
-                {
-                    for (uint32_t value = 0; value < 2; ++value)
-                    {
-                        const auto filter = HistorySampleFilter(value);
-                        const bool selected = filter == rtaa.historyFilter;
-                        if (ImGui::Selectable(
-                            GetHistorySampleFilterName(filter), selected))
-                        {
-                            rtaa.historyFilter = filter;
-                            advancedChanged = true;
-                        }
-                        if (selected)
-                            ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
-                ImGui::SetItemTooltip(
-                    "Choose the Maximum Quality history filter. Performance and Balanced use their statically compiled bilinear path.");
-                advancedChanged |= ImGui::Checkbox(
-                    "Velocity Dilation##RTAA", &rtaa.velocityDilationEnabled);
-                ImGui::SetItemTooltip(
-                    "Select the nearest valid 3x3 surface velocity at silhouettes.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Motion Response Start##RTAA",
-                    &rtaa.motionResponseStartPixels, 0.f, 16.f, "%.2f px");
-                ImGui::SetItemTooltip(
-                    "Begin shifting from stable to moving temporal response at this velocity.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Motion Response End##RTAA",
-                    &rtaa.motionResponseEndPixels, 0.1f, 64.f, "%.2f px");
-                ImGui::SetItemTooltip(
-                    "Reach the moving temporal response at this velocity.");
-                ImGui::TreePop();
-            }
-
-            if (ImGui::TreeNodeEx(
-                "Surface Validation", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                advancedChanged |= ImGui::SliderFloat(
-                    "Absolute Depth Error##RTAA",
-                    &rtaa.absoluteDepthThreshold, 0.f, 0.25f, "%.5f");
-                ImGui::SetItemTooltip(
-                    "Allow this absolute predicted-versus-history view-depth error.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Relative Depth Error##RTAA",
-                    &rtaa.relativeDepthThreshold, 0.f, 0.25f, "%.5f");
-                ImGui::SetItemTooltip(
-                    "Scale allowed depth error by current and previous view depth.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Normal Reject Cosine##RTAA",
-                    &rtaa.normalRejectCosine, -1.f, 1.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Give zero normal confidence at or below this world-normal dot product.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Normal Accept Cosine##RTAA",
-                    &rtaa.normalAcceptCosine, -1.f, 1.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Give full normal confidence at or above this world-normal dot product.");
-                advancedChanged |= ImGui::Checkbox(
-                    "Validate Material Identity##RTAA",
-                    &rtaa.validateMaterialIdentity);
-                ImGui::SetItemTooltip(
-                    "Reject history reuse across exact stable 32-bit material IDs.");
-                advancedChanged |= ImGui::Checkbox(
-                    "Validate Object Identity##RTAA",
-                    &rtaa.validateObjectIdentity);
-                ImGui::SetItemTooltip(
-                    "Also require the compact stable mesh-instance token; disable for unstable animated instances.");
-                ImGui::TreePop();
-            }
-
-            if (ImGui::TreeNodeEx(
-                "Reactive Shading", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                advancedChanged |= ImGui::Checkbox(
-                    "Explicit Reactive Mask##RTAA",
-                    &rtaa.explicitReactiveMaskEnabled);
-                ImGui::SetItemTooltip(
-                    "Consume an application-authored transient transport mask. The current depth-writing PBR producer stays neutral so stable alpha-tested and emissive details can accumulate.");
-                advancedChanged |= ImGui::Checkbox(
-                    "Automatic Reactive Mask##RTAA",
-                    &rtaa.automaticReactiveMaskEnabled);
-                ImGui::SetItemTooltip(
-                    "Estimate motion-corroborated shading change from bounded log-luminance and chroma residuals; stationary residuals remain governed by neighborhood clipping.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Automatic Strength##RTAA",
-                    &rtaa.automaticReactiveStrength, 0.f, 2.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Scale the automatic reactive estimate before combining it with the explicit mask.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Luminance Threshold##RTAA",
-                    &rtaa.reactiveLuminanceThreshold, 0.f, 1.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Ignore smaller exposure-normalized log-luminance changes.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Chroma Threshold##RTAA",
-                    &rtaa.reactiveChromaThreshold, 0.f, 1.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Ignore smaller bounded chroma changes.");
-                ImGui::TreePop();
-            }
-
-            if (ImGui::TreeNodeEx(
-                "Thin Geometry", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                advancedChanged |= ImGui::Checkbox(
-                    "Enabled##RTAAThin", &rtaa.thinGeometryEnabled);
-                ImGui::SetItemTooltip(
-                    "Track bounded temporal coverage for fences, foliage, hair cards, cables, and thin silhouettes.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Depth Range##RTAAThin",
-                    &rtaa.thinGeometryDepthRange, 0.001f, 0.25f, "%.4f");
-                ImGui::SetItemTooltip(
-                    "Set the relative depth discontinuity used by thin-structure classification.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Contrast Threshold##RTAAThin",
-                    &rtaa.thinGeometryContrastThreshold, 0.f, 2.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Require this compressed-luminance edge contrast to corroborate thin geometry.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Coverage Response##RTAAThin",
-                    &rtaa.thinGeometryCoverageResponseMs, 1.f, 500.f, "%.1f ms");
-                ImGui::SetItemTooltip(
-                    "Set the frame-rate-independent response of accumulated subpixel coverage.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Maximum Relaxation##RTAAThin",
-                    &rtaa.thinGeometryMaximumRelaxation, 0.f, 0.10f, "%.4f");
-                ImGui::SetItemTooltip(
-                    "Bound validation relaxation to stable, locally classified thin geometry.");
-                advancedChanged |= ImGui::Checkbox(
-                    "Cluster Diffusion##RTAAThin",
-                    &rtaa.thinGeometryClusterDiffusion);
-                ImGui::SetItemTooltip(
-                    "Diffuse thin classification through a gated shared-memory 3x3 cluster in Maximum Quality. Balanced keeps center structural evidence; Performance keeps authored plus cheap silhouette coverage.");
-                ImGui::TreePop();
-            }
-
-            if (ImGui::TreeNodeEx(
-                "History Clipping", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                advancedChanged |= ImGui::SliderFloat(
-                    "Variance Sigma##RTAA", &rtaa.varianceClipSigma,
-                    0.f, 4.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Set the YCoCg current-neighborhood variance interval.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Luminance Clip Strength##RTAA",
-                    &rtaa.luminanceClipStrength, 0.f, 2.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Scale luminance bounds without clamping scene-linear HDR to display range.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Chroma Clip Strength##RTAA",
-                    &rtaa.chromaClipStrength, 0.f, 2.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Scale chroma bounds while preserving hue with line-box clipping.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Thin Clip Expansion##RTAA",
-                    &rtaa.thinGeometryClipExpansion, 0.f, 0.10f, "%.4f");
-                ImGui::SetItemTooltip(
-                    "Bound neighborhood expansion for validated stable thin geometry.");
-                ImGui::TreePop();
-            }
-
-            if (ImGui::TreeNodeEx(
-                "Temporal Accumulation", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                advancedChanged |= ImGui::SliderFloat(
-                    "Stable Response##RTAA", &rtaa.stableResponseMs,
-                    1.f, 1000.f, "%.1f ms");
-                ImGui::SetItemTooltip(
-                    "Set the stable-surface time constant; higher values retain history longer.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Moving Response##RTAA", &rtaa.movingResponseMs,
-                    1.f, 500.f, "%.1f ms");
-                ImGui::SetItemTooltip(
-                    "Set the moving-surface time constant for motion clarity.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Reactive Response##RTAA", &rtaa.reactiveResponseMs,
-                    0.5f, 100.f, "%.1f ms");
-                ImGui::SetItemTooltip(
-                    "Set the reactive-shading time constant; shorter values favor the current frame.");
-
-                int maximumHistory = int(rtaa.maximumHistorySamples);
-                if (ImGui::SliderInt(
-                    "Maximum History Samples##RTAA", &maximumHistory, 1, 255))
-                {
-                    rtaa.maximumHistorySamples = uint32_t(maximumHistory);
-                    advancedChanged = true;
-                }
-                ImGui::SetItemTooltip(
-                    "Limit per-pixel stable history length and enforce its minimum current contribution.");
-                int maximumMovingHistory = int(rtaa.maximumMovingHistorySamples);
-                if (ImGui::SliderInt(
-                    "Maximum Moving Samples##RTAA",
-                    &maximumMovingHistory, 1, 64))
-                {
-                    rtaa.maximumMovingHistorySamples =
-                        uint32_t(maximumMovingHistory);
-                    advancedChanged = true;
-                }
-                ImGui::SetItemTooltip(
-                    "Use a shorter sample cap as motion approaches the moving response.");
-
-                const ReconstructiveTemporalWeights weights =
-                    ComputeReconstructiveTemporalWeights(
-                        rtaa, m_app->GetLastFrameDeltaSeconds());
-                ImGui::Text(
-                    "Current weights | Stable %.3f | Moving %.3f | Reactive %.3f",
-                    weights.stableCurrentWeight,
-                    weights.movingCurrentWeight,
-                    weights.reactiveCurrentWeight);
-                ImGui::SetItemTooltip(
-                    "Read-only CPU weights calculated from this frame's delta time and the three time constants.");
-                ImGui::TreePop();
-            }
-
-            if (ImGui::TreeNodeEx(
-                "Spatial Fallback", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                advancedChanged |= ImGui::Checkbox(
-                    "Enabled##RTAASpatial", &rtaa.spatialFallbackEnabled);
-                ImGui::SetItemTooltip(
-                    "Use edge-aware current-frame AA only where temporal confidence is low.");
-                int radius = int(rtaa.spatialFallbackRadius);
-                if (ImGui::SliderInt(
-                    "Radius##RTAASpatial", &radius, 1, 2))
-                {
-                    rtaa.spatialFallbackRadius = uint32_t(radius);
-                    advancedChanged = true;
-                }
-                ImGui::SetItemTooltip(
-                    "Choose the Maximum Quality 3x3 or 5x5 kernel. Balanced uses fixed 3x3; Performance uses a low-cost cross.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Depth Weight##RTAASpatial",
-                    &rtaa.spatialDepthWeight, 0.f, 256.f, "%.2f");
-                ImGui::SetItemTooltip(
-                    "Suppress fallback samples across view-depth discontinuities.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Normal Weight##RTAASpatial",
-                    &rtaa.spatialNormalWeight, 0.f, 64.f, "%.2f");
-                ImGui::SetItemTooltip(
-                    "Suppress fallback samples across opposing surface normals.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Luminance Weight##RTAASpatial",
-                    &rtaa.spatialLuminanceWeight, 0.f, 32.f, "%.2f");
-                ImGui::SetItemTooltip(
-                    "Suppress fallback samples across incompatible HDR luminance.");
-                ImGui::TreePop();
-            }
-
-            if (ImGui::TreeNodeEx(
-                "History Resurrection", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                advancedChanged |= ImGui::Checkbox(
-                    "Enabled##RTAAResurrection", &rtaa.resurrectionEnabled);
-                ImGui::SetItemTooltip(
-                    "Conditionally inspect older validated history after immediate history fails. Compiled out unless Maximum Quality is selected.");
-                if (!rtaa.resurrectionEnabled)
-                    ImGui::BeginDisabled();
-                int persistentCount = int(std::max(rtaa.persistentFrameCount, 1u));
-                if (ImGui::SliderInt(
-                    "Persistent Frames##RTAA", &persistentCount, 1, 2))
-                {
-                    rtaa.persistentFrameCount = uint32_t(persistentCount);
-                    advancedChanged = true;
-                }
-                ImGui::SetItemTooltip(
-                    "Retain at most two older no-copy history-ring positions.");
-                int persistentInterval = int(rtaa.persistentFrameInterval);
-                if (ImGui::SliderInt(
-                    "Frame Interval##RTAA", &persistentInterval, 1, 2))
-                {
-                    rtaa.persistentFrameInterval = uint32_t(persistentInterval);
-                    advancedChanged = true;
-                }
-                ImGui::SetItemTooltip(
-                    "Choose the age spacing between persistent history candidates.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Maximum Weight##RTAAResurrection",
-                    &rtaa.maximumResurrectionWeight, 0.f, 0.5f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Cap older-history contribution so stale lighting cannot dominate.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Match Threshold##RTAAResurrection",
-                    &rtaa.resurrectionMatchThreshold, 0.f, 1.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Require this validated color/surface confidence before resurrecting history.");
-                if (!rtaa.resurrectionEnabled)
-                    ImGui::EndDisabled();
-                ImGui::TreePop();
-            }
-
-            if (ImGui::TreeNodeEx(
-                "Sharpening", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                advancedChanged |= ImGui::Checkbox(
-                    "Enabled##RTAASharpen", &rtaa.sharpeningEnabled);
-                ImGui::SetItemTooltip(
-                    "Apply conservative luminance sharpening fused into AgX after accumulation. Performance disables the extra neighborhood reads.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Strength##RTAASharpen",
-                    &rtaa.sharpeningStrength, 0.f, 1.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Set the bounded unsharp contribution; sharpening never enters history.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Motion Suppression##RTAASharpen",
-                    &rtaa.sharpeningMotionSuppression, 0.f, 1.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Reduce sharpening as velocity approaches the moving response.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Reactive Suppression##RTAASharpen",
-                    &rtaa.sharpeningReactiveSuppression, 0.f, 1.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Reduce sharpening on temporally changing shading and transparency.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Variance Suppression##RTAASharpen",
-                    &rtaa.sharpeningVarianceSuppression, 0.f, 1.f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Reduce sharpening where log-luminance history variance is high.");
-                advancedChanged |= ImGui::SliderFloat(
-                    "Halo Clamp##RTAASharpen",
-                    &rtaa.sharpeningHaloClamp, 0.f, 0.5f, "%.3f");
-                ImGui::SetItemTooltip(
-                    "Limit sharpening overshoot relative to the local valid luminance range.");
-                ImGui::TreePop();
-            }
-
-            if (ImGui::TreeNode("Debug##RTAA"))
-            {
-                ImGui::SetNextItemWidth(settingsControlWidth);
-                if (ImGui::BeginCombo(
-                    "Debug Mode##RTAA",
-                    GetReconstructiveTemporalDebugModeName(rtaa.debugMode)))
-                {
-                    for (uint32_t modeIndex = 0;
-                        modeIndex < ReconstructiveTemporalDebugModeCount;
-                        ++modeIndex)
-                    {
-                        const auto mode =
-                            ReconstructiveTemporalDebugMode(modeIndex);
-                        const bool selected = rtaa.debugMode == mode;
-                        if (ImGui::Selectable(
-                            GetReconstructiveTemporalDebugModeName(mode), selected))
-                        {
-                            rtaa.debugMode = mode;
-                        }
-                        if (selected)
-                            ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
-                ImGui::SetItemTooltip(
-                    "Visualize RTAA inputs, classification, validation, clipping, weighting, fallback, resurrection, sharpening, or rejection reasons.");
-
-                if (const ReconstructiveTemporalAAMemoryStats* memory =
-                    m_app->GetReconstructiveTemporalAAMemoryStats())
-                {
-                    const double mebibytes =
-                        double(memory->totalBytes) / (1024.0 * 1024.0);
-                    ImGui::Text(
-                        "RTAA %.1f MiB | %u history slots | ~%.0f B read + %.0f B write / pixel",
-                        mebibytes, memory->historySlotCount,
-                        memory->approximateReadBytesPerPixel,
-                        memory->approximateWriteBytesPerPixel);
-                    ImGui::SetItemTooltip(
-                        "Native-size pass-owned allocation and steady-state logical texel footprint before cache reuse; conditional resurrection reads are excluded.");
-                }
-                ImGui::TreePop();
-            }
-
-            if (advancedChanged)
-            {
-                rtaa.preset = ReconstructiveTemporalPreset::Custom;
-                SanitizeReconstructiveTemporalSettings(rtaa);
-            }
         }
 
         const bool indirectLightingOpen = DrawCollapsingHeader(
@@ -2991,7 +2183,31 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Choose a full-resolution stochastic sample budget preset.");
+                "Choose the adaptive first-bounce sample and refinement-slice limits. Resolution and reconstruction remain independent profiling controls.");
+
+            static const char* resolutionLabels[] = {
+                "Full", "Half", "Quarter"
+            };
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            if (ImGui::BeginCombo(
+                    "AO / GI Resolution",
+                    resolutionLabels[int(visibility.resolution)]))
+            {
+                for (int index = 0;
+                    index < int(std::size(resolutionLabels));
+                    ++index)
+                {
+                    const auto resolution = VisibilityResolution(index);
+                    const bool selected = visibility.resolution == resolution;
+                    if (ImGui::Selectable(resolutionLabels[index], selected))
+                        visibility.resolution = resolution;
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip(
+                "Trace AO and GI at full, half, or quarter linear resolution. Reduced modes always use the selected joint bilateral filter to return to full resolution.");
 
             if (const ScreenSpaceVisibilityTimings* timings =
                 m_app->GetScreenSpaceVisibilityTimings())
@@ -2999,19 +2215,29 @@ protected:
                 const float traceMilliseconds =
                     timings->depthHierarchyMs + timings->samplingMs;
                 ImGui::Text(
-                    "All %.2f ms | Trace %.2f ms | Composite %.2f ms",
+                    "All %.2f | Trace %.2f | Temporal %.2f ms",
                     timings->CompleteEffectMs(), traceMilliseconds,
-                    timings->compositionMs);
+                    timings->temporalMs);
                 ImGui::SetItemTooltip(
-                    "Latest GPU times. Trace groups hierarchy construction and visibility sampling.");
+                    "Latest delayed GPU timings. Trace includes optional hierarchy construction and all active visibility bounces.");
+                ImGui::Text(
+                    "Filter %.2f | Composite %.2f ms",
+                    timings->filteringMs,
+                    timings->compositionMs);
                 constexpr double BytesPerMiB = 1024.0 * 1024.0;
                 ImGui::Text(
-                    "Targets %.1f MiB | Avoided %.1f MiB",
-                    double(timings->fullResolutionTextureBytes) / BytesPerMiB,
-                    double(timings->avoidedFullResolutionTextureBytes) /
-                        BytesPerMiB);
+                    "Outputs %.1f | Working %.1f | Mask Cache %.1f MiB",
+                    double(timings->outputTextureBytes) / BytesPerMiB,
+                    double(timings->workingTextureBytes) / BytesPerMiB,
+                    double(timings->maskCacheBytes) / BytesPerMiB);
                 ImGui::SetItemTooltip(
-                    "Logical full-resolution AO, GI, bounce, and traversal-debug texel payload. Avoided compares with the former always-allocate AO+GI+debug policy; it is not API-aligned residency or measured bandwidth.");
+                    "Exact logical texel payload: AO/GI and bounce outputs; adaptive, temporal, filter, and hierarchy working data; and any persistent directional-mask cache. API alignment and residency are excluded.");
+                ImGui::Text(
+                    "Avoided %.1f | Shared %.1f MiB",
+                    double(timings->avoidedTextureBytes) / BytesPerMiB,
+                    double(timings->sharedMaskPayloadBytes) / BytesPerMiB);
+                ImGui::SetItemTooltip(
+                    "Avoided is exact optional AO/GI storage not allocated because its consumer is inactive. Shared estimates one duplicate R32 directional-mask payload avoided by evaluating AO and GI from the same register-local mask; it is not measured bandwidth.");
             }
 
             if (!visibility.enabled)
@@ -3022,9 +2248,9 @@ protected:
                 SharedSamplingSettings& sampling = visibility.sampling;
                 bool samplingChanged = false;
                 static const char* estimatorLabels[] = {
-                    "Paper Angular",
-                    "GT Uniform",
-                    "GT Cosine (Gated)"
+                    "Uniform Projected Angle",
+                    "Uniform Solid Angle",
+                    "Cosine-Weighted Solid Angle"
                 };
                 ImGui::SetNextItemWidth(settingsControlWidth);
                 if (ImGui::BeginCombo(
@@ -3035,66 +2261,149 @@ protected:
                         estimatorIndex < int(std::size(estimatorLabels));
                         ++estimatorIndex)
                     {
-                        const bool implemented = estimatorIndex <
-                            int(ImplementedVisibilityEstimatorCount);
-                        if (!implemented)
-                            ImGui::BeginDisabled();
                         const auto estimator = VisibilityEstimator(estimatorIndex);
                         const bool selected = visibility.estimator == estimator;
                         if (ImGui::Selectable(
-                                estimatorLabels[estimatorIndex], selected) &&
-                            implemented)
-                        {
+                                estimatorLabels[estimatorIndex], selected))
                             visibility.estimator = estimator;
-                        }
                         if (selected)
                             ImGui::SetItemDefaultFocus();
-                        if (!implemented)
-                            ImGui::EndDisabled();
                     }
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip(
-                    "A/B the shipping paper-angular estimator against the complete no-acos GTUniform formulation. GTCosine remains disabled until GTUniform clears reference, image-quality, and hardware promotion gates.");
+                    "Uniform Projected Angle is the visibility-bitmask paper's linear projected-angle measure. Uniform Solid Angle uses equal solid-angle CDF sectors. Cosine-Weighted Solid Angle uses the complete joint receiver-cosine CDF and matching GI normalization.");
                 samplingChanged |= ImGui::SliderFloat(
                     "Radius", &sampling.radius, 0.01f, std::max(m_app->GetSceneDiagonal() * 0.1f, 1.f), "%.3f");
                 ImGui::SetItemTooltip("Set the world-space radius projected into screen space.");
                 samplingChanged |= ImGui::SliderFloat(
                     "Thickness", &sampling.thickness, 0.0f, std::max(m_app->GetSceneDiagonal() * 0.02f, 0.5f), "%.3f");
                 ImGui::SetItemTooltip(
-                    "Set finite occluder thickness in UVSR world units; thin surfaces leave light paths open.");
-                samplingChanged |= ImGui::Checkbox(
-                    "Distance-Scaled Thickness", &sampling.distanceScaledThickness);
-                ImGui::SetItemTooltip("Increase finite thickness gradually with view distance.");
-                if (!sampling.distanceScaledThickness)
-                    ImGui::BeginDisabled();
-                samplingChanged |= ImGui::SliderFloat(
-                    "Thickness Distance Scale", &sampling.thicknessDistanceScale,
-                    0.0f, 0.02f, "%.5f");
-                ImGui::SetItemTooltip("Control the per-view-depth thickness increase.");
-                if (!sampling.distanceScaledThickness)
-                    ImGui::EndDisabled();
+                    "Set one conservative finite occluder thickness in UVSR world units. It is intentionally not distance-scaled, so profiling does not mix geometry assumptions with sampling changes.");
 
-                int sampleCount = int(sampling.sampleCount);
-                if (ImGui::SliderInt("Samples Per Pixel", &sampleCount, 1, 64))
+                int minimumSamples = int(std::clamp(
+                    sampling.minimumSampleCount, 1u, 64u));
+                if (ImGui::SliderInt(
+                        "Minimum Samples / Pixel", &minimumSamples, 1, 64))
                 {
-                    sampling.sampleCount = uint32_t(sampleCount);
+                    sampling.minimumSampleCount = uint32_t(minimumSamples);
+                    sampling.maximumSampleCount = std::max(
+                        sampling.maximumSampleCount,
+                        sampling.minimumSampleCount);
                     samplingChanged = true;
                 }
                 ImGui::SetItemTooltip(
-                    "First-bounce stochastic depth taps per pixel, divided between the two near-to-far horizon directions. Later GI bounces progressively halve this budget toward 8 samples.");
-                samplingChanged |= ImGui::SliderFloat(
-                    "Step Distribution", &sampling.stepDistributionExponent, 0.5f, 4.0f, "%.2f");
-                ImGui::SetItemTooltip("Bias radial samples toward the receiving pixel.");
-                samplingChanged |= ImGui::SliderFloat(
-                    "Sample Jitter", &sampling.radialJitter, 0.0f, 1.0f, "%.2f");
-                ImGui::SetItemTooltip(
-                    "Blend from centered samples to the deterministic spatiotemporal radial jitter sequence.");
+                    "Guaranteed first-bounce depth taps for every eligible pixel. These form one inexpensive base slice and are divided between its two radial directions.");
 
-                samplingChanged |= ImGui::Checkbox(
-                    "Hierarchical View Depth", &sampling.useDepthHierarchy);
+                int maximumSamples = int(std::clamp(
+                    sampling.maximumSampleCount,
+                    sampling.minimumSampleCount, 64u));
+                if (ImGui::SliderInt(
+                        "Maximum Samples / Pixel",
+                        &maximumSamples,
+                        int(sampling.minimumSampleCount),
+                        64))
+                {
+                    sampling.maximumSampleCount = uint32_t(maximumSamples);
+                    samplingChanged = true;
+                }
                 ImGui::SetItemTooltip(
-                    "Use the single-dispatch XeGTAO-style five-level view-depth pyramid for distant samples.");
+                    "Upper first-bounce budget. A stochastic error estimate selects a value between Minimum and Maximum; later GI bounces halve their limits toward an 8-sample floor without raising a first-bounce limit already below 8.");
+
+                int maximumSlices = int(std::clamp(
+                    sampling.maximumRefinementSlices, 1u, 4u));
+                if (ImGui::SliderInt(
+                        "Maximum Refinement Slices",
+                        &maximumSlices,
+                        1,
+                        4))
+                {
+                    sampling.maximumRefinementSlices =
+                        uint32_t(maximumSlices);
+                    samplingChanged = true;
+                }
+                ImGui::SetItemTooltip(
+                    "Every eligible pixel receives one base slice. Thin edges, disocclusions, unstable history, and low-confidence or nearby contributing GI regions stochastically receive up to this many total slices.");
+
+                samplingChanged |= ImGui::SliderFloat(
+                    "Radial Distribution Exponent",
+                    &sampling.stepDistributionExponent,
+                    0.5f,
+                    4.0f,
+                    "%.2f");
+                ImGui::SetItemTooltip(
+                    "Transform each nested radial stratum by x^exponent. The default x^2 concentrates taps near the receiver while increasing either sample limit only appends samples instead of moving the existing prefix.");
+
+                const bool adaptiveControlsActive =
+                    sampling.maximumSampleCount > sampling.minimumSampleCount ||
+                    sampling.maximumRefinementSlices > 1u;
+                if (!adaptiveControlsActive)
+                    ImGui::BeginDisabled();
+                samplingChanged |= ImGui::SliderFloat(
+                    "Adaptive Error Strength",
+                    &sampling.adaptiveStrength,
+                    0.0f,
+                    2.0f,
+                    "%.2f");
+                ImGui::SetItemTooltip(
+                    "Scale stochastic refinement probability from depth/normal edges, disocclusions, unstable or low-confidence history, and reprojected neighboring GI contribution. A one-eighth uniform component prevents starvation while this value is above zero; zero selects only the minimum/base slice and releases adaptive feedback when temporal reconstruction is also off.");
+                if (!adaptiveControlsActive)
+                    ImGui::EndDisabled();
+
+                static const char* schedulerLabels[] = {
+                    "Hash Baseline", "Spatiotemporal Blue Noise"
+                };
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (ImGui::BeginCombo(
+                        "Sample Scheduler",
+                        schedulerLabels[int(sampling.scheduler)]))
+                {
+                    for (int index = 0;
+                        index < int(std::size(schedulerLabels));
+                        ++index)
+                    {
+                        const auto scheduler =
+                            VisibilitySampleScheduler(index);
+                        const bool selected = sampling.scheduler == scheduler;
+                        if (ImGui::Selectable(
+                                schedulerLabels[index], selected))
+                        {
+                            sampling.scheduler = scheduler;
+                            samplingChanged = true;
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Hash Baseline independently hashes slice rotation, radial strata, and stochastic rounding. Spatiotemporal Blue Noise uses a progressive 64x64 toroidal rank field plus maximally separated temporal phases; both keep the same nested radial distribution and sample budget.");
+
+                ImGui::Checkbox(
+                    "Collect Sampling Profile",
+                    &sampling.collectStatistics);
+                ImGui::SetItemTooltip(
+                    "Enable wave-reduced GPU counters and delayed readback for selected first-bounce sample budgets, slices, and refined eligible pixels. Early full-mask termination or duplicate screen coordinates can execute fewer depth reads. Leave this off for production profiling so atomic traffic is absent.");
+                if (sampling.collectStatistics)
+                {
+                    if (const ScreenSpaceVisibilityTimings* timings =
+                        m_app->GetScreenSpaceVisibilityTimings())
+                    {
+                        if (timings->sampledPixelCount > 0u)
+                        {
+                            ImGui::Text(
+                                "Selected %.2f samples | %.2f slices | %.1f%% refined",
+                                timings->AverageSamplesPerPixel(),
+                                timings->AverageSlicesPerPixel(),
+                                timings->RefinedPixelPercent());
+                        }
+                        else
+                        {
+                            ImGui::TextDisabled(
+                                "Sampling profile waiting for delayed GPU readback.");
+                        }
+                    }
+                }
 
                 if (samplingChanged)
                     visibility.quality = ScreenSpaceVisibilityQuality::Custom;
@@ -3110,9 +2419,7 @@ protected:
                     ImGui::BeginDisabled();
                 ImGui::SliderFloat("Strength", &ao.strength, 0.0f, 2.0f, "%.2f");
                 ImGui::SetItemTooltip(
-                    "Scale only the missing-visibility adjustment on fallback indirect diffuse.");
-                ImGui::SliderFloat("Power##AmbientVisibility", &ao.power, 0.25f, 4.0f, "%.2f");
-                ImGui::SetItemTooltip("Shape ambient visibility after radial-mask evaluation.");
+                    "Scale only the missing-visibility adjustment on fallback indirect lighting. Zero makes AO an inactive consumer and releases its traversal outputs while GI can continue independently.");
                 if (!ao.enabled)
                     ImGui::EndDisabled();
                 ImGui::TreePop();
@@ -3139,137 +2446,118 @@ protected:
                     gi.bounceCount = uint32_t(bounceCount);
                 }
                 ImGui::SetItemTooltip(
-                    "Choose 1-4 finite diffuse-light bounces. Later bounces run GI-only traversals and progressively halve the selected sample budget toward 8, reducing their cost while preserving full quality for bounce one.");
-                ImGui::SliderFloat(
-                    "Bounce Contribution Cutoff",
-                    &gi.minimumBounceContribution,
-                    0.0f,
-                    0.02f,
-                    "%.5f");
-                ImGui::SetItemTooltip(
-                    "Skip higher-bounce source energy whose conservative exposed scene-linear contribution cannot exceed this value before tone mapping. Set 0 for exact-zero exits only; GI-result diagnostics use the exact selected chain, while unrelated diagnostics skip secondary bounces.");
+                    "Choose 1-4 finite diffuse-light bounces. Later bounces run GI-only traversals and progressively halve the selected sample budget toward 8 without raising a first-bounce limit already below 8, reducing their cost while preserving full quality for bounce one.");
+                if (gi.bounceCount > 1u)
+                {
+                    ImGui::SliderFloat(
+                        "Bounce Contribution Cutoff",
+                        &gi.minimumBounceContribution,
+                        0.0f,
+                        0.02f,
+                        "%.5f");
+                    ImGui::SetItemTooltip(
+                        "Skip higher-bounce source energy whose conservative exposed scene-linear contribution cannot exceed this value before tone mapping. Set 0 for exact-zero exits only.");
+                }
                 ImGui::SliderFloat("Intensity##IndirectDiffuse", &gi.intensity, 0.0f, 10.0f, "%.2f");
-                ImGui::SetItemTooltip("Scale material-applied screen-space indirect diffuse.");
+                ImGui::SetItemTooltip(
+                    "Scale material-applied screen-space indirect diffuse. Zero makes GI an inactive consumer, removing its traversal outputs and full-resolution source-radiance target; AO can continue independently.");
                 ImGui::Checkbox("Include Emissive Sources", &gi.includeEmissive);
                 ImGui::SetItemTooltip(
-                    "Allow visible emissive G-buffer surfaces to illuminate receivers; set their global light strength in Lights.");
-                bool giLightOnly = visibility.debug.mode ==
-                    ScreenSpaceVisibilityDebugMode::GiLightOnly;
-                if (ImGui::Checkbox("GI Light Only", &giLightOnly))
-                {
-                    visibility.debug.mode = giLightOnly
-                        ? ScreenSpaceVisibilityDebugMode::GiLightOnly
-                        : ScreenSpaceVisibilityDebugMode::FinalComposite;
-                }
+                    "Allow visible emissive G-buffer surfaces to illuminate receivers.");
+                if (!gi.includeEmissive)
+                    ImGui::BeginDisabled();
+                ImGui::SliderFloat(
+                    "Emissive Source Gain",
+                    &gi.emissiveGain,
+                    0.0f,
+                    10.0f,
+                    "%.2f");
                 ImGui::SetItemTooltip(
-                    "Show indirect irradiance before receiver albedo, metalness, and the diffuse BRDF.");
+                    "Scale emissive radiance before it enters the first visibility bounce.");
+                if (!gi.includeEmissive)
+                    ImGui::EndDisabled();
                 if (!gi.enabled)
                     ImGui::EndDisabled();
                 ImGui::TreePop();
             }
 
-            if (ImGui::TreeNode("Debug##ScreenSpaceVisibility"))
+            if (ImGui::TreeNodeEx(
+                    "Reconstruction and Upsampling",
+                    ImGuiTreeNodeFlags_DefaultOpen))
             {
-                static const char* debugLabels[] = {
-                    "Final Composite",
-                    "Ambient Visibility",
-                    "Indirect Diffuse",
-                    "GI Light Only",
-                    "Direct-Radiance Source",
-                    "Receiver Normal",
-                    "Sampled Source Normal",
-                    "Sample Count",
-                    "Newly Covered Sectors",
-                    "Final Mask Popcount",
-                    "Current Slice Orientation",
-                    "Projected Normal",
-                    "Front Horizon Angle",
-                    "Back Horizon Angle",
-                    "Thickness Interval",
-                    "GT Endpoint Order Failures"
+                VisibilityReconstructionSettings& reconstruction =
+                    visibility.reconstruction;
+                ImGui::Checkbox(
+                    "Reconstruction Enabled",
+                    &reconstruction.enabled);
+                ImGui::SetItemTooltip(
+                    "At full resolution, disable this to composite raw visibility directly. Half and quarter resolution still run the spatial filter because they require joint upsampling.");
+
+                if (!reconstruction.enabled)
+                    ImGui::BeginDisabled();
+                ImGui::Checkbox(
+                    "Temporal Reconstruction",
+                    &reconstruction.temporalEnabled);
+                ImGui::SetItemTooltip(
+                    "Reproject depth, normals, AO, and GI with the G-buffer motion vector; reject mismatches, move history 25% toward the four-diagonal current neighborhood, then use the selected current-frame response.");
+                if (!reconstruction.temporalEnabled)
+                    ImGui::BeginDisabled();
+                ImGui::SliderFloat(
+                    "Temporal Current Response",
+                    &reconstruction.temporalResponse,
+                    0.05f,
+                    1.0f,
+                    "%.2f");
+                ImGui::SetItemTooltip(
+                    "Current-frame weight after valid reprojection. SSRT3's reference response is 0.35; lower values are steadier but retain history longer.");
+                if (!reconstruction.temporalEnabled)
+                    ImGui::EndDisabled();
+                if (!reconstruction.enabled)
+                    ImGui::EndDisabled();
+
+                const bool spatialFilterActive = reconstruction.enabled ||
+                    visibility.resolution != VisibilityResolution::Full;
+                if (!spatialFilterActive)
+                    ImGui::BeginDisabled();
+                static const char* filterLabels[] = {
+                    "Joint Bilateral",
+                    "Gaussian Joint Bilateral"
                 };
                 ImGui::SetNextItemWidth(settingsControlWidth);
                 if (ImGui::BeginCombo(
-                    "Debug Mode", debugLabels[int(visibility.debug.mode)]))
+                        "Spatial Filter",
+                        filterLabels[int(reconstruction.spatialFilter)]))
                 {
-                    for (int index = 0; index < int(std::size(debugLabels)); ++index)
+                    for (int index = 0;
+                        index < int(std::size(filterLabels));
+                        ++index)
                     {
-                        const auto mode = ScreenSpaceVisibilityDebugMode(index);
-                        const bool selected = visibility.debug.mode == mode;
-                        if (ImGui::Selectable(debugLabels[index], selected))
-                            visibility.debug.mode = mode;
+                        const auto filter = VisibilitySpatialFilter(index);
+                        const bool selected =
+                            reconstruction.spatialFilter == filter;
+                        if (ImGui::Selectable(filterLabels[index], selected))
+                            reconstruction.spatialFilter = filter;
                         if (selected)
                             ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndCombo();
                 }
-                ImGui::SetItemTooltip("Visualize visibility traversal or composition state.");
-                ImGui::Checkbox("Freeze Sampling Phase", &visibility.debug.freezeSamplingPhase);
-                ImGui::SetItemTooltip("Hold slice rotation and radial jitter at deterministic phase zero.");
-
-                int developerSliceCount = int(std::clamp(
-                    visibility.debug.developerSliceCount, 1u, 8u));
-                if (ImGui::SliderInt(
-                        "Developer Slices",
-                        &developerSliceCount,
-                        1,
-                        8,
-                        "%d",
-                        ImGuiSliderFlags_AlwaysClamp))
-                {
-                    visibility.debug.developerSliceCount =
-                        uint32_t(developerSliceCount);
-                }
                 ImGui::SetItemTooltip(
-                    "One uses UVSR's statically unrolled production shader. Values 2-8 select the separate general multi-slice validation path and multiply traversal work.");
-
-                const bool canCollectHigherBounceStatistics =
-                    visibility.indirectDiffuse.enabled &&
-                    visibility.indirectDiffuse.bounceCount > 1u;
-                if (!canCollectHigherBounceStatistics)
-                    ImGui::BeginDisabled();
-                ImGui::Checkbox(
-                    "Higher-Bounce Receiver Statistics",
-                    &visibility.debug.collectHigherBounceReceiverStatistics);
-                ImGui::SetItemTooltip(
-                    "Use a diagnostic-only higher-bounce shader permutation to count depth-eligible receiver attempts rejected by diffuse-transport metadata. Production traversal carries no counter work.");
-                if (visibility.debug.collectHigherBounceReceiverStatistics &&
-                    canCollectHigherBounceStatistics)
+                    "Both filters use depth and normal guides. Joint Bilateral uses a compact 3x3/full or 2x2/upsampling kernel; Gaussian Joint Bilateral uses an SSRT3-style disk with Gaussian spatial weights.");
+                if (reconstruction.spatialFilter ==
+                    VisibilitySpatialFilter::GaussianJointBilateral)
                 {
-                    if (const ScreenSpaceVisibilityTimings* timings =
-                        m_app->GetScreenSpaceVisibilityTimings())
-                    {
-                        ImGui::Text(
-                            "Early receiver exits: %u / %u (%.1f%%)",
-                            timings->higherBounceRejectedReceiverCount,
-                            timings->higherBounceEligibleReceiverCount,
-                            timings->HigherBounceReceiverRejectionPercent());
-                        ImGui::SetItemTooltip(
-                            "Counts every depth-eligible receiver attempt across the active higher-bounce dispatches; readback follows the existing delayed GPU timer ring.");
-                    }
+                    ImGui::SliderFloat(
+                        "Gaussian Radius",
+                        &reconstruction.spatialRadius,
+                        1.0f,
+                        12.0f,
+                        "%.1f");
+                    ImGui::SetItemTooltip(
+                        "Approximate full-resolution pixel radius. The Gaussian path converts it to a receiver-depth tangent-plane radius, projects disk taps back to the screen, and uses 16 taps at full resolution or a parity-varied four-tap subset when reduced.");
                 }
-                if (!canCollectHigherBounceStatistics)
+                if (!spatialFilterActive)
                     ImGui::EndDisabled();
-
-                static const char* criterionLabels[] = { "Round", "Ceil", "Floor" };
-                ImGui::SetNextItemWidth(settingsControlWidth);
-                if (ImGui::BeginCombo(
-                    "Sector Hit Criterion",
-                    criterionLabels[int(visibility.debug.sectorHitCriterion)]))
-                {
-                    for (int index = 0; index < int(std::size(criterionLabels)); ++index)
-                    {
-                        const auto criterion = SectorHitCriterion(index);
-                        const bool selected = visibility.debug.sectorHitCriterion == criterion;
-                        if (ImGui::Selectable(criterionLabels[index], selected))
-                            visibility.debug.sectorHitCriterion = criterion;
-                        if (selected)
-                            ImGui::SetItemDefaultFocus();
-                    }
-                    ImGui::EndCombo();
-                }
-                ImGui::SetItemTooltip(
-                    "Choose developer validation semantics; Round is the production paper criterion.");
                 ImGui::TreePop();
             }
 
@@ -3407,15 +2695,9 @@ protected:
         }
 
         const bool lightsOpen = DrawCollapsingHeader(
-            "Lights", "Expand scene-light and emissive-material lighting controls.");
+            "Lights", "Expand scene-light controls.");
         if (lightsOpen)
         {
-            IndirectDiffuseSettings& gi = m_ui.ScreenSpaceVisibility.indirectDiffuse;
-            ImGui::SliderFloat(
-                "Emissive Material Light Strength", &gi.emissiveGain, 0.0f, 16.0f, "%.2f");
-            ImGui::SetItemTooltip(
-                "Globally scale light cast by emissive materials. Higher values expand the visibly illuminated area up to the Visibility sampling radius without changing the emissive surface itself.");
-
             if (!lights.empty())
             {
                 ImGui::SetNextItemWidth(settingsControlWidth);

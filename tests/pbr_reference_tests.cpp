@@ -74,29 +74,23 @@ namespace
 
     bool HasPotentialSource(
         std::uint32_t knownInactiveSources,
-        std::uint32_t forceActiveSources,
         std::uint32_t relevantSources)
     {
         knownInactiveSources &= AllLightingSources;
-        forceActiveSources &= AllLightingSources;
         relevantSources &= AllLightingSources;
-        if ((forceActiveSources & relevantSources) != 0u)
-            return true;
         return relevantSources != 0u &&
             (knownInactiveSources & relevantSources) != relevantSources;
     }
 
     ContributionRejection ClassifyContribution(
         std::uint32_t knownInactiveSources,
-        std::uint32_t forceActiveSources,
         std::uint32_t relevantSources,
         const Color& signal,
         float throughputUpperBound,
         float minimumContribution,
         float exposureScale)
     {
-        if (!HasPotentialSource(
-            knownInactiveSources, forceActiveSources, relevantSources))
+        if (!HasPotentialSource(knownInactiveSources, relevantSources))
         {
             return ContributionRejection::ZeroSignal;
         }
@@ -130,7 +124,7 @@ namespace
         for (std::uint32_t bounce = 2u; bounce <= bounceCount; ++bounce)
         {
             if (ClassifyContribution(
-                0u, 0u, IndirectDiffuseSource, frontier, 1.f,
+                0u, IndirectDiffuseSource, frontier, 1.f,
                 minimumContribution, exposureScale) != ContributionRejection::None)
             {
                 break;
@@ -138,7 +132,7 @@ namespace
 
             const Color nextFrontier = Multiply(frontier, diffuseTransport);
             if (ClassifyContribution(
-                0u, 0u, IndirectDiffuseSource, nextFrontier, 1.f,
+                0u, IndirectDiffuseSource, nextFrontier, 1.f,
                 minimumContribution, exposureScale) != ContributionRejection::None)
             {
                 break;
@@ -297,7 +291,7 @@ int main()
 
     // Source-state composition is deliberately conservative: unknown scene
     // data stays active, every relevant source must be known inactive before a
-    // scope can be skipped, and debug consumers can force a source active.
+    // scope can be skipped.
     constexpr std::array<std::uint32_t, 5> sourceMasks = {
         DirectSource,
         EmissiveSource,
@@ -326,51 +320,44 @@ int main()
     Require(combinedSourceMask == AllLightingSources,
         "all lighting source bits exactly compose the all-sources mask");
 
-    Require(HasPotentialSource(0u, 0u, IndirectDiffuseSource),
+    Require(HasPotentialSource(0u, IndirectDiffuseSource),
         "unknown indirect source remains conservatively active");
-    Require(HasPotentialSource(DirectSource, 0u,
+    Require(HasPotentialSource(DirectSource,
         DirectSource | IndirectDiffuseSource),
         "one inactive source cannot suppress another relevant source");
-    Require(!HasPotentialSource(DirectSource | IndirectDiffuseSource, 0u,
+    Require(!HasPotentialSource(DirectSource | IndirectDiffuseSource,
         DirectSource | IndirectDiffuseSource),
         "all relevant known-inactive sources permit an early out");
-    Require(HasPotentialSource(IndirectDiffuseSource, IndirectDiffuseSource,
-        IndirectDiffuseSource), "force-active source overrides scene inactivity");
-    Require(!HasPotentialSource(0u, 0u, 0u),
+    Require(!HasPotentialSource(0u, 0u),
         "an empty relevant-source set has no work");
 
     const Color positiveSignal = { 0.001f, 0.00025f, 0.0005f };
     Require(ClassifyContribution(
-        0u, 0u, IndirectDiffuseSource, positiveSignal, 1.f, 0.f, 1.f) ==
+        0u, IndirectDiffuseSource, positiveSignal, 1.f, 0.f, 1.f) ==
         ContributionRejection::None,
         "zero cutoff retains every finite positive contribution");
     Require(ClassifyContribution(
-        0u, 0u, IndirectDiffuseSource, Color{ 0.f, -1.f, 0.f },
+        0u, IndirectDiffuseSource, Color{ 0.f, -1.f, 0.f },
         1.f, 0.f, 1.f) == ContributionRejection::ZeroSignal,
         "exact-zero and negative signals safely early out");
     Require(ClassifyContribution(
-        0u, 0u, IndirectDiffuseSource,
+        0u, IndirectDiffuseSource,
         Color{ std::numeric_limits<float>::quiet_NaN(), 1.f, 1.f },
         1.f, 0.f, 1.f) == ContributionRejection::NonFinite,
         "non-finite signals are rejected");
     Require(ClassifyContribution(
-        IndirectDiffuseSource, 0u, IndirectDiffuseSource,
+        IndirectDiffuseSource, IndirectDiffuseSource,
         Color{ 1.f, 1.f, 1.f }, 1.f, 0.f, 1.f) ==
         ContributionRejection::ZeroSignal,
         "known-inactive source rejects work before signal evaluation");
     Require(ClassifyContribution(
-        0u, 0u, IndirectDiffuseSource, positiveSignal, 0.5f, 0.001f, 2.f) ==
+        0u, IndirectDiffuseSource, positiveSignal, 0.5f, 0.001f, 2.f) ==
         ContributionRejection::BelowThreshold,
         "contribution cutoff is inclusive after throughput and exposure");
     Require(ClassifyContribution(
-        0u, 0u, IndirectDiffuseSource, positiveSignal, 0.5f, 0.00099f, 2.f) ==
+        0u, IndirectDiffuseSource, positiveSignal, 0.5f, 0.00099f, 2.f) ==
         ContributionRejection::None,
         "contribution just above the exposed cutoff remains active");
-    Require(ClassifyContribution(
-        IndirectDiffuseSource, IndirectDiffuseSource, IndirectDiffuseSource,
-        positiveSignal, 1.f, 0.f, 1.f) == ContributionRejection::None,
-        "forced diagnostics retain a positive inactive-source signal");
-
     // Multi-bounce transport advances a frontier B[n] = T(B[n-1]) and keeps a
     // separate cumulative sum C[n] = C[n-1] + B[n]. Feeding C back into T
     // would double-count all earlier paths.

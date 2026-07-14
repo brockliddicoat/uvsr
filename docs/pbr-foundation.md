@@ -55,11 +55,10 @@ evaluated yet.
 
 The original four material targets total 24 bytes per pixel. UVSR changes
 their interpretation without increasing their sizes, then adds one `R8_UNORM`
-attachment for authored material ambient occlusion, one `RG32_UINT` attachment
-for stable material/instance identity, and one `R8_UNORM` transient-transport
-reactive mask. Total always-on PBR G-buffer storage is 34 bytes per pixel,
-excluding depth. The identity attachment doubles as the picking source,
-avoiding a second geometry draw in the normal deferred PBR path.
+attachment for authored material ambient occlusion. Total always-on PBR
+G-buffer bandwidth is 25 bytes per pixel, excluding depth. Picking uses a
+separate `RG16_UINT` target and runs its material-ID geometry pass only after a
+pick request; it is not an every-frame MRT.
 
 | Target | Format | Channels |
 |---|---|---|
@@ -68,9 +67,7 @@ avoiding a second geometry draw in the normal deferred PBR path.
 | G2 | `RGBA16_SNORM` | Linear shading normal in RGB; perceptual roughness in A |
 | G3 | `RGBA16_FLOAT` | Scene-linear emissive radiance in RGB; metalness in A |
 | G4 | `R8_UNORM` | Authored material ambient occlusion for the approximate indirect-light fallback and screen-space diffuse transport |
-| G5 | `RG32_UINT` | Stable scene material ID in R; stable mesh-instance ID in G |
-| G6 | `R8_UNORM` | Reserved explicit transient-transport reactivity; the current depth-writing producer writes zero |
-| G7 (conditional) | `RGBA16_FLOAT` | Current-to-previous pixel motion in XY; previous-minus-current device-depth delta in Z; validity in A |
+| G5 (conditional) | `RGBA16_FLOAT` | Current-to-previous pixel motion in XY; previous-minus-current device-depth delta in Z; validity in A |
 
 Base-color quantization follows ordinary sRGB8 material storage. Geometric
 normals have 8 bits per octahedral component; this is sufficient for
@@ -78,29 +75,15 @@ back-side validity checks but not intended for high-frequency shading.
 Shading normals and perceptual roughness use signed 16-bit normalized storage.
 Emission and metalness use half floats. IOR has 256 steps over `[1,3]`, which
 provides finer common-dielectric F0 precision than storing raw F0 in UNORM8.
-Feature flags are exact at eight bits. Material ambient occlusion and the
-transient-transport reactive contribution have eight linear bits. The 32-bit
-identity channels avoid false temporal matches and picking aliases in scenes
-with more than 65,535 materials or instances. G7 is present while either
-NRA-RTAA or screen-space temporal filtering needs velocity. Its XY convention
-is current-to-previous in pixels and Donut's writer removes projection jitter
-exactly once. Preserving Z makes disocclusion validation projection-correct
-under camera motion; A distinguishes a valid zero velocity from cleared or
-behind-camera data. G7 is not counted in the 34-byte always-on total.
-
-NRA-RTAA decodes the octahedral geometric normal from G1 for temporal surface
-validation, thin/silhouette classification, and spatial-fallback gating. The G2
-shading normal remains available to lighting but is deliberately excluded from
-hard temporal validation, so normal-map detail cannot masquerade as a changing
-geometric surface. G6 likewise does not infer reactivity from surviving cutout
-opacity or emissive magnitude: opaque and alpha-tested pixels write trustworthy
-depth and motion, and static foliage coverage and small emissive details need
-temporal accumulation. The current first-party producer therefore writes zero.
-The attachment is reserved for a future compositor or material path with a
-concrete animated/unreliable transport signal, such as translucency, refraction,
-or scattering without the opaque G-buffer contract. RTAA's automatic path uses
-motion-corroborated neighborhood residuals; stationary uniform changes remain
-bounded by current-neighborhood clipping.
+Feature flags are exact at eight bits. Material ambient occlusion has eight
+linear bits. The separate picking target retains the original 16-bit material
+and instance channels, so scenes with more than 65,535 entries can alias during
+picking; visibility does not consume those IDs. G5 exists only while adaptive
+or temporal screen-space visibility needs velocity. Its XY convention is
+current-to-previous pixels; Z is previous-minus-current device depth; A
+distinguishes a valid zero velocity from cleared background or a previous point
+behind the camera. The conditional target is not counted in the 25-byte
+always-on total.
 
 The deferred decoder normalizes both normals and flips an invalid shading
 normal back into the geometric-normal hemisphere. The BSDF rejects light or
@@ -161,8 +144,7 @@ has independent direct, emissive, environment, indirect-diffuse, and
 indirect-specular bits. Systems may add a bit to `knownInactiveSources` only
 when they have proved that source class inactive for the current scope. A scope
 can be skipped only when every relevant source is known inactive, so unknown
-scene data remains conservatively active. `forceActiveSources` preserves debug
-and diagnostic consumers. The contract is intentionally open to later scene,
+scene data remains conservatively active. The contract is intentionally open to later scene,
 material, light-cluster, visibility, residency, probe, and radiance-cache data.
 The shared bit definitions are compiled by C++, HLSL, and tests from
 `src/lighting_contribution_shared.h`; screen-space inputs already expose a CPU
@@ -180,31 +162,14 @@ back-facing surface-light pairs before shadow evaluation and BSDF work. A fully
 occluded shadow result exits before remaining shadow consumers. Deferred shading
 also recognizes the cleared G-buffer normal as background before decoding the
 other material targets. These are exact exits and do not change production
-lighting. The direct-visibility debug view keeps the source activity it needs
-for inspection.
+lighting.
 
-## Debug views and validation
+## Validation
 
-Deferred debug views do not add to the settings window. Use:
-
-- `F1`: final linear HDR lighting
-- `F2`: base color
-- `F3`: metalness
-- `F4`: perceptual roughness
-- `F5`: encoded shading normal
-- `F6`: diffuse contribution
-- `F7`: specular contribution
-- `F8`: direct-light visibility
-
-Visibility, GI-light-only, mask, slice, horizon, and history debug modes live in
-the **Visibility > Debug** section. See
-`docs/screen-space-visibility.md` for the complete list and value conventions.
-
-The values still pass through the display pipeline so they can be inspected on
-the current output device. Debug modes apply only to deferred PBR shading. The
-Donut legacy comparison path remains implemented for future experiments, but
-its **Enable PBR** control is not exposed in the production UI. Forward and
-deferred production lighting both use the same shared BSDF.
+PBR and visibility debug views are intentionally absent from the current build.
+The Donut legacy comparison path remains implemented for possible future
+experiments, but its **Enable PBR** control is not exposed in the production UI.
+Forward and deferred production lighting both use the same shared BSDF.
 
 `tests/pbr_reference_tests.cpp` validates defaults and invalid-value repair,
 roughness extremes, dielectric and metallic behavior, dark/bright base colors,
@@ -244,9 +209,8 @@ and the four-bounce frontier recurrence.
   does not enumerate or bind Donut probe inputs it does not evaluate.
   Background pixels exit on the cleared normal sentinel before the remaining
   G-buffer reads.
-- Debug-only composite paths return before unrelated material and fallback-light
-  work. Temporal rejection delays packed history-normal and neighborhood reads
-  until their cheaper activity, motion, bounds, and depth tests pass.
+- Visibility temporal rejection delays history-normal and neighborhood reads
+  until cheaper motion, bounds, and depth tests pass.
 
 ## Exact extension steps
 

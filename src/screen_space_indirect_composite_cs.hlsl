@@ -15,9 +15,7 @@ Texture2D<float4> t_GBufferDiffuse : register(t3);
 Texture2D<float4> t_GBufferEmissive : register(t4);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t5);
 Texture2D<float4> t_Normal : register(t6);
-Texture2D<float4> t_Debug : register(t7);
-Texture2D<float4> t_DirectRadianceSource : register(t8);
-Texture2D<float4> t_GBufferMaterial : register(t9);
+Texture2D<float4> t_GBufferMaterial : register(t7);
 
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Output : register(u0);
 
@@ -37,33 +35,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
     if (any(pixel >= uint2(g_Visibility.fullResolution)))
         return;
 
-    if (g_Visibility.debugMode != 0u)
-    {
-        float3 debugColor = 0.0f;
-        if (g_Visibility.debugMode == 1u)
-            debugColor = (g_Visibility.enableAmbientOcclusion != 0u
-                ? saturate(t_AmbientVisibility[pixel]) : 1.0f).xxx;
-        else if (g_Visibility.debugMode == 2u)
-            debugColor = g_Visibility.enableIndirectDiffuse != 0u
-                ? max(t_IndirectDiffuse[pixel].rgb, 0.0f)
-                : 0.0f;
-        else if (g_Visibility.debugMode == 3u)
-            debugColor = g_Visibility.enableIndirectDiffuse != 0u
-                ? max(t_IndirectDiffuse[pixel].rgb, 0.0f) *
-                    g_Visibility.indirectDiffuseIntensity
-                : 0.0f;
-        else if (g_Visibility.debugMode == 4u)
-            debugColor = max(t_DirectRadianceSource[pixel].rgb, 0.0f);
-        else if (g_Visibility.debugMode >= 5u)
-            debugColor = t_Debug[pixel].rgb;
-
-        if (any(!isfinite(debugColor)))
-            debugColor = 0.0f;
-        u_Output[pixel] = float4(
-            min(max(debugColor, 0.0f), 65504.0f), 0.0f);
-        return;
-    }
-
     float ambientVisibility = g_Visibility.enableAmbientOcclusion != 0u
         ? saturate(t_AmbientVisibility[pixel]) : 1.0f;
     float3 indirectDiffuse = g_Visibility.enableIndirectDiffuse != 0u
@@ -72,11 +43,9 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float adjustedAmbientVisibility = 1.0f;
     if (g_Visibility.enableAmbientOcclusion != 0u)
     {
-        float poweredVisibility = abs(g_Visibility.ambientPower - 1.0f) < 1e-4f
-            ? ambientVisibility
-            : pow(max(ambientVisibility, 1e-6f), g_Visibility.ambientPower);
         adjustedAmbientVisibility = saturate(
-            1.0f - g_Visibility.ambientStrength * (1.0f - poweredVisibility));
+            1.0f - g_Visibility.ambientStrength *
+                (1.0f - ambientVisibility));
     }
 
     float3 baseColor = max(t_GBufferDiffuse[pixel].rgb, 0.0f);

@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace donut::engine
 {
@@ -18,11 +19,8 @@ namespace donut::engine
 namespace uvsr
 {
     inline constexpr uint32_t MaxIndirectDiffuseBounceCount = 4;
-    inline constexpr uint32_t ImplementedVisibilityEstimatorCount = 2;
-    inline constexpr uint32_t VisibilitySlicePermutationCount = 2;
-    // Kept bit-identical to lighting_contribution.hlsli so CPU scene systems
-    // can feed conservative source-availability facts into the shared shader
-    // gate. Unknown sources are represented by a clear bit and stay active.
+    inline constexpr uint32_t ImplementedVisibilityEstimatorCount = 3;
+
     inline constexpr uint32_t LightingSource_Direct =
         UVSR_LIGHTING_SOURCE_DIRECT;
     inline constexpr uint32_t LightingSource_Emissive =
@@ -46,114 +44,124 @@ namespace uvsr
 
     enum class VisibilityEstimator : uint32_t
     {
-        PaperAngular,
-        GTUniform,
-        // Reserved until the cosine-weighted CDF, sector interpretation,
-        // receiver weighting, and normalization pass the uniform estimator's
-        // complete promotion suite. It is intentionally not exposed in UI.
-        GTCosine
+        UniformProjectedAngle,
+        UniformSolidAngle,
+        CosineWeightedSolidAngle
     };
 
-    enum class SectorHitCriterion : uint32_t
+    enum class VisibilityResolution : uint32_t
     {
-        Round,
-        Ceil,
-        Floor
+        Full,
+        Half,
+        Quarter
     };
 
-    enum class ScreenSpaceVisibilityDebugMode : uint32_t
+    enum class VisibilitySampleScheduler : uint32_t
     {
-        FinalComposite,
-        AmbientVisibility,
-        IndirectDiffuse,
-        GiLightOnly,
-        DirectRadianceSource,
-        ReceiverNormal,
-        SampledSourceNormal,
-        SampleCount,
-        NewlyCoveredSectorCount,
-        FinalMaskPopcount,
-        CurrentSliceOrientation,
-        ProjectedNormal,
-        FrontHorizonAngle,
-        BackHorizonAngle,
-        ThicknessInterval,
-        GtEndpointOrder
+        HashBaseline,
+        SpatiotemporalBlueNoise
+    };
+
+    enum class VisibilitySpatialFilter : uint32_t
+    {
+        JointBilateral,
+        GaussianJointBilateral
     };
 
     struct SharedSamplingSettings
     {
-        // First-bounce stochastic depth fetches per pixel. Samples are divided
-        // between the two ordered horizon directions, with the odd sample
-        // alternating sides across the spatiotemporal phase sequence. Later
-        // GI bounces progressively reduce this budget toward eight samples.
-        uint32_t sampleCount = 32;
+        // These are scheduled radial-sample budgets per eligible tracing pixel
+        // across all active slices. The selected budget is stochastically
+        // rounded and distributed over a nested slice/radial prefix, so
+        // increasing a limit does not move samples already present at a lower
+        // limit.
+        uint32_t minimumSampleCount = 8;
+        uint32_t maximumSampleCount = 32;
+        uint32_t maximumRefinementSlices = 2;
         float radius = 3.0f;
         float thickness = 0.5f;
-        bool distanceScaledThickness = false;
-        float thicknessDistanceScale = 0.0025f;
-        float stepDistributionExponent = 1.0f;
-        float radialJitter = 1.0f;
-        // The compact five-level hierarchy is useful for long AO rays, but its
-        // full-screen construction costs more than it saves for the default
-        // 3 m radius on current discrete GPUs. Keep it as an opt-in diagnostic.
-        bool useDepthHierarchy = false;
+        float stepDistributionExponent = 2.0f;
+        float adaptiveStrength = 1.0f;
+        VisibilitySampleScheduler scheduler =
+            VisibilitySampleScheduler::SpatiotemporalBlueNoise;
+        // Statistics use a dedicated atomic/readback path and are off by
+        // default so production sampling carries no counter traffic.
+        bool collectStatistics = false;
     };
 
     struct AmbientOcclusionSettings
     {
         bool enabled = true;
-        // Apply the visibility estimate at full strength. Tonemapping and the
-        // neutral lighting calibration handle presentation contrast without
-        // washing out the AO signal itself.
         float strength = 1.0f;
-        float power = 1.0f;
     };
 
     struct IndirectDiffuseSettings
     {
         bool enabled = true;
-        // One bounce preserves the original screen-space GI behavior. Extra
-        // bounces repeat the finite current-frame transport solve with a
-        // progressive sample budget; keep the product limit small because
-        // every bounce still incurs a full-resolution traversal dispatch.
         uint32_t bounceCount = 1;
-        // Maximum exposed scene-linear radiance that all analytically rejected
-        // pieces of a higher-order bounce may add before tone mapping. Zero
-        // keeps exact-zero exits only. The gate accounts for GI Intensity and
-        // uses conservative unit bounds for receiver reflectance/material AO.
         float minimumBounceContribution = 0.001f;
         float intensity = 4.0f;
         bool includeEmissive = true;
         float emissiveGain = 4.0f;
     };
 
-    struct VisibilityDebugSettings
+    struct VisibilityReconstructionSettings
     {
-        ScreenSpaceVisibilityDebugMode mode = ScreenSpaceVisibilityDebugMode::FinalComposite;
-        bool freezeSamplingPhase = false;
-        // Uses a dedicated later-bounce permutation so production traversal
-        // pays no wave-reduction or atomic-counter cost.
-        bool collectHigherBounceReceiverStatistics = false;
-        // One selects the production static specialization. Values above one
-        // select the separate general developer/HQ slice permutation.
-        uint32_t developerSliceCount = 1u;
-        SectorHitCriterion sectorHitCriterion = SectorHitCriterion::Round;
+        // Full resolution can bypass reconstruction completely. Reduced
+        // resolutions still run the joint bilateral upsampler.
+        bool enabled = true;
+        bool temporalEnabled = true;
+        // SSRT3's default current-frame blend response.
+        float temporalResponse = 0.35f;
+        VisibilitySpatialFilter spatialFilter =
+            VisibilitySpatialFilter::GaussianJointBilateral;
+        float spatialRadius = 4.0f;
     };
 
     struct ScreenSpaceVisibilitySettings
     {
         bool enabled = true;
-        ScreenSpaceVisibilityQuality quality = ScreenSpaceVisibilityQuality::Medium;
-        VisibilityEstimator estimator = VisibilityEstimator::PaperAngular;
+        ScreenSpaceVisibilityQuality quality =
+            ScreenSpaceVisibilityQuality::Medium;
+        VisibilityEstimator estimator =
+            VisibilityEstimator::UniformProjectedAngle;
+        VisibilityResolution resolution = VisibilityResolution::Full;
         SharedSamplingSettings sampling;
         AmbientOcclusionSettings ambientOcclusion;
         IndirectDiffuseSettings indirectDiffuse;
-        VisibilityDebugSettings debug;
+        VisibilityReconstructionSettings reconstruction;
+
+        [[nodiscard]] bool HasActiveAmbientOcclusion() const
+        {
+            return ambientOcclusion.enabled && ambientOcclusion.strength > 0.f;
+        }
+
+        [[nodiscard]] bool HasActiveIndirectDiffuse() const
+        {
+            return indirectDiffuse.enabled &&
+                indirectDiffuse.intensity > 0.f;
+        }
 
         [[nodiscard]] bool HasActiveConsumer() const
         {
-            return enabled && (ambientOcclusion.enabled || indirectDiffuse.enabled);
+            return enabled &&
+                (HasActiveAmbientOcclusion() || HasActiveIndirectDiffuse());
+        }
+
+        [[nodiscard]] bool UsesAdaptiveSampling() const
+        {
+            return sampling.adaptiveStrength > 0.f &&
+                (sampling.maximumSampleCount >
+                        sampling.minimumSampleCount ||
+                    sampling.maximumRefinementSlices > 1u);
+        }
+
+        [[nodiscard]] bool RequiresMotionVectors() const
+        {
+            return HasActiveConsumer() &&
+                (UsesAdaptiveSampling() ||
+                    (reconstruction.enabled &&
+                        reconstruction.temporalEnabled));
         }
     };
 
@@ -165,6 +173,7 @@ namespace uvsr
     {
         nvrhi::ITexture* depth = nullptr;
         nvrhi::ITexture* normals = nullptr;
+        nvrhi::ITexture* motionVectors = nullptr;
         nvrhi::ITexture* sourceRadiance = nullptr;
         nvrhi::ITexture* gbufferDiffuse = nullptr;
         nvrhi::ITexture* gbufferSpecular = nullptr;
@@ -172,8 +181,6 @@ namespace uvsr
         nvrhi::ITexture* materialAmbientOcclusion = nullptr;
         nvrhi::ITexture* baseLighting = nullptr;
         nvrhi::ITexture* output = nullptr;
-        // Scene, clustering, residency, or future lighting systems may mark a
-        // source class inactive only when absence is proven for this frame.
         uint32_t knownInactiveLightingSources = 0u;
     };
 
@@ -181,24 +188,49 @@ namespace uvsr
     {
         float depthHierarchyMs = 0.f;
         float samplingMs = 0.f;
+        float temporalMs = 0.f;
+        float filteringMs = 0.f;
         float compositionMs = 0.f;
-        uint32_t higherBounceEligibleReceiverCount = 0u;
-        uint32_t higherBounceRejectedReceiverCount = 0u;
-        // Logical texel payload for full-resolution visibility working targets.
-        // This intentionally excludes API allocation alignment and traffic.
-        uint64_t fullResolutionTextureBytes = 0u;
-        uint64_t avoidedFullResolutionTextureBytes = 0u;
+
+        uint32_t sampledPixelCount = 0u;
+        uint32_t totalSampleCount = 0u;
+        uint32_t totalSliceCount = 0u;
+        uint32_t refinedPixelCount = 0u;
+
+        // Exact logical texel arithmetic, excluding API alignment/residency.
+        uint64_t outputTextureBytes = 0u;
+        uint64_t workingTextureBytes = 0u;
+        uint64_t maskCacheBytes = 0u;
+        uint64_t avoidedTextureBytes = 0u;
+        // An estimate of duplicate R32 mask payload that the shared
+        // register-local producer avoids when AO and GI are both active.
+        uint64_t sharedMaskPayloadBytes = 0u;
 
         [[nodiscard]] float CompleteEffectMs() const
         {
-            return depthHierarchyMs + samplingMs + compositionMs;
+            return depthHierarchyMs + samplingMs + temporalMs +
+                filteringMs + compositionMs;
         }
 
-        [[nodiscard]] float HigherBounceReceiverRejectionPercent() const
+        [[nodiscard]] float AverageSamplesPerPixel() const
         {
-            return higherBounceEligibleReceiverCount > 0u
-                ? 100.f * float(higherBounceRejectedReceiverCount) /
-                    float(higherBounceEligibleReceiverCount)
+            return sampledPixelCount > 0u
+                ? float(totalSampleCount) / float(sampledPixelCount)
+                : 0.f;
+        }
+
+        [[nodiscard]] float AverageSlicesPerPixel() const
+        {
+            return sampledPixelCount > 0u
+                ? float(totalSliceCount) / float(sampledPixelCount)
+                : 0.f;
+        }
+
+        [[nodiscard]] float RefinedPixelPercent() const
+        {
+            return sampledPixelCount > 0u
+                ? 100.f * float(refinedPixelCount) /
+                    float(sampledPixelCount)
                 : 0.f;
         }
     };
@@ -221,15 +253,21 @@ namespace uvsr
             uint32_t frameIndex);
 
         void Deactivate();
+        void ResetHistory();
         void ResetBindingCache();
 
-        [[nodiscard]] const ScreenSpaceVisibilityTimings& GetTimings() const { return m_Timings; }
+        [[nodiscard]] const ScreenSpaceVisibilityTimings& GetTimings() const
+        {
+            return m_Timings;
+        }
 
     private:
         enum class Stage : uint32_t
         {
             DepthHierarchy,
             Sampling,
+            Temporal,
+            Filtering,
             Composition,
             Count
         };
@@ -242,98 +280,110 @@ namespace uvsr
         };
 
         static constexpr uint32_t c_TimerLatency = 4;
+        static constexpr uint32_t c_ConsumerVariantCount = 3;
 
         nvrhi::DeviceHandle m_Device;
         nvrhi::BufferHandle m_ConstantBuffer;
 
-        // AO, GI and traversal-debug specialization prevents the full sampling
-        // kernel from carrying every consumer's registers and texture traffic.
-        // The upper eight slots retain the general developer multi-slice path;
-        // the lower eight are statically specialized to one production slice.
-        std::array<std::array<Pipeline, 8 * VisibilitySlicePermutationCount>,
-            ImplementedVisibilityEstimatorCount>
-            m_Sampling;
-        // The packed receiver metadata needed by a later bounce has its own GI
-        // specialization. One-bounce rendering therefore avoids even the
-        // receiver source-alpha read and metadata output arithmetic.
-        std::array<std::array<Pipeline, 2 * VisibilitySlicePermutationCount>,
-            ImplementedVisibilityEstimatorCount>
-            m_MultiBounceFirstSampling;
-        // Later bounces use GI-only specializations. Bounce two initializes the
-        // cumulative target; bounces three and four add to it in place. Keeping
-        // both variants out of m_Sampling preserves the original one-bounce
-        // register and SRV footprint.
-        // Bits 0 and 1 select cumulative initialization and the opt-in
-        // receiver-gate statistics permutation respectively.
-        std::array<std::array<Pipeline, 4 * VisibilitySlicePermutationCount>,
-            ImplementedVisibilityEstimatorCount>
-            m_IndirectBounceSampling;
+        std::array<std::array<Pipeline, c_ConsumerVariantCount>,
+            ImplementedVisibilityEstimatorCount> m_Sampling;
+        std::array<std::array<Pipeline, 2>,
+            ImplementedVisibilityEstimatorCount> m_MultiBounceFirstSampling;
+        std::array<std::array<Pipeline, 2>,
+            ImplementedVisibilityEstimatorCount> m_IndirectBounceSampling;
+        std::array<Pipeline, c_ConsumerVariantCount> m_Temporal;
+        std::array<std::array<Pipeline, c_ConsumerVariantCount>, 2> m_Filter;
         Pipeline m_DepthHierarchy;
         Pipeline m_Composite;
 
         dm::uint2 m_FullSize = dm::uint2::zero();
         dm::uint2 m_SamplingSize = dm::uint2::zero();
-        bool m_MultipleBounceResourcesEnabled = false;
-        bool m_DepthHierarchyResourcesEnabled = false;
+        uint32_t m_ResolutionScale = 1u;
         bool m_AmbientResourcesEnabled = false;
         bool m_IndirectDiffuseResourcesEnabled = false;
-        bool m_TraversalDebugResourcesEnabled = false;
+        bool m_MultipleBounceResourcesEnabled = false;
+        bool m_AdaptiveResourcesEnabled = false;
+        bool m_TemporalResourcesEnabled = false;
+        bool m_PostProcessResourcesEnabled = false;
+        bool m_DepthHierarchyResourcesEnabled = false;
 
         nvrhi::TextureHandle m_RawAmbientVisibility;
-        nvrhi::TextureHandle m_DepthHierarchyTexture;
-        // Higher-order transport uses an incremental frontier B(n)=T(B(n-1))
-        // in two ping-pong textures and accumulates C(n)=C(n-1)+B(n) in a third
-        // UAV. The extra two allocations exist only for multiple bounces.
         nvrhi::TextureHandle m_RawIndirectDiffuse[2];
         nvrhi::TextureHandle m_CumulativeIndirectDiffuse;
-        nvrhi::TextureHandle m_RawDebug;
-        // Binding layouts remain invariant across consumer permutations. These
-        // pass-lifetime 1x1 UAV/SRV resources stand in for compiled-out targets.
+        nvrhi::TextureHandle m_AdaptiveFeedback[2];
+        nvrhi::TextureHandle m_TemporalAmbientVisibility[2];
+        nvrhi::TextureHandle m_TemporalIndirectDiffuse[2];
+        nvrhi::TextureHandle m_TemporalDepth[2];
+        nvrhi::TextureHandle m_TemporalNormal[2];
+        nvrhi::TextureHandle m_FinalAmbientVisibility;
+        nvrhi::TextureHandle m_FinalIndirectDiffuse;
+        nvrhi::TextureHandle m_DepthHierarchyTexture;
+        nvrhi::TextureHandle m_BlueNoiseTexture;
+
         nvrhi::TextureHandle m_DummyAmbientVisibility;
         nvrhi::TextureHandle m_DummyIndirectDiffuse;
-        nvrhi::TextureHandle m_DummyDebug;
+        nvrhi::TextureHandle m_DummyFeedback;
+        nvrhi::TextureHandle m_DummyAmbientOutput;
+        nvrhi::TextureHandle m_DummyIndirectOutput;
+        nvrhi::TextureHandle m_DummyFeedbackOutput;
 
-        // Sampling resources are stable for the lifetime of this pass. Cache
-        // the descriptor sets instead of allocating one per active bounce on
-        // every frame. The three later-bounce slots encode the fixed resource
-        // rotations for requested bounces two through four.
-        std::array<std::array<nvrhi::BindingSetHandle,
-            8 * VisibilitySlicePermutationCount>,
-            ImplementedVisibilityEstimatorCount> m_SamplingBindingSets;
-        std::array<std::array<nvrhi::BindingSetHandle,
-            2 * VisibilitySlicePermutationCount>,
+        std::array<std::array<std::array<nvrhi::BindingSetHandle, 2>,
+            c_ConsumerVariantCount>, ImplementedVisibilityEstimatorCount>
+            m_SamplingBindingSets;
+        std::array<std::array<std::array<nvrhi::BindingSetHandle, 2>, 2>,
             ImplementedVisibilityEstimatorCount> m_MultiBounceFirstBindingSets;
-        // Three fixed bounce rotations, followed by the same rotations with
-        // the statistics UAV bound.
-        std::array<std::array<nvrhi::BindingSetHandle,
-            6 * VisibilitySlicePermutationCount>,
+        // [estimator][initialize/add][bounce rotation][feedback parity]
+        std::array<std::array<std::array<std::array<nvrhi::BindingSetHandle, 2>, 3>, 2>,
             ImplementedVisibilityEstimatorCount> m_IndirectBounceBindingSets;
+        // [consumer][single/multiple-bounce source][history write parity]
+        std::array<std::array<std::array<nvrhi::BindingSetHandle, 2>, 2>,
+            c_ConsumerVariantCount> m_TemporalBindingSets;
+        // Sources 0/1 are the single/multiple-bounce raw results; 2/3 select
+        // the temporal ping-pong output written during the current frame.
+        std::array<std::array<std::array<nvrhi::BindingSetHandle, 4>,
+            c_ConsumerVariantCount>, 2> m_FilterBindingSets;
         nvrhi::BindingSetHandle m_DepthHierarchyBindingSet;
-        // The first slot reads the first-bounce frontier; the second reads the
-        // cumulative resource used by a multi-bounce solve.
         std::array<nvrhi::BindingSetHandle, 2> m_CompositeBindingSets;
+
+        nvrhi::BufferHandle m_SamplingStatisticsBuffer;
+        std::array<nvrhi::BufferHandle, c_TimerLatency>
+            m_SamplingStatisticsReadbackBuffers;
+        std::array<bool, c_TimerLatency> m_SamplingStatisticsPending{};
 
         std::array<std::array<nvrhi::TimerQueryHandle, c_TimerLatency>,
             static_cast<size_t>(Stage::Count)> m_TimerQueries;
         std::array<std::array<bool, c_TimerLatency>,
             static_cast<size_t>(Stage::Count)> m_TimerPending{};
         std::array<bool, static_cast<size_t>(Stage::Count)> m_TimerActive{};
-        nvrhi::BufferHandle m_HigherBounceStatisticsBuffer;
-        std::array<nvrhi::BufferHandle, c_TimerLatency>
-            m_HigherBounceStatisticsReadbackBuffers;
-        std::array<bool, c_TimerLatency> m_HigherBounceStatisticsPending{};
-        uint32_t m_TimerFrame = 0;
+
+        std::vector<uint16_t> m_BlueNoiseUpload;
+        bool m_BlueNoiseUploaded = false;
+        bool m_HistoryValid = false;
+        bool m_FeedbackValid = false;
+        bool m_HistoryConfigurationInitialized = false;
+        uint64_t m_HistoryConfigurationKey = 0u;
+        bool m_HistoryEstimatorInitialized = false;
+        VisibilityEstimator m_HistoryEstimator =
+            VisibilityEstimator::UniformProjectedAngle;
+        uint32_t m_HistoryIndex = 0u;
+        uint32_t m_FeedbackIndex = 0u;
+        uint32_t m_TimerFrame = 0u;
         ScreenSpaceVisibilityTimings m_Timings;
 
-        void CreatePipelines(const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory);
+        void CreatePipelines(
+            const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory);
         void EnsureResources(
             dm::uint2 fullSize,
+            uint32_t resolutionScale,
             bool ambientEnabled,
             bool indirectDiffuseEnabled,
-            bool traversalDebugEnabled,
             bool multipleBouncesEnabled,
+            bool adaptiveEnabled,
+            bool temporalEnabled,
+            bool postProcessEnabled,
             bool depthHierarchyEnabled);
         void ReleaseResources();
+        void UploadBlueNoise(nvrhi::ICommandList* commandList);
 
         void BeginStage(nvrhi::ICommandList* commandList, Stage stage);
         void EndStage(nvrhi::ICommandList* commandList, Stage stage);

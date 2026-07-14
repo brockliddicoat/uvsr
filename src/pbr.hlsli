@@ -287,7 +287,7 @@ PbrDirectLighting EvaluateDirectLight(
     PbrLightSample lightSample)
 {
     LightingContributionGate exactGate = MakeLightingContributionGate(
-        0u, 0u, 0.0f, 1.0f);
+        0u, 0.0f, 1.0f);
     uint rejection = LightingClassifyContribution(
         exactGate,
         LightingSource_Direct,

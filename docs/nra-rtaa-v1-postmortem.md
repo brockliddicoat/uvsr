@@ -20,6 +20,14 @@ The failure should not be read as evidence that temporal reconstruction cannot
 work in UVSR. It is evidence that the next experiment must prove a much smaller
 resolver before adding exception handling.
 
+Removal deleted the RTAA passes, shaders, settings, tests, reactive target,
+sharpening integration, and debug surface. It also restored material/instance
+picking to its compact on-demand pass instead of writing NRA-RTAA's 64-bit
+surface identity MRT every frame. The conditional four-channel motion target is
+the one retained producer change: visibility reconstruction now consumes its
+pixel motion, device-depth delta, and validity channel, so it has an active
+non-RTAA owner and is allocated only while that owner needs it.
+
 ## Development chronology
 
 The repository history makes the sequencing problem visible:
@@ -218,4 +226,3 @@ image-stability result.
   only mechanism masking instability.
 - Do not promote a temporal reconstruction technique without controlled visual
   and performance evidence from the target renderer.
-

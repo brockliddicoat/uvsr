@@ -6,8 +6,6 @@
 
 Texture2D<float4> t_SceneColor : register(t0);
 Texture3D<float4> t_KodakLut : register(t1);
-Texture2D<float4> t_RtaaMetadata : register(t2);
-Texture2D<float4> t_RtaaMoments : register(t3);
 SamplerState s_LinearClamp : register(s0);
 
 cbuffer c_AgxToneMapping : register(b0)
@@ -18,12 +16,6 @@ cbuffer c_AgxToneMapping : register(b0)
     float4 g_Power;
     float4 g_LutDomainMin;
     float4 g_LutDomainMax;
-    // xy: inverse native resolution, z: strength, w: halo-range expansion.
-    float4 g_RtaaSharpening;
-    // x/y/z: motion/reactive/variance suppression, w: enabled.
-    float4 g_RtaaSharpeningSuppression;
-    // x: diagnostic bypass, y: sharpening-contribution debug.
-    float4 g_RtaaDisplayFlags;
 };
 
 static const float AGX_MIN_EV = -12.47393;
@@ -107,79 +99,6 @@ float Hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
-float SceneLuminance(float3 color)
-{
-    return dot(max(color, 0.0f), float3(0.2126f, 0.7152f, 0.0722f));
-}
-
-float3 ApplyRtaaSharpening(int2 pixel, float3 center, out float3 contribution)
-{
-    contribution = 0.0f;
-    if (g_RtaaSharpeningSuppression.w <= 0.5f || g_RtaaSharpening.z <= 0.0f)
-        return center;
-
-    uint width, height;
-    t_SceneColor.GetDimensions(width, height);
-    int2 maximumPixel = int2(width, height) - 1;
-    int2 leftPixel = clamp(pixel + int2(-1, 0), 0, maximumPixel);
-    int2 rightPixel = clamp(pixel + int2(1, 0), 0, maximumPixel);
-    int2 upPixel = clamp(pixel + int2(0, -1), 0, maximumPixel);
-    int2 downPixel = clamp(pixel + int2(0, 1), 0, maximumPixel);
-
-    float3 left = max(t_SceneColor.Load(int3(leftPixel, 0)).rgb, 0.0f);
-    float3 right = max(t_SceneColor.Load(int3(rightPixel, 0)).rgb, 0.0f);
-    float3 up = max(t_SceneColor.Load(int3(upPixel, 0)).rgb, 0.0f);
-    float3 down = max(t_SceneColor.Load(int3(downPixel, 0)).rgb, 0.0f);
-
-    float centerLuminance = SceneLuminance(center);
-    float4 neighborLuminance = float4(
-        SceneLuminance(left), SceneLuminance(right),
-        SceneLuminance(up), SceneLuminance(down));
-    float averageLuminance = (neighborLuminance.x + neighborLuminance.y +
-        neighborLuminance.z + neighborLuminance.w) * 0.25f;
-    float minimumLuminance = min(centerLuminance,
-        min(min(neighborLuminance.x, neighborLuminance.y),
-            min(neighborLuminance.z, neighborLuminance.w)));
-    float maximumLuminance = max(centerLuminance,
-        max(max(neighborLuminance.x, neighborLuminance.y),
-            max(neighborLuminance.z, neighborLuminance.w)));
-
-    // Resolve metadata packs normalized sample count, validation confidence,
-    // thin-lock lifetime, and reactive/motion nibbles. Moments are log-luminance
-    // first and second moments, making variance suppression robust to HDR peaks.
-    float4 metadata = saturate(t_RtaaMetadata.Load(int3(pixel, 0)));
-    uint packedReactiveAndMotion = (uint)round(metadata.a * 255.0f);
-    float reactive = float(packedReactiveAndMotion & 15u) / 15.0f;
-    float motionFactor =
-        float((packedReactiveAndMotion >> 4u) & 15u) / 15.0f;
-    float2 moments = t_RtaaMoments.Load(int3(pixel, 0)).xy;
-    float temporalVariance = sqrt(max(moments.y - moments.x * moments.x, 0.0f));
-    float motionSuppression = 1.0f - saturate(
-        motionFactor * g_RtaaSharpeningSuppression.x);
-    float reactiveSuppression = 1.0f - saturate(
-        reactive * g_RtaaSharpeningSuppression.y);
-    float varianceSuppression = 1.0f - saturate(
-        temporalVariance * g_RtaaSharpeningSuppression.z);
-    float validationSuppression = smoothstep(0.15f, 0.75f, metadata.g);
-    float effectiveStrength = g_RtaaSharpening.z * motionSuppression *
-        reactiveSuppression * varianceSuppression * validationSuppression;
-
-    float sharpenedLuminance = centerLuminance +
-        (centerLuminance - averageLuminance) * effectiveStrength;
-    float luminanceRange = maximumLuminance - minimumLuminance;
-    float haloExpansion = max(g_RtaaSharpening.w, 0.0f) * luminanceRange;
-    sharpenedLuminance = clamp(sharpenedLuminance,
-        max(minimumLuminance - haloExpansion, 0.0f),
-        maximumLuminance + haloExpansion);
-
-    float3 sharpened = centerLuminance > 1e-6f
-        ? center * (sharpenedLuminance / centerLuminance)
-        : center;
-    sharpened = max(sharpened, 0.0f);
-    contribution = sharpened - center;
-    return sharpened;
-}
-
 void main(
     in float4 position : SV_Position,
     in float2 uv : UV,
@@ -198,35 +117,8 @@ void main(
     // scene-linear HDR -> white balance -> exposure -> AgX inset -> AgX log
     // -> contrast tone scale -> Base-space grade/LUT -> output gamut -> sRGB
     // transfer -> dithering.
-    int2 pixel = int2(position.xy);
-    float4 sceneSample = t_SceneColor.Load(int3(pixel, 0));
-    float3 sharpeningContribution;
-    float3 sharpenedSceneColor = ApplyRtaaSharpening(
-        pixel, max(sceneSample.rgb, 0.0f), sharpeningContribution);
-
-    if (g_RtaaDisplayFlags.y > 0.5f)
-    {
-        // This developer view is evaluated here because sharpening is fused
-        // into the downstream display pass and intentionally never feeds
-        // temporal history.
-        // LdrColor is SRGBA8_UNORM, so feed it linear values just like the
-        // normal path below. Without this conversion a diagnostic value of
-        // 0.5 would be hardware-encoded a second time and displayed as 0.735.
-        outputColor = float4(SrgbToLinear(
-            saturate(abs(sharpeningContribution) * 8.0f)), 1.0f);
-        return;
-    }
-
-    if (g_RtaaDisplayFlags.x > 0.5f)
-    {
-        // Analytical debug surfaces are authored in [0,1] display-relative
-        // values. Bypassing exposure, AgX and grading keeps classifications
-        // readable and prevents a user's grade from changing diagnostics.
-        outputColor = float4(SrgbToLinear(saturate(sceneSample.rgb)), 1.0f);
-        return;
-    }
-
-    float3 color = ApplyCameraWhiteBalance(sharpenedSceneColor, warmth, tint);
+    float4 sceneSample = t_SceneColor.Load(int3(position.xy, 0));
+    float3 color = ApplyCameraWhiteBalance(sceneSample.rgb, warmth, tint);
     color *= exp2(exposureEv);
     color = AgxLogEncode(color);
     color = saturate((AgxDefaultContrast(color) - 0.5) * contrast + 0.5);

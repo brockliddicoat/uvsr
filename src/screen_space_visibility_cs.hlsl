@@ -17,9 +17,6 @@
 #ifndef ENABLE_GI
 #define ENABLE_GI 1
 #endif
-#ifndef ENABLE_TRAVERSAL_DEBUG
-#define ENABLE_TRAVERSAL_DEBUG 0
-#endif
 #ifndef ENABLE_BOUNCE_REINJECTION
 #define ENABLE_BOUNCE_REINJECTION 0
 #endif
@@ -29,15 +26,10 @@
 #ifndef ENABLE_BOUNCE_METADATA
 #define ENABLE_BOUNCE_METADATA 0
 #endif
-#ifndef ENABLE_BOUNCE_STATISTICS
-#define ENABLE_BOUNCE_STATISTICS 0
-#endif
-#ifndef STATIC_SLICE_COUNT
-#define STATIC_SLICE_COUNT 0
-#endif
 
-#define VisibilityEstimator_PaperAngular 0
-#define VisibilityEstimator_GTUniform 1
+#define VisibilityEstimator_UniformProjectedAngle 0
+#define VisibilityEstimator_UniformSolidAngle 1
+#define VisibilityEstimator_CosineWeightedSolidAngle 2
 
 cbuffer c_Visibility : register(b0)
 {
@@ -52,22 +44,41 @@ Texture2D<float> t_DepthHierarchy : register(t3);
 Texture2D<float4> t_GBufferDiffuse : register(t4);
 Texture2D<float4> t_Emissive : register(t5);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t6);
+Texture2D<float4> t_PreviousFeedback : register(t7);
+Texture2D<float> t_BlueNoise : register(t8);
+Texture2D<float4> t_Motion : register(t9);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_BounceFrontier : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
-#if ENABLE_BOUNCE_STATISTICS
-RWBuffer<uint> u_HigherBounceReceiverStatistics : register(u2);
-#endif
 #else
 Texture2D<float4> t_SourceRadiance : register(t2);
 Texture2D<float> t_DepthHierarchy : register(t3);
+Texture2D<float4> t_PreviousFeedback : register(t4);
+Texture2D<float> t_BlueNoise : register(t5);
+Texture2D<float4> t_Motion : register(t6);
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
-VK_IMAGE_FORMAT("rgba8") RWTexture2D<float4> u_Debug : register(u2);
+VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_AdaptiveFeedback : register(u2);
+RWBuffer<uint> u_SamplingStatistics : register(u3);
 #endif
 
 static const float VisibilityPi = 3.14159265358979323846f;
 static const float VisibilityHalfPi = 1.57079632679489661923f;
 static const float VisibilityEpsilon = 1e-6f;
+
+// Bit i selects radial stratum i. Entry n contains the first n strata in the
+// 5-bit reversal sequence, so budgets remain nested while firstbitlow consumes
+// the selected set in near-to-far order for correct GI sector ownership.
+static const uint ProgressiveRadialPrefixMasks[33] = {
+    0x00000000u, 0x00000001u, 0x00010001u, 0x00010101u,
+    0x01010101u, 0x01010111u, 0x01110111u, 0x01111111u,
+    0x11111111u, 0x11111115u, 0x11151115u, 0x11151515u,
+    0x15151515u, 0x15151555u, 0x15551555u, 0x15555555u,
+    0x55555555u, 0x55555557u, 0x55575557u, 0x55575757u,
+    0x57575757u, 0x57575777u, 0x57775777u, 0x57777777u,
+    0x77777777u, 0x7777777fu, 0x777f777fu, 0x777f7f7fu,
+    0x7f7f7f7fu, 0x7f7f7fffu, 0x7fff7fffu, 0x7fffffffu,
+    0xffffffffu
+};
 
 uint VisibilityHash(uint value)
 {
@@ -95,19 +106,41 @@ float VisibilityFastAcos(float value)
     return value >= 0.0f ? result : VisibilityPi - result;
 }
 
-float AzimuthTemporalPhase(uint frameIndex)
+float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
 {
-    static const float phases[6] = {
-        1.0f / 6.0f, 5.0f / 6.0f, 1.0f / 2.0f,
-        2.0f / 3.0f, 1.0f / 3.0f, 0.0f
-    };
-    return phases[frameIndex % 6u];
+    if (g_Visibility.sampleScheduler == 0u)
+        return VisibilityRandom(samplingPixel, dimension, phase);
+
+    // Procedural progressive blue-noise ranks provide the spatial ordering.
+    // Toroidal integer offsets preserve that ordering after arbitrary motion
+    // or rejection, while the golden-ratio phase gives each pixel a maximally
+    // separated temporal sequence.
+    uint2 offset = uint2(
+        phase * 13u + dimension * 17u,
+        phase * 29u + dimension * 7u) & 63u;
+    uint2 coordinate = (samplingPixel + offset) & 63u;
+    float rank = t_BlueNoise.Load(int3(coordinate, 0));
+    return frac(rank + float(phase) * 0.61803398875f +
+        float(dimension) * 0.38196601125f);
 }
 
-float RadialTemporalPhase(uint frameIndex)
+uint2 SamplingToFullPixel(uint2 samplingPixel)
 {
-    static const float phases[4] = { 0.0f, 0.5f, 0.25f, 0.75f };
-    return phases[(frameIndex / 6u) % 4u];
+    uint scale = max(g_Visibility.resolutionScale, 1u);
+    uint2 fullSize = uint2(g_Visibility.fullResolution);
+    return min(samplingPixel * scale + scale / 2u, fullSize - 1u);
+}
+
+uint2 FullToSamplingPixel(uint2 fullPixel)
+{
+    uint scale = max(g_Visibility.resolutionScale, 1u);
+    return min(fullPixel / scale,
+        uint2(g_Visibility.samplingResolution) - 1u);
+}
+
+float ProgressiveRadialSample(uint radialStratum, float rotation)
+{
+    return (float(radialStratum) + rotation) * (1.0f / 32.0f);
 }
 
 bool IsFiniteFloat3(float3 value)
@@ -219,7 +252,7 @@ bool ProjectClippedViewEndpoint(
     return all(isfinite(pixelPosition));
 }
 
-VisibilityInterval BuildPaperVisibilityInterval(
+VisibilityInterval BuildProjectedAngleVisibilityInterval(
     float3 frontDirection,
     float3 backDirection,
     float3 viewDirection,
@@ -242,7 +275,6 @@ VisibilityInterval BuildPaperVisibilityInterval(
 
 void WriteEmptyVisibilityOutput(
     uint2 pixel,
-    bool traversalDebugActive,
     float4 previousFrontier)
 {
 #if ENABLE_BOUNCE_REINJECTION
@@ -259,10 +291,8 @@ void WriteEmptyVisibilityOutput(
 #if ENABLE_GI
     u_IndirectDiffuse[pixel] = 0.0f;
 #endif
-#if ENABLE_TRAVERSAL_DEBUG
-    if (traversalDebugActive)
-        u_Debug[pixel] = 0.0f;
-#endif
+    if (g_Visibility.adaptiveSamplingEnabled != 0u)
+        u_AdaptiveFeedback[pixel] = 0.0f;
 #endif
 }
 
@@ -272,30 +302,24 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     if (any(dispatchPixel >= uint2(g_Visibility.samplingResolution)))
         return;
 
-    uint2 receiverPixel = dispatchPixel;
+    uint2 receiverPixel = SamplingToFullPixel(dispatchPixel);
     float receiverDepth = t_Depth[receiverPixel];
     float2 receiverPixelCenter = float2(receiverPixel) + 0.5f;
     float4 previousReceiverFrontier = 0.0f;
 
-    const bool traversalDebugActive = ENABLE_TRAVERSAL_DEBUG != 0;
 #if ENABLE_BOUNCE_REINJECTION
-    const bool forceBounceActivity =
-        g_Visibility.debugMode >= 2u && g_Visibility.debugMode <= 3u;
     LightingContributionGate bounceContributionGate = MakeLightingContributionGate(
         g_Visibility.knownInactiveLightingSources,
-        forceBounceActivity ? LightingSource_IndirectDiffuse : 0u,
         g_Visibility.minimumBounceContribution,
         g_Visibility.lightingExposureScale);
-    float bounceToFinalUpperBound = forceBounceActivity
-        ? 1.0f
-        : max(g_Visibility.indirectDiffuseIntensity, 0.0f) * UVSR_INV_PI;
+    float bounceToFinalUpperBound =
+        max(g_Visibility.indirectDiffuseIntensity, 0.0f) * UVSR_INV_PI;
 #else
     const uint firstBounceSources =
         LightingSource_Direct | LightingSource_Emissive;
     LightingContributionGate firstBounceContributionGate =
         MakeLightingContributionGate(
             g_Visibility.knownInactiveLightingSources,
-            g_Visibility.debugMode != 0u ? firstBounceSources : 0u,
             0.0f,
             1.0f);
 #endif
@@ -312,7 +336,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     if (!giSourcePotential)
     {
         WriteEmptyVisibilityOutput(
-            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
+            dispatchPixel, previousReceiverFrontier);
         return;
     }
 #endif
@@ -324,7 +348,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         // depth, so bounce two can initialize its cumulative output from zero
         // without performing a frontier read that cannot carry energy.
         WriteEmptyVisibilityOutput(
-            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
+            dispatchPixel, previousReceiverFrontier);
         return;
     }
 
@@ -334,36 +358,25 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     // loading/transformation, and slice setup. The same value is passed to
     // every inactive-output path and later resolve, so there is one receiver
     // frontier read per eligible higher-bounce pixel.
-    previousReceiverFrontier = t_PreviousBounceFrontier[receiverPixel];
+    // Bounce frontiers live at the visibility sampling resolution. The
+    // dispatch coordinate is therefore the receiver coordinate for this
+    // texture even though depth and G-buffer data use receiverPixel.
+    previousReceiverFrontier = t_PreviousBounceFrontier[dispatchPixel];
     uint receiverFrontierMetadata = (uint)round(
         max(previousReceiverFrontier.a, 0.0f));
     bool receiverRejectsDiffuseTransport =
         (receiverFrontierMetadata & PbrGiMetadata_DiffuseActive) == 0u;
-#if ENABLE_BOUNCE_STATISTICS
-    uint waveEligibleReceiverCount = WaveActiveCountBits(true);
-    uint waveRejectedReceiverCount = WaveActiveCountBits(
-        receiverRejectsDiffuseTransport);
-    if (WaveIsFirstLane())
-    {
-        InterlockedAdd(
-            u_HigherBounceReceiverStatistics[0],
-            waveEligibleReceiverCount);
-        InterlockedAdd(
-            u_HigherBounceReceiverStatistics[1],
-            waveRejectedReceiverCount);
-    }
-#endif
     if (receiverRejectsDiffuseTransport)
     {
         WriteEmptyVisibilityOutput(
-            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
+            dispatchPixel, previousReceiverFrontier);
         return;
     }
 #if !ENABLE_AO
     if (!giSourcePotential)
     {
         WriteEmptyVisibilityOutput(
-            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
+            dispatchPixel, previousReceiverFrontier);
         return;
     }
 #endif
@@ -373,7 +386,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     if (!ReconstructViewPositionSafe(receiverPixelCenter, receiverDepth, receiverPositionVS))
     {
         WriteEmptyVisibilityOutput(
-            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
+            dispatchPixel, previousReceiverFrontier);
         return;
     }
 
@@ -383,7 +396,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     if (dot(receiverNormalVS, receiverNormalVS) <= VisibilityEpsilon * VisibilityEpsilon)
     {
         WriteEmptyVisibilityOutput(
-            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
+            dispatchPixel, previousReceiverFrontier);
         return;
     }
     receiverNormalVS = SafeNormalize(receiverNormalVS, float3(0.0f, 0.0f, -1.0f));
@@ -420,44 +433,176 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         !(receiverClipPosition.w > VisibilityProjectionEpsilon))
     {
         WriteEmptyVisibilityOutput(
-            dispatchPixel, traversalDebugActive, previousReceiverFrontier);
+            dispatchPixel, previousReceiverFrontier);
         return;
     }
 
-    uint phase = g_Visibility.freezeSamplingPhase != 0u ? 0u : g_Visibility.frameIndex;
-    float sliceRotation = frac(VisibilityRandom(receiverPixel, 0u, 0u) +
-        AzimuthTemporalPhase(phase));
-    float radialRandom = frac(VisibilityRandom(receiverPixel, 1u, 0u) +
-        RadialTemporalPhase(phase));
+    uint phase = g_Visibility.frameIndex;
+    float edgeImportance = 0.0f;
+    float disocclusionImportance = 0.0f;
+    float historyImportance = 0.0f;
+    float neighborContributionImportance = 0.0f;
+    float reprojectedContributionSignal = 0.0f;
+    bool hasReprojectedFeedback = false;
+    if (g_Visibility.adaptiveSamplingEnabled != 0u)
+    {
+        uint2 fullMaximum = uint2(g_Visibility.fullResolution) - 1u;
+        static const int2 edgeOffsets[4] = {
+            int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
+        };
+        [unroll]
+        for (uint edgeIndex = 0u; edgeIndex < 4u; ++edgeIndex)
+        {
+            uint2 neighborPixel = uint2(clamp(
+                int2(receiverPixel) + edgeOffsets[edgeIndex],
+                int2(0, 0), int2(fullMaximum)));
+            float neighborDepth = t_Depth[neighborPixel];
+            if (!IsValidDepth(neighborDepth))
+            {
+                edgeImportance = 1.0f;
+                continue;
+            }
+            float depthDelta = abs(neighborDepth - receiverDepth) /
+                max(max(abs(neighborDepth), abs(receiverDepth)), 1e-4f);
+            float3 neighborNormalVS = mul(float4(
+                t_Normals[neighborPixel].xyz, 0.0f),
+                g_Visibility.view.matWorldToView).xyz;
+            neighborNormalVS = SafeNormalize(neighborNormalVS, receiverNormalVS);
+            float normalEdge = 1.0f - saturate(dot(
+                receiverNormalVS, neighborNormalVS));
+            edgeImportance = max(edgeImportance,
+                max(saturate(depthDelta * 24.0f),
+                    saturate(normalEdge * 4.0f)));
+        }
+
+        if (g_Visibility.feedbackValid != 0u)
+        {
+            float4 motion = t_Motion[receiverPixel];
+            float2 previousFullPosition = receiverPixelCenter + motion.xy;
+            bool validMotion = motion.a > 0.5f &&
+                all(isfinite(motion)) &&
+                all(previousFullPosition >= 0.0f) &&
+                all(previousFullPosition < g_Visibility.fullResolution);
+            if (validMotion)
+            {
+                uint2 previousFullPixel = uint2(previousFullPosition);
+                uint2 previousSamplingPixel =
+                    FullToSamplingPixel(previousFullPixel);
+                float4 feedback = t_PreviousFeedback[previousSamplingPixel];
+                float expectedPreviousDepth = receiverDepth + motion.z;
+                hasReprojectedFeedback = all(isfinite(feedback)) &&
+                    isfinite(expectedPreviousDepth);
+                if (hasReprojectedFeedback)
+                {
+                    float depthError = abs(feedback.a - expectedPreviousDepth) /
+                        max(max(abs(feedback.a),
+                            abs(expectedPreviousDepth)), 1e-4f);
+                    disocclusionImportance = saturate(depthError * 32.0f);
+                    historyImportance = max(
+                        1.0f - saturate(feedback.r),
+                        saturate(feedback.g));
+                    reprojectedContributionSignal = saturate(feedback.b);
+
+                    uint2 samplingMaximum =
+                        uint2(g_Visibility.samplingResolution) - 1u;
+                    static const int2 feedbackOffsets[5] = {
+                        int2(0, 0), int2(-1, 0), int2(1, 0),
+                        int2(0, -1), int2(0, 1)
+                    };
+                    [unroll]
+                    for (uint feedbackIndex = 0u;
+                        feedbackIndex < 5u;
+                        ++feedbackIndex)
+                    {
+                        uint2 feedbackPixel = uint2(clamp(
+                            int2(previousSamplingPixel) +
+                                feedbackOffsets[feedbackIndex],
+                            int2(0, 0), int2(samplingMaximum)));
+                        float neighborSignal =
+                            t_PreviousFeedback[feedbackPixel].b;
+                        if (isfinite(neighborSignal))
+                        {
+                            neighborContributionImportance = max(
+                                neighborContributionImportance,
+                                saturate(neighborSignal));
+                        }
+                    }
+                }
+                else
+                {
+                    disocclusionImportance = 1.0f;
+                }
+            }
+            else
+            {
+                disocclusionImportance = 1.0f;
+            }
+        }
+    }
+
+    float errorImportance = saturate(max(
+        max(edgeImportance, disocclusionImportance),
+        max(historyImportance, neighborContributionImportance * 0.75f)) *
+        max(g_Visibility.adaptiveStrength, 0.0f));
+    // Preserve the adaptive-sampling paper's one-eighth uniform component so
+    // flat regions never become deterministic starvation zones.
+    float samplingProbability = g_Visibility.adaptiveSamplingEnabled != 0u
+        ? 0.125f + 0.875f * errorImportance
+        : 0.0f;
+    uint minimumSampleCount = clamp(
+        g_Visibility.minimumSampleCount, 1u, 64u);
+    uint maximumSampleCount = clamp(
+        g_Visibility.maximumSampleCount, minimumSampleCount, 64u);
+    float desiredSampleCount = lerp(
+        float(minimumSampleCount), float(maximumSampleCount),
+        samplingProbability);
+    uint selectedSampleCount = min(
+        uint(floor(desiredSampleCount)) +
+            (SchedulerRandom(dispatchPixel, 10u, phase) <
+                frac(desiredSampleCount) ? 1u : 0u),
+        maximumSampleCount);
+
+    uint maximumSliceCount = clamp(
+        g_Visibility.maximumRefinementSlices, 1u, 4u);
+    float desiredSliceCount = 1.0f +
+        float(maximumSliceCount - 1u) * errorImportance;
+    uint activeSliceCount = min(
+        uint(floor(desiredSliceCount)) +
+            (SchedulerRandom(dispatchPixel, 11u, phase) <
+                frac(desiredSliceCount) ? 1u : 0u),
+        min(maximumSliceCount, selectedSampleCount));
+    activeSliceCount = max(activeSliceCount, 1u);
+
+#if !ENABLE_BOUNCE_REINJECTION
+    if (g_Visibility.collectSamplingStatistics != 0u)
+    {
+        uint waveSamples = WaveActiveSum(selectedSampleCount);
+        uint waveSlices = WaveActiveSum(activeSliceCount);
+        uint waveRefined = WaveActiveCountBits(
+            selectedSampleCount > minimumSampleCount || activeSliceCount > 1u);
+        uint wavePixels = WaveActiveCountBits(true);
+        if (WaveIsFirstLane())
+        {
+            InterlockedAdd(u_SamplingStatistics[0], waveSamples);
+            InterlockedAdd(u_SamplingStatistics[1], waveSlices);
+            InterlockedAdd(u_SamplingStatistics[2], waveRefined);
+            InterlockedAdd(u_SamplingStatistics[3], wavePixels);
+        }
+    }
+#endif
+
+    float sliceRotation = SchedulerRandom(dispatchPixel, 0u, phase);
     float ambientVisibilitySum = 0.0f;
     float3 indirectDiffuseSum = 0.0f;
-    uint validSampleCount = 0u;
-    uint newlyCoveredSectorCount = 0u;
-    uint alreadyCoveredSectorCount = 0u;
-    uint accumulatedMaskPopulation = 0u;
-    uint gtEndpointOrderFailureCount = 0u;
-    float frontAngleSum = 0.0f;
-    float backAngleSum = 0.0f;
-    float thicknessAngleSum = 0.0f;
-    float3 debugSliceOrientation = 0.0f;
-    float3 debugProjectedNormal = receiverNormalVS;
-    float3 debugSourceNormal = 0.0f;
-
-#if STATIC_SLICE_COUNT
-    static const uint activeSliceCount = 1u;
-    [unroll]
-#else
-    uint activeSliceCount = max(g_Visibility.sliceCount, 1u);
     [loop]
-#endif
     for (uint sliceIndex = 0u; sliceIndex < activeSliceCount; ++sliceIndex)
     {
-#if STATIC_SLICE_COUNT
-        float slicePhase = sliceRotation;
-#else
-        float slicePhase = (float(sliceIndex) + sliceRotation) /
-            float(activeSliceCount);
-#endif
+        // Four-entry bit reversal gives a nested, evenly spread prefix:
+        // 0, 1/2, 1/4, 3/4. Adding a refinement slice never rotates the base
+        // direction and covers the available line orientations more evenly
+        // than a truncated golden-ratio sequence at this small fixed limit.
+        float slicePhase = frac(sliceRotation +
+            float(reversebits(sliceIndex) >> 30u) * 0.25f);
         float sliceAzimuth = slicePhase * VisibilityPi;
         // Both estimators consume the same coherent image-plane slice. Their
         // projected-normal representation and measure remain compile-time
@@ -469,19 +614,14 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             float3(0.0f, 1.0f, 0.0f));
         float3 sliceTangent = SafeNormalize(
             cross(viewDirection, slicePlaneNormal), screenSliceDirection);
-        float sectorPhase = VisibilityRandom(
-            receiverPixel, 2u + sliceIndex, phase);
+        float sectorPhase = SchedulerRandom(
+            dispatchPixel, 2u + sliceIndex, phase);
 
-        float3 projectedNormal;
-#if VISIBILITY_ESTIMATOR == VisibilityEstimator_GTUniform
+#if VISIBILITY_ESTIMATOR != VisibilityEstimator_UniformProjectedAngle
         SliceMeasure sliceMeasure = BuildSliceMeasure(
             viewDirection, sliceTangent, receiverNormalVS);
-        projectedNormal = sliceMeasure.valid != 0u
-            ? sliceMeasure.cosGamma * sliceMeasure.V -
-                sliceMeasure.sinGamma * sliceMeasure.S
-            : viewDirection;
 #else
-        projectedNormal = receiverNormalVS - slicePlaneNormal *
+        float3 projectedNormal = receiverNormalVS - slicePlaneNormal *
             dot(receiverNormalVS, slicePlaneNormal);
         float projectedNormalLengthSquared = dot(projectedNormal, projectedNormal);
         float projectedNormalAngle = 0.0f;
@@ -498,12 +638,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             projectedNormal = viewDirection;
         }
 #endif
-
-        if (traversalDebugActive && sliceIndex == 0u)
-        {
-            debugSliceOrientation = sliceTangent;
-            debugProjectedNormal = projectedNormal;
-        }
 
         float2 sidePixelDirection[2];
         float sideProjectedRadius[2];
@@ -543,29 +677,33 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             uint2(0u, 0u), uint2(0u, 0u)
         };
 
-        // sampleCount is total stochastic samples per pixel, not steps per
-        // side. Divide it between the two horizons and alternate the odd sample
-        // so low counts remain spatially and temporally unbiased.
-        uint stepsPerSide = g_Visibility.sampleCount >> 1u;
-        uint oddSampleSide = VisibilityHash(
-            receiverPixel.x ^ (receiverPixel.y << 16u) ^ phase) & 1u;
-        uint maximumStepsOnSide = stepsPerSide + (g_Visibility.sampleCount & 1u);
-        float jitter = lerp(0.5f, radialRandom, g_Visibility.radialJitter);
-        float inverseStepsOnSide = rcp(float(max(maximumStepsOnSide, 1u)));
+        uint samplesForSlice = selectedSampleCount / activeSliceCount +
+            (sliceIndex < selectedSampleCount % activeSliceCount ? 1u : 0u);
+        uint stepsPerSide = samplesForSlice >> 1u;
+        uint oddSampleSide = SchedulerRandom(
+            dispatchPixel, 12u + sliceIndex, phase) < 0.5f ? 0u : 1u;
+        uint sideStepCount[2] = {
+            stepsPerSide + (((samplesForSlice & 1u) != 0u &&
+                oddSampleSide == 0u) ? 1u : 0u),
+            stepsPerSide + (((samplesForSlice & 1u) != 0u &&
+                oddSampleSide == 1u) ? 1u : 0u)
+        };
+        uint remainingRadialStrata[2] = {
+            sideActive[0]
+                ? ProgressiveRadialPrefixMasks[min(sideStepCount[0], 32u)]
+                : 0u,
+            sideActive[1]
+                ? ProgressiveRadialPrefixMasks[min(sideStepCount[1], 32u)]
+                : 0u
+        };
+        float radialRotation[2] = {
+            SchedulerRandom(dispatchPixel, 20u + sliceIndex * 2u, phase),
+            SchedulerRandom(dispatchPixel, 21u + sliceIndex * 2u, phase)
+        };
 
         [loop]
-        for (uint stepIndex = 0u; stepIndex < maximumStepsOnSide; ++stepIndex)
+        while ((remainingRadialStrata[0] | remainingRadialStrata[1]) != 0u)
         {
-            float normalizedStep = max(
-                (float(stepIndex) + jitter) * inverseStepsOnSide,
-                0.5f * inverseStepsOnSide);
-            float distributedStep = saturate(normalizedStep);
-            if (abs(g_Visibility.stepDistributionExponent - 1.0f) >= 1e-4f)
-            {
-                distributedStep = abs(g_Visibility.stepDistributionExponent - 2.0f) < 1e-4f
-                    ? distributedStep * distributedStep
-                    : pow(distributedStep, g_Visibility.stepDistributionExponent);
-            }
             [unroll]
             for (uint sideIndex = 0u; sideIndex < 2u; ++sideIndex)
             {
@@ -573,24 +711,33 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     break;
                 if (!sideActive[sideIndex])
                     continue;
-                uint sideStepCount = stepsPerSide +
-                    ((g_Visibility.sampleCount & 1u) != 0u && sideIndex == oddSampleSide ? 1u : 0u);
-                if (stepIndex >= sideStepCount)
+                uint radialMask = remainingRadialStrata[sideIndex];
+                if (radialMask == 0u)
                     continue;
+                uint radialStratum = uint(firstbitlow(radialMask));
+                remainingRadialStrata[sideIndex] = radialMask &
+                    (radialMask - 1u);
 
                 float samplingSide = sideIndex == 0u ? -1.0f : 1.0f;
+                float normalizedStep = ProgressiveRadialSample(
+                    radialStratum, radialRotation[sideIndex]);
+                float distributedStep = saturate(normalizedStep);
+                if (abs(g_Visibility.stepDistributionExponent - 1.0f) >= 1e-4f)
+                {
+                    distributedStep =
+                        abs(g_Visibility.stepDistributionExponent - 2.0f) < 1e-4f
+                        ? distributedStep * distributedStep
+                        : pow(distributedStep,
+                            g_Visibility.stepDistributionExponent);
+                }
                 float sampleDistance = distributedStep * sideProjectedRadius[sideIndex];
-                // Preserve one unique-pixel opportunity per stochastic step.
-                // A constant one-pixel floor collapsed several early quadratic
-                // steps onto the same texel and silently reduced thin-surface SPP.
-                sampleDistance = max(sampleDistance, float(stepIndex + 1u));
+                sampleDistance = max(sampleDistance, 0.5f);
                 float2 samplePixelFloat = receiverPixelCenter +
                     sidePixelDirection[sideIndex] * sampleDistance;
                 if (any(samplePixelFloat < g_Visibility.view.viewportOrigin) ||
                     any(samplePixelFloat >= g_Visibility.view.viewportOrigin +
                         g_Visibility.fullResolution))
                 {
-                    sideActive[sideIndex] = false;
                     continue;
                 }
 
@@ -633,11 +780,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 }
 
                 float effectiveThickness = g_Visibility.thicknessWorld;
-                if (g_Visibility.distanceScaledThickness != 0u)
-                {
-                    effectiveThickness *= 1.0f + abs(samplePositionVS.z) *
-                        g_Visibility.thicknessDistanceScale;
-                }
 
                 float3 frontDelta = samplePositionVS - receiverPositionVS;
                 float frontLengthSquared = dot(frontDelta, frontDelta);
@@ -656,25 +798,21 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 float3 backDirection = SafeNormalize(
                     backDelta, directionToSample);
 
-                float frontAngle = 0.0f;
-                float backAngle = 0.0f;
                 VisibilityInterval interval;
-#if VISIBILITY_ESTIMATOR == VisibilityEstimator_GTUniform
-                GtIntervalBuildResult gtInterval = BuildGtIntervalDebug(
+#if VISIBILITY_ESTIMATOR == VisibilityEstimator_UniformSolidAngle
+                interval = BuildGtInterval(
                     directionToSample,
                     backDirection,
                     sliceMeasure);
-                interval = gtInterval.interval;
-#if ENABLE_TRAVERSAL_DEBUG
-                gtEndpointOrderFailureCount +=
-                    gtInterval.endpointOrderValid == 0u ? 1u : 0u;
-                frontAngle = VisibilityFastAcos(
-                    dot(directionToSample, viewDirection));
-                backAngle = VisibilityFastAcos(
-                    dot(backDirection, viewDirection));
-#endif
+#elif VISIBILITY_ESTIMATOR == VisibilityEstimator_CosineWeightedSolidAngle
+                interval = BuildGtCosineInterval(
+                    directionToSample,
+                    backDirection,
+                    sliceMeasure);
 #else
-                interval = BuildPaperVisibilityInterval(
+                float frontAngle;
+                float backAngle;
+                interval = BuildProjectedAngleVisibilityInterval(
                     directionToSample,
                     backDirection,
                     viewDirection,
@@ -683,30 +821,16 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     frontAngle,
                     backAngle);
 #endif
-                uint candidateBits = g_Visibility.sectorHitCriterion ==
-                    SectorHitCriterion_Round
-                    ? MakeStochasticSectorRangeMask(interval, sectorPhase)
-                    : MakeSectorRangeMask(interval, g_Visibility.sectorHitCriterion);
+                uint candidateBits = MakeStochasticSectorRangeMask(
+                    interval, sectorPhase);
                 if (candidateBits == 0u)
                     continue;
 
-                uint existingBits = visibilityMask.occludedBits;
                 uint newlyCoveredBits = AccumulateOccluder(visibilityMask, candidateBits);
                 uint newSectorCount = 0u;
-#if ENABLE_GI || ENABLE_TRAVERSAL_DEBUG
+#if ENABLE_GI
                 newSectorCount = countbits(newlyCoveredBits);
 #endif
-
-                if (traversalDebugActive)
-                {
-                    uint alreadyCovered = countbits(candidateBits & existingBits);
-                    ++validSampleCount;
-                    newlyCoveredSectorCount += newSectorCount;
-                    alreadyCoveredSectorCount += alreadyCovered;
-                    frontAngleSum += frontAngle;
-                    backAngleSum += backAngle;
-                    thicknessAngleSum += abs(backAngle - frontAngle);
-                }
 
                 // Geometry reads above are shared by AO and GI. Source normal,
                 // radiance, and emissive are fetched only for newly claimed
@@ -716,8 +840,10 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     continue;
 
                 float receiverCosine = saturate(dot(receiverNormalVS, directionToSample));
+#if VISIBILITY_ESTIMATOR != VisibilityEstimator_CosineWeightedSolidAngle
                 if (!(receiverCosine > 0.0f))
                     continue;
+#endif
 
 #if ENABLE_BOUNCE_REINJECTION
                 // Only the newest transport frontier is eligible for another
@@ -725,7 +851,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 // before fetching material textures; the sum of angular-sector
                 // weights is at most one, so all rejected source pieces remain
                 // bounded by the configured cutoff at this receiver.
-                uint2 previousSamplingPixel = samplePixel;
+                uint2 previousSamplingPixel =
+                    FullToSamplingPixel(samplePixel);
                 float4 previousFrontierSample =
                     t_PreviousBounceFrontier[previousSamplingPixel];
                 float3 previousFrontier = max(previousFrontierSample.rgb, 0.0f);
@@ -781,8 +908,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 float3 sampleNormalVS = mul(float4(sampleNormalWS, 0.0f),
                     g_Visibility.view.matWorldToView).xyz;
                 sampleNormalVS = SafeNormalize(sampleNormalVS, 0.0f);
-                if (traversalDebugActive)
-                    debugSourceNormal = sampleNormalVS;
                 float signedSourceCosine = dot(sampleNormalVS, -directionToSample);
                 float sourceCosine = sourceIsDoubleSided
                     ? abs(signedSourceCosine)
@@ -791,11 +916,17 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 if (!any(weightedSource > 0.0f))
                     continue;
 
-#if VISIBILITY_ESTIMATOR == VisibilityEstimator_GTUniform
+#if VISIBILITY_ESTIMATOR == VisibilityEstimator_UniformSolidAngle
                 sliceIndirectDiffuse += sourceRadiance *
                     ComputeGtUniformGiSampleWeight(
                         newSectorCount,
                         receiverCosine,
+                        sourceCosine);
+#elif VISIBILITY_ESTIMATOR == VisibilityEstimator_CosineWeightedSolidAngle
+                sliceIndirectDiffuse += sourceRadiance *
+                    ComputeGtCosineGiSampleWeight(
+                        newSectorCount,
+                        sliceMeasure.cosineSliceMass,
                         sourceCosine);
 #else
                 float angularCoverage = float(newSectorCount) /
@@ -814,8 +945,11 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         }
 
 #if ENABLE_AO
-#if VISIBILITY_ESTIMATOR == VisibilityEstimator_GTUniform
+#if VISIBILITY_ESTIMATOR == VisibilityEstimator_UniformSolidAngle
         ambientVisibilitySum += ResolveGtUniformAmbientVisibility(visibilityMask);
+#elif VISIBILITY_ESTIMATOR == VisibilityEstimator_CosineWeightedSolidAngle
+        ambientVisibilitySum += ResolveGtCosineAmbientVisibility(
+            visibilityMask, sliceMeasure);
 #else
         ambientVisibilitySum += GetSliceVisibility(visibilityMask);
 #endif
@@ -823,22 +957,21 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #if ENABLE_GI
         indirectDiffuseSum += sliceIndirectDiffuse;
 #endif
-        if (traversalDebugActive)
-            accumulatedMaskPopulation += CountOccludedSectors(visibilityMask);
     }
 
-#if STATIC_SLICE_COUNT
-    static const float inverseSliceCount = 1.0f;
-#else
     float inverseSliceCount = 1.0f / float(activeSliceCount);
-#endif
-    float ambientVisibility = saturate(ambientVisibilitySum * inverseSliceCount);
-    // PaperAngular preserves Algorithm 1's pi normalization. GTUniform bits
-    // are equal mass under p(omega)=1/(2*pi), retain the explicit receiver
-    // cosine, and therefore require 2*pi. These are compile-time formulations,
-    // not selectable pieces of one hybrid estimator.
-#if VISIBILITY_ESTIMATOR == VisibilityEstimator_GTUniform
+    // A single uniformly selected slice is an unbiased outer Monte Carlo
+    // estimate of the cosine integral. Its projected slice mass can exceed
+    // one for tilted normals, so retain that energy through reconstruction;
+    // the physical [0,1] bound is applied only after averaging/composition.
+    float ambientVisibility = max(
+        ambientVisibilitySum * inverseSliceCount, 0.0f);
+    if (!isfinite(ambientVisibility))
+        ambientVisibility = 1.0f;
+#if VISIBILITY_ESTIMATOR == VisibilityEstimator_UniformSolidAngle
     float irradianceNormalization = GetGtUniformIrradianceNormalization();
+#elif VISIBILITY_ESTIMATOR == VisibilityEstimator_CosineWeightedSolidAngle
+    float irradianceNormalization = GetGtCosineIrradianceNormalization();
 #else
     float irradianceNormalization = VisibilityPi;
 #endif
@@ -847,51 +980,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     if (!IsFiniteFloat3(indirectDiffuse))
         indirectDiffuse = 0.0f;
 
-#if STATIC_SLICE_COUNT
-    float maximumSamples = float(g_Visibility.sampleCount);
-    float maximumSectors = float(RadialVisibilitySectorCount);
-#else
-    float maximumSamples = float(activeSliceCount * g_Visibility.sampleCount);
-    float maximumSectors = float(activeSliceCount * RadialVisibilitySectorCount);
-#endif
-    float sampleNormalization = max(maximumSamples, 1.0f);
-    float sectorNormalization = max(maximumSectors, 1.0f);
-    float angleNormalization = max(float(validSampleCount) * VisibilityPi, VisibilityPi);
-
-    float3 debugValue = 0.0f;
-    if (traversalDebugActive && g_Visibility.debugMode == 5u)
-        debugValue = receiverNormalVS * 0.5f + 0.5f;
-    else if (g_Visibility.debugMode == 6u)
-        debugValue = debugSourceNormal * 0.5f + 0.5f;
-    else if (g_Visibility.debugMode == 7u)
-        debugValue = float(validSampleCount).xxx / sampleNormalization;
-    else if (g_Visibility.debugMode == 8u)
-        debugValue = float3(
-            float(newlyCoveredSectorCount) / sectorNormalization,
-            float(alreadyCoveredSectorCount) / max(
-                float(newlyCoveredSectorCount + alreadyCoveredSectorCount), 1.0f),
-            0.0f);
-    else if (g_Visibility.debugMode == 9u)
-        debugValue = float(accumulatedMaskPopulation).xxx / sectorNormalization;
-    else if (g_Visibility.debugMode == 10u)
-        debugValue = debugSliceOrientation * 0.5f + 0.5f;
-    else if (g_Visibility.debugMode == 11u)
-        debugValue = debugProjectedNormal * 0.5f + 0.5f;
-    else if (g_Visibility.debugMode == 12u)
-        debugValue = (frontAngleSum / angleNormalization).xxx;
-    else if (g_Visibility.debugMode == 13u)
-        debugValue = (backAngleSum / angleNormalization).xxx;
-    else if (g_Visibility.debugMode == 14u)
-        debugValue = (thicknessAngleSum / angleNormalization).xxx;
-    else if (g_Visibility.debugMode == 15u)
-        debugValue = float3(
-            float(gtEndpointOrderFailureCount) /
-                max(float(validSampleCount), 1.0f),
-            0.0f,
-            0.0f);
-
 #if ENABLE_AO
-    u_AmbientVisibility[dispatchPixel] = ambientVisibility;
+    u_AmbientVisibility[dispatchPixel] = min(
+        ambientVisibility, 65504.0f);
 #endif
 #if ENABLE_GI
 #if ENABLE_BOUNCE_REINJECTION
@@ -924,8 +1015,29 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         min(indirectDiffuse, 65504.0f), receiverFrontierMetadataValue);
 #endif
 #endif
-#if ENABLE_TRAVERSAL_DEBUG
-    if (traversalDebugActive)
-        u_Debug[dispatchPixel] = float4(saturate(debugValue), 1.0f);
+#if !ENABLE_BOUNCE_REINJECTION
+    if (g_Visibility.adaptiveSamplingEnabled != 0u)
+    {
+        float adaptiveSignal = dot(indirectDiffuse,
+            float3(0.2126f, 0.7152f, 0.0722f));
+#if ENABLE_AO
+        adaptiveSignal = max(adaptiveSignal, 1.0f - ambientVisibility);
+#endif
+        float compressedSignal = adaptiveSignal /
+            (1.0f + max(adaptiveSignal, 0.0f));
+        float signalInstability = hasReprojectedFeedback
+            ? saturate(abs(compressedSignal -
+                reprojectedContributionSignal) * 4.0f)
+            : 0.0f;
+        float currentInstability = max(
+            max(max(edgeImportance, disocclusionImportance),
+                historyImportance),
+            signalInstability);
+        u_AdaptiveFeedback[dispatchPixel] = float4(
+            saturate(1.0f - currentInstability),
+            saturate(currentInstability),
+            saturate(compressedSignal),
+            receiverDepth);
+    }
 #endif
 }

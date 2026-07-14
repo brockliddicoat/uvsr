@@ -33,9 +33,6 @@ struct LightingContributionGate
 {
     // Default zero means no source has been proven inactive.
     uint knownInactiveSources;
-    // Debug and diagnostic consumers can override source-availability facts;
-    // exact-zero and numeric contribution tests remain in force.
-    uint forceActiveSources;
     // Cutoff is measured after exposure but before tone mapping. Zero enables
     // exact-zero rejection only.
     float minimumContribution;
@@ -44,13 +41,11 @@ struct LightingContributionGate
 
 LightingContributionGate MakeLightingContributionGate(
     uint knownInactiveSources,
-    uint forceActiveSources,
     float minimumContribution,
     float exposureScale)
 {
     LightingContributionGate gate;
     gate.knownInactiveSources = knownInactiveSources & LightingSource_All;
-    gate.forceActiveSources = forceActiveSources & LightingSource_All;
     gate.minimumContribution = max(minimumContribution, 0.0f);
     gate.exposureScale = max(exposureScale, 0.0f);
     return gate;
@@ -67,8 +62,6 @@ bool LightingHasPotentialSource(
     uint relevantSources)
 {
     relevantSources &= LightingSource_All;
-    if ((gate.forceActiveSources & relevantSources) != 0u)
-        return true;
     return relevantSources != 0u &&
         (gate.knownInactiveSources & relevantSources) != relevantSources;
 }
