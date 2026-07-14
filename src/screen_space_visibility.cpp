@@ -104,7 +104,6 @@ namespace
         appendFloat(constants.adaptiveStrength);
         appendUint(constants.minimumSampleCount);
         appendUint(constants.maximumSampleCount);
-        appendUint(constants.maximumRefinementSlices);
         appendUint(constants.sampleScheduler);
         appendUint(constants.adaptiveSamplingEnabled);
         appendUint(constants.useDepthHierarchy);
@@ -154,22 +153,18 @@ namespace uvsr
         case ScreenSpaceVisibilityQuality::Low:
             settings.sampling.minimumSampleCount = 4u;
             settings.sampling.maximumSampleCount = 16u;
-            settings.sampling.maximumRefinementSlices = 1u;
             break;
         case ScreenSpaceVisibilityQuality::Medium:
             settings.sampling.minimumSampleCount = 8u;
             settings.sampling.maximumSampleCount = 32u;
-            settings.sampling.maximumRefinementSlices = 2u;
             break;
         case ScreenSpaceVisibilityQuality::High:
             settings.sampling.minimumSampleCount = 12u;
             settings.sampling.maximumSampleCount = 48u;
-            settings.sampling.maximumRefinementSlices = 3u;
             break;
         case ScreenSpaceVisibilityQuality::Ultra:
             settings.sampling.minimumSampleCount = 16u;
             settings.sampling.maximumSampleCount = 64u;
-            settings.sampling.maximumRefinementSlices = 4u;
             break;
         default:
             break;
@@ -189,28 +184,6 @@ namespace uvsr
         constantBufferDesc.maxVersions =
             engine::c_MaxRenderPassConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(constantBufferDesc);
-
-        nvrhi::BufferDesc statisticsDesc;
-        statisticsDesc.byteSize = sizeof(uint32_t) * 4u;
-        statisticsDesc.format = nvrhi::Format::R32_UINT;
-        statisticsDesc.canHaveUAVs = true;
-        statisticsDesc.canHaveTypedViews = true;
-        statisticsDesc.initialState = nvrhi::ResourceStates::CopySource;
-        statisticsDesc.keepInitialState = true;
-        statisticsDesc.debugName = "ScreenSpaceVisibility/SamplingStatistics";
-        m_SamplingStatisticsBuffer = device->createBuffer(statisticsDesc);
-
-        statisticsDesc.canHaveUAVs = false;
-        statisticsDesc.canHaveTypedViews = false;
-        statisticsDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
-        statisticsDesc.initialState = nvrhi::ResourceStates::CopyDest;
-        statisticsDesc.debugName =
-            "ScreenSpaceVisibility/SamplingStatisticsReadback";
-        for (nvrhi::BufferHandle& readback :
-            m_SamplingStatisticsReadbackBuffers)
-        {
-            readback = device->createBuffer(statisticsDesc);
-        }
 
         auto createDummyTexture = [device](
             nvrhi::Format format,
@@ -353,8 +326,7 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(6),
             nvrhi::BindingLayoutItem::Texture_UAV(0),
             nvrhi::BindingLayoutItem::Texture_UAV(1),
-            nvrhi::BindingLayoutItem::Texture_UAV(2),
-            nvrhi::BindingLayoutItem::TypedBuffer_UAV(3)
+            nvrhi::BindingLayoutItem::Texture_UAV(2)
         };
 
         for (uint32_t estimator = 0u;
@@ -861,26 +833,6 @@ namespace uvsr
             m_Device->resetTimerQuery(query);
             m_TimerPending[stageIndex][slot] = false;
 
-            if (static_cast<Stage>(stageIndex) == Stage::Sampling &&
-                m_SamplingStatisticsPending[slot])
-            {
-                void* mappedData = m_Device->mapBuffer(
-                    m_SamplingStatisticsReadbackBuffers[slot],
-                    nvrhi::CpuAccessMode::Read);
-                if (mappedData)
-                {
-                    const auto* values =
-                        static_cast<const uint32_t*>(mappedData);
-                    m_Timings.totalSampleCount = values[0];
-                    m_Timings.totalSliceCount = values[1];
-                    m_Timings.refinedPixelCount = values[2];
-                    m_Timings.sampledPixelCount = values[3];
-                    m_Device->unmapBuffer(
-                        m_SamplingStatisticsReadbackBuffers[slot]);
-                }
-                m_SamplingStatisticsPending[slot] = false;
-            }
-
             switch (static_cast<Stage>(stageIndex))
             {
             case Stage::DepthHierarchy:
@@ -1034,14 +986,6 @@ namespace uvsr
         UploadBlueNoise(commandList);
         AdvanceTimers();
 
-        if (!settings.sampling.collectStatistics)
-        {
-            m_Timings.sampledPixelCount = 0u;
-            m_Timings.totalSampleCount = 0u;
-            m_Timings.totalSliceCount = 0u;
-            m_Timings.refinedPixelCount = 0u;
-        }
-
         const uint32_t consumerVariant =
             GetConsumerVariant(ambientEnabled, indirectEnabled);
         const uint32_t estimatorIndex = std::min(
@@ -1087,8 +1031,6 @@ namespace uvsr
         constants.maximumSampleCount = std::clamp(
             settings.sampling.maximumSampleCount,
             constants.minimumSampleCount, 64u);
-        constants.maximumRefinementSlices = std::clamp(
-            settings.sampling.maximumRefinementSlices, 1u, 4u);
         constants.knownInactiveLightingSources =
             knownInactiveLightingSources;
         constants.enableAmbientOcclusion = ambientEnabled ? 1u : 0u;
@@ -1103,7 +1045,6 @@ namespace uvsr
         constants.sampleScheduler = static_cast<uint32_t>(
             settings.sampling.scheduler);
         constants.adaptiveSamplingEnabled = adaptiveEnabled ? 1u : 0u;
-        constants.collectSamplingStatistics = 0u;
         constants.showIndirectDiffuseOnly =
             settings.showIndirectDiffuseOnly ? 1u : 0u;
         const uint64_t historyConfigurationKey =
@@ -1206,16 +1147,6 @@ namespace uvsr
                 ? "Fixed Visibility Sampling (Multiple Bounces)"
                 : "Fixed Visibility Sampling"));
         BeginStage(commandList, Stage::Sampling);
-        const bool collectStatisticsThisFrame =
-            settings.sampling.collectStatistics &&
-            m_TimerActive[static_cast<size_t>(Stage::Sampling)];
-        constants.collectSamplingStatistics =
-            collectStatisticsThisFrame ? 1u : 0u;
-        commandList->writeBuffer(
-            m_ConstantBuffer, &constants, sizeof(constants));
-        if (collectStatisticsThisFrame)
-            commandList->clearBufferUInt(m_SamplingStatisticsBuffer, 0u);
-
         const bool writeBounceMetadata = activeBounceCount > 1u;
         Pipeline& firstPipeline = writeBounceMetadata
             ? m_MultiBounceFirstSampling[estimatorIndex]
@@ -1242,9 +1173,7 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(6, motion),
                 nvrhi::BindingSetItem::Texture_UAV(0, rawAmbient),
                 nvrhi::BindingSetItem::Texture_UAV(1, rawIndirect),
-                nvrhi::BindingSetItem::Texture_UAV(2, currentFeedback),
-                nvrhi::BindingSetItem::TypedBuffer_UAV(
-                    3, m_SamplingStatisticsBuffer)
+                nvrhi::BindingSetItem::Texture_UAV(2, currentFeedback)
             };
             firstBindingSet = m_Device->createBindingSet(
                 bindings, firstPipeline.bindingLayout);
@@ -1275,7 +1204,6 @@ namespace uvsr
                 constants.minimumSampleCount,
                 GetIndirectBounceSampleCount(
                     primaryMaximumSampleCount, bounceIndex));
-            constants.collectSamplingStatistics = 0u;
             commandList->writeBuffer(
                 m_ConstantBuffer, &constants, sizeof(constants));
 
@@ -1329,17 +1257,6 @@ namespace uvsr
 
         if (activeBounceCount > 1u)
             rawIndirect = m_CumulativeIndirectDiffuse;
-        if (collectStatisticsThisFrame)
-        {
-            const uint32_t slot = m_TimerFrame % c_TimerLatency;
-            commandList->copyBuffer(
-                m_SamplingStatisticsReadbackBuffers[slot],
-                0u,
-                m_SamplingStatisticsBuffer,
-                0u,
-                sizeof(uint32_t) * 4u);
-            m_SamplingStatisticsPending[slot] = true;
-        }
         EndStage(commandList, Stage::Sampling);
         commandList->endMarker();
 

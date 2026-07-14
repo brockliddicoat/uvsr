@@ -71,13 +71,11 @@ namespace uvsr
     struct SharedSamplingSettings
     {
         // These are scheduled radial-sample budgets per eligible tracing pixel
-        // across all active slices. The selected budget is stochastically
-        // rounded and distributed over a nested slice/radial prefix, so
-        // increasing a limit does not move samples already present at a lower
-        // limit.
+        // on one stochastic slice. The selected budget is stochastically
+        // rounded over a nested radial prefix, so increasing a limit does not
+        // move samples already present at a lower limit.
         uint32_t minimumSampleCount = 8;
         uint32_t maximumSampleCount = 32;
-        uint32_t maximumRefinementSlices = 2;
         // Selects the adaptive importance/feedback specialization. When false,
         // every eligible pixel traces maximumSampleCount taps on one slice and
         // the adaptive shader path is compiled out.
@@ -88,9 +86,6 @@ namespace uvsr
         float adaptiveStrength = 1.0f;
         VisibilitySampleScheduler scheduler =
             VisibilitySampleScheduler::SpatiotemporalBlueNoise;
-        // Statistics use a dedicated atomic/readback path and are off by
-        // default so production sampling carries no counter traffic.
-        bool collectStatistics = false;
     };
 
     struct AmbientOcclusionSettings
@@ -161,9 +156,8 @@ namespace uvsr
         {
             return sampling.adaptiveSparseSamplingEnabled &&
                 sampling.adaptiveStrength > 0.f &&
-                (sampling.maximumSampleCount >
-                        sampling.minimumSampleCount ||
-                    sampling.maximumRefinementSlices > 1u);
+                sampling.maximumSampleCount >
+                    sampling.minimumSampleCount;
         }
 
         [[nodiscard]] bool RequiresMotionVectors() const
@@ -202,11 +196,6 @@ namespace uvsr
         float filteringMs = 0.f;
         float compositionMs = 0.f;
 
-        uint32_t sampledPixelCount = 0u;
-        uint32_t totalSampleCount = 0u;
-        uint32_t totalSliceCount = 0u;
-        uint32_t refinedPixelCount = 0u;
-
         // Exact logical texel arithmetic, excluding API alignment/residency.
         uint64_t outputTextureBytes = 0u;
         uint64_t workingTextureBytes = 0u;
@@ -222,27 +211,6 @@ namespace uvsr
                 filteringMs + compositionMs;
         }
 
-        [[nodiscard]] float AverageSamplesPerPixel() const
-        {
-            return sampledPixelCount > 0u
-                ? float(totalSampleCount) / float(sampledPixelCount)
-                : 0.f;
-        }
-
-        [[nodiscard]] float AverageSlicesPerPixel() const
-        {
-            return sampledPixelCount > 0u
-                ? float(totalSliceCount) / float(sampledPixelCount)
-                : 0.f;
-        }
-
-        [[nodiscard]] float RefinedPixelPercent() const
-        {
-            return sampledPixelCount > 0u
-                ? 100.f * float(refinedPixelCount) /
-                    float(sampledPixelCount)
-                : 0.f;
-        }
     };
 
     class ScreenSpaceVisibilityPass
@@ -361,11 +329,6 @@ namespace uvsr
         nvrhi::BindingSetHandle m_DepthHierarchyBindingSet;
         // Raw single, raw cumulative, and the two temporal ping-pong sources.
         std::array<nvrhi::BindingSetHandle, 4> m_CompositeBindingSets;
-
-        nvrhi::BufferHandle m_SamplingStatisticsBuffer;
-        std::array<nvrhi::BufferHandle, c_TimerLatency>
-            m_SamplingStatisticsReadbackBuffers;
-        std::array<bool, c_TimerLatency> m_SamplingStatisticsPending{};
 
         std::array<std::array<nvrhi::TimerQueryHandle, c_TimerLatency>,
             static_cast<size_t>(Stage::Count)> m_TimerQueries;

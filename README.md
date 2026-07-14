@@ -24,9 +24,8 @@ is also available from the scene picker.
 - Every eligible pixel receives one base slice and a configurable minimum depth-
   tap budget. Depth/normal edges, disocclusions, unstable history, low
   confidence, and reprojected neighboring GI contribution stochastically raise
-  the budget toward **Maximum Samples / Pixel** and **Maximum Refinement
-  Slices**. The sample profiler is opt-in so production traversal has no atomic
-  counter traffic.
+  the radial budget toward **Maximum Samples / Pixel**. Refinement remains
+  stochastic, but every pixel uses exactly one slice.
 - **Adaptive Sparse Sampling** can select a separate fixed-work specialization:
   one slice and **Fixed Samples / Pixel** for every eligible pixel, with the
   adaptive neighborhood, reprojection, feedback, and stochastic budget code

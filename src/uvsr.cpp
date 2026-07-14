@@ -2183,7 +2183,7 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Choose the adaptive first-bounce sample and refinement-slice limits. Resolution and reconstruction remain independent profiling controls.");
+                "Choose the adaptive first-bounce radial sample limits. Every preset uses one stochastic slice; resolution and reconstruction remain independent profiling controls.");
 
             static const char* resolutionLabels[] = {
                 "Full", "Half", "Quarter"
@@ -2285,7 +2285,7 @@ protected:
                     "Adaptive Sparse Sampling",
                     &sampling.adaptiveSparseSamplingEnabled);
                 ImGui::SetItemTooltip(
-                    "Stochastically assign extra taps and slices from local error and reprojected contribution. Disabling this selects a dedicated fixed-work shader: one slice at the fixed tap count, no adaptive neighborhood analysis, feedback reads/writes, or motion-vector dependency. The sample scheduler remains independent and controls where those fixed taps land.");
+                    "Stochastically assign extra radial taps from local error and reprojected contribution. Every pixel uses one slice. Disabling this selects a dedicated fixed-work shader with no adaptive neighborhood analysis, feedback reads/writes, or motion-vector dependency. The sample scheduler remains independent and controls where those fixed taps land.");
 
                 if (sampling.adaptiveSparseSamplingEnabled)
                 {
@@ -2321,25 +2321,9 @@ protected:
                     ImGui::SetItemTooltip(
                         "Upper first-bounce budget. A stochastic error estimate selects a value between Minimum and Maximum; later GI bounces halve their limits toward an 8-sample floor without raising a first-bounce limit already below 8.");
 
-                    int maximumSlices = int(std::clamp(
-                        sampling.maximumRefinementSlices, 1u, 4u));
-                    if (ImGui::SliderInt(
-                            "Maximum Refinement Slices",
-                            &maximumSlices,
-                            1,
-                            4))
-                    {
-                        sampling.maximumRefinementSlices =
-                            uint32_t(maximumSlices);
-                        samplingChanged = true;
-                    }
-                    ImGui::SetItemTooltip(
-                        "Every eligible pixel receives one base slice. Thin edges, disocclusions, unstable history, and low-confidence or nearby contributing GI regions stochastically receive up to this many total slices.");
-
                     const bool adaptiveControlsActive =
                         sampling.maximumSampleCount >
-                            sampling.minimumSampleCount ||
-                        sampling.maximumRefinementSlices > 1u;
+                            sampling.minimumSampleCount;
                     if (!adaptiveControlsActive)
                         ImGui::BeginDisabled();
                     samplingChanged |= ImGui::SliderFloat(
@@ -2410,33 +2394,7 @@ protected:
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip(
-                    "Hash Baseline independently hashes slice rotation, radial strata, and stochastic rounding. Spatiotemporal Blue Noise uses a progressive 64x64 toroidal rank field plus maximally separated temporal phases; both keep the same nested radial distribution and sample budget.");
-
-                ImGui::Checkbox(
-                    "Collect Sampling Profile",
-                    &sampling.collectStatistics);
-                ImGui::SetItemTooltip(
-                    "Enable wave-reduced GPU counters and delayed readback for selected first-bounce sample budgets, slices, and refined eligible pixels. Early full-mask termination or duplicate screen coordinates can execute fewer depth reads. Leave this off for production profiling so atomic traffic is absent.");
-                if (sampling.collectStatistics)
-                {
-                    if (const ScreenSpaceVisibilityTimings* timings =
-                        m_app->GetScreenSpaceVisibilityTimings())
-                    {
-                        if (timings->sampledPixelCount > 0u)
-                        {
-                            ImGui::Text(
-                                "Selected %.2f samples | %.2f slices | %.1f%% refined",
-                                timings->AverageSamplesPerPixel(),
-                                timings->AverageSlicesPerPixel(),
-                                timings->RefinedPixelPercent());
-                        }
-                        else
-                        {
-                            ImGui::TextDisabled(
-                                "Sampling profile waiting for delayed GPU readback.");
-                        }
-                    }
-                }
+                    "Hash Baseline independently hashes the single-slice rotation, radial strata, and stochastic sample-count rounding. Spatiotemporal Blue Noise uses a progressive 64x64 toroidal rank field plus maximally separated temporal phases; both keep the same nested radial distribution and sample budget.");
 
                 if (samplingChanged)
                     visibility.quality = ScreenSpaceVisibilityQuality::Custom;

@@ -36,7 +36,7 @@ struct ScreenSpaceVisibilityConstants
     uint frameIndex;
     uint minimumSampleCount;
     uint maximumSampleCount;
-    uint maximumRefinementSlices;
+    uint paddingSampleCount;
 
     uint knownInactiveLightingSources;
     uint enableAmbientOcclusion;
@@ -53,10 +53,10 @@ struct ScreenSpaceVisibilityConstants
     uint feedbackValid;
     uint historyValid;
 
-    uint collectSamplingStatistics;
     uint showIndirectDiffuseOnly;
     uint padding3;
     uint padding4;
+    uint padding5;
 };
 
 #endif // UVSR_SCREEN_SPACE_VISIBILITY_CB_H

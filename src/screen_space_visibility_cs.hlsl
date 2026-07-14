@@ -61,7 +61,6 @@ Texture2D<float4> t_Motion : register(t6);
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_AdaptiveFeedback : register(u2);
-RWBuffer<uint> u_SamplingStatistics : register(u3);
 #endif
 
 static const float VisibilityPi = 3.14159265358979323846f;
@@ -563,72 +562,26 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             (SchedulerRandom(dispatchPixel, 10u, phase) <
                 frac(desiredSampleCount) ? 1u : 0u),
         maximumSampleCount);
-
-    uint maximumSliceCount = clamp(
-        g_Visibility.maximumRefinementSlices, 1u, 4u);
-    float desiredSliceCount = 1.0f +
-        float(maximumSliceCount - 1u) * errorImportance;
-    uint activeSliceCount = min(
-        uint(floor(desiredSliceCount)) +
-            (SchedulerRandom(dispatchPixel, 11u, phase) <
-                frac(desiredSliceCount) ? 1u : 0u),
-        min(maximumSliceCount, selectedSampleCount));
-    activeSliceCount = max(activeSliceCount, 1u);
 #else
     // Fixed-work fallback: this specialization contains no adaptive
     // importance, reprojection, feedback, or stochastic budget instructions.
     uint selectedSampleCount = maximumSampleCount;
-    uint activeSliceCount = 1u;
-#endif
-
-#if !ENABLE_BOUNCE_REINJECTION
-    if (g_Visibility.collectSamplingStatistics != 0u)
-    {
-        uint waveSamples = WaveActiveSum(selectedSampleCount);
-        uint waveSlices = WaveActiveSum(activeSliceCount);
-#if ENABLE_ADAPTIVE_SPARSE_SAMPLING
-        bool refinedPixel = selectedSampleCount > minimumSampleCount ||
-            activeSliceCount > 1u;
-#else
-        bool refinedPixel = false;
-#endif
-        uint waveRefined = WaveActiveCountBits(refinedPixel);
-        uint wavePixels = WaveActiveCountBits(true);
-        if (WaveIsFirstLane())
-        {
-            InterlockedAdd(u_SamplingStatistics[0], waveSamples);
-            InterlockedAdd(u_SamplingStatistics[1], waveSlices);
-            InterlockedAdd(u_SamplingStatistics[2], waveRefined);
-            InterlockedAdd(u_SamplingStatistics[3], wavePixels);
-        }
-    }
 #endif
 
     float sliceRotation = SchedulerRandom(dispatchPixel, 0u, phase);
-    float ambientVisibilitySum = 0.0f;
-    float3 indirectDiffuseSum = 0.0f;
-    [loop]
-    for (uint sliceIndex = 0u; sliceIndex < activeSliceCount; ++sliceIndex)
-    {
-        // Four-entry bit reversal gives a nested, evenly spread prefix:
-        // 0, 1/2, 1/4, 3/4. Adding a refinement slice never rotates the base
-        // direction and covers the available line orientations more evenly
-        // than a truncated golden-ratio sequence at this small fixed limit.
-        float slicePhase = frac(sliceRotation +
-            float(reversebits(sliceIndex) >> 30u) * 0.25f);
-        float sliceAzimuth = slicePhase * VisibilityPi;
-        // Both estimators consume the same coherent image-plane slice. Their
-        // projected-normal representation and measure remain compile-time
-        // contracts rather than a runtime hybrid.
-        float3 screenSliceDirection = float3(
-            cos(sliceAzimuth), sin(sliceAzimuth), 0.0f);
-        float3 slicePlaneNormal = SafeNormalize(
-            cross(screenSliceDirection, viewDirection),
-            float3(0.0f, 1.0f, 0.0f));
-        float3 sliceTangent = SafeNormalize(
-            cross(viewDirection, slicePlaneNormal), screenSliceDirection);
-        float sectorPhase = SchedulerRandom(
-            dispatchPixel, 2u + sliceIndex, phase);
+    float ambientVisibility = 1.0f;
+    float3 indirectDiffuse = 0.0f;
+    float sliceAzimuth = sliceRotation * VisibilityPi;
+    // Every pixel evaluates one coherent stochastic image-plane slice. The
+    // estimator-specific measure remains a compile-time contract.
+    float3 screenSliceDirection = float3(
+        cos(sliceAzimuth), sin(sliceAzimuth), 0.0f);
+    float3 slicePlaneNormal = SafeNormalize(
+        cross(screenSliceDirection, viewDirection),
+        float3(0.0f, 1.0f, 0.0f));
+    float3 sliceTangent = SafeNormalize(
+        cross(viewDirection, slicePlaneNormal), screenSliceDirection);
+    float sectorPhase = SchedulerRandom(dispatchPixel, 2u, phase);
 
 #if VISIBILITY_ESTIMATOR != VisibilityEstimator_UniformProjectedAngle
         SliceMeasure sliceMeasure = BuildSliceMeasure(
@@ -690,15 +643,13 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             uint2(0u, 0u), uint2(0u, 0u)
         };
 
-        uint samplesForSlice = selectedSampleCount / activeSliceCount +
-            (sliceIndex < selectedSampleCount % activeSliceCount ? 1u : 0u);
-        uint stepsPerSide = samplesForSlice >> 1u;
+        uint stepsPerSide = selectedSampleCount >> 1u;
         uint oddSampleSide = SchedulerRandom(
-            dispatchPixel, 12u + sliceIndex, phase) < 0.5f ? 0u : 1u;
+            dispatchPixel, 12u, phase) < 0.5f ? 0u : 1u;
         uint sideStepCount[2] = {
-            stepsPerSide + (((samplesForSlice & 1u) != 0u &&
+            stepsPerSide + (((selectedSampleCount & 1u) != 0u &&
                 oddSampleSide == 0u) ? 1u : 0u),
-            stepsPerSide + (((samplesForSlice & 1u) != 0u &&
+            stepsPerSide + (((selectedSampleCount & 1u) != 0u &&
                 oddSampleSide == 1u) ? 1u : 0u)
         };
         uint remainingRadialStrata[2] = {
@@ -710,8 +661,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 : 0u
         };
         float radialRotation[2] = {
-            SchedulerRandom(dispatchPixel, 20u + sliceIndex * 2u, phase),
-            SchedulerRandom(dispatchPixel, 21u + sliceIndex * 2u, phase)
+            SchedulerRandom(dispatchPixel, 20u, phase),
+            SchedulerRandom(dispatchPixel, 21u, phase)
         };
 
         [loop]
@@ -959,26 +910,23 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 
 #if ENABLE_AO
 #if VISIBILITY_ESTIMATOR == VisibilityEstimator_UniformSolidAngle
-        ambientVisibilitySum += ResolveGtUniformAmbientVisibility(visibilityMask);
+        ambientVisibility = ResolveGtUniformAmbientVisibility(visibilityMask);
 #elif VISIBILITY_ESTIMATOR == VisibilityEstimator_CosineWeightedSolidAngle
-        ambientVisibilitySum += ResolveGtCosineAmbientVisibility(
+        ambientVisibility = ResolveGtCosineAmbientVisibility(
             visibilityMask, sliceMeasure);
 #else
-        ambientVisibilitySum += GetSliceVisibility(visibilityMask);
+        ambientVisibility = GetSliceVisibility(visibilityMask);
 #endif
 #endif
 #if ENABLE_GI
-        indirectDiffuseSum += sliceIndirectDiffuse;
+        indirectDiffuse = sliceIndirectDiffuse;
 #endif
-    }
 
-    float inverseSliceCount = 1.0f / float(activeSliceCount);
     // A single uniformly selected slice is an unbiased outer Monte Carlo
     // estimate of the cosine integral. Its projected slice mass can exceed
     // one for tilted normals, so retain that energy through reconstruction;
     // the physical [0,1] bound is applied only after averaging/composition.
-    float ambientVisibility = max(
-        ambientVisibilitySum * inverseSliceCount, 0.0f);
+    ambientVisibility = max(ambientVisibility, 0.0f);
     if (!isfinite(ambientVisibility))
         ambientVisibility = 1.0f;
 #if VISIBILITY_ESTIMATOR == VisibilityEstimator_UniformSolidAngle
@@ -988,8 +936,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #else
     float irradianceNormalization = VisibilityPi;
 #endif
-    float3 indirectDiffuse = max(indirectDiffuseSum *
-        (irradianceNormalization * inverseSliceCount), 0.0f);
+    indirectDiffuse = max(
+        indirectDiffuse * irradianceNormalization, 0.0f);
     if (!IsFiniteFloat3(indirectDiffuse))
         indirectDiffuse = 0.0f;
 

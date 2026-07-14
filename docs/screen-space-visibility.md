@@ -24,7 +24,7 @@ There are no visibility or PBR debug-shader views in the current build. The
 sole diagnostic exception is **Show GI-Only Lighting**, a composition switch
 that shows the final material-applied screen-space diffuse GI contribution.
 Profiling is otherwise limited to GPU stage timings, logical allocation
-arithmetic, and an explicitly opt-in sample counter.
+arithmetic, and external capture tools.
 
 ## Estimators
 
@@ -120,14 +120,13 @@ instead of hiding a view-distance heuristic in estimator comparisons.
 ## Current Sample Distribution
 
 With **Adaptive Sparse Sampling** enabled, **Minimum Samples / Pixel** and
-**Maximum Samples / Pixel** are scheduled radial sample budgets across all
-active slices, not budgets per direction or per slice.
+**Maximum Samples / Pixel** are scheduled radial sample budgets on one
+stochastic slice, not budgets per radial direction.
 Full-mask early termination, invalid projection, and duplicate screen coordinates
 can make the executed depth-read count lower than the selected budget.
 
-Every eligible pixel receives one base slice and at least the minimum sample
-count. The selected total is divided as evenly as possible among active slices,
-then each slice divides its taps between the two near-to-far radial directions.
+Every eligible pixel receives one slice and at least the minimum sample count.
+The selected total is divided between the two near-to-far radial directions.
 Later diffuse bounces halve both limits toward an eight-sample floor, without
 raising a first-bounce limit that was already below eight.
 
@@ -144,20 +143,14 @@ means:
 - raise the maximum to give difficult pixels more possible evidence;
 - tune the exponent separately, because it redistributes distance rather than
   changing tap count; and
-- compare scheduler modes with identical sample and slice limits.
-
-Slice orientations use the nested bit-reversal prefix `0, 1/2, 1/4, 3/4` over
-the half-circle of unique line directions. Raising **Maximum Refinement
-Slices** therefore adds evenly separated directions without rotating the base
-slice. One is the cheapest setting; values up to four reduce directional
-variance at pixels selected for refinement.
+- compare scheduler modes with identical sample limits.
 
 With **Adaptive Sparse Sampling** disabled, UVSR selects a separately compiled
 fixed-work shader. Every eligible pixel receives **Fixed Samples / Pixel** on
 one slice. The fixed specialization contains no adaptive depth/normal
-neighborhood analysis, motion/reprojection reads, feedback reads or writes,
-stochastic budget rounding, or refinement-slice selection. Adaptive feedback
-textures are not allocated and adaptive sampling alone does not request motion
+neighborhood analysis, motion/reprojection reads, feedback reads or writes, or
+stochastic budget rounding. Adaptive feedback textures are not allocated and
+adaptive sampling alone does not request motion
 vectors. The hash/STBN scheduler remains independent because it determines
 where the fixed samples land, not how many samples a pixel receives.
 
@@ -184,20 +177,16 @@ The last term makes pixels around previously contributing GI samples
 stochastically more likely to receive extra work. The sample budget uses a
 one-eighth uniform component plus seven-eighths adaptive importance so flat
 regions cannot become permanent starvation zones. Fractional desired sample
-and slice counts use stochastic rounding. Additional slices depend on error
-importance directly, so ordinary flat pixels retain only their base slice.
+counts use stochastic rounding. Importance changes only radial tap count; every
+pixel retains one stochastic slice.
 
 This is a probability framework, not a hard classification table. Features
 raise the chance of extra work; they do not deterministically force one quality
 tier. **Adaptive Error Strength** scales those probabilities. Zero, or an empty
-refinement range where minimum equals maximum and the maximum slice count is
-one, selects the fixed-work specialization. The explicit **Adaptive Sparse
+refinement range where minimum equals maximum, selects the fixed-work
+specialization. The explicit **Adaptive Sparse
 Sampling** checkbox is the clearer A/B control: off fixes the budget to the
 maximum/fixed count and removes all adaptive instructions and resources.
-**Collect Sampling Profile** adds wave-reduced atomics and delayed readback for selected
-first-bounce sample budgets, slices, and refined eligible pixels; it is off by
-default so normal GPU timings carry no counter traffic. These counters describe
-the scheduler's allocation, not post-termination texture-read traffic.
 
 ## Spatiotemporal Blue-Noise Scheduler
 
