@@ -116,10 +116,12 @@
   `cmake --build build --config Release --target uvsr`.
 - For PBR or rendering changes, also build `uvsr_pbr_tests` and run
   `ctest --test-dir build -C Release --output-on-failure`.
-- Launch through `tools/launch_uvsr.ps1 -Experiment "<specific test>"` and
+- Launch through `tools/launch_uvsr.ps1 -Experiment "<oneword>"` and
   smoke-test after runtime, rendering, shader, scene-loading, or UI changes.
   Never launch the bare executable during agent work: every renderer taskbar
-  title must identify the experiment being run. Exercise the relevant
+  title must identify the experiment with an ASCII alphanumeric one-word
+  description; the renderer appends its source commit and local `HHmm` launch
+  time. Exercise the relevant
   forward/deferred and screen-space AO/GI combinations when they could be
   affected.
 - Documentation-only changes require link and diff validation, not a renderer

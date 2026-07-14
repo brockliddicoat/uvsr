@@ -6,6 +6,48 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Embed the exact source commit in the executable so experiment titles describe
+# the code that was built, not whichever checkout happens to exist at launch.
+# Watching both the worktree HEAD and its resolved branch ref makes a normal
+# `cmake --build` reconfigure automatically after commits and branch changes.
+find_package(Git REQUIRED)
+execute_process(
+    COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --short=7 HEAD
+    RESULT_VARIABLE UVSR_GIT_COMMIT_RESULT
+    OUTPUT_VARIABLE UVSR_GIT_COMMIT
+    ERROR_VARIABLE UVSR_GIT_COMMIT_ERROR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+string(LENGTH "${UVSR_GIT_COMMIT}" UVSR_GIT_COMMIT_LENGTH)
+if (NOT UVSR_GIT_COMMIT_RESULT EQUAL 0 OR
+    NOT UVSR_GIT_COMMIT MATCHES "^[0-9a-f]+$" OR
+    NOT UVSR_GIT_COMMIT_LENGTH EQUAL 7)
+    message(FATAL_ERROR
+        "Cannot determine UVSR's seven-character Git commit: ${UVSR_GIT_COMMIT_ERROR}")
+endif()
+
+execute_process(
+    COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --git-path HEAD
+    OUTPUT_VARIABLE UVSR_GIT_HEAD_PATH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${UVSR_GIT_HEAD_PATH}")
+execute_process(
+    COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" symbolic-ref -q HEAD
+    RESULT_VARIABLE UVSR_GIT_SYMBOLIC_REF_RESULT
+    OUTPUT_VARIABLE UVSR_GIT_SYMBOLIC_REF
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if (UVSR_GIT_SYMBOLIC_REF_RESULT EQUAL 0)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}"
+            rev-parse --git-path "${UVSR_GIT_SYMBOLIC_REF}"
+        OUTPUT_VARIABLE UVSR_GIT_REF_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${UVSR_GIT_REF_PATH}")
+endif()
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
@@ -73,6 +115,7 @@ add_executable(uvsr WIN32
     src/visibility_blue_noise.cpp
 )
 target_link_libraries(uvsr PRIVATE donut_render donut_app donut_engine)
+target_compile_definitions(uvsr PRIVATE "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\"")
 add_dependencies(uvsr uvsr_shaders)
 
 enable_testing()

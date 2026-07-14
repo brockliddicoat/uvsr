@@ -2,6 +2,7 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [ValidateNotNullOrEmpty()]
+    [ValidatePattern('^[A-Za-z0-9]+$')]
     [string] $Experiment,
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -14,8 +15,8 @@ if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
     throw "UVSR is not built. Run: cmake --build build --config Release --target uvsr"
 }
 
-# Pass the experiment through the child environment. This avoids losing spaces
-# when Start-Process reconstructs a native Windows command line from ArgumentList.
+# Pass the validated one-word description through the child environment. The
+# renderer combines it with its build-embedded commit and local launch time.
 $previousExperiment = $env:UVSR_EXPERIMENT
 try {
     $env:UVSR_EXPERIMENT = $Experiment
