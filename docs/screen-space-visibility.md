@@ -15,13 +15,16 @@ The frame order is:
    compact diffuse-transport metadata.
 3. Trace visibility at full, half, or quarter linear resolution.
 4. Optionally reproject and accumulate AO/GI history.
-5. Joint-bilateral filter or upsample to full resolution.
+5. Optionally joint-bilateral filter to full resolution; reduced output always
+   receives at least a minimal depth/normal-guided 2x2 upsample.
 6. Composite approximate sky fallback, AO, screen-space GI, and direct light.
 7. Apply the normal AgX display pipeline.
 
-There are no visibility or PBR debug views in the current build. Profiling is
-limited to GPU stage timings, logical allocation arithmetic, and an explicitly
-opt-in sample counter.
+There are no visibility or PBR debug-shader views in the current build. The
+sole diagnostic exception is **Show GI-Only Lighting**, a composition switch
+that shows the final material-applied screen-space diffuse GI contribution.
+Profiling is otherwise limited to GPU stage timings, logical allocation
+arithmetic, and an explicitly opt-in sample counter.
 
 ## Estimators
 
@@ -116,8 +119,9 @@ instead of hiding a view-distance heuristic in estimator comparisons.
 
 ## Current Sample Distribution
 
-**Minimum Samples / Pixel** and **Maximum Samples / Pixel** are scheduled radial
-sample budgets across all active slices, not budgets per direction or per slice.
+With **Adaptive Sparse Sampling** enabled, **Minimum Samples / Pixel** and
+**Maximum Samples / Pixel** are scheduled radial sample budgets across all
+active slices, not budgets per direction or per slice.
 Full-mask early termination, invalid projection, and duplicate screen coordinates
 can make the executed depth-read count lower than the selected budget.
 
@@ -148,6 +152,15 @@ Slices** therefore adds evenly separated directions without rotating the base
 slice. One is the cheapest setting; values up to four reduce directional
 variance at pixels selected for refinement.
 
+With **Adaptive Sparse Sampling** disabled, UVSR selects a separately compiled
+fixed-work shader. Every eligible pixel receives **Fixed Samples / Pixel** on
+one slice. The fixed specialization contains no adaptive depth/normal
+neighborhood analysis, motion/reprojection reads, feedback reads or writes,
+stochastic budget rounding, or refinement-slice selection. Adaptive feedback
+textures are not allocated and adaptive sampling alone does not request motion
+vectors. The hash/STBN scheduler remains independent because it determines
+where the fixed samples land, not how many samples a pixel receives.
+
 Activision's
 [Practical Realtime Strategies for Accurate Indirect Occlusion](https://www.activision.com/cdn/research/PracticalRealtimeStrategiesTRfinal.pdf)
 informs the horizon-slice traversal, quadratic radial concentration, and the
@@ -176,9 +189,11 @@ importance directly, so ordinary flat pixels retain only their base slice.
 
 This is a probability framework, not a hard classification table. Features
 raise the chance of extra work; they do not deterministically force one quality
-tier. **Adaptive Error Strength** scales those probabilities. Zero disables
-adaptive refinement, selects only the minimum/base slice, and releases adaptive
-feedback and motion resources unless temporal reconstruction still needs motion.
+tier. **Adaptive Error Strength** scales those probabilities. Zero, or an empty
+refinement range where minimum equals maximum and the maximum slice count is
+one, selects the fixed-work specialization. The explicit **Adaptive Sparse
+Sampling** checkbox is the clearer A/B control: off fixes the budget to the
+maximum/fixed count and removes all adaptive instructions and resources.
 **Collect Sampling Profile** adds wave-reduced atomics and delayed readback for selected
 first-bounce sample budgets, slices, and refined eligible pixels; it is off by
 default so normal GPU timings carry no counter traffic. These counters describe
@@ -208,9 +223,11 @@ banding, stationary grain, motion trails, and convergence after disocclusion.
 
 ## Reconstruction and Upsampling
 
-At full resolution, disabling **Reconstruction Enabled** composites raw AO/GI
-directly. Half and quarter resolution always run a spatial pass because their
-outputs must be reconstructed to full resolution.
+**Reconstruction Enabled** is the master switch. When it is off, full
+resolution composites raw AO/GI directly. Half/quarter resolution retains the
+minimal guide-aware upsampler required to map between source and destination
+grids. Temporal reconstruction and **Spatial Filtering** can be toggled
+independently while the master is on.
 
 Temporal reconstruction follows SSRT3's core contract:
 
@@ -233,6 +250,11 @@ at full resolution or one parity-varied four-tap subset when reduced,
 `sigma = 0.9 * radius`, receiver tangent-plane placement projected back into
 screen space, and depth/normal bilateral rejection. Background pixels resolve
 to open AO and zero GI rather than bleeding foreground values into the sky.
+Disabling **Spatial Filtering** skips the dispatch and full-resolution AO/GI
+target allocation at full resolution. At half/quarter resolution it selects
+only the compact four-tap joint upsampler. Direct nearest expansion is not used:
+it exposes isolated, high-energy GI samples as coherent horizontal or vertical
+streaks and is not a valid reconstruction of the lower-resolution signal.
 
 Source: [cdrinmatane/SSRT3](https://github.com/cdrinmatane/SSRT3), MIT license.
 

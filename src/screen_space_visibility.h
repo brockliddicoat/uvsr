@@ -78,6 +78,10 @@ namespace uvsr
         uint32_t minimumSampleCount = 8;
         uint32_t maximumSampleCount = 32;
         uint32_t maximumRefinementSlices = 2;
+        // Selects the adaptive importance/feedback specialization. When false,
+        // every eligible pixel traces maximumSampleCount taps on one slice and
+        // the adaptive shader path is compiled out.
+        bool adaptiveSparseSamplingEnabled = true;
         float radius = 3.0f;
         float thickness = 0.5f;
         float stepDistributionExponent = 2.0f;
@@ -107,10 +111,12 @@ namespace uvsr
 
     struct VisibilityReconstructionSettings
     {
-        // Full resolution can bypass reconstruction completely. Reduced
-        // resolutions still run the joint bilateral upsampler.
+        // The master switch can bypass temporal and optional spatial
+        // reconstruction. Reduced resolutions retain a minimal guide-aware
+        // upsampler because their source and destination grids differ.
         bool enabled = true;
         bool temporalEnabled = true;
+        bool spatialEnabled = true;
         // SSRT3's default current-frame blend response.
         float temporalResponse = 0.35f;
         VisibilitySpatialFilter spatialFilter =
@@ -130,6 +136,9 @@ namespace uvsr
         AmbientOcclusionSettings ambientOcclusion;
         IndirectDiffuseSettings indirectDiffuse;
         VisibilityReconstructionSettings reconstruction;
+        // A deliberately narrow diagnostic exception: composition displays
+        // only material-applied screen-space diffuse GI.
+        bool showIndirectDiffuseOnly = false;
 
         [[nodiscard]] bool HasActiveAmbientOcclusion() const
         {
@@ -150,7 +159,8 @@ namespace uvsr
 
         [[nodiscard]] bool UsesAdaptiveSampling() const
         {
-            return sampling.adaptiveStrength > 0.f &&
+            return sampling.adaptiveSparseSamplingEnabled &&
+                sampling.adaptiveStrength > 0.f &&
                 (sampling.maximumSampleCount >
                         sampling.minimumSampleCount ||
                     sampling.maximumRefinementSlices > 1u);
@@ -285,11 +295,13 @@ namespace uvsr
         nvrhi::DeviceHandle m_Device;
         nvrhi::BufferHandle m_ConstantBuffer;
 
-        std::array<std::array<Pipeline, c_ConsumerVariantCount>,
-            ImplementedVisibilityEstimatorCount> m_Sampling;
-        std::array<std::array<Pipeline, 2>,
+        // Final dimension selects fixed/adaptive sparse sampling.
+        std::array<std::array<std::array<Pipeline, 2>,
+            c_ConsumerVariantCount>, ImplementedVisibilityEstimatorCount>
+            m_Sampling;
+        std::array<std::array<std::array<Pipeline, 2>, 2>,
             ImplementedVisibilityEstimatorCount> m_MultiBounceFirstSampling;
-        std::array<std::array<Pipeline, 2>,
+        std::array<std::array<std::array<Pipeline, 2>, 2>,
             ImplementedVisibilityEstimatorCount> m_IndirectBounceSampling;
         std::array<Pipeline, c_ConsumerVariantCount> m_Temporal;
         std::array<std::array<Pipeline, c_ConsumerVariantCount>, 2> m_Filter;
@@ -327,13 +339,17 @@ namespace uvsr
         nvrhi::TextureHandle m_DummyIndirectOutput;
         nvrhi::TextureHandle m_DummyFeedbackOutput;
 
-        std::array<std::array<std::array<nvrhi::BindingSetHandle, 2>,
-            c_ConsumerVariantCount>, ImplementedVisibilityEstimatorCount>
-            m_SamplingBindingSets;
-        std::array<std::array<std::array<nvrhi::BindingSetHandle, 2>, 2>,
+        // [estimator][consumer][fixed/adaptive][feedback parity]
+        std::array<std::array<std::array<std::array<
+            nvrhi::BindingSetHandle, 2>, 2>, c_ConsumerVariantCount>,
+            ImplementedVisibilityEstimatorCount> m_SamplingBindingSets;
+        // [estimator][AO variant][fixed/adaptive][feedback parity]
+        std::array<std::array<std::array<std::array<
+            nvrhi::BindingSetHandle, 2>, 2>, 2>,
             ImplementedVisibilityEstimatorCount> m_MultiBounceFirstBindingSets;
-        // [estimator][initialize/add][bounce rotation][feedback parity]
-        std::array<std::array<std::array<std::array<nvrhi::BindingSetHandle, 2>, 3>, 2>,
+        // [estimator][initialize/add][fixed/adaptive][bounce rotation][feedback parity]
+        std::array<std::array<std::array<std::array<std::array<
+            nvrhi::BindingSetHandle, 2>, 3>, 2>, 2>,
             ImplementedVisibilityEstimatorCount> m_IndirectBounceBindingSets;
         // [consumer][single/multiple-bounce source][history write parity]
         std::array<std::array<std::array<nvrhi::BindingSetHandle, 2>, 2>,
@@ -343,7 +359,8 @@ namespace uvsr
         std::array<std::array<std::array<nvrhi::BindingSetHandle, 4>,
             c_ConsumerVariantCount>, 2> m_FilterBindingSets;
         nvrhi::BindingSetHandle m_DepthHierarchyBindingSet;
-        std::array<nvrhi::BindingSetHandle, 2> m_CompositeBindingSets;
+        // Raw single, raw cumulative, and the two temporal ping-pong sources.
+        std::array<nvrhi::BindingSetHandle, 4> m_CompositeBindingSets;
 
         nvrhi::BufferHandle m_SamplingStatisticsBuffer;
         std::array<nvrhi::BufferHandle, c_TimerLatency>

@@ -54,9 +54,9 @@ struct ScreenSpaceVisibilityConstants
     uint historyValid;
 
     uint collectSamplingStatistics;
+    uint showIndirectDiffuseOnly;
     uint padding3;
     uint padding4;
-    uint padding5;
 };
 
 #endif // UVSR_SCREEN_SPACE_VISIBILITY_CB_H

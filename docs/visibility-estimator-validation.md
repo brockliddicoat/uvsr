@@ -131,7 +131,7 @@ inputs.
 
 ShaderMake compiles AO-only, GI-only, combined AO/GI, first-bounce metadata,
 higher-bounce reinjection, temporal reconstruction, and both spatial-filter
-permutations. On 2026-07-14, all 48 configured DXIL tasks compiled with DXC
+permutations. On 2026-07-14, all 69 configured DXIL tasks compiled with DXC
 1.9.2602, and the Release C++ renderer linked with MSVC 19.44.
 
 ## Runtime Validation Still Required

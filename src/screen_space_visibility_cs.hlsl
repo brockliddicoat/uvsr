@@ -26,6 +26,9 @@
 #ifndef ENABLE_BOUNCE_METADATA
 #define ENABLE_BOUNCE_METADATA 0
 #endif
+#ifndef ENABLE_ADAPTIVE_SPARSE_SAMPLING
+#define ENABLE_ADAPTIVE_SPARSE_SAMPLING 1
+#endif
 
 #define VisibilityEstimator_UniformProjectedAngle 0
 #define VisibilityEstimator_UniformSolidAngle 1
@@ -291,8 +294,9 @@ void WriteEmptyVisibilityOutput(
 #if ENABLE_GI
     u_IndirectDiffuse[pixel] = 0.0f;
 #endif
-    if (g_Visibility.adaptiveSamplingEnabled != 0u)
-        u_AdaptiveFeedback[pixel] = 0.0f;
+#if ENABLE_ADAPTIVE_SPARSE_SAMPLING
+    u_AdaptiveFeedback[pixel] = 0.0f;
+#endif
 #endif
 }
 
@@ -438,13 +442,17 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     }
 
     uint phase = g_Visibility.frameIndex;
+    uint minimumSampleCount = clamp(
+        g_Visibility.minimumSampleCount, 1u, 64u);
+    uint maximumSampleCount = clamp(
+        g_Visibility.maximumSampleCount, minimumSampleCount, 64u);
+#if ENABLE_ADAPTIVE_SPARSE_SAMPLING
     float edgeImportance = 0.0f;
     float disocclusionImportance = 0.0f;
     float historyImportance = 0.0f;
     float neighborContributionImportance = 0.0f;
     float reprojectedContributionSignal = 0.0f;
     bool hasReprojectedFeedback = false;
-    if (g_Visibility.adaptiveSamplingEnabled != 0u)
     {
         uint2 fullMaximum = uint2(g_Visibility.fullResolution) - 1u;
         static const int2 edgeOffsets[4] = {
@@ -546,13 +554,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         max(g_Visibility.adaptiveStrength, 0.0f));
     // Preserve the adaptive-sampling paper's one-eighth uniform component so
     // flat regions never become deterministic starvation zones.
-    float samplingProbability = g_Visibility.adaptiveSamplingEnabled != 0u
-        ? 0.125f + 0.875f * errorImportance
-        : 0.0f;
-    uint minimumSampleCount = clamp(
-        g_Visibility.minimumSampleCount, 1u, 64u);
-    uint maximumSampleCount = clamp(
-        g_Visibility.maximumSampleCount, minimumSampleCount, 64u);
+    float samplingProbability = 0.125f + 0.875f * errorImportance;
     float desiredSampleCount = lerp(
         float(minimumSampleCount), float(maximumSampleCount),
         samplingProbability);
@@ -572,14 +574,25 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 frac(desiredSliceCount) ? 1u : 0u),
         min(maximumSliceCount, selectedSampleCount));
     activeSliceCount = max(activeSliceCount, 1u);
+#else
+    // Fixed-work fallback: this specialization contains no adaptive
+    // importance, reprojection, feedback, or stochastic budget instructions.
+    uint selectedSampleCount = maximumSampleCount;
+    uint activeSliceCount = 1u;
+#endif
 
 #if !ENABLE_BOUNCE_REINJECTION
     if (g_Visibility.collectSamplingStatistics != 0u)
     {
         uint waveSamples = WaveActiveSum(selectedSampleCount);
         uint waveSlices = WaveActiveSum(activeSliceCount);
-        uint waveRefined = WaveActiveCountBits(
-            selectedSampleCount > minimumSampleCount || activeSliceCount > 1u);
+#if ENABLE_ADAPTIVE_SPARSE_SAMPLING
+        bool refinedPixel = selectedSampleCount > minimumSampleCount ||
+            activeSliceCount > 1u;
+#else
+        bool refinedPixel = false;
+#endif
+        uint waveRefined = WaveActiveCountBits(refinedPixel);
         uint wavePixels = WaveActiveCountBits(true);
         if (WaveIsFirstLane())
         {
@@ -1015,8 +1028,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         min(indirectDiffuse, 65504.0f), receiverFrontierMetadataValue);
 #endif
 #endif
-#if !ENABLE_BOUNCE_REINJECTION
-    if (g_Visibility.adaptiveSamplingEnabled != 0u)
+#if ENABLE_ADAPTIVE_SPARSE_SAMPLING && !ENABLE_BOUNCE_REINJECTION
     {
         float adaptiveSignal = dot(indirectDiffuse,
             float3(0.2126f, 0.7152f, 0.0722f));

@@ -17,14 +17,20 @@ is also available from the scene picker.
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
   linear resolution. Full resolution can composite raw output; reconstruction
   adds SSRT3-style temporal accumulation and either compact or Gaussian joint-
-  bilateral filtering. Reduced modes always use the selected joint filter to
-  upsample to full resolution.
+  bilateral filtering. Spatial filtering can be disabled independently;
+  reduced modes retain only a minimal depth/normal-guided 2x2 upsampler because
+  raw grid expansion produces coherent GI streaks. Full resolution incurs no
+  spatial dispatch or filter target while filtering is disabled.
 - Every eligible pixel receives one base slice and a configurable minimum depth-
   tap budget. Depth/normal edges, disocclusions, unstable history, low
   confidence, and reprojected neighboring GI contribution stochastically raise
   the budget toward **Maximum Samples / Pixel** and **Maximum Refinement
   Slices**. The sample profiler is opt-in so production traversal has no atomic
   counter traffic.
+- **Adaptive Sparse Sampling** can select a separate fixed-work specialization:
+  one slice and **Fixed Samples / Pixel** for every eligible pixel, with the
+  adaptive neighborhood, reprojection, feedback, and stochastic budget code
+  compiled out. Its feedback textures and motion dependency are also absent.
 - The **Estimator** control exposes **Uniform Projected Angle**, **Uniform Solid
   Angle**, and **Cosine-Weighted Solid Angle**. Uniform Projected Angle remains
   the default. The cosine path is fully compiled and uses the complete joint-cosine
@@ -63,6 +69,9 @@ is also available from the scene picker.
   scales how much light emissive materials contribute to GI without changing
   the visible emissive surfaces themselves. Raising it expands the visibly
   illuminated area up to the screen-space sampling radius.
+- **Show GI-Only Lighting** is the sole retained visibility diagnostic. It
+  displays the material-applied screen-space diffuse GI contribution without
+  direct light, sky fallback, fallback specular, or AO-only darkening.
 - **Bounces** in **Indirect Diffuse GI** selects one through four finite diffuse
   bounces. One is the default and keeps the original compact shader path. Later
   bounces transport only the newest light frontier and accumulate it separately;

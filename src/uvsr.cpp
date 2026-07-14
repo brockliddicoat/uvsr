@@ -2207,7 +2207,7 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Trace AO and GI at full, half, or quarter linear resolution. Reduced modes always use the selected joint bilateral filter to return to full resolution.");
+                "Trace AO and GI at full, half, or quarter linear resolution. Reduced output always uses a minimal depth/normal-guided 2x2 upsampler; enabling spatial filtering selects the configured reconstruction filter.");
 
             if (const ScreenSpaceVisibilityTimings* timings =
                 m_app->GetScreenSpaceVisibilityTimings())
@@ -2281,49 +2281,98 @@ protected:
                 ImGui::SetItemTooltip(
                     "Set one conservative finite occluder thickness in UVSR world units. It is intentionally not distance-scaled, so profiling does not mix geometry assumptions with sampling changes.");
 
-                int minimumSamples = int(std::clamp(
-                    sampling.minimumSampleCount, 1u, 64u));
-                if (ImGui::SliderInt(
-                        "Minimum Samples / Pixel", &minimumSamples, 1, 64))
+                samplingChanged |= ImGui::Checkbox(
+                    "Adaptive Sparse Sampling",
+                    &sampling.adaptiveSparseSamplingEnabled);
+                ImGui::SetItemTooltip(
+                    "Stochastically assign extra taps and slices from local error and reprojected contribution. Disabling this selects a dedicated fixed-work shader: one slice at the fixed tap count, no adaptive neighborhood analysis, feedback reads/writes, or motion-vector dependency. The sample scheduler remains independent and controls where those fixed taps land.");
+
+                if (sampling.adaptiveSparseSamplingEnabled)
                 {
-                    sampling.minimumSampleCount = uint32_t(minimumSamples);
-                    sampling.maximumSampleCount = std::max(
+                    int minimumSamples = int(std::clamp(
+                        sampling.minimumSampleCount, 1u, 64u));
+                    if (ImGui::SliderInt(
+                            "Minimum Samples / Pixel",
+                            &minimumSamples, 1, 64))
+                    {
+                        sampling.minimumSampleCount =
+                            uint32_t(minimumSamples);
+                        sampling.maximumSampleCount = std::max(
+                            sampling.maximumSampleCount,
+                            sampling.minimumSampleCount);
+                        samplingChanged = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Guaranteed first-bounce depth taps for every eligible pixel. These form one inexpensive base slice and are divided between its two radial directions.");
+
+                    int maximumSamples = int(std::clamp(
                         sampling.maximumSampleCount,
-                        sampling.minimumSampleCount);
-                    samplingChanged = true;
-                }
-                ImGui::SetItemTooltip(
-                    "Guaranteed first-bounce depth taps for every eligible pixel. These form one inexpensive base slice and are divided between its two radial directions.");
+                        sampling.minimumSampleCount, 64u));
+                    if (ImGui::SliderInt(
+                            "Maximum Samples / Pixel",
+                            &maximumSamples,
+                            int(sampling.minimumSampleCount),
+                            64))
+                    {
+                        sampling.maximumSampleCount =
+                            uint32_t(maximumSamples);
+                        samplingChanged = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Upper first-bounce budget. A stochastic error estimate selects a value between Minimum and Maximum; later GI bounces halve their limits toward an 8-sample floor without raising a first-bounce limit already below 8.");
 
-                int maximumSamples = int(std::clamp(
-                    sampling.maximumSampleCount,
-                    sampling.minimumSampleCount, 64u));
-                if (ImGui::SliderInt(
-                        "Maximum Samples / Pixel",
-                        &maximumSamples,
-                        int(sampling.minimumSampleCount),
-                        64))
-                {
-                    sampling.maximumSampleCount = uint32_t(maximumSamples);
-                    samplingChanged = true;
-                }
-                ImGui::SetItemTooltip(
-                    "Upper first-bounce budget. A stochastic error estimate selects a value between Minimum and Maximum; later GI bounces halve their limits toward an 8-sample floor without raising a first-bounce limit already below 8.");
+                    int maximumSlices = int(std::clamp(
+                        sampling.maximumRefinementSlices, 1u, 4u));
+                    if (ImGui::SliderInt(
+                            "Maximum Refinement Slices",
+                            &maximumSlices,
+                            1,
+                            4))
+                    {
+                        sampling.maximumRefinementSlices =
+                            uint32_t(maximumSlices);
+                        samplingChanged = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Every eligible pixel receives one base slice. Thin edges, disocclusions, unstable history, and low-confidence or nearby contributing GI regions stochastically receive up to this many total slices.");
 
-                int maximumSlices = int(std::clamp(
-                    sampling.maximumRefinementSlices, 1u, 4u));
-                if (ImGui::SliderInt(
-                        "Maximum Refinement Slices",
-                        &maximumSlices,
-                        1,
-                        4))
-                {
-                    sampling.maximumRefinementSlices =
-                        uint32_t(maximumSlices);
-                    samplingChanged = true;
+                    const bool adaptiveControlsActive =
+                        sampling.maximumSampleCount >
+                            sampling.minimumSampleCount ||
+                        sampling.maximumRefinementSlices > 1u;
+                    if (!adaptiveControlsActive)
+                        ImGui::BeginDisabled();
+                    samplingChanged |= ImGui::SliderFloat(
+                        "Adaptive Error Strength",
+                        &sampling.adaptiveStrength,
+                        0.0f,
+                        2.0f,
+                        "%.2f");
+                    ImGui::SetItemTooltip(
+                        "Scale stochastic refinement probability from depth/normal edges, disocclusions, unstable or low-confidence history, and reprojected neighboring GI contribution. A one-eighth uniform component prevents starvation while this value is above zero.");
+                    if (!adaptiveControlsActive)
+                        ImGui::EndDisabled();
                 }
-                ImGui::SetItemTooltip(
-                    "Every eligible pixel receives one base slice. Thin edges, disocclusions, unstable history, and low-confidence or nearby contributing GI regions stochastically receive up to this many total slices.");
+                else
+                {
+                    int fixedSamples = int(std::clamp(
+                        sampling.maximumSampleCount, 1u, 64u));
+                    if (ImGui::SliderInt(
+                            "Fixed Samples / Pixel",
+                            &fixedSamples,
+                            1,
+                            64))
+                    {
+                        sampling.maximumSampleCount =
+                            uint32_t(fixedSamples);
+                        sampling.minimumSampleCount = std::min(
+                            sampling.minimumSampleCount,
+                            sampling.maximumSampleCount);
+                        samplingChanged = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        "First-bounce taps traced by every eligible pixel in the fixed-work specialization. All taps use one slice; later GI bounces halve this count toward an 8-sample floor without raising a count already below 8.");
+                }
 
                 samplingChanged |= ImGui::SliderFloat(
                     "Radial Distribution Exponent",
@@ -2333,22 +2382,6 @@ protected:
                     "%.2f");
                 ImGui::SetItemTooltip(
                     "Transform each nested radial stratum by x^exponent. The default x^2 concentrates taps near the receiver while increasing either sample limit only appends samples instead of moving the existing prefix.");
-
-                const bool adaptiveControlsActive =
-                    sampling.maximumSampleCount > sampling.minimumSampleCount ||
-                    sampling.maximumRefinementSlices > 1u;
-                if (!adaptiveControlsActive)
-                    ImGui::BeginDisabled();
-                samplingChanged |= ImGui::SliderFloat(
-                    "Adaptive Error Strength",
-                    &sampling.adaptiveStrength,
-                    0.0f,
-                    2.0f,
-                    "%.2f");
-                ImGui::SetItemTooltip(
-                    "Scale stochastic refinement probability from depth/normal edges, disocclusions, unstable or low-confidence history, and reprojected neighboring GI contribution. A one-eighth uniform component prevents starvation while this value is above zero; zero selects only the minimum/base slice and releases adaptive feedback when temporal reconstruction is also off.");
-                if (!adaptiveControlsActive)
-                    ImGui::EndDisabled();
 
                 static const char* schedulerLabels[] = {
                     "Hash Baseline", "Spatiotemporal Blue Noise"
@@ -2461,6 +2494,11 @@ protected:
                 ImGui::SliderFloat("Intensity##IndirectDiffuse", &gi.intensity, 0.0f, 10.0f, "%.2f");
                 ImGui::SetItemTooltip(
                     "Scale material-applied screen-space indirect diffuse. Zero makes GI an inactive consumer, removing its traversal outputs and full-resolution source-radiance target; AO can continue independently.");
+                ImGui::Checkbox(
+                    "Show GI-Only Lighting",
+                    &visibility.showIndirectDiffuseOnly);
+                ImGui::SetItemTooltip(
+                    "Display only the final screen-space diffuse GI contribution after receiver diffuse reflectance, 1/pi BRDF, material AO, and GI intensity. Direct light, sky fallback, fallback specular, and AO-only darkening are excluded.");
                 ImGui::Checkbox("Include Emissive Sources", &gi.includeEmissive);
                 ImGui::SetItemTooltip(
                     "Allow visible emissive G-buffer surfaces to illuminate receivers.");
@@ -2491,7 +2529,7 @@ protected:
                     "Reconstruction Enabled",
                     &reconstruction.enabled);
                 ImGui::SetItemTooltip(
-                    "At full resolution, disable this to composite raw visibility directly. Half and quarter resolution still run the spatial filter because they require joint upsampling.");
+                    "Master switch for temporal and optional spatial reconstruction. When disabled, full resolution composites raw visibility; half/quarter resolution retains only the minimal guide-aware upsampler required to map between grids.");
 
                 if (!reconstruction.enabled)
                     ImGui::BeginDisabled();
@@ -2512,12 +2550,14 @@ protected:
                     "Current-frame weight after valid reprojection. SSRT3's reference response is 0.35; lower values are steadier but retain history longer.");
                 if (!reconstruction.temporalEnabled)
                     ImGui::EndDisabled();
-                if (!reconstruction.enabled)
-                    ImGui::EndDisabled();
 
-                const bool spatialFilterActive = reconstruction.enabled ||
-                    visibility.resolution != VisibilityResolution::Full;
-                if (!spatialFilterActive)
+                ImGui::Checkbox(
+                    "Spatial Filtering",
+                    &reconstruction.spatialEnabled);
+                ImGui::SetItemTooltip(
+                    "Run the selected depth/normal-guided spatial denoiser. At full resolution, disabling it removes the filter dispatch and target. At half/quarter resolution, only the minimal 2x2 guide-aware upsampler remains so isolated GI samples cannot be replicated into coherent streaks by raw grid expansion.");
+
+                if (!reconstruction.spatialEnabled)
                     ImGui::BeginDisabled();
                 static const char* filterLabels[] = {
                     "Joint Bilateral",
@@ -2556,7 +2596,9 @@ protected:
                     ImGui::SetItemTooltip(
                         "Approximate full-resolution pixel radius. The Gaussian path converts it to a receiver-depth tangent-plane radius, projects disk taps back to the screen, and uses 16 taps at full resolution or a parity-varied four-tap subset when reduced.");
                 }
-                if (!spatialFilterActive)
+                if (!reconstruction.spatialEnabled)
+                    ImGui::EndDisabled();
+                if (!reconstruction.enabled)
                     ImGui::EndDisabled();
                 ImGui::TreePop();
             }

@@ -86,6 +86,11 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float3 finalComposite = t_BaseLighting[pixel].rgb +
         approximateFallbackIndirect + approximateFallbackSpecular +
         screenSpaceIndirect;
+    if (g_Visibility.showIndirectDiffuseOnly != 0u &&
+        g_Visibility.enableIndirectDiffuse != 0u)
+    {
+        finalComposite = screenSpaceIndirect;
+    }
     if (any(!isfinite(finalComposite)))
         finalComposite = 0.0f;
     finalComposite = max(finalComposite, 0.0f);
