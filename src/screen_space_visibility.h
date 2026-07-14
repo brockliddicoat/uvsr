@@ -59,7 +59,7 @@ namespace uvsr
     enum class VisibilitySampleScheduler : uint32_t
     {
         HashBaseline,
-        SpatiotemporalBlueNoise
+        DecorrelatedBlueNoise
     };
 
     enum class VisibilitySpatialFilter : uint32_t
@@ -85,7 +85,7 @@ namespace uvsr
         float stepDistributionExponent = 2.0f;
         float adaptiveStrength = 1.0f;
         VisibilitySampleScheduler scheduler =
-            VisibilitySampleScheduler::SpatiotemporalBlueNoise;
+            VisibilitySampleScheduler::DecorrelatedBlueNoise;
     };
 
     struct AmbientOcclusionSettings

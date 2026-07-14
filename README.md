@@ -21,11 +21,11 @@ is also available from the scene picker.
   reduced modes retain only a minimal depth/normal-guided 2x2 upsampler because
   raw grid expansion produces coherent GI streaks. Full resolution incurs no
   spatial dispatch or filter target while filtering is disabled.
-- Every eligible pixel receives one base slice and a configurable minimum depth-
-  tap budget. Depth/normal edges, disocclusions, unstable history, low
+- Every eligible pixel receives one stochastic slice and a configurable minimum
+  depth-tap budget. Depth/normal edges, disocclusions, unstable history, low
   confidence, and reprojected neighboring GI contribution stochastically raise
-  the radial budget toward **Maximum Samples / Pixel**. Refinement remains
-  stochastic, but every pixel uses exactly one slice.
+  the radial budget toward **Maximum Samples / Pixel**. Neighbor-driven work
+  cannot recursively become a new propagation seed.
 - **Adaptive Sparse Sampling** can select a separate fixed-work specialization:
   one slice and **Fixed Samples / Pixel** for every eligible pixel, with the
   adaptive neighborhood, reprojection, feedback, and stochastic budget code
@@ -36,9 +36,9 @@ is also available from the scene picker.
   CDF, projected slice mass, `pi` GI normalization, and no duplicate receiver-
   cosine factor.
 - The **Sample Scheduler** compares an independent hash baseline with a
-  first-party progressive 64x64 spatiotemporal-blue-noise rank field. Both use
-  nested radial and slice prefixes, so increasing a limit appends samples rather
-  than moving lower-budget samples.
+  first-party set of eight independent 64x64 void-and-cluster rank layers.
+  Both toroidally rotate the complete nested radial prefix, so fixed-work and
+  adaptive modes do not reuse global radius shells as the budget changes.
 - The renderer selector provides **Deferred**, **Forward**, and **Forward
   Tonemapperless** modes. The tonemapperless mode renders with the forward path
   and sends its scene-linear HDR result directly to the sRGB display target,
@@ -129,7 +129,7 @@ entries are not promises that the work will merge.
   speedup is claimed yet. The current phase retires failed NRA-RTAA v1 and its
   debug-only surface after preserving a postmortem, completes the joint-cosine
   CDF estimator, and replaces fixed per-pixel work with stochastic confidence-
-  driven sample and refinement budgets. It also adds a documented
+  driven radial sample budgets. It also adds a documented
   spatiotemporal-blue-noise schedule, conditional SSRT3-style visibility
   reconstruction, and full/half/quarter-resolution AO/GI paths with joint
   bilateral upsampling. This owns visibility traversal/output resources,

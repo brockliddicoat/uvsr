@@ -130,11 +130,14 @@ The selected total is divided between the two near-to-far radial directions.
 Later diffuse bounces halve both limits toward an eight-sample floor, without
 raising a first-bounce limit that was already below eight.
 
-Each radial direction owns a fixed 32-stratum bit-reversal sequence. Increasing
-a sample limit appends strata without moving the lower-budget prefix. The
-selected nested set is consumed in ascending radial-stratum order. Nesting
-therefore controls set membership without letting a farther GI sample claim a
-sector before a nearer selected source on the same radial direction. The
+Each radial direction owns a 32-stratum bit-reversal sequence. The complete
+selected prefix receives a stochastic toroidal stratum rotation plus an
+independent within-stratum offset every pixel and frame. Increasing a sample
+limit with the same phase appends strata without moving its lower-budget prefix,
+while changing phase prevents the same global radius shells from accumulating
+into rings. The rotated set is consumed in ascending physical-stratum order.
+Nesting therefore controls set membership without letting a farther GI sample
+claim a sector before a nearer selected source on the same radial direction. The
 **Radial Distribution Exponent** transforms each normalized stratum by
 `x^exponent`; the default `x^2` concentrates depth taps near the receiver. This
 means:
@@ -170,12 +173,18 @@ no network or learned density. It builds a local error importance from:
 
 - four-neighbor depth and normal discontinuity;
 - invalid motion or reprojected depth mismatch;
-- reprojected confidence and instability; and
-- the current pixel plus four neighbors' reprojected AO/GI contribution signal.
+- reprojected instability; and
+- the current pixel plus one stochastically selected, depth-compatible
+  eight-neighbor contribution seed.
 
 The last term makes pixels around previously contributing GI samples
-stochastically more likely to receive extra work. The sample budget uses a
-one-eighth uniform component plus seven-eighths adaptive importance so flat
+stochastically more likely to receive extra work without a fixed cross stencil.
+A contribution discovered only because of a neighboring seed is tagged as
+ineligible to seed another outward step; center or independently discovered
+signals remain persistent. This prevents the old one-texel-per-frame positive-
+feedback dilation that appeared as expanding crosses and rings. Stored
+instability decays when no current evidence sustains it. The sample budget uses
+a one-eighth uniform component plus seven-eighths adaptive importance so flat
 regions cannot become permanent starvation zones. Fractional desired sample
 counts use stochastic rounding. Importance changes only radial tap count; every
 pixel retains one stochastic slice.
@@ -190,20 +199,23 @@ maximum/fixed count and removes all adaptive instructions and resources.
 
 ## Spatiotemporal Blue-Noise Scheduler
 
-**Hash Baseline** independently hashes stochastic decisions. **Spatiotemporal
-Blue Noise** uses a first-party 64x64 progressive toroidal rank texture,
-dimension-dependent toroidal offsets, and a golden-ratio temporal phase. It
-chooses slice rotation, CDF sector phase, radial within-stratum position, odd
-sample direction, and stochastic budget rounding.
+**Hash Baseline** independently hashes stochastic decisions. **Decorrelated
+Blue Noise** uses eight independently generated 64x64 toroidal void-and-cluster
+rank layers. Slice rotation, CDF sector phase, budget rounding, odd-sample side,
+both radial directions, and adaptive-neighbor choice receive separate semantic
+layers rather than translated copies of one scalar texture. Dimension-specific
+toroidal temporal steps preserve each layer's spatial spectrum, and hashed
+cycle offsets prevent exact 64-frame repetition.
 
 The design follows the rejection-safe and toroidal-sequence guidance in
 NVIDIA's
 [Rendering in Real Time With Spatiotemporal Blue Noise Textures, Part 2](https://developer.nvidia.com/blog/rendering-in-real-time-with-spatiotemporal-blue-noise-textures-part-2/).
 It also follows the filter-aware motivation of
 [Importance-Sampled Filter-Adapted Spatiotemporal Sampling](https://jcgt.org/published/0014/01/08/paper.pdf),
-but it does not claim to reproduce that paper's offline FAST texture optimizer.
-UVSR's rank texture is generated procedurally and imports no NVIDIA texture
-asset.
+but it does not claim to reproduce that paper's offline FAST texture optimizer
+or NVIDIA's precomputed 3D STBN volumes. UVSR's rank layers are generated
+procedurally and import no external texture asset. They consume exactly 64 KiB
+of logical `R16_UNORM` scheduler storage.
 
 The scheduler changes where and when samples appear; it does not change the
 nested radial distribution or the requested budget. Profile the hash and blue-
@@ -279,8 +291,8 @@ The Visibility HUD separates:
 
 - **Outputs:** exact logical AO, GI, filtered output, and active bounce-frontier
   texel payload.
-- **Working:** exact adaptive feedback, temporal depth/normal/AO/GI history,
-  and depth-hierarchy texel payload.
+- **Working:** exact blue-noise scheduler, adaptive feedback, temporal
+  depth/normal/AO/GI history, and depth-hierarchy texel payload.
 - **Mask Cache:** exact persistent directional-mask storage. It is zero in the
   current register-only architecture.
 - **Avoided:** exact optional AO/GI resources not allocated because their

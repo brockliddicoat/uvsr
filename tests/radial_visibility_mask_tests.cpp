@@ -70,6 +70,14 @@ namespace
         return count;
     }
 
+    uint32_t RotateLeft(uint32_t value, uint32_t shift)
+    {
+        shift &= 31u;
+        return shift == 0u
+            ? value
+            : (value << shift) | (value >> (32u - shift));
+    }
+
     void TestProgressiveRadialPrefixes()
     {
         // Mirrored by ProgressiveRadialPrefixMasks in the visibility shader.
@@ -124,6 +132,24 @@ namespace
             RequireEqual(remaining, 0u,
                 "Near-to-far traversal consumes the selected prefix");
             previousMask = prefixMask;
+        }
+
+        for (uint32_t shift = 0u; shift < 32u; ++shift)
+        {
+            uint32_t previousRotatedMask = 0u;
+            for (uint32_t budget = 0u; budget <= 32u; ++budget)
+            {
+                const uint32_t rotatedMask = RotateLeft(
+                    expectedMasks[budget], shift);
+                RequireEqual(CountBits(rotatedMask), budget,
+                    "Rotated radial prefix retains its sample count");
+                Require((previousRotatedMask & ~rotatedMask) == 0u,
+                    "Rotated radial budgets remain nested");
+                previousRotatedMask = rotatedMask;
+            }
+            RequireEqual(RotateLeft(expectedMasks[1], shift),
+                uint32_t{ 1 } << shift,
+                "First radial sample visits every stratum across rotations");
         }
     }
 

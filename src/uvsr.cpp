@@ -2231,7 +2231,7 @@ protected:
                     double(timings->workingTextureBytes) / BytesPerMiB,
                     double(timings->maskCacheBytes) / BytesPerMiB);
                 ImGui::SetItemTooltip(
-                    "Exact logical texel payload: AO/GI and bounce outputs; adaptive, temporal, filter, and hierarchy working data; and any persistent directional-mask cache. API alignment and residency are excluded.");
+                    "Exact logical texel payload: AO/GI and bounce outputs; scheduler, adaptive, temporal, filter, and hierarchy working data; and any persistent directional-mask cache. API alignment and residency are excluded.");
                 ImGui::Text(
                     "Avoided %.1f | Shared %.1f MiB",
                     double(timings->avoidedTextureBytes) / BytesPerMiB,
@@ -2333,7 +2333,7 @@ protected:
                         2.0f,
                         "%.2f");
                     ImGui::SetItemTooltip(
-                        "Scale stochastic refinement probability from depth/normal edges, disocclusions, unstable or low-confidence history, and reprojected neighboring GI contribution. A one-eighth uniform component prevents starvation while this value is above zero.");
+                        "Scale stochastic refinement probability from depth/normal edges, disocclusions, decaying instability, and depth-compatible contribution seeds. One randomly selected neighbor can raise work but a neighbor-driven discovery cannot recursively seed an outward ring. A one-eighth uniform component prevents starvation while this value is above zero.");
                     if (!adaptiveControlsActive)
                         ImGui::EndDisabled();
                 }
@@ -2365,10 +2365,10 @@ protected:
                     4.0f,
                     "%.2f");
                 ImGui::SetItemTooltip(
-                    "Transform each nested radial stratum by x^exponent. The default x^2 concentrates taps near the receiver while increasing either sample limit only appends samples instead of moving the existing prefix.");
+                    "Transform each nested radial stratum by x^exponent. The default x^2 concentrates taps near the receiver. The complete prefix is toroidally rotated per pixel and frame to prevent fixed radius shells, while increasing a limit at the same phase only appends samples.");
 
                 static const char* schedulerLabels[] = {
-                    "Hash Baseline", "Spatiotemporal Blue Noise"
+                    "Hash Baseline", "Decorrelated Blue Noise"
                 };
                 ImGui::SetNextItemWidth(settingsControlWidth);
                 if (ImGui::BeginCombo(
@@ -2394,7 +2394,7 @@ protected:
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip(
-                    "Hash Baseline independently hashes the single-slice rotation, radial strata, and stochastic sample-count rounding. Spatiotemporal Blue Noise uses a progressive 64x64 toroidal rank field plus maximally separated temporal phases; both keep the same nested radial distribution and sample budget.");
+                    "Hash Baseline independently hashes each decision. Decorrelated Blue Noise gives slice, sector, budget, odd-side, radial, and feedback choices separate 64x64 void-and-cluster rank layers with toroidal temporal traversal. Both rotate the full nested radial prefix and keep the same sample budget.");
 
                 if (samplingChanged)
                     visibility.quality = ScreenSpaceVisibilityQuality::Custom;

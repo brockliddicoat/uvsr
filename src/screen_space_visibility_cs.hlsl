@@ -48,7 +48,7 @@ Texture2D<float4> t_GBufferDiffuse : register(t4);
 Texture2D<float4> t_Emissive : register(t5);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t6);
 Texture2D<float4> t_PreviousFeedback : register(t7);
-Texture2D<float> t_BlueNoise : register(t8);
+Texture2DArray<float> t_BlueNoise : register(t8);
 Texture2D<float4> t_Motion : register(t9);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_BounceFrontier : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
@@ -56,7 +56,7 @@ VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 Texture2D<float4> t_SourceRadiance : register(t2);
 Texture2D<float> t_DepthHierarchy : register(t3);
 Texture2D<float4> t_PreviousFeedback : register(t4);
-Texture2D<float> t_BlueNoise : register(t5);
+Texture2DArray<float> t_BlueNoise : register(t5);
 Texture2D<float4> t_Motion : register(t6);
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
@@ -80,6 +80,21 @@ static const uint ProgressiveRadialPrefixMasks[33] = {
     0x77777777u, 0x7777777fu, 0x777f777fu, 0x777f7f7fu,
     0x7f7f7f7fu, 0x7f7f7fffu, 0x7fff7fffu, 0x7fffffffu,
     0xffffffffu
+};
+
+static const uint SchedulerDimension_SliceRotation = 0u;
+static const uint SchedulerDimension_SectorPhase = 1u;
+static const uint SchedulerDimension_SampleBudget = 2u;
+static const uint SchedulerDimension_OddSampleSide = 3u;
+static const uint SchedulerDimension_RadialNegative = 4u;
+static const uint SchedulerDimension_RadialPositive = 5u;
+static const uint SchedulerDimension_FeedbackNeighbor = 6u;
+
+static const uint2 BlueNoiseTemporalSteps[8] = {
+    uint2(13u, 29u), uint2(31u, 11u),
+    uint2(17u, 27u), uint2(23u, 19u),
+    uint2(7u, 25u), uint2(29u, 15u),
+    uint2(21u, 31u), uint2(11u, 23u)
 };
 
 uint VisibilityHash(uint value)
@@ -113,17 +128,20 @@ float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
     if (g_Visibility.sampleScheduler == 0u)
         return VisibilityRandom(samplingPixel, dimension, phase);
 
-    // Procedural progressive blue-noise ranks provide the spatial ordering.
-    // Toroidal integer offsets preserve that ordering after arbitrary motion
-    // or rejection, while the golden-ratio phase gives each pixel a maximally
-    // separated temporal sequence.
-    uint2 offset = uint2(
-        phase * 13u + dimension * 17u,
-        phase * 29u + dimension * 7u) & 63u;
-    uint2 coordinate = (samplingPixel + offset) & 63u;
-    float rank = t_BlueNoise.Load(int3(coordinate, 0));
-    return frac(rank + float(phase) * 0.61803398875f +
-        float(dimension) * 0.38196601125f);
+    // Each semantic random dimension owns an independently optimized rank
+    // layer. Moving the layer toroidally preserves its spatial spectrum;
+    // changing the cycle offset prevents an exact 64-frame repetition.
+    uint layer = dimension & 7u;
+    uint frameInCycle = phase & 63u;
+    uint cycle = phase >> 6u;
+    uint cycleHashX = VisibilityHash(
+        cycle ^ (dimension * 0x9e3779b9u) ^ 0x68bc21ebu);
+    uint cycleHashY = VisibilityHash(
+        cycle ^ (dimension * 0x85ebca6bu) ^ 0x02e5be93u);
+    uint2 cycleOffset = uint2(cycleHashX, cycleHashY) & 63u;
+    uint2 coordinate = (samplingPixel + cycleOffset +
+        BlueNoiseTemporalSteps[layer] * frameInCycle) & 63u;
+    return t_BlueNoise.Load(int4(coordinate, layer, 0));
 }
 
 uint2 SamplingToFullPixel(uint2 samplingPixel)
@@ -143,6 +161,14 @@ uint2 FullToSamplingPixel(uint2 fullPixel)
 float ProgressiveRadialSample(uint radialStratum, float rotation)
 {
     return (float(radialStratum) + rotation) * (1.0f / 32.0f);
+}
+
+uint RotateRadialPrefix(uint mask, uint shift)
+{
+    shift &= 31u;
+    return shift == 0u
+        ? mask
+        : (mask << shift) | (mask >> (32u - shift));
 }
 
 bool IsFiniteFloat3(float3 value)
@@ -449,9 +475,10 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     float edgeImportance = 0.0f;
     float disocclusionImportance = 0.0f;
     float historyImportance = 0.0f;
-    float neighborContributionImportance = 0.0f;
+    float centerContributionSeed = 0.0f;
+    float neighboringContributionSeed = 0.0f;
     float reprojectedContributionSignal = 0.0f;
-    bool hasReprojectedFeedback = false;
+    bool hasMatchingFeedback = false;
     {
         uint2 fullMaximum = uint2(g_Visibility.fullResolution) - 1u;
         static const int2 edgeOffsets[4] = {
@@ -497,41 +524,54 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     FullToSamplingPixel(previousFullPixel);
                 float4 feedback = t_PreviousFeedback[previousSamplingPixel];
                 float expectedPreviousDepth = receiverDepth + motion.z;
-                hasReprojectedFeedback = all(isfinite(feedback)) &&
+                bool finiteFeedback = all(isfinite(feedback)) &&
                     isfinite(expectedPreviousDepth);
-                if (hasReprojectedFeedback)
+                if (finiteFeedback)
                 {
                     float depthError = abs(feedback.a - expectedPreviousDepth) /
                         max(max(abs(feedback.a),
                             abs(expectedPreviousDepth)), 1e-4f);
                     disocclusionImportance = saturate(depthError * 32.0f);
-                    historyImportance = max(
-                        1.0f - saturate(feedback.r),
-                        saturate(feedback.g));
-                    reprojectedContributionSignal = saturate(feedback.b);
+                    float feedbackDepthSimilarity =
+                        1.0f - disocclusionImportance;
+                    hasMatchingFeedback = feedbackDepthSimilarity > 0.0f;
+                    historyImportance = saturate(feedback.r) *
+                        feedbackDepthSimilarity;
+                    reprojectedContributionSignal = saturate(feedback.g);
+                    centerContributionSeed = saturate(feedback.b) *
+                        feedbackDepthSimilarity;
 
-                    uint2 samplingMaximum =
-                        uint2(g_Visibility.samplingResolution) - 1u;
-                    static const int2 feedbackOffsets[5] = {
-                        int2(0, 0), int2(-1, 0), int2(1, 0),
-                        int2(0, -1), int2(0, 1)
-                    };
-                    [unroll]
-                    for (uint feedbackIndex = 0u;
-                        feedbackIndex < 5u;
-                        ++feedbackIndex)
+                    if (hasMatchingFeedback)
                     {
+                        uint2 samplingMaximum =
+                            uint2(g_Visibility.samplingResolution) - 1u;
+                        static const int2 feedbackOffsets[8] = {
+                            int2(-1, -1), int2(0, -1), int2(1, -1),
+                            int2(-1, 0), int2(1, 0),
+                            int2(-1, 1), int2(0, 1), int2(1, 1)
+                        };
+                        uint feedbackIndex = min(uint(SchedulerRandom(
+                            dispatchPixel,
+                            SchedulerDimension_FeedbackNeighbor,
+                            phase) * 8.0f), 7u);
                         uint2 feedbackPixel = uint2(clamp(
                             int2(previousSamplingPixel) +
                                 feedbackOffsets[feedbackIndex],
                             int2(0, 0), int2(samplingMaximum)));
-                        float neighborSignal =
-                            t_PreviousFeedback[feedbackPixel].b;
-                        if (isfinite(neighborSignal))
+                        float4 neighborFeedback =
+                            t_PreviousFeedback[feedbackPixel];
+                        if (all(isfinite(neighborFeedback)))
                         {
-                            neighborContributionImportance = max(
-                                neighborContributionImportance,
-                                saturate(neighborSignal));
+                            float neighborDepthError = abs(
+                                neighborFeedback.a - feedback.a) /
+                                max(max(abs(neighborFeedback.a),
+                                    abs(feedback.a)), 1e-4f);
+                            float neighborDepthSimilarity = saturate(
+                                1.0f - neighborDepthError * 32.0f);
+                            neighboringContributionSeed =
+                                saturate(neighborFeedback.b) *
+                                feedbackDepthSimilarity *
+                                neighborDepthSimilarity;
                         }
                     }
                 }
@@ -547,9 +587,12 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         }
     }
 
+    float independentImportance = max(
+        max(edgeImportance, disocclusionImportance), historyImportance);
+    float contributionImportance = max(
+        centerContributionSeed, neighboringContributionSeed * 0.75f);
     float errorImportance = saturate(max(
-        max(edgeImportance, disocclusionImportance),
-        max(historyImportance, neighborContributionImportance * 0.75f)) *
+        independentImportance, contributionImportance) *
         max(g_Visibility.adaptiveStrength, 0.0f));
     // Preserve the adaptive-sampling paper's one-eighth uniform component so
     // flat regions never become deterministic starvation zones.
@@ -559,7 +602,10 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         samplingProbability);
     uint selectedSampleCount = min(
         uint(floor(desiredSampleCount)) +
-            (SchedulerRandom(dispatchPixel, 10u, phase) <
+            (SchedulerRandom(
+                dispatchPixel,
+                SchedulerDimension_SampleBudget,
+                phase) <
                 frac(desiredSampleCount) ? 1u : 0u),
         maximumSampleCount);
 #else
@@ -568,7 +614,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     uint selectedSampleCount = maximumSampleCount;
 #endif
 
-    float sliceRotation = SchedulerRandom(dispatchPixel, 0u, phase);
+    float sliceRotation = SchedulerRandom(
+        dispatchPixel, SchedulerDimension_SliceRotation, phase);
     float ambientVisibility = 1.0f;
     float3 indirectDiffuse = 0.0f;
     float sliceAzimuth = sliceRotation * VisibilityPi;
@@ -581,7 +628,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         float3(0.0f, 1.0f, 0.0f));
     float3 sliceTangent = SafeNormalize(
         cross(viewDirection, slicePlaneNormal), screenSliceDirection);
-    float sectorPhase = SchedulerRandom(dispatchPixel, 2u, phase);
+    float sectorPhase = SchedulerRandom(
+        dispatchPixel, SchedulerDimension_SectorPhase, phase);
 
 #if VISIBILITY_ESTIMATOR != VisibilityEstimator_UniformProjectedAngle
         SliceMeasure sliceMeasure = BuildSliceMeasure(
@@ -645,24 +693,46 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 
         uint stepsPerSide = selectedSampleCount >> 1u;
         uint oddSampleSide = SchedulerRandom(
-            dispatchPixel, 12u, phase) < 0.5f ? 0u : 1u;
+            dispatchPixel,
+            SchedulerDimension_OddSampleSide,
+            phase) < 0.5f ? 0u : 1u;
         uint sideStepCount[2] = {
             stepsPerSide + (((selectedSampleCount & 1u) != 0u &&
                 oddSampleSide == 0u) ? 1u : 0u),
             stepsPerSide + (((selectedSampleCount & 1u) != 0u &&
                 oddSampleSide == 1u) ? 1u : 0u)
         };
-        uint remainingRadialStrata[2] = {
-            sideActive[0]
-                ? ProgressiveRadialPrefixMasks[min(sideStepCount[0], 32u)]
-                : 0u,
-            sideActive[1]
-                ? ProgressiveRadialPrefixMasks[min(sideStepCount[1], 32u)]
-                : 0u
+        float radialSequence[2] = {
+            SchedulerRandom(
+                dispatchPixel,
+                SchedulerDimension_RadialNegative,
+                phase),
+            SchedulerRandom(
+                dispatchPixel,
+                SchedulerDimension_RadialPositive,
+                phase)
+        };
+        uint radialShift[2] = {
+            min(uint(radialSequence[0] * 32.0f), 31u),
+            min(uint(radialSequence[1] * 32.0f), 31u)
         };
         float radialRotation[2] = {
-            SchedulerRandom(dispatchPixel, 20u, phase),
-            SchedulerRandom(dispatchPixel, 21u, phase)
+            frac(radialSequence[0] * 32.0f),
+            frac(radialSequence[1] * 32.0f)
+        };
+        uint remainingRadialStrata[2] = {
+            sideActive[0]
+                ? RotateRadialPrefix(
+                    ProgressiveRadialPrefixMasks[
+                        min(sideStepCount[0], 32u)],
+                    radialShift[0])
+                : 0u,
+            sideActive[1]
+                ? RotateRadialPrefix(
+                    ProgressiveRadialPrefixMasks[
+                        min(sideStepCount[1], 32u)],
+                    radialShift[1])
+                : 0u
         };
 
         [loop]
@@ -985,18 +1055,28 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #endif
         float compressedSignal = adaptiveSignal /
             (1.0f + max(adaptiveSignal, 0.0f));
-        float signalInstability = hasReprojectedFeedback
+        float signalInstability = hasMatchingFeedback
             ? saturate(abs(compressedSignal -
                 reprojectedContributionSignal) * 4.0f)
             : 0.0f;
         float currentInstability = max(
-            max(max(edgeImportance, disocclusionImportance),
-                historyImportance),
-            signalInstability);
+            max(edgeImportance, disocclusionImportance),
+            max(signalInstability, historyImportance * 0.5f));
+        // A sample found because of a neighboring seed may receive more work,
+        // but it cannot become a fresh outward seed. Existing center seeds and
+        // independently difficult pixels remain eligible, so useful regions
+        // persist without a one-texel-per-frame dilation wave.
+        bool independentContributionDiscovery =
+            centerContributionSeed > 0.0f ||
+            neighboringContributionSeed * 0.75f <=
+                independentImportance + VisibilityEpsilon;
+        float contributionSeed = independentContributionDiscovery
+            ? compressedSignal
+            : 0.0f;
         u_AdaptiveFeedback[dispatchPixel] = float4(
-            saturate(1.0f - currentInstability),
             saturate(currentInstability),
             saturate(compressedSignal),
+            saturate(contributionSeed),
             receiverDepth);
     }
 #endif

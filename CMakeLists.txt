@@ -70,6 +70,7 @@ add_executable(uvsr WIN32
     src/uvsr.cpp
     src/pbr_deferred_lighting_pass.cpp
     src/screen_space_visibility.cpp
+    src/visibility_blue_noise.cpp
 )
 target_link_libraries(uvsr PRIVATE donut_render donut_app donut_engine)
 add_dependencies(uvsr uvsr_shaders)
@@ -106,6 +107,19 @@ target_include_directories(
 add_test(
     NAME uvsr_visibility_projection_reference
     COMMAND uvsr_visibility_projection_tests
+)
+
+add_executable(uvsr_visibility_sampling_tests
+    tests/visibility_sampling_reference_tests.cpp
+    src/visibility_blue_noise.cpp
+)
+target_include_directories(
+    uvsr_visibility_sampling_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_visibility_sampling_reference
+    COMMAND uvsr_visibility_sampling_tests
 )
 
 # Donut builds its complete shader catalog as an internal dependency. Stage it

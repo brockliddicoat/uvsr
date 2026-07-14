@@ -1,4 +1,5 @@
 #include "screen_space_visibility.h"
+#include "visibility_blue_noise.h"
 
 #include <donut/engine/CommonRenderPasses.h>
 #include <donut/engine/ShaderFactory.h>
@@ -8,7 +9,6 @@
 #include <algorithm>
 #include <cassert>
 #include <functional>
-#include <limits>
 #include <string>
 #include <vector>
 
@@ -22,10 +22,7 @@ namespace
 {
     constexpr uint32_t kThreadGroupSize = 8u;
     constexpr uint32_t kMinimumSecondaryBounceSamples = 8u;
-    constexpr uint32_t kBlueNoiseSize = 64u;
-    constexpr uint32_t kBlueNoiseTexelCount =
-        kBlueNoiseSize * kBlueNoiseSize;
-
+    constexpr uint32_t kHistoryContractVersion = 2u;
     uint32_t GetResolutionScale(uvsr::VisibilityResolution resolution)
     {
         switch (resolution)
@@ -98,6 +95,7 @@ namespace
             AppendHistoryConfigurationValue(key, uint64_t(value));
         };
 
+        appendUint(kHistoryContractVersion);
         appendFloat(constants.radiusWorld);
         appendFloat(constants.thicknessWorld);
         appendFloat(constants.stepDistributionExponent);
@@ -146,7 +144,7 @@ namespace uvsr
         settings.sampling.stepDistributionExponent = 2.0f;
         settings.sampling.adaptiveStrength = 1.0f;
         settings.sampling.scheduler =
-            VisibilitySampleScheduler::SpatiotemporalBlueNoise;
+            VisibilitySampleScheduler::DecorrelatedBlueNoise;
 
         switch (quality)
         {
@@ -224,64 +222,21 @@ namespace uvsr
             nvrhi::Format::RGBA16_FLOAT,
             "ScreenSpaceVisibility/DummyFeedbackOutput");
 
-        // Generate a deterministic, progressive toroidal rank texture. Each
-        // prefix greedily chooses the texel farthest from the existing set,
-        // which preserves broad spatial separation without importing a
-        // licensed blue-noise asset.
-        m_BlueNoiseUpload.resize(kBlueNoiseTexelCount);
-        std::vector<float> nearestDistanceSquared(
-            kBlueNoiseTexelCount, std::numeric_limits<float>::max());
-        std::vector<bool> selected(kBlueNoiseTexelCount, false);
-        uint32_t selectedIndex = 0u;
-        for (uint32_t rank = 0u; rank < kBlueNoiseTexelCount; ++rank)
-        {
-            selected[selectedIndex] = true;
-            m_BlueNoiseUpload[selectedIndex] = uint16_t(
-                (uint64_t(rank) * 65535u) /
-                uint64_t(kBlueNoiseTexelCount - 1u));
-
-            const int selectedX = int(selectedIndex % kBlueNoiseSize);
-            const int selectedY = int(selectedIndex / kBlueNoiseSize);
-            for (uint32_t candidate = 0u;
-                candidate < kBlueNoiseTexelCount;
-                ++candidate)
-            {
-                if (selected[candidate])
-                    continue;
-                int dx = std::abs(int(candidate % kBlueNoiseSize) - selectedX);
-                int dy = std::abs(int(candidate / kBlueNoiseSize) - selectedY);
-                dx = std::min(dx, int(kBlueNoiseSize) - dx);
-                dy = std::min(dy, int(kBlueNoiseSize) - dy);
-                const float distanceSquared = float(dx * dx + dy * dy);
-                nearestDistanceSquared[candidate] = std::min(
-                    nearestDistanceSquared[candidate], distanceSquared);
-            }
-
-            float bestDistance = -1.0f;
-            uint32_t nextIndex = 0u;
-            for (uint32_t candidate = 0u;
-                candidate < kBlueNoiseTexelCount;
-                ++candidate)
-            {
-                if (!selected[candidate] &&
-                    nearestDistanceSquared[candidate] > bestDistance)
-                {
-                    bestDistance = nearestDistanceSquared[candidate];
-                    nextIndex = candidate;
-                }
-            }
-            selectedIndex = nextIndex;
-        }
+        // Independent void-and-cluster rank layers prevent the ray dimensions
+        // from becoming translated copies of one structured scalar field.
+        m_BlueNoiseUpload = GenerateVisibilityBlueNoise();
 
         nvrhi::TextureDesc blueNoiseDesc;
-        blueNoiseDesc.width = kBlueNoiseSize;
-        blueNoiseDesc.height = kBlueNoiseSize;
+        blueNoiseDesc.width = VisibilityBlueNoiseSize;
+        blueNoiseDesc.height = VisibilityBlueNoiseSize;
+        blueNoiseDesc.arraySize = VisibilityBlueNoiseLayerCount;
         blueNoiseDesc.format = nvrhi::Format::R16_UNORM;
-        blueNoiseDesc.dimension = nvrhi::TextureDimension::Texture2D;
+        blueNoiseDesc.dimension = nvrhi::TextureDimension::Texture2DArray;
         blueNoiseDesc.mipLevels = 1u;
         blueNoiseDesc.initialState = nvrhi::ResourceStates::CopyDest;
         blueNoiseDesc.keepInitialState = true;
-        blueNoiseDesc.debugName = "ScreenSpaceVisibility/ProgressiveBlueNoise";
+        blueNoiseDesc.debugName =
+            "ScreenSpaceVisibility/DecorrelatedBlueNoise";
         m_BlueNoiseTexture = device->createTexture(blueNoiseDesc);
 
         CreatePipelines(shaderFactory);
@@ -680,6 +635,8 @@ namespace uvsr
         const uint64_t rawIndirectBytes = TextureBytes(samplingSize, 8u);
         const uint64_t finalAmbientBytes = TextureBytes(fullSize, 2u);
         const uint64_t finalIndirectBytes = TextureBytes(fullSize, 8u);
+        const uint64_t schedulerBytes = uint64_t(VisibilityBlueNoiseTexelCount) *
+            uint64_t(VisibilityBlueNoiseLayerCount) * sizeof(uint16_t);
 
         m_Timings.outputTextureBytes =
             (ambientEnabled ? rawAmbientBytes : 0u) +
@@ -688,7 +645,7 @@ namespace uvsr
             (postProcessEnabled && ambientEnabled ? finalAmbientBytes : 0u) +
             (postProcessEnabled && indirectDiffuseEnabled
                 ? finalIndirectBytes : 0u);
-        m_Timings.workingTextureBytes =
+        m_Timings.workingTextureBytes = schedulerBytes +
             (adaptiveEnabled ? rawIndirectBytes * 2u : 0u) +
             (temporalEnabled && ambientEnabled ? rawAmbientBytes * 2u : 0u) +
             (temporalEnabled && indirectDiffuseEnabled
@@ -799,12 +756,18 @@ namespace uvsr
             return;
 
         assert(m_BlueNoiseTexture && !m_BlueNoiseUpload.empty());
-        commandList->writeTexture(
-            m_BlueNoiseTexture,
-            0u,
-            0u,
-            m_BlueNoiseUpload.data(),
-            size_t(kBlueNoiseSize) * sizeof(uint16_t));
+        for (uint32_t layer = 0u;
+            layer < VisibilityBlueNoiseLayerCount;
+            ++layer)
+        {
+            commandList->writeTexture(
+                m_BlueNoiseTexture,
+                layer,
+                0u,
+                m_BlueNoiseUpload.data() +
+                    layer * VisibilityBlueNoiseTexelCount,
+                size_t(VisibilityBlueNoiseSize) * sizeof(uint16_t));
+        }
         commandList->setPermanentTextureState(
             m_BlueNoiseTexture,
             nvrhi::ResourceStates::ShaderResource);
