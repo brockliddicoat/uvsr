@@ -2186,7 +2186,7 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Choose the adaptive first-bounce radial sample limits. Every preset uses one stochastic slice; resolution and reconstruction remain independent profiling controls.");
+                "Choose first-bounce radial sample budgets. With Adaptive Sparse Sampling off, each preset uses its fixed/maximum count. With it on, the preset supplies minimum and maximum limits. Every preset uses one stochastic slice; resolution and reconstruction remain independent profiling controls.");
 
             static const char* resolutionLabels[] = {
                 "Full", "Half", "Quarter"

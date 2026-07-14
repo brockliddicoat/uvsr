@@ -26,6 +26,19 @@ that shows the final material-applied screen-space diffuse GI contribution.
 Profiling is otherwise limited to GPU stage timings, logical allocation
 arithmetic, and external capture tools.
 
+## Factory Defaults
+
+- Visibility, AO, and GI are enabled at full resolution.
+- Medium quality traces 20 fixed samples on one slice per eligible pixel.
+- Uniform Solid Angle and Toroidal Blue Noise are selected.
+- Adaptive Sparse Sampling is disabled.
+- AO strength is 1.0. GI intensity is 4.0 with one bounce, a 0.001 bounce
+  contribution cutoff, and emissive sourcing enabled at gain 4.0.
+- GI-only lighting is disabled.
+- Reconstruction, temporal reconstruction, and spatial filtering are disabled.
+  Their dormant settings remain a 0.35 temporal current response and Gaussian
+  joint-bilateral filtering at radius 4.0.
+
 ## Estimators
 
 The **Estimator** control exposes three compiled formulations:
@@ -150,12 +163,21 @@ means:
 With **Adaptive Sparse Sampling** disabled, as it is by default, UVSR selects a
 separately compiled fixed-work shader. Every eligible pixel receives **Fixed
 Samples / Pixel** on one slice; the default is 20. The fixed specialization
-contains no adaptive depth/normal
-neighborhood analysis, motion/reprojection reads, feedback reads or writes, or
-stochastic budget rounding. Adaptive feedback textures are not allocated and
-adaptive sampling alone does not request motion
-vectors. The sample scheduler remains independent because it determines
-where the fixed samples land, not how many samples a pixel receives.
+contains no adaptive depth/normal neighborhood analysis, motion/reprojection
+reads, feedback reads or writes, or stochastic budget rounding. Adaptive
+feedback textures are not allocated and adaptive sampling alone does not
+request motion vectors. The sample scheduler remains independent because it
+determines where the fixed samples land, not how many samples a pixel receives.
+
+The quality presets set the following first-bounce budgets. With adaptive
+sampling off, only the fixed/max value is executed.
+
+| Preset | Adaptive minimum | Fixed/adaptive maximum |
+|---|---:|---:|
+| Low | 4 | 10 |
+| Medium (default) | 8 | 20 |
+| High | 12 | 48 |
+| Ultra | 16 | 64 |
 
 Activision's
 [Practical Realtime Strategies for Accurate Indirect Occlusion](https://www.activision.com/cdn/research/PracticalRealtimeStrategiesTRfinal.pdf)
@@ -210,6 +232,7 @@ texture. Dimension-specific toroidal temporal steps preserve each layer's
 spatial spectrum, and hashed cycle offsets prevent exact 64-frame repetition.
 It is spatiotemporal as a runtime sequence, but its eight 2D layers were not
 jointly optimized as one 3D space-time volume.
+This is the default scheduler.
 
 **Filter-Adapted Spatiotemporal Noise** uses a 64x64x32 scalar-uniform
 volume generated offline by Electronic Arts' FastNoise optimizer. Its fixed
@@ -303,11 +326,18 @@ dispatch chain.
 
 ## HUD Statistics
 
-The Visibility HUD separates:
+The collapsed **Statistics** drawer starts with one timing row:
+
+- **All:** the complete visibility effect time.
+- **Trace:** depth hierarchy plus all active visibility traversal.
+- **Filter:** spatial filtering or required reduced-resolution upsampling.
+- **Other:** temporal reconstruction plus final visibility composition.
+
+Two following memory rows separate:
 
 - **Outputs:** exact logical AO, GI, filtered output, and active bounce-frontier
   texel payload.
-- **Working:** exact blue-noise scheduler, adaptive feedback, temporal
+- **Working:** exact resident scheduler textures, adaptive feedback, temporal
   depth/normal/AO/GI history, and depth-hierarchy texel payload.
 - **Mask Cache:** exact persistent directional-mask storage. It is zero in the
   current register-only architecture.

@@ -52,9 +52,10 @@ is also available from the scene picker.
   restores those defaults in-session, and settings are not carried between
   launches.
 - The HUD performance row reports resolution, frame time, FPS, current-clock
-  memory bandwidth, and current-clock FP32 peak GFLOPS. Visibility reports Trace,
-  Temporal, Filter, and Composite GPU timings plus exact logical **Outputs**,
-  **Working**, **Mask Cache**, and **Avoided** payloads. **Shared** is explicitly
+  memory bandwidth, and current-clock FP32 peak GFLOPS. Visibility statistics
+  start collapsed and report **All**, **Trace**, **Filter**, and **Other** GPU
+  timings on one row. Two memory rows report exact logical **Outputs**,
+  **Working**, **Mask Cache**, and **Avoided** payloads; **Shared** is explicitly
   an estimate of duplicate mask payload avoided by shared AO/GI traversal.
 - UVSR's shared forward/deferred metallic-roughness PBR path is always enabled
   in the production UI. The legacy Donut comparison path remains implemented
@@ -116,49 +117,21 @@ that has not merged into `main`, plus every project or feature an agent is
 currently working on. An entry is not shipped on `main`, and experimental
 entries are not promises that the work will merge.
 
-- **Visibility Reconstruction Reset and Adaptive Sampling — Active Cleanup and
-  Implementation**
-  (`agent/visibility-gt-estimator`). Establish deterministic CPU and brute-force
-  reference truth, correct perspective thickness along each sampled point's
-  camera ray, and add explicit projected-angle/solid-angle A/B estimators whose
-  slice measure, no-`acos` CDF, stochastic sector lattice, AO resolve, GI
-  weighting, and normalization agree. The published
-  `agent/visibility-reference` branch owns shared CPU/HLSL estimator math,
-  tests, fixtures, and benchmark schema; the integration branch now owns the
-  compiled runtime estimator permutations, sampled-ray thickness, UI, and
-  design documentation. The `agent/visibility-hot-loop` branch implements
-  early higher-bounce receiver rejection and diagnostics, a statically
-  specialized production slice, analytic homogeneous endpoint clipping, and
-  consumer-driven target allocation; validation is active and no runtime
-  speedup is claimed yet. The current phase retires failed NRA-RTAA v1 and its
-  debug-only surface after preserving a postmortem, completes the joint-cosine
-  CDF estimator, and replaces fixed per-pixel work with stochastic confidence-
-  driven radial sample budgets. It also adds a documented
-  spatiotemporal-blue-noise schedule, conditional SSRT3-style visibility
-  reconstruction, and full/half/quarter-resolution AO/GI paths with joint
-  bilateral upsampling. This owns visibility traversal/output resources,
-  estimator math and tests, motion/history/confidence contracts, shader
-  packaging, and the **Visibility** UI. It overlaps the filtering/specular-AA
-  effort at GI source/output and normals, supersedes that effort's planned NRD
-  diffuse-GI integration, consumes the existing PBR/G-buffer and finite
-  multibounce contracts without repacking them, and must leave inactive
-  reconstruction paths at zero allocation and zero dispatch cost.
 - **Forward Renderer Simplification — Local Implementation Complete; Awaiting
   Integration.** Remove the broken Forward Tonemapperless mode and its display-
   pipeline bypass, leaving supported Forward and Deferred rendering on the
-  normal AgX path. Its visible checkout is unbranched and predates current
-  `main`. It overlaps the GT-estimator UI integration and bilateral-grid local
-  tone mapping in `src/uvsr.cpp`, `README.md`, `UsesTonemapper()` eligibility,
-  and AgX display integration, so those changes must be rebased deliberately.
+  normal AgX path. Its visible checkout is unbranched and predates the current
+  visibility baseline. It overlaps bilateral-grid local tone mapping in
+  `src/uvsr.cpp`, `README.md`, `UsesTonemapper()` eligibility, and AgX display
+  integration, so those changes must be rebased deliberately.
 - **Texture Filtering and Specular AA — Active Development**
   (`feat/filtering-specular-aa-nrd`). Improve Intel Arc-focused anisotropic
   sampling and mip correctness and add material specular anti-aliasing. The
-  former NRD diffuse-GI scope is superseded by the active visibility
-  reconstruction work. This still overlaps PBR materials, G-buffer packing,
-  normals, and renderer settings. The local branch started from the now-merged
-  visibility simplification but predates current `main`; it must be rebased
-  deliberately and preserve the visibility estimator's source-radiance,
-  normal, sidedness, and estimator-selection contracts.
+  former NRD diffuse-GI scope is superseded by UVSR's shipped visibility
+  reconstruction. This still overlaps PBR materials, G-buffer packing, normals,
+  and renderer settings. The branch predates the current visibility baseline;
+  it must be rebased deliberately and preserve the visibility estimator's
+  source-radiance, normal, sidedness, and estimator-selection contracts.
 - **Bilateral-Grid Local Tone Mapping — Active Development**
   (`agent/bilateral-grid-local-tone-mapping`). Add a first-party D3D12 GPU
   bilateral-grid analysis pass over the final scene-linear display source after
@@ -244,10 +217,9 @@ The launcher requires a description and puts it in the window and task title:
 .\tools\launch_uvsr.ps1 -Experiment "testing program title on task title"
 ```
 
-After building, Windows users can also double-click
-`Launch UVSR Visibility Candidate.cmd`. It delegates to the same required
-experiment launcher with this branch's fixed AO/GI candidate label; optional
-renderer arguments can be appended from a terminal.
+After building, Windows users can also double-click `Launch UVSR.cmd`. It
+delegates to the same required experiment launcher with a fixed main-build
+label; optional renderer arguments can be appended from a terminal.
 
 The title reports the active graphics API at runtime, for example
 `UVSR Renderer D3D12 (testing program title on task title, 4:32 AM)`. The time
@@ -258,11 +230,11 @@ Direct and IDE-driven launches can instead supply the description through
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the PBR, radial-visibility, estimator, and visibility-projection
-reference tests separately:
+Build and run the PBR, radial-visibility, estimator, visibility-projection, and
+visibility-sampling reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests
+cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
@@ -302,6 +274,10 @@ G-buffer packing, equations, validation, limitations, and extension points.
 The [screen-space visibility design](docs/screen-space-visibility.md) documents
 the shared 32-sector AO/GI traversal, resources, coordinate/radiance contracts,
 controls, limitations, and the upgrade path to persistent unified visibility.
+
+The [visibility estimator validation](docs/visibility-estimator-validation.md)
+records the shared C++/HLSL measure contracts, deterministic reference fixtures,
+and the boundary between automated evidence and required runtime evaluation.
 
 The [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) preserves why the
 retired anti-aliasing experiment failed and the required order for any successor.

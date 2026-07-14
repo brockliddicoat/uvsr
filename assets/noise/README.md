@@ -1,4 +1,4 @@
-# Visibility Filter-Adapted Rank Field
+# Visibility Filter-Adapted Spatiotemporal Noise
 
 `visibility_filter_adapted_gauss1_ema035_r8.bin` is a 64x64x32
 `R8_UNORM` scalar-uniform volume in array-slice order. Every temporal slice
