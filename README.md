@@ -190,6 +190,10 @@ README.txt
 renderer exposes it as `a_beautiful_game/ABeautifulGame.glb` in the scene
 picker.
 
+The larger downloaded **Cornell Box** is also tracked and self-contained. CMake
+packages `assets/scenes/cornell_box/cornellBox.glb`, exposed as
+`cornell_box/cornellBox.glb` in the scene picker.
+
 Configure and build a Release executable from PowerShell:
 
 ```powershell
