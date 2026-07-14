@@ -2788,7 +2788,7 @@ void ProcessCommandLine(
     const char* const* argv,
     DeviceCreationParameters& deviceParams,
     std::string& sceneName,
-    std::string& experimentName)
+    std::string& experimentDescription)
 {
     for (int i = 1; i < argc; i++)
     {
@@ -2816,13 +2816,26 @@ void ProcessCommandLine(
         else if ((!strcmp(argv[i], "--experiment") || !strcmp(argv[i], "-experiment"))
             && i + 1 < argc)
         {
-            experimentName = argv[++i];
+            experimentDescription = argv[++i];
         }
         else if (argv[i][0] != '-')
         {
             sceneName = argv[i];
         }
     }
+}
+
+bool IsOneWordExperimentDescription(const std::string& description)
+{
+    return !description.empty() && std::all_of(
+        description.begin(),
+        description.end(),
+        [](unsigned char character)
+        {
+            return (character >= 'a' && character <= 'z') ||
+                (character >= 'A' && character <= 'Z') ||
+                (character >= '0' && character <= '9');
+        });
 }
 
 std::string FormatExperimentLaunchTime(
@@ -2836,10 +2849,9 @@ std::string FormatExperimentLaunchTime(
     localtime_r(&timestamp, &localTime);
 #endif
 
-    const int hour = localTime.tm_hour % 12 == 0 ? 12 : localTime.tm_hour % 12;
     std::ostringstream formattedTime;
-    formattedTime << hour << ':' << std::setfill('0') << std::setw(2)
-        << localTime.tm_min << (localTime.tm_hour < 12 ? " AM" : " PM");
+    formattedTime << std::setfill('0') << std::setw(2) << localTime.tm_hour
+        << std::setw(2) << localTime.tm_min;
     return formattedTime.str();
 }
 
@@ -2961,17 +2973,26 @@ int main(int __argc, const char* const* __argv)
     deviceParams.supportExplicitDisplayScaling = true;
     
     std::string sceneName;
-    std::string experimentName;
-    ProcessCommandLine(__argc, __argv, deviceParams, sceneName, experimentName);
-    if (experimentName.empty())
+    std::string experimentDescription;
+    ProcessCommandLine(__argc, __argv, deviceParams, sceneName, experimentDescription);
+    if (experimentDescription.empty())
     {
-        // The launcher uses an environment variable so experiment descriptions
-        // containing spaces reach WinMain without another layer of Windows
-        // command-line quoting. An explicit argument remains the override for
-        // direct and IDE-driven launches.
+        // The launcher passes the validated one-word description through the
+        // environment so scene paths remain the only native command-line
+        // arguments it needs to reconstruct. An explicit argument remains the
+        // override for direct and IDE-driven launches.
         const char* environmentExperiment = std::getenv("UVSR_EXPERIMENT");
         if (environmentExperiment && environmentExperiment[0] != '\0')
-            experimentName = environmentExperiment;
+            experimentDescription = environmentExperiment;
+    }
+    if (experimentDescription.empty())
+        experimentDescription = "main";
+    if (!IsOneWordExperimentDescription(experimentDescription))
+    {
+        log::error(
+            "Experiment description '%s' must contain exactly one ASCII alphanumeric word",
+            experimentDescription.c_str());
+        return 1;
     }
 
     // UVSR intentionally runs uncapped; the renderer no longer exposes or
@@ -2988,10 +3009,9 @@ int main(int __argc, const char* const* __argv)
 
     const char* apiString = nvrhi::utils::GraphicsAPIToString(deviceManager->GetGraphicsAPI());
 
-    std::string windowTitle = "UVSR Renderer " + std::string(apiString);
-    if (!experimentName.empty())
-        windowTitle += " (" + experimentName + ", "
-            + FormatExperimentLaunchTime(launchTime) + ")";
+    const std::string windowTitle = "UVSR Renderer " + std::string(apiString)
+        + " (" + experimentDescription + "-" + std::string(UVSR_GIT_COMMIT)
+        + "-" + FormatExperimentLaunchTime(launchTime) + ")";
 
     if (!deviceManager->CreateWindowDeviceAndSwapChain(deviceParams, windowTitle.c_str()))
 	{

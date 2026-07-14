@@ -184,24 +184,27 @@ Configure and build a Release executable from PowerShell:
 git submodule update --init --recursive
 cmake -S . -B build
 cmake --build build --config Release --target uvsr
-.\tools\launch_uvsr.ps1 -Experiment "testing program title on task title"
+.\tools\launch_uvsr.ps1 -Experiment naming
 ```
 
-The launcher requires a description and puts it in the window and task title:
+The launcher requires a one-word ASCII alphanumeric experiment description:
 
 ```powershell
-.\tools\launch_uvsr.ps1 -Experiment "testing program title on task title"
+.\tools\launch_uvsr.ps1 -Experiment naming
 ```
 
 After building, Windows users can also double-click `LaunchUVSR.cmd`. It
 delegates to the same required experiment launcher with a fixed main-build
 label; optional renderer arguments can be appended from a terminal.
 
-The title reports the active graphics API at runtime, for example
-`UVSR Renderer D3D12 (testing program title on task title, 4:32 AM)`. The time
-is captured when the experiment process launches and displayed in local time.
-Direct and IDE-driven launches can instead supply the description through
-`--experiment "description"` or the `UVSR_EXPERIMENT` environment variable.
+The title reports the active graphics API followed by the description, the
+seven-character source commit embedded at build time, and the local launch time
+in 24-hour `HHmm` form. Each field is separated by a dash, for example
+`UVSR Renderer D3D12 (naming-b216081-2117)`. CMake watches the worktree's Git
+HEAD and branch ref so the embedded commit refreshes on the next build after a
+commit or checkout. Direct and IDE-driven launches can instead supply the one-
+word description through `--experiment naming` or the `UVSR_EXPERIMENT`
+environment variable; omitted descriptions default to `main`.
 
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
