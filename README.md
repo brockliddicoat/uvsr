@@ -117,39 +117,15 @@ that has not merged into `main`, plus every project or feature an agent is
 currently working on. An entry is not shipped on `main`, and experimental
 entries are not promises that the work will merge.
 
-- **Forward Renderer Simplification — Local Implementation Complete; Awaiting
-  Integration.** Remove the broken Forward Tonemapperless mode and its display-
-  pipeline bypass, leaving supported Forward and Deferred rendering on the
-  normal AgX path. Its visible checkout is unbranched and predates the current
-  visibility baseline. It overlaps bilateral-grid local tone mapping in
-  `src/uvsr.cpp`, `README.md`, `UsesTonemapper()` eligibility, and AgX display
-  integration, so those changes must be rebased deliberately.
-- **Texture Filtering and Specular AA — Active Development**
-  (`feat/filtering-specular-aa-nrd`). Improve Intel Arc-focused anisotropic
-  sampling and mip correctness and add material specular anti-aliasing. The
-  former NRD diffuse-GI scope is superseded by UVSR's shipped visibility
-  reconstruction. This still overlaps PBR materials, G-buffer packing, normals,
-  and renderer settings. The branch predates the current visibility baseline;
-  it must be rebased deliberately and preserve the visibility estimator's
-  source-radiance, normal, sidedness, and estimator-selection contracts.
 - **Bilateral-Grid Local Tone Mapping — Active Development**
   (`agent/bilateral-grid-local-tone-mapping`). Add a first-party D3D12 GPU
   bilateral-grid analysis pass over the final scene-linear display source after
   visibility composition and before AgX, then apply one scalar local-EV
   correction inside the existing AgX display pass. This owns
   `src/local_tone_mapping*`, AgX bindings,
-  display eligibility, reference tests, and its UI. It overlaps Forward
-  Tonemapperless removal and filtering/NRD renderer settings, and may extend the
-  higher-bounce contribution cutoff conservatively without changing visibility
+  display eligibility, reference tests, and its UI. It may extend the higher-
+  bounce contribution cutoff conservatively without changing visibility
   estimator math or adding motion-reprojected local-exposure history.
-- **GPU HZB Occlusion Culling — Experimental Validation**
-  (`experiment/hzb-main-post-rtaa`). Evaluate main/post HZB culling, repaired
-  indirect G-buffer draws, conservative fallbacks, and GPU telemetry before
-  deciding whether this experimental path is safe to merge. Its visible branch
-  predates the visibility cleanup and current `main`, has no configured remote,
-  and requires a deliberate rebase plus revalidation against the visibility
-  estimator's projection/depth assumptions after NRA-RTAA v1 removal. It does
-  not authorize coarse radiance sampling for visibility GI.
 
 ### How Work Gets Listed
 
