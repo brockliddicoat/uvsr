@@ -127,6 +127,13 @@ entries are not promises that the work will merge.
   bounce contribution cutoff conservatively without changing visibility
   estimator math or adding motion-reprojected local-exposure history.
 
+- **A Beautiful Game Scene — Integration In Progress**
+  (`agent/add-beautiful-game`). Add the downloaded `ABeautifulGame.glb` as a
+  tracked scene asset, package it into UVSR's runtime scene directory, document
+  it, and validate a live renderer load. This overlaps the tonemapper project
+  only in `README.md`; it does not modify AgX, local-tone-mapping resources,
+  bindings, reference tests, or UI.
+
 ### How Work Gets Listed
 
 This README-first workflow is how every project or feature gets onto Coming
