@@ -185,6 +185,11 @@ LICENSE.txt
 README.txt
 ```
 
+**A Beautiful Game** is a tracked, self-contained GLB scene. CMake packages
+`assets/scenes/a_beautiful_game/ABeautifulGame.glb` automatically, and the
+renderer exposes it as `a_beautiful_game/ABeautifulGame.glb` in the scene
+picker.
+
 Configure and build a Release executable from PowerShell:
 
 ```powershell
