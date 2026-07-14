@@ -49,7 +49,8 @@ Texture2D<float4> t_Emissive : register(t5);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t6);
 Texture2D<float4> t_PreviousFeedback : register(t7);
 Texture2DArray<float> t_BlueNoise : register(t8);
-Texture2D<float4> t_Motion : register(t9);
+Texture2DArray<float> t_FilterAdaptedNoise : register(t9);
+Texture2D<float4> t_Motion : register(t10);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_BounceFrontier : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 #else
@@ -57,7 +58,8 @@ Texture2D<float4> t_SourceRadiance : register(t2);
 Texture2D<float> t_DepthHierarchy : register(t3);
 Texture2D<float4> t_PreviousFeedback : register(t4);
 Texture2DArray<float> t_BlueNoise : register(t5);
-Texture2D<float4> t_Motion : register(t6);
+Texture2DArray<float> t_FilterAdaptedNoise : register(t6);
+Texture2D<float4> t_Motion : register(t7);
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_AdaptiveFeedback : register(u2);
@@ -97,6 +99,16 @@ static const uint2 BlueNoiseTemporalSteps[8] = {
     uint2(21u, 31u), uint2(11u, 23u)
 };
 
+// The FAST design recommends R2-separated spatial reads when several random
+// values are needed in one frame. These integer offsets are the first eight R2
+// points quantized to the 64x64 rank-field torus.
+static const uint2 FilterAdaptedSemanticOffsets[8] = {
+    uint2(0u, 0u), uint2(48u, 36u),
+    uint2(32u, 8u), uint2(16u, 45u),
+    uint2(1u, 17u), uint2(49u, 54u),
+    uint2(33u, 26u), uint2(18u, 63u)
+};
+
 uint VisibilityHash(uint value)
 {
     value ^= value >> 16u;
@@ -127,6 +139,24 @@ float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
 {
     if (g_Visibility.sampleScheduler == 0u)
         return VisibilityRandom(samplingPixel, dimension, phase);
+
+    if (g_Visibility.sampleScheduler == 2u)
+    {
+        // The 64x64x32 scalar-uniform volume was optimized offline for a
+        // Gaussian spatial filter and alpha=0.35 EMA temporal filter. Every
+        // 32-frame cycle receives a global low-discrepancy permutation offset;
+        // 2531 is the odd integer nearest 4096 / phi and is coprime to 4096.
+        uint frameInVolume = phase & 31u;
+        uint cycle = phase >> 5u;
+        uint shuffledOffset = (1741u + 2531u * cycle) & 4095u;
+        uint2 cycleOffset = uint2(
+            shuffledOffset & 63u,
+            shuffledOffset >> 6u);
+        uint2 coordinate = (samplingPixel + cycleOffset +
+            FilterAdaptedSemanticOffsets[dimension & 7u]) & 63u;
+        return t_FilterAdaptedNoise.Load(
+            int4(coordinate, frameInVolume, 0));
+    }
 
     // Each semantic random dimension owns an independently optimized rank
     // layer. Moving the layer toroidally preserves its spatial spectrum;

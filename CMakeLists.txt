@@ -120,6 +120,7 @@ target_include_directories(
 add_test(
     NAME uvsr_visibility_sampling_reference
     COMMAND uvsr_visibility_sampling_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise/visibility_filter_adapted_gauss1_ema035_r8.bin"
 )
 
 # Donut builds its complete shader catalog as an internal dependency. Stage it
@@ -208,4 +209,13 @@ add_custom_command(TARGET uvsr POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/assets/luts/kodak"
         "${CMAKE_BINARY_DIR}/media/luts/kodak"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory
+        "${CMAKE_BINARY_DIR}/media/noise"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${CMAKE_BINARY_DIR}/media/noise"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/assets/noise/visibility_filter_adapted_gauss1_ema035_r8.bin"
+        "${CMAKE_SOURCE_DIR}/assets/noise/FAST-LICENSE.txt"
+        "${CMAKE_SOURCE_DIR}/assets/noise/README.md"
+        "${CMAKE_BINARY_DIR}/media/noise"
 )

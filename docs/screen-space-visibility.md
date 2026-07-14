@@ -148,13 +148,14 @@ means:
   changing tap count; and
 - compare scheduler modes with identical sample limits.
 
-With **Adaptive Sparse Sampling** disabled, UVSR selects a separately compiled
-fixed-work shader. Every eligible pixel receives **Fixed Samples / Pixel** on
-one slice. The fixed specialization contains no adaptive depth/normal
+With **Adaptive Sparse Sampling** disabled, as it is by default, UVSR selects a
+separately compiled fixed-work shader. Every eligible pixel receives **Fixed
+Samples / Pixel** on one slice; the default is 20. The fixed specialization
+contains no adaptive depth/normal
 neighborhood analysis, motion/reprojection reads, feedback reads or writes, or
 stochastic budget rounding. Adaptive feedback textures are not allocated and
 adaptive sampling alone does not request motion
-vectors. The hash/STBN scheduler remains independent because it determines
+vectors. The sample scheduler remains independent because it determines
 where the fixed samples land, not how many samples a pixel receives.
 
 Activision's
@@ -197,30 +198,45 @@ specialization. The explicit **Adaptive Sparse
 Sampling** checkbox is the clearer A/B control: off fixes the budget to the
 maximum/fixed count and removes all adaptive instructions and resources.
 
-## Spatiotemporal Blue-Noise Scheduler
+## Sample Schedulers
 
-**Hash Baseline** independently hashes stochastic decisions. **Decorrelated
-Blue Noise** uses eight independently generated 64x64 toroidal void-and-cluster
-rank layers. Slice rotation, CDF sector phase, budget rounding, odd-sample side,
-both radial directions, and adaptive-neighbor choice receive separate semantic
-layers rather than translated copies of one scalar texture. Dimension-specific
-toroidal temporal steps preserve each layer's spatial spectrum, and hashed
-cycle offsets prevent exact 64-frame repetition.
+**Independent Hash** independently hashes stochastic decisions and consumes no
+rank-field texture.
+
+**Toroidal Blue-Noise Rank Field** uses eight independently generated 64x64
+toroidal void-and-cluster rank layers. Slice rotation, CDF sector phase, budget
+rounding, odd-sample side, both radial directions, and adaptive-neighbor choice
+receive separate semantic layers rather than translated copies of one scalar
+texture. Dimension-specific toroidal temporal steps preserve each layer's
+spatial spectrum, and hashed cycle offsets prevent exact 64-frame repetition.
+It is spatiotemporal as a runtime sequence, but its eight 2D layers were not
+jointly optimized as one 3D space-time volume.
+
+**Filter-Adapted Spatiotemporal Rank Field** uses a 64x64x32 scalar-uniform
+volume generated offline by Electronic Arts' FastNoise optimizer. Its fixed
+objective is a Gaussian spatial filter with sigma 1.0 and exponential temporal
+history with alpha 0.35. R2-separated spatial reads provide different semantic
+random values without adding texture layers, and a coprime 4096-position offset
+advances after each 32-frame volume cycle. This mode is the genuinely 3D,
+jointly filter-adapted option. Its objective remains statistically valid when
+reconstruction settings change, but is no longer an exact match for a different
+spatial kernel or temporal response.
 
 The design follows the rejection-safe and toroidal-sequence guidance in
 NVIDIA's
 [Rendering in Real Time With Spatiotemporal Blue Noise Textures, Part 2](https://developer.nvidia.com/blog/rendering-in-real-time-with-spatiotemporal-blue-noise-textures-part-2/).
-It also follows the filter-aware motivation of
+The filter-adapted mode directly follows the offline optimization described by
 [Importance-Sampled Filter-Adapted Spatiotemporal Sampling](https://jcgt.org/published/0014/01/08/paper.pdf),
-but it does not claim to reproduce that paper's offline FAST texture optimizer
-or NVIDIA's precomputed 3D STBN volumes. UVSR's rank layers are generated
-procedurally and import no external texture asset. They consume exactly 64 KiB
-of logical `R16_UNORM` scheduler storage.
+using the authors' FastNoise implementation. The toroidal mode remains UVSR's
+procedurally generated alternative; neither mode claims to reproduce NVIDIA's
+precomputed 3D STBN volumes. The two resident rank fields consume exactly 192
+KiB of logical scheduler storage: 64 KiB of `R16_UNORM` toroidal layers and 128
+KiB of `R8_UNORM` filter-adapted volume data.
 
 The scheduler changes where and when samples appear; it does not change the
-nested radial distribution or the requested budget. Profile the hash and blue-
-noise modes at identical limits. Human evaluation should look for structured
-banding, stationary grain, motion trails, and convergence after disocclusion.
+nested radial distribution or the requested budget. Profile all modes at
+identical limits. Human evaluation should look for structured banding,
+stationary grain, motion trails, and convergence after disocclusion.
 
 ## Reconstruction and Upsampling
 

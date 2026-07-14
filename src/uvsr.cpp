@@ -1486,7 +1486,10 @@ public:
                 GetDevice(), m_CommonPasses);
             m_PbrDeferredLightingPass->Init(m_ShaderFactory);
             m_ScreenSpaceVisibilityPass = std::make_unique<ScreenSpaceVisibilityPass>(
-                GetDevice(), m_ShaderFactory);
+                GetDevice(),
+                m_ShaderFactory,
+                app::GetDirectoryWithExecutable().parent_path() /
+                    "media/noise/visibility_filter_adapted_gauss1_ema035_r8.bin");
         }
         else
         {
@@ -2368,7 +2371,9 @@ protected:
                     "Transform each nested radial stratum by x^exponent. The default x^2 concentrates taps near the receiver. The complete prefix is toroidally rotated per pixel and frame to prevent fixed radius shells, while increasing a limit at the same phase only appends samples.");
 
                 static const char* schedulerLabels[] = {
-                    "Hash Baseline", "Decorrelated Blue Noise"
+                    "Independent Hash",
+                    "Toroidal Blue-Noise Rank Field",
+                    "Filter-Adapted Spatiotemporal Rank Field"
                 };
                 ImGui::SetNextItemWidth(settingsControlWidth);
                 if (ImGui::BeginCombo(
@@ -2394,7 +2399,7 @@ protected:
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip(
-                    "Hash Baseline independently hashes each decision. Decorrelated Blue Noise gives slice, sector, budget, odd-side, radial, and feedback choices separate 64x64 void-and-cluster rank layers with toroidal temporal traversal. Both rotate the full nested radial prefix and keep the same sample budget.");
+                    "Independent Hash hashes every decision. Toroidal Blue-Noise Rank Field uses separate 64x64 void-and-cluster layers with temporal traversal. Filter-Adapted Spatiotemporal Rank Field uses a scalar-uniform 64x64x32 FAST-optimized volume shaped for Gaussian spatial filtering and alpha=0.35 EMA history, with R2-separated semantic reads and low-discrepancy cycle offsets. Every mode keeps the same sample budget.");
 
                 if (samplingChanged)
                     visibility.quality = ScreenSpaceVisibilityQuality::Custom;

@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <numeric>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -54,9 +55,172 @@ namespace
         return centerSeed > 0.f ||
             neighboringSeed * 0.75f <= independentImportance + 1e-6f;
     }
+
+    double Variance(const std::vector<double>& values)
+    {
+        const double mean = std::accumulate(
+            values.begin(), values.end(), 0.0) / double(values.size());
+        double variance = 0.0;
+        for (double value : values)
+        {
+            const double centered = value - mean;
+            variance += centered * centered;
+        }
+        return variance / double(values.size());
+    }
+
+    std::vector<double> Normalize(const std::vector<uint8_t>& values)
+    {
+        std::vector<double> result(values.size());
+        std::transform(values.begin(), values.end(), result.begin(),
+            [](uint8_t value) { return double(value) / 255.0; });
+        return result;
+    }
+
+    std::vector<double> GaussianFilter(
+        const std::vector<double>& values)
+    {
+        constexpr int radius = 4;
+        std::array<double, radius * 2 + 1> weights{};
+        double totalWeight = 0.0;
+        for (int offset = -radius; offset <= radius; ++offset)
+        {
+            const double weight = std::exp(
+                -double(offset * offset) * 0.5);
+            weights[offset + radius] = weight;
+            totalWeight += weight;
+        }
+        for (double& weight : weights)
+            weight /= totalWeight;
+
+        constexpr uint32_t size =
+            uvsr::VisibilityFilterAdaptedNoiseSize;
+        constexpr uint32_t layerSize =
+            uvsr::VisibilityFilterAdaptedNoiseTexelCount;
+        std::vector<double> horizontal(values.size(), 0.0);
+        std::vector<double> result(values.size(), 0.0);
+        for (uint32_t layer = 0u;
+            layer < uvsr::VisibilityFilterAdaptedNoiseLayerCount;
+            ++layer)
+        {
+            for (uint32_t y = 0u; y < size; ++y)
+            {
+                for (uint32_t x = 0u; x < size; ++x)
+                {
+                    const size_t destination =
+                        layer * layerSize + y * size + x;
+                    for (int offset = -radius; offset <= radius; ++offset)
+                    {
+                        const uint32_t sourceX =
+                            uint32_t(int(x) + offset) & (size - 1u);
+                        horizontal[destination] +=
+                            values[layer * layerSize + y * size + sourceX] *
+                            weights[offset + radius];
+                    }
+                }
+            }
+        }
+        for (uint32_t layer = 0u;
+            layer < uvsr::VisibilityFilterAdaptedNoiseLayerCount;
+            ++layer)
+        {
+            for (uint32_t y = 0u; y < size; ++y)
+            {
+                for (uint32_t x = 0u; x < size; ++x)
+                {
+                    const size_t destination =
+                        layer * layerSize + y * size + x;
+                    for (int offset = -radius; offset <= radius; ++offset)
+                    {
+                        const uint32_t sourceY =
+                            uint32_t(int(y) + offset) & (size - 1u);
+                        result[destination] += horizontal[
+                            layer * layerSize + sourceY * size + x] *
+                            weights[offset + radius];
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    std::vector<double> ExponentialFilter(
+        const std::vector<double>& values)
+    {
+        constexpr double alpha = 0.35;
+        constexpr uint32_t layerCount =
+            uvsr::VisibilityFilterAdaptedNoiseLayerCount;
+        constexpr uint32_t layerSize =
+            uvsr::VisibilityFilterAdaptedNoiseTexelCount;
+        std::array<double, layerCount> weights{};
+        double totalWeight = 0.0;
+        for (uint32_t offset = 0u; offset < layerCount; ++offset)
+        {
+            weights[offset] = alpha * std::pow(1.0 - alpha, offset);
+            totalWeight += weights[offset];
+        }
+        for (double& weight : weights)
+            weight /= totalWeight;
+
+        std::vector<double> result(values.size(), 0.0);
+        for (uint32_t layer = 0u; layer < layerCount; ++layer)
+        {
+            for (uint32_t pixel = 0u; pixel < layerSize; ++pixel)
+            {
+                const size_t destination = layer * layerSize + pixel;
+                for (uint32_t offset = 0u; offset < layerCount; ++offset)
+                {
+                    const uint32_t sourceLayer =
+                        (layer - offset) & (layerCount - 1u);
+                    result[destination] +=
+                        values[sourceLayer * layerSize + pixel] *
+                        weights[offset];
+                }
+            }
+        }
+        return result;
+    }
+
+    double ShiftedVolumeCorrelation(
+        const std::vector<uint8_t>& values,
+        std::array<uint32_t, 2> leftOffset,
+        std::array<uint32_t, 2> rightOffset)
+    {
+        constexpr uint32_t size =
+            uvsr::VisibilityFilterAdaptedNoiseSize;
+        constexpr uint32_t layerSize =
+            uvsr::VisibilityFilterAdaptedNoiseTexelCount;
+        constexpr double mean = 127.5;
+        double covariance = 0.0;
+        double leftVariance = 0.0;
+        double rightVariance = 0.0;
+        for (uint32_t layer = 0u;
+            layer < uvsr::VisibilityFilterAdaptedNoiseLayerCount;
+            ++layer)
+        {
+            for (uint32_t y = 0u; y < size; ++y)
+            {
+                for (uint32_t x = 0u; x < size; ++x)
+                {
+                    const double left = double(values[
+                        layer * layerSize +
+                        ((y + leftOffset[1]) & 63u) * size +
+                        ((x + leftOffset[0]) & 63u)]) - mean;
+                    const double right = double(values[
+                        layer * layerSize +
+                        ((y + rightOffset[1]) & 63u) * size +
+                        ((x + rightOffset[0]) & 63u)]) - mean;
+                    covariance += left * right;
+                    leftVariance += left * left;
+                    rightVariance += right * right;
+                }
+            }
+        }
+        return covariance / std::sqrt(leftVariance * rightVariance);
+    }
 }
 
-int main()
+int main(int argc, char* argv[])
 {
     const std::vector<uint16_t> noise =
         uvsr::GenerateVisibilityBlueNoise();
@@ -190,6 +354,92 @@ int main()
         "a reprojected center seed can persist without spatial dilation");
     Require(IsIndependentContributionDiscovery(0.f, 1.f, 1.f),
         "independently difficult pixels remain eligible contribution seeds");
+
+    Require(argc == 2,
+        "the filter-adapted rank-field path is supplied by CTest");
+    std::vector<uint8_t> filterAdapted =
+        uvsr::LoadVisibilityFilterAdaptedNoise(argv[1]);
+    Require(filterAdapted.size() ==
+        size_t(uvsr::VisibilityFilterAdaptedNoiseTexelCount) *
+            uvsr::VisibilityFilterAdaptedNoiseLayerCount,
+        "the complete filter-adapted volume loads");
+
+    for (uint32_t layer = 0u;
+        layer < uvsr::VisibilityFilterAdaptedNoiseLayerCount;
+        ++layer)
+    {
+        std::array<uint32_t, 256> histogram{};
+        const size_t offset = size_t(layer) *
+            uvsr::VisibilityFilterAdaptedNoiseTexelCount;
+        for (uint32_t pixel = 0u;
+            pixel < uvsr::VisibilityFilterAdaptedNoiseTexelCount;
+            ++pixel)
+        {
+            ++histogram[filterAdapted[offset + pixel]];
+        }
+        for (uint32_t count : histogram)
+            Require(count == 16u,
+                "FAST optimization preserves each slice's uniform histogram");
+    }
+
+    constexpr std::array<std::array<uint32_t, 2>, 8> semanticOffsets = {{
+        {{ 0u, 0u }}, {{ 48u, 36u }},
+        {{ 32u, 8u }}, {{ 16u, 45u }},
+        {{ 1u, 17u }}, {{ 49u, 54u }},
+        {{ 33u, 26u }}, {{ 18u, 63u }}
+    }};
+    for (uint32_t left = 0u; left < semanticOffsets.size(); ++left)
+    {
+        for (uint32_t right = left + 1u;
+            right < semanticOffsets.size();
+            ++right)
+        {
+            Require(std::abs(ShiftedVolumeCorrelation(
+                filterAdapted,
+                semanticOffsets[left],
+                semanticOffsets[right])) < 0.03,
+                "R2 semantic reads remain decorrelated");
+        }
+    }
+
+    std::array<bool, 4096> visitedCycleOffsets{};
+    for (uint32_t cycle = 0u; cycle < visitedCycleOffsets.size(); ++cycle)
+    {
+        const uint32_t offset = (1741u + 2531u * cycle) & 4095u;
+        Require(!visitedCycleOffsets[offset],
+            "low-discrepancy cycle offsets do not repeat early");
+        visitedCycleOffsets[offset] = true;
+    }
+
+    std::vector<uint8_t> shuffled = filterAdapted;
+    std::mt19937 random(0xa5a5a5a5u);
+    for (uint32_t layer = 0u;
+        layer < uvsr::VisibilityFilterAdaptedNoiseLayerCount;
+        ++layer)
+    {
+        auto first = shuffled.begin() + size_t(layer) *
+            uvsr::VisibilityFilterAdaptedNoiseTexelCount;
+        std::shuffle(first,
+            first + uvsr::VisibilityFilterAdaptedNoiseTexelCount,
+            random);
+    }
+    const std::vector<double> optimizedValues = Normalize(filterAdapted);
+    const std::vector<double> shuffledValues = Normalize(shuffled);
+    const std::vector<double> optimizedSpatial =
+        GaussianFilter(optimizedValues);
+    const std::vector<double> shuffledSpatial =
+        GaussianFilter(shuffledValues);
+    const std::vector<double> optimizedTemporal =
+        ExponentialFilter(optimizedValues);
+    const std::vector<double> shuffledTemporal =
+        ExponentialFilter(shuffledValues);
+    Require(Variance(optimizedSpatial) < Variance(shuffledSpatial) * 0.25,
+        "the rank field suppresses Gaussian-filtered spatial error");
+    Require(Variance(optimizedTemporal) < Variance(shuffledTemporal) * 0.5,
+        "the rank field suppresses EMA-filtered temporal error");
+    Require(Variance(ExponentialFilter(optimizedSpatial)) <
+        Variance(ExponentialFilter(shuffledSpatial)) * 0.1,
+        "the rank field suppresses combined reconstruction error");
 
     std::cout << "Visibility sampling validation passed\n";
     return EXIT_SUCCESS;

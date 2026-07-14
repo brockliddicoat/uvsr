@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <fstream>
 #include <limits>
 #include <numeric>
 
@@ -282,6 +283,26 @@ namespace uvsr
             generator.Generate(result.data() +
                 layer * VisibilityBlueNoiseTexelCount);
         }
+        return result;
+    }
+
+    std::vector<uint8_t> LoadVisibilityFilterAdaptedNoise(
+        const std::filesystem::path& path)
+    {
+        constexpr size_t expectedSize =
+            size_t(VisibilityFilterAdaptedNoiseTexelCount) *
+            VisibilityFilterAdaptedNoiseLayerCount;
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file || file.tellg() != std::streamoff(expectedSize))
+            return {};
+
+        std::vector<uint8_t> result(expectedSize);
+        file.seekg(0, std::ios::beg);
+        file.read(
+            reinterpret_cast<char*>(result.data()),
+            std::streamsize(result.size()));
+        if (!file)
+            return {};
         return result;
     }
 }

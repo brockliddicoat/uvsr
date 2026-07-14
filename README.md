@@ -21,24 +21,27 @@ is also available from the scene picker.
   reduced modes retain only a minimal depth/normal-guided 2x2 upsampler because
   raw grid expansion produces coherent GI streaks. Full resolution incurs no
   spatial dispatch or filter target while filtering is disabled.
-- Every eligible pixel receives one stochastic slice and a configurable minimum
-  depth-tap budget. Depth/normal edges, disocclusions, unstable history, low
-  confidence, and reprojected neighboring GI contribution stochastically raise
-  the radial budget toward **Maximum Samples / Pixel**. Neighbor-driven work
-  cannot recursively become a new propagation seed.
-- **Adaptive Sparse Sampling** can select a separate fixed-work specialization:
-  one slice and **Fixed Samples / Pixel** for every eligible pixel, with the
-  adaptive neighborhood, reprojection, feedback, and stochastic budget code
-  compiled out. Its feedback textures and motion dependency are also absent.
+- **Adaptive Sparse Sampling** is off by default. The default fixed-work
+  specialization traces one stochastic slice and **20 Fixed Samples / Pixel**
+  for every eligible pixel, with the adaptive neighborhood, reprojection,
+  feedback, and stochastic budget code compiled out. Its feedback textures and
+  motion dependency are also absent.
+- When adaptive sampling is explicitly enabled, every eligible pixel receives
+  one stochastic slice and a configurable minimum depth-tap budget.
+  Depth/normal edges, disocclusions, unstable history, low confidence, and
+  reprojected neighboring GI contribution stochastically raise the radial
+  budget toward **Maximum Samples / Pixel**. Neighbor-driven work cannot
+  recursively become a new propagation seed.
 - The **Estimator** control exposes **Uniform Projected Angle**, **Uniform Solid
   Angle**, and **Cosine-Weighted Solid Angle**. Uniform Projected Angle remains
   the default. The cosine path is fully compiled and uses the complete joint-cosine
   CDF, projected slice mass, `pi` GI normalization, and no duplicate receiver-
   cosine factor.
-- The **Sample Scheduler** compares an independent hash baseline with a
-  first-party set of eight independent 64x64 void-and-cluster rank layers.
-  Both toroidally rotate the complete nested radial prefix, so fixed-work and
-  adaptive modes do not reuse global radius shells as the budget changes.
+- The **Sample Scheduler** compares **Independent Hash**, a first-party
+  **Toroidal Blue-Noise Rank Field**, and an offline optimized
+  **Filter-Adapted Spatiotemporal Rank Field**. Every scheduler toroidally
+  rotates the complete nested radial prefix, so fixed-work and adaptive modes
+  do not reuse global radius shells as the budget changes.
 - The renderer selector provides **Deferred**, **Forward**, and **Forward
   Tonemapperless** modes. The tonemapperless mode renders with the forward path
   and sends its scene-linear HDR result directly to the sRGB display target,

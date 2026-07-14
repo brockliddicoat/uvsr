@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -58,8 +59,9 @@ namespace uvsr
 
     enum class VisibilitySampleScheduler : uint32_t
     {
-        HashBaseline,
-        DecorrelatedBlueNoise
+        IndependentHash,
+        ToroidalBlueNoiseRankField,
+        FilterAdaptedSpatiotemporalRankField
     };
 
     enum class VisibilitySpatialFilter : uint32_t
@@ -75,17 +77,17 @@ namespace uvsr
         // rounded over a nested radial prefix, so increasing a limit does not
         // move samples already present at a lower limit.
         uint32_t minimumSampleCount = 8;
-        uint32_t maximumSampleCount = 32;
+        uint32_t maximumSampleCount = 20;
         // Selects the adaptive importance/feedback specialization. When false,
         // every eligible pixel traces maximumSampleCount taps on one slice and
         // the adaptive shader path is compiled out.
-        bool adaptiveSparseSamplingEnabled = true;
+        bool adaptiveSparseSamplingEnabled = false;
         float radius = 3.0f;
         float thickness = 0.5f;
         float stepDistributionExponent = 2.0f;
         float adaptiveStrength = 1.0f;
         VisibilitySampleScheduler scheduler =
-            VisibilitySampleScheduler::DecorrelatedBlueNoise;
+            VisibilitySampleScheduler::ToroidalBlueNoiseRankField;
     };
 
     struct AmbientOcclusionSettings
@@ -218,7 +220,8 @@ namespace uvsr
     public:
         ScreenSpaceVisibilityPass(
             nvrhi::IDevice* device,
-            const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory);
+            const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
+            const std::filesystem::path& filterAdaptedNoisePath);
 
         void Render(
             nvrhi::ICommandList* commandList,
@@ -299,6 +302,7 @@ namespace uvsr
         nvrhi::TextureHandle m_FinalIndirectDiffuse;
         nvrhi::TextureHandle m_DepthHierarchyTexture;
         nvrhi::TextureHandle m_BlueNoiseTexture;
+        nvrhi::TextureHandle m_FilterAdaptedNoiseTexture;
 
         nvrhi::TextureHandle m_DummyAmbientVisibility;
         nvrhi::TextureHandle m_DummyIndirectDiffuse;
@@ -337,7 +341,8 @@ namespace uvsr
         std::array<bool, static_cast<size_t>(Stage::Count)> m_TimerActive{};
 
         std::vector<uint16_t> m_BlueNoiseUpload;
-        bool m_BlueNoiseUploaded = false;
+        std::vector<uint8_t> m_FilterAdaptedNoiseUpload;
+        bool m_SamplingNoiseUploaded = false;
         bool m_HistoryValid = false;
         bool m_FeedbackValid = false;
         bool m_HistoryConfigurationInitialized = false;
@@ -363,7 +368,7 @@ namespace uvsr
             bool postProcessEnabled,
             bool depthHierarchyEnabled);
         void ReleaseResources();
-        void UploadBlueNoise(nvrhi::ICommandList* commandList);
+        void UploadSamplingNoise(nvrhi::ICommandList* commandList);
 
         void BeginStage(nvrhi::ICommandList* commandList, Stage stage);
         void EndStage(nvrhi::ICommandList* commandList, Stage stage);

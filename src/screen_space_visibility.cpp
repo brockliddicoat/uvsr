@@ -4,6 +4,7 @@
 #include <donut/engine/CommonRenderPasses.h>
 #include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
+#include <donut/core/log.h>
 #include <nvrhi/utils.h>
 
 #include <algorithm>
@@ -144,7 +145,7 @@ namespace uvsr
         settings.sampling.stepDistributionExponent = 2.0f;
         settings.sampling.adaptiveStrength = 1.0f;
         settings.sampling.scheduler =
-            VisibilitySampleScheduler::DecorrelatedBlueNoise;
+            VisibilitySampleScheduler::ToroidalBlueNoiseRankField;
 
         switch (quality)
         {
@@ -154,7 +155,7 @@ namespace uvsr
             break;
         case ScreenSpaceVisibilityQuality::Medium:
             settings.sampling.minimumSampleCount = 8u;
-            settings.sampling.maximumSampleCount = 32u;
+            settings.sampling.maximumSampleCount = 20u;
             break;
         case ScreenSpaceVisibilityQuality::High:
             settings.sampling.minimumSampleCount = 12u;
@@ -171,7 +172,8 @@ namespace uvsr
 
     ScreenSpaceVisibilityPass::ScreenSpaceVisibilityPass(
         nvrhi::IDevice* device,
-        const std::shared_ptr<ShaderFactory>& shaderFactory)
+        const std::shared_ptr<ShaderFactory>& shaderFactory,
+        const std::filesystem::path& filterAdaptedNoisePath)
         : m_Device(device)
     {
         nvrhi::BufferDesc constantBufferDesc;
@@ -236,8 +238,60 @@ namespace uvsr
         blueNoiseDesc.initialState = nvrhi::ResourceStates::CopyDest;
         blueNoiseDesc.keepInitialState = true;
         blueNoiseDesc.debugName =
-            "ScreenSpaceVisibility/DecorrelatedBlueNoise";
+            "ScreenSpaceVisibility/ToroidalBlueNoiseRankField";
         m_BlueNoiseTexture = device->createTexture(blueNoiseDesc);
+
+        m_FilterAdaptedNoiseUpload =
+            LoadVisibilityFilterAdaptedNoise(filterAdaptedNoisePath);
+        if (m_FilterAdaptedNoiseUpload.empty())
+        {
+            log::warning(
+                "Filter-adapted visibility rank field is missing or malformed: %s; using a safe toroidal fallback",
+                filterAdaptedNoisePath.string().c_str());
+            m_FilterAdaptedNoiseUpload.resize(
+                VisibilityFilterAdaptedNoiseTexelCount *
+                VisibilityFilterAdaptedNoiseLayerCount);
+            for (uint32_t layer = 0u;
+                layer < VisibilityFilterAdaptedNoiseLayerCount;
+                ++layer)
+            {
+                const uint32_t sourceLayer =
+                    layer % VisibilityBlueNoiseLayerCount;
+                const uint32_t offsetX = (layer * 13u) & 63u;
+                const uint32_t offsetY = (layer * 29u) & 63u;
+                for (uint32_t y = 0u; y < VisibilityFilterAdaptedNoiseSize; ++y)
+                {
+                    for (uint32_t x = 0u; x < VisibilityFilterAdaptedNoiseSize; ++x)
+                    {
+                        const uint32_t sourceX = (x + offsetX) & 63u;
+                        const uint32_t sourceY = (y + offsetY) & 63u;
+                        m_FilterAdaptedNoiseUpload[
+                            layer * VisibilityFilterAdaptedNoiseTexelCount +
+                            y * VisibilityFilterAdaptedNoiseSize + x] =
+                            uint8_t(m_BlueNoiseUpload[
+                                sourceLayer * VisibilityBlueNoiseTexelCount +
+                                sourceY * VisibilityBlueNoiseSize + sourceX] >> 8u);
+                    }
+                }
+            }
+        }
+
+        nvrhi::TextureDesc filterAdaptedNoiseDesc;
+        filterAdaptedNoiseDesc.width = VisibilityFilterAdaptedNoiseSize;
+        filterAdaptedNoiseDesc.height = VisibilityFilterAdaptedNoiseSize;
+        filterAdaptedNoiseDesc.arraySize =
+            VisibilityFilterAdaptedNoiseLayerCount;
+        filterAdaptedNoiseDesc.format = nvrhi::Format::R8_UNORM;
+        filterAdaptedNoiseDesc.dimension =
+            nvrhi::TextureDimension::Texture2DArray;
+        filterAdaptedNoiseDesc.mipLevels = 1u;
+        filterAdaptedNoiseDesc.initialState =
+            nvrhi::ResourceStates::CopyDest;
+        filterAdaptedNoiseDesc.keepInitialState = true;
+        filterAdaptedNoiseDesc.debugName =
+            "ScreenSpaceVisibility/FilterAdaptedSpatiotemporalRankField";
+        m_FilterAdaptedNoiseTexture =
+            device->createTexture(filterAdaptedNoiseDesc);
 
         CreatePipelines(shaderFactory);
         for (auto& stageQueries : m_TimerQueries)
@@ -279,6 +333,7 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(4),
             nvrhi::BindingLayoutItem::Texture_SRV(5),
             nvrhi::BindingLayoutItem::Texture_SRV(6),
+            nvrhi::BindingLayoutItem::Texture_SRV(7),
             nvrhi::BindingLayoutItem::Texture_UAV(0),
             nvrhi::BindingLayoutItem::Texture_UAV(1),
             nvrhi::BindingLayoutItem::Texture_UAV(2)
@@ -373,6 +428,7 @@ namespace uvsr
                             nvrhi::BindingLayoutItem::Texture_SRV(7),
                             nvrhi::BindingLayoutItem::Texture_SRV(8),
                             nvrhi::BindingLayoutItem::Texture_SRV(9),
+                            nvrhi::BindingLayoutItem::Texture_SRV(10),
                             nvrhi::BindingLayoutItem::Texture_UAV(0),
                             nvrhi::BindingLayoutItem::Texture_UAV(1)
                         },
@@ -635,8 +691,12 @@ namespace uvsr
         const uint64_t rawIndirectBytes = TextureBytes(samplingSize, 8u);
         const uint64_t finalAmbientBytes = TextureBytes(fullSize, 2u);
         const uint64_t finalIndirectBytes = TextureBytes(fullSize, 8u);
-        const uint64_t schedulerBytes = uint64_t(VisibilityBlueNoiseTexelCount) *
-            uint64_t(VisibilityBlueNoiseLayerCount) * sizeof(uint16_t);
+        const uint64_t schedulerBytes =
+            uint64_t(VisibilityBlueNoiseTexelCount) *
+                uint64_t(VisibilityBlueNoiseLayerCount) * sizeof(uint16_t) +
+            uint64_t(VisibilityFilterAdaptedNoiseTexelCount) *
+                uint64_t(VisibilityFilterAdaptedNoiseLayerCount) *
+                sizeof(uint8_t);
 
         m_Timings.outputTextureBytes =
             (ambientEnabled ? rawAmbientBytes : 0u) +
@@ -749,13 +809,16 @@ namespace uvsr
             bindingSet = nullptr;
     }
 
-    void ScreenSpaceVisibilityPass::UploadBlueNoise(
+    void ScreenSpaceVisibilityPass::UploadSamplingNoise(
         nvrhi::ICommandList* commandList)
     {
-        if (m_BlueNoiseUploaded)
+        if (m_SamplingNoiseUploaded)
             return;
 
-        assert(m_BlueNoiseTexture && !m_BlueNoiseUpload.empty());
+        assert(m_BlueNoiseTexture &&
+            m_FilterAdaptedNoiseTexture &&
+            !m_BlueNoiseUpload.empty() &&
+            !m_FilterAdaptedNoiseUpload.empty());
         for (uint32_t layer = 0u;
             layer < VisibilityBlueNoiseLayerCount;
             ++layer)
@@ -771,9 +834,26 @@ namespace uvsr
         commandList->setPermanentTextureState(
             m_BlueNoiseTexture,
             nvrhi::ResourceStates::ShaderResource);
-        m_BlueNoiseUploaded = true;
+        for (uint32_t layer = 0u;
+            layer < VisibilityFilterAdaptedNoiseLayerCount;
+            ++layer)
+        {
+            commandList->writeTexture(
+                m_FilterAdaptedNoiseTexture,
+                layer,
+                0u,
+                m_FilterAdaptedNoiseUpload.data() +
+                    layer * VisibilityFilterAdaptedNoiseTexelCount,
+                size_t(VisibilityFilterAdaptedNoiseSize) * sizeof(uint8_t));
+        }
+        commandList->setPermanentTextureState(
+            m_FilterAdaptedNoiseTexture,
+            nvrhi::ResourceStates::ShaderResource);
+        m_SamplingNoiseUploaded = true;
         m_BlueNoiseUpload.clear();
         m_BlueNoiseUpload.shrink_to_fit();
+        m_FilterAdaptedNoiseUpload.clear();
+        m_FilterAdaptedNoiseUpload.shrink_to_fit();
     }
 
     void ScreenSpaceVisibilityPass::AdvanceTimers()
@@ -946,7 +1026,7 @@ namespace uvsr
         }
         m_HistoryEstimator = settings.estimator;
         m_HistoryEstimatorInitialized = true;
-        UploadBlueNoise(commandList);
+        UploadSamplingNoise(commandList);
         AdvanceTimers();
 
         const uint32_t consumerVariant =
@@ -1133,7 +1213,9 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(3, hierarchy),
                 nvrhi::BindingSetItem::Texture_SRV(4, previousFeedback),
                 nvrhi::BindingSetItem::Texture_SRV(5, m_BlueNoiseTexture),
-                nvrhi::BindingSetItem::Texture_SRV(6, motion),
+                nvrhi::BindingSetItem::Texture_SRV(
+                    6, m_FilterAdaptedNoiseTexture),
+                nvrhi::BindingSetItem::Texture_SRV(7, motion),
                 nvrhi::BindingSetItem::Texture_UAV(0, rawAmbient),
                 nvrhi::BindingSetItem::Texture_UAV(1, rawIndirect),
                 nvrhi::BindingSetItem::Texture_UAV(2, currentFeedback)
@@ -1200,7 +1282,9 @@ namespace uvsr
                         7, previousFeedback),
                     nvrhi::BindingSetItem::Texture_SRV(
                         8, m_BlueNoiseTexture),
-                    nvrhi::BindingSetItem::Texture_SRV(9, motion),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        9, m_FilterAdaptedNoiseTexture),
+                    nvrhi::BindingSetItem::Texture_SRV(10, motion),
                     nvrhi::BindingSetItem::Texture_UAV(
                         0, m_RawIndirectDiffuse[outputIndex]),
                     nvrhi::BindingSetItem::Texture_UAV(
