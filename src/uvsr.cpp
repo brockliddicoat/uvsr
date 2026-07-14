@@ -2213,20 +2213,19 @@ protected:
                 "Trace AO and GI at full, half, or quarter linear resolution. Reduced output always uses a minimal depth/normal-guided 2x2 upsampler; enabling spatial filtering selects the configured reconstruction filter.");
 
             if (const ScreenSpaceVisibilityTimings* timings =
-                m_app->GetScreenSpaceVisibilityTimings())
+                    m_app->GetScreenSpaceVisibilityTimings();
+                timings && ImGui::TreeNodeEx("Statistics"))
             {
                 const float traceMilliseconds =
                     timings->depthHierarchyMs + timings->samplingMs;
+                const float otherMilliseconds =
+                    timings->temporalMs + timings->compositionMs;
                 ImGui::Text(
-                    "All %.2f | Trace %.2f | Temporal %.2f ms",
+                    "All %.2f | Trace %.2f | Filter %.2f | Other %.2f ms",
                     timings->CompleteEffectMs(), traceMilliseconds,
-                    timings->temporalMs);
+                    timings->filteringMs, otherMilliseconds);
                 ImGui::SetItemTooltip(
-                    "Latest delayed GPU timings. Trace includes optional hierarchy construction and all active visibility bounces.");
-                ImGui::Text(
-                    "Filter %.2f | Composite %.2f ms",
-                    timings->filteringMs,
-                    timings->compositionMs);
+                    "Latest delayed GPU timings. Trace includes optional hierarchy construction and all active visibility bounces. Other combines temporal reconstruction and final composition.");
                 constexpr double BytesPerMiB = 1024.0 * 1024.0;
                 ImGui::Text(
                     "Outputs %.1f | Working %.1f | Mask Cache %.1f MiB",
@@ -2241,6 +2240,7 @@ protected:
                     double(timings->sharedMaskPayloadBytes) / BytesPerMiB);
                 ImGui::SetItemTooltip(
                     "Avoided is exact optional AO/GI storage not allocated because its consumer is inactive. Shared estimates one duplicate R32 directional-mask payload avoided by evaluating AO and GI from the same register-local mask; it is not measured bandwidth.");
+                ImGui::TreePop();
             }
 
             if (!visibility.enabled)
@@ -2372,8 +2372,8 @@ protected:
 
                 static const char* schedulerLabels[] = {
                     "Independent Hash",
-                    "Toroidal Blue-Noise Rank Field",
-                    "Filter-Adapted Spatiotemporal Rank Field"
+                    "Toroidal Blue Noise",
+                    "Filter-Adapted Spatiotemporal Noise"
                 };
                 ImGui::SetNextItemWidth(settingsControlWidth);
                 if (ImGui::BeginCombo(
@@ -2399,7 +2399,7 @@ protected:
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip(
-                    "Independent Hash hashes every decision. Toroidal Blue-Noise Rank Field uses separate 64x64 void-and-cluster layers with temporal traversal. Filter-Adapted Spatiotemporal Rank Field uses a scalar-uniform 64x64x32 FAST-optimized volume shaped for Gaussian spatial filtering and alpha=0.35 EMA history, with R2-separated semantic reads and low-discrepancy cycle offsets. Every mode keeps the same sample budget.");
+                    "Independent Hash hashes every decision. Toroidal Blue Noise uses separate 64x64 void-and-cluster layers with temporal traversal. Filter-Adapted Spatiotemporal Noise uses a scalar-uniform 64x64x32 FAST-optimized volume shaped for Gaussian spatial filtering and alpha=0.35 EMA history, with R2-separated semantic reads and low-discrepancy cycle offsets. Every mode keeps the same sample budget.");
 
                 if (samplingChanged)
                     visibility.quality = ScreenSpaceVisibilityQuality::Custom;

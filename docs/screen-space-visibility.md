@@ -30,22 +30,21 @@ arithmetic, and external capture tools.
 
 The **Estimator** control exposes three compiled formulations:
 
-- **Uniform Projected Angle** is the default. It follows the finite-thickness
+- **Uniform Projected Angle** follows the finite-thickness
   sector definition in Therrien, Levesque, and Gilet's
   [Screen Space Indirect Lighting with Visibility Bitmask](https://arxiv.org/abs/2301.11376):
   the sector lattice is uniform in projected slice angle.
-- **Uniform Solid Angle** maps the receiver hemisphere to equal-solid-angle
-  sectors. Receiver cosine remains explicit in GI, and irradiance uses a
-  `2*pi` normalization.
+- **Uniform Solid Angle** is the default. It maps the receiver hemisphere to
+  equal-solid-angle sectors. Receiver cosine remains explicit in GI, and
+  irradiance uses a `2*pi` normalization.
 - **Cosine-Weighted Solid Angle** uses the complete joint receiver-cosine
   measure. It is no longer gated. Receiver cosine is already represented by
   the CDF and slice mass, so GI must not multiply it a second time; the outer
   irradiance normalization is `pi`.
 
-Uniform Projected Angle remains the default until controlled image comparisons and GPU
-measurements justify changing it. Successful compilation and CPU quadrature do
-not establish runtime speed, register pressure, occupancy, cache behavior, or
-image quality.
+Uniform Solid Angle is the current factory default. Successful compilation and
+CPU quadrature do not establish runtime speed, register pressure, occupancy,
+cache behavior, or image quality.
 
 ### Complete Joint-Cosine CDF
 
@@ -203,7 +202,7 @@ maximum/fixed count and removes all adaptive instructions and resources.
 **Independent Hash** independently hashes stochastic decisions and consumes no
 rank-field texture.
 
-**Toroidal Blue-Noise Rank Field** uses eight independently generated 64x64
+**Toroidal Blue Noise** uses eight independently generated 64x64
 toroidal void-and-cluster rank layers. Slice rotation, CDF sector phase, budget
 rounding, odd-sample side, both radial directions, and adaptive-neighbor choice
 receive separate semantic layers rather than translated copies of one scalar
@@ -212,7 +211,7 @@ spatial spectrum, and hashed cycle offsets prevent exact 64-frame repetition.
 It is spatiotemporal as a runtime sequence, but its eight 2D layers were not
 jointly optimized as one 3D space-time volume.
 
-**Filter-Adapted Spatiotemporal Rank Field** uses a 64x64x32 scalar-uniform
+**Filter-Adapted Spatiotemporal Noise** uses a 64x64x32 scalar-uniform
 volume generated offline by Electronic Arts' FastNoise optimizer. Its fixed
 objective is a Gaussian spatial filter with sigma 1.0 and exponential temporal
 history with alpha 0.35. R2-separated spatial reads provide different semantic
@@ -240,7 +239,8 @@ stationary grain, motion trails, and convergence after disocclusion.
 
 ## Reconstruction and Upsampling
 
-**Reconstruction Enabled** is the master switch. When it is off, full
+Reconstruction, temporal reconstruction, and spatial filtering are all disabled
+by default. **Reconstruction Enabled** is the master switch. When it is off, full
 resolution composites raw AO/GI directly. Half/quarter resolution retains the
 minimal guide-aware upsampler required to map between source and destination
 grids. Temporal reconstruction and **Spatial Filtering** can be toggled

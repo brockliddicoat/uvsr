@@ -151,7 +151,7 @@ namespace uvsr
         {
         case ScreenSpaceVisibilityQuality::Low:
             settings.sampling.minimumSampleCount = 4u;
-            settings.sampling.maximumSampleCount = 16u;
+            settings.sampling.maximumSampleCount = 10u;
             break;
         case ScreenSpaceVisibilityQuality::Medium:
             settings.sampling.minimumSampleCount = 8u;

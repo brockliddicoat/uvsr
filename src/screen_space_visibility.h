@@ -111,9 +111,9 @@ namespace uvsr
         // The master switch can bypass temporal and optional spatial
         // reconstruction. Reduced resolutions retain a minimal guide-aware
         // upsampler because their source and destination grids differ.
-        bool enabled = true;
-        bool temporalEnabled = true;
-        bool spatialEnabled = true;
+        bool enabled = false;
+        bool temporalEnabled = false;
+        bool spatialEnabled = false;
         // SSRT3's default current-frame blend response.
         float temporalResponse = 0.35f;
         VisibilitySpatialFilter spatialFilter =
@@ -127,7 +127,7 @@ namespace uvsr
         ScreenSpaceVisibilityQuality quality =
             ScreenSpaceVisibilityQuality::Medium;
         VisibilityEstimator estimator =
-            VisibilityEstimator::UniformProjectedAngle;
+            VisibilityEstimator::UniformSolidAngle;
         VisibilityResolution resolution = VisibilityResolution::Full;
         SharedSamplingSettings sampling;
         AmbientOcclusionSettings ambientOcclusion;

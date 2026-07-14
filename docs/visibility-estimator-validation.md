@@ -3,10 +3,9 @@
 UVSR compiles three runtime estimators: `UniformProjectedAngle`,
 `UniformSolidAngle`, and `CosineWeightedSolidAngle`. Their UI labels are
 **Uniform Projected Angle**, **Uniform Solid Angle**, and **Cosine-Weighted
-Solid Angle**. Uniform Projected Angle remains the default; all three are
-selectable.
+Solid Angle**. Uniform Solid Angle is the default; all three are selectable.
 
-The default projected-angle measure follows
+The projected-angle measure follows
 [Screen Space Indirect Lighting with Visibility Bitmask](https://arxiv.org/abs/2301.11376).
 Uniform Solid Angle and Cosine-Weighted Solid Angle are UVSR alternatives
 derived and tested against explicit slice integrals. Activision's
