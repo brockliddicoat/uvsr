@@ -217,7 +217,7 @@ The launcher requires a description and puts it in the window and task title:
 .\tools\launch_uvsr.ps1 -Experiment "testing program title on task title"
 ```
 
-After building, Windows users can also double-click `Launch UVSR.cmd`. It
+After building, Windows users can also double-click `LaunchUVSR.cmd`. It
 delegates to the same required experiment launcher with a fixed main-build
 label; optional renderer arguments can be appended from a terminal.
 
