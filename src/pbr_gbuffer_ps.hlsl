@@ -110,13 +110,21 @@ void main(
         uint(max(g_Material.materialID, 0)),
         g_Push.startInstanceLocation + i_instance);
 
-    // This deferred producer contains depth-writing opaque and alpha-tested
-    // surfaces. Feature presence, surviving cutout opacity, and static emissive
-    // intensity do not prove temporal change; marking them reactive prevents
-    // the accumulation needed by foliage, coated surfaces, and small lights.
-    // Keep the producer neutral until a later composition/material path has a
-    // concrete unreliable-motion or animated-shading signal to author here.
-    o_reactiveMask = 0.0f;
+    // This is UVSR's explicit, application-authored reactive contribution.
+    // Alpha coverage, emissive shading and transport features are known at
+    // material evaluation time and are more trustworthy than a color-only
+    // heuristic. The resolve pass combines this with its automatic
+    // exposure-normalized luminance/chroma comparison; it does not interpret
+    // this mask as unconditional history rejection.
+    float emissiveLuminance = dot(max(surface.emissiveColor, 0.0f),
+        float3(0.2126f, 0.7152f, 0.0722f));
+    float alphaReactivity = saturate((1.0f - surface.opacity) * 4.0f);
+    float emissiveReactivity = saturate(log2(1.0f + emissiveLuminance) * 0.25f);
+    float featureReactivity = (pbrData.material.featureMask &
+        (PbrFeature_Translucency | PbrFeature_Refraction | PbrFeature_Scattering)) != 0u
+        ? 1.0f : 0.0f;
+    o_reactiveMask = max(alphaReactivity,
+        max(emissiveReactivity, featureReactivity));
 
 #if MOTION_VECTORS
     // The alpha channel distinguishes a valid zero velocity from the cleared

@@ -56,10 +56,10 @@ evaluated yet.
 The original four material targets total 24 bytes per pixel. UVSR changes
 their interpretation without increasing their sizes, then adds one `R8_UNORM`
 attachment for authored material ambient occlusion, one `RG32_UINT` attachment
-for stable material/instance identity, and one `R8_UNORM` transient-transport
-reactive mask. Total always-on PBR G-buffer storage is 34 bytes per pixel,
-excluding depth. The identity attachment doubles as the picking source,
-avoiding a second geometry draw in the normal deferred PBR path.
+for stable material/instance identity, and one `R8_UNORM` application-reactive
+mask. Total always-on PBR G-buffer storage is 34 bytes per pixel, excluding
+depth. The identity attachment doubles as the picking source, avoiding a
+second geometry draw in the normal deferred PBR path.
 
 | Target | Format | Channels |
 |---|---|---|
@@ -69,7 +69,7 @@ avoiding a second geometry draw in the normal deferred PBR path.
 | G3 | `RGBA16_FLOAT` | Scene-linear emissive radiance in RGB; metalness in A |
 | G4 | `R8_UNORM` | Authored material ambient occlusion for the approximate indirect-light fallback and screen-space diffuse transport |
 | G5 | `RG32_UINT` | Stable scene material ID in R; stable mesh-instance ID in G |
-| G6 | `R8_UNORM` | Reserved explicit transient-transport reactivity; the current depth-writing producer writes zero |
+| G6 | `R8_UNORM` | Explicit reactive contribution from alpha coverage, emissive shading, and reactive transport features |
 | G7 (conditional) | `RGBA16_FLOAT` | Current-to-previous pixel motion in XY; previous-minus-current device-depth delta in Z; validity in A |
 
 Base-color quantization follows ordinary sRGB8 material storage. Geometric
@@ -79,28 +79,14 @@ Shading normals and perceptual roughness use signed 16-bit normalized storage.
 Emission and metalness use half floats. IOR has 256 steps over `[1,3]`, which
 provides finer common-dielectric F0 precision than storing raw F0 in UNORM8.
 Feature flags are exact at eight bits. Material ambient occlusion and the
-transient-transport reactive contribution have eight linear bits. The 32-bit
-identity channels avoid false temporal matches and picking aliases in scenes
-with more than 65,535 materials or instances. G7 is present while either
-NRA-RTAA or screen-space temporal filtering needs velocity. Its XY convention
-is current-to-previous in pixels and Donut's writer removes projection jitter
+reactive contribution have eight linear bits. The 32-bit identity channels
+avoid false temporal matches and picking aliases in scenes with more than
+65,535 materials or instances. G7 is present while either NRA-RTAA or screen-
+space temporal filtering needs velocity. Its XY convention is
+current-to-previous in pixels and Donut's writer removes projection jitter
 exactly once. Preserving Z makes disocclusion validation projection-correct
 under camera motion; A distinguishes a valid zero velocity from cleared or
 behind-camera data. G7 is not counted in the 34-byte always-on total.
-
-NRA-RTAA decodes the octahedral geometric normal from G1 for temporal surface
-validation, thin/silhouette classification, and spatial-fallback gating. The G2
-shading normal remains available to lighting but is deliberately excluded from
-hard temporal validation, so normal-map detail cannot masquerade as a changing
-geometric surface. G6 likewise does not infer reactivity from surviving cutout
-opacity or emissive magnitude: opaque and alpha-tested pixels write trustworthy
-depth and motion, and static foliage coverage and small emissive details need
-temporal accumulation. The current first-party producer therefore writes zero.
-The attachment is reserved for a future compositor or material path with a
-concrete animated/unreliable transport signal, such as translucency, refraction,
-or scattering without the opaque G-buffer contract. RTAA's automatic path uses
-motion-corroborated neighborhood residuals; stationary uniform changes remain
-bounded by current-neighborhood clipping.
 
 The deferred decoder normalizes both normals and flips an invalid shading
 normal back into the geometric-normal hemisphere. The BSDF rejects light or

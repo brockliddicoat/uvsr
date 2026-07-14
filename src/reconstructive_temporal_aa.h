@@ -45,9 +45,8 @@ namespace uvsr
         uint64_t debugBytes = 0;
         uint64_t totalBytes = 0;
 
-        // Baseline full-screen logical traffic estimates before cache reuse.
-        // Scene-dependent background dilation, rejected-history color skips,
-        // and conditional persistent-history reads are not folded into them.
+        // Conservative full-screen traffic estimates. Conditional persistent
+        // history reads are excluded because their coverage is scene-dependent.
         float approximateReadBytesPerPixel = 0.f;
         float approximateWriteBytesPerPixel = 0.f;
     };
@@ -59,8 +58,10 @@ namespace uvsr
         {
             nvrhi::ITexture* sceneColor = nullptr;
             nvrhi::ITexture* depth = nullptr;
+            nvrhi::ITexture* normals = nullptr;
             nvrhi::ITexture* gbufferDiffuse = nullptr;
             nvrhi::ITexture* gbufferSpecular = nullptr;
+            nvrhi::ITexture* gbufferEmissive = nullptr;
             nvrhi::ITexture* surfaceIds = nullptr;
             nvrhi::ITexture* motionVectors = nullptr;
             nvrhi::ITexture* explicitReactiveMask = nullptr;
@@ -133,8 +134,7 @@ namespace uvsr
         nvrhi::BufferHandle m_ConstantBuffer;
         nvrhi::SamplerHandle m_LinearClampSampler;
         Pipeline m_PreparePipeline;
-        // filter bit | resurrection bit | (performance tier << 2)
-        std::array<Pipeline, 12> m_ResolvePipelines;
+        std::array<Pipeline, 4> m_ResolvePipelines;
 
         dm::uint2 m_Resolution = dm::uint2::zero();
         uint32_t m_PersistentCount = 0;

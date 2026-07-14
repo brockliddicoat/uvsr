@@ -87,7 +87,7 @@ struct ReconstructiveTemporalAAConstants
     float thinDepthThreshold;
     float thinContrastThreshold;
     float thinMaxRelaxation;
-    float thinLockDecayPerFrame;
+    float paddingThin;
 
     float varianceSigma;
     float varianceLumaScale;

@@ -145,19 +145,15 @@ float3 ApplyRtaaSharpening(int2 pixel, float3 center, out float3 contribution)
             max(neighborLuminance.z, neighborLuminance.w)));
 
     // Resolve metadata packs normalized sample count, validation confidence,
-    // thin-lock lifetime, and reactive/motion nibbles. Moments are log-luminance
-    // first and second moments, making variance suppression robust to HDR peaks.
+    // final reactive value, and motion factor. Moments are log-luminance first
+    // and second moments, making the variance suppression robust to HDR peaks.
     float4 metadata = saturate(t_RtaaMetadata.Load(int3(pixel, 0)));
-    uint packedReactiveAndMotion = (uint)round(metadata.a * 255.0f);
-    float reactive = float(packedReactiveAndMotion & 15u) / 15.0f;
-    float motionFactor =
-        float((packedReactiveAndMotion >> 4u) & 15u) / 15.0f;
     float2 moments = t_RtaaMoments.Load(int3(pixel, 0)).xy;
     float temporalVariance = sqrt(max(moments.y - moments.x * moments.x, 0.0f));
     float motionSuppression = 1.0f - saturate(
-        motionFactor * g_RtaaSharpeningSuppression.x);
+        metadata.a * g_RtaaSharpeningSuppression.x);
     float reactiveSuppression = 1.0f - saturate(
-        reactive * g_RtaaSharpeningSuppression.y);
+        metadata.b * g_RtaaSharpeningSuppression.y);
     float varianceSuppression = 1.0f - saturate(
         temporalVariance * g_RtaaSharpeningSuppression.z);
     float validationSuppression = smoothstep(0.15f, 0.75f, metadata.g);

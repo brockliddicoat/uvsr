@@ -65,27 +65,6 @@ namespace
         float z = 0.0f;
     };
 
-    struct Float2
-    {
-        float x = 0.0f;
-        float y = 0.0f;
-    };
-
-    Float2 operator+(const Float2& first, const Float2& second)
-    {
-        return { first.x + second.x, first.y + second.y };
-    }
-
-    Float2 operator-(const Float2& first, const Float2& second)
-    {
-        return { first.x - second.x, first.y - second.y };
-    }
-
-    float Length(const Float2& value)
-    {
-        return std::sqrt(value.x * value.x + value.y * value.y);
-    }
-
     Float3 operator+(const Float3& first, const Float3& second)
     {
         return { first.x + second.x, first.y + second.y,
@@ -212,72 +191,6 @@ namespace
         return center + delta * Saturate(scale);
     }
 
-    float ReferenceNeighborhoodReactive(
-        const Float3& unclippedHistory,
-        const Float3& historyInsideBroadNeighborhood,
-        float lumaThreshold,
-        float chromaThreshold,
-        float strength)
-    {
-        const Float3 residual = unclippedHistory -
-            historyInsideBroadNeighborhood;
-        const float lumaReactive = SmoothRange(std::abs(residual.x),
-            lumaThreshold, lumaThreshold * 2.0f);
-        const float chromaReactive = SmoothRange(std::sqrt(
-            residual.y * residual.y + residual.z * residual.z),
-            chromaThreshold, chromaThreshold * 2.0f);
-        return Saturate(std::max(lumaReactive, chromaReactive) *
-            std::max(strength, 0.0f));
-    }
-
-    float ReferenceMotionGatedAutomaticReactive(
-        const Float3& unclippedHistory,
-        const Float3& historyInsideBroadNeighborhood,
-        float lumaThreshold,
-        float chromaThreshold,
-        float strength,
-        float motionFactor)
-    {
-        return ReferenceNeighborhoodReactive(unclippedHistory,
-            historyInsideBroadNeighborhood, lumaThreshold,
-            chromaThreshold, strength) * Saturate(motionFactor);
-    }
-
-    struct HistoryCoordinates
-    {
-        Float2 resolvedColor;
-        Float2 rawAuxiliary;
-    };
-
-    HistoryCoordinates ImmediateHistoryCoordinates(
-        Float2 currentPixelCenter,
-        Float2 deJitteredMotion,
-        Float2 currentJitter,
-        Float2 historyJitter)
-    {
-        const Float2 resolvedColor = currentPixelCenter + deJitteredMotion;
-        return { resolvedColor,
-            resolvedColor - currentJitter + historyJitter };
-    }
-
-    HistoryCoordinates PersistentHistoryCoordinates(
-        Float2 unjitteredHistoryProjection,
-        Float2 currentJitter,
-        Float2 historyJitter)
-    {
-        return { unjitteredHistoryProjection + currentJitter,
-            unjitteredHistoryProjection + historyJitter };
-    }
-
-    bool ReferenceStaticSurfaceForResurrection(
-        Float2 actualMotion,
-        Float2 cameraOnlyMotion,
-        float depthAgreement)
-    {
-        return Length(actualMotion - cameraOnlyMotion) <= 0.125f &&
-            depthAgreement > 0.5f;
-    }
-
     struct VelocitySample
     {
         float depth = 0.0f;
@@ -297,49 +210,12 @@ namespace
         return std::isfinite(depth) && depth > 0.0f && depth <= 1.0f;
     }
 
-    bool IsValidDeviceDepth(float depth, bool reverseZ)
-    {
-        if (!std::isfinite(depth))
-            return false;
-        return reverseZ
-            ? depth > 0.0f && depth <= 1.0f
-            : depth >= 0.0f && depth < 1.0f;
-    }
-
-    float ClearDeviceDepth(bool reverseZ)
-    {
-        return reverseZ ? 0.0f : 1.0f;
-    }
-
-    float ReferencePreparedReactive(
-        bool centerDepthValid,
-        float explicitReactive,
-        bool /* staticMaterialFeaturePresent */)
-    {
-        return centerDepthValid ? Saturate(explicitReactive) : 0.0f;
-    }
-
-    float ReferenceAuthoredThin(
-        bool centerDepthValid,
-        float diffuseAlpha,
-        bool thinFeaturePresent)
-    {
-        if (!centerDepthValid)
-            return 0.0f;
-        const float featureThin = thinFeaturePresent ? 1.0f : 0.0f;
-        const float alphaThin = Saturate((1.0f -
-            Saturate(diffuseAlpha)) * 2.0f);
-        return std::max(featureThin, alphaThin);
-    }
-
     VelocityOwner SelectNearestReverseZVelocity(
         const std::array<VelocitySample, 9>& neighborhood)
     {
         VelocityOwner owner;
         owner.sample = neighborhood[4];
         owner.valid = IsValidReverseDepth(owner.sample.depth);
-        if (owner.valid)
-            return owner;
 
         for (uint32_t index = 0; index < neighborhood.size(); ++index)
         {
@@ -360,8 +236,7 @@ namespace
         float actualViewDepth,
         float expectedViewDepth,
         float absoluteThreshold,
-        float relativeThreshold,
-        float toleranceScale = 1.0f)
+        float relativeThreshold)
     {
         if (!std::isfinite(actualViewDepth) ||
             !std::isfinite(expectedViewDepth) ||
@@ -372,7 +247,7 @@ namespace
 
         const float threshold = std::max(absoluteThreshold +
             relativeThreshold * std::max(actualViewDepth, expectedViewDepth),
-            ReferenceEpsilon) * std::clamp(toleranceScale, 1.0f, 2.0f);
+            ReferenceEpsilon);
         const float error = std::abs(actualViewDepth - expectedViewDepth);
         return 1.0f - SmoothRange(error, threshold, threshold * 2.0f);
     }
@@ -460,190 +335,6 @@ namespace
         return { currentWeight, newHistoryCount, maximumSamples };
     }
 
-    struct CoverageAccumulationStep
-    {
-        float color = 0.0f;
-        float currentWeight = 1.0f;
-        float historyCount = 1.0f;
-        float reactive = 0.0f;
-    };
-
-    CoverageAccumulationStep StepCoverageAccumulation(
-        const ReconstructiveTemporalAASettings& settings,
-        float deltaSeconds,
-        float historyColor,
-        float currentColor,
-        float historyCount,
-        float historyConfidence,
-        float stableCoverage)
-    {
-        const Float3 black = RgbToCompressedYCoCg({ 0.0f, 0.0f, 0.0f });
-        const Float3 white = RgbToCompressedYCoCg({ 1.0f, 1.0f, 1.0f });
-        const Float3 history = RgbToCompressedYCoCg(
-            { historyColor, historyColor, historyColor });
-        const Float3 broadCenter = (black + white) * 0.5f;
-        const Float3 broadHistory = ClipLineToBox(
-            history, broadCenter, black, white);
-        const float reactive = ReferenceNeighborhoodReactive(
-            history, broadHistory, settings.reactiveLuminanceThreshold,
-            settings.reactiveChromaThreshold,
-            settings.automaticReactiveStrength);
-
-        const ReconstructiveTemporalWeights weights =
-            ComputeReconstructiveTemporalWeights(settings, deltaSeconds);
-        const float maximumSamples = static_cast<float>(
-            std::max(settings.maximumHistorySamples, 1u));
-        const float sampleLimitedWeight = 1.0f /
-            (std::min(historyCount, maximumSamples) + 1.0f);
-        float currentWeight = std::max(
-            weights.stableCurrentWeight, sampleLimitedWeight);
-
-        currentWeight = Lerp(currentWeight, 1.0f,
-            1.0f - Saturate(historyConfidence));
-        // Verified stationary coverage selects the count-driven weight after
-        // the confidence safety gate so foreground/background phases cannot be
-        // biased by their necessarily asymmetric validation confidence.
-        currentWeight = Lerp(currentWeight, sampleLimitedWeight,
-            Saturate(stableCoverage));
-        const float outputColor = Lerp(
-            historyColor, currentColor, currentWeight);
-        const bool historyAccepted = historyConfidence > 0.05f &&
-            currentWeight < 0.999f;
-        const float newHistoryCount = historyAccepted
-            ? std::min(historyCount + 1.0f, maximumSamples) : 1.0f;
-        return { outputColor, currentWeight, newHistoryCount, reactive };
-    }
-
-    float ReferenceCoverageOverrideSignal(
-        bool coverageTransition,
-        float currentEdge,
-        bool borrowedSource,
-        float previousCoverageLock,
-        float currentNeighborMatch,
-        float stationaryMotionGate)
-    {
-        const float candidate = std::max({ currentEdge,
-            borrowedSource ? 1.0f : 0.0f, previousCoverageLock });
-        const float support = std::max(currentNeighborMatch,
-            previousCoverageLock);
-        return (coverageTransition ? 1.0f : 0.0f) * candidate * support *
-            Saturate(stationaryMotionGate);
-    }
-
-    float ReferenceUncoveredCoverageHistory(
-        float clippedHistory,
-        float unclippedHistory,
-        bool currentDepthValid,
-        bool previousCoverageLock,
-        float stationaryMotionGate,
-        float reactive)
-    {
-        const float preservation = currentDepthValid ? 0.0f :
-            (previousCoverageLock ? 1.0f : 0.0f) * stationaryMotionGate *
-            (1.0f - Saturate(reactive));
-        return Lerp(clippedHistory, unclippedHistory,
-            Saturate(preservation));
-    }
-
-    float PackReactiveAndMotion(float reactive, float motionFactor)
-    {
-        const uint32_t reactiveBits = static_cast<uint32_t>(
-            std::round(Saturate(reactive) * 15.0f));
-        const uint32_t motionBits = static_cast<uint32_t>(
-            std::round(Saturate(motionFactor) * 15.0f));
-        return static_cast<float>((motionBits << 4u) | reactiveBits) / 255.0f;
-    }
-
-    float UnpackReactive(float packed)
-    {
-        const uint32_t bits = static_cast<uint32_t>(
-            std::round(Saturate(packed) * 255.0f));
-        return static_cast<float>(bits & 15u) / 15.0f;
-    }
-
-    float UnpackMotion(float packed)
-    {
-        const uint32_t bits = static_cast<uint32_t>(
-            std::round(Saturate(packed) * 255.0f));
-        return static_cast<float>((bits >> 4u) & 15u) / 15.0f;
-    }
-
-    float QuantizeThinLock(float lifetime)
-    {
-        return std::round(Saturate(lifetime) * 255.0f) / 255.0f;
-    }
-
-    float StepCoverageLockLifetime(
-        float previousLifetime,
-        bool currentThin,
-        uint32_t jitterPeriod,
-        bool currentDepthValid = false,
-        float geometricConfidence = 0.0f,
-        float stationaryMotionGate = 1.0f,
-        float reactive = 0.0f)
-    {
-        const float lockFrames =
-            static_cast<float>(std::max(jitterPeriod, 1u)) + 2.0f;
-        const float decay = std::ceil(255.0f / lockFrames) / 255.0f;
-        const bool canInherit = !currentDepthValid ||
-            geometricConfidence > 0.5f;
-        const float unquantized = (currentThin ? 1.0f :
-            std::max(previousLifetime - decay, 0.0f) *
-                (canInherit ? 1.0f : 0.0f)) *
-            Saturate(stationaryMotionGate) * (1.0f - Saturate(reactive));
-        return QuantizeThinLock(unquantized);
-    }
-
-    float InterpolatedStationaryThinLock(
-        const std::array<float, 4>& lifetimes,
-        const std::array<float, 4>& motionFactors,
-        const std::array<float, 4>& bilinearWeights)
-    {
-        float interpolatedLifetime = 0.0f;
-        for (size_t index = 0; index < lifetimes.size(); ++index)
-        {
-            if (motionFactors[index] < 0.10f)
-                interpolatedLifetime +=
-                    lifetimes[index] * bilinearWeights[index];
-        }
-        return interpolatedLifetime > (1.0f / 255.0f)
-            ? Saturate(interpolatedLifetime) : 0.0f;
-    }
-
-    float ReferenceExpiredCoverageAlpha(
-        bool currentDepthValid,
-        float previousCoverageLifetime,
-        float accumulatedCoverage)
-    {
-        return !currentDepthValid && previousCoverageLifetime <= 0.0f
-            ? 0.0f : accumulatedCoverage;
-    }
-
-    float ReferencePreviousCoverageLifetime(
-        bool historyValid,
-        float pointLifetime,
-        float footprintLifetime)
-    {
-        return historyValid
-            ? (pointLifetime > 0.0f ? pointLifetime : footprintLifetime)
-            : 0.0f;
-    }
-
-    uint32_t ReferenceResolveVariant(
-        ReconstructiveTemporalPerformanceProfile profile,
-        HistorySampleFilter configuredFilter,
-        bool resurrectionEnabled)
-    {
-        const bool maximumQuality = profile ==
-            ReconstructiveTemporalPerformanceProfile::MaximumQuality;
-        const bool catmullRom = maximumQuality &&
-            configuredFilter == HistorySampleFilter::CatmullRom;
-        const bool resurrection = maximumQuality && resurrectionEnabled;
-        return (catmullRom ? 1u : 0u) |
-            (resurrection ? 2u : 0u) |
-            (static_cast<uint32_t>(profile) << 2u);
-    }
-
     float ReferenceFallbackContribution(bool enabled, float historyConfidence)
     {
         if (!enabled)
@@ -669,13 +360,12 @@ namespace
         float hardGeometricConfidence,
         float thinCoverage,
         float maximumRelaxation,
-        float previousConfidence,
-        float reactive = 0.0f)
+        float previousConfidence)
     {
         historyConfidence = Saturate(historyConfidence);
         hardGeometricConfidence = Saturate(hardGeometricConfidence);
         const float thinRelaxation = Saturate(thinCoverage) *
-            Saturate(maximumRelaxation) * (1.0f - Saturate(reactive));
+            Saturate(maximumRelaxation);
         const float boost = hardGeometricConfidence * thinRelaxation *
             Saturate(previousConfidence) * (1.0f - historyConfidence);
         return Saturate(historyConfidence + boost);
@@ -768,7 +458,7 @@ namespace
         Require(settings.historyFilter == HistorySampleFilter::CatmullRom,
             "preset Catmull-Rom history filter");
         Require(settings.explicitReactiveMaskEnabled,
-            "preset consumes the optional explicit application reactive mask");
+            "preset consumes explicit PBR reactive mask");
         RequireNear(settings.stableResponseMs, stableResponseMs,
             "preset stable response");
         RequireNear(settings.movingResponseMs, movingResponseMs,
@@ -820,71 +510,6 @@ namespace
             heavy, ReconstructiveTemporalPreset::HeavyTemporal);
         Require(heavy.persistentFrameInterval == 1,
             "Heavy resurrection samples every frame by default");
-    }
-
-    void TestPerformanceProfiles()
-    {
-        static_assert(static_cast<uint32_t>(
-            ReconstructiveTemporalPerformanceProfile::Performance) == 0u);
-        static_assert(static_cast<uint32_t>(
-            ReconstructiveTemporalPerformanceProfile::Balanced) == 1u);
-        static_assert(static_cast<uint32_t>(
-            ReconstructiveTemporalPerformanceProfile::MaximumQuality) == 2u);
-
-        const ReconstructiveTemporalAASettings defaults;
-        Require(defaults.performanceProfile ==
-            ReconstructiveTemporalPerformanceProfile::Balanced,
-            "Balanced is the default RTAA performance profile");
-        Require(std::strcmp(GetReconstructiveTemporalPerformanceProfileName(
-            ReconstructiveTemporalPerformanceProfile::Performance),
-            "Performance") == 0, "stable Performance profile name");
-        Require(std::strcmp(GetReconstructiveTemporalPerformanceProfileName(
-            ReconstructiveTemporalPerformanceProfile::Balanced),
-            "Balanced") == 0, "stable Balanced profile name");
-        Require(std::strcmp(GetReconstructiveTemporalPerformanceProfileName(
-            ReconstructiveTemporalPerformanceProfile::MaximumQuality),
-            "Maximum Quality") == 0,
-            "stable Maximum Quality profile name");
-        Require(std::strcmp(GetReconstructiveTemporalPerformanceProfileName(
-            static_cast<ReconstructiveTemporalPerformanceProfile>(999u)),
-            "Unknown") == 0, "invalid performance profile has a safe name");
-
-        ReconstructiveTemporalAASettings independent;
-        independent.performanceProfile =
-            ReconstructiveTemporalPerformanceProfile::Performance;
-        ApplyReconstructiveTemporalPreset(
-            independent, ReconstructiveTemporalPreset::HeavyTemporal);
-        Require(independent.performanceProfile ==
-            ReconstructiveTemporalPerformanceProfile::Performance,
-            "temporal presets preserve the independent performance profile");
-
-        independent.performanceProfile =
-            static_cast<ReconstructiveTemporalPerformanceProfile>(999u);
-        SanitizeReconstructiveTemporalSettings(independent);
-        Require(independent.performanceProfile ==
-            ReconstructiveTemporalPerformanceProfile::Balanced,
-            "invalid performance profile sanitizes to Balanced");
-
-        std::set<uint32_t> reachableVariants;
-        for (ReconstructiveTemporalPerformanceProfile profile : {
-            ReconstructiveTemporalPerformanceProfile::Performance,
-            ReconstructiveTemporalPerformanceProfile::Balanced,
-            ReconstructiveTemporalPerformanceProfile::MaximumQuality })
-        {
-            for (HistorySampleFilter filter : {
-                HistorySampleFilter::Bilinear,
-                HistorySampleFilter::CatmullRom })
-            {
-                for (bool resurrection : { false, true })
-                {
-                    reachableVariants.insert(ReferenceResolveVariant(
-                        profile, filter, resurrection));
-                }
-            }
-        }
-        Require(reachableVariants == std::set<uint32_t>{
-            0u, 4u, 8u, 9u, 10u, 11u },
-            "profile/filter/resurrection selection reaches exactly six compiled variants");
     }
 
     void TestLightTemporalWeights()
@@ -1106,25 +731,6 @@ namespace
         TestJitterSequence(JitterSequence::R2, "R2");
         TestJitterSequence(JitterSequence::Halton23, "Halton 2/3");
 
-        for (uint32_t period : { 8u, 16u })
-        {
-            ReconstructiveTemporalAASettings zeroMean;
-            zeroMean.jitterSequence = JitterSequence::R2;
-            zeroMean.jitterPeriod = period;
-            zeroMean.jitterScale = 1.0f;
-            double sumX = 0.0;
-            double sumY = 0.0;
-            for (uint32_t phase = 0; phase < period; ++phase)
-            {
-                const ReconstructiveTemporalJitter jitter =
-                    GenerateReconstructiveTemporalJitter(zeroMean, phase);
-                sumX += static_cast<double>(jitter.x);
-                sumY += static_cast<double>(jitter.y);
-            }
-            Require(std::abs(sumX) <= 1e-6 && std::abs(sumY) <= 1e-6,
-                "finite R2 production cycle has a strict zero centroid");
-        }
-
         ReconstructiveTemporalAASettings settings;
         settings.jitterPeriod = 1000;
         settings.heldJitterPhase = 999;
@@ -1151,64 +757,6 @@ namespace
             "held jitter phase repeats a selected nonzero sequence sample");
     }
 
-    void TestResolvedAndRawHistoryCoordinates()
-    {
-        const Float2 currentPixelCenter = { 100.5f, 60.5f };
-        const Float2 currentJitter = { 0.45f, -0.40f };
-        const Float2 immediateJitter = { -0.45f, 0.40f };
-        const Float2 motion = { 2.25f, -1.75f };
-        const Float2 currentNoOffset = currentPixelCenter - currentJitter;
-        const Float2 historyNoOffset = currentNoOffset + motion;
-
-        const HistoryCoordinates immediate = ImmediateHistoryCoordinates(
-            currentPixelCenter, motion, currentJitter, immediateJitter);
-        const HistoryCoordinates projected = PersistentHistoryCoordinates(
-            historyNoOffset, currentJitter, immediateJitter);
-
-        RequireNear(immediate.resolvedColor.x, projected.resolvedColor.x,
-            "immediate and projected resolved-color X coordinates agree");
-        RequireNear(immediate.resolvedColor.y, projected.resolvedColor.y,
-            "immediate and projected resolved-color Y coordinates agree");
-        RequireNear(immediate.rawAuxiliary.x, projected.rawAuxiliary.x,
-            "immediate and projected raw-auxiliary X coordinates agree");
-        RequireNear(immediate.rawAuxiliary.y, projected.rawAuxiliary.y,
-            "immediate and projected raw-auxiliary Y coordinates agree");
-        RequireNear(immediate.rawAuxiliary.x,
-            immediate.resolvedColor.x - currentJitter.x + immediateJitter.x,
-            "raw auxiliary X applies previous-current jitter exactly once");
-        RequireNear(immediate.rawAuxiliary.y,
-            immediate.resolvedColor.y - currentJitter.y + immediateJitter.y,
-            "raw auxiliary Y applies previous-current jitter exactly once");
-        Require(std::abs(immediate.rawAuxiliary.x -
-            immediate.resolvedColor.x) > 0.5f &&
-            std::abs(immediate.rawAuxiliary.y -
-                immediate.resolvedColor.y) > 0.5f,
-            "opposing jitters keep resolved color and raw validation coordinates distinct");
-
-        const Float2 olderJitter = { -0.30f, 0.35f };
-        const HistoryCoordinates persistent = PersistentHistoryCoordinates(
-            historyNoOffset, currentJitter, olderJitter);
-        RequireNear(persistent.resolvedColor.x,
-            historyNoOffset.x + currentJitter.x,
-            "persistent resolved color preserves the current subpixel phase");
-        RequireNear(persistent.rawAuxiliary.y,
-            historyNoOffset.y + olderJitter.y,
-            "persistent raw auxiliary uses its producing history jitter");
-
-        Require(ReferenceStaticSurfaceForResurrection(
-            { 2.0f, -1.0f }, { 2.08f, -1.08f }, 1.0f),
-            "camera-only motion agreement permits static-surface resurrection");
-        Require(!ReferenceStaticSurfaceForResurrection(
-            { 2.0f, -1.0f }, { 2.2f, -1.0f }, 1.0f),
-            "subpixel independent motion cannot resurrect older static-world color");
-        Require(!ReferenceStaticSurfaceForResurrection(
-            { 3.0f, -1.0f }, { 2.0f, -1.0f }, 1.0f),
-            "independent object motion rejects persistent resurrection");
-        Require(!ReferenceStaticSurfaceForResurrection(
-            { 2.0f, -1.0f }, { 2.0f, -1.0f }, 0.25f),
-            "depth-changing object motion rejects persistent resurrection");
-    }
-
     void TestReverseZVelocityOwnership()
     {
         const float nan = std::numeric_limits<float>::quiet_NaN();
@@ -1217,7 +765,7 @@ namespace
             { 0.20f, 120.0f, -90.0f },
             { 0.93f, 1.25f, -0.75f },
             { 0.00f, 300.0f, 300.0f },
-            { 0.00f, 0.10f, 0.20f },
+            { 0.45f, 0.10f, 0.20f },
             { 0.80f, -2.00f, 0.50f },
             { 1.10f, 900.0f, 900.0f },
             { -0.1f, 700.0f, 700.0f },
@@ -1236,15 +784,6 @@ namespace
         RequireNear(owner.sample.motionY, -0.75f,
             "both velocity components belong to the selected surface");
 
-        std::array<VelocitySample, 9> validCenter = neighborhood;
-        validCenter[4] = { 0.45f, 0.10f, 0.20f };
-        const VelocityOwner centerOwner =
-            SelectNearestReverseZVelocity(validCenter);
-        Require(centerOwner.valid && centerOwner.sampleIndex == 4,
-            "valid center motion is retained without a 3x3 dilation scan");
-        RequireNear(centerOwner.sample.motionX, 0.10f,
-            "a closer neighbor cannot steal valid center motion ownership");
-
         std::array<VelocitySample, 9> centerWins = {};
         centerWins[4] = { 0.8f, 2.0f, 3.0f };
         centerWins[5] = { 0.8f, 200.0f, 300.0f };
@@ -1256,32 +795,6 @@ namespace
         const std::array<VelocitySample, 9> background = {};
         Require(!SelectNearestReverseZVelocity(background).valid,
             "reverse-Z clear depth never becomes a velocity owner");
-    }
-
-    void TestDepthSentinelsAndStableClassification()
-    {
-        for (bool reverseZ : { false, true })
-        {
-            const float clearDepth = ClearDeviceDepth(reverseZ);
-            Require(!IsValidDeviceDepth(clearDepth, reverseZ),
-                "the convention-specific clear depth stays invalid in history");
-            Require(IsValidDeviceDepth(0.5f, reverseZ),
-                "mid-range geometry depth remains valid in both conventions");
-        }
-
-        RequireNear(ReferencePreparedReactive(true, 0.0f, true), 0.0f,
-            "static material feature presence is not temporal reactivity");
-        RequireNear(ReferencePreparedReactive(true, 0.75f, false), 0.75f,
-            "an explicit application-authored signal remains reactive");
-        RequireNear(ReferencePreparedReactive(false, 1.0f, false), 0.0f,
-            "cleared background does not read stale reactive classification");
-
-        RequireNear(ReferenceAuthoredThin(false, 0.0f, true), 0.0f,
-            "clear sky cannot become authored thin geometry");
-        RequireNear(ReferenceAuthoredThin(true, 0.5f, false), 1.0f,
-            "depth-writing partial alpha can author thin coverage");
-        RequireNear(ReferenceAuthoredThin(true, 1.0f, true), 1.0f,
-            "an explicit thin feature remains classified on valid geometry");
     }
 
     void TestConfidenceBootstrap()
@@ -1327,10 +840,6 @@ namespace
         RequireNear(ReferenceDepthConfidence(
             1.0f, 1.015f, 0.01f, 0.0f), 0.5f,
             "absolute depth confidence fades between one and two thresholds",
-            2e-5f);
-        RequireNear(ReferenceDepthConfidence(
-            1.0f, 1.015f, 0.01f, 0.0f, 2.0f), 1.0f,
-            "bounded grazing tolerance accepts a one-texel planar depth error",
             2e-5f);
         RequireNear(ReferenceDepthConfidence(
             1.0f, 1.021f, 0.01f, 0.0f), 0.0f,
@@ -1482,213 +991,6 @@ namespace
             "120 FPS stable accumulation is bounded by the sample cap");
     }
 
-    void TestNeighborhoodAwareCoverageAccumulation()
-    {
-        ReconstructiveTemporalAASettings settings;
-        ApplyReconstructiveTemporalPreset(
-            settings, ReconstructiveTemporalPreset::MediumTemporal);
-
-        // A jittered black/white coverage edge is represented by the broad
-        // current neighborhood. Its history delta is therefore spatially
-        // explained and must not be treated as animated shading.
-        const Float3 black = RgbToCompressedYCoCg({ 0.0f, 0.0f, 0.0f });
-        const Float3 white = RgbToCompressedYCoCg({ 1.0f, 1.0f, 1.0f });
-        const Float3 broadCenter = (black + white) * 0.5f;
-        const Float3 explainedHistory = ClipLineToBox(
-            white, broadCenter, black, white);
-        RequireNear(ReferenceNeighborhoodReactive(
-            white, explainedHistory, settings.reactiveLuminanceThreshold,
-            settings.reactiveChromaThreshold,
-            settings.automaticReactiveStrength), 0.0f,
-            "jittered coverage inside the neighborhood is not reactive");
-
-        const Float3 flatBlackHistory = ClipLineToBox(
-            white, black, black, black);
-        RequireNear(flatBlackHistory.x, black.x,
-            "uniform stationary shading changes are corrected by clipping");
-        const float flatRegionReactiveCandidate = ReferenceNeighborhoodReactive(
-            white, flatBlackHistory, settings.reactiveLuminanceThreshold,
-            settings.reactiveChromaThreshold,
-            settings.automaticReactiveStrength);
-        Require(flatRegionReactiveCandidate > 0.5f,
-            "a flat-region history residual remains an automatic-reactive candidate");
-        RequireNear(ReferenceMotionGatedAutomaticReactive(
-            white, flatBlackHistory, settings.reactiveLuminanceThreshold,
-            settings.reactiveChromaThreshold,
-            settings.automaticReactiveStrength, 0.0f), 0.0f,
-            "stationary Nyquist or uniform jitter phases cannot become reactive");
-        Require(ReferenceMotionGatedAutomaticReactive(
-            white, flatBlackHistory, settings.reactiveLuminanceThreshold,
-            settings.reactiveChromaThreshold,
-            settings.automaticReactiveStrength, 1.0f) > 0.5f,
-            "motion corroborates a large automatic-reactive residual");
-
-        Require(ReferenceCoverageOverrideSignal(true, 0.0f, true,
-            0.0f, 1.0f, 1.0f) > 0.99f,
-            "a diagonal-only borrowed surface supplies coverage evidence");
-        Require(ReferenceCoverageOverrideSignal(true, 0.0f, false,
-            1.0f, 0.0f, 1.0f) > 0.99f,
-            "a separate thin lock fully validates an uncovered jitter phase");
-        RequireNear(ReferenceCoverageOverrideSignal(true, 1.0f, true,
-            1.0f, 1.0f, 0.0f), 0.0f,
-            "moving disocclusions cannot use the stationary coverage override");
-
-        RequireNear(ReferenceUncoveredCoverageHistory(
-            0.0f, 1.0f, false, true, 1.0f, 0.0f), 1.0f,
-            "lock trust does not multiply an already averaged coverage color");
-        RequireNear(ReferenceUncoveredCoverageHistory(
-            0.0f, 1.0f, false, true, 0.0f, 0.0f), 0.0f,
-            "moving uncovered phases cannot retain stale radiance");
-        RequireNear(ReferenceUncoveredCoverageHistory(
-            0.0f, 1.0f, false, true, 1.0f, 1.0f), 0.0f,
-            "reactive uncovered phases cannot retain stale radiance");
-
-        const float packedMetadata = PackReactiveAndMotion(0.73f, 0.61f);
-        RequireNear(UnpackReactive(packedMetadata), 11.0f / 15.0f,
-            "metadata low nibble preserves reactive shading", 1e-6f);
-        RequireNear(UnpackMotion(packedMetadata), 9.0f / 15.0f,
-            "metadata high nibble independently preserves motion", 1e-6f);
-        RequireNear(UnpackReactive(PackReactiveAndMotion(0.80f, 0.0f)),
-            UnpackReactive(PackReactiveAndMotion(0.80f, 1.0f)),
-            "motion cannot alter AgX reactive suppression", 1e-6f);
-        RequireNear(QuantizeThinLock(0.61f), 156.0f / 255.0f,
-            "thin-lock lifetime retains the full independent R8 channel", 1e-6f);
-
-        RequireNear(InterpolatedStationaryThinLock(
-            { 0.0f, 0.8f, 0.0f, 0.0f },
-            { 0.0f, 0.0f, 0.0f, 0.0f },
-            { 0.1f, 0.9f, 0.0f, 0.0f }), 0.72f,
-            "fractional reprojection finds a lock outside the floor texel");
-        RequireNear(InterpolatedStationaryThinLock(
-            { 0.0f, 0.8f, 0.0f, 0.0f },
-            { 0.0f, 0.2f, 0.0f, 0.0f },
-            { 0.1f, 0.9f, 0.0f, 0.0f }), 0.0f,
-            "a moving adjacent lock cannot validate filtered stale color");
-        RequireNear(InterpolatedStationaryThinLock(
-            { 0.0f, 0.8f, 0.0f, 0.0f },
-            { 0.0f, 0.0f, 0.0f, 0.0f },
-            { 1.0f, 0.0f, 0.0f, 0.0f }), 0.0f,
-            "an exact-center sample rejects a zero-weight neighboring lock");
-        const float translatedLock0 = InterpolatedStationaryThinLock(
-            { 1.0f, 0.0f, 0.0f, 0.0f },
-            { 0.0f, 0.0f, 0.0f, 0.0f },
-            { 0.75f, 0.25f, 0.0f, 0.0f });
-        const float translatedLock1 = InterpolatedStationaryThinLock(
-            { 0.0f, 1.0f, 0.0f, 0.0f },
-            { 0.0f, 0.0f, 0.0f, 0.0f },
-            { 0.75f, 0.25f, 0.0f, 0.0f });
-        RequireNear(translatedLock0 + translatedLock1, 1.0f,
-            "fractional lock reprojection conserves support instead of duplicating it");
-        RequireNear(ReferencePreviousCoverageLifetime(
-            false, 0.0f, 1.0f), 0.0f,
-            "a non-pure background pixel cannot read a lock before history exists");
-        RequireNear(ReferencePreviousCoverageLifetime(
-            true, 0.25f, 1.0f), 0.25f,
-            "a point lock avoids the conditional 2x2 fallback lookup");
-
-        float historyColor = 0.0f;
-        float historyCount = 1.0f;
-        float lowPhase = 0.0f;
-        float highPhase = 1.0f;
-        for (uint32_t frame = 0; frame < 256u; ++frame)
-        {
-            const float currentColor = (frame & 1u) != 0u ? 1.0f : 0.0f;
-            const float phaseConfidence = currentColor > 0.5f
-                ? 0.90f : 0.85f * 0.90f;
-            const CoverageAccumulationStep step = StepCoverageAccumulation(
-                settings, 1.0f / 30.0f, historyColor, currentColor,
-                historyCount, phaseConfidence, 1.0f);
-            RequireNear(step.reactive, 0.0f,
-                "alternating edge remains neighborhood-explained");
-            historyColor = step.color;
-            historyCount = step.historyCount;
-            if (frame >= 254u)
-            {
-                if (currentColor == 0.0f)
-                    lowPhase = historyColor;
-                else
-                    highPhase = historyColor;
-            }
-        }
-
-        RequireNear(historyCount,
-            static_cast<float>(settings.maximumHistorySamples),
-            "coverage accumulation reaches the stable sample cap");
-        Require(lowPhase > 0.45f && highPhase < 0.55f,
-            "slow-GPU coverage accumulation stays near the analytical average");
-        RequireNear((lowPhase + highPhase) * 0.5f, 0.5f,
-            "asymmetric acceptance confidence does not bias coverage duty cycle",
-            0.025f);
-        Require(highPhase - lowPhase < 0.08f,
-            "alternating coverage converges instead of following rotating samples");
-
-        for (uint32_t hitsPerPeriod : { 1u, 2u })
-        {
-            historyColor = 0.0f;
-            historyCount = 1.0f;
-            float lockLifetime = 0.0f;
-            float sum = 0.0f;
-            float maximumFrameDelta = 0.0f;
-            float previousColor = 0.0f;
-            for (uint32_t frame = 0; frame < 1024u; ++frame)
-            {
-                const bool visible = frame % 8u < hitsPerPeriod;
-                const bool previousLock = lockLifetime > 0.0f;
-                const float phaseConfidence = visible
-                    ? 0.90f : 0.85f * 0.90f;
-                const CoverageAccumulationStep step = StepCoverageAccumulation(
-                    settings, 1.0f / 30.0f, historyColor,
-                    visible ? 1.0f : 0.0f, historyCount,
-                    phaseConfidence, visible || previousLock ? 1.0f : 0.0f);
-                historyColor = step.color;
-                historyCount = step.historyCount;
-                lockLifetime = StepCoverageLockLifetime(
-                    lockLifetime, visible, 8u);
-                if (frame >= 768u)
-                {
-                    sum += historyColor;
-                    maximumFrameDelta = std::max(maximumFrameDelta,
-                        std::abs(historyColor - previousColor));
-                }
-                previousColor = historyColor;
-            }
-
-            const float expectedDuty =
-                static_cast<float>(hitsPerPeriod) / 8.0f;
-            RequireNear(sum / 256.0f, expectedDuty,
-                "sparse subpixel coverage converges to its analytical duty cycle",
-                0.015f);
-            Require(maximumFrameDelta < 0.08f,
-                "one-of-eight and two-of-eight coverage do not pulse between phases");
-        }
-
-        for (uint32_t period : { 8u, 16u, 17u, 28u, 29u, 64u })
-        {
-            float expiringLock = 1.0f;
-            for (uint32_t frame = 0; frame + 1u < period; ++frame)
-                expiringLock = StepCoverageLockLifetime(
-                    expiringLock, false, period);
-            Require(expiringLock > 0.0f,
-                "lock lifetime spans every uncovered jitter phase");
-            for (uint32_t frame = period - 1u;
-                frame < period + 3u; ++frame)
-            {
-                expiringLock = StepCoverageLockLifetime(
-                    expiringLock, false, period);
-            }
-            RequireNear(expiringLock, 0.0f,
-                "every supported jitter period releases a disappeared lock");
-        }
-
-        const float occluderClearedLock = StepCoverageLockLifetime(
-            1.0f, false, 8u, true, 0.0f);
-        RequireNear(occluderClearedLock, 0.0f,
-            "a hard-rejected valid occluder cannot inherit an older thin lock");
-        RequireNear(ReferenceExpiredCoverageAlpha(
-            false, occluderClearedLock, 0.75f), 0.0f,
-            "one cleanup frame clears expired coverage alpha for the sky fast path");
-    }
-
     void TestFallbackAndThinRelaxationGates()
     {
         RequireNear(ReferenceFallbackContribution(true, 0.0f), 1.0f,
@@ -1733,10 +1035,6 @@ namespace
             baseConfidence, baseConfidence, 1.0f, 0.025f, 0.0f),
             baseConfidence,
             "untrusted prior coverage cannot relax current confidence");
-        RequireNear(ReferenceThinConfidenceRelaxation(
-            baseConfidence, baseConfidence, 1.0f, 0.025f, 1.0f, 1.0f),
-            baseConfidence,
-            "reactive shading cannot use thin confidence relaxation");
     }
 
     void TestNativeOddDispatchCoverage()
@@ -1830,18 +1128,14 @@ namespace
 int main()
 {
     TestPresets();
-    TestPerformanceProfiles();
     TestLightTemporalWeights();
     TestSanitization();
     TestJitter();
-    TestResolvedAndRawHistoryCoordinates();
     TestReverseZVelocityOwnership();
-    TestDepthSentinelsAndStableClassification();
     TestConfidenceBootstrap();
     TestDepthNormalAndMaterialValidation();
     TestHdrLineBoxClipping();
     TestAdaptiveAccumulationAtFrameRates();
-    TestNeighborhoodAwareCoverageAccumulation();
     TestFallbackAndThinRelaxationGates();
     TestNativeOddDispatchCoverage();
     TestNamesAndDebugAbi();
