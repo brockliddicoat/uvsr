@@ -146,6 +146,46 @@ namespace
         return static_cast<float>(accumulated / total);
     }
 
+    struct NumericalCosineSliceIntegral
+    {
+        float cdf = 0.f;
+        float totalMass = 0.f;
+    };
+
+    NumericalCosineSliceIntegral NumericalCosineSliceCdf(
+        Float3 receiverNormal,
+        const SliceMeasure& measure,
+        float targetSignedAngle)
+    {
+        constexpr uint32_t IntegrationSteps = 131072u;
+        const double minimumAngle = -static_cast<double>(VisibilityEstimatorPi);
+        const double maximumAngle = static_cast<double>(VisibilityEstimatorPi);
+        const double step = (maximumAngle - minimumAngle) /
+            static_cast<double>(IntegrationSteps);
+        double accumulated = 0.0;
+        double total = 0.0;
+
+        for (uint32_t index = 0u; index < IntegrationSteps; ++index)
+        {
+            const double angle = minimumAngle +
+                (static_cast<double>(index) + 0.5) * step;
+            Float3 direction = DirectionInSlice(measure, static_cast<float>(angle));
+            const double receiverCosine = std::max(
+                static_cast<double>(Dot(receiverNormal, direction)), 0.0);
+            const double mass = receiverCosine * std::abs(std::sin(angle)) * step;
+            total += mass;
+            if (angle <= static_cast<double>(targetSignedAngle))
+                accumulated += mass;
+        }
+
+        NumericalCosineSliceIntegral result;
+        result.cdf = total > 0.0
+            ? static_cast<float>(accumulated / total)
+            : 0.f;
+        result.totalMass = static_cast<float>(total);
+        return result;
+    }
+
     void TestSliceMeasureAndUniformCdf()
     {
         const Float3 viewDirection{ 0.f, 0.f, 1.f };
@@ -195,6 +235,89 @@ namespace
             "slice direction parallel to V is rejected deterministically");
         Require(Near(MapDirectionToUniformSliceMass(viewDirection, degenerate), 0.f),
             "invalid slice measure fails open with zero interval mass");
+    }
+
+    void TestSliceMeasureAndCosineCdf()
+    {
+        const Float3 viewDirection{ 0.f, 0.f, 1.f };
+        const Float3 sliceDirection{ 1.f, 0.f, 0.f };
+        const Float3 sliceNormal{ 0.f, 1.f, 0.f };
+        constexpr std::array<float, 7> NormalTilts = {
+            -1.25f, -0.8f, -0.25f, 0.f, 0.35f, 0.9f, 1.25f
+        };
+        constexpr std::array<float, 3> OutOfPlaneComponents = {
+            0.f, 0.2f, -0.55f
+        };
+        constexpr std::array<float, 13> DirectionAngles = {
+            -3.05f, -2.8f, -2.1f, -1.4f, -0.75f, -0.15f, 0.f,
+            0.2f, 0.65f, 1.3f, 2.0f, 2.75f, 3.05f
+        };
+
+        for (float normalTilt : NormalTilts)
+        {
+            for (float outOfPlane : OutOfPlaneComponents)
+            {
+                Float3 receiverNormal = Normalize(
+                    viewDirection * std::cos(normalTilt) +
+                    sliceDirection * std::sin(normalTilt) +
+                    sliceNormal * outOfPlane);
+                SliceMeasure measure = BuildSliceMeasure(
+                    viewDirection, sliceDirection, receiverNormal);
+                Require(measure.valid != 0u,
+                    "cosine CDF fixture has a non-degenerate slice measure");
+                Require(measure.cosGamma >= 0.f,
+                    "face-forward cosine CDF fixture has non-negative cosGamma");
+
+                for (float directionAngle : DirectionAngles)
+                {
+                    Float3 direction = DirectionInSlice(measure, directionAngle);
+                    const float actual = MapDirectionToCosineSliceMass(
+                        direction, measure);
+                    const NumericalCosineSliceIntegral expected =
+                        NumericalCosineSliceCdf(
+                            receiverNormal, measure, directionAngle);
+                    std::ostringstream context;
+                    context << "closed cosine CDF matches quadrature at normal tilt "
+                        << normalTilt << ", out-of-plane " << outOfPlane
+                        << ", direction " << directionAngle;
+                    Require(Near(actual, expected.cdf, 4e-4f), context.str());
+                    Require(Near(
+                            measure.cosineSliceMass,
+                            expected.totalMass,
+                            4e-4f),
+                        "complete projected joint-cosine slice mass matches quadrature");
+                }
+            }
+        }
+
+        // A bidirectional slice samples azimuth uniformly over [0, pi). The
+        // average complete slice mass must therefore equal the cosine-
+        // hemisphere normalization pi/pi = 1 for every face-forward normal.
+        constexpr uint32_t AzimuthCount = 32768u;
+        const Float3 receiverNormal = Normalize({ 0.45f, -0.2f, 1.f });
+        double averageMass = 0.0;
+        for (uint32_t index = 0u; index < AzimuthCount; ++index)
+        {
+            const float azimuth = VisibilityEstimatorPi *
+                (static_cast<float>(index) + 0.5f) /
+                static_cast<float>(AzimuthCount);
+            Float3 direction{ std::cos(azimuth), std::sin(azimuth), 0.f };
+            SliceMeasure measure = BuildSliceMeasure(
+                viewDirection, direction, receiverNormal);
+            averageMass += measure.cosineSliceMass;
+        }
+        averageMass /= static_cast<double>(AzimuthCount);
+        Require(std::abs(averageMass - 1.0) < 2e-5,
+            "uniform slice azimuths integrate the complete cosine hemisphere");
+
+        SliceMeasure degenerate = BuildSliceMeasure(
+            viewDirection, viewDirection, viewDirection);
+        Require(Near(MapDirectionToCosineSliceMass(
+                viewDirection, degenerate), 0.f),
+            "invalid slice measure maps to zero cosine mass");
+        Require(Near(ResolveGtCosineAmbientVisibility(
+                RadialVisibilityMask{}, degenerate), 0.f),
+            "invalid slice measure contributes zero cosine AO mass");
     }
 
     struct ProjectedPoint
@@ -319,6 +442,7 @@ namespace
         float minimumSignedAngle = 0.f;
         float maximumSignedAngle = 0.f;
         VisibilityInterval gtInterval;
+        VisibilityInterval gtCosineInterval;
         VisibilityInterval paperInterval;
         bool doubleSided = false;
     };
@@ -442,6 +566,11 @@ namespace
             Require(gtBuild.endpointOrderValid != 0u,
                 std::string(fixture.name) +
                     ": GT endpoints follow the documented side convention");
+            GtIntervalBuildResult gtCosineBuild = BuildGtCosineIntervalDebug(
+                frontDirection, backDirection, measure);
+            Require(gtCosineBuild.endpointOrderValid != 0u,
+                std::string(fixture.name) +
+                    ": cosine GT endpoints follow the documented side convention");
 
             Float3 sourceTangent = Normalize(
                 measure.V * -std::sin(sample.signedAngle) +
@@ -462,6 +591,7 @@ namespace
                 geometricInterval.first,
                 geometricInterval.second,
                 gtBuild.interval,
+                gtCosineBuild.interval,
                 BuildPaperInterval(frontDirection, backDirection, measure),
                 sample.doubleSided
             });
@@ -592,10 +722,70 @@ namespace
         return result;
     }
 
+    Evaluation EvaluateDenseCosineReference(const PreparedFixture& fixture)
+    {
+        constexpr uint32_t DirectionCount = 131072u;
+        const double angleStep = static_cast<double>(VisibilityEstimatorTwoPi) /
+            static_cast<double>(DirectionCount);
+        double visibleMass = 0.0;
+        double totalMass = 0.0;
+        Float3 irradiance{};
+
+        for (uint32_t directionIndex = 0u;
+            directionIndex < DirectionCount;
+            ++directionIndex)
+        {
+            const double signedAngle = -static_cast<double>(VisibilityEstimatorPi) +
+                (static_cast<double>(directionIndex) + 0.5) * angleStep;
+            Float3 direction = DirectionInSlice(
+                fixture.measure, static_cast<float>(signedAngle));
+            const double receiverCosine = std::max(
+                static_cast<double>(Dot(fixture.receiverNormal, direction)), 0.0);
+            const double mass = receiverCosine *
+                std::abs(std::sin(signedAngle)) * angleStep;
+            totalMass += mass;
+
+            const PreparedSample* owner = nullptr;
+            for (const PreparedSample& sample : fixture.samples)
+            {
+                if (ContainsSignedAngle(sample, static_cast<float>(signedAngle)))
+                {
+                    owner = &sample;
+                    break;
+                }
+            }
+
+            if (!owner)
+            {
+                visibleMass += mass;
+                continue;
+            }
+
+            const float signedSourceCosine = Dot(
+                owner->sourceNormal, -owner->frontDirection);
+            const float sourceCosine = owner->doubleSided
+                ? std::abs(signedSourceCosine)
+                : std::max(signedSourceCosine, 0.f);
+            irradiance += owner->sourceRadiance * static_cast<float>(
+                mass * static_cast<double>(VisibilityEstimatorPi) *
+                static_cast<double>(sourceCosine));
+        }
+
+        Require(std::abs(totalMass - fixture.measure.cosineSliceMass) < 4e-4,
+            std::string(fixture.name) +
+                ": dense cosine reference recovers complete slice mass");
+        Evaluation result;
+        result.ambientVisibility = static_cast<float>(visibleMass);
+        result.irradiance = irradiance;
+        result.composite = irradiance * fixture.receiverDiffuseScale;
+        return result;
+    }
+
     enum class PacketEstimator
     {
         PaperAngular,
-        GTUniform
+        GTUniform,
+        GTCosine
     };
 
     Evaluation EvaluatePacket(
@@ -607,9 +797,11 @@ namespace
         Float3 irradiance{};
         for (const PreparedSample& sample : fixture.samples)
         {
-            VisibilityInterval interval = estimator == PacketEstimator::GTUniform
-                ? sample.gtInterval
-                : sample.paperInterval;
+            VisibilityInterval interval = sample.paperInterval;
+            if (estimator == PacketEstimator::GTUniform)
+                interval = sample.gtInterval;
+            else if (estimator == PacketEstimator::GTCosine)
+                interval = sample.gtCosineInterval;
             const uint32_t candidateBits = MakeStochasticSectorRangeMask(
                 interval, sectorPhase);
             const uint32_t newlyCoveredBits = AccumulateOccluder(mask, candidateBits);
@@ -626,20 +818,32 @@ namespace
                 : std::max(signedSourceCosine, 0.f);
             const float coverage = static_cast<float>(newSectorCount) /
                 static_cast<float>(RadialVisibilitySectorCount);
-            const float normalization = estimator == PacketEstimator::GTUniform
-                ? GetGtUniformIrradianceNormalization()
-                : VisibilityEstimatorPi;
-            const float sampleWeight = estimator == PacketEstimator::GTUniform
-                ? ComputeGtUniformGiSampleWeight(
-                    newSectorCount, receiverCosine, sourceCosine)
-                : coverage * receiverCosine * sourceCosine;
+            float normalization = VisibilityEstimatorPi;
+            float sampleWeight = coverage * receiverCosine * sourceCosine;
+            if (estimator == PacketEstimator::GTUniform)
+            {
+                normalization = GetGtUniformIrradianceNormalization();
+                sampleWeight = ComputeGtUniformGiSampleWeight(
+                    newSectorCount, receiverCosine, sourceCosine);
+            }
+            else if (estimator == PacketEstimator::GTCosine)
+            {
+                normalization = GetGtCosineIrradianceNormalization();
+                sampleWeight = ComputeGtCosineGiSampleWeight(
+                    newSectorCount,
+                    fixture.measure.cosineSliceMass,
+                    sourceCosine);
+            }
             irradiance += sample.sourceRadiance * (normalization * sampleWeight);
         }
 
         Evaluation result;
-        result.ambientVisibility = estimator == PacketEstimator::GTUniform
-            ? ResolveGtUniformAmbientVisibility(mask)
-            : GetSliceVisibility(mask);
+        result.ambientVisibility = GetSliceVisibility(mask);
+        if (estimator == PacketEstimator::GTUniform)
+            result.ambientVisibility = ResolveGtUniformAmbientVisibility(mask);
+        else if (estimator == PacketEstimator::GTCosine)
+            result.ambientVisibility = ResolveGtCosineAmbientVisibility(
+                mask, fixture.measure);
         result.irradiance = irradiance;
         result.composite = irradiance * fixture.receiverDiffuseScale;
         return result;
@@ -769,41 +973,58 @@ namespace
     {
         MetricSet paperMetrics;
         MetricSet uniformMetrics;
+        MetricSet cosineMetrics;
         std::cout << std::fixed << std::setprecision(7);
 
         for (const Fixture& fixture : MakeFixtures())
         {
             PreparedFixture prepared = PrepareFixture(fixture);
             Evaluation reference = EvaluateDenseReference(prepared);
+            Evaluation cosineReference = EvaluateDenseCosineReference(prepared);
             PhaseStatistics paper = EvaluateAcrossPhases(
                 prepared, PacketEstimator::PaperAngular);
             PhaseStatistics uniform = EvaluateAcrossPhases(
                 prepared, PacketEstimator::GTUniform);
+            PhaseStatistics cosine = EvaluateAcrossPhases(
+                prepared, PacketEstimator::GTCosine);
             AppendMetrics(paperMetrics, reference, paper);
             AppendMetrics(uniformMetrics, reference, uniform);
+            AppendMetrics(cosineMetrics, cosineReference, cosine);
 
             std::cout << "scene=\"" << fixture.name << "\""
                 << " reference_ao=" << reference.ambientVisibility
                 << " paper_ao=" << paper.mean.ambientVisibility
                 << " gt_uniform_ao=" << uniform.mean.ambientVisibility
+                << " gt_cosine_reference_ao=" << cosineReference.ambientVisibility
+                << " gt_cosine_ao=" << cosine.mean.ambientVisibility
                 << " reference_gi_luma=" << Luminance(reference.irradiance)
                 << " paper_gi_luma=" << Luminance(paper.mean.irradiance)
                 << " gt_uniform_gi_luma=" << Luminance(uniform.mean.irradiance)
+                << " gt_cosine_reference_gi_luma="
+                << Luminance(cosineReference.irradiance)
+                << " gt_cosine_gi_luma=" << Luminance(cosine.mean.irradiance)
                 << '\n';
 
             Require(std::isfinite(uniform.mean.ambientVisibility) &&
                 VisibilityEstimatorIsFinite3(uniform.mean.irradiance),
                 std::string(fixture.name) + ": GTUniform result remains finite");
+            Require(std::isfinite(cosine.mean.ambientVisibility) &&
+                VisibilityEstimatorIsFinite3(cosine.mean.irradiance),
+                std::string(fixture.name) + ": GTCosine result remains finite");
             if (fixture.receiverDiffuseScale == 0.f)
             {
                 Require(Near(uniform.mean.composite, Float3{}, 1e-7f),
                     std::string(fixture.name) +
                         ": non-diffuse receiver composite rejects GI exactly");
+                Require(Near(cosine.mean.composite, Float3{}, 1e-7f),
+                    std::string(fixture.name) +
+                        ": non-diffuse receiver rejects cosine-weighted GI exactly");
             }
         }
 
         PrintSummary("PaperAngular", paperMetrics);
         PrintSummary("GTUniform", uniformMetrics);
+        PrintSummary("GTCosine", cosineMetrics);
 
         const float uniformAoRmse = RootMeanSquare(uniformMetrics.signedAmbientBias);
         const float paperAoRmse = RootMeanSquare(paperMetrics.signedAmbientBias);
@@ -828,6 +1049,19 @@ namespace
                 VisibilityEstimatorTwoPi,
                 1e-7f),
             "GTUniform irradiance normalization is two pi");
+        Require(RootMeanSquare(cosineMetrics.signedAmbientBias) < 0.001f,
+            "GTCosine averaged AO agrees with joint-cosine quadrature");
+        Require(Percentile(cosineMetrics.absoluteAmbientError, 0.99f) < 0.002f,
+            "GTCosine AO quantization remains unbiased across sector phases");
+        Require(RootMeanSquare(cosineMetrics.giLuminanceError) < 0.002f,
+            "GTCosine GI agrees with joint-cosine quadrature");
+        Require(Mean(cosineMetrics.giChromaError) < 0.001f,
+            "GTCosine preserves sampled-source chroma");
+        Require(Near(
+                GetGtCosineIrradianceNormalization(),
+                VisibilityEstimatorPi,
+                1e-7f),
+            "GTCosine irradiance normalization is pi without double cosine");
     }
 
     void TestFiniteMultibounceEnergy()
@@ -853,6 +1087,7 @@ namespace
 int main()
 {
     TestSliceMeasureAndUniformCdf();
+    TestSliceMeasureAndCosineCdf();
     TestSampleRayThickness();
     TestStochasticEqualMassQuantization();
     TestDeterministicReferenceSuite();
