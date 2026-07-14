@@ -2371,7 +2371,7 @@ protected:
                     "Transform each nested radial stratum by x^exponent. The default x^2 concentrates taps near the receiver. The complete prefix is toroidally rotated per pixel and frame to prevent fixed radius shells, while increasing a limit at the same phase only appends samples.");
 
                 static const char* schedulerLabels[] = {
-                    "Independent Hash",
+                    "Independent Hash Noise",
                     "Toroidal Blue Noise",
                     "Filter-Adapted Spatiotemporal Noise"
                 };
@@ -2399,7 +2399,7 @@ protected:
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip(
-                    "Independent Hash hashes every decision. Toroidal Blue Noise uses separate 64x64 void-and-cluster layers with temporal traversal. Filter-Adapted Spatiotemporal Noise uses a scalar-uniform 64x64x32 FAST-optimized volume shaped for Gaussian spatial filtering and alpha=0.35 EMA history, with R2-separated semantic reads and low-discrepancy cycle offsets. Every mode keeps the same sample budget.");
+                    "Independent Hash Noise hashes every decision. Toroidal Blue Noise uses separate 64x64 void-and-cluster layers with temporal traversal. Filter-Adapted Spatiotemporal Noise uses a scalar-uniform 64x64x32 FAST-optimized volume shaped for Gaussian spatial filtering and alpha=0.35 EMA history, with R2-separated semantic reads and low-discrepancy cycle offsets. Every mode keeps the same sample budget.");
 
                 if (samplingChanged)
                     visibility.quality = ScreenSpaceVisibilityQuality::Custom;

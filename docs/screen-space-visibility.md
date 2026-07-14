@@ -199,8 +199,8 @@ maximum/fixed count and removes all adaptive instructions and resources.
 
 ## Sample Schedulers
 
-**Independent Hash** independently hashes stochastic decisions and consumes no
-rank-field texture.
+**Independent Hash Noise** independently hashes stochastic decisions and
+consumes no rank-field texture.
 
 **Toroidal Blue Noise** uses eight independently generated 64x64
 toroidal void-and-cluster rank layers. Slice rotation, CDF sector phase, budget

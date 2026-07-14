@@ -38,7 +38,7 @@ is also available from the scene picker.
   default. The cosine path is fully compiled and uses the complete joint-cosine
   CDF, projected slice mass, `pi` GI normalization, and no duplicate receiver-
   cosine factor.
-- The **Sample Scheduler** compares **Independent Hash**, a first-party
+- The **Sample Scheduler** compares **Independent Hash Noise**, a first-party
   **Toroidal Blue Noise**, and an offline optimized
   **Filter-Adapted Spatiotemporal Noise**. Every scheduler toroidally
   rotates the complete nested radial prefix, so fixed-work and adaptive modes
