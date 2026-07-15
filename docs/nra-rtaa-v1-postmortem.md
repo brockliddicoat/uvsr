@@ -28,7 +28,7 @@ the one retained producer change: visibility reconstruction now consumes its
 pixel motion, device-depth delta, and validity channel, so it has an active
 non-RTAA owner and is allocated only while that owner needs it.
 
-## Development chronology
+## Development Chronology
 
 The repository history makes the sequencing problem visible:
 
@@ -50,13 +50,13 @@ configuration breadth were engineered before the minimum reprojection loop had
 demonstrated stable edges under camera motion, object motion, disocclusion,
 subpixel geometry, and reduced-cost operation.
 
-## Why the image shimmered
+## Why the Image Shimmered
 
 No capture matrix isolated one single defect, so the following is a ranked causal
 analysis rather than a claim that one line caused every artifact.
 
-1. **The current sample footprint moved while history acceptance changed
-   discontinuously.** Projection jitter intentionally moves subpixel coverage.
+1. **The Current Sample Footprint Moved While History Acceptance Changed
+   Discontinuously.** Projection jitter intentionally moves subpixel coverage.
    At a thin edge, the center pixel can alternate between foreground, background,
    and a borrowed velocity source. Depth, normal, material, bounds, and coverage
    gates were multiplied into one confidence. A small phase-dependent change in
@@ -64,7 +64,7 @@ analysis rather than a claim that one line caused every artifact.
    history, spatial fallback, and current-only color. That is a temporal step
    function, perceived as shimmer or swimming.
 
-2. **Resolved color and validating auxiliaries had different sample grids.** The
+2. **Resolved Color and Validating Auxiliaries Had Different Sample Grids.** The
    implementation stored resolved color on a display grid while depth and surface
    identity came from a jittered G-buffer. The follow-up commit had to separate
    `previousPixelCenter` from `previousAuxiliaryCenter` and apply the jitter delta
@@ -72,7 +72,7 @@ analysis rather than a claim that one line caused every artifact.
    item. Building thin coverage, reactive logic, and resurrection before this
    contract was settled made every higher-level signal suspect.
 
-3. **Velocity dilation solved a hole but created an ownership problem.** Borrowing
+3. **Velocity Dilation Solved a Hole but Created an Ownership Problem.** Borrowing
    neighboring motion can find history at silhouettes, but the borrowed motion
    does not make the neighboring surface the center pixel's surface. The follow-up
    explicitly stopped borrowed depth, normals, and IDs from contaminating center
@@ -80,7 +80,7 @@ analysis rather than a claim that one line caused every artifact.
    center motion, borrowed motion, and camera reconstruction as jitter phases
    change.
 
-4. **Thin-geometry heuristics classified an unstable signal and then fed it back.**
+4. **Thin-Geometry Heuristics Classified an Unstable Signal and Then Fed It Back.**
    v1 combined authored flags, depth curvature, normal/material contrast,
    neighborhood diffusion, accumulated coverage, and a lock lifetime. The repair
    commit changed the classifier substantially to avoid treating ordinary slopes
@@ -88,27 +88,27 @@ analysis rather than a claim that one line caused every artifact.
    classifier can stabilize correct evidence, but it can also preserve a wrong or
    phase-dependent classification.
 
-5. **Automatic reactivity initially confused jitter variation with animation.**
+5. **Automatic Reactivity Initially Confused Jitter Variation with Animation.**
    The repair changed reactivity to consider only history outside the broad current
    3x3 range and required motion corroboration. Before that, stationary high-
    frequency detail could reduce its own history weight simply because the jittered
    current sample differed from reprojected history.
 
-6. **Clipping and fallback reduced noise by erasing the very subpixel signal the
-   resolver needed to integrate.** Tight current-neighborhood clipping is safe at
+6. **Clipping and Fallback Reduced Noise by Erasing the Very Subpixel Signal the
+   Resolver Needed to Integrate.** Tight current-neighborhood clipping is safe at
    disocclusions but repeatedly cuts old edge colors when geometry appears in only
    some jitter phases. Spatial fallback then blends current neighbors rather than
    increasing temporal sample support. This can make an edge softer without making
    its position stable.
 
-7. **Lower-cost profiles removed support precisely where the base resolver was
-   weakest.** Performance and Balanced forced bilinear history sampling and
+7. **Lower-Cost Profiles Removed Support Precisely Where the Base Resolver Was
+   Weakest.** Performance and Balanced forced bilinear history sampling and
    compiled out resurrection. Their reduced spatial and thin-feature work exposed
    the phase-dependent acceptance problem instead of merely lowering quality. A
    scalable algorithm should degrade gradually; profile-dependent shaking means
    the expensive tiers were compensating for a broken invariant.
 
-## Why history resurrection appeared to help
+## Why History Resurrection Appeared to Help
 
 Immediate history was validated against the immediately previous jitter phase. At
 a small edge, that phase is often the worst possible reference: the surface may
@@ -138,7 +138,7 @@ The observation that resurrection helped therefore points to insufficient and
 phase-fragile immediate temporal support. It does not validate the rest of v1's
 classification machinery.
 
-## Performance failure
+## Performance Failure
 
 The default path used two full-resolution compute passes before tone mapping. It
 allocated prepared motion/classification targets plus at least two 28-byte-per-
@@ -160,7 +160,7 @@ with one compact history and a small fixed neighborhood. Extra history surfaces,
 classifiers, and fallback paths must each earn their cost against measured failure
 cases.
 
-## What was over-engineered too early
+## What Was Over-Engineered Too Early
 
 The following work preceded proof of the base resolver and made failures harder to
 attribute:
@@ -182,29 +182,29 @@ These features were individually defensible. Their simultaneous introduction was
 the mistake: too many mechanisms could hide, amplify, or compensate for the same
 base defect.
 
-## Required order for a successor experiment
+## Required Order for a Successor Experiment
 
 NRA-RTAA v2 should not be started by restoring v1. A future anti-aliasing
 experiment should pass these gates in order:
 
-1. **Fixed non-jittered baseline:** one current color, one history color, one
+1. **Fixed Non-Jittered Baseline:** one current color, one history color, one
    motion convention, bilinear reprojection, and an obvious current/history blend.
-2. **Projection contract:** automated coordinate tests plus visual camera pan,
+2. **Projection Contract:** automated coordinate tests plus visual camera pan,
    rotation, resize, reverse-Z, and static-scene tests. Color and every validating
    auxiliary must have explicitly documented sample grids.
-3. **Minimal disocclusion:** depth-only rejection first. Add normal and identity
+3. **Minimal Disocclusion:** depth-only rejection first. Add normal and identity
    gates one at a time only if a captured failure requires them.
-4. **Jitter integration:** enable one low-discrepancy sequence and prove that static
+4. **Jitter Integration:** enable one low-discrepancy sequence and prove that static
    one-pixel lines, fences, foliage, specular edges, emissive edges, and sky
    silhouettes converge instead of alternating.
-5. **Motion matrix:** camera-static, camera-moving, rigid-object, skinned-object,
+5. **Motion Matrix:** camera-static, camera-moving, rigid-object, skinned-object,
    subpixel-motion, and newly revealed background cases at 30, 60, and 120 Hz.
-6. **One reconstruction filter:** keep bilinear until the acceptance logic is
+6. **One Reconstruction Filter:** keep bilinear until the acceptance logic is
    stable. Compare a sharper filter only with controlled captures and timings.
-7. **Measured additions:** clipping, reactive handling, dilation, longer history,
+7. **Measured Additions:** clipping, reactive handling, dilation, longer history,
    or spatial fallback enter separately, each with a named artifact, before/after
    captures, GPU time, memory cost, and an easy removal path.
-8. **Quality scaling:** lower-cost modes reduce sample quality without changing
+8. **Quality Scaling:** lower-cost modes reduce sample quality without changing
    the fundamental history-validity semantics. If a mode begins to shake, it does
    not pass.
 
@@ -214,7 +214,7 @@ scenes, GPU timings, occupancy/register data, and a memory-traffic estimate. Uni
 tests remain necessary for coordinate algebra and packing, but they are not an
 image-stability result.
 
-## Reusable conclusions
+## Reusable Conclusions
 
 - Stabilize sample ownership and reprojection before classifying content.
 - A hard confidence product is dangerous at subpixel edges; continuous confidence

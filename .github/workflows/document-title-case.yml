@@ -1,0 +1,43 @@
+name: Document Title Case
+
+on:
+  pull_request:
+    paths:
+      - "*.[mM][dD]"
+      - "**/*.[mM][dD]"
+      - "*.[mM][aA][rR][kK][dD][oO][wW][nN]"
+      - "**/*.[mM][aA][rR][kK][dD][oO][wW][nN]"
+      - "tools/check_document_title_case.cmd"
+      - "tools/check_document_title_case.py"
+      - ".github/workflows/document-title-case.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "*.[mM][dD]"
+      - "**/*.[mM][dD]"
+      - "*.[mM][aA][rR][kK][dD][oO][wW][nN]"
+      - "**/*.[mM][aA][rR][kK][dD][oO][wW][nN]"
+      - "tools/check_document_title_case.cmd"
+      - "tools/check_document_title_case.py"
+      - ".github/workflows/document-title-case.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set Up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Test Document Checker
+        run: python tools/check_document_title_case.py --self-test
+      - name: Check Document Title Case
+        run: python tools/check_document_title_case.py

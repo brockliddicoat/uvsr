@@ -1,6 +1,6 @@
 # UVSR Agent Guide
 
-Agent policy version: `2026-07-15.4`.
+Agent policy version: `2026-07-15.5`.
 
 ## Product and Scope
 
@@ -337,18 +337,24 @@ Agent policy version: `2026-07-15.4`.
 ## Documentation
 
 - Keep the root file named `README.md`.
-- Use conventional English Title Case for every visible heading in reports,
-  `README.md` files, execution plans, guides, handoffs, and all other generated
-  documents.
-- Treat a paragraph or list lead-in whose visible text is entirely bold,
-  optionally followed by a colon, as a heading. Inline bold emphasis and table
-  cells are not headings.
-- Preserve the established casing of product names, acronyms, code identifiers,
-  file paths, commands, literal UI text, and quoted source text. This convention
-  changes headings, not ordinary prose.
-- Apply this rule to documents and headings the agent creates or substantively
-  edits. Do not mass-retitle untouched source or historical documents solely for
-  casing.
+- Every document an agent creates or edits must use conventional English Title
+  Case for every visible heading. This includes Markdown headings and any
+  standalone paragraph or list lead-in whose heading text is formatted entirely
+  in bold, with an optional trailing colon.
+- Apply this requirement retroactively to all agent-authored or
+  repository-maintained documents in scope. Audit existing documents and correct
+  every nonconforming heading, including headings in otherwise untouched or
+  historical documents; title-only remediation is expressly authorized.
+- Inline bold emphasis and table cells are not headings. Preserve the
+  established casing of product names, acronyms, code identifiers, file paths,
+  commands, literal UI text, and quoted source text; do not change ordinary
+  prose.
+- Run `tools/check_document_title_case.cmd` on Windows, or
+  `python3 tools/check_document_title_case.py` on other hosts, after creating or
+  editing documentation and before committing it. Audit the entire tracked
+  Markdown set plus nonignored new Markdown files, not only the files changed by
+  the current task, and do not claim completion while the checker reports a
+  violation.
 - Update `README.md` whenever a change affects user-visible behavior, defaults,
   controls, required assets, build/test/run steps, or intentional omissions.
   Remove stale claims instead of preserving historical behavior.
@@ -383,6 +389,8 @@ Agent policy version: `2026-07-15.4`.
   against the recorded baseline and list any checks not run.
 - Documentation-only changes require link and diff validation, not a renderer
   rebuild.
+- For documentation changes, run the checker command above with `--self-test`,
+  then run it again without arguments.
 - Run `git diff --check` before committing.
 - Before declaring the overall task complete, the coordinator maps every
   acceptance criterion to evidence, confirms all workers are done or stopped,

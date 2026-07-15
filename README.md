@@ -306,6 +306,12 @@ and the boundary between automated evidence and required runtime evaluation.
 The [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) preserves why the
 retired anti-aliasing experiment failed and the required order for any successor.
 
+All Markdown headings, standalone bold headings, and initial bold list-item
+headings use conventional English Title Case. Run
+`tools/check_document_title_case.cmd` to validate the entire tracked
+documentation set plus nonignored new Markdown files; the same check runs for
+documentation changes on GitHub.
+
 UVSR runs uncapped with a single planar view. UVSR-owned interactive controls
 provide short, plain-English hover tooltips; new controls should follow the same
 convention.
