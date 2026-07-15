@@ -131,19 +131,18 @@ that has not merged into `main`, plus every project or feature an agent is
 currently working on. An entry is not shipped on `main`, and experimental
 entries are not promises that the work will merge.
 
-- **Bilateral-Grid Local Tone Mapping — Active Development**
-  (`agent/bilateral-grid-local-tone-mapping-latest`). Port the validated local
-  implementation onto the newest `main` as a first-party D3D12 GPU
+- **Bilateral-Grid Local Tone Mapping — Implementation Complete**
+  (`agent/bilateral-grid-local-tone-mapping-latest`). The validated local
+  implementation is ported onto `4aa1f1c` as a first-party D3D12 GPU
   bilateral-grid analysis pass over the final scene-linear display source after
-  visibility composition and before AgX, then apply one scalar local-EV
-  correction inside the existing AgX display pass. Add a top-of-drawer master
-  checkbox that bypasses AgX tone mapping and every LUT, while retaining a
-  separate checkbox for the local effect. This owns
-  `src/local_tone_mapping*`, AgX bindings,
-  display eligibility, reference tests, and its UI. It may extend the higher-
-  bounce contribution cutoff conservatively without changing visibility
+  visibility composition and before AgX. A top-of-drawer master checkbox
+  bypasses AgX tone mapping and every LUT, while a separate checkbox controls
+  the local effect. The integration owns `src/local_tone_mapping*`, AgX
+  bindings, display eligibility, reference tests, and its UI. It conservatively
+  extends the higher-bounce contribution cutoff without changing visibility
   estimator math, resurrecting retired NRA-RTAA v1 code, or adding motion-
-  reprojected local-exposure history.
+  reprojected local-exposure history. Release compilation, all shader
+  permutations, D3D12 startup, and all six CTest targets are validated.
 
 ### How Work Gets Listed
 
