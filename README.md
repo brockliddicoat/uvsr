@@ -3,9 +3,9 @@
 **Unified Visibility Stochastic Rendering**
 
 UVSR is a DirectX 12 renderer built on NVIDIA's pinned Donut framework and its
-NVRHI graphics abstraction layer. It launches the NVIDIA Bistro exterior scene
-with its authored materials by default; the converted Bistro Interior Wine scene
-is also available from the scene picker.
+NVRHI graphics abstraction layer. It ships with two ready-to-run Intel PBR
+Sponza flat-roof scenes. The default includes Intel's separately distributed
+curtains and ivy; the second is the same architecture without either add-on.
 
 ## Renderer Baseline
 
@@ -55,6 +55,9 @@ is also available from the scene picker.
   is hidden.
 - The top **General** drawer contains renderer and performance information, GPU
   selection, camera mode, and White World, with the scene picker at the bottom.
+  Named multi-model descriptors appear as one clean entry while their component
+  GLBs stay available to explicit command-line loads without cluttering the
+  picker.
 - **White World Off** is the default. **White World On**, **White World Preserve
   Normals**, and **White World Preserve Emissives** override material color
   without modifying source assets. The last mode keeps authored emissive color
@@ -145,20 +148,6 @@ promises that the work will merge.
   rank-field paths. This owns only visibility test sources and has no runtime
   rendering, UI, or asset overlap.
 
-- **Intel PBR Sponza Scenes — Active Development**
-  (`agent/intel-pbr-sponza-scenes`). Make Intel's main PBR Sponza the default
-  scene, add a combined architecture-and-curtains scene, and introduce
-  first-party multi-file scene manifests. This owns scene catalog and loading
-  code, Intel assets, runtime packaging, tests, and scene documentation. Its
-  `src/uvsr.cpp`, `CMakeLists.txt`, and `README.md` edits require integration
-  with other work touching those files.
-
-- **Intel PBR Sponza Rounded Architecture Study — Experiment**
-  (`agent/intel-pbr-sponza-scenes`). Derive optional Sponza scene variants with
-  rounder pillars, restrained exterior bevels, and an extended tile roof. This
-  depends on the Intel PBR Sponza scene catalog and owns only its deterministic
-  geometry recipe, validation, derived assets, and scene descriptor.
-
 - **Three-Band Sky and Night Mode — Experiment**
   (`codex/sky-night-mode-3087874`). Add a first-party three-band atmospheric
   sky and a Night Mode with a neutral procedural lunar disk, zero ambient fill,
@@ -201,25 +190,13 @@ At startup, UVSR selects the D3D12-capable adapter with the most dedicated
 video memory. The **Graphics Adapter** selector lists every compatible GPU and
 restarts the renderer immediately on the selected adapter.
 
-The Bistro source assets are licensed local content and are intentionally
-gitignored. Before building, place these files in
-`assets/scenes/nvidia_bistro/`:
-
-```text
-BistroExterior.glb
-BistroInterior_Wine.glb
-LICENSE.txt
-README.txt
-```
-
-**A Beautiful Game** is a tracked, self-contained GLB scene. CMake packages
-`assets/scenes/a_beautiful_game/ABeautifulGame.glb` automatically, and the
-renderer exposes it as `a_beautiful_game/ABeautifulGame.glb` in the scene
-picker.
-
-The larger downloaded **Cornell Box** is also tracked and self-contained. CMake
-packages `assets/scenes/cornell_box/cornellBox.glb`, exposed as
-`cornell_box/cornellBox.glb` in the scene picker.
+Intel PBR Sponza is completely included in the repository and staged by CMake;
+there is no separate model download, conversion, or scene setup step. The
+default **Intel PBR Sponza** scene composes the flat-roof architecture, curtains,
+and roof-trimmed ivy. **Intel PBR Sponza - Plain** loads only the same two
+architecture components. Every component remains below GitHub's 100 MB
+per-file limit. Attribution and the exact runtime edits are recorded in
+[`assets/scenes/intel_sponza/README.md`](assets/scenes/intel_sponza/README.md).
 
 Configure and build a Release executable from PowerShell:
 
@@ -253,42 +230,14 @@ environment variable; omitted descriptions default to `main`.
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the experiment-title, camera-collision, camera-controls, PBR,
-radial-visibility, estimator, visibility-projection, and visibility-sampling
-reference tests separately:
+Build and run the scene-catalog, experiment-title, camera-collision,
+camera-controls, PBR, radial-visibility, estimator, visibility-projection, and
+visibility-sampling reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
-
-## Bistro Material Preparation
-
-UVSR renders Bistro materials two-sided because the FBX source contains thin
-surfaces with mixed winding. The repair identifies the small set of base-color
-images with real binary/fractional alpha, converts those materials to
-depth-writing alpha test, and restores opaque domain for the exporter-mislabeled
-remainder while preserving genuine Water/Ice/Wine blend materials. White World
-samples only real coverage alpha and overrides RGB in a
-shader permutation, so foliage cutouts survive without leaking albedo.
-
-Some source conversions label packed roughness/metalness maps as specular
-extension textures. Repair freshly converted GLBs once with:
-
-```powershell
-tools\repair_bistro_orm.cmd assets/scenes/nvidia_bistro/BistroExterior.glb assets/scenes/nvidia_bistro/BistroInterior_Wine.glb
-```
-
-The repair changes only GLB metadata, saves the original JSON chunk in a
-`.pre-uvsr-json` file, and ignores the maps' zero-filled red channel so authored
-material occlusion is not fabricated. Screen-space ambient visibility remains a
-separate renderer input. Pass `--restore` to restore the original chunks.
-
-The Bistro light is normalized from its exported real-world lux value to the
-renderer's unoccluded-light range and uses a neutral illuminant so White World
-does not inherit the source scene's strong amber cast. This scene-specific
-calibration is applied to the light, outside the shared BSDF, and remains
-editable in **Lights**.
 
 ## Documentation and Conventions
 

@@ -15,9 +15,7 @@ Agent policy version: `2026-07-15.5`.
 - `Donut-Samples/` is local reference material, never UVSR source.
 - DirectX 12 is the product backend. Keep Vulkan and DX11 disabled unless a task
   explicitly requires them.
-- Bistro scene sources are licensed local assets. Do not commit files from
-  `assets/scenes/nvidia_bistro/`, generated `build/` content, or `work/`
-  artifacts.
+- Do not commit generated `build/` content or `work/` artifacts.
 
 ## Work Like a Human Teammate
 
