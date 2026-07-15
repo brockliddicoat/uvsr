@@ -63,6 +63,8 @@
 #include "pbr_material.h"
 #include "pbr_deferred_lighting_pass.h"
 #include "gpu_performance_monitor.h"
+#include "camera_collision.h"
+#include "camera_controllers.h"
 #include "screen_space_visibility.h"
 
 using namespace donut;
@@ -842,7 +844,7 @@ struct UIData
     bool                                ShaderReloadRequested = false;
     bool                                EnableProceduralSky = true;
     WhiteWorldMode                      WhiteWorld = WhiteWorldMode::Off;
-    bool                                UseThirdPersonCamera = false;
+    CameraMode                          Camera = CameraMode::ThirdPerson;
     std::shared_ptr<Material>           SelectedMaterial;
     std::shared_ptr<SceneGraphNode>     SelectedNode;
     bool                                CopyScreenshotToClipboard = false;
@@ -890,12 +892,16 @@ private:
     std::shared_ptr<PlanarView>         m_PreviousView;
     
     nvrhi::CommandListHandle            m_CommandList;
-    FirstPersonCamera                   m_FirstPersonCamera;
-    ThirdPersonCamera                   m_ThirdPersonCamera;
+    UvsrFirstPersonCamera               m_FirstPersonCamera{ true };
+    UvsrThirdPersonCamera               m_ThirdPersonCamera;
+    UvsrFirstPersonCamera               m_PivotCamera{ false };
+    StaticViewCamera                    m_StaticCamera;
+    CameraCollisionWorld                m_CameraCollisionWorld;
     BindingCache                        m_BindingCache;
     
     float                               m_CameraVerticalFov = 60.f;
     float                               m_SceneDiagonal = 100.f;
+    float                               m_CameraCollisionRadius = 0.1f;
     float3                              m_AmbientTop = 0.f;
     float3                              m_AmbientBottom = 0.f;
     uint2                               m_PickPosition = 0u;
@@ -943,9 +949,6 @@ public:
 
         m_CommandList = GetDevice()->createCommandList();
 
-        m_FirstPersonCamera.SetMoveSpeed(3.0f);
-        m_ThirdPersonCamera.SetMoveSpeed(3.0f);
-        
         SetAsynchronousLoadingEnabled(true);
 
         if (sceneName.empty())
@@ -962,7 +965,47 @@ public:
 
     BaseCamera& GetActiveCamera() const
     {
-        return m_ui.UseThirdPersonCamera ? (BaseCamera&)m_ThirdPersonCamera : (BaseCamera&)m_FirstPersonCamera;
+        switch (m_ui.Camera)
+        {
+        case CameraMode::FirstPerson: return (BaseCamera&)m_FirstPersonCamera;
+        case CameraMode::ThirdPerson: return (BaseCamera&)m_ThirdPersonCamera;
+        case CameraMode::Static: return (BaseCamera&)m_StaticCamera;
+        case CameraMode::Pivot: return (BaseCamera&)m_PivotCamera;
+        default: return (BaseCamera&)m_FirstPersonCamera;
+        }
+    }
+
+    void SetCameraMode(CameraMode mode)
+    {
+        if (mode == m_ui.Camera)
+            return;
+
+        const BaseCamera& source = GetActiveCamera();
+        const float3 position = source.GetPosition();
+        const float3 direction = source.GetDir();
+        const float3 up = source.GetUp();
+
+        switch (mode)
+        {
+        case CameraMode::FirstPerson:
+            m_FirstPersonCamera.LookTo(position, direction, up);
+            break;
+
+        case CameraMode::ThirdPerson:
+            m_ThirdPersonCamera.LookTo(position, direction, up);
+            m_ThirdPersonCamera.CancelPendingZoom();
+            break;
+
+        case CameraMode::Static:
+            m_StaticCamera.LookTo(position, direction, up);
+            break;
+
+        case CameraMode::Pivot:
+            m_PivotCamera.LookTo(position, direction, up);
+            break;
+        }
+
+        m_ui.Camera = mode;
     }
 
 	std::vector<std::string> const& GetAvailableScenes() const
@@ -988,14 +1031,6 @@ public:
 		m_CurrentSceneName = sceneName;
 
 		BeginLoadingScene(m_NativeFs, m_CurrentSceneName);
-    }
-
-    void CopyThirdPersonToFirstPerson()
-    {
-        m_FirstPersonCamera.LookAt(
-            m_ThirdPersonCamera.GetPosition(),
-            m_ThirdPersonCamera.GetPosition() + m_ThirdPersonCamera.GetDir(),
-            m_ThirdPersonCamera.GetUp());
     }
 
     void DiscoverKodakLuts(const std::filesystem::path& directory)
@@ -1075,11 +1110,187 @@ public:
         log::info("All renderer settings restored to factory defaults");
     }
 
-    void CopyCurrentViewToThirdPerson()
+    void SynchronizeCameraInput()
     {
-        m_ThirdPersonCamera.LookTo(m_FirstPersonCamera.GetPosition(), m_FirstPersonCamera.GetDir(),
-            std::max(10.f, m_SceneDiagonal * 0.01f));
-        m_ThirdPersonCamera.Animate(0.f);
+        GLFWwindow* window = GetDeviceManager()->GetWindow();
+        if (!window)
+            return;
+
+        const bool windowFocused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
+        const bool imguiAvailable = ImGui::GetCurrentContext() != nullptr;
+        const bool keyboardCaptured = imguiAvailable && ImGui::GetIO().WantCaptureKeyboard;
+        const bool mouseCaptured = imguiAvailable && ImGui::GetIO().WantCaptureMouse;
+
+        // Donut's cameras intentionally keep their own key/button latches, but
+        // an ImGui popup or a native focus transition can consume the matching
+        // release callback. Polling GLFW once per animated frame reconciles the
+        // latches with physical state after focus returns. Inactive controllers
+        // are explicitly released so switching modes cannot revive stale input.
+        static constexpr int CameraKeys[] = {
+            GLFW_KEY_Q,
+            GLFW_KEY_E,
+            GLFW_KEY_A,
+            GLFW_KEY_D,
+            GLFW_KEY_W,
+            GLFW_KEY_S,
+            GLFW_KEY_LEFT,
+            GLFW_KEY_RIGHT,
+            GLFW_KEY_UP,
+            GLFW_KEY_DOWN,
+            GLFW_KEY_Z,
+            GLFW_KEY_C,
+            GLFW_KEY_LEFT_SHIFT,
+            GLFW_KEY_RIGHT_SHIFT,
+            GLFW_KEY_LEFT_CONTROL,
+            GLFW_KEY_RIGHT_CONTROL,
+            GLFW_KEY_LEFT_ALT
+        };
+
+        const bool firstPersonActive = m_ui.Camera == CameraMode::FirstPerson;
+        const bool thirdPersonActive = m_ui.Camera == CameraMode::ThirdPerson;
+        const bool pivotActive = m_ui.Camera == CameraMode::Pivot;
+        const bool allowKeyboard = windowFocused && !keyboardCaptured;
+        for (int key : CameraKeys)
+        {
+            // GLFW polling is used only to clear stale latches. Synthesizing a
+            // press here would turn a key held while closing UI into a new
+            // camera action even though the camera never received its press.
+            const bool physicallyPressed = allowKeyboard &&
+                glfwGetKey(window, key) == GLFW_PRESS;
+            if (!firstPersonActive || !physicallyPressed)
+                m_FirstPersonCamera.KeyboardUpdate(key, 0, GLFW_RELEASE, 0);
+            if (!thirdPersonActive || !physicallyPressed)
+                m_ThirdPersonCamera.KeyboardUpdate(key, 0, GLFW_RELEASE, 0);
+            if (!pivotActive || !physicallyPressed)
+                m_PivotCamera.KeyboardUpdate(key, 0, GLFW_RELEASE, 0);
+        }
+
+        // ImGui consumes mouse-position callbacks while its windows are active.
+        // Polling the current position into both cameras prevents the inactive
+        // third-person camera from seeing one giant stale delta after a mode
+        // switch. Match DeviceManager's display-scale conversion exactly.
+        double cursorX = 0.0;
+        double cursorY = 0.0;
+        glfwGetCursorPos(window, &cursorX, &cursorY);
+        if (!GetDeviceManager()->GetDeviceParams().supportExplicitDisplayScaling)
+        {
+            float dpiScaleX = 1.f;
+            float dpiScaleY = 1.f;
+            GetDeviceManager()->GetDPIScaleInfo(dpiScaleX, dpiScaleY);
+            cursorX /= dpiScaleX;
+            cursorY /= dpiScaleY;
+        }
+        m_FirstPersonCamera.MousePosUpdate(cursorX, cursorY);
+        m_ThirdPersonCamera.MousePosUpdate(cursorX, cursorY);
+        m_PivotCamera.MousePosUpdate(cursorX, cursorY);
+
+        static constexpr int CameraMouseButtons[] = {
+            GLFW_MOUSE_BUTTON_LEFT,
+            GLFW_MOUSE_BUTTON_MIDDLE,
+            GLFW_MOUSE_BUTTON_RIGHT
+        };
+
+        const bool allowMouse = windowFocused && !mouseCaptured;
+        for (int button : CameraMouseButtons)
+        {
+            const bool physicallyPressed = allowMouse &&
+                glfwGetMouseButton(window, button) == GLFW_PRESS;
+            if (!firstPersonActive || !physicallyPressed)
+                m_FirstPersonCamera.MouseButtonUpdate(button, GLFW_RELEASE, 0);
+            if (!thirdPersonActive || !physicallyPressed)
+                m_ThirdPersonCamera.MouseButtonUpdate(button, GLFW_RELEASE, 0);
+            if (!pivotActive || !physicallyPressed)
+                m_PivotCamera.MouseButtonUpdate(button, GLFW_RELEASE, 0);
+        }
+    }
+
+    void BuildCameraCollisionWorld()
+    {
+        std::vector<CameraCollisionWorld::Triangle> triangles;
+        const auto& instances = m_Scene->GetSceneGraph()->GetMeshInstances();
+
+        size_t triangleCapacity = 0;
+        for (const auto& instance : instances)
+        {
+            if (!instance)
+                continue;
+
+            std::shared_ptr<MeshInfo> mesh = instance->GetMesh();
+            if (const auto skinnedInstance = std::dynamic_pointer_cast<SkinnedMeshInstance>(instance))
+                mesh = skinnedInstance->GetPrototypeMesh();
+
+            if (!mesh)
+                continue;
+
+            for (const auto& geometry : mesh->geometries)
+            {
+                if (geometry && geometry->type == MeshGeometryPrimitiveType::Triangles)
+                    triangleCapacity += geometry->numIndices / 3;
+            }
+        }
+        triangles.reserve(triangleCapacity);
+
+        for (const auto& instance : instances)
+        {
+            if (!instance || !instance->GetNode())
+                continue;
+
+            std::shared_ptr<MeshInfo> mesh = instance->GetMesh();
+            if (const auto skinnedInstance = std::dynamic_pointer_cast<SkinnedMeshInstance>(instance))
+                mesh = skinnedInstance->GetPrototypeMesh();
+
+            if (!mesh || !mesh->buffers || mesh->buffers->indexData.empty() ||
+                mesh->buffers->positionData.empty())
+            {
+                continue;
+            }
+
+            const auto& indices = mesh->buffers->indexData;
+            const auto& positions = mesh->buffers->positionData;
+            const affine3 localToWorld = instance->GetNode()->GetLocalToWorldTransformFloat();
+
+            for (const auto& geometry : mesh->geometries)
+            {
+                if (!geometry || geometry->type != MeshGeometryPrimitiveType::Triangles)
+                    continue;
+
+                const size_t firstIndex = size_t(mesh->indexOffset) + geometry->indexOffsetInMesh;
+                const size_t firstVertex = size_t(mesh->vertexOffset) + geometry->vertexOffsetInMesh;
+                if (firstIndex + geometry->numIndices > indices.size())
+                {
+                    log::warning("Skipping camera collision geometry with an invalid index range");
+                    continue;
+                }
+
+                for (uint32_t index = 0; index + 2 < geometry->numIndices; index += 3)
+                {
+                    const size_t vertex0 = firstVertex + indices[firstIndex + index];
+                    const size_t vertex1 = firstVertex + indices[firstIndex + index + 1];
+                    const size_t vertex2 = firstVertex + indices[firstIndex + index + 2];
+                    if (vertex0 >= positions.size() || vertex1 >= positions.size() ||
+                        vertex2 >= positions.size())
+                    {
+                        continue;
+                    }
+
+                    triangles.push_back({
+                        localToWorld.transformPoint(positions[vertex0]),
+                        localToWorld.transformPoint(positions[vertex1]),
+                        localToWorld.transformPoint(positions[vertex2])
+                    });
+                }
+            }
+        }
+
+        const auto buildStart = std::chrono::high_resolution_clock::now();
+        m_CameraCollisionWorld.Build(std::move(triangles));
+        const auto buildDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::high_resolution_clock::now() - buildStart).count();
+        log::info(
+            "Camera collision: %zu triangles, %.3f-unit radius, built in %lld ms",
+            m_CameraCollisionWorld.GetTriangleCount(),
+            m_CameraCollisionRadius,
+            static_cast<long long>(buildDuration));
     }
 
     virtual bool KeyboardUpdate(int key, int scancode, int action, int mods) override
@@ -1092,11 +1303,9 @@ public:
 
         if (key == GLFW_KEY_T && action == GLFW_PRESS)
         {
-            if (m_ui.UseThirdPersonCamera)
-                CopyThirdPersonToFirstPerson();
-            else
-                CopyCurrentViewToThirdPerson();
-            m_ui.UseThirdPersonCamera = !m_ui.UseThirdPersonCamera;
+            SetCameraMode(m_ui.Camera == CameraMode::ThirdPerson
+                ? CameraMode::FirstPerson
+                : CameraMode::ThirdPerson);
             return true;
         }
 
@@ -1106,7 +1315,12 @@ public:
 
     virtual bool MousePosUpdate(double xpos, double ypos) override
     {
-        GetActiveCamera().MousePosUpdate(xpos, ypos);
+        // Keep all interactive controllers synchronized while inactive. A
+        // later press can then begin from the current cursor position instead
+        // of applying all motion accumulated since the last mode switch.
+        m_FirstPersonCamera.MousePosUpdate(xpos, ypos);
+        m_ThirdPersonCamera.MousePosUpdate(xpos, ypos);
+        m_PivotCamera.MousePosUpdate(xpos, ypos);
 
         m_PickPosition = uint2(static_cast<uint>(xpos), static_cast<uint>(ypos));
 
@@ -1132,7 +1346,55 @@ public:
 
     virtual void Animate(float fElapsedTimeSeconds) override
     {
-        GetActiveCamera().Animate(fElapsedTimeSeconds);
+        SynchronizeCameraInput();
+
+        switch (m_ui.Camera)
+        {
+        case CameraMode::ThirdPerson:
+        {
+            // Third Person is look-and-dolly only. Damped wheel input and
+            // smooth W/S input move the eye directly, with no orbit target or
+            // pivot-to-eye obstruction query.
+            const float3 start = m_ThirdPersonCamera.GetPosition();
+            m_ThirdPersonCamera.Animate(fElapsedTimeSeconds);
+
+            const float3 desiredPosition = m_ThirdPersonCamera.GetPosition();
+            const float3 resolvedPosition = m_CameraCollisionWorld.MoveSphere(
+                start, desiredPosition, m_CameraCollisionRadius);
+            if (lengthSquared(resolvedPosition - desiredPosition) > 1e-12f)
+            {
+                // The correction becomes the free-look camera's next origin;
+                // its look direction and dolly sensitivity stay unchanged.
+                m_ThirdPersonCamera.ApplyCollisionPosition(resolvedPosition);
+            }
+            break;
+        }
+
+        case CameraMode::Pivot:
+            m_PivotCamera.Animate(fElapsedTimeSeconds);
+            break;
+
+        case CameraMode::Static:
+            break;
+
+        case CameraMode::FirstPerson:
+        {
+            const float3 start = m_FirstPersonCamera.GetPosition();
+            m_FirstPersonCamera.Animate(fElapsedTimeSeconds);
+
+            const float3 desiredPosition = m_FirstPersonCamera.GetPosition();
+            const float3 resolvedPosition = m_CameraCollisionWorld.MoveSphere(
+                start, desiredPosition, m_CameraCollisionRadius);
+            if (lengthSquared(resolvedPosition - desiredPosition) > 1e-12f)
+            {
+                m_FirstPersonCamera.LookTo(
+                    resolvedPosition,
+                    m_FirstPersonCamera.GetDir(),
+                    m_FirstPersonCamera.GetUp());
+            }
+            break;
+        }
+        }
     }
 
 
@@ -1153,6 +1415,7 @@ public:
         m_ui.SelectedNode = nullptr;
         m_OriginalMaterials.clear();
         m_PreviousView.reset();
+        m_CameraCollisionWorld.Clear();
 
     }
 
@@ -1182,11 +1445,17 @@ public:
     virtual void SceneLoaded() override
     {
         Super::SceneLoaded();
-        
-        m_Scene->FinishedLoading(GetFrameIndex());
 
+        // Refresh transforms before extracting collision triangles. Donut frees
+        // importer CPU arrays while FinishedLoading uploads mesh buffers, so the
+        // first-party collision copy must be built between these two steps.
+        m_Scene->RefreshSceneGraph(GetFrameIndex());
         const box3 loadedSceneBounds = m_Scene->GetSceneGraph()->GetRootNode()->GetGlobalBoundingBox();
         m_SceneDiagonal = std::max(length(loadedSceneBounds.diagonal()), 100.f);
+        m_CameraCollisionRadius = std::max(0.1f, m_SceneDiagonal * 0.0005f);
+        BuildCameraCollisionWorld();
+
+        m_Scene->FinishedLoading(GetFrameIndex());
 
         m_OriginalMaterials.clear();
         for (const auto& material : m_Scene->GetSceneGraph()->GetMaterials())
@@ -1229,7 +1498,6 @@ public:
             m_SunLight->color = dm::colors::white;
         }
         
-        m_ThirdPersonCamera.SetRotation(dm::radians(135.f), dm::radians(20.f));
         std::shared_ptr<SceneGraphNode> cameraTarget = m_Scene->GetSceneGraph()->GetRootNode();
         // Prefer the compact asteroid core when present so the initial view
         // includes the full rocky platform instead of tightly framing only the
@@ -1242,12 +1510,19 @@ public:
         }
         else if (auto pyramid = FindDescendantByName(cameraTarget, "Pyramid_EmitterShell"))
             cameraTarget = pyramid;
-        PointThirdPersonCameraAt(cameraTarget, cameraDistanceScale);
+        PointThirdPersonCameraAt(cameraTarget, cameraDistanceScale, true);
 
-        m_ui.UseThirdPersonCamera = string_utils::ends_with(m_CurrentSceneName, ".gltf")
-            || string_utils::ends_with(m_CurrentSceneName, ".glb");
+        m_ui.Camera = string_utils::ends_with(m_CurrentSceneName, ".gltf")
+            || string_utils::ends_with(m_CurrentSceneName, ".glb")
+            ? CameraMode::ThirdPerson
+            : CameraMode::FirstPerson;
 
-        CopyThirdPersonToFirstPerson();
+        const float3 initialPosition = m_ThirdPersonCamera.GetPosition();
+        const float3 initialDirection = m_ThirdPersonCamera.GetDir();
+        const float3 initialUp = m_ThirdPersonCamera.GetUp();
+        m_FirstPersonCamera.LookTo(initialPosition, initialDirection, initialUp);
+        m_PivotCamera.LookTo(initialPosition, initialDirection, initialUp);
+        m_StaticCamera.LookTo(initialPosition, initialDirection, initialUp);
 
     }
 
@@ -1371,7 +1646,8 @@ public:
 
     void PointThirdPersonCameraAt(
         const std::shared_ptr<SceneGraphNode>& node,
-        float distanceScale = 1.f)
+        float distanceScale = 1.f,
+        bool resetOrientation = false)
     {
         if (!node)
             return;
@@ -1387,9 +1663,31 @@ public:
         if (!std::isfinite(distance) || distance <= 0.f)
             return;
 
-        m_ThirdPersonCamera.SetTargetPosition(bounds.center());
-        m_ThirdPersonCamera.SetDistance(distance);
-        m_ThirdPersonCamera.Animate(0.f);
+        if (resetOrientation)
+        {
+            // Reuse Donut's established orbit framing math only to calculate
+            // the initial eye pose. Runtime Third Person is a free-look camera
+            // and retains no pivot or orbit state from this temporary object.
+            ThirdPersonCamera framingCamera;
+            framingCamera.SetRotation(dm::radians(135.f), dm::radians(20.f));
+            framingCamera.SetTargetPosition(bounds.center());
+            framingCamera.SetDistance(distance);
+            framingCamera.Animate(0.f);
+            m_ThirdPersonCamera.LookTo(
+                framingCamera.GetPosition(),
+                framingCamera.GetDir(),
+                framingCamera.GetUp());
+        }
+        else
+        {
+            const float3 direction = m_ThirdPersonCamera.GetDir();
+            const float3 up = m_ThirdPersonCamera.GetUp();
+            m_ThirdPersonCamera.LookTo(
+                bounds.center() - direction * distance,
+                direction,
+                up);
+        }
+        m_ThirdPersonCamera.ResetZoomReferenceDistance(distance);
     }
 
     std::shared_ptr<TextureCache> GetTextureCache()
@@ -1428,8 +1726,6 @@ public:
 
         planarView->SetMatrices(viewMatrix, projection);
         planarView->UpdateCache();
-
-        m_ThirdPersonCamera.SetView(*planarView);
 
         return topologyChanged;
     }
@@ -2008,25 +2304,24 @@ protected:
 
         ImGui::SetNextItemWidth(-FLT_MIN);
         const bool cameraComboOpen = ImGui::BeginCombo(
-            "##Camera", m_ui.UseThirdPersonCamera ? "Third Person" : "First Person");
-        ImGui::SetItemTooltip("Choose first- or third-person controls.");
+            "##Camera", GetCameraModeLabel(m_ui.Camera));
+        ImGui::SetItemTooltip(
+            "Choose First Person, Third Person, Static Camera, or Pivot Camera controls.");
         if (cameraComboOpen)
         {
-            if (ImGui::Selectable("First Person", !m_ui.UseThirdPersonCamera))
+            static constexpr CameraMode CameraModes[] = {
+                CameraMode::FirstPerson,
+                CameraMode::ThirdPerson,
+                CameraMode::Static,
+                CameraMode::Pivot
+            };
+            for (CameraMode mode : CameraModes)
             {
-                if (m_ui.UseThirdPersonCamera)
-                {
-                    m_app->CopyThirdPersonToFirstPerson();
-                    m_ui.UseThirdPersonCamera = false;
-                }
-            }
-            if (ImGui::Selectable("Third Person", m_ui.UseThirdPersonCamera))
-            {
-                if (!m_ui.UseThirdPersonCamera)
-                {
-                    m_app->CopyCurrentViewToThirdPerson();
-                    m_ui.UseThirdPersonCamera = true;
-                }
+                const bool selected = mode == m_ui.Camera;
+                if (ImGui::Selectable(GetCameraModeLabel(mode), selected) && !selected)
+                    m_app->SetCameraMode(mode);
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
             }
             ImGui::EndCombo();
         }

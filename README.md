@@ -59,7 +59,21 @@ is also available from the scene picker.
   Normals**, and **White World Preserve Emissives** override material color
   without modifying source assets. The last mode keeps authored emissive color
   alongside the scene's colored direct lights so GI sources remain easy to read.
-- Camera controls are limited to **First Person** and **Third Person**.
+- Camera controls include **First Person**, **Third Person**, **Static Camera**,
+  and **Pivot Camera**. First Person uses a small scene-scale sphere against
+  imported GLB triangles, moves at 6 units/second, and sprints at 12 units/second
+  with Shift. Third Person is collision-enabled look-and-dolly: mouse and arrow
+  keys rotate the view, the wheel applies a small damped dolly, and W/S dolly
+  at up to 16% of the initial framing distance per second with smooth
+  acceleration and finite deceleration. Moving inward gently
+  lowers dolly sensitivity on a linear scale that bottoms out at 40% of the
+  starting speed; the floor affects speed rather than position, so the eye
+  remains free to continue forward without converging on a fixed pivot.
+  A/D/Q/E translation stays disabled. Static Camera freezes the current
+  view, while Pivot Camera allows mouse or arrow-key look without translation.
+  Camera keys and mouse buttons are reconciled with physical input after UI or
+  window focus transitions, preventing a consumed release event from latching
+  motion.
 - The first scene light is selected automatically in the **Lights** panel.
 - **Emissive Source Gain** in **Visibility > Indirect Diffuse GI** globally
   scales how much light emissive materials contribute to GI without changing
@@ -150,12 +164,6 @@ entries are not promises that the work will merge.
   rounder pillars, restrained exterior bevels, and an extended tile roof. This
   depends on the Intel PBR Sponza scene catalog and owns only its deterministic
   geometry recipe, validation, derived assets, and scene descriptor.
-
-- **Camera Collision and Input Reset — Active Development**
-  (`codex/camera-collision-input-reset`). Add scene-triangle collision for both
-  camera modes and reconcile held movement and mouse input after focus or UI
-  transitions. This owns camera collision code and tests and overlaps
-  `src/uvsr.cpp`, `CMakeLists.txt`, and `README.md` only.
 
 - **Three-Band Sky and Night Mode — Experiment**
   (`codex/sky-night-mode`). Add a first-party three-band atmospheric sky and a
@@ -254,11 +262,12 @@ environment variable; omitted descriptions default to `main`.
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the PBR, radial-visibility, estimator, visibility-projection, and
-visibility-sampling reference tests separately:
+Build and run the camera-collision, camera-controls, PBR, radial-visibility,
+estimator, visibility-projection, and visibility-sampling reference tests
+separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
