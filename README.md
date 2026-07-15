@@ -40,11 +40,6 @@ is also available from the scene picker.
   **Filter-Adapted Spatiotemporal Noise**. Every scheduler toroidally
   rotates the complete nested radial prefix, so fixed-work and adaptive modes
   do not reuse global radius shells as the budget changes.
-- The renderer selector provides **Deferred**, **Forward**, and **Forward
-  Tonemapperless** modes. The tonemapperless mode renders with the forward path
-  and sends its scene-linear HDR result directly to the sRGB display target,
-  bypassing AgX, exposure, grading, LUTs, and dithering; out-of-range values are
-  clipped by the display target.
 - Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
@@ -54,12 +49,12 @@ is also available from the scene picker.
   timings on one row. Two memory rows report exact logical **Outputs**,
   **Working**, **Mask Cache**, and **Avoided** payloads; **Shared** is explicitly
   an estimate of duplicate mask payload avoided by shared AO/GI traversal.
-- UVSR's shared forward/deferred metallic-roughness PBR path is always enabled
-  in the production UI. The legacy Donut comparison path remains implemented
-  for possible future experiments, but its control is hidden.
+- The default deferred UVSR PBR path starts enabled. **Visibility > Enabled**
+  turns visibility and PBR off or on together. The legacy Donut comparison path
+  remains implemented for possible future experiments, but its separate control
+  is hidden.
 - The top **General** drawer contains renderer and performance information, GPU
-  selection, camera mode, White World, and rendering-path selection, with the
-  scene picker at the bottom.
+  selection, camera mode, and White World, with the scene picker at the bottom.
 - **White World Off** is the default. **White World On**, **White World Preserve
   Normals**, and **White World Preserve Emissives** override material color
   without modifying source assets. The last mode keeps authored emissive color
@@ -123,6 +118,50 @@ entries are not promises that the work will merge.
   display eligibility, reference tests, and its UI. It may extend the higher-
   bounce contribution cutoff conservatively without changing visibility
   estimator math or adding motion-reprojected local-exposure history.
+
+- **Agent Collaboration Policy — Active Development**
+  (`codex/casual-agent-policy`). Replace the repository's agent guidance with
+  coordinator-led collaboration rules, conversational-language guidance, and
+  reusable execution-plan documentation. This owns `AGENTS.md` and agent-only
+  documentation; it has no renderer, shader, asset, or UI overlap.
+
+- **Screen-Space Visibility Shared Shader Helpers — In Review**
+  (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate shared
+  depth, pixel-coordinate, and safe-normal helpers used by the visibility
+  sampling, depth-hierarchy, temporal, and filter shaders. This is a mechanical
+  extraction with no equations, bindings, UI, or scene changes.
+
+- **Visibility Degenerate-Path Test Coverage — In Review**
+  (`devin/1784102780-visibility-test-coverage`, PR #11). Add reference coverage
+  for degenerate visibility clipping, radial-mask edge cases, and blue-noise
+  rank-field paths. This owns only visibility test sources and has no runtime
+  rendering, UI, or asset overlap.
+
+- **Intel PBR Sponza Scenes — Active Development**
+  (`agent/intel-pbr-sponza-scenes`). Make Intel's main PBR Sponza the default
+  scene, add a combined architecture-and-curtains scene, and introduce
+  first-party multi-file scene manifests. This owns scene catalog and loading
+  code, Intel assets, runtime packaging, tests, and scene documentation. Its
+  `src/uvsr.cpp`, `CMakeLists.txt`, and `README.md` edits require integration
+  with other work touching those files.
+
+- **Intel PBR Sponza Rounded Architecture Study — Experiment**
+  (`agent/intel-pbr-sponza-scenes`). Derive optional Sponza scene variants with
+  rounder pillars, restrained exterior bevels, and an extended tile roof. This
+  depends on the Intel PBR Sponza scene catalog and owns only its deterministic
+  geometry recipe, validation, derived assets, and scene descriptor.
+
+- **Camera Collision and Input Reset — Active Development**
+  (`codex/camera-collision-input-reset`). Add scene-triangle collision for both
+  camera modes and reconcile held movement and mouse input after focus or UI
+  transitions. This owns camera collision code and tests and overlaps
+  `src/uvsr.cpp`, `CMakeLists.txt`, and `README.md` only.
+
+- **Three-Band Sky and Night Mode — Experiment**
+  (`codex/sky-night-mode`). Add a first-party three-band atmospheric sky and a
+  Night Mode with a soft moon and deterministic procedural stars. This owns
+  sky shaders, constants, controls, reference tests, and sky documentation; it
+  preserves PBR, visibility, and display-pipeline equations.
 
 ### How Work Gets Listed
 
@@ -268,7 +307,8 @@ The [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) preserves why the
 retired anti-aliasing experiment failed and the required order for any successor.
 
 UVSR runs uncapped with a single planar view. UVSR-owned interactive controls
-provide concise hover tooltips; new controls should follow the same convention.
+provide short, plain-English hover tooltips; new controls should follow the same
+convention.
 The bottom action row exposes equally sized **Reload Shaders**, **Reset Settings**,
 **Restart**, and **Screenshot** buttons.
 
