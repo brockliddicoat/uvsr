@@ -11,9 +11,6 @@ is also available from the scene picker.
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
-- NRA-RTAA v1 is retired and removed. Its failure analysis remains in the
-  [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) so a successor starts
-  from a proven reprojection base instead of restoring the failed subsystem.
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
   linear resolution. Full resolution can composite raw output; reconstruction
   adds SSRT3-style temporal accumulation and either compact or Gaussian joint-
@@ -43,11 +40,6 @@ is also available from the scene picker.
   **Filter-Adapted Spatiotemporal Noise**. Every scheduler toroidally
   rotates the complete nested radial prefix, so fixed-work and adaptive modes
   do not reuse global radius shells as the budget changes.
-- The renderer selector provides **Deferred**, **Forward**, and **Forward
-  Tonemapperless** modes. The tonemapperless mode renders with the forward path
-  and sends its scene-linear HDR result directly to the sRGB display target,
-  bypassing AgX, exposure, grading, LUTs, and dithering; out-of-range values are
-  clipped by the display target.
 - Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
@@ -57,17 +49,31 @@ is also available from the scene picker.
   timings on one row. Two memory rows report exact logical **Outputs**,
   **Working**, **Mask Cache**, and **Avoided** payloads; **Shared** is explicitly
   an estimate of duplicate mask payload avoided by shared AO/GI traversal.
-- UVSR's shared forward/deferred metallic-roughness PBR path is always enabled
-  in the production UI. The legacy Donut comparison path remains implemented
-  for possible future experiments, but its control is hidden.
+- The default deferred UVSR PBR path starts enabled. **Visibility > Enabled**
+  turns visibility and PBR off or on together. The legacy Donut comparison path
+  remains implemented for possible future experiments, but its separate control
+  is hidden.
 - The top **General** drawer contains renderer and performance information, GPU
-  selection, camera mode, White World, and rendering-path selection, with the
-  scene picker at the bottom.
+  selection, camera mode, and White World, with the scene picker at the bottom.
 - **White World Off** is the default. **White World On**, **White World Preserve
   Normals**, and **White World Preserve Emissives** override material color
   without modifying source assets. The last mode keeps authored emissive color
   alongside the scene's colored direct lights so GI sources remain easy to read.
-- Camera controls are limited to **First Person** and **Third Person**.
+- Camera controls include **First Person**, **Third Person**, **Static Camera**,
+  and **Pivot Camera**. First Person uses a small scene-scale sphere against
+  imported GLB triangles, moves at 6 units/second, and sprints at 12 units/second
+  with Shift. Third Person is collision-enabled look-and-dolly: mouse and arrow
+  keys rotate the view, the wheel applies a small damped dolly, and W/S dolly
+  at up to 16% of the initial framing distance per second with smooth
+  acceleration and finite deceleration. Moving inward gently
+  lowers dolly sensitivity on a linear scale that bottoms out at 40% of the
+  starting speed; the floor affects speed rather than position, so the eye
+  remains free to continue forward without converging on a fixed pivot.
+  A/D/Q/E translation stays disabled. Static Camera freezes the current
+  view, while Pivot Camera allows mouse or arrow-key look without translation.
+  Camera keys and mouse buttons are reconciled with physical input after UI or
+  window focus transitions, preventing a consumed release event from latching
+  motion.
 - The first scene light is selected automatically in the **Lights** panel.
 - **Emissive Source Gain** in **Visibility > Indirect Diffuse GI** globally
   scales how much light emissive materials contribute to GI without changing
@@ -126,6 +132,48 @@ promises that the work will merge.
   display eligibility, reference tests, and its UI. It may extend the higher-
   bounce contribution cutoff conservatively without changing visibility
   estimator math or adding motion-reprojected local-exposure history.
+
+- **Agent Collaboration Policy — Active Development**
+  (`codex/casual-agent-policy`). Replace the repository's agent guidance with
+  coordinator-led collaboration rules, conversational-language guidance, and
+  reusable execution-plan documentation. Integrate the lowercase-only
+  experiment-title rule as policy version `2026-07-15.4` and enforce it in the
+  PowerShell launcher and renderer startup validator. This owns `AGENTS.md`,
+  agent-only documentation, and experiment-title validation; it has no shader,
+  asset, or UI overlap.
+
+- **Screen-Space Visibility Shared Shader Helpers — In Review**
+  (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate shared
+  depth, pixel-coordinate, and safe-normal helpers used by the visibility
+  sampling, depth-hierarchy, temporal, and filter shaders. This is a mechanical
+  extraction with no equations, bindings, UI, or scene changes.
+
+- **Visibility Degenerate-Path Test Coverage — In Review**
+  (`devin/1784102780-visibility-test-coverage`, PR #11). Add reference coverage
+  for degenerate visibility clipping, radial-mask edge cases, and blue-noise
+  rank-field paths. This owns only visibility test sources and has no runtime
+  rendering, UI, or asset overlap.
+
+- **Intel PBR Sponza Scenes — Active Development**
+  (`agent/intel-pbr-sponza-scenes`). Make Intel's main PBR Sponza the default
+  scene, add a combined architecture-and-curtains scene, and introduce
+  first-party multi-file scene manifests. This owns scene catalog and loading
+  code, Intel assets, runtime packaging, tests, and scene documentation. Its
+  `src/uvsr.cpp`, `CMakeLists.txt`, and `README.md` edits require integration
+  with other work touching those files.
+
+- **Intel PBR Sponza Rounded Architecture Study — Experiment**
+  (`agent/intel-pbr-sponza-scenes`). Derive optional Sponza scene variants with
+  rounder pillars, restrained exterior bevels, and an extended tile roof. This
+  depends on the Intel PBR Sponza scene catalog and owns only its deterministic
+  geometry recipe, validation, derived assets, and scene descriptor.
+
+- **Three-Band Sky and Night Mode — Experiment**
+  (`codex/sky-night-mode-3087874`). Add a first-party three-band atmospheric
+  sky and a Night Mode with a neutral procedural lunar disk, zero ambient fill,
+  deterministic procedural stars, adjustable darkness, and a sun/moon toggle.
+  This owns sky shaders, constants, controls, reference tests, and sky
+  documentation; it preserves the day palette and display pipeline.
 
 ### Roadmap Ownership
 
@@ -213,11 +261,12 @@ environment variable; omitted descriptions default to `main`.
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the PBR, radial-visibility, estimator, visibility-projection, and
-visibility-sampling reference tests separately:
+Build and run the camera-collision, camera-controls, PBR, radial-visibility,
+estimator, visibility-projection, and visibility-sampling reference tests
+separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
@@ -266,7 +315,8 @@ The [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) preserves why the
 retired anti-aliasing experiment failed and the required order for any successor.
 
 UVSR runs uncapped with a single planar view. UVSR-owned interactive controls
-provide concise hover tooltips; new controls should follow the same convention.
+provide short, plain-English hover tooltips; new controls should follow the same
+convention.
 The bottom action row exposes equally sized **Reload Shaders**, **Reset Settings**,
 **Restart**, and **Screenshot** buttons.
 

@@ -63,6 +63,8 @@
 #include "pbr_material.h"
 #include "pbr_deferred_lighting_pass.h"
 #include "gpu_performance_monitor.h"
+#include "camera_collision.h"
+#include "camera_controllers.h"
 #include "screen_space_visibility.h"
 
 using namespace donut;
@@ -842,7 +844,7 @@ struct UIData
     bool                                ShaderReloadRequested = false;
     bool                                EnableProceduralSky = true;
     WhiteWorldMode                      WhiteWorld = WhiteWorldMode::Off;
-    bool                                UseThirdPersonCamera = false;
+    CameraMode                          Camera = CameraMode::ThirdPerson;
     std::shared_ptr<Material>           SelectedMaterial;
     std::shared_ptr<SceneGraphNode>     SelectedNode;
     bool                                CopyScreenshotToClipboard = false;
@@ -890,12 +892,16 @@ private:
     std::shared_ptr<PlanarView>         m_PreviousView;
     
     nvrhi::CommandListHandle            m_CommandList;
-    FirstPersonCamera                   m_FirstPersonCamera;
-    ThirdPersonCamera                   m_ThirdPersonCamera;
+    UvsrFirstPersonCamera               m_FirstPersonCamera{ true };
+    UvsrThirdPersonCamera               m_ThirdPersonCamera;
+    UvsrFirstPersonCamera               m_PivotCamera{ false };
+    StaticViewCamera                    m_StaticCamera;
+    CameraCollisionWorld                m_CameraCollisionWorld;
     BindingCache                        m_BindingCache;
     
     float                               m_CameraVerticalFov = 60.f;
     float                               m_SceneDiagonal = 100.f;
+    float                               m_CameraCollisionRadius = 0.1f;
     float3                              m_AmbientTop = 0.f;
     float3                              m_AmbientBottom = 0.f;
     uint2                               m_PickPosition = 0u;
@@ -943,9 +949,6 @@ public:
 
         m_CommandList = GetDevice()->createCommandList();
 
-        m_FirstPersonCamera.SetMoveSpeed(3.0f);
-        m_ThirdPersonCamera.SetMoveSpeed(3.0f);
-        
         SetAsynchronousLoadingEnabled(true);
 
         if (sceneName.empty())
@@ -962,7 +965,47 @@ public:
 
     BaseCamera& GetActiveCamera() const
     {
-        return m_ui.UseThirdPersonCamera ? (BaseCamera&)m_ThirdPersonCamera : (BaseCamera&)m_FirstPersonCamera;
+        switch (m_ui.Camera)
+        {
+        case CameraMode::FirstPerson: return (BaseCamera&)m_FirstPersonCamera;
+        case CameraMode::ThirdPerson: return (BaseCamera&)m_ThirdPersonCamera;
+        case CameraMode::Static: return (BaseCamera&)m_StaticCamera;
+        case CameraMode::Pivot: return (BaseCamera&)m_PivotCamera;
+        default: return (BaseCamera&)m_FirstPersonCamera;
+        }
+    }
+
+    void SetCameraMode(CameraMode mode)
+    {
+        if (mode == m_ui.Camera)
+            return;
+
+        const BaseCamera& source = GetActiveCamera();
+        const float3 position = source.GetPosition();
+        const float3 direction = source.GetDir();
+        const float3 up = source.GetUp();
+
+        switch (mode)
+        {
+        case CameraMode::FirstPerson:
+            m_FirstPersonCamera.LookTo(position, direction, up);
+            break;
+
+        case CameraMode::ThirdPerson:
+            m_ThirdPersonCamera.LookTo(position, direction, up);
+            m_ThirdPersonCamera.CancelPendingZoom();
+            break;
+
+        case CameraMode::Static:
+            m_StaticCamera.LookTo(position, direction, up);
+            break;
+
+        case CameraMode::Pivot:
+            m_PivotCamera.LookTo(position, direction, up);
+            break;
+        }
+
+        m_ui.Camera = mode;
     }
 
 	std::vector<std::string> const& GetAvailableScenes() const
@@ -988,14 +1031,6 @@ public:
 		m_CurrentSceneName = sceneName;
 
 		BeginLoadingScene(m_NativeFs, m_CurrentSceneName);
-    }
-
-    void CopyThirdPersonToFirstPerson()
-    {
-        m_FirstPersonCamera.LookAt(
-            m_ThirdPersonCamera.GetPosition(),
-            m_ThirdPersonCamera.GetPosition() + m_ThirdPersonCamera.GetDir(),
-            m_ThirdPersonCamera.GetUp());
     }
 
     void DiscoverKodakLuts(const std::filesystem::path& directory)
@@ -1075,11 +1110,187 @@ public:
         log::info("All renderer settings restored to factory defaults");
     }
 
-    void CopyCurrentViewToThirdPerson()
+    void SynchronizeCameraInput()
     {
-        m_ThirdPersonCamera.LookTo(m_FirstPersonCamera.GetPosition(), m_FirstPersonCamera.GetDir(),
-            std::max(10.f, m_SceneDiagonal * 0.01f));
-        m_ThirdPersonCamera.Animate(0.f);
+        GLFWwindow* window = GetDeviceManager()->GetWindow();
+        if (!window)
+            return;
+
+        const bool windowFocused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
+        const bool imguiAvailable = ImGui::GetCurrentContext() != nullptr;
+        const bool keyboardCaptured = imguiAvailable && ImGui::GetIO().WantCaptureKeyboard;
+        const bool mouseCaptured = imguiAvailable && ImGui::GetIO().WantCaptureMouse;
+
+        // Donut's cameras intentionally keep their own key/button latches, but
+        // an ImGui popup or a native focus transition can consume the matching
+        // release callback. Polling GLFW once per animated frame reconciles the
+        // latches with physical state after focus returns. Inactive controllers
+        // are explicitly released so switching modes cannot revive stale input.
+        static constexpr int CameraKeys[] = {
+            GLFW_KEY_Q,
+            GLFW_KEY_E,
+            GLFW_KEY_A,
+            GLFW_KEY_D,
+            GLFW_KEY_W,
+            GLFW_KEY_S,
+            GLFW_KEY_LEFT,
+            GLFW_KEY_RIGHT,
+            GLFW_KEY_UP,
+            GLFW_KEY_DOWN,
+            GLFW_KEY_Z,
+            GLFW_KEY_C,
+            GLFW_KEY_LEFT_SHIFT,
+            GLFW_KEY_RIGHT_SHIFT,
+            GLFW_KEY_LEFT_CONTROL,
+            GLFW_KEY_RIGHT_CONTROL,
+            GLFW_KEY_LEFT_ALT
+        };
+
+        const bool firstPersonActive = m_ui.Camera == CameraMode::FirstPerson;
+        const bool thirdPersonActive = m_ui.Camera == CameraMode::ThirdPerson;
+        const bool pivotActive = m_ui.Camera == CameraMode::Pivot;
+        const bool allowKeyboard = windowFocused && !keyboardCaptured;
+        for (int key : CameraKeys)
+        {
+            // GLFW polling is used only to clear stale latches. Synthesizing a
+            // press here would turn a key held while closing UI into a new
+            // camera action even though the camera never received its press.
+            const bool physicallyPressed = allowKeyboard &&
+                glfwGetKey(window, key) == GLFW_PRESS;
+            if (!firstPersonActive || !physicallyPressed)
+                m_FirstPersonCamera.KeyboardUpdate(key, 0, GLFW_RELEASE, 0);
+            if (!thirdPersonActive || !physicallyPressed)
+                m_ThirdPersonCamera.KeyboardUpdate(key, 0, GLFW_RELEASE, 0);
+            if (!pivotActive || !physicallyPressed)
+                m_PivotCamera.KeyboardUpdate(key, 0, GLFW_RELEASE, 0);
+        }
+
+        // ImGui consumes mouse-position callbacks while its windows are active.
+        // Polling the current position into both cameras prevents the inactive
+        // third-person camera from seeing one giant stale delta after a mode
+        // switch. Match DeviceManager's display-scale conversion exactly.
+        double cursorX = 0.0;
+        double cursorY = 0.0;
+        glfwGetCursorPos(window, &cursorX, &cursorY);
+        if (!GetDeviceManager()->GetDeviceParams().supportExplicitDisplayScaling)
+        {
+            float dpiScaleX = 1.f;
+            float dpiScaleY = 1.f;
+            GetDeviceManager()->GetDPIScaleInfo(dpiScaleX, dpiScaleY);
+            cursorX /= dpiScaleX;
+            cursorY /= dpiScaleY;
+        }
+        m_FirstPersonCamera.MousePosUpdate(cursorX, cursorY);
+        m_ThirdPersonCamera.MousePosUpdate(cursorX, cursorY);
+        m_PivotCamera.MousePosUpdate(cursorX, cursorY);
+
+        static constexpr int CameraMouseButtons[] = {
+            GLFW_MOUSE_BUTTON_LEFT,
+            GLFW_MOUSE_BUTTON_MIDDLE,
+            GLFW_MOUSE_BUTTON_RIGHT
+        };
+
+        const bool allowMouse = windowFocused && !mouseCaptured;
+        for (int button : CameraMouseButtons)
+        {
+            const bool physicallyPressed = allowMouse &&
+                glfwGetMouseButton(window, button) == GLFW_PRESS;
+            if (!firstPersonActive || !physicallyPressed)
+                m_FirstPersonCamera.MouseButtonUpdate(button, GLFW_RELEASE, 0);
+            if (!thirdPersonActive || !physicallyPressed)
+                m_ThirdPersonCamera.MouseButtonUpdate(button, GLFW_RELEASE, 0);
+            if (!pivotActive || !physicallyPressed)
+                m_PivotCamera.MouseButtonUpdate(button, GLFW_RELEASE, 0);
+        }
+    }
+
+    void BuildCameraCollisionWorld()
+    {
+        std::vector<CameraCollisionWorld::Triangle> triangles;
+        const auto& instances = m_Scene->GetSceneGraph()->GetMeshInstances();
+
+        size_t triangleCapacity = 0;
+        for (const auto& instance : instances)
+        {
+            if (!instance)
+                continue;
+
+            std::shared_ptr<MeshInfo> mesh = instance->GetMesh();
+            if (const auto skinnedInstance = std::dynamic_pointer_cast<SkinnedMeshInstance>(instance))
+                mesh = skinnedInstance->GetPrototypeMesh();
+
+            if (!mesh)
+                continue;
+
+            for (const auto& geometry : mesh->geometries)
+            {
+                if (geometry && geometry->type == MeshGeometryPrimitiveType::Triangles)
+                    triangleCapacity += geometry->numIndices / 3;
+            }
+        }
+        triangles.reserve(triangleCapacity);
+
+        for (const auto& instance : instances)
+        {
+            if (!instance || !instance->GetNode())
+                continue;
+
+            std::shared_ptr<MeshInfo> mesh = instance->GetMesh();
+            if (const auto skinnedInstance = std::dynamic_pointer_cast<SkinnedMeshInstance>(instance))
+                mesh = skinnedInstance->GetPrototypeMesh();
+
+            if (!mesh || !mesh->buffers || mesh->buffers->indexData.empty() ||
+                mesh->buffers->positionData.empty())
+            {
+                continue;
+            }
+
+            const auto& indices = mesh->buffers->indexData;
+            const auto& positions = mesh->buffers->positionData;
+            const affine3 localToWorld = instance->GetNode()->GetLocalToWorldTransformFloat();
+
+            for (const auto& geometry : mesh->geometries)
+            {
+                if (!geometry || geometry->type != MeshGeometryPrimitiveType::Triangles)
+                    continue;
+
+                const size_t firstIndex = size_t(mesh->indexOffset) + geometry->indexOffsetInMesh;
+                const size_t firstVertex = size_t(mesh->vertexOffset) + geometry->vertexOffsetInMesh;
+                if (firstIndex + geometry->numIndices > indices.size())
+                {
+                    log::warning("Skipping camera collision geometry with an invalid index range");
+                    continue;
+                }
+
+                for (uint32_t index = 0; index + 2 < geometry->numIndices; index += 3)
+                {
+                    const size_t vertex0 = firstVertex + indices[firstIndex + index];
+                    const size_t vertex1 = firstVertex + indices[firstIndex + index + 1];
+                    const size_t vertex2 = firstVertex + indices[firstIndex + index + 2];
+                    if (vertex0 >= positions.size() || vertex1 >= positions.size() ||
+                        vertex2 >= positions.size())
+                    {
+                        continue;
+                    }
+
+                    triangles.push_back({
+                        localToWorld.transformPoint(positions[vertex0]),
+                        localToWorld.transformPoint(positions[vertex1]),
+                        localToWorld.transformPoint(positions[vertex2])
+                    });
+                }
+            }
+        }
+
+        const auto buildStart = std::chrono::high_resolution_clock::now();
+        m_CameraCollisionWorld.Build(std::move(triangles));
+        const auto buildDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::high_resolution_clock::now() - buildStart).count();
+        log::info(
+            "Camera collision: %zu triangles, %.3f-unit radius, built in %lld ms",
+            m_CameraCollisionWorld.GetTriangleCount(),
+            m_CameraCollisionRadius,
+            static_cast<long long>(buildDuration));
     }
 
     virtual bool KeyboardUpdate(int key, int scancode, int action, int mods) override
@@ -1092,11 +1303,9 @@ public:
 
         if (key == GLFW_KEY_T && action == GLFW_PRESS)
         {
-            if (m_ui.UseThirdPersonCamera)
-                CopyThirdPersonToFirstPerson();
-            else
-                CopyCurrentViewToThirdPerson();
-            m_ui.UseThirdPersonCamera = !m_ui.UseThirdPersonCamera;
+            SetCameraMode(m_ui.Camera == CameraMode::ThirdPerson
+                ? CameraMode::FirstPerson
+                : CameraMode::ThirdPerson);
             return true;
         }
 
@@ -1106,7 +1315,12 @@ public:
 
     virtual bool MousePosUpdate(double xpos, double ypos) override
     {
-        GetActiveCamera().MousePosUpdate(xpos, ypos);
+        // Keep all interactive controllers synchronized while inactive. A
+        // later press can then begin from the current cursor position instead
+        // of applying all motion accumulated since the last mode switch.
+        m_FirstPersonCamera.MousePosUpdate(xpos, ypos);
+        m_ThirdPersonCamera.MousePosUpdate(xpos, ypos);
+        m_PivotCamera.MousePosUpdate(xpos, ypos);
 
         m_PickPosition = uint2(static_cast<uint>(xpos), static_cast<uint>(ypos));
 
@@ -1132,7 +1346,55 @@ public:
 
     virtual void Animate(float fElapsedTimeSeconds) override
     {
-        GetActiveCamera().Animate(fElapsedTimeSeconds);
+        SynchronizeCameraInput();
+
+        switch (m_ui.Camera)
+        {
+        case CameraMode::ThirdPerson:
+        {
+            // Third Person is look-and-dolly only. Damped wheel input and
+            // smooth W/S input move the eye directly, with no orbit target or
+            // pivot-to-eye obstruction query.
+            const float3 start = m_ThirdPersonCamera.GetPosition();
+            m_ThirdPersonCamera.Animate(fElapsedTimeSeconds);
+
+            const float3 desiredPosition = m_ThirdPersonCamera.GetPosition();
+            const float3 resolvedPosition = m_CameraCollisionWorld.MoveSphere(
+                start, desiredPosition, m_CameraCollisionRadius);
+            if (lengthSquared(resolvedPosition - desiredPosition) > 1e-12f)
+            {
+                // The correction becomes the free-look camera's next origin;
+                // its look direction and dolly sensitivity stay unchanged.
+                m_ThirdPersonCamera.ApplyCollisionPosition(resolvedPosition);
+            }
+            break;
+        }
+
+        case CameraMode::Pivot:
+            m_PivotCamera.Animate(fElapsedTimeSeconds);
+            break;
+
+        case CameraMode::Static:
+            break;
+
+        case CameraMode::FirstPerson:
+        {
+            const float3 start = m_FirstPersonCamera.GetPosition();
+            m_FirstPersonCamera.Animate(fElapsedTimeSeconds);
+
+            const float3 desiredPosition = m_FirstPersonCamera.GetPosition();
+            const float3 resolvedPosition = m_CameraCollisionWorld.MoveSphere(
+                start, desiredPosition, m_CameraCollisionRadius);
+            if (lengthSquared(resolvedPosition - desiredPosition) > 1e-12f)
+            {
+                m_FirstPersonCamera.LookTo(
+                    resolvedPosition,
+                    m_FirstPersonCamera.GetDir(),
+                    m_FirstPersonCamera.GetUp());
+            }
+            break;
+        }
+        }
     }
 
 
@@ -1153,6 +1415,7 @@ public:
         m_ui.SelectedNode = nullptr;
         m_OriginalMaterials.clear();
         m_PreviousView.reset();
+        m_CameraCollisionWorld.Clear();
 
     }
 
@@ -1182,11 +1445,17 @@ public:
     virtual void SceneLoaded() override
     {
         Super::SceneLoaded();
-        
-        m_Scene->FinishedLoading(GetFrameIndex());
 
+        // Refresh transforms before extracting collision triangles. Donut frees
+        // importer CPU arrays while FinishedLoading uploads mesh buffers, so the
+        // first-party collision copy must be built between these two steps.
+        m_Scene->RefreshSceneGraph(GetFrameIndex());
         const box3 loadedSceneBounds = m_Scene->GetSceneGraph()->GetRootNode()->GetGlobalBoundingBox();
         m_SceneDiagonal = std::max(length(loadedSceneBounds.diagonal()), 100.f);
+        m_CameraCollisionRadius = std::max(0.1f, m_SceneDiagonal * 0.0005f);
+        BuildCameraCollisionWorld();
+
+        m_Scene->FinishedLoading(GetFrameIndex());
 
         m_OriginalMaterials.clear();
         for (const auto& material : m_Scene->GetSceneGraph()->GetMaterials())
@@ -1229,7 +1498,6 @@ public:
             m_SunLight->color = dm::colors::white;
         }
         
-        m_ThirdPersonCamera.SetRotation(dm::radians(135.f), dm::radians(20.f));
         std::shared_ptr<SceneGraphNode> cameraTarget = m_Scene->GetSceneGraph()->GetRootNode();
         // Prefer the compact asteroid core when present so the initial view
         // includes the full rocky platform instead of tightly framing only the
@@ -1242,12 +1510,19 @@ public:
         }
         else if (auto pyramid = FindDescendantByName(cameraTarget, "Pyramid_EmitterShell"))
             cameraTarget = pyramid;
-        PointThirdPersonCameraAt(cameraTarget, cameraDistanceScale);
+        PointThirdPersonCameraAt(cameraTarget, cameraDistanceScale, true);
 
-        m_ui.UseThirdPersonCamera = string_utils::ends_with(m_CurrentSceneName, ".gltf")
-            || string_utils::ends_with(m_CurrentSceneName, ".glb");
+        m_ui.Camera = string_utils::ends_with(m_CurrentSceneName, ".gltf")
+            || string_utils::ends_with(m_CurrentSceneName, ".glb")
+            ? CameraMode::ThirdPerson
+            : CameraMode::FirstPerson;
 
-        CopyThirdPersonToFirstPerson();
+        const float3 initialPosition = m_ThirdPersonCamera.GetPosition();
+        const float3 initialDirection = m_ThirdPersonCamera.GetDir();
+        const float3 initialUp = m_ThirdPersonCamera.GetUp();
+        m_FirstPersonCamera.LookTo(initialPosition, initialDirection, initialUp);
+        m_PivotCamera.LookTo(initialPosition, initialDirection, initialUp);
+        m_StaticCamera.LookTo(initialPosition, initialDirection, initialUp);
 
     }
 
@@ -1371,7 +1646,8 @@ public:
 
     void PointThirdPersonCameraAt(
         const std::shared_ptr<SceneGraphNode>& node,
-        float distanceScale = 1.f)
+        float distanceScale = 1.f,
+        bool resetOrientation = false)
     {
         if (!node)
             return;
@@ -1387,9 +1663,31 @@ public:
         if (!std::isfinite(distance) || distance <= 0.f)
             return;
 
-        m_ThirdPersonCamera.SetTargetPosition(bounds.center());
-        m_ThirdPersonCamera.SetDistance(distance);
-        m_ThirdPersonCamera.Animate(0.f);
+        if (resetOrientation)
+        {
+            // Reuse Donut's established orbit framing math only to calculate
+            // the initial eye pose. Runtime Third Person is a free-look camera
+            // and retains no pivot or orbit state from this temporary object.
+            ThirdPersonCamera framingCamera;
+            framingCamera.SetRotation(dm::radians(135.f), dm::radians(20.f));
+            framingCamera.SetTargetPosition(bounds.center());
+            framingCamera.SetDistance(distance);
+            framingCamera.Animate(0.f);
+            m_ThirdPersonCamera.LookTo(
+                framingCamera.GetPosition(),
+                framingCamera.GetDir(),
+                framingCamera.GetUp());
+        }
+        else
+        {
+            const float3 direction = m_ThirdPersonCamera.GetDir();
+            const float3 up = m_ThirdPersonCamera.GetUp();
+            m_ThirdPersonCamera.LookTo(
+                bounds.center() - direction * distance,
+                direction,
+                up);
+        }
+        m_ThirdPersonCamera.ResetZoomReferenceDistance(distance);
     }
 
     std::shared_ptr<TextureCache> GetTextureCache()
@@ -1428,8 +1726,6 @@ public:
 
         planarView->SetMatrices(viewMatrix, projection);
         planarView->UpdateCache();
-
-        m_ThirdPersonCamera.SetView(*planarView);
 
         return topologyChanged;
     }
@@ -1942,7 +2238,7 @@ protected:
 
         const bool generalOpen = DrawCollapsingHeader(
             "General",
-            "Expand renderer, hardware, scene, camera, material override, and rendering-path controls.",
+            "Show general renderer settings.",
             ImGuiTreeNodeFlags_DefaultOpen);
         if (generalOpen)
         {
@@ -1964,7 +2260,7 @@ protected:
                         width, height, frameTime * 1e3, 1.0 / frameTime);
                 }
                 ImGui::SetItemTooltip(
-                    "Current-clock theoretical memory bandwidth and FP32 peak for supported Intel and NVIDIA adapters, not measured workload utilization.");
+                    "The GPU's current theoretical limits, not measured app use.");
             }
 
         if (!m_ui.GpuAdapterChoices.empty())
@@ -2003,30 +2299,29 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Choose the GPU used by UVSR. Changing adapters restarts the renderer immediately.");
+                "Choose the GPU. UVSR restarts after a change.");
         }
 
         ImGui::SetNextItemWidth(-FLT_MIN);
         const bool cameraComboOpen = ImGui::BeginCombo(
-            "##Camera", m_ui.UseThirdPersonCamera ? "Third Person" : "First Person");
-        ImGui::SetItemTooltip("Switch the active camera control mode.");
+            "##Camera", GetCameraModeLabel(m_ui.Camera));
+        ImGui::SetItemTooltip(
+            "Choose First Person, Third Person, Static Camera, or Pivot Camera controls.");
         if (cameraComboOpen)
         {
-            if (ImGui::Selectable("First Person", !m_ui.UseThirdPersonCamera))
+            static constexpr CameraMode CameraModes[] = {
+                CameraMode::FirstPerson,
+                CameraMode::ThirdPerson,
+                CameraMode::Static,
+                CameraMode::Pivot
+            };
+            for (CameraMode mode : CameraModes)
             {
-                if (m_ui.UseThirdPersonCamera)
-                {
-                    m_app->CopyThirdPersonToFirstPerson();
-                    m_ui.UseThirdPersonCamera = false;
-                }
-            }
-            if (ImGui::Selectable("Third Person", m_ui.UseThirdPersonCamera))
-            {
-                if (!m_ui.UseThirdPersonCamera)
-                {
-                    m_app->CopyCurrentViewToThirdPerson();
-                    m_ui.UseThirdPersonCamera = true;
-                }
+                const bool selected = mode == m_ui.Camera;
+                if (ImGui::Selectable(GetCameraModeLabel(mode), selected) && !selected)
+                    m_app->SetCameraMode(mode);
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
             }
             ImGui::EndCombo();
         }
@@ -2039,8 +2334,7 @@ protected:
         ImGui::SetNextItemWidth(-FLT_MIN);
         const bool whiteWorldComboOpen = ImGui::BeginCombo(
             "##WhiteWorld", whiteWorldLabels[int(m_ui.WhiteWorld)]);
-        ImGui::SetItemTooltip(
-            "Override material color while optionally preserving surface detail or colored GI sources.");
+        ImGui::SetItemTooltip("Replace material colors with white.");
         if (whiteWorldComboOpen)
         {
             for (int modeIndex = 0; modeIndex < int(std::size(whiteWorldLabels)); ++modeIndex)
@@ -2048,34 +2342,6 @@ protected:
                 const bool selected = modeIndex == int(m_ui.WhiteWorld);
                 if (ImGui::Selectable(whiteWorldLabels[modeIndex], selected))
                     m_app->SetWhiteWorldMode(WhiteWorldMode(modeIndex));
-                if (selected)
-                    ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-
-        static const char* rendererModeLabels[] = {
-            "Deferred",
-            "Forward",
-            "Forward Tonemapperless"
-        };
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        const bool rendererModeComboOpen = ImGui::BeginCombo(
-            "##RendererMode", rendererModeLabels[int(m_ui.RenderMode)]);
-        ImGui::SetItemTooltip(
-            "Choose deferred, forward, or forward rendering that bypasses AgX and the grading LUT.");
-        if (rendererModeComboOpen)
-        {
-            for (int modeIndex = 0;
-                modeIndex < int(std::size(rendererModeLabels)); ++modeIndex)
-            {
-                const RendererMode mode = RendererMode(modeIndex);
-                const bool selected = mode == m_ui.RenderMode;
-                if (ImGui::Selectable(rendererModeLabels[modeIndex], selected))
-                {
-                    m_ui.RenderMode = mode;
-                    log::info("Renderer mode: %s", rendererModeLabels[modeIndex]);
-                }
                 if (selected)
                     ImGui::SetItemDefaultFocus();
             }
@@ -2095,7 +2361,7 @@ protected:
         ImGui::SetNextItemWidth(-(folderButtonWidth + style.ItemSpacing.x));
         const bool sceneComboOpen = ImGui::BeginCombo("##Scene", getRelativePath(currentScene));
         // UI convention: every UVSR-owned interactive control explains itself on hover.
-        ImGui::SetItemTooltip("Choose the scene to load.");
+        ImGui::SetItemTooltip("Load a different scene.");
         if (sceneComboOpen)
         {
             const std::vector<std::string>& scenes = m_app->GetAvailableScenes();
@@ -2135,7 +2401,7 @@ protected:
                 ImVec2(bodyMin.x + iconWidth * 0.40f, bodyMin.y),
                 iconColor, 1.5f);
         }
-        ImGui::SetItemTooltip("Open the scene folder in File Explorer.");
+        ImGui::SetItemTooltip("Open the scene folder.");
 
         // Keep the legacy-lighting comparison path available for future
         // experiments without exposing it in the production settings UI.
@@ -2149,24 +2415,32 @@ protected:
                     m_app->SetWhiteWorldMode(WhiteWorldMode::Off);
                 log::info("PBR rendering %s", m_ui.EnablePbr ? "enabled" : "disabled");
             }
-            ImGui::SetItemTooltip("Use UVSR PBR shading; disable to compare Donut legacy shading.");
+            ImGui::SetItemTooltip("Use UVSR PBR instead of legacy Donut shading.");
         }
         }
 
         const bool indirectLightingOpen = DrawCollapsingHeader(
             "Visibility",
-            "Configure the shared visibility traversal used by ambient occlusion and diffuse GI.",
+            "Set up screen-space AO and diffuse GI.",
             ImGuiTreeNodeFlags_DefaultOpen);
         if (indirectLightingOpen)
         {
             ScreenSpaceVisibilitySettings& visibility = m_ui.ScreenSpaceVisibility;
-            const bool visibilityAvailable = m_ui.UsesDeferredShading() && m_ui.EnablePbr;
+            const bool visibilityAvailable = m_ui.UsesDeferredShading();
             if (!visibilityAvailable)
                 ImGui::BeginDisabled();
 
-            ImGui::Checkbox("Enabled##ScreenSpaceVisibility", &visibility.enabled);
+            if (ImGui::Checkbox(
+                    "Enabled##ScreenSpaceVisibility", &visibility.enabled))
+            {
+                m_ui.EnablePbr = visibility.enabled;
+                if (!m_ui.EnablePbr && m_ui.WhiteWorld != WhiteWorldMode::Off)
+                    m_app->SetWhiteWorldMode(WhiteWorldMode::Off);
+                log::info("Visibility and PBR rendering %s",
+                    visibility.enabled ? "enabled" : "disabled");
+            }
             ImGui::SetItemTooltip(
-                "Enable the shared screen-space visibility producer and indirect-light composite.");
+                "Enable screen-space visibility-based lighting and PBR.");
 
             static const char* qualityLabels[] = {
                 "Low", "Medium", "High", "Ultra", "Custom"
@@ -2185,8 +2459,7 @@ protected:
                 }
                 ImGui::EndCombo();
             }
-            ImGui::SetItemTooltip(
-                "Choose first-bounce radial sample budgets. With Adaptive Sparse Sampling off, each preset uses its fixed/maximum count. With it on, the preset supplies minimum and maximum limits. Every preset uses one stochastic slice; resolution and reconstruction remain independent profiling controls.");
+            ImGui::SetItemTooltip("Set the first-bounce sample range.");
 
             static const char* resolutionLabels[] = {
                 "Full", "Half", "Quarter"
@@ -2209,8 +2482,7 @@ protected:
                 }
                 ImGui::EndCombo();
             }
-            ImGui::SetItemTooltip(
-                "Trace AO and GI at full, half, or quarter linear resolution. Reduced output always uses a minimal depth/normal-guided 2x2 upsampler; enabling spatial filtering selects the configured reconstruction filter.");
+            ImGui::SetItemTooltip("Choose the render resolution for AO and GI.");
 
             if (const ScreenSpaceVisibilityTimings* timings =
                     m_app->GetScreenSpaceVisibilityTimings();
@@ -2225,7 +2497,7 @@ protected:
                     timings->CompleteEffectMs(), traceMilliseconds,
                     timings->filteringMs, otherMilliseconds);
                 ImGui::SetItemTooltip(
-                    "Latest delayed GPU timings. Trace includes optional hierarchy construction and all active visibility bounces. Other combines temporal reconstruction and final composition.");
+                    "Recent GPU time for visibility work.");
                 constexpr double BytesPerMiB = 1024.0 * 1024.0;
                 ImGui::Text(
                     "Outputs %.1f | Working %.1f | Mask Cache %.1f MiB",
@@ -2233,13 +2505,13 @@ protected:
                     double(timings->workingTextureBytes) / BytesPerMiB,
                     double(timings->maskCacheBytes) / BytesPerMiB);
                 ImGui::SetItemTooltip(
-                    "Exact logical texel payload: AO/GI and bounce outputs; scheduler, adaptive, temporal, filter, and hierarchy working data; and any persistent directional-mask cache. API alignment and residency are excluded.");
+                    "Texture memory by use, excluding API padding.");
                 ImGui::Text(
                     "Avoided %.1f | Shared %.1f MiB",
                     double(timings->avoidedTextureBytes) / BytesPerMiB,
                     double(timings->sharedMaskPayloadBytes) / BytesPerMiB);
                 ImGui::SetItemTooltip(
-                    "Avoided is exact optional AO/GI storage not allocated because its consumer is inactive. Shared estimates one duplicate R32 directional-mask payload avoided by evaluating AO and GI from the same register-local mask; it is not measured bandwidth.");
+                    "Avoided is saved memory; Shared is estimated reuse.");
                 ImGui::TreePop();
             }
 
@@ -2274,21 +2546,19 @@ protected:
                     }
                     ImGui::EndCombo();
                 }
-                ImGui::SetItemTooltip(
-                    "Uniform Projected Angle is the visibility-bitmask paper's linear projected-angle measure. Uniform Solid Angle uses equal solid-angle CDF sectors. Cosine-Weighted Solid Angle uses the complete joint receiver-cosine CDF and matching GI normalization.");
+                ImGui::SetItemTooltip("Choose how samples spread around each pixel.");
                 samplingChanged |= ImGui::SliderFloat(
                     "Radius", &sampling.radius, 0.01f, std::max(m_app->GetSceneDiagonal() * 0.1f, 1.f), "%.3f");
-                ImGui::SetItemTooltip("Set the world-space radius projected into screen space.");
+                ImGui::SetItemTooltip("Set how far visibility rays reach.");
                 samplingChanged |= ImGui::SliderFloat(
                     "Thickness", &sampling.thickness, 0.0f, std::max(m_app->GetSceneDiagonal() * 0.02f, 0.5f), "%.3f");
-                ImGui::SetItemTooltip(
-                    "Set one conservative finite occluder thickness in UVSR world units. It is intentionally not distance-scaled, so profiling does not mix geometry assumptions with sampling changes.");
+                ImGui::SetItemTooltip("Set the assumed thickness of occluders.");
 
                 samplingChanged |= ImGui::Checkbox(
                     "Adaptive Sparse Sampling",
                     &sampling.adaptiveSparseSamplingEnabled);
                 ImGui::SetItemTooltip(
-                    "Stochastically assign extra radial taps from local error and reprojected contribution. Every pixel uses one slice. Disabling this selects a dedicated fixed-work shader with no adaptive neighborhood analysis, feedback reads/writes, or motion-vector dependency. The sample scheduler remains independent and controls where those fixed taps land.");
+                    "Spend more samples where the image is harder to resolve.");
 
                 if (sampling.adaptiveSparseSamplingEnabled)
                 {
@@ -2305,8 +2575,7 @@ protected:
                             sampling.minimumSampleCount);
                         samplingChanged = true;
                     }
-                    ImGui::SetItemTooltip(
-                        "Guaranteed first-bounce depth taps for every eligible pixel. These form one inexpensive base slice and are divided between its two radial directions.");
+                    ImGui::SetItemTooltip("Set the samples every pixel receives.");
 
                     int maximumSamples = int(std::clamp(
                         sampling.maximumSampleCount,
@@ -2321,8 +2590,7 @@ protected:
                             uint32_t(maximumSamples);
                         samplingChanged = true;
                     }
-                    ImGui::SetItemTooltip(
-                        "Upper first-bounce budget. A stochastic error estimate selects a value between Minimum and Maximum; later GI bounces halve their limits toward an 8-sample floor without raising a first-bounce limit already below 8.");
+                    ImGui::SetItemTooltip("Cap samples used on difficult pixels.");
 
                     const bool adaptiveControlsActive =
                         sampling.maximumSampleCount >
@@ -2335,8 +2603,7 @@ protected:
                         0.0f,
                         2.0f,
                         "%.2f");
-                    ImGui::SetItemTooltip(
-                        "Scale stochastic refinement probability from depth/normal edges, disocclusions, decaying instability, and depth-compatible contribution seeds. One randomly selected neighbor can raise work but a neighbor-driven discovery cannot recursively seed an outward ring. A one-eighth uniform component prevents starvation while this value is above zero.");
+                    ImGui::SetItemTooltip("Control how strongly errors add samples.");
                     if (!adaptiveControlsActive)
                         ImGui::EndDisabled();
                 }
@@ -2357,8 +2624,7 @@ protected:
                             sampling.maximumSampleCount);
                         samplingChanged = true;
                     }
-                    ImGui::SetItemTooltip(
-                        "First-bounce taps traced by every eligible pixel in the fixed-work specialization. All taps use one slice; later GI bounces halve this count toward an 8-sample floor without raising a count already below 8.");
+                    ImGui::SetItemTooltip("Set the samples used by every pixel.");
                 }
 
                 samplingChanged |= ImGui::SliderFloat(
@@ -2367,8 +2633,7 @@ protected:
                     0.5f,
                     4.0f,
                     "%.2f");
-                ImGui::SetItemTooltip(
-                    "Transform each nested radial stratum by x^exponent. The default x^2 concentrates taps near the receiver. The complete prefix is toroidally rotated per pixel and frame to prevent fixed radius shells, while increasing a limit at the same phase only appends samples.");
+                ImGui::SetItemTooltip("Higher values place more samples nearby.");
 
                 static const char* schedulerLabels[] = {
                     "Independent Hash Noise",
@@ -2398,8 +2663,7 @@ protected:
                     }
                     ImGui::EndCombo();
                 }
-                ImGui::SetItemTooltip(
-                    "Independent Hash Noise hashes every decision. Toroidal Blue Noise uses separate 64x64 void-and-cluster layers with temporal traversal. Filter-Adapted Spatiotemporal Noise uses a scalar-uniform 64x64x32 FAST-optimized volume shaped for Gaussian spatial filtering and alpha=0.35 EMA history, with R2-separated semantic reads and low-discrepancy cycle offsets. Every mode keeps the same sample budget.");
+                ImGui::SetItemTooltip("Choose the noise pattern used to place samples.");
 
                 if (samplingChanged)
                     visibility.quality = ScreenSpaceVisibilityQuality::Custom;
@@ -2410,12 +2674,11 @@ protected:
             {
                 AmbientOcclusionSettings& ao = visibility.ambientOcclusion;
                 ImGui::Checkbox("Enabled##AmbientVisibility", &ao.enabled);
-                ImGui::SetItemTooltip("Consume the final radial masks as scalar ambient visibility.");
+                ImGui::SetItemTooltip("Enable screen-space ambient occlusion.");
                 if (!ao.enabled)
                     ImGui::BeginDisabled();
                 ImGui::SliderFloat("Strength", &ao.strength, 0.0f, 2.0f, "%.2f");
-                ImGui::SetItemTooltip(
-                    "Scale only the missing-visibility adjustment on fallback indirect lighting. Zero makes AO an inactive consumer and releases its traversal outputs while GI can continue independently.");
+                ImGui::SetItemTooltip("Set how strongly AO darkens indirect light.");
                 if (!ao.enabled)
                     ImGui::EndDisabled();
                 ImGui::TreePop();
@@ -2425,8 +2688,7 @@ protected:
             {
                 IndirectDiffuseSettings& gi = visibility.indirectDiffuse;
                 ImGui::Checkbox("Enabled##IndirectDiffuse", &gi.enabled);
-                ImGui::SetItemTooltip(
-                    "Accumulate diffuse irradiance only from newly claimed mask sectors.");
+                ImGui::SetItemTooltip("Enable screen-space diffuse indirect light.");
                 if (!gi.enabled)
                     ImGui::BeginDisabled();
                 int bounceCount = int(std::clamp(
@@ -2441,8 +2703,7 @@ protected:
                 {
                     gi.bounceCount = uint32_t(bounceCount);
                 }
-                ImGui::SetItemTooltip(
-                    "Choose 1-4 finite diffuse-light bounces. Later bounces run GI-only traversals and progressively halve the selected sample budget toward 8 without raising a first-bounce limit already below 8, reducing their cost while preserving full quality for bounce one.");
+                ImGui::SetItemTooltip("Set the number of diffuse-light bounces.");
                 if (gi.bounceCount > 1u)
                 {
                     ImGui::SliderFloat(
@@ -2452,19 +2713,16 @@ protected:
                         0.02f,
                         "%.5f");
                     ImGui::SetItemTooltip(
-                        "Skip higher-bounce source energy whose conservative exposed scene-linear contribution cannot exceed this value before tone mapping. Set 0 for exact-zero exits only.");
+                        "Skip dim higher-bounce light. Zero disables the cutoff.");
                 }
                 ImGui::SliderFloat("Intensity##IndirectDiffuse", &gi.intensity, 0.0f, 10.0f, "%.2f");
-                ImGui::SetItemTooltip(
-                    "Scale material-applied screen-space indirect diffuse. Zero makes GI an inactive consumer, removing its traversal outputs and full-resolution source-radiance target; AO can continue independently.");
+                ImGui::SetItemTooltip("Set screen-space diffuse GI brightness.");
                 ImGui::Checkbox(
                     "Show GI-Only Lighting",
                     &visibility.showIndirectDiffuseOnly);
-                ImGui::SetItemTooltip(
-                    "Display only the final screen-space diffuse GI contribution after receiver diffuse reflectance, 1/pi BRDF, material AO, and GI intensity. Direct light, sky fallback, fallback specular, and AO-only darkening are excluded.");
+                ImGui::SetItemTooltip("Show only screen-space diffuse GI.");
                 ImGui::Checkbox("Include Emissive Sources", &gi.includeEmissive);
-                ImGui::SetItemTooltip(
-                    "Allow visible emissive G-buffer surfaces to illuminate receivers.");
+                ImGui::SetItemTooltip("Let visible emissive surfaces light the scene.");
                 if (!gi.includeEmissive)
                     ImGui::BeginDisabled();
                 ImGui::SliderFloat(
@@ -2473,8 +2731,7 @@ protected:
                     0.0f,
                     10.0f,
                     "%.2f");
-                ImGui::SetItemTooltip(
-                    "Scale emissive radiance before it enters the first visibility bounce.");
+                ImGui::SetItemTooltip("Set emissive surfaces' GI strength.");
                 if (!gi.includeEmissive)
                     ImGui::EndDisabled();
                 if (!gi.enabled)
@@ -2492,15 +2749,14 @@ protected:
                     "Reconstruction Enabled",
                     &reconstruction.enabled);
                 ImGui::SetItemTooltip(
-                    "Master switch for temporal and optional spatial reconstruction. When disabled, full resolution composites raw visibility; half/quarter resolution retains only the minimal guide-aware upsampler required to map between grids.");
+                    "Enable temporal reconstruction and optional smoothing.");
 
                 if (!reconstruction.enabled)
                     ImGui::BeginDisabled();
                 ImGui::Checkbox(
                     "Temporal Reconstruction",
                     &reconstruction.temporalEnabled);
-                ImGui::SetItemTooltip(
-                    "Reproject depth, normals, AO, and GI with the G-buffer motion vector; reject mismatches, move history 25% toward the four-diagonal current neighborhood, then use the selected current-frame response.");
+                ImGui::SetItemTooltip("Reuse valid detail from earlier frames.");
                 if (!reconstruction.temporalEnabled)
                     ImGui::BeginDisabled();
                 ImGui::SliderFloat(
@@ -2510,15 +2766,14 @@ protected:
                     1.0f,
                     "%.2f");
                 ImGui::SetItemTooltip(
-                    "Current-frame weight after valid reprojection. SSRT3's reference response is 0.35; lower values are steadier but retain history longer.");
+                    "Higher values follow the current frame faster.");
                 if (!reconstruction.temporalEnabled)
                     ImGui::EndDisabled();
 
                 ImGui::Checkbox(
                     "Spatial Filtering",
                     &reconstruction.spatialEnabled);
-                ImGui::SetItemTooltip(
-                    "Run the selected depth/normal-guided spatial denoiser. At full resolution, disabling it removes the filter dispatch and target. At half/quarter resolution, only the minimal 2x2 guide-aware upsampler remains so isolated GI samples cannot be replicated into coherent streaks by raw grid expansion.");
+                ImGui::SetItemTooltip("Smooth AO and GI using scene edges.");
 
                 if (!reconstruction.spatialEnabled)
                     ImGui::BeginDisabled();
@@ -2545,8 +2800,7 @@ protected:
                     }
                     ImGui::EndCombo();
                 }
-                ImGui::SetItemTooltip(
-                    "Both filters use depth and normal guides. Joint Bilateral uses a compact 3x3/full or 2x2/upsampling kernel; Gaussian Joint Bilateral uses an SSRT3-style disk with Gaussian spatial weights.");
+                ImGui::SetItemTooltip("Choose the spatial smoothing method.");
                 if (reconstruction.spatialFilter ==
                     VisibilitySpatialFilter::GaussianJointBilateral)
                 {
@@ -2556,8 +2810,7 @@ protected:
                         1.0f,
                         12.0f,
                         "%.1f");
-                    ImGui::SetItemTooltip(
-                        "Approximate full-resolution pixel radius. The Gaussian path converts it to a receiver-depth tangent-plane radius, projects disk taps back to the screen, and uses 16 taps at full resolution or a parity-varied four-tap subset when reduced.");
+                    ImGui::SetItemTooltip("Set how far the Gaussian filter reaches.");
                 }
                 if (!reconstruction.spatialEnabled)
                     ImGui::EndDisabled();
@@ -2577,7 +2830,7 @@ protected:
 
         const bool tonemapperOpen = DrawCollapsingHeader(
             "Tonemapper",
-            "Expand AgX tonemapping and grading controls.");
+            "Show AgX tone and color controls.");
         if (tonemapperOpen)
         {
             static const char* presetLabels[] = {
@@ -2591,8 +2844,7 @@ protected:
             ImGui::SetNextItemWidth(settingsControlWidth);
             const bool presetComboOpen = ImGui::BeginCombo(
                 "Preset", presetLabels[int(m_ui.AgxToneMappingPreset)]);
-            ImGui::SetItemTooltip(
-                "Apply a predefined grade; editing a value switches to Custom.");
+            ImGui::SetItemTooltip("Choose a grade. Edits switch to Custom.");
             if (presetComboOpen)
             {
                 for (int presetIndex = 0;
@@ -2618,7 +2870,7 @@ protected:
             ImGui::SetNextItemWidth(settingsControlWidth);
             const bool lutComboOpen = ImGui::BeginCombo(
                 "Lut", luts[selectedLut].Name.c_str());
-            ImGui::SetItemTooltip("Apply a film-look LUT.");
+            ImGui::SetItemTooltip("Apply a film-style color look.");
             if (lutComboOpen)
             {
                 for (size_t lutIndex = 0; lutIndex < luts.size(); ++lutIndex)
@@ -2635,23 +2887,21 @@ protected:
             AgxToneMappingParameters& params = m_ui.AgxToneMappingParams;
             bool gradeChanged = false;
             gradeChanged |= ImGui::SliderFloat("Exposure", &params.Exposure, -10.f, 10.f, "%.2f EV");
-            ImGui::SetItemTooltip("Adjust scene exposure in EV before tonemapping.");
+            ImGui::SetItemTooltip("Brighten or darken before tone mapping.");
             gradeChanged |= ImGui::SliderFloat("Contrast", &params.Contrast, 0.5f, 2.f, "%.3f");
-            ImGui::SetItemTooltip("Adjust contrast in AgX Base space.");
+            ImGui::SetItemTooltip("Increase or reduce contrast.");
             gradeChanged |= ImGui::SliderFloat("Saturation", &params.Saturation, 0.f, 2.f, "%.3f");
-            ImGui::SetItemTooltip("Adjust color saturation in AgX Base space.");
+            ImGui::SetItemTooltip("Increase or reduce color intensity.");
             gradeChanged |= ImGui::SliderFloat("Warmth", &params.Warmth, -1.f, 1.f, "%.3f");
-            ImGui::SetItemTooltip("Shift the grade toward warmer or cooler colors.");
+            ImGui::SetItemTooltip("Shift colors warmer or cooler.");
             gradeChanged |= ImGui::SliderFloat("Tint", &params.Tint, -1.f, 1.f, "%.3f");
-            ImGui::SetItemTooltip("Shift the grade toward green or magenta.");
+            ImGui::SetItemTooltip("Shift colors toward green or magenta.");
             gradeChanged |= ImGui::SliderFloat(
                 "Slope", &params.Slope, 0.f, 2.f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
-            ImGui::SetItemTooltip(
-                "Multiply the AgX Base-space grade before Power. 1.0 is neutral.");
+            ImGui::SetItemTooltip("Scale the color grade. 1.0 is neutral.");
             gradeChanged |= ImGui::SliderFloat(
                 "Power", &params.Power, 0.01f, 2.f, "%.4f", ImGuiSliderFlags_AlwaysClamp);
-            ImGui::SetItemTooltip(
-                "Apply the grade exponent. Below 1 brightens; above 1 darkens.");
+            ImGui::SetItemTooltip("Below 1 brightens; above 1 darkens.");
 
             if (gradeChanged)
             {
@@ -2667,26 +2917,26 @@ protected:
         }
 
         const bool skyOpen = DrawCollapsingHeader(
-            "Sky", "Expand procedural sky controls.");
+            "Sky", "Show sky controls.");
         if (skyOpen)
         {
             if (!m_ui.EnableProceduralSky)
                 ImGui::BeginDisabled();
             ImGui::SliderFloat("Brightness", &m_ui.SkyParams.brightness, 0.f, 1.f);
-            ImGui::SetItemTooltip("Set sky and ambient-light brightness.");
+            ImGui::SetItemTooltip("Set sky and ambient light brightness.");
             ImGui::SliderFloat("Glow Size", &m_ui.SkyParams.glowSize, 0.f, 90.f);
-            ImGui::SetItemTooltip("Set the sun-glow angular size.");
+            ImGui::SetItemTooltip("Set the sun glow's size.");
             ImGui::SliderFloat("Glow Sharpness", &m_ui.SkyParams.glowSharpness, 1.f, 10.f);
-            ImGui::SetItemTooltip("Control how tightly the sun glow falls off.");
+            ImGui::SetItemTooltip("Set how quickly the sun glow fades.");
             ImGui::SliderFloat("Glow Intensity", &m_ui.SkyParams.glowIntensity, 0.f, 1.f);
-            ImGui::SetItemTooltip("Set the sun-glow brightness.");
+            ImGui::SetItemTooltip("Set the sun glow's brightness.");
             ImGui::SliderFloat("Horizon Size", &m_ui.SkyParams.horizonSize, 0.f, 90.f);
-            ImGui::SetItemTooltip("Set the horizon transition width.");
+            ImGui::SetItemTooltip("Set the horizon blend width.");
             if (!m_ui.EnableProceduralSky)
                 ImGui::EndDisabled();
 
             ImGui::Checkbox("Enable Procedural Sky", &m_ui.EnableProceduralSky);
-            ImGui::SetItemTooltip("Render the procedural sky behind the scene.");
+            ImGui::SetItemTooltip("Show the procedural sky.");
         }
 
         const auto& lights = m_app->GetScene()->GetSceneGraph()->GetLights();
@@ -2700,7 +2950,7 @@ protected:
         }
 
         const bool lightsOpen = DrawCollapsingHeader(
-            "Lights", "Expand scene-light controls.");
+            "Lights", "Show scene light controls.");
         if (lightsOpen)
         {
             if (!lights.empty())
@@ -2708,7 +2958,7 @@ protected:
                 ImGui::SetNextItemWidth(settingsControlWidth);
                 const bool lightComboOpen = ImGui::BeginCombo(
                     "Select Light", m_SelectedLight ? m_SelectedLight->GetName().c_str() : "(None)");
-                ImGui::SetItemTooltip("Choose which scene light to edit.");
+                ImGui::SetItemTooltip("Choose a light to edit.");
                 if (lightComboOpen)
                 {
                     for (const auto& light : lights)
@@ -2740,13 +2990,13 @@ protected:
 
         if (ImGui::Button("Reload Shaders", ImVec2(actionButtonWidth, 0.f)))
             m_ui.ShaderReloadRequested = true;
-        ImGui::SetItemTooltip("Recompile and reload renderer shaders.");
+        ImGui::SetItemTooltip("Recompile and reload shaders.");
 
         ImGui::SameLine();
         if (ImGui::Button("Reset Settings", ImVec2(actionButtonWidth, 0.f)))
             m_app->ResetAllRendererSettings();
         ImGui::SetItemTooltip(
-            "Restore factory renderer, aliasing, visibility, tonemapper, LUT, sky, and white-world settings. Camera and scene edits are left in place.");
+            "Restore factory settings without changing the camera or scene.");
 
         ImGui::SameLine();
         if (ImGui::Button("Restart", ImVec2(actionButtonWidth, 0.f)))
@@ -2754,12 +3004,12 @@ protected:
             g_RestartRequested = true;
             glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
         }
-        ImGui::SetItemTooltip("Restart UVSR and recreate the renderer.");
+        ImGui::SetItemTooltip("Restart UVSR.");
 
         ImGui::SameLine();
         if (ImGui::Button("Screenshot", ImVec2(actionButtonWidth, 0.f)))
             m_ui.CopyScreenshotToClipboard = true;
-        ImGui::SetItemTooltip("Copy the current rendered frame to the clipboard.");
+        ImGui::SetItemTooltip("Copy the current frame to the clipboard.");
 
         ImGui::End();
 
