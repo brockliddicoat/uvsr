@@ -66,6 +66,7 @@
 #include "camera_collision.h"
 #include "camera_controllers.h"
 #include "experiment_title.h"
+#include "scene_catalog.h"
 #include "screen_space_visibility.h"
 
 using namespace donut;
@@ -868,7 +869,7 @@ private:
 
     std::shared_ptr<RootFileSystem>     m_RootFs;
     std::shared_ptr<NativeFileSystem>   m_NativeFs;
-	std::vector<std::string>            m_SceneFilesAvailable;
+    std::vector<SceneCatalogEntry>      m_SceneCatalog;
     std::string                         m_CurrentSceneName;
     std::filesystem::path               m_SceneDir;
     std::shared_ptr<Scene>				m_Scene;
@@ -931,12 +932,16 @@ public:
         m_NativeFs = std::make_shared<NativeFileSystem>();
 
         m_SceneDir = mediaDir / "glTF-Sample-Assets/Models/";
-        m_SceneFilesAvailable = FindScenes(*m_NativeFs, m_SceneDir);
+        m_SceneCatalog = BuildSceneCatalog(
+            *m_NativeFs,
+            m_SceneDir,
+            FindScenes(*m_NativeFs, m_SceneDir));
 
-        if (sceneName.empty() && m_SceneFilesAvailable.empty())
+        if (sceneName.empty() && m_SceneCatalog.empty())
         {
-            log::fatal("No scene file found in media folder '%s'\n"
-                "Please make sure that folder contains valid scene files.", m_SceneDir.generic_string().c_str());
+            log::fatal("No scene descriptor or model found in media folder '%s'\n"
+                "Please make sure that folder contains valid scene files.",
+                m_SceneDir.generic_string().c_str());
         }
         
         m_TextureCache = std::make_shared<TextureCache>(GetDevice(), m_NativeFs, nullptr);
@@ -953,7 +958,24 @@ public:
         SetAsynchronousLoadingEnabled(true);
 
         if (sceneName.empty())
-            SetCurrentSceneName(app::FindPreferredScene(m_SceneFilesAvailable, "BistroExterior.glb"));
+        {
+            // Use an exact catalog path rather than a substring preference:
+            // the standardized furnished and plain Sponza descriptors share
+            // their architecture components, while the complete scene is
+            // UVSR's stable default.
+            const std::string defaultScene = (m_SceneDir
+                / "intel_sponza/intel_pbr_sponza.scene.json").lexically_normal().generic_string();
+            if (const SceneCatalogEntry* entry = FindSceneCatalogEntry(m_SceneCatalog, defaultScene))
+                SetCurrentSceneName(entry->FileName);
+            else
+            {
+                log::warning(
+                    "Default Intel PBR Sponza descriptor '%s' was not found; loading '%s' instead.",
+                    defaultScene.c_str(),
+                    m_SceneCatalog.front().FileName.c_str());
+                SetCurrentSceneName(m_SceneCatalog.front().FileName);
+            }
+        }
         else
             SetCurrentSceneName(sceneName);
 
@@ -1009,10 +1031,10 @@ public:
         m_ui.Camera = mode;
     }
 
-	std::vector<std::string> const& GetAvailableScenes() const
-	{
-		return m_SceneFilesAvailable;
-	}
+    const std::vector<SceneCatalogEntry>& GetAvailableScenes() const
+    {
+        return m_SceneCatalog;
+    }
 
     std::filesystem::path const& GetSceneDir() const
     {
@@ -1024,12 +1046,25 @@ public:
         return m_CurrentSceneName;
     }
 
+    std::string GetCurrentSceneDisplayName() const
+    {
+        if (const SceneCatalogEntry* entry = FindSceneCatalogEntry(m_SceneCatalog, m_CurrentSceneName))
+            return entry->DisplayName;
+
+        // Explicit command-line paths are allowed even when they are not in
+        // the picker. Preserve the old in-tree relative-path presentation for
+        // those scenes and show an external path verbatim.
+        return MakeSceneDisplayName(m_SceneDir, m_CurrentSceneName);
+    }
+
     void SetCurrentSceneName(const std::string& sceneName)
     {
-        if (m_CurrentSceneName == sceneName)
+        const SceneCatalogEntry* catalogEntry = FindSceneCatalogEntry(m_SceneCatalog, sceneName);
+        const std::string resolvedSceneName = catalogEntry ? catalogEntry->FileName : sceneName;
+        if (m_CurrentSceneName == resolvedSceneName)
             return;
 
-		m_CurrentSceneName = sceneName;
+		m_CurrentSceneName = resolvedSceneName;
 
 		BeginLoadingScene(m_NativeFs, m_CurrentSceneName);
     }
@@ -1487,18 +1522,6 @@ public:
             m_Scene->GetSceneGraph()->Attach(m_Scene->GetSceneGraph()->GetRootNode(), node);
         }
 
-        if (m_CurrentSceneName.find("nvidia_bistro") != std::string::npos)
-        {
-            // Blender exports the Bistro directional light at roughly
-            // real-world lux (102,450). UVSR currently has no sun shadows, so
-            // use the scene's established unoccluded-light calibration. Its
-            // authored RGB is strongly amber and contaminated the neutral
-            // white-world diagnostic, so keep the calibrated intensity but use
-            // a neutral illuminant for this renderer benchmark.
-            m_SunLight->irradiance = 0.35f;
-            m_SunLight->color = dm::colors::white;
-        }
-        
         std::shared_ptr<SceneGraphNode> cameraTarget = m_Scene->GetSceneGraph()->GetRootNode();
         // Prefer the compact asteroid core when present so the initial view
         // includes the full rocky platform instead of tightly framing only the
@@ -1515,6 +1538,7 @@ public:
 
         m_ui.Camera = string_utils::ends_with(m_CurrentSceneName, ".gltf")
             || string_utils::ends_with(m_CurrentSceneName, ".glb")
+            || string_utils::ends_with(m_CurrentSceneName, ".scene.json")
             ? CameraMode::ThirdPerson
             : CameraMode::FirstPerson;
 
@@ -1544,31 +1568,9 @@ public:
         if (!m_Scene)
             return;
 
-        // Blender's FBX export marks every Bistro material as BLEND, even
-        // opaque surfaces. That sends the whole scene through the transparent
-        // pass and prevents reliable depth ordering. Keep alpha cutouts, but
-        // put Bistro's blended materials in the depth-writing alpha-tested
-        // pass when textured mode is active.
-        const bool normalizeBistroAlphaDepth =
-            m_CurrentSceneName.find("nvidia_bistro") != std::string::npos;
-
         for (auto& [material, original] : m_OriginalMaterials)
         {
             *material = original;
-
-            // The Bistro FBX contains thin architectural surfaces with mixed
-            // winding. Keep both sides visible in textured and white-world modes so
-            // back-face culling cannot erase legitimate facade/interior faces.
-            if (normalizeBistroAlphaDepth)
-                material->doubleSided = true;
-
-            if (!enabled && normalizeBistroAlphaDepth &&
-                (material->domain == MaterialDomain::AlphaBlended ||
-                 material->domain == MaterialDomain::TransmissiveAlphaBlended))
-            {
-                material->domain = MaterialDomain::AlphaTested;
-                material->alphaCutoff = 0.5f;
-            }
 
             if (enabled)
             {
@@ -2192,8 +2194,9 @@ protected:
 
             char messageBuffer[256];
             const auto& stats = Scene::GetLoadingStats();
+            const std::string sceneDisplayName = m_app->GetCurrentSceneDisplayName();
             snprintf(messageBuffer, std::size(messageBuffer), "Loading scene %s, please wait...\nObjects: %d/%d, Textures: %d/%d",
-                m_app->GetCurrentSceneName().c_str(), stats.ObjectsLoaded.load(), stats.ObjectsTotal.load(), m_app->GetTextureCache()->GetNumberOfLoadedTextures(), m_app->GetTextureCache()->GetNumberOfRequestedTextures());
+                sceneDisplayName.c_str(), stats.ObjectsLoaded.load(), stats.ObjectsTotal.load(), m_app->GetTextureCache()->GetNumberOfLoadedTextures(), m_app->GetTextureCache()->GetNumberOfRequestedTextures());
 
             DrawScreenCenteredText(messageBuffer);
 
@@ -2349,30 +2352,25 @@ protected:
             ImGui::EndCombo();
         }
 
-        const std::string sceneDir = m_app->GetSceneDir().generic_string();
-        auto getRelativePath = [&sceneDir](std::string const& name)
-        {
-            return donut::string_utils::starts_with(name, sceneDir)
-                ? name.c_str() + sceneDir.size()
-                : name.c_str();
-        };
-
         const std::string currentScene = m_app->GetCurrentSceneName();
+        const std::string currentSceneDisplayName = m_app->GetCurrentSceneDisplayName();
         const float folderButtonWidth = ImGui::GetFrameHeight();
         ImGui::SetNextItemWidth(-(folderButtonWidth + style.ItemSpacing.x));
-        const bool sceneComboOpen = ImGui::BeginCombo("##Scene", getRelativePath(currentScene));
+        const bool sceneComboOpen = ImGui::BeginCombo("##Scene", currentSceneDisplayName.c_str());
         // UI convention: every UVSR-owned interactive control explains itself on hover.
         ImGui::SetItemTooltip("Load a different scene.");
         if (sceneComboOpen)
         {
-            const std::vector<std::string>& scenes = m_app->GetAvailableScenes();
-            for (const std::string& scene : scenes)
+            const std::vector<SceneCatalogEntry>& scenes = m_app->GetAvailableScenes();
+            for (const SceneCatalogEntry& scene : scenes)
             {
-                bool is_selected = scene == currentScene;
-                if (ImGui::Selectable(getRelativePath(scene), is_selected))
-                    m_app->SetCurrentSceneName(scene);
+                ImGui::PushID(scene.FileName.c_str());
+                const bool is_selected = scene.FileName == currentScene;
+                if (ImGui::Selectable(scene.DisplayName.c_str(), is_selected))
+                    m_app->SetCurrentSceneName(scene.FileName);
                 if (is_selected)
                     ImGui::SetItemDefaultFocus();
+                ImGui::PopID();
             }
             ImGui::EndCombo();
         }
@@ -3282,4 +3280,3 @@ int main(int __argc, const char* const* __argv)
 	
 	return 0;
 }
-

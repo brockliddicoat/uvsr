@@ -324,7 +324,7 @@ namespace uvsr
         m_Triangles = std::move(triangles);
         // Leaves hold up to eight triangles, so a balanced binary tree needs
         // far fewer than two nodes per triangle. Reserving that pessimistic
-        // amount would waste roughly 200 MB for BistroExterior alone.
+        // amount would waste roughly 200 MB on a large exterior scene.
         m_Nodes.reserve(m_Triangles.size() / 2 + 1);
         BuildNode(0, uint32_t(m_Triangles.size()));
     }

@@ -112,6 +112,7 @@ add_executable(uvsr WIN32
     src/gpu_performance_monitor.cpp
     src/uvsr.cpp
     src/pbr_deferred_lighting_pass.cpp
+    src/scene_catalog.cpp
     src/screen_space_visibility.cpp
     src/visibility_blue_noise.cpp
 )
@@ -120,6 +121,17 @@ target_compile_definitions(uvsr PRIVATE "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\""
 add_dependencies(uvsr uvsr_shaders)
 
 enable_testing()
+add_executable(uvsr_scene_catalog_tests
+    tests/scene_catalog_tests.cpp
+    src/scene_catalog.cpp
+)
+target_include_directories(
+    uvsr_scene_catalog_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(uvsr_scene_catalog_tests PRIVATE donut_core)
+add_test(NAME uvsr_scene_catalog_reference COMMAND uvsr_scene_catalog_tests)
+
 add_executable(uvsr_pbr_tests tests/pbr_reference_tests.cpp)
 target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
@@ -263,25 +275,54 @@ foreach(shader IN LISTS UVSR_APP_SHADERS)
     )
 endforeach()
 
+set(UVSR_INTEL_SPONZA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/assets/scenes/intel_sponza")
+set(UVSR_INTEL_SPONZA_STAGING_DIR
+    "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/intel_sponza")
+file(GLOB_RECURSE UVSR_INTEL_SPONZA_RUNTIME_ASSETS
+    CONFIGURE_DEPENDS
+    LIST_DIRECTORIES false
+    "${UVSR_INTEL_SPONZA_SOURCE_DIR}/*"
+)
+list(SORT UVSR_INTEL_SPONZA_RUNTIME_ASSETS)
+string(JOIN "\n" UVSR_INTEL_SPONZA_ASSET_MANIFEST_CONTENT
+    ${UVSR_INTEL_SPONZA_RUNTIME_ASSETS})
+set(UVSR_INTEL_SPONZA_ASSET_MANIFEST
+    "${CMAKE_BINARY_DIR}/intel_sponza_runtime_assets.manifest")
+file(GENERATE
+    OUTPUT "${UVSR_INTEL_SPONZA_ASSET_MANIFEST}"
+    CONTENT "${UVSR_INTEL_SPONZA_ASSET_MANIFEST_CONTENT}\n"
+)
+set(UVSR_INTEL_SPONZA_STAGE_STAMP
+    "${UVSR_INTEL_SPONZA_STAGING_DIR}/.uvsr-stage.stamp")
+add_custom_command(
+    OUTPUT "${UVSR_INTEL_SPONZA_STAGE_STAMP}"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory
+        "${UVSR_INTEL_SPONZA_STAGING_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${UVSR_INTEL_SPONZA_STAGING_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${UVSR_INTEL_SPONZA_SOURCE_DIR}"
+        "${UVSR_INTEL_SPONZA_STAGING_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E touch
+        "${UVSR_INTEL_SPONZA_STAGE_STAMP}"
+    DEPENDS
+        ${UVSR_INTEL_SPONZA_RUNTIME_ASSETS}
+        "${UVSR_INTEL_SPONZA_ASSET_MANIFEST}"
+    COMMENT "Synchronizing Intel PBR Sponza runtime assets"
+    VERBATIM
+)
+add_custom_target(uvsr_stage_intel_sponza
+    DEPENDS "${UVSR_INTEL_SPONZA_STAGE_STAMP}"
+)
+add_dependencies(uvsr uvsr_stage_intel_sponza)
+
 add_custom_command(TARGET uvsr POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/nvidia_bistro"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/assets/scenes/nvidia_bistro/BistroExterior.glb"
-        "${CMAKE_SOURCE_DIR}/assets/scenes/nvidia_bistro/BistroInterior_Wine.glb"
-        "${CMAKE_SOURCE_DIR}/assets/scenes/nvidia_bistro/LICENSE.txt"
-        "${CMAKE_SOURCE_DIR}/assets/scenes/nvidia_bistro/README.txt"
-        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/nvidia_bistro"
-    COMMAND ${CMAKE_COMMAND} -E make_directory
+    COMMAND ${CMAKE_COMMAND} -E remove_directory
         "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/a_beautiful_game"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/assets/scenes/a_beautiful_game/ABeautifulGame.glb"
-        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/a_beautiful_game/ABeautifulGame.glb"
-    COMMAND ${CMAKE_COMMAND} -E make_directory
+    COMMAND ${CMAKE_COMMAND} -E remove_directory
         "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/cornell_box"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/assets/scenes/cornell_box/cornellBox.glb"
-        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/cornell_box/cornellBox.glb"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory
+        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/nvidia_bistro"
     COMMAND ${CMAKE_COMMAND} -E remove_directory
         "${CMAKE_BINARY_DIR}/media/luts/kodak"
     COMMAND ${CMAKE_COMMAND} -E make_directory

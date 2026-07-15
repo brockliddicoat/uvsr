@@ -18,8 +18,7 @@ output gamut conversion, and display transfer happen afterward.
   material occlusion modulates the approximate indirect fallback and
   screen-space diffuse transport, while screen-space ambient visibility
   modulates only the approximate sky fallback. Screen-space GI is not
-  multiplied by ambient visibility. The converted Bistro ORM maps have no
-  authored occlusion channel, so their zero-filled red channel is ignored.
+  multiplied by ambient visibility.
 
 ## CPU Material Contract
 

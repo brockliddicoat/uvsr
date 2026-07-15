@@ -19,7 +19,7 @@ These are complete requests:
 - “Try this on the active visibility experiment, but don’t change AgX or the UI.”
 - “That triangle fan is broken in the build you just launched. Fix it and show
   me again.”
-- “Make this faster without changing the image. Use the normal Bistro test.”
+- “Make this faster without changing the image. Use the default Intel Sponza scene.”
 
 In these examples, **latest verified** means the newest Canonical verified
 checkpoint on live canonical `main` history. **Nearest verified** means the

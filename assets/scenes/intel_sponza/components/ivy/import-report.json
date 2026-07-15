@@ -1,0 +1,467 @@
+{
+  "schemaVersion": 1,
+  "importer": "tools/import_sponza_ivy.mjs",
+  "deterministic": true,
+  "sourcePackage": "Intel Sponza pkg_b_ivy",
+  "sources": [
+    {
+      "path": "NewSponza_IvyGrowth_glTF.gltf",
+      "byteLength": 3407,
+      "sha256": "22039080d6de24569f377210b8ebbe59194b5d44de777679d9d87b69ffda2c1e"
+    },
+    {
+      "path": "NewSponza_IvyGrowth_glTF.bin",
+      "byteLength": 269978952,
+      "sha256": "4e2d5ac1b3d63f269e2ea030860bc40f222a6e81b86aef0055a0cb37446268ad"
+    },
+    {
+      "path": "textures/IvyLeaf_Normal.png",
+      "byteLength": 11191941,
+      "sha256": "1ee03e6648630980d24808efef25fc4d9303a3a9ac00c1818ba0a2b35c806ee5"
+    },
+    {
+      "path": "textures/IvyLeaf_BaseColor.png",
+      "byteLength": 11529446,
+      "sha256": "2fb74643b58fe426fea28f564152abfa63d274d6c5dc7bf5e8b8360fd80c0ba0"
+    },
+    {
+      "path": "textures/IvyLeaf_Roughness0.png",
+      "byteLength": 6546780,
+      "sha256": "df43f05073854129b44ac1245acabf2ec47fac669faf9216e371234a02cf0dbe"
+    }
+  ],
+  "trim": {
+    "seamWorldY": 16.0414255217268,
+    "epsilonMeters": 0.00001,
+    "retainedMaximumWorldY": 16.0414155217268,
+    "predicate": "connectedComponent.maximumWorldY <= seamWorldY - epsilonMeters",
+    "positionsEvaluatedAfterFullSourceNodeTransform": true,
+    "partialComponentsRetained": 0
+  },
+  "textureResize": {
+    "width": 1024,
+    "height": 1024,
+    "kernel": "lanczos3",
+    "pngCompressionLevel": 9,
+    "adaptiveFiltering": false,
+    "normalVectorsRenormalized": true,
+    "sharpVersion": "0.34.5",
+    "libvipsVersion": "8.17.3",
+    "images": [
+      {
+        "name": "IvyLeaf_Normal.png",
+        "sourceMetadata": {
+          "width": 4096,
+          "height": 4096,
+          "channels": 3,
+          "hasAlpha": false
+        },
+        "sourceByteLength": 11191941,
+        "sourceSha256": "1ee03e6648630980d24808efef25fc4d9303a3a9ac00c1818ba0a2b35c806ee5",
+        "outputMetadata": {
+          "width": 1024,
+          "height": 1024,
+          "channels": 3,
+          "hasAlpha": false
+        },
+        "outputByteLength": 1350333,
+        "outputSha256": "3e97f9f96da01f43f13962f8dfbdae3f89e022a48dfdc68d916a7ec38ff8081a"
+      },
+      {
+        "name": "IvyLeaf_BaseColor.png",
+        "sourceMetadata": {
+          "width": 4096,
+          "height": 4096,
+          "channels": 3,
+          "hasAlpha": false
+        },
+        "sourceByteLength": 11529446,
+        "sourceSha256": "2fb74643b58fe426fea28f564152abfa63d274d6c5dc7bf5e8b8360fd80c0ba0",
+        "outputMetadata": {
+          "width": 1024,
+          "height": 1024,
+          "channels": 3,
+          "hasAlpha": false
+        },
+        "outputByteLength": 1297846,
+        "outputSha256": "7b29df17ffaee75c4f1c322a3f65fe97c0b0ff0c040fc72e37bb87eceb9acd40"
+      },
+      {
+        "name": "IvyLeaf_Roughness0.png",
+        "sourceMetadata": {
+          "width": 4096,
+          "height": 4096,
+          "channels": 4,
+          "hasAlpha": true
+        },
+        "sourceByteLength": 6546780,
+        "sourceSha256": "df43f05073854129b44ac1245acabf2ec47fac669faf9216e371234a02cf0dbe",
+        "outputMetadata": {
+          "width": 1024,
+          "height": 1024,
+          "channels": 4,
+          "hasAlpha": true
+        },
+        "outputByteLength": 276814,
+        "outputSha256": "e065a3aeede082658eaee3d19543ba85748f776b40ef1d4fa4265026a559ec07"
+      }
+    ]
+  },
+  "materialAudit": {
+    "leafMaterial": "IvyLeaf",
+    "sourceAlphaModeDeclared": false,
+    "effectiveAlphaMode": "OPAQUE",
+    "doubleSided": true,
+    "baseColorTexture": "IvyLeaf_BaseColor.png",
+    "sourceBaseColorHasAlpha": false,
+    "sourceBaseColorChannels": 3,
+    "outputBaseColorHasAlpha": false,
+    "cutoutRepairApplied": false,
+    "conclusion": "The base-color PNG is RGB with no alpha channel, so glTF's default OPAQUE domain is correct; doubleSided remains true."
+  },
+  "sourceModel": {
+    "nodes": [
+      {
+        "name": "IvySim_Leaves",
+        "rotation": [
+          -8.146034e-8,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          100,
+          100,
+          100
+        ],
+        "translation": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "name": "IvySim_Lianas",
+        "rotation": [
+          -8.146034e-8,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          100,
+          100,
+          100
+        ],
+        "translation": [
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "resources": {
+      "nodes": 2,
+      "meshes": 2,
+      "materials": 2,
+      "textures": 3,
+      "images": 3,
+      "samplers": 1,
+      "accessors": 12,
+      "bufferViews": 4
+    },
+    "leaves": {
+      "boundsWorld": {
+        "min": [
+          -11.66454702615738,
+          3.6413446505784424,
+          -2.858674020907688
+        ],
+        "max": [
+          -2.472599968314171,
+          18.024750092328887,
+          4.713916550739686
+        ]
+      },
+      "components": {
+        "total": {
+          "components": 38575,
+          "vertices": 3098245,
+          "triangles": 4905636
+        },
+        "retained": {
+          "components": 27884,
+          "vertices": 2239115,
+          "triangles": 3545260
+        },
+        "whollyBelowExactSeam": {
+          "components": 27884,
+          "vertices": 2239115,
+          "triangles": 3545260
+        },
+        "whollyAboveExactSeam": {
+          "components": 10654,
+          "vertices": 848914,
+          "triangles": 1342904
+        },
+        "straddlingExactSeam": {
+          "components": 37,
+          "vertices": 10216,
+          "triangles": 17472
+        },
+        "removed": {
+          "components": 10691,
+          "vertices": 859130,
+          "triangles": 1360376
+        }
+      },
+      "highestRetainedWorldY": 16.041177903620504,
+      "nearestRemovedWorldY": 15.924592606086744
+    },
+    "lianas": {
+      "boundsWorld": {
+        "min": [
+          -11.771231144666672,
+          3.747343698494901,
+          -2.7643146483327548
+        ],
+        "max": [
+          -2.557319588959217,
+          17.939418563233502,
+          4.69282993814915
+        ]
+      },
+      "components": {
+        "total": {
+          "components": 5231,
+          "vertices": 170384,
+          "triangles": 159922
+        },
+        "retained": {
+          "components": 3720,
+          "vertices": 120522,
+          "triangles": 113082
+        },
+        "whollyBelowExactSeam": {
+          "components": 3720,
+          "vertices": 120522,
+          "triangles": 113082
+        },
+        "whollyAboveExactSeam": {
+          "components": 1490,
+          "vertices": 49148,
+          "triangles": 46168
+        },
+        "straddlingExactSeam": {
+          "components": 21,
+          "vertices": 714,
+          "triangles": 672
+        },
+        "removed": {
+          "components": 1511,
+          "vertices": 49862,
+          "triangles": 46840
+        }
+      },
+      "highestRetainedWorldY": 16.04033598715598,
+      "nearestRemovedWorldY": 15.968621201795917
+    }
+  },
+  "partitioning": {
+    "strategy": "largest-component-first balance across both materials, then deterministic ascending-root U16 primitive packing",
+    "parts": [
+      {
+        "index": 0,
+        "bytes": 86483448,
+        "vertices": 1179819,
+        "triangles": 1829172,
+        "components": 15802,
+        "materials": {
+          "leaves": {
+            "bytes": 82285760,
+            "vertices": 1119533,
+            "triangles": 1772608,
+            "components": 13941
+          },
+          "lianas": {
+            "bytes": 4197688,
+            "vertices": 60286,
+            "triangles": 56564,
+            "components": 1861
+          }
+        }
+      },
+      {
+        "index": 1,
+        "bytes": 86483372,
+        "vertices": 1179818,
+        "triangles": 1829170,
+        "components": 15802,
+        "materials": {
+          "leaves": {
+            "bytes": 82289160,
+            "vertices": 1119582,
+            "triangles": 1772652,
+            "components": 13943
+          },
+          "lianas": {
+            "bytes": 4194212,
+            "vertices": 60236,
+            "triangles": 56518,
+            "components": 1859
+          }
+        }
+      }
+    ],
+    "indexComponentType": "UNSIGNED_SHORT",
+    "maximumVerticesPerPrimitive": 65535,
+    "minimumSelfContainedPartsAtPreservedFloat32Attributes": 2,
+    "minimumProof": "Retained float32 vertex attributes alone exceed 100,000,000 bytes, so one GLB is impossible; two embedded-texture GLBs are below the limit."
+  },
+  "outputs": [
+    {
+      "path": "assets/scenes/intel_sponza/components/ivy/intel_pbr_sponza_ivy_part1.glb",
+      "byteLength": 89437540,
+      "sha256": "ea53351a147641eae277754821cf947b0170ec004f0e8c2a0ca644c19841d88f",
+      "belowGitHub100MBLimit": true,
+      "components": 15802,
+      "vertices": 1179819,
+      "triangles": 1829172,
+      "primitives": 19,
+      "boundsWorld": {
+        "min": [
+          -10.604927062988281,
+          3.6413445472717285,
+          -2.079596996307373
+        ],
+        "max": [
+          -2.472599983215332,
+          16.04117774963379,
+          4.281160831451416
+        ]
+      },
+      "materials": {
+        "leaves": {
+          "components": 13941,
+          "vertices": 1119533,
+          "triangles": 1772608,
+          "primitives": 18,
+          "boundsWorld": {
+            "min": [
+              -10.604927062988281,
+              3.6413445472717285,
+              -2.079596996307373
+            ],
+            "max": [
+              -2.472599983215332,
+              16.04117774963379,
+              4.234836101531982
+            ]
+          }
+        },
+        "lianas": {
+          "components": 1861,
+          "vertices": 60286,
+          "triangles": 56564,
+          "primitives": 1,
+          "boundsWorld": {
+            "min": [
+              -10.47335147857666,
+              3.809478521347046,
+              -2.008396625518799
+            ],
+            "max": [
+              -2.5573196411132812,
+              16.04033660888672,
+              4.281160831451416
+            ]
+          }
+        }
+      },
+      "binByteLength": 89408448,
+      "resources": {
+        "nodes": 2,
+        "meshes": 2,
+        "materials": 2,
+        "textures": 3,
+        "images": 3,
+        "samplers": 1,
+        "accessors": 114,
+        "bufferViews": 117,
+        "buffers": 1
+      }
+    },
+    {
+      "path": "assets/scenes/intel_sponza/components/ivy/intel_pbr_sponza_ivy_part2.glb",
+      "byteLength": 89437452,
+      "sha256": "cf4e88f191b4f196ceae2701c1e97d053d01072d8ad12222644b41dcbb33613a",
+      "belowGitHub100MBLimit": true,
+      "components": 15802,
+      "vertices": 1179818,
+      "triangles": 1829170,
+      "primitives": 19,
+      "boundsWorld": {
+        "min": [
+          -10.604361534118652,
+          3.642566204071045,
+          -2.078981876373291
+        ],
+        "max": [
+          -2.4732565879821777,
+          16.04117774963379,
+          4.281160831451416
+        ]
+      },
+      "materials": {
+        "leaves": {
+          "components": 13943,
+          "vertices": 1119582,
+          "triangles": 1772652,
+          "primitives": 18,
+          "boundsWorld": {
+            "min": [
+              -10.604361534118652,
+              3.642566204071045,
+              -2.078981876373291
+            ],
+            "max": [
+              -2.4732565879821777,
+              16.04117774963379,
+              4.234836101531982
+            ]
+          }
+        },
+        "lianas": {
+          "components": 1859,
+          "vertices": 60236,
+          "triangles": 56518,
+          "primitives": 1,
+          "boundsWorld": {
+            "min": [
+              -10.47335147857666,
+              3.7473437786102295,
+              -2.008396625518799
+            ],
+            "max": [
+              -2.5573196411132812,
+              16.03413963317871,
+              4.281160831451416
+            ]
+          }
+        }
+      },
+      "binByteLength": 89408372,
+      "resources": {
+        "nodes": 2,
+        "meshes": 2,
+        "materials": 2,
+        "textures": 3,
+        "images": 3,
+        "samplers": 1,
+        "accessors": 114,
+        "bufferViews": 117,
+        "buffers": 1
+      }
+    }
+  ]
+}
