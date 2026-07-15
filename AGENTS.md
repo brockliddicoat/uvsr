@@ -116,12 +116,17 @@
   `cmake --build build --config Release --target uvsr`.
 - For PBR or rendering changes, also build `uvsr_pbr_tests` and run
   `ctest --test-dir build -C Release --output-on-failure`.
-- Launch through `tools/launch_uvsr.ps1 -Experiment "<oneword>"` and
+- Launch through `tools/launch_uvsr.ps1 -Experiment "<lowercaseword>"` and
   smoke-test after runtime, rendering, shader, scene-loading, or UI changes.
+  The one-word experiment/title token must match `^[a-z]+$`: use one or more
+  lowercase ASCII letters and nothing else. Never use uppercase letters,
+  digits, spaces, hyphens, underscores, or punctuation. Valid examples are
+  `main` and `localtone`; invalid examples include `LocalTone`, `localtone2`,
+  and `local-tone`.
   Never launch the bare executable during agent work: every renderer taskbar
-  title must identify the experiment with an ASCII alphanumeric one-word
-  description; the renderer appends its source commit and local `HHmm` launch
-  time. Exercise the relevant
+  title must identify the experiment with that lowercase ASCII letters-only
+  token; the renderer appends its source commit and local `HHmm` launch time.
+  Exercise the relevant
   forward/deferred and screen-space AO/GI combinations when they could be
   affected.
 - Documentation-only changes require link and diff validation, not a renderer
