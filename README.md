@@ -133,15 +133,6 @@ promises that the work will merge.
   bounce contribution cutoff conservatively without changing visibility
   estimator math or adding motion-reprojected local-exposure history.
 
-- **Agent Collaboration Policy — Active Development**
-  (`codex/casual-agent-policy`). Replace the repository's agent guidance with
-  coordinator-led collaboration rules, conversational-language guidance, and
-  reusable execution-plan documentation. Integrate the lowercase-only
-  experiment-title rule as policy version `2026-07-15.4` and enforce it in the
-  PowerShell launcher and renderer startup validator. This owns `AGENTS.md`,
-  agent-only documentation, and experiment-title validation; it has no shader,
-  asset, or UI overlap.
-
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate shared
   depth, pixel-coordinate, and safe-normal helpers used by the visibility
@@ -239,7 +230,8 @@ cmake --build build --config Release --target uvsr
 .\tools\launch_uvsr.ps1 -Experiment naming
 ```
 
-The launcher requires a one-word ASCII alphanumeric experiment description:
+The launcher requires one lowercase ASCII word matching `\A[a-z]+\z`; uppercase
+letters, digits, spaces, hyphens, underscores, and punctuation are rejected:
 
 ```powershell
 .\tools\launch_uvsr.ps1 -Experiment naming
@@ -261,12 +253,12 @@ environment variable; omitted descriptions default to `main`.
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the camera-collision, camera-controls, PBR, radial-visibility,
-estimator, visibility-projection, and visibility-sampling reference tests
-separately:
+Build and run the experiment-title, camera-collision, camera-controls, PBR,
+radial-visibility, estimator, visibility-projection, and visibility-sampling
+reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 

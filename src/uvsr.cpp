@@ -65,6 +65,7 @@
 #include "gpu_performance_monitor.h"
 #include "camera_collision.h"
 #include "camera_controllers.h"
+#include "experiment_title.h"
 #include "screen_space_visibility.h"
 
 using namespace donut;
@@ -3075,19 +3076,6 @@ void ProcessCommandLine(
     }
 }
 
-bool IsOneWordExperimentDescription(const std::string& description)
-{
-    return !description.empty() && std::all_of(
-        description.begin(),
-        description.end(),
-        [](unsigned char character)
-        {
-            return (character >= 'a' && character <= 'z') ||
-                (character >= 'A' && character <= 'Z') ||
-                (character >= '0' && character <= '9');
-        });
-}
-
 std::string FormatExperimentLaunchTime(
     const std::chrono::system_clock::time_point& launchTime)
 {
@@ -3227,20 +3215,21 @@ int main(int __argc, const char* const* __argv)
     ProcessCommandLine(__argc, __argv, deviceParams, sceneName, experimentDescription);
     if (experimentDescription.empty())
     {
-        // The launcher passes the validated one-word description through the
+        // The launcher passes the validated lowercase description through the
         // environment so scene paths remain the only native command-line
         // arguments it needs to reconstruct. An explicit argument remains the
-        // override for direct and IDE-driven launches.
+        // override for IDE-driven launches and is validated by the same
+        // renderer backstop below.
         const char* environmentExperiment = std::getenv("UVSR_EXPERIMENT");
         if (environmentExperiment && environmentExperiment[0] != '\0')
             experimentDescription = environmentExperiment;
     }
     if (experimentDescription.empty())
         experimentDescription = "main";
-    if (!IsOneWordExperimentDescription(experimentDescription))
+    if (!uvsr::IsValidExperimentTitle(experimentDescription))
     {
         log::error(
-            "Experiment description '%s' must contain exactly one ASCII alphanumeric word",
+            "Experiment description '%s' must contain only lowercase ASCII letters (a-z)",
             experimentDescription.c_str());
         return 1;
     }

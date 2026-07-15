@@ -125,6 +125,13 @@ target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/s
 target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
 add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
 
+add_executable(uvsr_experiment_title_tests tests/experiment_title_tests.cpp)
+target_include_directories(
+    uvsr_experiment_title_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(NAME uvsr_experiment_title_reference COMMAND uvsr_experiment_title_tests)
+
 add_executable(uvsr_camera_collision_tests
     tests/camera_collision_tests.cpp
     src/camera_collision.cpp
