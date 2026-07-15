@@ -11,9 +11,6 @@ is also available from the scene picker.
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
-- NRA-RTAA v1 is retired and removed. Its failure analysis remains in the
-  [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) so a successor starts
-  from a proven reprojection base instead of restoring the failed subsystem.
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
   linear resolution. Full resolution can composite raw output; reconstruction
   adds SSRT3-style temporal accumulation and either compact or Gaussian joint-
