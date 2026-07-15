@@ -112,10 +112,10 @@ is also available from the scene picker.
 
 ## Coming Soon
 
-Coming Soon is UVSR's shared coordination ledger for every project or feature
-that has not merged into `main`, plus every project or feature an agent is
-currently working on. An entry is not shipped on `main`, and experimental
-entries are not promises that the work will merge.
+Coming Soon is UVSR's user-facing roadmap and integration summary for stable,
+active work that has not merged into `main`. It is not a mutex or a live task
+ledger. An entry is not shipped on `main`, and experimental entries are not
+promises that the work will merge.
 
 - **Bilateral-Grid Local Tone Mapping — Active Development**
   (`agent/bilateral-grid-local-tone-mapping`). Add a first-party D3D12 GPU
@@ -127,32 +127,27 @@ entries are not promises that the work will merge.
   bounce contribution cutoff conservatively without changing visibility
   estimator math or adding motion-reprojected local-exposure history.
 
-### How Work Gets Listed
+### Roadmap Ownership
 
-This README-first workflow is how every project or feature gets onto Coming
-Soon:
+The task coordinator or final integrator owns this section:
 
-1. Before writing implementation code, the owning agent reads this entire
-   section into working memory and checks open pull requests, unmerged branches,
-   and visible agent worktrees for overlapping or missing work. An agent
-   resuming an in-flight project performs this reconciliation before its next
-   code edit.
-2. The agent imports every missing unmerged or current-agent project it finds.
-   If its own project is absent, adding or updating that entry is its first
-   repository change. Each entry includes status, branch when one exists,
-   intended scope, affected subsystems, and integration dependencies.
-3. The agent cites the exact Coming Soon entry in its implementation plan and
-   records any overlap or coordination needed with another entry. Implementation
-   does not begin until both the entry and plan reference exist.
-4. Scope and status changes update the same entry. When publication is
-   authorized, commit and push the coordination update before creating or
-   pushing implementation commits so simultaneous agents can see it. For pre-
-   existing implementation, reconcile and publish the ledger before the next
-   code edit or implementation push. This rule does not grant permission to
-   push by itself.
-5. A merge removes the entry and moves durable user-facing behavior into the
-   renderer baseline or design documentation. Abandoned work is removed
-   explicitly rather than left as a stale promise.
+1. Small fixes, read-only investigations, and short-lived private experiments
+   do not require an entry.
+2. Before complex, concurrent, shared-hotspot, integration, or publication work,
+   the coordinator reviews this entire section together with relevant pull
+   requests, branches, worktrees, and active execution plans. The coordinator
+   records overlap and dependency decisions in the task plan; individual
+   workers do not each edit this README.
+3. Add or update an entry once its scope and branch are stable. Include status,
+   branch when one exists, intended scope, affected subsystems, and integration
+   dependencies. A private experiment is listed only when it becomes stable
+   roadmap information.
+4. Reconcile the entry again during integration. Publishing a roadmap update
+   still requires explicit authorization and never grants permission to push,
+   open a pull request, or merge implementation work.
+5. When work merges, remove its entry and move durable user-facing behavior into
+   the renderer baseline or relevant design documentation. Mark or remove
+   abandoned work explicitly rather than leaving a stale promise.
 
 ## Build and Run
 
