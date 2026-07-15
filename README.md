@@ -105,6 +105,20 @@ is also available from the scene picker.
 - The AgX display pipeline provides Base, Punchy, Golden, Mix, and Custom
   presets. Its controls are Exposure, Contrast, Saturation, Warmth, Tint, Slope,
   and Power.
+- The top **Enable Tonemapping and LUT** checkbox in the **Tonemapper** drawer
+  bypasses AgX, exposure, grading, every LUT, local tone mapping, and dithering
+  without discarding the selected settings. The raw scene-linear result is sent
+  to the sRGB display target, matching the existing tonemapperless presentation
+  contract without forcing a renderer-mode change.
+- Optional **Local Tone Mapping** uses a first-party D3D12 bilateral grid over
+  scene-linear luminance after visibility and sky composition. The grid stores
+  broad local exposure and confidence; the full-resolution scene luminance
+  selects the range slice per display pixel before AgX, so sharp luminance edges
+  are not forced to align to coarse XY cells. The effect is disabled by default;
+  see the [local tone-mapping notes](docs/local-tone-mapping.md).
+- Local shadow recovery conservatively extends the multi-bounce contribution
+  cutoff's exposure bound only while normal local presentation is active. It
+  does not alter visibility estimation, filtering, or reconstruction.
 - UVSR includes original AgX Base-space simulations of Kodak 2383 Print, Portra
   400, and Ektar 100 looks. They are not official Kodak LUTs. Additional licensed
   3D `.cube` LUTs can be placed in `assets/luts/kodak`; see the
@@ -222,11 +236,11 @@ environment variable; omitted descriptions default to `main`.
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the PBR, radial-visibility, estimator, visibility-projection, and
-visibility-sampling reference tests separately:
+Build and run the PBR, radial-visibility, estimator, visibility-projection,
+visibility-sampling, and local tone-mapping reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests uvsr_local_tone_mapping_reference_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 

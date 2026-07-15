@@ -109,6 +109,7 @@ donut_compile_shaders_all_platforms(
 
 add_executable(uvsr WIN32
     src/gpu_performance_monitor.cpp
+    src/local_tone_mapping.cpp
     src/uvsr.cpp
     src/pbr_deferred_lighting_pass.cpp
     src/screen_space_visibility.cpp
@@ -127,6 +128,23 @@ add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
 add_executable(uvsr_radial_visibility_tests tests/radial_visibility_mask_tests.cpp)
 target_include_directories(uvsr_radial_visibility_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 add_test(NAME uvsr_radial_visibility_reference COMMAND uvsr_radial_visibility_tests)
+
+add_executable(uvsr_local_tone_mapping_reference_tests
+    tests/local_tone_mapping_reference_tests.cpp
+    src/local_tone_mapping.cpp
+)
+target_include_directories(
+    uvsr_local_tone_mapping_reference_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(
+    uvsr_local_tone_mapping_reference_tests
+    PRIVATE donut_render donut_engine
+)
+add_test(
+    NAME uvsr_local_tone_mapping_reference
+    COMMAND uvsr_local_tone_mapping_reference_tests
+)
 
 add_executable(uvsr_visibility_estimator_tests
     tests/visibility_estimator_reference_tests.cpp
@@ -218,6 +236,10 @@ endforeach()
 
 set(UVSR_APP_SHADERS
     agx_tonemapping_ps
+    local_tone_mapping_blur_cs
+    local_tone_mapping_finalize_cs
+    local_tone_mapping_reduce_cs
+    local_tone_mapping_splat_cs
     pbr_deferred_lighting_cs
     pbr_forward_ps
     pbr_gbuffer_ps

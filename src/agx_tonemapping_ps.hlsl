@@ -4,8 +4,11 @@
 
 #pragma pack_matrix(row_major)
 
+#include "local_tone_mapping_cb.h"
+
 Texture2D<float4> t_SceneColor : register(t0);
 Texture3D<float4> t_KodakLut : register(t1);
+Texture3D<float2> t_LocalToneMappingGrid : register(t2);
 SamplerState s_LinearClamp : register(s0);
 
 cbuffer c_AgxToneMapping : register(b0)
@@ -16,6 +19,7 @@ cbuffer c_AgxToneMapping : register(b0)
     float4 g_Power;
     float4 g_LutDomainMin;
     float4 g_LutDomainMax;
+    LocalToneMappingDisplayConstants g_LocalToneMapping;
 };
 
 static const float AGX_MIN_EV = -12.47393;
@@ -99,6 +103,85 @@ float Hash12(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
+float SceneLuminance(float3 color)
+{
+    return dot(max(color, 0.0f), float3(0.2126f, 0.7152f, 0.0722f));
+}
+
+void EvaluateLocalToneMapping(
+    int2 pixel,
+    float3 sceneColor,
+    out float inputLogY,
+    out float baseDeltaEV,
+    out float confidence,
+    out float localEV)
+{
+    inputLogY = g_LocalToneMapping.rangeStrengthAndMaximumCorrection.x;
+    baseDeltaEV = 0.0f;
+    confidence = 0.0f;
+    localEV = 0.0f;
+    if (g_LocalToneMapping.directionDebugAndActive.w <= 0.5f ||
+        !all(isfinite(sceneColor)))
+    {
+        return;
+    }
+
+    sceneColor = max(sceneColor, 0.0f);
+    inputLogY = clamp(log2(max(SceneLuminance(sceneColor), 1e-6f)),
+        g_LocalToneMapping.rangeStrengthAndMaximumCorrection.x,
+        g_LocalToneMapping.rangeStrengthAndMaximumCorrection.y);
+
+    const float3 gridDimensions = max(
+        g_LocalToneMapping.gridDimensionsAndCellSize.xyz, 1.0f);
+    const float cellSize = max(
+        g_LocalToneMapping.gridDimensionsAndCellSize.w, 1.0f);
+    const float range = max(
+        g_LocalToneMapping.rangeStrengthAndMaximumCorrection.y -
+        g_LocalToneMapping.rangeStrengthAndMaximumCorrection.x,
+        1e-6f);
+    const float rangeCoordinate = saturate(
+        (inputLogY -
+            g_LocalToneMapping.rangeStrengthAndMaximumCorrection.x) / range);
+
+    // Full-resolution scene luminance supplies the range coordinate, so an
+    // edge is not constrained to the coarse XY grid. The grid only estimates
+    // the broad local exposure field; trilinear slicing reconstructs it at the
+    // exact display pixel without a full-resolution intermediate texture.
+    float3 gridUv;
+    gridUv.xy = (float2(pixel) + 0.5f) /
+        (gridDimensions.xy * cellSize);
+    gridUv.z = (rangeCoordinate * (gridDimensions.z - 1.0f) + 0.5f) /
+        gridDimensions.z;
+    gridUv = clamp(gridUv,
+        0.5f / gridDimensions,
+        1.0f - 0.5f / gridDimensions);
+
+    const float2 gridSample = t_LocalToneMappingGrid.SampleLevel(
+        s_LinearClamp, gridUv, 0.0f);
+    if (!all(isfinite(gridSample)))
+        return;
+
+    baseDeltaEV = clamp(gridSample.x, -range, range);
+    confidence = saturate(gridSample.y);
+    const float directionalScale = baseDeltaEV >= 0.0f
+        ? g_LocalToneMapping.directionDebugAndActive.x
+        : g_LocalToneMapping.directionDebugAndActive.y;
+    localEV = baseDeltaEV * directionalScale *
+        g_LocalToneMapping.rangeStrengthAndMaximumCorrection.z * confidence;
+    localEV = clamp(localEV,
+        -g_LocalToneMapping.rangeStrengthAndMaximumCorrection.w,
+         g_LocalToneMapping.rangeStrengthAndMaximumCorrection.w);
+}
+
+float3 VisualizeLocalEV(float value, float scale)
+{
+    const float amount = saturate(abs(value) / max(scale, 1e-3f));
+    const float3 neutral = 0.5f;
+    const float3 positive = float3(1.0f, 0.28f, 0.08f);
+    const float3 negative = float3(0.08f, 0.32f, 1.0f);
+    return lerp(neutral, value >= 0.0f ? positive : negative, amount);
+}
+
 void main(
     in float4 position : SV_Position,
     in float2 uv : UV,
@@ -114,12 +197,62 @@ void main(
     const float ditherStrength = g_TintLutSizeUseLutDither.w;
 
     // Required processing order:
-    // scene-linear HDR -> white balance -> exposure -> AgX inset -> AgX log
+    // scene-linear HDR -> white balance -> global plus local EV exposure
+    // -> AgX inset -> AgX log
     // -> contrast tone scale -> Base-space grade/LUT -> output gamut -> sRGB
     // transfer -> dithering.
-    float4 sceneSample = t_SceneColor.Load(int3(position.xy, 0));
+    int2 pixel = int2(position.xy);
+    float4 sceneSample = t_SceneColor.Load(int3(pixel, 0));
+
+    float inputLogY;
+    float baseDeltaEV;
+    float localConfidence;
+    float localEV;
+    EvaluateLocalToneMapping(
+        pixel, sceneSample.rgb,
+        inputLogY, baseDeltaEV, localConfidence, localEV);
+
+    const uint localDebugMode =
+        (uint)round(g_LocalToneMapping.directionDebugAndActive.z);
+    if (g_LocalToneMapping.directionDebugAndActive.w > 0.5f &&
+        localDebugMode != LOCAL_TONE_MAPPING_DEBUG_OFF)
+    {
+        float3 debugColor = 0.0f;
+        if (localDebugMode == LOCAL_TONE_MAPPING_DEBUG_INPUT_LOG_LUMINANCE)
+        {
+            const float range = max(
+                g_LocalToneMapping.rangeStrengthAndMaximumCorrection.y -
+                g_LocalToneMapping.rangeStrengthAndMaximumCorrection.x,
+                1e-6f);
+            debugColor = saturate(
+                (inputLogY -
+                    g_LocalToneMapping.rangeStrengthAndMaximumCorrection.x) /
+                range).xxx;
+        }
+        else if (localDebugMode == LOCAL_TONE_MAPPING_DEBUG_BASE_LOCAL_EV)
+        {
+            debugColor = VisualizeLocalEV(baseDeltaEV,
+                g_LocalToneMapping.rangeStrengthAndMaximumCorrection.w);
+        }
+        else if (localDebugMode == LOCAL_TONE_MAPPING_DEBUG_FINAL_LOCAL_EV)
+        {
+            debugColor = VisualizeLocalEV(localEV,
+                g_LocalToneMapping.rangeStrengthAndMaximumCorrection.w);
+        }
+        else if (localDebugMode == LOCAL_TONE_MAPPING_DEBUG_GRID_CONFIDENCE)
+        {
+            debugColor = localConfidence.xxx;
+        }
+
+        // Local diagnostics are display-relative and bypass exposure, AgX,
+        // grading, LUT and dithering. Compensate for the SRGBA8 target's
+        // hardware encoding exactly as the normal display path does.
+        outputColor = float4(SrgbToLinear(saturate(debugColor)), 1.0f);
+        return;
+    }
+
     float3 color = ApplyCameraWhiteBalance(sceneSample.rgb, warmth, tint);
-    color *= exp2(exposureEv);
+    color *= exp2(exposureEv + localEV);
     color = AgxLogEncode(color);
     color = saturate((AgxDefaultContrast(color) - 0.5) * contrast + 0.5);
     color = ApplyAgxBaseGrade(color, saturation, g_Slope.rgb, g_Power.rgb);

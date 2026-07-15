@@ -31,6 +31,7 @@
 #include <fstream>
 #include <sstream>
 #include <cctype>
+#include <cstddef>
 #include <cfloat>
 #include <cstdlib>
 #include <Windows.h>
@@ -63,6 +64,7 @@
 #include "pbr_material.h"
 #include "pbr_deferred_lighting_pass.h"
 #include "gpu_performance_monitor.h"
+#include "local_tone_mapping.h"
 #include "screen_space_visibility.h"
 
 using namespace donut;
@@ -72,6 +74,8 @@ using namespace donut::vfs;
 using namespace donut::engine;
 using namespace donut::render;
 using namespace uvsr;
+
+#include "local_tone_mapping_cb.h"
 
 static bool g_RestartRequested = false;
 static int g_RestartAdapterIndex = -1;
@@ -521,6 +525,29 @@ struct AgxToneMappingParameters
     float Power = 1.f;
 };
 
+static void SanitizeAgxToneMappingParameters(AgxToneMappingParameters& params)
+{
+    const AgxToneMappingParameters defaults;
+    auto finiteOrDefault = [](float value, float fallback)
+    {
+        return std::isfinite(value) ? value : fallback;
+    };
+    params.Exposure = std::clamp(
+        finiteOrDefault(params.Exposure, defaults.Exposure), -10.f, 10.f);
+    params.Contrast = std::clamp(
+        finiteOrDefault(params.Contrast, defaults.Contrast), 0.5f, 2.f);
+    params.Saturation = std::clamp(
+        finiteOrDefault(params.Saturation, defaults.Saturation), 0.f, 2.f);
+    params.Warmth = std::clamp(
+        finiteOrDefault(params.Warmth, defaults.Warmth), -1.f, 1.f);
+    params.Tint = std::clamp(
+        finiteOrDefault(params.Tint, defaults.Tint), -1.f, 1.f);
+    params.Slope = std::clamp(
+        finiteOrDefault(params.Slope, defaults.Slope), 0.f, 2.f);
+    params.Power = std::clamp(
+        finiteOrDefault(params.Power, defaults.Power), 0.01f, 2.f);
+}
+
 struct KodakLut
 {
     std::string Name;
@@ -539,7 +566,15 @@ struct alignas(16) AgxToneMappingConstants
     float4 Power;
     float4 LutDomainMin;
     float4 LutDomainMax;
+    LocalToneMappingDisplayConstants LocalToneMapping;
 };
+
+static_assert(alignof(AgxToneMappingConstants) == 16,
+    "AgxToneMappingConstants must retain D3D constant-buffer alignment");
+static_assert(sizeof(AgxToneMappingConstants) == 9 * 16,
+    "AgxToneMappingConstants CPU/HLSL size mismatch");
+static_assert(offsetof(AgxToneMappingConstants, LocalToneMapping) == 6 * 16,
+    "Local tone-mapping constants must follow the six AgX rows");
 
 class AgxToneMappingPass
 {
@@ -552,6 +587,7 @@ private:
     nvrhi::GraphicsPipelineHandle m_Pipeline;
     nvrhi::ITexture* m_BoundSource = nullptr;
     nvrhi::ITexture* m_BoundLut = nullptr;
+    nvrhi::ITexture* m_BoundLocalToneMappingGrid = nullptr;
     nvrhi::TextureHandle m_ColorLut;
     uint32_t m_ColorLutSize = 0;
     float3 m_LutDomainMin = 0.f;
@@ -586,6 +622,7 @@ public:
             nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
             nvrhi::BindingLayoutItem::Texture_SRV(0),
             nvrhi::BindingLayoutItem::Texture_SRV(1),
+            nvrhi::BindingLayoutItem::Texture_SRV(2),
             nvrhi::BindingLayoutItem::Sampler(0)
         };
         m_BindingLayout = device->createBindingLayout(layoutDesc);
@@ -610,41 +647,71 @@ public:
         m_LutDomainMax = lut ? lut->DomainMax : float3(1.f);
         m_BindingSet = nullptr;
         m_BoundLut = nullptr;
+        m_BoundLocalToneMappingGrid = nullptr;
     }
 
     void Render(
         nvrhi::ICommandList* commandList,
         const AgxToneMappingParameters& params,
         const ICompositeView& compositeView,
-        nvrhi::ITexture* sourceTexture)
+        nvrhi::ITexture* sourceTexture,
+        const LocalToneMappingSettings& localToneMappingSettings,
+        const LocalToneMappingDisplayState& localToneMappingState)
     {
         nvrhi::ITexture* lutTexture = m_ColorLut
             ? m_ColorLut.Get()
             : m_CommonPasses->m_BlackTexture3D.Get();
+        nvrhi::ITexture* localToneMappingGrid = localToneMappingState.grid
+            ? localToneMappingState.grid
+            : m_CommonPasses->m_BlackTexture3D.Get();
 
-        if (!m_BindingSet || m_BoundSource != sourceTexture || m_BoundLut != lutTexture)
+        if (!m_BindingSet || m_BoundSource != sourceTexture ||
+            m_BoundLut != lutTexture ||
+            m_BoundLocalToneMappingGrid != localToneMappingGrid)
         {
             nvrhi::BindingSetDesc bindingSetDesc;
             bindingSetDesc.bindings = {
                 nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
                 nvrhi::BindingSetItem::Texture_SRV(0, sourceTexture),
                 nvrhi::BindingSetItem::Texture_SRV(1, lutTexture),
+                nvrhi::BindingSetItem::Texture_SRV(2, localToneMappingGrid),
                 nvrhi::BindingSetItem::Sampler(0, m_CommonPasses->m_LinearClampSampler)
             };
             m_BindingSet = m_Device->createBindingSet(bindingSetDesc, m_BindingLayout);
             m_BoundSource = sourceTexture;
             m_BoundLut = lutTexture;
+            m_BoundLocalToneMappingGrid = localToneMappingGrid;
         }
+
+        AgxToneMappingParameters sanitizedParams = params;
+        SanitizeAgxToneMappingParameters(sanitizedParams);
+        LocalToneMappingSettings sanitizedLocalSettings = localToneMappingSettings;
+        SanitizeLocalToneMappingSettings(sanitizedLocalSettings);
 
         AgxToneMappingConstants constants{};
         constants.ExposureContrastSaturationWarmth = float4(
-            params.Exposure, params.Contrast, params.Saturation, params.Warmth);
+            sanitizedParams.Exposure, sanitizedParams.Contrast,
+            sanitizedParams.Saturation, sanitizedParams.Warmth);
         constants.TintLutSizeUseLutDither = float4(
-            params.Tint, float(m_ColorLutSize), m_ColorLut ? 1.f : 0.f, 1.f);
-        constants.Slope = float4(float3(params.Slope), 0.f);
-        constants.Power = float4(float3(params.Power), 0.f);
+            sanitizedParams.Tint, float(m_ColorLutSize),
+            m_ColorLut ? 1.f : 0.f, 1.f);
+        constants.Slope = float4(float3(sanitizedParams.Slope), 0.f);
+        constants.Power = float4(float3(sanitizedParams.Power), 0.f);
         constants.LutDomainMin = float4(m_LutDomainMin, 0.f);
         constants.LutDomainMax = float4(m_LutDomainMax, 0.f);
+        constants.LocalToneMapping.gridDimensionsAndCellSize = float4(
+            float3(localToneMappingState.gridDimensions),
+            float(localToneMappingState.spatialCellSize));
+        constants.LocalToneMapping.rangeStrengthAndMaximumCorrection = float4(
+            LocalToneMappingMinEV,
+            LocalToneMappingMaxEV,
+            sanitizedLocalSettings.strength,
+            sanitizedLocalSettings.maximumCorrectionEV);
+        constants.LocalToneMapping.directionDebugAndActive = float4(
+            sanitizedLocalSettings.shadowRecovery,
+            sanitizedLocalSettings.highlightCompression,
+            float(static_cast<uint32_t>(sanitizedLocalSettings.debugMode)),
+            localToneMappingState.active ? 1.f : 0.f);
         commandList->writeBuffer(m_ConstantBuffer, &constants, sizeof(constants));
 
         commandList->beginMarker("AgX Tone Mapping");
@@ -836,6 +903,8 @@ struct UIData
     bool                                EnablePbr = true;
     RendererMode                        RenderMode = RendererMode::Deferred;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
+    LocalToneMappingSettings            LocalToneMapping;
+    bool                                EnableTonemappingAndLut = true;
     AgxToneMappingParameters            AgxToneMappingParams;
     AgxPreset                           AgxToneMappingPreset = AgxPreset::Base;
     SkyParameters                       SkyParams;
@@ -854,9 +923,30 @@ struct UIData
 
     [[nodiscard]] bool UsesTonemapper() const
     {
-        return RenderMode != RendererMode::ForwardTonemapperless;
+        return EnableTonemappingAndLut &&
+            RenderMode != RendererMode::ForwardTonemapperless;
     }
 };
+
+// This is the single frame-level presentation contract for the local effect.
+// The master display toggle and legacy Forward Tonemapperless mode both flow
+// through UsesTonemapper(), so either can disappear later without duplicating
+// renderer-mode checks in the bilateral pass or AgX shader.
+static bool IsLocalToneMappingEligibleForFinalPresentation(const UIData& ui)
+{
+    if (!ui.UsesTonemapper() || !ui.EnablePbr ||
+        !ui.LocalToneMapping.enabled ||
+        (!(ui.LocalToneMapping.strength > 0.f) &&
+            ui.LocalToneMapping.debugMode == LocalToneMappingDebugMode::Off))
+    {
+        return false;
+    }
+
+    const bool visibilityDiagnostic = ui.UsesDeferredShading() &&
+        ui.ScreenSpaceVisibility.HasActiveConsumer() &&
+        ui.ScreenSpaceVisibility.showIndirectDiffuseOnly;
+    return !visibilityDiagnostic;
+}
 
 class UvsrSceneViewer : public ApplicationBase
 {
@@ -880,6 +970,7 @@ private:
     std::unique_ptr<PbrDeferredLightingPass> m_PbrDeferredLightingPass;
     std::unique_ptr<SkyPass>            m_SkyPass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
+    std::unique_ptr<LocalToneMappingPass> m_LocalToneMappingPass;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
     std::unique_ptr<PixelReadbackPass>  m_PixelReadbackPass;
@@ -900,6 +991,7 @@ private:
     float3                              m_AmbientBottom = 0.f;
     uint2                               m_PickPosition = 0u;
     bool                                m_Pick = false;
+    float                               m_LastFrameDeltaSeconds = 1.f / 60.f;
     
 
     UIData&                             m_ui;
@@ -1063,6 +1155,8 @@ public:
         m_ui.EnablePbr = true;
         m_ui.RenderMode = RendererMode::Deferred;
         m_ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
+        m_ui.EnableTonemappingAndLut = true;
+        m_ui.LocalToneMapping = LocalToneMappingSettings{};
         m_ui.AgxToneMappingPreset = AgxPreset::Base;
         m_ui.AgxToneMappingParams = GetAgxPresetParameters(AgxPreset::Base);
         m_ui.SkyParams = SkyParameters{};
@@ -1072,6 +1166,7 @@ public:
         // deferred rendering, or white-world permutations had been disabled
         // before the reset.
         m_ui.ShaderReloadRequested = true;
+        ResetLocalToneMappingHistory();
         log::info("All renderer settings restored to factory defaults");
     }
 
@@ -1097,6 +1192,7 @@ public:
             else
                 CopyCurrentViewToThirdPerson();
             m_ui.UseThirdPersonCamera = !m_ui.UseThirdPersonCamera;
+            ResetLocalToneMappingHistory();
             return true;
         }
 
@@ -1132,6 +1228,14 @@ public:
 
     virtual void Animate(float fElapsedTimeSeconds) override
     {
+        if (std::isfinite(fElapsedTimeSeconds) && fElapsedTimeSeconds > 0.f)
+        {
+            // The bilateral pass only temporally smooths its scalar scene
+            // reference. Clamp pathological pauses without introducing a
+            // second, HUD-smoothed time source.
+            m_LastFrameDeltaSeconds = std::clamp(
+                fElapsedTimeSeconds, 1.f / 1000.f, 0.25f);
+        }
         GetActiveCamera().Animate(fElapsedTimeSeconds);
     }
 
@@ -1146,6 +1250,7 @@ public:
             m_ScreenSpaceVisibilityPass->ResetBindingCache();
             m_ScreenSpaceVisibilityPass->ResetHistory();
         }
+        if (m_LocalToneMappingPass) m_LocalToneMappingPass->Deactivate();
         if (m_GBufferPass) m_GBufferPass->ResetBindingCache();
         m_BindingCache.Clear();
         m_SunLight.reset();
@@ -1260,6 +1365,8 @@ public:
 
         if (modeChanged && m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetHistory();
+        if (modeChanged)
+            ResetLocalToneMappingHistory();
 
         const bool enabled = mode != WhiteWorldMode::Off;
         const bool preserveDetailMaps = mode == WhiteWorldMode::PreserveDetail;
@@ -1390,6 +1497,7 @@ public:
         m_ThirdPersonCamera.SetTargetPosition(bounds.center());
         m_ThirdPersonCamera.SetDistance(distance);
         m_ThirdPersonCamera.Animate(0.f);
+        ResetLocalToneMappingHistory();
     }
 
     std::shared_ptr<TextureCache> GetTextureCache()
@@ -1505,6 +1613,8 @@ public:
             GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->LdrFramebuffer);
         m_AgxToneMappingPass->SetColorLut(
             m_SelectedKodakLut == 0 ? nullptr : &m_KodakLuts[m_SelectedKodakLut]);
+        m_LocalToneMappingPass = std::make_unique<LocalToneMappingPass>(
+            GetDevice(), m_ShaderFactory, m_CommonPasses);
 
     }
 
@@ -1585,6 +1695,14 @@ public:
 
             m_ui.ShaderReloadRequested = false;
         }
+
+        // Render-side sanitization is authoritative because settings can be
+        // supplied by paths other than the UI.
+        SanitizeAgxToneMappingParameters(m_ui.AgxToneMappingParams);
+        SanitizeLocalToneMappingSettings(m_ui.LocalToneMapping);
+        const bool localToneMappingEligible =
+            IsLocalToneMappingEligibleForFinalPresentation(m_ui) &&
+            m_LocalToneMappingPass;
 
         m_CommandList->open();
 
@@ -1698,6 +1816,28 @@ public:
                     visibilityInputs.output = m_RenderTargets->HdrColor;
                     visibilityInputs.knownInactiveLightingSources =
                         knownInactiveLightingSources;
+                    const bool contributionGateCanPrune =
+                        writeBounceMetadata &&
+                        m_ui.ScreenSpaceVisibility.indirectDiffuse.
+                            minimumBounceContribution > 0.f;
+                    const bool normalLocalPresentation =
+                        localToneMappingEligible &&
+                        m_ui.LocalToneMapping.debugMode ==
+                            LocalToneMappingDebugMode::Off;
+                    const bool localDebugPresentation =
+                        localToneMappingEligible &&
+                        m_ui.LocalToneMapping.debugMode !=
+                            LocalToneMappingDebugMode::Off;
+                    const float globalExposureEV =
+                        m_ui.UsesTonemapper() && !localDebugPresentation
+                            ? m_ui.AgxToneMappingParams.Exposure
+                            : 0.f;
+                    const float maximumPositiveLocalEV =
+                        contributionGateCanPrune
+                            ? ComputeMaximumPositiveLocalCorrectionEV(
+                                m_ui.LocalToneMapping,
+                                normalLocalPresentation)
+                            : 0.f;
                     m_ScreenSpaceVisibilityPass->Render(
                         m_CommandList,
                         m_ui.ScreenSpaceVisibility,
@@ -1705,7 +1845,7 @@ public:
                         visibilityInputs,
                         m_AmbientTop,
                         m_AmbientBottom,
-                        std::exp2(m_ui.AgxToneMappingParams.Exposure),
+                        std::exp2(globalExposureEV + maximumPositiveLocalEV),
                         uint32_t(GetFrameIndex()));
                 }
                 else
@@ -1754,17 +1894,40 @@ public:
         if (m_ui.EnableProceduralSky)
             m_SkyPass->Render(m_CommandList, *m_View, *m_SunLight, m_ui.SkyParams);
 
+        // Analyze the final scene-linear presentation source after visibility
+        // composition and sky, then slice the coarse bilateral grid in the
+        // full-resolution AgX pass.
+        if (localToneMappingEligible)
+        {
+            m_LocalToneMappingPass->Render(
+                m_CommandList,
+                m_ui.LocalToneMapping,
+                m_RenderTargets->HdrColor,
+                m_LastFrameDeltaSeconds);
+        }
+        else if (m_LocalToneMappingPass)
+        {
+            m_LocalToneMappingPass->Deactivate();
+        }
+
+        const LocalToneMappingDisplayState localToneMappingState =
+            m_LocalToneMappingPass
+                ? m_LocalToneMappingPass->GetDisplayState()
+                : LocalToneMappingDisplayState{};
+
         nvrhi::ITexture* displayTexture = m_RenderTargets->HdrColor;
         if (m_ui.UsesTonemapper())
         {
             m_AgxToneMappingPass->Render(
                 m_CommandList, m_ui.AgxToneMappingParams, *m_View,
-                m_RenderTargets->HdrColor);
+                m_RenderTargets->HdrColor,
+                m_ui.LocalToneMapping,
+                localToneMappingState);
 
             displayTexture = m_RenderTargets->LdrColor;
         }
 
-        // The tonemapperless renderer intentionally sends forward scene-linear
+        // The master bypass and legacy tonemapperless renderer send scene-linear
         // radiance straight to the sRGB swap-chain target. The render-target
         // conversion still applies the display transfer and clamps values to
         // the target's representable range, but AgX, exposure, grading, LUTs,
@@ -1844,6 +2007,26 @@ public:
         return m_ScreenSpaceVisibilityPass
             ? &m_ScreenSpaceVisibilityPass->GetTimings()
             : nullptr;
+    }
+
+    const LocalToneMappingTimings* GetLocalToneMappingTimings() const
+    {
+        return m_LocalToneMappingPass
+            ? &m_LocalToneMappingPass->GetTimings()
+            : nullptr;
+    }
+
+    const LocalToneMappingMemoryStats* GetLocalToneMappingMemoryStats() const
+    {
+        return m_LocalToneMappingPass
+            ? &m_LocalToneMappingPass->GetMemoryStats()
+            : nullptr;
+    }
+
+    void ResetLocalToneMappingHistory()
+    {
+        if (m_LocalToneMappingPass)
+            m_LocalToneMappingPass->ResetHistory();
     }
 
 };
@@ -2018,6 +2201,7 @@ protected:
                 {
                     m_app->CopyThirdPersonToFirstPerson();
                     m_ui.UseThirdPersonCamera = false;
+                    m_app->ResetLocalToneMappingHistory();
                 }
             }
             if (ImGui::Selectable("Third Person", m_ui.UseThirdPersonCamera))
@@ -2026,6 +2210,7 @@ protected:
                 {
                     m_app->CopyCurrentViewToThirdPerson();
                     m_ui.UseThirdPersonCamera = true;
+                    m_app->ResetLocalToneMappingHistory();
                 }
             }
             ImGui::EndCombo();
@@ -2071,9 +2256,11 @@ protected:
             {
                 const RendererMode mode = RendererMode(modeIndex);
                 const bool selected = mode == m_ui.RenderMode;
-                if (ImGui::Selectable(rendererModeLabels[modeIndex], selected))
+                if (ImGui::Selectable(rendererModeLabels[modeIndex], selected) &&
+                    mode != m_ui.RenderMode)
                 {
                     m_ui.RenderMode = mode;
+                    m_app->ResetLocalToneMappingHistory();
                     log::info("Renderer mode: %s", rendererModeLabels[modeIndex]);
                 }
                 if (selected)
@@ -2580,6 +2767,18 @@ protected:
             "Expand AgX tonemapping and grading controls.");
         if (tonemapperOpen)
         {
+            if (ImGui::Checkbox(
+                "Enable Tonemapping and LUT",
+                &m_ui.EnableTonemappingAndLut))
+            {
+                m_app->ResetLocalToneMappingHistory();
+            }
+            ImGui::SetItemTooltip(
+                "Disable AgX, exposure, grading, every LUT, and local tone mapping; present the raw scene-linear renderer output instead.");
+
+            if (!m_ui.EnableTonemappingAndLut)
+                ImGui::BeginDisabled();
+
             static const char* presetLabels[] = {
                 "Base",
                 "Punchy",
@@ -2664,6 +2863,174 @@ protected:
                 params.Power = std::clamp(params.Power, 0.01f, 2.f);
                 m_ui.AgxToneMappingPreset = AgxPreset::Custom;
             }
+
+            const bool localToneMappingOpen = ImGui::TreeNodeEx(
+                "Local Tone Mapping", ImGuiTreeNodeFlags_None);
+            ImGui::SetItemTooltip(
+                "Configure bilateral-grid local exposure after scene lighting and before AgX.");
+            if (localToneMappingOpen)
+            {
+                LocalToneMappingSettings& local = m_ui.LocalToneMapping;
+                SanitizeLocalToneMappingSettings(local);
+                if (ImGui::Checkbox("Enabled##LocalToneMapping", &local.enabled))
+                    m_app->ResetLocalToneMappingHistory();
+                ImGui::SetItemTooltip(
+                    "Enable local exposure while reducing bleed across strong luminance edges.");
+
+                if (!local.enabled)
+                    ImGui::BeginDisabled();
+
+                ImGui::SliderFloat(
+                    "Strength", &local.strength, 0.f, 1.f, "%.3f",
+                    ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Set how strongly local exposure differs from the global Exposure setting.");
+
+                ImGui::SliderFloat(
+                    "Radius", &local.radiusAt1080p, 16.f, 192.f,
+                    "%.0f px at 1080p", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Set the surrounding image area used to estimate local brightness.");
+
+                ImGui::SliderFloat(
+                    "Edge Preservation", &local.edgePreservation, 0.f, 1.f,
+                    "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Reduce exposure bleeding between neighboring regions with different brightness.");
+
+                ImGui::SliderFloat(
+                    "Shadow Recovery", &local.shadowRecovery, 0.f, 1.f,
+                    "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Control how much local exposure can brighten regions darker than the scene reference.");
+
+                ImGui::SliderFloat(
+                    "Highlight Compression", &local.highlightCompression, 0.f, 1.f,
+                    "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Control how much local exposure can darken regions brighter than the scene reference.");
+
+                ImGui::SliderFloat(
+                    "Maximum Correction", &local.maximumCorrectionEV, 0.f, 2.5f,
+                    "%.2f EV", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Limit local exposure changes to reduce halos and an unnaturally flat image.");
+
+                ImGui::SliderFloat(
+                    "Reference Response", &local.referenceResponseMs, 0.f, 1000.f,
+                    "%.0f ms", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Smooth the scene-wide reference brightness without reprojecting the spatial grid.");
+
+                static const char* qualityLabels[] = {
+                    "Performance",
+                    "Balanced",
+                    "Maximum Quality"
+                };
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                const bool qualityComboOpen = ImGui::BeginCombo(
+                    "Quality", qualityLabels[int(local.quality)]);
+                ImGui::SetItemTooltip(
+                    "Choose the bilateral-grid resolution and input sampling cost.");
+                if (qualityComboOpen)
+                {
+                    for (int qualityIndex = 0;
+                        qualityIndex < int(std::size(qualityLabels)); ++qualityIndex)
+                    {
+                        const LocalToneMappingQuality quality =
+                            LocalToneMappingQuality(qualityIndex);
+                        const bool selected = local.quality == quality;
+                        if (ImGui::Selectable(qualityLabels[qualityIndex], selected) &&
+                            !selected)
+                        {
+                            ApplyLocalToneMappingQualityPreset(local, quality);
+                            m_app->ResetLocalToneMappingHistory();
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+
+                static const char* debugLabels[] = {
+                    "Off",
+                    "Input Log Luminance",
+                    "Base Local EV",
+                    "Final Local EV",
+                    "Grid Confidence"
+                };
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                const bool debugComboOpen = ImGui::BeginCombo(
+                    "Debug Mode", debugLabels[int(local.debugMode)]);
+                ImGui::SetItemTooltip(
+                    "Visualize the luminance analysis and local-exposure result.");
+                if (debugComboOpen)
+                {
+                    for (int debugIndex = 0;
+                        debugIndex < int(std::size(debugLabels)); ++debugIndex)
+                    {
+                        const LocalToneMappingDebugMode debugMode =
+                            LocalToneMappingDebugMode(debugIndex);
+                        const bool selected = local.debugMode == debugMode;
+                        if (ImGui::Selectable(debugLabels[debugIndex], selected))
+                            local.debugMode = debugMode;
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+
+                if (!local.enabled)
+                    ImGui::EndDisabled();
+
+                SanitizeLocalToneMappingSettings(local);
+                if (!local.enabled)
+                {
+                    ImGui::TextDisabled(
+                        "Enable Local Tone Mapping to use its controls and debug views.");
+                }
+                else if (!IsLocalToneMappingEligibleForFinalPresentation(m_ui))
+                {
+                    ImGui::TextDisabled(
+                        "Master tonemapping, renderer mode, or GI-only diagnostics bypass local tone mapping.");
+                }
+
+                const LocalToneMappingTimings* localTimings =
+                    m_app->GetLocalToneMappingTimings();
+                if (localTimings)
+                {
+                    ImGui::Text(
+                        "GPU %.2f ms | Splat %.2f | Ref %.2f | Blur %.2f | Final %.2f",
+                        localTimings->totalMs,
+                        localTimings->splatMs,
+                        localTimings->referenceMs,
+                        localTimings->blurMs,
+                        localTimings->finalizeMs);
+                }
+                else
+                {
+                    ImGui::TextUnformatted("GPU -- ms");
+                }
+
+                const LocalToneMappingMemoryStats* localMemory =
+                    m_app->GetLocalToneMappingMemoryStats();
+                if (localMemory && localMemory->totalBytes > 0u)
+                {
+                    const auto& grid = localMemory->configuration.gridDimensions;
+                    ImGui::Text("Grid %ux%ux%u | %.2f MiB",
+                        grid.x, grid.y, grid.z,
+                        double(localMemory->totalBytes) / (1024.0 * 1024.0));
+                }
+                else
+                {
+                    ImGui::TextUnformatted("Grid inactive | 0.00 MiB");
+                }
+
+                ImGui::TreePop();
+            }
+
+            if (!m_ui.EnableTonemappingAndLut)
+                ImGui::EndDisabled();
         }
 
         const bool skyOpen = DrawCollapsingHeader(
@@ -2746,7 +3113,7 @@ protected:
         if (ImGui::Button("Reset Settings", ImVec2(actionButtonWidth, 0.f)))
             m_app->ResetAllRendererSettings();
         ImGui::SetItemTooltip(
-            "Restore factory renderer, aliasing, visibility, tonemapper, LUT, sky, and white-world settings. Camera and scene edits are left in place.");
+            "Restore factory renderer, aliasing, visibility, local tone-mapping, master tonemapper, LUT, sky, and white-world settings. Camera and scene edits are left in place.");
 
         ImGui::SameLine();
         if (ImGui::Button("Restart", ImVec2(actionButtonWidth, 0.f)))
