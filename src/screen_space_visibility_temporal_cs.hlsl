@@ -15,6 +15,8 @@ cbuffer c_Visibility : register(b0)
     ScreenSpaceVisibilityConstants g_Visibility;
 };
 
+#include "screen_space_visibility_common.hlsli"
+
 Texture2D<float> t_CurrentAmbient : register(t0);
 Texture2D<float4> t_CurrentIndirect : register(t1);
 Texture2D<float> t_CurrentDepth : register(t2);
@@ -29,21 +31,6 @@ VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientHistory : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectHistory : register(u1);
 VK_IMAGE_FORMAT("r32f") RWTexture2D<float> u_DepthHistory : register(u2);
 VK_IMAGE_FORMAT("rgba8") RWTexture2D<float4> u_NormalHistory : register(u3);
-
-uint2 SamplingToFullPixel(uint2 samplingPixel)
-{
-    uint scale = max(g_Visibility.resolutionScale, 1u);
-    uint2 fullSize = uint2(g_Visibility.fullResolution);
-    return min(samplingPixel * scale + scale / 2u, fullSize - 1u);
-}
-
-float3 SafeNormal(float3 value, float3 fallback)
-{
-    float lengthSquared = dot(value, value);
-    return lengthSquared > 1e-12f && isfinite(lengthSquared)
-        ? value * rsqrt(lengthSquared)
-        : fallback;
-}
 
 void CurrentNeighborhoodBounds(
     uint2 pixel,
