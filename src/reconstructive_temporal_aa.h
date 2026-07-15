@@ -94,6 +94,10 @@ namespace uvsr
         [[nodiscard]] nvrhi::ITexture* GetHistoryMetadata() const;
         [[nodiscard]] nvrhi::ITexture* GetHistoryMoments() const;
         [[nodiscard]] bool IsHistoryValid() const { return m_HistoryValid; }
+        [[nodiscard]] bool WasHistoryResetThisFrame() const
+        {
+            return m_HistoryResetThisFrame;
+        }
         [[nodiscard]] const ReconstructiveTemporalAATimings& GetTimings() const { return m_Timings; }
         [[nodiscard]] const ReconstructiveTemporalWeights& GetWeights() const { return m_Weights; }
         [[nodiscard]] const ReconstructiveTemporalAAMemoryStats& GetMemoryStats() const { return m_MemoryStats; }
@@ -148,6 +152,7 @@ namespace uvsr
         uint32_t m_NextWriteIndex = 0;
         uint32_t m_LatestOutputIndex = 0;
         bool m_HistoryValid = false;
+        bool m_HistoryResetThisFrame = true;
         bool m_WasEnabled = false;
         bool m_HasPreviousCamera = false;
         bool m_ReverseDepth = false;

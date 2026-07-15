@@ -58,7 +58,9 @@ is also available from the scene picker.
   `0.001`; zero keeps exact-zero exits only. GI-result diagnostics use the exact
   selected chain, while unrelated diagnostics skip invisible secondary work.
   The gate saves source material/lighting work but each active bounce still
-  dispatches and performs its visibility traversal.
+  dispatches and performs its visibility traversal. When local tone mapping can
+  recover shadows, its maximum positive correction extends the conservative
+  exposed bound, so stronger recovery can intentionally reduce pruning.
 - Proven scene-wide source inactivity and zero final GI intensity terminate the
   complete higher-bounce dispatch chain. The shared CPU/HLSL activity mask is
   extensible to future clustering, probe, cache, visibility, and residency data;
@@ -69,6 +71,14 @@ is also available from the scene picker.
 - The AgX display pipeline provides Base, Punchy, Golden, Mix, and Custom
   presets. Its controls are Exposure, Contrast, Saturation, Warmth, Tint, Slope,
   and Power.
+- Optional bilateral-grid local tone mapping runs after NRA-RTAA and before AgX,
+  and applies its scalar EV correction inside the existing AgX display pass. It
+  starts disabled; defaults are Strength `0.35`, Radius `64` px at 1080p, Edge
+  Preservation `0.70`, Shadow Recovery `0.70`, Highlight Compression `0.70`,
+  Maximum Correction `1.25` EV, Reference Response `200` ms, and Balanced
+  quality. The Tonemapper drawer includes analysis debug views, per-stage GPU
+  timings, and active grid memory. See the
+  [local tone-mapping design](docs/local-tone-mapping.md).
 - UVSR includes original AgX Base-space simulations of Kodak 2383 Print, Portra
   400, and Ektar 100 looks. They are not official Kodak LUTs. Additional licensed
   3D `.cube` LUTs can be placed in `assets/luts/kodak`; see the
@@ -81,24 +91,38 @@ that has not merged into `main`, plus every project or feature an agent is
 currently working on. An entry is not shipped on `main`, and experimental
 entries are not promises that the work will merge.
 
-- **Visibility-Pipeline Simplification — [Draft PR #3](https://github.com/brockliddicoat/uvsr/pull/3)**
-  (`agent/visibility-cleanup-coming-soon`). Remove only the visibility bitmask's
-  temporal AO/GI accumulator and bilateral spatial filter, then feed current-
-  frame visibility directly into composition. NRA-RTAA remains the independent
-  downstream anti-aliasing and temporal-reconstruction stage.
+- **Bilateral-Grid Local Tone Mapping — Local Implementation Complete; Runtime
+  Validation Complete; Awaiting Integration.**
+  (`agent/bilateral-grid-local-tone-mapping`). Adds a first-party D3D12 GPU
+  bilateral-grid analysis pass over the final scene-linear display source after
+  NRA-RTAA and before AgX, then slice and apply one scalar local-EV correction
+  only inside the existing AgX display pass. This affects
+  `src/local_tone_mapping*`, AgX bindings and shaders, `src/uvsr.cpp` render/UI/
+  reset coordination, CMake and shader staging, reference tests, documentation,
+  and the screen-space visibility contribution cutoff. A conservative maximum
+  positive local-EV bound extends that cutoff without passing per-pixel
+  exposure upstream. The work overlaps Forward Tonemapperless removal in
+  `UsesTonemapper()` eligibility and AgX/`src/uvsr.cpp` integration, and overlaps
+  filtering/specular-AA/NRD work that touches motion, history, and renderer
+  settings; this version owns only scalar reference history and must not add
+  motion-reprojected spatial local-exposure history.
 - **Forward Renderer Simplification — Local Implementation Complete; Awaiting
   Integration.** Remove the broken Forward Tonemapperless mode and its display-
   pipeline bypass, leaving supported Forward and Deferred rendering on the
-  normal AgX path. Its current checkout is stacked on the visibility cleanup and
-  overlaps that branch in `src/uvsr.cpp` and `README.md`, so integration must
-  preserve both changes.
+  normal AgX path. Its visible checkout is unbranched and predates current
+  `main`. It overlaps bilateral-grid local tone mapping in `src/uvsr.cpp`,
+  `README.md`, `UsesTonemapper()` eligibility, and AgX display integration, so
+  integration must preserve the local effect's authoritative eligibility check
+  while allowing the obsolete mode to disappear cleanly.
 - **Texture Filtering, Specular AA, and NRD Denoising — Active Development**
   (`feat/filtering-specular-aa-nrd`). Improve Intel Arc-focused anisotropic
   sampling and mip correctness, add material specular anti-aliasing, and
   integrate NRD diffuse-GI denoising with NRA-RTAA. This overlaps PBR materials,
   visibility GI outputs, motion/history contracts, and renderer settings. The
-  branch is based on the unmerged visibility-pipeline simplification and must be
-  integrated after it or rebased deliberately.
+  branch started from the now-merged visibility-pipeline simplification but
+  predates current `main`, so it must be rebased deliberately. Local tone
+  mapping must preserve its motion/history and settings ownership and remain
+  limited to non-reprojected spatial analysis plus scalar reference history.
 - **RTAA-Compatible GPU HZB Occlusion Culling — Experimental Validation**
   (`experiment/hzb-main-post-rtaa`). Evaluate main/post HZB culling, repaired
   indirect G-buffer draws, conservative history fallbacks, and GPU telemetry
@@ -180,11 +204,11 @@ Direct and IDE-driven launches can instead supply the description through
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the PBR, radial-visibility, and NRA-RTAA reference tests
-separately:
+Build and run the PBR, radial-visibility, NRA-RTAA, and local-tone-mapping
+reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_rtaa_reference_tests
+cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_rtaa_reference_tests uvsr_local_tone_mapping_reference_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
@@ -229,6 +253,11 @@ controls, limitations, and the upgrade path to persistent unified visibility.
 The [NRA-RTAA design](docs/nra-rtaa.md) documents pipeline placement, motion
 and jitter conventions, validation and reconstruction behavior, resource
 packing, memory costs, presets, timing interpretation, and current limitations.
+
+The [local tone-mapping design](docs/local-tone-mapping.md) documents bilateral
+analysis, fixed-point accumulation, pipeline placement, controls, quality and
+memory costs, debug output, reset behavior, limitations, and conservative
+visibility contribution pruning.
 
 UVSR runs uncapped with a single planar view. UVSR-owned interactive controls
 provide concise hover tooltips; new controls should follow the same convention.

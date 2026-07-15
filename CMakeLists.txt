@@ -67,6 +67,7 @@ donut_compile_shaders_all_platforms(
 
 add_executable(uvsr WIN32
     src/gpu_performance_monitor.cpp
+    src/local_tone_mapping.cpp
     src/reconstructive_temporal_aa.cpp
     src/reconstructive_temporal_aa_settings.cpp
     src/uvsr.cpp
@@ -92,6 +93,17 @@ add_executable(uvsr_rtaa_reference_tests
 )
 target_include_directories(uvsr_rtaa_reference_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 add_test(NAME uvsr_rtaa_reference COMMAND uvsr_rtaa_reference_tests)
+
+add_executable(uvsr_local_tone_mapping_reference_tests
+    tests/local_tone_mapping_reference_tests.cpp
+    src/local_tone_mapping.cpp
+)
+target_include_directories(uvsr_local_tone_mapping_reference_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(uvsr_local_tone_mapping_reference_tests PRIVATE
+    donut_render donut_engine)
+add_test(NAME uvsr_local_tone_mapping_reference
+    COMMAND uvsr_local_tone_mapping_reference_tests)
 
 # Donut builds its complete shader catalog as an internal dependency. Stage it
 # outside the runtime tree, then package only the shaders instantiated by UVSR.
@@ -145,6 +157,10 @@ endforeach()
 
 set(UVSR_APP_SHADERS
     agx_tonemapping_ps
+    local_tone_mapping_blur_cs
+    local_tone_mapping_finalize_cs
+    local_tone_mapping_reduce_cs
+    local_tone_mapping_splat_cs
     pbr_deferred_lighting_cs
     pbr_forward_ps
     pbr_gbuffer_ps

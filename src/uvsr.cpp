@@ -31,6 +31,7 @@
 #include <fstream>
 #include <sstream>
 #include <cctype>
+#include <cstddef>
 #include <cfloat>
 #include <cstdlib>
 #include <Windows.h>
@@ -63,6 +64,7 @@
 #include "pbr_material.h"
 #include "pbr_deferred_lighting_pass.h"
 #include "gpu_performance_monitor.h"
+#include "local_tone_mapping.h"
 #include "reconstructive_temporal_aa.h"
 #include "screen_space_visibility.h"
 
@@ -73,6 +75,8 @@ using namespace donut::vfs;
 using namespace donut::engine;
 using namespace donut::render;
 using namespace uvsr;
+
+#include "local_tone_mapping_cb.h"
 
 static bool g_RestartRequested = false;
 static int g_RestartAdapterIndex = -1;
@@ -568,6 +572,29 @@ struct AgxToneMappingParameters
     float Power = 1.f;
 };
 
+static void SanitizeAgxToneMappingParameters(AgxToneMappingParameters& params)
+{
+    const AgxToneMappingParameters defaults;
+    auto finiteOrDefault = [](float value, float fallback)
+    {
+        return std::isfinite(value) ? value : fallback;
+    };
+    params.Exposure = std::clamp(
+        finiteOrDefault(params.Exposure, defaults.Exposure), -10.f, 10.f);
+    params.Contrast = std::clamp(
+        finiteOrDefault(params.Contrast, defaults.Contrast), 0.5f, 2.f);
+    params.Saturation = std::clamp(
+        finiteOrDefault(params.Saturation, defaults.Saturation), 0.f, 2.f);
+    params.Warmth = std::clamp(
+        finiteOrDefault(params.Warmth, defaults.Warmth), -1.f, 1.f);
+    params.Tint = std::clamp(
+        finiteOrDefault(params.Tint, defaults.Tint), -1.f, 1.f);
+    params.Slope = std::clamp(
+        finiteOrDefault(params.Slope, defaults.Slope), 0.f, 2.f);
+    params.Power = std::clamp(
+        finiteOrDefault(params.Power, defaults.Power), 0.01f, 2.f);
+}
+
 struct KodakLut
 {
     std::string Name;
@@ -589,7 +616,16 @@ struct alignas(16) AgxToneMappingConstants
     float4 RtaaSharpening;
     float4 RtaaSharpeningSuppression;
     float4 RtaaDisplayFlags;
+    LocalToneMappingDisplayConstants LocalToneMapping;
 };
+
+static_assert(alignof(AgxToneMappingConstants) == 16,
+    "AgxToneMappingConstants must retain D3D constant-buffer alignment");
+static_assert(sizeof(AgxToneMappingConstants) == 12 * 16,
+    "AgxToneMappingConstants CPU/HLSL size mismatch");
+static_assert(offsetof(AgxToneMappingConstants, ExposureContrastSaturationWarmth) == 0 * 16);
+static_assert(offsetof(AgxToneMappingConstants, RtaaDisplayFlags) == 8 * 16);
+static_assert(offsetof(AgxToneMappingConstants, LocalToneMapping) == 9 * 16);
 
 struct AgxSharpeningParameters
 {
@@ -616,6 +652,7 @@ private:
     nvrhi::ITexture* m_BoundLut = nullptr;
     nvrhi::ITexture* m_BoundRtaaMetadata = nullptr;
     nvrhi::ITexture* m_BoundRtaaMoments = nullptr;
+    nvrhi::ITexture* m_BoundLocalToneMappingGrid = nullptr;
     nvrhi::TextureHandle m_ColorLut;
     uint32_t m_ColorLutSize = 0;
     float3 m_LutDomainMin = 0.f;
@@ -652,6 +689,7 @@ public:
             nvrhi::BindingLayoutItem::Texture_SRV(1),
             nvrhi::BindingLayoutItem::Texture_SRV(2),
             nvrhi::BindingLayoutItem::Texture_SRV(3),
+            nvrhi::BindingLayoutItem::Texture_SRV(4),
             nvrhi::BindingLayoutItem::Sampler(0)
         };
         m_BindingLayout = device->createBindingLayout(layoutDesc);
@@ -683,6 +721,8 @@ public:
         const AgxToneMappingParameters& params,
         const ICompositeView& compositeView,
         nvrhi::ITexture* sourceTexture,
+        const LocalToneMappingSettings& localToneMappingSettings,
+        const LocalToneMappingDisplayState& localToneMappingState,
         nvrhi::ITexture* rtaaMetadata = nullptr,
         nvrhi::ITexture* rtaaMoments = nullptr,
         const AgxSharpeningParameters& sharpening = {})
@@ -693,9 +733,13 @@ public:
 
         nvrhi::ITexture* metadataTexture = rtaaMetadata ? rtaaMetadata : sourceTexture;
         nvrhi::ITexture* momentsTexture = rtaaMoments ? rtaaMoments : sourceTexture;
+        nvrhi::ITexture* localToneMappingGrid = localToneMappingState.grid
+            ? localToneMappingState.grid
+            : m_CommonPasses->m_BlackTexture3D.Get();
 
         if (!m_BindingSet || m_BoundSource != sourceTexture || m_BoundLut != lutTexture ||
-            m_BoundRtaaMetadata != metadataTexture || m_BoundRtaaMoments != momentsTexture)
+            m_BoundRtaaMetadata != metadataTexture || m_BoundRtaaMoments != momentsTexture ||
+            m_BoundLocalToneMappingGrid != localToneMappingGrid)
         {
             nvrhi::BindingSetDesc bindingSetDesc;
             bindingSetDesc.bindings = {
@@ -704,6 +748,7 @@ public:
                 nvrhi::BindingSetItem::Texture_SRV(1, lutTexture),
                 nvrhi::BindingSetItem::Texture_SRV(2, metadataTexture),
                 nvrhi::BindingSetItem::Texture_SRV(3, momentsTexture),
+                nvrhi::BindingSetItem::Texture_SRV(4, localToneMappingGrid),
                 nvrhi::BindingSetItem::Sampler(0, m_CommonPasses->m_LinearClampSampler)
             };
             m_BindingSet = m_Device->createBindingSet(bindingSetDesc, m_BindingLayout);
@@ -711,15 +756,23 @@ public:
             m_BoundLut = lutTexture;
             m_BoundRtaaMetadata = metadataTexture;
             m_BoundRtaaMoments = momentsTexture;
+            m_BoundLocalToneMappingGrid = localToneMappingGrid;
         }
+
+        AgxToneMappingParameters sanitizedParams = params;
+        SanitizeAgxToneMappingParameters(sanitizedParams);
+        LocalToneMappingSettings sanitizedLocalSettings = localToneMappingSettings;
+        SanitizeLocalToneMappingSettings(sanitizedLocalSettings);
 
         AgxToneMappingConstants constants{};
         constants.ExposureContrastSaturationWarmth = float4(
-            params.Exposure, params.Contrast, params.Saturation, params.Warmth);
+            sanitizedParams.Exposure, sanitizedParams.Contrast,
+            sanitizedParams.Saturation, sanitizedParams.Warmth);
         constants.TintLutSizeUseLutDither = float4(
-            params.Tint, float(m_ColorLutSize), m_ColorLut ? 1.f : 0.f, 1.f);
-        constants.Slope = float4(float3(params.Slope), 0.f);
-        constants.Power = float4(float3(params.Power), 0.f);
+            sanitizedParams.Tint, float(m_ColorLutSize),
+            m_ColorLut ? 1.f : 0.f, 1.f);
+        constants.Slope = float4(float3(sanitizedParams.Slope), 0.f);
+        constants.Power = float4(float3(sanitizedParams.Power), 0.f);
         constants.LutDomainMin = float4(m_LutDomainMin, 0.f);
         constants.LutDomainMax = float4(m_LutDomainMax, 0.f);
         const nvrhi::TextureDesc& sourceDesc = sourceTexture->getDesc();
@@ -737,6 +790,19 @@ public:
             sharpening.diagnosticBypass ? 1.f : 0.f,
             sharpening.debugContribution ? 1.f : 0.f,
             0.f, 0.f);
+        constants.LocalToneMapping.gridDimensionsAndCellSize = float4(
+            float3(localToneMappingState.gridDimensions),
+            float(localToneMappingState.spatialCellSize));
+        constants.LocalToneMapping.rangeStrengthAndMaximumCorrection = float4(
+            LocalToneMappingMinEV,
+            LocalToneMappingMaxEV,
+            sanitizedLocalSettings.strength,
+            sanitizedLocalSettings.maximumCorrectionEV);
+        constants.LocalToneMapping.directionDebugAndActive = float4(
+            sanitizedLocalSettings.shadowRecovery,
+            sanitizedLocalSettings.highlightCompression,
+            float(static_cast<uint32_t>(sanitizedLocalSettings.debugMode)),
+            localToneMappingState.active ? 1.f : 0.f);
         commandList->writeBuffer(m_ConstantBuffer, &constants, sizeof(constants));
 
         commandList->beginMarker("AgX Tone Mapping");
@@ -929,6 +995,7 @@ struct UIData
     RendererMode                        RenderMode = RendererMode::Deferred;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
     ReconstructiveTemporalAASettings    ReconstructiveTemporalAA;
+    LocalToneMappingSettings            LocalToneMapping;
     AgxToneMappingParameters            AgxToneMappingParams;
     AgxPreset                           AgxToneMappingPreset = AgxPreset::Base;
     SkyParameters                       SkyParams;
@@ -952,6 +1019,45 @@ struct UIData
     }
 };
 
+// This is the sole frame-level eligibility decision for local presentation.
+// Keep renderer-mode, analytical-debug, visibility-debug, and RTAA-debug
+// contracts here so Forward Tonemapperless can disappear independently without
+// leaving duplicated mode checks in the bilateral pass or AgX shader.
+static bool IsLocalToneMappingEligibleForFinalPresentation(
+    const UIData& ui,
+    bool rtaaActive)
+{
+    if (!ui.UsesTonemapper() || !ui.LocalToneMapping.enabled ||
+        (!(ui.LocalToneMapping.strength > 0.f) &&
+            ui.LocalToneMapping.debugMode == LocalToneMappingDebugMode::Off) ||
+        ui.PbrDebug != PbrDebugView::FinalLinearHdr)
+    {
+        return false;
+    }
+
+    const bool visibilityActive = ui.EnablePbr && ui.UsesDeferredShading() &&
+        ui.ScreenSpaceVisibility.HasActiveConsumer();
+    if (visibilityActive &&
+        ui.ScreenSpaceVisibility.debug.mode !=
+            ScreenSpaceVisibilityDebugMode::FinalComposite)
+    {
+        return false;
+    }
+
+    if (rtaaActive)
+    {
+        const ReconstructiveTemporalDebugMode debugMode =
+            ui.ReconstructiveTemporalAA.debugMode;
+        if (debugMode != ReconstructiveTemporalDebugMode::FinalOutput &&
+            debugMode != ReconstructiveTemporalDebugMode::FinalNraRtaaOutput)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 class UvsrSceneViewer : public ApplicationBase
 {
 private:
@@ -974,6 +1080,7 @@ private:
     std::unique_ptr<PbrDeferredLightingPass> m_PbrDeferredLightingPass;
     std::unique_ptr<SkyPass>            m_SkyPass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
+    std::unique_ptr<LocalToneMappingPass> m_LocalToneMappingPass;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
     std::unique_ptr<ReconstructiveTemporalAAPass> m_ReconstructiveTemporalAAPass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
@@ -1161,6 +1268,7 @@ public:
         m_ui.PbrDebug = PbrDebugView::FinalLinearHdr;
         m_ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
         m_ui.ReconstructiveTemporalAA = ReconstructiveTemporalAASettings{};
+        m_ui.LocalToneMapping = LocalToneMappingSettings{};
         m_ui.AgxToneMappingPreset = AgxPreset::Base;
         m_ui.AgxToneMappingParams = GetAgxPresetParameters(AgxPreset::Base);
         m_ui.SkyParams = SkyParameters{};
@@ -1198,6 +1306,8 @@ public:
             m_ui.UseThirdPersonCamera = !m_ui.UseThirdPersonCamera;
             if (m_ReconstructiveTemporalAAPass)
                 m_ReconstructiveTemporalAAPass->ResetHistory();
+            if (m_LocalToneMappingPass)
+                m_LocalToneMappingPass->ResetHistory();
             return true;
         }
 
@@ -1262,6 +1372,7 @@ public:
         if (m_PbrDeferredLightingPass) m_PbrDeferredLightingPass->ResetBindingCache();
         if (m_ScreenSpaceVisibilityPass) m_ScreenSpaceVisibilityPass->ResetBindingCache();
         if (m_ReconstructiveTemporalAAPass) m_ReconstructiveTemporalAAPass->Deactivate();
+        if (m_LocalToneMappingPass) m_LocalToneMappingPass->Deactivate();
         if (m_GBufferPass) m_GBufferPass->ResetBindingCache();
         m_BindingCache.Clear();
         m_SunLight.reset();
@@ -1462,6 +1573,8 @@ public:
             m_ui.ShaderReloadRequested = true;
         if (modeChanged && m_ReconstructiveTemporalAAPass)
             m_ReconstructiveTemporalAAPass->ResetHistory();
+        if (modeChanged && m_LocalToneMappingPass)
+            m_LocalToneMappingPass->ResetHistory();
     }
 
     static std::shared_ptr<SceneGraphNode> FindDescendantByName(
@@ -1508,6 +1621,8 @@ public:
         // Retargeting is an explicit camera cut for the display AA history.
         if (m_ReconstructiveTemporalAAPass)
             m_ReconstructiveTemporalAAPass->ResetHistory();
+        if (m_LocalToneMappingPass)
+            m_LocalToneMappingPass->ResetHistory();
     }
 
     std::shared_ptr<TextureCache> GetTextureCache()
@@ -1641,6 +1756,8 @@ public:
             GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->LdrFramebuffer);
         m_AgxToneMappingPass->SetColorLut(
             m_SelectedKodakLut == 0 ? nullptr : &m_KodakLuts[m_SelectedKodakLut]);
+        m_LocalToneMappingPass = std::make_unique<LocalToneMappingPass>(
+            GetDevice(), m_ShaderFactory, m_CommonPasses);
 
     }
 
@@ -1710,6 +1827,17 @@ public:
 
             m_ui.ShaderReloadRequested = false;
         }
+
+        // Render-side sanitization is authoritative. UI sliders are only one
+        // input path and cannot be trusted to protect shader math or the
+        // visibility contribution bound from non-finite external values.
+        SanitizeAgxToneMappingParameters(m_ui.AgxToneMappingParams);
+        SanitizeLocalToneMappingSettings(m_ui.LocalToneMapping);
+        const bool rtaaActive = IsReconstructiveTemporalAAActive() &&
+            m_ReconstructiveTemporalAAPass;
+        const bool localToneMappingEligible =
+            IsLocalToneMappingEligibleForFinalPresentation(m_ui, rtaaActive) &&
+            m_LocalToneMappingPass;
 
         m_CommandList->open();
 
@@ -1837,6 +1965,18 @@ public:
                     visibilityInputs.output = m_RenderTargets->HdrColor;
                     visibilityInputs.knownInactiveLightingSources =
                         knownInactiveLightingSources;
+                    const bool contributionGateCanPrune =
+                        writeBounceMetadata && !exactGiTransportDebug &&
+                        m_ui.ScreenSpaceVisibility.indirectDiffuse.
+                            minimumBounceContribution > 0.f;
+                    const bool normalLocalPresentation =
+                        localToneMappingEligible &&
+                        m_ui.LocalToneMapping.debugMode ==
+                            LocalToneMappingDebugMode::Off;
+                    const float maximumPositiveLocalEV = contributionGateCanPrune
+                        ? ComputeMaximumPositiveLocalCorrectionEV(
+                            m_ui.LocalToneMapping, normalLocalPresentation)
+                        : 0.f;
                     m_ScreenSpaceVisibilityPass->Render(
                         m_CommandList,
                         m_ui.ScreenSpaceVisibility,
@@ -1844,7 +1984,8 @@ public:
                         visibilityInputs,
                         m_AmbientTop,
                         m_AmbientBottom,
-                        std::exp2(m_ui.AgxToneMappingParams.Exposure),
+                        std::exp2(m_ui.AgxToneMappingParams.Exposure +
+                            maximumPositiveLocalEV),
                         uint32_t(GetFrameIndex()));
                 }
                 else
@@ -1902,8 +2043,6 @@ public:
         nvrhi::ITexture* rtaaMetadata = nullptr;
         nvrhi::ITexture* rtaaMoments = nullptr;
         AgxSharpeningParameters sharpening;
-        const bool rtaaActive = IsReconstructiveTemporalAAActive() &&
-            m_ReconstructiveTemporalAAPass;
         if (rtaaActive)
         {
             ReconstructiveTemporalAAPass::Inputs rtaaInputs;
@@ -1950,20 +2089,51 @@ public:
             sharpening.reactiveSuppression = rtaa.sharpeningReactiveSuppression;
             sharpening.varianceSuppression = rtaa.sharpeningVarianceSuppression;
             sharpening.haloClamp = rtaa.sharpeningHaloClamp;
-
-            m_ReconstructiveTemporalAAPass->BeginFusedSharpeningTimer(m_CommandList);
         }
         else if (m_ReconstructiveTemporalAAPass)
         {
             m_ReconstructiveTemporalAAPass->Deactivate();
         }
 
+        // The bilateral pass analyzes the exact scene-linear source selected
+        // for display, after RTAA when active. It never writes that source or
+        // any RTAA/visibility history. An RTAA-detected camera cut resets the
+        // independent scalar reference before this frame's reduction.
+        if (localToneMappingEligible)
+        {
+            if (rtaaActive &&
+                m_ReconstructiveTemporalAAPass->WasHistoryResetThisFrame())
+            {
+                m_LocalToneMappingPass->ResetHistory();
+            }
+            m_LocalToneMappingPass->Render(
+                m_CommandList,
+                m_ui.LocalToneMapping,
+                displaySource,
+                m_LastFrameDeltaSeconds);
+        }
+        else if (m_LocalToneMappingPass)
+        {
+            m_LocalToneMappingPass->Deactivate();
+        }
+
+        const LocalToneMappingDisplayState localToneMappingState =
+            m_LocalToneMappingPass
+                ? m_LocalToneMappingPass->GetDisplayState()
+                : LocalToneMappingDisplayState{};
+
+        // Keep local analysis outside the existing AgX+sharpen interval. This
+        // timer begins only after the finalized grid is ready for slicing.
+        if (rtaaActive)
+            m_ReconstructiveTemporalAAPass->BeginFusedSharpeningTimer(m_CommandList);
+
         nvrhi::ITexture* displayTexture = displaySource;
         if (m_ui.UsesTonemapper())
         {
             m_AgxToneMappingPass->Render(
                 m_CommandList, m_ui.AgxToneMappingParams, *m_View,
-                displaySource, rtaaMetadata, rtaaMoments, sharpening);
+                displaySource, m_ui.LocalToneMapping, localToneMappingState,
+                rtaaMetadata, rtaaMoments, sharpening);
 
             if (rtaaActive)
                 m_ReconstructiveTemporalAAPass->EndFusedSharpeningTimer(m_CommandList);
@@ -2079,10 +2249,31 @@ public:
             : nullptr;
     }
 
+    const LocalToneMappingTimings* GetLocalToneMappingTimings() const
+    {
+        return m_LocalToneMappingPass
+            ? &m_LocalToneMappingPass->GetTimings()
+            : nullptr;
+    }
+
+    const LocalToneMappingMemoryStats* GetLocalToneMappingMemoryStats() const
+    {
+        return m_LocalToneMappingPass
+            ? &m_LocalToneMappingPass->GetMemoryStats()
+            : nullptr;
+    }
+
+    void ResetLocalToneMappingHistory()
+    {
+        if (m_LocalToneMappingPass)
+            m_LocalToneMappingPass->ResetHistory();
+    }
+
     void ResetReconstructiveTemporalAAHistory()
     {
         if (m_ReconstructiveTemporalAAPass)
             m_ReconstructiveTemporalAAPass->ResetHistory();
+        ResetLocalToneMappingHistory();
         // Also cover a reset requested before the pass exists, such as while a
         // scene is loading or immediately after a renderer setting reset.
         m_ui.ReconstructiveTemporalAA.forceHistoryReset = true;
@@ -2315,9 +2506,11 @@ protected:
             {
                 const RendererMode mode = RendererMode(modeIndex);
                 const bool selected = mode == m_ui.RenderMode;
-                if (ImGui::Selectable(rendererModeLabels[modeIndex], selected))
+                if (ImGui::Selectable(rendererModeLabels[modeIndex], selected) &&
+                    mode != m_ui.RenderMode)
                 {
                     m_ui.RenderMode = mode;
+                    m_app->ResetLocalToneMappingHistory();
                     log::info("Renderer mode: %s", rendererModeLabels[modeIndex]);
                 }
                 if (selected)
@@ -3283,6 +3476,179 @@ protected:
                 params.Power = std::clamp(params.Power, 0.01f, 2.f);
                 m_ui.AgxToneMappingPreset = AgxPreset::Custom;
             }
+
+            const bool localToneMappingOpen = ImGui::TreeNodeEx(
+                "Local Tone Mapping", ImGuiTreeNodeFlags_None);
+            ImGui::SetItemTooltip(
+                "Configure bilateral-grid local exposure after NRA-RTAA and before AgX.");
+            if (localToneMappingOpen)
+            {
+                LocalToneMappingSettings& local = m_ui.LocalToneMapping;
+                SanitizeLocalToneMappingSettings(local);
+                if (ImGui::Checkbox("Enabled##LocalToneMapping", &local.enabled))
+                    m_app->ResetLocalToneMappingHistory();
+                ImGui::SetItemTooltip(
+                    "Adjust exposure in different image regions while reducing bleed across strong brightness edges.");
+
+                if (!local.enabled)
+                    ImGui::BeginDisabled();
+
+                ImGui::SliderFloat(
+                    "Strength", &local.strength, 0.f, 1.f, "%.3f",
+                    ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Set how strongly local exposure differs from the global Exposure setting.");
+
+                ImGui::SliderFloat(
+                    "Radius", &local.radiusAt1080p, 16.f, 192.f,
+                    "%.0f px at 1080p", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Set the surrounding image area used to estimate local brightness.");
+
+                ImGui::SliderFloat(
+                    "Edge Preservation", &local.edgePreservation, 0.f, 1.f,
+                    "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Reduce exposure bleeding between neighboring regions with different brightness.");
+
+                ImGui::SliderFloat(
+                    "Shadow Recovery", &local.shadowRecovery, 0.f, 1.f,
+                    "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Control how much local exposure can brighten regions darker than the scene reference.");
+
+                ImGui::SliderFloat(
+                    "Highlight Compression", &local.highlightCompression, 0.f, 1.f,
+                    "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Control how much local exposure can darken regions brighter than the scene reference.");
+
+                ImGui::SliderFloat(
+                    "Maximum Correction", &local.maximumCorrectionEV, 0.f, 2.5f,
+                    "%.2f EV", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Limit local exposure changes to reduce halos and an unnaturally flat image.");
+
+                ImGui::SliderFloat(
+                    "Reference Response", &local.referenceResponseMs, 0.f, 1000.f,
+                    "%.0f ms", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip(
+                    "Smooth the scene-wide reference brightness. This does not reproject the spatial local-exposure field.");
+
+                static const char* qualityLabels[] = {
+                    "Performance",
+                    "Balanced",
+                    "Maximum Quality"
+                };
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                const bool qualityComboOpen = ImGui::BeginCombo(
+                    "Quality", qualityLabels[int(local.quality)]);
+                ImGui::SetItemTooltip(
+                    "Choose the bilateral-grid resolution and input sampling cost.");
+                if (qualityComboOpen)
+                {
+                    for (int qualityIndex = 0;
+                        qualityIndex < int(std::size(qualityLabels)); ++qualityIndex)
+                    {
+                        const LocalToneMappingQuality quality =
+                            LocalToneMappingQuality(qualityIndex);
+                        const bool selected = local.quality == quality;
+                        if (ImGui::Selectable(qualityLabels[qualityIndex], selected) &&
+                            !selected)
+                        {
+                            ApplyLocalToneMappingQualityPreset(local, quality);
+                            m_app->ResetLocalToneMappingHistory();
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+
+                static const char* debugLabels[] = {
+                    "Off",
+                    "Input Log Luminance",
+                    "Base Local EV",
+                    "Final Local EV",
+                    "Grid Confidence"
+                };
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                const bool debugComboOpen = ImGui::BeginCombo(
+                    "Debug Mode", debugLabels[int(local.debugMode)]);
+                ImGui::SetItemTooltip(
+                    "Visualize the luminance analysis and local-exposure result.");
+                if (debugComboOpen)
+                {
+                    for (int debugIndex = 0;
+                        debugIndex < int(std::size(debugLabels)); ++debugIndex)
+                    {
+                        const LocalToneMappingDebugMode debugMode =
+                            LocalToneMappingDebugMode(debugIndex);
+                        const bool selected = local.debugMode == debugMode;
+                        if (ImGui::Selectable(debugLabels[debugIndex], selected))
+                            local.debugMode = debugMode;
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+
+                if (!local.enabled)
+                    ImGui::EndDisabled();
+
+                SanitizeLocalToneMappingSettings(local);
+                if (!local.enabled)
+                {
+                    ImGui::TextDisabled(
+                        "Enable Local Tone Mapping to use its controls and debug views.");
+                }
+                else
+                {
+                    const bool configuredRtaaActive =
+                        m_ui.ReconstructiveTemporalAA.enabled &&
+                        m_ui.EnablePbr && m_ui.UsesDeferredShading() &&
+                        m_ui.PbrDebug == PbrDebugView::FinalLinearHdr;
+                    if (!IsLocalToneMappingEligibleForFinalPresentation(
+                        m_ui, configuredRtaaActive))
+                    {
+                        ImGui::TextDisabled(
+                            "Current settings, renderer, or analytical debug output bypass local tone mapping.");
+                    }
+                }
+
+                const LocalToneMappingTimings* localTimings =
+                    m_app->GetLocalToneMappingTimings();
+                if (localTimings)
+                {
+                    ImGui::Text(
+                        "GPU %.2f ms | Splat %.2f | Ref %.2f | Blur %.2f | Final %.2f",
+                        localTimings->totalMs,
+                        localTimings->splatMs,
+                        localTimings->referenceMs,
+                        localTimings->blurMs,
+                        localTimings->finalizeMs);
+                }
+                else
+                {
+                    ImGui::TextUnformatted("GPU -- ms");
+                }
+
+                const LocalToneMappingMemoryStats* localMemory =
+                    m_app->GetLocalToneMappingMemoryStats();
+                if (localMemory && localMemory->totalBytes > 0u)
+                {
+                    const auto& grid = localMemory->configuration.gridDimensions;
+                    ImGui::Text("Grid %ux%ux%u | %.2f MiB",
+                        grid.x, grid.y, grid.z,
+                        double(localMemory->totalBytes) / (1024.0 * 1024.0));
+                }
+                else
+                {
+                    ImGui::TextUnformatted("Grid inactive | 0.00 MiB");
+                }
+
+                ImGui::TreePop();
+            }
         }
 
         const bool skyOpen = DrawCollapsingHeader(
@@ -3371,7 +3737,7 @@ protected:
         if (ImGui::Button("Reset Settings", ImVec2(actionButtonWidth, 0.f)))
             m_app->ResetAllRendererSettings();
         ImGui::SetItemTooltip(
-            "Restore factory renderer, aliasing, visibility, tonemapper, LUT, sky, and white-world settings. Camera and scene edits are left in place.");
+            "Restore factory renderer, aliasing, visibility, local tone-mapping, tonemapper, LUT, sky, and white-world settings. Camera and scene edits are left in place.");
 
         ImGui::SameLine();
         if (ImGui::Button("Restart", ImVec2(actionButtonWidth, 0.f)))

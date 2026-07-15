@@ -407,6 +407,7 @@ namespace uvsr
         m_NextWriteIndex = 0;
         m_LatestOutputIndex = 0;
         m_HistoryValid = false;
+        m_HistoryResetThisFrame = true;
         m_HistorySignature = 0;
         m_HasPreviousCamera = false;
         m_ReverseDepth = false;
@@ -682,6 +683,7 @@ namespace uvsr
         float deltaSeconds,
         uint64_t frameIndex)
     {
+        m_HistoryResetThisFrame = false;
         SanitizeReconstructiveTemporalSettings(settings);
         if (!settings.enabled)
         {
@@ -750,6 +752,7 @@ namespace uvsr
             previousView, resourcesChanged, forceReset);
         if (!historyValid)
         {
+            m_HistoryResetThisFrame = true;
             for (HistorySlot& slot : m_History)
             {
                 slot.valid = false;
