@@ -118,10 +118,10 @@ is also available from the scene picker.
 
 ## Coming Soon
 
-Coming Soon is UVSR's shared coordination ledger for every project or feature
-that has not merged into `main`, plus every project or feature an agent is
-currently working on. An entry is not shipped on `main`, and experimental
-entries are not promises that the work will merge.
+Coming Soon is UVSR's user-facing roadmap and integration summary for stable,
+active work that has not merged into `main`. It is not a mutex or a live task
+ledger. An entry is not shipped on `main`, and experimental entries are not
+promises that the work will merge.
 
 - **Bilateral-Grid Local Tone Mapping — Active Development**
   (`agent/bilateral-grid-local-tone-mapping`). Add a first-party D3D12 GPU
@@ -132,12 +132,6 @@ entries are not promises that the work will merge.
   display eligibility, reference tests, and its UI. It may extend the higher-
   bounce contribution cutoff conservatively without changing visibility
   estimator math or adding motion-reprojected local-exposure history.
-
-- **Agent Collaboration Policy — Active Development**
-  (`codex/casual-agent-policy`). Replace the repository's agent guidance with
-  coordinator-led collaboration rules, conversational-language guidance, and
-  reusable execution-plan documentation. This owns `AGENTS.md` and agent-only
-  documentation; it has no renderer, shader, asset, or UI overlap.
 
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate shared
@@ -166,37 +160,33 @@ entries are not promises that the work will merge.
   geometry recipe, validation, derived assets, and scene descriptor.
 
 - **Three-Band Sky and Night Mode — Experiment**
-  (`codex/sky-night-mode`). Add a first-party three-band atmospheric sky and a
-  Night Mode with a soft moon and deterministic procedural stars. This owns
-  sky shaders, constants, controls, reference tests, and sky documentation; it
-  preserves PBR, visibility, and display-pipeline equations.
+  (`codex/sky-night-mode-3087874`). Add a first-party three-band atmospheric
+  sky and a Night Mode with a neutral procedural lunar disk, zero ambient fill,
+  deterministic procedural stars, adjustable darkness, and a sun/moon toggle.
+  This owns sky shaders, constants, controls, reference tests, and sky
+  documentation; it preserves the day palette and display pipeline.
 
-### How Work Gets Listed
+### Roadmap Ownership
 
-This README-first workflow is how every project or feature gets onto Coming
-Soon:
+The task coordinator or final integrator owns this section:
 
-1. Before writing implementation code, the owning agent reads this entire
-   section into working memory and checks open pull requests, unmerged branches,
-   and visible agent worktrees for overlapping or missing work. An agent
-   resuming an in-flight project performs this reconciliation before its next
-   code edit.
-2. The agent imports every missing unmerged or current-agent project it finds.
-   If its own project is absent, adding or updating that entry is its first
-   repository change. Each entry includes status, branch when one exists,
-   intended scope, affected subsystems, and integration dependencies.
-3. The agent cites the exact Coming Soon entry in its implementation plan and
-   records any overlap or coordination needed with another entry. Implementation
-   does not begin until both the entry and plan reference exist.
-4. Scope and status changes update the same entry. When publication is
-   authorized, commit and push the coordination update before creating or
-   pushing implementation commits so simultaneous agents can see it. For pre-
-   existing implementation, reconcile and publish the ledger before the next
-   code edit or implementation push. This rule does not grant permission to
-   push by itself.
-5. A merge removes the entry and moves durable user-facing behavior into the
-   renderer baseline or design documentation. Abandoned work is removed
-   explicitly rather than left as a stale promise.
+1. Small fixes, read-only investigations, and short-lived private experiments
+   do not require an entry.
+2. Before complex, concurrent, shared-hotspot, integration, or publication work,
+   the coordinator reviews this entire section together with relevant pull
+   requests, branches, worktrees, and active execution plans. The coordinator
+   records overlap and dependency decisions in the task plan; individual
+   workers do not each edit this README.
+3. Add or update an entry once its scope and branch are stable. Include status,
+   branch when one exists, intended scope, affected subsystems, and integration
+   dependencies. A private experiment is listed only when it becomes stable
+   roadmap information.
+4. Reconcile the entry again during integration. Publishing a roadmap update
+   still requires explicit authorization and never grants permission to push,
+   open a pull request, or merge implementation work.
+5. When work merges, remove its entry and move durable user-facing behavior into
+   the renderer baseline or relevant design documentation. Mark or remove
+   abandoned work explicitly rather than leaving a stale promise.
 
 ## Build and Run
 
@@ -240,7 +230,8 @@ cmake --build build --config Release --target uvsr
 .\tools\launch_uvsr.ps1 -Experiment naming
 ```
 
-The launcher requires a one-word ASCII alphanumeric experiment description:
+The launcher requires one lowercase ASCII word matching `\A[a-z]+\z`; uppercase
+letters, digits, spaces, hyphens, underscores, and punctuation are rejected:
 
 ```powershell
 .\tools\launch_uvsr.ps1 -Experiment naming
@@ -262,12 +253,12 @@ environment variable; omitted descriptions default to `main`.
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the camera-collision, camera-controls, PBR, radial-visibility,
-estimator, visibility-projection, and visibility-sampling reference tests
-separately:
+Build and run the experiment-title, camera-collision, camera-controls, PBR,
+radial-visibility, estimator, visibility-projection, and visibility-sampling
+reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 

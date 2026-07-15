@@ -2,7 +2,11 @@
 param(
     [Parameter(Mandatory = $true, Position = 0)]
     [ValidateNotNullOrEmpty()]
-    [ValidatePattern('^[A-Za-z0-9]+$')]
+    # ValidatePattern defaults to case-insensitive matching, and `$` accepts a
+    # position before a final newline. Explicit options plus absolute anchors
+    # enforce the documented lowercase-letters-only token literally.
+    [ValidatePattern('\A[a-z]+\z',
+        Options = [System.Text.RegularExpressions.RegexOptions]::None)]
     [string] $Experiment,
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -15,8 +19,9 @@ if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
     throw "UVSR is not built. Run: cmake --build build --config Release --target uvsr"
 }
 
-# Pass the validated one-word description through the child environment. The
-# renderer combines it with its build-embedded commit and local launch time.
+# Pass the validated lowercase one-word description through the child
+# environment. The renderer combines it with its build-embedded commit and
+# local launch time.
 $previousExperiment = $env:UVSR_EXPERIMENT
 try {
     $env:UVSR_EXPERIMENT = $Experiment
