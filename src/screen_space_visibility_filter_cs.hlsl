@@ -18,6 +18,8 @@ cbuffer c_Visibility : register(b0)
     ScreenSpaceVisibilityConstants g_Visibility;
 };
 
+#include "screen_space_visibility_common.hlsli"
+
 Texture2D<float> t_Ambient : register(t0);
 Texture2D<float4> t_Indirect : register(t1);
 Texture2D<float> t_Depth : register(t2);
@@ -25,23 +27,6 @@ Texture2D<float4> t_Normal : register(t3);
 
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_Ambient : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Indirect : register(u1);
-
-float3 SafeNormal(float3 value, float3 fallback)
-{
-    float lengthSquared = dot(value, value);
-    return lengthSquared > 1e-12f && isfinite(lengthSquared)
-        ? value * rsqrt(lengthSquared)
-        : fallback;
-}
-
-bool IsValidDepth(float depth)
-{
-    if (!isfinite(depth))
-        return false;
-    return g_Visibility.reverseDepth != 0u
-        ? depth > 0.0f && depth <= 1.0f
-        : depth >= 0.0f && depth < 1.0f;
-}
 
 float LinearViewDepth(float deviceDepth)
 {
@@ -97,13 +82,6 @@ bool ProjectViewPosition(float3 positionVS, out float2 pixelPosition)
         all(pixelPosition >= g_Visibility.view.viewportOrigin) &&
         all(pixelPosition < g_Visibility.view.viewportOrigin +
             g_Visibility.fullResolution);
-}
-
-uint2 SamplingToFullPixel(uint2 samplingPixel)
-{
-    uint scale = max(g_Visibility.resolutionScale, 1u);
-    return min(samplingPixel * scale + scale / 2u,
-        uint2(g_Visibility.fullResolution) - 1u);
 }
 
 float JointWeight(

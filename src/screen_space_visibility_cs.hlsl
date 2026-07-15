@@ -39,6 +39,8 @@ cbuffer c_Visibility : register(b0)
     ScreenSpaceVisibilityConstants g_Visibility;
 };
 
+#include "screen_space_visibility_common.hlsli"
+
 Texture2D<float> t_Depth : register(t0);
 Texture2D<float4> t_Normals : register(t1);
 #if ENABLE_BOUNCE_REINJECTION
@@ -174,13 +176,6 @@ float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
     return t_BlueNoise.Load(int4(coordinate, layer, 0));
 }
 
-uint2 SamplingToFullPixel(uint2 samplingPixel)
-{
-    uint scale = max(g_Visibility.resolutionScale, 1u);
-    uint2 fullSize = uint2(g_Visibility.fullResolution);
-    return min(samplingPixel * scale + scale / 2u, fullSize - 1u);
-}
-
 uint2 FullToSamplingPixel(uint2 fullPixel)
 {
     uint scale = max(g_Visibility.resolutionScale, 1u);
@@ -212,15 +207,6 @@ float3 SafeNormalize(float3 value, float3 fallback)
     if (!(lengthSquared > VisibilityEpsilon * VisibilityEpsilon) || !isfinite(lengthSquared))
         return fallback;
     return value * rsqrt(lengthSquared);
-}
-
-bool IsValidDepth(float depth)
-{
-    if (!isfinite(depth))
-        return false;
-    return g_Visibility.reverseDepth != 0u
-        ? depth > 0.0f && depth <= 1.0f
-        : depth >= 0.0f && depth < 1.0f;
 }
 
 bool ReconstructViewPositionSafe(float2 pixelPosition, float depth, out float3 positionVS)

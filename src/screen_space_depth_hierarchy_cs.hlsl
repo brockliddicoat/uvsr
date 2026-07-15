@@ -14,21 +14,14 @@ cbuffer c_Visibility : register(b0)
     ScreenSpaceVisibilityConstants g_Visibility;
 };
 
+#include "screen_space_visibility_common.hlsli"
+
 Texture2D<float> t_Depth : register(t0);
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_DepthHierarchy[5] : register(u0);
 
 groupshared float s_Depth[8][8];
 
 static const float DepthHierarchyFar = 65504.0f;
-
-bool IsValidDepth(float depth)
-{
-    if (!isfinite(depth))
-        return false;
-    return g_Visibility.reverseDepth != 0u
-        ? depth > 0.0f && depth <= 1.0f
-        : depth >= 0.0f && depth < 1.0f;
-}
 
 float LinearizeDepth(uint2 pixel)
 {

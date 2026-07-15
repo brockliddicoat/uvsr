@@ -127,6 +127,18 @@ entries are not promises that the work will merge.
   bounce contribution cutoff conservatively without changing visibility
   estimator math or adding motion-reprojected local-exposure history.
 
+- **Screen-Space Visibility Shared Shader Helpers — Active Development**
+  (`devin/1784102514-screen-space-shared-helpers`). Consolidate the identical
+  `IsValidDepth`, `SamplingToFullPixel`, and two-argument `SafeNormal` helpers
+  that were copied across the screen-space visibility sampling, depth-hierarchy
+  prefilter, temporal, and bilateral-filter compute shaders into a single
+  `src/screen_space_visibility_common.hlsli`. Pure textual extraction with no
+  math, binding, register, or UI change, so it preserves visibility output
+  exactly. Owns only `src/screen_space_visibility_common.hlsli` and the include
+  edits in the four `screen_space_visibility*_cs.hlsl` / depth-hierarchy shaders;
+  it does not touch the estimator equations or `g_Visibility` layout and has no
+  overlap with the Bilateral-Grid Local Tone Mapping effort.
+
 ### How Work Gets Listed
 
 This README-first workflow is how every project or feature gets onto Coming
