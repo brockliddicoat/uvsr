@@ -1,6 +1,6 @@
-# UVSR PBR foundation
+# UVSR PBR Foundation
 
-## Scope and invariants
+## Scope and Invariants
 
 UVSR owns one scene-linear metallic-roughness BSDF in `src/pbr.hlsli`.
 Deferred and forward shading both include that file; exposure, AgX, LUT grading,
@@ -21,7 +21,7 @@ output gamut conversion, and display transfer happen afterward.
   multiplied by ambient visibility. The converted Bistro ORM maps have no
   authored occlusion channel, so their zero-filled red channel is ignored.
 
-## CPU material contract
+## CPU Material Contract
 
 `PbrMaterialParameters` in `src/pbr_material.h` contains:
 
@@ -51,7 +51,7 @@ scattering, thin-film iridescence, absorption, and dispersion. Existing
 subsurface and transmission metadata maps to reserved bits, but no new lobe is
 evaluated yet.
 
-## G-buffer layout
+## G-Buffer Layout
 
 The original four material targets total 24 bytes per pixel. UVSR changes
 their interpretation without increasing their sizes, then adds one `R8_UNORM`
@@ -90,7 +90,7 @@ normal back into the geometric-normal hemisphere. The BSDF rejects light or
 view directions below the geometric surface. A full shading-normal energy
 correction is intentionally left for a later transport-focused revision.
 
-## Implemented equations
+## Implemented Equations
 
 Dielectric normal-incidence Fresnel:
 
@@ -136,7 +136,7 @@ radiance. Point and spot lights use inverse-square attenuation with a minimum
 distance squared of `1e-4`; their authored range, when nonzero, supplies the
 only smooth range cutoff. Spot lights add their authored cone falloff.
 
-## Shared contribution-gate contract
+## Shared Contribution-Gate Contract
 
 `src/lighting_contribution.hlsli` supplies a common early-out vocabulary to the
 forward, deferred, and screen-space lighting shaders. Its source-activity mask
@@ -179,7 +179,7 @@ geometric-normal rejection, no-light/emission-only behavior, visibility
 ambient occlusion, source-mask composition, contribution-gate boundary cases,
 and the four-bounce frontier recurrence.
 
-## Current limitations and performance-sensitive areas
+## Current Limitations and Performance-Sensitive Areas
 
 - GGX is single scattering. No unverified compensation term is present; the
   compensation integration point is the result of `EvaluateGGX`.
@@ -212,9 +212,9 @@ and the four-bounce frontier recurrence.
 - Visibility temporal rejection delays history-normal and neighborhood reads
   until cheaper motion, bounds, and depth tests pass.
 
-## Exact extension steps
+## Exact Extension Steps
 
-### Multi-scattering GGX compensation
+### Multi-Scattering GGX Compensation
 
 1. Generate and validate a directional-albedo integration LUT for the exact
    GGX/Fresnel convention used here.
@@ -222,7 +222,7 @@ and the four-bounce frontier recurrence.
 3. Add a compensation result beside `EvaluateGGX`, not inside light sampling.
 4. Re-run furnace tests across roughness, F0, view angle, and metalness.
 
-### Image-based lighting
+### Image-Based Lighting
 
 1. Add a prefiltered scene-linear specular environment and diffuse irradiance
    representation.
@@ -232,7 +232,7 @@ and the four-bounce frontier recurrence.
 4. Add specular-occlusion policy only after validating it against traced
    reference images.
 
-### Importance sampling
+### Importance Sampling
 
 1. Add cosine-hemisphere diffuse sampling with `PdfLambert`.
 2. Add Heitz visible-normal GGX sampling and replace `PdfGGX` with the matching
@@ -241,7 +241,7 @@ and the four-bounce frontier recurrence.
 4. Validate evaluation/PDF agreement and white-furnace energy before sharing
    the sampler with path tracing or radiance-cache updates.
 
-### glTF material import
+### glTF Material Import
 
 1. Preserve the current metallic-roughness factors and textures.
 2. Import `KHR_materials_ior` into UVSR's CPU material sidecar.
