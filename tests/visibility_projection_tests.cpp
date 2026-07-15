@@ -113,6 +113,37 @@ namespace
             "large-radius crossing shortens analytically without iteration");
     }
 
+    void TestDegenerateClipSpansAreRejected()
+    {
+        // A crossing endpoint is only reconstructed by dividing the receiver-
+        // to-endpoint span. When the receiver sits just inside the valid domain
+        // and the endpoint lands just past the boundary, that span collapses
+        // below the epsilon guard. The clip must reject rather than divide by a
+        // near-zero denominator and emit a point on the projection singularity.
+
+        // Positive-w domain: receiver w barely exceeds epsilon and the endpoint
+        // w falls at/below it, leaving receiverClipW - endpointClipW < epsilon.
+        VisibilityProjectionClipResult positiveW =
+            ComputeVisibilityProjectionEndpointClip(
+                0.f, 1.4e-6f, 0.f, 0.5e-6f, false);
+        Require(positiveW.valid == 0u,
+            "an unspannable positive-w crossing is rejected, not divided by ~0");
+
+        // Near plane: receiver rests exactly on the plane and the endpoint only
+        // just crosses it, so receiverNearDistance - endpointNearDistance stays
+        // under the epsilon guard on both depth conventions.
+        VisibilityProjectionClipResult forwardNear =
+            ComputeVisibilityProjectionEndpointClip(
+                0.f, 1.f, -0.5e-6f, 1.f, false);
+        Require(forwardNear.valid == 0u,
+            "an unspannable forward near-plane crossing is rejected");
+        VisibilityProjectionClipResult reverseNear =
+            ComputeVisibilityProjectionEndpointClip(
+                1.f, 1.f, 1.f + 0.5e-6f, 1.f, true);
+        Require(reverseNear.valid == 0u,
+            "an unspannable reverse near-plane crossing is rejected");
+    }
+
     void TestForwardReverseSymmetryAndInvalidInputs()
     {
         VisibilityProjectionClipResult forward =
@@ -146,6 +177,7 @@ int main()
     TestPositiveWClip();
     TestOrthographicPathsRemainUnchanged();
     TestNearPlaneAndLargeRadiusLimits();
+    TestDegenerateClipSpansAreRejected();
     TestForwardReverseSymmetryAndInvalidInputs();
 
     std::cout << "UVSR visibility projection validation passed\n";

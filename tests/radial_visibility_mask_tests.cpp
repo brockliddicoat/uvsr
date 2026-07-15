@@ -153,6 +153,47 @@ namespace
         }
     }
 
+    void TestLowBitMaskBounds()
+    {
+        // MakeStochasticSectorRangeMask only ever calls the helper with a
+        // strictly positive, in-range span, so exercise the degenerate and
+        // saturating counts directly to pin the contiguous-run construction.
+        using radial_visibility_detail::MakeLowBitMask;
+        RequireEqual(MakeLowBitMask(0u), 0u,
+            "A zero sector count masks no bits");
+        RequireEqual(MakeLowBitMask(1u), 0x00000001u,
+            "A single sector count masks the lowest bit");
+        RequireEqual(MakeLowBitMask(5u), 0x0000001fu,
+            "A partial sector count masks a contiguous low run");
+        RequireEqual(
+            MakeLowBitMask(RadialVisibilitySectorCount),
+            RadialVisibilityFullMask,
+            "A full sector count saturates to the complete mask");
+        RequireEqual(
+            MakeLowBitMask(RadialVisibilitySectorCount + 4u),
+            RadialVisibilityFullMask,
+            "An over-full sector count clamps without shifting past the word");
+    }
+
+    void TestDegenerateIntervalCollapses()
+    {
+        // A collapsed interval carries no angular measure and must survive no
+        // point lattice, independent of the sector phase or overload used.
+        RequireEqual(
+            MakeStochasticSectorRangeMask(0.5f, 0.5f, 0.3f),
+            0u,
+            "A zero-width interval quantizes to no sectors");
+        RequireEqual(
+            MakeStochasticSectorRangeMask(0.5f, 0.5f, 0.87f),
+            0u,
+            "A zero-width interval stays empty under a shifted lattice");
+        RequireEqual(
+            MakeStochasticSectorRangeMask(
+                MakeVisibilityInterval(0.42f, 0.42f), 0.6f),
+            0u,
+            "The interval overload also collapses a zero-width span");
+    }
+
     void TestStochasticPointQuantization()
     {
         constexpr float sectorWidth =
@@ -308,6 +349,8 @@ namespace
 int main()
 {
     TestProgressiveRadialPrefixes();
+    TestLowBitMaskBounds();
+    TestDegenerateIntervalCollapses();
     TestStochasticPointQuantization();
     TestAccumulation();
     TestCountsAndVisibility();

@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <numeric>
 #include <random>
@@ -363,6 +365,32 @@ int main(int argc, char* argv[])
         size_t(uvsr::VisibilityFilterAdaptedNoiseTexelCount) *
             uvsr::VisibilityFilterAdaptedNoiseLayerCount,
         "the complete filter-adapted volume loads");
+
+    // The loader reports an empty result rather than a partial field when the
+    // rank file is absent or the wrong size, so runtime consumers can fall back
+    // instead of sampling uninitialized or truncated noise.
+    namespace fs = std::filesystem;
+    fs::path missingPath = fs::path(argv[1]);
+    missingPath.replace_filename("uvsr_missing_filter_adapted_noise.bin");
+    Require(!fs::exists(missingPath) &&
+        uvsr::LoadVisibilityFilterAdaptedNoise(missingPath).empty(),
+        "a missing rank field reports an empty result");
+
+    const fs::path truncatedPath = fs::temp_directory_path() /
+        "uvsr_truncated_filter_adapted_noise.bin";
+    {
+        std::ofstream truncated(
+            truncatedPath, std::ios::binary | std::ios::trunc);
+        const std::array<char, 64> shortContent{};
+        truncated.write(shortContent.data(),
+            std::streamsize(shortContent.size()));
+    }
+    const bool truncatedIsEmpty =
+        uvsr::LoadVisibilityFilterAdaptedNoise(truncatedPath).empty();
+    std::error_code removeError;
+    fs::remove(truncatedPath, removeError);
+    Require(truncatedIsEmpty,
+        "a wrong-sized rank field reports an empty result");
 
     for (uint32_t layer = 0u;
         layer < uvsr::VisibilityFilterAdaptedNoiseLayerCount;
