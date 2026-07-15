@@ -108,6 +108,7 @@ donut_compile_shaders_all_platforms(
 )
 
 add_executable(uvsr WIN32
+    src/camera_collision.cpp
     src/gpu_performance_monitor.cpp
     src/uvsr.cpp
     src/pbr_deferred_lighting_pass.cpp
@@ -123,6 +124,25 @@ add_executable(uvsr_pbr_tests tests/pbr_reference_tests.cpp)
 target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
 add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
+
+add_executable(uvsr_camera_collision_tests
+    tests/camera_collision_tests.cpp
+    src/camera_collision.cpp
+)
+target_include_directories(
+    uvsr_camera_collision_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(uvsr_camera_collision_tests PRIVATE donut_core)
+add_test(NAME uvsr_camera_collision_reference COMMAND uvsr_camera_collision_tests)
+
+add_executable(uvsr_camera_controls_tests tests/camera_controls_tests.cpp)
+target_include_directories(
+    uvsr_camera_controls_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(uvsr_camera_controls_tests PRIVATE donut_app)
+add_test(NAME uvsr_camera_controls_reference COMMAND uvsr_camera_controls_tests)
 
 add_executable(uvsr_radial_visibility_tests tests/radial_visibility_mask_tests.cpp)
 target_include_directories(uvsr_radial_visibility_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
