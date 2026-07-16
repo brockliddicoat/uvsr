@@ -1,6 +1,6 @@
 # UVSR Agent Guide
 
-Agent policy version: `2026-07-15.5`.
+Agent policy version: `2026-07-16.1`.
 
 ## Product and Scope
 
@@ -227,6 +227,12 @@ Agent policy version: `2026-07-15.5`.
   integration. When work merges, remove its entry and put durable shipped
   behavior in the renderer baseline or relevant design documentation. Mark or
   remove abandoned work explicitly.
+- If future work adds phase-resolved or output-resolution visibility history, a
+  real jitter-aware output-space reconstruction path, or a genuine packed
+  checkerboard visibility layout together with convergence evidence, remind the
+  user about the retired
+  [Visibility Sample Rotation v1 experiment](docs/postmortem/visibility-sample-rotation-v1.md)
+  before proposing restoration. A reminder does not authorize revival.
 - Publishing a roadmap or execution-plan update can improve cross-task
   visibility, but this guide never grants permission to push or open a pull
   request.
