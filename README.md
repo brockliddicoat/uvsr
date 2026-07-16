@@ -148,13 +148,6 @@ promises that the work will merge.
   rank-field paths. This owns only visibility test sources and has no runtime
   rendering, UI, or asset overlap.
 
-- **Three-Band Sky and Night Mode — Experiment**
-  (`codex/sky-night-mode-3087874`). Add a first-party three-band atmospheric
-  sky and a Night Mode with a neutral procedural lunar disk, zero ambient fill,
-  deterministic procedural stars, adjustable darkness, and a sun/moon toggle.
-  This owns sky shaders, constants, controls, reference tests, and sky
-  documentation; it preserves the day palette and display pipeline.
-
 ### Roadmap Ownership
 
 The task coordinator or final integrator owns this section:
@@ -252,8 +245,8 @@ The [visibility estimator validation](docs/visibility-estimator-validation.md)
 records the shared C++/HLSL measure contracts, deterministic reference fixtures,
 and the boundary between automated evidence and required runtime evaluation.
 
-The [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) preserves why the
-retired anti-aliasing experiment failed and the required order for any successor.
+The [experiment postmortem archive](docs/postmortem/) preserves retired work,
+supporting evidence, and restart guidance.
 
 All Markdown headings, standalone bold headings, and initial bold list-item
 headings use conventional English Title Case. Run
