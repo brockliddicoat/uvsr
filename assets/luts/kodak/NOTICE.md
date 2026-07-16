@@ -1,4 +1,4 @@
-# Included film-look LUTs
+# Included Film-Look LUTs
 
 The `.cube` files in this directory are original UVSR simulations authored for
 the AgX Base working space. They are not measurements, official LUTs, or exact

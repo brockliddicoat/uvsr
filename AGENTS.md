@@ -1,6 +1,6 @@
-# UVSR agent guide
+# UVSR Agent Guide
 
-## Product and scope
+## Product and Scope
 
 - Treat UVSR as a focused production renderer, not a general Donut sample.
 - Follow near-YAGNI principles: keep only behavior the product currently needs.
@@ -17,7 +17,7 @@
   `assets/scenes/nvidia_bistro/`, generated `build/` content, or `work/`
   artifacts.
 
-## Coming Soon coordination
+## Coming Soon Coordination
 
 - Treat the complete **Coming Soon** section in `README.md` as the shared
   coordination ledger for every unmerged project or feature and every project
@@ -46,7 +46,7 @@
   or relevant design documentation with durable shipped behavior. Remove
   abandoned work explicitly.
 
-## Change discipline
+## Change Discipline
 
 - Inspect `git status` and the relevant diff before editing. Preserve unrelated
   user changes and never discard them to simplify a task.
@@ -73,7 +73,7 @@
   packaging dependency is uncertain.
 - Do not push, publish, or open a pull request unless the user explicitly asks.
 
-## UI and rendering safeguards
+## UI and Rendering Safeguards
 
 - Treat the existing UI layout, wording, order, widths, defaults, and alignment
   as user-designed product behavior. Change them only when the task explicitly
