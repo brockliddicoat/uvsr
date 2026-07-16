@@ -61,6 +61,7 @@ PRESERVED_WORDS = frozenset(
         "D3D12",
         "DirectX",
         "DX11",
+        "DXIL",
         "GGX",
         "GI",
         "GitHub",
@@ -1006,6 +1007,7 @@ def run_self_tests() -> None:
         "Use ``literal lower`` Safely": "Use ``literal lower`` Safely",
         "Use ``lower content``` safely": "Use ``Lower Content``` Safely",
         "DirectX and AgX UI": "DirectX and AgX UI",
+        "Generated DXIL Comparison": "Generated DXIL Comparison",
         "What was over-engineered too early": "What Was Over-Engineered Too Early",
         "{literal placeholder} and [API docs](https://example.test/path)": (
             "{literal placeholder} and [API Docs](https://example.test/path)"

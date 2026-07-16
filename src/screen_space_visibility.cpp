@@ -73,6 +73,75 @@ namespace
         return bytes;
     }
 
+    uvsr::VisibilityPerformanceConsumer GetPerformanceConsumer(
+        bool ambientEnabled,
+        bool indirectEnabled)
+    {
+        if (ambientEnabled)
+        {
+            return indirectEnabled
+                ? uvsr::VisibilityPerformanceConsumer::
+                    AmbientOcclusionAndIndirectDiffuse
+                : uvsr::VisibilityPerformanceConsumer::AmbientOcclusion;
+        }
+        return uvsr::VisibilityPerformanceConsumer::IndirectDiffuse;
+    }
+
+    uvsr::VisibilityPerformanceEstimator GetPerformanceEstimator(
+        uvsr::VisibilityEstimator estimator)
+    {
+        switch (estimator)
+        {
+        case uvsr::VisibilityEstimator::UniformProjectedAngle:
+            return uvsr::VisibilityPerformanceEstimator::
+                UniformProjectedAngle;
+        case uvsr::VisibilityEstimator::CosineWeightedSolidAngle:
+            return uvsr::VisibilityPerformanceEstimator::
+                CosineWeightedSolidAngle;
+        default:
+            return uvsr::VisibilityPerformanceEstimator::UniformSolidAngle;
+        }
+    }
+
+    uvsr::VisibilityPerformanceResolution GetPerformanceResolution(
+        uvsr::VisibilityResolution resolution)
+    {
+        switch (resolution)
+        {
+        case uvsr::VisibilityResolution::Half:
+            return uvsr::VisibilityPerformanceResolution::Half;
+        case uvsr::VisibilityResolution::Quarter:
+            return uvsr::VisibilityPerformanceResolution::Quarter;
+        default:
+            return uvsr::VisibilityPerformanceResolution::Full;
+        }
+    }
+
+    uvsr::VisibilityPerformanceScheduler GetPerformanceScheduler(
+        uvsr::VisibilitySampleScheduler scheduler)
+    {
+        switch (scheduler)
+        {
+        case uvsr::VisibilitySampleScheduler::ToroidalBlueNoiseRankField:
+            return uvsr::VisibilityPerformanceScheduler::
+                ToroidalBlueNoiseRankField;
+        case uvsr::VisibilitySampleScheduler::
+            FilterAdaptedSpatiotemporalRankField:
+            return uvsr::VisibilityPerformanceScheduler::
+                FilterAdaptedSpatiotemporalRankField;
+        default:
+            return uvsr::VisibilityPerformanceScheduler::IndependentHash;
+        }
+    }
+
+    uint64_t AdvancedPipelineKey(uint64_t permutationKey, uint32_t stage)
+    {
+        uint64_t key = permutationKey;
+        key ^= uint64_t(stage) + 0x9e3779b97f4a7c15ull +
+            (key << 6u) + (key >> 2u);
+        return key;
+    }
+
     void AppendHistoryConfigurationValue(uint64_t& key, uint64_t value)
     {
         // A process-local change detector, not a serialized identifier. The
@@ -175,6 +244,7 @@ namespace uvsr
         const std::shared_ptr<ShaderFactory>& shaderFactory,
         const std::filesystem::path& filterAdaptedNoisePath)
         : m_Device(device)
+        , m_ShaderFactory(shaderFactory)
     {
         nvrhi::BufferDesc constantBufferDesc;
         constantBufferDesc.byteSize = sizeof(ScreenSpaceVisibilityConstants);
@@ -275,6 +345,9 @@ namespace uvsr
                 }
             }
         }
+        m_PackedFastNoiseUpload =
+            PackVisibilityFilterAdaptedNoiseRgba8(
+                m_FilterAdaptedNoiseUpload);
 
         nvrhi::TextureDesc filterAdaptedNoiseDesc;
         filterAdaptedNoiseDesc.width = VisibilityFilterAdaptedNoiseSize;
@@ -514,6 +587,32 @@ namespace uvsr
             });
     }
 
+    ScreenSpaceVisibilityPass::Pipeline&
+        ScreenSpaceVisibilityPass::GetOrCreateAdvancedPipeline(
+            uint64_t key,
+            const char* shaderName,
+            const std::vector<nvrhi::BindingLayoutItem>& bindings,
+            const std::vector<ShaderMacro>* macros)
+    {
+        const auto existing = m_AdvancedPipelines.find(key);
+        if (existing != m_AdvancedPipelines.end())
+            return existing->second;
+
+        Pipeline pipeline;
+        pipeline.shader = m_ShaderFactory->CreateShader(
+            shaderName, "main", macros, nvrhi::ShaderType::Compute);
+        nvrhi::BindingLayoutDesc layoutDesc;
+        layoutDesc.visibility = nvrhi::ShaderType::Compute;
+        layoutDesc.bindings = bindings;
+        pipeline.bindingLayout = m_Device->createBindingLayout(layoutDesc);
+        nvrhi::ComputePipelineDesc pipelineDesc;
+        pipelineDesc.CS = pipeline.shader;
+        pipelineDesc.bindingLayouts = { pipeline.bindingLayout };
+        pipeline.pipeline = m_Device->createComputePipeline(pipelineDesc);
+        return m_AdvancedPipelines.emplace(key, std::move(pipeline))
+            .first->second;
+    }
+
     void ScreenSpaceVisibilityPass::EnsureResources(
         uint2 fullSize,
         uint32_t resolutionScale,
@@ -523,7 +622,10 @@ namespace uvsr
         bool adaptiveEnabled,
         bool temporalEnabled,
         bool postProcessEnabled,
-        bool depthHierarchyEnabled)
+        bool depthHierarchyEnabled,
+        bool finalAmbientEnabled,
+        bool packedFastEnabled,
+        bool packedEdgesEnabled)
     {
         resolutionScale = std::clamp(resolutionScale, 1u, 4u);
         const uint2 samplingSize(
@@ -542,6 +644,9 @@ namespace uvsr
             m_TemporalResourcesEnabled == temporalEnabled &&
             m_PostProcessResourcesEnabled == postProcessEnabled &&
             m_DepthHierarchyResourcesEnabled == depthHierarchyEnabled &&
+            m_FinalAmbientResourcesEnabled == finalAmbientEnabled &&
+            m_PackedFastResourcesEnabled == packedFastEnabled &&
+            m_PackedEdgeResourcesEnabled == packedEdgesEnabled &&
             (!ambientEnabled || m_RawAmbientVisibility) &&
             (!indirectDiffuseEnabled || m_RawIndirectDiffuse[0]))
         {
@@ -559,6 +664,9 @@ namespace uvsr
         m_TemporalResourcesEnabled = temporalEnabled;
         m_PostProcessResourcesEnabled = postProcessEnabled;
         m_DepthHierarchyResourcesEnabled = depthHierarchyEnabled;
+        m_FinalAmbientResourcesEnabled = finalAmbientEnabled;
+        m_PackedFastResourcesEnabled = packedFastEnabled;
+        m_PackedEdgeResourcesEnabled = packedEdgesEnabled;
 
         auto createTexture = [this](
             uint2 size,
@@ -653,7 +761,7 @@ namespace uvsr
         }
         if (postProcessEnabled)
         {
-            if (ambientEnabled)
+            if (ambientEnabled && finalAmbientEnabled)
             {
                 m_FinalAmbientVisibility = createTexture(
                     fullSize,
@@ -667,6 +775,33 @@ namespace uvsr
                     nvrhi::Format::RGBA16_FLOAT,
                     "ScreenSpaceVisibility/FinalIndirectDiffuse");
             }
+        }
+        if (packedEdgesEnabled)
+        {
+            m_PackedEdgesTexture = createTexture(
+                samplingSize,
+                nvrhi::Format::R8_UINT,
+                "ScreenSpaceVisibility/PackedEdges");
+        }
+        if (packedFastEnabled)
+        {
+            nvrhi::TextureDesc packedFastDesc;
+            packedFastDesc.width = VisibilityFilterAdaptedNoiseSize;
+            packedFastDesc.height = VisibilityFilterAdaptedNoiseSize;
+            packedFastDesc.arraySize =
+                VisibilityFilterAdaptedNoiseLayerCount;
+            packedFastDesc.format = nvrhi::Format::RGBA8_UNORM;
+            packedFastDesc.dimension =
+                nvrhi::TextureDimension::Texture2DArray;
+            packedFastDesc.mipLevels = 1u;
+            packedFastDesc.initialState =
+                nvrhi::ResourceStates::CopyDest;
+            packedFastDesc.keepInitialState = true;
+            packedFastDesc.debugName =
+                "ScreenSpaceVisibility/PackedCurrentFAST";
+            m_PackedFastNoiseTexture =
+                m_Device->createTexture(packedFastDesc);
+            m_PackedFastNoiseUploaded = false;
         }
         if (depthHierarchyEnabled)
         {
@@ -702,7 +837,8 @@ namespace uvsr
             (ambientEnabled ? rawAmbientBytes : 0u) +
             (indirectDiffuseEnabled ? rawIndirectBytes : 0u) +
             (multipleBouncesEnabled ? rawIndirectBytes * 2u : 0u) +
-            (postProcessEnabled && ambientEnabled ? finalAmbientBytes : 0u) +
+            (postProcessEnabled && ambientEnabled && finalAmbientEnabled
+                ? finalAmbientBytes : 0u) +
             (postProcessEnabled && indirectDiffuseEnabled
                 ? finalIndirectBytes : 0u);
         m_Timings.workingTextureBytes = schedulerBytes +
@@ -713,12 +849,29 @@ namespace uvsr
             (temporalEnabled ? TextureBytes(samplingSize, 8u) : 0u) +
             (temporalEnabled ? TextureBytes(samplingSize, 8u) : 0u) +
             (depthHierarchyEnabled ? DepthHierarchyBytes(fullSize) : 0u);
+        const uint64_t packedFastBytes = packedFastEnabled
+            ? uint64_t(VisibilityFilterAdaptedNoiseTexelCount) *
+                VisibilityFilterAdaptedNoiseLayerCount * 4u
+            : 0u;
+        const uint64_t packedEdgeBytes = packedEdgesEnabled
+            ? TextureBytes(samplingSize, 1u) : 0u;
+        m_Timings.workingTextureBytes +=
+            packedFastBytes + packedEdgeBytes;
+        m_Timings.optionalTextureBytes =
+            packedFastBytes + packedEdgeBytes;
+        m_Timings.fullResolutionIntermediateBytes =
+            ambientEnabled && finalAmbientEnabled
+                ? finalAmbientBytes : 0u;
+        m_Timings.logicalTrafficAvoidedBytes =
+            ambientEnabled && postProcessEnabled && !finalAmbientEnabled
+                ? finalAmbientBytes * 2u : 0u;
         m_Timings.maskCacheBytes = 0u;
         m_Timings.avoidedTextureBytes =
             (!ambientEnabled
                 ? rawAmbientBytes +
                     (temporalEnabled ? rawAmbientBytes * 2u : 0u) +
-                    (postProcessEnabled ? finalAmbientBytes : 0u)
+                    (postProcessEnabled && finalAmbientEnabled
+                        ? finalAmbientBytes : 0u)
                 : 0u) +
             (!indirectDiffuseEnabled
                 ? rawIndirectBytes +
@@ -750,6 +903,8 @@ namespace uvsr
         m_FinalAmbientVisibility = nullptr;
         m_FinalIndirectDiffuse = nullptr;
         m_DepthHierarchyTexture = nullptr;
+        m_PackedFastNoiseTexture = nullptr;
+        m_PackedEdgesTexture = nullptr;
 
         m_FullSize = uint2::zero();
         m_SamplingSize = uint2::zero();
@@ -761,6 +916,10 @@ namespace uvsr
         m_TemporalResourcesEnabled = false;
         m_PostProcessResourcesEnabled = false;
         m_DepthHierarchyResourcesEnabled = false;
+        m_FinalAmbientResourcesEnabled = false;
+        m_PackedFastResourcesEnabled = false;
+        m_PackedEdgeResourcesEnabled = false;
+        m_PackedFastNoiseUploaded = false;
         ResetHistory();
         m_Timings = {};
     }
@@ -807,53 +966,178 @@ namespace uvsr
         m_DepthHierarchyBindingSet = nullptr;
         for (nvrhi::BindingSetHandle& bindingSet : m_CompositeBindingSets)
             bindingSet = nullptr;
+        m_AdvancedBindingSets.clear();
     }
 
     void ScreenSpaceVisibilityPass::UploadSamplingNoise(
         nvrhi::ICommandList* commandList)
     {
-        if (m_SamplingNoiseUploaded)
-            return;
-
-        assert(m_BlueNoiseTexture &&
-            m_FilterAdaptedNoiseTexture &&
-            !m_BlueNoiseUpload.empty() &&
-            !m_FilterAdaptedNoiseUpload.empty());
-        for (uint32_t layer = 0u;
-            layer < VisibilityBlueNoiseLayerCount;
-            ++layer)
+        if (!m_SamplingNoiseUploaded)
         {
-            commandList->writeTexture(
+            assert(m_BlueNoiseTexture &&
+                m_FilterAdaptedNoiseTexture &&
+                !m_BlueNoiseUpload.empty() &&
+                !m_FilterAdaptedNoiseUpload.empty());
+            for (uint32_t layer = 0u;
+                layer < VisibilityBlueNoiseLayerCount;
+                ++layer)
+            {
+                commandList->writeTexture(
+                    m_BlueNoiseTexture,
+                    layer,
+                    0u,
+                    m_BlueNoiseUpload.data() +
+                        layer * VisibilityBlueNoiseTexelCount,
+                    size_t(VisibilityBlueNoiseSize) * sizeof(uint16_t));
+            }
+            commandList->setPermanentTextureState(
                 m_BlueNoiseTexture,
-                layer,
-                0u,
-                m_BlueNoiseUpload.data() +
-                    layer * VisibilityBlueNoiseTexelCount,
-                size_t(VisibilityBlueNoiseSize) * sizeof(uint16_t));
-        }
-        commandList->setPermanentTextureState(
-            m_BlueNoiseTexture,
-            nvrhi::ResourceStates::ShaderResource);
-        for (uint32_t layer = 0u;
-            layer < VisibilityFilterAdaptedNoiseLayerCount;
-            ++layer)
-        {
-            commandList->writeTexture(
+                nvrhi::ResourceStates::ShaderResource);
+            for (uint32_t layer = 0u;
+                layer < VisibilityFilterAdaptedNoiseLayerCount;
+                ++layer)
+            {
+                commandList->writeTexture(
+                    m_FilterAdaptedNoiseTexture,
+                    layer,
+                    0u,
+                    m_FilterAdaptedNoiseUpload.data() +
+                        layer * VisibilityFilterAdaptedNoiseTexelCount,
+                    size_t(VisibilityFilterAdaptedNoiseSize) *
+                        sizeof(uint8_t));
+            }
+            commandList->setPermanentTextureState(
                 m_FilterAdaptedNoiseTexture,
-                layer,
-                0u,
-                m_FilterAdaptedNoiseUpload.data() +
-                    layer * VisibilityFilterAdaptedNoiseTexelCount,
-                size_t(VisibilityFilterAdaptedNoiseSize) * sizeof(uint8_t));
+                nvrhi::ResourceStates::ShaderResource);
+            m_SamplingNoiseUploaded = true;
+            m_BlueNoiseUpload.clear();
+            m_BlueNoiseUpload.shrink_to_fit();
+            m_FilterAdaptedNoiseUpload.clear();
+            m_FilterAdaptedNoiseUpload.shrink_to_fit();
         }
-        commandList->setPermanentTextureState(
-            m_FilterAdaptedNoiseTexture,
-            nvrhi::ResourceStates::ShaderResource);
-        m_SamplingNoiseUploaded = true;
-        m_BlueNoiseUpload.clear();
-        m_BlueNoiseUpload.shrink_to_fit();
-        m_FilterAdaptedNoiseUpload.clear();
-        m_FilterAdaptedNoiseUpload.shrink_to_fit();
+
+        if (m_PackedFastNoiseTexture && !m_PackedFastNoiseUploaded)
+        {
+            assert(!m_PackedFastNoiseUpload.empty());
+            for (uint32_t layer = 0u;
+                layer < VisibilityFilterAdaptedNoiseLayerCount;
+                ++layer)
+            {
+                commandList->writeTexture(
+                    m_PackedFastNoiseTexture,
+                    layer,
+                    0u,
+                    m_PackedFastNoiseUpload.data() +
+                        size_t(layer) *
+                            VisibilityFilterAdaptedNoiseTexelCount * 4u,
+                    size_t(VisibilityFilterAdaptedNoiseSize) * 4u);
+            }
+            commandList->setPermanentTextureState(
+                m_PackedFastNoiseTexture,
+                nvrhi::ResourceStates::ShaderResource);
+            m_PackedFastNoiseUploaded = true;
+        }
+    }
+
+    bool ScreenSpaceVisibilityPass::BeginBenchmark(
+        const VisibilityBenchmarkRunMetadata& metadata,
+        uint32_t warmupFrameCount,
+        uint32_t measuredFrameCount)
+    {
+        if (!m_ExecutionPlan.valid || measuredFrameCount == 0u)
+            return false;
+
+        VisibilityBenchmarkStageMask requiredStageMask =
+            VisibilityBenchmarkStageBit(
+                VisibilityBenchmarkStage::FirstTrace) |
+            VisibilityBenchmarkStageBit(
+                VisibilityBenchmarkStage::EffectEnvelope);
+        if (HasVisibilityExecutionPass(m_ExecutionPlan.passMask,
+                VisibilityExecutionPass::DepthPreparation))
+        {
+            requiredStageMask |= VisibilityBenchmarkStageBit(
+                VisibilityBenchmarkStage::DepthPreparation);
+        }
+        if (HasVisibilityExecutionPass(m_ExecutionPlan.passMask,
+                VisibilityExecutionPass::LegacyLaterBounceTrace) ||
+            HasVisibilityExecutionPass(m_ExecutionPlan.passMask,
+                VisibilityExecutionPass::FixedLaterBounceTrace))
+        {
+            requiredStageMask |= VisibilityBenchmarkStageBit(
+                VisibilityBenchmarkStage::LaterTrace);
+            if (m_ExecutionPlan.workload.bounceCount >= 2u)
+            {
+                requiredStageMask |= VisibilityBenchmarkStageBit(
+                    VisibilityBenchmarkStage::LaterTraceBounce2);
+            }
+            if (m_ExecutionPlan.workload.bounceCount >= 3u)
+            {
+                requiredStageMask |= VisibilityBenchmarkStageBit(
+                    VisibilityBenchmarkStage::LaterTraceBounce3);
+            }
+            if (m_ExecutionPlan.workload.bounceCount >= 4u)
+            {
+                requiredStageMask |= VisibilityBenchmarkStageBit(
+                    VisibilityBenchmarkStage::LaterTraceBounce4);
+            }
+        }
+        if (HasVisibilityExecutionPass(m_ExecutionPlan.passMask,
+                VisibilityExecutionPass::Temporal))
+        {
+            requiredStageMask |= VisibilityBenchmarkStageBit(
+                VisibilityBenchmarkStage::Temporal);
+        }
+        if (HasVisibilityExecutionPass(m_ExecutionPlan.passMask,
+                VisibilityExecutionPass::Reconstruction))
+        {
+            requiredStageMask |= VisibilityBenchmarkStageBit(
+                VisibilityBenchmarkStage::SpatialResolve);
+        }
+        if (HasVisibilityExecutionPass(m_ExecutionPlan.passMask,
+                VisibilityExecutionPass::FusedResolveAndApply))
+        {
+            requiredStageMask |= VisibilityBenchmarkStageBit(
+                VisibilityBenchmarkStage::FullResolutionApply);
+        }
+        if (HasVisibilityExecutionPass(m_ExecutionPlan.passMask,
+                VisibilityExecutionPass::Composition) ||
+            m_ExecutionPlan.configuration.application ==
+                VisibilityApplicationMode::BypassCompositionDiagnostic)
+        {
+            requiredStageMask |= VisibilityBenchmarkStageBit(
+                VisibilityBenchmarkStage::Composition);
+        }
+
+        VisibilityBenchmarkRunConfiguration configuration;
+        configuration.metadata = metadata;
+        configuration.firstFrameId = m_TimerFrame;
+        configuration.warmupFrameCount = warmupFrameCount;
+        configuration.measuredFrameCount = measuredFrameCount;
+        configuration.requiredStageMask = requiredStageMask;
+        configuration.summedStageMask =
+            VisibilityBenchmarkDefaultSummedStageMask & requiredStageMask;
+        configuration.producerStageMask =
+            VisibilityBenchmarkDefaultProducerStageMask & requiredStageMask;
+        if (HasVisibilityExecutionPass(m_ExecutionPlan.passMask,
+                VisibilityExecutionPass::FusedResolveAndApply))
+        {
+            // In fused profiles, the full-resolution apply dispatch owns the
+            // final producer work; excluding it would make producer totals
+            // incomparable with the unfused reconstruction pipeline.
+            configuration.producerStageMask |= VisibilityBenchmarkStageBit(
+                VisibilityBenchmarkStage::FullResolutionApply);
+        }
+        if (!m_BenchmarkStatistics.Reset(configuration))
+            return false;
+
+        ResetHistory();
+        m_BenchmarkActive = true;
+        return true;
+    }
+
+    void ScreenSpaceVisibilityPass::CancelBenchmark()
+    {
+        m_BenchmarkActive = false;
     }
 
     void ScreenSpaceVisibilityPass::AdvanceTimers()
@@ -873,16 +1157,42 @@ namespace uvsr
 
             const float milliseconds =
                 m_Device->getTimerQueryTime(query) * 1000.f;
+            const uint64_t originatingFrame =
+                m_TimerFrameIds[stageIndex][slot];
             m_Device->resetTimerQuery(query);
             m_TimerPending[stageIndex][slot] = false;
+
+            if (m_BenchmarkActive)
+            {
+                (void)m_BenchmarkStatistics.AddSample(
+                    originatingFrame,
+                    static_cast<VisibilityBenchmarkStage>(stageIndex),
+                    milliseconds);
+            }
 
             switch (static_cast<Stage>(stageIndex))
             {
             case Stage::DepthHierarchy:
                 m_Timings.depthHierarchyMs = milliseconds;
                 break;
-            case Stage::Sampling:
-                m_Timings.samplingMs = milliseconds;
+            case Stage::FirstTrace:
+                m_Timings.firstTraceMs = milliseconds;
+                m_Timings.samplingMs =
+                    m_Timings.firstTraceMs + m_Timings.laterTraceMs;
+                break;
+            case Stage::LaterTrace:
+                m_Timings.laterTraceMs = milliseconds;
+                m_Timings.samplingMs =
+                    m_Timings.firstTraceMs + m_Timings.laterTraceMs;
+                break;
+            case Stage::LaterTraceBounce2:
+                m_Timings.laterBounceMs[0] = milliseconds;
+                break;
+            case Stage::LaterTraceBounce3:
+                m_Timings.laterBounceMs[1] = milliseconds;
+                break;
+            case Stage::LaterTraceBounce4:
+                m_Timings.laterBounceMs[2] = milliseconds;
                 break;
             case Stage::Temporal:
                 m_Timings.temporalMs = milliseconds;
@@ -890,10 +1200,34 @@ namespace uvsr
             case Stage::Filtering:
                 m_Timings.filteringMs = milliseconds;
                 break;
+            case Stage::FullResolutionApply:
+                m_Timings.fullResolutionApplyMs = milliseconds;
+                break;
             case Stage::Composition:
                 m_Timings.compositionMs = milliseconds;
                 break;
+            case Stage::EffectEnvelope:
+                m_Timings.effectEnvelopeMs = milliseconds;
+                break;
             default:
+                break;
+            }
+        }
+
+        // Do not partially instrument a frame when even one query in the
+        // selected ring slot is still owned by the GPU. Holding the logical
+        // timer frame here makes the next render poll the same slot again;
+        // once it is free, every required stage is issued under one frame ID.
+        // This avoids permanent holes in a benchmark on a GPU whose query
+        // latency exceeds c_TimerLatency physical frames.
+        m_TimerFrameWritable = true;
+        for (uint32_t stageIndex = 0u;
+            stageIndex < static_cast<uint32_t>(Stage::Count);
+            ++stageIndex)
+        {
+            if (m_TimerPending[stageIndex][slot])
+            {
+                m_TimerFrameWritable = false;
                 break;
             }
         }
@@ -903,6 +1237,9 @@ namespace uvsr
         nvrhi::ICommandList* commandList,
         Stage stage)
     {
+        if (!m_TimerFrameWritable)
+            return;
+
         const uint32_t stageIndex = static_cast<uint32_t>(stage);
         const uint32_t slot = m_TimerFrame % c_TimerLatency;
         if (m_TimerPending[stageIndex][slot])
@@ -923,6 +1260,7 @@ namespace uvsr
         const uint32_t slot = m_TimerFrame % c_TimerLatency;
         commandList->endTimerQuery(m_TimerQueries[stageIndex][slot]);
         m_TimerPending[stageIndex][slot] = true;
+        m_TimerFrameIds[stageIndex][slot] = m_TimerFrame;
         m_TimerActive[stageIndex] = false;
     }
 
@@ -1005,6 +1343,130 @@ namespace uvsr
             settings.sampling.radius >= 8.f &&
             !view->IsOrthographicProjection();
 
+        VisibilityPerformanceWorkload performanceWorkload;
+        performanceWorkload.consumer = GetPerformanceConsumer(
+            ambientEnabled, indirectEnabled);
+        performanceWorkload.estimator = GetPerformanceEstimator(
+            settings.estimator);
+        performanceWorkload.resolution = GetPerformanceResolution(
+            settings.resolution);
+        performanceWorkload.scheduler = GetPerformanceScheduler(
+            settings.sampling.scheduler);
+        const VisibilityPerformanceProfileConfiguration selectedConfig =
+            GetVisibilityPerformanceProfileConfiguration(
+                settings.performanceProfile);
+        uint32_t traceGroupSizeX = kThreadGroupSize;
+        uint32_t traceGroupSizeY = kThreadGroupSize;
+        if (settings.performanceProfile ==
+            VisibilityPerformanceProfile::ExactGroup16x8)
+        {
+            traceGroupSizeX = 16u;
+        }
+        else if (settings.performanceProfile ==
+            VisibilityPerformanceProfile::ExactGroup8x16)
+        {
+            traceGroupSizeY = 16u;
+        }
+        if (selectedConfig.noise ==
+            VisibilityNoiseDelivery::ActivisionInterleavedGradient)
+        {
+            performanceWorkload.scheduler =
+                VisibilityPerformanceScheduler::Activision4x4SixPhase;
+        }
+        else if (selectedConfig.noise ==
+            VisibilityNoiseDelivery::XeGtaoHilbertR2)
+        {
+            performanceWorkload.scheduler =
+                VisibilityPerformanceScheduler::XeGtaoHilbertR2;
+        }
+        else if (selectedConfig.noise ==
+            VisibilityNoiseDelivery::ConstantDiagnostic)
+        {
+            performanceWorkload.scheduler =
+                VisibilityPerformanceScheduler::ConstantDiagnostic;
+        }
+        performanceWorkload.firstBounceSampleCount = std::clamp(
+            settings.sampling.maximumSampleCount, 1u, 64u);
+        performanceWorkload.laterBounceSampleCount =
+            GetIndirectBounceSampleCount(
+                performanceWorkload.firstBounceSampleCount, 1u);
+        performanceWorkload.bounceCount = activeBounceCount;
+        performanceWorkload.adaptiveSamplingEnabled = adaptiveEnabled;
+        performanceWorkload.temporalEnabled = temporalEnabled;
+        performanceWorkload.spatialEnabled = spatialFilterEnabled;
+        performanceWorkload.depthHierarchyEnabled = useDepthHierarchy;
+        performanceWorkload.outputWidth = fullSize.x;
+        performanceWorkload.outputHeight = fullSize.y;
+        performanceWorkload.radius = settings.sampling.radius;
+        performanceWorkload.thickness = settings.sampling.thickness;
+        performanceWorkload.radialExponent =
+            settings.sampling.stepDistributionExponent;
+        performanceWorkload.threadGroupSizeX = traceGroupSizeX;
+        performanceWorkload.threadGroupSizeY = traceGroupSizeY;
+
+        const VisibilityExecutionPlan selectedPlan =
+            ResolveVisibilityExecutionPlan(
+                settings.performanceProfile, performanceWorkload);
+        VisibilityExecutionPlan executionPlan = selectedPlan;
+        if (!executionPlan.valid)
+        {
+            VisibilityPerformanceWorkload referenceWorkload =
+                performanceWorkload;
+            referenceWorkload.scheduler = GetPerformanceScheduler(
+                settings.sampling.scheduler);
+            referenceWorkload.threadGroupSizeX = kThreadGroupSize;
+            referenceWorkload.threadGroupSizeY = kThreadGroupSize;
+            executionPlan = ResolveVisibilityExecutionPlan(
+                VisibilityPerformanceProfile::Reference,
+                referenceWorkload);
+            assert(executionPlan.valid);
+            traceGroupSizeX = kThreadGroupSize;
+            traceGroupSizeY = kThreadGroupSize;
+        }
+        if (m_ExecutionPlan.valid &&
+            m_ExecutionPlan.historyResetKey != executionPlan.historyResetKey)
+        {
+            ResetHistory();
+        }
+        m_ExecutionPlan = executionPlan;
+
+        const VisibilityPerformanceProfileConfiguration& performanceConfig =
+            executionPlan.configuration;
+        const bool fusedResolveApply = performanceConfig.application ==
+                VisibilityApplicationMode::FusedResolveAndApplyExact ||
+            performanceConfig.application ==
+                VisibilityApplicationMode::FusedResolveAndApplyPackedEdges;
+        const bool packedFastEnabled = performanceConfig.noise ==
+            VisibilityNoiseDelivery::PackedCurrentFast;
+        const bool packedEdgesEnabled =
+            performanceConfig.reconstruction ==
+                VisibilityReconstructionMode::PackedEdges2x2 ||
+            performanceConfig.reconstruction ==
+                VisibilityReconstructionMode::PackedEdges4x4;
+        const VisibilityPerformanceProfile activePerformanceProfile =
+            performanceConfig.profile;
+        uint32_t schedulerSpecialization = 0u;
+        switch (executionPlan.workload.scheduler)
+        {
+        case VisibilityPerformanceScheduler::IndependentHash:
+            schedulerSpecialization = 1u;
+            break;
+        case VisibilityPerformanceScheduler::ToroidalBlueNoiseRankField:
+            schedulerSpecialization = 2u;
+            break;
+        case VisibilityPerformanceScheduler::
+                FilterAdaptedSpatiotemporalRankField:
+            schedulerSpecialization = 3u;
+            break;
+        case VisibilityPerformanceScheduler::ConstantDiagnostic:
+            schedulerSpecialization = 4u;
+            break;
+        default:
+            break;
+        }
+        const bool finalAmbientEnabled = postProcessEnabled &&
+            ambientEnabled && !fusedResolveApply;
+
         EnsureResources(
             fullSize,
             resolutionScale,
@@ -1014,7 +1476,22 @@ namespace uvsr
             adaptiveEnabled,
             temporalEnabled,
             postProcessEnabled,
-            useDepthHierarchy);
+            useDepthHierarchy,
+            finalAmbientEnabled,
+            packedFastEnabled,
+            packedEdgesEnabled);
+        m_Timings.profileValid = selectedPlan.valid;
+        m_Timings.profileError = selectedPlan.valid
+            ? std::string() : selectedPlan.errorMessage;
+        m_Timings.activePermutation = selectedPlan.valid
+            ? selectedPlan.permutationName
+            : std::string("Reference Fallback: ") +
+                std::string(selectedPlan.configuration.name);
+        m_Timings.activeSrvCount = executionPlan.firstTraceSrvCount;
+        m_Timings.activeUavCount = executionPlan.firstTraceUavCount;
+        m_Timings.peakSrvCount = executionPlan.peakSrvCount;
+        m_Timings.peakUavCount = executionPlan.peakUavCount;
+        m_Timings.activeDispatchCount = executionPlan.dispatchCount;
         if (m_HistoryEstimatorInitialized &&
             m_HistoryEstimator != settings.estimator)
         {
@@ -1100,9 +1577,14 @@ namespace uvsr
         m_HistoryConfigurationInitialized = true;
         constants.feedbackValid = adaptiveEnabled && m_FeedbackValid ? 1u : 0u;
         constants.historyValid = temporalEnabled && m_HistoryValid ? 1u : 0u;
+        BeginStage(commandList, Stage::EffectEnvelope);
         commandList->writeBuffer(
             m_ConstantBuffer, &constants, sizeof(constants));
 
+        const uint32_t traceDispatchX =
+            (m_SamplingSize.x + traceGroupSizeX - 1u) / traceGroupSizeX;
+        const uint32_t traceDispatchY =
+            (m_SamplingSize.y + traceGroupSizeY - 1u) / traceGroupSizeY;
         const uint32_t samplingDispatchX =
             (m_SamplingSize.x + kThreadGroupSize - 1u) / kThreadGroupSize;
         const uint32_t samplingDispatchY =
@@ -1188,58 +1670,436 @@ namespace uvsr
             : (activeBounceCount > 1u
                 ? "Fixed Visibility Sampling (Multiple Bounces)"
                 : "Fixed Visibility Sampling"));
-        BeginStage(commandList, Stage::Sampling);
         const bool writeBounceMetadata = activeBounceCount > 1u;
-        Pipeline& firstPipeline = writeBounceMetadata
-            ? m_MultiBounceFirstSampling[estimatorIndex]
-                [ambientEnabled ? 1u : 0u][sparseSamplingIndex]
-            : m_Sampling[estimatorIndex][consumerVariant]
-                [sparseSamplingIndex];
-        nvrhi::BindingSetHandle& firstBindingSet = writeBounceMetadata
-            ? m_MultiBounceFirstBindingSets[estimatorIndex]
-                [ambientEnabled ? 1u : 0u]
-                [sparseSamplingIndex][feedbackWrite]
-            : m_SamplingBindingSets[estimatorIndex]
-                [consumerVariant][sparseSamplingIndex][feedbackWrite];
-        if (!firstBindingSet)
+        Pipeline* firstPipeline = nullptr;
+        nvrhi::BindingSetHandle* firstBindingSet = nullptr;
+        const char* advancedFirstShader = nullptr;
+        std::vector<ShaderMacro> advancedFirstMacros;
+        uint32_t algorithmVariant = 0u;
+        switch (activePerformanceProfile)
+        {
+        case VisibilityPerformanceProfile::ExactDuplicatePixelRejectionOff:
+            advancedFirstShader =
+                "uvsr/screen_space_visibility_duplicate_off_cs.hlsl";
+            break;
+        case VisibilityPerformanceProfile::ExactFullMaskEarlyExitOff:
+            advancedFirstShader =
+                "uvsr/screen_space_visibility_full_mask_exit_off_cs.hlsl";
+            break;
+        case VisibilityPerformanceProfile::AlgorithmicProjectedRadiusClamp32:
+            advancedFirstShader =
+                "uvsr/screen_space_visibility_radius_clamp_32_cs.hlsl";
+            break;
+        case VisibilityPerformanceProfile::AlgorithmicProjectedRadiusClamp64:
+            advancedFirstShader =
+                "uvsr/screen_space_visibility_radius_clamp_64_cs.hlsl";
+            break;
+        case VisibilityPerformanceProfile::AlgorithmicProjectedRadiusClamp128:
+            advancedFirstShader =
+                "uvsr/screen_space_visibility_radius_clamp_128_cs.hlsl";
+            break;
+        case VisibilityPerformanceProfile::DiagnosticConstantScheduler:
+            advancedFirstShader =
+                "uvsr/screen_space_visibility_constant_scheduler_cs.hlsl";
+            break;
+        default:
+            break;
+        }
+        if (advancedFirstShader)
+        {
+            advancedFirstMacros = {{
+                "FIXED_DIRECT_DEPTH", useDepthHierarchy ? "0" : "1" }};
+            if (activePerformanceProfile !=
+                VisibilityPerformanceProfile::DiagnosticConstantScheduler)
+            {
+                advancedFirstMacros.push_back({
+                    "SCHEDULER_SPECIALIZATION",
+                    std::to_string(schedulerSpecialization) });
+            }
+        }
+        else if (packedFastEnabled)
+        {
+            advancedFirstShader =
+                "uvsr/screen_space_visibility_packed_fast_cs.hlsl";
+            advancedFirstMacros = {
+                { "ENABLE_AO", ambientEnabled ? "1" : "0" },
+                { "ENABLE_GI", indirectEnabled ? "1" : "0" },
+                { "ENABLE_BOUNCE_METADATA",
+                    writeBounceMetadata ? "1" : "0" },
+                { "FIXED_DIRECT_DEPTH", useDepthHierarchy ? "0" : "1" }
+            };
+        }
+        else if (packedEdgesEnabled)
+        {
+            advancedFirstShader =
+                "uvsr/screen_space_visibility_algorithmic_cs.hlsl";
+            switch (activePerformanceProfile)
+            {
+            case VisibilityPerformanceProfile::
+                    AlgorithmicPackedEdgesDepthNormal2x2:
+            case VisibilityPerformanceProfile::
+                    AlgorithmicPackedEdgesLeakage2x2:
+            case VisibilityPerformanceProfile::
+                    AlgorithmicFusedPackedEdges2x2:
+            case VisibilityPerformanceProfile::
+                    AlgorithmicFusedPackedEdges4x4:
+                algorithmVariant = 5u;
+                break;
+            case VisibilityPerformanceProfile::AlgorithmicPackedEdgesSlope2x2:
+                algorithmVariant = 6u;
+                break;
+            default:
+                algorithmVariant = 4u;
+                break;
+            }
+        }
+        else if (activePerformanceProfile ==
+                VisibilityPerformanceProfile::ExactGroup16x8 ||
+            activePerformanceProfile ==
+                VisibilityPerformanceProfile::ExactGroup8x16)
+        {
+            advancedFirstShader =
+                "uvsr/screen_space_visibility_algorithmic_cs.hlsl";
+            algorithmVariant = activePerformanceProfile ==
+                    VisibilityPerformanceProfile::ExactGroup16x8
+                ? 7u : 8u;
+        }
+        else
+        {
+            if (performanceConfig.noise ==
+                    VisibilityNoiseDelivery::ActivisionInterleavedGradient &&
+                performanceConfig.trace ==
+                    VisibilityTraceImplementation::FixedInterleavedBitmask)
+            {
+                advancedFirstShader =
+                    "uvsr/screen_space_visibility_algorithmic_cs.hlsl";
+                algorithmVariant = 1u;
+            }
+            else switch (performanceConfig.trace)
+            {
+            case VisibilityTraceImplementation::FixedInterleavedBitmask:
+                advancedFirstShader =
+                    "uvsr/screen_space_visibility_fixed_cs.hlsl";
+                advancedFirstMacros = {
+                    { "VISIBILITY_ESTIMATOR",
+                        std::to_string(estimatorIndex) },
+                    { "ENABLE_AO", ambientEnabled ? "1" : "0" },
+                    { "ENABLE_GI", indirectEnabled ? "1" : "0" },
+                    { "ENABLE_BOUNCE_REINJECTION", "0" },
+                    { "INITIALIZE_BOUNCE_CUMULATIVE", "0" },
+                    { "ENABLE_BOUNCE_METADATA",
+                        writeBounceMetadata ? "1" : "0" },
+                    { "FIXED_DIRECT_DEPTH",
+                        useDepthHierarchy ? "0" : "1" },
+                    { "SCHEDULER_SPECIALIZATION",
+                        std::to_string(schedulerSpecialization) },
+                    { "FIXED_SAMPLE_COUNT", std::to_string(
+                        executionPlan.fixedFirstBounceSampleCount) }
+                };
+                break;
+            case VisibilityTraceImplementation::ConstantDiagnostic:
+            case VisibilityTraceImplementation::DepthOnlyDiagnostic:
+            case VisibilityTraceImplementation::BitmaskOnlyDiagnostic:
+                advancedFirstShader =
+                    "uvsr/screen_space_visibility_diagnostic_cs.hlsl";
+                advancedFirstMacros = {
+                    { "TRACE_DIAGNOSTIC",
+                        performanceConfig.trace ==
+                            VisibilityTraceImplementation::ConstantDiagnostic
+                        ? "1"
+                        : performanceConfig.trace ==
+                                VisibilityTraceImplementation::
+                                    DepthOnlyDiagnostic
+                            ? "2" : "3" },
+                    { "SCHEDULER_SPECIALIZATION",
+                        std::to_string(schedulerSpecialization) }
+                };
+                break;
+            case VisibilityTraceImplementation::ActivisionHorizon:
+                advancedFirstShader =
+                    "uvsr/screen_space_visibility_algorithmic_cs.hlsl";
+                algorithmVariant = activePerformanceProfile ==
+                        VisibilityPerformanceProfile::ActivisionPs4Schedule
+                    ? 3u : 2u;
+                break;
+            case VisibilityTraceImplementation::XeGtaoHorizon:
+                advancedFirstShader =
+                    "uvsr/screen_space_visibility_algorithmic_cs.hlsl";
+                algorithmVariant = 2u;
+                break;
+            default:
+                break;
+            }
+        }
+        if (algorithmVariant != 0u)
+        {
+            advancedFirstMacros = {
+                { "VISIBILITY_ALGORITHM",
+                    std::to_string(algorithmVariant) },
+                { "FIXED_DIRECT_DEPTH", useDepthHierarchy ? "0" : "1" },
+                { "SCHEDULER_SPECIALIZATION",
+                    std::to_string(schedulerSpecialization) }
+            };
+        }
+
+        if (advancedFirstShader)
+        {
+            // Advanced permutations use their reflected resource subset rather
+            // than inheriting the generic shader's dummy-resource layout. This
+            // is the concrete off-state/minimal-binding experiment: fixed AO,
+            // for example, binds depth, normals, the selected scalar noise
+            // sources, and its AO UAV only.
+            std::vector<nvrhi::BindingLayoutItem> layout = {
+                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0)
+            };
+            const bool diagnosticTrace = performanceConfig.trace ==
+                    VisibilityTraceImplementation::ConstantDiagnostic ||
+                performanceConfig.trace ==
+                    VisibilityTraceImplementation::DepthOnlyDiagnostic ||
+                performanceConfig.trace ==
+                    VisibilityTraceImplementation::BitmaskOnlyDiagnostic;
+            const bool diagnosticReadsDepth = performanceConfig.trace ==
+                VisibilityTraceImplementation::DepthOnlyDiagnostic;
+            if (diagnosticTrace)
+            {
+                if (diagnosticReadsDepth)
+                {
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(0));
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(1));
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(3));
+                    if (schedulerSpecialization == 2u)
+                    {
+                        layout.push_back(
+                            nvrhi::BindingLayoutItem::Texture_SRV(5));
+                    }
+                    else if (schedulerSpecialization == 3u)
+                    {
+                        layout.push_back(
+                            nvrhi::BindingLayoutItem::Texture_SRV(6));
+                    }
+                }
+                layout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(0));
+            }
+            else
+            {
+                layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(0));
+                layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(1));
+                if (indirectEnabled)
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(2));
+                if (useDepthHierarchy)
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(3));
+
+                if (packedFastEnabled)
+                {
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(6));
+                }
+                else if (schedulerSpecialization == 2u)
+                {
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(5));
+                }
+                else if (schedulerSpecialization == 3u)
+                {
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(6));
+                }
+
+                if (ambientEnabled)
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_UAV(0));
+                if (indirectEnabled)
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_UAV(1));
+                if (packedEdgesEnabled)
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_UAV(3));
+            }
+            const uint64_t pipelineKey = AdvancedPipelineKey(
+                executionPlan.shaderPermutationKey, 1u);
+            firstPipeline = &GetOrCreateAdvancedPipeline(
+                pipelineKey, advancedFirstShader, layout,
+                &advancedFirstMacros);
+            const uint64_t bindingKey = AdvancedPipelineKey(
+                pipelineKey, 0x100u + feedbackWrite);
+            firstBindingSet = std::addressof(
+                m_AdvancedBindingSets[bindingKey]);
+        }
+        else
+        {
+            firstPipeline = writeBounceMetadata
+                ? &m_MultiBounceFirstSampling[estimatorIndex]
+                    [ambientEnabled ? 1u : 0u][sparseSamplingIndex]
+                : &m_Sampling[estimatorIndex][consumerVariant]
+                    [sparseSamplingIndex];
+            firstBindingSet = writeBounceMetadata
+                ? std::addressof(
+                    m_MultiBounceFirstBindingSets[estimatorIndex]
+                        [ambientEnabled ? 1u : 0u]
+                        [sparseSamplingIndex][feedbackWrite])
+                : std::addressof(
+                    m_SamplingBindingSets[estimatorIndex]
+                        [consumerVariant][sparseSamplingIndex][feedbackWrite]);
+        }
+
+        if (!*firstBindingSet)
         {
             nvrhi::BindingSetDesc bindings;
             bindings.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
-                nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth),
-                nvrhi::BindingSetItem::Texture_SRV(1, inputs.normals),
-                nvrhi::BindingSetItem::Texture_SRV(2, sourceRadiance),
-                nvrhi::BindingSetItem::Texture_SRV(3, hierarchy),
-                nvrhi::BindingSetItem::Texture_SRV(4, previousFeedback),
-                nvrhi::BindingSetItem::Texture_SRV(5, m_BlueNoiseTexture),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    6, m_FilterAdaptedNoiseTexture),
-                nvrhi::BindingSetItem::Texture_SRV(7, motion),
-                nvrhi::BindingSetItem::Texture_UAV(0, rawAmbient),
-                nvrhi::BindingSetItem::Texture_UAV(1, rawIndirect),
-                nvrhi::BindingSetItem::Texture_UAV(2, currentFeedback)
+                nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer)
             };
-            firstBindingSet = m_Device->createBindingSet(
-                bindings, firstPipeline.bindingLayout);
+            if (advancedFirstShader)
+            {
+                const bool diagnosticTrace = performanceConfig.trace ==
+                        VisibilityTraceImplementation::ConstantDiagnostic ||
+                    performanceConfig.trace ==
+                        VisibilityTraceImplementation::DepthOnlyDiagnostic ||
+                    performanceConfig.trace ==
+                        VisibilityTraceImplementation::BitmaskOnlyDiagnostic;
+                if (diagnosticTrace)
+                {
+                    if (performanceConfig.trace ==
+                        VisibilityTraceImplementation::DepthOnlyDiagnostic)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                0, inputs.depth));
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                1, inputs.normals));
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                3, hierarchy));
+                        if (schedulerSpecialization == 2u)
+                        {
+                            bindings.bindings.push_back(
+                                nvrhi::BindingSetItem::Texture_SRV(
+                                    5, m_BlueNoiseTexture));
+                        }
+                        else if (schedulerSpecialization == 3u)
+                        {
+                            bindings.bindings.push_back(
+                                nvrhi::BindingSetItem::Texture_SRV(
+                                    6, m_FilterAdaptedNoiseTexture));
+                        }
+                    }
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_UAV(0, rawAmbient));
+                }
+                else
+                {
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth));
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_SRV(1, inputs.normals));
+                    if (indirectEnabled)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                            2, sourceRadiance));
+                    }
+                    if (useDepthHierarchy)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                3, hierarchy));
+                    }
+                    if (packedFastEnabled)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                6, m_PackedFastNoiseTexture));
+                    }
+                    else if (schedulerSpecialization == 2u)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                5, m_BlueNoiseTexture));
+                    }
+                    else if (schedulerSpecialization == 3u)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                6, m_FilterAdaptedNoiseTexture));
+                    }
+                    if (ambientEnabled)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_UAV(
+                                0, rawAmbient));
+                    }
+                    if (indirectEnabled)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_UAV(
+                                1, rawIndirect));
+                    }
+                    if (packedEdgesEnabled)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_UAV(
+                                3, m_PackedEdgesTexture));
+                    }
+                }
+            }
+            else
+            {
+                bindings.bindings.insert(bindings.bindings.end(), {
+                    nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth),
+                    nvrhi::BindingSetItem::Texture_SRV(1, inputs.normals),
+                    nvrhi::BindingSetItem::Texture_SRV(2, sourceRadiance),
+                    nvrhi::BindingSetItem::Texture_SRV(3, hierarchy),
+                    nvrhi::BindingSetItem::Texture_SRV(4, previousFeedback),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        5, m_BlueNoiseTexture),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        6, m_FilterAdaptedNoiseTexture),
+                    nvrhi::BindingSetItem::Texture_SRV(7, motion),
+                    nvrhi::BindingSetItem::Texture_UAV(0, rawAmbient),
+                    nvrhi::BindingSetItem::Texture_UAV(1, rawIndirect),
+                    nvrhi::BindingSetItem::Texture_UAV(
+                        2, currentFeedback)
+                });
+            }
+            *firstBindingSet = m_Device->createBindingSet(
+                bindings, firstPipeline->bindingLayout);
         }
 
         {
             nvrhi::ComputeState state;
-            state.pipeline = firstPipeline.pipeline;
-            state.bindings = { firstBindingSet };
+            state.pipeline = firstPipeline->pipeline;
+            state.bindings = { *firstBindingSet };
+            BeginStage(commandList, Stage::FirstTrace);
             commandList->setComputeState(state);
             commandList->dispatch(
-                samplingDispatchX, samplingDispatchY, 1u);
+                traceDispatchX, traceDispatchY, 1u);
+            EndStage(commandList, Stage::FirstTrace);
         }
 
         const uint32_t primaryMinimumSampleCount =
             constants.minimumSampleCount;
         const uint32_t primaryMaximumSampleCount =
             constants.maximumSampleCount;
+        if (activeBounceCount > 1u)
+            BeginStage(commandList, Stage::LaterTrace);
+        else
+        {
+            m_Timings.laterTraceMs = 0.f;
+            m_Timings.laterBounceMs.fill(0.f);
+        }
         for (uint32_t bounceIndex = 1u;
             bounceIndex < activeBounceCount;
             ++bounceIndex)
         {
+            const Stage bounceStage = static_cast<Stage>(
+                static_cast<uint32_t>(Stage::LaterTraceBounce2) +
+                bounceIndex - 1u);
+            BeginStage(commandList, bounceStage);
             const uint32_t outputIndex = bounceIndex & 1u;
             const uint32_t previousIndex = 1u - outputIndex;
             constants.minimumSampleCount = GetIndirectBounceSampleCount(
@@ -1253,112 +2113,265 @@ namespace uvsr
 
             const uint32_t cumulativeMode = bounceIndex == 1u ? 0u : 1u;
             const uint32_t bounceRotation = bounceIndex - 1u;
-            Pipeline& pipeline =
-                m_IndirectBounceSampling[estimatorIndex]
+            Pipeline* pipeline = nullptr;
+            nvrhi::BindingSetHandle* bindingSet = nullptr;
+            if (executionPlan.fixedLaterBounceSampleCount != 0u)
+            {
+                std::vector<ShaderMacro> macros = {
+                    { "VISIBILITY_ESTIMATOR",
+                        std::to_string(estimatorIndex) },
+                    { "ENABLE_AO", "0" },
+                    { "ENABLE_GI", "1" },
+                    { "ENABLE_BOUNCE_REINJECTION", "1" },
+                    { "INITIALIZE_BOUNCE_CUMULATIVE",
+                        cumulativeMode == 0u ? "1" : "0" },
+                    { "ENABLE_BOUNCE_METADATA", "0" },
+                    { "SCHEDULER_SPECIALIZATION",
+                        std::to_string(schedulerSpecialization) },
+                    { "FIXED_SAMPLE_COUNT", std::to_string(
+                        executionPlan.fixedLaterBounceSampleCount) }
+                };
+                std::vector<nvrhi::BindingLayoutItem> layout = {
+                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(1),
+                    nvrhi::BindingLayoutItem::Texture_SRV(2),
+                    nvrhi::BindingLayoutItem::Texture_SRV(4),
+                    nvrhi::BindingLayoutItem::Texture_SRV(5),
+                    nvrhi::BindingLayoutItem::Texture_SRV(6)
+                };
+                if (schedulerSpecialization == 2u)
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(8));
+                else if (schedulerSpecialization == 3u)
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(9));
+                layout.push_back(
+                    nvrhi::BindingLayoutItem::Texture_UAV(0));
+                layout.push_back(
+                    nvrhi::BindingLayoutItem::Texture_UAV(1));
+                const uint64_t pipelineKey = AdvancedPipelineKey(
+                    executionPlan.shaderPermutationKey,
+                    0x20u + cumulativeMode);
+                pipeline = &GetOrCreateAdvancedPipeline(
+                    pipelineKey,
+                    "uvsr/screen_space_visibility_fixed_cs.hlsl",
+                    layout, &macros);
+                const uint64_t bindingKey = AdvancedPipelineKey(
+                    pipelineKey,
+                    0x200u + bounceRotation * 2u + feedbackWrite);
+                bindingSet = std::addressof(
+                    m_AdvancedBindingSets[bindingKey]);
+            }
+            else
+            {
+                pipeline = &m_IndirectBounceSampling[estimatorIndex]
                     [cumulativeMode][sparseSamplingIndex];
-            nvrhi::BindingSetHandle& bindingSet =
-                m_IndirectBounceBindingSets[estimatorIndex]
-                    [cumulativeMode][sparseSamplingIndex]
-                    [bounceRotation][feedbackWrite];
-            if (!bindingSet)
+                bindingSet = std::addressof(
+                    m_IndirectBounceBindingSets[estimatorIndex]
+                        [cumulativeMode][sparseSamplingIndex]
+                        [bounceRotation][feedbackWrite]);
+            }
+            if (!*bindingSet)
             {
                 nvrhi::BindingSetDesc bindings;
-                bindings.bindings = {
-                    nvrhi::BindingSetItem::ConstantBuffer(
-                        0, m_ConstantBuffer),
-                    nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth),
-                    nvrhi::BindingSetItem::Texture_SRV(1, inputs.normals),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        2, m_RawIndirectDiffuse[previousIndex]),
-                    nvrhi::BindingSetItem::Texture_SRV(3, hierarchy),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        4, inputs.gbufferDiffuse),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        5, inputs.gbufferEmissive),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        6, inputs.materialAmbientOcclusion),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        7, previousFeedback),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        8, m_BlueNoiseTexture),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        9, m_FilterAdaptedNoiseTexture),
-                    nvrhi::BindingSetItem::Texture_SRV(10, motion),
-                    nvrhi::BindingSetItem::Texture_UAV(
-                        0, m_RawIndirectDiffuse[outputIndex]),
-                    nvrhi::BindingSetItem::Texture_UAV(
-                        1, m_CumulativeIndirectDiffuse)
-                };
-                bindingSet = m_Device->createBindingSet(
-                    bindings, pipeline.bindingLayout);
+                if (executionPlan.fixedLaterBounceSampleCount != 0u)
+                {
+                    bindings.bindings = {
+                        nvrhi::BindingSetItem::ConstantBuffer(
+                            0, m_ConstantBuffer),
+                        nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            1, inputs.normals),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            2, m_RawIndirectDiffuse[previousIndex]),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            4, inputs.gbufferDiffuse),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            5, inputs.gbufferEmissive),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            6, inputs.materialAmbientOcclusion)
+                    };
+                    if (schedulerSpecialization == 2u)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                8, m_BlueNoiseTexture));
+                    }
+                    else if (schedulerSpecialization == 3u)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                9, m_FilterAdaptedNoiseTexture));
+                    }
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            0, m_RawIndirectDiffuse[outputIndex]));
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            1, m_CumulativeIndirectDiffuse));
+                }
+                else
+                {
+                    bindings.bindings = {
+                        nvrhi::BindingSetItem::ConstantBuffer(
+                            0, m_ConstantBuffer),
+                        nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            1, inputs.normals),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            2, m_RawIndirectDiffuse[previousIndex]),
+                        nvrhi::BindingSetItem::Texture_SRV(3, hierarchy),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            4, inputs.gbufferDiffuse),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            5, inputs.gbufferEmissive),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            6, inputs.materialAmbientOcclusion),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            7, previousFeedback),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            8, m_BlueNoiseTexture),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            9, m_FilterAdaptedNoiseTexture),
+                        nvrhi::BindingSetItem::Texture_SRV(10, motion),
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            0, m_RawIndirectDiffuse[outputIndex]),
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            1, m_CumulativeIndirectDiffuse)
+                    };
+                }
+                *bindingSet = m_Device->createBindingSet(
+                    bindings, pipeline->bindingLayout);
             }
 
             nvrhi::ComputeState state;
-            state.pipeline = pipeline.pipeline;
-            state.bindings = { bindingSet };
+            state.pipeline = pipeline->pipeline;
+            state.bindings = { *bindingSet };
             commandList->setComputeState(state);
             commandList->dispatch(
                 samplingDispatchX, samplingDispatchY, 1u);
+            EndStage(commandList, bounceStage);
         }
 
         if (activeBounceCount > 1u)
+        {
+            for (uint32_t bounceIndex = activeBounceCount;
+                bounceIndex < MaxIndirectDiffuseBounceCount;
+                ++bounceIndex)
+            {
+                m_Timings.laterBounceMs[bounceIndex - 1u] = 0.f;
+            }
             rawIndirect = m_CumulativeIndirectDiffuse;
-        EndStage(commandList, Stage::Sampling);
+            EndStage(commandList, Stage::LaterTrace);
+        }
         commandList->endMarker();
 
         nvrhi::ITexture* reconstructedAmbient = rawAmbient;
         nvrhi::ITexture* reconstructedIndirect = rawIndirect;
         if (temporalEnabled)
         {
-            Pipeline& pipeline = m_Temporal[consumerVariant];
             const uint32_t sourceVariant =
                 activeBounceCount > 1u ? 1u : 0u;
-            nvrhi::BindingSetHandle& bindingSet =
-                m_TemporalBindingSets[consumerVariant]
-                    [sourceVariant][historyWrite];
-            if (!bindingSet)
+            Pipeline* pipeline = nullptr;
+            nvrhi::BindingSetHandle* bindingSet = nullptr;
+            if (performanceConfig.temporal ==
+                VisibilityTemporalMode::CopyDiagnostic)
+            {
+                const std::vector<nvrhi::BindingLayoutItem> layout = {
+                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(2),
+                    nvrhi::BindingLayoutItem::Texture_SRV(3),
+                    nvrhi::BindingLayoutItem::Texture_UAV(0),
+                    nvrhi::BindingLayoutItem::Texture_UAV(2),
+                    nvrhi::BindingLayoutItem::Texture_UAV(3)
+                };
+                const uint64_t pipelineKey = AdvancedPipelineKey(
+                    executionPlan.shaderPermutationKey, 0x40u);
+                pipeline = &GetOrCreateAdvancedPipeline(
+                    pipelineKey,
+                    "uvsr/screen_space_visibility_temporal_copy_cs.hlsl",
+                    layout);
+                const uint64_t bindingKey = AdvancedPipelineKey(
+                    pipelineKey,
+                    0x400u + sourceVariant * 2u + historyWrite);
+                bindingSet = std::addressof(
+                    m_AdvancedBindingSets[bindingKey]);
+            }
+            else
+            {
+                pipeline = &m_Temporal[consumerVariant];
+                bindingSet = std::addressof(
+                    m_TemporalBindingSets[consumerVariant]
+                        [sourceVariant][historyWrite]);
+            }
+            if (!*bindingSet)
             {
                 nvrhi::BindingSetDesc bindings;
-                bindings.bindings = {
-                    nvrhi::BindingSetItem::ConstantBuffer(
-                        0, m_ConstantBuffer),
-                    nvrhi::BindingSetItem::Texture_SRV(0, rawAmbient),
-                    nvrhi::BindingSetItem::Texture_SRV(1, rawIndirect),
-                    nvrhi::BindingSetItem::Texture_SRV(2, inputs.depth),
-                    nvrhi::BindingSetItem::Texture_SRV(3, inputs.normals),
-                    nvrhi::BindingSetItem::Texture_SRV(4, motion),
-                    nvrhi::BindingSetItem::Texture_SRV(5,
-                        ambientEnabled
-                            ? m_TemporalAmbientVisibility[historyRead].Get()
-                            : m_DummyAmbientVisibility.Get()),
-                    nvrhi::BindingSetItem::Texture_SRV(6,
-                        indirectEnabled
-                            ? m_TemporalIndirectDiffuse[historyRead].Get()
-                            : m_DummyIndirectDiffuse.Get()),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        7, m_TemporalDepth[historyRead]),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        8, m_TemporalNormal[historyRead]),
-                    nvrhi::BindingSetItem::Texture_UAV(0,
-                        ambientEnabled
-                            ? m_TemporalAmbientVisibility[historyWrite].Get()
-                            : m_DummyAmbientOutput.Get()),
-                    nvrhi::BindingSetItem::Texture_UAV(1,
-                        indirectEnabled
-                            ? m_TemporalIndirectDiffuse[historyWrite].Get()
-                            : m_DummyIndirectOutput.Get()),
-                    nvrhi::BindingSetItem::Texture_UAV(
-                        2, m_TemporalDepth[historyWrite]),
-                    nvrhi::BindingSetItem::Texture_UAV(
-                        3, m_TemporalNormal[historyWrite])
-                };
-                bindingSet = m_Device->createBindingSet(
-                    bindings, pipeline.bindingLayout);
+                if (performanceConfig.temporal ==
+                    VisibilityTemporalMode::CopyDiagnostic)
+                {
+                    bindings.bindings = {
+                        nvrhi::BindingSetItem::ConstantBuffer(
+                            0, m_ConstantBuffer),
+                        nvrhi::BindingSetItem::Texture_SRV(0, rawAmbient),
+                        nvrhi::BindingSetItem::Texture_SRV(2, inputs.depth),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            3, inputs.normals),
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            0,
+                            m_TemporalAmbientVisibility[historyWrite]),
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            2, m_TemporalDepth[historyWrite]),
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            3, m_TemporalNormal[historyWrite])
+                    };
+                }
+                else
+                {
+                    bindings.bindings = {
+                        nvrhi::BindingSetItem::ConstantBuffer(
+                            0, m_ConstantBuffer),
+                        nvrhi::BindingSetItem::Texture_SRV(0, rawAmbient),
+                        nvrhi::BindingSetItem::Texture_SRV(1, rawIndirect),
+                        nvrhi::BindingSetItem::Texture_SRV(2, inputs.depth),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            3, inputs.normals),
+                        nvrhi::BindingSetItem::Texture_SRV(4, motion),
+                        nvrhi::BindingSetItem::Texture_SRV(5,
+                            ambientEnabled
+                                ? m_TemporalAmbientVisibility[historyRead].Get()
+                                : m_DummyAmbientVisibility.Get()),
+                        nvrhi::BindingSetItem::Texture_SRV(6,
+                            indirectEnabled
+                                ? m_TemporalIndirectDiffuse[historyRead].Get()
+                                : m_DummyIndirectDiffuse.Get()),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            7, m_TemporalDepth[historyRead]),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            8, m_TemporalNormal[historyRead]),
+                        nvrhi::BindingSetItem::Texture_UAV(0,
+                            ambientEnabled
+                                ? m_TemporalAmbientVisibility[historyWrite].Get()
+                                : m_DummyAmbientOutput.Get()),
+                        nvrhi::BindingSetItem::Texture_UAV(1,
+                            indirectEnabled
+                                ? m_TemporalIndirectDiffuse[historyWrite].Get()
+                                : m_DummyIndirectOutput.Get()),
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            2, m_TemporalDepth[historyWrite]),
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            3, m_TemporalNormal[historyWrite])
+                    };
+                }
+                *bindingSet = m_Device->createBindingSet(
+                    bindings, pipeline->bindingLayout);
             }
 
             nvrhi::ComputeState state;
-            state.pipeline = pipeline.pipeline;
-            state.bindings = { bindingSet };
+            state.pipeline = pipeline->pipeline;
+            state.bindings = { *bindingSet };
             commandList->beginMarker("Visibility Temporal Reconstruction");
             BeginStage(commandList, Stage::Temporal);
             commandList->setComputeState(state);
@@ -1384,7 +2397,97 @@ namespace uvsr
             m_HistoryValid = false;
         }
 
-        if (postProcessEnabled)
+        if (fusedResolveApply)
+        {
+            const bool fusedPackedEdges = performanceConfig.application ==
+                VisibilityApplicationMode::FusedResolveAndApplyPackedEdges;
+            std::vector<nvrhi::BindingLayoutItem> layout = {
+                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                nvrhi::BindingLayoutItem::Texture_SRV(0)
+            };
+            if (!fusedPackedEdges)
+                layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(1));
+            layout.insert(layout.end(), {
+                nvrhi::BindingLayoutItem::Texture_SRV(2),
+                nvrhi::BindingLayoutItem::Texture_SRV(3),
+                nvrhi::BindingLayoutItem::Texture_SRV(4),
+                nvrhi::BindingLayoutItem::Texture_SRV(5),
+                nvrhi::BindingLayoutItem::Texture_SRV(6),
+                nvrhi::BindingLayoutItem::Texture_SRV(7)
+            });
+            if (fusedPackedEdges)
+                layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(8));
+            layout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(0));
+            std::vector<ShaderMacro> macros = {{
+                "FUSED_PACKED_EDGE_RECONSTRUCTION",
+                fusedPackedEdges
+                    ? (performanceConfig.reconstruction ==
+                            VisibilityReconstructionMode::PackedEdges2x2
+                        ? "1" : "2")
+                    : "0" }};
+            const uint64_t pipelineKey = AdvancedPipelineKey(
+                executionPlan.shaderPermutationKey, 0x60u);
+            Pipeline& pipeline = GetOrCreateAdvancedPipeline(
+                pipelineKey,
+                "uvsr/screen_space_visibility_fused_apply_cs.hlsl",
+                layout, &macros);
+            const uint32_t sourceVariant = temporalEnabled
+                ? 2u + historyWrite : 0u;
+            const uint64_t bindingKey = AdvancedPipelineKey(
+                pipelineKey, 0x600u + sourceVariant);
+            nvrhi::BindingSetHandle& bindingSet =
+                m_AdvancedBindingSets[bindingKey];
+            if (!bindingSet)
+            {
+                nvrhi::BindingSetDesc bindings;
+                bindings.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(
+                        0, m_ConstantBuffer),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        0, reconstructedAmbient)
+                };
+                if (!fusedPackedEdges)
+                {
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_SRV(1, inputs.depth));
+                }
+                bindings.bindings.insert(bindings.bindings.end(), {
+                    nvrhi::BindingSetItem::Texture_SRV(2, inputs.normals),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        3, inputs.baseLighting),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        4, inputs.gbufferDiffuse),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        5, inputs.gbufferEmissive),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        6, inputs.materialAmbientOcclusion),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        7, inputs.gbufferSpecular),
+                });
+                if (fusedPackedEdges)
+                {
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            8, m_PackedEdgesTexture));
+                }
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_UAV(0, inputs.output));
+                bindingSet = m_Device->createBindingSet(
+                    bindings, pipeline.bindingLayout);
+            }
+            nvrhi::ComputeState state;
+            state.pipeline = pipeline.pipeline;
+            state.bindings = { bindingSet };
+            commandList->beginMarker(
+                "Visibility Fused Resolve And Full-Resolution Apply");
+            BeginStage(commandList, Stage::FullResolutionApply);
+            commandList->setComputeState(state);
+            commandList->dispatch(fullDispatchX, fullDispatchY, 1u);
+            EndStage(commandList, Stage::FullResolutionApply);
+            commandList->endMarker();
+            m_Timings.filteringMs = 0.f;
+        }
+        else if (postProcessEnabled)
         {
             uint32_t sourceVariant = activeBounceCount > 1u ? 1u : 0u;
             if (temporalEnabled)
@@ -1395,38 +2498,148 @@ namespace uvsr
                         settings.reconstruction.spatialFilter)
                     : 0u,
                 1u);
-            Pipeline& pipeline = m_Filter[filterIndex][consumerVariant];
-            nvrhi::BindingSetHandle& bindingSet =
-                m_FilterBindingSets[filterIndex]
-                    [consumerVariant][sourceVariant];
-            if (!bindingSet)
+            Pipeline* pipeline = nullptr;
+            nvrhi::BindingSetHandle* bindingSet = nullptr;
+            const char* advancedFilterShader = nullptr;
+            std::vector<ShaderMacro> advancedFilterMacros;
+            if (performanceConfig.math ==
+                VisibilityMathMode::ConservativeNumericalFp32)
+            {
+                advancedFilterShader =
+                    "uvsr/screen_space_visibility_filter_exact_cs.hlsl";
+                advancedFilterMacros = {{
+                    "SPATIAL_FILTER", std::to_string(filterIndex) }};
+            }
+            else if (performanceConfig.reconstruction ==
+                    VisibilityReconstructionMode::NearestDiagnostic ||
+                performanceConfig.reconstruction ==
+                    VisibilityReconstructionMode::BilinearDiagnostic)
+            {
+                advancedFilterShader =
+                    "uvsr/screen_space_visibility_filter_diagnostic_cs.hlsl";
+                advancedFilterMacros = {{
+                    "RECONSTRUCTION_DIAGNOSTIC",
+                    performanceConfig.reconstruction ==
+                            VisibilityReconstructionMode::BilinearDiagnostic
+                        ? "1" : "2" }};
+            }
+            else if (packedEdgesEnabled)
+            {
+                advancedFilterShader =
+                    "uvsr/screen_space_visibility_filter_packed_edge_cs.hlsl";
+                advancedFilterMacros = {
+                    { "PACKED_EDGE_RECONSTRUCTION",
+                        performanceConfig.reconstruction ==
+                                VisibilityReconstructionMode::PackedEdges2x2
+                            ? "1" : "2" },
+                    { "PACKED_EDGE_CONTROLLED_LEAKAGE", "0" }
+                };
+                if (settings.performanceProfile == VisibilityPerformanceProfile::
+                    AlgorithmicPackedEdgesLeakage2x2)
+                {
+                    advancedFilterMacros[1].definition = "1";
+                }
+            }
+
+            if (advancedFilterShader)
+            {
+                std::vector<nvrhi::BindingLayoutItem> layout = {
+                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(0)
+                };
+                if (packedEdgesEnabled)
+                {
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(4));
+                }
+                else if (performanceConfig.math ==
+                    VisibilityMathMode::ConservativeNumericalFp32)
+                {
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(2));
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(3));
+                }
+                layout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(0));
+                const uint64_t pipelineKey = AdvancedPipelineKey(
+                    executionPlan.shaderPermutationKey,
+                    0x50u + filterIndex);
+                pipeline = &GetOrCreateAdvancedPipeline(
+                    pipelineKey, advancedFilterShader, layout,
+                    &advancedFilterMacros);
+                const uint64_t bindingKey = AdvancedPipelineKey(
+                    pipelineKey, 0x500u + sourceVariant);
+                bindingSet = std::addressof(
+                    m_AdvancedBindingSets[bindingKey]);
+            }
+            else
+            {
+                pipeline = &m_Filter[filterIndex][consumerVariant];
+                bindingSet = std::addressof(
+                    m_FilterBindingSets[filterIndex]
+                        [consumerVariant][sourceVariant]);
+            }
+            if (!*bindingSet)
             {
                 nvrhi::BindingSetDesc bindings;
-                bindings.bindings = {
-                    nvrhi::BindingSetItem::ConstantBuffer(
-                        0, m_ConstantBuffer),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        0, reconstructedAmbient),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        1, reconstructedIndirect),
-                    nvrhi::BindingSetItem::Texture_SRV(2, inputs.depth),
-                    nvrhi::BindingSetItem::Texture_SRV(3, inputs.normals),
-                    nvrhi::BindingSetItem::Texture_UAV(0,
-                        ambientEnabled
-                            ? m_FinalAmbientVisibility.Get()
-                            : m_DummyAmbientOutput.Get()),
-                    nvrhi::BindingSetItem::Texture_UAV(1,
-                        indirectEnabled
-                            ? m_FinalIndirectDiffuse.Get()
-                            : m_DummyIndirectOutput.Get())
-                };
-                bindingSet = m_Device->createBindingSet(
-                    bindings, pipeline.bindingLayout);
+                if (advancedFilterShader)
+                {
+                    bindings.bindings = {
+                        nvrhi::BindingSetItem::ConstantBuffer(
+                            0, m_ConstantBuffer),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            0, reconstructedAmbient)
+                    };
+                    if (packedEdgesEnabled)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                4, m_PackedEdgesTexture));
+                    }
+                    else if (performanceConfig.math ==
+                        VisibilityMathMode::ConservativeNumericalFp32)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                2, inputs.depth));
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                3, inputs.normals));
+                    }
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            0, m_FinalAmbientVisibility));
+                }
+                else
+                {
+                    bindings.bindings = {
+                        nvrhi::BindingSetItem::ConstantBuffer(
+                            0, m_ConstantBuffer),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            0, reconstructedAmbient),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            1, reconstructedIndirect),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            2, inputs.depth),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            3, inputs.normals),
+                        nvrhi::BindingSetItem::Texture_UAV(0,
+                            ambientEnabled
+                                ? m_FinalAmbientVisibility.Get()
+                                : m_DummyAmbientOutput.Get()),
+                        nvrhi::BindingSetItem::Texture_UAV(1,
+                            indirectEnabled
+                                ? m_FinalIndirectDiffuse.Get()
+                                : m_DummyIndirectOutput.Get())
+                    };
+                }
+                *bindingSet = m_Device->createBindingSet(
+                    bindings, pipeline->bindingLayout);
             }
 
             nvrhi::ComputeState state;
-            state.pipeline = pipeline.pipeline;
-            state.bindings = { bindingSet };
+            state.pipeline = pipeline->pipeline;
+            state.bindings = { *bindingSet };
             commandList->beginMarker(spatialFilterEnabled
                 ? "Visibility Joint Bilateral Filter"
                 : "Visibility Required Joint Bilateral Upsample");
@@ -1440,48 +2653,69 @@ namespace uvsr
                 reconstructedAmbient = m_FinalAmbientVisibility;
             if (indirectEnabled)
                 reconstructedIndirect = m_FinalIndirectDiffuse;
+            m_Timings.fullResolutionApplyMs = 0.f;
         }
         else
         {
             m_Timings.filteringMs = 0.f;
+            m_Timings.fullResolutionApplyMs = 0.f;
         }
 
-        uint32_t compositeVariant = 0u;
-        if (!postProcessEnabled)
+        const bool bypassComposition = performanceConfig.application ==
+            VisibilityApplicationMode::BypassCompositionDiagnostic;
+        if (fusedResolveApply)
         {
-            if (temporalEnabled)
-                compositeVariant = 2u + historyWrite;
-            else if (activeBounceCount > 1u)
-                compositeVariant = 1u;
+            m_Timings.compositionMs = 0.f;
         }
-        nvrhi::BindingSetHandle& compositeBindingSet =
-            m_CompositeBindingSets[compositeVariant];
-        if (!compositeBindingSet)
+        else if (bypassComposition)
         {
-            nvrhi::BindingSetDesc bindings;
-            bindings.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
-                nvrhi::BindingSetItem::Texture_SRV(0, inputs.baseLighting),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    1, reconstructedAmbient),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    2, reconstructedIndirect),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    3, inputs.gbufferDiffuse),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    4, inputs.gbufferEmissive),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    5, inputs.materialAmbientOcclusion),
-                nvrhi::BindingSetItem::Texture_SRV(6, inputs.normals),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    7, inputs.gbufferSpecular),
-                nvrhi::BindingSetItem::Texture_UAV(0, inputs.output)
-            };
-            compositeBindingSet = m_Device->createBindingSet(
-                bindings, m_Composite.bindingLayout);
+            commandList->beginMarker("Visibility Composition Bypass Copy");
+            BeginStage(commandList, Stage::Composition);
+            commandList->copyTexture(
+                inputs.output, nvrhi::TextureSlice(),
+                inputs.baseLighting, nvrhi::TextureSlice());
+            EndStage(commandList, Stage::Composition);
+            commandList->endMarker();
         }
-
+        else
         {
+            uint32_t compositeVariant = 0u;
+            if (!postProcessEnabled)
+            {
+                if (temporalEnabled)
+                    compositeVariant = 2u + historyWrite;
+                else if (activeBounceCount > 1u)
+                    compositeVariant = 1u;
+            }
+            nvrhi::BindingSetHandle& compositeBindingSet =
+                m_CompositeBindingSets[compositeVariant];
+            if (!compositeBindingSet)
+            {
+                nvrhi::BindingSetDesc bindings;
+                bindings.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(
+                        0, m_ConstantBuffer),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        0, inputs.baseLighting),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        1, reconstructedAmbient),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        2, reconstructedIndirect),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        3, inputs.gbufferDiffuse),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        4, inputs.gbufferEmissive),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        5, inputs.materialAmbientOcclusion),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        6, inputs.normals),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        7, inputs.gbufferSpecular),
+                    nvrhi::BindingSetItem::Texture_UAV(0, inputs.output)
+                };
+                compositeBindingSet = m_Device->createBindingSet(
+                    bindings, m_Composite.bindingLayout);
+            }
             nvrhi::ComputeState state;
             state.pipeline = m_Composite.pipeline;
             state.bindings = { compositeBindingSet };
@@ -1494,6 +2728,7 @@ namespace uvsr
         }
 
         commandList->endMarker();
+        EndStage(commandList, Stage::EffectEnvelope);
         if (adaptiveEnabled)
         {
             m_FeedbackValid = true;
@@ -1508,6 +2743,7 @@ namespace uvsr
             m_HistoryValid = true;
             m_HistoryIndex = 1u - historyWrite;
         }
-        ++m_TimerFrame;
+        if (m_TimerFrameWritable)
+            ++m_TimerFrame;
     }
 }

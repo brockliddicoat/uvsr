@@ -1,6 +1,8 @@
 #pragma once
 
 #include "lighting_contribution_shared.h"
+#include "visibility_benchmark_statistics.h"
+#include "visibility_performance_plan.h"
 
 #include <donut/core/math/math.h>
 #include <nvrhi/nvrhi.h>
@@ -9,12 +11,15 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace donut::engine
 {
     class ICompositeView;
     class ShaderFactory;
+    struct ShaderMacro;
 }
 
 namespace uvsr
@@ -129,6 +134,12 @@ namespace uvsr
         AmbientOcclusionSettings ambientOcclusion;
         IndirectDiffuseSettings indirectDiffuse;
         VisibilityReconstructionSettings reconstruction;
+        // Reference is a hard lock to the canonical generic pipeline. Every
+        // advanced profile resolves a complete CPU-side pass/resource plan;
+        // no candidate shader branch or auxiliary resource exists while this
+        // remains Reference.
+        VisibilityPerformanceProfile performanceProfile =
+            VisibilityPerformanceProfile::Reference;
         // A deliberately narrow diagnostic exception: composition displays
         // only material-applied screen-space diffuse GI.
         bool showIndirectDiffuseOnly = false;
@@ -189,9 +200,15 @@ namespace uvsr
     {
         float depthHierarchyMs = 0.f;
         float samplingMs = 0.f;
+        float firstTraceMs = 0.f;
+        float laterTraceMs = 0.f;
+        std::array<float, MaxIndirectDiffuseBounceCount - 1u>
+            laterBounceMs{};
         float temporalMs = 0.f;
         float filteringMs = 0.f;
+        float fullResolutionApplyMs = 0.f;
         float compositionMs = 0.f;
+        float effectEnvelopeMs = 0.f;
 
         // Exact logical texel arithmetic, excluding API alignment/residency.
         uint64_t outputTextureBytes = 0u;
@@ -201,11 +218,28 @@ namespace uvsr
         // An estimate of duplicate R32 mask payload that the shared
         // register-local producer avoids when AO and GI are both active.
         uint64_t sharedMaskPayloadBytes = 0u;
+        uint64_t optionalTextureBytes = 0u;
+        uint64_t fullResolutionIntermediateBytes = 0u;
+        uint64_t logicalTrafficAvoidedBytes = 0u;
+        uint32_t activeSrvCount = 0u;
+        uint32_t activeUavCount = 0u;
+        uint32_t peakSrvCount = 0u;
+        uint32_t peakUavCount = 0u;
+        uint32_t activeDispatchCount = 0u;
+        bool profileValid = true;
+        std::string activePermutation = "Reference";
+        std::string profileError;
+
+        [[nodiscard]] float SummedStageMs() const
+        {
+            return depthHierarchyMs + firstTraceMs + laterTraceMs +
+                temporalMs + filteringMs + fullResolutionApplyMs +
+                compositionMs;
+        }
 
         [[nodiscard]] float CompleteEffectMs() const
         {
-            return depthHierarchyMs + samplingMs + temporalMs +
-                filteringMs + compositionMs;
+            return effectEnvelopeMs;
         }
 
     };
@@ -237,14 +271,44 @@ namespace uvsr
             return m_Timings;
         }
 
+        bool BeginBenchmark(
+            const VisibilityBenchmarkRunMetadata& metadata,
+            uint32_t warmupFrameCount = 120u,
+            uint32_t measuredFrameCount = 240u);
+        void CancelBenchmark();
+        [[nodiscard]] bool IsBenchmarkActive() const
+        {
+            return m_BenchmarkActive;
+        }
+        [[nodiscard]] bool IsBenchmarkComplete() const
+        {
+            return m_BenchmarkActive && m_BenchmarkStatistics.IsComplete();
+        }
+        [[nodiscard]] VisibilityBenchmarkSummary GetBenchmarkSummary() const
+        {
+            return m_BenchmarkStatistics.BuildSummary();
+        }
+        // Post-Render ID of the next fully instrumented logical timer frame.
+        // It intentionally does not advance while a query-ring slot is busy.
+        [[nodiscard]] uint64_t GetBenchmarkNextLogicalFrameId() const
+        {
+            return m_TimerFrame;
+        }
+
     private:
         enum class Stage : uint32_t
         {
             DepthHierarchy,
-            Sampling,
+            FirstTrace,
+            LaterTrace,
+            LaterTraceBounce2,
+            LaterTraceBounce3,
+            LaterTraceBounce4,
             Temporal,
             Filtering,
+            FullResolutionApply,
             Composition,
+            EffectEnvelope,
             Count
         };
 
@@ -259,6 +323,7 @@ namespace uvsr
         static constexpr uint32_t c_ConsumerVariantCount = 3;
 
         nvrhi::DeviceHandle m_Device;
+        std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
         nvrhi::BufferHandle m_ConstantBuffer;
 
         // Final dimension selects fixed/adaptive sparse sampling.
@@ -273,6 +338,9 @@ namespace uvsr
         std::array<std::array<Pipeline, c_ConsumerVariantCount>, 2> m_Filter;
         Pipeline m_DepthHierarchy;
         Pipeline m_Composite;
+        std::unordered_map<uint64_t, Pipeline> m_AdvancedPipelines;
+        std::unordered_map<uint64_t, nvrhi::BindingSetHandle>
+            m_AdvancedBindingSets;
 
         dm::uint2 m_FullSize = dm::uint2::zero();
         dm::uint2 m_SamplingSize = dm::uint2::zero();
@@ -284,6 +352,9 @@ namespace uvsr
         bool m_TemporalResourcesEnabled = false;
         bool m_PostProcessResourcesEnabled = false;
         bool m_DepthHierarchyResourcesEnabled = false;
+        bool m_PackedFastResourcesEnabled = false;
+        bool m_PackedEdgeResourcesEnabled = false;
+        bool m_FinalAmbientResourcesEnabled = false;
 
         nvrhi::TextureHandle m_RawAmbientVisibility;
         nvrhi::TextureHandle m_RawIndirectDiffuse[2];
@@ -298,6 +369,8 @@ namespace uvsr
         nvrhi::TextureHandle m_DepthHierarchyTexture;
         nvrhi::TextureHandle m_BlueNoiseTexture;
         nvrhi::TextureHandle m_FilterAdaptedNoiseTexture;
+        nvrhi::TextureHandle m_PackedFastNoiseTexture;
+        nvrhi::TextureHandle m_PackedEdgesTexture;
 
         nvrhi::TextureHandle m_DummyAmbientVisibility;
         nvrhi::TextureHandle m_DummyIndirectDiffuse;
@@ -333,11 +406,15 @@ namespace uvsr
             static_cast<size_t>(Stage::Count)> m_TimerQueries;
         std::array<std::array<bool, c_TimerLatency>,
             static_cast<size_t>(Stage::Count)> m_TimerPending{};
+        std::array<std::array<uint64_t, c_TimerLatency>,
+            static_cast<size_t>(Stage::Count)> m_TimerFrameIds{};
         std::array<bool, static_cast<size_t>(Stage::Count)> m_TimerActive{};
 
         std::vector<uint16_t> m_BlueNoiseUpload;
         std::vector<uint8_t> m_FilterAdaptedNoiseUpload;
+        std::vector<uint8_t> m_PackedFastNoiseUpload;
         bool m_SamplingNoiseUploaded = false;
+        bool m_PackedFastNoiseUploaded = false;
         bool m_HistoryValid = false;
         bool m_FeedbackValid = false;
         bool m_HistoryConfigurationInitialized = false;
@@ -348,7 +425,11 @@ namespace uvsr
         uint32_t m_HistoryIndex = 0u;
         uint32_t m_FeedbackIndex = 0u;
         uint32_t m_TimerFrame = 0u;
+        bool m_TimerFrameWritable = true;
         ScreenSpaceVisibilityTimings m_Timings;
+        VisibilityExecutionPlan m_ExecutionPlan;
+        VisibilityBenchmarkStatistics m_BenchmarkStatistics;
+        bool m_BenchmarkActive = false;
 
         void CreatePipelines(
             const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory);
@@ -361,9 +442,17 @@ namespace uvsr
             bool adaptiveEnabled,
             bool temporalEnabled,
             bool postProcessEnabled,
-            bool depthHierarchyEnabled);
+            bool depthHierarchyEnabled,
+            bool finalAmbientEnabled,
+            bool packedFastEnabled,
+            bool packedEdgesEnabled);
         void ReleaseResources();
         void UploadSamplingNoise(nvrhi::ICommandList* commandList);
+        Pipeline& GetOrCreateAdvancedPipeline(
+            uint64_t key,
+            const char* shaderName,
+            const std::vector<nvrhi::BindingLayoutItem>& bindings,
+            const std::vector<donut::engine::ShaderMacro>* macros = nullptr);
 
         void BeginStage(nvrhi::ICommandList* commandList, Stage stage);
         void EndStage(nvrhi::ICommandList* commandList, Stage stage);

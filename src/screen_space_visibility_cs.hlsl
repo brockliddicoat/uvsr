@@ -29,6 +29,57 @@
 #ifndef ENABLE_ADAPTIVE_SPARSE_SAMPLING
 #define ENABLE_ADAPTIVE_SPARSE_SAMPLING 1
 #endif
+#ifndef FIXED_SAMPLE_COUNT
+#define FIXED_SAMPLE_COUNT 0
+#endif
+#ifndef FIXED_RADIAL_EXPONENT_TWO
+#define FIXED_RADIAL_EXPONENT_TWO 0
+#endif
+#ifndef FIXED_DIRECT_DEPTH
+#define FIXED_DIRECT_DEPTH 0
+#endif
+#ifndef PACKED_FAST_NOISE
+#define PACKED_FAST_NOISE 0
+#endif
+#ifndef ACTIVISION_SCHEDULE
+#define ACTIVISION_SCHEDULE 0
+#endif
+#ifndef HORIZON_GTAO_CONTROL
+#define HORIZON_GTAO_CONTROL 0
+#endif
+#ifndef OUTPUT_PACKED_EDGES
+#define OUTPUT_PACKED_EDGES 0
+#endif
+#ifndef PACKED_EDGE_MODE
+// 1 = depth, 2 = depth + normal, 3 = slope-adjusted depth + normal.
+#define PACKED_EDGE_MODE 2
+#endif
+#ifndef DUPLICATE_PIXEL_REJECTION
+#define DUPLICATE_PIXEL_REJECTION 1
+#endif
+#ifndef FULL_MASK_EARLY_EXIT
+#define FULL_MASK_EARLY_EXIT 1
+#endif
+#ifndef MAX_PROJECTED_RADIUS_PIXELS
+// Zero preserves the current unlimited projected radius.
+#define MAX_PROJECTED_RADIUS_PIXELS 0
+#endif
+#ifndef SCHEDULER_SPECIALIZATION
+// 0 = runtime, 1 = independent hash, 2 = toroidal blue noise,
+// 3 = scalar FAST, 4 = deterministic constant diagnostic.
+#define SCHEDULER_SPECIALIZATION 0
+#endif
+#ifndef TRACE_DIAGNOSTIC
+// 0 = product trace, 1 = constant write, 2 = depth-load floor,
+// 3 = register-local interval/mask ALU floor.
+#define TRACE_DIAGNOSTIC 0
+#endif
+#ifndef VISIBILITY_GROUP_SIZE_X
+#define VISIBILITY_GROUP_SIZE_X 8
+#endif
+#ifndef VISIBILITY_GROUP_SIZE_Y
+#define VISIBILITY_GROUP_SIZE_Y 8
+#endif
 
 #define VisibilityEstimator_UniformProjectedAngle 0
 #define VisibilityEstimator_UniformSolidAngle 1
@@ -49,7 +100,11 @@ Texture2D<float4> t_Emissive : register(t5);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t6);
 Texture2D<float4> t_PreviousFeedback : register(t7);
 Texture2DArray<float> t_BlueNoise : register(t8);
+#if PACKED_FAST_NOISE
+Texture2DArray<float4> t_FilterAdaptedNoise : register(t9);
+#else
 Texture2DArray<float> t_FilterAdaptedNoise : register(t9);
+#endif
 Texture2D<float4> t_Motion : register(t10);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_BounceFrontier : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
@@ -58,11 +113,18 @@ Texture2D<float4> t_SourceRadiance : register(t2);
 Texture2D<float> t_DepthHierarchy : register(t3);
 Texture2D<float4> t_PreviousFeedback : register(t4);
 Texture2DArray<float> t_BlueNoise : register(t5);
+#if PACKED_FAST_NOISE
+Texture2DArray<float4> t_FilterAdaptedNoise : register(t6);
+#else
 Texture2DArray<float> t_FilterAdaptedNoise : register(t6);
+#endif
 Texture2D<float4> t_Motion : register(t7);
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_AdaptiveFeedback : register(u2);
+#endif
+#if OUTPUT_PACKED_EDGES
+VK_IMAGE_FORMAT("r8ui") RWTexture2D<uint> u_PackedEdges : register(u3);
 #endif
 
 static const float VisibilityPi = 3.14159265358979323846f;
@@ -137,10 +199,17 @@ float VisibilityFastAcos(float value)
 
 float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
 {
-    if (g_Visibility.sampleScheduler == 0u)
-        return VisibilityRandom(samplingPixel, dimension, phase);
-
-    if (g_Visibility.sampleScheduler == 2u)
+#if SCHEDULER_SPECIALIZATION == 1
+    return VisibilityRandom(samplingPixel, dimension, phase);
+#elif SCHEDULER_SPECIALIZATION == 4
+    // Fixed, decorrelated semantic constants isolate scheduler texture/hash
+    // cost without collapsing every stochastic dimension to one value.
+    static const float diagnosticValues[8] = {
+        0.125f, 0.625f, 0.375f, 0.875f,
+        0.25f, 0.75f, 0.5f, 0.0f
+    };
+    return diagnosticValues[dimension & 7u];
+#elif SCHEDULER_SPECIALIZATION == 3
     {
         // The 64x64x32 scalar-uniform volume was optimized offline for a
         // Gaussian spatial filter and alpha=0.35 EMA temporal filter. Every
@@ -154,10 +223,15 @@ float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
             shuffledOffset >> 6u);
         uint2 coordinate = (samplingPixel + cycleOffset +
             FilterAdaptedSemanticOffsets[dimension & 7u]) & 63u;
+#if PACKED_FAST_NOISE
+        return t_FilterAdaptedNoise.Load(
+            int4(coordinate, frameInVolume, 0)).x;
+#else
         return t_FilterAdaptedNoise.Load(
             int4(coordinate, frameInVolume, 0));
+#endif
     }
-
+#elif SCHEDULER_SPECIALIZATION == 2
     // Each semantic random dimension owns an independently optimized rank
     // layer. Moving the layer toroidally preserves its spatial spectrum;
     // changing the cycle offset prevents an exact 64-frame repetition.
@@ -172,7 +246,94 @@ float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
     uint2 coordinate = (samplingPixel + cycleOffset +
         BlueNoiseTemporalSteps[layer] * frameInCycle) & 63u;
     return t_BlueNoise.Load(int4(coordinate, layer, 0));
+#else
+    if (g_Visibility.sampleScheduler == 0u)
+        return VisibilityRandom(samplingPixel, dimension, phase);
+
+    if (g_Visibility.sampleScheduler == 2u)
+    {
+        // Runtime-selectable legacy path. Specialized candidates compile the
+        // equivalent branch above and therefore do not retain both textures.
+        uint frameInVolume = phase & 31u;
+        uint cycle = phase >> 5u;
+        uint shuffledOffset = (1741u + 2531u * cycle) & 4095u;
+        uint2 cycleOffset = uint2(
+            shuffledOffset & 63u,
+            shuffledOffset >> 6u);
+        uint2 coordinate = (samplingPixel + cycleOffset +
+            FilterAdaptedSemanticOffsets[dimension & 7u]) & 63u;
+#if PACKED_FAST_NOISE
+        return t_FilterAdaptedNoise.Load(
+            int4(coordinate, frameInVolume, 0)).x;
+#else
+        return t_FilterAdaptedNoise.Load(
+            int4(coordinate, frameInVolume, 0));
+#endif
+    }
+
+    uint layer = dimension & 7u;
+    uint frameInCycle = phase & 63u;
+    uint cycle = phase >> 6u;
+    uint cycleHashX = VisibilityHash(
+        cycle ^ (dimension * 0x9e3779b9u) ^ 0x68bc21ebu);
+    uint cycleHashY = VisibilityHash(
+        cycle ^ (dimension * 0x85ebca6bu) ^ 0x02e5be93u);
+    uint2 cycleOffset = uint2(cycleHashX, cycleHashY) & 63u;
+    uint2 coordinate = (samplingPixel + cycleOffset +
+        BlueNoiseTemporalSteps[layer] * frameInCycle) & 63u;
+    return t_BlueNoise.Load(int4(coordinate, layer, 0));
+#endif
 }
+
+#if PACKED_FAST_NOISE
+float4 SchedulerPackedFastRandom(uint2 samplingPixel, uint phase)
+{
+    // The upload packs the existing scalar FAST values for semantic
+    // dimensions {slice, sector, radial-, radial+}. The global cycle offset is
+    // intentionally identical to the scalar path, so this changes delivery,
+    // not the stochastic sequence.
+    uint frameInVolume = phase & 31u;
+    uint cycle = phase >> 5u;
+    uint shuffledOffset = (1741u + 2531u * cycle) & 4095u;
+    uint2 cycleOffset = uint2(
+        shuffledOffset & 63u,
+        shuffledOffset >> 6u);
+    uint2 coordinate = (samplingPixel + cycleOffset) & 63u;
+    return t_FilterAdaptedNoise.Load(int4(coordinate, frameInVolume, 0));
+}
+#endif
+
+#if ACTIVISION_SCHEDULE
+float ActivisionSpatialRotation(uint2 pixel)
+{
+    uint pattern = ((((pixel.x + pixel.y) & 3u) << 2u) +
+        (pixel.x & 3u));
+    return float(pattern) * (1.0f / 16.0f);
+}
+
+float ActivisionTemporalRotation(uint phase)
+{
+    static const float rotations[6] = {
+        60.0f / 180.0f, 300.0f / 180.0f, 180.0f / 180.0f,
+        240.0f / 180.0f, 120.0f / 180.0f, 0.0f
+    };
+    // A paired slice is pi-periodic, hence degrees/180 rather than /360.
+    return rotations[phase % 6u];
+}
+
+float ActivisionSpatialRadialOffset(uint2 pixel)
+{
+    // Activision slide 93: four values per row, shifted each row so similar
+    // directions alternate two offsets along the diagonals.
+    return float((pixel.y - pixel.x) & 3u) * 0.25f;
+}
+
+float ActivisionTemporalRadialOffset(uint phase)
+{
+    static const float offsets[4] = { 0.0f, 0.5f, 0.25f, 0.75f };
+    return offsets[(phase / 6u) & 3u];
+}
+#endif
 
 uint2 SamplingToFullPixel(uint2 samplingPixel)
 {
@@ -245,6 +406,90 @@ bool ReconstructViewPositionSafe(float2 pixelPosition, float depth, out float3 p
         viewZ);
     return IsFiniteFloat3(positionVS);
 }
+
+#if OUTPUT_PACKED_EDGES
+uint PackEdgeContinuity(float4 continuity)
+{
+    uint4 quantized = uint4(round(saturate(continuity) * 3.0f));
+    return ((quantized.x & 3u) << 6u) |
+        ((quantized.y & 3u) << 4u) |
+        ((quantized.z & 3u) << 2u) |
+        (quantized.w & 3u);
+}
+
+uint ComputePackedReceiverEdges(
+    uint2 samplingPixel,
+    uint2 receiverPixel,
+    float receiverDepth)
+{
+    if (!IsValidDepth(receiverDepth))
+        return 0u;
+
+    static const int2 offsets[4] = {
+        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
+    };
+    uint2 samplingMaximum = uint2(g_Visibility.samplingResolution) - 1u;
+    float receiverLinearDepth;
+    float3 receiverPositionVS;
+    if (!ReconstructViewPositionSafe(
+            float2(receiverPixel) + 0.5f,
+            receiverDepth,
+            receiverPositionVS))
+    {
+        return 0u;
+    }
+    receiverLinearDepth = abs(receiverPositionVS.z);
+    float3 receiverNormal = SafeNormalize(
+        t_Normals[receiverPixel].xyz,
+        float3(0.0f, 1.0f, 0.0f));
+    float4 depthDiscontinuity = 1.0f;
+    float4 normalDiscontinuity = 0.0f;
+    [unroll]
+    for (uint edgeIndex = 0u; edgeIndex < 4u; ++edgeIndex)
+    {
+        uint2 neighborSamplingPixel = uint2(clamp(
+            int2(samplingPixel) + offsets[edgeIndex],
+            int2(0, 0), int2(samplingMaximum)));
+        uint2 neighborPixel = SamplingToFullPixel(neighborSamplingPixel);
+        float neighborDepth = t_Depth[neighborPixel];
+        float3 neighborPositionVS;
+        if (!IsValidDepth(neighborDepth) ||
+            !ReconstructViewPositionSafe(
+                float2(neighborPixel) + 0.5f,
+                neighborDepth,
+                neighborPositionVS))
+        {
+            depthDiscontinuity[edgeIndex] = 1.0f;
+            normalDiscontinuity[edgeIndex] = 1.0f;
+            continue;
+        }
+        float neighborLinearDepth = abs(neighborPositionVS.z);
+        depthDiscontinuity[edgeIndex] = saturate(
+            abs(neighborLinearDepth - receiverLinearDepth) /
+            max(receiverLinearDepth * 0.08f, 0.01f));
+#if PACKED_EDGE_MODE >= 2
+        float3 neighborNormal = SafeNormalize(
+            t_Normals[neighborPixel].xyz, receiverNormal);
+        normalDiscontinuity[edgeIndex] = saturate(
+            (1.0f - dot(receiverNormal, neighborNormal)) * 4.0f);
+#endif
+    }
+
+#if PACKED_EDGE_MODE == 3
+    float horizontalSlope = min(
+        depthDiscontinuity.x, depthDiscontinuity.y);
+    float verticalSlope = min(
+        depthDiscontinuity.z, depthDiscontinuity.w);
+    depthDiscontinuity.xy = saturate(
+        depthDiscontinuity.xy - horizontalSlope.xx);
+    depthDiscontinuity.zw = saturate(
+        depthDiscontinuity.zw - verticalSlope.xx);
+#endif
+    float4 continuity = 1.0f - max(
+        depthDiscontinuity, normalDiscontinuity);
+    return PackEdgeContinuity(continuity);
+}
+#endif
 
 bool ReconstructViewPositionFromLinearDepth(
     float2 pixelPosition,
@@ -355,16 +600,74 @@ void WriteEmptyVisibilityOutput(
 #endif
 }
 
-[numthreads(8, 8, 1)]
+[numthreads(VISIBILITY_GROUP_SIZE_X, VISIBILITY_GROUP_SIZE_Y, 1)]
 void main(uint2 dispatchPixel : SV_DispatchThreadID)
 {
     if (any(dispatchPixel >= uint2(g_Visibility.samplingResolution)))
         return;
 
+#if TRACE_DIAGNOSTIC == 1
+    // Dispatch/write floor: deliberately performs no depth, normal, noise, or
+    // history reads. This permutation is AO-only and benchmark-only.
+#if ENABLE_AO && !ENABLE_BOUNCE_REINJECTION
+    u_AmbientVisibility[dispatchPixel] = 0.5f;
+#endif
+#if ENABLE_GI && !ENABLE_BOUNCE_REINJECTION
+    u_IndirectDiffuse[dispatchPixel] = 0.0f;
+#endif
+    return;
+#elif TRACE_DIAGNOSTIC == 2
+    // Matched-address depth floor. The normal trace below performs receiver
+    // reconstruction, slice/radius projection, stochastic radial placement,
+    // duplicate rejection, and the exact selected depth loads. It exits each
+    // tap immediately after reconstructing the sampled position, before
+    // interval construction, visibility masks, or GI source work.
+    float diagnosticDepthSum = 0.0f;
+#elif TRACE_DIAGNOSTIC == 3
+    // ALU floor: deterministic intervals exercise stochastic-sector mask
+    // construction, union, and popcount without any texture input.
+    RadialVisibilityMask diagnosticMask = MakeEmptyRadialVisibilityMask();
+    const uint diagnosticCount = FIXED_SAMPLE_COUNT > 0
+        ? FIXED_SAMPLE_COUNT : 8u;
+    // Keep the sector work register-local but data-dependent so optimized DXIL
+    // cannot collapse the unrolled interval/mask loop to one literal output.
+    float diagnosticSectorPhase = frac(
+        float((dispatchPixel.x + dispatchPixel.y * 17u) & 31u) /
+            32.0f +
+        g_Visibility.thicknessWorld * (1.0f / 1024.0f));
+    [unroll]
+    for (uint diagnosticTap = 0u;
+        diagnosticTap < diagnosticCount;
+        ++diagnosticTap)
+    {
+        float center = (float(diagnosticTap) + 0.5f) /
+            float(diagnosticCount);
+        VisibilityInterval diagnosticInterval = MakeVisibilityInterval(
+            saturate(center - 0.03125f),
+            saturate(center + 0.03125f));
+        uint diagnosticBits = MakeStochasticSectorRangeMask(
+            diagnosticInterval, diagnosticSectorPhase);
+        AccumulateOccluder(diagnosticMask, diagnosticBits);
+    }
+#if ENABLE_AO && !ENABLE_BOUNCE_REINJECTION
+    u_AmbientVisibility[dispatchPixel] =
+        GetSliceVisibility(diagnosticMask);
+#endif
+#if ENABLE_GI && !ENABLE_BOUNCE_REINJECTION
+    u_IndirectDiffuse[dispatchPixel] = 0.0f;
+#endif
+    return;
+#endif
+
     uint2 receiverPixel = SamplingToFullPixel(dispatchPixel);
     float receiverDepth = t_Depth[receiverPixel];
     float2 receiverPixelCenter = float2(receiverPixel) + 0.5f;
     float4 previousReceiverFrontier = 0.0f;
+
+#if OUTPUT_PACKED_EDGES
+    u_PackedEdges[dispatchPixel] = ComputePackedReceiverEdges(
+        dispatchPixel, receiverPixel, receiverDepth);
+#endif
 
 #if ENABLE_BOUNCE_REINJECTION
     LightingContributionGate bounceContributionGate = MakeLightingContributionGate(
@@ -497,6 +800,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     }
 
     uint phase = g_Visibility.frameIndex;
+#if FIXED_SAMPLE_COUNT == 0
     uint minimumSampleCount = clamp(
         g_Visibility.minimumSampleCount, 1u, 64u);
     uint maximumSampleCount = clamp(
@@ -643,9 +947,25 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     // importance, reprojection, feedback, or stochastic budget instructions.
     uint selectedSampleCount = maximumSampleCount;
 #endif
+#else
+    // Curated even-count permutations compile out clamping, budget selection,
+    // side division, and the odd-side random dimension. The runtime profile
+    // validator requires the requested count to match this shader key.
+    static const uint selectedSampleCount = FIXED_SAMPLE_COUNT;
+#endif
 
+#if PACKED_FAST_NOISE
+    float4 packedFastRandom = SchedulerPackedFastRandom(
+        dispatchPixel, phase);
+    float sliceRotation = packedFastRandom.x;
+#elif ACTIVISION_SCHEDULE
+    float sliceRotation = frac(
+        ActivisionSpatialRotation(dispatchPixel) +
+        ActivisionTemporalRotation(phase));
+#else
     float sliceRotation = SchedulerRandom(
         dispatchPixel, SchedulerDimension_SliceRotation, phase);
+#endif
     float ambientVisibility = 1.0f;
     float3 indirectDiffuse = 0.0f;
     float sliceAzimuth = sliceRotation * VisibilityPi;
@@ -658,8 +978,42 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         float3(0.0f, 1.0f, 0.0f));
     float3 sliceTangent = SafeNormalize(
         cross(viewDirection, slicePlaneNormal), screenSliceDirection);
+#if PACKED_FAST_NOISE
+    float sectorPhase = packedFastRandom.y;
+#elif ACTIVISION_SCHEDULE
+    // GTAO has no sector phase. Keep a decorrelated deterministic phase for
+    // the bitmask estimator while preserving the published slice schedule.
+    float sectorPhase = frac(
+        ActivisionSpatialRotation(dispatchPixel) * 0.754877666f +
+        float(phase & 31u) * 0.569840296f);
+#else
     float sectorPhase = SchedulerRandom(
         dispatchPixel, SchedulerDimension_SectorPhase, phase);
+#endif
+
+#if HORIZON_GTAO_CONTROL
+    // Same-engine horizon control derived from the Activision/XeGTAO analytic
+    // slice integral. It intentionally replaces finite interval masks only in
+    // a benchmark-only AO permutation so the surrounding projection, depth
+    // reads, schedule, output format, timer, and application remain directly
+    // comparable to the visibility-bitmask trace.
+    float3 horizonProjectedNormal = receiverNormalVS - slicePlaneNormal *
+        dot(receiverNormalVS, slicePlaneNormal);
+    float horizonProjectedNormalLength = length(horizonProjectedNormal);
+    horizonProjectedNormal = horizonProjectedNormalLength > VisibilityEpsilon
+        ? horizonProjectedNormal / horizonProjectedNormalLength
+        : viewDirection;
+    float horizonCosNorm = saturate(dot(
+        horizonProjectedNormal, viewDirection));
+    float horizonSign = dot(horizonProjectedNormal, sliceTangent) >= 0.0f
+        ? 1.0f : -1.0f;
+    float horizonNormalAngle = horizonSign *
+        VisibilityFastAcos(horizonCosNorm);
+    float horizonCosine[2] = {
+        cos(horizonNormalAngle - VisibilityHalfPi),
+        cos(horizonNormalAngle + VisibilityHalfPi)
+    };
+#endif
 
 #if VISIBILITY_ESTIMATOR != VisibilityEstimator_UniformProjectedAngle
         SliceMeasure sliceMeasure = BuildSliceMeasure(
@@ -701,14 +1055,21 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                         (projectionSide * g_Visibility.radiusWorld),
                     radiusEndpointPixel);
             float2 projectedRadiusVector = radiusEndpointPixel - receiverPixelCenter;
-            sideProjectedRadius[projectionSideIndex] = length(projectedRadiusVector);
+            float projectedRadiusLength = length(projectedRadiusVector);
             sideProjectionValid[projectionSideIndex] =
                 sideProjectionValid[projectionSideIndex] &&
-                sideProjectedRadius[projectionSideIndex] >= 0.5f &&
-                isfinite(sideProjectedRadius[projectionSideIndex]);
-            sidePixelDirection[projectionSideIndex] = sideProjectionValid[projectionSideIndex]
-                ? projectedRadiusVector / sideProjectedRadius[projectionSideIndex]
+                projectedRadiusLength >= 0.5f &&
+                isfinite(projectedRadiusLength);
+            sidePixelDirection[projectionSideIndex] =
+                sideProjectionValid[projectionSideIndex]
+                ? projectedRadiusVector / projectedRadiusLength
                 : 0.0f;
+            sideProjectedRadius[projectionSideIndex] = projectedRadiusLength;
+#if MAX_PROJECTED_RADIUS_PIXELS > 0
+            sideProjectedRadius[projectionSideIndex] = min(
+                sideProjectedRadius[projectionSideIndex],
+                float(MAX_PROJECTED_RADIUS_PIXELS));
+#endif
         }
 
         RadialVisibilityMask visibilityMask = MakeEmptyRadialVisibilityMask();
@@ -722,6 +1083,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         };
 
         uint stepsPerSide = selectedSampleCount >> 1u;
+#if FIXED_SAMPLE_COUNT == 0
         uint oddSampleSide = SchedulerRandom(
             dispatchPixel,
             SchedulerDimension_OddSampleSide,
@@ -732,6 +1094,21 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             stepsPerSide + (((selectedSampleCount & 1u) != 0u &&
                 oddSampleSide == 1u) ? 1u : 0u)
         };
+#else
+        uint sideStepCount[2] = { stepsPerSide, stepsPerSide };
+#endif
+#if PACKED_FAST_NOISE
+        float radialSequence[2] = {
+            packedFastRandom.z, packedFastRandom.w
+        };
+#elif ACTIVISION_SCHEDULE
+        float activisionRadialOffset = frac(
+            ActivisionSpatialRadialOffset(dispatchPixel) +
+            ActivisionTemporalRadialOffset(phase));
+        float radialSequence[2] = {
+            activisionRadialOffset, activisionRadialOffset
+        };
+#else
         float radialSequence[2] = {
             SchedulerRandom(
                 dispatchPixel,
@@ -742,6 +1119,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 SchedulerDimension_RadialPositive,
                 phase)
         };
+#endif
         uint radialShift[2] = {
             min(uint(radialSequence[0] * 32.0f), 31u),
             min(uint(radialSequence[1] * 32.0f), 31u)
@@ -765,14 +1143,23 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 : 0u
         };
 
+#if FIXED_SAMPLE_COUNT > 0
+        [unroll]
+        for (uint fixedStepIndex = 0u;
+            fixedStepIndex < FIXED_SAMPLE_COUNT / 2u;
+            ++fixedStepIndex)
+#else
         [loop]
         while ((remainingRadialStrata[0] | remainingRadialStrata[1]) != 0u)
+#endif
         {
             [unroll]
             for (uint sideIndex = 0u; sideIndex < 2u; ++sideIndex)
             {
+#if FULL_MASK_EARLY_EXIT
                 if (visibilityMask.occludedBits == RadialVisibilityFullMask)
                     break;
+#endif
                 if (!sideActive[sideIndex])
                     continue;
                 uint radialMask = remainingRadialStrata[sideIndex];
@@ -783,9 +1170,20 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     (radialMask - 1u);
 
                 float samplingSide = sideIndex == 0u ? -1.0f : 1.0f;
+#if ACTIVISION_SCHEDULE
+                // The benchmark schedule distributes its inner integral with
+                // one shared spatial+temporal offset over the fixed taps.
+                float normalizedStep =
+                    (float(fixedStepIndex) + activisionRadialOffset) /
+                    float(FIXED_SAMPLE_COUNT / 2u);
+#else
                 float normalizedStep = ProgressiveRadialSample(
                     radialStratum, radialRotation[sideIndex]);
+#endif
                 float distributedStep = saturate(normalizedStep);
+#if FIXED_RADIAL_EXPONENT_TWO
+                distributedStep *= distributedStep;
+#else
                 if (abs(g_Visibility.stepDistributionExponent - 1.0f) >= 1e-4f)
                 {
                     distributedStep =
@@ -794,6 +1192,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                         : pow(distributedStep,
                             g_Visibility.stepDistributionExponent);
                 }
+#endif
                 float sampleDistance = distributedStep * sideProjectedRadius[sideIndex];
                 sampleDistance = max(sampleDistance, 0.5f);
                 float2 samplePixelFloat = receiverPixelCenter +
@@ -806,6 +1205,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 }
 
                 uint2 samplePixel = uint2(samplePixelFloat);
+#if DUPLICATE_PIXEL_REJECTION
                 if (hasPreviousSample[sideIndex] &&
                     all(samplePixel == previousSamplePixel[sideIndex]))
                 {
@@ -813,8 +1213,10 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 }
                 previousSamplePixel[sideIndex] = samplePixel;
                 hasPreviousSample[sideIndex] = true;
+#endif
                 float3 samplePositionVS;
                 bool reconstructed = false;
+#if !FIXED_DIRECT_DEPTH
                 if (g_Visibility.useDepthHierarchy != 0u &&
                     g_Visibility.orthographicProjection == 0u)
                 {
@@ -833,6 +1235,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                             samplePositionVS);
                     }
                 }
+#endif
                 if (!reconstructed)
                 {
                     float sampleDepth = t_Depth[samplePixel];
@@ -842,6 +1245,11 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                         continue;
                     }
                 }
+
+#if TRACE_DIAGNOSTIC == 2
+                diagnosticDepthSum += abs(samplePositionVS.z);
+                continue;
+#endif
 
                 float effectiveThickness = g_Visibility.thicknessWorld;
 
@@ -853,6 +1261,12 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     continue;
                 }
                 float3 directionToSample = frontDelta * rsqrt(frontLengthSquared);
+#if HORIZON_GTAO_CONTROL
+                horizonCosine[sideIndex] = max(
+                    horizonCosine[sideIndex],
+                    dot(directionToSample, viewDirection));
+                continue;
+#endif
                 float3 backDelta = ComputeBackDelta(
                     receiverPositionVS,
                     samplePositionVS,
@@ -1001,15 +1415,36 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #endif
             }
 
+#if FULL_MASK_EARLY_EXIT
             if (visibilityMask.occludedBits == RadialVisibilityFullMask ||
                 (!sideActive[0] && !sideActive[1]))
             {
                 break;
             }
+#endif
         }
 
 #if ENABLE_AO
-#if VISIBILITY_ESTIMATOR == VisibilityEstimator_UniformSolidAngle
+#if TRACE_DIAGNOSTIC == 2
+        ambientVisibility = 0.5f +
+            frac(abs(diagnosticDepthSum)) * (1.0f / 65536.0f);
+#elif HORIZON_GTAO_CONTROL
+        float negativeHorizon = -VisibilityFastAcos(
+            saturate(horizonCosine[0]));
+        float positiveHorizon = VisibilityFastAcos(
+            saturate(horizonCosine[1]));
+        float sineNormal = sin(horizonNormalAngle);
+        float negativeArc = (horizonCosNorm +
+            2.0f * negativeHorizon * sineNormal -
+            cos(2.0f * negativeHorizon - horizonNormalAngle)) * 0.25f;
+        float positiveArc = (horizonCosNorm +
+            2.0f * positiveHorizon * sineNormal -
+            cos(2.0f * positiveHorizon - horizonNormalAngle)) * 0.25f;
+        ambientVisibility = max(
+            horizonProjectedNormalLength *
+                (negativeArc + positiveArc),
+            0.0f);
+#elif VISIBILITY_ESTIMATOR == VisibilityEstimator_UniformSolidAngle
         ambientVisibility = ResolveGtUniformAmbientVisibility(visibilityMask);
 #elif VISIBILITY_ESTIMATOR == VisibilityEstimator_CosineWeightedSolidAngle
         ambientVisibility = ResolveGtCosineAmbientVisibility(

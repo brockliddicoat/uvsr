@@ -56,6 +56,121 @@ namespace
             neighboringSeed * 0.75f <= independentImportance + 1e-6f;
     }
 
+    struct VisibilityTraceFixtureSample
+    {
+        uint32_t intervalMask = 0u;
+        uint32_t samplePixel = 0u;
+        uint32_t side = 0u;
+        float sourceRadiance = 0.f;
+    };
+
+    struct VisibilityTraceFixtureResult
+    {
+        uint32_t mask = 0u;
+        uint32_t newlyClaimedBitCount = 0u;
+        float rawAmbient = 1.f;
+        float rawIndirect = 0.f;
+        std::array<int32_t, 32> sourceOwner{};
+    };
+
+    uint32_t CountBits(uint32_t value)
+    {
+        uint32_t count = 0u;
+        while (value != 0u)
+        {
+            value &= value - 1u;
+            ++count;
+        }
+        return count;
+    }
+
+    VisibilityTraceFixtureResult RunVisibilityTraceFixture(
+        const std::vector<VisibilityTraceFixtureSample>& samples,
+        bool rejectDuplicatePixels,
+        bool exitOnFullMask)
+    {
+        VisibilityTraceFixtureResult result;
+        result.sourceOwner.fill(-1);
+        std::array<uint32_t, 2> previousPixel{};
+        std::array<bool, 2> hasPrevious{};
+        for (size_t sampleIndex = 0u;
+            sampleIndex < samples.size();
+            ++sampleIndex)
+        {
+            const VisibilityTraceFixtureSample& sample = samples[sampleIndex];
+            Require(sample.side < previousPixel.size(),
+                "trace fixture uses a valid radial side");
+            if (rejectDuplicatePixels && hasPrevious[sample.side] &&
+                previousPixel[sample.side] == sample.samplePixel)
+            {
+                continue;
+            }
+            hasPrevious[sample.side] = true;
+            previousPixel[sample.side] = sample.samplePixel;
+
+            const uint32_t newlyVisible = sample.intervalMask & ~result.mask;
+            result.mask |= sample.intervalMask;
+            const uint32_t claimedCount = CountBits(newlyVisible);
+            result.newlyClaimedBitCount += claimedCount;
+            result.rawIndirect += sample.sourceRadiance *
+                (float(claimedCount) / 32.f);
+            for (uint32_t bit = 0u; bit < 32u; ++bit)
+            {
+                if ((newlyVisible & (uint32_t{ 1 } << bit)) != 0u)
+                    result.sourceOwner[bit] = int32_t(sampleIndex);
+            }
+            if (exitOnFullMask && result.mask == ~uint32_t{ 0 })
+                break;
+        }
+        result.rawAmbient = 1.f -
+            float(CountBits(result.mask)) / 32.f;
+        return result;
+    }
+
+    void RequireEquivalentVisibilityResult(
+        const VisibilityTraceFixtureResult& left,
+        const VisibilityTraceFixtureResult& right,
+        const std::string& control)
+    {
+        Require(left.mask == right.mask,
+            control + " preserves the final mask");
+        Require(left.newlyClaimedBitCount == right.newlyClaimedBitCount,
+            control + " preserves newly claimed bit counts");
+        Require(std::abs(left.rawAmbient - right.rawAmbient) < 1e-7f,
+            control + " preserves raw AO");
+        Require(std::abs(left.rawIndirect - right.rawIndirect) < 1e-7f,
+            control + " preserves raw GI");
+        Require(left.sourceOwner == right.sourceOwner,
+            control + " preserves near-to-far source ownership");
+    }
+
+    void ValidateExactTraceControls()
+    {
+        const std::vector<VisibilityTraceFixtureSample> duplicateFixture = {
+            { 0x000000ffu, 17u, 0u, 0.25f },
+            // Same side, pixel, interval, and source as the preceding tap. The
+            // second OR is idempotent and owns no new sector when retained.
+            { 0x000000ffu, 17u, 0u, 0.25f },
+            { 0x0000ff00u, 31u, 0u, 0.5f },
+            { 0xffff0000u, 42u, 1u, 0.75f }
+        };
+        RequireEquivalentVisibilityResult(
+            RunVisibilityTraceFixture(duplicateFixture, true, false),
+            RunVisibilityTraceFixture(duplicateFixture, false, false),
+            "duplicate-pixel rejection");
+
+        const std::vector<VisibilityTraceFixtureSample> fullMaskFixture = {
+            { 0x0000ffffu, 11u, 0u, 0.25f },
+            { 0xffff0000u, 12u, 1u, 0.75f },
+            // This farther source cannot own a sector after the mask is full.
+            { 0xffffffffu, 13u, 1u, 100.f }
+        };
+        RequireEquivalentVisibilityResult(
+            RunVisibilityTraceFixture(fullMaskFixture, true, true),
+            RunVisibilityTraceFixture(fullMaskFixture, true, false),
+            "full-mask early exit");
+    }
+
     double Variance(const std::vector<double>& values)
     {
         const double mean = std::accumulate(
@@ -222,6 +337,8 @@ namespace
 
 int main(int argc, char* argv[])
 {
+    ValidateExactTraceControls();
+
     const std::vector<uint16_t> noise =
         uvsr::GenerateVisibilityBlueNoise();
     Require(noise.size() ==
@@ -399,6 +516,50 @@ int main(int argc, char* argv[])
                 semanticOffsets[left],
                 semanticOffsets[right])) < 0.03,
                 "R2 semantic reads remain decorrelated");
+        }
+    }
+
+    Require(uvsr::PackVisibilityFilterAdaptedNoiseRgba8({}).empty(),
+        "packed FAST rejects a malformed scalar volume");
+    const std::vector<uint8_t> packedFast =
+        uvsr::PackVisibilityFilterAdaptedNoiseRgba8(filterAdapted);
+    Require(packedFast.size() == filterAdapted.size() * 4u,
+        "packed FAST allocates one RGBA8 texel per scalar texel");
+    constexpr std::array<uint32_t, 4> packedSemanticDimensions = {
+        0u, 1u, 4u, 5u
+    };
+    for (uint32_t layer = 0u;
+        layer < uvsr::VisibilityFilterAdaptedNoiseLayerCount;
+        ++layer)
+    {
+        const size_t layerOffset = size_t(layer) *
+            uvsr::VisibilityFilterAdaptedNoiseTexelCount;
+        for (uint32_t y = 0u;
+            y < uvsr::VisibilityFilterAdaptedNoiseSize;
+            ++y)
+        {
+            for (uint32_t x = 0u;
+                x < uvsr::VisibilityFilterAdaptedNoiseSize;
+                ++x)
+            {
+                const size_t packedOffset = (layerOffset +
+                    size_t(y) * uvsr::VisibilityFilterAdaptedNoiseSize + x) *
+                    4u;
+                for (uint32_t channel = 0u; channel < 4u; ++channel)
+                {
+                    const auto& semanticOffset = semanticOffsets[
+                        packedSemanticDimensions[channel]];
+                    const uint32_t sourceX =
+                        (x + semanticOffset[0]) & 63u;
+                    const uint32_t sourceY =
+                        (y + semanticOffset[1]) & 63u;
+                    const uint8_t expected = filterAdapted[
+                        layerOffset + size_t(sourceY) *
+                            uvsr::VisibilityFilterAdaptedNoiseSize + sourceX];
+                    Require(packedFast[packedOffset + channel] == expected,
+                        "each packed FAST channel exactly reproduces its scalar semantic lookup");
+                }
+            }
         }
     }
 

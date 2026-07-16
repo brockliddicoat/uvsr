@@ -12,6 +12,27 @@
 #ifndef SPATIAL_FILTER
 #define SPATIAL_FILTER 0
 #endif
+#ifndef FILTER_EXACT_FAST_MATH
+#define FILTER_EXACT_FAST_MATH 0
+#endif
+#ifndef RECONSTRUCTION_DIAGNOSTIC
+// 0 = product reconstruction, 1 = bilinear, 2 = nearest.
+#define RECONSTRUCTION_DIAGNOSTIC 0
+#endif
+#ifndef PACKED_EDGE_RECONSTRUCTION
+// 0 = legacy guide reconstruction, 1 = packed-edge 2x2,
+// 2 = packed-edge 4x4.
+#define PACKED_EDGE_RECONSTRUCTION 0
+#endif
+#ifndef PACKED_EDGE_CONTROLLED_LEAKAGE
+#define PACKED_EDGE_CONTROLLED_LEAKAGE 0
+#endif
+#ifndef VISIBILITY_GROUP_SIZE_X
+#define VISIBILITY_GROUP_SIZE_X 8
+#endif
+#ifndef VISIBILITY_GROUP_SIZE_Y
+#define VISIBILITY_GROUP_SIZE_Y 8
+#endif
 
 cbuffer c_Visibility : register(b0)
 {
@@ -22,6 +43,9 @@ Texture2D<float> t_Ambient : register(t0);
 Texture2D<float4> t_Indirect : register(t1);
 Texture2D<float> t_Depth : register(t2);
 Texture2D<float4> t_Normal : register(t3);
+#if PACKED_EDGE_RECONSTRUCTION
+Texture2D<uint> t_PackedEdges : register(t4);
+#endif
 
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_Ambient : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Indirect : register(u1);
@@ -81,6 +105,36 @@ bool ReconstructViewPosition(
     return all(isfinite(positionVS));
 }
 
+bool ReconstructViewPositionAndDepth(
+    float2 pixelPosition,
+    float deviceDepth,
+    out float3 positionVS,
+    out float linearDepth)
+{
+    float4x4 projection = g_Visibility.view.matViewToClip;
+    float denominator = deviceDepth * projection[2][3] - projection[2][2];
+    if (!isfinite(denominator) || abs(denominator) <= 1e-6f)
+    {
+        positionVS = 0.0f;
+        linearDepth = 65504.0f;
+        return false;
+    }
+
+    float viewZ = (projection[3][2] -
+        deviceDepth * projection[3][3]) / denominator;
+    float clipW = viewZ * projection[2][3] + projection[3][3];
+    float2 ndc = (pixelPosition - g_Visibility.view.clipToWindowBias) /
+        g_Visibility.view.clipToWindowScale;
+    positionVS = float3(
+        (ndc.x * clipW - viewZ * projection[2][0] - projection[3][0]) /
+            projection[0][0],
+        (ndc.y * clipW - viewZ * projection[2][1] - projection[3][1]) /
+            projection[1][1],
+        viewZ);
+    linearDepth = abs(viewZ);
+    return all(isfinite(positionVS)) && isfinite(linearDepth);
+}
+
 bool ProjectViewPosition(float3 positionVS, out float2 pixelPosition)
 {
     float4 clip = mul(
@@ -118,12 +172,21 @@ float JointWeight(
     float sampleDeviceDepth = t_Depth[guidePixel];
     if (!IsValidDepth(sampleDeviceDepth))
         return 0.0f;
-    float sampleDepth = LinearViewDepth(sampleDeviceDepth);
     float3 samplePositionVS;
+#if FILTER_EXACT_FAST_MATH
+    float sampleDepth;
+    if (!ReconstructViewPositionAndDepth(
+            float2(guidePixel) + 0.5f,
+            sampleDeviceDepth,
+            samplePositionVS,
+            sampleDepth))
+#else
+    float sampleDepth = LinearViewDepth(sampleDeviceDepth);
     if (!ReconstructViewPosition(
             float2(guidePixel) + 0.5f,
             sampleDeviceDepth,
             samplePositionVS))
+#endif
     {
         return 0.0f;
     }
@@ -132,10 +195,21 @@ float JointWeight(
     float depthScale = max(centerDepth * 0.02f, 0.01f);
     float planeDistance = abs(dot(
         samplePositionVS - centerPositionVS, centerNormalVS));
+#if FILTER_EXACT_FAST_MATH
+    float depthWeight = exp(-(
+        planeDistance + 0.5f * abs(sampleDepth - centerDepth)) /
+        depthScale);
+    float normalWeight = saturate(dot(centerNormalWS, sampleNormalWS));
+    normalWeight *= normalWeight;
+    normalWeight *= normalWeight;
+    normalWeight *= normalWeight;
+    normalWeight *= normalWeight;
+#else
     float depthWeight = exp(-planeDistance / depthScale) *
         exp(-abs(sampleDepth - centerDepth) / (depthScale * 2.0f));
     float normalWeight = pow(
         saturate(dot(centerNormalWS, sampleNormalWS)), 16.0f);
+#endif
     return spatialWeight * depthWeight * normalWeight;
 }
 
@@ -169,11 +243,215 @@ void AccumulateTap(
 #endif
 }
 
-[numthreads(8, 8, 1)]
+#if PACKED_EDGE_RECONSTRUCTION
+float PackedEdgeComponent(uint packedEdges, uint component)
+{
+    uint shift = component == 0u ? 6u
+        : component == 1u ? 4u
+        : component == 2u ? 2u : 0u;
+    return float((packedEdges >> shift) & 3u) * (1.0f / 3.0f);
+}
+
+float SymmetricPackedEdge(
+    int2 from,
+    int2 to,
+    uint direction,
+    int2 maximumCoordinate)
+{
+    int2 clampedFrom = clamp(from, int2(0, 0), maximumCoordinate);
+    int2 clampedTo = clamp(to, int2(0, 0), maximumCoordinate);
+    if (all(clampedFrom == clampedTo))
+        return 1.0f;
+    uint opposite = direction ^ 1u;
+    uint fromPacked = t_PackedEdges[uint2(clampedFrom)];
+    uint toPacked = t_PackedEdges[uint2(clampedTo)];
+    return min(
+        PackedEdgeComponent(fromPacked, direction),
+        PackedEdgeComponent(toPacked, opposite));
+}
+
+float PackedEdgeConnectivity(
+    int2 anchor,
+    int2 target,
+    int2 maximumCoordinate)
+{
+    int2 current = clamp(anchor, int2(0, 0), maximumCoordinate);
+    int2 clampedTarget = clamp(target, int2(0, 0), maximumCoordinate);
+    float connectivity = 1.0f;
+    int horizontalDirection = clampedTarget.x < current.x ? -1 : 1;
+    [unroll]
+    for (uint step = 0u; step < 3u; ++step)
+    {
+        if (current.x == clampedTarget.x)
+            break;
+        int2 next = current + int2(horizontalDirection, 0);
+        uint direction = horizontalDirection < 0 ? 0u : 1u;
+        connectivity *= SymmetricPackedEdge(
+            current, next, direction, maximumCoordinate);
+        current = clamp(next, int2(0, 0), maximumCoordinate);
+    }
+    int verticalDirection = clampedTarget.y < current.y ? -1 : 1;
+    [unroll]
+    for (uint step = 0u; step < 3u; ++step)
+    {
+        if (current.y == clampedTarget.y)
+            break;
+        int2 next = current + int2(0, verticalDirection);
+        uint direction = verticalDirection < 0 ? 2u : 3u;
+        connectivity *= SymmetricPackedEdge(
+            current, next, direction, maximumCoordinate);
+        current = clamp(next, int2(0, 0), maximumCoordinate);
+    }
+#if PACKED_EDGE_CONTROLLED_LEAKAGE
+    connectivity = max(connectivity, 1.0f / 255.0f);
+#endif
+    return connectivity;
+}
+#endif
+
+[numthreads(VISIBILITY_GROUP_SIZE_X, VISIBILITY_GROUP_SIZE_Y, 1)]
 void main(uint2 pixel : SV_DispatchThreadID)
 {
     if (any(pixel >= uint2(g_Visibility.fullResolution)))
         return;
+
+#if RECONSTRUCTION_DIAGNOSTIC != 0
+    uint diagnosticScale = max(g_Visibility.resolutionScale, 1u);
+    float2 diagnosticPosition = (float2(pixel) + 0.5f) /
+        float(diagnosticScale) - 0.5f;
+#if RECONSTRUCTION_DIAGNOSTIC == 2
+    int2 diagnosticCoordinate = int2(round(diagnosticPosition));
+    int2 diagnosticMaximum = int2(g_Visibility.samplingResolution) - 1;
+    uint2 diagnosticPixel = uint2(clamp(
+        diagnosticCoordinate, int2(0, 0), diagnosticMaximum));
+#if ENABLE_AO
+    u_Ambient[pixel] = t_Ambient[diagnosticPixel];
+#endif
+#if ENABLE_GI
+    u_Indirect[pixel] = t_Indirect[diagnosticPixel];
+#endif
+#else
+    int2 diagnosticBase = int2(floor(diagnosticPosition));
+    float2 diagnosticFraction = frac(diagnosticPosition);
+    int2 diagnosticMaximum = int2(g_Visibility.samplingResolution) - 1;
+    float diagnosticAmbient = 0.0f;
+    float4 diagnosticIndirect = 0.0f;
+    [unroll]
+    for (uint diagnosticY = 0u; diagnosticY < 2u; ++diagnosticY)
+    {
+        [unroll]
+        for (uint diagnosticX = 0u; diagnosticX < 2u; ++diagnosticX)
+        {
+            uint2 diagnosticPixel = uint2(clamp(
+                diagnosticBase + int2(diagnosticX, diagnosticY),
+                int2(0, 0), diagnosticMaximum));
+            float2 axisWeight = diagnosticX == 0u
+                ? float2(1.0f - diagnosticFraction.x, 0.0f)
+                : float2(diagnosticFraction.x, 0.0f);
+            float diagnosticWeight = axisWeight.x *
+                (diagnosticY == 0u
+                    ? 1.0f - diagnosticFraction.y
+                    : diagnosticFraction.y);
+#if ENABLE_AO
+            diagnosticAmbient += t_Ambient[diagnosticPixel] *
+                diagnosticWeight;
+#endif
+#if ENABLE_GI
+            diagnosticIndirect += t_Indirect[diagnosticPixel] *
+                diagnosticWeight;
+#endif
+        }
+    }
+#if ENABLE_AO
+    u_Ambient[pixel] = diagnosticAmbient;
+#endif
+#if ENABLE_GI
+    u_Indirect[pixel] = diagnosticIndirect;
+#endif
+#endif
+    return;
+#endif
+
+#if PACKED_EDGE_RECONSTRUCTION
+    uint packedScale = max(g_Visibility.resolutionScale, 1u);
+    float2 packedSamplingPosition = (float2(pixel) + 0.5f) /
+        float(packedScale) - 0.5f;
+    int2 packedMaximum = int2(g_Visibility.samplingResolution) - 1;
+    int2 packedAnchor = clamp(
+        int2(round(packedSamplingPosition)),
+        int2(0, 0), packedMaximum);
+#if PACKED_EDGE_RECONSTRUCTION == 1
+    int2 packedBase = int2(floor(packedSamplingPosition));
+    static const uint packedWidth = 2u;
+#else
+    int2 packedBase = int2(floor(packedSamplingPosition)) - 1;
+    static const uint packedWidth = 4u;
+#endif
+    float packedTotalWeight = 0.0f;
+    float packedAmbientSum = 0.0f;
+    float3 packedIndirectSum = 0.0f;
+    [unroll]
+    for (uint packedY = 0u; packedY < packedWidth; ++packedY)
+    {
+        [unroll]
+        for (uint packedX = 0u; packedX < packedWidth; ++packedX)
+        {
+            int2 packedCoordinate = packedBase +
+                int2(packedX, packedY);
+            uint2 packedPixel = uint2(clamp(
+                packedCoordinate, int2(0, 0), packedMaximum));
+            float2 packedDelta = float2(packedCoordinate) -
+                packedSamplingPosition;
+#if PACKED_EDGE_RECONSTRUCTION == 1
+            float packedSpatialWeight = max(
+                (1.0f - abs(packedDelta.x)) *
+                (1.0f - abs(packedDelta.y)), 0.0f);
+#else
+            // Four-source-wide tent. This is an explicitly algorithmic
+            // Activision-style support experiment, not the legacy bilateral.
+            float packedSpatialWeight = max(
+                2.0f - abs(packedDelta.x), 0.0f) *
+                max(2.0f - abs(packedDelta.y), 0.0f);
+#endif
+            float packedWeight = packedSpatialWeight *
+                PackedEdgeConnectivity(
+                    packedAnchor,
+                    int2(packedPixel),
+                    packedMaximum);
+            packedTotalWeight += packedWeight;
+#if ENABLE_AO
+            packedAmbientSum += max(
+                t_Ambient[packedPixel], 0.0f) * packedWeight;
+#endif
+#if ENABLE_GI
+            packedIndirectSum += max(
+                t_Indirect[packedPixel].rgb, 0.0f) * packedWeight;
+#endif
+        }
+    }
+    if (!(packedTotalWeight > 1e-6f) ||
+        !isfinite(packedTotalWeight))
+    {
+        packedTotalWeight = 1.0f;
+        uint2 packedFallback = uint2(packedAnchor);
+#if ENABLE_AO
+        packedAmbientSum = max(t_Ambient[packedFallback], 0.0f);
+#endif
+#if ENABLE_GI
+        packedIndirectSum = max(t_Indirect[packedFallback].rgb, 0.0f);
+#endif
+    }
+    float packedInverseWeight = rcp(packedTotalWeight);
+#if ENABLE_AO
+    u_Ambient[pixel] = min(max(
+        packedAmbientSum * packedInverseWeight, 0.0f), 65504.0f);
+#endif
+#if ENABLE_GI
+    u_Indirect[pixel] = float4(min(max(
+        packedIndirectSum * packedInverseWeight, 0.0f), 65504.0f), 0.0f);
+#endif
+    return;
+#endif
 
     float centerDeviceDepth = t_Depth[pixel];
     if (!IsValidDepth(centerDeviceDepth))
@@ -191,12 +469,21 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float2 samplingPosition = (float2(pixel) + 0.5f) /
         float(scale) - 0.5f;
     int2 samplingCenter = int2(round(samplingPosition));
-    float centerDepth = LinearViewDepth(centerDeviceDepth);
     float3 centerPositionVS;
+#if FILTER_EXACT_FAST_MATH
+    float centerDepth;
+    if (!ReconstructViewPositionAndDepth(
+            float2(pixel) + 0.5f,
+            centerDeviceDepth,
+            centerPositionVS,
+            centerDepth))
+#else
+    float centerDepth = LinearViewDepth(centerDeviceDepth);
     if (!ReconstructViewPosition(
             float2(pixel) + 0.5f,
             centerDeviceDepth,
             centerPositionVS))
+#endif
     {
 #if ENABLE_AO
         u_Ambient[pixel] = 1.0f;
@@ -277,6 +564,18 @@ void main(uint2 pixel : SV_DispatchThreadID)
             float2(0.4387f, 0.8729f), float2(-0.1637f, 0.9525f),
             float2(-0.7296f, -0.5993f), float2(-0.9694f, -0.2104f)
         };
+#if FILTER_EXACT_FAST_MATH
+        // sigma = 0.9 * radius makes radius cancel from the Gaussian term:
+        // exp(-dot(radius*p, radius*p) / (2*(0.9*radius)^2)).
+        // These FP32 constants are the offline-rounded values for the fixed
+        // disk above, eliminating a transcendental evaluation per tap.
+        static const float diskGaussianWeight[16] = {
+            1.0f, 0.8381876f, 0.8366060f, 0.7427413f,
+            0.7191886f, 0.657865942f, 0.6743235f, 0.6145380f,
+            0.6585701f, 0.623884737f, 0.613518655f, 0.5774419f,
+            0.5548024f, 0.5618185f, 0.5767801f, 0.54475987f
+        };
+#endif
         uint tapCount = scale == 1u ? 16u : 4u;
         uint sampleOffset = scale == 1u ? 0u :
             ((pixel.x & 1u) + (pixel.y & 1u) * 2u) * 4u;
@@ -300,7 +599,9 @@ void main(uint2 pixel : SV_DispatchThreadID)
                 g_Visibility.view.clipToWindowScale.y), 1e-6f));
         float worldRadius = max(g_Visibility.spatialRadius *
             0.5f * (footprintX + footprintY), 1e-5f);
+#if !FILTER_EXACT_FAST_MATH
         float sigma = max(0.9f * worldRadius, 1e-5f);
+#endif
         [loop]
         for (uint tap = 0u; tap < tapCount; ++tap)
         {
@@ -315,8 +616,13 @@ void main(uint2 pixel : SV_DispatchThreadID)
             float2 targetSamplingPosition = targetPixelPosition /
                 float(scale) - 0.5f;
             int2 coordinate = int2(round(targetSamplingPosition));
+#if FILTER_EXACT_FAST_MATH
+            float spatialWeight =
+                diskGaussianWeight[(sampleOffset + tap) & 15u];
+#else
             float spatialWeight = exp(-dot(tangentOffset, tangentOffset) /
                 (2.0f * sigma * sigma));
+#endif
             AccumulateTap(coordinate, spatialWeight,
                 centerDepth, centerPositionVS,
                 centerNormalWS, centerNormalVS, totalWeight,
