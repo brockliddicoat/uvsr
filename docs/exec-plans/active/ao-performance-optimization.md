@@ -23,13 +23,13 @@ an inactive-path zero-cost contract for every optional experiment.
 
 Done when:
 
-- [ ] Every supplied, Activision, XeGTAO, and newly researched candidate has an
+- [x] Every supplied, Activision, XeGTAO, and newly researched candidate has an
   evidence-backed optimization-ledger disposition.
-- [ ] Measurement controls and per-stage median/p95 capture distinguish depth,
+- [x] Measurement controls and per-stage median/p95 capture distinguish depth,
   trace, reconstruction, application, composition, and residual work.
-- [ ] The requested advanced drawers and curated profiles select CPU-side
+- [x] The requested advanced drawers and curated profiles select CPU-side
   permutations and conditionally allocate/dispatch optional resources.
-- [ ] Defensible exact, numerical, and algorithmic candidates are implemented
+- [x] Defensible exact, numerical, and algorithmic candidates are implemented
   in that order, with the reference generic path retained.
 - [ ] Fixed-count, noise, depth, packed-edge, temporal, and fused-application
   experiments have focused correctness coverage and individual smoke/performance
@@ -124,21 +124,23 @@ asset/package contracts:
 
 | Task ID | Owner | Branch/Worktree | Base | Write Scope | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| Primary-source inventory | `/root/primary_research` | Shared read-only checkout | `5f43205` | None | Public primary sources | In progress |
-| Renderer architecture audit | `/root/renderer_architecture` | Shared read-only checkout | `5f43205` | None | Required repository files | In progress |
+| Primary-source inventory and optimization ledger | `/root/primary_research` | Shared checkout | `5f43205` | `docs/ao-optimization-ledger.md` only | Public primary sources and supplied prompt | Complete and reconciled |
+| Renderer architecture audit | `/root/renderer_architecture` | Shared read-only checkout | `5f43205` | None | Required repository files | Complete |
+| Performance profile and resource-plan model | `/root/performance_plan` | Shared checkout | `5f43205` plus coordination commit | New `src/visibility_performance_plan.*` and `tests/visibility_performance_plan_tests.cpp` only | Architecture findings and reference contracts | Complete and integrated |
+| Frame-correlated benchmark statistics | `/root/benchmark_statistics` | Shared checkout | `5f43205` plus coordination commit | New `src/visibility_benchmark_statistics.*` and `tests/visibility_benchmark_statistics_tests.cpp` only | Existing asynchronous timer behavior and prompt accounting rules | Complete and integrated |
 | Coordination, implementation, integration, and verification | `/root` | Task branch/shared checkout | `5f43205` | All task-owned paths | Research and architecture findings | Active |
 
 ## Assignment Contracts
 
-### Primary-Source Inventory
+### Primary-Source Inventory and Optimization Ledger
 
 - Owner/thread: `/root/primary_research`
 - Branch/worktree: shared checkout, read-only
 - Base commit/state: `5f43205`, before substantive implementation
 - Read scope: all named primary sources plus relevant vendor papers, source code,
   presentations, and profiling guidance discovered during further research
-- Write scope: none
-- No-touch scope: repository files, Git history, external publication
+- Write scope: `docs/ao-optimization-ledger.md` only
+- No-touch scope: all other repository files, Git history, external publication
 - Deliverable: exhaustive source-referenced optimization inventory with
   classification and additional candidates
 - Done when: Activision, XeGTAO, and further-research items are individually
@@ -148,6 +150,54 @@ asset/package contracts:
 - Allowed Git and external actions: read-only repository and web access
 - Stop and report if: a source is inaccessible, licensing is restrictive, or a
   claim cannot be supported by a primary source
+
+### Performance Profile and Resource-Plan Model
+
+- Owner/thread: `/root/performance_plan`
+- Branch/worktree: shared checkout
+- Base commit/state: `5f43205` plus the task coordination commit
+- Read scope: current visibility settings/resources and focused test conventions
+- Write scope: new `src/visibility_performance_plan.h`,
+  `src/visibility_performance_plan.cpp`, and
+  `tests/visibility_performance_plan_tests.cpp` only
+- No-touch scope: all existing files, CMake/shader integration, renderer UI,
+  orchestration, documentation, Git history, and external publication
+- Deliverable: typed curated-profile settings, explicit CPU-side resolved
+  resource/pass plan, stable permutation/history keys, packing helpers, and
+  exhaustive focused tests for optional-off and fixed-profile contracts
+- Done when: the new files are warning-clean and the tests cover Reference,
+  diagnostic, Exact, Numerical, and Algorithmic profile resolution without a
+  Cartesian permutation surface
+- Required verification: standalone compilation where practical; coordinator
+  integrates into CMake and renderer after review
+- Allowed Git and external actions: read-only inspection, scoped file creation,
+  and local build commands; no commits, runtime launches, or remote actions
+- Stop and report if: an existing-file change is required or the requested model
+  would silently alter the reference path
+
+### Frame-Correlated Benchmark Statistics
+
+- Owner/thread: `/root/benchmark_statistics`
+- Branch/worktree: shared checkout
+- Base commit/state: `5f43205` plus the task coordination commit
+- Read scope: existing timer rings, UI statistics, and benchmark requirements
+- Write scope: new `src/visibility_benchmark_statistics.h`,
+  `src/visibility_benchmark_statistics.cpp`, and
+  `tests/visibility_benchmark_statistics_tests.cpp` only
+- No-touch scope: all existing files, renderer integration, documentation,
+  CMake, Git history, runtime sessions, and external publication
+- Deliverable: frame-identity-aware stage sample collection, warmup and measured
+  windows, complete-frame median/p95 calculations, CSV/JSON-ready summary data,
+  and focused tests proving totals come from per-frame sums rather than summed
+  stage percentiles
+- Done when: delayed/out-of-order stage samples associate correctly, incomplete
+  frames are excluded, and reset/profile metadata behavior is covered
+- Required verification: standalone compilation where practical; coordinator
+  integrates the module and export path after review
+- Allowed Git and external actions: read-only inspection, scoped file creation,
+  and local build commands; no commits, launches, or remote actions
+- Stop and report if: an existing-file change is required or correlation cannot
+  be established with the available timer interface
 
 ### Renderer Architecture Audit
 
@@ -207,17 +257,31 @@ asset/package contracts:
 6. Reconcile documentation, ledger dispositions, shader evidence, UI costs,
    target-hardware handoff, and local commits.
 
+## Expected Performance Impact
+
+The ranked forecast is maintained in
+[`docs/ao-optimization-ledger.md`](../../ao-optimization-ledger.md#expected-performance-impact)
+and summarized in
+[`docs/screen-space-visibility.md`](../../screen-space-visibility.md#expected-performance-impact).
+It uses the user's 2.5-2.7 ms baseline, labels every range as an engineering
+forecast, treats overlapping savings as non-additive, and ranks every distinct
+implemented runtime family. No forecast is promoted to a result until a
+controlled Intel Core Ultra 9 185H/Xe-LPG export records the exact build,
+profile/permutation, warm-up, measured-frame count, median, p95, and quality
+review.
+
 ## Verification Plan
 
 | Acceptance Criterion | Evidence Required | Command/Experiment | Result/Artifact |
 | --- | --- | --- | --- |
 | Exact requested base | Commit identity and clean pre-edit state | `git rev-parse HEAD`; `git status` | Confirmed `5f43205`; task branch created |
-| Canonical reference retained | Reference resource/dispatch/output contract and reference image comparison | Unit tests plus reference profile smoke capture | Pending |
-| Fixed AO/GI order and masks | Mask, AO, claimed-bit, source-owner, raw-GI fixtures for 8/12/16/20 and generic fallback | Focused visibility tests | Pending |
-| Packed edge correctness | All byte combinations, reverse depth, boundaries, slopes, depth/normal discontinuity, receiver mapping | Focused edge tests | Pending |
-| Optional off-state zero cost | Reference pipeline key, bindings, allocations, dispatches, history, and output unchanged | Resource counters, code inspection, and reference capture | Pending |
-| Isolated feature sanity | No correctness regression and directionally useful local timing/traffic result per optimization | One-at-a-time smoke/benchmark actions; no permutation matrix | Pending |
-| Release readiness | All task targets build; tests and title-case validator pass | CMake Release build, `ctest`, heading validator | Pending |
+| Canonical reference retained | Reference resource/dispatch/output contract and reference image comparison | Unit tests plus reference profile smoke capture | Plan/resource-invariance tests and gross-corruption capture pass; exact same-phase GPU comparison remains pending |
+| Fixed AO/GI order and masks | Mask, AO, claimed-bit, source-owner, raw-GI fixtures for 8/12/16/20 and generic fallback | Focused visibility tests | 589,824 deterministic comparisons plus AO, GI-only, and AO+GI consumer-profile smoke pass |
+| Packed edge correctness | All byte combinations, reverse depth, boundaries, slopes, depth/normal discontinuity, receiver mapping | Focused edge tests | Focused CPU fixtures and packed-edge profile smoke pass |
+| Optional off-state zero cost | Reference pipeline key, bindings, allocations, dispatches, history, and output unchanged | Resource counters, code inspection, and reference capture | Plan-level reference-invariance assertions pass; target physical-resource capture remains pending |
+| Isolated feature sanity | No correctness regression and directionally useful local timing/traffic result per optimization | One-at-a-time smoke/benchmark actions; no permutation matrix | Fixed (5), noise (6), reconstruction (12), math (2), and comprehensive (53) sequences completed; slower optional experiments are retained and documented |
+| Generated shader evidence | Source optimizations survive DXC; static code/load/store changes are recorded without treating them as runtime counts | `tools/measure_visibility_dxil.ps1`; [`docs/visibility-dxil-evidence.md`](../../visibility-dxil-evidence.md) | Core 18-variant DXIL report complete; physical Intel registers/spills/occupancy pending |
+| Release readiness | All task targets build; tests and title-case validator pass | CMake Release build, `ctest`, heading validator | Pre-commit Release build, 13/13 tests, DXIL generation, 413-row ledger audit, and heading validator pass; committed-identity rebuild/smoke remains the final handoff check |
 | Target performance | Median/p95 on the exact Intel target after warmup with saved key/settings/clock state | User-led benchmark export, 120 warmup and at least 240 measured frames | Pending external handoff |
 
 ## Decisions
@@ -228,14 +292,20 @@ asset/package contracts:
 | 2026-07-16 | Record PR #10 and PR #11 as integration dependencies without cherry-picking | Both overlap task paths but are unmerged and absent from the requested base; their additive/mechanical intent can be preserved during later reconciliation | Shader and test edits |
 | 2026-07-16 | Keep performance claims adapter-scoped | The local GPU may not be the target Xe-LPG device, and the prompt forbids extrapolating target wins | Benchmarking and report |
 | 2026-07-16 | Run isolated smoke and traffic/performance checks, not combination permutations | This follows the user's explicit verification priority while still gathering evidence for each retained feature | Verification |
+| 2026-07-16 | Keep Mixed-Precision AO and XeGTAO Closest Match unavailable | No compiled mixed-precision trace or complete XeGTAO depth/noise/denoise/application pipeline exists; substituting the conservative FP32 filter or analytic horizon control would mislabel evidence | Profiles, UI, and ledger |
+| 2026-07-16 | Use an outer effect timer plus a signed residual | A sum of named queries omits transitions and gaps, while summing stage percentiles mixes frames; the outer envelope and frame-correlated stage sum expose both scopes honestly | Benchmark statistics and export |
 
 ## Progress and Handoffs
 
 | Date/Time | Task/Owner | Status | Revision/Artifact | Checks | Risks/Next Action |
 | --- | --- | --- | --- | --- | --- |
 | 2026-07-16 | Coordinator preflight | Complete | `5f43205` and this plan | Full user prompt read; remote branches, open PRs, worktrees, roadmap, and execution plans reviewed | Baseline build and required-file audit next |
-| 2026-07-16 | Primary-source inventory | In progress | Read-only agent report pending | Primary sources only | Reconcile exhaustive candidate list into ledger |
-| 2026-07-16 | Renderer architecture audit | In progress | Read-only agent report pending | Exact-base source inspection | Use map to bound implementation permutations |
+| 2026-07-16 | Primary-source inventory | Complete | `docs/ao-optimization-ledger.md` | Primary sources and current-build source evidence reconciled | Target measurements remain pending |
+| 2026-07-16 | Renderer architecture audit | Complete | Read-only pass/resource/permutation map | Exact-base and current-diff source inspection | Findings incorporated into curated implementation |
+| 2026-07-16 | Profile/resource plan and benchmark statistics | Integrated | `src/visibility_performance_plan.*`; `src/visibility_benchmark_statistics.*` | Focused test targets exist; final aggregate verification pending | Preserve pending result placeholders until final run |
+| 2026-07-16 | Renderer and UI implementation | Integrated | Fixed/group/radius-clamp/packed-noise/packed-edge/fused/diagnostic shaders; four advanced drawers; sequential runners; CLI/export | Packaged-shader audit and 53-entry comprehensive smoke pass | Controlled target timing and manual product-quality review remain pending |
+| 2026-07-16 | Generated shader evidence | Partially complete | `docs/visibility-dxil-evidence.md`; `tools/measure_visibility_dxil.ps1` | Reproducible 18-variant optimized-DXIL table; packed FAST, filter algebra, fusion, diagnostics, and fixed code growth confirmed | Target Intel native ISA, GRF, spill, SIMD width, and occupancy remain pending |
+| 2026-07-16 | Documentation reconciliation | Complete | README, design, 413-row ledger, DXIL evidence, and this plan | Dispositions, ranked forecasts, deferred work, current smoke evidence, 413 unique IDs, and Title Case reconcile | Preserve target timing and physical-ISA limitations in the final handoff |
 
 ## Risks and Escalation Triggers
 

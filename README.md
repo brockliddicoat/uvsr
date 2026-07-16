@@ -43,15 +43,32 @@ architecture without either add-on.
   **Filter-Adapted Spatiotemporal Noise**. Every scheduler toroidally
   rotates the complete nested radial prefix, so fixed-work and adaptive modes
   do not reuse global radius shells as the budget changes.
+- **AO Performance Verification** retains **Reference** as a hard lock to the
+  canonical generic shaders and exposes CPU-selected fixed 8/12/16/20 trace
+  permutations, packed current FAST delivery, exact fused AO resolve/apply,
+  16x8 and 8x16 trace groups, 32/64/128-pixel projected-radius clamps, packed-
+  edge reconstruction/fusion experiments, the Activision 4x4-by-6 scheduler,
+  duplicate/full-mask off controls, diagnostic floors, and partial analytic-
+  horizon controls. Reference allocates, binds, and dispatches no candidate-
+  only work. The separate **Fast Math & Validation**, **Precision & Formats**,
+  and **Dispatch, Memory & Cache** drawers report the selected profile rather
+  than implying that every researched option is compiled.
+- Mixed-precision trace and complete same-engine XeGTAO profiles are explicitly
+  unavailable. The conservative numerical profile is an FP32 filter-algebra
+  experiment, and the Activision controls retain UVSR's downstream resolve,
+  temporal, and composition pipeline; neither is mislabeled as the missing
+  implementation.
 - Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
 - The renderer/GPU summary and first performance line stay visible above the
   **General** drawer. That line reports resolution, frame time, FPS,
   current-clock memory bandwidth, and current-clock FP32 peak GFLOPS.
-  Visibility statistics start collapsed and report **All**, **Trace**,
-  **Filter**, and **Other** GPU timings on one row. Two memory rows report exact
-  logical **Outputs**,
+  Visibility statistics start collapsed and distinguish the outer effect
+  envelope, summed named stages, signed unattributed residual, depth
+  preparation, first trace, each later GI bounce, temporal reconstruction,
+  spatial resolve, full-resolution application, and composition. Two memory
+  rows report exact logical **Outputs**,
   **Working**, **Mask Cache**, and **Avoided** payloads; **Shared** is explicitly
   an estimate of duplicate mask payload avoided by shared AO/GI traversal.
 - The default deferred UVSR PBR path starts enabled. **Visibility > Enabled**
@@ -167,18 +184,21 @@ promises that the work will merge.
   rank-field paths. This owns only visibility test sources and has no runtime
   rendering, UI, or asset overlap.
 
-- **AO Performance Optimization — Active Development**
+- **AO Performance Optimization — Ready for Manual Validation**
   (`codex/ao-performance-optimization`). Measure and optimize the AO-only
   visibility-bitmask path from depth preparation through application while
   retaining the canonical generic implementation as a zero-cost-off reference.
   This work owns visibility performance diagnostics, curated fixed-sample and
   resource permutations, optional noise/depth/packed-edge reconstruction
   experiments, AO-only fused resolve/application, advanced verification UI,
-  focused reference tests, and the optimization ledger. It deliberately starts
-  from `5f43205`; PR #10's shared-helper extraction and PR #11's test additions
-  remain later integration dependencies, and the separate bilateral-grid work
-  retains ownership of local tone mapping and AgX integration after visibility
-  composition.
+  focused reference tests, and the optimization ledger. The branch now
+  contains the curated profile and benchmark/export implementation; controlled
+  Core Ultra 9 185H timing and visual acceptance remain a user-run validation
+  step, so its ranked impact ranges are forecasts rather than measured gains.
+  It deliberately starts from `5f43205`; PR #10's shared-helper extraction and
+  PR #11's test additions remain later integration dependencies, and the
+  separate bilateral-grid work retains ownership of local tone mapping and AgX
+  integration after visibility composition.
 
 ### Roadmap Ownership
 
@@ -254,6 +274,40 @@ launch. The benchmark pose is shared by **PBR Sponza Decorated** and **PBR
 Sponza Plain**; benchmark records identify it by that preset ID while the
 separate `scene` field identifies which scene was measured.
 
+Run one visibility profile without UI, export its frame-correlated JSON/CSV and
+last measured frame, and close after completion with:
+
+```powershell
+.\tools\launch_uvsr.ps1 benchmark --benchmark-camera `
+  --visibility-profile exact-fast-ao-8t --visibility-benchmark `
+  --benchmark-warmup 120 --benchmark-frames 240 `
+  --benchmark-output .\benchmark-results --benchmark-auto-close
+```
+
+Profile matching ignores punctuation and case, so either the displayed
+one-click name or a hyphenated form is accepted. `--benchmark-warmup` accepts
+0 through 100000 frames and `--benchmark-frames` accepts 1 through 100000.
+Unknown or unavailable profiles and invalid frame counts report to standard
+error and return a nonzero process exit code; they do not open modal dialogs.
+Run a complete fixed-sample, noise, reconstruction, or math matrix through the
+same headless path by replacing `--visibility-profile ... --visibility-benchmark`
+with `--benchmark-sequence fixed-sample`, `noise`, `reconstruction`, or `math`.
+Each entry is an isolated run with its own history reset and artifacts. The
+`--benchmark-warmup`, `--benchmark-frames`, `--benchmark-output`, and
+`--benchmark-auto-close` options apply to the whole sequence. The unavailable
+`precision` sequence fails before renderer startup with the documented reason.
+Use `--benchmark-sequence all` for a smoke pass over every implemented or
+partial benchmark-control performance profile; unavailable profiles are skipped.
+The UI also provides **Benchmark Current Profile**, **Cancel Benchmark**, and
+**Export Benchmark Results**. Reference-versus-current, fixed-count, noise,
+reconstruction, and math actions run their entries sequentially with per-entry
+history reset/export and exact starting-setting restoration on completion,
+cancellation, or failure. **Benchmark Precision Matrix** remains explicitly
+unavailable because no non-reference mixed-precision trace is compiled.
+The schema-v2 JSON includes a human-readable and hashed snapshot of the full
+profile-relevant AO/GI, sampling, reconstruction, format, dispatch, and resource
+contract that was active for the run.
+
 After building, Windows users can also double-click `LaunchUVSR.cmd`. It
 delegates to the same required experiment launcher with a fixed main-build
 label; optional renderer arguments can be appended from a terminal.
@@ -272,11 +326,12 @@ not already cached.
 
 Build and run the scene-catalog, experiment-title, camera-collision,
 camera-controls, Sponza-camera-preset, PBR, World-Material-view,
-radial-visibility, estimator, visibility-projection, and visibility-sampling
-reference tests separately:
+radial-visibility, estimator, visibility-projection, visibility-sampling,
+visibility-performance-plan, and visibility-benchmark-statistics tests
+separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests uvsr_visibility_performance_plan_tests uvsr_visibility_benchmark_statistics_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
@@ -288,6 +343,18 @@ G-buffer packing, equations, validation, limitations, and extension points.
 The [screen-space visibility design](docs/screen-space-visibility.md) documents
 the shared 32-sector AO/GI traversal, resources, coordinate/radiance contracts,
 controls, limitations, and the upgrade path to persistent unified visibility.
+
+The [AO optimization ledger](docs/ao-optimization-ledger.md) inventories every
+supplied, Activision, XeGTAO, and further-research candidate; records its
+classification, evidence, quality boundary, zero-cost-off disposition, and
+measurement method; and ranks all implemented runtime families with explicitly
+non-additive engineering forecasts.
+
+The [visibility DXIL evidence](docs/visibility-dxil-evidence.md) provides a
+reproducible static generated-shader comparison for the core Reference,
+candidate, diagnostic, reconstruction, and fusion permutations. It does not
+substitute static IR counts for target-GPU timings or physical Intel register,
+spill, SIMD-width, and occupancy data.
 
 The [visibility estimator validation](docs/visibility-estimator-validation.md)
 records the shared C++/HLSL measure contracts, deterministic reference fixtures,
