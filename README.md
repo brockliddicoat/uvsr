@@ -167,6 +167,19 @@ promises that the work will merge.
   rank-field paths. This owns only visibility test sources and has no runtime
   rendering, UI, or asset overlap.
 
+- **AO Performance Optimization — Active Development**
+  (`codex/ao-performance-optimization`). Measure and optimize the AO-only
+  visibility-bitmask path from depth preparation through application while
+  retaining the canonical generic implementation as a zero-cost-off reference.
+  This work owns visibility performance diagnostics, curated fixed-sample and
+  resource permutations, optional noise/depth/packed-edge reconstruction
+  experiments, AO-only fused resolve/application, advanced verification UI,
+  focused reference tests, and the optimization ledger. It deliberately starts
+  from `5f43205`; PR #10's shared-helper extraction and PR #11's test additions
+  remain later integration dependencies, and the separate bilateral-grid work
+  retains ownership of local tone mapping and AgX integration after visibility
+  composition.
+
 ### Roadmap Ownership
 
 The task coordinator or final integrator owns this section:
