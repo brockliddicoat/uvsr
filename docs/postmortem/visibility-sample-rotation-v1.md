@@ -40,10 +40,10 @@ demonstrated benefit.
 - Local branch: `codex/sample-rotation-experiment`.
 - Implementation state: source remains uncommitted, unpushed, and never part of
   Canonical UVSR.
-- Documentation state: archive commit
-  `4810921a66aa803296630802f6a8c600ee71ddd4` was pushed to
-  `origin/codex/sample-rotation-experiment`; no pull request or merge was
-  authorized.
+- Documentation state: documentation-only pull request
+  [#16](https://github.com/brockliddicoat/uvsr/pull/16) was merged into
+  Canonical `main` at `869e2241a72faf59f11604b5199a96b3c0218788`.
+  The rejected implementation was excluded.
 - Design and technical evidence:
   [`../visibility-sample-rotation-v1.md`](../visibility-sample-rotation-v1.md).
 - Completed execution record:
