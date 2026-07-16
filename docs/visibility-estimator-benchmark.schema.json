@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/brockliddicoat/uvsr/blob/main/docs/visibility-estimator-benchmark.schema.json",
-  "title": "UVSR visibility estimator benchmark",
+  "title": "UVSR Visibility Estimator Benchmark",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,8 +19,16 @@
     "timestampUtc": { "type": "string", "format": "date-time" },
     "adapter": { "type": "string", "minLength": 1 },
     "driver": { "type": "string", "minLength": 1 },
-    "scene": { "type": "string", "minLength": 1 },
-    "camera": { "type": "string", "minLength": 1 },
+    "scene": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Scene display name. Standard Sponza records use PBR Sponza Decorated or PBR Sponza Plain."
+    },
+    "camera": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable camera preset identifier. Standard PBR Sponza benchmarks lock Benchmark Position 1 and record intel-pbr-sponza-courtyard-simplified-v1."
+    },
     "configuration": {
       "type": "object",
       "additionalProperties": false,
@@ -44,7 +52,6 @@
         "resolution",
         "scheduler",
         "adaptiveSparseSampling",
-        "reconstructionEnabled",
         "temporalReconstruction",
         "temporalCurrentResponse",
         "spatialFiltering",
@@ -77,7 +84,6 @@
           ]
         },
         "adaptiveSparseSampling": { "type": "boolean" },
-        "reconstructionEnabled": { "type": "boolean" },
         "temporalReconstruction": { "type": "boolean" },
         "temporalCurrentResponse": { "type": "number", "minimum": 0.05, "maximum": 1 },
         "spatialFiltering": { "type": "boolean" },

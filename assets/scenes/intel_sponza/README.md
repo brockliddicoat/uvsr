@@ -6,15 +6,57 @@ or path setup; CMake stages the bundle automatically.
 
 ## Standard Scenes
 
-- **Intel PBR Sponza** is the default. It composes the flat-roof architecture,
+- **PBR Sponza Decorated** is the default. It composes the flat-roof architecture,
   Intel's curtains, and the roof-trimmed ivy package at their authored identity
   transforms.
-- **Intel PBR Sponza - Plain** loads the same architecture without curtains or
+- **PBR Sponza Plain** loads the same architecture without curtains or
   ivy.
 
 The architecture and add-ons remain separate GLBs. The `.scene.json`
 descriptors compose them at load time, and the scene catalog hides their
 component files so these are the only two Intel Sponza picker entries.
+
+## Camera Locations
+
+Both standardized scene descriptors declare
+`intel-pbr-sponza-courtyard-simplified-v1` as their default camera metadata, so
+staged picker loads and explicit source-tree descriptor loads behave
+identically. **PBR Sponza Decorated** and **PBR Sponza Plain** open in
+**Freelook** at **Benchmark Position 1**. The **Camera Location** dropdown
+retains this sole named location so more locations can be added later and also
+includes an always-selectable **Free** entry.
+
+### Benchmark Position 1
+
+**Benchmark Position 1** uses the requested rounded position. Its supplied
+direction and right components of `±0.7` are normalized
+to `±0.707106769`, preserving an orthonormal camera basis and the intended
+45-degree heading without scaling the view matrix. Its stable default and
+benchmark ID is
+`intel-pbr-sponza-courtyard-simplified-v1`:
+
+```text
+Position:     (11.0, 7.7, -2.2)
+Direction:    (-0.707106769, 0.0, 0.707106769)
+Up:           (0.0, 1.0, 0.0)
+Right:        (-0.707106769, 0.0, -0.707106769)
+Vertical FOV: 60 degrees
+```
+
+The preset uses 1920x1080 reference framing at a 16:9 aspect ratio. Choosing it
+recalls its complete pose immediately without changing the current Camera Mode.
+After translation or rotation moves the view away from that pose, the dropdown
+reports **Free** while Benchmark Position 1 remains available for recall.
+Choosing Free explicitly detaches the location name without moving or
+reorienting the camera. Both standardized scenes use Benchmark Position 1 on a
+fresh load.
+
+Launching with `--benchmark-camera` starts and locks Benchmark Position 1 in
+the disabled Camera Location dropdown, enforces the 1920x1080 reference frame,
+and selects **Locked** so the benchmark view cannot move or switch modes.
+Benchmark records use `intel-pbr-sponza-courtyard-simplified-v1` in their
+`camera` field and identify **PBR Sponza Decorated** or **PBR Sponza Plain**
+separately in their `scene` field.
 
 ## Runtime Components
 

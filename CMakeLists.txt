@@ -114,6 +114,7 @@ add_executable(uvsr WIN32
     src/pbr_deferred_lighting_pass.cpp
     src/scene_catalog.cpp
     src/screen_space_visibility.cpp
+    src/sponza_camera_preset.cpp
     src/visibility_blue_noise.cpp
 )
 target_link_libraries(uvsr PRIVATE donut_render donut_app donut_engine)
@@ -136,6 +137,18 @@ add_executable(uvsr_pbr_tests tests/pbr_reference_tests.cpp)
 target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
 add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
+
+add_executable(uvsr_world_material_view_tests
+    tests/world_material_view_tests.cpp
+)
+target_include_directories(
+    uvsr_world_material_view_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_world_material_view_reference
+    COMMAND uvsr_world_material_view_tests
+)
 
 add_executable(uvsr_experiment_title_tests tests/experiment_title_tests.cpp)
 target_include_directories(
@@ -162,6 +175,21 @@ target_include_directories(
 )
 target_link_libraries(uvsr_camera_controls_tests PRIVATE donut_app)
 add_test(NAME uvsr_camera_controls_reference COMMAND uvsr_camera_controls_tests)
+
+add_executable(uvsr_sponza_camera_tests
+    tests/sponza_camera_preset_tests.cpp
+    src/sponza_camera_preset.cpp
+)
+target_include_directories(
+    uvsr_sponza_camera_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(uvsr_sponza_camera_tests PRIVATE donut_core)
+add_test(
+    NAME uvsr_sponza_camera_reference
+    COMMAND uvsr_sponza_camera_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/intel_sponza"
+)
 
 add_executable(uvsr_radial_visibility_tests tests/radial_visibility_mask_tests.cpp)
 target_include_directories(uvsr_radial_visibility_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")

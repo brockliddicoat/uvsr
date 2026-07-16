@@ -976,10 +976,9 @@ namespace uvsr
         const bool motionAvailable = inputs.motionVectors != nullptr;
         const bool adaptiveEnabled =
             settings.UsesAdaptiveSampling() && motionAvailable;
-        const bool temporalEnabled = settings.reconstruction.enabled &&
+        const bool temporalEnabled =
             settings.reconstruction.temporalEnabled && motionAvailable;
         const bool spatialFilterEnabled =
-            settings.reconstruction.enabled &&
             settings.reconstruction.spatialEnabled;
         // A reduced-resolution signal still requires guide-aware
         // reconstruction. Spatial filtering off selects only the minimal

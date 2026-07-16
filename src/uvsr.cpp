@@ -68,6 +68,8 @@
 #include "experiment_title.h"
 #include "scene_catalog.h"
 #include "screen_space_visibility.h"
+#include "sponza_camera_preset.h"
+#include "world_material_view.h"
 
 using namespace donut;
 using namespace donut::math;
@@ -79,6 +81,24 @@ using namespace uvsr;
 
 static bool g_RestartRequested = false;
 static int g_RestartAdapterIndex = -1;
+static GLFWkeyfun g_BenchmarkForwardKeyCallback = nullptr;
+
+void BenchmarkWindowKeyCallback(
+    GLFWwindow* window,
+    int key,
+    int scancode,
+    int action,
+    int mods)
+{
+    // DeviceManager normally handles Alt+Enter before application input.
+    // Suppress that transition in benchmark mode so monitor-native fullscreen
+    // cannot silently replace the 1920x1080 reference frame.
+    if (key == GLFW_KEY_ENTER && action == GLFW_PRESS && (mods & GLFW_MOD_ALT))
+        return;
+
+    if (g_BenchmarkForwardKeyCallback)
+        g_BenchmarkForwardKeyCallback(window, key, scancode, action, mods);
+}
 
 struct GpuAdapterChoice
 {
@@ -908,16 +928,25 @@ private:
     float3                              m_AmbientBottom = 0.f;
     uint2                               m_PickPosition = 0u;
     bool                                m_Pick = false;
-    
+    bool                                m_BenchmarkCameraRequested = false;
+    bool                                m_BenchmarkCameraActive = false;
+    bool                                m_SponzaCameraLocationsAvailable = false;
+    SponzaCameraLocation                m_SponzaCameraLocation =
+        SponzaCameraLocation::SimplifiedApproximation;
 
     UIData&                             m_ui;
 
 public:
 
-    UvsrSceneViewer(DeviceManager* deviceManager, UIData& ui, const std::string& sceneName)
+    UvsrSceneViewer(
+        DeviceManager* deviceManager,
+        UIData& ui,
+        const std::string& sceneName,
+        bool benchmarkCameraRequested)
         : Super(deviceManager)
-        , m_ui(ui)
         , m_BindingCache(deviceManager->GetDevice())
+        , m_BenchmarkCameraRequested(benchmarkCameraRequested)
+        , m_ui(ui)
     { 
         m_RootFs = std::make_shared<RootFileSystem>();
 
@@ -960,7 +989,7 @@ public:
         if (sceneName.empty())
         {
             // Use an exact catalog path rather than a substring preference:
-            // the standardized furnished and plain Sponza descriptors share
+            // the standardized Decorated and Plain Sponza descriptors share
             // their architecture components, while the complete scene is
             // UVSR's stable default.
             const std::string defaultScene = (m_SceneDir
@@ -970,7 +999,7 @@ public:
             else
             {
                 log::warning(
-                    "Default Intel PBR Sponza descriptor '%s' was not found; loading '%s' instead.",
+                    "Default PBR Sponza Decorated descriptor '%s' was not found; loading '%s' instead.",
                     defaultScene.c_str(),
                     m_SceneCatalog.front().FileName.c_str());
                 SetCurrentSceneName(m_SceneCatalog.front().FileName);
@@ -1000,6 +1029,12 @@ public:
 
     void SetCameraMode(CameraMode mode)
     {
+        if (mode != CameraMode::ThirdPerson && mode != CameraMode::Static)
+            return;
+
+        if (m_BenchmarkCameraActive && mode != CameraMode::Static)
+            return;
+
         if (mode == m_ui.Camera)
             return;
 
@@ -1016,7 +1051,7 @@ public:
 
         case CameraMode::ThirdPerson:
             m_ThirdPersonCamera.LookTo(position, direction, up);
-            m_ThirdPersonCamera.CancelPendingZoom();
+            m_ThirdPersonCamera.CancelPendingMotion();
             break;
 
         case CameraMode::Static:
@@ -1029,6 +1064,98 @@ public:
         }
 
         m_ui.Camera = mode;
+    }
+
+    [[nodiscard]] bool IsBenchmarkCameraActive() const
+    {
+        return m_BenchmarkCameraActive;
+    }
+
+    [[nodiscard]] bool HasSponzaCameraLocations() const
+    {
+        return m_SponzaCameraLocationsAvailable;
+    }
+
+    [[nodiscard]] SponzaCameraLocation GetSponzaCameraLocation() const
+    {
+        return m_SponzaCameraLocation;
+    }
+
+    void ApplySponzaCameraPreset(const SponzaCameraPreset& preset)
+    {
+        m_CameraVerticalFov = preset.VerticalFovDegrees;
+        const float zoomReferenceDistance =
+            m_ThirdPersonCamera.GetReferenceZoomDistance();
+        m_ThirdPersonCamera.ResetZoomReferenceDistance(zoomReferenceDistance);
+        m_ThirdPersonCamera.SetExactPose(
+            preset.Position,
+            preset.Direction,
+            preset.Up,
+            preset.Right);
+        m_FirstPersonCamera.SetExactPose(
+            preset.Position,
+            preset.Direction,
+            preset.Up,
+            preset.Right);
+        m_PivotCamera.SetExactPose(
+            preset.Position,
+            preset.Direction,
+            preset.Up,
+            preset.Right);
+        m_StaticCamera.SetExactPose(
+            preset.Position,
+            preset.Direction,
+            preset.Up,
+            preset.Right);
+
+        m_PreviousView.reset();
+        if (m_ScreenSpaceVisibilityPass)
+            m_ScreenSpaceVisibilityPass->ResetHistory();
+    }
+
+    void SetSponzaCameraLocation(SponzaCameraLocation location)
+    {
+        if (!m_SponzaCameraLocationsAvailable || m_BenchmarkCameraActive)
+            return;
+
+        if (location == SponzaCameraLocation::Free)
+        {
+            m_SponzaCameraLocation = location;
+            log::info("Camera location is now Free");
+            return;
+        }
+
+        const SponzaCameraPreset* preset = FindSponzaCameraPreset(location);
+        if (!preset)
+            return;
+
+        ApplySponzaCameraPreset(*preset);
+        m_SponzaCameraLocation = location;
+        log::info(
+            "Applied camera location '%s' (%s)",
+            preset->Label,
+            preset->Id);
+    }
+
+    void UpdateSponzaCameraLocationTracking()
+    {
+        if (!m_SponzaCameraLocationsAvailable ||
+            m_SponzaCameraLocation == SponzaCameraLocation::Free)
+        {
+            return;
+        }
+
+        const SponzaCameraPreset* preset =
+            FindSponzaCameraPreset(m_SponzaCameraLocation);
+        if (preset && !IsSponzaCameraAtPreset(
+            *preset,
+            m_ThirdPersonCamera.GetPosition(),
+            m_ThirdPersonCamera.GetDir(),
+            m_ThirdPersonCamera.GetUp()))
+        {
+            m_SponzaCameraLocation = SponzaCameraLocation::Free;
+            log::info("Camera location is now Free");
+        }
     }
 
     const std::vector<SceneCatalogEntry>& GetAvailableScenes() const
@@ -1337,14 +1464,6 @@ public:
             return true;	
 		}
 
-        if (key == GLFW_KEY_T && action == GLFW_PRESS)
-        {
-            SetCameraMode(m_ui.Camera == CameraMode::ThirdPerson
-                ? CameraMode::FirstPerson
-                : CameraMode::ThirdPerson);
-            return true;
-        }
-
         GetActiveCamera().KeyboardUpdate(key, scancode, action, mods);
         return true;
     }
@@ -1388,9 +1507,8 @@ public:
         {
         case CameraMode::ThirdPerson:
         {
-            // Third Person is look-and-dolly only. Damped wheel input and
-            // smooth W/S input move the eye directly, with no orbit target or
-            // pivot-to-eye obstruction query.
+            // Freelook combines mouse/arrow look, W/S dolly, and A/D strafe.
+            // It moves the eye directly with no orbit target or pivot state.
             const float3 start = m_ThirdPersonCamera.GetPosition();
             m_ThirdPersonCamera.Animate(fElapsedTimeSeconds);
 
@@ -1403,6 +1521,7 @@ public:
                 // its look direction and dolly sensitivity stay unchanged.
                 m_ThirdPersonCamera.ApplyCollisionPosition(resolvedPosition);
             }
+            UpdateSponzaCameraLocationTracking();
             break;
         }
 
@@ -1522,6 +1641,22 @@ public:
             m_Scene->GetSceneGraph()->Attach(m_Scene->GetSceneGraph()->GetRootNode(), node);
         }
 
+        const SponzaCameraPreset* sceneDefaultCamera = FindStandardSponzaCameraPreset(
+            *m_NativeFs,
+            m_CurrentSceneName);
+        m_SponzaCameraLocationsAvailable = sceneDefaultCamera != nullptr;
+        if (m_SponzaCameraLocationsAvailable)
+        {
+            m_SponzaCameraLocation = ResolveSponzaCameraLocation(
+                m_SponzaCameraLocation,
+                m_BenchmarkCameraRequested);
+        }
+        const SponzaCameraPreset* sponzaCamera = m_SponzaCameraLocationsAvailable
+            ? FindSponzaCameraPreset(m_SponzaCameraLocation)
+            : nullptr;
+        if (sponzaCamera)
+            m_CameraVerticalFov = sponzaCamera->VerticalFovDegrees;
+
         std::shared_ptr<SceneGraphNode> cameraTarget = m_Scene->GetSceneGraph()->GetRootNode();
         // Prefer the compact asteroid core when present so the initial view
         // includes the full rocky platform instead of tightly framing only the
@@ -1536,18 +1671,47 @@ public:
             cameraTarget = pyramid;
         PointThirdPersonCameraAt(cameraTarget, cameraDistanceScale, true);
 
-        m_ui.Camera = string_utils::ends_with(m_CurrentSceneName, ".gltf")
-            || string_utils::ends_with(m_CurrentSceneName, ".glb")
-            || string_utils::ends_with(m_CurrentSceneName, ".scene.json")
-            ? CameraMode::ThirdPerson
-            : CameraMode::FirstPerson;
+        if (sponzaCamera)
+        {
+            ApplySponzaCameraPreset(*sponzaCamera);
+            log::info(
+                "Applied standardized camera location '%s' (%s) to '%s' at %u x %u and %.1f degrees vertical FOV",
+                sponzaCamera->Label,
+                sponzaCamera->Id,
+                m_CurrentSceneName.c_str(),
+                sponzaCamera->ReferenceWidth,
+                sponzaCamera->ReferenceHeight,
+                sponzaCamera->VerticalFovDegrees);
+        }
 
-        const float3 initialPosition = m_ThirdPersonCamera.GetPosition();
-        const float3 initialDirection = m_ThirdPersonCamera.GetDir();
-        const float3 initialUp = m_ThirdPersonCamera.GetUp();
-        m_FirstPersonCamera.LookTo(initialPosition, initialDirection, initialUp);
-        m_PivotCamera.LookTo(initialPosition, initialDirection, initialUp);
-        m_StaticCamera.LookTo(initialPosition, initialDirection, initialUp);
+        m_ui.Camera = CameraMode::ThirdPerson;
+
+        if (!sponzaCamera)
+        {
+            const float3 initialPosition = m_ThirdPersonCamera.GetPosition();
+            const float3 initialDirection = m_ThirdPersonCamera.GetDir();
+            const float3 initialUp = m_ThirdPersonCamera.GetUp();
+            m_FirstPersonCamera.LookTo(initialPosition, initialDirection, initialUp);
+            m_PivotCamera.LookTo(initialPosition, initialDirection, initialUp);
+            m_StaticCamera.LookTo(initialPosition, initialDirection, initialUp);
+        }
+
+        m_BenchmarkCameraActive = m_BenchmarkCameraRequested && sponzaCamera;
+        if (m_BenchmarkCameraRequested)
+        {
+            if (m_BenchmarkCameraActive)
+            {
+                m_ui.Camera = CameraMode::Static;
+                log::info(
+                    "Benchmark camera '%s' is active in Locked mode",
+                    sponzaCamera->Id);
+            }
+            else
+            {
+                log::warning(
+                    "--benchmark-camera applies only to the two standardized PBR Sponza scenes; using the normal scene camera");
+            }
+        }
 
     }
 
@@ -1669,7 +1833,7 @@ public:
         if (resetOrientation)
         {
             // Reuse Donut's established orbit framing math only to calculate
-            // the initial eye pose. Runtime Third Person is a free-look camera
+            // the initial eye pose. Runtime Freelook is a free-moving camera
             // and retains no pivot or orbit state from this temporary object.
             ThirdPersonCamera framingCamera;
             framingCamera.SetRotation(dm::radians(135.f), dm::radians(20.f));
@@ -2181,6 +2345,26 @@ public:
 protected:
     virtual void buildUI(void) override
     {
+        const WorldMaterialViewAvailability worldMaterialAvailability = {
+            m_ui.EnablePbr,
+            m_ui.UsesDeferredShading(),
+            m_ui.ScreenSpaceVisibility.enabled,
+            m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse()
+        };
+        WorldMaterialViewState worldMaterialState =
+            NormalizeWorldMaterialViewState(
+                {
+                    uint32_t(m_ui.WhiteWorld),
+                    m_ui.ScreenSpaceVisibility.showIndirectDiffuseOnly
+                },
+                worldMaterialAvailability);
+        m_ui.ScreenSpaceVisibility.showIndirectDiffuseOnly =
+            worldMaterialState.showIndirectDiffuseOnly;
+        const WorldMaterialView selectedWorldMaterial =
+            ResolveWorldMaterialView(
+                worldMaterialState,
+                worldMaterialAvailability);
+
         if (!m_ui.ShowUI)
             return;
 
@@ -2240,32 +2424,33 @@ protected:
             style.ItemSpacing.x +
             ImGui::CalcTextSize("Restart Renderer").x + style.FramePadding.x * 2.f;
 
+        ImGui::Text("Renderer: %s", GetDeviceManager()->GetRendererString());
+        double frameTime = GetDeviceManager()->GetAverageFrameTimeSeconds();
+        if (frameTime > 0.0)
+        {
+            const GpuPerformanceMetrics gpuMetrics = QueryGpuPerformanceMetrics(
+                GetDeviceManager()->GetRendererString());
+            if (gpuMetrics.valid)
+            {
+                ImGui::Text("%d x %d | %.3f ms | %.1f FPS | %.1f GB/s | %.0f GFLOPS",
+                    width, height, frameTime * 1e3, 1.0 / frameTime,
+                    gpuMetrics.memoryBandwidthGBps, gpuMetrics.gpuGFlops);
+            }
+            else
+            {
+                ImGui::Text("%d x %d | %.3f ms | %.1f FPS | -- GB/s | -- GFLOPS",
+                    width, height, frameTime * 1e3, 1.0 / frameTime);
+            }
+            ImGui::SetItemTooltip(
+                "The GPU's current theoretical limits, not measured app use.");
+        }
+
         const bool generalOpen = DrawCollapsingHeader(
             "General",
             "Show general renderer settings.",
             ImGuiTreeNodeFlags_DefaultOpen);
         if (generalOpen)
         {
-            ImGui::Text("Renderer: %s", GetDeviceManager()->GetRendererString());
-            double frameTime = GetDeviceManager()->GetAverageFrameTimeSeconds();
-            if (frameTime > 0.0)
-            {
-                const GpuPerformanceMetrics gpuMetrics = QueryGpuPerformanceMetrics(
-                    GetDeviceManager()->GetRendererString());
-                if (gpuMetrics.valid)
-                {
-                    ImGui::Text("%d x %d | %.3f ms | %.1f FPS | %.1f GB/s | %.0f GFLOPS",
-                        width, height, frameTime * 1e3, 1.0 / frameTime,
-                        gpuMetrics.memoryBandwidthGBps, gpuMetrics.gpuGFlops);
-                }
-                else
-                {
-                    ImGui::Text("%d x %d | %.3f ms | %.1f FPS | -- GB/s | -- GFLOPS",
-                        width, height, frameTime * 1e3, 1.0 / frameTime);
-                }
-                ImGui::SetItemTooltip(
-                    "The GPU's current theoretical limits, not measured app use.");
-            }
 
         if (!m_ui.GpuAdapterChoices.empty())
         {
@@ -2306,20 +2491,19 @@ protected:
                 "Choose the GPU. UVSR restarts after a change.");
         }
 
+        ImGui::TextUnformatted("Camera Mode");
         ImGui::SetNextItemWidth(-FLT_MIN);
+        const bool benchmarkCameraActive = m_app->IsBenchmarkCameraActive();
+        if (benchmarkCameraActive)
+            ImGui::BeginDisabled();
         const bool cameraComboOpen = ImGui::BeginCombo(
             "##Camera", GetCameraModeLabel(m_ui.Camera));
-        ImGui::SetItemTooltip(
-            "Choose First Person, Third Person, Static Camera, or Pivot Camera controls.");
+        ImGui::SetItemTooltip(benchmarkCameraActive
+            ? "The benchmark camera is Locked."
+            : "Choose Freelook or Locked. Shift doubles Freelook move and zoom speed.");
         if (cameraComboOpen)
         {
-            static constexpr CameraMode CameraModes[] = {
-                CameraMode::FirstPerson,
-                CameraMode::ThirdPerson,
-                CameraMode::Static,
-                CameraMode::Pivot
-            };
-            for (CameraMode mode : CameraModes)
+            for (CameraMode mode : SelectableCameraModes)
             {
                 const bool selected = mode == m_ui.Camera;
                 if (ImGui::Selectable(GetCameraModeLabel(mode), selected) && !selected)
@@ -2329,29 +2513,78 @@ protected:
             }
             ImGui::EndCombo();
         }
-        static const char* whiteWorldLabels[] = {
-            "White World Off",
-            "White World On",
-            "White World Preserve Normals",
-            "White World Preserve Emissives"
-        };
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        const bool whiteWorldComboOpen = ImGui::BeginCombo(
-            "##WhiteWorld", whiteWorldLabels[int(m_ui.WhiteWorld)]);
-        ImGui::SetItemTooltip("Replace material colors with white.");
-        if (whiteWorldComboOpen)
+        if (benchmarkCameraActive)
+            ImGui::EndDisabled();
+
+        const bool cameraLocationsAvailable = m_app->HasSponzaCameraLocations();
+        if (cameraLocationsAvailable)
         {
-            for (int modeIndex = 0; modeIndex < int(std::size(whiteWorldLabels)); ++modeIndex)
+            ImGui::TextUnformatted("Camera Location");
+            if (benchmarkCameraActive)
+                ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            const SponzaCameraLocation selectedCameraLocation =
+                m_app->GetSponzaCameraLocation();
+            const bool cameraLocationComboOpen = ImGui::BeginCombo(
+                "##CameraLocation",
+                GetSponzaCameraLocationLabel(selectedCameraLocation));
+            ImGui::SetItemTooltip(benchmarkCameraActive
+                ? "Benchmark mode locks Benchmark Position 1."
+                : "Recall a stored camera location. Movement changes this status to Free.");
+            if (cameraLocationComboOpen)
             {
-                const bool selected = modeIndex == int(m_ui.WhiteWorld);
-                if (ImGui::Selectable(whiteWorldLabels[modeIndex], selected))
-                    m_app->SetWhiteWorldMode(WhiteWorldMode(modeIndex));
+                for (SponzaCameraLocation location : SelectableSponzaCameraLocations)
+                {
+                    const bool selected = location == selectedCameraLocation;
+                    if (ImGui::Selectable(GetSponzaCameraLocationLabel(location), selected))
+                        m_app->SetSponzaCameraLocation(location);
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            if (benchmarkCameraActive)
+                ImGui::EndDisabled();
+        }
+
+        ImGui::TextUnformatted("World Materials");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        const bool worldMaterialComboOpen = ImGui::BeginCombo(
+            "##WorldMaterials",
+            GetWorldMaterialViewLabel(selectedWorldMaterial));
+        ImGui::SetItemTooltip(
+            "Choose a White World presentation or inspect each material's indirect diffuse response.");
+        if (worldMaterialComboOpen)
+        {
+            for (WorldMaterialView view : SelectableWorldMaterialViews)
+            {
+                const bool available = IsWorldMaterialViewAvailable(
+                    view,
+                    worldMaterialAvailability);
+                if (!available)
+                    ImGui::BeginDisabled();
+                const bool selected = view == selectedWorldMaterial;
+                if (ImGui::Selectable(
+                        GetWorldMaterialViewLabel(view),
+                        selected))
+                {
+                    const WorldMaterialViewState state =
+                        MakeWorldMaterialViewState(view);
+                    m_ui.ScreenSpaceVisibility.showIndirectDiffuseOnly = false;
+                    m_app->SetWhiteWorldMode(
+                        WhiteWorldMode(state.whiteWorldMode));
+                    m_ui.ScreenSpaceVisibility.showIndirectDiffuseOnly =
+                        state.showIndirectDiffuseOnly;
+                }
                 if (selected)
                     ImGui::SetItemDefaultFocus();
+                if (!available)
+                    ImGui::EndDisabled();
             }
             ImGui::EndCombo();
         }
 
+        ImGui::TextUnformatted("World Scenes");
         const std::string currentScene = m_app->GetCurrentSceneName();
         const std::string currentSceneDisplayName = m_app->GetCurrentSceneDisplayName();
         const float folderButtonWidth = ImGui::GetFrameHeight();
@@ -2465,7 +2698,7 @@ protected:
             };
             ImGui::SetNextItemWidth(settingsControlWidth);
             if (ImGui::BeginCombo(
-                    "AO / GI Resolution",
+                    "Sampling Resolution",
                     resolutionLabels[int(visibility.resolution)]))
             {
                 for (int index = 0;
@@ -2481,7 +2714,8 @@ protected:
                 }
                 ImGui::EndCombo();
             }
-            ImGui::SetItemTooltip("Choose the render resolution for AO and GI.");
+            ImGui::SetItemTooltip(
+                "Choose the sampling resolution for screen-space visibility.");
 
             if (const ScreenSpaceVisibilityTimings* timings =
                     m_app->GetScreenSpaceVisibilityTimings();
@@ -2611,7 +2845,7 @@ protected:
                     int fixedSamples = int(std::clamp(
                         sampling.maximumSampleCount, 1u, 64u));
                     if (ImGui::SliderInt(
-                            "Fixed Samples / Pixel",
+                            "Fixed Samples Per Pixel",
                             &fixedSamples,
                             1,
                             64))
@@ -2683,7 +2917,7 @@ protected:
                 ImGui::TreePop();
             }
 
-            if (ImGui::TreeNodeEx("Indirect Diffuse GI", ImGuiTreeNodeFlags_DefaultOpen))
+            if (ImGui::TreeNodeEx("Indirect Diffuse", ImGuiTreeNodeFlags_DefaultOpen))
             {
                 IndirectDiffuseSettings& gi = visibility.indirectDiffuse;
                 ImGui::Checkbox("Enabled##IndirectDiffuse", &gi.enabled);
@@ -2716,10 +2950,6 @@ protected:
                 }
                 ImGui::SliderFloat("Intensity##IndirectDiffuse", &gi.intensity, 0.0f, 10.0f, "%.2f");
                 ImGui::SetItemTooltip("Set screen-space diffuse GI brightness.");
-                ImGui::Checkbox(
-                    "Show GI-Only Lighting",
-                    &visibility.showIndirectDiffuseOnly);
-                ImGui::SetItemTooltip("Show only screen-space diffuse GI.");
                 ImGui::Checkbox("Include Emissive Sources", &gi.includeEmissive);
                 ImGui::SetItemTooltip("Let visible emissive surfaces light the scene.");
                 if (!gi.includeEmissive)
@@ -2739,19 +2969,10 @@ protected:
             }
 
             if (ImGui::TreeNodeEx(
-                    "Reconstruction and Upsampling",
-                    ImGuiTreeNodeFlags_DefaultOpen))
+                    "Reconstruction and Upsampling"))
             {
                 VisibilityReconstructionSettings& reconstruction =
                     visibility.reconstruction;
-                ImGui::Checkbox(
-                    "Reconstruction Enabled",
-                    &reconstruction.enabled);
-                ImGui::SetItemTooltip(
-                    "Enable temporal reconstruction and optional smoothing.");
-
-                if (!reconstruction.enabled)
-                    ImGui::BeginDisabled();
                 ImGui::Checkbox(
                     "Temporal Reconstruction",
                     &reconstruction.temporalEnabled);
@@ -2812,8 +3033,6 @@ protected:
                     ImGui::SetItemTooltip("Set how far the Gaussian filter reaches.");
                 }
                 if (!reconstruction.spatialEnabled)
-                    ImGui::EndDisabled();
-                if (!reconstruction.enabled)
                     ImGui::EndDisabled();
                 ImGui::TreePop();
             }
@@ -3037,7 +3256,8 @@ void ProcessCommandLine(
     const char* const* argv,
     DeviceCreationParameters& deviceParams,
     std::string& sceneName,
-    std::string& experimentDescription)
+    std::string& experimentDescription,
+    bool& benchmarkCameraRequested)
 {
     for (int i = 1; i < argc; i++)
     {
@@ -3066,6 +3286,10 @@ void ProcessCommandLine(
             && i + 1 < argc)
         {
             experimentDescription = argv[++i];
+        }
+        else if (!strcmp(argv[i], "--benchmark-camera"))
+        {
+            benchmarkCameraRequested = true;
         }
         else if (argv[i][0] != '-')
         {
@@ -3210,7 +3434,22 @@ int main(int __argc, const char* const* __argv)
     
     std::string sceneName;
     std::string experimentDescription;
-    ProcessCommandLine(__argc, __argv, deviceParams, sceneName, experimentDescription);
+    bool benchmarkCameraRequested = false;
+    ProcessCommandLine(
+        __argc,
+        __argv,
+        deviceParams,
+        sceneName,
+        experimentDescription,
+        benchmarkCameraRequested);
+    if (benchmarkCameraRequested)
+    {
+        const SponzaCameraPreset& preset = GetDefaultSponzaCameraPreset();
+        deviceParams.backBufferWidth = preset.ReferenceWidth;
+        deviceParams.backBufferHeight = preset.ReferenceHeight;
+        deviceParams.startFullscreen = false;
+        deviceParams.startMaximized = false;
+    }
     if (experimentDescription.empty())
     {
         // The launcher passes the validated lowercase description through the
@@ -3256,12 +3495,25 @@ int main(int __argc, const char* const* __argv)
 		return 1;
 	}
 
+    if (benchmarkCameraRequested)
+    {
+        GLFWwindow* benchmarkWindow = deviceManager->GetWindow();
+        glfwSetWindowAttrib(benchmarkWindow, GLFW_RESIZABLE, GLFW_FALSE);
+        g_BenchmarkForwardKeyCallback = glfwSetKeyCallback(
+            benchmarkWindow,
+            BenchmarkWindowKeyCallback);
+    }
+
     {
         UIData uiData;
         uiData.GpuAdapterChoices = std::move(adapterChoices);
         uiData.ActiveGpuAdapterIndex = deviceParams.adapterIndex;
 
-        std::shared_ptr<UvsrSceneViewer> demo = std::make_shared<UvsrSceneViewer>(deviceManager, uiData, sceneName);
+        std::shared_ptr<UvsrSceneViewer> demo = std::make_shared<UvsrSceneViewer>(
+            deviceManager,
+            uiData,
+            sceneName,
+            benchmarkCameraRequested);
         std::shared_ptr<UIRenderer> gui = std::make_shared<UIRenderer>(deviceManager, demo, uiData);
 
         gui->Init(demo->GetShaderFactory());

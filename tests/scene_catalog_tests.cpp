@@ -102,9 +102,9 @@ int main()
         const std::filesystem::path standalone = root / "standalone/example.glb";
 
         WriteText(mainDescriptor,
-            R"({"displayName":"Intel PBR Sponza","models":["components/part1.glb","components/../components/part2.glb","components/curtains.glb","components/ivy/ivy1.glb","components/ivy/ivy2.glb"],"graph":[]})");
+            R"({"displayName":"PBR Sponza Decorated","models":["components/part1.glb","components/../components/part2.glb","components/curtains.glb","components/ivy/ivy1.glb","components/ivy/ivy2.glb"],"graph":[]})");
         WriteText(plainDescriptor,
-            R"({"displayName":"Intel PBR Sponza - Plain","models":["components/part1.glb","components/part2.glb"],"graph":[]})");
+            R"({"displayName":"PBR Sponza Plain","models":["components/part1.glb","components/part2.glb"],"graph":[]})");
         WriteText(fallbackDescriptor,
             R"({"displayName":"   ","models":[],"graph":[]})");
 
@@ -125,9 +125,9 @@ int main()
         const auto catalog = uvsr::BuildSceneCatalog(fileSystem, root, discovered);
 
         Require(catalog.size() == 4, "catalog must hide all descriptor-owned components");
-        Require(FindByDisplayName(catalog, "Intel PBR Sponza") != nullptr,
+        Require(FindByDisplayName(catalog, "PBR Sponza Decorated") != nullptr,
             "main descriptor must use its friendly display name");
-        Require(FindByDisplayName(catalog, "Intel PBR Sponza - Plain") != nullptr,
+        Require(FindByDisplayName(catalog, "PBR Sponza Plain") != nullptr,
             "plain descriptor must remain visible when it shares architecture components");
         Require(FindByDisplayName(catalog, "intel_sponza/fallback.scene.json") != nullptr,
             "empty displayName must fall back to the relative descriptor path");

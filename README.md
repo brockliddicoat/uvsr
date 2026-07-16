@@ -4,23 +4,26 @@
 
 UVSR is a DirectX 12 renderer built on NVIDIA's pinned Donut framework and its
 NVRHI graphics abstraction layer. It ships with two ready-to-run Intel PBR
-Sponza flat-roof scenes. The default includes Intel's separately distributed
-curtains and ivy; the second is the same architecture without either add-on.
+Sponza flat-roof scenes. The default **PBR Sponza Decorated** includes Intel's
+separately distributed curtains and ivy; **PBR Sponza Plain** uses the same
+architecture without either add-on.
 
 ## Renderer Baseline
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
-  linear resolution. Full resolution can composite raw output; reconstruction
-  adds SSRT3-style temporal accumulation and either compact or Gaussian joint-
-  bilateral filtering. Spatial filtering can be disabled independently;
-  reduced modes retain only a minimal depth/normal-guided 2x2 upsampler because
-  raw grid expansion produces coherent GI streaks. Full resolution incurs no
-  spatial dispatch or filter target while filtering is disabled. Reconstruction,
-  temporal reconstruction, and spatial filtering all start disabled.
+  linear resolution. **Temporal Reconstruction** independently enables
+  SSRT3-style history accumulation, while **Spatial Filtering** independently
+  enables compact or Gaussian joint-bilateral filtering. Both start disabled.
+  Full resolution can therefore composite unfiltered current or temporally
+  accumulated output without a spatial dispatch or filter target. Half and
+  quarter resolution always retain a minimal depth/normal-guided 2x2 upsampler
+  when spatial filtering is disabled because raw grid expansion produces
+  coherent GI streaks. The **Reconstruction and Upsampling** drawer starts
+  collapsed.
 - **Adaptive Sparse Sampling** is off by default. The default fixed-work
-  specialization traces one stochastic slice and **20 Fixed Samples / Pixel**
+  specialization traces one stochastic slice and **20 Fixed Samples Per Pixel**
   for every eligible pixel, with the adaptive neighborhood, reprojection,
   feedback, and stochastic budget code compiled out. Its feedback textures and
   motion dependency are also absent.
@@ -43,18 +46,22 @@ curtains and ivy; the second is the same architecture without either add-on.
 - Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
-- The HUD performance row reports resolution, frame time, FPS, current-clock
-  memory bandwidth, and current-clock FP32 peak GFLOPS. Visibility statistics
-  start collapsed and report **All**, **Trace**, **Filter**, and **Other** GPU
-  timings on one row. Two memory rows report exact logical **Outputs**,
+- The renderer/GPU summary and first performance line stay visible above the
+  **General** drawer. That line reports resolution, frame time, FPS,
+  current-clock memory bandwidth, and current-clock FP32 peak GFLOPS.
+  Visibility statistics start collapsed and report **All**, **Trace**,
+  **Filter**, and **Other** GPU timings on one row. Two memory rows report exact
+  logical **Outputs**,
   **Working**, **Mask Cache**, and **Avoided** payloads; **Shared** is explicitly
   an estimate of duplicate mask payload avoided by shared AO/GI traversal.
 - The default deferred UVSR PBR path starts enabled. **Visibility > Enabled**
   turns visibility and PBR off or on together. The legacy Donut comparison path
   remains implemented for possible future experiments, but its separate control
   is hidden.
-- The top **General** drawer contains renderer and performance information, GPU
-  selection, camera mode, and White World, with the scene picker at the bottom.
+- The **General** drawer contains **Graphics Adapter**, **Camera Mode**, and
+  **Camera Location** for the standardized Sponza scenes. **World Materials**
+  contains the White World presentations and the **Indirect Diffuse Response**
+  view. **World Scenes** labels the scene picker at the bottom.
   Named multi-model descriptors appear as one clean entry while their component
   GLBs stay available to explicit command-line loads without cluttering the
   picker.
@@ -62,30 +69,42 @@ curtains and ivy; the second is the same architecture without either add-on.
   Normals**, and **White World Preserve Emissives** override material color
   without modifying source assets. The last mode keeps authored emissive color
   alongside the scene's colored direct lights so GI sources remain easy to read.
-- Camera controls include **First Person**, **Third Person**, **Static Camera**,
-  and **Pivot Camera**. First Person uses a small scene-scale sphere against
-  imported GLB triangles, moves at 6 units/second, and sprints at 12 units/second
-  with Shift. Third Person is collision-enabled look-and-dolly: mouse and arrow
-  keys rotate the view, the wheel applies a small damped dolly, and W/S dolly
-  at up to 16% of the initial framing distance per second with smooth
-  acceleration and finite deceleration. Moving inward gently
+- **Camera Mode** offers **Freelook** and **Locked**. Freelook is
+  collision-enabled: mouse and arrow keys rotate the view, A/D strafe left and
+  right, the wheel applies a small damped dolly, and W/S dolly at up to 16% of
+  the initial framing distance per second with smooth acceleration and finite
+  deceleration. Holding Shift doubles A/D strafe, W/S dolly, and wheel zoom.
+  Moving inward gently
   lowers dolly sensitivity on a linear scale that bottoms out at 40% of the
   starting speed; the floor affects speed rather than position, so the eye
   remains free to continue forward without converging on a fixed pivot.
-  A/D/Q/E translation stays disabled. Static Camera freezes the current
-  view, while Pivot Camera allows mouse or arrow-key look without translation.
+  Q/E translation stays disabled. Locked freezes the current view.
   Camera keys and mouse buttons are reconciled with physical input after UI or
   window focus transitions, preventing a consumed release event from latching
   motion.
+- **PBR Sponza Decorated** and **PBR Sponza Plain** open in **Freelook** at
+  **Benchmark Position 1**, the
+  `intel-pbr-sponza-courtyard-simplified-v1` preset. The **Camera Location**
+  dropdown contains that named location and an always-selectable **Free** entry,
+  leaving room for more named locations later. Choosing Benchmark Position 1
+  recalls the complete pose without changing Camera Mode. After translation or
+  rotation moves the view away from the recalled pose, the dropdown reports
+  Free. Choosing Free also detaches the location name without moving or
+  reorienting the camera. The preset uses a 60-degree perspective view and a
+  1920x1080 reference frame.
 - The first scene light is selected automatically in the **Lights** panel.
-- **Emissive Source Gain** in **Visibility > Indirect Diffuse GI** globally
+- **Emissive Source Gain** in **Visibility > Indirect Diffuse** globally
   scales how much light emissive materials contribute to GI without changing
   the visible emissive surfaces themselves. Raising it expands the visibly
   illuminated area up to the screen-space sampling radius.
-- **Show GI-Only Lighting** is the sole retained visibility diagnostic. It
-  displays the material-applied screen-space diffuse GI contribution without
-  direct light, sky fallback, fallback specular, or AO-only darkening.
-- **Bounces** in **Indirect Diffuse GI** selects one through four finite diffuse
+- **Indirect Diffuse Response** in **World Materials** is the sole retained
+  visibility diagnostic. It displays the material-applied screen-space diffuse
+  GI contribution without direct light, sky fallback, fallback specular, or
+  AO-only darkening. Selecting it turns White World off; selecting any White
+  World presentation exits the diagnostic. The entry is available only while
+  deferred PBR visibility and effective diffuse GI are active; disabling a
+  prerequisite returns the dropdown to **White World Off**.
+- **Bounces** in **Indirect Diffuse** selects one through four finite diffuse
   bounces. One is the default and keeps the original compact shader path. Later
   bounces transport only the newest light frontier and accumulate it separately;
   their GI-only sample budgets halve toward 8 taps without raising a lower
@@ -185,8 +204,8 @@ restarts the renderer immediately on the selected adapter.
 
 Intel PBR Sponza is completely included in the repository and staged by CMake;
 there is no separate model download, conversion, or scene setup step. The
-default **Intel PBR Sponza** scene composes the flat-roof architecture, curtains,
-and roof-trimmed ivy. **Intel PBR Sponza - Plain** loads only the same two
+default **PBR Sponza Decorated** scene composes the flat-roof architecture,
+curtains, and roof-trimmed ivy. **PBR Sponza Plain** loads only the same two
 architecture components. Every component remains below GitHub's 100 MB
 per-file limit. Attribution and the exact runtime edits are recorded in
 [`assets/scenes/intel_sponza/README.md`](assets/scenes/intel_sponza/README.md).
@@ -207,6 +226,21 @@ letters, digits, spaces, hyphens, underscores, and punctuation are rejected:
 .\tools\launch_uvsr.ps1 -Experiment naming
 ```
 
+For a repeatable Sponza benchmark launch, add `--benchmark-camera`:
+
+```powershell
+.\tools\launch_uvsr.ps1 -Experiment benchmark --benchmark-camera
+```
+
+This flag selects and locks **Benchmark Position 1**
+(`intel-pbr-sponza-courtyard-simplified-v1`), enforces a non-resizable
+1920x1080 backbuffer, blocks fullscreen transitions, and selects **Locked** so
+input cannot move or reframe the benchmark view. The disabled **Camera
+Location** dropdown remains on Benchmark Position 1 throughout the benchmark
+launch. The benchmark pose is shared by **PBR Sponza Decorated** and **PBR
+Sponza Plain**; benchmark records identify it by that preset ID while the
+separate `scene` field identifies which scene was measured.
+
 After building, Windows users can also double-click `LaunchUVSR.cmd`. It
 delegates to the same required experiment launcher with a fixed main-build
 label; optional renderer arguments can be appended from a terminal.
@@ -224,11 +258,12 @@ The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
 Build and run the scene-catalog, experiment-title, camera-collision,
-camera-controls, PBR, radial-visibility, estimator, visibility-projection, and
-visibility-sampling reference tests separately:
+camera-controls, Sponza-camera-preset, PBR, World-Material-view,
+radial-visibility, estimator, visibility-projection, and visibility-sampling
+reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 

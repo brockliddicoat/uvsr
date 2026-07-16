@@ -108,10 +108,6 @@ namespace uvsr
 
     struct VisibilityReconstructionSettings
     {
-        // The master switch can bypass temporal and optional spatial
-        // reconstruction. Reduced resolutions retain a minimal guide-aware
-        // upsampler because their source and destination grids differ.
-        bool enabled = false;
         bool temporalEnabled = false;
         bool spatialEnabled = false;
         // SSRT3's default current-frame blend response.
@@ -166,8 +162,7 @@ namespace uvsr
         {
             return HasActiveConsumer() &&
                 (UsesAdaptiveSampling() ||
-                    (reconstruction.enabled &&
-                        reconstruction.temporalEnabled));
+                    reconstruction.temporalEnabled);
         }
     };
 

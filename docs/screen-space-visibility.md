@@ -21,10 +21,10 @@ The frame order is:
 7. Apply the normal AgX display pipeline.
 
 There are no visibility or PBR debug-shader views in the current build. The
-sole diagnostic exception is **Show GI-Only Lighting**, a composition switch
-that shows the final material-applied screen-space diffuse GI contribution.
-Profiling is otherwise limited to GPU stage timings, logical allocation
-arithmetic, and external capture tools.
+sole diagnostic exception is **World Materials > Indirect Diffuse Response**,
+a composition mode that shows the final material-applied screen-space diffuse
+GI contribution. Profiling is otherwise limited to GPU stage timings, logical
+allocation arithmetic, and external capture tools.
 
 ## Factory Defaults
 
@@ -34,10 +34,10 @@ arithmetic, and external capture tools.
 - Adaptive Sparse Sampling is disabled.
 - AO strength is 1.0. GI intensity is 4.0 with one bounce, a 0.001 bounce
   contribution cutoff, and emissive sourcing enabled at gain 4.0.
-- GI-only lighting is disabled.
-- Reconstruction, temporal reconstruction, and spatial filtering are disabled.
-  Their dormant settings remain a 0.35 temporal current response and Gaussian
-  joint-bilateral filtering at radius 4.0.
+- The Indirect Diffuse Response view is disabled.
+- Temporal reconstruction and spatial filtering are disabled. Their dormant
+  settings remain a 0.35 temporal current response and Gaussian joint-bilateral
+  filtering at radius 4.0.
 
 ## Estimators
 
@@ -262,12 +262,19 @@ stationary grain, motion trails, and convergence after disocclusion.
 
 ## Reconstruction and Upsampling
 
-Reconstruction, temporal reconstruction, and spatial filtering are all disabled
-by default. **Reconstruction Enabled** is the master switch. When it is off, full
-resolution composites raw AO/GI directly. Half/quarter resolution retains the
-minimal guide-aware upsampler required to map between source and destination
-grids. Temporal reconstruction and **Spatial Filtering** can be toggled
-independently while the master is on.
+**Temporal Reconstruction** and **Spatial Filtering** are independent and both
+are disabled by default. Their **Reconstruction and Upsampling** drawer starts
+collapsed. At full resolution with both disabled, UVSR composites the current
+AO/GI output directly. Temporal reconstruction can accumulate history with or
+without spatial filtering, and spatial filtering can process the current frame
+with or without temporal accumulation.
+
+Half and quarter resolution always require a guide-aware mapping from the trace
+grid to the full-resolution destination. When spatial filtering is disabled,
+UVSR performs only the minimal depth/normal-guided 2x2 upsample. Enabling spatial
+filtering routes reconstruction through the selected filter: the compact path
+uses its guided 2x2 gather, while the Gaussian path uses its parity-varied
+four-tap reduced-resolution subset.
 
 Temporal reconstruction follows SSRT3's core contract:
 
@@ -342,7 +349,8 @@ Two following memory rows separate:
 - **Mask Cache:** exact persistent directional-mask storage. It is zero in the
   current register-only architecture.
 - **Avoided:** exact optional AO/GI resources not allocated because their
-  consumer is inactive under the current resolution and reconstruction mode.
+  consumer is inactive under the current resolution, temporal, and spatial-
+  filter state.
 - **Shared:** an estimate of one duplicate `R32_UINT` mask payload avoided when
   AO and GI consume the same register-local mask.
 
