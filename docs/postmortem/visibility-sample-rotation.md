@@ -40,8 +40,10 @@ demonstrated benefit.
 - Local branch: `codex/sample-rotation-experiment`.
 - Implementation state: source remains uncommitted, unpushed, and never part of
   Canonical UVSR.
-- Documentation state: a later user request authorized a documentation-only
-  feature-branch commit and push; no pull request or merge was authorized.
+- Documentation state: archive commit
+  `4810921a66aa803296630802f6a8c600ee71ddd4` was pushed to
+  `origin/codex/sample-rotation-experiment`; no pull request or merge was
+  authorized.
 - Design and technical evidence:
   [`../visibility-sample-rotation.md`](../visibility-sample-rotation.md).
 - Completed execution record:

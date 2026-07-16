@@ -192,11 +192,11 @@ Stop and ask the user if:
 
 ## Completion
 
-- Final integrated commit: No implementation commit; renderer source remains uncommitted on local branch `codex/sample-rotation-experiment`. A later user request separately authorized a documentation-only feature-branch commit and push.
+- Final integrated commit: No implementation commit; renderer source remains uncommitted on local branch `codex/sample-rotation-experiment`. Documentation-only archive commit `4810921a66aa803296630802f6a8c600ee71ddd4` was pushed separately to `origin/codex/sample-rotation-experiment`.
 - Verification summary: Release renderer and shaders build; complete Release CTest passes 12/12; focused Debug test passes; document self-test/full scan and `git diff --check` pass. Runtime transitions completed without stale-history corruption; saved captures document state only and do not establish image-quality benefit.
 - Independent review: Final high-risk read-only review found no P0/P1/P2 source blocker; final document audit found no remaining heading violation.
 - Coming Soon/documentation update: No roadmap entry; durable design evidence remains at `docs/visibility-sample-rotation.md`, and the negative product result and revival triggers are archived at `docs/postmortem/visibility-sample-rotation.md`.
-- Pushed/PR/merged, or intentionally local: Documentation-only feature-branch publication was authorized later. The rejected implementation remains local; no source push, PR, merge, release, or deployment was authorized.
+- Pushed/PR/merged, or intentionally local: Documentation-only commit `4810921a66aa803296630802f6a8c600ee71ddd4` was pushed to the feature branch. The rejected implementation remains local; no source push, PR, merge, release, or deployment was authorized.
 - Remaining experiments or follow-ups: Optional research only. A redesigned history model or synchronized convergence testing would be needed to overturn the negative qualitative result; external GPU profiling remains unmeasured.
 - Active ownership released: Yes; task-owned renderer windows are closed. User-owned renderer sessions, including the process the user restarted during final testing, were not controlled.
 - Archived to completed/abandoned path: `docs/exec-plans/completed/sample-rotation-experiment.md`.
