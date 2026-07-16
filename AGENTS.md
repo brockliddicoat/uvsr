@@ -231,7 +231,7 @@ Agent policy version: `2026-07-16.1`.
   real jitter-aware output-space reconstruction path, or a genuine packed
   checkerboard visibility layout together with convergence evidence, remind the
   user about the retired
-  [visibility sample-rotation experiment](docs/postmortem/visibility-sample-rotation.md)
+  [Visibility Sample Rotation v1 experiment](docs/postmortem/visibility-sample-rotation-v1.md)
   before proposing restoration. A reminder does not authorize revival.
 - Publishing a roadmap or execution-plan update can improve cross-task
   visibility, but this guide never grants permission to push or open a pull

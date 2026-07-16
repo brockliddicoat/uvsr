@@ -1,14 +1,14 @@
-# Experimental Visibility Sample Rotation
+# Experimental Visibility Sample Rotation v1
 
 ## Scope and Status
 
-Visibility sample rotation is a retired, removable, default-off image-quality
+Visibility Sample Rotation v1 is a retired, removable, default-off image-quality
 experiment. It changes which full-resolution G-buffer pixel represents each
 reduced-resolution screen-space AO/GI block. It does not change scene
 rasterization, material shading, direct lighting, texture derivatives, or camera
 projection. Direct user evaluation found no visible improvement and a worse,
 noisier result even after temporal history gathered. The
-[postmortem](postmortem/visibility-sample-rotation.md) records the negative
+[postmortem](postmortem/visibility-sample-rotation-v1.md) records the negative
 product result and the conditions for any future reconsideration.
 
 The experiment is intentionally narrower than a general temporal upscaler. UVSR
@@ -351,11 +351,11 @@ metrics or for synchronized motion and convergence capture.
 - `src/uvsr.cpp`
 - `src/visibility_sample_rotation.h`
 - `tests/visibility_sample_rotation_tests.cpp`
-- `docs/visibility-sample-rotation.md`
-- `docs/exec-plans/completed/sample-rotation-experiment.md`
+- `docs/visibility-sample-rotation-v1.md`
+- `docs/exec-plans/completed/visibility-sample-rotation-v1.md`
 - `docs/postmortem/README.md`
-- `docs/postmortem/nra-rtaa-v1.md`
-- `docs/postmortem/visibility-sample-rotation.md`
+- `docs/postmortem/native-resolution-analytical-reconstructive-temporal-anti-aliasing-v1.md`
+- `docs/postmortem/visibility-sample-rotation-v1.md`
 - `tools/check_document_title_case.py`
 
 ## Recommendation
@@ -368,7 +368,7 @@ speculative and must not be cited as a demonstrated benefit.
 
 Reconsider only when a redesigned history model or another architecture trigger
 listed in the
-[postmortem](postmortem/visibility-sample-rotation.md#revival-triggers) can
+[postmortem](postmortem/visibility-sample-rotation-v1.md#revival-triggers) can
 preserve sample identity, synchronized captures demonstrate a repeatable
 improvement without cadence or added noise, and controlled timing shows
 acceptable cost. A true output-space superresolution design would require a

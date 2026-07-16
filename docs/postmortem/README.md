@@ -7,10 +7,10 @@ implementation wholesale.
 
 ## Records
 
-- [Native-Resolution Analytical/Reconstructive Temporal Anti-Aliasing v1](nra-rtaa-v1.md)
+- [Native-Resolution Analytical/Reconstructive Temporal Anti-Aliasing v1](native-resolution-analytical-reconstructive-temporal-anti-aliasing-v1.md)
   records the retired temporal anti-aliasing
   experiment and the required order for a smaller successor.
-- [Visibility Sample Rotation](visibility-sample-rotation.md) records the
+- [Visibility Sample Rotation v1](visibility-sample-rotation-v1.md) records the
   technically consistent but visually unsuccessful receiver-dithering
   experiment, its negative product evaluation, and exact revival triggers.
 - [Three-Band Time-of-Day Sky v1](three-band-time-of-day-sky-v1.md) records the

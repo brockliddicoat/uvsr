@@ -1,6 +1,6 @@
-# Visibility Sample Rotation Postmortem
+# Visibility Sample Rotation v1 Postmortem
 
-Visibility sample rotation is a retired local experiment. It is not suitable
+Visibility Sample Rotation v1 is a retired local experiment. It is not suitable
 for integration because the user's direct comparison found no visible
 improvement and found the rotation-enabled result worse and noisier, even after
 temporal reconstruction was allowed to gather. A possible convergence advantage
@@ -45,9 +45,9 @@ demonstrated benefit.
   `origin/codex/sample-rotation-experiment`; no pull request or merge was
   authorized.
 - Design and technical evidence:
-  [`../visibility-sample-rotation.md`](../visibility-sample-rotation.md).
+  [`../visibility-sample-rotation-v1.md`](../visibility-sample-rotation-v1.md).
 - Completed execution record:
-  [`../exec-plans/completed/sample-rotation-experiment.md`](../exec-plans/completed/sample-rotation-experiment.md).
+  [`../exec-plans/completed/visibility-sample-rotation-v1.md`](../exec-plans/completed/visibility-sample-rotation-v1.md).
 
 At the time of this postmortem, the rejected source remains only in the task's
 local working tree. Publishing these records does not publish the implementation
