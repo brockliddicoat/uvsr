@@ -7,8 +7,12 @@ implementation wholesale.
 
 ## Records
 
-- [NRA-RTAA v1](nra-rtaa-v1.md) records the retired temporal anti-aliasing
+- [Native-Resolution Analytical/Reconstructive Temporal Anti-Aliasing v1](nra-rtaa-v1.md)
+  records the retired temporal anti-aliasing
   experiment and the required order for a smaller successor.
+- [Visibility Sample Rotation](visibility-sample-rotation.md) records the
+  technically consistent but visually unsuccessful receiver-dithering
+  experiment, its negative product evaluation, and exact revival triggers.
 - [Three-Band Time-of-Day Sky v1](three-band-time-of-day-sky-v1.md) records the
   retired atmospheric sky and celestial-motion experiment. Its
   [design snapshot](three-band-time-of-day-sky-v1-design.md) preserves the final

@@ -980,7 +980,9 @@ def run_self_tests() -> None:
         "Scope and invariants": "Scope and Invariants",
         "G-buffer layout": "G-Buffer Layout",
         "glTF material import": "glTF Material Import",
-        "NRA-RTAA v1 Postmortem": "NRA-RTAA v1 Postmortem",
+        "Native-Resolution Analytical/Reconstructive Temporal Anti-Aliasing v1 Postmortem": (
+            "Native-Resolution Analytical/Reconstructive Temporal Anti-Aliasing v1 Postmortem"
+        ),
         "Included film-look LUTs": "Included Film-Look LUTs",
         "Bilateral-Grid Local Tone Mapping \u2014 active development": (
             "Bilateral-Grid Local Tone Mapping \u2014 Active Development"

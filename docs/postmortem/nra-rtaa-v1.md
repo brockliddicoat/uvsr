@@ -1,11 +1,12 @@
-# NRA-RTAA v1 Postmortem
+# Native-Resolution Analytical/Reconstructive Temporal Anti-Aliasing v1 Postmortem
 
-NRA-RTAA v1 is a retired experiment. It was not suitable for shipping because
-it was too expensive, shimmered on small details, and became visibly less stable
-in the lower-cost profiles. Persistent-history resurrection was the only option
-that consistently reduced the observed edge shaking and swimming. This document
-preserves the useful lessons; the implementation and its debug surface have been
-removed.
+Native-resolution analytical/reconstructive temporal anti-aliasing v1 is a
+retired experiment. It was not suitable for shipping because it was too
+expensive, shimmered on small details, and became visibly less stable in the
+lower-cost profiles. Persistent-history resurrection was the only option that
+consistently reduced the observed edge shaking and swimming. This document
+preserves the useful lessons; the implementation and its debug surface have
+been removed.
 
 ## Outcome
 
@@ -20,13 +21,13 @@ The failure should not be read as evidence that temporal reconstruction cannot
 work in UVSR. It is evidence that the next experiment must prove a much smaller
 resolver before adding exception handling.
 
-Removal deleted the RTAA passes, shaders, settings, tests, reactive target,
+Removal deleted the experiment's passes, shaders, settings, tests, reactive target,
 sharpening integration, and debug surface. It also restored material/instance
-picking to its compact on-demand pass instead of writing NRA-RTAA's 64-bit
-surface identity MRT every frame. The conditional four-channel motion target is
+picking to its compact on-demand pass instead of writing the experiment's 64-bit
+surface-identity MRT every frame. The conditional four-channel motion target is
 the one retained producer change: visibility reconstruction now consumes its
 pixel motion, device-depth delta, and validity channel, so it has an active
-non-RTAA owner and is allocated only while that owner needs it.
+non-anti-aliasing owner and is allocated only while that owner needs it.
 
 ## Development Chronology
 
@@ -184,8 +185,9 @@ base defect.
 
 ## Required Order for a Successor Experiment
 
-NRA-RTAA v2 should not be started by restoring v1. A future anti-aliasing
-experiment should pass these gates in order:
+Native-resolution analytical/reconstructive temporal anti-aliasing v2 should not
+be started by restoring v1. A future anti-aliasing experiment should pass these
+gates in order:
 
 1. **Fixed Non-Jittered Baseline:** one current color, one history color, one
    motion convention, bilinear reprojection, and an obvious current/history blend.

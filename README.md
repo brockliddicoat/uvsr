@@ -280,8 +280,15 @@ The [visibility estimator validation](docs/visibility-estimator-validation.md)
 records the shared C++/HLSL measure contracts, deterministic reference fixtures,
 and the boundary between automated evidence and required runtime evaluation.
 
+The [retired visibility sample-rotation notes](docs/visibility-sample-rotation.md)
+define the supported layout, exact four-phase sequence, history convention,
+resource contract, and technical evidence. Its
+[postmortem](docs/postmortem/visibility-sample-rotation.md) records the negative
+visual result, lessons, and explicit triggers for any future reconsideration.
+
 The [experiment postmortem archive](docs/postmortem/) preserves retired work,
-supporting evidence, and restart guidance.
+supporting evidence, and restart guidance, including the
+[native-resolution analytical/reconstructive temporal anti-aliasing v1 postmortem](docs/postmortem/nra-rtaa-v1.md).
 
 All Markdown headings, standalone bold headings, and initial bold list-item
 headings use conventional English Title Case. Run
