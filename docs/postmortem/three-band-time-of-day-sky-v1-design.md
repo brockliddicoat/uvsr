@@ -1,4 +1,12 @@
-# Procedural Sky Design
+# Three-Band Time-of-Day Sky v1 Design Snapshot
+
+## Archived Status
+
+This is the final implementation design from a rejected experiment. It records
+what checkpoint `c589563` implemented; it does not describe accepted product
+behavior. The accompanying
+[postmortem](three-band-time-of-day-sky-v1.md) supersedes this snapshot's orbit
+and verification claims and must be read before reusing any component.
 
 UVSR's first-party sky pass replaces Donut's two-anchor procedural backdrop
 with a continuous horizon, middle, and zenith atmosphere. One time-owned
