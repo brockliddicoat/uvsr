@@ -10,7 +10,30 @@ is also available from the scene picker.
 ## Renderer Baseline
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
-  sky start enabled.
+  sky start enabled. The sky blends independent blue horizon, middle, and
+  zenith anchors without hard seams while day-mode ambient lighting preserves
+  the pre-experiment renderer's neutral color balance.
+- **Time** defaults to noon and continuously drives the three-band atmosphere,
+  ambient fill, celestial orbit, active body, stars, and directional-light
+  angle. Day retains the pre-experiment color balance from 08:00 through 16:00;
+  warm, independently authored three-band sunrise and sunset palettes bridge
+  into a zero-ambient night with strong additional depth attenuation toward
+  midnight. The sun and moon fade to zero at the horizon before swapping, so
+  there is no lighting pop.
+- The active celestial light's read-only angle in **Lights** follows **Time**.
+  Each body follows one fixed Y-up world-space arc from the left horizon through
+  the zenith to the right horizon. Camera movement only changes where the body
+  is observed and never relocates its orbit; at the endpoint, the replacement
+  begins again on the left instead of either body continuing through a
+  360-degree loop.
+  Its **Irradiance** control edits authored daylight during sun hours and the
+  independent neutral moon value during moon hours; moon irradiance also scales
+  its detailed one-degree disk and halo. Stars combine a predominantly tiny
+  size distribution with rare larger points and broad world-anchored density
+  clusters. **Enable Celestials** removes stars,
+  the active disk and halo, and its directional illumination together. The moon
+  and sun share the same halo outer radius, while **Brightness** remains the
+  common atmosphere-and-stars control.
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
   linear resolution. Full resolution can composite raw output; reconstruction
   adds SSRT3-style temporal accumulation and either compact or Gaussian joint-
@@ -136,8 +159,11 @@ entries are not promises that the work will merge.
 - **Agent Collaboration Policy — Active Development**
   (`codex/casual-agent-policy`). Replace the repository's agent guidance with
   coordinator-led collaboration rules, conversational-language guidance, and
-  reusable execution-plan documentation. This owns `AGENTS.md` and agent-only
-  documentation; it has no renderer, shader, asset, or UI overlap.
+  reusable execution-plan documentation. Integrate the lowercase-only
+  experiment-title rule, bump the policy version, and enforce the same contract
+  in the PowerShell launcher and renderer startup validator. This owns
+  `AGENTS.md`, agent-only documentation, and experiment-title validation; its
+  `src/uvsr.cpp` and `README.md` edits are serialized with renderer work.
 
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate shared
@@ -165,11 +191,15 @@ entries are not promises that the work will merge.
   depends on the Intel PBR Sponza scene catalog and owns only its deterministic
   geometry recipe, validation, derived assets, and scene descriptor.
 
-- **Three-Band Sky and Night Mode — Experiment**
-  (`codex/sky-night-mode`). Add a first-party three-band atmospheric sky and a
-  Night Mode with a soft moon and deterministic procedural stars. This owns
-  sky shaders, constants, controls, reference tests, and sky documentation; it
-  preserves PBR, visibility, and display-pipeline equations.
+- **Three-Band Time-of-Day Sky — Experiment**
+  (`codex/sky-night-mode-3087874`). Add a first-party three-band atmospheric
+  sky with a continuous Time control, warm three-band sunrise and sunset,
+  automatic sun/moon orbit and replacement, progressive night darkness, a
+  neutral procedural lunar disk, zero deep-night ambient fill, and deterministic
+  stars. Directional-light Irradiance controls the active body's energy, while
+  Enable Celestials removes stars, disk, halo, and illumination as one system.
+  This owns sky shaders, constants, controls, reference tests, and sky
+  documentation; it preserves core PBR, camera, and display equations.
 
 ### How Work Gets Listed
 
@@ -262,12 +292,12 @@ environment variable; omitted descriptions default to `main`.
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the camera-collision, camera-controls, PBR, radial-visibility,
-estimator, visibility-projection, and visibility-sampling reference tests
-separately:
+Build and run the camera-collision, camera-controls, PBR, procedural-sky,
+radial-visibility, estimator, visibility-projection, and visibility-sampling
+reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_pbr_tests uvsr_procedural_sky_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
@@ -311,6 +341,10 @@ controls, limitations, and the upgrade path to persistent unified visibility.
 The [visibility estimator validation](docs/visibility-estimator-validation.md)
 records the shared C++/HLSL measure contracts, deterministic reference fixtures,
 and the boundary between automated evidence and required runtime evaluation.
+
+The [procedural sky design](docs/procedural-sky.md) records the three-band
+gradient, continuous time palettes, celestial orbit and replacement, darkness
+contract, halo sizing, and deterministic star construction.
 
 The [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) preserves why the
 retired anti-aliasing experiment failed and the required order for any successor.

@@ -110,6 +110,7 @@ donut_compile_shaders_all_platforms(
 add_executable(uvsr WIN32
     src/camera_collision.cpp
     src/gpu_performance_monitor.cpp
+    src/procedural_sky_pass.cpp
     src/uvsr.cpp
     src/pbr_deferred_lighting_pass.cpp
     src/screen_space_visibility.cpp
@@ -124,6 +125,19 @@ add_executable(uvsr_pbr_tests tests/pbr_reference_tests.cpp)
 target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
 add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
+
+add_executable(uvsr_procedural_sky_tests
+    tests/procedural_sky_reference_tests.cpp
+)
+target_include_directories(
+    uvsr_procedural_sky_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(uvsr_procedural_sky_tests PRIVATE donut_core)
+add_test(
+    NAME uvsr_procedural_sky_reference
+    COMMAND uvsr_procedural_sky_tests
+)
 
 add_executable(uvsr_camera_collision_tests
     tests/camera_collision_tests.cpp
@@ -205,7 +219,6 @@ set(UVSR_PASS_SHADERS
     gbuffer_vs_buffer_loads
     material_id_ps
     pixel_readback_cs
-    sky_ps
 )
 
 set(UVSR_RUNTIME_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework/dxil")
@@ -241,6 +254,7 @@ set(UVSR_APP_SHADERS
     pbr_deferred_lighting_cs
     pbr_forward_ps
     pbr_gbuffer_ps
+    procedural_sky_ps
     screen_space_depth_hierarchy_cs
     screen_space_indirect_composite_cs
     screen_space_visibility_filter_cs

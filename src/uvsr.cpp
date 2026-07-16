@@ -51,7 +51,6 @@
 #include <donut/render/GBuffer.h>
 #include <donut/render/GBufferFillPass.h>
 #include <donut/render/PixelReadbackPass.h>
-#include <donut/render/SkyPass.h>
 #include <donut/app/ApplicationBase.h>
 #include <donut/app/UserInterfaceUtils.h>
 #include <donut/app/Camera.h>
@@ -65,6 +64,7 @@
 #include "gpu_performance_monitor.h"
 #include "camera_collision.h"
 #include "camera_controllers.h"
+#include "procedural_sky_pass.h"
 #include "screen_space_visibility.h"
 
 using namespace donut;
@@ -83,6 +83,116 @@ struct GpuAdapterChoice
     int adapterIndex = -1;
     std::string name;
     uint64_t dedicatedVideoMemory = 0;
+};
+
+bool DrawCelestialLightEditor(
+    DirectionalLight& light,
+    ProceduralSkySettings& settings)
+{
+    bool changed = false;
+    const ProceduralSkyTimeState timeState =
+        GetProceduralSkyTimeState(settings);
+    ImGui::Text(
+        "Active Celestial: %s",
+        timeState.moonActive ? "Moon" : "Sun");
+
+    // Donut stores the direction in which photons travel. The disabled angle
+    // widget represents the body's position in the sky, which is the inverse.
+    double3 direction = -light.GetDirection();
+    ImGui::BeginDisabled();
+    app::AzimuthElevationSliders(direction, false);
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip(
+        "Azimuth and elevation are driven automatically by Sky > Time.");
+
+    changed |= ImGui::ColorEdit3(
+        "Color", &light.color.x, ImGuiColorEditFlags_Float);
+    ImGui::SetItemTooltip(
+        "Set the base daylight color. Time adds warm sunrise and sunset light; moonlight remains neutral.");
+
+    float& activeIrradiance = timeState.moonActive
+        ? settings.moonIrradiance
+        : light.irradiance;
+    changed |= ImGui::SliderFloat(
+        "Irradiance",
+        &activeIrradiance,
+        0.f,
+        100.f,
+        timeState.moonActive ? "%.4f" : "%.2f",
+        ImGuiSliderFlags_Logarithmic |
+            ImGuiSliderFlags_AlwaysClamp |
+            ImGuiSliderFlags_NoRoundToFormat);
+    ImGui::SetItemTooltip(
+        timeState.moonActive
+            ? "Set neutral moon lighting and the visible moon disk and halo. Daylight irradiance remains stored separately."
+            : "Set the sun's daylight irradiance. Time fades it near the horizon and keeps moon irradiance separate.");
+    activeIrradiance = std::max(activeIrradiance, 0.f);
+
+    changed |= ImGui::SliderFloat(
+        "Angular Size", &light.angularSize, 0.1f, 20.f);
+    ImGui::SetItemTooltip(
+        "Set the sun's disk size. The moon uses its independent one-degree preset.");
+    return changed;
+}
+
+class ScopedCelestialLightOverride final
+{
+public:
+    ScopedCelestialLightOverride(
+        const std::shared_ptr<DirectionalLight>& light,
+        const ProceduralSkySettings& settings)
+        : m_Light(light)
+    {
+        if (!m_Light)
+            return;
+
+        // Preserve the authored/editor-visible daylight state exactly. The
+        // override exists only while the frame records direct-light, GI, and
+        // sky work, so time and enable changes cannot accumulate state drift.
+        m_OriginalColor = m_Light->color;
+        m_OriginalIrradiance = m_Light->irradiance;
+        m_OriginalAngularSize = m_Light->angularSize;
+
+        const ProceduralSkyTimeState timeState =
+            uvsr::GetProceduralSkyTimeState(settings);
+        if (timeState.moonActive)
+        {
+            const uvsr::CelestialLightPreset moon =
+                uvsr::GetNightMoonLightPreset();
+            m_Light->color = moon.color;
+            m_Light->angularSize = moon.angularSize;
+        }
+        else
+        {
+            m_Light->color = m_OriginalColor *
+                uvsr::GetProceduralSunLightTint(timeState);
+        }
+
+        // One pure contract drives sun/moon elevation fading and the unified
+        // celestial toggle for every direct-light, GI, and sky consumer.
+        m_Light->irradiance = uvsr::GetEffectiveCelestialIrradiance(
+            settings, timeState, m_OriginalIrradiance);
+    }
+
+    ~ScopedCelestialLightOverride()
+    {
+        if (!m_Light)
+            return;
+
+        m_Light->color = m_OriginalColor;
+        m_Light->irradiance = m_OriginalIrradiance;
+        m_Light->angularSize = m_OriginalAngularSize;
+    }
+
+    ScopedCelestialLightOverride(const ScopedCelestialLightOverride&) = delete;
+    ScopedCelestialLightOverride& operator=(
+        const ScopedCelestialLightOverride&) = delete;
+
+private:
+    std::shared_ptr<DirectionalLight> m_Light;
+    dm::float3 m_OriginalColor = dm::float3(0.f);
+    float m_OriginalIrradiance = 0.f;
+    float m_OriginalAngularSize = 0.f;
 };
 
 class PbrGBufferFillPass final : public GBufferFillPass
@@ -840,7 +950,7 @@ struct UIData
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
     AgxToneMappingParameters            AgxToneMappingParams;
     AgxPreset                           AgxToneMappingPreset = AgxPreset::Base;
-    SkyParameters                       SkyParams;
+    ProceduralSkySettings               SkyParams;
     bool                                ShaderReloadRequested = false;
     bool                                EnableProceduralSky = true;
     WhiteWorldMode                      WhiteWorld = WhiteWorldMode::Off;
@@ -880,7 +990,7 @@ private:
     std::shared_ptr<GBufferFillPass>     m_GBufferPass;
     std::shared_ptr<DeferredLightingPass> m_DeferredLightingPass;
     std::unique_ptr<PbrDeferredLightingPass> m_PbrDeferredLightingPass;
-    std::unique_ptr<SkyPass>            m_SkyPass;
+    std::unique_ptr<ProceduralSkyPass>  m_SkyPass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
@@ -1088,6 +1198,33 @@ public:
             m_AgxToneMappingPass->SetColorLut(index == 0 ? nullptr : &m_KodakLuts[index]);
     }
 
+    void ResetScreenSpaceVisibilityHistory()
+    {
+        if (m_ScreenSpaceVisibilityPass)
+            m_ScreenSpaceVisibilityPass->ResetHistory();
+    }
+
+    [[nodiscard]] bool IsCelestialLight(
+        const std::shared_ptr<Light>& light) const noexcept
+    {
+        return light && light.get() == m_SunLight.get();
+    }
+
+    void UpdateCelestialDirectionFromTime()
+    {
+        if (!m_SunLight)
+            return;
+
+        const ProceduralSkyTimeState timeState =
+            GetProceduralSkyTimeState(m_ui.SkyParams);
+        const float3 lightDirection =
+            GetProceduralSkyCelestialPhotonDirection(timeState);
+        m_SunLight->SetDirection(double3(
+            lightDirection.x,
+            lightDirection.y,
+            lightDirection.z));
+    }
+
     void ResetAllRendererSettings()
     {
         // Restore modes through their public setters first so material shader
@@ -1100,7 +1237,7 @@ public:
         m_ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
         m_ui.AgxToneMappingPreset = AgxPreset::Base;
         m_ui.AgxToneMappingParams = GetAgxPresetParameters(AgxPreset::Base);
-        m_ui.SkyParams = SkyParameters{};
+        m_ui.SkyParams = ProceduralSkySettings{};
         m_ui.EnableProceduralSky = true;
 
         // This also recreates any passes/resources that were absent because PBR,
@@ -1795,7 +1932,9 @@ public:
             m_DeferredLightingPass->Init(m_ShaderFactory);
         }
 
-        m_SkyPass = std::make_unique<SkyPass>(GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->ForwardFramebuffer, *m_View);
+        m_SkyPass = std::make_unique<ProceduralSkyPass>(
+            GetDevice(), m_ShaderFactory, m_CommonPasses,
+            m_RenderTargets->ForwardFramebuffer, *m_View);
         
         m_AgxToneMappingPass = std::make_unique<AgxToneMappingPass>(
             GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->LdrFramebuffer);
@@ -1820,9 +1959,17 @@ public:
         nvrhi::Viewport windowViewport = nvrhi::Viewport(float(windowWidth), float(windowHeight));
         nvrhi::Viewport renderViewport = windowViewport;
 
+        UpdateCelestialDirectionFromTime();
         m_Scene->RefreshSceneGraph(GetFrameIndex());
         const auto& sceneLights =
             m_Scene->GetSceneGraph()->GetLights();
+
+        // The frame-local override selects and fades the sun or moon for the
+        // current time, or zeroes the active light when celestials are disabled.
+        // Every direct-light, GI-source, and sky consumer sees the same state;
+        // authored daylight is restored before UI and editor code resumes.
+        ScopedCelestialLightOverride celestialLightOverride(
+            m_SunLight, m_ui.SkyParams);
 
         {
             uint width = windowWidth;
@@ -1889,8 +2036,14 @@ public:
         nvrhi::ITexture* framebufferTexture = framebuffer->getDesc().colorAttachments[0].texture;
         m_CommandList->clearTextureFloat(framebufferTexture, nvrhi::AllSubresources, nvrhi::Color(0.f));
         
-        m_AmbientTop = m_ui.SkyParams.skyColor * m_ui.SkyParams.brightness;
-        m_AmbientBottom = m_ui.SkyParams.groundColor * m_ui.SkyParams.brightness;
+        const ProceduralSkyPalette skyPalette =
+            GetProceduralSkyPalette(m_ui.SkyParams);
+        const ProceduralSkyTimeState skyTimeState =
+            GetProceduralSkyTimeState(m_ui.SkyParams);
+        const float skyBrightness = GetEffectiveProceduralSkyBrightness(
+            m_ui.SkyParams, skyPalette, skyTimeState);
+        m_AmbientTop = skyPalette.ambientTopColor * skyBrightness;
+        m_AmbientBottom = skyPalette.ambientBottomColor * skyBrightness;
 
         if (m_ui.WhiteWorld != WhiteWorldMode::Off)
         {
@@ -2920,23 +3073,62 @@ protected:
             "Sky", "Show sky controls.");
         if (skyOpen)
         {
+            const bool proceduralSkyChanged = ImGui::Checkbox(
+                "Enable Procedural Sky", &m_ui.EnableProceduralSky);
+            ImGui::SetItemTooltip("Show the procedural sky.");
+            if (proceduralSkyChanged)
+                m_app->ResetScreenSpaceVisibilityHistory();
+
             if (!m_ui.EnableProceduralSky)
                 ImGui::BeginDisabled();
-            ImGui::SliderFloat("Brightness", &m_ui.SkyParams.brightness, 0.f, 1.f);
-            ImGui::SetItemTooltip("Set sky and ambient light brightness.");
-            ImGui::SliderFloat("Glow Size", &m_ui.SkyParams.glowSize, 0.f, 90.f);
-            ImGui::SetItemTooltip("Set the sun glow's size.");
-            ImGui::SliderFloat("Glow Sharpness", &m_ui.SkyParams.glowSharpness, 1.f, 10.f);
-            ImGui::SetItemTooltip("Set how quickly the sun glow fades.");
-            ImGui::SliderFloat("Glow Intensity", &m_ui.SkyParams.glowIntensity, 0.f, 1.f);
-            ImGui::SetItemTooltip("Set the sun glow's brightness.");
-            ImGui::SliderFloat("Horizon Size", &m_ui.SkyParams.horizonSize, 0.f, 90.f);
-            ImGui::SetItemTooltip("Set the horizon blend width.");
+            bool skyParametersChanged = ImGui::SliderFloat(
+                "Brightness", &m_ui.SkyParams.brightness, 0.f, 1.f);
+            ImGui::SetItemTooltip(
+                "Set sky and star brightness plus day ambient-light brightness. Zero makes the night background black without changing the moon.");
+            skyParametersChanged |= ImGui::SliderFloat(
+                "Glow Size", &m_ui.SkyParams.glowSize, 0.f, 90.f);
+            ImGui::SetItemTooltip(
+                "Set the sun or moon halo's outer angular radius; both use the same footprint.");
+            skyParametersChanged |= ImGui::SliderFloat(
+                "Glow Sharpness", &m_ui.SkyParams.glowSharpness, 1.f, 10.f);
+            ImGui::SetItemTooltip(
+                "Set how quickly the active sun or moon halo fades.");
+            skyParametersChanged |= ImGui::SliderFloat(
+                "Glow Intensity", &m_ui.SkyParams.glowIntensity, 0.f, 1.f);
+            ImGui::SetItemTooltip(
+                "Set the active sun or moon halo's brightness.");
+            skyParametersChanged |= ImGui::SliderFloat(
+                "Horizon Size", &m_ui.SkyParams.horizonSize, 0.f, 90.f);
+            ImGui::SetItemTooltip(
+                "Set the below-horizon ground transition depth.");
             if (!m_ui.EnableProceduralSky)
                 ImGui::EndDisabled();
 
-            ImGui::Checkbox("Enable Procedural Sky", &m_ui.EnableProceduralSky);
-            ImGui::SetItemTooltip("Show the procedural sky.");
+            if (skyParametersChanged)
+                m_app->ResetScreenSpaceVisibilityHistory();
+
+            const bool celestialLightChanged = ImGui::Checkbox(
+                "Enable Celestials",
+                &m_ui.SkyParams.enableCelestials);
+            ImGui::SetItemTooltip(
+                "Enable stars and the active sun or moon in both scene lighting and the sky.");
+            if (celestialLightChanged)
+                m_app->ResetScreenSpaceVisibilityHistory();
+
+            const bool timeChanged = ImGui::SliderFloat(
+                "Time",
+                &m_ui.SkyParams.timeOfDay,
+                0.f,
+                24.f,
+                "%.2f h",
+                ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetItemTooltip(
+                "Set time of day. Sunrise is 06:00, noon is 12:00, sunset is 18:00, and midnight is 00:00; sky color, darkness, stars, and celestial angle update automatically.");
+            if (timeChanged)
+            {
+                m_app->UpdateCelestialDirectionFromTime();
+                m_app->ResetScreenSpaceVisibilityHistory();
+            }
         }
 
         const auto& lights = m_app->GetScene()->GetSceneGraph()->GetLights();
@@ -2976,7 +3168,14 @@ protected:
 
                 if (m_SelectedLight)
                 {
-                    app::LightEditor(*m_SelectedLight);
+                    const bool lightChanged =
+                        m_app->IsCelestialLight(m_SelectedLight)
+                        ? DrawCelestialLightEditor(
+                            static_cast<DirectionalLight&>(*m_SelectedLight),
+                            m_ui.SkyParams)
+                        : app::LightEditor(*m_SelectedLight);
+                    if (lightChanged)
+                        m_app->ResetScreenSpaceVisibilityHistory();
                 }
             }
         }
