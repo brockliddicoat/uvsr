@@ -11,20 +11,28 @@ experiment.
 - Project/integration branch and worktree:
   `codex/taa-miniengine-experiment` in `work/uvsr-taa-miniengine`
 - Base commit: `a7e51b7d3a09e18cc4e5da085b511623a87cc0ac`
-- Canon Contender renderer commit:
+- Original TAA implementation commit:
   `6f84a9987ef7f6629d0ce98e4047f0a46bc033ec`
-- Accepted implementation manifest SHA-256:
-  `6332fc4ff1082ce25320e94c23b83ab802a9ad96d6d3cca57f6ee4aca786a398`
+- Final Canon Contender renderer commit:
+  `f2551e13c4ed7719815541a90c3e645671387bff`
+- Final contender implementation manifest SHA-256:
+  `840a325ec659ee56308bfe9bfb8ce87127a05e0b85d3c5a13d202d31002fa74a`
 - User-verified predecessor runtime:
   `UVSR Renderer D3D12 (sharpenctl-a7e51b7-0338)`, TAA enabled with the
   plain resolve output at 1920x1080 in the benchmark Sponza view
 - User-verified predecessor executable SHA-256:
   `55c6076af13bc3e79a070cd4700f649085f1fb99eaee2ece1c6b37a0c7cceca5`
-- Clean contender runtime:
+- First clean contender runtime:
   `UVSR Renderer D3D12 (taacontender-6f84a99-0404)`
-- Clean contender executable SHA-256:
+- First clean contender executable SHA-256:
   `22b215e594ee60e526ca8f3bc0dd93c85d7f1e2ed94350b099406668c72df146`
-- Clean contender executable size: `2116608` bytes
+- Final clean contender runtime:
+  `UVSR Renderer D3D12 (taacontender-f2551e1-0413)`, opened without
+  `--benchmark-camera` and observed in `Freelook` with Camera Location
+  `Piloted`
+- Final clean contender executable SHA-256:
+  `050742e6515d30d4d17be1770ce5c379fc3c3a0de8300c7d717d3265ed46f957`
+- Final clean contender executable size: `2116608` bytes
 - Started: 2026-07-17
 - Last updated: 2026-07-17
 - Archived to:
@@ -54,13 +62,16 @@ The implementation, fixed-camera smoke, user-driven moving-camera smoke,
 TAA enable/disable control, Release build, 12/12 CTest suite, document
 validation, exact-manifest review, independent rendering review, and local
 contender checkpoint are complete. The user explicitly verified the predecessor
-artifact carrying the same accepted 11-file implementation manifest and
-directed its promotion to Canon Contender. The clean committed executable was
-then rebuilt, tested, and passively smoke-checked with its embedded `6f84a99`
-identity. Resize smoke and a thermally controlled matched baseline/candidate
-sample window remain integration acceptance work. The feature-pass timer is
-usable now; long uncapped total-frame samples are not treated as controlled
-evidence.
+artifact carrying the accepted TAA implementation manifest and directed its
+promotion to Canon Contender. The first clean executable was rebuilt and
+passively smoke-checked with its embedded `6f84a99` identity. The user then
+required the final contender to open without the locked benchmark camera and
+renamed the free-camera location descriptor to `Piloted`. That additive label
+correction is committed as `f2551e1`; its clean executable passed the full suite
+and was observed in `Freelook` with Camera Location `Piloted`. Resize smoke and
+a thermally controlled matched baseline/candidate sample window remain
+integration acceptance work. The feature-pass timer is usable now; long
+uncapped total-frame samples are not treated as controlled evidence.
 
 ## Scope
 
@@ -229,12 +240,13 @@ For performance work, record:
 | 2026-07-17 | Retain MiniEngine's exact absolute `+0.001` depth allowance after reverse-Z linearization. | A first draft used a relative allowance. Source-to-source review found that it broadened acceptance without evidence, so the final shader copies the reference threshold exactly. | TAA |
 | 2026-07-17 | Do not attribute long-run FPS drift to TAA or add a TAA-local frame cap. | Fifteen live samples showed zero private-memory, working-set, or handle growth while the uncapped renderer held the GPU at 100%, raised temperature from 80 to 85 degrees C, and reduced clocks. A later sample at 86 degrees C showed 1455 MHz versus 2025 MHz when cool. UVSR explicitly disables VSync, so thermal steady state is a benchmark-control problem. | Verification |
 | 2026-07-17 | Preserve the accepted implementation as a local contender before composing it with the newer tonemapper-free canonical line. | The user verified the exact dirty artifact and requested Canon Contender promotion. Rebasing first would change overlapping renderer and build files, invalidate that artifact's acceptance, and repeat the prior postmortem's mistake of combining implementation with integration uncertainty. | Integration |
+| 2026-07-17 | Keep the final contender piloted instead of benchmark-locked and label the free-camera location `Piloted`. | Normal startup already uses `Freelook`; only the contender launch flag caused `Locked`. The internal `Free` enum and camera mechanics remain unchanged to minimize risk, while the dropdown label, logs, tooltip, tests, and README use the requested descriptor. | Camera/UI |
 
 ## Progress and Handoffs
 
 | Date/Time | Task/Owner | Status | Revision/Artifact | Checks | Risks/Next Action |
 | --- | --- | --- | --- | --- | --- |
-| 2026-07-17 | `taa` `/root` | Complete | Base `a7e51b7`; MiniEngine `357ade6`; accepted manifest `6332fc4`; contender `6f84a99` | Release build, all three TAA DXIL shaders, 12/12 CTest, document validator, `git diff --check`, fixed and moved Sponza smoke, live sharpen-to-resolve switch, clean contender smoke, independent review | Compose onto live canonical in a successor plan, then repeat affected checks and product acceptance |
+| 2026-07-17 | `taa` `/root` | Complete | Base `a7e51b7`; MiniEngine `357ade6`; final manifest `840a325`; contender `f2551e1` | Release build, all three TAA DXIL shaders, 12/12 CTest, document validator, `git diff --check`, fixed and moved Sponza smoke, live sharpen-to-resolve switch, independent review, final `Freelook`/`Piloted` contender smoke | Compose onto live canonical in a successor plan, then repeat affected checks and product acceptance |
 
 ## Risks and Escalation Triggers
 
@@ -281,9 +293,9 @@ Stop and ask the user if:
 3. Repeat the matrix with visibility temporal reconstruction off and on. Do not
    add cross-temporal fixes unless that comparison names a reproducible failure.
 4. Start a successor integration plan from live `origin/main` `9f2e69e`,
-   transplant contender commit `6f84a99`, and resolve only the build,
-   scene-linear insertion, UI, and documentation conflicts created by the
-   tonemapper sunset. The TAA pass itself has no display-stage dependency.
+   transplant renderer commits `6f84a99` and `f2551e1`, and resolve only the
+   build, scene-linear insertion, UI, and documentation conflicts created by
+   the tonemapper sunset. The TAA pass itself has no display-stage dependency.
    Repeat the Release build, full suite, resize/mode smoke, independent review,
    and exact-artifact product acceptance after composition.
 5. Add one mechanism at a time only after a measured failure: camera velocity
@@ -294,13 +306,16 @@ Stop and ask the user if:
 
 ## Completion
 
-- Final local implementation commit:
+- Original TAA implementation commit:
   `6f84a9987ef7f6629d0ce98e4047f0a46bc033ec`
+- Final local Canon Contender renderer commit:
+  `f2551e13c4ed7719815541a90c3e645671387bff`
 - Final integrated commit: pending; this contender is not on canonical `main`
 - Verification summary: clean-commit Release build, three TAA DXIL shader
   builds, 12/12 CTest, document validation, diff validation, fixed/moving
-  smoke, live sharpen/resolve selection, clean contender smoke, 0.15 ms
-  reference-sharpen feature timing, and 47.5 MiB 1080p logical history verified
+  smoke, live sharpen/resolve selection, final `Freelook`/`Piloted` contender
+  smoke, 0.15 ms reference-sharpen feature timing, and 47.5 MiB 1080p logical
+  history verified
 - Independent review: passed with no promotion blocker; shader bindings,
   ping-pong history, reset and resize recreation, motion/jitter grids, reverse-Z
   rejection, scene-linear placement, and sharpen/resolve selection reviewed
