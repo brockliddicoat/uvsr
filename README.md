@@ -12,6 +12,16 @@ architecture without either add-on.
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
+- **Temporal Anti-Aliasing** starts enabled on the deferred UVSR PBR path. The
+  experiment follows Microsoft's MiniEngine TAA structure: its eight-sample
+  jitter, one bilinear history blend with depth/motion rejection and confidence,
+  followed by either its plain resolve or compact sharpening dispatch.
+  Sharpening starts enabled at MiniEngine's `0.5` reference strength and can be
+  disabled or adjusted without resetting temporal history. TAA resolves
+  scene-linear color before the display stage, reports both GPU dispatch
+  timings in its drawer, and uses 47.5 MiB of logical color/depth history at
+  1920x1080. Forward and legacy shading paths leave it unavailable because they
+  do not produce the required validated motion contract.
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
   linear resolution. **Temporal Reconstruction** independently enables
   SSRT3-style history accumulation, while **Spatial Filtering** independently

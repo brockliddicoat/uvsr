@@ -67,6 +67,7 @@
 #include "scene_catalog.h"
 #include "screen_space_visibility.h"
 #include "sponza_camera_preset.h"
+#include "taa_miniengine.h"
 #include "world_material_view.h"
 
 using namespace donut;
@@ -609,6 +610,10 @@ struct UIData
     int                                 ActiveGpuAdapterIndex = -1;
     bool                                EnablePbr = true;
     RendererMode                        RenderMode = RendererMode::Deferred;
+    bool                                EnableMiniEngineTaa = true;
+    bool                                EnableMiniEngineTaaSharpen = true;
+    float                               MiniEngineTaaSharpness =
+        MiniEngineTaaDefaultSharpness;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
     SkyParameters                       SkyParams;
     bool                                ShaderReloadRequested = false;
@@ -622,6 +627,14 @@ struct UIData
     [[nodiscard]] bool UsesDeferredShading() const
     {
         return RenderMode == RendererMode::Deferred;
+    }
+
+    [[nodiscard]] bool UsesMiniEngineTaa() const
+    {
+        return IsMiniEngineTaaAvailable(
+            EnableMiniEngineTaa,
+            EnablePbr,
+            UsesDeferredShading());
     }
 
     [[nodiscard]] bool UsesTonemapper() const
@@ -653,6 +666,7 @@ private:
     std::unique_ptr<SkyPass>            m_SkyPass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
+    std::unique_ptr<MiniEngineTemporalAAPass> m_MiniEngineTemporalAAPass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
     std::unique_ptr<PixelReadbackPass>  m_PixelReadbackPass;
 
@@ -856,6 +870,8 @@ public:
         m_PreviousView.reset();
         if (m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetHistory();
+        if (m_MiniEngineTemporalAAPass)
+            m_MiniEngineTemporalAAPass->ResetHistory();
     }
 
     void SetSponzaCameraLocation(SponzaCameraLocation location)
@@ -949,6 +965,9 @@ public:
 
         m_ui.EnablePbr = true;
         m_ui.RenderMode = RendererMode::Deferred;
+        m_ui.EnableMiniEngineTaa = true;
+        m_ui.EnableMiniEngineTaaSharpen = true;
+        m_ui.MiniEngineTaaSharpness = MiniEngineTaaDefaultSharpness;
         m_ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
         m_ui.SkyParams = SkyParameters{};
         m_ui.EnableProceduralSky = true;
@@ -1250,6 +1269,8 @@ public:
             m_ScreenSpaceVisibilityPass->ResetBindingCache();
             m_ScreenSpaceVisibilityPass->ResetHistory();
         }
+        if (m_MiniEngineTemporalAAPass)
+            m_MiniEngineTemporalAAPass->ResetHistory();
         if (m_GBufferPass) m_GBufferPass->ResetBindingCache();
         m_BindingCache.Clear();
         m_SunLight.reset();
@@ -1411,6 +1432,8 @@ public:
 
         if (modeChanged && m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetHistory();
+        if (modeChanged && m_MiniEngineTemporalAAPass)
+            m_MiniEngineTemporalAAPass->ResetHistory();
 
         const bool enabled = mode != WhiteWorldMode::Off;
         const bool preserveDetailMaps = mode == WhiteWorldMode::PreserveDetail;
@@ -1575,8 +1598,14 @@ public:
 
         float4x4 projection = perspProjD3DStyleReverse(verticalFov, renderTargetSize.x / renderTargetSize.y, sceneScaleNear);
 
-        planarView->SetViewport(nvrhi::Viewport(renderTargetSize.x, renderTargetSize.y));
-        planarView->SetPixelOffset(float2(0.f));
+        planarView->SetViewport(nvrhi::Viewport(
+            renderTargetSize.x,
+            renderTargetSize.y));
+        const MiniEngineTaaJitterSample jitter =
+            m_ui.UsesMiniEngineTaa()
+            ? GetMiniEngineTaaJitter(uint64_t(GetFrameIndex()))
+            : MiniEngineTaaJitterSample{ 0.f, 0.f };
+        planarView->SetPixelOffset(float2(jitter.x, jitter.y));
 
         planarView->SetMatrices(viewMatrix, projection);
         planarView->UpdateCache();
@@ -1605,6 +1634,8 @@ public:
 
     void CreateRenderPasses()
     {
+        m_MiniEngineTemporalAAPass.reset();
+
         ForwardShadingPass::CreateParameters ForwardParams;
         ForwardParams.trackLiveness = false;
         if (m_ui.EnablePbr)
@@ -1649,6 +1680,17 @@ public:
             m_DeferredLightingPass->Init(m_ShaderFactory);
         }
 
+        if (m_ui.UsesMiniEngineTaa())
+        {
+            m_MiniEngineTemporalAAPass =
+                std::make_unique<MiniEngineTemporalAAPass>(
+                    GetDevice(),
+                    m_ShaderFactory,
+                    m_RenderTargets->HdrColor,
+                    m_RenderTargets->Depth,
+                    m_RenderTargets->MotionVectors);
+        }
+
         m_SkyPass = std::make_unique<SkyPass>(GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->ForwardFramebuffer, *m_View);
         
         m_AgxToneMappingPass = std::make_unique<AgxToneMappingPass>(
@@ -1690,8 +1732,11 @@ public:
                 (!sceneLights.empty() ||
                     (m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive &&
                         m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain > 0.f));
-            const bool motionVectorsRequired = visibilityResourcesRequired &&
-                m_ui.ScreenSpaceVisibility.RequiresMotionVectors();
+            const bool temporalAARequired = m_ui.UsesMiniEngineTaa();
+            const bool motionVectorsRequired =
+                temporalAARequired ||
+                (visibilityResourcesRequired &&
+                    m_ui.ScreenSpaceVisibility.RequiresMotionVectors());
 
             bool needNewPasses = false;
 
@@ -1713,6 +1758,9 @@ public:
                 
                 needNewPasses = true;
             }
+
+            if (temporalAARequired != bool(m_MiniEngineTemporalAAPass))
+                needNewPasses = true;
 
             if (SetupView())
             {
@@ -1904,6 +1952,21 @@ public:
         if (m_ui.EnableProceduralSky)
             m_SkyPass->Render(m_CommandList, *m_View, *m_SunLight, m_ui.SkyParams);
 
+        if (m_MiniEngineTemporalAAPass)
+        {
+            // Resolve scene-linear radiance before any display transform. The
+            // pass intentionally has no exposure, grading, LUT, or transfer
+            // dependency, so removing or replacing the display stage does not
+            // change its contract.
+            m_MiniEngineTemporalAAPass->Render(
+                m_CommandList,
+                *m_View,
+                m_PreviousView.get(),
+                uint64_t(GetFrameIndex()),
+                m_ui.EnableMiniEngineTaaSharpen,
+                m_ui.MiniEngineTaaSharpness);
+        }
+
         nvrhi::ITexture* displayTexture = m_RenderTargets->HdrColor;
         if (m_ui.UsesTonemapper())
         {
@@ -1992,6 +2055,13 @@ public:
     {
         return m_ScreenSpaceVisibilityPass
             ? &m_ScreenSpaceVisibilityPass->GetTimings()
+            : nullptr;
+    }
+
+    const MiniEngineTemporalAATimings* GetMiniEngineTemporalAATimings() const
+    {
+        return m_MiniEngineTemporalAAPass
+            ? &m_MiniEngineTemporalAAPass->GetTimings()
             : nullptr;
     }
 
@@ -2729,6 +2799,76 @@ protected:
             {
                 ImGui::EndDisabled();
                 ImGui::TextDisabled("Requires deferred UVSR PBR rendering.");
+            }
+        }
+
+        const bool temporalAAOpen = DrawCollapsingHeader(
+            "Temporal Anti-Aliasing",
+            "Configure the MiniEngine temporal anti-aliasing experiment.",
+            ImGuiTreeNodeFlags_DefaultOpen);
+        if (temporalAAOpen)
+        {
+            const bool temporalAAAvailable = IsMiniEngineTaaAvailable(
+                true,
+                m_ui.EnablePbr,
+                m_ui.UsesDeferredShading());
+            if (!temporalAAAvailable)
+                ImGui::BeginDisabled();
+            if (ImGui::Checkbox(
+                    "Enabled##MiniEngineTAA",
+                    &m_ui.EnableMiniEngineTaa))
+            {
+                log::info(
+                    "MiniEngine temporal anti-aliasing %s",
+                    m_ui.EnableMiniEngineTaa ? "enabled" : "disabled");
+            }
+            ImGui::SetItemTooltip(
+                "Jitter and accumulate scene-linear color using Microsoft's MiniEngine TAA.");
+
+            ImGui::Checkbox(
+                "Sharpen##MiniEngineTAA",
+                &m_ui.EnableMiniEngineTaaSharpen);
+            ImGui::SetItemTooltip(
+                "Use MiniEngine's sharpening output pass. When disabled, use its plain resolve pass.");
+
+            if (!m_ui.EnableMiniEngineTaaSharpen)
+                ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            ImGui::SliderFloat(
+                "Sharpness##MiniEngineTAA",
+                &m_ui.MiniEngineTaaSharpness,
+                MiniEngineTaaMinimumSharpness,
+                MiniEngineTaaMaximumSharpness,
+                "%.2f");
+            ImGui::SetItemTooltip(
+                "MiniEngine sharpening strength. The reference default is 0.50.");
+            if (!m_ui.EnableMiniEngineTaaSharpen)
+                ImGui::EndDisabled();
+
+            if (const MiniEngineTemporalAATimings* timings =
+                    m_app->GetMiniEngineTemporalAATimings())
+            {
+                ImGui::Text(
+                    "All %.2f | Blend %.2f | %s %.2f ms",
+                    timings->CompleteEffectMilliseconds(),
+                    timings->blendMilliseconds,
+                    timings->outputWasSharpened ? "Sharpen" : "Resolve",
+                    timings->outputMilliseconds);
+                ImGui::SetItemTooltip(
+                    "Recent GPU time for the two MiniEngine TAA dispatches.");
+                constexpr double BytesPerMiB = 1024.0 * 1024.0;
+                ImGui::Text(
+                    "History %.1f MiB",
+                    double(timings->historyTextureBytes) / BytesPerMiB);
+                ImGui::SetItemTooltip(
+                    "Logical color and depth history payload before API padding.");
+            }
+
+            if (!temporalAAAvailable)
+            {
+                ImGui::EndDisabled();
+                ImGui::TextDisabled(
+                    "Requires deferred UVSR PBR motion and depth.");
             }
         }
 

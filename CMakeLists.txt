@@ -110,11 +110,12 @@ donut_compile_shaders_all_platforms(
 add_executable(uvsr WIN32
     src/camera_collision.cpp
     src/gpu_performance_monitor.cpp
-    src/uvsr.cpp
     src/pbr_deferred_lighting_pass.cpp
     src/scene_catalog.cpp
     src/screen_space_visibility.cpp
     src/sponza_camera_preset.cpp
+    src/taa_miniengine.cpp
+    src/uvsr.cpp
     src/visibility_blue_noise.cpp
 )
 target_link_libraries(uvsr PRIVATE donut_render donut_app donut_engine)
@@ -137,6 +138,16 @@ add_executable(uvsr_pbr_tests tests/pbr_reference_tests.cpp)
 target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
 add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
+
+add_executable(uvsr_taa_miniengine_tests tests/taa_miniengine_tests.cpp)
+target_include_directories(
+    uvsr_taa_miniengine_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_taa_miniengine_reference
+    COMMAND uvsr_taa_miniengine_tests
+)
 
 add_executable(uvsr_world_material_view_tests
     tests/world_material_view_tests.cpp
@@ -293,6 +304,9 @@ set(UVSR_APP_SHADERS
     screen_space_visibility_filter_cs
     screen_space_visibility_cs
     screen_space_visibility_temporal_cs
+    taa_miniengine_blend_cs
+    taa_miniengine_resolve_cs
+    taa_miniengine_sharpen_cs
 )
 
 foreach(shader IN LISTS UVSR_APP_SHADERS)
