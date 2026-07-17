@@ -319,9 +319,13 @@ set(UVSR_APP_SHADERS
     screen_space_depth_hierarchy_cs
     screen_space_indirect_composite_cs
     screen_space_visibility_algorithmic_cs
+    screen_space_visibility_activision_depth_cs
+    screen_space_visibility_activision_spatial_cs
+    screen_space_visibility_activision_temporal_cs
     screen_space_visibility_constant_scheduler_cs
     screen_space_visibility_diagnostic_cs
     screen_space_visibility_duplicate_off_cs
+    screen_space_visibility_filter_activision_cs
     screen_space_visibility_filter_cs
     screen_space_visibility_filter_diagnostic_cs
     screen_space_visibility_filter_exact_cs
@@ -336,6 +340,9 @@ set(UVSR_APP_SHADERS
     screen_space_visibility_cs
     screen_space_visibility_temporal_copy_cs
     screen_space_visibility_temporal_cs
+    screen_space_visibility_xegtao_denoise_cs
+    screen_space_visibility_xegtao_main_cs
+    screen_space_visibility_xegtao_prefilter_cs
 )
 
 # Keep the runtime package synchronized with every shader source named by the

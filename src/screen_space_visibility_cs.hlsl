@@ -74,6 +74,9 @@
 // 3 = register-local interval/mask ALU floor.
 #define TRACE_DIAGNOSTIC 0
 #endif
+#ifndef ACTIVISION_PREPARED_DEPTH
+#define ACTIVISION_PREPARED_DEPTH 0
+#endif
 #ifndef VISIBILITY_GROUP_SIZE_X
 #define VISIBILITY_GROUP_SIZE_X 8
 #endif
@@ -119,6 +122,9 @@ Texture2DArray<float4> t_FilterAdaptedNoise : register(t6);
 Texture2DArray<float> t_FilterAdaptedNoise : register(t6);
 #endif
 Texture2D<float4> t_Motion : register(t7);
+#if ACTIVISION_PREPARED_DEPTH
+Texture2D<uint> t_ActivisionPackedLinearDepth : register(t8);
+#endif
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_AdaptiveFeedback : register(u2);
@@ -314,10 +320,13 @@ float ActivisionSpatialRotation(uint2 pixel)
 float ActivisionTemporalRotation(uint phase)
 {
     static const float rotations[6] = {
-        60.0f / 180.0f, 300.0f / 180.0f, 180.0f / 180.0f,
-        240.0f / 180.0f, 120.0f / 180.0f, 0.0f
+        60.0f / 360.0f, 300.0f / 360.0f, 180.0f / 360.0f,
+        240.0f / 360.0f, 120.0f / 360.0f, 0.0f
     };
-    // A paired slice is pi-periodic, hence degrees/180 rather than /360.
+    // Slide 93 publishes these as full-turn fractions, but they rotate a
+    // bidirectional slice whose outer integral is over [0, pi). Multiplying
+    // this fraction by pi below produces six distinct slice-axis rotations;
+    // converting the table to /180 aliases antipodal entries to three axes.
     return rotations[phase % 6u];
 }
 
@@ -348,6 +357,25 @@ uint2 FullToSamplingPixel(uint2 fullPixel)
     return min(fullPixel / scale,
         uint2(g_Visibility.samplingResolution) - 1u);
 }
+
+#if ACTIVISION_PREPARED_DEPTH
+static const uint ActivisionGuideOffsetMask = 3u;
+
+float ActivisionLinearDepth(uint packedDepthGuide)
+{
+    return asfloat(packedDepthGuide & ~ActivisionGuideOffsetMask);
+}
+
+uint2 ActivisionGuidePixel(
+    uint2 samplingPixel,
+    uint packedDepthGuide)
+{
+    uint guideOffset = packedDepthGuide & ActivisionGuideOffsetMask;
+    uint2 offset = uint2(guideOffset & 1u, guideOffset >> 1u);
+    uint2 fullSize = uint2(g_Visibility.fullResolution);
+    return min(samplingPixel * 2u + offset, fullSize - 1u);
+}
+#endif
 
 float ProgressiveRadialSample(uint radialStratum, float rotation)
 {
@@ -659,7 +687,16 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     return;
 #endif
 
+#if ACTIVISION_PREPARED_DEPTH
+    uint receiverPackedDepthGuide =
+        t_ActivisionPackedLinearDepth[dispatchPixel];
+    float receiverViewDepth =
+        ActivisionLinearDepth(receiverPackedDepthGuide);
+    uint2 receiverPixel = ActivisionGuidePixel(
+        dispatchPixel, receiverPackedDepthGuide);
+#else
     uint2 receiverPixel = SamplingToFullPixel(dispatchPixel);
+#endif
     float receiverDepth = t_Depth[receiverPixel];
     float2 receiverPixelCenter = float2(receiverPixel) + 0.5f;
     float4 previousReceiverFrontier = 0.0f;
@@ -745,7 +782,20 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #endif
 
     float3 receiverPositionVS;
-    if (!ReconstructViewPositionSafe(receiverPixelCenter, receiverDepth, receiverPositionVS))
+#if ACTIVISION_PREPARED_DEPTH
+    // The two packed mantissa bits identify the exact 2x2 texel that supplied
+    // the closest linear depth. Position, normal, device-depth clip anchor,
+    // temporal motion, and upsample guide can therefore describe one receiver
+    // surface instead of mixing closest depth with the footprint center.
+    bool receiverReconstructed = receiverViewDepth > 0.0f &&
+        receiverViewDepth < 65503.0f && isfinite(receiverViewDepth) &&
+        ReconstructViewPositionFromLinearDepth(
+            receiverPixelCenter, receiverViewDepth, receiverPositionVS);
+#else
+    bool receiverReconstructed = ReconstructViewPositionSafe(
+        receiverPixelCenter, receiverDepth, receiverPositionVS);
+#endif
+    if (!receiverReconstructed)
     {
         WriteEmptyVisibilityOutput(
             dispatchPixel, previousReceiverFrontier);
@@ -968,6 +1018,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #endif
     float ambientVisibility = 1.0f;
     float3 indirectDiffuse = 0.0f;
+    // A slice traces both negative and positive sides, so azimuth is sampled
+    // once over [0, pi). Sampling [0, 2*pi) repeats the same unoriented axis
+    // and aliases the six Activision temporal rotations to three.
     float sliceAzimuth = sliceRotation * VisibilityPi;
     // Every pixel evaluates one coherent stochastic image-plane slice. The
     // estimator-specific measure remains a compile-time contract.
@@ -1181,7 +1234,15 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     radialStratum, radialRotation[sideIndex]);
 #endif
                 float distributedStep = saturate(normalizedStep);
-#if FIXED_RADIAL_EXPONENT_TWO
+#if ACTIVISION_GTAO_REFERENCE
+                // Activision distributes four samples per side directly over
+                // the radius. A receiver-footprint guard prevents the nearest
+                // half-resolution tap from repeatedly self-sampling.
+                float minimumNormalizedStep = min(
+                    1.3f / max(sideProjectedRadius[sideIndex], 1.3f), 1.0f);
+                distributedStep = lerp(
+                    minimumNormalizedStep, 1.0f, distributedStep);
+#elif FIXED_RADIAL_EXPONENT_TWO
                 distributedStep *= distributedStep;
 #else
                 if (abs(g_Visibility.stepDistributionExponent - 1.0f) >= 1e-4f)
@@ -1205,17 +1266,45 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 }
 
                 uint2 samplePixel = uint2(samplePixelFloat);
+                uint2 sampleRepresentativePixel = samplePixel;
+#if ACTIVISION_PREPARED_DEPTH
+                uint2 sampleSamplingPixel =
+                    FullToSamplingPixel(samplePixel);
+                uint samplePackedDepthGuide =
+                    t_ActivisionPackedLinearDepth[sampleSamplingPixel];
+                float activisionSampleViewDepth =
+                    ActivisionLinearDepth(samplePackedDepthGuide);
+                bool activisionSampleDepthValid =
+                    activisionSampleViewDepth > 0.0f &&
+                    activisionSampleViewDepth < 65503.0f &&
+                    isfinite(activisionSampleViewDepth);
+                if (activisionSampleDepthValid)
+                {
+                    sampleRepresentativePixel = ActivisionGuidePixel(
+                        sampleSamplingPixel, samplePackedDepthGuide);
+                }
+#endif
 #if DUPLICATE_PIXEL_REJECTION
                 if (hasPreviousSample[sideIndex] &&
-                    all(samplePixel == previousSamplePixel[sideIndex]))
+                    all(sampleRepresentativePixel ==
+                        previousSamplePixel[sideIndex]))
                 {
                     continue;
                 }
-                previousSamplePixel[sideIndex] = samplePixel;
+                previousSamplePixel[sideIndex] = sampleRepresentativePixel;
                 hasPreviousSample[sideIndex] = true;
 #endif
                 float3 samplePositionVS;
                 bool reconstructed = false;
+#if ACTIVISION_PREPARED_DEPTH
+                if (activisionSampleDepthValid)
+                {
+                    reconstructed = ReconstructViewPositionFromLinearDepth(
+                        float2(sampleRepresentativePixel) + 0.5f,
+                        activisionSampleViewDepth,
+                        samplePositionVS);
+                }
+#endif
 #if !FIXED_DIRECT_DEPTH
                 if (g_Visibility.useDepthHierarchy != 0u &&
                     g_Visibility.orthographicProjection == 0u)
@@ -1238,9 +1327,10 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #endif
                 if (!reconstructed)
                 {
-                    float sampleDepth = t_Depth[samplePixel];
+                    float sampleDepth = t_Depth[sampleRepresentativePixel];
                     if (!IsValidDepth(sampleDepth) || !ReconstructViewPositionSafe(
-                        float2(samplePixel) + 0.5f, sampleDepth, samplePositionVS))
+                        float2(sampleRepresentativePixel) + 0.5f,
+                        sampleDepth, samplePositionVS))
                     {
                         continue;
                     }
@@ -1262,9 +1352,33 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 }
                 float3 directionToSample = frontDelta * rsqrt(frontLengthSquared);
 #if HORIZON_GTAO_CONTROL
+                float candidateHorizon = dot(
+                    directionToSample, viewDirection);
+#if ACTIVISION_GTAO_REFERENCE
+                // The publication conservatively fades occluders through the
+                // outer quarter of the world-space radius instead of applying
+                // a hard, dark cutoff. Fade this sample from the unoccluded
+                // cosine (-1) toward its candidate before the running max;
+                // blending from the accumulated horizon makes falloff depend
+                // on sample order and cannot weaken a distant candidate.
+                float sampleWorldDistance = sqrt(frontLengthSquared);
+                float falloffStart = g_Visibility.radiusWorld * 0.75f;
+                float falloffRange = max(
+                    g_Visibility.radiusWorld - falloffStart,
+                    VisibilityEpsilon);
+                float distanceWeight = saturate(
+                    (g_Visibility.radiusWorld - sampleWorldDistance) /
+                    falloffRange);
+                candidateHorizon = lerp(
+                    -1.0f,
+                    candidateHorizon,
+                    distanceWeight);
+#endif
+                // The paper describes conservative attenuation for thin
+                // occluders, but does not publish its decrement constants.
+                // This approximation intentionally does not invent them.
                 horizonCosine[sideIndex] = max(
-                    horizonCosine[sideIndex],
-                    dot(directionToSample, viewDirection));
+                    horizonCosine[sideIndex], candidateHorizon);
                 continue;
 #endif
                 float3 backDelta = ComputeBackDelta(
@@ -1429,10 +1543,12 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         ambientVisibility = 0.5f +
             frac(abs(diagnosticDepthSum)) * (1.0f / 65536.0f);
 #elif HORIZON_GTAO_CONTROL
-        float negativeHorizon = -VisibilityFastAcos(
-            saturate(horizonCosine[0]));
-        float positiveHorizon = VisibilityFastAcos(
-            saturate(horizonCosine[1]));
+        // Signed horizon cosines are valid. Saturating here collapsed every
+        // back-facing horizon to zero, producing the large black PS4-control
+        // artifacts. VisibilityFastAcos already clamps numerical drift over
+        // the complete [-1,1] cosine domain.
+        float negativeHorizon = -VisibilityFastAcos(horizonCosine[0]);
+        float positiveHorizon = VisibilityFastAcos(horizonCosine[1]);
         float sineNormal = sin(horizonNormalAngle);
         float negativeArc = (horizonCosNorm +
             2.0f * negativeHorizon * sineNormal -

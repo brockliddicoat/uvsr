@@ -126,6 +126,8 @@ namespace uvsr
                 return 12u;
             case VisibilitySampleSpecialization::Fixed16:
                 return 16u;
+            case VisibilitySampleSpecialization::Fixed18:
+                return 18u;
             case VisibilitySampleSpecialization::Fixed20:
                 return 20u;
             default:
@@ -701,6 +703,19 @@ namespace uvsr
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::AmbientOcclusionOnly, Resolution::Reduced,
                 false, true);
+        case VisibilityPerformanceProfile::ExactFixed8FusedResolveApply:
+            return MakeConfiguration(
+                profile, "Exact Fixed 8 + Fused Resolve And Apply",
+                Class::Exact,
+                Trace::FixedInterleavedBitmask, Samples::Fixed8,
+                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
+                Storage::R16Float, Reconstruction::Legacy,
+                Temporal::Legacy, Application::FusedResolveAndApplyExact,
+                Depth::Legacy, Bindings::MinimalConditional,
+                Traversal::InterleavedNegativePositiveNearToFar,
+                Consumer::AmbientOcclusionOnly, Resolution::Reduced,
+                false, true, Edge::None,
+                Estimator::UniformSolidAngle);
         case VisibilityPerformanceProfile::DiagnosticFusedFullResolutionAoOutput:
             return MakeConfiguration(
                 profile, "Fused Debug Full-Resolution AO Output",
@@ -1033,39 +1048,67 @@ namespace uvsr
                 "This is the compiled same-engine analytic-horizon control, "
                 "not an Activision PS4 pipeline reproduction.");
         case VisibilityPerformanceProfile::ActivisionPs4Schedule:
+        case VisibilityPerformanceProfile::ActivisionPs4PackedGather:
             return MakeConfiguration(
-                profile, "PS4 GTAO Schedule Control 12", Class::Algorithmic,
-                Trace::ActivisionHorizon, Samples::Fixed12,
+                profile,
+                profile == VisibilityPerformanceProfile::
+                        ActivisionPs4PackedGather
+                    ? "Activision PS4 GTAO Approximation (Packed 4x4 Gather)"
+                    : "Activision PS4 GTAO Approximation (Scalar 4x4 Filter)",
+                Class::Algorithmic,
+                Trace::ActivisionHorizon, Samples::Fixed8,
                 Samples::Runtime, Noise::ActivisionInterleavedGradient,
                 Math::ReferenceFp32, Storage::R16Float,
-                Reconstruction::Legacy, Temporal::Legacy,
-                Application::LegacySeparateComposition, Depth::Legacy,
+                Reconstruction::ActivisionBilateral4x4,
+                Temporal::ActivisionSixDirectionEma,
+                Application::LegacySeparateComposition,
+                Depth::ActivisionClampedScreenRadius,
                 Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::AmbientOcclusionOnly, Resolution::Half,
                 true, false, Edge::None,
                 Estimator::UniformSolidAngle,
-                Status::PartialBenchmarkControl,
-                "Implements the compiled 12-sample horizon and Activision "
-                "4x4-by-6 schedule control; it retains UVSR R16F resolve, "
-                "filter, temporal, and composition paths.");
+                Status::Implemented,
+                "Published eight-tap schedule and depth-spatial-temporal pass "
+                "order, with disclosed UVSR values for unpublished shipping "
+                "constants; this remains an approximation, not copied "
+                "Activision source code.");
         case VisibilityPerformanceProfile::XeGtaoClosestMatch:
+        case VisibilityPerformanceProfile::XeGtaoHighInlineHilbert:
+        case VisibilityPerformanceProfile::XeGtaoHighFp32:
             return MakeConfiguration(
-                profile, "XeGTAO Closest Match (Unavailable)", Class::Algorithmic,
-                Trace::XeGtaoHorizon, Samples::Fixed8,
-                Samples::Runtime, Noise::XeGtaoHilbertR2,
-                Math::XeGtaoMixedPrecision, Storage::R8Unorm,
+                profile,
+                profile == VisibilityPerformanceProfile::
+                        XeGtaoHighInlineHilbert
+                    ? "Intel XeGTAO 1.30 High Source Port (Inline Hilbert, "
+                        "Mixed Precision)"
+                    : profile == VisibilityPerformanceProfile::XeGtaoHighFp32
+                        ? "Intel XeGTAO 1.30 High Source Port (LUT, FP32)"
+                        : "Intel XeGTAO 1.30 High Source Port (LUT, Mixed "
+                            "Precision)",
+                Class::Algorithmic,
+                Trace::XeGtaoHorizon, Samples::Fixed18,
+                Samples::Runtime,
+                profile == VisibilityPerformanceProfile::
+                        XeGtaoHighInlineHilbert
+                    ? Noise::XeGtaoInlineHilbertR2
+                    : Noise::XeGtaoHilbertR2,
+                profile == VisibilityPerformanceProfile::XeGtaoHighFp32
+                    ? Math::ReferenceFp32
+                    : Math::XeGtaoMixedPrecision,
+                Storage::R16Float,
                 Reconstruction::XeGtaoDenoise, Temporal::Legacy,
                 Application::LegacySeparateComposition,
                 Depth::XeGtaoPrefilteredMips,
                 Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Half,
-                true, false, Edge::None,
-                Estimator::UniformSolidAngle, Status::Unavailable,
-                "No compiled same-engine XeGTAO path exists: the available "
-                "horizon control does not implement XeGTAO Hilbert/R2 noise, "
-                "depth prefilter mips, denoiser, or mixed-precision path.");
+                Consumer::AmbientOcclusionOnly, Resolution::Full,
+                true, false, Edge::R8Unorm,
+                Estimator::UniformSolidAngle, Status::Implemented,
+                "Direct port of the pinned Intel 1.30 High shader path with "
+                "documented UVSR adapters for R16F AO storage, world normals, "
+                "and view transforms; source math is retained, but engine "
+                "integration prevents bit-identical output.");
         case VisibilityPerformanceProfile::GenericFallback:
             return MakeConfiguration(
                 profile, "Generic Fallback", Class::Exact,
@@ -1096,7 +1139,7 @@ namespace uvsr
             IsAssignedEnum(configuration.laterBounceSamples,
                 VisibilitySampleSpecialization::Fixed20) &&
             IsAssignedEnum(configuration.noise,
-                VisibilityNoiseDelivery::XeGtaoHilbertR2) &&
+                VisibilityNoiseDelivery::XeGtaoInlineHilbertR2) &&
             IsAssignedEnum(configuration.math,
                 VisibilityMathMode::XeGtaoMixedPrecision) &&
             IsAssignedEnum(configuration.rawAoStorage,
@@ -1120,7 +1163,7 @@ namespace uvsr
             IsAssignedEnum(configuration.estimatorRequirement,
                 VisibilityEstimatorRequirement::CosineWeightedSolidAngle) &&
             IsAssignedEnum(configuration.resolutionRequirement,
-                VisibilityResolutionRequirement::Half) &&
+                VisibilityResolutionRequirement::Full) &&
             IsAssignedEnum(configuration.implementationStatus,
                 VisibilityImplementationStatus::Unavailable) &&
             (configuration.implementationStatus ==
@@ -1189,9 +1232,16 @@ namespace uvsr
             HasIndirectDiffuse(workload.consumer);
         const bool reducedResolution =
             IsReducedResolution(workload.resolution);
-        const bool usesDepthPreparation =
-            workload.depthHierarchyEnabled ||
-            configuration.depth == VisibilityDepthMode::XeGtaoPrefilteredMips;
+        const bool usesActivisionDepthPreparation = configuration.depth ==
+            VisibilityDepthMode::ActivisionClampedScreenRadius;
+        const bool usesXeGtaoDepthPreparation = configuration.depth ==
+            VisibilityDepthMode::XeGtaoPrefilteredMips;
+        const bool usesLegacyDepthPreparation =
+            workload.depthHierarchyEnabled;
+        const bool usesDepthPreparation = usesLegacyDepthPreparation ||
+            usesActivisionDepthPreparation || usesXeGtaoDepthPreparation;
+        const bool bindsDepthHierarchy = usesLegacyDepthPreparation ||
+            usesXeGtaoDepthPreparation;
 
         if (configuration.consumerRequirement ==
                 VisibilityConsumerRequirement::AmbientOcclusionOnly &&
@@ -1229,6 +1279,13 @@ namespace uvsr
         {
             return reject(VisibilityPlanError::ProfileResolutionMismatch,
                 "This profile requires half resolution.");
+        }
+        if (configuration.resolutionRequirement ==
+                VisibilityResolutionRequirement::Full &&
+            workload.resolution != VisibilityPerformanceResolution::Full)
+        {
+            return reject(VisibilityPlanError::ProfileResolutionMismatch,
+                "This profile requires full resolution.");
         }
         if (!MatchesEstimatorRequirement(
                 configuration.estimatorRequirement, workload.estimator))
@@ -1272,7 +1329,11 @@ namespace uvsr
             return reject(VisibilityPlanError::SampleCountMismatch,
                 "The workload does not match the fixed later-bounce count.");
         }
-        if ((fixedFirstCount != 0u || fixedLaterCount != 0u) &&
+        const bool fixedQuadraticExponent =
+            configuration.trace ==
+                VisibilityTraceImplementation::FixedInterleavedBitmask;
+        if (fixedQuadraticExponent &&
+            (fixedFirstCount != 0u || fixedLaterCount != 0u) &&
             workload.radialExponent != 2.0f)
         {
             return reject(VisibilityPlanError::FixedExponentMismatch,
@@ -1335,6 +1396,37 @@ namespace uvsr
             return reject(VisibilityPlanError::ProfileSchedulerMismatch,
                 "The XeGTAO profile requires its Hilbert/R2 scheduler.");
         }
+        if (configuration.noise ==
+                VisibilityNoiseDelivery::XeGtaoInlineHilbertR2 &&
+            workload.scheduler !=
+                VisibilityPerformanceScheduler::XeGtaoHilbertR2)
+        {
+            return reject(VisibilityPlanError::ProfileSchedulerMismatch,
+                "The inline XeGTAO Hilbert profile requires its R2 scheduler.");
+        }
+        if (usesActivisionDepthPreparation &&
+            (!workload.spatialEnabled ||
+                workload.radialExponent != 1.0f ||
+                workload.depthHierarchyEnabled))
+        {
+            return reject(
+                VisibilityPlanError::BenchmarkProfileContractViolation,
+                "The Activision approximation requires its 4x4 spatial pass, "
+                "linear eight-tap distribution, and dedicated half-resolution "
+                "depth preparation.");
+        }
+        if (usesXeGtaoDepthPreparation &&
+            (!workload.spatialEnabled || workload.temporalEnabled ||
+                workload.depthHierarchyEnabled ||
+                workload.thickness != 0.0f ||
+                workload.radialExponent != 2.0f))
+        {
+            return reject(
+                VisibilityPlanError::BenchmarkProfileContractViolation,
+                "The XeGTAO 1.30 High source port requires its sharp denoise, "
+                "static non-temporal path, intrinsic five-mip prefilter, zero "
+                "thin-occluder compensation, and source distribution power.");
+        }
         if ((configuration.temporal ==
                     VisibilityTemporalMode::CopyDiagnostic ||
                 configuration.temporal ==
@@ -1371,7 +1463,9 @@ namespace uvsr
                 "Packed R16_UINT AO plus edges is modeled as an experiment, "
                 "but no compiled trace or resolve permutation implements it.");
         }
-        if (configuration.edgeStorage == VisibilityEdgeStorage::R8Unorm)
+        if (configuration.edgeStorage == VisibilityEdgeStorage::R8Unorm &&
+            configuration.reconstruction !=
+                VisibilityReconstructionMode::XeGtaoDenoise)
         {
             return reject(
                 VisibilityPlanError::ProfileImplementationUnavailable,
@@ -1385,9 +1479,12 @@ namespace uvsr
                 VisibilityReconstructionMode::PackedEdges2x2 ||
             configuration.reconstruction ==
                 VisibilityReconstructionMode::PackedEdges4x4;
-        const bool separatePackedEdges =
-            configuration.edgeStorage == VisibilityEdgeStorage::R8Uint ||
+        const bool xeGtaoEdges = configuration.reconstruction ==
+                VisibilityReconstructionMode::XeGtaoDenoise &&
             configuration.edgeStorage == VisibilityEdgeStorage::R8Unorm;
+        const bool separatePackedEdges = !xeGtaoEdges &&
+            (configuration.edgeStorage == VisibilityEdgeStorage::R8Uint ||
+                configuration.edgeStorage == VisibilityEdgeStorage::R8Unorm);
         const bool validEmbeddedPacking = packedAo &&
             packedReconstruction && !separatePackedEdges;
         const bool validSeparatePacking = !packedAo &&
@@ -1513,6 +1610,11 @@ namespace uvsr
         const bool depthDiagnostic = configuration.trace ==
             VisibilityTraceImplementation::DepthOnlyDiagnostic;
         const bool traceUsesScheduler = !constantOrBitmaskDiagnostic;
+        const bool activisionTrace = configuration.trace ==
+            VisibilityTraceImplementation::ActivisionHorizon &&
+            usesActivisionDepthPreparation;
+        const bool xeGtaoTrace = configuration.trace ==
+            VisibilityTraceImplementation::XeGtaoHorizon;
         const bool schedulerTextureBound = traceUsesScheduler &&
             (configuration.noise ==
                     VisibilityNoiseDelivery::PackedCurrentFast ||
@@ -1546,11 +1648,24 @@ namespace uvsr
                 (schedulerTextureBound ? 1u : 0u);
             plan.firstTraceUavCount = 1u;
         }
+        else if (xeGtaoTrace)
+        {
+            plan.firstTraceSrvCount = configuration.noise ==
+                    VisibilityNoiseDelivery::XeGtaoHilbertR2
+                ? 3u : 2u;
+            plan.firstTraceUavCount = 2u;
+        }
+        else if (activisionTrace)
+        {
+            // Full depth and normals plus the prepared half-resolution depth.
+            plan.firstTraceSrvCount = 3u;
+            plan.firstTraceUavCount = 1u;
+        }
         else
         {
             plan.firstTraceSrvCount = 2u +
                 (hasIndirectDiffuse ? 1u : 0u) +
-                (usesDepthPreparation ? 1u : 0u) +
+                (usesLegacyDepthPreparation ? 1u : 0u) +
                 (schedulerTextureBound ? 1u : 0u);
             plan.firstTraceUavCount =
                 (hasAmbientOcclusion ? 1u : 0u) +
@@ -1561,22 +1676,25 @@ namespace uvsr
 
         if (hasAmbientOcclusion)
         {
-            switch (configuration.rawAoStorage)
+            if (!xeGtaoTrace)
             {
-            case VisibilityRawAoStorage::R16Float:
-                plan.resourceMask |=
-                    Bit(VisibilityExecutionResource::RawAmbientR16);
-                break;
-            case VisibilityRawAoStorage::R8Unorm:
-                plan.resourceMask |=
-                    Bit(VisibilityExecutionResource::RawAmbientR8);
-                break;
-            case VisibilityRawAoStorage::PackedCountAndEdgesR16Uint:
-                plan.resourceMask |= Bit(VisibilityExecutionResource::
-                    RawAmbientPackedCountEdgesR16);
-                break;
-            default:
-                break;
+                switch (configuration.rawAoStorage)
+                {
+                case VisibilityRawAoStorage::R16Float:
+                    plan.resourceMask |=
+                        Bit(VisibilityExecutionResource::RawAmbientR16);
+                    break;
+                case VisibilityRawAoStorage::R8Unorm:
+                    plan.resourceMask |=
+                        Bit(VisibilityExecutionResource::RawAmbientR8);
+                    break;
+                case VisibilityRawAoStorage::PackedCountAndEdgesR16Uint:
+                    plan.resourceMask |= Bit(VisibilityExecutionResource::
+                        RawAmbientPackedCountEdgesR16);
+                    break;
+                default:
+                    break;
+                }
             }
             switch (configuration.edgeStorage)
             {
@@ -1606,8 +1724,12 @@ namespace uvsr
         if (workload.temporalEnabled)
         {
             plan.resourceMask |=
-                Bit(VisibilityExecutionResource::TemporalDepthR32) |
-                Bit(VisibilityExecutionResource::TemporalNormalRgba8);
+                Bit(VisibilityExecutionResource::TemporalDepthR32);
+            if (!usesActivisionDepthPreparation)
+            {
+                plan.resourceMask |=
+                    Bit(VisibilityExecutionResource::TemporalNormalRgba8);
+            }
             if (hasAmbientOcclusion)
             {
                 plan.resourceMask |= configuration.rawAoStorage ==
@@ -1619,6 +1741,28 @@ namespace uvsr
             {
                 plan.resourceMask |= Bit(
                     VisibilityExecutionResource::TemporalIndirectRgba16);
+            }
+        }
+
+        if (configuration.reconstruction ==
+            VisibilityReconstructionMode::ActivisionBilateral4x4)
+        {
+            plan.resourceMask |=
+                Bit(VisibilityExecutionResource::
+                    ActivisionSpatialAmbientR16) |
+                Bit(VisibilityExecutionResource::
+                    ActivisionPackedDepthGuideR32Uint);
+        }
+        else if (configuration.reconstruction ==
+            VisibilityReconstructionMode::XeGtaoDenoise)
+        {
+            plan.resourceMask |= Bit(
+                VisibilityExecutionResource::XeGtaoWorkingAoR16);
+            if (configuration.noise ==
+                VisibilityNoiseDelivery::XeGtaoHilbertR2)
+            {
+                plan.resourceMask |= Bit(
+                    VisibilityExecutionResource::XeGtaoHilbertLutR16Uint);
             }
         }
 
@@ -1643,7 +1787,7 @@ namespace uvsr
             }
         }
 
-        if (usesDepthPreparation)
+        if (bindsDepthHierarchy)
         {
             plan.resourceMask |=
                 Bit(VisibilityExecutionResource::DepthHierarchy);
@@ -1741,10 +1885,15 @@ namespace uvsr
                         Bit(VisibilityExecutionBinding::IndirectHistory);
                 }
             }
-            if (usesDepthPreparation)
+            if (bindsDepthHierarchy)
             {
                 plan.bindingMask |=
                     Bit(VisibilityExecutionBinding::DepthHierarchy);
+            }
+            if (usesActivisionDepthPreparation)
+            {
+                plan.bindingMask |= Bit(
+                    VisibilityExecutionBinding::ActivisionPreparedDepth);
             }
             if (HasVisibilityExecutionResource(plan.resourceMask,
                     VisibilityExecutionResource::LegacyToroidalNoise))
@@ -1765,12 +1914,22 @@ namespace uvsr
                     Bit(VisibilityExecutionBinding::PackedCurrentFastNoise);
             }
             if (HasVisibilityExecutionResource(plan.resourceMask,
-                    VisibilityExecutionResource::PackedEdgesR8Uint) ||
-                HasVisibilityExecutionResource(plan.resourceMask,
-                    VisibilityExecutionResource::PackedEdgesR8Unorm))
+                    VisibilityExecutionResource::PackedEdgesR8Uint))
             {
                 plan.bindingMask |=
                     Bit(VisibilityExecutionBinding::PackedEdges);
+            }
+            if (xeGtaoTrace)
+            {
+                plan.bindingMask |=
+                    Bit(VisibilityExecutionBinding::XeGtaoEdges);
+                if (HasVisibilityExecutionResource(plan.resourceMask,
+                        VisibilityExecutionResource::
+                            XeGtaoHilbertLutR16Uint))
+                {
+                    plan.bindingMask |= Bit(
+                        VisibilityExecutionBinding::XeGtaoHilbertLut);
+                }
             }
         }
 
@@ -1822,6 +1981,10 @@ namespace uvsr
         {
             plan.passMask |= Bit(VisibilityExecutionPass::Temporal);
         }
+        if (activisionTrace || xeGtaoTrace)
+        {
+            plan.passMask |= Bit(VisibilityExecutionPass::SpatialDenoise);
+        }
         if (fusedApplication)
         {
             plan.passMask |=
@@ -1829,7 +1992,7 @@ namespace uvsr
         }
         else
         {
-            if (needsReconstruction)
+            if (needsReconstruction && !xeGtaoTrace)
             {
                 plan.passMask |=
                     Bit(VisibilityExecutionPass::Reconstruction);
@@ -1872,7 +2035,10 @@ namespace uvsr
             plan.peakUavCount = std::max(plan.peakUavCount, uavCount);
         };
         if (usesDepthPreparation)
-            includeLayout(1u, 5u);
+        {
+            includeLayout(1u,
+                usesActivisionDepthPreparation ? 1u : 5u);
+        }
         if (hasIndirectDiffuse && workload.bounceCount > 1u)
         {
             includeLayout(fixedLaterCount != 0u
@@ -1882,20 +2048,30 @@ namespace uvsr
         }
         if (workload.temporalEnabled)
         {
-            includeLayout(configuration.temporal ==
-                    VisibilityTemporalMode::CopyDiagnostic
-                    ? 3u : 9u,
-                configuration.temporal ==
-                    VisibilityTemporalMode::CopyDiagnostic
-                    ? 3u : 4u);
+            if (configuration.temporal ==
+                VisibilityTemporalMode::ActivisionSixDirectionEma)
+            {
+                includeLayout(5u, 2u);
+            }
+            else
+            {
+                includeLayout(configuration.temporal ==
+                        VisibilityTemporalMode::CopyDiagnostic
+                        ? 3u : 9u,
+                    configuration.temporal ==
+                        VisibilityTemporalMode::CopyDiagnostic
+                        ? 3u : 4u);
+            }
         }
+        if (activisionTrace || xeGtaoTrace)
+            includeLayout(2u, 1u);
         if (fusedApplication)
         {
             includeLayout(8u, 1u);
         }
         else
         {
-            if (needsReconstruction)
+            if (needsReconstruction && !xeGtaoTrace)
             {
                 if (packedReconstruction)
                     includeLayout(2u, 1u);
@@ -2035,23 +2211,33 @@ namespace uvsr
                 "compiled, so this preset cannot honestly select one.");
         case VisibilityVerificationProfile::XeGtaoClosestMatch:
             workload.scheduler = Scheduler::XeGtaoHilbertR2;
+            workload.resolution = VisibilityPerformanceResolution::Full;
+            workload.firstBounceSampleCount = 18u;
+            workload.laterBounceSampleCount = 9u;
+            workload.radius = 0.5f;
+            workload.thickness = 0.0f;
+            workload.spatialEnabled = true;
             return MakeVerificationDefinition(
-                profile, "XeGTAO Closest Match",
+                profile, "Intel XeGTAO 1.30 High Source Port",
                 Implementation::XeGtaoClosestMatch, workload,
-                Status::Unavailable,
-                "The compiled analytic-horizon control is not XeGTAO: it "
-                "lacks Hilbert/R2 noise, depth prefilter mips, the XeGTAO "
-                "denoiser, and its mixed-precision path.");
+                Status::Implemented,
+                "Direct port of pinned Intel 1.30 High shader math with "
+                "Hilbert/R2 noise, five depth mips, sharp edge-aware denoise, "
+                "and disclosed UVSR integration adapters.");
         case VisibilityVerificationProfile::Ps4GtaoClosestMatch:
-            workload.firstBounceSampleCount = 12u;
+            workload.firstBounceSampleCount = 8u;
             workload.scheduler = Scheduler::Activision4x4SixPhase;
+            workload.radialExponent = 1.0f;
+            workload.temporalEnabled = true;
+            workload.spatialEnabled = true;
             return MakeVerificationDefinition(
-                profile, "PS4 GTAO Closest Match",
+                profile, "Activision PS4 GTAO Approximation",
                 Implementation::ActivisionPs4Schedule, workload,
-                Status::PartialBenchmarkControl,
-                "This control implements the 12-sample analytic horizon and "
-                "4x4-by-6 schedule, but retains UVSR's R16F resolve, filter, "
-                "temporal, and composition paths.");
+                Status::Implemented,
+                "Implements the published eight-tap schedule and source-like "
+                "depth, spatial, then temporal pass order; unpublished "
+                "shipping constants remain disclosed UVSR approximation "
+                "values.");
         default:
             return {};
         }

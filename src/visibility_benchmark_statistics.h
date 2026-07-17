@@ -16,8 +16,10 @@ namespace uvsr
         LaterTraceBounce2,
         LaterTraceBounce3,
         LaterTraceBounce4,
+        SpatialDenoise,
         Temporal,
-        SpatialResolve,
+        FusedSpatialDenoiseUpsample,
+        RequiredUpsample,
         FullResolutionApply,
         Composition,
         EffectEnvelope,
@@ -74,9 +76,13 @@ namespace uvsr
             VisibilityBenchmarkStageBit(
                 VisibilityBenchmarkStage::LaterTrace) |
             VisibilityBenchmarkStageBit(
+                VisibilityBenchmarkStage::SpatialDenoise) |
+            VisibilityBenchmarkStageBit(
                 VisibilityBenchmarkStage::Temporal) |
             VisibilityBenchmarkStageBit(
-                VisibilityBenchmarkStage::SpatialResolve);
+                VisibilityBenchmarkStage::FusedSpatialDenoiseUpsample) |
+            VisibilityBenchmarkStageBit(
+                VisibilityBenchmarkStage::RequiredUpsample);
 
     [[nodiscard]] const char* VisibilityBenchmarkStageKey(
         VisibilityBenchmarkStage stage);

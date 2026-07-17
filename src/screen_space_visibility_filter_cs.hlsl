@@ -27,6 +27,9 @@
 #ifndef PACKED_EDGE_CONTROLLED_LEAKAGE
 #define PACKED_EDGE_CONTROLLED_LEAKAGE 0
 #endif
+#ifndef ACTIVISION_PACKED_DEPTH_GUIDE
+#define ACTIVISION_PACKED_DEPTH_GUIDE 0
+#endif
 #ifndef VISIBILITY_GROUP_SIZE_X
 #define VISIBILITY_GROUP_SIZE_X 8
 #endif
@@ -45,6 +48,8 @@ Texture2D<float> t_Depth : register(t2);
 Texture2D<float4> t_Normal : register(t3);
 #if PACKED_EDGE_RECONSTRUCTION
 Texture2D<uint> t_PackedEdges : register(t4);
+#elif ACTIVISION_PACKED_DEPTH_GUIDE
+Texture2D<uint> t_ActivisionPackedDepthGuide : register(t4);
 #endif
 
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_Ambient : register(u0);
@@ -160,6 +165,20 @@ uint2 SamplingToFullPixel(uint2 samplingPixel)
         uint2(g_Visibility.fullResolution) - 1u);
 }
 
+uint2 ReconstructionGuidePixel(uint2 samplingPixel)
+{
+#if ACTIVISION_PACKED_DEPTH_GUIDE
+    uint packedDepthGuide =
+        t_ActivisionPackedDepthGuide[samplingPixel];
+    uint guideOffset = packedDepthGuide & 3u;
+    uint2 offset = uint2(guideOffset & 1u, guideOffset >> 1u);
+    return min(samplingPixel * 2u + offset,
+        uint2(g_Visibility.fullResolution) - 1u);
+#else
+    return SamplingToFullPixel(samplingPixel);
+#endif
+}
+
 float JointWeight(
     uint2 samplingPixel,
     float spatialWeight,
@@ -168,7 +187,7 @@ float JointWeight(
     float3 centerNormalWS,
     float3 centerNormalVS)
 {
-    uint2 guidePixel = SamplingToFullPixel(samplingPixel);
+    uint2 guidePixel = ReconstructionGuidePixel(samplingPixel);
     float sampleDeviceDepth = t_Depth[guidePixel];
     if (!IsValidDepth(sampleDeviceDepth))
         return 0.0f;

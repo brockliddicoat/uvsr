@@ -196,6 +196,35 @@ namespace uvsr
         uint32_t knownInactiveLightingSources = 0u;
     };
 
+    // Matches the reflected row-major layout in the pinned XeGTAO 1.30
+    // adapter shaders. Keep this separate from UVSR's general visibility
+    // constants so Reference never pays for or binds the candidate buffer.
+    struct alignas(16) XeGtaoConstants
+    {
+        dm::int2 viewportSize;
+        dm::float2 viewportPixelSize;
+        dm::float2 depthUnpackConstants;
+        dm::float2 cameraTanHalfFov;
+        dm::float2 ndcToViewMultiply;
+        dm::float2 ndcToViewAdd;
+        dm::float2 ndcToViewMultiplyPixelSize;
+        float effectRadius;
+        float effectFalloffRange;
+        float radiusMultiplier;
+        float padding0;
+        float finalValuePower;
+        float denoiseBlurBeta;
+        float sampleDistributionPower;
+        float thinOccluderCompensation;
+        float depthMipSamplingOffset;
+        int32_t noiseIndex;
+        dm::uint2 viewportOrigin;
+        uint32_t reverseDepth;
+        uint32_t padding1;
+        dm::float4x4 worldToView;
+    };
+    static_assert(sizeof(XeGtaoConstants) == 176u);
+
     struct ScreenSpaceVisibilityTimings
     {
         float depthHierarchyMs = 0.f;
@@ -204,8 +233,10 @@ namespace uvsr
         float laterTraceMs = 0.f;
         std::array<float, MaxIndirectDiffuseBounceCount - 1u>
             laterBounceMs{};
+        float spatialDenoiseMs = 0.f;
         float temporalMs = 0.f;
-        float filteringMs = 0.f;
+        float fusedSpatialDenoiseUpsampleMs = 0.f;
+        float requiredUpsampleMs = 0.f;
         float fullResolutionApplyMs = 0.f;
         float compositionMs = 0.f;
         float effectEnvelopeMs = 0.f;
@@ -213,6 +244,24 @@ namespace uvsr
         // Exact logical texel arithmetic, excluding API alignment/residency.
         uint64_t outputTextureBytes = 0u;
         uint64_t workingTextureBytes = 0u;
+        uint64_t rawAmbientTextureBytes = 0u;
+        uint64_t rawIndirectFrontierBytes = 0u;
+        uint64_t multiBounceIndirectBytes = 0u;
+        uint64_t finalAmbientTextureBytes = 0u;
+        uint64_t finalIndirectTextureBytes = 0u;
+        uint64_t schedulerResourceBytes = 0u;
+        uint64_t adaptiveFeedbackBytes = 0u;
+        uint64_t temporalAmbientHistoryBytes = 0u;
+        uint64_t temporalIndirectHistoryBytes = 0u;
+        uint64_t temporalDepthHistoryBytes = 0u;
+        uint64_t temporalNormalHistoryBytes = 0u;
+        uint64_t depthHierarchyBytes = 0u;
+        uint64_t packedFastNoiseBytes = 0u;
+        uint64_t packedEdgeMetadataBytes = 0u;
+        uint64_t activisionWorkingBytes = 0u;
+        uint64_t xeGtaoWorkingAoBytes = 0u;
+        uint64_t xeGtaoEdgeBytes = 0u;
+        uint64_t xeGtaoHilbertLutBytes = 0u;
         uint64_t maskCacheBytes = 0u;
         uint64_t avoidedTextureBytes = 0u;
         // An estimate of duplicate R32 mask payload that the shared
@@ -233,8 +282,9 @@ namespace uvsr
         [[nodiscard]] float SummedStageMs() const
         {
             return depthHierarchyMs + firstTraceMs + laterTraceMs +
-                temporalMs + filteringMs + fullResolutionApplyMs +
-                compositionMs;
+                spatialDenoiseMs + temporalMs +
+                fusedSpatialDenoiseUpsampleMs + requiredUpsampleMs +
+                fullResolutionApplyMs + compositionMs;
         }
 
         [[nodiscard]] float CompleteEffectMs() const
@@ -304,8 +354,10 @@ namespace uvsr
             LaterTraceBounce2,
             LaterTraceBounce3,
             LaterTraceBounce4,
+            SpatialDenoise,
             Temporal,
-            Filtering,
+            FusedSpatialDenoiseUpsample,
+            RequiredUpsample,
             FullResolutionApply,
             Composition,
             EffectEnvelope,
@@ -325,6 +377,8 @@ namespace uvsr
         nvrhi::DeviceHandle m_Device;
         std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
         nvrhi::BufferHandle m_ConstantBuffer;
+        nvrhi::BufferHandle m_XeGtaoConstantBuffer;
+        nvrhi::SamplerHandle m_PointClampSampler;
 
         // Final dimension selects fixed/adaptive sparse sampling.
         std::array<std::array<std::array<Pipeline, 2>,
@@ -355,6 +409,9 @@ namespace uvsr
         bool m_PackedFastResourcesEnabled = false;
         bool m_PackedEdgeResourcesEnabled = false;
         bool m_FinalAmbientResourcesEnabled = false;
+        bool m_ActivisionResourcesEnabled = false;
+        bool m_XeGtaoResourcesEnabled = false;
+        bool m_XeGtaoHilbertLutResourcesEnabled = false;
 
         nvrhi::TextureHandle m_RawAmbientVisibility;
         nvrhi::TextureHandle m_RawIndirectDiffuse[2];
@@ -371,6 +428,11 @@ namespace uvsr
         nvrhi::TextureHandle m_FilterAdaptedNoiseTexture;
         nvrhi::TextureHandle m_PackedFastNoiseTexture;
         nvrhi::TextureHandle m_PackedEdgesTexture;
+        nvrhi::TextureHandle m_ActivisionCurrentDepth;
+        nvrhi::TextureHandle m_ActivisionSpatialAmbient;
+        nvrhi::TextureHandle m_XeGtaoWorkingAo;
+        nvrhi::TextureHandle m_XeGtaoEdges;
+        nvrhi::TextureHandle m_XeGtaoHilbertLut;
 
         nvrhi::TextureHandle m_DummyAmbientVisibility;
         nvrhi::TextureHandle m_DummyIndirectDiffuse;
@@ -413,8 +475,10 @@ namespace uvsr
         std::vector<uint16_t> m_BlueNoiseUpload;
         std::vector<uint8_t> m_FilterAdaptedNoiseUpload;
         std::vector<uint8_t> m_PackedFastNoiseUpload;
+        std::vector<uint16_t> m_XeGtaoHilbertUpload;
         bool m_SamplingNoiseUploaded = false;
         bool m_PackedFastNoiseUploaded = false;
+        bool m_XeGtaoHilbertUploaded = false;
         bool m_HistoryValid = false;
         bool m_FeedbackValid = false;
         bool m_HistoryConfigurationInitialized = false;
@@ -445,7 +509,10 @@ namespace uvsr
             bool depthHierarchyEnabled,
             bool finalAmbientEnabled,
             bool packedFastEnabled,
-            bool packedEdgesEnabled);
+            bool packedEdgesEnabled,
+            bool activisionEnabled,
+            bool xeGtaoEnabled,
+            bool xeGtaoHilbertLutEnabled);
         void ReleaseResources();
         void UploadSamplingNoise(nvrhi::ICommandList* commandList);
         Pipeline& GetOrCreateAdvancedPipeline(

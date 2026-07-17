@@ -9,12 +9,17 @@
 #define INITIALIZE_BOUNCE_CUMULATIVE 0
 #define ENABLE_BOUNCE_METADATA 0
 #define ENABLE_ADAPTIVE_SPARSE_SAMPLING 0
-#if VISIBILITY_ALGORITHM == 3
-#define FIXED_SAMPLE_COUNT 12
-#else
 #define FIXED_SAMPLE_COUNT 8
-#endif
+#if VISIBILITY_ALGORITHM == 3
+// The reference-like Activision candidate uses the published eight total
+// horizon samples (four on each side) and its own source-derived spacing,
+// falloff, and projected-radius guard below.
+#define ACTIVISION_GTAO_REFERENCE 1
+#define ACTIVISION_PREPARED_DEPTH 1
+#define MAX_PROJECTED_RADIUS_PIXELS 64
+#else
 #define FIXED_RADIAL_EXPONENT_TWO 1
+#endif
 #ifndef FIXED_DIRECT_DEPTH
 #define FIXED_DIRECT_DEPTH 1
 #endif

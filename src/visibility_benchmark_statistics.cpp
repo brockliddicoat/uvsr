@@ -57,10 +57,14 @@ namespace uvsr
             return "later_trace_bounce_3";
         case VisibilityBenchmarkStage::LaterTraceBounce4:
             return "later_trace_bounce_4";
+        case VisibilityBenchmarkStage::SpatialDenoise:
+            return "spatial_denoise";
         case VisibilityBenchmarkStage::Temporal:
             return "temporal";
-        case VisibilityBenchmarkStage::SpatialResolve:
-            return "spatial_resolve";
+        case VisibilityBenchmarkStage::FusedSpatialDenoiseUpsample:
+            return "fused_spatial_denoise_upsample";
+        case VisibilityBenchmarkStage::RequiredUpsample:
+            return "required_upsample";
         case VisibilityBenchmarkStage::FullResolutionApply:
             return "full_resolution_apply";
         case VisibilityBenchmarkStage::Composition:

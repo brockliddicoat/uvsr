@@ -31,13 +31,22 @@ Done when:
   permutations and conditionally allocate/dispatch optional resources.
 - [x] Defensible exact, numerical, and algorithmic candidates are implemented
   in that order, with the reference generic path retained.
-- [ ] Fixed-count, noise, depth, packed-edge, temporal, and fused-application
+- [x] A repaired, explicitly approximate Activision PS4 pipeline and a separate
+  pinned Intel XeGTAO 1.30 High source port are implemented without relabeling
+  either as the UVSR bitmask estimator.
+- [x] Fixed-count, noise, depth, packed-edge, temporal, and fused-application
   experiments have focused correctness coverage and individual smoke/performance
   sanity evidence without a Cartesian combination sweep.
-- [ ] Release build, shader compilation, focused tests, documentation validation,
+- [x] Release build, shader compilation, focused tests, documentation validation,
   and reference-versus-candidate smoke captures pass.
-- [ ] Target Intel Arc/Xe-LPG measurements not available locally are clearly
+- [x] Target Intel Arc/Xe-LPG measurements not available locally are clearly
   handed off without unsupported performance claims.
+
+This done condition means the curated manual-test candidate and every ledger
+disposition are documented to the locally provable level. It does not mean that
+every isolatable experiment was implemented, measured, or rejected; the
+specific feasible follow-ups remain explicit in
+[`docs/ao-optimization-ledger.md`](../../ao-optimization-ledger.md#ledger-status).
 
 ## Scope
 
@@ -86,16 +95,20 @@ Shared hotspots reserved for the coordinator:
 - Local versus remote state: clean and equal at
   `5f43205ecfe00e31fd64af34cad0f031472a224c` before branch creation.
 - Verified source commit/build: user-named canonical verified commit `5f43205`;
-  local Release build verification pending.
+  the current local Release build and 13 CTest targets pass. The 58-entry
+  all-profile smoke, controlled nine-profile 600-frame sequence, independent
+  two-profile precision repeat, and clean final static captures also complete.
+  Dynamic motion/disocclusion, target Xe-LPG evidence, and the final committed-
+  identity rebuild/smoke remain separate handoff checks.
 - Target preset: Intel Core Ultra 9 185H integrated Arc/Xe-LPG, PBR Sponza
   Decorated Benchmark Position 1, 1920x1080, half-resolution AO, GI/adaptive/
   temporal/spatial disabled initially, eight total samples, exponent 2.0, radius
   3.0, thickness 0.5, Toroidal Blue Noise or retained packed FAST candidate.
 - User-reported baseline: about 2.5 ms AO-only; AO+GI about 3.1 ms; trace about
-  1.2 ms; reported filter about 1.1 ms and other about 0.9 ms even with temporal
-  and spatial filtering disabled. These are hypotheses to reproduce, not local
-  measured results.
-- Known pre-existing failures: none established; build and test baseline pending.
+  1.2 ms; reported filter about 1.1 ms and previously unattributed work about
+  0.9 ms even with temporal and spatial filtering disabled. These are
+  hypotheses to reproduce, not local measured results.
+- Known pre-existing failures: none established.
 
 ## Dependencies and Interfaces
 
@@ -105,7 +118,7 @@ Shared hotspots reserved for the coordinator:
 | Visibility degenerate tests, PR #11 | Preserve its additive coverage and avoid conflicting rewrites; reconcile after local completion | Open/in review | Mask, projection, and sampling tests |
 | Bilateral-grid local tone mapping | Keep ownership of local tone mapping and AgX bindings separate; fused AO must preserve the pre-AgX visibility-composition contract | Active roadmap work; branch not visible on remote | AO application/composition |
 | Target Intel Xe-LPG hardware | User performs most final performance testing; local data must identify the actual adapter and cannot be generalized | External measurement pending | Final performance disposition |
-| Primary-source research | Activision, XeGTAO, visibility-bitmask, vendor, and related implementation evidence | In progress | Ledger and permutation selection |
+| Primary-source research | Activision, XeGTAO, visibility-bitmask, vendor, and related implementation evidence | Complete and reconciled | Ledger and permutation selection |
 
 Public interface, ABI, shader binding, resource layout, serialized setting, or
 asset/package contracts:
@@ -119,6 +132,11 @@ asset/package contracts:
 - Raw/temporal AO remains range-safe for estimators that may exceed one; R8 is
   allowed only for validated bounded/final values. GI accumulation and ownership
   remain FP32/reference unless a separately validated experiment is selected.
+- XeGTAO preserves Intel's 96-byte constants prefix in a 176-byte adapter,
+  emulates source R8 AO rounding in R16F storage, and runs prefilter, main,
+  denoise, and composition passes. Activision approximation runs prepared depth,
+  horizon trace, spatial, temporal, required upsample, and composition passes.
+  Reference owns none of those optional contracts.
 
 ## Assignment Summary
 
@@ -231,7 +249,10 @@ asset/package contracts:
 - Dependencies already integrated: none beyond canonical `5f43205`
 - Interface/invariant contract: reference path unchanged; bitmask and finite
   thickness retained; GI near-to-far ownership retained; optional off-state has
-  zero GPU/resource/pass cost; no unrestricted permutation Cartesian product
+  zero GPU/resource/pass cost; no unrestricted permutation Cartesian product;
+  PS4 and Xe source profiles require a perspective full-texture viewport;
+  ordinary AO/GI workload edits invalidate named source identities; failed
+  benchmark re-export leaves no partial artifact set
 - Deliverable: locally committed build ready for user-led target-hardware testing
 - Done when: implementation, focused verification, ledger, documentation, and
   evidence are complete to the locally provable level
@@ -265,10 +286,23 @@ and summarized in
 [`docs/screen-space-visibility.md`](../../screen-space-visibility.md#expected-performance-impact).
 It uses the user's 2.5-2.7 ms baseline, labels every range as an engineering
 forecast, treats overlapping savings as non-additive, and ranks every distinct
-implemented runtime family. No forecast is promoted to a result until a
-controlled Intel Core Ultra 9 185H/Xe-LPG export records the exact build,
-profile/permutation, warm-up, measured-frame count, median, p95, and quality
-review.
+implemented runtime family. The overall ranking forecasts -0.40 to 0.80 ms for
+XeGTAO High versus Reference with low estimator-comparability confidence,
+0.20-0.60 ms for the same-estimator Fixed 8 plus fusion finalist, -0.15 to
+0.35 ms for XeGTAO mixed precision versus FP32, and -0.08 to 0.25 ms for the
+Activision packed gather versus scalar filter. Published Intel/Activision
+timings are provenance only, not inputs promoted to UVSR results.
+
+The controlled 1920x1080 RTX 4090 Laptop run used 120 warm-up and 600 measured
+frames per entry with zero incomplete frames. Exact fusion saved 6.250% median
+and 17.510% p95; Fixed 8 plus fusion saved 7.870% and 19.066%; Fixed 8 alone
+regressed median by 0.926% with an identical trace median. Packed PS4 saved
+1.338% median and 7.845% p95 versus scalar, although both were slower than
+Reference. XeGTAO LUT beat inline mixed by 1.463%, and FP32 beat mixed by
+11.2-15.6% across the main run and precision repeat. These are local
+adapter-scoped results and do not replace the Xe-LPG forecasts. A target result
+requires the exact build, profile/permutation, warm-up, measured-frame count,
+median, p95, and quality review.
 
 ## Verification Plan
 
@@ -278,11 +312,13 @@ review.
 | Canonical reference retained | Reference resource/dispatch/output contract and reference image comparison | Unit tests plus reference profile smoke capture | Plan/resource-invariance tests and gross-corruption capture pass; exact same-phase GPU comparison remains pending |
 | Fixed AO/GI order and masks | Mask, AO, claimed-bit, source-owner, raw-GI fixtures for 8/12/16/20 and generic fallback | Focused visibility tests | 589,824 deterministic comparisons plus AO, GI-only, and AO+GI consumer-profile smoke pass |
 | Packed edge correctness | All byte combinations, reverse depth, boundaries, slopes, depth/normal discontinuity, receiver mapping | Focused edge tests | Focused CPU fixtures and packed-edge profile smoke pass |
+| XeGTAO source-port contract | Pinned math/constants, High workload, LUT/inline and mixed/FP32 distinctions, adapter resources, Hilbert mapping, perspective/full-texture viewport fallback, and strict shader build | Profile/resource tests plus strict standalone DXC | 4096-entry Hilbert coverage, profile/resource assertions, viewport guard inspection, and 40 strict DXC permutations pass; all three profiles complete 600/600 controlled local frames with clean captures. Xe-LPG timing and physical ISA/counters remain pending |
+| Activision approximation contract | 2016 eight-tap schedule, closest-depth guide, spatial/temporal order, valid clamp-footprint/true-exit/odd-padding handling, scalar/gather variants, perspective/full-texture viewport fallback, named-stage attribution, and separation from the expanded 2019 memo | Profile tests, shader build, and `new-candidates` sequence | Both profiles complete 600/600 controlled local frames with clean captures; packed saves 1.338% median and 7.845% p95 versus scalar. Dynamic motion/disocclusion and target timing remain pending |
 | Optional off-state zero cost | Reference pipeline key, bindings, allocations, dispatches, history, and output unchanged | Resource counters, code inspection, and reference capture | Plan-level reference-invariance assertions pass; target physical-resource capture remains pending |
-| Isolated feature sanity | No correctness regression and directionally useful local timing/traffic result per optimization | One-at-a-time smoke/benchmark actions; no permutation matrix | Fixed (5), noise (6), reconstruction (12), math (2), and comprehensive (53) sequences completed; slower optional experiments are retained and documented |
-| Generated shader evidence | Source optimizations survive DXC; static code/load/store changes are recorded without treating them as runtime counts | `tools/measure_visibility_dxil.ps1`; [`docs/visibility-dxil-evidence.md`](../../visibility-dxil-evidence.md) | Core 18-variant DXIL report complete; physical Intel registers/spills/occupancy pending |
-| Release readiness | All task targets build; tests and title-case validator pass | CMake Release build, `ctest`, heading validator | Pre-commit Release build, 13/13 tests, DXIL generation, 413-row ledger audit, and heading validator pass; committed-identity rebuild/smoke remains the final handoff check |
-| Target performance | Median/p95 on the exact Intel target after warmup with saved key/settings/clock state | User-led benchmark export, 120 warmup and at least 240 measured frames | Pending external handoff |
+| Isolated feature sanity | No correctness regression and directionally useful local timing/traffic result per optimization | One-at-a-time smoke/benchmark actions; no unrestricted permutation matrix | Fixed (5), noise (6), reconstruction (12), math (2), and the final all-profile smoke complete. The final smoke produced 58/58 entries, 116/116 complete frames, zero incomplete frames, and matching JSON/CSV/BMP sets. The controlled new-candidate and precision sequences completed nine and two entries respectively at 600/600 frames each with zero incomplete frames |
+| Generated shader evidence | Source optimizations survive DXC; static code/load/store changes are recorded without treating them as runtime counts | `tools/measure_visibility_dxil.ps1`; [`docs/visibility-dxil-evidence.md`](../../visibility-dxil-evidence.md) | Representative 18-variant core DXIL report complete. Dedicated Xe/PS4 passes, fixed GI/later-bounce, most edge variants, groups/clamps, and diagnostics are outside that table; physical Intel registers/spills/occupancy remain pending |
+| Release readiness | All task targets build; tests and title-case validator pass | CMake Release build, `ctest`, heading validator | Pre-commit Release build, 13/13 tests, DXIL generation, 413-row ledger audit, heading validator, 58-entry smoke, controlled local finalist run, and precision repeat pass; committed-identity rebuild/smoke remains the final coordinator check |
+| Target performance | Median/p95 on the exact Intel target after warm-up with saved key/settings/clock state | User-led benchmark export, 120 warm-up and at least 240 measured frames | Local NVIDIA evidence is complete and adapter-scoped; Xe-LPG measurement is an explicit external handoff |
 
 ## Decisions
 
@@ -292,20 +328,28 @@ review.
 | 2026-07-16 | Record PR #10 and PR #11 as integration dependencies without cherry-picking | Both overlap task paths but are unmerged and absent from the requested base; their additive/mechanical intent can be preserved during later reconciliation | Shader and test edits |
 | 2026-07-16 | Keep performance claims adapter-scoped | The local GPU may not be the target Xe-LPG device, and the prompt forbids extrapolating target wins | Benchmarking and report |
 | 2026-07-16 | Run isolated smoke and traffic/performance checks, not combination permutations | This follows the user's explicit verification priority while still gathering evidence for each retained feature | Verification |
-| 2026-07-16 | Keep Mixed-Precision AO and XeGTAO Closest Match unavailable | No compiled mixed-precision trace or complete XeGTAO depth/noise/denoise/application pipeline exists; substituting the conservative FP32 filter or analytic horizon control would mislabel evidence | Profiles, UI, and ledger |
+| 2026-07-16 | Implement XeGTAO High as a separate pinned source port | Intel's MIT-licensed commit `a5b1686c7ea37788eeb3576b5be47f7c03db532c` supplies the complete depth/main/denoise math and published timing provenance; explicit UVSR adapters avoid falsely claiming bit-identical output | Profiles, shaders, UI, tests, and ledger |
+| 2026-07-16 | Keep generic UVSR bitmask mixed precision unavailable while exposing XeGTAO mixed/FP32 | XeGTAO now provides an honest same-algorithm precision matrix, but its success cannot prove half-precision safety at UVSR bitmask sector boundaries | Profiles, UI, and ledger |
+| 2026-07-16 | Replace the broken PS4 trace-only presentation with a coupled approximation | Published evidence supports eight total linear taps and depth-spatial-temporal order, but shipping code/constants are unavailable; the profile remains explicitly approximate and keeps older controls separate | Profiles, shaders, UI, and ledger |
+| 2026-07-16 | Keep the 2016 PS4 workload distinct from `ATVI-TR-19-01` | The 2016 deck publishes the eight-tap console schedule and filter order used by the approximation; the expanded 2019 memo supplies fuller theory, effective spatiotemporal sample counts, and combined 0.5 ms provenance but no replacement shipping source or complete constants | Profiles, source documentation, and ledger |
 | 2026-07-16 | Use an outer effect timer plus a signed residual | A sum of named queries omits transitions and gaps, while summing stage percentiles mixes frames; the outer envelope and frame-correlated stage sum expose both scopes honestly | Benchmark statistics and export |
+| 2026-07-16 | Retain fusion finalists and drop standalone Fixed 8 from local production consideration | The controlled NVIDIA run found 6.250-7.870% median savings for fusion, while Fixed 8 had an identical trace median and a 0.926% complete-median regression | Profiles, UI guidance, and ledger |
+| 2026-07-16 | Keep PS4 and XeGTAO variants as algorithm/reference comparisons | Both PS4 profiles and all three XeGTAO profiles were slower than Reference locally; packed PS4, Xe LUT, and Xe FP32 remain the locally preferred variants inside their own comparison families | Profiles, benchmark guidance, and target handoff |
+| 2026-07-16 | Make source-profile identity and export failure states conservative | Both source pipelines now fall back for orthographic or non-full-texture views; ordinary AO/GI workload edits switch to Generic Fallback/Custom; PS4 border reprojection preserves only the valid clamp footprint; and failed re-export removes its whole new artifact set | Runtime guards, UI identity, benchmark export, tests, and documentation |
 
 ## Progress and Handoffs
 
 | Date/Time | Task/Owner | Status | Revision/Artifact | Checks | Risks/Next Action |
 | --- | --- | --- | --- | --- | --- |
 | 2026-07-16 | Coordinator preflight | Complete | `5f43205` and this plan | Full user prompt read; remote branches, open PRs, worktrees, roadmap, and execution plans reviewed | Baseline build and required-file audit next |
-| 2026-07-16 | Primary-source inventory | Complete | `docs/ao-optimization-ledger.md` | Primary sources and current-build source evidence reconciled | Target measurements remain pending |
+| 2026-07-16 | Primary-source inventory | Complete | `docs/ao-optimization-ledger.md` | Primary sources, current-build evidence, and duplicate candidate semantics reconciled across 413 unique rows | Target measurements remain pending |
 | 2026-07-16 | Renderer architecture audit | Complete | Read-only pass/resource/permutation map | Exact-base and current-diff source inspection | Findings incorporated into curated implementation |
-| 2026-07-16 | Profile/resource plan and benchmark statistics | Integrated | `src/visibility_performance_plan.*`; `src/visibility_benchmark_statistics.*` | Focused test targets exist; final aggregate verification pending | Preserve pending result placeholders until final run |
-| 2026-07-16 | Renderer and UI implementation | Integrated | Fixed/group/radius-clamp/packed-noise/packed-edge/fused/diagnostic shaders; four advanced drawers; sequential runners; CLI/export | Packaged-shader audit and 53-entry comprehensive smoke pass | Controlled target timing and manual product-quality review remain pending |
-| 2026-07-16 | Generated shader evidence | Partially complete | `docs/visibility-dxil-evidence.md`; `tools/measure_visibility_dxil.ps1` | Reproducible 18-variant optimized-DXIL table; packed FAST, filter algebra, fusion, diagnostics, and fixed code growth confirmed | Target Intel native ISA, GRF, spill, SIMD width, and occupancy remain pending |
-| 2026-07-16 | Documentation reconciliation | Complete | README, design, 413-row ledger, DXIL evidence, and this plan | Dispositions, ranked forecasts, deferred work, current smoke evidence, 413 unique IDs, and Title Case reconcile | Preserve target timing and physical-ISA limitations in the final handoff |
+| 2026-07-16 | Profile/resource plan and benchmark statistics | Integrated | `src/visibility_performance_plan.*`; `src/visibility_benchmark_statistics.*` | Focused tests, 58-entry all-profile smoke, controlled new-candidate sequence, and precision repeat pass | Preserve adapter scope and the target evidence boundary |
+| 2026-07-16 | Renderer and UI implementation | Integrated | Fixed/group/radius-clamp/packed-noise/packed-edge/fused/diagnostic shaders; compact familiar AO controls; folder buttons; explicit stage statistics; sequential runners; CLI/export | Packaged-shader audit, 58/58-entry smoke with 116/116 complete frames, nine-profile controlled run, and precision repeat pass | Committed-identity rebuild/smoke remains the coordinator's final local check |
+| 2026-07-16 | Activision PS4 approximation repair | Integrated | Closest-depth guide, horizon, scalar/gather spatial, temporal, upsample, and composition chain | Both profiles complete 600/600 controlled frames; captures are clean and packed is faster than scalar locally | Dynamic motion/disocclusion and controlled Xe-LPG timing remain pending |
+| 2026-07-16 | Intel XeGTAO 1.30 High source port | Integrated | Pinned prefilter/main/denoise shaders; LUT/inline and mixed/FP32 profiles; adapter contract | 40 strict DXC permutations, focused profile/Hilbert/resource tests, three controlled 600-frame profiles, independent precision repeat, and clean captures pass | Native Xe-LPG timing/ISA/counters remain pending |
+| 2026-07-16 | Generated shader evidence | Partially complete | `docs/visibility-dxil-evidence.md`; `tools/measure_visibility_dxil.ps1` | Reproducible representative 18-variant optimized-DXIL table confirms packed FAST, filter algebra, fusion, and fixed code growth | The table is not exhaustive; target Intel native ISA, GRF, spill, SIMD width, and occupancy remain pending |
+| 2026-07-16 | Documentation reconciliation | Complete | README, design, 413-row ledger, DXIL evidence, and this plan | Source-port/approximation boundaries, controlled local ranking, keep/drop guidance, 413 unique rows, and Title Case validator pass | Preserve target timing, dynamic-motion, and physical-ISA limitations in the final handoff |
 
 ## Risks and Escalation Triggers
 
@@ -335,10 +379,29 @@ Stop and ask the user if:
 ## Completion
 
 - Final integrated commit: pending
-- Verification summary: pending
-- Independent review: pending
-- Coming Soon/documentation update: active entry added; final baseline pending
+- Verification summary: pre-commit Release build, 13/13 tests, 40 strict XeGTAO
+  DXC permutations, 58/58-entry smoke with 116/116 complete frames, controlled
+  nine-profile run, independent precision repeat, and clean static captures pass
+- Independent review: optimization-coverage audit reconciled stale duplicate
+  ledger semantics; coordinator final review remains
+- Coming Soon/documentation update: active entry and final local evidence
+  reconciled across README, design document, ledger, and this plan
 - Pushed/PR/merged, or intentionally local: intentionally local
-- Remaining experiments or follow-ups: pending
+- Ready/manual-candidate boundary: ready means the curated build is available
+  for user testing; it does not mean every isolatable experiment was
+  implemented or rejected
+- Remaining implementation/evidence families: Auto Fixed (D-005), trace LDS
+  (D-020), reconstruction LDS (D-024/R-011), four-output coarsening
+  (D-026/R-013), staged AO-only ILP (L-015/O-022), and exhaustive generated-
+  code coverage (F-030); see the
+  [ledger status](../../ao-optimization-ledger.md#ledger-status)
+- Feasible curated source experiments: screen-space-size horizon-thickness EMA
+  (A-011), depth-derived receiver normals (A-014), velocity-agreement adaptive
+  clamp width (Q-027), XeGTAO Low (X-002), XeGTAO Medium (X-003), native R8 AO
+  storage/decode (X-018), standalone depth-derived-normal generation (X-020),
+  and in-main depth-derived normals (X-021); these are deferred, not impossible
+- Remaining external validation: dynamic motion/disocclusion stress, exact same-
+  phase GPU image equivalence, Xe-LPG timing, and Intel physical ISA/register/
+  occupancy counters
 - Active ownership released: no
 - Archived to completed/abandoned path: pending

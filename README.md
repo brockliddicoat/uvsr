@@ -48,16 +48,37 @@ architecture without either add-on.
   permutations, packed current FAST delivery, exact fused AO resolve/apply,
   16x8 and 8x16 trace groups, 32/64/128-pixel projected-radius clamps, packed-
   edge reconstruction/fusion experiments, the Activision 4x4-by-6 scheduler,
-  duplicate/full-mask off controls, diagnostic floors, and partial analytic-
-  horizon controls. Reference allocates, binds, and dispatches no candidate-
-  only work. The separate **Fast Math & Validation**, **Precision & Formats**,
-  and **Dispatch, Memory & Cache** drawers report the selected profile rather
-  than implying that every researched option is compiled.
-- Mixed-precision trace and complete same-engine XeGTAO profiles are explicitly
-  unavailable. The conservative numerical profile is an FP32 filter-algebra
-  experiment, and the Activision controls retain UVSR's downstream resolve,
-  temporal, and composition pipeline; neither is mislabeled as the missing
-  implementation.
+  duplicate/full-mask off controls, diagnostic floors, repaired Activision PS4
+  GTAO approximation profiles, and a separate Intel XeGTAO 1.30 High source
+  port. Reference allocates, binds, and dispatches no candidate-only work. The
+  advanced controls use familiar dropdowns and compact one-click buttons rather
+  than exposing an unrestricted permutation product.
+- The pinned XeGTAO source port provides LUT/mixed-precision, inline-Hilbert/
+  mixed-precision, and LUT/FP32 profiles. It follows Intel's High preset with
+  five depth mips, three slices by three steps per side, Hilbert/R2 noise, packed
+  edges, and one sharp denoise pass. It remains an AO-only algorithmic comparison,
+  not a bit-identical engine import or an exact replacement for UVSR's finite-
+  thickness bitmask producer.
+- The Activision PS4 profiles remain explicitly labeled **Approximation** because
+  Activision did not publish its shipping source or every constant. They now use
+  eight total linear-distribution taps, a half-resolution closest-valid-depth
+  guide with packed 2-bit source identity, the published 4x4-by-6 schedule, a
+  derivative-aware 4x4 spatial pass, motion/depth-validated temporal
+  accumulation, conservative far falloff, and the required full-resolution
+  upsample. Temporal reprojection accepts the valid bilinear clamp footprint
+  `[-0.5, size - 0.5)` but rejects nonfinite motion, true viewport exits, and
+  odd-size padding. Scalar-filter and packed-gather versions remain available
+  for direct comparison. This workload follows the console implementation
+  disclosed in the 2016 slide deck. The expanded 2019
+  `ATVI-TR-19-01` report is a separate analytical source: it documents the GTAO
+  formulation, effective spatiotemporal sampling, and a 0.5 ms PS4 GTAO-plus-GI
+  result, but it does not publish replacement shipping shader code or all
+  constants needed for an exact port.
+- Both the Activision PS4 approximation and XeGTAO source port require a
+  perspective camera and a viewport at origin `(0, 0)` whose size exactly
+  matches the depth texture. Orthographic, offset, cropped, or mismatched views
+  report a clear profile error and run Reference instead of partially applying
+  a source profile.
 - Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
@@ -65,12 +86,22 @@ architecture without either add-on.
   **General** drawer. That line reports resolution, frame time, FPS,
   current-clock memory bandwidth, and current-clock FP32 peak GFLOPS.
   Visibility statistics start collapsed and distinguish the outer effect
-  envelope, summed named stages, signed unattributed residual, depth
-  preparation, first trace, each later GI bounce, temporal reconstruction,
-  spatial resolve, full-resolution application, and composition. Two memory
+  envelope, named-stage total, signed unattributed timer difference, depth
+  preparation, first trace, later GI trace and each bounce, spatial denoise,
+  temporal reconstruction, fused spatial denoise/upsample, required upsample,
+  fused resolve/application, and composition. No stage is labeled **Other** and
+  unrelated concepts are not combined. Two memory
   rows report exact logical **Outputs**,
   **Working**, **Mask Cache**, and **Avoided** payloads; **Shared** is explicitly
   an estimate of duplicate mask payload avoided by shared AO/GI traversal.
+- AO controls use compact, scrollable sections modeled on the established AA
+  panel: full-width dropdowns, one-click Reference/Exact Fast/Fast Edges
+  buttons, and dedicated Method, Noise, Denoiser, Resolve, and Benchmark areas.
+  Benchmark and scene locations use folder buttons instead of displaying long
+  filesystem paths in the main panel. Ordinary quality, resolution, estimator,
+  AO, or GI edits clear any named source/verification profile and switch the
+  selector to **Generic Fallback** with custom settings, so a source label
+  cannot silently survive a renderer fallback.
 - The default deferred UVSR PBR path starts enabled. **Visibility > Enabled**
   turns visibility and PBR off or on together. The legacy Donut comparison path
   remains implemented for possible future experiments, but its separate control
@@ -192,9 +223,37 @@ promises that the work will merge.
   resource permutations, optional noise/depth/packed-edge reconstruction
   experiments, AO-only fused resolve/application, advanced verification UI,
   focused reference tests, and the optimization ledger. The branch now
-  contains the curated profile and benchmark/export implementation; controlled
-  Core Ultra 9 185H timing and visual acceptance remain a user-run validation
-  step, so its ranked impact ranges are forecasts rather than measured gains.
+  contains the curated profile and benchmark/export implementation. The final
+  all-profile smoke completed 58/58 entries and 116/116 frames with zero
+  incomplete frames and matching JSON/CSV/BMP sets. A controlled
+  local RTX 4090 Laptop run used 120 warm-up and 600 measured frames per profile,
+  completed every frame, and produced clean final captures. Exact fused resolve/
+  apply saved 6.25% median and 17.51% p95; Fixed 8 plus fusion saved 7.87% and
+  19.07%. Fixed 8 alone regressed 0.93% median and is not a standalone production
+  candidate. Core Ultra 9 185H/Xe-LPG timing remains a user-run validation step,
+  so NVIDIA results are not generalized to that target.
+  The current candidate also keeps a repaired Activision PS4 GTAO approximation
+  separate from a pinned Intel XeGTAO 1.30 High source port, exposes scalar/
+  gather, LUT/inline-Hilbert, and mixed/FP32 comparisons, and adds the bounded
+  **New AO Candidates** benchmark sequence. The controlled nine-entry run and an
+  independent two-entry Xe precision repeat both completed 600/600 frames per
+  profile with zero incomplete frames. On this GPU, prefer packed over scalar
+  for the PS4 comparison and LUT/FP32 over Xe mixed precision; retain both
+  algorithm families for comparison and quality testing rather than treating
+  them as faster UVSR bitmask profiles.
+  **Ready for Manual Validation** means the curated candidate can be built,
+  launched, and tested; it does not mean every isolatable experiment was
+  implemented or rejected. The explicit implementation/evidence follow-ups are
+  Auto Fixed (D-005), trace LDS (D-020), reconstruction LDS (D-024/R-011),
+  four-output coarsening (D-026/R-013), staged AO-only ILP (L-015/O-022), and
+  exhaustive generated-code coverage (F-030). Feasible curated source
+  experiments also remain: screen-space-size horizon-thickness EMA (A-011),
+  depth-derived receiver normals (A-014), velocity-agreement adaptive clamp
+  width (Q-027), XeGTAO Low (X-002), XeGTAO Medium (X-003), native R8 AO
+  storage/decode (X-018), standalone depth-derived-normal generation (X-020),
+  and in-main depth-derived normals (X-021). These are deferred/unimplemented,
+  not impossible; the [optimization ledger](docs/ao-optimization-ledger.md#ledger-status)
+  records each prerequisite and evidence boundary.
   It deliberately starts from `5f43205`; PR #10's shared-helper extraction and
   PR #11's test additions remain later integration dependencies, and the
   separate bilateral-grid work retains ownership of local tone mapping and AgX
@@ -289,24 +348,35 @@ one-click name or a hyphenated form is accepted. `--benchmark-warmup` accepts
 0 through 100000 frames and `--benchmark-frames` accepts 1 through 100000.
 Unknown or unavailable profiles and invalid frame counts report to standard
 error and return a nonzero process exit code; they do not open modal dialogs.
-Run a complete fixed-sample, noise, reconstruction, or math matrix through the
+Run a complete fixed-sample, noise, reconstruction, math, new-candidate, or
+precision matrix through the
 same headless path by replacing `--visibility-profile ... --visibility-benchmark`
-with `--benchmark-sequence fixed-sample`, `noise`, `reconstruction`, or `math`.
+with `--benchmark-sequence fixed-sample`, `noise`, `reconstruction`, `math`,
+`new-candidates`, or `precision`.
 Each entry is an isolated run with its own history reset and artifacts. The
 `--benchmark-warmup`, `--benchmark-frames`, `--benchmark-output`, and
-`--benchmark-auto-close` options apply to the whole sequence. The unavailable
-`precision` sequence fails before renderer startup with the documented reason.
+`--benchmark-auto-close` options apply to the whole sequence. **New AO
+Candidates** runs Reference, Fixed 8, exact fusion, Fixed 8 plus fusion, both
+Activision PS4 approximations, and all three XeGTAO High profiles. **XeGTAO
+Precision Matrix** compares the LUT mixed-precision and LUT FP32 source-port
+profiles without substituting the unrelated conservative FP32 filter experiment.
 Use `--benchmark-sequence all` for a smoke pass over every implemented or
 partial benchmark-control performance profile; unavailable profiles are skipped.
 The UI also provides **Benchmark Current Profile**, **Cancel Benchmark**, and
 **Export Benchmark Results**. Reference-versus-current, fixed-count, noise,
-reconstruction, and math actions run their entries sequentially with per-entry
-history reset/export and exact starting-setting restoration on completion,
-cancellation, or failure. **Benchmark Precision Matrix** remains explicitly
-unavailable because no non-reference mixed-precision trace is compiled.
+reconstruction, math, new-candidate, and precision actions run their entries
+sequentially with per-entry history reset/export and exact starting-setting
+restoration on completion, cancellation, or failure.
 The schema-v2 JSON includes a human-readable and hashed snapshot of the full
 profile-relevant AO/GI, sampling, reconstruction, format, dispatch, and resource
 contract that was active for the run.
+On Windows, artifact filenames dynamically shorten only the redundant display-
+name token so the complete path stays at or below a conservative 240-character
+budget. The full profile name remains in JSON, while hashes, timestamp, extension,
+and collision suffix retain their reserved space. Extension-length accounting
+uses native path-size arithmetic without a narrowing conversion. Re-export is
+all-or-nothing: if the recorded final frame cannot be copied, the newly created
+JSON, CSV, and BMP are removed instead of leaving a misleading partial set.
 
 After building, Windows users can also double-click `LaunchUVSR.cmd`. It
 delegates to the same required experiment launcher with a fixed main-build
@@ -348,7 +418,9 @@ The [AO optimization ledger](docs/ao-optimization-ledger.md) inventories every
 supplied, Activision, XeGTAO, and further-research candidate; records its
 classification, evidence, quality boundary, zero-cost-off disposition, and
 measurement method; and ranks all implemented runtime families with explicitly
-non-additive engineering forecasts.
+non-additive engineering forecasts. Its XeGTAO evidence is pinned to Intel
+commit `a5b1686c7ea37788eeb3576b5be47f7c03db532c`; published Intel timings are
+reported only as upstream provenance and never as UVSR measurements or promises.
 
 The [visibility DXIL evidence](docs/visibility-dxil-evidence.md) provides a
 reproducible static generated-shader comparison for the core Reference,

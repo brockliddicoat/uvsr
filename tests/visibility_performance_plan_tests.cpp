@@ -182,6 +182,9 @@ namespace
         case VisibilityPerformanceProfile::ExactFixed20:
             workload.firstBounceSampleCount = 20u;
             break;
+        case VisibilityPerformanceProfile::ExactFixed8FusedResolveApply:
+            workload.firstBounceSampleCount = 8u;
+            break;
         case VisibilityPerformanceProfile::ExactFixedLaterBounce8:
             workload.consumer =
                 VisibilityPerformanceConsumer::IndirectDiffuse;
@@ -214,13 +217,24 @@ namespace
                 VisibilityPerformanceScheduler::Activision4x4SixPhase;
             break;
         case VisibilityPerformanceProfile::ActivisionPs4Schedule:
-            workload.firstBounceSampleCount = 12u;
+        case VisibilityPerformanceProfile::ActivisionPs4PackedGather:
+            workload.firstBounceSampleCount = 8u;
             workload.scheduler =
                 VisibilityPerformanceScheduler::Activision4x4SixPhase;
+            workload.radialExponent = 1.0f;
+            workload.temporalEnabled = true;
+            workload.spatialEnabled = true;
             break;
         case VisibilityPerformanceProfile::XeGtaoClosestMatch:
+        case VisibilityPerformanceProfile::XeGtaoHighInlineHilbert:
+        case VisibilityPerformanceProfile::XeGtaoHighFp32:
             workload.scheduler =
                 VisibilityPerformanceScheduler::XeGtaoHilbertR2;
+            workload.resolution = VisibilityPerformanceResolution::Full;
+            workload.firstBounceSampleCount = 18u;
+            workload.radius = 0.5f;
+            workload.thickness = 0.0f;
+            workload.spatialEnabled = true;
             break;
         default:
             break;
@@ -1190,14 +1204,6 @@ namespace
             const VisibilityExecutionPlan plan =
                 ResolveVisibilityExecutionPlan(
                     configuration, MakeCompatibleWorkload(profile));
-            if (profile == VisibilityPerformanceProfile::XeGtaoClosestMatch)
-            {
-                Require(!plan.valid && plan.error ==
-                        VisibilityPlanError::ProfileImplementationUnavailable &&
-                        !plan.errorMessage.empty(),
-                    "The unimplemented XeGTAO profile fails with a reason");
-                continue;
-            }
             Require(plan.valid,
                 std::string("A compatible workload resolves profile: ") +
                     std::string(configuration.name) + " (" +
@@ -1272,22 +1278,74 @@ namespace
         const auto ps4 = GetVisibilityPerformanceProfileConfiguration(
             VisibilityPerformanceProfile::ActivisionPs4Schedule);
         Require(ps4.firstBounceSamples ==
-                VisibilitySampleSpecialization::Fixed12 &&
+                VisibilitySampleSpecialization::Fixed8 &&
                 ps4.rawAoStorage == VisibilityRawAoStorage::R16Float &&
-                ps4.reconstruction == VisibilityReconstructionMode::Legacy &&
-                ps4.temporal == VisibilityTemporalMode::Legacy &&
+                ps4.reconstruction ==
+                    VisibilityReconstructionMode::ActivisionBilateral4x4 &&
+                ps4.temporal ==
+                    VisibilityTemporalMode::ActivisionSixDirectionEma &&
                 ps4.implementationStatus ==
-                    VisibilityImplementationStatus::PartialBenchmarkControl,
-            "The PS4 control models the compiled fixed-12 partial path only");
+                    VisibilityImplementationStatus::Implemented,
+            "The PS4 prototype models the complete source-like pass order");
 
         const auto xe = GetVisibilityPerformanceProfileConfiguration(
             VisibilityPerformanceProfile::XeGtaoClosestMatch);
         Require(xe.implementationStatus ==
-                VisibilityImplementationStatus::Unavailable &&
-                xe.name.find("Unavailable") != std::string_view::npos &&
-                xe.implementationNote.find("Hilbert") !=
-                    std::string_view::npos,
-            "XeGTAO is not mislabeled as the UVSR horizon control");
+                VisibilityImplementationStatus::Implemented &&
+                xe.trace == VisibilityTraceImplementation::XeGtaoHorizon &&
+                xe.firstBounceSamples ==
+                    VisibilitySampleSpecialization::Fixed18 &&
+                xe.noise == VisibilityNoiseDelivery::XeGtaoHilbertR2 &&
+                xe.math == VisibilityMathMode::XeGtaoMixedPrecision &&
+                xe.edgeStorage == VisibilityEdgeStorage::R8Unorm &&
+                xe.reconstruction ==
+                    VisibilityReconstructionMode::XeGtaoDenoise &&
+                xe.depth == VisibilityDepthMode::XeGtaoPrefilteredMips &&
+                xe.resolutionRequirement ==
+                    VisibilityResolutionRequirement::Full &&
+                xe.name.find("LUT") != std::string_view::npos &&
+                !xe.implementationNote.empty(),
+            "XeGTAO advertises its implemented source-derived pipeline");
+
+        const auto xeInline = GetVisibilityPerformanceProfileConfiguration(
+            VisibilityPerformanceProfile::XeGtaoHighInlineHilbert);
+        const auto xeFp32 = GetVisibilityPerformanceProfileConfiguration(
+            VisibilityPerformanceProfile::XeGtaoHighFp32);
+        Require(xeInline.implementationStatus ==
+                    VisibilityImplementationStatus::Implemented &&
+                xeInline.noise ==
+                    VisibilityNoiseDelivery::XeGtaoInlineHilbertR2 &&
+                xeInline.math ==
+                    VisibilityMathMode::XeGtaoMixedPrecision &&
+                xeFp32.implementationStatus ==
+                    VisibilityImplementationStatus::Implemented &&
+                xeFp32.noise == VisibilityNoiseDelivery::XeGtaoHilbertR2 &&
+                xeFp32.math == VisibilityMathMode::ReferenceFp32,
+            "XeGTAO exposes independent LUT, inline-Hilbert, and FP32 controls");
+
+        const auto fixedFused = GetVisibilityPerformanceProfileConfiguration(
+            VisibilityPerformanceProfile::ExactFixed8FusedResolveApply);
+        Require(fixedFused.implementationStatus ==
+                    VisibilityImplementationStatus::Implemented &&
+                fixedFused.firstBounceSamples ==
+                    VisibilitySampleSpecialization::Fixed8 &&
+                fixedFused.application ==
+                    VisibilityApplicationMode::FusedResolveAndApplyExact &&
+                fixedFused.consumerRequirement ==
+                    VisibilityConsumerRequirement::AmbientOcclusionOnly &&
+                fixedFused.resolutionRequirement ==
+                    VisibilityResolutionRequirement::Reduced,
+            "The combined exact profile composes fixed-8 tracing with exact fusion");
+
+        const auto ps4Packed = GetVisibilityPerformanceProfileConfiguration(
+            VisibilityPerformanceProfile::ActivisionPs4PackedGather);
+        Require(ps4Packed.implementationStatus ==
+                    VisibilityImplementationStatus::Implemented &&
+                ps4Packed.trace == ps4.trace &&
+                ps4Packed.reconstruction == ps4.reconstruction &&
+                ps4Packed.temporal == ps4.temporal &&
+                ps4Packed.name != ps4.name,
+            "The packed-gather PS4 control isolates filter delivery without changing the algorithm");
 
         const auto unset = GetVisibilityPerformanceProfileConfiguration(
             VisibilityPerformanceProfile::Unset);
@@ -1490,6 +1548,37 @@ namespace
                 fused.dispatchCount == 2u,
             "Exact fusion removes the final AO texture and one dispatch while retaining the broad legacy trace contract");
 
+        const VisibilityExecutionPlan fixed8 = ResolveVisibilityExecutionPlan(
+            VisibilityPerformanceProfile::ExactFixed8, {});
+        const VisibilityExecutionPlan fixedFused =
+            ResolveVisibilityExecutionPlan(
+                VisibilityPerformanceProfile::
+                    ExactFixed8FusedResolveApply,
+                {});
+        Require(fixed8.valid && fixedFused.valid &&
+                fixedFused.fixedFirstBounceSampleCount == 8u &&
+                fixedFused.requiresExplicitHalfRoundtrip &&
+                fixedFused.resourceMask ==
+                    (ResourceBit(
+                        VisibilityExecutionResource::RawAmbientR16) |
+                     ResourceBit(
+                        VisibilityExecutionResource::LegacyToroidalNoise)) &&
+                fixedFused.passMask ==
+                    (PassBit(VisibilityExecutionPass::FixedTrace) |
+                     PassBit(
+                        VisibilityExecutionPass::FusedResolveAndApply)) &&
+                fixedFused.firstTraceSrvCount == 3u &&
+                fixedFused.firstTraceUavCount == 1u &&
+                fixedFused.dispatchCount == 2u &&
+                !HasVisibilityExecutionResource(
+                    fixedFused.resourceMask,
+                    VisibilityExecutionResource::FinalAmbientR16) &&
+                fixedFused.bindingMask == fixed8.bindingMask &&
+                fixedFused.shaderPermutationKey !=
+                    fixed8.shaderPermutationKey &&
+                fixedFused.permutationKey != fixed8.permutationKey,
+            "The exact combined profile retains fixed-8 bindings while removing the resolved AO texture and standalone reconstruction/application passes");
+
         const VisibilityExecutionPlan fusedPacked =
             ResolveVisibilityExecutionPlan(
                 VisibilityPerformanceProfile::
@@ -1550,19 +1639,183 @@ namespace
             "The procedural Activision schedule allocates no noise texture");
 
         VisibilityPerformanceWorkload ps4Workload = scheduleWorkload;
-        ps4Workload.firstBounceSampleCount = 12u;
+        ps4Workload.firstBounceSampleCount = 8u;
+        ps4Workload.radialExponent = 1.0f;
+        ps4Workload.temporalEnabled = true;
+        ps4Workload.spatialEnabled = true;
         const VisibilityExecutionPlan ps4 = ResolveVisibilityExecutionPlan(
             VisibilityPerformanceProfile::ActivisionPs4Schedule,
             ps4Workload);
+        const VisibilityExecutionPlan ps4Packed =
+            ResolveVisibilityExecutionPlan(
+                VisibilityPerformanceProfile::ActivisionPs4PackedGather,
+                ps4Workload);
+        const uint64_t expectedPs4Resources =
+            ResourceBit(VisibilityExecutionResource::RawAmbientR16) |
+            ResourceBit(VisibilityExecutionResource::FinalAmbientR16) |
+            ResourceBit(VisibilityExecutionResource::TemporalAmbientR16) |
+            ResourceBit(VisibilityExecutionResource::TemporalDepthR32) |
+            ResourceBit(
+                VisibilityExecutionResource::ActivisionSpatialAmbientR16) |
+            ResourceBit(
+                VisibilityExecutionResource::
+                    ActivisionPackedDepthGuideR32Uint);
+        const uint64_t expectedPs4Bindings =
+            BindingBit(VisibilityExecutionBinding::Depth) |
+            BindingBit(VisibilityExecutionBinding::Normals) |
+            BindingBit(VisibilityExecutionBinding::MotionVectors) |
+            BindingBit(VisibilityExecutionBinding::GBufferMaterial) |
+            BindingBit(VisibilityExecutionBinding::BaseLighting) |
+            BindingBit(VisibilityExecutionBinding::OutputLighting) |
+            BindingBit(VisibilityExecutionBinding::AmbientHistory) |
+            BindingBit(VisibilityExecutionBinding::AmbientOutput) |
+            BindingBit(
+                VisibilityExecutionBinding::ActivisionPreparedDepth);
+        const uint64_t expectedPs4Passes =
+            PassBit(VisibilityExecutionPass::DepthPreparation) |
+            PassBit(VisibilityExecutionPass::ActivisionHorizonTrace) |
+            PassBit(VisibilityExecutionPass::Temporal) |
+            PassBit(VisibilityExecutionPass::SpatialDenoise) |
+            PassBit(VisibilityExecutionPass::Reconstruction) |
+            PassBit(VisibilityExecutionPass::Composition);
         Require(ps4.valid && ps4.benchmarkOnly &&
-                ps4.fixedFirstBounceSampleCount == 12u &&
-                HasVisibilityExecutionPass(ps4.passMask,
-                    VisibilityExecutionPass::ActivisionHorizonTrace) &&
+                ps4.fixedFirstBounceSampleCount == 8u &&
+                ps4.resourceMask == expectedPs4Resources &&
+                ps4.bindingMask == expectedPs4Bindings &&
+                ps4.passMask == expectedPs4Passes &&
+                ps4.firstTraceSrvCount == 3u &&
+                ps4.firstTraceUavCount == 1u &&
+                ps4.peakSrvCount == 8u &&
+                ps4.peakUavCount == 2u &&
                 !HasVisibilityExecutionResource(ps4.resourceMask,
                     VisibilityExecutionResource::RawAmbientR8) &&
                 !HasVisibilityExecutionResource(ps4.resourceMask,
-                    VisibilityExecutionResource::DepthHierarchy),
-            "PS4 control reports only the compiled 12T horizon/schedule path");
+                    VisibilityExecutionResource::DepthHierarchy) &&
+                !HasVisibilityExecutionResource(ps4.resourceMask,
+                    VisibilityExecutionResource::TemporalNormalRgba8) &&
+                !HasVisibilityExecutionBinding(ps4.bindingMask,
+                    VisibilityExecutionBinding::DepthHierarchy) &&
+                HasVisibilityExecutionResource(ps4.resourceMask,
+                    VisibilityExecutionResource::
+                        ActivisionSpatialAmbientR16) &&
+                HasVisibilityExecutionResource(ps4.resourceMask,
+                    VisibilityExecutionResource::
+                        ActivisionPackedDepthGuideR32Uint) &&
+                ps4.dispatchCount == 6u,
+            "PS4 prototype reports trace, depth, spatial, temporal, and upsample work");
+        Require(ps4Packed.valid && ps4Packed.benchmarkOnly &&
+                ps4Packed.resourceMask == ps4.resourceMask &&
+                ps4Packed.bindingMask == ps4.bindingMask &&
+                ps4Packed.passMask == ps4.passMask &&
+                ps4Packed.firstTraceSrvCount == ps4.firstTraceSrvCount &&
+                ps4Packed.firstTraceUavCount == ps4.firstTraceUavCount &&
+                ps4Packed.shaderPermutationKey != ps4.shaderPermutationKey &&
+                ps4Packed.permutationKey != ps4.permutationKey &&
+                ps4Packed.historyResetKey != ps4.historyResetKey,
+            "Scalar and packed-gather PS4 controls isolate the spatial fetch strategy behind distinct shader and history identities");
+
+        const VisibilityPerformanceWorkload xeWorkload =
+            MakeCompatibleWorkload(
+                VisibilityPerformanceProfile::XeGtaoClosestMatch);
+        const VisibilityExecutionPlan xeLut = ResolveVisibilityExecutionPlan(
+            VisibilityPerformanceProfile::XeGtaoClosestMatch, xeWorkload);
+        const VisibilityExecutionPlan xeInline =
+            ResolveVisibilityExecutionPlan(
+                VisibilityPerformanceProfile::XeGtaoHighInlineHilbert,
+                xeWorkload);
+        const VisibilityExecutionPlan xeFp32 = ResolveVisibilityExecutionPlan(
+            VisibilityPerformanceProfile::XeGtaoHighFp32, xeWorkload);
+        const uint64_t hilbertLut = ResourceBit(
+            VisibilityExecutionResource::XeGtaoHilbertLutR16Uint);
+        const uint64_t hilbertBinding = BindingBit(
+            VisibilityExecutionBinding::XeGtaoHilbertLut);
+        const uint64_t xeRequiredResources =
+            ResourceBit(VisibilityExecutionResource::DepthHierarchy) |
+            ResourceBit(VisibilityExecutionResource::PackedEdgesR8Unorm) |
+            ResourceBit(VisibilityExecutionResource::XeGtaoWorkingAoR16) |
+            ResourceBit(VisibilityExecutionResource::FinalAmbientR16);
+        const uint64_t xeInlineBindings =
+            BindingBit(VisibilityExecutionBinding::Depth) |
+            BindingBit(VisibilityExecutionBinding::Normals) |
+            BindingBit(VisibilityExecutionBinding::GBufferMaterial) |
+            BindingBit(VisibilityExecutionBinding::BaseLighting) |
+            BindingBit(VisibilityExecutionBinding::OutputLighting) |
+            BindingBit(VisibilityExecutionBinding::DepthHierarchy) |
+            BindingBit(VisibilityExecutionBinding::AmbientOutput) |
+            BindingBit(VisibilityExecutionBinding::XeGtaoEdges);
+        Require(xeLut.valid && xeInline.valid && xeFp32.valid &&
+                xeInline.resourceMask == xeRequiredResources &&
+                xeLut.resourceMask ==
+                    (xeRequiredResources | hilbertLut) &&
+                xeFp32.resourceMask ==
+                    (xeRequiredResources | hilbertLut) &&
+                HasVisibilityExecutionResource(
+                    xeLut.resourceMask,
+                    VisibilityExecutionResource::XeGtaoHilbertLutR16Uint) &&
+                !HasVisibilityExecutionResource(
+                    xeInline.resourceMask,
+                    VisibilityExecutionResource::XeGtaoHilbertLutR16Uint) &&
+                xeLut.resourceMask == (xeInline.resourceMask | hilbertLut) &&
+                xeFp32.resourceMask == xeLut.resourceMask &&
+                xeLut.optionalResourceMask ==
+                    (xeInline.optionalResourceMask | hilbertLut) &&
+                xeFp32.optionalResourceMask == xeLut.optionalResourceMask &&
+                xeLut.firstTraceSrvCount == 3u &&
+                xeInline.firstTraceSrvCount == 2u &&
+                xeFp32.firstTraceSrvCount == 3u &&
+                xeLut.firstTraceUavCount == 2u &&
+                xeInline.firstTraceUavCount == 2u &&
+                xeFp32.firstTraceUavCount == 2u &&
+                xeLut.peakSrvCount == 8u &&
+                xeLut.peakUavCount == 5u &&
+                xeInline.peakSrvCount == 8u &&
+                xeInline.peakUavCount == 5u &&
+                xeFp32.peakSrvCount == 8u &&
+                xeFp32.peakUavCount == 5u &&
+                !HasVisibilityExecutionResource(
+                    xeLut.resourceMask,
+                    VisibilityExecutionResource::RawAmbientR16),
+            "XeGTAO LUT delivery adds exactly one 64x64 R16_UINT resource and one trace SRV while inline Hilbert removes both");
+        Require(xeInline.bindingMask == xeInlineBindings &&
+                xeLut.bindingMask ==
+                    (xeInline.bindingMask | hilbertBinding) &&
+                xeFp32.bindingMask == xeLut.bindingMask &&
+                xeLut.candidateBindingMask ==
+                    (xeInline.candidateBindingMask | hilbertBinding) &&
+                xeFp32.candidateBindingMask ==
+                    xeLut.candidateBindingMask &&
+                xeLut.passMask == xeInline.passMask &&
+                xeLut.passMask == xeFp32.passMask &&
+                HasVisibilityExecutionPass(
+                    xeLut.passMask,
+                    VisibilityExecutionPass::DepthPreparation) &&
+                HasVisibilityExecutionPass(
+                    xeLut.passMask,
+                    VisibilityExecutionPass::XeGtaoHorizonTrace) &&
+                HasVisibilityExecutionPass(
+                    xeLut.passMask,
+                    VisibilityExecutionPass::SpatialDenoise) &&
+                !HasVisibilityExecutionPass(
+                    xeLut.passMask,
+                    VisibilityExecutionPass::Reconstruction) &&
+                xeLut.dispatchCount == 4u &&
+                !HasVisibilityExecutionResource(
+                    xeLut.resourceMask,
+                    VisibilityExecutionResource::LegacyToroidalNoise) &&
+                !HasVisibilityExecutionResource(
+                    xeInline.resourceMask,
+                    VisibilityExecutionResource::LegacyCurrentFastNoise),
+            "Every XeGTAO variant retains the same prefilter, horizon, denoise, and application pass graph while LUT delivery adds only its explicit binding");
+        Require(xeLut.configuration.math ==
+                    VisibilityMathMode::XeGtaoMixedPrecision &&
+                xeFp32.configuration.math ==
+                    VisibilityMathMode::ReferenceFp32 &&
+                xeLut.shaderPermutationKey != xeInline.shaderPermutationKey &&
+                xeLut.shaderPermutationKey != xeFp32.shaderPermutationKey &&
+                xeInline.shaderPermutationKey != xeFp32.shaderPermutationKey &&
+                xeLut.permutationKey != xeInline.permutationKey &&
+                xeLut.permutationKey != xeFp32.permutationKey,
+            "XeGTAO mixed precision, FP32, LUT, and inline-Hilbert variants retain distinct compiled identities");
     }
 
     void TestPermutationAndHistoryKeysAreComplete()
@@ -1880,6 +2133,31 @@ namespace
                 VisibilityPlanError::ProfileSchedulerMismatch,
             "Reference cannot silently select a candidate scheduler");
 
+        VisibilityPerformanceWorkload xeMismatch = MakeCompatibleWorkload(
+            VisibilityPerformanceProfile::XeGtaoClosestMatch);
+        xeMismatch.firstBounceSampleCount = 16u;
+        Require(ResolveVisibilityExecutionPlan(
+                VisibilityPerformanceProfile::XeGtaoClosestMatch,
+                xeMismatch).error == VisibilityPlanError::SampleCountMismatch,
+            "XeGTAO High rejects a workload that does not retain its 18 horizon samples");
+        xeMismatch = MakeCompatibleWorkload(
+            VisibilityPerformanceProfile::XeGtaoHighInlineHilbert);
+        xeMismatch.resolution = VisibilityPerformanceResolution::Half;
+        Require(ResolveVisibilityExecutionPlan(
+                VisibilityPerformanceProfile::XeGtaoHighInlineHilbert,
+                xeMismatch).error ==
+                    VisibilityPlanError::ProfileResolutionMismatch,
+            "The source-faithful XeGTAO High controls reject reduced-resolution tracing");
+        xeMismatch = MakeCompatibleWorkload(
+            VisibilityPerformanceProfile::XeGtaoHighFp32);
+        xeMismatch.scheduler =
+            VisibilityPerformanceScheduler::ToroidalBlueNoiseRankField;
+        Require(ResolveVisibilityExecutionPlan(
+                VisibilityPerformanceProfile::XeGtaoHighFp32,
+                xeMismatch).error ==
+                    VisibilityPlanError::ProfileSchedulerMismatch,
+            "XeGTAO FP32 cannot silently replace Hilbert/R2 scheduling with legacy noise");
+
         Require(ResolveVisibilityExecutionPlan(
                 VisibilityPerformanceProfile::DiagnosticTemporalCopy, {}).error ==
                 VisibilityPlanError::TemporalModeRequiresHistory,
@@ -2075,22 +2353,76 @@ namespace
             Require(definition.implementationStatus !=
                     VisibilityImplementationStatus::Unset,
                 "Every requested profile states availability");
+            const bool ps4Prototype = profile ==
+                VisibilityVerificationProfile::Ps4GtaoClosestMatch;
+            const bool xeGtao = profile ==
+                VisibilityVerificationProfile::XeGtaoClosestMatch;
             Require(definition.expectedWorkload.outputWidth == 1920u &&
                     definition.expectedWorkload.outputHeight == 1080u &&
                     definition.expectedWorkload.resolution ==
-                        VisibilityPerformanceResolution::Half &&
+                        (xeGtao
+                            ? VisibilityPerformanceResolution::Full
+                            : VisibilityPerformanceResolution::Half) &&
                     definition.expectedWorkload.estimator ==
                         VisibilityPerformanceEstimator::UniformSolidAngle &&
-                    definition.expectedWorkload.radius == 3.0f &&
-                    definition.expectedWorkload.thickness == 0.5f &&
-                    definition.expectedWorkload.radialExponent == 2.0f &&
+                    definition.expectedWorkload.radius ==
+                        (xeGtao ? 0.5f : 3.0f) &&
+                    definition.expectedWorkload.thickness ==
+                        (xeGtao ? 0.0f : 0.5f) &&
+                    definition.expectedWorkload.radialExponent ==
+                        (ps4Prototype ? 1.0f : 2.0f) &&
                     definition.expectedWorkload.threadGroupSizeX == 8u &&
                     definition.expectedWorkload.threadGroupSizeY == 8u &&
                     !definition.expectedWorkload.adaptiveSamplingEnabled &&
-                    !definition.expectedWorkload.temporalEnabled &&
-                    !definition.expectedWorkload.spatialEnabled &&
+                    definition.expectedWorkload.temporalEnabled ==
+                        ps4Prototype &&
+                    definition.expectedWorkload.spatialEnabled ==
+                        (ps4Prototype || xeGtao) &&
                     !definition.expectedWorkload.depthHierarchyEnabled,
                 "Every one-click definition explicitly assigns target settings");
+            if (xeGtao)
+            {
+                Require(definition.implementationStatus ==
+                            VisibilityImplementationStatus::Implemented &&
+                        definition.implementationProfile ==
+                            VisibilityPerformanceProfile::
+                                XeGtaoClosestMatch &&
+                        definition.expectedWorkload.scheduler ==
+                            VisibilityPerformanceScheduler::XeGtaoHilbertR2 &&
+                        definition.expectedWorkload.firstBounceSampleCount ==
+                            18u &&
+                        definition.expectedWorkload.laterBounceSampleCount ==
+                            9u,
+                    "The XeGTAO one-click preset selects the implemented full-resolution High contract");
+                VisibilityPerformanceWorkload runtimeDerivedWorkload =
+                    definition.expectedWorkload;
+                runtimeDerivedWorkload.laterBounceSampleCount =
+                    std::max(
+                        1u,
+                        runtimeDerivedWorkload.firstBounceSampleCount / 2u);
+                const VisibilityVerificationProfileResolution
+                    runtimeDerivedResolution =
+                        ResolveVisibilityVerificationProfile(
+                            profile, runtimeDerivedWorkload);
+                Require(
+                    runtimeDerivedResolution.valid &&
+                        runtimeDerivedResolution.executionPlan.valid,
+                    "The one-click XeGTAO settings match the runtime-derived later-bounce count");
+            }
+            if (ps4Prototype)
+            {
+                Require(definition.implementationStatus ==
+                            VisibilityImplementationStatus::Implemented &&
+                        definition.implementationProfile ==
+                            VisibilityPerformanceProfile::
+                                ActivisionPs4Schedule &&
+                        definition.expectedWorkload.scheduler ==
+                            VisibilityPerformanceScheduler::
+                                Activision4x4SixPhase &&
+                        definition.expectedWorkload.firstBounceSampleCount ==
+                            8u,
+                    "The PS4 one-click preset selects the repaired scalar prototype");
+            }
 
             const VisibilityVerificationProfileResolution resolution =
                 ResolveVisibilityVerificationProfile(
@@ -2135,8 +2467,8 @@ namespace
                 }
             }
         }
-        Require(unavailableCount == 3u,
-            "Mixed precision, aggressive, and XeGTAO remain honestly unavailable");
+        Require(unavailableCount == 2u,
+            "Only the uncompiled mixed-precision and aggressive presets remain unavailable");
 
         const auto reference = GetVisibilityVerificationProfileDefinition(
             VisibilityVerificationProfile::ReferenceAo8T);

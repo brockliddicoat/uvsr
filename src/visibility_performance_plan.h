@@ -28,6 +28,7 @@ namespace uvsr
         ExactFixedAllBounce8,
         ExactPackedCurrentFast,
         ExactFusedResolveApply,
+        ExactFixed8FusedResolveApply,
         DiagnosticFusedFullResolutionAoOutput,
         ExactGroup16x8,
         ExactGroup8x16,
@@ -56,7 +57,10 @@ namespace uvsr
         AlgorithmicActivisionSchedule,
         ActivisionClosestMatch,
         ActivisionPs4Schedule,
+        ActivisionPs4PackedGather,
         XeGtaoClosestMatch,
+        XeGtaoHighInlineHilbert,
+        XeGtaoHighFp32,
         GenericFallback,
         Count
     };
@@ -80,6 +84,7 @@ namespace uvsr
         Fixed8,
         Fixed12,
         Fixed16,
+        Fixed18,
         Fixed20
     };
 
@@ -90,7 +95,8 @@ namespace uvsr
         PackedCurrentFast,
         ConstantDiagnostic,
         ActivisionInterleavedGradient,
-        XeGtaoHilbertR2
+        XeGtaoHilbertR2,
+        XeGtaoInlineHilbertR2
     };
 
     enum class VisibilityMathMode : uint8_t
@@ -193,7 +199,8 @@ namespace uvsr
         Unset,
         Any,
         Reduced,
-        Half
+        Half,
+        Full
     };
 
     enum class VisibilityPerformanceConsumer : uint8_t
@@ -336,6 +343,8 @@ namespace uvsr
 
     enum class VisibilityExecutionResource : uint64_t
     {
+        // Each bit denotes an allocation family, not one texture instance.
+        // Temporal families and XeGTAO working AO are ping-pong allocations.
         RawAmbientR16 = uint64_t{ 1 } << 0u,
         RawAmbientR8 = uint64_t{ 1 } << 1u,
         RawAmbientPackedCountEdgesR16 = uint64_t{ 1 } << 2u,
@@ -354,7 +363,11 @@ namespace uvsr
         LegacyCurrentFastNoise = uint64_t{ 1 } << 15u,
         PackedCurrentFastNoise = uint64_t{ 1 } << 16u,
         PackedEdgesR8Uint = uint64_t{ 1 } << 17u,
-        PackedEdgesR8Unorm = uint64_t{ 1 } << 18u
+        PackedEdgesR8Unorm = uint64_t{ 1 } << 18u,
+        ActivisionSpatialAmbientR16 = uint64_t{ 1 } << 19u,
+        ActivisionPackedDepthGuideR32Uint = uint64_t{ 1 } << 20u,
+        XeGtaoWorkingAoR16 = uint64_t{ 1 } << 21u,
+        XeGtaoHilbertLutR16Uint = uint64_t{ 1 } << 22u
     };
 
     enum class VisibilityExecutionBinding : uint64_t
@@ -374,7 +387,10 @@ namespace uvsr
         IndirectHistory = uint64_t{ 1 } << 12u,
         AmbientOutput = uint64_t{ 1 } << 13u,
         IndirectOutput = uint64_t{ 1 } << 14u,
-        PackedEdges = uint64_t{ 1 } << 15u
+        PackedEdges = uint64_t{ 1 } << 15u,
+        XeGtaoEdges = uint64_t{ 1 } << 16u,
+        XeGtaoHilbertLut = uint64_t{ 1 } << 17u,
+        ActivisionPreparedDepth = uint64_t{ 1 } << 18u
     };
 
     enum class VisibilityExecutionPass : uint64_t
@@ -392,7 +408,8 @@ namespace uvsr
         Reconstruction = uint64_t{ 1 } << 10u,
         Composition = uint64_t{ 1 } << 11u,
         FusedResolveAndApply = uint64_t{ 1 } << 12u,
-        CompositionBypass = uint64_t{ 1 } << 13u
+        CompositionBypass = uint64_t{ 1 } << 13u,
+        SpatialDenoise = uint64_t{ 1 } << 14u
     };
 
     inline constexpr uint64_t VisibilityOptionalResourceMask =
@@ -407,12 +424,25 @@ namespace uvsr
         static_cast<uint64_t>(
             VisibilityExecutionResource::PackedEdgesR8Uint) |
         static_cast<uint64_t>(
-            VisibilityExecutionResource::PackedEdgesR8Unorm);
+            VisibilityExecutionResource::PackedEdgesR8Unorm) |
+        static_cast<uint64_t>(
+            VisibilityExecutionResource::ActivisionSpatialAmbientR16) |
+        static_cast<uint64_t>(
+            VisibilityExecutionResource::ActivisionPackedDepthGuideR32Uint) |
+        static_cast<uint64_t>(
+            VisibilityExecutionResource::XeGtaoWorkingAoR16) |
+        static_cast<uint64_t>(
+            VisibilityExecutionResource::XeGtaoHilbertLutR16Uint);
 
     inline constexpr uint64_t VisibilityCandidateBindingMask =
         static_cast<uint64_t>(
             VisibilityExecutionBinding::PackedCurrentFastNoise) |
-        static_cast<uint64_t>(VisibilityExecutionBinding::PackedEdges);
+        static_cast<uint64_t>(VisibilityExecutionBinding::PackedEdges) |
+        static_cast<uint64_t>(VisibilityExecutionBinding::XeGtaoEdges) |
+        static_cast<uint64_t>(
+            VisibilityExecutionBinding::XeGtaoHilbertLut) |
+        static_cast<uint64_t>(
+            VisibilityExecutionBinding::ActivisionPreparedDepth);
 
     inline constexpr uint64_t VisibilityCandidatePassMask =
         static_cast<uint64_t>(
@@ -426,7 +456,8 @@ namespace uvsr
             VisibilityExecutionPass::FixedLaterBounceTrace) |
         static_cast<uint64_t>(
             VisibilityExecutionPass::FusedResolveAndApply) |
-        static_cast<uint64_t>(VisibilityExecutionPass::CompositionBypass);
+        static_cast<uint64_t>(VisibilityExecutionPass::CompositionBypass) |
+        static_cast<uint64_t>(VisibilityExecutionPass::SpatialDenoise);
 
     struct VisibilityExecutionPlan
     {

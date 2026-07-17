@@ -908,7 +908,10 @@ static VisibilityPerformanceWorkload BuildVisibilityPerformanceWorkload(
         workload.scheduler =
             VisibilityPerformanceScheduler::Activision4x4SixPhase;
     }
-    else if (configuration.noise == VisibilityNoiseDelivery::XeGtaoHilbertR2)
+    else if (configuration.noise ==
+            VisibilityNoiseDelivery::XeGtaoHilbertR2 ||
+        configuration.noise ==
+            VisibilityNoiseDelivery::XeGtaoInlineHilbertR2)
     {
         workload.scheduler = VisibilityPerformanceScheduler::XeGtaoHilbertR2;
     }
@@ -994,6 +997,7 @@ static uint32_t GetVisibilityFixedSampleCount(
     case VisibilitySampleSpecialization::Fixed8: return 8u;
     case VisibilitySampleSpecialization::Fixed12: return 12u;
     case VisibilitySampleSpecialization::Fixed16: return 16u;
+    case VisibilitySampleSpecialization::Fixed18: return 18u;
     case VisibilitySampleSpecialization::Fixed20: return 20u;
     default: return 0u;
     }
@@ -1135,7 +1139,9 @@ static bool ApplyVisibilityPerformanceProfileDefaults(
     }
     else if (configuration.noise ==
             VisibilityNoiseDelivery::ActivisionInterleavedGradient ||
-        configuration.noise == VisibilityNoiseDelivery::XeGtaoHilbertR2)
+        configuration.noise == VisibilityNoiseDelivery::XeGtaoHilbertR2 ||
+        configuration.noise ==
+            VisibilityNoiseDelivery::XeGtaoInlineHilbertR2)
     {
         visibility.sampling.scheduler =
             VisibilitySampleScheduler::IndependentHash;
@@ -1145,8 +1151,53 @@ static bool ApplyVisibilityPerformanceProfileDefaults(
         configuration.temporal == VisibilityTemporalMode::CopyDiagnostic ||
         configuration.temporal ==
             VisibilityTemporalMode::ActivisionSixDirectionEma;
-    visibility.reconstruction.spatialEnabled = false;
+    visibility.reconstruction.spatialEnabled =
+        configuration.reconstruction ==
+            VisibilityReconstructionMode::ActivisionBilateral4x4;
+    if (configuration.reconstruction ==
+        VisibilityReconstructionMode::ActivisionBilateral4x4)
+    {
+        // Published GTAO distributes four taps per side directly over the
+        // radius. The temporal response is a disclosed UVSR prototype value;
+        // Activision's shipping coefficient was not published.
+        visibility.sampling.stepDistributionExponent = 1.f;
+        visibility.reconstruction.temporalResponse = 0.12f;
+        visibility.reconstruction.spatialRadius = 2.f;
+    }
+    else if (configuration.reconstruction ==
+        VisibilityReconstructionMode::XeGtaoDenoise)
+    {
+        visibility.resolution = VisibilityResolution::Full;
+        visibility.sampling.minimumSampleCount = 18u;
+        visibility.sampling.maximumSampleCount = 18u;
+        visibility.sampling.radius = 0.5f;
+        visibility.sampling.thickness = 0.f;
+        visibility.sampling.stepDistributionExponent = 2.f;
+        visibility.reconstruction.temporalEnabled = false;
+        visibility.reconstruction.spatialEnabled = true;
+        visibility.reconstruction.spatialRadius = 1.f;
+    }
     return true;
+}
+
+static std::string_view GetVisibilityPerformanceProfileDisplayName(
+    VisibilityPerformanceProfile profile)
+{
+    switch (profile)
+    {
+    case VisibilityPerformanceProfile::ActivisionPs4Schedule:
+        return "PS4 GTAO - Scalar 4x4";
+    case VisibilityPerformanceProfile::ActivisionPs4PackedGather:
+        return "PS4 GTAO - Packed 4x4 Gather";
+    case VisibilityPerformanceProfile::XeGtaoClosestMatch:
+        return "XeGTAO High - LUT / Mixed";
+    case VisibilityPerformanceProfile::XeGtaoHighInlineHilbert:
+        return "XeGTAO High - Inline Hilbert / Mixed";
+    case VisibilityPerformanceProfile::XeGtaoHighFp32:
+        return "XeGTAO High - LUT / FP32";
+    default:
+        return GetVisibilityPerformanceProfileConfiguration(profile).name;
+    }
 }
 
 static std::string NormalizeVisibilityProfileName(std::string_view name)
@@ -1184,11 +1235,40 @@ static bool TryParseVisibilityVerificationProfile(
     return false;
 }
 
+static bool TryParseVisibilityPerformanceProfile(
+    std::string_view name,
+    VisibilityPerformanceProfile& profile)
+{
+    const std::string normalized = NormalizeVisibilityProfileName(name);
+    for (uint32_t profileIndex = 1u;
+        profileIndex < static_cast<uint32_t>(
+            VisibilityPerformanceProfile::Count);
+        ++profileIndex)
+    {
+        const auto candidate = static_cast<VisibilityPerformanceProfile>(
+            profileIndex);
+        const VisibilityPerformanceProfileConfiguration configuration =
+            GetVisibilityPerformanceProfileConfiguration(candidate);
+        if (NormalizeVisibilityProfileName(configuration.name) == normalized ||
+            NormalizeVisibilityProfileName(
+                GetVisibilityPerformanceProfileDisplayName(candidate)) ==
+                    normalized)
+        {
+            profile = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
 struct VisibilityBenchmarkLaunchOptions
 {
     VisibilityVerificationProfile profile =
         VisibilityVerificationProfile::ReferenceAo8T;
     bool profileSpecified = false;
+    VisibilityPerformanceProfile implementationProfile =
+        VisibilityPerformanceProfile::Unset;
+    bool implementationProfileSpecified = false;
     bool benchmarkRequested = false;
     uint8_t sequenceKind = 0u;
     uint32_t warmupFrameCount = 120u;
@@ -1266,6 +1346,7 @@ struct VisibilityBenchmarkRunSettings
     float adaptiveStrength = 0.f;
     float radius = 0.f;
     float thickness = 0.f;
+    bool thicknessActive = true;
     float radialDistributionExponent = 0.f;
     std::string scheduler;
     std::string noiseDelivery;
@@ -1283,6 +1364,7 @@ struct VisibilityBenchmarkRunSettings
     bool spatialEnabled = false;
     std::string spatialFilter;
     float spatialRadius = 0.f;
+    bool spatialRadiusActive = false;
     std::string reconstruction;
     std::string application;
     uint32_t threadGroupSizeX = 0u;
@@ -1327,6 +1409,7 @@ enum class VisibilityBenchmarkSequenceKind : uint8_t
     Reconstruction,
     Math,
     AllImplemented,
+    NewCandidates,
     Precision
 };
 
@@ -1350,6 +1433,9 @@ static bool TryParseVisibilityBenchmarkSequenceKind(
     else if (normalized == "all" || normalized == "smoke" ||
         normalized == "allprofiles" || normalized == "allimplemented")
         kind = VisibilityBenchmarkSequenceKind::AllImplemented;
+    else if (normalized == "new" || normalized == "newcandidates" ||
+        normalized == "sourceports" || normalized == "gtao")
+        kind = VisibilityBenchmarkSequenceKind::NewCandidates;
     else if (normalized == "precision" || normalized == "precisionmatrix")
         kind = VisibilityBenchmarkSequenceKind::Precision;
     else
@@ -1480,7 +1566,7 @@ static const char* DescribeVisibilityTrace(
     case VisibilityTraceImplementation::ActivisionHorizon:
         return "Activision Horizon Control";
     case VisibilityTraceImplementation::XeGtaoHorizon:
-        return "XeGTAO Horizon Control";
+        return "Intel XeGTAO 1.30 Source Port";
     default: return "Unknown";
     }
 }
@@ -1494,6 +1580,7 @@ static const char* DescribeVisibilitySampleSpecialization(
     case VisibilitySampleSpecialization::Fixed8: return "Fixed 8";
     case VisibilitySampleSpecialization::Fixed12: return "Fixed 12";
     case VisibilitySampleSpecialization::Fixed16: return "Fixed 16";
+    case VisibilitySampleSpecialization::Fixed18: return "Fixed 18";
     case VisibilitySampleSpecialization::Fixed20: return "Fixed 20";
     default: return "Unknown";
     }
@@ -1514,6 +1601,8 @@ static const char* DescribeVisibilityNoiseDelivery(
         return "Activision Interleaved Gradient";
     case VisibilityNoiseDelivery::XeGtaoHilbertR2:
         return "XeGTAO Hilbert + R2";
+    case VisibilityNoiseDelivery::XeGtaoInlineHilbertR2:
+        return "XeGTAO Inline Hilbert + R2";
     default: return "Unknown";
     }
 }
@@ -1620,7 +1709,7 @@ static const char* DescribeVisibilityDepth(VisibilityDepthMode value)
     {
     case VisibilityDepthMode::Legacy: return "Direct Device Depth";
     case VisibilityDepthMode::ActivisionClampedScreenRadius:
-        return "Activision Clamped Screen Radius";
+        return "Activision Packed Closest-Depth Guide + 64 px Clamp";
     case VisibilityDepthMode::XeGtaoPrefilteredMips:
         return "XeGTAO Prefiltered Mips";
     default: return "Unknown";
@@ -1680,6 +1769,11 @@ static VisibilityBenchmarkRunSettings BuildVisibilityBenchmarkRunSettings(
     const ScreenSpaceVisibilityTimings& timings)
 {
     VisibilityBenchmarkRunSettings result;
+    const bool activisionPs4Pipeline =
+        configuration.depth ==
+            VisibilityDepthMode::ActivisionClampedScreenRadius &&
+        configuration.reconstruction ==
+            VisibilityReconstructionMode::ActivisionBilateral4x4;
     result.implementationProfile.assign(configuration.name);
     result.optimizationClass = DescribeVisibilityOptimizationClass(
         configuration.optimizationClass);
@@ -1719,6 +1813,7 @@ static VisibilityBenchmarkRunSettings BuildVisibilityBenchmarkRunSettings(
     result.adaptiveStrength = visibility.sampling.adaptiveStrength;
     result.radius = visibility.sampling.radius;
     result.thickness = visibility.sampling.thickness;
+    result.thicknessActive = !activisionPs4Pipeline;
     result.radialDistributionExponent =
         visibility.sampling.stepDistributionExponent;
     result.scheduler = DescribeVisibilityScheduler(workload.scheduler);
@@ -1742,12 +1837,17 @@ static VisibilityBenchmarkRunSettings BuildVisibilityBenchmarkRunSettings(
         ? "R16_FLOAT" : "Not Allocated";
     result.temporalDepthFormat = result.temporalEnabled
         ? "R32_FLOAT" : "Not Allocated";
-    result.temporalNormalFormat = result.temporalEnabled
+    result.temporalNormalFormat =
+        result.temporalEnabled && !activisionPs4Pipeline
         ? "RGBA8_UNORM" : "Not Allocated";
     result.spatialEnabled = visibility.reconstruction.spatialEnabled;
-    result.spatialFilter = DescribeVisibilitySpatialFilter(
-        visibility.reconstruction.spatialFilter);
+    result.spatialFilter = activisionPs4Pipeline
+        ? "Fixed 4x4 Linear Relative-Depth"
+        : DescribeVisibilitySpatialFilter(
+            visibility.reconstruction.spatialFilter);
     result.spatialRadius = visibility.reconstruction.spatialRadius;
+    result.spatialRadiusActive =
+        result.spatialEnabled && !activisionPs4Pipeline;
     result.reconstruction = DescribeVisibilityReconstruction(
         configuration.reconstruction);
     result.application = DescribeVisibilityApplication(
@@ -1807,6 +1907,7 @@ static VisibilityBenchmarkRunSettings BuildVisibilityBenchmarkRunSettings(
         << ";adaptive_strength=" << result.adaptiveStrength
         << ";radius=" << result.radius
         << ";thickness=" << result.thickness
+        << ";thickness_active=" << result.thicknessActive
         << ";radial_exponent=" << result.radialDistributionExponent
         << ";scheduler=" << result.scheduler
         << ";noise_delivery=" << result.noiseDelivery
@@ -1824,6 +1925,7 @@ static VisibilityBenchmarkRunSettings BuildVisibilityBenchmarkRunSettings(
         << ";spatial_enabled=" << result.spatialEnabled
         << ";spatial_filter=" << result.spatialFilter
         << ";spatial_radius=" << result.spatialRadius
+        << ";spatial_radius_active=" << result.spatialRadiusActive
         << ";reconstruction=" << result.reconstruction
         << ";application=" << result.application
         << ";thread_group=" << result.threadGroupSizeX << 'x'
@@ -2155,6 +2257,8 @@ static void WriteVisibilityBenchmarkRunSettingsJson(
         << ",\"adaptive_strength\":" << settings.adaptiveStrength
         << ",\"radius\":" << settings.radius
         << ",\"thickness\":" << settings.thickness
+        << ",\"thickness_active\":"
+        << (settings.thicknessActive ? "true" : "false")
         << ",\"radial_distribution_exponent\":"
         << settings.radialDistributionExponent << ",\"scheduler\":";
     WriteJsonString(output, settings.scheduler);
@@ -2166,6 +2270,8 @@ static void WriteVisibilityBenchmarkRunSettingsJson(
         << ",\"spatial_filter\":";
     WriteJsonString(output, settings.spatialFilter);
     output << ",\"spatial_radius\":" << settings.spatialRadius
+        << ",\"spatial_radius_active\":"
+        << (settings.spatialRadiusActive ? "true" : "false")
         << "},\n    \"dispatch\": {\"thread_group_x\":"
         << settings.threadGroupSizeX << ",\"thread_group_y\":"
         << settings.threadGroupSizeY << "},\n"
@@ -2195,13 +2301,22 @@ static void WriteVisibilityBenchmarkRunSettingsJson(
         << settings.logicalTrafficAvoidedBytes << "}\n  }";
 }
 
-static std::string MakeFileNameToken(std::string_view value)
+static std::string MakeFileNameToken(
+    std::string_view value,
+    size_t maximumTokenLength = 48u)
 {
+    // The full profile name is preserved in JSON. Keep only a concise display
+    // token in the artifact filename so ordinary Windows MAX_PATH setups still
+    // have room for the output directory, two collision-resistant hashes, the
+    // timestamp, extension, and an optional collision suffix.
+    maximumTokenLength = std::max(maximumTokenLength, size_t(1u));
     std::string token;
-    token.reserve(value.size());
+    token.reserve(std::min(value.size(), maximumTokenLength));
     bool previousDash = false;
     for (const unsigned char character : value)
     {
+        if (token.size() >= maximumTokenLength)
+            break;
         if (std::isalnum(character))
         {
             token.push_back(char(std::tolower(character)));
@@ -2215,7 +2330,45 @@ static std::string MakeFileNameToken(std::string_view value)
     }
     while (!token.empty() && token.back() == '-')
         token.pop_back();
-    return token.empty() ? "profile" : token;
+    if (!token.empty())
+        return token;
+    return std::string("profile").substr(0u, maximumTokenLength);
+}
+
+static size_t GetVisibilityArtifactProfileTokenBudget(
+    const std::filesystem::path& directory,
+    std::string_view prefix,
+    std::string_view permutationToken,
+    std::string_view settingsToken,
+    std::string_view timestamp,
+    std::string_view extension)
+{
+    constexpr size_t DefaultMaximumTokenLength = 48u;
+#ifdef _WIN32
+    // Keep enough headroom below legacy MAX_PATH for a trailing NUL, the
+    // largest collision suffix ("-9999"), and library-internal path handling.
+    // The full profile name remains in JSON, so shortening only the display
+    // token is lossless and lets descriptive output folders remain usable.
+    constexpr size_t ConservativeMaximumPathLength = 240u;
+    constexpr size_t CollisionSuffixReserve = 5u;
+    const size_t fixedLength = directory.native().size() + 1u +
+        prefix.size() + 3u + permutationToken.size() +
+        settingsToken.size() + timestamp.size() + extension.size() +
+        CollisionSuffixReserve;
+    if (fixedLength >= ConservativeMaximumPathLength)
+        return 1u;
+    return std::clamp(
+        ConservativeMaximumPathLength - fixedLength,
+        size_t(1u), DefaultMaximumTokenLength);
+#else
+    (void)directory;
+    (void)prefix;
+    (void)permutationToken;
+    (void)settingsToken;
+    (void)timestamp;
+    (void)extension;
+    return DefaultMaximumTokenLength;
+#endif
 }
 
 static std::string FormatVisibilityBenchmarkTimestamp(
@@ -2315,7 +2468,6 @@ static bool AllocateVisibilityBenchmarkMeasuredFramePath(
         return false;
     }
 
-    const std::string profileToken = MakeFileNameToken(metadata.profileName);
     const std::string_view permutationMetadata = metadata.permutationKey;
     const std::string permutationToken = MakeFileNameToken(
         permutationMetadata.substr(0, permutationMetadata.find(':')));
@@ -2323,6 +2475,11 @@ static bool AllocateVisibilityBenchmarkMeasuredFramePath(
         FormatVisibilityBenchmarkHash(runSettingsHash));
     const std::string timestamp = FormatVisibilityBenchmarkTimestamp(
         std::chrono::system_clock::now());
+    const std::string profileToken = MakeFileNameToken(
+        metadata.profileName,
+        GetVisibilityArtifactProfileTokenBudget(
+            directory, ".vframe-", permutationToken, settingsToken,
+            timestamp, ".bmp"));
     std::error_code fileError;
     for (uint32_t suffix = 0u; suffix < 10000u; ++suffix)
     {
@@ -2365,8 +2522,6 @@ static bool ExportVisibilityBenchmark(
         return false;
     }
 
-    const std::string profileToken = MakeFileNameToken(
-        summary.configuration.metadata.profileName);
     const std::string_view permutationMetadata =
         summary.configuration.metadata.permutationKey;
     const size_t permutationSeparator = permutationMetadata.find(':');
@@ -2376,6 +2531,11 @@ static bool ExportVisibilityBenchmark(
         FormatVisibilityBenchmarkHash(artifactMetadata.runSettings.hash));
     const std::string timestamp = FormatVisibilityBenchmarkTimestamp(
         std::chrono::system_clock::now());
+    const std::string profileToken = MakeFileNameToken(
+        summary.configuration.metadata.profileName,
+        GetVisibilityArtifactProfileTokenBudget(
+            directory, "visibility-", permutationToken, settingsToken,
+            timestamp, ".json"));
     std::filesystem::path base;
     for (uint32_t suffix = 0u; suffix < 10000u; ++suffix)
     {
@@ -2384,9 +2544,12 @@ static bool ExportVisibilityBenchmark(
         if (suffix > 0u)
             name += '-' + std::to_string(suffix);
         base = directory / name;
-        const std::filesystem::path jsonCandidate = base.string() + ".json";
-        const std::filesystem::path csvCandidate = base.string() + ".csv";
-        const std::filesystem::path frameCandidate = base.string() + ".bmp";
+        std::filesystem::path jsonCandidate = base;
+        std::filesystem::path csvCandidate = base;
+        std::filesystem::path frameCandidate = base;
+        jsonCandidate += ".json";
+        csvCandidate += ".csv";
+        frameCandidate += ".bmp";
         if (!std::filesystem::exists(jsonCandidate, fileError) &&
             !std::filesystem::exists(csvCandidate, fileError) &&
             !std::filesystem::exists(frameCandidate, fileError))
@@ -4329,6 +4492,13 @@ bool UvsrSceneViewer::QueueVisibilityBenchmarkSequence(
 
     std::vector<VisibilityBenchmarkSequenceEntry> entries;
     std::string sequenceName;
+    const auto makeProfileEntry = [](VisibilityPerformanceProfile profile)
+    {
+        const VisibilityPerformanceProfileConfiguration configuration =
+            GetVisibilityPerformanceProfileConfiguration(profile);
+        return VisibilityBenchmarkSequenceEntry{
+            std::string(configuration.name), profile, false };
+    };
     switch (kind)
     {
     case VisibilityBenchmarkSequenceKind::ReferenceVersusCurrent:
@@ -4342,12 +4512,11 @@ bool UvsrSceneViewer::QueueVisibilityBenchmarkSequence(
     case VisibilityBenchmarkSequenceKind::FixedSample:
         sequenceName = "Fixed Sample Matrix";
         entries = {
-            { "Reference Generic", VisibilityPerformanceProfile::Reference,
-                false },
-            { "Fixed 8", VisibilityPerformanceProfile::ExactFixed8, false },
-            { "Fixed 12", VisibilityPerformanceProfile::ExactFixed12, false },
-            { "Fixed 16", VisibilityPerformanceProfile::ExactFixed16, false },
-            { "Fixed 20", VisibilityPerformanceProfile::ExactFixed20, false }
+            makeProfileEntry(VisibilityPerformanceProfile::Reference),
+            makeProfileEntry(VisibilityPerformanceProfile::ExactFixed8),
+            makeProfileEntry(VisibilityPerformanceProfile::ExactFixed12),
+            makeProfileEntry(VisibilityPerformanceProfile::ExactFixed16),
+            makeProfileEntry(VisibilityPerformanceProfile::ExactFixed20)
         };
         break;
     case VisibilityBenchmarkSequenceKind::Noise:
@@ -4421,10 +4590,9 @@ bool UvsrSceneViewer::QueueVisibilityBenchmarkSequence(
     case VisibilityBenchmarkSequenceKind::Math:
         sequenceName = "Math Matrix";
         entries = {
-            { "Reference FP32", VisibilityPerformanceProfile::Reference,
-                false },
-            { "Conservative Numerical FP32",
-                VisibilityPerformanceProfile::ConservativeNumerical, false }
+            makeProfileEntry(VisibilityPerformanceProfile::Reference),
+            makeProfileEntry(
+                VisibilityPerformanceProfile::ConservativeNumerical)
         };
         break;
     case VisibilityBenchmarkSequenceKind::AllImplemented:
@@ -4519,14 +4687,36 @@ bool UvsrSceneViewer::QueueVisibilityBenchmarkSequence(
             entries.push_back(std::move(temporal));
         }
         break;
+    case VisibilityBenchmarkSequenceKind::NewCandidates:
+        sequenceName = "New AO Optimization Candidates";
+        entries = {
+            makeProfileEntry(VisibilityPerformanceProfile::Reference),
+            makeProfileEntry(VisibilityPerformanceProfile::ExactFixed8),
+            makeProfileEntry(
+                VisibilityPerformanceProfile::ExactFusedResolveApply),
+            makeProfileEntry(
+                VisibilityPerformanceProfile::ExactFixed8FusedResolveApply),
+            makeProfileEntry(
+                VisibilityPerformanceProfile::ActivisionPs4Schedule),
+            makeProfileEntry(
+                VisibilityPerformanceProfile::ActivisionPs4PackedGather),
+            makeProfileEntry(
+                VisibilityPerformanceProfile::XeGtaoClosestMatch),
+            makeProfileEntry(
+                VisibilityPerformanceProfile::XeGtaoHighInlineHilbert),
+            makeProfileEntry(
+                VisibilityPerformanceProfile::XeGtaoHighFp32)
+        };
+        break;
     case VisibilityBenchmarkSequenceKind::Precision:
-        m_VisibilityBenchmarkStatus = "Precision Matrix unavailable.";
-        m_VisibilityBenchmarkError =
-            "No non-reference mixed-precision trace profile is compiled. "
-            "Conservative Numerical changes FP32 filter algebra and would not "
-            "be an honest precision comparison.";
-        log::warning("%s", m_VisibilityBenchmarkError.c_str());
-        return false;
+        sequenceName = "XeGTAO Precision Matrix";
+        entries = {
+            makeProfileEntry(
+                VisibilityPerformanceProfile::XeGtaoClosestMatch),
+            makeProfileEntry(
+                VisibilityPerformanceProfile::XeGtaoHighFp32)
+        };
+        break;
     default:
         return false;
     }
@@ -5166,9 +5356,17 @@ bool UvsrSceneViewer::ExportLastVisibilityBenchmark(
     }
     if (copyError)
     {
+        // Re-export is an all-or-nothing artifact set. Do not leave a summary
+        // that names a final measured frame which could not be copied.
+        std::error_code cleanupError;
+        std::filesystem::remove(exportedPaths.json, cleanupError);
+        cleanupError.clear();
+        std::filesystem::remove(exportedPaths.csv, cleanupError);
+        cleanupError.clear();
+        std::filesystem::remove(exportedPaths.presentedFrame, cleanupError);
         m_VisibilityBenchmarkError =
-            "JSON and CSV were exported, but the recorded final measured frame could "
-            "not be copied: " + copyError.message();
+            "Benchmark re-export was rolled back because the recorded final "
+            "measured frame could not be copied: " + copyError.message();
         log::warning("%s", m_VisibilityBenchmarkError.c_str());
         return false;
     }
@@ -5226,6 +5424,12 @@ private:
         default:
             return "Unset";
         }
+    }
+
+    static std::string_view GetPerformanceProfileUiLabel(
+        VisibilityPerformanceProfile profile)
+    {
+        return GetVisibilityPerformanceProfileDisplayName(profile);
     }
 
     static const char* GetConsumerLabel(
@@ -5297,6 +5501,8 @@ private:
             return "Activision 4x4 x 6 Schedule";
         case VisibilityPerformanceScheduler::XeGtaoHilbertR2:
             return "XeGTAO Hilbert + R2";
+        case VisibilityPerformanceScheduler::ConstantDiagnostic:
+            return "Constant Diagnostic";
         default:
             return "Unknown";
         }
@@ -5320,7 +5526,7 @@ private:
         case VisibilityTraceImplementation::ActivisionHorizon:
             return "Activision Horizon Benchmark";
         case VisibilityTraceImplementation::XeGtaoHorizon:
-            return "XeGTAO Horizon Benchmark";
+            return "Intel XeGTAO 1.30 Source Port";
         default:
             return "Unknown";
         }
@@ -5339,6 +5545,8 @@ private:
             return "Fixed 12 Total, 6 Per Side";
         case VisibilitySampleSpecialization::Fixed16:
             return "Fixed 16 Total, 8 Per Side";
+        case VisibilitySampleSpecialization::Fixed18:
+            return "Fixed 18 Total, 3 Slices x 3 Steps x 2 Sides";
         case VisibilitySampleSpecialization::Fixed20:
             return "Fixed 20 Total, 10 Per Side";
         default:
@@ -5354,10 +5562,14 @@ private:
             return "Reference Scheduler Resources";
         case VisibilityNoiseDelivery::PackedCurrentFast:
             return "Packed RGBA8 Current FAST";
+        case VisibilityNoiseDelivery::ConstantDiagnostic:
+            return "Constant Diagnostic";
         case VisibilityNoiseDelivery::ActivisionInterleavedGradient:
             return "Activision Interleaved Gradient";
         case VisibilityNoiseDelivery::XeGtaoHilbertR2:
             return "XeGTAO Hilbert + R2";
+        case VisibilityNoiseDelivery::XeGtaoInlineHilbertR2:
+            return "XeGTAO Inline Hilbert + R2";
         default:
             return "Unknown";
         }
@@ -5501,6 +5713,73 @@ private:
         return open;
     }
 
+    static bool DrawFolderButton(const char* id, const char* tooltip)
+    {
+        const float buttonSize = ImGui::GetFrameHeight();
+        const bool clicked = ImGui::Button(id, ImVec2(buttonSize, 0.f));
+        const ImVec2 iconMin = ImGui::GetItemRectMin();
+        const ImVec2 iconMax = ImGui::GetItemRectMax();
+        const float iconWidth = iconMax.x - iconMin.x;
+        const float iconHeight = iconMax.y - iconMin.y;
+        const ImU32 iconColor = ImGui::GetColorU32(ImGuiCol_Text);
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImVec2 bodyMin(
+            iconMin.x + iconWidth * 0.20f,
+            iconMin.y + iconHeight * 0.38f);
+        const ImVec2 bodyMax(
+            iconMax.x - iconWidth * 0.20f,
+            iconMax.y - iconHeight * 0.22f);
+        drawList->AddRect(bodyMin, bodyMax, iconColor, 1.5f, 0, 1.5f);
+        drawList->AddLine(
+            ImVec2(bodyMin.x, bodyMin.y),
+            ImVec2(bodyMin.x + iconWidth * 0.22f,
+                iconMin.y + iconHeight * 0.27f),
+            iconColor, 1.5f);
+        drawList->AddLine(
+            ImVec2(bodyMin.x + iconWidth * 0.22f,
+                iconMin.y + iconHeight * 0.27f),
+            ImVec2(bodyMin.x + iconWidth * 0.40f, bodyMin.y),
+            iconColor, 1.5f);
+        ImGui::SetItemTooltip("%s", tooltip);
+        return clicked;
+    }
+
+    static const char* GetBenchmarkStageLabel(
+        VisibilityBenchmarkStage stage)
+    {
+        switch (stage)
+        {
+        case VisibilityBenchmarkStage::DepthPreparation:
+            return "Depth Preparation";
+        case VisibilityBenchmarkStage::FirstTrace:
+            return "First-Bounce Visibility Trace";
+        case VisibilityBenchmarkStage::LaterTrace:
+            return "Later-Bounce GI Trace";
+        case VisibilityBenchmarkStage::LaterTraceBounce2:
+            return "  GI Bounce 2";
+        case VisibilityBenchmarkStage::LaterTraceBounce3:
+            return "  GI Bounce 3";
+        case VisibilityBenchmarkStage::LaterTraceBounce4:
+            return "  GI Bounce 4";
+        case VisibilityBenchmarkStage::SpatialDenoise:
+            return "Spatial Denoise";
+        case VisibilityBenchmarkStage::Temporal:
+            return "Temporal Reconstruction";
+        case VisibilityBenchmarkStage::FusedSpatialDenoiseUpsample:
+            return "Fused Spatial Denoise & Upsample";
+        case VisibilityBenchmarkStage::RequiredUpsample:
+            return "Required Full-Resolution Upsample";
+        case VisibilityBenchmarkStage::FullResolutionApply:
+            return "Fused Resolve & Apply";
+        case VisibilityBenchmarkStage::Composition:
+            return "Indirect-Lighting Composition";
+        case VisibilityBenchmarkStage::EffectEnvelope:
+            return "Complete Visibility Pipeline";
+        default:
+            return "Unknown Stage";
+        }
+    }
+
 public:
     UIRenderer(DeviceManager* deviceManager, std::shared_ptr<UvsrSceneViewer> app, UIData& ui)
         : ImGui_Renderer(deviceManager)
@@ -5591,7 +5870,18 @@ protected:
         float const fontSize = ImGui::GetFontSize();
 
         ImGui::SetNextWindowPos(ImVec2(fontSize * 0.6f, fontSize * 0.6f), 0);
-        ImGui::Begin("Settings", 0, ImGuiWindowFlags_AlwaysAutoResize);
+        const float settingsWindowHeight = std::max(
+            fontSize * 24.f,
+            std::min(float(height) - fontSize * 1.2f, fontSize * 50.f));
+        ImGui::SetNextWindowSize(
+            ImVec2(fontSize * 27.f, settingsWindowHeight),
+            ImGuiCond_Once);
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(fontSize * 24.f, fontSize * 18.f),
+            ImVec2(fontSize * 32.f,
+                std::max(fontSize * 18.f,
+                    float(height) - fontSize * 1.2f)));
+        ImGui::Begin("Settings", 0, ImGuiWindowFlags_AlwaysVerticalScrollbar);
         const ImGuiStyle& style = ImGui::GetStyle();
         const float settingsControlWidth =
             ImGui::CalcTextSize("Reload Shaders").x + style.FramePadding.x * 2.f +
@@ -5621,7 +5911,7 @@ protected:
         if (visibilityBenchmarkBusy)
         {
             ImGui::TextDisabled(
-                "Benchmark Environment Locked; Cancel Under Benchmark Actions");
+                "Benchmark Environment Locked; Cancel Under AO Benchmarks");
         }
 
         const bool generalOpen = DrawCollapsingHeader(
@@ -5790,31 +6080,11 @@ protected:
         }
 
         ImGui::SameLine();
-        if (ImGui::Button("##OpenSceneFolder", ImVec2(folderButtonWidth, 0.f)))
+        if (DrawFolderButton("##OpenSceneFolder", "Open the scene folder."))
         {
             const std::filesystem::path sceneFolder = m_app->GetSceneDir();
             ShellExecuteW(nullptr, L"open", sceneFolder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         }
-        {
-            const ImVec2 iconMin = ImGui::GetItemRectMin();
-            const ImVec2 iconMax = ImGui::GetItemRectMax();
-            const float iconWidth = iconMax.x - iconMin.x;
-            const float iconHeight = iconMax.y - iconMin.y;
-            const ImU32 iconColor = ImGui::GetColorU32(ImGuiCol_Text);
-            ImDrawList* drawList = ImGui::GetWindowDrawList();
-            const ImVec2 bodyMin(iconMin.x + iconWidth * 0.20f, iconMin.y + iconHeight * 0.38f);
-            const ImVec2 bodyMax(iconMax.x - iconWidth * 0.20f, iconMax.y - iconHeight * 0.22f);
-            drawList->AddRect(bodyMin, bodyMax, iconColor, 1.5f, 0, 1.5f);
-            drawList->AddLine(
-                ImVec2(bodyMin.x, bodyMin.y),
-                ImVec2(bodyMin.x + iconWidth * 0.22f, iconMin.y + iconHeight * 0.27f),
-                iconColor, 1.5f);
-            drawList->AddLine(
-                ImVec2(bodyMin.x + iconWidth * 0.22f, iconMin.y + iconHeight * 0.27f),
-                ImVec2(bodyMin.x + iconWidth * 0.40f, bodyMin.y),
-                iconColor, 1.5f);
-        }
-        ImGui::SetItemTooltip("Open the scene folder.");
 
         // Keep the legacy-lighting comparison path available for future
         // experiments without exposing it in the production settings UI.
@@ -5835,9 +6105,10 @@ protected:
         }
 
         const bool indirectLightingOpen = DrawCollapsingHeader(
-            "AO Performance Verification",
-            "Select curated AO performance profiles, inspect their exact "
-            "runtime plan, and retain the normal AO and diffuse GI controls.");
+            "Ambient Occlusion & Indirect Lighting",
+            "Configure AO, diffuse GI, sampling, denoising, and performance "
+            "experiments.",
+            ImGuiTreeNodeFlags_DefaultOpen);
         if (indirectLightingOpen)
         {
             ScreenSpaceVisibilitySettings& visibility = m_ui.ScreenSpaceVisibility;
@@ -5909,9 +6180,27 @@ protected:
                         m_ui.EnablePbr = true;
                     }
                 };
+            auto applyImplementationProfile =
+                [&](VisibilityPerformanceProfile profile)
+                {
+                    if (ApplyVisibilityPerformanceProfileDefaults(
+                            visibility, profile))
+                    {
+                        m_ui.VisibilityVerification =
+                            VisibilityVerificationProfile::Unset;
+                        m_ui.EnablePbr = true;
+                    }
+                };
+            auto switchVisibilityToCustom = [&]()
+                {
+                    visibility.performanceProfile =
+                        VisibilityPerformanceProfile::GenericFallback;
+                    m_ui.VisibilityVerification =
+                        VisibilityVerificationProfile::Unset;
+                };
 
             ImGui::TextUnformatted("Verification Profile");
-            ImGui::SetNextItemWidth(settingsControlWidth);
+            ImGui::SetNextItemWidth(-FLT_MIN);
             const char* selectedProfileName =
                 customImplementationProfile
                     ? "Custom Implementation Profile"
@@ -5969,16 +6258,18 @@ protected:
                 "Choose a fully specified benchmark profile. Selection "
                 "overwrites all profile-relevant AO and GI settings.");
 
-            ImGui::TextUnformatted("Custom Implementation Profile");
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            const char* activeImplementationName =
-                activeConfiguration.name.empty()
-                    ? "Unset"
-                    : activeConfiguration.name.data();
+            ImGui::TextUnformatted("Performance Profile");
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            const std::string_view activeImplementationName =
+                GetPerformanceProfileUiLabel(
+                    visibility.performanceProfile);
             if (ImGui::BeginCombo(
                     "##VisibilityImplementationProfile",
-                    activeImplementationName))
+                    activeImplementationName.empty()
+                        ? "Unset"
+                        : activeImplementationName.data()))
             {
+                int previousCategory = -1;
                 for (uint32_t profileIndex = 1u;
                     profileIndex < static_cast<uint32_t>(
                         VisibilityPerformanceProfile::Count);
@@ -5990,6 +6281,38 @@ protected:
                         configuration =
                             GetVisibilityPerformanceProfileConfiguration(
                                 profile);
+                    int category = 0;
+                    const char* categoryLabel = "Reference & Exact";
+                    if (configuration.implementationStatus ==
+                            VisibilityImplementationStatus::Unavailable ||
+                        configuration.implementationStatus ==
+                            VisibilityImplementationStatus::Unset)
+                    {
+                        category = 3;
+                        categoryLabel = "Unavailable";
+                    }
+                    else if (configuration.benchmarkOnly ||
+                        configuration.optimizationClass ==
+                            VisibilityOptimizationClass::Diagnostic)
+                    {
+                        category = 2;
+                        categoryLabel = "Diagnostics";
+                    }
+                    else if (configuration.optimizationClass ==
+                            VisibilityOptimizationClass::Algorithmic ||
+                        configuration.optimizationClass ==
+                            VisibilityOptimizationClass::Numerical)
+                    {
+                        category = 1;
+                        categoryLabel = "Performance Experiments";
+                    }
+                    if (category != previousCategory)
+                    {
+                        if (previousCategory >= 0)
+                            ImGui::Separator();
+                        ImGui::TextDisabled("%s", categoryLabel);
+                        previousCategory = category;
+                    }
                     const bool available =
                         configuration.implementationStatus !=
                             VisibilityImplementationStatus::Unavailable &&
@@ -5999,19 +6322,16 @@ protected:
                         profile == visibility.performanceProfile;
                     if (!available)
                         ImGui::BeginDisabled();
+                    const std::string_view profileUiLabel =
+                        GetPerformanceProfileUiLabel(profile);
                     if (ImGui::Selectable(
-                            configuration.name.data(), selected) && available)
+                            profileUiLabel.data(), selected) && available)
                     {
-                        if (ApplyVisibilityPerformanceProfileDefaults(
-                                visibility, profile))
-                        {
-                            m_ui.VisibilityVerification =
-                                VisibilityVerificationProfile::Unset;
-                            m_ui.EnablePbr = true;
-                        }
+                        applyImplementationProfile(profile);
                     }
                     ImGui::SetItemTooltip(
-                        "%s | %s%s%s",
+                        "%s\n%s | %s%s%s",
+                        configuration.name.data(),
                         GetOptimizationClassLabel(
                             configuration.optimizationClass),
                         GetImplementationStatusLabel(
@@ -6028,17 +6348,63 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Select any implemented or partial CPU-side profile. "
-                "Compatible canonical workload defaults are applied so the "
-                "permutation can be smoke-tested without stale settings.");
+                "Select any implemented profile. Diagnostics are test modes, "
+                "not quality presets.");
+
+            const float quickProfileWidth = std::max(
+                1.f,
+                (ImGui::GetContentRegionAvail().x -
+                    style.ItemSpacing.x * 2.f) / 3.f);
+            if (ImGui::Button(
+                    "Reference", ImVec2(quickProfileWidth, 0.f)))
+            {
+                applyImplementationProfile(
+                    VisibilityPerformanceProfile::Reference);
+            }
+            ImGui::SetItemTooltip("Restore the canonical reference path.");
+            ImGui::SameLine();
+            if (ImGui::Button(
+                    "Exact Fast", ImVec2(quickProfileWidth, 0.f)))
+            {
+                applyImplementationProfile(
+                    VisibilityPerformanceProfile::
+                        ExactFixed8FusedResolveApply);
+            }
+            ImGui::SetItemTooltip(
+                "Use fixed-eight tracing plus exact fused resolve-and-apply.");
+            ImGui::SameLine();
+            if (ImGui::Button(
+                    "Fast Edges", ImVec2(quickProfileWidth, 0.f)))
+            {
+                applyImplementationProfile(
+                    VisibilityPerformanceProfile::
+                        AlgorithmicFusedPackedEdges2x2);
+            }
+            ImGui::SetItemTooltip(
+                "Use the faster 2x2 packed-edge experiment.");
 
             const ImVec4 validColor = ImVec4(0.25f, 0.85f, 0.35f, 1.f);
             const ImVec4 invalidColor = ImVec4(1.f, 0.45f, 0.30f, 1.f);
+            const std::string& displayedPermutation = visibilityTimings &&
+                    !visibilityTimings->activePermutation.empty()
+                ? visibilityTimings->activePermutation
+                : activePlan.permutationName;
+            const std::string_view runningProfileLabel =
+                GetPerformanceProfileUiLabel(
+                    visibility.performanceProfile);
             ImGui::TextColored(
                 verificationProfileValid ? validColor : invalidColor,
-                verificationProfileValid
-                    ? "Profile Valid"
-                    : "Profile Invalid");
+                "%s: %s",
+                verificationProfileValid ? "Ready" : "Not Ready",
+                runningProfileLabel.empty()
+                    ? "Waiting for GPU plan"
+                    : runningProfileLabel.data());
+            if (!displayedPermutation.empty())
+            {
+                ImGui::SetItemTooltip(
+                    "Full GPU permutation:\n%s",
+                    displayedPermutation.c_str());
+            }
             if (!verificationProfileValid)
             {
                 const char* invalidReason = nullptr;
@@ -6091,431 +6457,19 @@ protected:
                         "the CPU-resolved profile plan yet.";
                 }
                 if (invalidReason)
-                    ImGui::TextWrapped("Reason: %s", invalidReason);
+                    ImGui::SetItemTooltip("%s", invalidReason);
             }
-
-            ImGui::Text(
-                "Implementation Status: %s",
-                GetImplementationStatusLabel(
-                    customImplementationProfile
-                        ? activeConfiguration.implementationStatus
-                        : selectedDefinition.implementationStatus));
-            const std::string_view implementationNote =
-                customImplementationProfile
-                    ? activeConfiguration.implementationNote
-                    : selectedDefinition.implementationNote;
-            if (!implementationNote.empty())
+            if (!displayedPermutation.empty())
             {
-                ImGui::TextWrapped(
-                    "Implementation Note: %s",
-                    implementationNote.data());
-            }
-            ImGui::Text(
-                "Classification: %s",
-                GetOptimizationClassLabel(
-                    activeConfiguration.optimizationClass));
-            ImGui::SetItemTooltip(
-                "The selected profile's minimum-drift classification.");
-            ImGui::Text(
-                "Output: %u x %u | Expected: %u x %u",
-                observedWorkload.outputWidth,
-                observedWorkload.outputHeight,
-                customImplementationProfile
-                    ? 1920u
-                    : selectedDefinition.expectedWorkload.outputWidth,
-                customImplementationProfile
-                    ? 1080u
-                    : selectedDefinition.expectedWorkload.outputHeight);
-            ImGui::Text(
-                "Consumer: %s | Resolution: %s",
-                GetConsumerLabel(observedWorkload),
-                GetResolutionLabel(observedWorkload.resolution));
-            ImGui::Text(
-                "Estimator: %s",
-                GetEstimatorLabel(observedWorkload.estimator));
-            ImGui::Text(
-                "Implementation: %s",
-                GetTraceLabel(activeConfiguration.trace));
-            ImGui::Text(
-                "Sample Specialization: %s",
-                GetSampleSpecializationLabel(
-                    activeConfiguration.firstBounceSamples));
-            ImGui::Text(
-                "Later-Bounce Specialization: %s",
-                GetSampleSpecializationLabel(
-                    activeConfiguration.laterBounceSamples));
-            ImGui::Text(
-                "Noise Delivery: %s",
-                GetNoiseDeliveryLabel(activeConfiguration.noise));
-            ImGui::Text(
-                "Active Scheduler: %s",
-                GetSchedulerLabel(observedWorkload.scheduler));
-            ImGui::Text(
-                "Reconstruction: %s",
-                GetReconstructionLabel(
-                    activeConfiguration.reconstruction));
-            ImGui::Text(
-                "Application: %s",
-                GetApplicationLabel(activeConfiguration.application));
-            ImGui::Text(
-                "Raw AO: %s | Edge Metadata: %s",
-                GetRawAoStorageLabel(activeConfiguration.rawAoStorage),
-                GetEdgeStorageLabel(activeConfiguration.edgeStorage));
-
-            const std::string& runtimePermutation = visibilityTimings &&
-                    !visibilityTimings->activePermutation.empty()
-                ? visibilityTimings->activePermutation
-                : activePlan.permutationName;
-            ImGui::TextWrapped(
-                "Active Permutation: %s",
-                runtimePermutation.empty()
-                    ? "Unavailable"
-                    : runtimePermutation.c_str());
-            ImGui::Text(
-                "Permutation Key: 0x%016llX",
-                static_cast<unsigned long long>(activePlan.permutationKey));
-            ImGui::Text(
-                "Shader Permutation Key: 0x%016llX",
-                static_cast<unsigned long long>(
-                    activePlan.shaderPermutationKey));
-            ImGui::Text(
-                "History Reset Key: 0x%016llX",
-                static_cast<unsigned long long>(activePlan.historyResetKey));
-            ImGui::SetItemTooltip(
-                "Changing any history-affecting profile value changes this "
-                "key and invalidates temporal and adaptive history.");
-            ImGui::Text(
-                "Resource / Binding / Pass Masks: %016llX / %016llX / %016llX",
-                static_cast<unsigned long long>(activePlan.resourceMask),
-                static_cast<unsigned long long>(activePlan.bindingMask),
-                static_cast<unsigned long long>(activePlan.passMask));
-
-            constexpr double BytesPerMiB = 1024.0 * 1024.0;
-            if (visibilityTimings)
-            {
-                ImGui::Text(
-                    "First-Trace SRVs: %u | First-Trace UAVs: %u | "
-                    "Peak SRVs: %u | Peak UAVs: %u | Active Dispatches: %u",
-                    visibilityTimings->activeSrvCount,
-                    visibilityTimings->activeUavCount,
-                    visibilityTimings->peakSrvCount,
-                    visibilityTimings->peakUavCount,
-                    visibilityTimings->activeDispatchCount);
-                ImGui::Text(
-                    "Optional %.2f | Full-Resolution Intermediate %.2f MiB",
-                    double(visibilityTimings->optionalTextureBytes) /
-                        BytesPerMiB,
-                    double(visibilityTimings->
-                        fullResolutionIntermediateBytes) / BytesPerMiB);
-                ImGui::Text(
-                    "Logical Traffic Avoided: %.2f MiB",
-                    double(visibilityTimings->logicalTrafficAvoidedBytes) /
-                        BytesPerMiB);
-            }
-            else
-            {
-                ImGui::Text(
-                    "Planned Cost: %u Dispatches",
-                    activePlan.dispatchCount);
-            }
-            ImGui::TextWrapped(
-                activePlan.selectsLegacyReference
-                    ? "Inactive Candidate Cost: Zero candidate resources, "
-                        "bindings, passes, or history."
-                    : "Reference Restores Zero Candidate Cost: Candidate "
-                        "resources and passes are CPU-selected and conditional.");
-
-            if (ImGui::TreeNodeEx("One-Click Profiles"))
-            {
-                for (uint32_t profileIndex = 1u;
-                    profileIndex < static_cast<uint32_t>(
-                        VisibilityVerificationProfile::Count);
-                    ++profileIndex)
+                ImGui::SameLine();
+                if (ImGui::SmallButton(
+                        "Copy Details##VisibilityPermutation"))
                 {
-                    const auto profile =
-                        static_cast<VisibilityVerificationProfile>(
-                            profileIndex);
-                    const VisibilityVerificationProfileDefinition definition =
-                        GetVisibilityVerificationProfileDefinition(profile);
-                    const bool available =
-                        definition.implementationStatus !=
-                            VisibilityImplementationStatus::Unavailable &&
-                        definition.implementationStatus !=
-                            VisibilityImplementationStatus::Unset;
-                    ImGui::PushID(int(profileIndex));
-                    if (!available)
-                        ImGui::BeginDisabled();
-                    if (ImGui::Button(
-                            definition.name.data(),
-                            ImVec2(settingsControlWidth, 0.f)) && available)
-                    {
-                        applyVerificationProfile(profile);
-                    }
-                    const VisibilityPerformanceProfileConfiguration
-                        profileConfiguration =
-                            GetVisibilityPerformanceProfileConfiguration(
-                                definition.implementationProfile);
-                    ImGui::SetItemTooltip(
-                        "%s | %s%s%s",
-                        GetOptimizationClassLabel(
-                            profileConfiguration.optimizationClass),
-                        GetImplementationStatusLabel(
-                            definition.implementationStatus),
-                        definition.implementationNote.empty() ? "" : ": ",
-                        definition.implementationNote.empty()
-                            ? ""
-                            : definition.implementationNote.data());
-                    if (!available)
-                        ImGui::EndDisabled();
-                    ImGui::PopID();
+                    ImGui::SetClipboardText(displayedPermutation.c_str());
                 }
-                ImGui::TreePop();
-            }
-
-            if (visibilityBenchmarkBusy)
-                ImGui::EndDisabled();
-            if (ImGui::TreeNodeEx("Benchmark Actions"))
-            {
-                static int benchmarkWarmupFrames = 120;
-                static int benchmarkMeasuredFrames = 240;
-                ImGui::SliderInt(
-                    "Warmup Frames",
-                    &benchmarkWarmupFrames,
-                    0,
-                    600,
-                    "%d",
-                    ImGuiSliderFlags_AlwaysClamp);
                 ImGui::SetItemTooltip(
-                    "Diagnostic Only. Frames rendered after history reset "
-                    "before measurements are retained.");
-                ImGui::SliderInt(
-                    "Measured Frames",
-                    &benchmarkMeasuredFrames,
-                    1,
-                    2000,
-                    "%d",
-                    ImGuiSliderFlags_AlwaysClamp);
-                ImGui::SetItemTooltip(
-                    "Diagnostic Only. Complete frame-correlated timer sets "
-                    "used for median and p95 statistics.");
-
-                const bool benchmarkQueued =
-                    m_app->IsVisibilityBenchmarkQueued();
-                const bool benchmarkActive =
-                    m_app->IsVisibilityBenchmarkActive();
-                const bool benchmarkBusy = benchmarkQueued || benchmarkActive ||
-                    m_app->IsVisibilityBenchmarkSequenceActive();
-                const bool targetOutputValid =
-                    observedWorkload.outputWidth == 1920u &&
-                    observedWorkload.outputHeight == 1080u;
-                const bool benchmarkSceneValid =
-                    m_app->HasSponzaCameraLocations();
-                const bool canStartBenchmark = verificationProfileValid &&
-                    targetOutputValid && benchmarkSceneValid && !benchmarkBusy;
-                if (!canStartBenchmark)
-                    ImGui::BeginDisabled();
-                if (ImGui::Button(
-                        "Benchmark Current Profile",
-                        ImVec2(settingsControlWidth, 0.f)) &&
-                    canStartBenchmark)
-                {
-                    (void)m_app->QueueVisibilityBenchmark(
-                        uint32_t(std::max(benchmarkWarmupFrames, 0)),
-                        uint32_t(std::max(benchmarkMeasuredFrames, 1)),
-                        {},
-                        false);
-                }
-                if (!canStartBenchmark)
-                    ImGui::EndDisabled();
-                ImGui::SetItemTooltip(
-                    !targetOutputValid
-                        ? "Diagnostic Only. Benchmarking requires the "
-                            "1920x1080 target output."
-                        : (!benchmarkSceneValid
-                            ? "Diagnostic Only. Benchmarking requires PBR "
-                                "Sponza Decorated or PBR Sponza Plain so "
-                                "Benchmark Position 1 can be locked."
-                            : (!verificationProfileValid
-                                ? "Diagnostic Only. Resolve a valid exact "
-                                    "permutation before benchmarking."
-                                : "Diagnostic Only. Queue an isolated benchmark "
-                                    "at locked Benchmark Position 1 after the "
-                                    "next resolved visibility frame.")));
-
-                if (!benchmarkBusy)
-                    ImGui::BeginDisabled();
-                if (ImGui::Button(
-                        "Cancel Benchmark",
-                        ImVec2(settingsControlWidth, 0.f)) && benchmarkBusy)
-                {
-                    m_app->CancelVisibilityBenchmark();
-                }
-                if (!benchmarkBusy)
-                    ImGui::EndDisabled();
-                ImGui::SetItemTooltip(
-                    "Diagnostic Only. Cancel the queued or active run without "
-                    "publishing partial measurements.");
-
-                const bool canExport =
-                    m_app->HasVisibilityBenchmarkResults() && !benchmarkBusy;
-                if (!canExport)
-                    ImGui::BeginDisabled();
-                if (ImGui::Button(
-                        "Export Benchmark Results",
-                        ImVec2(settingsControlWidth, 0.f)) && canExport)
-                {
-                    (void)m_app->ExportLastVisibilityBenchmark({});
-                }
-                if (!canExport)
-                    ImGui::EndDisabled();
-                ImGui::SetItemTooltip(
-                    "Diagnostic Only. Re-export the last JSON summary, raw "
-                    "frame CSV, and captured final measured frame with "
-                    "collision-safe names.");
-
-                ImGui::TextWrapped(
-                    "Sequential runners apply each listed profile independently, "
-                    "reset history, export its artifacts, and restore the exact "
-                    "starting settings after completion, cancellation, or failure.");
-                const bool canStartMatrix = targetOutputValid &&
-                    benchmarkSceneValid && !benchmarkBusy;
-                auto drawSequenceButton =
-                    [&](const char* label,
-                        VisibilityBenchmarkSequenceKind kind,
-                        const char* tooltip,
-                        bool requiresValidCurrent)
-                    {
-                        const bool enabled = canStartMatrix &&
-                            (!requiresValidCurrent || verificationProfileValid);
-                        if (!enabled)
-                            ImGui::BeginDisabled();
-                        if (ImGui::Button(
-                                label,
-                                ImVec2(settingsControlWidth, 0.f)) && enabled)
-                        {
-                            (void)m_app->QueueVisibilityBenchmarkSequence(
-                                kind,
-                                uint32_t(std::max(benchmarkWarmupFrames, 0)),
-                                uint32_t(std::max(benchmarkMeasuredFrames, 1)),
-                                {});
-                        }
-                        if (!enabled)
-                            ImGui::EndDisabled();
-                        ImGui::SetItemTooltip("%s", tooltip);
-                    };
-                drawSequenceButton(
-                    "Benchmark Reference Versus Current",
-                    VisibilityBenchmarkSequenceKind::ReferenceVersusCurrent,
-                    "Diagnostic Only. Runs canonical Reference, then the exact "
-                    "settings snapshot that was active when the action started.",
-                    true);
-                drawSequenceButton(
-                    "Benchmark Fixed Sample Matrix",
-                    VisibilityBenchmarkSequenceKind::FixedSample,
-                    "Diagnostic Only. Runs Reference Generic and exact Fixed 8, "
-                    "12, 16, and 20 profiles independently.",
-                    false);
-                drawSequenceButton(
-                    "Benchmark Noise Matrix",
-                    VisibilityBenchmarkSequenceKind::Noise,
-                    "Diagnostic Only. Runs Independent Hash, Toroidal Blue "
-                    "Noise, Current Scalar FAST, Packed Current FAST, and "
-                    "Activision 4x4 x 6 plus Constant Diagnostic independently.",
-                    false);
-                drawSequenceButton(
-                    "Benchmark Reconstruction Matrix",
-                    VisibilityBenchmarkSequenceKind::Reconstruction,
-                    "Diagnostic Only. Runs compact and Gaussian reference "
-                    "filters, exact fused apply, every implemented packed-edge "
-                    "and fused variant, Nearest, and Bilinear independently.",
-                    false);
-                drawSequenceButton(
-                    "Benchmark Math Matrix",
-                    VisibilityBenchmarkSequenceKind::Math,
-                    "Diagnostic Only. Runs Reference FP32 and the compiled "
-                    "Conservative Numerical FP32 filter-algebra profile.",
-                    false);
-                drawSequenceButton(
-                    "Benchmark Precision Matrix",
-                    VisibilityBenchmarkSequenceKind::Precision,
-                    "Diagnostic Only. Records an explicit unavailable result: "
-                    "no honest non-reference mixed-precision trace profile is "
-                    "compiled.",
-                    false);
-
-                if (m_app->IsVisibilityBenchmarkSequenceActive())
-                {
-                    ImGui::TextWrapped(
-                        "Sequence Entry: %zu / %zu — %s",
-                        m_app->GetVisibilityBenchmarkSequenceIndex() + 1u,
-                        m_app->GetVisibilityBenchmarkSequenceCount(),
-                        m_app->GetVisibilityBenchmarkSequenceEntryName().c_str());
-                }
-
-                const std::string& benchmarkStatus =
-                    m_app->GetVisibilityBenchmarkStatus();
-                if (!benchmarkStatus.empty())
-                    ImGui::TextWrapped("Status: %s", benchmarkStatus.c_str());
-                const std::string& benchmarkError =
-                    m_app->GetVisibilityBenchmarkError();
-                if (!benchmarkError.empty())
-                {
-                    ImGui::TextColored(
-                        invalidColor,
-                        "Error: %s",
-                        benchmarkError.c_str());
-                }
-                if (benchmarkActive)
-                {
-                    ImGui::Text(
-                        "Measured Complete Frames: %u / %u",
-                        m_app->GetVisibilityBenchmarkCompletedFrameCount(),
-                        m_app->GetVisibilityBenchmarkRequestedFrameCount());
-                }
-                if (const VisibilityBenchmarkSummary* summary =
-                        m_app->GetLastVisibilityBenchmarkSummary())
-                {
-                    ImGui::Text(
-                        "Last Effect Envelope: %.3f ms Median | %.3f ms p95",
-                        summary->completeEffect.medianMilliseconds,
-                        summary->completeEffect.p95Milliseconds);
-                    ImGui::Text(
-                        "Last Producer: %.3f ms Median | %.3f ms p95",
-                        summary->producerSubtotal.medianMilliseconds,
-                        summary->producerSubtotal.p95Milliseconds);
-                    ImGui::Text(
-                        "Last Summed Stages: %.3f ms Median | %.3f ms p95",
-                        summary->summedStages.medianMilliseconds,
-                        summary->summedStages.p95Milliseconds);
-                    ImGui::Text(
-                        "Last Signed Residual: %.3f ms Median | %.3f ms p95",
-                        summary->unattributedResidual.medianMilliseconds,
-                        summary->unattributedResidual.p95Milliseconds);
-                    const bool controlledProtocol =
-                        summary->configuration.warmupFrameCount >= 120u &&
-                        summary->configuration.measuredFrameCount >= 240u;
-                    ImGui::Text(
-                        "Last Run Class: %s",
-                        controlledProtocol ? "Controlled" : "Smoke");
-                    const VisibilityBenchmarkExportPaths& paths =
-                        m_app->GetLastVisibilityBenchmarkPaths();
-                    if (!paths.json.empty())
-                    {
-                        ImGui::TextWrapped(
-                            "Last JSON: %s",
-                            paths.json.generic_string().c_str());
-                        ImGui::TextWrapped(
-                            "Last CSV: %s",
-                            paths.csv.generic_string().c_str());
-                        ImGui::TextWrapped(
-                            "Last Measured Frame: %s",
-                            paths.presentedFrame.generic_string().c_str());
-                    }
-                }
-                ImGui::TreePop();
+                    "Copy the full GPU permutation diagnostics.");
             }
-            if (visibilityBenchmarkBusy)
-                ImGui::BeginDisabled();
 
             if (ImGui::Checkbox(
                     "Enabled##ScreenSpaceVisibility", &visibility.enabled))
@@ -6532,7 +6486,7 @@ protected:
             static const char* qualityLabels[] = {
                 "Low", "Medium", "High", "Ultra", "Custom"
             };
-            ImGui::SetNextItemWidth(settingsControlWidth);
+            ImGui::SetNextItemWidth(-FLT_MIN);
             if (ImGui::BeginCombo("Quality", qualityLabels[int(visibility.quality)]))
             {
                 for (int qualityIndex = 0; qualityIndex < int(std::size(qualityLabels)); ++qualityIndex)
@@ -6540,7 +6494,10 @@ protected:
                     const auto quality = ScreenSpaceVisibilityQuality(qualityIndex);
                     const bool selected = visibility.quality == quality;
                     if (ImGui::Selectable(qualityLabels[qualityIndex], selected))
+                    {
                         ApplyScreenSpaceVisibilityQualityPreset(visibility, quality);
+                        switchVisibilityToCustom();
+                    }
                     if (selected)
                         ImGui::SetItemDefaultFocus();
                 }
@@ -6551,7 +6508,7 @@ protected:
             static const char* resolutionLabels[] = {
                 "Full", "Half", "Quarter"
             };
-            ImGui::SetNextItemWidth(settingsControlWidth);
+            ImGui::SetNextItemWidth(-FLT_MIN);
             if (ImGui::BeginCombo(
                     "Sampling Resolution",
                     resolutionLabels[int(visibility.resolution)]))
@@ -6563,7 +6520,10 @@ protected:
                     const auto resolution = VisibilityResolution(index);
                     const bool selected = visibility.resolution == resolution;
                     if (ImGui::Selectable(resolutionLabels[index], selected))
+                    {
                         visibility.resolution = resolution;
+                        switchVisibilityToCustom();
+                    }
                     if (selected)
                         ImGui::SetItemDefaultFocus();
                 }
@@ -6572,59 +6532,119 @@ protected:
             ImGui::SetItemTooltip(
                 "Choose the sampling resolution for screen-space visibility.");
 
-            if (const ScreenSpaceVisibilityTimings* timings =
-                    m_app->GetScreenSpaceVisibilityTimings();
-                timings && ImGui::TreeNodeEx("Statistics"))
+            const char* activeAoMethod = "UVSR Visibility Bitmask";
+            const bool activisionSourceProfile =
+                visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::ActivisionClosestMatch ||
+                visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::ActivisionPs4Schedule ||
+                visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::ActivisionPs4PackedGather;
+            const bool activisionPs4Profile =
+                visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::ActivisionPs4Schedule ||
+                visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::ActivisionPs4PackedGather;
+            const bool xeGtaoSourceProfile =
+                visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::XeGtaoClosestMatch ||
+                visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::XeGtaoHighInlineHilbert ||
+                visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::XeGtaoHighFp32;
+            if (activisionSourceProfile || xeGtaoSourceProfile)
             {
-                const float traceMilliseconds =
-                    timings->depthHierarchyMs + timings->firstTraceMs +
-                    timings->laterTraceMs;
-                const float otherMilliseconds =
-                    timings->temporalMs +
-                    timings->fullResolutionApplyMs +
-                    timings->compositionMs;
-                ImGui::Text(
-                    "Envelope %.2f | Summed %.2f | Signed Residual %.2f ms",
-                    timings->CompleteEffectMs(), timings->SummedStageMs(),
-                    timings->CompleteEffectMs() - timings->SummedStageMs());
-                ImGui::Text(
-                    "Trace %.2f | Filter %.2f | Other %.2f ms",
-                    traceMilliseconds, timings->filteringMs,
-                    otherMilliseconds);
-                ImGui::SetItemTooltip(
-                    "Recent GPU time for visibility work.");
-                ImGui::Text(
-                    "Depth %.2f | First %.2f | Later %.2f | Temporal %.2f ms",
-                    timings->depthHierarchyMs,
-                    timings->firstTraceMs,
-                    timings->laterTraceMs,
-                    timings->temporalMs);
-                ImGui::Text(
-                    "Later Bounce 2 %.2f | 3 %.2f | 4 %.2f ms",
-                    timings->laterBounceMs[0],
-                    timings->laterBounceMs[1],
-                    timings->laterBounceMs[2]);
-                ImGui::Text(
-                    "Filter %.2f | Apply %.2f | Composite %.2f ms",
-                    timings->filteringMs,
-                    timings->fullResolutionApplyMs,
-                    timings->compositionMs);
-                constexpr double BytesPerMiB = 1024.0 * 1024.0;
-                ImGui::Text(
-                    "Outputs %.1f | Working %.1f | Mask Cache %.1f MiB",
-                    double(timings->outputTextureBytes) / BytesPerMiB,
-                    double(timings->workingTextureBytes) / BytesPerMiB,
-                    double(timings->maskCacheBytes) / BytesPerMiB);
-                ImGui::SetItemTooltip(
-                    "Texture memory by use, excluding API padding.");
-                ImGui::Text(
-                    "Avoided %.1f | Shared %.1f MiB",
-                    double(timings->avoidedTextureBytes) / BytesPerMiB,
-                    double(timings->sharedMaskPayloadBytes) / BytesPerMiB);
-                ImGui::SetItemTooltip(
-                    "Avoided is saved memory; Shared is estimated reuse.");
-                ImGui::TreePop();
+                activeAoMethod = GetPerformanceProfileUiLabel(
+                    visibility.performanceProfile).data();
             }
+            else if (activeConfiguration.trace ==
+                VisibilityTraceImplementation::ActivisionHorizon)
+                activeAoMethod = "Analytic-Horizon AO";
+            else if (activeConfiguration.trace ==
+                VisibilityTraceImplementation::XeGtaoHorizon)
+                activeAoMethod = "XeGTAO";
+            else if (activeConfiguration.trace ==
+                    VisibilityTraceImplementation::ConstantDiagnostic ||
+                activeConfiguration.trace ==
+                    VisibilityTraceImplementation::DepthOnlyDiagnostic ||
+                activeConfiguration.trace ==
+                    VisibilityTraceImplementation::BitmaskOnlyDiagnostic)
+            {
+                activeAoMethod = GetTraceLabel(activeConfiguration.trace);
+            }
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::BeginCombo("AO Method", activeAoMethod))
+            {
+                const bool bitmaskSelected =
+                    activeConfiguration.trace ==
+                        VisibilityTraceImplementation::
+                            LegacyGenericBitmask ||
+                    activeConfiguration.trace ==
+                        VisibilityTraceImplementation::
+                            FixedInterleavedBitmask;
+                if (ImGui::Selectable(
+                        "UVSR Visibility Bitmask", bitmaskSelected))
+                {
+                    visibility.performanceProfile =
+                        VisibilityPerformanceProfile::GenericFallback;
+                    m_ui.VisibilityVerification =
+                        VisibilityVerificationProfile::Unset;
+                }
+                const VisibilityPerformanceProfile methodProfiles[] = {
+                    VisibilityPerformanceProfile::ActivisionClosestMatch,
+                    VisibilityPerformanceProfile::ActivisionPs4Schedule,
+                    VisibilityPerformanceProfile::ActivisionPs4PackedGather,
+                    VisibilityPerformanceProfile::XeGtaoClosestMatch,
+                    VisibilityPerformanceProfile::XeGtaoHighInlineHilbert,
+                    VisibilityPerformanceProfile::XeGtaoHighFp32,
+                    VisibilityPerformanceProfile::DiagnosticConstantTrace,
+                    VisibilityPerformanceProfile::DiagnosticDepthOnlyTrace,
+                    VisibilityPerformanceProfile::DiagnosticBitmaskOnlyTrace
+                };
+                for (VisibilityPerformanceProfile profile : methodProfiles)
+                {
+                    if (profile == VisibilityPerformanceProfile::
+                        DiagnosticConstantTrace)
+                    {
+                        ImGui::Separator();
+                        ImGui::TextDisabled("Diagnostics");
+                    }
+                    const auto configuration =
+                        GetVisibilityPerformanceProfileConfiguration(profile);
+                    const bool available =
+                        configuration.implementationStatus !=
+                            VisibilityImplementationStatus::Unavailable &&
+                        configuration.implementationStatus !=
+                            VisibilityImplementationStatus::Unset;
+                    if (!available)
+                        ImGui::BeginDisabled();
+                    const std::string_view profileUiLabel =
+                        GetPerformanceProfileUiLabel(profile);
+                    if (ImGui::Selectable(
+                            profileUiLabel.data(),
+                            visibility.performanceProfile == profile) &&
+                        available)
+                    {
+                        applyImplementationProfile(profile);
+                    }
+                    ImGui::SetItemTooltip(
+                        "%s%s%s",
+                        GetImplementationStatusLabel(
+                            configuration.implementationStatus),
+                        configuration.implementationNote.empty()
+                            ? ""
+                            : ": ",
+                        configuration.implementationNote.empty()
+                            ? ""
+                            : configuration.implementationNote.data());
+                    if (!available)
+                        ImGui::EndDisabled();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip(
+                "Choose UVSR bitmask visibility or a complete source-"
+                "inspired AO pipeline.");
 
             if (!visibility.enabled)
                 ImGui::BeginDisabled();
@@ -6638,7 +6658,7 @@ protected:
                     "Uniform Solid Angle",
                     "Cosine-Weighted Solid Angle"
                 };
-                ImGui::SetNextItemWidth(settingsControlWidth);
+                ImGui::SetNextItemWidth(-FLT_MIN);
                 if (ImGui::BeginCombo(
                     "Estimator",
                     estimatorLabels[int(visibility.estimator)]))
@@ -6651,19 +6671,113 @@ protected:
                         const bool selected = visibility.estimator == estimator;
                         if (ImGui::Selectable(
                                 estimatorLabels[estimatorIndex], selected))
+                        {
                             visibility.estimator = estimator;
+                            samplingChanged = true;
+                        }
                         if (selected)
                             ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip("Choose how samples spread around each pixel.");
+
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::BeginCombo(
+                        "Trace Specialization",
+                        GetSampleSpecializationLabel(
+                            activeConfiguration.firstBounceSamples)))
+                {
+                    if (ImGui::Selectable(
+                            "Generic",
+                            activeConfiguration.firstBounceSamples ==
+                                VisibilitySampleSpecialization::Runtime))
+                    {
+                        visibility.performanceProfile =
+                            VisibilityPerformanceProfile::GenericFallback;
+                        m_ui.VisibilityVerification =
+                            VisibilityVerificationProfile::Unset;
+                    }
+                    const VisibilityPerformanceProfile fixedProfiles[] = {
+                        VisibilityPerformanceProfile::ExactFixed8,
+                        VisibilityPerformanceProfile::ExactFixed12,
+                        VisibilityPerformanceProfile::ExactFixed16,
+                        VisibilityPerformanceProfile::ExactFixed20
+                    };
+                    for (VisibilityPerformanceProfile profile : fixedProfiles)
+                    {
+                        const auto configuration =
+                            GetVisibilityPerformanceProfileConfiguration(
+                                profile);
+                        if (ImGui::Selectable(
+                                configuration.name.data(),
+                                visibility.performanceProfile == profile))
+                        {
+                            applyImplementationProfile(profile);
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Choose a generic trace or an exact fixed sample count.");
+
                 samplingChanged |= ImGui::SliderFloat(
                     "Radius", &sampling.radius, 0.01f, std::max(m_app->GetSceneDiagonal() * 0.1f, 1.f), "%.3f");
                 ImGui::SetItemTooltip("Set how far visibility rays reach.");
                 samplingChanged |= ImGui::SliderFloat(
                     "Thickness", &sampling.thickness, 0.0f, std::max(m_app->GetSceneDiagonal() * 0.02f, 0.5f), "%.3f");
                 ImGui::SetItemTooltip("Set the assumed thickness of occluders.");
+
+                const char* radiusLimitLabel = "Unlimited";
+                if (visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::
+                        AlgorithmicProjectedRadiusClamp32)
+                    radiusLimitLabel = "32 Pixels";
+                else if (visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::
+                        AlgorithmicProjectedRadiusClamp64)
+                    radiusLimitLabel = "64 Pixels";
+                else if (visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::
+                        AlgorithmicProjectedRadiusClamp128)
+                    radiusLimitLabel = "128 Pixels";
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::BeginCombo(
+                        "Screen-Radius Limit", radiusLimitLabel))
+                {
+                    if (ImGui::Selectable(
+                            "Unlimited",
+                            std::strcmp(radiusLimitLabel, "Unlimited") == 0))
+                    {
+                        visibility.performanceProfile =
+                            VisibilityPerformanceProfile::GenericFallback;
+                        m_ui.VisibilityVerification =
+                            VisibilityVerificationProfile::Unset;
+                    }
+                    const VisibilityPerformanceProfile clampProfiles[] = {
+                        VisibilityPerformanceProfile::
+                            AlgorithmicProjectedRadiusClamp32,
+                        VisibilityPerformanceProfile::
+                            AlgorithmicProjectedRadiusClamp64,
+                        VisibilityPerformanceProfile::
+                            AlgorithmicProjectedRadiusClamp128
+                    };
+                    for (VisibilityPerformanceProfile profile : clampProfiles)
+                    {
+                        const auto configuration =
+                            GetVisibilityPerformanceProfileConfiguration(
+                                profile);
+                        if (ImGui::Selectable(
+                                configuration.name.data(),
+                                visibility.performanceProfile == profile))
+                        {
+                            applyImplementationProfile(profile);
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Limit projected trace radius for cache experiments.");
 
                 samplingChanged |= ImGui::Checkbox(
                     "Adaptive Sparse Sampling",
@@ -6747,14 +6861,14 @@ protected:
                 ImGui::SetItemTooltip("Higher values place more samples nearby.");
 
                 static const char* schedulerLabels[] = {
-                    "Independent Hash Noise",
+                    "Independent Hash",
                     "Toroidal Blue Noise",
-                    "Filter-Adapted Spatiotemporal Noise"
+                    "Filter-Adapted Blue Noise"
                 };
-                ImGui::SetNextItemWidth(settingsControlWidth);
+                ImGui::SetNextItemWidth(-FLT_MIN);
                 if (ImGui::BeginCombo(
-                        "Sample Scheduler",
-                        schedulerLabels[int(sampling.scheduler)]))
+                        "Sample Pattern",
+                        GetSchedulerLabel(observedWorkload.scheduler)))
                 {
                     for (int index = 0;
                         index < int(std::size(schedulerLabels));
@@ -6762,43 +6876,137 @@ protected:
                     {
                         const auto scheduler =
                             VisibilitySampleScheduler(index);
-                        const bool selected = sampling.scheduler == scheduler;
+                        const bool selected =
+                            activeConfiguration.noise ==
+                                VisibilityNoiseDelivery::Legacy &&
+                            sampling.scheduler == scheduler;
                         if (ImGui::Selectable(
                                 schedulerLabels[index], selected))
                         {
                             sampling.scheduler = scheduler;
                             samplingChanged = true;
+                            visibility.performanceProfile =
+                                VisibilityPerformanceProfile::GenericFallback;
+                            m_ui.VisibilityVerification =
+                                VisibilityVerificationProfile::Unset;
                         }
                         if (selected)
                             ImGui::SetItemDefaultFocus();
                     }
                     ImGui::EndCombo();
                 }
-                ImGui::SetItemTooltip("Choose the noise pattern used to place samples.");
+                ImGui::SetItemTooltip(
+                    "Choose the spatial and temporal sample sequence. "
+                    "Source profiles lock this to their required schedule.");
+
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::BeginCombo(
+                        "Noise Delivery",
+                        GetNoiseDeliveryLabel(activeConfiguration.noise)))
+                {
+                    if (ImGui::Selectable(
+                            "Reference Scheduler Resources",
+                            activeConfiguration.noise ==
+                                VisibilityNoiseDelivery::Legacy))
+                    {
+                        visibility.performanceProfile =
+                            VisibilityPerformanceProfile::GenericFallback;
+                        m_ui.VisibilityVerification =
+                            VisibilityVerificationProfile::Unset;
+                    }
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Optimized & Source Profiles");
+                    const VisibilityPerformanceProfile noiseProfiles[] = {
+                        VisibilityPerformanceProfile::ExactPackedCurrentFast,
+                        VisibilityPerformanceProfile::
+                            AlgorithmicActivisionSchedule,
+                        VisibilityPerformanceProfile::
+                            ActivisionPs4Schedule,
+                        VisibilityPerformanceProfile::
+                            ActivisionPs4PackedGather,
+                        VisibilityPerformanceProfile::
+                            DiagnosticConstantScheduler,
+                        VisibilityPerformanceProfile::XeGtaoClosestMatch,
+                        VisibilityPerformanceProfile::
+                            XeGtaoHighInlineHilbert,
+                        VisibilityPerformanceProfile::XeGtaoHighFp32
+                    };
+                    for (VisibilityPerformanceProfile profile : noiseProfiles)
+                    {
+                        const VisibilityPerformanceProfileConfiguration
+                            configuration =
+                                GetVisibilityPerformanceProfileConfiguration(
+                                    profile);
+                        const bool available =
+                            configuration.implementationStatus !=
+                                VisibilityImplementationStatus::Unavailable &&
+                            configuration.implementationStatus !=
+                                VisibilityImplementationStatus::Unset;
+                        if (!available)
+                            ImGui::BeginDisabled();
+                        const bool selected =
+                            visibility.performanceProfile == profile;
+                        const std::string_view profileUiLabel =
+                            GetPerformanceProfileUiLabel(profile);
+                        if (ImGui::Selectable(
+                                profileUiLabel.data(), selected) &&
+                            available)
+                        {
+                            applyImplementationProfile(profile);
+                        }
+                        ImGui::SetItemTooltip(
+                            "%s%s%s",
+                            GetImplementationStatusLabel(
+                                configuration.implementationStatus),
+                            configuration.implementationNote.empty()
+                                ? ""
+                                : ": ",
+                            configuration.implementationNote.empty()
+                                ? ""
+                                : configuration.implementationNote.data());
+                        if (!available)
+                            ImGui::EndDisabled();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Choose noise resources or a source profile. XeGTAO "
+                    "Hilbert LUT and inline Hilbert are separate choices.");
 
                 if (samplingChanged)
+                {
                     visibility.quality = ScreenSpaceVisibilityQuality::Custom;
+                    visibility.performanceProfile =
+                        VisibilityPerformanceProfile::GenericFallback;
+                    m_ui.VisibilityVerification =
+                        VisibilityVerificationProfile::Unset;
+                }
                 ImGui::TreePop();
             }
 
             if (ImGui::TreeNodeEx("Ambient Occlusion", ImGuiTreeNodeFlags_DefaultOpen))
             {
                 AmbientOcclusionSettings& ao = visibility.ambientOcclusion;
-                ImGui::Checkbox("Enabled##AmbientVisibility", &ao.enabled);
+                bool aoChanged = ImGui::Checkbox(
+                    "Enabled##AmbientVisibility", &ao.enabled);
                 ImGui::SetItemTooltip("Enable screen-space ambient occlusion.");
                 if (!ao.enabled)
                     ImGui::BeginDisabled();
-                ImGui::SliderFloat("Strength", &ao.strength, 0.0f, 2.0f, "%.2f");
+                aoChanged |= ImGui::SliderFloat(
+                    "Strength", &ao.strength, 0.0f, 2.0f, "%.2f");
                 ImGui::SetItemTooltip("Set how strongly AO darkens indirect light.");
                 if (!ao.enabled)
                     ImGui::EndDisabled();
+                if (aoChanged)
+                    switchVisibilityToCustom();
                 ImGui::TreePop();
             }
 
             if (ImGui::TreeNodeEx("Indirect Diffuse", ImGuiTreeNodeFlags_DefaultOpen))
             {
                 IndirectDiffuseSettings& gi = visibility.indirectDiffuse;
-                ImGui::Checkbox("Enabled##IndirectDiffuse", &gi.enabled);
+                bool giChanged = ImGui::Checkbox(
+                    "Enabled##IndirectDiffuse", &gi.enabled);
                 ImGui::SetItemTooltip("Enable screen-space diffuse indirect light.");
                 if (!gi.enabled)
                     ImGui::BeginDisabled();
@@ -6813,11 +7021,50 @@ protected:
                         ImGuiSliderFlags_AlwaysClamp))
                 {
                     gi.bounceCount = uint32_t(bounceCount);
+                    giChanged = true;
                 }
                 ImGui::SetItemTooltip("Set the number of diffuse-light bounces.");
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::BeginCombo(
+                        "Later-Bounce Trace",
+                        GetSampleSpecializationLabel(
+                            activeConfiguration.laterBounceSamples)))
+                {
+                    if (ImGui::Selectable(
+                            "Generic",
+                            activeConfiguration.laterBounceSamples ==
+                                VisibilitySampleSpecialization::Runtime))
+                    {
+                        visibility.performanceProfile =
+                            VisibilityPerformanceProfile::GenericFallback;
+                        m_ui.VisibilityVerification =
+                            VisibilityVerificationProfile::Unset;
+                    }
+                    const VisibilityPerformanceProfile laterProfiles[] = {
+                        VisibilityPerformanceProfile::
+                            ExactFixedLaterBounce8,
+                        VisibilityPerformanceProfile::
+                            ExactFixedAllBounce8
+                    };
+                    for (VisibilityPerformanceProfile profile : laterProfiles)
+                    {
+                        const auto configuration =
+                            GetVisibilityPerformanceProfileConfiguration(
+                                profile);
+                        if (ImGui::Selectable(
+                                configuration.name.data(),
+                                visibility.performanceProfile == profile))
+                        {
+                            applyImplementationProfile(profile);
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Choose generic or fixed-eight higher-bounce tracing.");
                 if (gi.bounceCount > 1u)
                 {
-                    ImGui::SliderFloat(
+                    giChanged |= ImGui::SliderFloat(
                         "Bounce Contribution Cutoff",
                         &gi.minimumBounceContribution,
                         0.0f,
@@ -6826,13 +7073,19 @@ protected:
                     ImGui::SetItemTooltip(
                         "Skip dim higher-bounce light. Zero disables the cutoff.");
                 }
-                ImGui::SliderFloat("Intensity##IndirectDiffuse", &gi.intensity, 0.0f, 10.0f, "%.2f");
+                giChanged |= ImGui::SliderFloat(
+                    "Intensity##IndirectDiffuse",
+                    &gi.intensity,
+                    0.0f,
+                    10.0f,
+                    "%.2f");
                 ImGui::SetItemTooltip("Set screen-space diffuse GI brightness.");
-                ImGui::Checkbox("Include Emissive Sources", &gi.includeEmissive);
+                giChanged |= ImGui::Checkbox(
+                    "Include Emissive Sources", &gi.includeEmissive);
                 ImGui::SetItemTooltip("Let visible emissive surfaces light the scene.");
                 if (!gi.includeEmissive)
                     ImGui::BeginDisabled();
-                ImGui::SliderFloat(
+                giChanged |= ImGui::SliderFloat(
                     "Emissive Source Gain",
                     &gi.emissiveGain,
                     0.0f,
@@ -6843,22 +7096,84 @@ protected:
                     ImGui::EndDisabled();
                 if (!gi.enabled)
                     ImGui::EndDisabled();
+                if (giChanged)
+                    switchVisibilityToCustom();
                 ImGui::TreePop();
             }
 
-            if (ImGui::TreeNodeEx(
-                    "Reconstruction and Upsampling"))
+            if (ImGui::TreeNodeEx("Temporal Reconstruction"))
             {
                 VisibilityReconstructionSettings& reconstruction =
                     visibility.reconstruction;
-                ImGui::Checkbox(
-                    "Temporal Reconstruction",
-                    &reconstruction.temporalEnabled);
-                ImGui::SetItemTooltip("Reuse valid detail from earlier frames.");
+                if (ImGui::Checkbox(
+                        "Enabled##TemporalReconstruction",
+                        &reconstruction.temporalEnabled))
+                {
+                    visibility.performanceProfile =
+                        VisibilityPerformanceProfile::GenericFallback;
+                    m_ui.VisibilityVerification =
+                        VisibilityVerificationProfile::Unset;
+                }
+                ImGui::SetItemTooltip(
+                    "Reuse valid detail from earlier frames.");
                 if (!reconstruction.temporalEnabled)
                     ImGui::BeginDisabled();
+                const char* temporalMethodLabel =
+                    DescribeVisibilityTemporal(activeConfiguration.temporal);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::BeginCombo(
+                        "Temporal Method",
+                        temporalMethodLabel))
+                {
+                    if (ImGui::Selectable(
+                            "Standard Reprojection",
+                            activeConfiguration.temporal ==
+                                VisibilityTemporalMode::Legacy))
+                    {
+                        visibility.performanceProfile =
+                            VisibilityPerformanceProfile::GenericFallback;
+                        m_ui.VisibilityVerification =
+                            VisibilityVerificationProfile::Unset;
+                        reconstruction.temporalEnabled = true;
+                    }
+                    const VisibilityPerformanceProfile temporalProfiles[] = {
+                        VisibilityPerformanceProfile::DiagnosticTemporalCopy,
+                        VisibilityPerformanceProfile::ActivisionPs4Schedule,
+                        VisibilityPerformanceProfile::
+                            ActivisionPs4PackedGather
+                    };
+                    for (VisibilityPerformanceProfile profile :
+                        temporalProfiles)
+                    {
+                        const auto configuration =
+                            GetVisibilityPerformanceProfileConfiguration(
+                                profile);
+                        const bool available =
+                            configuration.implementationStatus !=
+                                VisibilityImplementationStatus::Unavailable &&
+                            configuration.implementationStatus !=
+                                VisibilityImplementationStatus::Unset;
+                        if (!available)
+                            ImGui::BeginDisabled();
+                        const std::string_view profileUiLabel =
+                            GetPerformanceProfileUiLabel(profile);
+                        if (ImGui::Selectable(
+                                profileUiLabel.data(),
+                                visibility.performanceProfile == profile) &&
+                            available)
+                        {
+                            applyImplementationProfile(profile);
+                        }
+                        if (!available)
+                            ImGui::EndDisabled();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Choose temporal reprojection or a complete source-"
+                    "inspired temporal profile.");
                 ImGui::SliderFloat(
-                    "Temporal Current Response",
+                    "Current-Frame Weight",
                     &reconstruction.temporalResponse,
                     0.05f,
                     1.0f,
@@ -6867,40 +7182,147 @@ protected:
                     "Higher values follow the current frame faster.");
                 if (!reconstruction.temporalEnabled)
                     ImGui::EndDisabled();
+                ImGui::TreePop();
+            }
 
-                ImGui::Checkbox(
-                    "Spatial Filtering",
-                    &reconstruction.spatialEnabled);
-                ImGui::SetItemTooltip("Smooth AO and GI using scene edges.");
-
-                if (!reconstruction.spatialEnabled)
-                    ImGui::BeginDisabled();
-                static const char* filterLabels[] = {
-                    "Joint Bilateral",
-                    "Gaussian Joint Bilateral"
-                };
-                ImGui::SetNextItemWidth(settingsControlWidth);
-                if (ImGui::BeginCombo(
-                        "Spatial Filter",
-                        filterLabels[int(reconstruction.spatialFilter)]))
+            if (ImGui::TreeNodeEx("Spatial Denoising & Upsampling"))
+            {
+                VisibilityReconstructionSettings& reconstruction =
+                    visibility.reconstruction;
+                const char* denoiserLabel = GetReconstructionLabel(
+                    activeConfiguration.reconstruction);
+                if (activeConfiguration.reconstruction ==
+                    VisibilityReconstructionMode::Legacy)
                 {
-                    for (int index = 0;
-                        index < int(std::size(filterLabels));
-                        ++index)
+                    denoiserLabel = reconstruction.spatialEnabled
+                        ? (reconstruction.spatialFilter ==
+                                VisibilitySpatialFilter::
+                                    GaussianJointBilateral
+                            ? "Gaussian Joint Bilateral"
+                            : "Joint Bilateral")
+                        : "Required Upsample";
+                }
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::BeginCombo(
+                        "Spatial Denoiser", denoiserLabel))
+                {
+                    if (ImGui::Selectable(
+                            "Required Upsample",
+                            activeConfiguration.reconstruction ==
+                                    VisibilityReconstructionMode::Legacy &&
+                                !reconstruction.spatialEnabled))
                     {
-                        const auto filter = VisibilitySpatialFilter(index);
-                        const bool selected =
-                            reconstruction.spatialFilter == filter;
-                        if (ImGui::Selectable(filterLabels[index], selected))
-                            reconstruction.spatialFilter = filter;
-                        if (selected)
-                            ImGui::SetItemDefaultFocus();
+                        visibility.performanceProfile =
+                            VisibilityPerformanceProfile::GenericFallback;
+                        m_ui.VisibilityVerification =
+                            VisibilityVerificationProfile::Unset;
+                        reconstruction.spatialEnabled = false;
+                    }
+                    if (ImGui::Selectable(
+                            "Joint Bilateral",
+                            activeConfiguration.reconstruction ==
+                                    VisibilityReconstructionMode::Legacy &&
+                                reconstruction.spatialEnabled &&
+                                reconstruction.spatialFilter ==
+                                    VisibilitySpatialFilter::JointBilateral))
+                    {
+                        visibility.performanceProfile =
+                            VisibilityPerformanceProfile::GenericFallback;
+                        m_ui.VisibilityVerification =
+                            VisibilityVerificationProfile::Unset;
+                        reconstruction.spatialEnabled = true;
+                        reconstruction.spatialFilter =
+                            VisibilitySpatialFilter::JointBilateral;
+                    }
+                    if (ImGui::Selectable(
+                            "Gaussian Joint Bilateral",
+                            activeConfiguration.reconstruction ==
+                                    VisibilityReconstructionMode::Legacy &&
+                                reconstruction.spatialEnabled &&
+                                reconstruction.spatialFilter ==
+                                    VisibilitySpatialFilter::
+                                        GaussianJointBilateral))
+                    {
+                        visibility.performanceProfile =
+                            VisibilityPerformanceProfile::GenericFallback;
+                        m_ui.VisibilityVerification =
+                            VisibilityVerificationProfile::Unset;
+                        reconstruction.spatialEnabled = true;
+                        reconstruction.spatialFilter =
+                            VisibilitySpatialFilter::
+                                GaussianJointBilateral;
+                    }
+                    ImGui::Separator();
+                    ImGui::TextDisabled("Packed & Source-Inspired");
+                    const VisibilityPerformanceProfile denoiserProfiles[] = {
+                        VisibilityPerformanceProfile::
+                            AlgorithmicPackedEdges2x2,
+                        VisibilityPerformanceProfile::
+                            AlgorithmicPackedEdgesDepthNormal2x2,
+                        VisibilityPerformanceProfile::
+                            AlgorithmicPackedEdgesSlope2x2,
+                        VisibilityPerformanceProfile::
+                            AlgorithmicPackedEdgesLeakage2x2,
+                        VisibilityPerformanceProfile::
+                            AlgorithmicPackedEdges4x4,
+                        VisibilityPerformanceProfile::
+                            DiagnosticNearestResolve,
+                        VisibilityPerformanceProfile::
+                            DiagnosticBilinearResolve,
+                        VisibilityPerformanceProfile::
+                            ActivisionPs4Schedule,
+                        VisibilityPerformanceProfile::
+                            ActivisionPs4PackedGather,
+                        VisibilityPerformanceProfile::XeGtaoClosestMatch,
+                        VisibilityPerformanceProfile::
+                            XeGtaoHighInlineHilbert,
+                        VisibilityPerformanceProfile::XeGtaoHighFp32
+                    };
+                    for (VisibilityPerformanceProfile profile :
+                        denoiserProfiles)
+                    {
+                        const auto configuration =
+                            GetVisibilityPerformanceProfileConfiguration(
+                                profile);
+                        const bool available =
+                            configuration.implementationStatus !=
+                                VisibilityImplementationStatus::Unavailable &&
+                            configuration.implementationStatus !=
+                                VisibilityImplementationStatus::Unset;
+                        if (!available)
+                            ImGui::BeginDisabled();
+                        const std::string_view profileUiLabel =
+                            GetPerformanceProfileUiLabel(profile);
+                        if (ImGui::Selectable(
+                                profileUiLabel.data(),
+                                visibility.performanceProfile == profile) &&
+                            available)
+                        {
+                            applyImplementationProfile(profile);
+                        }
+                        ImGui::SetItemTooltip(
+                            "%s%s%s",
+                            GetImplementationStatusLabel(
+                                configuration.implementationStatus),
+                            configuration.implementationNote.empty()
+                                ? ""
+                                : ": ",
+                            configuration.implementationNote.empty()
+                                ? ""
+                                : configuration.implementationNote.data());
+                        if (!available)
+                            ImGui::EndDisabled();
                     }
                     ImGui::EndCombo();
                 }
-                ImGui::SetItemTooltip("Choose the spatial smoothing method.");
-                if (reconstruction.spatialFilter ==
-                    VisibilitySpatialFilter::GaussianJointBilateral)
+                ImGui::SetItemTooltip(
+                    "Choose the upsample or spatial denoiser used by the "
+                    "effective GPU plan.");
+                if (activeConfiguration.reconstruction ==
+                        VisibilityReconstructionMode::Legacy &&
+                    reconstruction.spatialEnabled &&
+                    reconstruction.spatialFilter ==
+                        VisibilitySpatialFilter::GaussianJointBilateral)
                 {
                     ImGui::SliderFloat(
                         "Gaussian Radius",
@@ -6908,10 +7330,234 @@ protected:
                         1.0f,
                         12.0f,
                         "%.1f");
-                    ImGui::SetItemTooltip("Set how far the Gaussian filter reaches.");
+                    ImGui::SetItemTooltip(
+                        "Set how far the Gaussian denoiser reaches.");
                 }
-                if (!reconstruction.spatialEnabled)
-                    ImGui::EndDisabled();
+
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                const char* applicationLabel =
+                    visibility.performanceProfile ==
+                            VisibilityPerformanceProfile::
+                                DiagnosticFusedFullResolutionAoOutput
+                        ? GetPerformanceProfileUiLabel(
+                            visibility.performanceProfile).data()
+                        : GetApplicationLabel(
+                            activeConfiguration.application);
+                if (ImGui::BeginCombo(
+                        "Resolve & Apply",
+                        applicationLabel))
+                {
+                    if (ImGui::Selectable(
+                            "Separate Resolve & Composition",
+                            activeConfiguration.application ==
+                                VisibilityApplicationMode::
+                                    LegacySeparateComposition &&
+                                visibility.performanceProfile !=
+                                    VisibilityPerformanceProfile::
+                                        DiagnosticFusedFullResolutionAoOutput))
+                    {
+                        visibility.performanceProfile =
+                            VisibilityPerformanceProfile::GenericFallback;
+                        m_ui.VisibilityVerification =
+                            VisibilityVerificationProfile::Unset;
+                    }
+                    const VisibilityPerformanceProfile applicationProfiles[] = {
+                        VisibilityPerformanceProfile::
+                            ExactFusedResolveApply,
+                        VisibilityPerformanceProfile::
+                            ExactFixed8FusedResolveApply,
+                        VisibilityPerformanceProfile::
+                            AlgorithmicFusedPackedEdges2x2,
+                        VisibilityPerformanceProfile::
+                            AlgorithmicFusedPackedEdges4x4,
+                        VisibilityPerformanceProfile::
+                            DiagnosticFusedFullResolutionAoOutput,
+                        VisibilityPerformanceProfile::
+                            DiagnosticCompositionOnly,
+                        VisibilityPerformanceProfile::
+                            DiagnosticCompositionBypass
+                    };
+                    for (VisibilityPerformanceProfile profile :
+                        applicationProfiles)
+                    {
+                        if (profile == VisibilityPerformanceProfile::
+                            DiagnosticFusedFullResolutionAoOutput)
+                        {
+                            ImGui::Separator();
+                            ImGui::TextDisabled("Diagnostics");
+                        }
+                        const auto configuration =
+                            GetVisibilityPerformanceProfileConfiguration(
+                                profile);
+                        const std::string_view profileUiLabel =
+                            GetPerformanceProfileUiLabel(profile);
+                        if (ImGui::Selectable(
+                                profileUiLabel.data(),
+                                visibility.performanceProfile == profile))
+                        {
+                            applyImplementationProfile(profile);
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Choose separate composition or a fused resolve-and-"
+                    "apply dispatch. Fused work is timed as one pass.");
+                ImGui::TreePop();
+            }
+
+            if (ImGui::TreeNodeEx("Performance"))
+            {
+                const char* mathControlLabel = xeGtaoSourceProfile
+                    ? "Precision"
+                    : "Math";
+                const char* mathValueLabel = xeGtaoSourceProfile
+                    ? (visibility.performanceProfile ==
+                            VisibilityPerformanceProfile::XeGtaoHighFp32
+                        ? "XeGTAO FP32"
+                        : "XeGTAO Mixed Precision")
+                    : GetMathModeLabel(activeConfiguration.math);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::BeginCombo(
+                        mathControlLabel,
+                        mathValueLabel))
+                {
+                    if (xeGtaoSourceProfile)
+                    {
+                        if (ImGui::Selectable(
+                                "Mixed Precision",
+                                activeConfiguration.math ==
+                                    VisibilityMathMode::
+                                        XeGtaoMixedPrecision))
+                        {
+                            applyImplementationProfile(
+                                visibility.performanceProfile ==
+                                        VisibilityPerformanceProfile::
+                                            XeGtaoHighInlineHilbert
+                                    ? VisibilityPerformanceProfile::
+                                        XeGtaoHighInlineHilbert
+                                    : VisibilityPerformanceProfile::
+                                        XeGtaoClosestMatch);
+                        }
+                        if (ImGui::Selectable(
+                                "FP32 (Hilbert LUT)",
+                                visibility.performanceProfile ==
+                                    VisibilityPerformanceProfile::
+                                        XeGtaoHighFp32))
+                        {
+                            applyImplementationProfile(
+                                VisibilityPerformanceProfile::
+                                    XeGtaoHighFp32);
+                        }
+                    }
+                    else
+                    {
+                        if (ImGui::Selectable(
+                                "Reference FP32",
+                                activeConfiguration.math ==
+                                    VisibilityMathMode::ReferenceFp32) &&
+                            !activisionSourceProfile)
+                        {
+                            visibility.performanceProfile =
+                                VisibilityPerformanceProfile::GenericFallback;
+                            m_ui.VisibilityVerification =
+                                VisibilityVerificationProfile::Unset;
+                        }
+                        const auto conservativeConfiguration =
+                            GetVisibilityPerformanceProfileConfiguration(
+                                VisibilityPerformanceProfile::
+                                    ConservativeNumerical);
+                        if (ImGui::Selectable(
+                                conservativeConfiguration.name.data(),
+                                visibility.performanceProfile ==
+                                    VisibilityPerformanceProfile::
+                                        ConservativeNumerical))
+                        {
+                            applyImplementationProfile(
+                                VisibilityPerformanceProfile::
+                                    ConservativeNumerical);
+                        }
+                        ImGui::BeginDisabled();
+                        ImGui::Selectable(
+                            "UVSR Bitmask Mixed Precision (Unavailable)",
+                            false);
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    xeGtaoSourceProfile
+                        ? "Choose XeGTAO mixed precision or its LUT-based "
+                            "FP32 control without leaving the XeGTAO family."
+                        : "Choose reference FP32 or a compiled math "
+                            "experiment.");
+
+                const char* groupLabel = "8 x 8";
+                if (visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::ExactGroup16x8)
+                    groupLabel = "16 x 8";
+                else if (visibility.performanceProfile ==
+                    VisibilityPerformanceProfile::ExactGroup8x16)
+                    groupLabel = "8 x 16";
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::BeginCombo(
+                        "Trace Thread Group", groupLabel))
+                {
+                    if (ImGui::Selectable(
+                            "8 x 8",
+                            std::strcmp(groupLabel, "8 x 8") == 0))
+                    {
+                        visibility.performanceProfile =
+                            VisibilityPerformanceProfile::GenericFallback;
+                        m_ui.VisibilityVerification =
+                            VisibilityVerificationProfile::Unset;
+                    }
+                    const VisibilityPerformanceProfile groupProfiles[] = {
+                        VisibilityPerformanceProfile::ExactGroup16x8,
+                        VisibilityPerformanceProfile::ExactGroup8x16
+                    };
+                    for (VisibilityPerformanceProfile profile : groupProfiles)
+                    {
+                        const auto configuration =
+                            GetVisibilityPerformanceProfileConfiguration(
+                                profile);
+                        if (ImGui::Selectable(
+                                configuration.name.data(),
+                                visibility.performanceProfile == profile))
+                        {
+                            applyImplementationProfile(profile);
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Choose a compiled trace thread-group shape.");
+
+                const float experimentButtonWidth = std::max(
+                    1.f,
+                    (ImGui::GetContentRegionAvail().x -
+                        style.ItemSpacing.x) / 2.f);
+                if (ImGui::Button(
+                        "Duplicate Check Off",
+                        ImVec2(experimentButtonWidth, 0.f)))
+                {
+                    applyImplementationProfile(
+                        VisibilityPerformanceProfile::
+                            ExactDuplicatePixelRejectionOff);
+                }
+                ImGui::SetItemTooltip(
+                    "Diagnostic: disable duplicate-sample rejection.");
+                ImGui::SameLine();
+                if (ImGui::Button(
+                        "Mask Exit Off",
+                        ImVec2(experimentButtonWidth, 0.f)))
+                {
+                    applyImplementationProfile(
+                        VisibilityPerformanceProfile::
+                            ExactFullMaskEarlyExitOff);
+                }
+                ImGui::SetItemTooltip(
+                    "Diagnostic: disable the full-mask early exit.");
                 ImGui::TreePop();
             }
 
@@ -6926,306 +7572,735 @@ protected:
             }
         }
 
+        const bool visibilityStatisticsOpen = DrawCollapsingHeader(
+            "AO Statistics",
+            "Show one GPU timing or resource concept per row.");
+        if (visibilityStatisticsOpen)
+        {
+            const ScreenSpaceVisibilitySettings& statsVisibility =
+                m_ui.ScreenSpaceVisibility;
+            const ScreenSpaceVisibilityTimings* timings =
+                m_app->GetScreenSpaceVisibilityTimings();
+            const VisibilityPerformanceWorkload statsWorkload =
+                BuildVisibilityPerformanceWorkload(
+                    statsVisibility,
+                    uint32_t(std::max(width, 0)),
+                    uint32_t(std::max(height, 0)));
+            const VisibilityPerformanceProfileConfiguration statsConfig =
+                GetVisibilityPerformanceProfileConfiguration(
+                    statsVisibility.performanceProfile);
+            const VisibilityExecutionPlan statsPlan =
+                ResolveVisibilityExecutionPlan(
+                    statsVisibility.performanceProfile,
+                    statsWorkload);
+
+            if (!timings)
+            {
+                ImGui::TextDisabled("Waiting for GPU timing data.");
+            }
+            else if (ImGui::BeginTable(
+                    "##VisibilityLiveTimings",
+                    2,
+                    ImGuiTableFlags_BordersInnerH |
+                        ImGuiTableFlags_RowBg |
+                        ImGuiTableFlags_SizingStretchProp))
+            {
+                ImGui::TableSetupColumn(
+                    "GPU Stage",
+                    ImGuiTableColumnFlags_WidthStretch,
+                    3.f);
+                ImGui::TableSetupColumn(
+                    "Current",
+                    ImGuiTableColumnFlags_WidthStretch,
+                    1.f);
+                ImGui::TableHeadersRow();
+                auto drawTimingRow =
+                    [](const char* label, float milliseconds, bool active)
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        if (active)
+                            ImGui::TextUnformatted(label);
+                        else
+                            ImGui::TextDisabled("%s", label);
+                        ImGui::TableSetColumnIndex(1);
+                        if (active)
+                            ImGui::Text("%.3f ms", milliseconds);
+                        else
+                            ImGui::TextDisabled("--");
+                    };
+
+                const bool depthActive = statsPlan.valid &&
+                    HasVisibilityExecutionPass(
+                        statsPlan.passMask,
+                        VisibilityExecutionPass::DepthPreparation);
+                const bool firstTraceActive = statsPlan.valid &&
+                    statsVisibility.HasActiveConsumer();
+                const bool laterTraceActive = statsPlan.valid &&
+                    (HasVisibilityExecutionPass(
+                        statsPlan.passMask,
+                        VisibilityExecutionPass::LegacyLaterBounceTrace) ||
+                     HasVisibilityExecutionPass(
+                        statsPlan.passMask,
+                        VisibilityExecutionPass::FixedLaterBounceTrace));
+                const bool reconstructionActive = statsPlan.valid &&
+                    HasVisibilityExecutionPass(
+                        statsPlan.passMask,
+                        VisibilityExecutionPass::Reconstruction);
+                const bool dedicatedSpatialDenoise = statsPlan.valid &&
+                    HasVisibilityExecutionPass(
+                        statsPlan.passMask,
+                        VisibilityExecutionPass::SpatialDenoise);
+                const bool fusedSpatialDenoiseUpsample =
+                    reconstructionActive &&
+                    !dedicatedSpatialDenoise &&
+                    statsWorkload.spatialEnabled;
+                const bool requiredUpsample =
+                    reconstructionActive &&
+                    !fusedSpatialDenoiseUpsample &&
+                    (!dedicatedSpatialDenoise ||
+                        statsWorkload.resolution !=
+                            VisibilityPerformanceResolution::Full);
+                const bool temporalActive = statsPlan.valid &&
+                    HasVisibilityExecutionPass(
+                        statsPlan.passMask,
+                        VisibilityExecutionPass::Temporal);
+                const bool applyActive = statsPlan.valid &&
+                    HasVisibilityExecutionPass(
+                        statsPlan.passMask,
+                        VisibilityExecutionPass::FusedResolveAndApply);
+                const bool compositionActive = statsPlan.valid &&
+                    (HasVisibilityExecutionPass(
+                        statsPlan.passMask,
+                        VisibilityExecutionPass::Composition) ||
+                     statsConfig.application ==
+                        VisibilityApplicationMode::
+                            BypassCompositionDiagnostic);
+
+                drawTimingRow(
+                    "Complete Visibility Pipeline",
+                    timings->CompleteEffectMs(),
+                    statsPlan.valid);
+                drawTimingRow(
+                    "Depth Preparation",
+                    timings->depthHierarchyMs,
+                    depthActive);
+                drawTimingRow(
+                    "First-Bounce Visibility Trace",
+                    timings->firstTraceMs,
+                    firstTraceActive);
+                drawTimingRow(
+                    "Later-Bounce GI Trace",
+                    timings->laterTraceMs,
+                    laterTraceActive);
+                drawTimingRow(
+                    "  GI Bounce 2 (Inside Later Trace)",
+                    timings->laterBounceMs[0],
+                    laterTraceActive && statsWorkload.bounceCount >= 2u);
+                drawTimingRow(
+                    "  GI Bounce 3 (Inside Later Trace)",
+                    timings->laterBounceMs[1],
+                    laterTraceActive && statsWorkload.bounceCount >= 3u);
+                drawTimingRow(
+                    "  GI Bounce 4 (Inside Later Trace)",
+                    timings->laterBounceMs[2],
+                    laterTraceActive && statsWorkload.bounceCount >= 4u);
+                drawTimingRow(
+                    "Spatial Denoise",
+                    timings->spatialDenoiseMs,
+                    dedicatedSpatialDenoise);
+                drawTimingRow(
+                    "Temporal Reconstruction",
+                    timings->temporalMs,
+                    temporalActive);
+                drawTimingRow(
+                    "Fused Spatial Denoise & Upsample",
+                    timings->fusedSpatialDenoiseUpsampleMs,
+                    fusedSpatialDenoiseUpsample);
+                drawTimingRow(
+                    "Required Full-Resolution Upsample",
+                    timings->requiredUpsampleMs,
+                    requiredUpsample);
+                drawTimingRow(
+                    "Fused Resolve & Apply",
+                    timings->fullResolutionApplyMs,
+                    applyActive);
+                drawTimingRow(
+                    statsConfig.application ==
+                            VisibilityApplicationMode::
+                                BypassCompositionDiagnostic
+                        ? "Composition Bypass Copy"
+                        : "Indirect-Lighting Composition",
+                    timings->compositionMs,
+                    compositionActive);
+                drawTimingRow(
+                    "Named-Stage Total",
+                    timings->SummedStageMs(),
+                    statsPlan.valid);
+                drawTimingRow(
+                    "Unattributed Timer Difference",
+                    timings->CompleteEffectMs() -
+                        timings->SummedStageMs(),
+                    statsPlan.valid);
+                ImGui::EndTable();
+            }
+
+            if (timings && ImGui::TreeNodeEx("Resource Footprint"))
+            {
+                constexpr double BytesPerMiB = 1024.0 * 1024.0;
+                if (ImGui::BeginTable(
+                        "##VisibilityResources",
+                        2,
+                        ImGuiTableFlags_BordersInnerH |
+                            ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_SizingStretchProp))
+                {
+                    ImGui::TableSetupColumn(
+                        "Resource",
+                        ImGuiTableColumnFlags_WidthStretch,
+                        3.f);
+                    ImGui::TableSetupColumn(
+                        "Value",
+                        ImGuiTableColumnFlags_WidthStretch,
+                        1.f);
+                    ImGui::TableHeadersRow();
+                    auto drawMibRow =
+                        [BytesPerMiB](const char* label, uint64_t bytes)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted(label);
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text(
+                                "%.2f MiB",
+                                double(bytes) / BytesPerMiB);
+                        };
+                    auto drawAllocatedMibRow =
+                        [&drawMibRow](const char* label, uint64_t bytes)
+                        {
+                            if (bytes != 0u)
+                                drawMibRow(label, bytes);
+                        };
+                    auto drawSectionRow = [](const char* label)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextDisabled("%s", label);
+                        };
+                    auto drawCountRow =
+                        [](const char* label, uint32_t value)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted(label);
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%u", value);
+                        };
+                    drawMibRow(
+                        "Output Texture Total (Logical)",
+                        timings->outputTextureBytes);
+                    drawSectionRow("Output Textures");
+                    drawAllocatedMibRow(
+                        "  Raw AO Surface",
+                        timings->rawAmbientTextureBytes);
+                    drawAllocatedMibRow(
+                        "  GI Frontier",
+                        timings->rawIndirectFrontierBytes);
+                    drawAllocatedMibRow(
+                        "  Multi-Bounce GI Frontiers",
+                        timings->multiBounceIndirectBytes);
+                    drawAllocatedMibRow(
+                        "  Final AO Surface",
+                        timings->finalAmbientTextureBytes);
+                    drawAllocatedMibRow(
+                        "  Final GI Surface",
+                        timings->finalIndirectTextureBytes);
+                    drawMibRow(
+                        "Working Texture Total (Logical)",
+                        timings->workingTextureBytes);
+                    drawSectionRow("Shared And History Textures");
+                    drawAllocatedMibRow(
+                        "  Scheduler Noise Tables",
+                        timings->schedulerResourceBytes);
+                    drawAllocatedMibRow(
+                        "  Adaptive Feedback",
+                        timings->adaptiveFeedbackBytes);
+                    drawAllocatedMibRow(
+                        "  Temporal AO History",
+                        timings->temporalAmbientHistoryBytes);
+                    drawAllocatedMibRow(
+                        "  Temporal GI History",
+                        timings->temporalIndirectHistoryBytes);
+                    drawAllocatedMibRow(
+                        "  Temporal Depth History",
+                        timings->temporalDepthHistoryBytes);
+                    drawAllocatedMibRow(
+                        "  Temporal Normal History",
+                        timings->temporalNormalHistoryBytes);
+                    drawAllocatedMibRow(
+                        "  Depth Hierarchy",
+                        timings->depthHierarchyBytes);
+                    drawMibRow(
+                        "Optional Candidate Total",
+                        timings->optionalTextureBytes);
+                    drawSectionRow("Candidate Textures");
+                    drawAllocatedMibRow(
+                        "  Packed FAST Noise",
+                        timings->packedFastNoiseBytes);
+                    drawAllocatedMibRow(
+                        "  Packed Edge Metadata",
+                        timings->packedEdgeMetadataBytes);
+                    drawAllocatedMibRow(
+                        "  PS4 GTAO Working Surfaces",
+                        timings->activisionWorkingBytes);
+                    drawAllocatedMibRow(
+                        "  XeGTAO Working AO",
+                        timings->xeGtaoWorkingAoBytes);
+                    drawAllocatedMibRow(
+                        "  XeGTAO Edge Metadata",
+                        timings->xeGtaoEdgeBytes);
+                    drawAllocatedMibRow(
+                        "  XeGTAO Hilbert LUT",
+                        timings->xeGtaoHilbertLutBytes);
+                    drawSectionRow("Modeled Savings");
+                    drawMibRow(
+                        "Mask Cache Payload",
+                        timings->maskCacheBytes);
+                    drawMibRow(
+                        "Fusion-Eligible AO Intermediate",
+                        timings->fullResolutionIntermediateBytes);
+                    drawMibRow(
+                        "Avoided Allocation (Modeled)",
+                        timings->avoidedTextureBytes);
+                    drawMibRow(
+                        "Shared Mask Payload Avoided (Modeled)",
+                        timings->sharedMaskPayloadBytes);
+                    drawMibRow(
+                        "Logical Traffic Avoided (Modeled)",
+                        timings->logicalTrafficAvoidedBytes);
+                    drawCountRow(
+                        "First-Trace SRVs",
+                        timings->activeSrvCount);
+                    drawCountRow(
+                        "First-Trace UAVs",
+                        timings->activeUavCount);
+                    drawCountRow("Peak SRVs", timings->peakSrvCount);
+                    drawCountRow("Peak UAVs", timings->peakUavCount);
+                    drawCountRow(
+                        "Active Dispatches",
+                        timings->activeDispatchCount);
+                    ImGui::EndTable();
+                }
+                ImGui::SetItemTooltip(
+                    "Payload and traffic values are logical models, not "
+                    "measured memory bandwidth.");
+                ImGui::TreePop();
+            }
+        }
+
+        const bool visibilityBenchmarksOpen = DrawCollapsingHeader(
+            "AO Benchmarks",
+            "Run isolated AO comparisons and inspect complete GPU-stage "
+            "results.");
+        if (visibilityBenchmarksOpen)
+        {
+            static int benchmarkWarmupFrames = 120;
+            static int benchmarkMeasuredFrames = 240;
+            static int benchmarkMatrix = 0;
+            static std::string benchmarkUiError;
+
+            const bool benchmarkQueued =
+                m_app->IsVisibilityBenchmarkQueued();
+            const bool benchmarkActive =
+                m_app->IsVisibilityBenchmarkActive();
+            const bool benchmarkSequenceActive =
+                m_app->IsVisibilityBenchmarkSequenceActive();
+            const bool benchmarkBusy = benchmarkQueued || benchmarkActive ||
+                benchmarkSequenceActive;
+            const ScreenSpaceVisibilitySettings& benchmarkVisibility =
+                m_ui.ScreenSpaceVisibility;
+            const VisibilityPerformanceWorkload benchmarkWorkload =
+                BuildVisibilityPerformanceWorkload(
+                    benchmarkVisibility,
+                    uint32_t(std::max(width, 0)),
+                    uint32_t(std::max(height, 0)));
+            const VisibilityVerificationProfileDefinition
+                benchmarkDefinition =
+                    GetVisibilityVerificationProfileDefinition(
+                        m_ui.VisibilityVerification);
+            const bool benchmarkCustomProfile =
+                m_ui.VisibilityVerification ==
+                    VisibilityVerificationProfile::Unset;
+            const VisibilityVerificationProfileResolution
+                benchmarkResolution = ResolveVisibilityVerificationProfile(
+                    m_ui.VisibilityVerification,
+                    benchmarkVisibility.performanceProfile,
+                    benchmarkWorkload);
+            const std::string benchmarkSettingsMismatch =
+                benchmarkCustomProfile
+                    ? std::string()
+                    : FindVisibilityVerificationSettingsMismatch(
+                        m_ui.VisibilityVerification,
+                        benchmarkVisibility,
+                        benchmarkWorkload);
+            const VisibilityExecutionPlan benchmarkPlan =
+                ResolveVisibilityExecutionPlan(
+                    benchmarkVisibility.performanceProfile,
+                    benchmarkWorkload);
+            const ScreenSpaceVisibilityTimings* benchmarkTimings =
+                m_app->GetScreenSpaceVisibilityTimings();
+            const bool benchmarkCurrentProfileValid =
+                m_ui.UsesDeferredShading() &&
+                benchmarkVisibility.enabled &&
+                benchmarkVisibility.HasActiveConsumer() &&
+                (benchmarkCustomProfile || benchmarkResolution.valid) &&
+                benchmarkSettingsMismatch.empty() &&
+                benchmarkPlan.valid &&
+                (benchmarkCustomProfile ||
+                    benchmarkVisibility.performanceProfile ==
+                        benchmarkDefinition.implementationProfile) &&
+                benchmarkTimings && benchmarkTimings->profileValid &&
+                !benchmarkTimings->activePermutation.empty() &&
+                benchmarkTimings->activePermutation ==
+                    benchmarkPlan.permutationName;
+            const bool benchmarkOutputValid =
+                benchmarkWorkload.outputWidth == 1920u &&
+                benchmarkWorkload.outputHeight == 1080u;
+            const bool benchmarkSceneValid =
+                m_app->HasSponzaCameraLocations();
+            const bool canRunCurrent = benchmarkCurrentProfileValid &&
+                benchmarkOutputValid && benchmarkSceneValid &&
+                !benchmarkBusy;
+            const bool canRunMatrix = benchmarkOutputValid &&
+                benchmarkSceneValid && !benchmarkBusy;
+
+            ImGui::SliderInt(
+                "Warmup Frames",
+                &benchmarkWarmupFrames,
+                0,
+                600,
+                "%d",
+                ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetItemTooltip(
+                "Frames discarded after history reset before measurement.");
+            ImGui::SliderInt(
+                "Measured Frames",
+                &benchmarkMeasuredFrames,
+                1,
+                2000,
+                "%d",
+                ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetItemTooltip(
+                "Complete, frame-correlated GPU samples retained per run.");
+
+            const float pairedButtonWidth = std::max(
+                1.f,
+                (ImGui::GetContentRegionAvail().x -
+                    style.ItemSpacing.x) / 2.f);
+            if (!canRunCurrent)
+                ImGui::BeginDisabled();
+            if (ImGui::Button(
+                    "Run Current",
+                    ImVec2(pairedButtonWidth, 0.f)) && canRunCurrent)
+            {
+                benchmarkUiError.clear();
+                (void)m_app->QueueVisibilityBenchmark(
+                    uint32_t(std::max(benchmarkWarmupFrames, 0)),
+                    uint32_t(std::max(benchmarkMeasuredFrames, 1)),
+                    {},
+                    false);
+            }
+            ImGui::SetItemTooltip(
+                !benchmarkOutputValid
+                    ? "Requires 1920 x 1080 output."
+                    : (!benchmarkSceneValid
+                        ? "Requires a Sponza benchmark scene."
+                        : (!benchmarkCurrentProfileValid
+                            ? "Wait for a valid compiled AO permutation."
+                            : "Benchmark only the current AO profile.")));
+            ImGui::SameLine();
+            if (ImGui::Button(
+                    "Compare Reference",
+                    ImVec2(pairedButtonWidth, 0.f)) && canRunCurrent)
+            {
+                benchmarkUiError.clear();
+                (void)m_app->QueueVisibilityBenchmarkSequence(
+                    VisibilityBenchmarkSequenceKind::ReferenceVersusCurrent,
+                    uint32_t(std::max(benchmarkWarmupFrames, 0)),
+                    uint32_t(std::max(benchmarkMeasuredFrames, 1)),
+                    {});
+            }
+            ImGui::SetItemTooltip(
+                "Run Reference, then the current settings snapshot.");
+            if (!canRunCurrent)
+                ImGui::EndDisabled();
+
+            static constexpr const char* BenchmarkMatrixLabels[] = {
+                "All Implemented Profiles",
+                "New AO Candidates",
+                "Fixed Sample Counts",
+                "Noise Patterns",
+                "Spatial Denoising & Reconstruction",
+                "Math Modes",
+                "Precision Modes"
+            };
+            static constexpr VisibilityBenchmarkSequenceKind
+                BenchmarkMatrixKinds[] = {
+                    VisibilityBenchmarkSequenceKind::AllImplemented,
+                    VisibilityBenchmarkSequenceKind::NewCandidates,
+                    VisibilityBenchmarkSequenceKind::FixedSample,
+                    VisibilityBenchmarkSequenceKind::Noise,
+                    VisibilityBenchmarkSequenceKind::Reconstruction,
+                    VisibilityBenchmarkSequenceKind::Math,
+                    VisibilityBenchmarkSequenceKind::Precision
+                };
+            ImGui::TextUnformatted("Test Matrix");
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (ImGui::BeginCombo(
+                    "##VisibilityBenchmarkMatrix",
+                    BenchmarkMatrixLabels[benchmarkMatrix]))
+            {
+                for (int matrixIndex = 0;
+                    matrixIndex < int(std::size(BenchmarkMatrixLabels));
+                    ++matrixIndex)
+                {
+                    const bool selected = matrixIndex == benchmarkMatrix;
+                    if (ImGui::Selectable(
+                            BenchmarkMatrixLabels[matrixIndex], selected))
+                    {
+                        benchmarkMatrix = matrixIndex;
+                    }
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+
+            if (!canRunMatrix)
+                ImGui::BeginDisabled();
+            if (ImGui::Button(
+                    "Run Selected Matrix",
+                    ImVec2(pairedButtonWidth, 0.f)) && canRunMatrix)
+            {
+                benchmarkUiError.clear();
+                (void)m_app->QueueVisibilityBenchmarkSequence(
+                    BenchmarkMatrixKinds[benchmarkMatrix],
+                    uint32_t(std::max(benchmarkWarmupFrames, 0)),
+                    uint32_t(std::max(benchmarkMeasuredFrames, 1)),
+                    {});
+            }
+            ImGui::SetItemTooltip(
+                !benchmarkOutputValid
+                    ? "Requires 1920 x 1080 output."
+                    : (!benchmarkSceneValid
+                        ? "Requires a Sponza benchmark scene."
+                        : "Run each profile independently and restore the "
+                            "starting settings afterward."));
+            if (!canRunMatrix)
+                ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (!benchmarkBusy)
+                ImGui::BeginDisabled();
+            if (ImGui::Button(
+                    "Cancel",
+                    ImVec2(pairedButtonWidth, 0.f)) && benchmarkBusy)
+            {
+                m_app->CancelVisibilityBenchmark();
+            }
+            ImGui::SetItemTooltip(
+                "Cancel without publishing partial measurements.");
+            if (!benchmarkBusy)
+                ImGui::EndDisabled();
+
+            if (benchmarkSequenceActive)
+            {
+                ImGui::Text(
+                    "Matrix %zu / %zu: %s",
+                    m_app->GetVisibilityBenchmarkSequenceIndex() + 1u,
+                    m_app->GetVisibilityBenchmarkSequenceCount(),
+                    m_app->GetVisibilityBenchmarkSequenceEntryName().c_str());
+            }
+            if (benchmarkActive)
+            {
+                const uint32_t completed =
+                    m_app->GetVisibilityBenchmarkCompletedFrameCount();
+                const uint32_t requested =
+                    m_app->GetVisibilityBenchmarkRequestedFrameCount();
+                const float progress = requested > 0u
+                    ? std::clamp(
+                        float(completed) / float(requested), 0.f, 1.f)
+                    : 0.f;
+                char progressLabel[64];
+                snprintf(
+                    progressLabel,
+                    std::size(progressLabel),
+                    "%u / %u measured frames",
+                    completed,
+                    requested);
+                ImGui::ProgressBar(
+                    progress,
+                    ImVec2(-FLT_MIN, 0.f),
+                    progressLabel);
+            }
+            const std::string& benchmarkStatus =
+                m_app->GetVisibilityBenchmarkStatus();
+            if (!benchmarkStatus.empty())
+                ImGui::TextWrapped("%s", benchmarkStatus.c_str());
+            const std::string& benchmarkError =
+                m_app->GetVisibilityBenchmarkError();
+            if (!benchmarkError.empty())
+            {
+                ImGui::TextColored(
+                    ImVec4(1.f, 0.35f, 0.30f, 1.f),
+                    "%s",
+                    benchmarkError.c_str());
+            }
+            if (!benchmarkUiError.empty())
+            {
+                ImGui::TextColored(
+                    ImVec4(1.f, 0.35f, 0.30f, 1.f),
+                    "%s",
+                    benchmarkUiError.c_str());
+            }
+
+            const bool canExport =
+                m_app->HasVisibilityBenchmarkResults() && !benchmarkBusy;
+            const float folderButtonWidth = ImGui::GetFrameHeight();
+            const float exportButtonWidth = std::max(
+                1.f,
+                ImGui::GetContentRegionAvail().x -
+                    folderButtonWidth - style.ItemSpacing.x);
+            if (!canExport)
+                ImGui::BeginDisabled();
+            if (ImGui::Button(
+                    "Export Last Run",
+                    ImVec2(exportButtonWidth, 0.f)) && canExport)
+            {
+                benchmarkUiError.clear();
+                (void)m_app->ExportLastVisibilityBenchmark({});
+            }
+            ImGui::SetItemTooltip(
+                "Export the last summary, raw frame data, and final frame.");
+            if (!canExport)
+                ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (DrawFolderButton(
+                    "##OpenVisibilityBenchmarkFolder",
+                    "Open the benchmark results folder."))
+            {
+                benchmarkUiError.clear();
+                std::filesystem::path benchmarkDirectory;
+                const VisibilityBenchmarkExportPaths& paths =
+                    m_app->GetLastVisibilityBenchmarkPaths();
+                if (!paths.json.empty())
+                    benchmarkDirectory = paths.json.parent_path();
+                if (benchmarkDirectory.empty() &&
+                    !ResolveVisibilityBenchmarkOutputDirectory(
+                        {}, benchmarkDirectory, benchmarkUiError))
+                {
+                    benchmarkDirectory.clear();
+                }
+                if (!benchmarkDirectory.empty())
+                {
+                    const std::wstring folder = benchmarkDirectory.wstring();
+                    const HINSTANCE openResult = ShellExecuteW(
+                        nullptr,
+                        L"open",
+                        folder.c_str(),
+                        nullptr,
+                        nullptr,
+                        SW_SHOWNORMAL);
+                    if (reinterpret_cast<INT_PTR>(openResult) <= 32)
+                    {
+                        benchmarkUiError =
+                            "Windows could not open the benchmark folder.";
+                    }
+                }
+            }
+
+            if (const VisibilityBenchmarkSummary* summary =
+                    m_app->GetLastVisibilityBenchmarkSummary())
+            {
+                if (ImGui::BeginTable(
+                        "##VisibilityBenchmarkResults",
+                        3,
+                        ImGuiTableFlags_BordersInnerH |
+                            ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_SizingStretchProp))
+                {
+                    ImGui::TableSetupColumn(
+                        "Last Run Stage",
+                        ImGuiTableColumnFlags_WidthStretch,
+                        2.5f);
+                    ImGui::TableSetupColumn(
+                        "Median",
+                        ImGuiTableColumnFlags_WidthStretch,
+                        1.f);
+                    ImGui::TableSetupColumn(
+                        "p95",
+                        ImGuiTableColumnFlags_WidthStretch,
+                        1.f);
+                    ImGui::TableHeadersRow();
+                    auto drawDistributionRow =
+                        [](const char* label,
+                            const VisibilityBenchmarkDistributionSummary&
+                                distribution)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted(label);
+                            ImGui::TableSetColumnIndex(1);
+                            if (distribution.valid)
+                            {
+                                ImGui::Text(
+                                    "%.3f ms",
+                                    distribution.medianMilliseconds);
+                            }
+                            else
+                            {
+                                ImGui::TextDisabled("--");
+                            }
+                            ImGui::TableSetColumnIndex(2);
+                            if (distribution.valid)
+                            {
+                                ImGui::Text(
+                                    "%.3f ms",
+                                    distribution.p95Milliseconds);
+                            }
+                            else
+                            {
+                                ImGui::TextDisabled("--");
+                            }
+                        };
+                    for (const VisibilityBenchmarkStageSummary& stage :
+                        summary->stages)
+                    {
+                        if (!stage.required)
+                            continue;
+                        drawDistributionRow(
+                            GetBenchmarkStageLabel(stage.stage),
+                            stage.distribution);
+                    }
+                    drawDistributionRow(
+                        "Named-Stage Total",
+                        summary->summedStages);
+                    drawDistributionRow(
+                        "Unattributed Timer Difference",
+                        summary->unattributedResidual);
+                    ImGui::EndTable();
+                }
+                if (summary->incompleteFrameCount > 0u)
+                {
+                    ImGui::TextDisabled(
+                        "%u incomplete frames excluded",
+                        summary->incompleteFrameCount);
+                }
+            }
+        }
+
         if (visibilityBenchmarkBusy)
             ImGui::BeginDisabled();
 
-        const bool fastMathOpen = DrawCollapsingHeader(
-            "Fast Math & Validation",
-            "Inspect the active math permutation and the exact boundaries "
-            "of the currently exposed math controls.");
-        if (fastMathOpen)
-        {
-            const ScreenSpaceVisibilitySettings& visibility =
-                m_ui.ScreenSpaceVisibility;
-            const VisibilityPerformanceProfileConfiguration configuration =
-                GetVisibilityPerformanceProfileConfiguration(
-                    visibility.performanceProfile);
-            const VisibilityPerformanceWorkload workload =
-                BuildVisibilityPerformanceWorkload(
-                    visibility,
-                    uint32_t(std::max(width, 0)),
-                    uint32_t(std::max(height, 0)));
-            const bool fixedRadialPower =
-                configuration.firstBounceSamples !=
-                    VisibilitySampleSpecialization::Runtime &&
-                std::abs(workload.radialExponent - 2.f) <= 0.00001f;
-
-            ImGui::Text(
-                "Math Profile: %s",
-                GetMathModeLabel(configuration.math));
-            ImGui::Text(
-                "Classification: %s",
-                GetOptimizationClassLabel(
-                    configuration.optimizationClass));
-            ImGui::Text(
-                "Radial Power Path: %s",
-                fixedRadialPower
-                    ? "Compile-Time x^2 Multiplication"
-                    : "Runtime General Exponent");
-            ImGui::Text(
-                "Noise Read Path: %s",
-                GetNoiseDeliveryLabel(configuration.noise));
-            ImGui::TextWrapped(
-                "Validation: the curated profile resolver checks output "
-                "size, consumer, estimator, sample counts, radius, "
-                "thickness, exponent, scheduler, reconstruction, history "
-                "state, and the CPU-selected shader plan.");
-            ImGui::Separator();
-            DrawUnavailableOption(
-                "Custom Per-Operation Math",
-                "No independent custom-math settings or fully assigned "
-                "shader profile exist. Curated profiles avoid an "
-                "unrestricted permutation product.");
-            DrawUnavailableOption(
-                "View-Position Reconstruction Override",
-                "Shared denominators and reconstruction forms are not "
-                "independently selectable in the performance-plan API.");
-            DrawUnavailableOption(
-                "World-Radius Projection Override",
-                "The current implementation exposes projection behavior only "
-                "through complete curated profiles.");
-            DrawUnavailableOption(
-                "Slice-Direction Override",
-                "No isolated sincos, lookup, or noise-packed direction "
-                "permutation is represented by a runtime profile.");
-            DrawUnavailableOption(
-                "Inverse-Trigonometric Override",
-                "Fast acos and approximate atan2 are not exposed without an "
-                "implemented, validated shader permutation.");
-            DrawUnavailableOption(
-                "Validation-Check Override",
-                "Safety-check removal is not exposed independently; the "
-                "selected release permutation owns its validation contract.");
-            DrawUnavailableOption(
-                "Loop and Constant-Hoisting Override",
-                "Hoisting is compiler- and permutation-owned and has no "
-                "independent runtime control.");
-        }
-
-        const bool precisionOpen = DrawCollapsingHeader(
-            "Precision & Formats",
-            "Inspect active arithmetic and resource formats without implying "
-            "that unimplemented mixed-precision paths are selectable.");
-        if (precisionOpen)
-        {
-            const ScreenSpaceVisibilitySettings& visibility =
-                m_ui.ScreenSpaceVisibility;
-            const VisibilityPerformanceProfileConfiguration configuration =
-                GetVisibilityPerformanceProfileConfiguration(
-                    visibility.performanceProfile);
-            const bool actualMixedPrecision = configuration.math ==
-                VisibilityMathMode::XeGtaoMixedPrecision;
-
-            ImGui::Text(
-                "Precision Profile: %s",
-                actualMixedPrecision
-                    ? "XeGTAO Mixed Precision"
-                    : "Reference FP32 Storage Contract");
-            ImGui::Text(
-                "Classification: %s",
-                GetOptimizationClassLabel(
-                    configuration.optimizationClass));
-            ImGui::Text(
-                "Trace Arithmetic: %s",
-                actualMixedPrecision ? "Mixed Precision" : "FP32");
-            ImGui::Text(
-                "Position and Depth Math: %s",
-                actualMixedPrecision ? "Profile-Defined" : "FP32");
-            ImGui::Text(
-                "Interval, CDF, and Sector Math: %s",
-                actualMixedPrecision ? "Profile-Defined" : "FP32");
-            ImGui::Text(
-                "GI Accumulation: FP32");
-            ImGui::Text(
-                "Raw AO: %s",
-                GetRawAoStorageLabel(configuration.rawAoStorage));
-            ImGui::Text(
-                "Edge Metadata: %s",
-                GetEdgeStorageLabel(configuration.edgeStorage));
-            ImGui::Text(
-                "Final Resolved AO: %s",
-                configuration.application ==
-                        VisibilityApplicationMode::FusedResolveAndApplyExact ||
-                    configuration.application ==
-                        VisibilityApplicationMode::FusedResolveAndApplyPackedEdges
-                    ? (configuration.explicitHalfRoundtrip
-                        ? "No Full-Resolution Intermediate, Explicit R16F Roundtrip"
-                        : "No Full-Resolution Intermediate, Packed Edge Resolve")
-                    : "R16_FLOAT Intermediate When Reconstruction Is Needed");
-            ImGui::Text(
-                "Noise Storage: %s",
-                GetNoiseDeliveryLabel(configuration.noise));
-            ImGui::TextWrapped(
-                "R8 raw or temporal AO remains unavailable for Uniform Solid "
-                "Angle and Cosine-Weighted Solid Angle because their "
-                "single-slice estimates may exceed one. R8 edge metadata is "
-                "independent of that AO range constraint.");
-            ImGui::Separator();
-            DrawUnavailableOption(
-                "Custom Precision Overrides",
-                "No independently selectable trace, position, interval, CDF, "
-                "or GI precision fields exist in the runtime plan.");
-            DrawUnavailableOption(
-                "Native FP16 Trace",
-                "A validated native-FP16 trace permutation is not implemented.");
-            DrawUnavailableOption(
-                "R16_FLOAT Linear Depth",
-                "The existing depth path and curated profiles do not expose a "
-                "standalone R16 linear-depth storage choice.");
-            DrawUnavailableOption(
-                "R8 Temporal AO",
-                "No validated range-preserving encoding and temporal shader "
-                "contract are implemented.");
-            DrawUnavailableOption(
-                "R16_FLOAT Temporal Depth",
-                "Temporal depth remains R32_FLOAT in implemented profiles.");
-            DrawUnavailableOption(
-                "RG8 Octahedral Temporal Normal",
-                "Temporal normal compression has no implemented history "
-                "permutation or validation path.");
-            DrawUnavailableOption(
-                "Packed R32_UINT Noise",
-                "Packed Current FAST is implemented as RGBA8; no R32_UINT "
-                "noise resource/profile is available.");
-        }
-
-        const bool dispatchOpen = DrawCollapsingHeader(
-            "Dispatch, Memory & Cache",
-            "Inspect dispatch shape, conditional resources, bindings, "
-            "traffic, and unavailable memory experiments.");
-        if (dispatchOpen)
-        {
-            const ScreenSpaceVisibilitySettings& visibility =
-                m_ui.ScreenSpaceVisibility;
-            const VisibilityPerformanceProfileConfiguration configuration =
-                GetVisibilityPerformanceProfileConfiguration(
-                    visibility.performanceProfile);
-            const VisibilityPerformanceWorkload workload =
-                BuildVisibilityPerformanceWorkload(
-                    visibility,
-                    uint32_t(std::max(width, 0)),
-                    uint32_t(std::max(height, 0)));
-            const ScreenSpaceVisibilityTimings* timings =
-                m_app->GetScreenSpaceVisibilityTimings();
-
-            ImGui::Text(
-                "Dispatch Profile: %s",
-                visibility.performanceProfile ==
-                        VisibilityPerformanceProfile::Reference
-                    ? "Reference"
-                    : "Curated Candidate");
-            ImGui::Text(
-                "Classification: %s",
-                GetOptimizationClassLabel(
-                    configuration.optimizationClass));
-            ImGui::Text(
-                "Thread Group: %ux%u",
-                workload.threadGroupSizeX,
-                workload.threadGroupSizeY);
-            ImGui::Text(
-                "Sample Specialization: %s",
-                GetSampleSpecializationLabel(
-                    configuration.firstBounceSamples));
-            ImGui::Text(
-                "Depth Preparation: %s",
-                GetDepthModeLabel(configuration.depth));
-            ImGui::Text(
-                "Application: %s",
-                GetApplicationLabel(configuration.application));
-            ImGui::Text(
-                "Resource Policy: %s",
-                GetBindingStrategyLabel(configuration.bindings));
-            ImGui::Text(
-                "Pipeline Creation: %s",
-                configuration.bindings ==
-                        VisibilityBindingStrategy::LegacyBroad
-                    ? "Eager Reference"
-                    : "Lazy Cached Advanced Permutations");
-
-            if (timings)
-            {
-                constexpr double BytesPerMiB = 1024.0 * 1024.0;
-                ImGui::Text(
-                    "First-Trace SRVs: %u | First-Trace UAVs: %u | "
-                    "Peak SRVs: %u | Peak UAVs: %u",
-                    timings->activeSrvCount,
-                    timings->activeUavCount,
-                    timings->peakSrvCount,
-                    timings->peakUavCount);
-                ImGui::Text(
-                    "Active Dispatches: %u",
-                    timings->activeDispatchCount);
-                ImGui::Text(
-                    "Optional Texture Bytes: %.2f MiB",
-                    double(timings->optionalTextureBytes) / BytesPerMiB);
-                ImGui::Text(
-                    "Full-Resolution Intermediate Bytes: %.2f MiB",
-                    double(timings->fullResolutionIntermediateBytes) /
-                        BytesPerMiB);
-                ImGui::Text(
-                    "Logical Traffic Avoided: %.2f MiB",
-                    double(timings->logicalTrafficAvoidedBytes) / BytesPerMiB);
-            }
-            else
-            {
-                ImGui::TextDisabled(
-                    "Runtime Resource Counters: Unavailable");
-            }
-            ImGui::Separator();
-            ImGui::TextWrapped(
-                "Exact 8x8, 16x8, and 8x16 thread-group profiles are "
-                "selectable in Custom Implementation Profile.");
-            DrawUnavailableOption(
-                "Additional Thread-Group Shapes",
-                "No additional validated thread-group profile is currently "
-                "available beyond the selectable 8x8, 16x8, and 8x16 set.");
-            DrawUnavailableOption(
-                "Depth-Reduction Override",
-                "Closest, smart-average, and hybrid reductions have no "
-                "independent runtime profile.");
-            DrawUnavailableOption(
-                "Depth-Mip Selection Override",
-                "Runtime log2, fixed-per-tap, and bias controls are not "
-                "implemented as assigned shader profiles.");
-            DrawUnavailableOption(
-                "Sampling-Layout Override",
-                "Checkerboard, deinterleaved, and group-shared layouts are "
-                "not implemented selectable paths.");
-            ImGui::TextWrapped(
-                "Projected Radius Clamp: Reference Unlimited, or Algorithmic "
-                "32, 64, and 128 Pixel profiles in Custom Implementation "
-                "Profile");
-            ImGui::SetItemTooltip(
-                "Algorithmic approximation. Each clamp is a separate CPU-"
-                "selected trace permutation; Reference retains the unlimited "
-                "radius path.");
-            ImGui::TextWrapped(
-                "Noise Scheduler Diagnostic: Constant Scheduler profile in "
-                "Custom Implementation Profile");
-            ImGui::SetItemTooltip(
-                "Diagnostic only. Selects a deterministic scheduler shader "
-                "permutation without changing the generic scheduler enum.");
-            ImGui::TextWrapped(
-                "Duplicate-Pixel Rejection: Reference On, or Exact Duplicate "
-                "Rejection Off profile in Custom Implementation Profile");
-            ImGui::SetItemTooltip(
-                "Exact implementation experiment. The Off profile selects a "
-                "separate shader permutation with no reference-path branch.");
-            ImGui::TextWrapped(
-                "Full-Mask Early Exit: Reference On, or Exact Full-Mask Early "
-                "Exit Off profile in Custom Implementation Profile");
-            ImGui::SetItemTooltip(
-                "Exact implementation experiment. The Off profile selects a "
-                "separate shader permutation with no reference-path branch.");
-            DrawUnavailableOption(
-                "Group-Shared Filter Storage",
-                "No validated LDS or thread-coarsened filter profile is "
-                "available.");
-            DrawUnavailableOption(
-                "Apply Inside Deferred Lighting",
-                "Only the separate composition and exact fused resolve/apply "
-                "profiles have an assigned runtime contract.");
-        }
 
         const bool tonemapperOpen = DrawCollapsingHeader(
             "Tonemapper",
@@ -7512,6 +8587,13 @@ bool ProcessCommandLine(
         }
         else if (!strcmp(argv[i], "--visibility-profile"))
         {
+            if (visibilityBenchmark.implementationProfileSpecified)
+            {
+                ReportCommandLineError(
+                    "--visibility-profile cannot be combined with "
+                    "--visibility-implementation-profile");
+                return false;
+            }
             if (i + 1 >= argc)
             {
                 ReportCommandLineError(
@@ -7531,6 +8613,37 @@ bool ProcessCommandLine(
             }
             visibilityBenchmark.profileSpecified = true;
         }
+        else if (!strcmp(
+                argv[i], "--visibility-implementation-profile"))
+        {
+            if (visibilityBenchmark.profileSpecified)
+            {
+                ReportCommandLineError(
+                    "--visibility-implementation-profile cannot be combined "
+                    "with --visibility-profile");
+                return false;
+            }
+            if (i + 1 >= argc)
+            {
+                ReportCommandLineError(
+                    "--visibility-implementation-profile requires a "
+                    "displayed Performance Profile name");
+                return false;
+            }
+            const char* profileName = argv[++i];
+            if (!TryParseVisibilityPerformanceProfile(
+                    profileName,
+                    visibilityBenchmark.implementationProfile))
+            {
+                ReportCommandLineError(
+                    "Unknown visibility implementation profile '" +
+                    std::string(profileName) +
+                    "'. Use a displayed Performance Profile name or its "
+                    "hyphenated form.");
+                return false;
+            }
+            visibilityBenchmark.implementationProfileSpecified = true;
+        }
         else if (!strcmp(argv[i], "--visibility-benchmark"))
         {
             visibilityBenchmark.benchmarkRequested = true;
@@ -7541,8 +8654,8 @@ bool ProcessCommandLine(
             {
                 ReportCommandLineError(
                     "--benchmark-sequence requires reference-versus-current, "
-                    "fixed-sample, noise, reconstruction, math, all, or "
-                    "precision");
+                    "new-candidates, fixed-sample, noise, reconstruction, "
+                    "math, all, or precision");
                 return false;
             }
 
@@ -7556,16 +8669,7 @@ bool ProcessCommandLine(
                     "Unknown benchmark sequence '" +
                     std::string(sequenceName) +
                     "'. Use reference-versus-current, fixed-sample, noise, "
-                    "reconstruction, math, all, or precision.");
-                return false;
-            }
-            if (sequenceKind == VisibilityBenchmarkSequenceKind::Precision)
-            {
-                ReportCommandLineError(
-                    "Benchmark sequence 'precision' is unavailable: no "
-                    "non-reference mixed-precision trace profile is compiled; "
-                    "the conservative candidate only changes FP32 filter "
-                    "algebra.");
+                    "reconstruction, math, new-candidates, all, or precision.");
                 return false;
             }
 
@@ -7782,7 +8886,27 @@ int main(int __argc, const char* const* __argv)
         log::warning(
             "--benchmark-auto-close has no effect without --visibility-benchmark");
     }
-    if (visibilityBenchmark.profileSpecified ||
+    if (visibilityBenchmark.implementationProfileSpecified)
+    {
+        const VisibilityPerformanceProfileConfiguration configuration =
+            GetVisibilityPerformanceProfileConfiguration(
+                visibilityBenchmark.implementationProfile);
+        if (configuration.implementationStatus ==
+                VisibilityImplementationStatus::Unavailable ||
+            configuration.implementationStatus ==
+                VisibilityImplementationStatus::Unset)
+        {
+            ReportCommandLineError(
+                "Visibility implementation profile '" +
+                std::string(configuration.name) + "' is unavailable" +
+                (configuration.implementationNote.empty()
+                    ? std::string(".")
+                    : std::string(": ") +
+                        std::string(configuration.implementationNote)));
+            return 1;
+        }
+    }
+    else if (visibilityBenchmark.profileSpecified ||
         visibilityBenchmark.benchmarkRequested)
     {
         const VisibilityVerificationProfileDefinition definition =
@@ -7864,7 +8988,25 @@ int main(int __argc, const char* const* __argv)
         UIData uiData;
         uiData.GpuAdapterChoices = std::move(adapterChoices);
         uiData.ActiveGpuAdapterIndex = deviceParams.adapterIndex;
-        if (visibilityBenchmark.profileSpecified ||
+        if (visibilityBenchmark.implementationProfileSpecified)
+        {
+            if (!ApplyVisibilityPerformanceProfileDefaults(
+                    uiData.ScreenSpaceVisibility,
+                    visibilityBenchmark.implementationProfile))
+            {
+                ReportCommandLineError(
+                    "Cannot apply the requested visibility implementation "
+                    "profile.");
+                deviceManager->Shutdown();
+                delete deviceManager;
+                return 1;
+            }
+            uiData.VisibilityVerification =
+                VisibilityVerificationProfile::Unset;
+            uiData.EnablePbr = true;
+            uiData.RenderMode = RendererMode::Deferred;
+        }
+        else if (visibilityBenchmark.profileSpecified ||
             visibilityBenchmark.benchmarkRequested)
         {
             if (!ApplyVisibilityVerificationProfileDefaults(
