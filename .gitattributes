@@ -1,1 +1,1 @@
-docs/postmortem/archive/*.restore.patch -diff
+docs/postmortem/archive/*.restore.patch -diff -text
