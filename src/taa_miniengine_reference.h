@@ -84,12 +84,18 @@ namespace uvsr
     [[nodiscard]] inline constexpr bool IsMiniEngineTaaAvailable(
         bool enabled,
         bool pbrEnabled,
-        bool deferredShading)
+        bool deferredShading,
+        bool visibilityTemporalEnabled,
+        bool visibilityAdaptiveEnabled)
     {
         // UVSR's required XYZ+validity motion contract is produced by the
         // first-party deferred PBR G-buffer. Pretending another renderer mode
         // has the same contract would create a plausible-looking but incorrect
         // temporal path.
-        return enabled && pbrEnabled && deferredShading;
+        return enabled &&
+               pbrEnabled &&
+               deferredShading &&
+               !visibilityTemporalEnabled &&
+               !visibilityAdaptiveEnabled;
     }
 }

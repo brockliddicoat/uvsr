@@ -70,13 +70,17 @@ int main()
         "disabled or zero sharpness must select MiniEngine's resolve path");
 
     passed &= Check(
-        uvsr::IsMiniEngineTaaAvailable(true, true, true),
-        "deferred PBR must support MiniEngine TAA");
+        uvsr::IsMiniEngineTaaAvailable(true, true, true, false, false),
+        "deferred PBR without a competing visibility history must support MiniEngine TAA");
     passed &= Check(
-        !uvsr::IsMiniEngineTaaAvailable(true, true, false) &&
-            !uvsr::IsMiniEngineTaaAvailable(true, false, true) &&
-            !uvsr::IsMiniEngineTaaAvailable(false, true, true),
+        !uvsr::IsMiniEngineTaaAvailable(true, true, false, false, false) &&
+            !uvsr::IsMiniEngineTaaAvailable(true, false, true, false, false) &&
+            !uvsr::IsMiniEngineTaaAvailable(false, true, true, false, false),
         "unsupported or disabled modes must not claim a valid TAA contract");
+    passed &= Check(
+        !uvsr::IsMiniEngineTaaAvailable(true, true, true, true, false) &&
+            !uvsr::IsMiniEngineTaaAvailable(true, true, true, false, true),
+        "visibility histories without TAA jitter delta must block MiniEngine TAA");
 
     if (!passed)
         return 1;

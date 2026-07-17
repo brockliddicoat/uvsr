@@ -21,7 +21,10 @@ architecture without either add-on.
   scene-linear color before the display stage, reports both GPU dispatch
   timings in its drawer, and uses 47.5 MiB of logical color/depth history at
   1920x1080. Forward and legacy shading paths leave it unavailable because they
-  do not produce the required validated motion contract.
+  do not produce the required validated motion contract. Until the visibility
+  histories carry the same jitter-delta contract, TAA is mutually exclusive
+  with visibility Temporal Reconstruction and Adaptive Sparse Sampling; turn
+  TAA off to use either visibility feature.
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
   linear resolution. **Temporal Reconstruction** independently enables
   SSRT3-style history accumulation, while **Spatial Filtering** independently
@@ -155,6 +158,13 @@ Coming Soon is UVSR's user-facing roadmap and integration summary for stable,
 active work that has not merged into `main`. It is not a mutex or a live task
 ledger. An entry is not shipped on `main`, and experimental entries are not
 promises that the work will merge.
+
+- **Miniengine Temporal Anti-Aliasing — Canon Contender**
+  (`codex/taa-miniengine-canon-contender`). Add the pinned MiniEngine
+  scene-linear TAA blend with selectable plain resolve or adjustable sharpen,
+  validated deferred-PBR motion, and explicit history/reset controls. This
+  contender is composed directly on current `main`; Canonical promotion still
+  requires exact-artifact product acceptance and publication.
 
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate shared

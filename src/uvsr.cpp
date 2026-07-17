@@ -629,12 +629,21 @@ struct UIData
         return RenderMode == RendererMode::Deferred;
     }
 
+    [[nodiscard]] bool HasMiniEngineTaaVisibilityConflict() const
+    {
+        // These visibility histories do not yet receive TAA's subpixel jitter delta.
+        return ScreenSpaceVisibility.reconstruction.temporalEnabled ||
+               ScreenSpaceVisibility.sampling.adaptiveSparseSamplingEnabled;
+    }
+
     [[nodiscard]] bool UsesMiniEngineTaa() const
     {
         return IsMiniEngineTaaAvailable(
             EnableMiniEngineTaa,
             EnablePbr,
-            UsesDeferredShading());
+            UsesDeferredShading(),
+            ScreenSpaceVisibility.reconstruction.temporalEnabled,
+            ScreenSpaceVisibility.sampling.adaptiveSparseSamplingEnabled);
     }
 
     [[nodiscard]] bool UsesTonemapper() const
@@ -2543,11 +2552,17 @@ protected:
                     "Thickness", &sampling.thickness, 0.0f, std::max(m_app->GetSceneDiagonal() * 0.02f, 0.5f), "%.3f");
                 ImGui::SetItemTooltip("Set the assumed thickness of occluders.");
 
+                const bool miniEngineTaaActive = m_ui.UsesMiniEngineTaa();
+                if (miniEngineTaaActive)
+                    ImGui::BeginDisabled();
                 samplingChanged |= ImGui::Checkbox(
                     "Adaptive Sparse Sampling",
                     &sampling.adaptiveSparseSamplingEnabled);
-                ImGui::SetItemTooltip(
-                    "Spend more samples where the image is harder to resolve.");
+                ImGui::SetItemTooltip(miniEngineTaaActive
+                        ? "Disable MiniEngine TAA before enabling adaptive sparse sampling."
+                        : "Spend more samples where the image is harder to resolve.");
+                if (miniEngineTaaActive)
+                    ImGui::EndDisabled();
 
                 if (sampling.adaptiveSparseSamplingEnabled)
                 {
@@ -2729,10 +2744,17 @@ protected:
             {
                 VisibilityReconstructionSettings& reconstruction =
                     visibility.reconstruction;
+                const bool miniEngineTaaActive = m_ui.UsesMiniEngineTaa();
+                if (miniEngineTaaActive)
+                    ImGui::BeginDisabled();
                 ImGui::Checkbox(
                     "Temporal Reconstruction",
                     &reconstruction.temporalEnabled);
-                ImGui::SetItemTooltip("Reuse valid detail from earlier frames.");
+                ImGui::SetItemTooltip(miniEngineTaaActive
+                        ? "Disable MiniEngine TAA before enabling visibility temporal reconstruction."
+                        : "Reuse valid detail from earlier frames.");
+                if (miniEngineTaaActive)
+                    ImGui::EndDisabled();
                 if (!reconstruction.temporalEnabled)
                     ImGui::BeginDisabled();
                 ImGui::SliderFloat(
@@ -2808,10 +2830,14 @@ protected:
             ImGuiTreeNodeFlags_DefaultOpen);
         if (temporalAAOpen)
         {
+            const bool temporalAAVisibilityConflict =
+                m_ui.HasMiniEngineTaaVisibilityConflict();
             const bool temporalAAAvailable = IsMiniEngineTaaAvailable(
                 true,
                 m_ui.EnablePbr,
-                m_ui.UsesDeferredShading());
+                m_ui.UsesDeferredShading(),
+                m_ui.ScreenSpaceVisibility.reconstruction.temporalEnabled,
+                m_ui.ScreenSpaceVisibility.sampling.adaptiveSparseSamplingEnabled);
             if (!temporalAAAvailable)
                 ImGui::BeginDisabled();
             if (ImGui::Checkbox(
@@ -2868,7 +2894,9 @@ protected:
             {
                 ImGui::EndDisabled();
                 ImGui::TextDisabled(
-                    "Requires deferred UVSR PBR motion and depth.");
+                    temporalAAVisibilityConflict
+                        ? "Disable visibility Temporal Reconstruction and Adaptive Sparse Sampling first."
+                        : "Requires deferred UVSR PBR motion and depth.");
             }
         }
 
