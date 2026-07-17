@@ -130,13 +130,13 @@ architecture without either add-on.
 - A shared, future-extensible contribution-gate contract also gives forward and
   deferred direct lighting exact early outs for zero, out-of-influence,
   back-facing, or fully occluded lights before unnecessary shadow/BSDF work.
-- The AgX display pipeline provides Base, Punchy, Golden, Mix, and Custom
-  presets. Its controls are Exposure, Contrast, Saturation, Warmth, Tint, Slope,
-  and Power.
-- UVSR includes original AgX Base-space simulations of Kodak 2383 Print, Portra
-  400, and Ektar 100 looks. They are not official Kodak LUTs. Additional licensed
-  3D `.cube` LUTs can be placed in `assets/luts/kodak`; see the
-  [LUT notes](assets/luts/kodak/README.md) for the supported format.
+- UVSR uses one fixed neutral AgX display transform to convert scene-linear HDR
+  radiance for display. The optional Tonemapper drawer, grading presets, LUT
+  loader, and bundled film looks are strategically sunset while scene lighting
+  is still developing. This is a sequencing decision, not a failed feature.
+  The exact implementation and its paired revival contract with bilateral-grid
+  local tone mapping are preserved in the
+  [postmortem](docs/postmortem/tonemapper-drawer-and-luts-v1.md).
 
 ## Coming Soon
 
@@ -144,16 +144,6 @@ Coming Soon is UVSR's user-facing roadmap and integration summary for stable,
 active work that has not merged into `main`. It is not a mutex or a live task
 ledger. An entry is not shipped on `main`, and experimental entries are not
 promises that the work will merge.
-
-- **Bilateral-Grid Local Tone Mapping — Active Development**
-  (`agent/bilateral-grid-local-tone-mapping`). Add a first-party D3D12 GPU
-  bilateral-grid analysis pass over the final scene-linear display source after
-  visibility composition and before AgX, then apply one scalar local-EV
-  correction inside the existing AgX display pass. This owns
-  `src/local_tone_mapping*`, AgX bindings,
-  display eligibility, reference tests, and its UI. It may extend the higher-
-  bounce contribution cutoff conservatively without changing visibility
-  estimator math or adding motion-reprojected local-exposure history.
 
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate shared

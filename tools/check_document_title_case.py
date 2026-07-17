@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate Title Case in tracked Markdown headings and bold lead-ins."""
+"""Validate Title Case in existing tracked Markdown headings and bold lead-ins."""
 
 from __future__ import annotations
 
@@ -937,6 +937,7 @@ def _repository_markdown_files(root: Path) -> list[Path]:
         root / path
         for path in relative_paths
         if path.suffix.lower() in {".md", ".markdown"}
+        and (root / path).is_file()
     ]
 
 
@@ -1224,8 +1225,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         nargs="*",
         type=Path,
         help=(
-            "Markdown files to check; defaults to every tracked and nonignored "
-            "new Markdown file."
+            "Markdown files to check; defaults to every existing tracked and "
+            "nonignored new Markdown file."
         ),
     )
     parser.add_argument(
