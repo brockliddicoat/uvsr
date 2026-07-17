@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "archiveId": "tonemapper-drawer-v1",
+  "status": "strategically-sunset",
+  "triggerPhrases": [
+    "bring back the tonemapper drawer",
+    "restore the tonemapper drawer"
+  ],
+  "archiveBaseCommit": "5f43205ecfe00e31fd64af34cad0f031472a224c",
+  "sourceIntroductionCommits": [
+    "c90274a01f21db1f4c23e3629d3004e9160fbeb6",
+    "177176a990fa9996a5da0bd8e638df32152ea9cd",
+    "f1edae2440d4c07f1110f62d26f186b086e6dd95"
+  ],
+  "restorationPatch": "docs/postmortem/archive/tonemapper-drawer-v1.restore.patch",
+  "restorationPatchDirection": "post-sunset-to-pre-sunset",
+  "restorationPatchSha256": "e5e85b69d5cf8a5f6ab5cf3933f63b98d765e113df68d4606b4f72f774e5e93a",
+  "standaloneDrawerRestorationAllowed": false,
+  "requiredCompanionFeature": "bilateral-grid-local-tonemapper",
+  "localTonemapperContract": {
+    "backend": "DirectX 12",
+    "analysisInput": "final scene-linear display source after visibility composition and before AgX",
+    "analysisMethod": "GPU bilateral grid",
+    "output": "one scalar local-EV correction per display pixel",
+    "applicationPoint": "combine with global exposure before the AgX inset transform",
+    "ownedSourcePrefix": "src/local_tone_mapping",
+    "motionReprojectedHistoryRequired": false
+  },
+  "preSunsetGitBlobIds": {
+    "CMakeLists.txt": "9501eb95f3cc1fbe21f0297dbf7080b1ef70008f",
+    "src/uvsr.cpp": "38d7f87dc8fc5def64ae011a5dd995fc8bff5627",
+    "src/agx_tonemapping_ps.hlsl": "ce52049c9a09eee8b0eca27e63b078543e577efe",
+    "assets/luts/kodak/NOTICE.md": "19b99cb621481ee769cd6fed8fb0470143d0fb6f",
+    "assets/luts/kodak/README.md": "b888e2fa54c775f57840cb38b243c6d796e239a5",
+    "assets/luts/kodak/UVSR_Kodak_2383_Print.cube": "cdca71487d45ba000eb0f75bb84bdd23941a3762",
+    "assets/luts/kodak/UVSR_Kodak_Ektar_100.cube": "72b1ecfca409fdb6d445f350bb7d03fa65a9aea4",
+    "assets/luts/kodak/UVSR_Kodak_Portra_400.cube": "69cbf69de2b16daac5598d60a1383ff802b433d0"
+  },
+  "postSunsetGitBlobIdsAtArchiveCreation": {
+    "CMakeLists.txt": "0e696d05a2eae84707297d4428336a85dbdb3328",
+    "src/uvsr.cpp": "fac616720ba8dee57db75acf8b0fd1045f1a677f",
+    "src/agx_tonemapping_ps.hlsl": "c7fa1480181e6db3d4b55cffb7bdc084e140508d"
+  },
+  "requiredRestorationSequence": [
+    "read the postmortem and this manifest",
+    "start from the newest Canonical verified checkpoint",
+    "verify the restoration patch SHA-256",
+    "apply and semantically review the focused restoration patch",
+    "implement the bilateral-grid local tonemapper in the same candidate",
+    "reconcile current bindings, resources, UI, documentation, and tests",
+    "build, test, launch, compare, and obtain fresh product acceptance"
+  ]
+}

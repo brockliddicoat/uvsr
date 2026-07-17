@@ -233,6 +233,15 @@ Agent policy version: `2026-07-16.1`.
   user about the retired
   [Visibility Sample Rotation v1 experiment](docs/postmortem/visibility-sample-rotation-v1.md)
   before proposing restoration. A reminder does not authorize revival.
+- If the user says **“bring back the tonemapper drawer”**, **“restore the
+  tonemapper drawer”**, or equivalent, read the
+  [Tonemapper Drawer and LUTs v1 Strategic Sunset](docs/postmortem/tonemapper-drawer-and-luts-v1.md)
+  and its restoration manifest before editing. Treat revival as one coupled
+  feature: restore the archived global Tonemapper drawer/LUT implementation and
+  implement the bilateral-grid local tonemapper in the same work item. Never
+  restore only the old drawer as a standalone feature. The phrase authorizes
+  scoped local implementation and verification under this guide; it does not
+  authorize a commit, push, pull request, merge, release, or deployment.
 - Publishing a roadmap or execution-plan update can improve cross-task
   visibility, but this guide never grants permission to push or open a pull
   request.
@@ -333,10 +342,11 @@ Agent policy version: `2026-07-16.1`.
   the dormant-feature rule: it is retained as a regression/experiment oracle,
   but its production UI control is hidden. If restored, the toggle must retain
   the same camera, scene, tonemapper, sky, and lights.
-- Preserve the display pipeline order: scene-linear HDR radiance, camera white
-  balance, exposure in EV, AgX inset transform, logarithmic encoding, contrast
-  tone scale, Base-space grade/LUT, output gamut conversion, display transfer,
-  then dithering.
+- Preserve the active display pipeline order: scene-linear HDR radiance, fixed
+  neutral AgX inset transform, logarithmic encoding, default contrast tone
+  scale, output gamut conversion, display transfer, then dithering. User-facing
+  exposure, grading, LUTs, and local tone mapping remain absent until the paired
+  revival contract above is explicitly invoked.
 
 ## Documentation
 

@@ -3,8 +3,8 @@
 ## Scope and Invariants
 
 UVSR owns one scene-linear metallic-roughness BSDF in `src/pbr.hlsli`.
-Deferred and forward shading both include that file; exposure, AgX, LUT grading,
-output gamut conversion, and display transfer happen afterward.
+Deferred and forward shading both include that file; the fixed neutral AgX
+transform, output gamut conversion, and display transfer happen afterward.
 
 - Material roughness is perceptual roughness. Microfacet roughness is
   `alpha = max(perceptualRoughness², 0.002)`.
