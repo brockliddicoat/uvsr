@@ -159,13 +159,6 @@ active work that has not merged into `main`. It is not a mutex or a live task
 ledger. An entry is not shipped on `main`, and experimental entries are not
 promises that the work will merge.
 
-- **Miniengine Temporal Anti-Aliasing — Canon Contender**
-  (`codex/taa-miniengine-canon-contender`). Add the pinned MiniEngine
-  scene-linear TAA blend with selectable plain resolve or adjustable sharpen,
-  validated deferred-PBR motion, and explicit history/reset controls. This
-  contender is composed directly on current `main`; Canonical promotion still
-  requires exact-artifact product acceptance and publication.
-
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate shared
   depth, pixel-coordinate, and safe-normal helpers used by the visibility
