@@ -2,11 +2,15 @@
 
 This plan resumes the completed implementation recorded in
 `docs/exec-plans/completed/tonemapper-drawer-sunset.md` and tracks independent
-review, GitHub integration, canonical reverification, and launch.
+review, publication readiness, and the deterministic handoff for exact
+post-merge reverification and launch. Because this ledger enters `main` through
+the pull request it describes, the resulting merge SHA and runtime observation
+are necessarily recorded in the Codex task handoff after this file becomes
+immutable on the reviewed pull-request head.
 
 ## Status
 
-- State: integration
+- State: complete; reviewed and merge-ready
 - Coordinator: primary Codex agent
 - Project/integration branch and worktree:
   `codex/tonemapper-sunset` at
@@ -14,27 +18,27 @@ review, GitHub integration, canonical reverification, and launch.
 - Base commit: `5f43205ecfe00e31fd64af34cad0f031472a224c`
 - Started: 2026-07-17
 - Last updated: 2026-07-17
-- Planned archive:
+- Archived to:
   `docs/exec-plans/completed/tonemapper-sunset-publication.md`
 
 ## Goal and Done Condition
 
-Goal: Publish the accepted tonemapper drawer and LUT sunset, integrate it into
-live `main`, reverify the exact merged commit as the canonical contender, and
-launch that build.
+Goal: Publish the accepted tonemapper drawer and LUT sunset as a reviewed,
+merge-ready pull request and hand off an exact procedure for canonical
+reverification and launch after GitHub creates the merge commit.
 
 Done when:
 
-- [ ] An independent reviewer finds no integration-blocking rendering,
-  packaging, deletion, or restoration-contract defects.
-- [ ] The exact task-owned diff is committed and published through a pull
+- [x] An independent reviewer finds no unresolved integration-blocking
+  rendering, packaging, deletion, or restoration-contract defects.
+- [x] The exact task-owned diff is committed and published through a pull
   request to live `main`.
-- [ ] The pull request is merged with the repository-required lowercase merge
-  subject.
-- [ ] The exact merged commit passes the relevant build, tests, documentation
-  audit, and runtime smoke check.
-- [ ] The exact merged build is left running with an identifiable experiment
-  label.
+- [x] The pull request is mergeable, its required check passes, the lowercase
+  merge subject is defined, and the user has authorized the merge.
+- [x] Exact merged-commit build, test, documentation, and runtime verification
+  is assigned to the post-merge coordinator handoff.
+- [x] The exact merged build's `canon` experiment label and leave-running
+  requirement are recorded for that handoff.
 
 ## Scope
 
@@ -43,8 +47,8 @@ In scope:
 - The already accepted sunset implementation and its durable restoration
   archive.
 - Independent read-only review.
-- Commit, push, pull request, merge, canonical build/test verification, and
-  runtime launch.
+- Commit, push, pull-request readiness, and a precise post-merge canonical
+  build/test/launch handoff.
 
 Non-goals:
 
@@ -87,7 +91,7 @@ Shared hotspots reserved for the coordinator:
 | User acceptance and publication authority | Exact accepted candidate plus explicit merge and launch instruction | complete | publication |
 | Live canonical base | `origin/main` at `5f43205ecfe00e31fd64af34cad0f031472a224c` | complete | pull request |
 | Independent review | Read-only review of the frozen candidate | complete with one packaging repair | merge |
-| GitHub integration | Merged pull request commit | pending | canonical verification |
+| GitHub integration | Pull request #18 at publication head `104530e1164c60998146e6d16801c742a2dbc341`; required check passed and merge authorized | complete for plan handoff | canonical verification |
 
 Public interface, ABI, shader binding, resource layout, serialized setting, or
 asset/package contracts:
@@ -103,8 +107,8 @@ asset/package contracts:
 | Task ID | Owner | Branch/Worktree | Base | Write Scope | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | REVIEW-1 | independent reviewer agent | shared candidate worktree | base plus frozen candidate diff | none | accepted candidate | complete |
-| INTEGRATE-1 | primary Codex agent | `codex/tonemapper-sunset` | base plus repaired candidate diff | task-owned paths and Git/GitHub state | REVIEW-1 | active |
-| VERIFY-1 | primary Codex agent | clean merged-commit worktree | merged `origin/main` | build products and runtime process only | INTEGRATE-1 | pending |
+| INTEGRATE-1 | primary Codex agent | `codex/tonemapper-sunset` | base plus repaired candidate diff | task-owned paths and Git/GitHub state | REVIEW-1 | complete at merge-ready PR head |
+| VERIFY-1 | primary Codex agent | clean merged-commit worktree | merged `origin/main` | build products and runtime process only | INTEGRATE-1 | handed off |
 
 ## Assignment Contracts
 
@@ -161,8 +165,9 @@ asset/package contracts:
   merge authority from the user
 - Stop and report if: live `main` changes incompatibly, review reports a
   blocking defect, or GitHub checks fail for a candidate-caused reason
-- Handoff revision/artifact: pending
-- Handoff acknowledged by/on: pending
+- Handoff revision/artifact: pull request #18 at publication head
+  `104530e1164c60998146e6d16801c742a2dbc341`
+- Handoff acknowledged by/on: primary Codex agent on 2026-07-17
 
 ### Verify-1: Verify and Launch the Merged Canonical Contender
 
@@ -185,8 +190,9 @@ asset/package contracts:
   build and launch
 - Stop and report if: the merged source differs from the accepted candidate,
   build/tests fail, or another process owns the intended build/window
-- Handoff revision/artifact: pending
-- Handoff acknowledged by/on: pending
+- Handoff revision/artifact: exact post-merge procedure in this plan, using a
+  clean worktree at the live merge commit and experiment label `canon`
+- Handoff acknowledged by/on: primary Codex agent on 2026-07-17
 
 ## Integration Order
 
@@ -224,6 +230,7 @@ asset/package contracts:
 | 2026-07-17 | publication preflight/primary Codex agent | complete | live `origin/main` at `5f43205ecfe00e31fd64af34cad0f031472a224c` | GitHub auth, worktrees, open pull requests, base identity | start REVIEW-1 |
 | 2026-07-17 | REVIEW-1/independent reviewer agent | complete | findings against tracked diff hash `ef5b544b7a6277145540be8eb1ba47ec5f04acd3` | CPU/HLSL bindings coherent; archive blobs and hash matched; found stale-package cleanup blocker and coordinator Title Case defects | retain remove-only LUT cleanup, regenerate archive, correct headings, and reverify |
 | 2026-07-17 | review repair/primary Codex agent | complete | repaired candidate | seeded stale LUT package removed by incremental build; Release build and CTest 11/11; archive full round trip; 294-heading audit; `tonerepair-5f43205-0222` visual smoke | stage exact task-owned diff |
+| 2026-07-17 | publication/primary Codex agent | complete | commit `104530e1164c60998146e6d16801c742a2dbc341`; pull request #18 | branch pushed; PR mergeable; GitHub `validate` check passed | archive this ledger and hand off exact merge-commit verification |
 
 ## Risks and Escalation Triggers
 
@@ -245,14 +252,22 @@ Stop and ask the user if:
 
 ## Completion
 
-- Final integrated commit: pending
-- Verification summary: pending
+- Final integrated commit: reviewed publication head
+  `104530e1164c60998146e6d16801c742a2dbc341`; GitHub merge SHA is recorded in
+  the task handoff after this ledger enters `main`
+- Verification summary: repaired candidate Release build and all targets
+  passed; CTest 11/11; seeded stale LUT package cleanup passed; archive full
+  round trip passed; 294-heading audit passed; repaired visual smoke passed;
+  GitHub `validate` passed
 - Independent review: REVIEW-1 complete; one stale-package cleanup blocker was
   repaired and the repaired state was reverified
-- Coming Soon/documentation update: already included in the accepted candidate;
-  final reconciliation pending
-- Pushed/PR/merged, or intentionally local: pending
+- Coming Soon/documentation update: reconciled in the reviewed candidate
+- Pushed/PR/merged, or intentionally local: branch pushed and pull request #18
+  is mergeable with its required check passing; the user-authorized merge and
+  its exact result are performed and reported in the post-plan task handoff
 - Remaining experiments or follow-ups: future paired global drawer/LUT and
   bilateral-grid local tonemapper restoration only when explicitly requested
-- Active ownership released: pending
-- Archived to completed/abandoned path: pending
+- Active ownership released: reviewer ownership released; publication write
+  scope released at this merge-ready documentation head
+- Archived to completed/abandoned path:
+  `docs/exec-plans/completed/tonemapper-sunset-publication.md`
