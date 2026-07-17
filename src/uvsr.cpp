@@ -882,7 +882,7 @@ public:
         if (location == SponzaCameraLocation::Free)
         {
             m_SponzaCameraLocation = location;
-            log::info("Camera location is now Free");
+            log::info("Camera location is now Piloted");
             return;
         }
 
@@ -915,7 +915,7 @@ public:
             m_ThirdPersonCamera.GetUp()))
         {
             m_SponzaCameraLocation = SponzaCameraLocation::Free;
-            log::info("Camera location is now Free");
+            log::info("Camera location is now Piloted");
         }
     }
 
@@ -2286,7 +2286,7 @@ protected:
                 GetSponzaCameraLocationLabel(selectedCameraLocation));
             ImGui::SetItemTooltip(benchmarkCameraActive
                 ? "Benchmark mode locks Benchmark Position 1."
-                : "Recall a stored camera location. Movement changes this status to Free.");
+                : "Recall a stored camera location. Movement changes this status to Piloted.");
             if (cameraLocationComboOpen)
             {
                 for (SponzaCameraLocation location : SelectableSponzaCameraLocations)

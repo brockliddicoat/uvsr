@@ -50,7 +50,7 @@ const char* uvsr::GetSponzaCameraLocationLabel(SponzaCameraLocation location)
     if (const SponzaCameraPreset* preset = FindSponzaCameraPreset(location))
         return preset->Label;
 
-    return "Free";
+    return "Piloted";
 }
 
 const uvsr::SponzaCameraPreset* uvsr::FindSponzaCameraPreset(

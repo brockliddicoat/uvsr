@@ -84,12 +84,12 @@ int main(int argc, const char* const* argv)
                 uvsr::SponzaCameraLocation::Free &&
             uvsr::SelectableSponzaCameraLocations[1] ==
                 uvsr::SponzaCameraLocation::SimplifiedApproximation,
-            "the camera-location menu must always expose Free followed by the stored preset");
+            "the camera-location menu must always expose Piloted followed by the stored preset");
         Require(uvsr::FindSponzaCameraPreset(
             uvsr::SponzaCameraLocation::Free) == nullptr &&
             uvsr::FindSponzaCameraPreset(
                 uvsr::SponzaCameraLocation::Count) == nullptr,
-            "Free and the enum sentinel must not resolve to stored camera presets");
+            "Piloted and the enum sentinel must not resolve to stored camera presets");
 
         const std::filesystem::path productionDirectory = argv[1];
         Require(uvsr::FindStandardSponzaCameraPreset(
@@ -126,8 +126,8 @@ int main(int argc, const char* const* argv)
                 "Benchmark Position 1",
             "the stored preset must expose the Benchmark Position 1 dropdown label");
         Require(std::string(uvsr::GetSponzaCameraLocationLabel(
-            uvsr::SponzaCameraLocation::Free)) == "Free",
-            "a camera that leaves its recalled pose must display Free");
+            uvsr::SponzaCameraLocation::Free)) == "Piloted",
+            "a camera that leaves its recalled pose must display Piloted");
 
         Require(simplified.ReferenceWidth == 1920u &&
             simplified.ReferenceHeight == 1080u,
@@ -165,7 +165,7 @@ int main(int argc, const char* const* argv)
             uvsr::ResolveSponzaCameraLocation(
                 uvsr::SponzaCameraLocation::SimplifiedApproximation,
                 false) == uvsr::SponzaCameraLocation::SimplifiedApproximation,
-            "scene loading must resolve Free and the named location to the sole preset");
+            "scene loading must resolve Piloted and the named location to the sole preset");
         Require(uvsr::ResolveSponzaCameraLocation(
             uvsr::SponzaCameraLocation::Free,
             true) == uvsr::SponzaCameraLocation::SimplifiedApproximation &&
@@ -185,13 +185,13 @@ int main(int argc, const char* const* argv)
             simplified.Position + float3(0.001f, 0.f, 0.f),
             simplified.Direction,
             simplified.Up),
-            "moving away from a recalled pose must identify the camera as Free");
+            "moving away from a recalled pose must identify the camera as Piloted");
         Require(!uvsr::IsSponzaCameraAtPreset(
             simplified,
             simplified.Position,
             normalize(simplified.Direction + float3(0.f, 0.001f, 0.f)),
             simplified.Up),
-            "rotating away from a recalled pose must identify the camera as Free");
+            "rotating away from a recalled pose must identify the camera as Piloted");
 
         std::error_code cleanupError;
         std::filesystem::remove_all(directory, cleanupError);

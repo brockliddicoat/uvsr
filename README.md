@@ -95,11 +95,12 @@ architecture without either add-on.
 - **PBR Sponza Decorated** and **PBR Sponza Plain** open in **Freelook** at
   **Benchmark Position 1**, the
   `intel-pbr-sponza-courtyard-simplified-v1` preset. The **Camera Location**
-  dropdown contains that named location and an always-selectable **Free** entry,
+  dropdown contains that named location and an always-selectable **Piloted**
+  entry,
   leaving room for more named locations later. Choosing Benchmark Position 1
   recalls the complete pose without changing Camera Mode. After translation or
   rotation moves the view away from the recalled pose, the dropdown reports
-  Free. Choosing Free also detaches the location name without moving or
+  Piloted. Choosing Piloted also detaches the location name without moving or
   reorienting the camera. The preset uses a 60-degree perspective view and a
   1920x1080 reference frame.
 - The first scene light is selected automatically in the **Lights** panel.
