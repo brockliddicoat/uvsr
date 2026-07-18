@@ -148,8 +148,8 @@ could execute neighborhood statistics, structural thin classification, history
 filtering, depth/normal/material validation, YCoCg clipping, automatic reactivity,
 spatial fallback, resurrection, and sharpening-related outputs.
 
-At 1920x1080, immediate history alone was documented at roughly 110.7 MiB. The
-largest persistent configuration doubled that to roughly 221.5 MiB, excluding the
+At 1920x1080, immediate history alone was documented at roughly 110.7 mib. The
+largest persistent configuration doubled that to roughly 221.5 mib, excluding the
 prepared targets and output. The old estimate of approximately 133 logical bytes
 read and 36 bytes written per pixel for the default resolve was not a controlled
 hardware bandwidth measurement, but it correctly identified a bandwidth-heavy

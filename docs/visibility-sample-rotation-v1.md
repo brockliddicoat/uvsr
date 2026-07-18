@@ -215,7 +215,7 @@ and history convergence remain inspectable.
 
 After a fixed warmup, record multiple windows of:
 
-- Total frame time and FPS.
+- Total frame time and fps.
 - Visibility **All**, **Trace**, **Filter**, and **Other** GPU timers.
 - Exact logical **Outputs** and **Working** bytes shown by UVSR.
 - Executable/source identity, adapter, scene, camera, output resolution,
@@ -287,17 +287,17 @@ GI bounce at intensity 4 with emissive gain 4, temporal response 0.35, and the
 Gaussian joint-bilateral filter at radius 4.
 
 One persisted canonical `a7e51b7` Release observation reported 2.367 ms,
-422.6 FPS, and visibility timers of 0.52 ms All, 0.27 ms Trace, 0.13 ms Filter,
+422.6 fps, and visibility timers of 0.52 ms All, 0.27 ms Trace, 0.13 ms Filter,
 and 0.13 ms Other. Five candidate Release observations with rotation disabled
 reported a median frame interval of 2.422 ms with a 2.416-2.493 ms range and a
-median 412.9 FPS with a 401.1-413.9 FPS range. Their Trace median was 0.20 ms
+median 412.9 fps with a 401.1-413.9 fps range. Their Trace median was 0.20 ms
 with a 0.20-0.29 ms range, Filter was 0.13 ms with a 0.13-0.14 ms range, and
 Other was 0.13 ms in every sample. The cursor obscured the candidate All value,
 so no exact candidate All summary is claimed.
 
 Every baseline and candidate-disabled observation reported the same logical
-texture footprint: 24.7 MiB Outputs, 18.0 MiB Working, 0.0 MiB Mask Cache,
-0.0 MiB Avoided, and 2.0 MiB Shared. This supports the unchanged-allocation
+texture footprint: 24.7 mib Outputs, 18.0 mib Working, 0.0 mib Mask Cache,
+0.0 mib Avoided, and 2.0 mib Shared. This supports the unchanged-allocation
 contract but is not an API-residency measurement.
 
 These short UI observations are smoke telemetry, not a statistically controlled

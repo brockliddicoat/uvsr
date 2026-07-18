@@ -16,7 +16,7 @@ namespace uvsr
 {
     namespace
     {
-        constexpr auto QueryInterval = std::chrono::milliseconds(250);
+        constexpr auto QueryInterval = std::chrono::milliseconds(500);
 
         std::string NormalizeName(std::string name)
         {
@@ -151,6 +151,9 @@ namespace uvsr
                     "nvmlDeviceGetMemoryBusWidth");
                 m_GetGpuCoreCount = LoadFunction<GetUnsignedMetricFunction>(
                     "nvmlDeviceGetNumGpuCores");
+                m_GetUtilizationRates =
+                    LoadFunction<GetUtilizationRatesFunction>(
+                        "nvmlDeviceGetUtilizationRates");
 
                 if (!m_Init || !m_Shutdown || !m_GetDeviceCount ||
                     !m_GetDeviceByIndex || !m_GetDeviceName || !m_GetClockInfo ||
@@ -220,12 +223,26 @@ namespace uvsr
                     return m_Metrics;
                 }
 
+                NvmlUtilization utilization{};
+                double gpuUtilization = m_Metrics.valid
+                    ? m_Metrics.gpuUtilization
+                    : 1.0;
+                if (m_GetUtilizationRates &&
+                    m_GetUtilizationRates(m_Device, &utilization) == NvmlSuccess)
+                {
+                    gpuUtilization = std::clamp(
+                        double(utilization.gpu) / 100.0,
+                        0.0,
+                        1.0);
+                }
+
                 // NVML reports the physical memory clock. Double-data-rate
                 // memory transfers twice per clock; an FP32 FMA is two FLOPs.
                 m_Metrics.memoryBandwidthGBps =
                     double(memoryClockMHz) * 2.0 * double(memoryBusWidthBits) / 8000.0;
                 m_Metrics.gpuGFlops =
                     double(gpuCoreCount) * 2.0 * double(graphicsClockMHz) / 1000.0;
+                m_Metrics.gpuUtilization = gpuUtilization;
                 m_Metrics.valid = memoryClockMHz > 0 && memoryBusWidthBits > 0 &&
                     graphicsClockMHz > 0 && gpuCoreCount > 0;
                 return m_Metrics;
@@ -241,6 +258,13 @@ namespace uvsr
             using GetClockInfoFunction = int(__cdecl*)(
                 NvmlDevice, unsigned int, unsigned int*);
             using GetUnsignedMetricFunction = int(__cdecl*)(NvmlDevice, unsigned int*);
+            struct NvmlUtilization
+            {
+                unsigned int gpu;
+                unsigned int memory;
+            };
+            using GetUtilizationRatesFunction = int(__cdecl*)(
+                NvmlDevice, NvmlUtilization*);
 
             static constexpr int NvmlSuccess = 0;
             static constexpr unsigned int NvmlClockGraphics = 0;
@@ -263,6 +287,7 @@ namespace uvsr
             GetClockInfoFunction m_GetClockInfo = nullptr;
             GetUnsignedMetricFunction m_GetMemoryBusWidth = nullptr;
             GetUnsignedMetricFunction m_GetGpuCoreCount = nullptr;
+            GetUtilizationRatesFunction m_GetUtilizationRates = nullptr;
             std::chrono::steady_clock::time_point m_LastQuery{};
             GpuPerformanceMetrics m_Metrics;
         };

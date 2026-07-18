@@ -60,9 +60,94 @@ set(DONUT_WITH_DX12 ON CACHE BOOL "" FORCE)
 set(DONUT_WITH_VULKAN OFF CACHE BOOL "" FORCE)
 set(DONUT_WITH_AFTERMATH OFF CACHE BOOL "" FORCE)
 
+# UVSR intentionally keeps Donut and its nested ImGui checkout pinned and
+# pristine. Stage the small product-specific dependency changes into the build
+# tree, apply reviewed first-party patches there, and replace only the affected
+# target sources. This keeps dependency identity auditable without sacrificing
+# the custom loading telemetry and UI behavior.
+function(uvsr_stage_patched_sources
+    source_root
+    patch_file
+    output_root)
+    file(REMOVE_RECURSE "${output_root}")
+    foreach(relative_path IN LISTS ARGN)
+        get_filename_component(relative_directory
+            "${relative_path}" DIRECTORY)
+        file(MAKE_DIRECTORY
+            "${output_root}/${relative_directory}")
+        configure_file(
+            "${source_root}/${relative_path}"
+            "${output_root}/${relative_path}"
+            COPYONLY)
+    endforeach()
+
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}"
+            "${GIT_EXECUTABLE}" apply
+            --no-index
+            --whitespace=nowarn
+            "${patch_file}"
+        WORKING_DIRECTORY "${output_root}"
+        RESULT_VARIABLE patch_result
+        ERROR_VARIABLE patch_error)
+    if (NOT patch_result EQUAL 0)
+        message(FATAL_ERROR
+            "Failed to stage UVSR dependency override ${patch_file}: "
+            "${patch_error}")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY
+        CMAKE_CONFIGURE_DEPENDS "${patch_file}")
+endfunction()
+
+function(uvsr_replace_target_sources
+    target
+    source_root
+    override_root)
+    get_target_property(target_sources "${target}" SOURCES)
+    foreach(relative_path IN LISTS ARGN)
+        set(original_source "${source_root}/${relative_path}")
+        list(FIND target_sources "${original_source}" source_index)
+        if (source_index EQUAL -1)
+            message(FATAL_ERROR
+                "Cannot replace ${original_source} in target ${target}")
+        endif()
+        list(REMOVE_ITEM target_sources "${original_source}")
+    endforeach()
+    set_property(TARGET "${target}" PROPERTY SOURCES "${target_sources}")
+
+    foreach(relative_path IN LISTS ARGN)
+        target_sources("${target}" PRIVATE
+            "${override_root}/${relative_path}")
+    endforeach()
+endfunction()
+
+set(UVSR_DONUT_ENGINE_OVERRIDE_DIR
+    "${CMAKE_BINARY_DIR}/uvsr_donut_engine_overrides")
+uvsr_stage_patched_sources(
+    "${CMAKE_CURRENT_SOURCE_DIR}/donut"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-engine.patch"
+    "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}"
+    include/donut/engine/SceneTypes.h
+    src/engine/GltfImporter.cpp
+    src/engine/Scene.cpp
+    src/engine/TextureCache.cpp)
+
+set(UVSR_IMGUI_OVERRIDE_DIR
+    "${CMAKE_BINARY_DIR}/uvsr_imgui_overrides")
+uvsr_stage_patched_sources(
+    "${CMAKE_CURRENT_SOURCE_DIR}/donut/thirdparty/imgui"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-ui.patch"
+    "${UVSR_IMGUI_OVERRIDE_DIR}"
+    imgui.cpp
+    imgui.h
+    imgui_draw.cpp
+    imgui_internal.h
+    imgui_widgets.cpp)
+
 # Donut's asynchronous loader writes m_SceneLoaded on a worker thread and
-# reads it on the render thread. Generate an atomic header override without
-# modifying the pinned Donut submodule.
+# reads it on the render thread. Generate an atomic header override alongside
+# the staged source patches.
 set(UVSR_DONUT_OVERRIDE_DIR "${CMAKE_BINARY_DIR}/uvsr_donut_overrides")
 set(UVSR_DONUT_APPLICATION_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/donut/include/donut/app/ApplicationBase.h")
 file(READ "${UVSR_DONUT_APPLICATION_HEADER}" UVSR_DONUT_APPLICATION_HEADER_CONTENT)
@@ -86,6 +171,28 @@ file(WRITE
 
 add_subdirectory(donut)
 target_include_directories(donut_app BEFORE PUBLIC "${UVSR_DONUT_OVERRIDE_DIR}")
+uvsr_replace_target_sources(
+    donut_engine
+    "${CMAKE_CURRENT_SOURCE_DIR}/donut"
+    "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}"
+    include/donut/engine/SceneTypes.h
+    src/engine/GltfImporter.cpp
+    src/engine/Scene.cpp
+    src/engine/TextureCache.cpp)
+target_include_directories(donut_engine BEFORE PUBLIC
+    "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}/include")
+
+uvsr_replace_target_sources(
+    imgui
+    "${CMAKE_CURRENT_SOURCE_DIR}/donut/thirdparty/imgui"
+    "${UVSR_IMGUI_OVERRIDE_DIR}"
+    imgui.cpp
+    imgui.h
+    imgui_draw.cpp
+    imgui_internal.h
+    imgui_widgets.cpp)
+target_include_directories(imgui BEFORE PUBLIC
+    "${UVSR_IMGUI_OVERRIDE_DIR}")
 
 if (NVRHI_WITH_DX12)
     set(DONUT_D3D_AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.717.1-preview")
@@ -118,6 +225,9 @@ add_executable(uvsr WIN32
     src/uvsr.cpp
     src/visibility_blue_noise.cpp
 )
+target_include_directories(uvsr BEFORE PRIVATE
+    "${UVSR_IMGUI_OVERRIDE_DIR}"
+    "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}/include")
 target_link_libraries(uvsr PRIVATE donut_render donut_app donut_engine)
 target_compile_definitions(uvsr PRIVATE "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\"")
 add_dependencies(uvsr uvsr_shaders)
@@ -296,6 +406,7 @@ endforeach()
 
 set(UVSR_APP_SHADERS
     agx_tonemapping_ps
+    backdrop_blur_ps
     pbr_deferred_lighting_cs
     pbr_forward_ps
     pbr_gbuffer_ps
@@ -358,6 +469,34 @@ add_custom_target(uvsr_stage_intel_sponza
 )
 add_dependencies(uvsr uvsr_stage_intel_sponza)
 
+if (WIN32)
+    file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/SegUIVar.ttf"
+        UVSR_UI_FONT_SOURCE)
+    if (NOT EXISTS "${UVSR_UI_FONT_SOURCE}")
+        file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/segoeui.ttf"
+            UVSR_UI_FONT_SOURCE)
+    endif()
+    if (NOT EXISTS "${UVSR_UI_FONT_SOURCE}")
+        message(FATAL_ERROR
+            "Segoe UI system font was not found in the Windows font directory")
+    endif()
+    file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/seguisb.ttf"
+        UVSR_UI_HEADER_FONT_SOURCE)
+    if (NOT EXISTS "${UVSR_UI_HEADER_FONT_SOURCE}")
+        file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/seguibl.ttf"
+            UVSR_UI_HEADER_FONT_SOURCE)
+    endif()
+    if (NOT EXISTS "${UVSR_UI_HEADER_FONT_SOURCE}")
+        message(FATAL_ERROR
+            "Segoe UI Semibold or Bold was not found in the Windows font directory")
+    endif()
+else()
+    set(UVSR_UI_FONT_SOURCE
+        "${CMAKE_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
+    set(UVSR_UI_HEADER_FONT_SOURCE
+        "${CMAKE_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
+endif()
+
 add_custom_command(TARGET uvsr POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E remove_directory
         "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/a_beautiful_game"
@@ -369,6 +508,18 @@ add_custom_command(TARGET uvsr POST_BUILD
         "${CMAKE_BINARY_DIR}/media/luts/kodak"
     COMMAND ${CMAKE_COMMAND} -E remove_directory
         "${CMAKE_BINARY_DIR}/media/noise"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory
+        "${CMAKE_BINARY_DIR}/media/fonts/Inter"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory
+        "${CMAKE_BINARY_DIR}/media/fonts/Geist"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${CMAKE_BINARY_DIR}/media/fonts/System"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${UVSR_UI_FONT_SOURCE}"
+        "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI.ttf"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${UVSR_UI_HEADER_FONT_SOURCE}"
+        "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI-Semibold.ttf"
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "${CMAKE_BINARY_DIR}/media/noise"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

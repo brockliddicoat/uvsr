@@ -1,0 +1,137 @@
+diff --git a/include/donut/engine/SceneTypes.h b/include/donut/engine/SceneTypes.h
+index 3d16ff6..3d37e82 100644
+--- a/include/donut/engine/SceneTypes.h
++++ b/include/donut/engine/SceneTypes.h
+@@ -157,6 +157,8 @@ namespace donut::engine
+     {
+         std::atomic<uint32_t> ObjectsTotal;
+         std::atomic<uint32_t> ObjectsLoaded;
++        std::atomic<uint64_t> ImportStepsTotal;
++        std::atomic<uint64_t> ImportStepsCompleted;
+     };
+ 
+     // NOTE regarding MaterialDomain and transparency. It may seem that the Transparent attribute
+diff --git a/src/engine/GltfImporter.cpp b/src/engine/GltfImporter.cpp
+index 09693e1..969d7ed 100644
+--- a/src/engine/GltfImporter.cpp
++++ b/src/engine/GltfImporter.cpp
+@@ -665,6 +665,12 @@ bool GltfImporter::Load(
+ 
+     std::string normalizedFileName = fileName.lexically_normal().generic_string();
+ 
++    // Publish real importer work units for the loading UI. The first two
++    // units cover parsing and external-buffer reads; finer units are added
++    // after cgltf exposes the model's material, mesh, node, and animation
++    // counts.
++    stats.ImportStepsTotal.fetch_add(2);
++
+     cgltf_data* objects = nullptr;
+     cgltf_result res = cgltf_parse_file(&options, normalizedFileName.c_str(), &objects);
+     if (res != cgltf_result_success)
+@@ -672,6 +678,7 @@ bool GltfImporter::Load(
+         log::error("Couldn't load glTF file '%s': %s", normalizedFileName.c_str(), cgltf_error_to_string(res));
+         return false;
+     }
++    stats.ImportStepsCompleted.fetch_add(1);
+ 
+     res = cgltf_load_buffers(&options, objects, normalizedFileName.c_str());
+     if (res != cgltf_result_success)
+@@ -679,6 +686,17 @@ bool GltfImporter::Load(
+         log::error("Failed to load buffers for glTF file '%s': ", normalizedFileName.c_str(), cgltf_error_to_string(res));
+         return false;
+     }
++    stats.ImportStepsCompleted.fetch_add(1);
++
++    const uint64_t detailedImportSteps =
++        uint64_t(objects->materials_count) +
++        uint64_t(objects->meshes_count) +
++        uint64_t(objects->cameras_count) +
++        uint64_t(objects->lights_count) +
++        uint64_t(objects->nodes_count) +
++        uint64_t(objects->animations_count) +
++        1u;
++    stats.ImportStepsTotal.fetch_add(detailedImportSteps);
+ 
+     std::unordered_map<const cgltf_image*, std::shared_ptr<GltfInlineData>> inlineImageDataCache;
+ 
+@@ -1009,6 +1027,7 @@ bool GltfImporter::Load(
+         ParseMaterialExtensions(&options, &material, matinfo.get());
+ 
+         materials[&material] = matinfo;
++        stats.ImportStepsCompleted.fetch_add(1);
+     }
+     
+     size_t totalIndices = 0;
+@@ -1641,6 +1660,7 @@ bool GltfImporter::Load(
+                 }
+             }
+         }
++        stats.ImportStepsCompleted.fetch_add(1);
+     }
+ 
+     std::unordered_map<const cgltf_camera*, std::shared_ptr<SceneCamera>> cameraMap;
+@@ -1675,6 +1695,7 @@ bool GltfImporter::Load(
+         }
+ 
+         cameraMap[src] = dst;
++        stats.ImportStepsCompleted.fetch_add(1);
+     }
+ 
+     std::unordered_map<const cgltf_light*, std::shared_ptr<Light>> lightMap;
+@@ -1718,6 +1739,7 @@ bool GltfImporter::Load(
+         {
+             lightMap[src] = dst;
+         }
++        stats.ImportStepsCompleted.fetch_add(1);
+     }
+ 
+     // build the scene graph
+@@ -1866,6 +1888,7 @@ bool GltfImporter::Load(
+                 stack.pop_back();
+             }
+         }
++        stats.ImportStepsCompleted.fetch_add(1);
+     }
+ 
+     for (auto* src : skinnedNodes)
+@@ -2024,6 +2047,7 @@ bool GltfImporter::Load(
+             if (srcAnim->name)
+                 animationNode->SetName(srcAnim->name);
+         }
++        stats.ImportStepsCompleted.fetch_add(1);
+     }
+ 
+     if (c_ForceRebuildTangents)
+@@ -2038,6 +2062,7 @@ bool GltfImporter::Load(
+     }
+ 
+     cgltf_free(objects);
++    stats.ImportStepsCompleted.fetch_add(1);
+ 
+     return true;
+ }
+diff --git a/src/engine/Scene.cpp b/src/engine/Scene.cpp
+index 4a99d33..86c9625 100644
+--- a/src/engine/Scene.cpp
++++ b/src/engine/Scene.cpp
+@@ -135,6 +135,8 @@ bool Scene::LoadWithThreadPool(const std::filesystem::path& sceneFileName, Threa
+ {
+     g_LoadingStats.ObjectsLoaded = 0;
+     g_LoadingStats.ObjectsTotal = 0;
++    g_LoadingStats.ImportStepsTotal = 0;
++    g_LoadingStats.ImportStepsCompleted = 0;
+     
+     m_SceneGraph = m_SceneTypeFactory->CreateGraph();
+ 
+diff --git a/src/engine/TextureCache.cpp b/src/engine/TextureCache.cpp
+index e4e105f..8154d2b 100644
+--- a/src/engine/TextureCache.cpp
++++ b/src/engine/TextureCache.cpp
+@@ -135,6 +135,7 @@ void TextureCache::Reset()
+ 
+     m_TexturesRequested = 0;
+     m_TexturesLoaded = 0;
++    m_TexturesFinalized = 0;
+ }
+ 
+ void TextureCache::SetGenerateMipmaps(bool generateMipmaps)
