@@ -19,24 +19,23 @@ architecture without either add-on.
   Sharpening starts enabled at MiniEngine's `0.5` reference strength and can be
   disabled or adjusted without resetting temporal history. TAA resolves
   scene-linear color before the display stage, reports both GPU dispatch
-  timings in its drawer, and uses 47.5 MiB of logical color/depth history at
+  timings in its drawer, and uses 47.5 mib of logical color/depth history at
   1920x1080. Forward and legacy shading paths leave it unavailable because they
   do not produce the required validated motion contract. Until the visibility
   histories carry the same jitter-delta contract, TAA is mutually exclusive
-  with visibility Temporal Reconstruction and Adaptive Sparse Sampling; turn
+  with visibility Temporal Reuse and Adaptive Sparse Sampling; turn
   TAA off to use either visibility feature.
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
-  linear resolution. **Temporal Reconstruction** independently enables
-  SSRT3-style history accumulation, while **Spatial Filtering** independently
-  enables compact or Gaussian joint-bilateral filtering. Both start disabled.
+  linear resolution. **Temporal Reuse** independently enables SSRT3-style
+  history accumulation, while **Spatial Filter** independently enables compact
+  or Gaussian joint-bilateral filtering. Both start disabled.
   Full resolution can therefore composite unfiltered current or temporally
   accumulated output without a spatial dispatch or filter target. Half and
   quarter resolution always retain a minimal depth/normal-guided 2x2 upsampler
   when spatial filtering is disabled because raw grid expansion produces
-  coherent GI streaks. The **Reconstruction and Upsampling** drawer starts
-  collapsed.
+  coherent GI streaks. The **Reconstruction** drawer starts collapsed.
 - **Adaptive Sparse Sampling** is off by default. The default fixed-work
-  specialization traces one stochastic slice and **20 Fixed Samples Per Pixel**
+  specialization traces one stochastic slice and **20 Samples Per Pixel**
   for every eligible pixel, with the adaptive neighborhood, reprojection,
   feedback, and stochastic budget code compiled out. Its feedback textures and
   motion dependency are also absent.
@@ -56,12 +55,62 @@ architecture without either add-on.
   **Filter-Adapted Spatiotemporal Noise**. Every scheduler toroidally
   rotates the complete nested radial prefix, so fixed-work and adaptive modes
   do not reuse global radius shells as the budget changes.
-- Renderer settings always start from factory defaults; **Reset Settings**
+- Renderer settings always start from factory defaults; **Reset**
   restores those defaults in-session, and settings are not carried between
   launches.
-- The renderer/GPU summary and first performance line stay visible above the
-  **General** drawer. That line reports resolution, frame time, FPS,
-  current-clock memory bandwidth, and current-clock FP32 peak GFLOPS.
+- The rounded scrollbar-style loading track and its blue moving grab separate
+  scene import, texture decoding, and render-thread texture finalization into
+  weighted phases. Import progress comes from real parser, buffer, material,
+  mesh, node, and animation milestones rather than one whole-model completion
+  bit. It reports decoded and GPU-ready texture counts, eases monotonically
+  between completed milestones, and reserves its final 5 percent for the scene
+  setup that dismisses the loading screen. A launch counter begins at program
+  entry and displays milliseconds to one decimal place on every loading screen.
+- The settings overlay uses the installed Codex desktop app's Windows system
+  UI face: 16 px Segoe UI Semibold with a 65-percent-wider word-space advance.
+  Non-Windows builds fall back to bundled Geist 1.7.2 under the SIL Open Font
+  License 1.1. The neutral-black panel stays at 0.60 opacity with a 4 px
+  backdrop blur and one subdued transparent graphite treatment across every
+  drawer body. Drawer headers use the authored transparent ImGui blue.
+  Dropdown fields, dropdown-arrow and folder-button backgrounds, and slider
+  tracks all reuse the panel's tinted-black RGB at 0.72 opacity, with
+  opacity-only hover and active states. The three footer action buttons reuse
+  the neutral Settings title-bar color. Dropdowns replace ImGui's sharp arrow
+  with a compact Bézier-rounded triangle, and the larger drawer and tree
+  disclosure triangles use the same rounded-corner construction in both
+  orientations. The Settings title-bar disclosure hover uses the menu's 4 px
+  frame rounding. Slider knobs use the same transparent blue appearance as the
+  drawer headers. Two-state toggles animate between endpoints; their active
+  track is 50-percent-opaque white and their solid compensated knob matches the
+  rendered header blue. Disabled controls are grayscale at 0.38 opacity. The
+  outer edges retain an 8 px radius.
+- The renderer/GPU summary and first performance line are pinned above an
+  independently scrolling settings body, so they stay attached and visible at
+  every drawer position. The panel shrinks to its open drawers and only scrolls
+  when its content reaches the available screen height. Its width follows the
+  widest status or control-and-label row rather than a proportional estimate.
+  The performance line flows naturally from the left, and the status lines use
+  an explicit 2 px gap. One queued snapshot captures and applies the top,
+  visibility, and temporal-AA stats together 24 times per second. The first GPU clock
+  sample is displayed directly; later hardware targets remain sampled every
+  500 ms. Displayed gb/s follows each raw sample directly, while tflops alone
+  moves toward each new target in 0.1 increments on each 24 Hz snapshot. The
+  performance line reports resolution, current-clock memory bandwidth,
+  utilization-adjusted current-clock FP32 tflops, frame time, and fps in that
+  order, leaving fps at the outside edge. Millisecond and tflops values use one
+  decimal place.
+- Tree-row hover states, popup selections, and keyboard selection highlights
+  use the same 4 px radius as other controls. The material editor continuously
+  auto-fits its selected material, including immediately after a new surface is
+  picked. The visibility panel uses the shorter **Distribution Exponent** label
+  when determining its minimum width, then keeps a small readability allowance
+  so its longest rows clear the scrollbar without clipping. Every text tooltip
+  uses one compact fixed width and height at every nesting depth, with wrapped
+  copy and a consistent inner safety margin.
+- Press **M** to open or close the material editor. Selecting a scene material
+  does not open the editor automatically.
+- The three footer actions use explicitly centered labels to compensate for the
+  system font's visual baseline.
   Visibility statistics start collapsed and report **All**, **Trace**,
   **Filter**, and **Other** GPU timings on one row. Two memory rows report exact
   logical **Outputs**,
@@ -249,6 +298,11 @@ After building, Windows users can also double-click `LaunchUVSR.cmd`. It
 delegates to the same required experiment launcher with a fixed main-build
 label; optional renderer arguments can be appended from a terminal.
 
+Windowed launches are centered in the primary monitor's usable work area. If
+the requested client size plus decorations would cross a work-area edge, UVSR
+preserves its aspect ratio while fitting it inside the available bounds before
+centering, so taskbars cannot cover its right or bottom edges.
+
 The title reports the active graphics API followed by the description, the
 seven-character source commit embedded at build time, and the local launch time
 in 24-hour `HHmm` form. Each field is separated by a dash, for example
@@ -303,8 +357,8 @@ documentation changes on GitHub.
 UVSR runs uncapped with a single planar view. UVSR-owned interactive controls
 provide short, plain-English hover tooltips; new controls should follow the same
 convention.
-The bottom action row exposes equally sized **Reload Shaders**, **Reset Settings**,
-**Restart**, and **Screenshot** buttons.
+The bottom action row exposes equally sized **Reset**, **Screenshot**, and
+**Restart** buttons.
 
 ## Intentional Omissions
 

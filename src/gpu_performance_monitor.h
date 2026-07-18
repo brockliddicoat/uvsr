@@ -6,6 +6,7 @@ namespace uvsr
     {
         double memoryBandwidthGBps = 0.0;
         double gpuGFlops = 0.0;
+        double gpuUtilization = 1.0;
         bool valid = false;
     };
 

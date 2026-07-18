@@ -1,0 +1,1576 @@
+diff --git a/imgui.cpp b/imgui.cpp
+index 286171463..0beb567f0 100644
+--- a/imgui.cpp
++++ b/imgui.cpp
+@@ -3408,10 +3408,26 @@ ImGuiStyle& ImGui::GetStyle()
+     return GImGui->Style;
+ }
+ 
++static void ApplyDisabledGrayscale(ImVec4& color)
++{
++    ImGuiContext& g = *GImGui;
++    if ((g.CurrentItemFlags & ImGuiItemFlags_Disabled) == 0)
++        return;
++
++    const float luminance =
++        color.x * 0.299f +
++        color.y * 0.587f +
++        color.z * 0.114f;
++    color.x = luminance;
++    color.y = luminance;
++    color.z = luminance;
++}
++
+ ImU32 ImGui::GetColorU32(ImGuiCol idx, float alpha_mul)
+ {
+     ImGuiStyle& style = GImGui->Style;
+     ImVec4 c = style.Colors[idx];
++    ApplyDisabledGrayscale(c);
+     c.w *= style.Alpha * alpha_mul;
+     return ColorConvertFloat4ToU32(c);
+ }
+@@ -3420,6 +3436,7 @@ ImU32 ImGui::GetColorU32(const ImVec4& col)
+ {
+     ImGuiStyle& style = GImGui->Style;
+     ImVec4 c = col;
++    ApplyDisabledGrayscale(c);
+     c.w *= style.Alpha;
+     return ColorConvertFloat4ToU32(c);
+ }
+@@ -3434,6 +3451,13 @@ ImU32 ImGui::GetColorU32(ImU32 col, float alpha_mul)
+ {
+     ImGuiStyle& style = GImGui->Style;
+     alpha_mul *= style.Alpha;
++    if ((GImGui->CurrentItemFlags & ImGuiItemFlags_Disabled) != 0)
++    {
++        ImVec4 c = ColorConvertU32ToFloat4(col);
++        ApplyDisabledGrayscale(c);
++        c.w *= alpha_mul;
++        return ColorConvertFloat4ToU32(c);
++    }
+     if (alpha_mul >= 1.0f)
+         return col;
+     ImU32 a = (col & IM_COL32_A_MASK) >> IM_COL32_A_SHIFT;
+@@ -3839,6 +3863,48 @@ void ImGui::RenderTextEllipsis(ImDrawList* draw_list, const ImVec2& pos_min, con
+         LogRenderedText(&pos_min, text, text_end_full);
+ }
+ 
++static void RenderGradientFrameOutline(
++    ImDrawList* draw_list,
++    const ImRect& bounding_box,
++    float rounding)
++{
++    const float thickness = 1.0f;
++    const float inset = thickness * 0.5f;
++    const ImRect outline_box(
++        bounding_box.Min + ImVec2(inset, inset),
++        bounding_box.Max - ImVec2(inset, inset));
++    if (outline_box.GetWidth() <= thickness ||
++        outline_box.GetHeight() <= thickness)
++    {
++        return;
++    }
++
++    const int vertex_start = draw_list->VtxBuffer.Size;
++    draw_list->AddRect(
++        outline_box.Min,
++        outline_box.Max,
++        IM_COL32_WHITE,
++        ImMax(0.0f, rounding - inset),
++        ImDrawFlags_RoundCornersAll,
++        thickness);
++    const int vertex_end = draw_list->VtxBuffer.Size;
++
++    const float gradient_extent = ImMax(outline_box.GetHeight(), 1.0f);
++    for (int vertex_index = vertex_start;
++        vertex_index < vertex_end;
++        ++vertex_index)
++    {
++        ImDrawVert& vertex = draw_list->VtxBuffer[vertex_index];
++        const float gradient_position = ImSaturate(
++            (vertex.pos.y - outline_box.Min.y) / gradient_extent);
++        vertex.col = ImGui::GetColorU32(ImVec4(
++            ImLerp(0.88f, 0.96f, gradient_position),
++            ImLerp(0.90f, 0.97f, gradient_position),
++            ImLerp(0.94f, 1.00f, gradient_position),
++            ImLerp(0.10f, 0.30f, gradient_position)));
++    }
++}
++
+ // Render a rectangle shaped with optional rounding and borders
+ void ImGui::RenderFrame(ImVec2 p_min, ImVec2 p_max, ImU32 fill_col, bool borders, float rounding)
+ {
+@@ -3851,6 +3917,69 @@ void ImGui::RenderFrame(ImVec2 p_min, ImVec2 p_max, ImU32 fill_col, bool borders
+         window->DrawList->AddRect(p_min + ImVec2(1, 1), p_max + ImVec2(1, 1), GetColorU32(ImGuiCol_BorderShadow), rounding, 0, border_size);
+         window->DrawList->AddRect(p_min, p_max, GetColorU32(ImGuiCol_Border), rounding, 0, border_size);
+     }
++    RenderGradientFrameOutline(
++        window->DrawList,
++        ImRect(p_min, p_max),
++        rounding);
++}
++
++void ImGui::RenderGradientFrame(
++    ImVec2 p_min,
++    ImVec2 p_max,
++    ImU32 top_col,
++    ImU32 bottom_col,
++    bool borders,
++    float rounding)
++{
++    ImGuiContext& g = *GImGui;
++    ImGuiWindow* window = g.CurrentWindow;
++    const int vertex_start = window->DrawList->VtxBuffer.Size;
++    window->DrawList->AddRectFilled(
++        p_min,
++        p_max,
++        top_col,
++        rounding);
++    const int vertex_end = window->DrawList->VtxBuffer.Size;
++
++    const ImVec4 top_color = ColorConvertU32ToFloat4(top_col);
++    const ImVec4 bottom_color = ColorConvertU32ToFloat4(bottom_col);
++    const float gradient_extent = ImMax(p_max.y - p_min.y, 1.0f);
++    for (int vertex_index = vertex_start;
++        vertex_index < vertex_end;
++        ++vertex_index)
++    {
++        ImDrawVert& vertex = window->DrawList->VtxBuffer[vertex_index];
++        const float gradient_position = ImSaturate(
++            (vertex.pos.y - p_min.y) / gradient_extent);
++        vertex.col = ColorConvertFloat4ToU32(ImVec4(
++            ImLerp(top_color.x, bottom_color.x, gradient_position),
++            ImLerp(top_color.y, bottom_color.y, gradient_position),
++            ImLerp(top_color.z, bottom_color.z, gradient_position),
++            ImLerp(top_color.w, bottom_color.w, gradient_position)));
++    }
++
++    const float border_size = g.Style.FrameBorderSize;
++    if (borders && border_size > 0.0f)
++    {
++        window->DrawList->AddRect(
++            p_min + ImVec2(1, 1),
++            p_max + ImVec2(1, 1),
++            GetColorU32(ImGuiCol_BorderShadow),
++            rounding,
++            0,
++            border_size);
++        window->DrawList->AddRect(
++            p_min,
++            p_max,
++            GetColorU32(ImGuiCol_Border),
++            rounding,
++            0,
++            border_size);
++    }
++    RenderGradientFrameOutline(
++        window->DrawList,
++        ImRect(p_min, p_max),
++        rounding);
+ }
+ 
+ void ImGui::RenderFrameBorder(ImVec2 p_min, ImVec2 p_max, float rounding)
+@@ -3863,6 +3992,10 @@ void ImGui::RenderFrameBorder(ImVec2 p_min, ImVec2 p_max, float rounding)
+         window->DrawList->AddRect(p_min + ImVec2(1, 1), p_max + ImVec2(1, 1), GetColorU32(ImGuiCol_BorderShadow), rounding, 0, border_size);
+         window->DrawList->AddRect(p_min, p_max, GetColorU32(ImGuiCol_Border), rounding, 0, border_size);
+     }
++    RenderGradientFrameOutline(
++        window->DrawList,
++        ImRect(p_min, p_max),
++        rounding);
+ }
+ 
+ void ImGui::RenderNavCursor(const ImRect& bb, ImGuiID id, ImGuiNavRenderCursorFlags flags)
+@@ -4011,6 +4144,7 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+     InputTextState.Ctx = this;
+ 
+     Initialized = false;
++    TextShadowAlphaScale = 1.0f;
+     Font = NULL;
+     FontBaked = NULL;
+     FontSize = FontSizeBase = FontBakedScale = CurrentDpiScale = 0.0f;
+@@ -6228,7 +6362,7 @@ bool ImGui::BeginChildEx(const char* name, ImGuiID id, const ImVec2& size_arg, I
+     IM_ASSERT(id != 0);
+ 
+     // Sanity check as it is likely that some user will accidentally pass ImGuiWindowFlags into the ImGuiChildFlags argument.
+-    const ImGuiChildFlags ImGuiChildFlags_SupportedMask_ = ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_ResizeX | ImGuiChildFlags_ResizeY | ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize | ImGuiChildFlags_FrameStyle | ImGuiChildFlags_NavFlattened;
++    const ImGuiChildFlags ImGuiChildFlags_SupportedMask_ = ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_ResizeX | ImGuiChildFlags_ResizeY | ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize | ImGuiChildFlags_FrameStyle | ImGuiChildFlags_NavFlattened | ImGuiChildFlags_AllowZeroSize;
+     IM_UNUSED(ImGuiChildFlags_SupportedMask_);
+     IM_ASSERT((child_flags & ~ImGuiChildFlags_SupportedMask_) == 0 && "Illegal ImGuiChildFlags value. Did you pass ImGuiWindowFlags values instead of ImGuiChildFlags?");
+     IM_ASSERT((window_flags & ImGuiWindowFlags_AlwaysAutoResize) == 0 && "Cannot specify ImGuiWindowFlags_AlwaysAutoResize for BeginChild(). Use ImGuiChildFlags_AlwaysAutoResize!");
+@@ -6489,6 +6623,12 @@ static inline ImVec2 CalcWindowMinSize(ImGuiWindow* window)
+     // FIXME: Essentially we want to restrict manual resizing to WindowMinSize+Decoration, and allow api resizing to be smaller.
+     // Perhaps should tend further a neater test for this.
+     ImGuiContext& g = *GImGui;
++    if ((window->Flags & ImGuiWindowFlags_ChildWindow) &&
++        (window->ChildFlags & ImGuiChildFlags_AllowZeroSize))
++    {
++        return ImVec2(0.0f, 0.0f);
++    }
++
+     ImVec2 size_min;
+     if ((window->Flags & ImGuiWindowFlags_ChildWindow) && !(window->Flags & ImGuiWindowFlags_Popup))
+     {
+@@ -6947,16 +7087,36 @@ static void ImGui::RenderWindowOuterBorders(ImGuiWindow* window)
+         if (window->ChildFlags & ImGuiChildFlags_ResizeY)
+             RenderWindowOuterSingleBorder(window, 3, border_col, border_size);
+     }
++    if (!window->Collapsed &&
++        (window->Flags & ImGuiWindowFlags_ChildWindow) == 0 &&
++        (window->Flags & ImGuiWindowFlags_NoBackground) == 0)
++    {
++        RenderGradientFrameOutline(
++            window->DrawList,
++            ImRect(window->Pos, window->Pos + window->Size),
++            window->WindowRounding);
++    }
+     if (window->ResizeBorderHovered != -1 || window->ResizeBorderHeld != -1)
+     {
+         const int border_n = (window->ResizeBorderHeld != -1) ? window->ResizeBorderHeld : window->ResizeBorderHovered;
+         const ImU32 border_col_resizing = GetColorU32((window->ResizeBorderHeld != -1) ? ImGuiCol_SeparatorActive : ImGuiCol_SeparatorHovered);
+         RenderWindowOuterSingleBorder(window, border_n, border_col_resizing, ImMax(2.0f, window->WindowBorderSize)); // Thicker than usual
+     }
+-    if (g.Style.FrameBorderSize > 0 && !(window->Flags & ImGuiWindowFlags_NoTitleBar))
++    if (g.Style.FrameBorderSize > 0 &&
++        !(window->Flags & ImGuiWindowFlags_NoTitleBar) &&
++        strcmp(window->Name, "Settings") != 0)
+     {
+         float y = window->Pos.y + window->TitleBarHeight - 1;
+-        window->DrawList->AddLine(ImVec2(window->Pos.x + border_size * 0.5f, y), ImVec2(window->Pos.x + window->Size.x - border_size * 0.5f, y), border_col, g.Style.FrameBorderSize);
++        window->DrawList->AddLine(
++            ImVec2(
++                window->Pos.x + border_size * 0.5f,
++                y),
++            ImVec2(
++                window->Pos.x + window->Size.x -
++                    border_size * 0.5f,
++                y),
++            border_col,
++            g.Style.FrameBorderSize);
+     }
+ }
+ 
+@@ -7008,7 +7168,32 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
+         if (!(flags & ImGuiWindowFlags_NoTitleBar))
+         {
+             ImU32 title_bar_col = GetColorU32(title_bar_is_highlight ? ImGuiCol_TitleBgActive : ImGuiCol_TitleBg);
+-            window->DrawList->AddRectFilled(title_bar_rect.Min, title_bar_rect.Max, title_bar_col, window_rounding, ImDrawFlags_RoundCornersTop);
++            const bool is_settings_window =
++                strcmp(window->Name, "Settings") == 0;
++            const ImDrawFlags title_rounding_flags =
++                is_settings_window
++                    ? ImDrawFlags_RoundCornersAll
++                    : ImDrawFlags_RoundCornersTop;
++            ImRect title_fill_rect = title_bar_rect;
++            if (is_settings_window)
++            {
++                // Keep both anti-aliased side arcs inside the window clip.
++                title_fill_rect.Min += ImVec2(0.5f, 0.5f);
++                title_fill_rect.Max -= ImVec2(0.5f, 0.5f);
++            }
++            window->DrawList->AddRectFilled(
++                title_fill_rect.Min,
++                title_fill_rect.Max,
++                title_bar_col,
++                window_rounding,
++                title_rounding_flags);
++            if (is_settings_window)
++            {
++                RenderGradientFrameOutline(
++                    window->DrawList,
++                    title_fill_rect,
++                    window_rounding);
++            }
+         }
+ 
+         // Menu bar
+@@ -7467,6 +7652,7 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+             use_current_size_for_scrollbar_x = true;
+         if (window_size_y_set_by_api && window->ContentSizeExplicit.y != 0.0f) // #7252
+             use_current_size_for_scrollbar_y = true;
++        float settings_window_collapse_amount = -1.0f;
+ 
+         // Collapse window by double-clicking on title bar
+         // At this point we don't have a clipping rectangle setup yet, so we can use the title bar area for hit detection and drawing
+@@ -7478,7 +7664,95 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+             if (g.HoveredWindow == window && g.HoveredId == 0 && g.HoveredIdPreviousFrame == 0 && g.ActiveId == 0 && IsMouseHoveringRect(title_bar_rect.Min, title_bar_rect.Max))
+                 if (g.IO.MouseClickedCount[0] == 2 && GetKeyOwner(ImGuiKey_MouseLeft) == ImGuiKeyOwner_NoOwner)
+                     window->WantCollapseToggle = true;
+-            if (window->WantCollapseToggle)
++            const bool is_settings_window =
++                strcmp(window->Name, "Settings") == 0;
++            if (is_settings_window)
++            {
++                ImGuiStorage& storage = window->StateStorage;
++                const ImGuiID amount_key =
++                    window->ID ^ ImGuiID(0x4F72A6C1u);
++                const ImGuiID start_amount_key =
++                    window->ID ^ ImGuiID(0xA1835D2Eu);
++                const ImGuiID elapsed_key =
++                    window->ID ^ ImGuiID(0x6B29E4F7u);
++                const ImGuiID target_key =
++                    window->ID ^ ImGuiID(0xD45C318Au);
++                const ImGuiID frame_key =
++                    window->ID ^ ImGuiID(0x39E7B652u);
++                const int requested_target =
++                    window->Collapsed ? 1 : 0;
++                float collapse_amount = storage.GetFloat(
++                    amount_key,
++                    requested_target ? 1.0f : 0.0f);
++                float start_amount = storage.GetFloat(
++                    start_amount_key,
++                    collapse_amount);
++                float elapsed = storage.GetFloat(
++                    elapsed_key,
++                    0.0f);
++                int target = storage.GetInt(
++                    target_key,
++                    requested_target);
++                const int last_frame = storage.GetInt(
++                    frame_key,
++                    -2);
++
++                if (last_frame < g.FrameCount - 1)
++                {
++                    collapse_amount =
++                        window->Collapsed ? 1.0f : 0.0f;
++                    start_amount = collapse_amount;
++                    elapsed = 0.0f;
++                    target = window->Collapsed ? 1 : 0;
++                }
++                if (window->WantCollapseToggle)
++                {
++                    target = target != 0 ? 0 : 1;
++                    start_amount = collapse_amount;
++                    elapsed = 0.0f;
++                    MarkIniSettingsDirty(window);
++                }
++
++                const float target_amount =
++                    target != 0 ? 1.0f : 0.0f;
++                if (collapse_amount != target_amount)
++                {
++                    constexpr float CollapseDuration = 0.20f;
++                    elapsed += ImMax(0.0f, g.IO.DeltaTime);
++                    const float progress = ImSaturate(
++                        elapsed / CollapseDuration);
++                    const float eased_progress =
++                        progress * progress *
++                        (3.0f - 2.0f * progress);
++                    collapse_amount = ImLerp(
++                        start_amount,
++                        target_amount,
++                        eased_progress);
++                    if (progress >= 1.0f)
++                        collapse_amount = target_amount;
++                }
++                else
++                {
++                    start_amount = target_amount;
++                    elapsed = 0.0f;
++                }
++
++                window->Collapsed =
++                    target != 0 &&
++                    collapse_amount >= 1.0f;
++                if (target == 0)
++                    use_current_size_for_scrollbar_y = true;
++                settings_window_collapse_amount =
++                    collapse_amount;
++                storage.SetFloat(amount_key, collapse_amount);
++                storage.SetFloat(
++                    start_amount_key,
++                    start_amount);
++                storage.SetFloat(elapsed_key, elapsed);
++                storage.SetInt(target_key, target);
++                storage.SetInt(frame_key, g.FrameCount);
++            }
++            else if (window->WantCollapseToggle)
+             {
+                 window->Collapsed = !window->Collapsed;
+                 if (!window->Collapsed)
+@@ -7539,7 +7813,23 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+ 
+         // Apply minimum/maximum window size constraints and final size
+         window->SizeFull = CalcWindowSizeAfterConstraint(window, window->SizeFull);
+-        window->Size = window->Collapsed && !(flags & ImGuiWindowFlags_ChildWindow) ? window->TitleBarRect().GetSize() : window->SizeFull;
++        if (settings_window_collapse_amount >= 0.0f &&
++            !(flags & ImGuiWindowFlags_ChildWindow))
++        {
++            window->Size = window->SizeFull;
++            window->Size.y = ImLerp(
++                window->SizeFull.y,
++                window->TitleBarHeight,
++                settings_window_collapse_amount);
++        }
++        else
++        {
++            window->Size =
++                window->Collapsed &&
++                    !(flags & ImGuiWindowFlags_ChildWindow)
++                    ? window->TitleBarRect().GetSize()
++                    : window->SizeFull;
++        }
+ 
+         // POSITION
+ 
+@@ -11856,9 +12146,34 @@ void ImGui::SetTooltip(const char* fmt, ...)
+ 
+ void ImGui::SetTooltipV(const char* fmt, va_list args)
+ {
++    const char* text;
++    const char* text_end;
++    ImFormatStringToTempBufferV(&text, &text_end, fmt, args);
++
++    ImGuiContext& g = *GImGui;
++    constexpr float tooltip_inner_margin = 5.0f;
++    const ImVec2 tooltip_size(
++        ImMin(
++            g.FontSize * 20.0f,
++            GetMainViewport()->WorkSize.x * 0.42f),
++        ImMin(
++            g.FontSize * 4.75f,
++            GetMainViewport()->WorkSize.y * 0.25f));
++    const float wrap_width = ImMax(
++        g.FontSize * 8.0f,
++        tooltip_size.x -
++            g.Style.WindowPadding.x * 2.0f -
++            tooltip_inner_margin * 2.0f);
++    SetNextWindowSize(tooltip_size, ImGuiCond_Always);
++
+     if (!BeginTooltipEx(ImGuiTooltipFlags_OverridePrevious, ImGuiWindowFlags_None))
+         return;
+-    TextV(fmt, args);
++    SetCursorPos(GetCursorPos() + ImVec2(
++        tooltip_inner_margin,
++        tooltip_inner_margin));
++    PushTextWrapPos(GetCursorPosX() + wrap_width);
++    TextUnformatted(text, text_end);
++    PopTextWrapPos();
+     EndTooltip();
+ }
+ 
+diff --git a/imgui.h b/imgui.h
+index 81fb65819..c38b27db8 100644
+--- a/imgui.h
++++ b/imgui.h
+@@ -1202,6 +1202,7 @@ enum ImGuiChildFlags_
+     ImGuiChildFlags_AlwaysAutoResize        = 1 << 6,   // Combined with AutoResizeX/AutoResizeY. Always measure size even when child is hidden, always return true, always disable clipping optimization! NOT RECOMMENDED.
+     ImGuiChildFlags_FrameStyle              = 1 << 7,   // Style the child window like a framed item: use FrameBg, FrameRounding, FrameBorderSize, FramePadding instead of ChildBg, ChildRounding, ChildBorderSize, WindowPadding.
+     ImGuiChildFlags_NavFlattened            = 1 << 8,   // [BETA] Share focus scope, allow keyboard/gamepad navigation to cross over parent border to this child or between sibling child windows.
++    ImGuiChildFlags_AllowZeroSize           = 1 << 9,   // Permit animation-only child windows to reach a true zero-size endpoint.
+ 
+     // Obsolete names
+ #ifndef IMGUI_DISABLE_OBSOLETE_FUNCTIONS
+diff --git a/imgui_draw.cpp b/imgui_draw.cpp
+index 34a967a99..ffddc22db 100644
+--- a/imgui_draw.cpp
++++ b/imgui_draw.cpp
+@@ -1717,7 +1717,45 @@ void ImDrawList::AddText(ImFont* font, float font_size, const ImVec2& pos, ImU32
+         clip_rect.z = ImMin(clip_rect.z, cpu_fine_clip_rect->z);
+         clip_rect.w = ImMin(clip_rect.w, cpu_fine_clip_rect->w);
+     }
+-    font->RenderText(this, font_size, pos, col, clip_rect, text_begin, text_end, wrap_width, cpu_fine_clip_rect != NULL);
++    const ImU32 red = (col >> IM_COL32_R_SHIFT) & 0xFFu;
++    const ImU32 green = (col >> IM_COL32_G_SHIFT) & 0xFFu;
++    const ImU32 blue = (col >> IM_COL32_B_SHIFT) & 0xFFu;
++    const ImU32 alpha = (col >> IM_COL32_A_SHIFT) & 0xFFu;
++    const float luminance =
++        (0.2126f * float(red) +
++            0.7152f * float(green) +
++            0.0722f * float(blue)) /
++        255.0f;
++    if (luminance >= 0.68f && alpha > 0u)
++    {
++        const float shadow_alpha_scale = GImGui != NULL
++            ? ImSaturate(GImGui->TextShadowAlphaScale)
++            : 1.0f;
++        const ImU32 shadow_alpha = ImU32(
++            float(alpha) *
++            (120.0f / 255.0f) *
++            shadow_alpha_scale);
++        font->RenderText(
++            this,
++            font_size,
++            pos + ImVec2(1.0f, 1.0f),
++            IM_COL32(0, 0, 0, shadow_alpha),
++            clip_rect,
++            text_begin,
++            text_end,
++            wrap_width,
++            cpu_fine_clip_rect != NULL);
++    }
++    font->RenderText(
++        this,
++        font_size,
++        pos,
++        col,
++        clip_rect,
++        text_begin,
++        text_end,
++        wrap_width,
++        cpu_fine_clip_rect != NULL);
+ }
+ 
+ void ImDrawList::AddText(const ImVec2& pos, ImU32 col, const char* text_begin, const char* text_end)
+@@ -5828,7 +5866,39 @@ void ImGui::RenderArrow(ImDrawList* draw_list, ImVec2 pos, ImU32 col, ImGuiDir d
+         IM_ASSERT(0);
+         break;
+     }
+-    draw_list->AddTriangleFilled(center + a, center + b, center + c, col);
++    const ImVec2 points[3] = {
++        center + a,
++        center + b,
++        center + c
++    };
++    const float corner_distance = ImAbs(r) * 0.36f;
++    const auto move_toward = [corner_distance](
++        const ImVec2& point,
++        const ImVec2& target)
++    {
++        const ImVec2 delta = target - point;
++        const float length = ImSqrt(
++            delta.x * delta.x + delta.y * delta.y);
++        const float amount = length > 0.0f
++            ? ImMin(corner_distance / length, 1.0f)
++            : 0.0f;
++        return point + delta * amount;
++    };
++
++    // Round every disclosure-arrow vertex with a short quadratic curve. This
++    // keeps the familiar filled triangle while softening large tree/header
++    // arrows in both their open and closed orientations.
++    draw_list->PathClear();
++    draw_list->PathLineTo(move_toward(points[0], points[2]));
++    draw_list->PathBezierQuadraticCurveTo(
++        points[0], move_toward(points[0], points[1]), 4);
++    draw_list->PathLineTo(move_toward(points[1], points[0]));
++    draw_list->PathBezierQuadraticCurveTo(
++        points[1], move_toward(points[1], points[2]), 4);
++    draw_list->PathLineTo(move_toward(points[2], points[1]));
++    draw_list->PathBezierQuadraticCurveTo(
++        points[2], move_toward(points[2], points[0]), 4);
++    draw_list->PathFillConvex(col);
+ }
+ 
+ void ImGui::RenderBullet(ImDrawList* draw_list, ImVec2 pos, ImU32 col)
+@@ -5846,10 +5916,16 @@ void ImGui::RenderCheckMark(ImDrawList* draw_list, ImVec2 pos, ImU32 col, float
+     float third = sz / 3.0f;
+     float bx = pos.x + third;
+     float by = pos.y + sz - third * 0.5f;
+-    draw_list->PathLineTo(ImVec2(bx - third, by - third));
+-    draw_list->PathLineTo(ImVec2(bx, by));
+-    draw_list->PathLineTo(ImVec2(bx + third * 2.0f, by - third * 2.0f));
++    const ImVec2 start(bx - third, by - third);
++    const ImVec2 middle(bx, by);
++    const ImVec2 end(bx + third * 2.0f, by - third * 2.0f);
++    draw_list->PathLineTo(start);
++    draw_list->PathLineTo(middle);
++    draw_list->PathLineTo(end);
+     draw_list->PathStroke(col, 0, thickness);
++    const float cap_radius = thickness * 0.5f;
++    draw_list->AddCircleFilled(start, cap_radius, col, 8);
++    draw_list->AddCircleFilled(end, cap_radius, col, 8);
+ }
+ 
+ // Render an arrow. 'pos' is position of the arrow tip. half_sz.x is length from base to tip. half_sz.y is length on each side.
+diff --git a/imgui_internal.h b/imgui_internal.h
+index a11d4e409..6d57b18a9 100644
+--- a/imgui_internal.h
++++ b/imgui_internal.h
+@@ -2142,6 +2142,7 @@ struct ImGuiContext
+     ImGuiIO                 IO;
+     ImGuiPlatformIO         PlatformIO;
+     ImGuiStyle              Style;
++    float                   TextShadowAlphaScale;               // Local rendering override used by controls that need subtler text shadowing.
+     ImVector<ImFontAtlas*>  FontAtlases;                        // List of font atlases used by the context (generally only contains g.IO.Fonts aka the main font atlas)
+     ImFont*                 Font;                               // Currently bound font. (== FontStack.back().Font)
+     ImFontBaked*            FontBaked;                          // Currently bound font at currently bound size. (== Font->GetFontBaked(FontSize))
+@@ -3520,6 +3521,7 @@ namespace ImGui
+     IMGUI_API void          RenderTextClippedEx(ImDrawList* draw_list, const ImVec2& pos_min, const ImVec2& pos_max, const char* text, const char* text_end, const ImVec2* text_size_if_known, const ImVec2& align = ImVec2(0, 0), const ImRect* clip_rect = NULL);
+     IMGUI_API void          RenderTextEllipsis(ImDrawList* draw_list, const ImVec2& pos_min, const ImVec2& pos_max, float ellipsis_max_x, const char* text, const char* text_end, const ImVec2* text_size_if_known);
+     IMGUI_API void          RenderFrame(ImVec2 p_min, ImVec2 p_max, ImU32 fill_col, bool borders = true, float rounding = 0.0f);
++    IMGUI_API void          RenderGradientFrame(ImVec2 p_min, ImVec2 p_max, ImU32 top_col, ImU32 bottom_col, bool borders = true, float rounding = 0.0f);
+     IMGUI_API void          RenderFrameBorder(ImVec2 p_min, ImVec2 p_max, float rounding = 0.0f);
+     IMGUI_API void          RenderColorRectWithAlphaCheckerboard(ImDrawList* draw_list, ImVec2 p_min, ImVec2 p_max, ImU32 fill_col, float grid_step, ImVec2 grid_off, float rounding = 0.0f, ImDrawFlags flags = 0);
+     IMGUI_API void          RenderNavCursor(const ImRect& bb, ImGuiID id, ImGuiNavRenderCursorFlags flags = ImGuiNavRenderCursorFlags_None); // Navigation highlight
+diff --git a/imgui_widgets.cpp b/imgui_widgets.cpp
+index 23ebf5dcd..4edc77853 100644
+--- a/imgui_widgets.cpp
++++ b/imgui_widgets.cpp
+@@ -764,6 +764,51 @@ bool ImGui::ButtonBehavior(const ImRect& bb, ImGuiID id, bool* out_hovered, bool
+     return pressed;
+ }
+ 
++static float GetAnimatedHighlightAmount(
++    ImGuiWindow* window,
++    ImGuiContext& g,
++    ImGuiID id,
++    bool highlighted,
++    float speed = 24.0f)
++{
++    ImGuiStorage& storage = window->StateStorage;
++    const ImGuiID amount_key = ImHashStr(
++        "##HighlightFadeAmount",
++        0,
++        id);
++    const ImGuiID frame_key = ImHashStr(
++        "##HighlightFadeFrame",
++        0,
++        id);
++    const float target = highlighted ? 1.0f : 0.0f;
++    float amount = storage.GetFloat(amount_key, 0.0f);
++    const int last_frame = storage.GetInt(frame_key, -2);
++    if (last_frame < g.FrameCount - 1)
++        amount = 0.0f;
++
++    amount = ImLerp(
++        amount,
++        target,
++        ImSaturate(g.IO.DeltaTime * speed));
++    if (ImFabs(target - amount) < 0.015f)
++        amount = target;
++    storage.SetFloat(amount_key, amount);
++    storage.SetInt(frame_key, g.FrameCount);
++    return amount;
++}
++
++static ImVec4 LerpWidgetColor(
++    const ImVec4& normal,
++    const ImVec4& interaction,
++    float amount)
++{
++    return ImVec4(
++        ImLerp(normal.x, interaction.x, amount),
++        ImLerp(normal.y, interaction.y, amount),
++        ImLerp(normal.z, interaction.z, amount),
++        ImLerp(normal.w, interaction.w, amount));
++}
++
+ bool ImGui::ButtonEx(const char* label, const ImVec2& size_arg, ImGuiButtonFlags flags)
+ {
+     ImGuiWindow* window = GetCurrentWindow();
+@@ -789,7 +834,19 @@ bool ImGui::ButtonEx(const char* label, const ImVec2& size_arg, ImGuiButtonFlags
+     bool pressed = ButtonBehavior(bb, id, &hovered, &held, flags);
+ 
+     // Render
+-    const ImU32 col = GetColorU32((held && hovered) ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
++    const float highlight_amount = GetAnimatedHighlightAmount(
++        window,
++        g,
++        id,
++        hovered);
++    const ImVec4 button_color = LerpWidgetColor(
++        style.Colors[ImGuiCol_Button],
++        style.Colors[
++            (held && hovered)
++                ? ImGuiCol_ButtonActive
++                : ImGuiCol_ButtonHovered],
++        highlight_amount);
++    const ImU32 col = GetColorU32(button_color);
+     RenderNavCursor(bb, id);
+     RenderFrame(bb.Min, bb.Max, col, true, style.FrameRounding);
+ 
+@@ -866,7 +923,18 @@ bool ImGui::ArrowButtonEx(const char* str_id, ImGuiDir dir, ImVec2 size, ImGuiBu
+     bool pressed = ButtonBehavior(bb, id, &hovered, &held, flags);
+ 
+     // Render
+-    const ImU32 bg_col = GetColorU32((held && hovered) ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
++    const float highlight_amount = GetAnimatedHighlightAmount(
++        window,
++        g,
++        id,
++        hovered);
++    const ImU32 bg_col = GetColorU32(LerpWidgetColor(
++        g.Style.Colors[ImGuiCol_Button],
++        g.Style.Colors[
++            (held && hovered)
++                ? ImGuiCol_ButtonActive
++                : ImGuiCol_ButtonHovered],
++        highlight_amount));
+     const ImU32 text_col = GetColorU32(ImGuiCol_Text);
+     RenderNavCursor(bb, id);
+     RenderFrame(bb.Min, bb.Max, bg_col, true, g.Style.FrameRounding);
+@@ -906,8 +974,19 @@ bool ImGui::CloseButton(ImGuiID id, const ImVec2& pos)
+         return pressed;
+ 
+     // Render
+-    ImU32 bg_col = GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered);
+-    if (hovered)
++    const float highlight_amount = GetAnimatedHighlightAmount(
++        window,
++        g,
++        id,
++        hovered);
++    const ImU32 bg_col = GetColorU32(LerpWidgetColor(
++        ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
++        g.Style.Colors[
++            held
++                ? ImGuiCol_ButtonActive
++                : ImGuiCol_ButtonHovered],
++        highlight_amount));
++    if (highlight_amount > 0.001f)
+         window->DrawList->AddRectFilled(bb.Min, bb.Max, bg_col);
+     RenderNavCursor(bb, id, ImGuiNavRenderCursorFlags_Compact);
+     const ImU32 cross_col = GetColorU32(ImGuiCol_Text);
+@@ -933,10 +1012,25 @@ bool ImGui::CollapseButton(ImGuiID id, const ImVec2& pos)
+         return pressed;
+ 
+     // Render
+-    ImU32 bg_col = GetColorU32((held && hovered) ? ImGuiCol_ButtonActive : hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
++    const float highlight_amount = GetAnimatedHighlightAmount(
++        window,
++        g,
++        id,
++        hovered || held);
++    const ImU32 bg_col = GetColorU32(LerpWidgetColor(
++        ImVec4(0.0f, 0.0f, 0.0f, 0.0f),
++        g.Style.Colors[
++            (held && hovered)
++                ? ImGuiCol_ButtonActive
++                : ImGuiCol_ButtonHovered],
++        highlight_amount));
+     ImU32 text_col = GetColorU32(ImGuiCol_Text);
+-    if (hovered || held)
+-        window->DrawList->AddRectFilled(bb.Min, bb.Max, bg_col);
++    if (highlight_amount > 0.001f)
++        window->DrawList->AddRectFilled(
++            bb.Min,
++            bb.Max,
++            bg_col,
++            g.Style.FrameRounding);
+     RenderNavCursor(bb, id, ImGuiNavRenderCursorFlags_Compact);
+     RenderArrow(window->DrawList, bb.Min, text_col, window->Collapsed ? ImGuiDir_Right : ImGuiDir_Down, 1.0f);
+ 
+@@ -1026,7 +1120,24 @@ bool ImGui::ScrollbarEx(const ImRect& bb_frame, ImGuiID id, ImGuiAxis axis, ImS6
+     const bool allow_interaction = (alpha >= 1.0f);
+ 
+     ImRect bb = bb_frame;
+-    bb.Expand(ImVec2(-ImClamp(IM_TRUNC((bb_frame_width - 2.0f) * 0.5f), 0.0f, 3.0f), -ImClamp(IM_TRUNC((bb_frame_height - 2.0f) * 0.5f), 0.0f, 3.0f)));
++    const bool settings_body_scrollbar =
++        axis == ImGuiAxis_Y &&
++        window->Name != NULL &&
++        strstr(window->Name, "##SettingsBody") != NULL;
++    const float scrollbar_inset_x = ImClamp(
++        IM_TRUNC((bb_frame_width - 2.0f) * 0.5f),
++        0.0f,
++        3.0f);
++    const float scrollbar_inset_y =
++        settings_body_scrollbar
++            ? 1.0f
++            : ImClamp(
++                IM_TRUNC((bb_frame_height - 2.0f) * 0.5f),
++                0.0f,
++                3.0f);
++    bb.Expand(ImVec2(
++        -scrollbar_inset_x,
++        -scrollbar_inset_y));
+ 
+     // V denote the main, longer axis of the scrollbar (= height for a vertical scrollbar)
+     const float scrollbar_size_v = (axis == ImGuiAxis_X) ? bb.GetWidth() : bb.GetHeight();
+@@ -1102,6 +1213,10 @@ bool ImGui::ScrollbarEx(const ImRect& bb_frame, ImGuiID id, ImGuiAxis axis, ImS6
+     else
+         grab_rect = ImRect(bb.Min.x, ImLerp(bb.Min.y, bb.Max.y, grab_v_norm), bb.Max.x, ImLerp(bb.Min.y, bb.Max.y, grab_v_norm) + grab_h_pixels);
+     window->DrawList->AddRectFilled(grab_rect.Min, grab_rect.Max, grab_col, style.ScrollbarRounding);
++    RenderFrameBorder(
++        grab_rect.Min,
++        grab_rect.Max,
++        style.ScrollbarRounding);
+ 
+     return held;
+ }
+@@ -1208,6 +1323,116 @@ bool ImGui::ImageButton(ImTextureID user_texture_id, const ImVec2& size, const I
+ */
+ #endif // #ifndef IMGUI_DISABLE_OBSOLETE_FUNCTIONS
+ 
++static ImU32 GetSelectionGradientBottomColor(
++    ImU32 top_color,
++    float brightness = 0.26f,
++    float alpha_increase = 0.10f)
++{
++    ImVec4 bottom_color = ImGui::ColorConvertU32ToFloat4(top_color);
++    bottom_color.x = ImLerp(bottom_color.x, 1.0f, brightness);
++    bottom_color.y = ImLerp(bottom_color.y, 1.0f, brightness);
++    bottom_color.z = ImLerp(bottom_color.z, 1.0f, brightness);
++    bottom_color.w = ImMin(
++        1.0f,
++        bottom_color.w + alpha_increase);
++    return ImGui::ColorConvertFloat4ToU32(bottom_color);
++}
++
++static ImU32 GetPopupSelectionHoverColor(
++    const ImGuiStyle& style,
++    bool held)
++{
++    const ImVec4& normal = style.Colors[ImGuiCol_Header];
++    const ImVec4& interaction = style.Colors[
++        held ? ImGuiCol_HeaderActive : ImGuiCol_HeaderHovered];
++    const float interaction_weight = held ? 0.62f : 0.50f;
++    ImVec4 color(
++        ImLerp(normal.x, interaction.x, interaction_weight),
++        ImLerp(normal.y, interaction.y, interaction_weight),
++        ImLerp(normal.z, interaction.z, interaction_weight),
++        ImLerp(normal.w, interaction.w, interaction_weight));
++    color.w *= held ? 0.88f : 0.82f;
++    return ImGui::GetColorU32(color);
++}
++
++static void RenderSubduedTreeNodeHighlight(
++    ImDrawList* draw_list,
++    ImRect bounding_box,
++    const ImVec4& top_color,
++    const ImVec4& bottom_color)
++{
++    const float inset = 0.5f;
++    bounding_box.Min += ImVec2(inset, inset);
++    bounding_box.Max -= ImVec2(inset, inset);
++    if (bounding_box.GetWidth() <= 1.0f ||
++        bounding_box.GetHeight() <= 1.0f)
++    {
++        return;
++    }
++
++    const float rounding = ImMin(
++        3.0f,
++        bounding_box.GetHeight() * 0.18f);
++    const float gradient_extent = ImMax(
++        bounding_box.GetHeight(),
++        1.0f);
++    const int fill_vertex_start = draw_list->VtxBuffer.Size;
++    draw_list->AddRectFilled(
++        bounding_box.Min,
++        bounding_box.Max,
++        IM_COL32_WHITE,
++        rounding,
++        ImDrawFlags_RoundCornersAll);
++    const int fill_vertex_end = draw_list->VtxBuffer.Size;
++    for (int vertex_index = fill_vertex_start;
++        vertex_index < fill_vertex_end;
++        ++vertex_index)
++    {
++        ImDrawVert& vertex = draw_list->VtxBuffer[vertex_index];
++        const float amount = ImSaturate(
++            (vertex.pos.y - bounding_box.Min.y) /
++            gradient_extent);
++        vertex.col = ImGui::GetColorU32(ImVec4(
++            ImLerp(top_color.x, bottom_color.x, amount),
++            ImLerp(top_color.y, bottom_color.y, amount),
++            ImLerp(top_color.z, bottom_color.z, amount),
++            ImLerp(top_color.w, bottom_color.w, amount)));
++    }
++
++    const int outline_vertex_start = draw_list->VtxBuffer.Size;
++    draw_list->AddRect(
++        bounding_box.Min,
++        bounding_box.Max,
++        IM_COL32_WHITE,
++        rounding,
++        ImDrawFlags_RoundCornersAll,
++        1.0f);
++    const int outline_vertex_end = draw_list->VtxBuffer.Size;
++    for (int vertex_index = outline_vertex_start;
++        vertex_index < outline_vertex_end;
++        ++vertex_index)
++    {
++        ImDrawVert& vertex = draw_list->VtxBuffer[vertex_index];
++        const float amount = ImSaturate(
++            (vertex.pos.y - bounding_box.Min.y) /
++            gradient_extent);
++        vertex.col = ImGui::GetColorU32(ImVec4(
++            ImLerp(0.82f, 0.91f, amount),
++            ImLerp(0.84f, 0.93f, amount),
++            ImLerp(0.88f, 0.97f, amount),
++            ImLerp(0.07f, 0.17f, amount)));
++    }
++}
++
++static bool IsComboPopupWindow(const ImGuiWindow* window)
++{
++    return
++        window != NULL &&
++        (window->Flags & ImGuiWindowFlags_Popup) != 0 &&
++        window->Name != NULL &&
++        strncmp(window->Name, "##Combo_", 8) == 0;
++}
++
+ bool ImGui::Checkbox(const char* label, bool* v)
+ {
+     ImGuiWindow* window = GetCurrentWindow();
+@@ -1219,9 +1444,18 @@ bool ImGui::Checkbox(const char* label, bool* v)
+     const ImGuiID id = window->GetID(label);
+     const ImVec2 label_size = CalcTextSize(label, NULL, true);
+ 
+-    const float square_sz = GetFrameHeight();
++    const float row_height = GetFrameHeight();
++    const float toggle_height = ImMax(1.0f, row_height - 4.0f);
++    const float toggle_width = IM_TRUNC(row_height * 1.72f);
+     const ImVec2 pos = window->DC.CursorPos;
+-    const ImRect total_bb(pos, pos + ImVec2(square_sz + (label_size.x > 0.0f ? style.ItemInnerSpacing.x + label_size.x : 0.0f), label_size.y + style.FramePadding.y * 2.0f));
++    const ImRect total_bb(
++        pos,
++        pos + ImVec2(
++            toggle_width +
++                (label_size.x > 0.0f
++                    ? style.ItemInnerSpacing.x + label_size.x
++                    : 0.0f),
++            row_height));
+     ItemSize(total_bb, style.FramePadding.y);
+     const bool is_visible = ItemAdd(total_bb, id);
+     const bool is_multi_select = (g.LastItemData.ItemFlags & ImGuiItemFlags_IsMultiSelect) != 0;
+@@ -1237,45 +1471,172 @@ bool ImGui::Checkbox(const char* label, bool* v)
+     if (is_multi_select)
+         MultiSelectItemHeader(id, &checked, NULL);
+ 
++    ImGuiStorage& storage = window->StateStorage;
++    const ImGuiID animation_key = ImHashStr(
++        "##ToggleAnimation",
++        0,
++        id);
++    const ImGuiID animation_frame_key = ImHashStr(
++        "##ToggleAnimationFrame",
++        0,
++        id);
++    const ImGuiID pending_value_key = ImHashStr(
++        "##TogglePendingValue",
++        0,
++        id);
++    float animated_position = storage.GetFloat(
++        animation_key,
++        *v ? 1.0f : 0.0f);
++    const int last_animation_frame = storage.GetInt(
++        animation_frame_key,
++        -2);
++    int pending_value = storage.GetInt(
++        pending_value_key,
++        -1);
++    if (last_animation_frame < g.FrameCount - 1)
++    {
++        animated_position = *v ? 1.0f : 0.0f;
++        pending_value = -1;
++    }
++
+     bool hovered, held;
+-    bool pressed = ButtonBehavior(total_bb, id, &hovered, &held);
++    bool interaction_pressed =
++        ButtonBehavior(total_bb, id, &hovered, &held);
++    bool pressed = false;
+ 
+     // Range-Selection/Multi-selection support (footer)
+     if (is_multi_select)
+-        MultiSelectItemFooter(id, &checked, &pressed);
+-    else if (pressed)
+-        checked = !checked;
+-
+-    if (*v != checked)
+     {
+-        *v = checked;
+-        pressed = true; // return value
++        MultiSelectItemFooter(
++            id,
++            &checked,
++            &interaction_pressed);
++        if (*v != checked)
++        {
++            *v = checked;
++            pressed = true;
++            MarkItemEdited(id);
++        }
++        pending_value = -1;
++    }
++    else if (interaction_pressed)
++    {
++        const bool current_target =
++            pending_value >= 0
++                ? pending_value != 0
++                : *v;
++        const bool requested_value = !current_target;
++        pending_value =
++            requested_value == *v
++                ? -1
++                : requested_value ? 1 : 0;
++    }
++
++    const bool visual_target =
++        pending_value >= 0
++            ? pending_value != 0
++            : *v;
++    const float target_position =
++        visual_target ? 1.0f : 0.0f;
++    const float animation_blend = ImSaturate(
++        g.IO.DeltaTime * 18.0f);
++    animated_position = ImLerp(
++        animated_position,
++        target_position,
++        animation_blend);
++    if (ImFabs(target_position - animated_position) < 0.015f)
++        animated_position = target_position;
++
++    if (pending_value >= 0 &&
++        animated_position == target_position)
++    {
++        *v = visual_target;
++        pending_value = -1;
++        pressed = true;
+         MarkItemEdited(id);
+     }
++    storage.SetFloat(animation_key, animated_position);
++    storage.SetInt(animation_frame_key, g.FrameCount);
++    storage.SetInt(pending_value_key, pending_value);
+ 
+-    const ImRect check_bb(pos, pos + ImVec2(square_sz, square_sz));
+-    const bool mixed_value = (g.LastItemData.ItemFlags & ImGuiItemFlags_MixedValue) != 0;
++    const ImRect toggle_bb(
++        pos + ImVec2(0.0f, (row_height - toggle_height) * 0.5f),
++        pos + ImVec2(
++            toggle_width,
++            (row_height + toggle_height) * 0.5f));
+     if (is_visible)
+     {
+         RenderNavCursor(total_bb, id);
+-        RenderFrame(check_bb.Min, check_bb.Max, GetColorU32((held && hovered) ? ImGuiCol_FrameBgActive : hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg), true, style.FrameRounding);
+-        ImU32 check_col = GetColorU32(ImGuiCol_CheckMark);
+-        if (mixed_value)
+-        {
+-            // Undocumented tristate/mixed/indeterminate checkbox (#2644)
+-            // This may seem awkwardly designed because the aim is to make ImGuiItemFlags_MixedValue supported by all widgets (not just checkbox)
+-            ImVec2 pad(ImMax(1.0f, IM_TRUNC(square_sz / 3.6f)), ImMax(1.0f, IM_TRUNC(square_sz / 3.6f)));
+-            window->DrawList->AddRectFilled(check_bb.Min + pad, check_bb.Max - pad, check_col, style.FrameRounding);
+-        }
+-        else if (*v)
+-        {
+-            const float pad = ImMax(1.0f, IM_TRUNC(square_sz / 6.0f));
+-            RenderCheckMark(window->DrawList, check_bb.Min + ImVec2(pad, pad), check_col, square_sz - pad * 2.0f);
+-        }
+-    }
+-    const ImVec2 label_pos = ImVec2(check_bb.Max.x + style.ItemInnerSpacing.x, check_bb.Min.y + style.FramePadding.y);
++        const ImVec4 inactive_track_color = style.Colors[
++            (held && hovered)
++                ? ImGuiCol_FrameBgActive
++                : hovered
++                    ? ImGuiCol_FrameBgHovered
++                    : ImGuiCol_FrameBg];
++        ImVec4 active_track_color(
++            0.94f,
++            0.95f,
++            0.98f,
++            0.50f);
++        const ImVec4 track_color = ImLerp(
++            inactive_track_color,
++            active_track_color,
++            animated_position);
++        const float track_rounding = style.FrameRounding;
++        RenderFrame(
++            toggle_bb.Min,
++            toggle_bb.Max,
++            GetColorU32(track_color),
++            true,
++            track_rounding);
++
++        constexpr float thumb_padding = 2.0f;
++        const float thumb_width = ImMin(
++            style.GrabMinSize,
++            toggle_width - thumb_padding * 2.0f);
++        const float thumb_height =
++            toggle_height - thumb_padding * 2.0f;
++        const float thumb_minimum_x =
++            toggle_bb.Min.x + thumb_padding + thumb_width * 0.5f;
++        const float thumb_maximum_x =
++            toggle_bb.Max.x - thumb_padding - thumb_width * 0.5f;
++        const ImVec2 thumb_center(
++            ImLerp(
++                thumb_minimum_x,
++                thumb_maximum_x,
++                animated_position),
++            (toggle_bb.Min.y + toggle_bb.Max.y) * 0.5f);
++        const ImVec2 thumb_half_size(
++            thumb_width * 0.5f,
++            thumb_height * 0.5f);
++        const float thumb_rounding = ImMin(
++            style.GrabRounding,
++            ImMin(thumb_width, thumb_height) * 0.5f);
++        const ImRect thumb_bb(
++            thumb_center - thumb_half_size,
++            thumb_center + thumb_half_size);
++        const ImVec4 thumb_color = ImLerp(
++            style.Colors[
++                held && hovered
++                    ? ImGuiCol_SliderGrabActive
++                    : ImGuiCol_SliderGrab],
++            ImVec4(0.117f, 0.217f, 0.342f, 1.0f),
++            animated_position);
++        window->DrawList->AddRectFilled(
++            thumb_bb.Min,
++            thumb_bb.Max,
++            GetColorU32(thumb_color),
++            thumb_rounding);
++        RenderFrameBorder(
++            thumb_bb.Min,
++            thumb_bb.Max,
++            thumb_rounding);
++    }
++    const ImVec2 label_pos = ImVec2(
++        toggle_bb.Max.x + style.ItemInnerSpacing.x,
++        pos.y + (row_height - label_size.y) * 0.5f);
+     if (g.LogEnabled)
+-        LogRenderedText(&label_pos, mixed_value ? "[~]" : *v ? "[x]" : "[ ]");
++        LogRenderedText(&label_pos, *v ? "[on]" : "[off]");
+     if (is_visible && label_size.x > 0.0f)
+         RenderText(label_pos, label);
+ 
+@@ -1432,6 +1793,23 @@ void ImGui::ProgressBar(float fraction, const ImVec2& size_arg, const char* over
+     RenderFrame(bb.Min, bb.Max, GetColorU32(ImGuiCol_FrameBg), true, style.FrameRounding);
+     bb.Expand(ImVec2(-style.FrameBorderSize, -style.FrameBorderSize));
+     RenderRectFilledRangeH(window->DrawList, bb, GetColorU32(ImGuiCol_PlotHistogram), fill_n0, fill_n1, style.FrameRounding);
++    if (fill_n1 > fill_n0)
++    {
++        const ImRect fill_bb(
++            ImVec2(
++                ImLerp(bb.Min.x, bb.Max.x, fill_n0),
++                bb.Min.y),
++            ImVec2(
++                ImLerp(bb.Min.x, bb.Max.x, fill_n1),
++                bb.Max.y));
++        const float fill_rounding = ImMin(
++            style.FrameRounding,
++            fill_bb.GetWidth() * 0.5f);
++        RenderFrameBorder(
++            fill_bb.Min,
++            fill_bb.Max,
++            fill_rounding);
++    }
+ 
+     // Default displaying the fraction as percentage string, but user can override it
+     // Don't display text for indeterminate bars by default
+@@ -1933,14 +2311,28 @@ bool ImGui::BeginCombo(const char* label, const char* preview_value, ImGuiComboF
+     }
+ 
+     // Render shape
+-    const ImU32 frame_col = GetColorU32(hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
++    const float highlight_amount = GetAnimatedHighlightAmount(
++        window,
++        g,
++        id,
++        hovered || popup_open);
++    const ImU32 frame_col = GetColorU32(LerpWidgetColor(
++        style.Colors[ImGuiCol_FrameBg],
++        style.Colors[ImGuiCol_FrameBgHovered],
++        highlight_amount));
+     const float value_x2 = ImMax(bb.Min.x, bb.Max.x - arrow_size);
+     RenderNavCursor(bb, id);
+     if (!(flags & ImGuiComboFlags_NoPreview))
+         window->DrawList->AddRectFilled(bb.Min, ImVec2(value_x2, bb.Max.y), frame_col, style.FrameRounding, (flags & ImGuiComboFlags_NoArrowButton) ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersLeft);
+     if (!(flags & ImGuiComboFlags_NoArrowButton))
+     {
+-        ImU32 bg_col = GetColorU32((popup_open || hovered) ? ImGuiCol_ButtonHovered : ImGuiCol_Button);
++        ImU32 bg_col = GetColorU32(LerpWidgetColor(
++            style.Colors[ImGuiCol_Button],
++            style.Colors[
++                popup_open
++                    ? ImGuiCol_ButtonActive
++                    : ImGuiCol_ButtonHovered],
++            highlight_amount));
+         ImU32 text_col = GetColorU32(ImGuiCol_Text);
+         window->DrawList->AddRectFilled(ImVec2(value_x2, bb.Min.y), bb.Max, bg_col, style.FrameRounding, (w <= arrow_size) ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersRight);
+         if (value_x2 + arrow_size - style.FramePadding.x <= bb.Max.x)
+@@ -1961,7 +2353,11 @@ bool ImGui::BeginCombo(const char* label, const char* preview_value, ImGuiComboF
+     {
+         if (g.LogEnabled)
+             LogSetNextTextDecoration("{", "}");
++        const float text_shadow_alpha_scale_backup =
++            g.TextShadowAlphaScale;
++        g.TextShadowAlphaScale *= 0.55f;
+         RenderTextClipped(bb.Min + style.FramePadding, ImVec2(value_x2, bb.Max.y), preview_value, NULL, NULL);
++        g.TextShadowAlphaScale = text_shadow_alpha_scale_backup;
+     }
+     if (label_size.x > 0)
+         RenderText(ImVec2(bb.Max.x + style.ItemInnerSpacing.x, bb.Min.y + style.FramePadding.y), label);
+@@ -3267,6 +3663,54 @@ bool ImGui::SliderBehavior(const ImRect& bb, ImGuiID id, ImGuiDataType data_type
+     return false;
+ }
+ 
++static void AnimateSliderGrab(
++    ImGuiWindow* window,
++    ImGuiContext& g,
++    ImGuiID id,
++    ImGuiAxis axis,
++    ImRect* grab_bb)
++{
++    if (grab_bb->Max[axis] <= grab_bb->Min[axis])
++        return;
++
++    ImGuiStorage& storage = window->StateStorage;
++    const ImGuiID animation_key = ImHashStr(
++        "##SliderGrabAnimation",
++        0,
++        id);
++    const ImGuiID animation_frame_key = ImHashStr(
++        "##SliderGrabAnimationFrame",
++        0,
++        id);
++    const float target_position =
++        (grab_bb->Min[axis] + grab_bb->Max[axis]) * 0.5f;
++    float animated_position = storage.GetFloat(
++        animation_key,
++        target_position);
++    const int last_animation_frame = storage.GetInt(
++        animation_frame_key,
++        -2);
++    if (last_animation_frame < g.FrameCount - 1)
++    {
++        animated_position = target_position;
++    }
++    else
++    {
++        const float animation_speed =
++            g.ActiveId == id ? 28.0f : 18.0f;
++        animated_position = ImLerp(
++            animated_position,
++            target_position,
++            ImSaturate(g.IO.DeltaTime * animation_speed));
++    }
++    storage.SetFloat(animation_key, animated_position);
++    storage.SetInt(animation_frame_key, g.FrameCount);
++
++    const float offset = animated_position - target_position;
++    grab_bb->Min[axis] += offset;
++    grab_bb->Max[axis] += offset;
++}
++
+ // Note: p_data, p_min and p_max are _pointers_ to a memory address holding the data. For a slider, they are all required.
+ // Read code of e.g. SliderFloat(), SliderInt() etc. or examples in 'Demo->Widgets->Data Types' to understand how to use this function directly.
+ bool ImGui::SliderScalar(const char* label, ImGuiDataType data_type, void* p_data, const void* p_min, const void* p_max, const char* format, ImGuiSliderFlags flags)
+@@ -3336,10 +3780,22 @@ bool ImGui::SliderScalar(const char* label, ImGuiDataType data_type, void* p_dat
+     const bool value_changed = SliderBehavior(frame_bb, id, data_type, p_data, p_min, p_max, format, flags, &grab_bb);
+     if (value_changed)
+         MarkItemEdited(id);
++    AnimateSliderGrab(
++        window,
++        g,
++        id,
++        ImGuiAxis_X,
++        &grab_bb);
+ 
+     // Render grab
+     if (grab_bb.Max.x > grab_bb.Min.x)
++    {
+         window->DrawList->AddRectFilled(grab_bb.Min, grab_bb.Max, GetColorU32(g.ActiveId == id ? ImGuiCol_SliderGrabActive : ImGuiCol_SliderGrab), style.GrabRounding);
++        RenderFrameBorder(
++            grab_bb.Min,
++            grab_bb.Max,
++            style.GrabRounding);
++    }
+ 
+     // Display value using user-provided display format so user can add prefix/suffix/decorations to the value.
+     char value_buf[64];
+@@ -3486,10 +3942,22 @@ bool ImGui::VSliderScalar(const char* label, const ImVec2& size, ImGuiDataType d
+     const bool value_changed = SliderBehavior(frame_bb, id, data_type, p_data, p_min, p_max, format, flags | ImGuiSliderFlags_Vertical, &grab_bb);
+     if (value_changed)
+         MarkItemEdited(id);
++    AnimateSliderGrab(
++        window,
++        g,
++        id,
++        ImGuiAxis_Y,
++        &grab_bb);
+ 
+     // Render grab
+     if (grab_bb.Max.y > grab_bb.Min.y)
++    {
+         window->DrawList->AddRectFilled(grab_bb.Min, grab_bb.Max, GetColorU32(g.ActiveId == id ? ImGuiCol_SliderGrabActive : ImGuiCol_SliderGrab), style.GrabRounding);
++        RenderFrameBorder(
++            grab_bb.Min,
++            grab_bb.Max,
++            style.GrabRounding);
++    }
+ 
+     // Display value using user-provided display format so user can add prefix/suffix/decorations to the value.
+     // For the vertical slider we allow centered text to overlap the frame padding
+@@ -6665,7 +7133,8 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
+     frame_bb.Max.y = window->DC.CursorPos.y + frame_height;
+     if (display_frame)
+     {
+-        const float outer_extend = IM_TRUNC(window->WindowPadding.x * 0.5f); // Framed header expand a little outside of current limits
++        const float outer_extend =
++            IM_TRUNC(window->WindowPadding.x * 0.5f);
+         frame_bb.Min.x -= outer_extend;
+         frame_bb.Max.x += outer_extend;
+     }
+@@ -6796,6 +7265,11 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
+ 
+     bool hovered, held;
+     bool pressed = ButtonBehavior(interact_bb, id, &hovered, &held, button_flags);
++    const float highlight_amount = GetAnimatedHighlightAmount(
++        window,
++        g,
++        id,
++        hovered);
+     bool toggled = false;
+     if (!is_leaf)
+     {
+@@ -6859,8 +7333,36 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
+         if (display_frame)
+         {
+             // Framed type
+-            const ImU32 bg_col = GetColorU32((held && hovered) ? ImGuiCol_HeaderActive : hovered ? ImGuiCol_HeaderHovered : ImGuiCol_Header);
+-            RenderFrame(frame_bb.Min, frame_bb.Max, bg_col, true, style.FrameRounding);
++            const ImVec4 background_color = LerpWidgetColor(
++                style.Colors[ImGuiCol_Header],
++                style.Colors[
++                    (held && hovered)
++                        ? ImGuiCol_HeaderActive
++                        : ImGuiCol_HeaderHovered],
++                highlight_amount);
++            const ImU32 bg_col = GetColorU32(background_color);
++            if (highlight_amount > 0.001f)
++            {
++                RenderGradientFrame(
++                    frame_bb.Min,
++                    frame_bb.Max,
++                    bg_col,
++                    GetSelectionGradientBottomColor(
++                        bg_col,
++                        0.05f * highlight_amount,
++                        0.02f * highlight_amount),
++                    true,
++                    style.FrameRounding);
++            }
++            else
++            {
++                RenderFrame(
++                    frame_bb.Min,
++                    frame_bb.Max,
++                    bg_col,
++                    true,
++                    style.FrameRounding);
++            }
+             RenderNavCursor(frame_bb, id, nav_render_cursor_flags);
+             if (span_all_columns && !span_all_columns_label)
+                 TablePopBackgroundChannel();
+@@ -6878,10 +7380,48 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
+         else
+         {
+             // Unframed typed for tree nodes
+-            if (hovered || selected)
++            if (highlight_amount > 0.001f || selected)
+             {
+-                const ImU32 bg_col = GetColorU32((held && hovered) ? ImGuiCol_HeaderActive : hovered ? ImGuiCol_HeaderHovered : ImGuiCol_Header);
+-                RenderFrame(frame_bb.Min, frame_bb.Max, bg_col, false);
++                const ImVec4 interaction_color = style.Colors[
++                    (held && hovered)
++                        ? ImGuiCol_HeaderActive
++                        : ImGuiCol_HeaderHovered];
++                ImVec4 top_color = LerpWidgetColor(
++                    style.Colors[ImGuiCol_Header],
++                    interaction_color,
++                    highlight_amount);
++                const float resting_alpha =
++                    selected ? 0.36f : 0.0f;
++                const float interaction_alpha =
++                    (held && hovered)
++                        ? 0.58f
++                        : 0.46f;
++                top_color.w = ImLerp(
++                    resting_alpha,
++                    interaction_alpha,
++                    highlight_amount);
++                const ImVec4 bottom_color(
++                    ImLerp(
++                        top_color.x,
++                        1.0f,
++                        0.055f * highlight_amount),
++                    ImLerp(
++                        top_color.y,
++                        1.0f,
++                        0.055f * highlight_amount),
++                    ImLerp(
++                        top_color.z,
++                        1.0f,
++                        0.055f * highlight_amount),
++                    ImMin(
++                        1.0f,
++                        top_color.w +
++                            0.025f * highlight_amount));
++                RenderSubduedTreeNodeHighlight(
++                    window->DrawList,
++                    frame_bb,
++                    top_color,
++                    bottom_color);
+             }
+             RenderNavCursor(frame_bb, id, nav_render_cursor_flags);
+             if (span_all_columns && !span_all_columns_label)
+@@ -7125,6 +7665,7 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+ 
+     ImGuiContext& g = *GImGui;
+     const ImGuiStyle& style = g.Style;
++    const bool combo_popup = IsComboPopupWindow(window);
+ 
+     // Submit label or explicit size to ItemSize(), whereas ItemAdd() will submit a larger/spanning rectangle.
+     ImGuiID id = window->GetID(label);
+@@ -7257,15 +7798,147 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+     if (is_visible)
+     {
+         const bool highlighted = hovered || (flags & ImGuiSelectableFlags_Highlight);
+-        if (highlighted || selected)
++        const bool popup_selection =
++            (window->Flags & ImGuiWindowFlags_Popup) != 0;
++        ImRect render_bb = bb;
++        if (popup_selection)
++        {
++            const float inset = 1.0f;
++            render_bb.Min.x = ImMax(
++                render_bb.Min.x,
++                window->InnerClipRect.Min.x + inset);
++            render_bb.Max.x = ImMin(
++                render_bb.Max.x,
++                window->InnerClipRect.Max.x - inset);
++        }
++
++        if (combo_popup)
++        {
++            // Keep the chosen row stable while the independent hover
++            // highlight slides back to it from another option.
++            if (selected)
++            {
++                RenderFrame(
++                    render_bb.Min,
++                    render_bb.Max,
++                    GetColorU32(ImGuiCol_Header),
++                    false,
++                    style.FrameRounding);
++            }
++            if (highlighted)
++            {
++                ImRect hover_bb = render_bb;
++                ImGuiStorage& storage = window->StateStorage;
++                const ImGuiID position_key = ImHashStr(
++                    "##ComboHighlightPosition",
++                    0,
++                    window->ID);
++                const ImGuiID frame_key = ImHashStr(
++                    "##ComboHighlightFrame",
++                    0,
++                    window->ID);
++                const float target_y = bb.Min.y;
++                float animated_y = storage.GetFloat(
++                    position_key,
++                    target_y);
++                const int last_frame = storage.GetInt(
++                    frame_key,
++                    -2);
++                if (last_frame < g.FrameCount - 1)
++                {
++                    animated_y = target_y;
++                }
++                else
++                {
++                    const float blend = ImSaturate(
++                        g.IO.DeltaTime * 22.0f);
++                    animated_y = ImLerp(
++                        animated_y,
++                        target_y,
++                        blend);
++                    if (ImFabs(target_y - animated_y) < 0.50f)
++                        animated_y = target_y;
++                }
++                storage.SetFloat(position_key, animated_y);
++                storage.SetInt(frame_key, g.FrameCount);
++                const float rendered_y = IM_ROUND(animated_y);
++                const float height = IM_ROUND(bb.GetHeight());
++                hover_bb.Min.y = rendered_y;
++                hover_bb.Max.y = rendered_y + height;
++                const ImU32 hover_color =
++                    GetPopupSelectionHoverColor(style, held);
++                RenderGradientFrame(
++                    hover_bb.Min,
++                    hover_bb.Max,
++                    hover_color,
++                    GetSelectionGradientBottomColor(
++                        hover_color,
++                        0.10f,
++                        0.04f),
++                    false,
++                    style.FrameRounding);
++            }
++        }
++        else
+         {
+-            // Between 1.91.0 and 1.91.4 we made selected Selectable use an arbitrary lerp between _Header and _HeaderHovered. Removed that now. (#8106)
+-            ImU32 col = GetColorU32((held && highlighted) ? ImGuiCol_HeaderActive : highlighted ? ImGuiCol_HeaderHovered : ImGuiCol_Header);
+-            RenderFrame(bb.Min, bb.Max, col, false, 0.0f);
++            const float highlight_amount =
++                GetAnimatedHighlightAmount(
++                    window,
++                    g,
++                    id,
++                    highlighted);
++            if (selected || highlight_amount > 0.001f)
++            {
++                const ImVec4 normal_color =
++                    style.Colors[ImGuiCol_Header];
++                const ImVec4 interaction_color =
++                    popup_selection
++                        ? ColorConvertU32ToFloat4(
++                            GetPopupSelectionHoverColor(
++                                style,
++                                held))
++                        : style.Colors[
++                            (held && highlighted)
++                                ? ImGuiCol_HeaderActive
++                                : ImGuiCol_HeaderHovered];
++                ImVec4 selection_color = LerpWidgetColor(
++                    normal_color,
++                    interaction_color,
++                    highlight_amount);
++                if (!selected)
++                    selection_color.w *= highlight_amount;
++                const ImU32 color =
++                    GetColorU32(selection_color);
++                if (highlight_amount > 0.001f)
++                {
++                    RenderGradientFrame(
++                        render_bb.Min,
++                        render_bb.Max,
++                        color,
++                        GetSelectionGradientBottomColor(
++                            color,
++                            (popup_selection ? 0.10f : 0.26f) *
++                                highlight_amount,
++                            (popup_selection ? 0.04f : 0.10f) *
++                                highlight_amount),
++                        false,
++                        style.FrameRounding);
++                }
++                else
++                {
++                    RenderFrame(
++                        render_bb.Min,
++                        render_bb.Max,
++                        color,
++                        false,
++                        style.FrameRounding);
++                }
++            }
+         }
+         if (g.NavId == id)
+         {
+-            ImGuiNavRenderCursorFlags nav_render_cursor_flags = ImGuiNavRenderCursorFlags_Compact | ImGuiNavRenderCursorFlags_NoRounding;
++            ImGuiNavRenderCursorFlags nav_render_cursor_flags =
++                ImGuiNavRenderCursorFlags_Compact;
+             if (is_multi_select)
+                 nav_render_cursor_flags |= ImGuiNavRenderCursorFlags_AlwaysDraw; // Always show the nav rectangle
+             RenderNavCursor(bb, id, nav_render_cursor_flags);
+@@ -7282,7 +7955,14 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+ 
+     // Text stays at the submission position. Alignment/clipping extents ignore SpanAllColumns.
+     if (is_visible)
++    {
++        const float text_shadow_alpha_scale_backup =
++            g.TextShadowAlphaScale;
++        if (combo_popup)
++            g.TextShadowAlphaScale *= 0.55f;
+         RenderTextClipped(pos, ImVec2(ImMin(pos.x + size.x, window->WorkRect.Max.x), pos.y + size.y), label, NULL, &label_size, style.SelectableTextAlign, &bb);
++        g.TextShadowAlphaScale = text_shadow_alpha_scale_backup;
++    }
+ 
+     // Automatically close popups
+     if (pressed && (window->Flags & ImGuiWindowFlags_Popup) && !(flags & ImGuiSelectableFlags_NoAutoClosePopups) && (g.LastItemData.ItemFlags & ImGuiItemFlags_AutoClosePopups))
