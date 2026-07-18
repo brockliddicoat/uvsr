@@ -128,8 +128,8 @@ asset/package contracts:
 - Handoff revision/artifact: renderer commit
   `df097d74a609b34979f5d5e462525e3e7f9ae7f9`; `build/bin/uvsr.exe`
   SHA-256 `66E274925485A5C320664FB6CD7533365F7B35996E254DFF693222AFC4E27890`
-- Handoff acknowledged by/on: exact contender left running for user
-  confirmation on 2026-07-18
+- Handoff acknowledged by/on: user verified the exact running contender
+  `canoncontender-df097d7-0618` on 2026-07-18
 
 ## Integration Order
 
@@ -168,9 +168,9 @@ asset/package contracts:
 
 ## Risks and Escalation Triggers
 
-- The accepted product review belongs to the predecessor dirty artifact. The
-  contender uses byte-equivalent patched source content but receives a new
-  commit identity and must be left running for exact-artifact confirmation.
+- The predecessor dirty artifact and the clean contender use byte-equivalent
+  patched source content. The user verified the exact clean contender after it
+  received its final renderer identity.
 - Fixed-size text tooltips intentionally trade unused space on short help text
   for consistent dimensions at every nesting depth.
 
@@ -193,8 +193,11 @@ Stop and ask the user if:
   audits for this local contender.
 - Coming Soon/documentation update: README updated with the accepted UI and
   loading behavior
-- Pushed/PR/merged, or intentionally local: intentionally local
-- Remaining experiments or follow-ups: exact contender product confirmation
+- Pushed/PR/merged, or intentionally local: pushed to
+  `origin/codex/imgui-reference-canon-contender` after this acceptance record;
+  no pull request or merge
+- Remaining experiments or follow-ups: Canonical promotion only if separately
+  requested
 - Active ownership released: yes
 - Archived to completed/abandoned path:
   `docs/exec-plans/completed/imgui-reference-canon-contender.md`
