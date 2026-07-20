@@ -10,7 +10,6 @@ namespace uvsr
     {
         Unset,
         Reference,
-        Diagnostic,
         Exact,
         Numerical,
         Algorithmic
@@ -24,43 +23,17 @@ namespace uvsr
         ExactFixed12,
         ExactFixed16,
         ExactFixed20,
-        ExactFixedLaterBounce8,
-        ExactFixedAllBounce8,
+        ExactFixed24,
+        ExactFixed48,
+        ExactFixed64,
         ExactPackedCurrentFast,
         ExactFusedResolveApply,
         ExactFixed8FusedResolveApply,
-        DiagnosticFusedFullResolutionAoOutput,
-        ExactGroup16x8,
-        ExactGroup8x16,
-        ExactDuplicatePixelRejectionOff,
-        ExactFullMaskEarlyExitOff,
-        AlgorithmicProjectedRadiusClamp32,
-        AlgorithmicProjectedRadiusClamp64,
-        AlgorithmicProjectedRadiusClamp128,
-        DiagnosticConstantScheduler,
-        DiagnosticConstantTrace,
-        DiagnosticDepthOnlyTrace,
-        DiagnosticBitmaskOnlyTrace,
-        DiagnosticTemporalCopy,
-        DiagnosticNearestResolve,
-        DiagnosticBilinearResolve,
-        DiagnosticCompositionOnly,
-        DiagnosticCompositionBypass,
-        ConservativeNumerical,
         AlgorithmicPackedEdges2x2,
-        AlgorithmicPackedEdges4x4,
         AlgorithmicPackedEdgesDepthNormal2x2,
         AlgorithmicPackedEdgesSlope2x2,
         AlgorithmicPackedEdgesLeakage2x2,
         AlgorithmicFusedPackedEdges2x2,
-        AlgorithmicFusedPackedEdges4x4,
-        AlgorithmicActivisionSchedule,
-        ActivisionClosestMatch,
-        ActivisionPs4Schedule,
-        ActivisionPs4PackedGather,
-        XeGtaoClosestMatch,
-        XeGtaoHighInlineHilbert,
-        XeGtaoHighFp32,
         GenericFallback,
         Count
     };
@@ -69,12 +42,7 @@ namespace uvsr
     {
         Unset,
         LegacyGenericBitmask,
-        FixedInterleavedBitmask,
-        ConstantDiagnostic,
-        DepthOnlyDiagnostic,
-        BitmaskOnlyDiagnostic,
-        ActivisionHorizon,
-        XeGtaoHorizon
+        FixedInterleavedBitmask
     };
 
     enum class VisibilitySampleSpecialization : uint8_t
@@ -84,64 +52,49 @@ namespace uvsr
         Fixed8,
         Fixed12,
         Fixed16,
-        Fixed18,
-        Fixed20
+        Fixed20,
+        Fixed24,
+        Fixed48,
+        Fixed64
     };
 
     enum class VisibilityNoiseDelivery : uint8_t
     {
         Unset,
         Legacy,
-        PackedCurrentFast,
-        ConstantDiagnostic,
-        ActivisionInterleavedGradient,
-        XeGtaoHilbertR2,
-        XeGtaoInlineHilbertR2
+        PackedCurrentFast
     };
 
     enum class VisibilityMathMode : uint8_t
     {
         Unset,
-        ReferenceFp32,
-        ConservativeNumericalFp32,
-        ActivisionFastFp32,
-        XeGtaoMixedPrecision
+        ReferenceFp32
     };
 
     enum class VisibilityRawAoStorage : uint8_t
     {
         Unset,
-        R16Float,
-        R8Unorm,
-        PackedCountAndEdgesR16Uint
+        ScalarFloat
     };
 
     enum class VisibilityEdgeStorage : uint8_t
     {
         Unset,
         None,
-        R8Uint,
-        R8Unorm
+        R8Uint
     };
 
     enum class VisibilityReconstructionMode : uint8_t
     {
         Unset,
         Legacy,
-        NearestDiagnostic,
-        BilinearDiagnostic,
-        PackedEdges2x2,
-        PackedEdges4x4,
-        ActivisionBilateral4x4,
-        XeGtaoDenoise
+        PackedEdges2x2
     };
 
     enum class VisibilityTemporalMode : uint8_t
     {
         Unset,
-        Legacy,
-        CopyDiagnostic,
-        ActivisionSixDirectionEma
+        Legacy
     };
 
     enum class VisibilityApplicationMode : uint8_t
@@ -149,17 +102,13 @@ namespace uvsr
         Unset,
         LegacySeparateComposition,
         FusedResolveAndApplyExact,
-        FusedResolveAndApplyPackedEdges,
-        IsolatedCompositionDiagnostic,
-        BypassCompositionDiagnostic
+        FusedResolveAndApplyPackedEdges
     };
 
     enum class VisibilityDepthMode : uint8_t
     {
         Unset,
-        Legacy,
-        ActivisionClampedScreenRadius,
-        XeGtaoPrefilteredMips
+        Legacy
     };
 
     enum class VisibilityBindingStrategy : uint8_t
@@ -228,10 +177,7 @@ namespace uvsr
     {
         IndependentHash,
         ToroidalBlueNoiseRankField,
-        FilterAdaptedSpatiotemporalRankField,
-        Activision4x4SixPhase,
-        XeGtaoHilbertR2,
-        ConstantDiagnostic
+        FilterAdaptedSpatiotemporalRankField
     };
 
     enum class VisibilityImplementationStatus : uint8_t
@@ -306,10 +252,13 @@ namespace uvsr
         float radialExponent = 2.0f;
         uint32_t threadGroupSizeX = 8u;
         uint32_t threadGroupSizeY = 8u;
-        bool adaptiveSamplingEnabled = false;
         bool temporalEnabled = false;
         bool spatialEnabled = false;
         bool depthHierarchyEnabled = false;
+        // Compact identity for independently composed shader math, thread
+        // behavior, and physical buffer precision controls owned by the
+        // renderer settings. The planner includes it in every relevant key.
+        uint64_t runtimeConfigurationKey = 0u;
     };
 
     enum class VisibilityPlanError : uint8_t
@@ -321,14 +270,11 @@ namespace uvsr
         ReferenceContractViolation,
         SampleCountMismatch,
         FixedExponentMismatch,
-        AdaptiveFixedCountConflict,
         ProfileConsumerMismatch,
         ProfileEstimatorMismatch,
         ProfileResolutionMismatch,
         ProfileSchedulerMismatch,
         ProfileThreadGroupMismatch,
-        TemporalModeRequiresHistory,
-        UnsupportedAoEncoding,
         InvalidPackedReconstruction,
         PackedReconstructionDoesNotSupportSpatialFilter,
         FusedApplicationRequiresAoOnly,
@@ -337,37 +283,27 @@ namespace uvsr
         FusedApplicationDoesNotSupportSpatialFilter,
         FusedApplicationRequiresPackedEdges,
         IndirectDiffuseTraversalReordered,
-        LaterBounceSpecializationRequiresIndirectDiffuse,
-        BenchmarkProfileContractViolation
+        LaterBounceSpecializationRequiresIndirectDiffuse
     };
 
     enum class VisibilityExecutionResource : uint64_t
     {
         // Each bit denotes an allocation family, not one texture instance.
-        // Temporal families and XeGTAO working AO are ping-pong allocations.
-        RawAmbientR16 = uint64_t{ 1 } << 0u,
-        RawAmbientR8 = uint64_t{ 1 } << 1u,
-        RawAmbientPackedCountEdgesR16 = uint64_t{ 1 } << 2u,
-        FinalAmbientR16 = uint64_t{ 1 } << 3u,
-        FinalAmbientR8 = uint64_t{ 1 } << 4u,
-        RawIndirectRgba16 = uint64_t{ 1 } << 5u,
-        CumulativeIndirectRgba16 = uint64_t{ 1 } << 6u,
-        FinalIndirectRgba16 = uint64_t{ 1 } << 7u,
-        TemporalAmbientR16 = uint64_t{ 1 } << 8u,
-        TemporalAmbientR8 = uint64_t{ 1 } << 9u,
-        TemporalIndirectRgba16 = uint64_t{ 1 } << 10u,
-        TemporalDepthR32 = uint64_t{ 1 } << 11u,
+        // Temporal families and legacy source-port staging are ping-pong allocations.
+        RawAmbient = uint64_t{ 1 } << 0u,
+        FinalAmbient = uint64_t{ 1 } << 3u,
+        RawIndirect = uint64_t{ 1 } << 5u,
+        CumulativeIndirect = uint64_t{ 1 } << 6u,
+        FinalIndirect = uint64_t{ 1 } << 7u,
+        TemporalAmbient = uint64_t{ 1 } << 8u,
+        TemporalIndirect = uint64_t{ 1 } << 10u,
+        TemporalDepth = uint64_t{ 1 } << 11u,
         TemporalNormalRgba8 = uint64_t{ 1 } << 12u,
         DepthHierarchy = uint64_t{ 1 } << 13u,
         LegacyToroidalNoise = uint64_t{ 1 } << 14u,
         LegacyCurrentFastNoise = uint64_t{ 1 } << 15u,
         PackedCurrentFastNoise = uint64_t{ 1 } << 16u,
-        PackedEdgesR8Uint = uint64_t{ 1 } << 17u,
-        PackedEdgesR8Unorm = uint64_t{ 1 } << 18u,
-        ActivisionSpatialAmbientR16 = uint64_t{ 1 } << 19u,
-        ActivisionPackedDepthGuideR32Uint = uint64_t{ 1 } << 20u,
-        XeGtaoWorkingAoR16 = uint64_t{ 1 } << 21u,
-        XeGtaoHilbertLutR16Uint = uint64_t{ 1 } << 22u
+        PackedEdgesR8Uint = uint64_t{ 1 } << 17u
     };
 
     enum class VisibilityExecutionBinding : uint64_t
@@ -387,10 +323,7 @@ namespace uvsr
         IndirectHistory = uint64_t{ 1 } << 12u,
         AmbientOutput = uint64_t{ 1 } << 13u,
         IndirectOutput = uint64_t{ 1 } << 14u,
-        PackedEdges = uint64_t{ 1 } << 15u,
-        XeGtaoEdges = uint64_t{ 1 } << 16u,
-        XeGtaoHilbertLut = uint64_t{ 1 } << 17u,
-        ActivisionPreparedDepth = uint64_t{ 1 } << 18u
+        PackedEdges = uint64_t{ 1 } << 15u
     };
 
     enum class VisibilityExecutionPass : uint64_t
@@ -399,64 +332,34 @@ namespace uvsr
         LegacyTrace = uint64_t{ 1 } << 1u,
         CandidateGenericTrace = uint64_t{ 1 } << 2u,
         FixedTrace = uint64_t{ 1 } << 3u,
-        DiagnosticTrace = uint64_t{ 1 } << 4u,
-        ActivisionHorizonTrace = uint64_t{ 1 } << 5u,
-        XeGtaoHorizonTrace = uint64_t{ 1 } << 6u,
         LegacyLaterBounceTrace = uint64_t{ 1 } << 7u,
         FixedLaterBounceTrace = uint64_t{ 1 } << 8u,
         Temporal = uint64_t{ 1 } << 9u,
         Reconstruction = uint64_t{ 1 } << 10u,
         Composition = uint64_t{ 1 } << 11u,
         FusedResolveAndApply = uint64_t{ 1 } << 12u,
-        CompositionBypass = uint64_t{ 1 } << 13u,
         SpatialDenoise = uint64_t{ 1 } << 14u
     };
 
     inline constexpr uint64_t VisibilityOptionalResourceMask =
-        static_cast<uint64_t>(VisibilityExecutionResource::RawAmbientR8) |
-        static_cast<uint64_t>(
-            VisibilityExecutionResource::RawAmbientPackedCountEdgesR16) |
-        static_cast<uint64_t>(VisibilityExecutionResource::FinalAmbientR8) |
-        static_cast<uint64_t>(
-            VisibilityExecutionResource::TemporalAmbientR8) |
         static_cast<uint64_t>(
             VisibilityExecutionResource::PackedCurrentFastNoise) |
         static_cast<uint64_t>(
-            VisibilityExecutionResource::PackedEdgesR8Uint) |
-        static_cast<uint64_t>(
-            VisibilityExecutionResource::PackedEdgesR8Unorm) |
-        static_cast<uint64_t>(
-            VisibilityExecutionResource::ActivisionSpatialAmbientR16) |
-        static_cast<uint64_t>(
-            VisibilityExecutionResource::ActivisionPackedDepthGuideR32Uint) |
-        static_cast<uint64_t>(
-            VisibilityExecutionResource::XeGtaoWorkingAoR16) |
-        static_cast<uint64_t>(
-            VisibilityExecutionResource::XeGtaoHilbertLutR16Uint);
+            VisibilityExecutionResource::PackedEdgesR8Uint);
 
     inline constexpr uint64_t VisibilityCandidateBindingMask =
         static_cast<uint64_t>(
             VisibilityExecutionBinding::PackedCurrentFastNoise) |
-        static_cast<uint64_t>(VisibilityExecutionBinding::PackedEdges) |
-        static_cast<uint64_t>(VisibilityExecutionBinding::XeGtaoEdges) |
-        static_cast<uint64_t>(
-            VisibilityExecutionBinding::XeGtaoHilbertLut) |
-        static_cast<uint64_t>(
-            VisibilityExecutionBinding::ActivisionPreparedDepth);
+        static_cast<uint64_t>(VisibilityExecutionBinding::PackedEdges);
 
     inline constexpr uint64_t VisibilityCandidatePassMask =
         static_cast<uint64_t>(
             VisibilityExecutionPass::CandidateGenericTrace) |
         static_cast<uint64_t>(VisibilityExecutionPass::FixedTrace) |
-        static_cast<uint64_t>(VisibilityExecutionPass::DiagnosticTrace) |
-        static_cast<uint64_t>(
-            VisibilityExecutionPass::ActivisionHorizonTrace) |
-        static_cast<uint64_t>(VisibilityExecutionPass::XeGtaoHorizonTrace) |
         static_cast<uint64_t>(
             VisibilityExecutionPass::FixedLaterBounceTrace) |
         static_cast<uint64_t>(
             VisibilityExecutionPass::FusedResolveAndApply) |
-        static_cast<uint64_t>(VisibilityExecutionPass::CompositionBypass) |
         static_cast<uint64_t>(VisibilityExecutionPass::SpatialDenoise);
 
     struct VisibilityExecutionPlan
@@ -503,17 +406,12 @@ namespace uvsr
         Unset,
         ReferenceAo8T,
         ExactFastAo8T,
-        MixedPrecisionAo8T,
         PackedEdgeAo8T,
-        ActivisionScheduleAo8T,
         ReferenceAoGi8T,
         ExactFastAoGi8T,
         ExactFastAoGi12T,
         ExactFastAoGi16T,
         ExactFastMultiBounce,
-        AggressiveExperimentalAo8T,
-        XeGtaoClosestMatch,
-        Ps4GtaoClosestMatch,
         Count
     };
 
@@ -652,7 +550,9 @@ namespace uvsr
         uint32_t sampleCount) noexcept
     {
         return sampleCount == 8u || sampleCount == 12u ||
-            sampleCount == 16u || sampleCount == 20u;
+            sampleCount == 16u || sampleCount == 20u ||
+            sampleCount == 24u || sampleCount == 48u ||
+            sampleCount == 64u;
     }
 
     // Mirrors the generic trace's outer near-to-far iteration and inner

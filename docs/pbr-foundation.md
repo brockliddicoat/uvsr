@@ -77,8 +77,8 @@ provides finer common-dielectric F0 precision than storing raw F0 in UNORM8.
 Feature flags are exact at eight bits. Material ambient occlusion has eight
 linear bits. The separate picking target retains the original 16-bit material
 and instance channels, so scenes with more than 65,535 entries can alias during
-picking; visibility does not consume those IDs. G5 exists only while adaptive
-or temporal screen-space visibility needs velocity. Its XY convention is
+picking; visibility does not consume those IDs. G5 exists only while temporal
+screen-space visibility needs velocity. Its XY convention is
 current-to-previous pixels; Z is previous-minus-current device depth; A
 distinguishes a valid zero velocity from cleared background or a previous point
 behind the camera. The conditional target is not counted in the 25-byte

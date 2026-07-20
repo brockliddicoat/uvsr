@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <functional>
 #include <string>
 #include <vector>
@@ -22,7 +23,6 @@ using namespace donut::math;
 namespace
 {
     constexpr uint32_t kThreadGroupSize = 8u;
-    constexpr uint32_t kMinimumSecondaryBounceSamples = 8u;
     constexpr uint32_t kHistoryContractVersion = 2u;
 
     constexpr bool IsFullTextureViewport(
@@ -65,17 +65,17 @@ namespace
         return 1u;
     }
 
+    bool IsAmbientPowerEnabled(float power)
+    {
+        const float clampedPower = std::clamp(power, 0.1f, 4.0f);
+        return std::abs(clampedPower - 1.0f) > 1e-6f;
+    }
+
     uint32_t GetIndirectBounceSampleCount(
         uint32_t primarySampleCount,
-        uint32_t bounceIndex)
+        uint32_t)
     {
-        primarySampleCount = std::clamp(primarySampleCount, 1u, 64u);
-        if (bounceIndex == 0u)
-            return primarySampleCount;
-
-        const uint32_t floor = std::min(
-            primarySampleCount, kMinimumSecondaryBounceSamples);
-        return std::max(primarySampleCount >> bounceIndex, floor);
+        return std::clamp(primarySampleCount, 1u, 64u);
     }
 
     uint64_t TextureBytes(uint2 size, uint32_t bytesPerPixel)
@@ -83,7 +83,9 @@ namespace
         return uint64_t(size.x) * uint64_t(size.y) * bytesPerPixel;
     }
 
-    uint64_t DepthHierarchyBytes(uint2 fullSize)
+    uint64_t DepthHierarchyBytes(
+        uint2 fullSize,
+        uint32_t bytesPerPixel = 2u)
     {
         uint32_t width = std::max((fullSize.x + 15u) & ~15u, 16u);
         uint32_t height = std::max((fullSize.y + 15u) & ~15u, 16u);
@@ -91,7 +93,8 @@ namespace
         for (uint32_t mip = 0u; mip < 5u; ++mip)
         {
             bytes += uint64_t(std::max(width >> mip, 1u)) *
-                uint64_t(std::max(height >> mip, 1u)) * 2u;
+                uint64_t(std::max(height >> mip, 1u)) *
+                    bytesPerPixel;
         }
         return bytes;
     }
@@ -168,8 +171,8 @@ namespace
     void AppendHistoryConfigurationValue(uint64_t& key, uint64_t value)
     {
         // A process-local change detector, not a serialized identifier. The
-        // boost-style combiner is sufficient to prevent stale temporal and
-        // adaptive values crossing materially different traversal settings.
+        // boost-style combiner is sufficient to prevent stale temporal values
+        // crossing materially different traversal settings.
         key ^= value + 0x9e3779b97f4a7c15ull + (key << 6u) + (key >> 2u);
     }
 
@@ -192,13 +195,11 @@ namespace
         appendFloat(constants.radiusWorld);
         appendFloat(constants.thicknessWorld);
         appendFloat(constants.stepDistributionExponent);
-        appendFloat(constants.adaptiveStrength);
-        appendUint(constants.minimumSampleCount);
         appendUint(constants.maximumSampleCount);
         appendUint(constants.sampleScheduler);
-        appendUint(constants.adaptiveSamplingEnabled);
         appendUint(constants.useDepthHierarchy);
         appendUint(constants.resolutionScale);
+        appendUint(constants.packedEdgeMode);
         if (constants.enableIndirectDiffuse != 0u)
         {
             appendFloat(constants.emissiveGain);
@@ -224,42 +225,325 @@ namespace
 
 namespace uvsr
 {
-    void ApplyScreenSpaceVisibilityQualityPreset(
-        ScreenSpaceVisibilitySettings& settings,
-        ScreenSpaceVisibilityQuality quality)
+    void ApplyVisibilityBufferPrecisionPreset(
+        VisibilityBufferPrecisionSettings& settings,
+        bool use16BitAo,
+        bool use16BitGi)
     {
-        settings.quality = quality;
-        if (quality == ScreenSpaceVisibilityQuality::Custom)
-            return;
+        const VisibilityScalarBufferPrecision ambientPrecision =
+            use16BitAo
+                ? VisibilityScalarBufferPrecision::Float16
+                : VisibilityScalarBufferPrecision::Float32;
+        const VisibilityVectorBufferPrecision indirectPrecision =
+            use16BitGi
+                ? VisibilityVectorBufferPrecision::Rgba16Float
+                : VisibilityVectorBufferPrecision::Rgba32Float;
 
-        settings.sampling.radius = 3.0f;
-        settings.sampling.thickness = 0.5f;
-        settings.sampling.stepDistributionExponent = 2.0f;
-        settings.sampling.adaptiveStrength = 1.0f;
-        settings.sampling.scheduler =
-            VisibilitySampleScheduler::ToroidalBlueNoiseRankField;
+        settings.rawAmbient = ambientPrecision;
+        settings.temporalAmbient = ambientPrecision;
+        settings.finalAmbient = ambientPrecision;
+        settings.depthHierarchy = ambientPrecision;
+        settings.rawIndirect = indirectPrecision;
+        settings.cumulativeIndirect = indirectPrecision;
+        settings.temporalIndirect = indirectPrecision;
+        settings.finalIndirect = indirectPrecision;
+        // The temporal-depth contract remains full precision in every preset.
+        settings.temporalDepth =
+            VisibilityScalarBufferPrecision::Float32;
+    }
 
-        switch (quality)
+    VisibilityPerformanceProfileConfiguration
+        GetEffectiveVisibilityPerformanceConfiguration(
+            const ScreenSpaceVisibilitySettings& settings)
+    {
+        if (settings.performanceProfile ==
+            VisibilityPerformanceProfile::GenericFallback)
         {
-        case ScreenSpaceVisibilityQuality::Low:
-            settings.sampling.minimumSampleCount = 4u;
-            settings.sampling.maximumSampleCount = 10u;
+            return settings.performance.configuration;
+        }
+        return GetVisibilityPerformanceProfileConfiguration(
+            settings.performanceProfile);
+    }
+
+    void ResetVisibilityComposableSettings(
+        ScreenSpaceVisibilitySettings& settings,
+        VisibilityPerformanceProfile profile)
+    {
+        const VisibilityBufferPrecisionSettings bufferPrecision =
+            settings.performance.bufferPrecision;
+        settings.performance = {};
+        settings.performance.bufferPrecision = bufferPrecision;
+        settings.performance.configuration =
+            GetVisibilityPerformanceProfileConfiguration(profile);
+
+        switch (profile)
+        {
+        case VisibilityPerformanceProfile::
+                AlgorithmicPackedEdges2x2:
+            settings.performance.packedEdgeMode =
+                VisibilityPackedEdgeMode::Depth;
             break;
-        case ScreenSpaceVisibilityQuality::Medium:
-            settings.sampling.minimumSampleCount = 8u;
-            settings.sampling.maximumSampleCount = 20u;
+        case VisibilityPerformanceProfile::
+                AlgorithmicPackedEdgesSlope2x2:
+            settings.performance.packedEdgeMode =
+                VisibilityPackedEdgeMode::SlopeAdjustedDepthAndNormal;
             break;
-        case ScreenSpaceVisibilityQuality::High:
-            settings.sampling.minimumSampleCount = 12u;
-            settings.sampling.maximumSampleCount = 48u;
-            break;
-        case ScreenSpaceVisibilityQuality::Ultra:
-            settings.sampling.minimumSampleCount = 16u;
-            settings.sampling.maximumSampleCount = 64u;
+        case VisibilityPerformanceProfile::
+                AlgorithmicPackedEdgesLeakage2x2:
+            settings.performance.packedEdgeMode =
+                VisibilityPackedEdgeMode::ControlledLeakage;
             break;
         default:
             break;
         }
+
+    }
+
+    void MakeVisibilityPerformanceComposable(
+        ScreenSpaceVisibilitySettings& settings)
+    {
+        if (settings.performanceProfile ==
+            VisibilityPerformanceProfile::GenericFallback)
+        {
+            return;
+        }
+
+        ResetVisibilityComposableSettings(
+            settings, settings.performanceProfile);
+        VisibilityPerformanceProfileConfiguration& configuration =
+            settings.performance.configuration;
+        configuration.profile =
+            VisibilityPerformanceProfile::GenericFallback;
+        configuration.name = "Custom Composite";
+        configuration.optimizationClass =
+            VisibilityOptimizationClass::Exact;
+        configuration.implementationStatus =
+            VisibilityImplementationStatus::Implemented;
+        configuration.implementationNote =
+            "Independent legacy UVSR optimization categories.";
+
+        const bool bitmaskTrace =
+            configuration.trace ==
+                VisibilityTraceImplementation::LegacyGenericBitmask ||
+            configuration.trace ==
+                VisibilityTraceImplementation::FixedInterleavedBitmask;
+        if (bitmaskTrace)
+        {
+            configuration.bindings =
+                VisibilityBindingStrategy::MinimalConditional;
+            configuration.benchmarkOnly = false;
+            if (configuration.laterBounceSamples ==
+                VisibilitySampleSpecialization::Runtime)
+            {
+                configuration.consumerRequirement =
+                    configuration.application ==
+                            VisibilityApplicationMode::
+                                FusedResolveAndApplyExact ||
+                        configuration.application ==
+                            VisibilityApplicationMode::
+                                FusedResolveAndApplyPackedEdges
+                        ? VisibilityConsumerRequirement::
+                            AmbientOcclusionOnly
+                        : VisibilityConsumerRequirement::Any;
+            }
+            configuration.resolutionRequirement =
+                configuration.application ==
+                        VisibilityApplicationMode::
+                            FusedResolveAndApplyExact ||
+                    configuration.application ==
+                        VisibilityApplicationMode::
+                            FusedResolveAndApplyPackedEdges
+                    ? VisibilityResolutionRequirement::Reduced
+                    : VisibilityResolutionRequirement::Any;
+        }
+        settings.performanceProfile =
+            VisibilityPerformanceProfile::GenericFallback;
+    }
+
+    uint64_t GetVisibilityRuntimeConfigurationKey(
+        const ScreenSpaceVisibilitySettings& settings)
+    {
+        uint64_t key = 0xcbf29ce484222325ull;
+        const auto append = [&key](uint64_t value)
+        {
+            for (uint32_t byte = 0u; byte < 8u; ++byte)
+            {
+                key ^= uint8_t(value >> (byte * 8u));
+                key *= 0x100000001b3ull;
+            }
+        };
+        const auto& performance = settings.performance;
+        const auto& buffers = performance.bufferPrecision;
+        append(static_cast<uint32_t>(buffers.rawAmbient));
+        append(static_cast<uint32_t>(buffers.rawIndirect));
+        append(static_cast<uint32_t>(buffers.cumulativeIndirect));
+        append(static_cast<uint32_t>(buffers.temporalAmbient));
+        append(static_cast<uint32_t>(buffers.temporalIndirect));
+        append(static_cast<uint32_t>(buffers.temporalDepth));
+        append(static_cast<uint32_t>(buffers.finalAmbient));
+        append(static_cast<uint32_t>(buffers.finalIndirect));
+        append(static_cast<uint32_t>(buffers.depthHierarchy));
+        append(static_cast<uint32_t>(performance.packedEdgeMode));
+        append(IsAmbientPowerEnabled(
+            settings.ambientOcclusion.power) ? 1u : 0u);
+        return key;
+    }
+
+    ScreenSpaceVisibilitySettings::ScreenSpaceVisibilitySettings()
+    {
+        ApplyScreenSpaceVisibilityQualityPreset(
+            *this, ScreenSpaceVisibilityQuality::High);
+    }
+
+    void ApplyScreenSpaceVisibilityQualityPreset(
+        ScreenSpaceVisibilitySettings& settings,
+        ScreenSpaceVisibilityQuality quality)
+    {
+        if (quality == ScreenSpaceVisibilityQuality::Custom)
+        {
+            settings.quality = quality;
+            return;
+        }
+
+        settings.enabled = true;
+        settings.estimator = VisibilityEstimator::UniformSolidAngle;
+        settings.sampling.radius = 3.0f;
+        settings.sampling.thickness = 0.5f;
+        settings.sampling.stepDistributionExponent = 2.0f;
+        settings.sampling.scheduler =
+            VisibilitySampleScheduler::
+                FilterAdaptedSpatiotemporalRankField;
+        settings.ambientOcclusion.enabled = true;
+        settings.ambientOcclusion.strength = 1.0f;
+        settings.ambientOcclusion.power = 1.0f;
+        settings.indirectDiffuse.enabled = true;
+        settings.indirectDiffuse.limitBounces = true;
+        settings.indirectDiffuse.bounceCount = 1u;
+        settings.indirectDiffuse.minimumBounceContribution = 0.001f;
+        settings.indirectDiffuse.intensity = 4.0f;
+        settings.reconstruction.temporalEnabled = false;
+        settings.reconstruction.temporalResponse = 0.35f;
+        settings.reconstruction.spatialFilter =
+            VisibilitySpatialFilter::GaussianJointBilateral;
+        settings.reconstruction.spatialRadius = 4.0f;
+        settings.reconstruction.spatialEnabled = false;
+        settings.showIndirectDiffuseOnly = false;
+
+        VisibilityPerformanceProfile implementationProfile =
+            VisibilityPerformanceProfile::ExactFixed20;
+
+        switch (quality)
+        {
+        case ScreenSpaceVisibilityQuality::Low:
+            settings.resolution = VisibilityResolution::Quarter;
+            settings.estimator =
+                VisibilityEstimator::UniformProjectedAngle;
+            settings.sampling.maximumSampleCount = 8u;
+            settings.reconstruction.spatialEnabled = true;
+            settings.reconstruction.spatialFilter =
+                VisibilitySpatialFilter::JointBilateral;
+            implementationProfile =
+                VisibilityPerformanceProfile::ExactFixed8;
+            break;
+        case ScreenSpaceVisibilityQuality::Medium:
+            settings.resolution = VisibilityResolution::Half;
+            settings.sampling.maximumSampleCount = 8u;
+            settings.reconstruction.spatialEnabled = true;
+            settings.reconstruction.spatialFilter =
+                VisibilitySpatialFilter::JointBilateral;
+            implementationProfile =
+                VisibilityPerformanceProfile::ExactFixed8;
+            break;
+        case ScreenSpaceVisibilityQuality::High:
+            settings.resolution = VisibilityResolution::Full;
+            settings.sampling.maximumSampleCount = 20u;
+            implementationProfile =
+                VisibilityPerformanceProfile::ExactFixed20;
+            break;
+        case ScreenSpaceVisibilityQuality::Ultra:
+            settings.resolution = VisibilityResolution::Full;
+            settings.sampling.maximumSampleCount = 48u;
+            settings.indirectDiffuse.bounceCount = 2u;
+            implementationProfile =
+                VisibilityPerformanceProfile::ExactFixed48;
+            break;
+        default:
+            break;
+        }
+
+        settings.performanceProfile = implementationProfile;
+        ResetVisibilityComposableSettings(settings, implementationProfile);
+        MakeVisibilityPerformanceComposable(settings);
+
+        auto& configuration = settings.performance.configuration;
+        configuration.noise = VisibilityNoiseDelivery::PackedCurrentFast;
+        configuration.bindings =
+            VisibilityBindingStrategy::MinimalConditional;
+        configuration.benchmarkOnly = false;
+        configuration.implementationStatus =
+            VisibilityImplementationStatus::Implemented;
+        configuration.implementationNote =
+            "Composable product quality preset.";
+
+        const bool reducedResolution =
+            quality == ScreenSpaceVisibilityQuality::Low ||
+            quality == ScreenSpaceVisibilityQuality::Medium;
+        if (reducedResolution)
+        {
+            configuration.optimizationClass =
+                VisibilityOptimizationClass::Exact;
+            configuration.edgeStorage = VisibilityEdgeStorage::None;
+            configuration.reconstruction =
+                VisibilityReconstructionMode::Legacy;
+            configuration.application =
+                VisibilityApplicationMode::LegacySeparateComposition;
+            configuration.consumerRequirement =
+                VisibilityConsumerRequirement::Any;
+            configuration.resolutionRequirement =
+                VisibilityResolutionRequirement::Any;
+            settings.performance.packedEdgeMode =
+                VisibilityPackedEdgeMode::DepthAndNormal;
+            ApplyVisibilityBufferPrecisionPreset(
+                settings.performance.bufferPrecision, true, true);
+        }
+        else
+        {
+            configuration.optimizationClass =
+                VisibilityOptimizationClass::Exact;
+            configuration.edgeStorage = VisibilityEdgeStorage::None;
+            configuration.reconstruction =
+                VisibilityReconstructionMode::Legacy;
+            configuration.application =
+                VisibilityApplicationMode::LegacySeparateComposition;
+            configuration.consumerRequirement =
+                VisibilityConsumerRequirement::Any;
+            configuration.resolutionRequirement =
+                VisibilityResolutionRequirement::Any;
+            settings.performance.packedEdgeMode =
+                VisibilityPackedEdgeMode::DepthAndNormal;
+            ApplyVisibilityBufferPrecisionPreset(
+                settings.performance.bufferPrecision, false, false);
+        }
+
+        switch (quality)
+        {
+        case ScreenSpaceVisibilityQuality::Low:
+            configuration.name = "Low";
+            break;
+        case ScreenSpaceVisibilityQuality::Medium:
+            configuration.name = "Medium";
+            break;
+        case ScreenSpaceVisibilityQuality::High:
+            configuration.name = "High";
+            break;
+        case ScreenSpaceVisibilityQuality::Ultra:
+            configuration.name = "Ultra";
+            break;
+        default:
+            break;
+        }
+
+        settings.quality = quality;
     }
 
     ScreenSpaceVisibilityPass::ScreenSpaceVisibilityPass(
@@ -277,6 +561,29 @@ namespace uvsr
         constantBufferDesc.maxVersions =
             engine::c_MaxRenderPassConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(constantBufferDesc);
+
+        nvrhi::BufferDesc continuationDesc;
+        continuationDesc.byteSize = sizeof(uint32_t);
+        continuationDesc.debugName =
+            "ScreenSpaceVisibility/BounceContinuation";
+        continuationDesc.canHaveUAVs = true;
+        continuationDesc.canHaveRawViews = true;
+        continuationDesc.initialState = nvrhi::ResourceStates::Common;
+        continuationDesc.keepInitialState = true;
+        m_BounceContinuation = device->createBuffer(continuationDesc);
+
+        nvrhi::BufferDesc indirectArgumentsDesc;
+        indirectArgumentsDesc.byteSize =
+            sizeof(nvrhi::DispatchIndirectArguments) * 2u;
+        indirectArgumentsDesc.debugName =
+            "ScreenSpaceVisibility/BounceIndirectArguments";
+        indirectArgumentsDesc.canHaveUAVs = true;
+        indirectArgumentsDesc.canHaveRawViews = true;
+        indirectArgumentsDesc.isDrawIndirectArgs = true;
+        indirectArgumentsDesc.initialState = nvrhi::ResourceStates::Common;
+        indirectArgumentsDesc.keepInitialState = true;
+        m_BounceIndirectArguments =
+            device->createBuffer(indirectArgumentsDesc);
 
         m_PointClampSampler = device->createSampler(
             nvrhi::SamplerDesc()
@@ -305,9 +612,9 @@ namespace uvsr
         m_DummyIndirectDiffuse = createDummyTexture(
             nvrhi::Format::RGBA16_FLOAT,
             "ScreenSpaceVisibility/DummyIndirectDiffuse");
-        m_DummyFeedback = createDummyTexture(
+        m_DummyVector = createDummyTexture(
             nvrhi::Format::RGBA16_FLOAT,
-            "ScreenSpaceVisibility/DummyFeedbackOrMotion");
+            "ScreenSpaceVisibility/DummyVector");
         // Keep placeholder UAVs distinct from placeholder SRVs. Disabled
         // shader permutations dead-strip these accesses, but binding the same
         // subresource for read and write is still an illegal API state and can
@@ -318,10 +625,6 @@ namespace uvsr
         m_DummyIndirectOutput = createDummyTexture(
             nvrhi::Format::RGBA16_FLOAT,
             "ScreenSpaceVisibility/DummyIndirectOutput");
-        m_DummyFeedbackOutput = createDummyTexture(
-            nvrhi::Format::RGBA16_FLOAT,
-            "ScreenSpaceVisibility/DummyFeedbackOutput");
-
         // Independent void-and-cluster rank layers prevent the ray dimensions
         // from becoming translated copies of one structured scalar field.
         m_BlueNoiseUpload = GenerateVisibilityBlueNoise();
@@ -395,6 +698,13 @@ namespace uvsr
             device->createTexture(filterAdaptedNoiseDesc);
 
         CreatePipelines(shaderFactory);
+        m_BounceDispatchControlBindingSet = device->createBindingSet(
+            nvrhi::BindingSetDesc().addItem(
+                nvrhi::BindingSetItem::RawBuffer_UAV(
+                    0, m_BounceContinuation)).addItem(
+                nvrhi::BindingSetItem::RawBuffer_UAV(
+                    1, m_BounceIndirectArguments)),
+            m_BounceDispatchControl.bindingLayout);
         for (auto& stageQueries : m_TimerQueries)
             for (nvrhi::TimerQueryHandle& query : stageQueries)
                 query = device->createTimerQuery();
@@ -450,49 +760,38 @@ namespace uvsr
             {
                 const bool ambientEnabled = consumer != 1u;
                 const bool indirectEnabled = consumer != 0u;
-                for (uint32_t sparse = 0u; sparse < 2u; ++sparse)
-                {
-                    std::vector<ShaderMacro> macros = {
-                        { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
-                        { "ENABLE_AO", ambientEnabled ? "1" : "0" },
-                        { "ENABLE_GI", indirectEnabled ? "1" : "0" },
-                        { "ENABLE_BOUNCE_REINJECTION", "0" },
-                        { "INITIALIZE_BOUNCE_CUMULATIVE", "0" },
-                        { "ENABLE_BOUNCE_METADATA", "0" },
-                        { "ENABLE_ADAPTIVE_SPARSE_SAMPLING",
-                            sparse != 0u ? "1" : "0" }
-                    };
-                    createPipeline(
-                        m_Sampling[estimator][consumer][sparse],
-                        "uvsr/screen_space_visibility_cs.hlsl",
-                        samplingBindings,
-                        &macros);
-                }
+                std::vector<ShaderMacro> macros = {
+                    { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
+                    { "ENABLE_AO", ambientEnabled ? "1" : "0" },
+                    { "ENABLE_GI", indirectEnabled ? "1" : "0" },
+                    { "ENABLE_BOUNCE_REINJECTION", "0" },
+                    { "INITIALIZE_BOUNCE_CUMULATIVE", "0" },
+                    { "ENABLE_BOUNCE_METADATA", "0" }
+                };
+                createPipeline(
+                    m_Sampling[estimator][consumer],
+                    "uvsr/screen_space_visibility_cs.hlsl",
+                    samplingBindings,
+                    &macros);
             }
 
             for (uint32_t ambientVariant = 0u;
                 ambientVariant < 2u;
                 ++ambientVariant)
             {
-                for (uint32_t sparse = 0u; sparse < 2u; ++sparse)
-                {
-                    std::vector<ShaderMacro> macros = {
-                        { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
-                        { "ENABLE_AO", ambientVariant != 0u ? "1" : "0" },
-                        { "ENABLE_GI", "1" },
-                        { "ENABLE_BOUNCE_REINJECTION", "0" },
-                        { "INITIALIZE_BOUNCE_CUMULATIVE", "0" },
-                        { "ENABLE_BOUNCE_METADATA", "1" },
-                        { "ENABLE_ADAPTIVE_SPARSE_SAMPLING",
-                            sparse != 0u ? "1" : "0" }
-                    };
-                    createPipeline(
-                        m_MultiBounceFirstSampling[estimator]
-                            [ambientVariant][sparse],
-                        "uvsr/screen_space_visibility_cs.hlsl",
-                        samplingBindings,
-                        &macros);
-                }
+                std::vector<ShaderMacro> macros = {
+                    { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
+                    { "ENABLE_AO", ambientVariant != 0u ? "1" : "0" },
+                    { "ENABLE_GI", "1" },
+                    { "ENABLE_BOUNCE_REINJECTION", "0" },
+                    { "INITIALIZE_BOUNCE_CUMULATIVE", "0" },
+                    { "ENABLE_BOUNCE_METADATA", "1" }
+                };
+                createPipeline(
+                    m_MultiBounceFirstSampling[estimator][ambientVariant],
+                    "uvsr/screen_space_visibility_cs.hlsl",
+                    samplingBindings,
+                    &macros);
             }
 
             for (uint32_t cumulativeMode = 0u;
@@ -500,43 +799,46 @@ namespace uvsr
                 ++cumulativeMode)
             {
                 const bool initializeCumulative = cumulativeMode == 0u;
-                for (uint32_t sparse = 0u; sparse < 2u; ++sparse)
-                {
-                    std::vector<ShaderMacro> macros = {
-                        { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
-                        { "ENABLE_AO", "0" },
-                        { "ENABLE_GI", "1" },
-                        { "ENABLE_BOUNCE_REINJECTION", "1" },
-                        { "INITIALIZE_BOUNCE_CUMULATIVE",
-                            initializeCumulative ? "1" : "0" },
-                        { "ENABLE_BOUNCE_METADATA", "0" },
-                        { "ENABLE_ADAPTIVE_SPARSE_SAMPLING",
-                            sparse != 0u ? "1" : "0" }
-                    };
-                    createPipeline(
-                        m_IndirectBounceSampling[estimator]
-                            [cumulativeMode][sparse],
-                        "uvsr/screen_space_visibility_cs.hlsl",
-                        {
-                            nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                            nvrhi::BindingLayoutItem::Texture_SRV(0),
-                            nvrhi::BindingLayoutItem::Texture_SRV(1),
-                            nvrhi::BindingLayoutItem::Texture_SRV(2),
-                            nvrhi::BindingLayoutItem::Texture_SRV(3),
-                            nvrhi::BindingLayoutItem::Texture_SRV(4),
-                            nvrhi::BindingLayoutItem::Texture_SRV(5),
-                            nvrhi::BindingLayoutItem::Texture_SRV(6),
-                            nvrhi::BindingLayoutItem::Texture_SRV(7),
-                            nvrhi::BindingLayoutItem::Texture_SRV(8),
-                            nvrhi::BindingLayoutItem::Texture_SRV(9),
-                            nvrhi::BindingLayoutItem::Texture_SRV(10),
-                            nvrhi::BindingLayoutItem::Texture_UAV(0),
-                            nvrhi::BindingLayoutItem::Texture_UAV(1)
-                        },
-                        &macros);
-                }
+                std::vector<ShaderMacro> macros = {
+                    { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
+                    { "ENABLE_AO", "0" },
+                    { "ENABLE_GI", "1" },
+                    { "ENABLE_BOUNCE_REINJECTION", "1" },
+                    { "INITIALIZE_BOUNCE_CUMULATIVE",
+                        initializeCumulative ? "1" : "0" },
+                    { "ENABLE_BOUNCE_METADATA", "0" },
+                    { "ENABLE_BOUNCE_CONTINUATION", "0" }
+                };
+                createPipeline(
+                    m_IndirectBounceSampling[estimator][cumulativeMode],
+                    "uvsr/screen_space_visibility_cs.hlsl",
+                    {
+                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(1),
+                        nvrhi::BindingLayoutItem::Texture_SRV(2),
+                        nvrhi::BindingLayoutItem::Texture_SRV(3),
+                        nvrhi::BindingLayoutItem::Texture_SRV(4),
+                        nvrhi::BindingLayoutItem::Texture_SRV(5),
+                        nvrhi::BindingLayoutItem::Texture_SRV(6),
+                        nvrhi::BindingLayoutItem::Texture_SRV(7),
+                        nvrhi::BindingLayoutItem::Texture_SRV(8),
+                        nvrhi::BindingLayoutItem::Texture_SRV(9),
+                        nvrhi::BindingLayoutItem::Texture_SRV(10),
+                        nvrhi::BindingLayoutItem::Texture_UAV(0),
+                        nvrhi::BindingLayoutItem::Texture_UAV(1)
+                    },
+                    &macros);
             }
         }
+
+        createPipeline(
+            m_BounceDispatchControl,
+            "uvsr/screen_space_visibility_bounce_control_cs.hlsl",
+            {
+                nvrhi::BindingLayoutItem::RawBuffer_UAV(0),
+                nvrhi::BindingLayoutItem::RawBuffer_UAV(1)
+            });
 
         for (uint32_t consumer = 0u;
             consumer < c_ConsumerVariantCount;
@@ -598,21 +900,30 @@ namespace uvsr
                 nvrhi::BindingLayoutItem::Texture_UAV(0).setSize(5)
             });
 
-        createPipeline(
-            m_Composite,
-            "uvsr/screen_space_indirect_composite_cs.hlsl",
-            {
-                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(1),
-                nvrhi::BindingLayoutItem::Texture_SRV(2),
-                nvrhi::BindingLayoutItem::Texture_SRV(3),
-                nvrhi::BindingLayoutItem::Texture_SRV(4),
-                nvrhi::BindingLayoutItem::Texture_SRV(5),
-                nvrhi::BindingLayoutItem::Texture_SRV(6),
-                nvrhi::BindingLayoutItem::Texture_SRV(7),
-                nvrhi::BindingLayoutItem::Texture_UAV(0)
-            });
+        for (uint32_t aoPowerEnabled = 0u;
+            aoPowerEnabled < 2u;
+            ++aoPowerEnabled)
+        {
+            std::vector<ShaderMacro> macros = {{
+                "ENABLE_AO_POWER", aoPowerEnabled != 0u ? "1" : "0"
+            }};
+            createPipeline(
+                m_Composite[aoPowerEnabled],
+                "uvsr/screen_space_indirect_composite_cs.hlsl",
+                {
+                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(1),
+                    nvrhi::BindingLayoutItem::Texture_SRV(2),
+                    nvrhi::BindingLayoutItem::Texture_SRV(3),
+                    nvrhi::BindingLayoutItem::Texture_SRV(4),
+                    nvrhi::BindingLayoutItem::Texture_SRV(5),
+                    nvrhi::BindingLayoutItem::Texture_SRV(6),
+                    nvrhi::BindingLayoutItem::Texture_SRV(7),
+                    nvrhi::BindingLayoutItem::Texture_UAV(0)
+                },
+                &macros);
+        }
     }
 
     ScreenSpaceVisibilityPass::Pipeline&
@@ -647,16 +958,13 @@ namespace uvsr
         bool ambientEnabled,
         bool indirectDiffuseEnabled,
         bool multipleBouncesEnabled,
-        bool adaptiveEnabled,
         bool temporalEnabled,
         bool postProcessEnabled,
         bool depthHierarchyEnabled,
         bool finalAmbientEnabled,
         bool packedFastEnabled,
         bool packedEdgesEnabled,
-        bool activisionEnabled,
-        bool xeGtaoEnabled,
-        bool xeGtaoHilbertLutEnabled)
+        const VisibilityBufferPrecisionSettings& bufferPrecision)
     {
         resolutionScale = std::clamp(resolutionScale, 1u, 4u);
         const uint2 samplingSize(
@@ -664,6 +972,16 @@ namespace uvsr
             (fullSize.y + resolutionScale - 1u) / resolutionScale);
         multipleBouncesEnabled = multipleBouncesEnabled &&
             indirectDiffuseEnabled;
+        const uint64_t bufferPrecisionKey =
+            uint64_t(bufferPrecision.rawAmbient) |
+            (uint64_t(bufferPrecision.rawIndirect) << 2u) |
+            (uint64_t(bufferPrecision.cumulativeIndirect) << 4u) |
+            (uint64_t(bufferPrecision.temporalAmbient) << 6u) |
+            (uint64_t(bufferPrecision.temporalIndirect) << 8u) |
+            (uint64_t(bufferPrecision.temporalDepth) << 10u) |
+            (uint64_t(bufferPrecision.finalAmbient) << 12u) |
+            (uint64_t(bufferPrecision.finalIndirect) << 14u) |
+            (uint64_t(bufferPrecision.depthHierarchy) << 16u);
 
         if (all(m_FullSize == fullSize) &&
             all(m_SamplingSize == samplingSize) &&
@@ -671,18 +989,14 @@ namespace uvsr
             m_AmbientResourcesEnabled == ambientEnabled &&
             m_IndirectDiffuseResourcesEnabled == indirectDiffuseEnabled &&
             m_MultipleBounceResourcesEnabled == multipleBouncesEnabled &&
-            m_AdaptiveResourcesEnabled == adaptiveEnabled &&
             m_TemporalResourcesEnabled == temporalEnabled &&
             m_PostProcessResourcesEnabled == postProcessEnabled &&
             m_DepthHierarchyResourcesEnabled == depthHierarchyEnabled &&
             m_FinalAmbientResourcesEnabled == finalAmbientEnabled &&
             m_PackedFastResourcesEnabled == packedFastEnabled &&
             m_PackedEdgeResourcesEnabled == packedEdgesEnabled &&
-            m_ActivisionResourcesEnabled == activisionEnabled &&
-            m_XeGtaoResourcesEnabled == xeGtaoEnabled &&
-            m_XeGtaoHilbertLutResourcesEnabled ==
-                xeGtaoHilbertLutEnabled &&
-            (!ambientEnabled || xeGtaoEnabled || m_RawAmbientVisibility) &&
+            m_BufferPrecisionConfigurationKey == bufferPrecisionKey &&
+            (!ambientEnabled || m_RawAmbientVisibility) &&
             (!indirectDiffuseEnabled || m_RawIndirectDiffuse[0]))
         {
             return;
@@ -695,16 +1009,36 @@ namespace uvsr
         m_AmbientResourcesEnabled = ambientEnabled;
         m_IndirectDiffuseResourcesEnabled = indirectDiffuseEnabled;
         m_MultipleBounceResourcesEnabled = multipleBouncesEnabled;
-        m_AdaptiveResourcesEnabled = adaptiveEnabled;
         m_TemporalResourcesEnabled = temporalEnabled;
         m_PostProcessResourcesEnabled = postProcessEnabled;
         m_DepthHierarchyResourcesEnabled = depthHierarchyEnabled;
         m_FinalAmbientResourcesEnabled = finalAmbientEnabled;
         m_PackedFastResourcesEnabled = packedFastEnabled;
         m_PackedEdgeResourcesEnabled = packedEdgesEnabled;
-        m_ActivisionResourcesEnabled = activisionEnabled;
-        m_XeGtaoResourcesEnabled = xeGtaoEnabled;
-        m_XeGtaoHilbertLutResourcesEnabled = xeGtaoHilbertLutEnabled;
+        m_BufferPrecisionConfigurationKey = bufferPrecisionKey;
+
+        const auto scalarFormat = [](VisibilityScalarBufferPrecision precision)
+        {
+            return precision == VisibilityScalarBufferPrecision::Float32
+                ? nvrhi::Format::R32_FLOAT
+                : nvrhi::Format::R16_FLOAT;
+        };
+        const auto vectorFormat = [](VisibilityVectorBufferPrecision precision)
+        {
+            return precision == VisibilityVectorBufferPrecision::Rgba32Float
+                ? nvrhi::Format::RGBA32_FLOAT
+                : nvrhi::Format::RGBA16_FLOAT;
+        };
+        const auto scalarBytes = [](VisibilityScalarBufferPrecision precision)
+        {
+            return precision == VisibilityScalarBufferPrecision::Float32
+                ? 4u : 2u;
+        };
+        const auto vectorBytes = [](VisibilityVectorBufferPrecision precision)
+        {
+            return precision == VisibilityVectorBufferPrecision::Rgba32Float
+                ? 16u : 8u;
+        };
 
         auto createTexture = [this](
             uint2 size,
@@ -724,42 +1058,30 @@ namespace uvsr
             return m_Device->createTexture(desc);
         };
 
-        if (ambientEnabled && !xeGtaoEnabled)
+        if (ambientEnabled)
         {
             m_RawAmbientVisibility = createTexture(
                 samplingSize,
-                nvrhi::Format::R16_FLOAT,
+                scalarFormat(bufferPrecision.rawAmbient),
                 "ScreenSpaceVisibility/RawAmbientVisibility");
         }
         if (indirectDiffuseEnabled)
         {
             m_RawIndirectDiffuse[0] = createTexture(
                 samplingSize,
-                nvrhi::Format::RGBA16_FLOAT,
+                vectorFormat(bufferPrecision.rawIndirect),
                 "ScreenSpaceVisibility/IndirectDiffuseFrontier0");
         }
         if (multipleBouncesEnabled)
         {
             m_RawIndirectDiffuse[1] = createTexture(
                 samplingSize,
-                nvrhi::Format::RGBA16_FLOAT,
+                vectorFormat(bufferPrecision.rawIndirect),
                 "ScreenSpaceVisibility/IndirectDiffuseFrontier1");
             m_CumulativeIndirectDiffuse = createTexture(
                 samplingSize,
-                nvrhi::Format::RGBA16_FLOAT,
+                vectorFormat(bufferPrecision.cumulativeIndirect),
                 "ScreenSpaceVisibility/CumulativeIndirectDiffuse");
-        }
-        if (adaptiveEnabled)
-        {
-            for (uint32_t index = 0u; index < 2u; ++index)
-            {
-                m_AdaptiveFeedback[index] = createTexture(
-                    samplingSize,
-                    nvrhi::Format::RGBA16_FLOAT,
-                    index == 0u
-                        ? "ScreenSpaceVisibility/AdaptiveFeedback0"
-                        : "ScreenSpaceVisibility/AdaptiveFeedback1");
-            }
         }
         if (temporalEnabled)
         {
@@ -769,7 +1091,7 @@ namespace uvsr
                 {
                     m_TemporalAmbientVisibility[index] = createTexture(
                         samplingSize,
-                        nvrhi::Format::R16_FLOAT,
+                        scalarFormat(bufferPrecision.temporalAmbient),
                         index == 0u
                             ? "ScreenSpaceVisibility/AmbientHistory0"
                             : "ScreenSpaceVisibility/AmbientHistory1");
@@ -778,26 +1100,23 @@ namespace uvsr
                 {
                     m_TemporalIndirectDiffuse[index] = createTexture(
                         samplingSize,
-                        nvrhi::Format::RGBA16_FLOAT,
+                        vectorFormat(bufferPrecision.temporalIndirect),
                         index == 0u
                             ? "ScreenSpaceVisibility/IndirectHistory0"
                             : "ScreenSpaceVisibility/IndirectHistory1");
                 }
                 m_TemporalDepth[index] = createTexture(
                     samplingSize,
-                    nvrhi::Format::R32_FLOAT,
+                    scalarFormat(bufferPrecision.temporalDepth),
                     index == 0u
                         ? "ScreenSpaceVisibility/DepthHistory0"
                         : "ScreenSpaceVisibility/DepthHistory1");
-                if (!activisionEnabled)
-                {
-                    m_TemporalNormal[index] = createTexture(
-                        samplingSize,
-                        nvrhi::Format::RGBA8_UNORM,
-                        index == 0u
-                            ? "ScreenSpaceVisibility/NormalHistory0"
-                            : "ScreenSpaceVisibility/NormalHistory1");
-                }
+                m_TemporalNormal[index] = createTexture(
+                    samplingSize,
+                    nvrhi::Format::RGBA8_UNORM,
+                    index == 0u
+                        ? "ScreenSpaceVisibility/NormalHistory0"
+                        : "ScreenSpaceVisibility/NormalHistory1");
             }
         }
         if (postProcessEnabled)
@@ -806,14 +1125,14 @@ namespace uvsr
             {
                 m_FinalAmbientVisibility = createTexture(
                     fullSize,
-                    nvrhi::Format::R16_FLOAT,
+                    scalarFormat(bufferPrecision.finalAmbient),
                     "ScreenSpaceVisibility/FinalAmbientVisibility");
             }
             if (indirectDiffuseEnabled)
             {
                 m_FinalIndirectDiffuse = createTexture(
                     fullSize,
-                    nvrhi::Format::RGBA16_FLOAT,
+                    vectorFormat(bufferPrecision.finalIndirect),
                     "ScreenSpaceVisibility/FinalIndirectDiffuse");
             }
         }
@@ -823,84 +1142,6 @@ namespace uvsr
                 samplingSize,
                 nvrhi::Format::R8_UINT,
                 "ScreenSpaceVisibility/PackedEdges");
-        }
-        if (activisionEnabled)
-        {
-            m_ActivisionCurrentDepth = createTexture(
-                samplingSize,
-                nvrhi::Format::R32_UINT,
-                "ScreenSpaceVisibility/ActivisionPackedDepthGuide");
-            m_ActivisionSpatialAmbient = createTexture(
-                samplingSize,
-                nvrhi::Format::R16_FLOAT,
-                "ScreenSpaceVisibility/ActivisionSpatialAmbient");
-        }
-        if (xeGtaoEnabled)
-        {
-            nvrhi::BufferDesc xeConstantsDesc;
-            xeConstantsDesc.byteSize = sizeof(XeGtaoConstants);
-            xeConstantsDesc.debugName =
-                "ScreenSpaceVisibility/XeGTAOConstants";
-            xeConstantsDesc.isConstantBuffer = true;
-            xeConstantsDesc.isVolatile = true;
-            xeConstantsDesc.maxVersions =
-                engine::c_MaxRenderPassConstantBufferVersions;
-            m_XeGtaoConstantBuffer =
-                m_Device->createBuffer(xeConstantsDesc);
-
-            // XeGTAO's default single sharp denoise pass consumes one working
-            // AO surface and writes directly to the final AO output. A second
-            // ping-pong surface is only required for multiple denoise passes.
-            m_XeGtaoWorkingAo = createTexture(
-                fullSize,
-                nvrhi::Format::R16_FLOAT,
-                "ScreenSpaceVisibility/XeGTAOWorkingAo");
-            m_XeGtaoEdges = createTexture(
-                fullSize,
-                nvrhi::Format::R8_UNORM,
-                "ScreenSpaceVisibility/XeGTAOEdges");
-
-            if (xeGtaoHilbertLutEnabled)
-            {
-                nvrhi::TextureDesc hilbertDesc;
-                hilbertDesc.width = 64u;
-                hilbertDesc.height = 64u;
-                hilbertDesc.format = nvrhi::Format::R16_UINT;
-                hilbertDesc.dimension = nvrhi::TextureDimension::Texture2D;
-                hilbertDesc.mipLevels = 1u;
-                hilbertDesc.initialState = nvrhi::ResourceStates::CopyDest;
-                hilbertDesc.keepInitialState = true;
-                hilbertDesc.debugName =
-                    "ScreenSpaceVisibility/XeGTAOHilbertLut";
-                m_XeGtaoHilbertLut = m_Device->createTexture(hilbertDesc);
-
-                m_XeGtaoHilbertUpload.resize(64u * 64u);
-                for (uint32_t y = 0u; y < 64u; ++y)
-                for (uint32_t x = 0u; x < 64u; ++x)
-                {
-                    uint32_t px = x;
-                    uint32_t py = y;
-                    uint32_t index = 0u;
-                    for (uint32_t level = 32u; level > 0u; level >>= 1u)
-                    {
-                        const uint32_t regionX = (px & level) != 0u;
-                        const uint32_t regionY = (py & level) != 0u;
-                        index += level * level * ((3u * regionX) ^ regionY);
-                        if (regionY == 0u)
-                        {
-                            if (regionX != 0u)
-                            {
-                                px = 63u - px;
-                                py = 63u - py;
-                            }
-                            std::swap(px, py);
-                        }
-                    }
-                    m_XeGtaoHilbertUpload[y * 64u + x] =
-                        static_cast<uint16_t>(index);
-                }
-                m_XeGtaoHilbertUploaded = false;
-            }
         }
         if (packedFastEnabled)
         {
@@ -929,7 +1170,8 @@ namespace uvsr
                 (fullSize.x + 15u) & ~15u, 16u);
             hierarchyDesc.height = std::max(
                 (fullSize.y + 15u) & ~15u, 16u);
-            hierarchyDesc.format = nvrhi::Format::R16_FLOAT;
+            hierarchyDesc.format =
+                scalarFormat(bufferPrecision.depthHierarchy);
             hierarchyDesc.dimension = nvrhi::TextureDimension::Texture2D;
             hierarchyDesc.mipLevels = 5u;
             hierarchyDesc.isUAV = true;
@@ -941,10 +1183,26 @@ namespace uvsr
                 m_Device->createTexture(hierarchyDesc);
         }
 
-        const uint64_t rawAmbientBytes = TextureBytes(samplingSize, 2u);
-        const uint64_t rawIndirectBytes = TextureBytes(samplingSize, 8u);
-        const uint64_t finalAmbientBytes = TextureBytes(fullSize, 2u);
-        const uint64_t finalIndirectBytes = TextureBytes(fullSize, 8u);
+        const uint64_t rawAmbientBytes = TextureBytes(
+            samplingSize, scalarBytes(bufferPrecision.rawAmbient));
+        const uint64_t rawIndirectBytes = TextureBytes(
+            samplingSize, vectorBytes(bufferPrecision.rawIndirect));
+        const uint64_t cumulativeIndirectBytes = TextureBytes(
+            samplingSize,
+            vectorBytes(bufferPrecision.cumulativeIndirect));
+        const uint64_t temporalAmbientBytes = TextureBytes(
+            samplingSize,
+            scalarBytes(bufferPrecision.temporalAmbient));
+        const uint64_t temporalIndirectBytes = TextureBytes(
+            samplingSize,
+            vectorBytes(bufferPrecision.temporalIndirect));
+        const uint64_t temporalDepthBytes = TextureBytes(
+            samplingSize,
+            scalarBytes(bufferPrecision.temporalDepth));
+        const uint64_t finalAmbientBytes = TextureBytes(
+            fullSize, scalarBytes(bufferPrecision.finalAmbient));
+        const uint64_t finalIndirectBytes = TextureBytes(
+            fullSize, vectorBytes(bufferPrecision.finalIndirect));
         const uint64_t schedulerBytes =
             uint64_t(VisibilityBlueNoiseTexelCount) *
                 uint64_t(VisibilityBlueNoiseLayerCount) * sizeof(uint16_t) +
@@ -953,11 +1211,12 @@ namespace uvsr
                 sizeof(uint8_t);
 
         m_Timings.rawAmbientTextureBytes =
-            ambientEnabled && !xeGtaoEnabled ? rawAmbientBytes : 0u;
+            ambientEnabled ? rawAmbientBytes : 0u;
         m_Timings.rawIndirectFrontierBytes =
             indirectDiffuseEnabled ? rawIndirectBytes : 0u;
         m_Timings.multiBounceIndirectBytes =
-            multipleBouncesEnabled ? rawIndirectBytes * 2u : 0u;
+            multipleBouncesEnabled
+                ? rawIndirectBytes + cumulativeIndirectBytes : 0u;
         m_Timings.finalAmbientTextureBytes =
             postProcessEnabled && ambientEnabled && finalAmbientEnabled
                 ? finalAmbientBytes : 0u;
@@ -965,35 +1224,26 @@ namespace uvsr
             postProcessEnabled && indirectDiffuseEnabled
                 ? finalIndirectBytes : 0u;
         m_Timings.schedulerResourceBytes = schedulerBytes;
-        m_Timings.adaptiveFeedbackBytes =
-            adaptiveEnabled ? rawIndirectBytes * 2u : 0u;
         m_Timings.temporalAmbientHistoryBytes =
-            temporalEnabled && ambientEnabled ? rawAmbientBytes * 2u : 0u;
+            temporalEnabled && ambientEnabled
+                ? temporalAmbientBytes * 2u : 0u;
         m_Timings.temporalIndirectHistoryBytes =
             temporalEnabled && indirectDiffuseEnabled
-                ? rawIndirectBytes * 2u : 0u;
+                ? temporalIndirectBytes * 2u : 0u;
         m_Timings.temporalDepthHistoryBytes = temporalEnabled
-            ? TextureBytes(samplingSize, 8u) : 0u;
+            ? temporalDepthBytes * 2u : 0u;
         m_Timings.temporalNormalHistoryBytes =
-            temporalEnabled && !activisionEnabled
-                ? TextureBytes(samplingSize, 8u) : 0u;
+            temporalEnabled ? TextureBytes(samplingSize, 8u) : 0u;
         m_Timings.depthHierarchyBytes = depthHierarchyEnabled
-            ? DepthHierarchyBytes(fullSize) : 0u;
+            ? DepthHierarchyBytes(
+                fullSize,
+                scalarBytes(bufferPrecision.depthHierarchy)) : 0u;
         m_Timings.packedFastNoiseBytes = packedFastEnabled
             ? uint64_t(VisibilityFilterAdaptedNoiseTexelCount) *
                 VisibilityFilterAdaptedNoiseLayerCount * 4u
             : 0u;
         m_Timings.packedEdgeMetadataBytes = packedEdgesEnabled
             ? TextureBytes(samplingSize, 1u) : 0u;
-        m_Timings.activisionWorkingBytes = activisionEnabled
-            ? TextureBytes(samplingSize, 6u) : 0u;
-        m_Timings.xeGtaoWorkingAoBytes = xeGtaoEnabled
-            ? TextureBytes(fullSize, 2u) : 0u;
-        m_Timings.xeGtaoEdgeBytes = xeGtaoEnabled
-            ? TextureBytes(fullSize, 1u) : 0u;
-        m_Timings.xeGtaoHilbertLutBytes =
-            xeGtaoEnabled && xeGtaoHilbertLutEnabled
-                ? 64u * 64u * 2u : 0u;
         m_Timings.outputTextureBytes =
             m_Timings.rawAmbientTextureBytes +
             m_Timings.rawIndirectFrontierBytes +
@@ -1002,25 +1252,16 @@ namespace uvsr
             m_Timings.finalIndirectTextureBytes;
         m_Timings.workingTextureBytes =
             m_Timings.schedulerResourceBytes +
-            m_Timings.adaptiveFeedbackBytes +
             m_Timings.temporalAmbientHistoryBytes +
             m_Timings.temporalIndirectHistoryBytes +
             m_Timings.temporalDepthHistoryBytes +
             m_Timings.temporalNormalHistoryBytes +
             m_Timings.depthHierarchyBytes +
             m_Timings.packedFastNoiseBytes +
-            m_Timings.packedEdgeMetadataBytes +
-            m_Timings.activisionWorkingBytes +
-            m_Timings.xeGtaoWorkingAoBytes +
-            m_Timings.xeGtaoEdgeBytes +
-            m_Timings.xeGtaoHilbertLutBytes;
+            m_Timings.packedEdgeMetadataBytes;
         m_Timings.optionalTextureBytes =
             m_Timings.packedFastNoiseBytes +
-            m_Timings.packedEdgeMetadataBytes +
-            m_Timings.activisionWorkingBytes +
-            m_Timings.xeGtaoWorkingAoBytes +
-            m_Timings.xeGtaoEdgeBytes +
-            m_Timings.xeGtaoHilbertLutBytes;
+            m_Timings.packedEdgeMetadataBytes;
         m_Timings.fullResolutionIntermediateBytes =
             ambientEnabled && finalAmbientEnabled
                 ? finalAmbientBytes : 0u;
@@ -1052,8 +1293,6 @@ namespace uvsr
         for (nvrhi::TextureHandle& texture : m_RawIndirectDiffuse)
             texture = nullptr;
         m_CumulativeIndirectDiffuse = nullptr;
-        for (nvrhi::TextureHandle& texture : m_AdaptiveFeedback)
-            texture = nullptr;
         for (nvrhi::TextureHandle& texture : m_TemporalAmbientVisibility)
             texture = nullptr;
         for (nvrhi::TextureHandle& texture : m_TemporalIndirectDiffuse)
@@ -1067,12 +1306,6 @@ namespace uvsr
         m_DepthHierarchyTexture = nullptr;
         m_PackedFastNoiseTexture = nullptr;
         m_PackedEdgesTexture = nullptr;
-        m_ActivisionCurrentDepth = nullptr;
-        m_ActivisionSpatialAmbient = nullptr;
-        m_XeGtaoWorkingAo = nullptr;
-        m_XeGtaoEdges = nullptr;
-        m_XeGtaoHilbertLut = nullptr;
-        m_XeGtaoConstantBuffer = nullptr;
 
         m_FullSize = uint2::zero();
         m_SamplingSize = uint2::zero();
@@ -1080,19 +1313,14 @@ namespace uvsr
         m_AmbientResourcesEnabled = false;
         m_IndirectDiffuseResourcesEnabled = false;
         m_MultipleBounceResourcesEnabled = false;
-        m_AdaptiveResourcesEnabled = false;
         m_TemporalResourcesEnabled = false;
         m_PostProcessResourcesEnabled = false;
         m_DepthHierarchyResourcesEnabled = false;
         m_FinalAmbientResourcesEnabled = false;
         m_PackedFastResourcesEnabled = false;
         m_PackedEdgeResourcesEnabled = false;
-        m_ActivisionResourcesEnabled = false;
-        m_XeGtaoResourcesEnabled = false;
-        m_XeGtaoHilbertLutResourcesEnabled = false;
+        m_BufferPrecisionConfigurationKey = 0u;
         m_PackedFastNoiseUploaded = false;
-        m_XeGtaoHilbertUploaded = false;
-        m_XeGtaoHilbertUpload.clear();
         ResetHistory();
         m_Timings = {};
     }
@@ -1105,29 +1333,21 @@ namespace uvsr
     void ScreenSpaceVisibilityPass::ResetHistory()
     {
         m_HistoryValid = false;
-        m_FeedbackValid = false;
         m_HistoryIndex = 0u;
-        m_FeedbackIndex = 0u;
     }
 
     void ScreenSpaceVisibilityPass::ResetBindingCache()
     {
         for (auto& estimator : m_SamplingBindingSets)
-            for (auto& consumer : estimator)
-                for (auto& sparse : consumer)
-                    for (nvrhi::BindingSetHandle& bindingSet : sparse)
-                        bindingSet = nullptr;
+            for (nvrhi::BindingSetHandle& bindingSet : estimator)
+                bindingSet = nullptr;
         for (auto& estimator : m_MultiBounceFirstBindingSets)
-            for (auto& ambientVariant : estimator)
-                for (auto& sparse : ambientVariant)
-                    for (nvrhi::BindingSetHandle& bindingSet : sparse)
-                        bindingSet = nullptr;
+            for (nvrhi::BindingSetHandle& bindingSet : estimator)
+                bindingSet = nullptr;
         for (auto& estimator : m_IndirectBounceBindingSets)
             for (auto& cumulativeMode : estimator)
-                for (auto& sparse : cumulativeMode)
-                    for (auto& rotation : sparse)
-                        for (nvrhi::BindingSetHandle& bindingSet : rotation)
-                            bindingSet = nullptr;
+                for (nvrhi::BindingSetHandle& bindingSet : cumulativeMode)
+                    bindingSet = nullptr;
         for (auto& consumer : m_TemporalBindingSets)
             for (auto& source : consumer)
                 for (nvrhi::BindingSetHandle& bindingSet : source)
@@ -1137,8 +1357,9 @@ namespace uvsr
                 for (nvrhi::BindingSetHandle& bindingSet : consumer)
                     bindingSet = nullptr;
         m_DepthHierarchyBindingSet = nullptr;
-        for (nvrhi::BindingSetHandle& bindingSet : m_CompositeBindingSets)
-            bindingSet = nullptr;
+        for (auto& powerVariant : m_CompositeBindingSets)
+            for (nvrhi::BindingSetHandle& bindingSet : powerVariant)
+                bindingSet = nullptr;
         m_AdvancedBindingSets.clear();
     }
 
@@ -1211,22 +1432,6 @@ namespace uvsr
             m_PackedFastNoiseUploaded = true;
         }
 
-        if (m_XeGtaoHilbertLut && !m_XeGtaoHilbertUploaded)
-        {
-            assert(m_XeGtaoHilbertUpload.size() == 64u * 64u);
-            commandList->writeTexture(
-                m_XeGtaoHilbertLut,
-                0u,
-                0u,
-                m_XeGtaoHilbertUpload.data(),
-                64u * sizeof(uint16_t));
-            commandList->setPermanentTextureState(
-                m_XeGtaoHilbertLut,
-                nvrhi::ResourceStates::ShaderResource);
-            m_XeGtaoHilbertUploaded = true;
-            m_XeGtaoHilbertUpload.clear();
-            m_XeGtaoHilbertUpload.shrink_to_fit();
-        }
     }
 
     bool ScreenSpaceVisibilityPass::BeginBenchmark(
@@ -1286,20 +1491,11 @@ namespace uvsr
         if (HasVisibilityExecutionPass(m_ExecutionPlan.passMask,
                 VisibilityExecutionPass::Reconstruction))
         {
-            if (m_ExecutionPlan.configuration.reconstruction ==
-                VisibilityReconstructionMode::ActivisionBilateral4x4)
-            {
-                requiredStageMask |= VisibilityBenchmarkStageBit(
-                    VisibilityBenchmarkStage::RequiredUpsample);
-            }
-            else
-            {
-                requiredStageMask |= VisibilityBenchmarkStageBit(
-                    m_ExecutionPlan.workload.spatialEnabled
-                        ? VisibilityBenchmarkStage::
-                            FusedSpatialDenoiseUpsample
-                        : VisibilityBenchmarkStage::RequiredUpsample);
-            }
+            requiredStageMask |= VisibilityBenchmarkStageBit(
+                m_ExecutionPlan.workload.spatialEnabled
+                    ? VisibilityBenchmarkStage::
+                        FusedSpatialDenoiseUpsample
+                    : VisibilityBenchmarkStage::RequiredUpsample);
         }
         if (HasVisibilityExecutionPass(m_ExecutionPlan.passMask,
                 VisibilityExecutionPass::FusedResolveAndApply))
@@ -1308,9 +1504,7 @@ namespace uvsr
                 VisibilityBenchmarkStage::FullResolutionApply);
         }
         if (HasVisibilityExecutionPass(m_ExecutionPlan.passMask,
-                VisibilityExecutionPass::Composition) ||
-            m_ExecutionPlan.configuration.application ==
-                VisibilityApplicationMode::BypassCompositionDiagnostic)
+                VisibilityExecutionPass::Composition))
         {
             requiredStageMask |= VisibilityBenchmarkStageBit(
                 VisibilityBenchmarkStage::Composition);
@@ -1496,11 +1690,6 @@ namespace uvsr
 
         uint32_t knownInactiveLightingSources =
             inputs.knownInactiveLightingSources & LightingSource_All;
-        if (!settings.indirectDiffuse.includeEmissive ||
-            !(settings.indirectDiffuse.emissiveGain > 0.f))
-        {
-            knownInactiveLightingSources |= LightingSource_Emissive;
-        }
         const uint32_t firstBounceSources =
             LightingSource_Direct | LightingSource_Emissive;
         const bool firstBounceSourceIsPotentiallyActive =
@@ -1525,9 +1714,9 @@ namespace uvsr
             GetResolutionScale(settings.resolution);
         const bool ambientEnabled = settings.HasActiveAmbientOcclusion();
         const bool indirectEnabled = settings.HasActiveIndirectDiffuse();
+        const bool ambientPowerEnabled = ambientEnabled &&
+            IsAmbientPowerEnabled(settings.ambientOcclusion.power);
         const bool motionAvailable = inputs.motionVectors != nullptr;
-        const bool adaptiveEnabled =
-            settings.UsesAdaptiveSampling() && motionAvailable;
         const bool temporalEnabled =
             settings.reconstruction.temporalEnabled && motionAvailable;
         const bool spatialFilterEnabled =
@@ -1544,9 +1733,13 @@ namespace uvsr
             knownInactiveLightingSources |= LightingSource_IndirectDiffuse;
         }
 
+        const bool contributionTerminatedBounces = indirectEnabled &&
+            !settings.indirectDiffuse.limitBounces;
         const uint32_t requestedBounceCount = indirectEnabled
-            ? std::clamp(settings.indirectDiffuse.bounceCount,
-                1u, MaxIndirectDiffuseBounceCount)
+            ? (contributionTerminatedBounces
+                ? MaxContributionTerminatedBounceCount
+                : std::clamp(settings.indirectDiffuse.bounceCount,
+                    1u, MaxIndirectDiffuseBounceCount))
             : 1u;
         const bool higherBouncesReachConsumer = indirectEnabled &&
             settings.indirectDiffuse.intensity > 0.f &&
@@ -1568,92 +1761,35 @@ namespace uvsr
         performanceWorkload.scheduler = GetPerformanceScheduler(
             settings.sampling.scheduler);
         const VisibilityPerformanceProfileConfiguration selectedConfig =
-            GetVisibilityPerformanceProfileConfiguration(
-                settings.performanceProfile);
+            GetEffectiveVisibilityPerformanceConfiguration(settings);
         const bool useDepthHierarchy = legacyDepthHierarchyEligible &&
             selectedConfig.depth == VisibilityDepthMode::Legacy;
-        uint32_t traceGroupSizeX = kThreadGroupSize;
-        uint32_t traceGroupSizeY = kThreadGroupSize;
-        if (settings.performanceProfile ==
-            VisibilityPerformanceProfile::ExactGroup16x8)
-        {
-            traceGroupSizeX = 16u;
-        }
-        else if (settings.performanceProfile ==
-            VisibilityPerformanceProfile::ExactGroup8x16)
-        {
-            traceGroupSizeY = 16u;
-        }
-        if (selectedConfig.noise ==
-            VisibilityNoiseDelivery::ActivisionInterleavedGradient)
-        {
-            performanceWorkload.scheduler =
-                VisibilityPerformanceScheduler::Activision4x4SixPhase;
-        }
-        else if (selectedConfig.noise ==
-                VisibilityNoiseDelivery::XeGtaoHilbertR2 ||
-            selectedConfig.noise ==
-                VisibilityNoiseDelivery::XeGtaoInlineHilbertR2)
-        {
-            performanceWorkload.scheduler =
-                VisibilityPerformanceScheduler::XeGtaoHilbertR2;
-        }
-        else if (selectedConfig.noise ==
-            VisibilityNoiseDelivery::ConstantDiagnostic)
-        {
-            performanceWorkload.scheduler =
-                VisibilityPerformanceScheduler::ConstantDiagnostic;
-        }
         performanceWorkload.firstBounceSampleCount = std::clamp(
             settings.sampling.maximumSampleCount, 1u, 64u);
         performanceWorkload.laterBounceSampleCount =
             GetIndirectBounceSampleCount(
                 performanceWorkload.firstBounceSampleCount, 1u);
         performanceWorkload.bounceCount = activeBounceCount;
-        performanceWorkload.adaptiveSamplingEnabled = adaptiveEnabled;
         performanceWorkload.temporalEnabled = temporalEnabled;
         performanceWorkload.spatialEnabled = spatialFilterEnabled;
         performanceWorkload.depthHierarchyEnabled = useDepthHierarchy;
+        performanceWorkload.runtimeConfigurationKey =
+            GetVisibilityRuntimeConfigurationKey(settings);
         performanceWorkload.outputWidth = fullSize.x;
         performanceWorkload.outputHeight = fullSize.y;
         performanceWorkload.radius = settings.sampling.radius;
         performanceWorkload.thickness = settings.sampling.thickness;
         performanceWorkload.radialExponent =
             settings.sampling.stepDistributionExponent;
-        performanceWorkload.threadGroupSizeX = traceGroupSizeX;
-        performanceWorkload.threadGroupSizeY = traceGroupSizeY;
+        performanceWorkload.threadGroupSizeX = kThreadGroupSize;
+        performanceWorkload.threadGroupSizeY = kThreadGroupSize;
+        m_Timings.activeWorkload = performanceWorkload;
+        m_Timings.hasActiveWorkload = true;
 
         const VisibilityExecutionPlan selectedPlan =
             ResolveVisibilityExecutionPlan(
-                settings.performanceProfile, performanceWorkload);
-        PlanarViewConstants currentViewConstants{};
-        view->FillPlanarViewConstants(currentViewConstants);
-        const bool selectedXeGtao = selectedPlan.valid &&
-            selectedPlan.configuration.trace ==
-                VisibilityTraceImplementation::XeGtaoHorizon;
-        const bool selectedXeGtaoProjectionUnsupported =
-            selectedXeGtao && view->IsOrthographicProjection();
-        const bool selectedActivisionPs4 = selectedPlan.valid &&
-            selectedPlan.configuration.depth ==
-                VisibilityDepthMode::ActivisionClampedScreenRadius;
-        const bool selectedActivisionProjectionUnsupported =
-            selectedActivisionPs4 && view->IsOrthographicProjection();
-        const bool fullTextureViewport = IsFullTextureViewport(
-            currentViewConstants.viewportOrigin.x,
-            currentViewConstants.viewportOrigin.y,
-            currentViewConstants.viewportSize.x,
-            currentViewConstants.viewportSize.y,
-            depthDesc.width,
-            depthDesc.height);
-        const bool selectedXeGtaoViewportUnsupported =
-            selectedXeGtao && !fullTextureViewport;
-        const bool selectedActivisionViewportUnsupported =
-            selectedActivisionPs4 && !fullTextureViewport;
-        const bool selectedPlanUsable = selectedPlan.valid &&
-            !selectedXeGtaoProjectionUnsupported &&
-            !selectedXeGtaoViewportUnsupported &&
-            !selectedActivisionProjectionUnsupported &&
-            !selectedActivisionViewportUnsupported;
+                selectedConfig, performanceWorkload);
+        const bool selectedPlanUsable = selectedPlan.valid;
         VisibilityExecutionPlan executionPlan = selectedPlan;
         if (!selectedPlanUsable)
         {
@@ -1667,8 +1803,6 @@ namespace uvsr
                 VisibilityPerformanceProfile::Reference,
                 referenceWorkload);
             assert(executionPlan.valid);
-            traceGroupSizeX = kThreadGroupSize;
-            traceGroupSizeY = kThreadGroupSize;
         }
         if (m_ExecutionPlan.valid &&
             m_ExecutionPlan.historyResetKey != executionPlan.historyResetKey)
@@ -1687,19 +1821,8 @@ namespace uvsr
             VisibilityNoiseDelivery::PackedCurrentFast;
         const bool packedEdgesEnabled =
             performanceConfig.reconstruction ==
-                VisibilityReconstructionMode::PackedEdges2x2 ||
-            performanceConfig.reconstruction ==
-                VisibilityReconstructionMode::PackedEdges4x4;
-        const bool activisionEnabled =
-            performanceConfig.reconstruction ==
-                VisibilityReconstructionMode::ActivisionBilateral4x4;
-        const bool xeGtaoEnabled = performanceConfig.trace ==
-            VisibilityTraceImplementation::XeGtaoHorizon;
-        const bool xeGtaoHilbertLutEnabled = xeGtaoEnabled &&
-            performanceConfig.noise ==
-                VisibilityNoiseDelivery::XeGtaoHilbertR2;
-        const bool postProcessEnabled =
-            legacyPostProcessRequested || xeGtaoEnabled;
+                VisibilityReconstructionMode::PackedEdges2x2;
+        const bool postProcessEnabled = legacyPostProcessRequested;
         const VisibilityPerformanceProfile activePerformanceProfile =
             performanceConfig.profile;
         uint32_t schedulerSpecialization = 0u;
@@ -1715,14 +1838,13 @@ namespace uvsr
                 FilterAdaptedSpatiotemporalRankField:
             schedulerSpecialization = 3u;
             break;
-        case VisibilityPerformanceScheduler::ConstantDiagnostic:
-            schedulerSpecialization = 4u;
-            break;
         default:
             break;
         }
         const bool finalAmbientEnabled = postProcessEnabled &&
             ambientEnabled && !fusedResolveApply;
+        const VisibilityBufferPrecisionSettings& bufferPrecision =
+            settings.performance.bufferPrecision;
 
         EnsureResources(
             fullSize,
@@ -1730,49 +1852,16 @@ namespace uvsr
             ambientEnabled,
             indirectEnabled,
             activeBounceCount > 1u,
-            adaptiveEnabled,
             temporalEnabled,
             postProcessEnabled,
-            useDepthHierarchy || xeGtaoEnabled,
+            useDepthHierarchy,
             finalAmbientEnabled,
             packedFastEnabled,
             packedEdgesEnabled,
-            activisionEnabled,
-            xeGtaoEnabled,
-            xeGtaoHilbertLutEnabled);
+            bufferPrecision);
         m_Timings.profileValid = selectedPlanUsable;
-        if (selectedXeGtaoProjectionUnsupported)
-        {
-            m_Timings.profileError =
-                "XeGTAO 1.30 requires a perspective projection; the "
-                "reference path is active for this orthographic view.";
-        }
-        else if (selectedXeGtaoViewportUnsupported)
-        {
-            m_Timings.profileError =
-                "XeGTAO 1.30 currently requires a full-texture viewport "
-                "with origin (0, 0) and size matching the depth texture; "
-                "the reference path is active for this partial view.";
-        }
-        else if (selectedActivisionProjectionUnsupported)
-        {
-            m_Timings.profileError =
-                "Activision PS4 GTAO requires a perspective projection; "
-                "the reference path is active for this orthographic view.";
-        }
-        else if (selectedActivisionViewportUnsupported)
-        {
-            m_Timings.profileError =
-                "Activision PS4 GTAO currently requires a full-texture "
-                "viewport with origin (0, 0) and size matching the depth "
-                "texture; the reference path is active for this partial "
-                "view.";
-        }
-        else
-        {
-            m_Timings.profileError = selectedPlan.valid
-                ? std::string() : selectedPlan.errorMessage;
-        }
+        m_Timings.profileError = selectedPlan.valid
+            ? std::string() : selectedPlan.errorMessage;
         m_Timings.activePermutation = selectedPlanUsable
             ? selectedPlan.permutationName
             : std::string("Reference Fallback: ") +
@@ -1786,7 +1875,7 @@ namespace uvsr
             m_HistoryEstimator != settings.estimator)
         {
             // The three estimators store different measures. Mixing their raw
-            // AO/GI values in temporal or adaptive history produces a visible
+            // AO/GI values in temporal history produces a visible
             // transition and contaminates estimator A/B comparisons.
             ResetHistory();
         }
@@ -1800,16 +1889,12 @@ namespace uvsr
         const uint32_t estimatorIndex = std::min(
             static_cast<uint32_t>(settings.estimator),
             ImplementedVisibilityEstimatorCount - 1u);
-        const uint32_t sparseSamplingIndex = adaptiveEnabled ? 1u : 0u;
-        const uint32_t feedbackWrite = adaptiveEnabled
-            ? m_FeedbackIndex : 0u;
-        const uint32_t feedbackRead = 1u - feedbackWrite;
         const uint32_t historyWrite = temporalEnabled
             ? m_HistoryIndex : 0u;
         const uint32_t historyRead = 1u - historyWrite;
 
         ScreenSpaceVisibilityConstants constants{};
-        constants.view = currentViewConstants;
+        view->FillPlanarViewConstants(constants.view);
         constants.fullResolution = float2(fullSize);
         constants.samplingResolution = float2(m_SamplingSize);
         constants.radiusWorld = std::max(settings.sampling.radius, 0.f);
@@ -1817,14 +1902,13 @@ namespace uvsr
             settings.sampling.thickness, 0.f);
         constants.stepDistributionExponent = std::clamp(
             settings.sampling.stepDistributionExponent, 0.25f, 4.f);
-        constants.adaptiveStrength = std::max(
-            settings.sampling.adaptiveStrength, 0.f);
+        constants.ambientPower = std::clamp(
+            settings.ambientOcclusion.power, 0.1f, 4.f);
         constants.ambientStrength = std::max(
             settings.ambientOcclusion.strength, 0.f);
         constants.indirectDiffuseIntensity = std::max(
             settings.indirectDiffuse.intensity, 0.f);
-        constants.emissiveGain = std::max(
-            settings.indirectDiffuse.emissiveGain, 0.f);
+        constants.emissiveGain = VisibilityEmissiveSourceGain;
         constants.minimumBounceContribution = std::max(
             settings.indirectDiffuse.minimumBounceContribution, 0.f);
         constants.lightingExposureScale = std::max(exposureScale, 0.f);
@@ -1835,17 +1919,13 @@ namespace uvsr
         constants.ambientColorTop = ambientColorTop;
         constants.ambientColorBottom = ambientColorBottom;
         constants.frameIndex = frameIndex;
-        constants.minimumSampleCount = std::clamp(
-            settings.sampling.minimumSampleCount, 1u, 64u);
         constants.maximumSampleCount = std::clamp(
-            settings.sampling.maximumSampleCount,
-            constants.minimumSampleCount, 64u);
+            settings.sampling.maximumSampleCount, 1u, 64u);
         constants.knownInactiveLightingSources =
             knownInactiveLightingSources;
         constants.enableAmbientOcclusion = ambientEnabled ? 1u : 0u;
         constants.enableIndirectDiffuse = indirectEnabled ? 1u : 0u;
-        constants.includeEmissive =
-            settings.indirectDiffuse.includeEmissive ? 1u : 0u;
+        constants.includeEmissive = 1u;
         constants.reverseDepth = view->IsReverseDepth() ? 1u : 0u;
         constants.orthographicProjection =
             view->IsOrthographicProjection() ? 1u : 0u;
@@ -1853,9 +1933,10 @@ namespace uvsr
         constants.resolutionScale = resolutionScale;
         constants.sampleScheduler = static_cast<uint32_t>(
             settings.sampling.scheduler);
-        constants.adaptiveSamplingEnabled = adaptiveEnabled ? 1u : 0u;
         constants.showIndirectDiffuseOnly =
             settings.showIndirectDiffuseOnly ? 1u : 0u;
+        constants.packedEdgeMode = static_cast<uint32_t>(
+            settings.performance.packedEdgeMode) + 1u;
         const uint64_t historyConfigurationKey =
             BuildHistoryConfigurationKey(constants, activeBounceCount);
         if (m_HistoryConfigurationInitialized &&
@@ -1865,72 +1946,15 @@ namespace uvsr
         }
         m_HistoryConfigurationKey = historyConfigurationKey;
         m_HistoryConfigurationInitialized = true;
-        constants.feedbackValid = adaptiveEnabled && m_FeedbackValid ? 1u : 0u;
         constants.historyValid = temporalEnabled && m_HistoryValid ? 1u : 0u;
         BeginStage(commandList, Stage::EffectEnvelope);
         commandList->writeBuffer(
             m_ConstantBuffer, &constants, sizeof(constants));
-        if (xeGtaoEnabled)
-        {
-            XeGtaoConstants xeConstants{};
-            xeConstants.viewportSize = int2(
-                static_cast<int32_t>(fullSize.x),
-                static_cast<int32_t>(fullSize.y));
-            xeConstants.viewportPixelSize = float2(
-                1.f / float(std::max(fullSize.x, 1u)),
-                1.f / float(std::max(fullSize.y, 1u)));
-
-            const float4x4& projection =
-                constants.view.matViewToClipNoOffset;
-            float depthMultiply = -projection.m32;
-            float depthAdd = projection.m22;
-            if (depthMultiply * depthAdd < 0.f)
-                depthAdd = -depthAdd;
-            xeConstants.depthUnpackConstants =
-                float2(depthMultiply, depthAdd);
-
-            const float tanHalfFovX = abs(projection.m00) > 1e-8f
-                ? 1.f / projection.m00 : 0.f;
-            const float tanHalfFovY = abs(projection.m11) > 1e-8f
-                ? 1.f / projection.m11 : 0.f;
-            xeConstants.cameraTanHalfFov =
-                float2(tanHalfFovX, tanHalfFovY);
-            xeConstants.ndcToViewMultiply =
-                float2(2.f * tanHalfFovX, -2.f * tanHalfFovY);
-            xeConstants.ndcToViewAdd =
-                float2(-tanHalfFovX, tanHalfFovY);
-            xeConstants.ndcToViewMultiplyPixelSize =
-                xeConstants.ndcToViewMultiply *
-                xeConstants.viewportPixelSize;
-            xeConstants.effectRadius = std::max(
-                settings.sampling.radius, 0.f);
-            xeConstants.effectFalloffRange = 0.615f;
-            xeConstants.radiusMultiplier = 1.457f;
-            xeConstants.finalValuePower = 2.2f;
-            xeConstants.denoiseBlurBeta = 1.2f;
-            xeConstants.sampleDistributionPower = 2.f;
-            xeConstants.thinOccluderCompensation = 0.f;
-            xeConstants.depthMipSamplingOffset = 3.30f;
-            // UVSR does not feed this pass into a matching TAA history, so
-            // Intel's host contract requires a static noise phase.
-            xeConstants.noiseIndex = 0;
-            xeConstants.viewportOrigin = uint2(
-                static_cast<uint32_t>(std::max(
-                    constants.view.viewportOrigin.x, 0.f)),
-                static_cast<uint32_t>(std::max(
-                    constants.view.viewportOrigin.y, 0.f)));
-            xeConstants.reverseDepth = constants.reverseDepth;
-            xeConstants.worldToView = constants.view.matWorldToView;
-            commandList->writeBuffer(
-                m_XeGtaoConstantBuffer,
-                &xeConstants,
-                sizeof(xeConstants));
-        }
 
         const uint32_t traceDispatchX =
-            (m_SamplingSize.x + traceGroupSizeX - 1u) / traceGroupSizeX;
+            (m_SamplingSize.x + kThreadGroupSize - 1u) / kThreadGroupSize;
         const uint32_t traceDispatchY =
-            (m_SamplingSize.y + traceGroupSizeY - 1u) / traceGroupSizeY;
+            (m_SamplingSize.y + kThreadGroupSize - 1u) / kThreadGroupSize;
         const uint32_t samplingDispatchX =
             (m_SamplingSize.x + kThreadGroupSize - 1u) / kThreadGroupSize;
         const uint32_t samplingDispatchY =
@@ -1948,16 +1972,10 @@ namespace uvsr
             : m_DummyIndirectDiffuse.Get();
         nvrhi::ITexture* sourceRadiance = inputs.sourceRadiance
             ? inputs.sourceRadiance
-            : m_DummyFeedback.Get();
-        nvrhi::ITexture* previousFeedback = adaptiveEnabled
-            ? m_AdaptiveFeedback[feedbackRead].Get()
-            : m_DummyFeedback.Get();
-        nvrhi::ITexture* currentFeedback = adaptiveEnabled
-            ? m_AdaptiveFeedback[feedbackWrite].Get()
-            : m_DummyFeedbackOutput.Get();
+            : m_DummyVector.Get();
         nvrhi::ITexture* motion = motionAvailable
             ? inputs.motionVectors
-            : m_DummyFeedback.Get();
+            : m_DummyVector.Get();
         nvrhi::ITexture* hierarchy = useDepthHierarchy
             ? m_DepthHierarchyTexture.Get()
             : inputs.depth;
@@ -1968,45 +1986,7 @@ namespace uvsr
                 : "Screen-Space Visibility (GI)")
             : "Screen-Space Visibility (AO)");
 
-        if (activisionEnabled)
-        {
-            const uint64_t pipelineKey = AdvancedPipelineKey(
-                executionPlan.shaderPermutationKey, 0x70u);
-            Pipeline& pipeline = GetOrCreateAdvancedPipeline(
-                pipelineKey,
-                "uvsr/screen_space_visibility_activision_depth_cs.hlsl",
-                {
-                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                    nvrhi::BindingLayoutItem::Texture_SRV(0),
-                    nvrhi::BindingLayoutItem::Texture_UAV(0)
-                });
-            const uint64_t bindingKey = AdvancedPipelineKey(
-                pipelineKey, 0x700u);
-            nvrhi::BindingSetHandle& bindingSet =
-                m_AdvancedBindingSets[bindingKey];
-            if (!bindingSet)
-            {
-                bindingSet = m_Device->createBindingSet({{
-                    nvrhi::BindingSetItem::ConstantBuffer(
-                        0, m_ConstantBuffer),
-                    nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth),
-                    nvrhi::BindingSetItem::Texture_UAV(
-                        0, m_ActivisionCurrentDepth)
-                }}, pipeline.bindingLayout);
-            }
-            nvrhi::ComputeState state;
-            state.pipeline = pipeline.pipeline;
-            state.bindings = { bindingSet };
-            commandList->beginMarker(
-                "Activision Half-Resolution Minimum Depth");
-            BeginStage(commandList, Stage::DepthHierarchy);
-            commandList->setComputeState(state);
-            commandList->dispatch(
-                samplingDispatchX, samplingDispatchY, 1u);
-            EndStage(commandList, Stage::DepthHierarchy);
-            commandList->endMarker();
-        }
-        else if (useDepthHierarchy)
+        if (useDepthHierarchy)
         {
             if (!m_DepthHierarchyBindingSet)
             {
@@ -2047,319 +2027,76 @@ namespace uvsr
             m_Timings.depthHierarchyMs = 0.f;
         }
 
-        if (xeGtaoEnabled)
-        {
-            const bool useHalfPrecision = performanceConfig.math ==
-                VisibilityMathMode::XeGtaoMixedPrecision;
-            const bool useHilbertLut = performanceConfig.noise ==
-                VisibilityNoiseDelivery::XeGtaoHilbertR2;
-
-            {
-                const std::vector<ShaderMacro> macros = {
-                    { "XE_GTAO_USE_HALF_FLOAT_PRECISION",
-                        useHalfPrecision ? "1" : "0" },
-                    { "XE_GTAO_USE_DEFAULT_CONSTANTS", "1" }
-                };
-                const uint64_t pipelineKey = AdvancedPipelineKey(
-                    executionPlan.shaderPermutationKey, 0x80u);
-                Pipeline& pipeline = GetOrCreateAdvancedPipeline(
-                    pipelineKey,
-                    "uvsr/screen_space_visibility_xegtao_prefilter_cs.hlsl",
-                    {
-                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                        nvrhi::BindingLayoutItem::Sampler(0),
-                        nvrhi::BindingLayoutItem::Texture_SRV(0),
-                        nvrhi::BindingLayoutItem::Texture_UAV(0).setSize(5)
-                    },
-                    &macros);
-                const uint64_t bindingKey = AdvancedPipelineKey(
-                    pipelineKey, 0x800u);
-                nvrhi::BindingSetHandle& bindingSet =
-                    m_AdvancedBindingSets[bindingKey];
-                if (!bindingSet)
-                {
-                    nvrhi::BindingSetDesc bindings;
-                    bindings.bindings = {
-                        nvrhi::BindingSetItem::ConstantBuffer(
-                            0, m_XeGtaoConstantBuffer),
-                        nvrhi::BindingSetItem::Sampler(
-                            0, m_PointClampSampler),
-                        nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth)
-                    };
-                    for (uint32_t mip = 0u; mip < 5u; ++mip)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_UAV(
-                                0, m_DepthHierarchyTexture)
-                                .setArrayElement(mip)
-                                .setSubresources(
-                                    nvrhi::TextureSubresourceSet(
-                                        mip, 1, 0, 1)));
-                    }
-                    bindingSet = m_Device->createBindingSet(
-                        bindings, pipeline.bindingLayout);
-                }
-                nvrhi::ComputeState state;
-                state.pipeline = pipeline.pipeline;
-                state.bindings = { bindingSet };
-                commandList->beginMarker("XeGTAO Depth Prefilter");
-                BeginStage(commandList, Stage::DepthHierarchy);
-                commandList->setComputeState(state);
-                commandList->dispatch(
-                    (fullSize.x + 15u) / 16u,
-                    (fullSize.y + 15u) / 16u,
-                    1u);
-                EndStage(commandList, Stage::DepthHierarchy);
-                commandList->endMarker();
-            }
-
-            {
-                const std::vector<ShaderMacro> macros = {
-                    { "XE_GTAO_USE_HALF_FLOAT_PRECISION",
-                        useHalfPrecision ? "1" : "0" },
-                    { "XE_GTAO_USE_DEFAULT_CONSTANTS", "1" },
-                    { "XE_GTAO_USE_HILBERT_LUT",
-                        useHilbertLut ? "1" : "0" },
-                    { "XE_GTAO_QUALITY", "2" }
-                };
-                std::vector<nvrhi::BindingLayoutItem> layout = {
-                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                    nvrhi::BindingLayoutItem::Sampler(0),
-                    nvrhi::BindingLayoutItem::Texture_SRV(0),
-                    nvrhi::BindingLayoutItem::Texture_SRV(1)
-                };
-                if (useHilbertLut)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(2));
-                layout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(0));
-                layout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(1));
-                const uint64_t pipelineKey = AdvancedPipelineKey(
-                    executionPlan.shaderPermutationKey, 0x81u);
-                Pipeline& pipeline = GetOrCreateAdvancedPipeline(
-                    pipelineKey,
-                    "uvsr/screen_space_visibility_xegtao_main_cs.hlsl",
-                    layout,
-                    &macros);
-                const uint64_t bindingKey = AdvancedPipelineKey(
-                    pipelineKey, 0x810u);
-                nvrhi::BindingSetHandle& bindingSet =
-                    m_AdvancedBindingSets[bindingKey];
-                if (!bindingSet)
-                {
-                    nvrhi::BindingSetDesc bindings;
-                    bindings.bindings = {
-                        nvrhi::BindingSetItem::ConstantBuffer(
-                            0, m_XeGtaoConstantBuffer),
-                        nvrhi::BindingSetItem::Sampler(
-                            0, m_PointClampSampler),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            0, m_DepthHierarchyTexture),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            1, inputs.normals)
-                    };
-                    if (useHilbertLut)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                2, m_XeGtaoHilbertLut));
-                    }
-                    bindings.bindings.push_back(
-                        nvrhi::BindingSetItem::Texture_UAV(
-                            0, m_XeGtaoWorkingAo));
-                    bindings.bindings.push_back(
-                        nvrhi::BindingSetItem::Texture_UAV(
-                            1, m_XeGtaoEdges));
-                    bindingSet = m_Device->createBindingSet(
-                        bindings, pipeline.bindingLayout);
-                }
-                nvrhi::ComputeState state;
-                state.pipeline = pipeline.pipeline;
-                state.bindings = { bindingSet };
-                commandList->beginMarker("XeGTAO High Horizon Trace");
-                BeginStage(commandList, Stage::FirstTrace);
-                commandList->setComputeState(state);
-                commandList->dispatch(
-                    (fullSize.x + 7u) / 8u,
-                    (fullSize.y + 7u) / 8u,
-                    1u);
-                EndStage(commandList, Stage::FirstTrace);
-                commandList->endMarker();
-            }
-
-            {
-                const std::vector<ShaderMacro> macros = {
-                    { "XE_GTAO_USE_HALF_FLOAT_PRECISION",
-                        useHalfPrecision ? "1" : "0" },
-                    { "XE_GTAO_DENOISE_FINAL", "1" }
-                };
-                const uint64_t pipelineKey = AdvancedPipelineKey(
-                    executionPlan.shaderPermutationKey, 0x82u);
-                Pipeline& pipeline = GetOrCreateAdvancedPipeline(
-                    pipelineKey,
-                    "uvsr/screen_space_visibility_xegtao_denoise_cs.hlsl",
-                    {
-                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                        nvrhi::BindingLayoutItem::Sampler(0),
-                        nvrhi::BindingLayoutItem::Texture_SRV(0),
-                        nvrhi::BindingLayoutItem::Texture_SRV(1),
-                        nvrhi::BindingLayoutItem::Texture_UAV(0)
-                    },
-                    &macros);
-                const uint64_t bindingKey = AdvancedPipelineKey(
-                    pipelineKey, 0x820u);
-                nvrhi::BindingSetHandle& bindingSet =
-                    m_AdvancedBindingSets[bindingKey];
-                if (!bindingSet)
-                {
-                    nvrhi::BindingSetDesc bindings;
-                    bindings.bindings = {
-                        nvrhi::BindingSetItem::ConstantBuffer(
-                            0, m_XeGtaoConstantBuffer),
-                        nvrhi::BindingSetItem::Sampler(
-                            0, m_PointClampSampler),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            0, m_XeGtaoWorkingAo),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            1, m_XeGtaoEdges),
-                        nvrhi::BindingSetItem::Texture_UAV(
-                            0, m_FinalAmbientVisibility)
-                    };
-                    bindingSet = m_Device->createBindingSet(
-                        bindings, pipeline.bindingLayout);
-                }
-                nvrhi::ComputeState state;
-                state.pipeline = pipeline.pipeline;
-                state.bindings = { bindingSet };
-                commandList->beginMarker("XeGTAO Sharp Edge-Aware Denoise");
-                BeginStage(commandList, Stage::SpatialDenoise);
-                commandList->setComputeState(state);
-                commandList->dispatch(
-                    (fullSize.x + 15u) / 16u,
-                    (fullSize.y + 7u) / 8u,
-                    1u);
-                EndStage(commandList, Stage::SpatialDenoise);
-                commandList->endMarker();
-            }
-
-            rawAmbient = m_FinalAmbientVisibility;
-            m_Timings.laterTraceMs = 0.f;
-            m_Timings.laterBounceMs.fill(0.f);
-        }
-        else if (!xeGtaoEnabled)
-        {
-        commandList->beginMarker(adaptiveEnabled
-            ? (activeBounceCount > 1u
-                ? "Adaptive Visibility Sampling (Multiple Bounces)"
-                : "Adaptive Visibility Sampling")
-            : (activeBounceCount > 1u
-                ? "Fixed Visibility Sampling (Multiple Bounces)"
-                : "Fixed Visibility Sampling"));
+        commandList->beginMarker(activeBounceCount > 1u
+            ? "Visibility Sampling (Multiple Bounces)"
+            : "Visibility Sampling");
         const bool writeBounceMetadata = activeBounceCount > 1u;
         Pipeline* firstPipeline = nullptr;
         nvrhi::BindingSetHandle* firstBindingSet = nullptr;
         const char* advancedFirstShader = nullptr;
         std::vector<ShaderMacro> advancedFirstMacros;
-        uint32_t algorithmVariant = 0u;
-        switch (activePerformanceProfile)
-        {
-        case VisibilityPerformanceProfile::ExactDuplicatePixelRejectionOff:
-            advancedFirstShader =
-                "uvsr/screen_space_visibility_duplicate_off_cs.hlsl";
-            break;
-        case VisibilityPerformanceProfile::ExactFullMaskEarlyExitOff:
-            advancedFirstShader =
-                "uvsr/screen_space_visibility_full_mask_exit_off_cs.hlsl";
-            break;
-        case VisibilityPerformanceProfile::AlgorithmicProjectedRadiusClamp32:
-            advancedFirstShader =
-                "uvsr/screen_space_visibility_radius_clamp_32_cs.hlsl";
-            break;
-        case VisibilityPerformanceProfile::AlgorithmicProjectedRadiusClamp64:
-            advancedFirstShader =
-                "uvsr/screen_space_visibility_radius_clamp_64_cs.hlsl";
-            break;
-        case VisibilityPerformanceProfile::AlgorithmicProjectedRadiusClamp128:
-            advancedFirstShader =
-                "uvsr/screen_space_visibility_radius_clamp_128_cs.hlsl";
-            break;
-        case VisibilityPerformanceProfile::DiagnosticConstantScheduler:
-            advancedFirstShader =
-                "uvsr/screen_space_visibility_constant_scheduler_cs.hlsl";
-            break;
-        default:
-            break;
-        }
-        if (advancedFirstShader)
-        {
-            advancedFirstMacros = {{
-                "FIXED_DIRECT_DEPTH", useDepthHierarchy ? "0" : "1" }};
-            if (activePerformanceProfile !=
-                VisibilityPerformanceProfile::DiagnosticConstantScheduler)
-            {
-                advancedFirstMacros.push_back({
-                    "SCHEDULER_SPECIALIZATION",
-                    std::to_string(schedulerSpecialization) });
-            }
-        }
-        else if (packedFastEnabled)
+        // Composed legacy controls use the packaged generic/fixed families.
+        // Their math and traversal switches are uniform constants, avoiding a
+        // Cartesian shader-permutation explosion.
+        if (packedFastEnabled)
         {
             advancedFirstShader =
-                "uvsr/screen_space_visibility_packed_fast_cs.hlsl";
+                "uvsr/screen_space_visibility_composed_packed_fast_cs.hlsl";
+            const uint32_t fixedSampleCount =
+                performanceConfig.trace ==
+                        VisibilityTraceImplementation::
+                            FixedInterleavedBitmask
+                    ? executionPlan.fixedFirstBounceSampleCount
+                    : 0u;
             advancedFirstMacros = {
+                { "VISIBILITY_ESTIMATOR",
+                    std::to_string(estimatorIndex) },
                 { "ENABLE_AO", ambientEnabled ? "1" : "0" },
                 { "ENABLE_GI", indirectEnabled ? "1" : "0" },
+                { "ENABLE_BOUNCE_REINJECTION", "0" },
+                { "INITIALIZE_BOUNCE_CUMULATIVE", "0" },
                 { "ENABLE_BOUNCE_METADATA",
                     writeBounceMetadata ? "1" : "0" },
-                { "FIXED_DIRECT_DEPTH", useDepthHierarchy ? "0" : "1" }
+                { "FIXED_SAMPLE_COUNT",
+                    std::to_string(fixedSampleCount) },
+                { "FIXED_RADIAL_EXPONENT_TWO",
+                    fixedSampleCount != 0u ? "1" : "0" },
+                { "FIXED_DIRECT_DEPTH", useDepthHierarchy ? "0" : "1" },
+                { "OUTPUT_PACKED_EDGES",
+                    packedEdgesEnabled ? "1" : "0" }
             };
         }
         else if (packedEdgesEnabled)
         {
             advancedFirstShader =
-                "uvsr/screen_space_visibility_algorithmic_cs.hlsl";
-            switch (activePerformanceProfile)
-            {
-            case VisibilityPerformanceProfile::
-                    AlgorithmicPackedEdgesDepthNormal2x2:
-            case VisibilityPerformanceProfile::
-                    AlgorithmicPackedEdgesLeakage2x2:
-            case VisibilityPerformanceProfile::
-                    AlgorithmicFusedPackedEdges2x2:
-            case VisibilityPerformanceProfile::
-                    AlgorithmicFusedPackedEdges4x4:
-                algorithmVariant = 5u;
-                break;
-            case VisibilityPerformanceProfile::AlgorithmicPackedEdgesSlope2x2:
-                algorithmVariant = 6u;
-                break;
-            default:
-                algorithmVariant = 4u;
-                break;
-            }
-        }
-        else if (activePerformanceProfile ==
-                VisibilityPerformanceProfile::ExactGroup16x8 ||
-            activePerformanceProfile ==
-                VisibilityPerformanceProfile::ExactGroup8x16)
-        {
-            advancedFirstShader =
-                "uvsr/screen_space_visibility_algorithmic_cs.hlsl";
-            algorithmVariant = activePerformanceProfile ==
-                    VisibilityPerformanceProfile::ExactGroup16x8
-                ? 7u : 8u;
+                "uvsr/screen_space_visibility_composed_edges_cs.hlsl";
+            const uint32_t fixedSampleCount =
+                performanceConfig.trace ==
+                        VisibilityTraceImplementation::
+                            FixedInterleavedBitmask
+                    ? executionPlan.fixedFirstBounceSampleCount
+                    : 0u;
+            advancedFirstMacros = {
+                { "VISIBILITY_ESTIMATOR",
+                    std::to_string(estimatorIndex) },
+                { "ENABLE_AO", ambientEnabled ? "1" : "0" },
+                { "ENABLE_GI", indirectEnabled ? "1" : "0" },
+                { "ENABLE_BOUNCE_REINJECTION", "0" },
+                { "INITIALIZE_BOUNCE_CUMULATIVE", "0" },
+                { "ENABLE_BOUNCE_METADATA",
+                    writeBounceMetadata ? "1" : "0" },
+                { "FIXED_SAMPLE_COUNT",
+                    std::to_string(fixedSampleCount) },
+                { "FIXED_RADIAL_EXPONENT_TWO",
+                    fixedSampleCount != 0u ? "1" : "0" },
+                { "FIXED_DIRECT_DEPTH", useDepthHierarchy ? "0" : "1" },
+                { "SCHEDULER_SPECIALIZATION",
+                    std::to_string(schedulerSpecialization) }
+            };
         }
         else
         {
-            if (performanceConfig.noise ==
-                    VisibilityNoiseDelivery::ActivisionInterleavedGradient &&
-                performanceConfig.trace ==
-                    VisibilityTraceImplementation::FixedInterleavedBitmask)
-            {
-                advancedFirstShader =
-                    "uvsr/screen_space_visibility_algorithmic_cs.hlsl";
-                algorithmVariant = 1u;
-            }
-            else switch (performanceConfig.trace)
+            switch (performanceConfig.trace)
             {
             case VisibilityTraceImplementation::FixedInterleavedBitmask:
                 advancedFirstShader =
@@ -2381,53 +2118,10 @@ namespace uvsr
                         executionPlan.fixedFirstBounceSampleCount) }
                 };
                 break;
-            case VisibilityTraceImplementation::ConstantDiagnostic:
-            case VisibilityTraceImplementation::DepthOnlyDiagnostic:
-            case VisibilityTraceImplementation::BitmaskOnlyDiagnostic:
-                advancedFirstShader =
-                    "uvsr/screen_space_visibility_diagnostic_cs.hlsl";
-                advancedFirstMacros = {
-                    { "TRACE_DIAGNOSTIC",
-                        performanceConfig.trace ==
-                            VisibilityTraceImplementation::ConstantDiagnostic
-                        ? "1"
-                        : performanceConfig.trace ==
-                                VisibilityTraceImplementation::
-                                    DepthOnlyDiagnostic
-                            ? "2" : "3" },
-                    { "SCHEDULER_SPECIALIZATION",
-                        std::to_string(schedulerSpecialization) }
-                };
-                break;
-            case VisibilityTraceImplementation::ActivisionHorizon:
-                advancedFirstShader =
-                    "uvsr/screen_space_visibility_algorithmic_cs.hlsl";
-                algorithmVariant = activePerformanceProfile ==
-                        VisibilityPerformanceProfile::ActivisionPs4Schedule ||
-                    activePerformanceProfile == VisibilityPerformanceProfile::
-                        ActivisionPs4PackedGather
-                    ? 3u : 2u;
-                break;
-            case VisibilityTraceImplementation::XeGtaoHorizon:
-                advancedFirstShader =
-                    "uvsr/screen_space_visibility_algorithmic_cs.hlsl";
-                algorithmVariant = 2u;
-                break;
             default:
                 break;
             }
         }
-        if (algorithmVariant != 0u)
-        {
-            advancedFirstMacros = {
-                { "VISIBILITY_ALGORITHM",
-                    std::to_string(algorithmVariant) },
-                { "FIXED_DIRECT_DEPTH", useDepthHierarchy ? "0" : "1" },
-                { "SCHEDULER_SPECIALIZATION",
-                    std::to_string(schedulerSpecialization) }
-            };
-        }
-
         if (advancedFirstShader)
         {
             // Advanced permutations use their reflected resource subset rather
@@ -2438,84 +2132,46 @@ namespace uvsr
             std::vector<nvrhi::BindingLayoutItem> layout = {
                 nvrhi::BindingLayoutItem::VolatileConstantBuffer(0)
             };
-            const bool diagnosticTrace = performanceConfig.trace ==
-                    VisibilityTraceImplementation::ConstantDiagnostic ||
-                performanceConfig.trace ==
-                    VisibilityTraceImplementation::DepthOnlyDiagnostic ||
-                performanceConfig.trace ==
-                    VisibilityTraceImplementation::BitmaskOnlyDiagnostic;
-            const bool diagnosticReadsDepth = performanceConfig.trace ==
-                VisibilityTraceImplementation::DepthOnlyDiagnostic;
-            if (diagnosticTrace)
-            {
-                if (diagnosticReadsDepth)
-                {
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(0));
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(1));
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(3));
-                    if (schedulerSpecialization == 2u)
-                    {
-                        layout.push_back(
-                            nvrhi::BindingLayoutItem::Texture_SRV(5));
-                    }
-                    else if (schedulerSpecialization == 3u)
-                    {
-                        layout.push_back(
-                            nvrhi::BindingLayoutItem::Texture_SRV(6));
-                    }
-                }
-                layout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(0));
-            }
-            else
-            {
-                layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(0));
-                layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(1));
-                if (indirectEnabled)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(2));
-                if (useDepthHierarchy)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(3));
-                if (activisionEnabled)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(8));
+            layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(0));
+            layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(1));
+            if (indirectEnabled)
+                layout.push_back(
+                    nvrhi::BindingLayoutItem::Texture_SRV(2));
+            if (useDepthHierarchy)
+                layout.push_back(
+                    nvrhi::BindingLayoutItem::Texture_SRV(3));
 
-                if (packedFastEnabled)
-                {
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(6));
-                }
-                else if (schedulerSpecialization == 2u)
-                {
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(5));
-                }
-                else if (schedulerSpecialization == 3u)
-                {
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(6));
-                }
-
-                if (ambientEnabled)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_UAV(0));
-                if (indirectEnabled)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_UAV(1));
-                if (packedEdgesEnabled)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_UAV(3));
+            if (packedFastEnabled)
+            {
+                layout.push_back(
+                    nvrhi::BindingLayoutItem::Texture_SRV(6));
             }
+            else if (schedulerSpecialization == 2u)
+            {
+                layout.push_back(
+                    nvrhi::BindingLayoutItem::Texture_SRV(5));
+            }
+            else if (schedulerSpecialization == 3u)
+            {
+                layout.push_back(
+                    nvrhi::BindingLayoutItem::Texture_SRV(6));
+            }
+            if (ambientEnabled)
+                layout.push_back(
+                    nvrhi::BindingLayoutItem::Texture_UAV(0));
+            if (indirectEnabled)
+                layout.push_back(
+                    nvrhi::BindingLayoutItem::Texture_UAV(1));
+            if (packedEdgesEnabled)
+                layout.push_back(
+                    nvrhi::BindingLayoutItem::Texture_UAV(3));
             const uint64_t pipelineKey = AdvancedPipelineKey(
                 executionPlan.shaderPermutationKey, 1u);
             firstPipeline = &GetOrCreateAdvancedPipeline(
                 pipelineKey, advancedFirstShader, layout,
                 &advancedFirstMacros);
             const uint64_t bindingKey = AdvancedPipelineKey(
-                pipelineKey, 0x100u + feedbackWrite);
+                pipelineKey, 0x100u);
             firstBindingSet = std::addressof(
                 m_AdvancedBindingSets[bindingKey]);
         }
@@ -2523,17 +2179,15 @@ namespace uvsr
         {
             firstPipeline = writeBounceMetadata
                 ? &m_MultiBounceFirstSampling[estimatorIndex]
-                    [ambientEnabled ? 1u : 0u][sparseSamplingIndex]
-                : &m_Sampling[estimatorIndex][consumerVariant]
-                    [sparseSamplingIndex];
+                    [ambientEnabled ? 1u : 0u]
+                : &m_Sampling[estimatorIndex][consumerVariant];
             firstBindingSet = writeBounceMetadata
                 ? std::addressof(
                     m_MultiBounceFirstBindingSets[estimatorIndex]
-                        [ambientEnabled ? 1u : 0u]
-                        [sparseSamplingIndex][feedbackWrite])
+                        [ambientEnabled ? 1u : 0u])
                 : std::addressof(
                     m_SamplingBindingSets[estimatorIndex]
-                        [consumerVariant][sparseSamplingIndex][feedbackWrite]);
+                        [consumerVariant]);
         }
 
         if (!*firstBindingSet)
@@ -2544,102 +2198,57 @@ namespace uvsr
             };
             if (advancedFirstShader)
             {
-                const bool diagnosticTrace = performanceConfig.trace ==
-                        VisibilityTraceImplementation::ConstantDiagnostic ||
-                    performanceConfig.trace ==
-                        VisibilityTraceImplementation::DepthOnlyDiagnostic ||
-                    performanceConfig.trace ==
-                        VisibilityTraceImplementation::BitmaskOnlyDiagnostic;
-                if (diagnosticTrace)
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth));
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(1, inputs.normals));
+                if (indirectEnabled)
                 {
-                    if (performanceConfig.trace ==
-                        VisibilityTraceImplementation::DepthOnlyDiagnostic)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                0, inputs.depth));
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                1, inputs.normals));
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                3, hierarchy));
-                        if (schedulerSpecialization == 2u)
-                        {
-                            bindings.bindings.push_back(
-                                nvrhi::BindingSetItem::Texture_SRV(
-                                    5, m_BlueNoiseTexture));
-                        }
-                        else if (schedulerSpecialization == 3u)
-                        {
-                            bindings.bindings.push_back(
-                                nvrhi::BindingSetItem::Texture_SRV(
-                                    6, m_FilterAdaptedNoiseTexture));
-                        }
-                    }
                     bindings.bindings.push_back(
-                        nvrhi::BindingSetItem::Texture_UAV(0, rawAmbient));
+                        nvrhi::BindingSetItem::Texture_SRV(
+                        2, sourceRadiance));
                 }
-                else
+                if (useDepthHierarchy)
                 {
                     bindings.bindings.push_back(
-                        nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth));
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            3, hierarchy));
+                }
+                if (packedFastEnabled)
+                {
                     bindings.bindings.push_back(
-                        nvrhi::BindingSetItem::Texture_SRV(1, inputs.normals));
-                    if (indirectEnabled)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                            2, sourceRadiance));
-                    }
-                    if (useDepthHierarchy)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                3, hierarchy));
-                    }
-                    if (activisionEnabled)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                8, m_ActivisionCurrentDepth));
-                    }
-                    if (packedFastEnabled)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                6, m_PackedFastNoiseTexture));
-                    }
-                    else if (schedulerSpecialization == 2u)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                5, m_BlueNoiseTexture));
-                    }
-                    else if (schedulerSpecialization == 3u)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                6, m_FilterAdaptedNoiseTexture));
-                    }
-                    if (ambientEnabled)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_UAV(
-                                0, rawAmbient));
-                    }
-                    if (indirectEnabled)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_UAV(
-                                1, rawIndirect));
-                    }
-                    if (packedEdgesEnabled)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_UAV(
-                                3, m_PackedEdgesTexture));
-                    }
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            6, m_PackedFastNoiseTexture));
+                }
+                else if (schedulerSpecialization == 2u)
+                {
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            5, m_BlueNoiseTexture));
+                }
+                else if (schedulerSpecialization == 3u)
+                {
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            6, m_FilterAdaptedNoiseTexture));
+                }
+                if (ambientEnabled)
+                {
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            0, rawAmbient));
+                }
+                if (indirectEnabled)
+                {
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            1, rawIndirect));
+                }
+                if (packedEdgesEnabled)
+                {
+                    bindings.bindings.push_back(
+                        nvrhi::BindingSetItem::Texture_UAV(
+                            3, m_PackedEdgesTexture));
                 }
             }
             else
@@ -2649,16 +2258,16 @@ namespace uvsr
                     nvrhi::BindingSetItem::Texture_SRV(1, inputs.normals),
                     nvrhi::BindingSetItem::Texture_SRV(2, sourceRadiance),
                     nvrhi::BindingSetItem::Texture_SRV(3, hierarchy),
-                    nvrhi::BindingSetItem::Texture_SRV(4, previousFeedback),
+                    nvrhi::BindingSetItem::Texture_SRV(4, m_DummyVector),
                     nvrhi::BindingSetItem::Texture_SRV(
                         5, m_BlueNoiseTexture),
                     nvrhi::BindingSetItem::Texture_SRV(
                         6, m_FilterAdaptedNoiseTexture),
-                    nvrhi::BindingSetItem::Texture_SRV(7, motion),
+                    nvrhi::BindingSetItem::Texture_SRV(7, m_DummyVector),
                     nvrhi::BindingSetItem::Texture_UAV(0, rawAmbient),
                     nvrhi::BindingSetItem::Texture_UAV(1, rawIndirect),
                     nvrhi::BindingSetItem::Texture_UAV(
-                        2, currentFeedback)
+                        2, m_DummyIndirectOutput)
                 });
             }
             *firstBindingSet = m_Device->createBindingSet(
@@ -2676,10 +2285,26 @@ namespace uvsr
             EndStage(commandList, Stage::FirstTrace);
         }
 
-        const uint32_t primaryMinimumSampleCount =
-            constants.minimumSampleCount;
         const uint32_t primaryMaximumSampleCount =
             constants.maximumSampleCount;
+        const float boundedBounceContribution =
+            std::max(settings.indirectDiffuse.minimumBounceContribution, 0.f);
+        const float contributionTerminatedBase =
+            std::max(boundedBounceContribution,
+                MinimumContributionTerminatedThreshold);
+        if (contributionTerminatedBounces && activeBounceCount > 1u)
+        {
+            nvrhi::DispatchIndirectArguments maximumDispatch;
+            maximumDispatch.setGroups3D(
+                traceDispatchX, traceDispatchY, 1u);
+            const std::array<nvrhi::DispatchIndirectArguments, 2>
+                initialArguments = { maximumDispatch, maximumDispatch };
+            commandList->clearBufferUInt(m_BounceContinuation, 0u);
+            commandList->writeBuffer(
+                m_BounceIndirectArguments,
+                initialArguments.data(),
+                sizeof(initialArguments));
+        }
         if (activeBounceCount > 1u)
             BeginStage(commandList, Stage::LaterTrace);
         else
@@ -2691,18 +2316,23 @@ namespace uvsr
             bounceIndex < activeBounceCount;
             ++bounceIndex)
         {
+            const bool instrumentBounce =
+                bounceIndex <= InstrumentedLaterBounceCount;
             const Stage bounceStage = static_cast<Stage>(
                 static_cast<uint32_t>(Stage::LaterTraceBounce2) +
                 bounceIndex - 1u);
-            BeginStage(commandList, bounceStage);
+            if (instrumentBounce)
+                BeginStage(commandList, bounceStage);
             const uint32_t outputIndex = bounceIndex & 1u;
             const uint32_t previousIndex = 1u - outputIndex;
-            constants.minimumSampleCount = GetIndirectBounceSampleCount(
-                primaryMinimumSampleCount, bounceIndex);
-            constants.maximumSampleCount = std::max(
-                constants.minimumSampleCount,
-                GetIndirectBounceSampleCount(
-                    primaryMaximumSampleCount, bounceIndex));
+            constants.maximumSampleCount = GetIndirectBounceSampleCount(
+                primaryMaximumSampleCount, bounceIndex);
+            constants.minimumBounceContribution =
+                contributionTerminatedBounces
+                ? contributionTerminatedBase * std::pow(
+                    ContributionTerminatedThresholdGrowth,
+                    float(bounceIndex - 1u))
+                : boundedBounceContribution;
             commandList->writeBuffer(
                 m_ConstantBuffer, &constants, sizeof(constants));
 
@@ -2710,7 +2340,9 @@ namespace uvsr
             const uint32_t bounceRotation = bounceIndex - 1u;
             Pipeline* pipeline = nullptr;
             nvrhi::BindingSetHandle* bindingSet = nullptr;
-            if (executionPlan.fixedLaterBounceSampleCount != 0u)
+            const bool fixedLaterTrace =
+                executionPlan.fixedLaterBounceSampleCount != 0u;
+            if (fixedLaterTrace || contributionTerminatedBounces)
             {
                 std::vector<ShaderMacro> macros = {
                     { "VISIBILITY_ESTIMATOR",
@@ -2721,56 +2353,89 @@ namespace uvsr
                     { "INITIALIZE_BOUNCE_CUMULATIVE",
                         cumulativeMode == 0u ? "1" : "0" },
                     { "ENABLE_BOUNCE_METADATA", "0" },
-                    { "SCHEDULER_SPECIALIZATION",
-                        std::to_string(schedulerSpecialization) },
-                    { "FIXED_SAMPLE_COUNT", std::to_string(
-                        executionPlan.fixedLaterBounceSampleCount) }
+                    { "ENABLE_BOUNCE_CONTINUATION",
+                        contributionTerminatedBounces ? "1" : "0" }
                 };
-                std::vector<nvrhi::BindingLayoutItem> layout = {
-                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                    nvrhi::BindingLayoutItem::Texture_SRV(0),
-                    nvrhi::BindingLayoutItem::Texture_SRV(1),
-                    nvrhi::BindingLayoutItem::Texture_SRV(2),
-                    nvrhi::BindingLayoutItem::Texture_SRV(4),
-                    nvrhi::BindingLayoutItem::Texture_SRV(5),
-                    nvrhi::BindingLayoutItem::Texture_SRV(6)
-                };
-                if (schedulerSpecialization == 2u)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(8));
-                else if (schedulerSpecialization == 3u)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(9));
+                const char* shader = fixedLaterTrace
+                    ? "uvsr/screen_space_visibility_fixed_cs.hlsl"
+                    : "uvsr/screen_space_visibility_cs.hlsl";
+                std::vector<nvrhi::BindingLayoutItem> layout;
+                if (fixedLaterTrace)
+                {
+                    macros.push_back(
+                        { "SCHEDULER_SPECIALIZATION",
+                            std::to_string(schedulerSpecialization) });
+                    macros.push_back(
+                        { "FIXED_SAMPLE_COUNT", std::to_string(
+                            executionPlan.fixedLaterBounceSampleCount) });
+                    layout = {
+                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(1),
+                        nvrhi::BindingLayoutItem::Texture_SRV(2),
+                        nvrhi::BindingLayoutItem::Texture_SRV(4),
+                        nvrhi::BindingLayoutItem::Texture_SRV(5),
+                        nvrhi::BindingLayoutItem::Texture_SRV(6)
+                    };
+                    if (schedulerSpecialization == 2u)
+                        layout.push_back(
+                            nvrhi::BindingLayoutItem::Texture_SRV(8));
+                    else if (schedulerSpecialization == 3u)
+                        layout.push_back(
+                            nvrhi::BindingLayoutItem::Texture_SRV(9));
+                }
+                else
+                {
+                    layout = {
+                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(1),
+                        nvrhi::BindingLayoutItem::Texture_SRV(2),
+                        nvrhi::BindingLayoutItem::Texture_SRV(3),
+                        nvrhi::BindingLayoutItem::Texture_SRV(4),
+                        nvrhi::BindingLayoutItem::Texture_SRV(5),
+                        nvrhi::BindingLayoutItem::Texture_SRV(6),
+                        nvrhi::BindingLayoutItem::Texture_SRV(7),
+                        nvrhi::BindingLayoutItem::Texture_SRV(8),
+                        nvrhi::BindingLayoutItem::Texture_SRV(9),
+                        nvrhi::BindingLayoutItem::Texture_SRV(10)
+                    };
+                }
                 layout.push_back(
                     nvrhi::BindingLayoutItem::Texture_UAV(0));
                 layout.push_back(
                     nvrhi::BindingLayoutItem::Texture_UAV(1));
+                if (contributionTerminatedBounces)
+                {
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::RawBuffer_UAV(2));
+                }
                 const uint64_t pipelineKey = AdvancedPipelineKey(
                     executionPlan.shaderPermutationKey,
-                    0x20u + cumulativeMode);
+                    0x20u + cumulativeMode +
+                        (contributionTerminatedBounces ? 0x10u : 0u));
                 pipeline = &GetOrCreateAdvancedPipeline(
                     pipelineKey,
-                    "uvsr/screen_space_visibility_fixed_cs.hlsl",
+                    shader,
                     layout, &macros);
                 const uint64_t bindingKey = AdvancedPipelineKey(
                     pipelineKey,
-                    0x200u + bounceRotation * 2u + feedbackWrite);
+                    0x200u + bounceRotation);
                 bindingSet = std::addressof(
                     m_AdvancedBindingSets[bindingKey]);
             }
             else
             {
                 pipeline = &m_IndirectBounceSampling[estimatorIndex]
-                    [cumulativeMode][sparseSamplingIndex];
+                    [cumulativeMode];
                 bindingSet = std::addressof(
                     m_IndirectBounceBindingSets[estimatorIndex]
-                        [cumulativeMode][sparseSamplingIndex]
-                        [bounceRotation][feedbackWrite]);
+                        [cumulativeMode][bounceRotation]);
             }
             if (!*bindingSet)
             {
                 nvrhi::BindingSetDesc bindings;
-                if (executionPlan.fixedLaterBounceSampleCount != 0u)
+                if (fixedLaterTrace)
                 {
                     bindings.bindings = {
                         nvrhi::BindingSetItem::ConstantBuffer(
@@ -2780,13 +2445,21 @@ namespace uvsr
                             1, inputs.normals),
                         nvrhi::BindingSetItem::Texture_SRV(
                             2, m_RawIndirectDiffuse[previousIndex]),
+                    };
+                    if (!fixedLaterTrace && useDepthHierarchy)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                3, hierarchy));
+                    }
+                    bindings.bindings.insert(bindings.bindings.end(), {
                         nvrhi::BindingSetItem::Texture_SRV(
                             4, inputs.gbufferDiffuse),
                         nvrhi::BindingSetItem::Texture_SRV(
                             5, inputs.gbufferEmissive),
                         nvrhi::BindingSetItem::Texture_SRV(
                             6, inputs.materialAmbientOcclusion)
-                    };
+                    });
                     if (schedulerSpecialization == 2u)
                     {
                         bindings.bindings.push_back(
@@ -2805,6 +2478,12 @@ namespace uvsr
                     bindings.bindings.push_back(
                         nvrhi::BindingSetItem::Texture_UAV(
                             1, m_CumulativeIndirectDiffuse));
+                    if (contributionTerminatedBounces)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::RawBuffer_UAV(
+                                2, m_BounceContinuation));
+                    }
                 }
                 else
                 {
@@ -2824,17 +2503,24 @@ namespace uvsr
                         nvrhi::BindingSetItem::Texture_SRV(
                             6, inputs.materialAmbientOcclusion),
                         nvrhi::BindingSetItem::Texture_SRV(
-                            7, previousFeedback),
+                            7, m_DummyVector),
                         nvrhi::BindingSetItem::Texture_SRV(
                             8, m_BlueNoiseTexture),
                         nvrhi::BindingSetItem::Texture_SRV(
                             9, m_FilterAdaptedNoiseTexture),
-                        nvrhi::BindingSetItem::Texture_SRV(10, motion),
+                        nvrhi::BindingSetItem::Texture_SRV(
+                            10, m_DummyVector),
                         nvrhi::BindingSetItem::Texture_UAV(
                             0, m_RawIndirectDiffuse[outputIndex]),
                         nvrhi::BindingSetItem::Texture_UAV(
                             1, m_CumulativeIndirectDiffuse)
                     };
+                    if (contributionTerminatedBounces)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::RawBuffer_UAV(
+                                2, m_BounceContinuation));
+                    }
                 }
                 *bindingSet = m_Device->createBindingSet(
                     bindings, pipeline->bindingLayout);
@@ -2843,16 +2529,32 @@ namespace uvsr
             nvrhi::ComputeState state;
             state.pipeline = pipeline->pipeline;
             state.bindings = { *bindingSet };
+            if (contributionTerminatedBounces)
+                state.indirectParams = m_BounceIndirectArguments;
             commandList->setComputeState(state);
-            commandList->dispatch(
-                samplingDispatchX, samplingDispatchY, 1u);
-            EndStage(commandList, bounceStage);
+            if (contributionTerminatedBounces)
+                commandList->dispatchIndirect(0u);
+            else
+                commandList->dispatch(
+                    samplingDispatchX, samplingDispatchY, 1u);
+            if (contributionTerminatedBounces)
+            {
+                nvrhi::ComputeState controlState;
+                controlState.pipeline = m_BounceDispatchControl.pipeline;
+                controlState.bindings = {
+                    m_BounceDispatchControlBindingSet
+                };
+                commandList->setComputeState(controlState);
+                commandList->dispatch(1u);
+            }
+            if (instrumentBounce)
+                EndStage(commandList, bounceStage);
         }
 
         if (activeBounceCount > 1u)
         {
             for (uint32_t bounceIndex = activeBounceCount;
-                bounceIndex < MaxIndirectDiffuseBounceCount;
+                bounceIndex <= InstrumentedLaterBounceCount;
                 ++bounceIndex)
             {
                 m_Timings.laterBounceMs[bounceIndex - 1u] = 0.f;
@@ -2861,211 +2563,56 @@ namespace uvsr
             EndStage(commandList, Stage::LaterTrace);
         }
         commandList->endMarker();
-        }
 
         nvrhi::ITexture* reconstructedAmbient = rawAmbient;
         nvrhi::ITexture* reconstructedIndirect = rawIndirect;
-        if (activisionEnabled)
-        {
-            {
-                const bool packedGather = settings.performanceProfile ==
-                    VisibilityPerformanceProfile::ActivisionPs4PackedGather;
-                const std::vector<ShaderMacro> macros = {{
-                    "ACTIVISION_PACKED_GATHER",
-                    packedGather ? "1" : "0" }};
-                const uint64_t pipelineKey = AdvancedPipelineKey(
-                    executionPlan.shaderPermutationKey, 0x71u);
-                Pipeline& pipeline = GetOrCreateAdvancedPipeline(
-                    pipelineKey,
-                    "uvsr/screen_space_visibility_activision_spatial_cs.hlsl",
-                    {
-                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                        nvrhi::BindingLayoutItem::Sampler(0),
-                        nvrhi::BindingLayoutItem::Texture_SRV(0),
-                        nvrhi::BindingLayoutItem::Texture_SRV(1),
-                        nvrhi::BindingLayoutItem::Texture_UAV(0)
-                    },
-                    &macros);
-                const uint64_t bindingKey = AdvancedPipelineKey(
-                    pipelineKey, 0x710u);
-                nvrhi::BindingSetHandle& bindingSet =
-                    m_AdvancedBindingSets[bindingKey];
-                if (!bindingSet)
-                {
-                    bindingSet = m_Device->createBindingSet({{
-                        nvrhi::BindingSetItem::ConstantBuffer(
-                            0, m_ConstantBuffer),
-                        nvrhi::BindingSetItem::Sampler(
-                            0, m_PointClampSampler),
-                        nvrhi::BindingSetItem::Texture_SRV(0, rawAmbient),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            1, m_ActivisionCurrentDepth),
-                        nvrhi::BindingSetItem::Texture_UAV(
-                            0, m_ActivisionSpatialAmbient)
-                    }}, pipeline.bindingLayout);
-                }
-                nvrhi::ComputeState state;
-                state.pipeline = pipeline.pipeline;
-                state.bindings = { bindingSet };
-                commandList->beginMarker(
-                    packedGather
-                        ? "Activision 4x4 Packed-Gather Spatial Denoise"
-                        : "Activision 4x4 Scalar Spatial Denoise");
-                BeginStage(commandList, Stage::SpatialDenoise);
-                commandList->setComputeState(state);
-                commandList->dispatch(
-                    samplingDispatchX, samplingDispatchY, 1u);
-                EndStage(commandList, Stage::SpatialDenoise);
-                commandList->endMarker();
-            }
-            reconstructedAmbient = m_ActivisionSpatialAmbient;
-        }
-        else if (!xeGtaoEnabled)
-        {
-            m_Timings.spatialDenoiseMs = 0.f;
-        }
+        m_Timings.spatialDenoiseMs = 0.f;
 
         if (temporalEnabled)
         {
             const uint32_t sourceVariant =
                 activeBounceCount > 1u ? 1u : 0u;
-            Pipeline* pipeline = nullptr;
-            nvrhi::BindingSetHandle* bindingSet = nullptr;
-            if (performanceConfig.temporal ==
-                VisibilityTemporalMode::ActivisionSixDirectionEma)
-            {
-                const std::vector<nvrhi::BindingLayoutItem> layout = {
-                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                    nvrhi::BindingLayoutItem::Texture_SRV(0),
-                    nvrhi::BindingLayoutItem::Texture_SRV(1),
-                    nvrhi::BindingLayoutItem::Texture_SRV(2),
-                    nvrhi::BindingLayoutItem::Texture_SRV(3),
-                    nvrhi::BindingLayoutItem::Texture_SRV(4),
-                    nvrhi::BindingLayoutItem::Texture_UAV(0),
-                    nvrhi::BindingLayoutItem::Texture_UAV(1)
-                };
-                const uint64_t pipelineKey = AdvancedPipelineKey(
-                    executionPlan.shaderPermutationKey, 0x42u);
-                pipeline = &GetOrCreateAdvancedPipeline(
-                    pipelineKey,
-                    "uvsr/screen_space_visibility_activision_temporal_cs.hlsl",
-                    layout);
-                const uint64_t bindingKey = AdvancedPipelineKey(
-                    pipelineKey, 0x420u + historyWrite);
-                bindingSet = std::addressof(
-                    m_AdvancedBindingSets[bindingKey]);
-            }
-            else if (performanceConfig.temporal ==
-                VisibilityTemporalMode::CopyDiagnostic)
-            {
-                const std::vector<nvrhi::BindingLayoutItem> layout = {
-                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                    nvrhi::BindingLayoutItem::Texture_SRV(0),
-                    nvrhi::BindingLayoutItem::Texture_SRV(2),
-                    nvrhi::BindingLayoutItem::Texture_SRV(3),
-                    nvrhi::BindingLayoutItem::Texture_UAV(0),
-                    nvrhi::BindingLayoutItem::Texture_UAV(2),
-                    nvrhi::BindingLayoutItem::Texture_UAV(3)
-                };
-                const uint64_t pipelineKey = AdvancedPipelineKey(
-                    executionPlan.shaderPermutationKey, 0x40u);
-                pipeline = &GetOrCreateAdvancedPipeline(
-                    pipelineKey,
-                    "uvsr/screen_space_visibility_temporal_copy_cs.hlsl",
-                    layout);
-                const uint64_t bindingKey = AdvancedPipelineKey(
-                    pipelineKey,
-                    0x400u + sourceVariant * 2u + historyWrite);
-                bindingSet = std::addressof(
-                    m_AdvancedBindingSets[bindingKey]);
-            }
-            else
-            {
-                pipeline = &m_Temporal[consumerVariant];
-                bindingSet = std::addressof(
-                    m_TemporalBindingSets[consumerVariant]
-                        [sourceVariant][historyWrite]);
-            }
+            Pipeline* pipeline = &m_Temporal[consumerVariant];
+            nvrhi::BindingSetHandle* bindingSet = std::addressof(
+                m_TemporalBindingSets[consumerVariant]
+                    [sourceVariant][historyWrite]);
             if (!*bindingSet)
             {
                 nvrhi::BindingSetDesc bindings;
-                if (performanceConfig.temporal ==
-                    VisibilityTemporalMode::ActivisionSixDirectionEma)
-                {
-                    bindings.bindings = {
-                        nvrhi::BindingSetItem::ConstantBuffer(
-                            0, m_ConstantBuffer),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            0, reconstructedAmbient),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            1, m_ActivisionCurrentDepth),
-                        nvrhi::BindingSetItem::Texture_SRV(2, motion),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            3, m_TemporalAmbientVisibility[historyRead]),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            4, m_TemporalDepth[historyRead]),
-                        nvrhi::BindingSetItem::Texture_UAV(
-                            0, m_TemporalAmbientVisibility[historyWrite]),
-                        nvrhi::BindingSetItem::Texture_UAV(
-                            1, m_TemporalDepth[historyWrite])
-                    };
-                }
-                else if (performanceConfig.temporal ==
-                    VisibilityTemporalMode::CopyDiagnostic)
-                {
-                    bindings.bindings = {
-                        nvrhi::BindingSetItem::ConstantBuffer(
-                            0, m_ConstantBuffer),
-                        nvrhi::BindingSetItem::Texture_SRV(0, rawAmbient),
-                        nvrhi::BindingSetItem::Texture_SRV(2, inputs.depth),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            3, inputs.normals),
-                        nvrhi::BindingSetItem::Texture_UAV(
-                            0,
-                            m_TemporalAmbientVisibility[historyWrite]),
-                        nvrhi::BindingSetItem::Texture_UAV(
-                            2, m_TemporalDepth[historyWrite]),
-                        nvrhi::BindingSetItem::Texture_UAV(
-                            3, m_TemporalNormal[historyWrite])
-                    };
-                }
-                else
-                {
-                    bindings.bindings = {
-                        nvrhi::BindingSetItem::ConstantBuffer(
-                            0, m_ConstantBuffer),
-                        nvrhi::BindingSetItem::Texture_SRV(0, rawAmbient),
-                        nvrhi::BindingSetItem::Texture_SRV(1, rawIndirect),
-                        nvrhi::BindingSetItem::Texture_SRV(2, inputs.depth),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            3, inputs.normals),
-                        nvrhi::BindingSetItem::Texture_SRV(4, motion),
-                        nvrhi::BindingSetItem::Texture_SRV(5,
-                            ambientEnabled
-                                ? m_TemporalAmbientVisibility[historyRead].Get()
-                                : m_DummyAmbientVisibility.Get()),
-                        nvrhi::BindingSetItem::Texture_SRV(6,
-                            indirectEnabled
-                                ? m_TemporalIndirectDiffuse[historyRead].Get()
-                                : m_DummyIndirectDiffuse.Get()),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            7, m_TemporalDepth[historyRead]),
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            8, m_TemporalNormal[historyRead]),
-                        nvrhi::BindingSetItem::Texture_UAV(0,
-                            ambientEnabled
-                                ? m_TemporalAmbientVisibility[historyWrite].Get()
-                                : m_DummyAmbientOutput.Get()),
-                        nvrhi::BindingSetItem::Texture_UAV(1,
-                            indirectEnabled
-                                ? m_TemporalIndirectDiffuse[historyWrite].Get()
-                                : m_DummyIndirectOutput.Get()),
-                        nvrhi::BindingSetItem::Texture_UAV(
-                            2, m_TemporalDepth[historyWrite]),
-                        nvrhi::BindingSetItem::Texture_UAV(
-                            3, m_TemporalNormal[historyWrite])
-                    };
-                }
+                bindings.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(
+                        0, m_ConstantBuffer),
+                    nvrhi::BindingSetItem::Texture_SRV(0, rawAmbient),
+                    nvrhi::BindingSetItem::Texture_SRV(1, rawIndirect),
+                    nvrhi::BindingSetItem::Texture_SRV(2, inputs.depth),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        3, inputs.normals),
+                    nvrhi::BindingSetItem::Texture_SRV(4, motion),
+                    nvrhi::BindingSetItem::Texture_SRV(5,
+                        ambientEnabled
+                            ? m_TemporalAmbientVisibility[historyRead].Get()
+                            : m_DummyAmbientVisibility.Get()),
+                    nvrhi::BindingSetItem::Texture_SRV(6,
+                        indirectEnabled
+                            ? m_TemporalIndirectDiffuse[historyRead].Get()
+                            : m_DummyIndirectDiffuse.Get()),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        7, m_TemporalDepth[historyRead]),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        8, m_TemporalNormal[historyRead]),
+                    nvrhi::BindingSetItem::Texture_UAV(0,
+                        ambientEnabled
+                            ? m_TemporalAmbientVisibility[historyWrite].Get()
+                            : m_DummyAmbientOutput.Get()),
+                    nvrhi::BindingSetItem::Texture_UAV(1,
+                        indirectEnabled
+                            ? m_TemporalIndirectDiffuse[historyWrite].Get()
+                            : m_DummyIndirectOutput.Get()),
+                    nvrhi::BindingSetItem::Texture_UAV(
+                        2, m_TemporalDepth[historyWrite]),
+                    nvrhi::BindingSetItem::Texture_UAV(
+                        3, m_TemporalNormal[historyWrite])
+                };
                 *bindingSet = m_Device->createBindingSet(
                     bindings, pipeline->bindingLayout);
             }
@@ -3119,13 +2666,20 @@ namespace uvsr
             if (fusedPackedEdges)
                 layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(8));
             layout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(0));
-            std::vector<ShaderMacro> macros = {{
-                "FUSED_PACKED_EDGE_RECONSTRUCTION",
-                fusedPackedEdges
-                    ? (performanceConfig.reconstruction ==
-                            VisibilityReconstructionMode::PackedEdges2x2
-                        ? "1" : "2")
-                    : "0" }};
+            std::vector<ShaderMacro> macros = {
+                {
+                    "FUSED_PACKED_EDGE_RECONSTRUCTION",
+                    fusedPackedEdges
+                        ? (performanceConfig.reconstruction ==
+                                VisibilityReconstructionMode::PackedEdges2x2
+                            ? "1" : "2")
+                        : "0"
+                },
+                {
+                    "ENABLE_AO_POWER",
+                    ambientPowerEnabled ? "1" : "0"
+                }
+            };
             const uint64_t pipelineKey = AdvancedPipelineKey(
                 executionPlan.shaderPermutationKey, 0x60u);
             Pipeline& pipeline = GetOrCreateAdvancedPipeline(
@@ -3189,96 +2743,62 @@ namespace uvsr
             m_Timings.fusedSpatialDenoiseUpsampleMs = 0.f;
             m_Timings.requiredUpsampleMs = 0.f;
         }
-        else if (postProcessEnabled && !xeGtaoEnabled)
+        else if (postProcessEnabled)
         {
             uint32_t sourceVariant = activeBounceCount > 1u ? 1u : 0u;
             if (temporalEnabled)
                 sourceVariant = 2u + historyWrite;
-            const uint32_t filterIndex = activisionEnabled
-                ? 0u
-                : std::min(
-                    spatialFilterEnabled
-                    ? static_cast<uint32_t>(
-                        settings.reconstruction.spatialFilter)
-                    : 0u,
-                    1u);
+            const uint32_t filterIndex = std::min(
+                spatialFilterEnabled
+                ? static_cast<uint32_t>(
+                    settings.reconstruction.spatialFilter)
+                : 0u,
+                1u);
             Pipeline* pipeline = nullptr;
             nvrhi::BindingSetHandle* bindingSet = nullptr;
             const char* advancedFilterShader = nullptr;
             std::vector<ShaderMacro> advancedFilterMacros;
-            if (performanceConfig.math ==
-                VisibilityMathMode::ConservativeNumericalFp32)
-            {
-                advancedFilterShader =
-                    "uvsr/screen_space_visibility_filter_exact_cs.hlsl";
-                advancedFilterMacros = {{
-                    "SPATIAL_FILTER", std::to_string(filterIndex) }};
-            }
-            else if (performanceConfig.reconstruction ==
-                    VisibilityReconstructionMode::NearestDiagnostic ||
-                performanceConfig.reconstruction ==
-                    VisibilityReconstructionMode::BilinearDiagnostic)
-            {
-                advancedFilterShader =
-                    "uvsr/screen_space_visibility_filter_diagnostic_cs.hlsl";
-                advancedFilterMacros = {{
-                    "RECONSTRUCTION_DIAGNOSTIC",
-                    performanceConfig.reconstruction ==
-                            VisibilityReconstructionMode::BilinearDiagnostic
-                        ? "1" : "2" }};
-            }
-            else if (packedEdgesEnabled)
+            if (packedEdgesEnabled)
             {
                 advancedFilterShader =
                     "uvsr/screen_space_visibility_filter_packed_edge_cs.hlsl";
                 advancedFilterMacros = {
-                    { "PACKED_EDGE_RECONSTRUCTION",
-                        performanceConfig.reconstruction ==
-                                VisibilityReconstructionMode::PackedEdges2x2
-                            ? "1" : "2" },
+                    { "ENABLE_AO", ambientEnabled ? "1" : "0" },
+                    { "ENABLE_GI", indirectEnabled ? "1" : "0" },
+                    { "PACKED_EDGE_RECONSTRUCTION", "1" },
                     { "PACKED_EDGE_CONTROLLED_LEAKAGE", "0" }
                 };
-                if (settings.performanceProfile == VisibilityPerformanceProfile::
-                    AlgorithmicPackedEdgesLeakage2x2)
+                if (settings.performance.packedEdgeMode ==
+                    VisibilityPackedEdgeMode::ControlledLeakage)
                 {
-                    advancedFilterMacros[1].definition = "1";
+                    advancedFilterMacros[3].definition = "1";
                 }
             }
-            else if (activisionEnabled)
-            {
-                advancedFilterShader =
-                    "uvsr/screen_space_visibility_filter_activision_cs.hlsl";
-            }
-
             if (advancedFilterShader)
             {
+                if (!packedEdgesEnabled)
+                {
+                    advancedFilterMacros.push_back({
+                        "ENABLE_AO", ambientEnabled ? "1" : "0" });
+                    advancedFilterMacros.push_back({
+                        "ENABLE_GI", indirectEnabled ? "1" : "0" });
+                }
                 std::vector<nvrhi::BindingLayoutItem> layout = {
                     nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
                     nvrhi::BindingLayoutItem::Texture_SRV(0)
                 };
+                if (indirectEnabled)
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(1));
                 if (packedEdgesEnabled)
                 {
                     layout.push_back(
                         nvrhi::BindingLayoutItem::Texture_SRV(4));
                 }
-                else if (activisionEnabled)
-                {
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(2));
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(3));
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(4));
-                }
-                else if (performanceConfig.math ==
-                    VisibilityMathMode::ConservativeNumericalFp32)
-                {
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(2));
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(3));
-                }
                 layout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(0));
+                if (indirectEnabled)
+                    layout.push_back(
+                        nvrhi::BindingLayoutItem::Texture_UAV(1));
                 const uint64_t pipelineKey = AdvancedPipelineKey(
                     executionPlan.shaderPermutationKey,
                     0x50u + filterIndex);
@@ -3308,37 +2828,29 @@ namespace uvsr
                         nvrhi::BindingSetItem::Texture_SRV(
                             0, reconstructedAmbient)
                     };
+                    if (indirectEnabled)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_SRV(
+                                1, reconstructedIndirect));
+                    }
                     if (packedEdgesEnabled)
                     {
                         bindings.bindings.push_back(
                             nvrhi::BindingSetItem::Texture_SRV(
                                 4, m_PackedEdgesTexture));
                     }
-                    else if (activisionEnabled)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                2, inputs.depth));
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                3, inputs.normals));
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                4, m_ActivisionCurrentDepth));
-                    }
-                    else if (performanceConfig.math ==
-                        VisibilityMathMode::ConservativeNumericalFp32)
-                    {
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                2, inputs.depth));
-                        bindings.bindings.push_back(
-                            nvrhi::BindingSetItem::Texture_SRV(
-                                3, inputs.normals));
-                    }
                     bindings.bindings.push_back(
                         nvrhi::BindingSetItem::Texture_UAV(
-                            0, m_FinalAmbientVisibility));
+                            0, ambientEnabled
+                                ? m_FinalAmbientVisibility.Get()
+                                : m_DummyAmbientOutput.Get()));
+                    if (indirectEnabled)
+                    {
+                        bindings.bindings.push_back(
+                            nvrhi::BindingSetItem::Texture_UAV(
+                                1, m_FinalIndirectDiffuse));
+                    }
                 }
                 else
                 {
@@ -3371,7 +2883,7 @@ namespace uvsr
             state.pipeline = pipeline->pipeline;
             state.bindings = { *bindingSet };
             const bool fusedSpatialDenoiseUpsample =
-                spatialFilterEnabled && !activisionEnabled;
+                spatialFilterEnabled;
             const Stage resolveStage = fusedSpatialDenoiseUpsample
                 ? Stage::FusedSpatialDenoiseUpsample
                 : Stage::RequiredUpsample;
@@ -3401,21 +2913,9 @@ namespace uvsr
             m_Timings.fullResolutionApplyMs = 0.f;
         }
 
-        const bool bypassComposition = performanceConfig.application ==
-            VisibilityApplicationMode::BypassCompositionDiagnostic;
         if (fusedResolveApply)
         {
             m_Timings.compositionMs = 0.f;
-        }
-        else if (bypassComposition)
-        {
-            commandList->beginMarker("Visibility Composition Bypass Copy");
-            BeginStage(commandList, Stage::Composition);
-            commandList->copyTexture(
-                inputs.output, nvrhi::TextureSlice(),
-                inputs.baseLighting, nvrhi::TextureSlice());
-            EndStage(commandList, Stage::Composition);
-            commandList->endMarker();
         }
         else
         {
@@ -3427,8 +2927,10 @@ namespace uvsr
                 else if (activeBounceCount > 1u)
                     compositeVariant = 1u;
             }
+            const uint32_t aoPowerVariant =
+                ambientPowerEnabled ? 1u : 0u;
             nvrhi::BindingSetHandle& compositeBindingSet =
-                m_CompositeBindingSets[compositeVariant];
+                m_CompositeBindingSets[aoPowerVariant][compositeVariant];
             if (!compositeBindingSet)
             {
                 nvrhi::BindingSetDesc bindings;
@@ -3454,10 +2956,11 @@ namespace uvsr
                     nvrhi::BindingSetItem::Texture_UAV(0, inputs.output)
                 };
                 compositeBindingSet = m_Device->createBindingSet(
-                    bindings, m_Composite.bindingLayout);
+                    bindings,
+                    m_Composite[aoPowerVariant].bindingLayout);
             }
             nvrhi::ComputeState state;
-            state.pipeline = m_Composite.pipeline;
+            state.pipeline = m_Composite[aoPowerVariant].pipeline;
             state.bindings = { compositeBindingSet };
             commandList->beginMarker("Screen-Space Indirect Composite");
             BeginStage(commandList, Stage::Composition);
@@ -3469,15 +2972,6 @@ namespace uvsr
 
         commandList->endMarker();
         EndStage(commandList, Stage::EffectEnvelope);
-        if (adaptiveEnabled)
-        {
-            m_FeedbackValid = true;
-            m_FeedbackIndex = 1u - feedbackWrite;
-        }
-        else
-        {
-            m_FeedbackValid = false;
-        }
         if (temporalEnabled)
         {
             m_HistoryValid = true;

@@ -16,7 +16,7 @@ struct ScreenSpaceVisibilityConstants
     float radiusWorld;
     float thicknessWorld;
     float stepDistributionExponent;
-    float adaptiveStrength;
+    float ambientPower;
 
     float ambientStrength;
     float indirectDiffuseIntensity;
@@ -34,9 +34,9 @@ struct ScreenSpaceVisibilityConstants
     float padding2;
 
     uint frameIndex;
-    uint minimumSampleCount;
     uint maximumSampleCount;
-    uint paddingSampleCount;
+    uint paddingSampleCount0;
+    uint paddingSampleCount1;
 
     uint knownInactiveLightingSources;
     uint enableAmbientOcclusion;
@@ -49,11 +49,11 @@ struct ScreenSpaceVisibilityConstants
     uint resolutionScale;
 
     uint sampleScheduler;
-    uint adaptiveSamplingEnabled;
-    uint feedbackValid;
     uint historyValid;
+    uint paddingHistory;
 
     uint showIndirectDiffuseOnly;
+    uint packedEdgeMode;
     uint padding3;
     uint padding4;
     uint padding5;

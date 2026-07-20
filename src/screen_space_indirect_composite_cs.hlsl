@@ -3,6 +3,10 @@
 #include <donut/shaders/binding_helpers.hlsli>
 #include "screen_space_visibility_cb.h"
 
+#ifndef ENABLE_AO_POWER
+#define ENABLE_AO_POWER 0
+#endif
+
 cbuffer c_Visibility : register(b0)
 {
     ScreenSpaceVisibilityConstants g_Visibility;
@@ -43,9 +47,15 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float adjustedAmbientVisibility = 1.0f;
     if (g_Visibility.enableAmbientOcclusion != 0u)
     {
+#if ENABLE_AO_POWER
+        float poweredAmbientVisibility = pow(
+            ambientVisibility, max(g_Visibility.ambientPower, 0.01f));
+#else
+        float poweredAmbientVisibility = ambientVisibility;
+#endif
         adjustedAmbientVisibility = saturate(
             1.0f - g_Visibility.ambientStrength *
-                (1.0f - ambientVisibility));
+                (1.0f - poweredAmbientVisibility));
     }
 
     float3 baseColor = max(t_GBufferDiffuse[pixel].rgb, 0.0f);

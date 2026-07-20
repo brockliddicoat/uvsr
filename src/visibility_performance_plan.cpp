@@ -9,7 +9,8 @@ namespace uvsr
     namespace
     {
         constexpr uint32_t c_MaximumRadialSampleCount = 64u;
-        constexpr uint32_t c_MaximumBounceCount = 8u;
+        constexpr uint32_t c_MaximumBounceCount = 16u;
+        constexpr uint32_t c_MaximumExplicitBounceCount = 8u;
         constexpr uint64_t c_FnvOffsetBasis = 14695981039346656037ull;
         constexpr uint64_t c_FnvPrime = 1099511628211ull;
 
@@ -126,10 +127,14 @@ namespace uvsr
                 return 12u;
             case VisibilitySampleSpecialization::Fixed16:
                 return 16u;
-            case VisibilitySampleSpecialization::Fixed18:
-                return 18u;
             case VisibilitySampleSpecialization::Fixed20:
                 return 20u;
+            case VisibilitySampleSpecialization::Fixed24:
+                return 24u;
+            case VisibilitySampleSpecialization::Fixed48:
+                return 48u;
+            case VisibilitySampleSpecialization::Fixed64:
+                return 64u;
             default:
                 return 0u;
             }
@@ -235,13 +240,7 @@ namespace uvsr
                 workload.scheduler == VisibilityPerformanceScheduler::
                     ToroidalBlueNoiseRankField ||
                 workload.scheduler == VisibilityPerformanceScheduler::
-                    FilterAdaptedSpatiotemporalRankField ||
-                workload.scheduler == VisibilityPerformanceScheduler::
-                    Activision4x4SixPhase ||
-                workload.scheduler ==
-                    VisibilityPerformanceScheduler::XeGtaoHilbertR2;
-            const bool constantScheduler = workload.scheduler ==
-                VisibilityPerformanceScheduler::ConstantDiagnostic;
+                    FilterAdaptedSpatiotemporalRankField;
             const bool validCounts =
                 workload.firstBounceSampleCount >= 1u &&
                 workload.firstBounceSampleCount <=
@@ -268,8 +267,7 @@ namespace uvsr
                 uint64_t(workload.threadGroupSizeX) *
                     uint64_t(workload.threadGroupSizeY) <= 1024u;
             return validConsumer && validEstimator && validResolution &&
-                (validScheduler || constantScheduler) && validCounts &&
-                validGeometry;
+                validScheduler && validCounts && validGeometry;
         }
 
         bool HasExactReferenceContract(
@@ -355,10 +353,10 @@ namespace uvsr
                 << "/exponent=" << workload.radialExponent
                 << "/group=" << workload.threadGroupSizeX << 'x'
                     << workload.threadGroupSizeY
-                << "/adaptive=" << (workload.adaptiveSamplingEnabled ? 1 : 0)
                 << "/temporal=" << (workload.temporalEnabled ? 1 : 0)
                 << "/spatial=" << (workload.spatialEnabled ? 1 : 0)
-                << "/hierarchy=" << (workload.depthHierarchyEnabled ? 1 : 0);
+                << "/hierarchy=" << (workload.depthHierarchyEnabled ? 1 : 0)
+                << "/runtime-config=" << workload.runtimeConfigurationKey;
             return name.str();
         }
 
@@ -399,10 +397,10 @@ namespace uvsr
             HashFloat(hash, workload.radialExponent);
             HashUint32(hash, workload.threadGroupSizeX);
             HashUint32(hash, workload.threadGroupSizeY);
-            HashBool(hash, workload.adaptiveSamplingEnabled);
             HashBool(hash, workload.temporalEnabled);
             HashBool(hash, workload.spatialEnabled);
             HashBool(hash, workload.depthHierarchyEnabled);
+            HashUint64(hash, workload.runtimeConfigurationKey);
             HashUint64(hash, plan.resourceMask);
             HashUint64(hash, plan.bindingMask);
             HashUint64(hash, plan.passMask);
@@ -437,10 +435,10 @@ namespace uvsr
             HashUint32(hash, workload.bounceCount);
             HashUint32(hash, workload.threadGroupSizeX);
             HashUint32(hash, workload.threadGroupSizeY);
-            HashBool(hash, workload.adaptiveSamplingEnabled);
             HashBool(hash, workload.temporalEnabled);
             HashBool(hash, workload.spatialEnabled);
             HashBool(hash, workload.depthHierarchyEnabled);
+            HashUint64(hash, workload.runtimeConfigurationKey);
             HashUint64(hash, plan.resourceMask);
             HashUint64(hash, plan.bindingMask);
             HashUint64(hash, plan.passMask);
@@ -455,7 +453,7 @@ namespace uvsr
             uint64_t hash = c_FnvOffsetBasis;
             // Profile identity intentionally participates even for exact
             // profiles so benchmark switches cannot reuse another profile's
-            // accumulated history or adaptive feedback.
+            // accumulated history.
             HashEnum(hash, configuration.profile);
             HashUint64(hash, permutationKey);
             HashEnum(hash, workload.consumer);
@@ -474,9 +472,9 @@ namespace uvsr
             HashFloat(hash, workload.radius);
             HashFloat(hash, workload.thickness);
             HashFloat(hash, workload.radialExponent);
-            HashBool(hash, workload.adaptiveSamplingEnabled);
             HashBool(hash, workload.temporalEnabled);
             HashBool(hash, workload.spatialEnabled);
+            HashUint64(hash, workload.runtimeConfigurationKey);
             return hash;
         }
 
@@ -500,7 +498,6 @@ namespace uvsr
             workload.radialExponent = 2.0f;
             workload.threadGroupSizeX = 8u;
             workload.threadGroupSizeY = 8u;
-            workload.adaptiveSamplingEnabled = false;
             workload.temporalEnabled = false;
             workload.spatialEnabled = false;
             workload.depthHierarchyEnabled = false;
@@ -546,11 +543,6 @@ namespace uvsr
                 expected.threadGroupSizeY != observed.threadGroupSizeY)
             {
                 return "Thread-group shape does not match the profile.";
-            }
-            if (expected.adaptiveSamplingEnabled !=
-                observed.adaptiveSamplingEnabled)
-            {
-                return "Adaptive-sampling state does not match the profile.";
             }
             if (expected.temporalEnabled != observed.temporalEnabled)
                 return "Temporal state does not match the profile.";
@@ -612,7 +604,7 @@ namespace uvsr
                 profile, "Reference", Class::Reference,
                 Trace::LegacyGenericBitmask, Samples::Runtime,
                 Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
+                Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::LegacySeparateComposition,
                 Depth::Legacy, Bindings::LegacyBroad,
                 Traversal::InterleavedNegativePositiveNearToFar,
@@ -621,8 +613,8 @@ namespace uvsr
             return MakeConfiguration(
                 profile, "Exact Fixed 8", Class::Exact,
                 Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
+                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::LegacySeparateComposition,
                 Depth::Legacy, Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
@@ -631,8 +623,8 @@ namespace uvsr
             return MakeConfiguration(
                 profile, "Exact Fixed 12", Class::Exact,
                 Trace::FixedInterleavedBitmask, Samples::Fixed12,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
+                Samples::Fixed12, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::LegacySeparateComposition,
                 Depth::Legacy, Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
@@ -641,8 +633,8 @@ namespace uvsr
             return MakeConfiguration(
                 profile, "Exact Fixed 16", Class::Exact,
                 Trace::FixedInterleavedBitmask, Samples::Fixed16,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
+                Samples::Fixed16, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::LegacySeparateComposition,
                 Depth::Legacy, Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
@@ -651,40 +643,50 @@ namespace uvsr
             return MakeConfiguration(
                 profile, "Exact Fixed 20", Class::Exact,
                 Trace::FixedInterleavedBitmask, Samples::Fixed20,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
+                Samples::Fixed20, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::LegacySeparateComposition,
                 Depth::Legacy, Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::Any, Resolution::Any, false, false);
-        case VisibilityPerformanceProfile::ExactFixedLaterBounce8:
+        case VisibilityPerformanceProfile::ExactFixed24:
             return MakeConfiguration(
-                profile, "Exact Fixed Later-Bounce 8", Class::Exact,
-                Trace::LegacyGenericBitmask, Samples::Runtime,
-                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::LegacyBroad,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                 Consumer::IncludesIndirectDiffuse, Resolution::Any,
-                 false, false);
-        case VisibilityPerformanceProfile::ExactFixedAllBounce8:
-            return MakeConfiguration(
-                profile, "Exact Fixed All-Bounce 8", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
+                profile, "Exact Fixed 24", Class::Exact,
+                Trace::FixedInterleavedBitmask, Samples::Fixed24,
+                Samples::Fixed24, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::LegacySeparateComposition,
                 Depth::Legacy, Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::IncludesIndirectDiffuse, Resolution::Any,
+                Consumer::Any, Resolution::Any, false, false);
+        case VisibilityPerformanceProfile::ExactFixed48:
+            return MakeConfiguration(
+                profile, "Exact Fixed 48", Class::Exact,
+                Trace::FixedInterleavedBitmask, Samples::Fixed48,
+                Samples::Fixed48, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::Legacy,
+                Temporal::Legacy, Application::LegacySeparateComposition,
+                Depth::Legacy, Bindings::MinimalConditional,
+                Traversal::InterleavedNegativePositiveNearToFar,
+                Consumer::Any, Resolution::Any, false, false);
+        case VisibilityPerformanceProfile::ExactFixed64:
+            return MakeConfiguration(
+                profile, "Exact Fixed 64", Class::Exact,
+                Trace::FixedInterleavedBitmask, Samples::Fixed64,
+                Samples::Fixed64, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::Legacy,
+                Temporal::Legacy, Application::LegacySeparateComposition,
+                Depth::Legacy, Bindings::MinimalConditional,
+                Traversal::InterleavedNegativePositiveNearToFar,
+                Consumer::Any, Resolution::Any,
                 false, false);
         case VisibilityPerformanceProfile::ExactPackedCurrentFast:
             return MakeConfiguration(
-                profile, "Exact Packed Current FAST", Class::Exact,
+                profile, "Offline Packed Spacetime Noise",
+                Class::Exact,
                 Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::PackedCurrentFast,
-                Math::ReferenceFp32, Storage::R16Float,
+                Samples::Fixed8, Noise::PackedCurrentFast,
+                Math::ReferenceFp32, Storage::ScalarFloat,
                 Reconstruction::Legacy, Temporal::Legacy,
                 Application::LegacySeparateComposition, Depth::Legacy,
                 Bindings::MinimalConditional,
@@ -694,10 +696,10 @@ namespace uvsr
                 Estimator::UniformSolidAngle);
         case VisibilityPerformanceProfile::ExactFusedResolveApply:
             return MakeConfiguration(
-                profile, "Exact Fused Resolve And Apply", Class::Exact,
+                profile, "Fused Apply", Class::Exact,
                 Trace::LegacyGenericBitmask, Samples::Runtime,
                 Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
+                Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::FusedResolveAndApplyExact,
                 Depth::Legacy, Bindings::LegacyBroad,
                 Traversal::InterleavedNegativePositiveNearToFar,
@@ -705,298 +707,81 @@ namespace uvsr
                 false, true);
         case VisibilityPerformanceProfile::ExactFixed8FusedResolveApply:
             return MakeConfiguration(
-                profile, "Exact Fixed 8 + Fused Resolve And Apply",
+                profile, "Fixed 8 Fused Apply",
                 Class::Exact,
                 Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
+                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::FusedResolveAndApplyExact,
                 Depth::Legacy, Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::AmbientOcclusionOnly, Resolution::Reduced,
                 false, true, Edge::None,
                 Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::DiagnosticFusedFullResolutionAoOutput:
-            return MakeConfiguration(
-                profile, "Fused Debug Full-Resolution AO Output",
-                Class::Diagnostic,
-                Trace::LegacyGenericBitmask, Samples::Runtime,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::LegacyBroad,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Reduced,
-                true, false);
-        case VisibilityPerformanceProfile::ExactGroup16x8:
-            return MakeConfiguration(
-                profile, "Exact Trace Group 16x8", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                false, false, Edge::None,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::ExactGroup8x16:
-            return MakeConfiguration(
-                profile, "Exact Trace Group 8x16", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                false, false, Edge::None,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::ExactDuplicatePixelRejectionOff:
-            return MakeConfiguration(
-                profile, "Exact Duplicate Rejection Off", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                true, false, Edge::None,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::ExactFullMaskEarlyExitOff:
-            return MakeConfiguration(
-                profile, "Exact Full-Mask Early Exit Off", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                true, false, Edge::None,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::AlgorithmicProjectedRadiusClamp32:
-        case VisibilityPerformanceProfile::AlgorithmicProjectedRadiusClamp64:
-        case VisibilityPerformanceProfile::AlgorithmicProjectedRadiusClamp128:
-            return MakeConfiguration(
-                profile,
-                profile == VisibilityPerformanceProfile::
-                        AlgorithmicProjectedRadiusClamp32
-                    ? "Algorithmic Projected Radius Clamp 32"
-                    : profile == VisibilityPerformanceProfile::
-                            AlgorithmicProjectedRadiusClamp64
-                        ? "Algorithmic Projected Radius Clamp 64"
-                        : "Algorithmic Projected Radius Clamp 128",
-                Class::Algorithmic,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                false, false, Edge::None,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::DiagnosticConstantScheduler:
-            return MakeConfiguration(
-                profile, "Diagnostic Constant Scheduler", Class::Diagnostic,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::ConstantDiagnostic,
-                Math::ReferenceFp32, Storage::R16Float,
-                Reconstruction::Legacy, Temporal::Legacy,
-                Application::LegacySeparateComposition, Depth::Legacy,
-                Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                true, false, Edge::None,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::DiagnosticConstantTrace:
-            return MakeConfiguration(
-                profile, "Diagnostic Constant Trace", Class::Diagnostic,
-                Trace::ConstantDiagnostic, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                true, false, Edge::None,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::DiagnosticDepthOnlyTrace:
-            return MakeConfiguration(
-                profile, "Diagnostic Depth-Only Trace", Class::Diagnostic,
-                Trace::DepthOnlyDiagnostic, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                true, false, Edge::None,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::DiagnosticBitmaskOnlyTrace:
-            return MakeConfiguration(
-                profile, "Diagnostic Bitmask-Only Trace", Class::Diagnostic,
-                Trace::BitmaskOnlyDiagnostic, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                true, false, Edge::None,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::DiagnosticTemporalCopy:
-            return MakeConfiguration(
-                profile, "Diagnostic Temporal Copy", Class::Diagnostic,
-                Trace::LegacyGenericBitmask, Samples::Runtime,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::CopyDiagnostic,
-                Application::LegacySeparateComposition, Depth::Legacy,
-                Bindings::LegacyBroad,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                true, false);
-        case VisibilityPerformanceProfile::DiagnosticNearestResolve:
-            return MakeConfiguration(
-                profile, "Diagnostic Nearest Resolve", Class::Diagnostic,
-                Trace::LegacyGenericBitmask, Samples::Runtime,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::NearestDiagnostic,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::LegacyBroad,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Reduced,
-                true, false);
-        case VisibilityPerformanceProfile::DiagnosticBilinearResolve:
-            return MakeConfiguration(
-                profile, "Diagnostic Bilinear Resolve", Class::Diagnostic,
-                Trace::LegacyGenericBitmask, Samples::Runtime,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::BilinearDiagnostic,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::LegacyBroad,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Reduced,
-                true, false);
-        case VisibilityPerformanceProfile::DiagnosticCompositionOnly:
-            return MakeConfiguration(
-                profile, "Diagnostic Composition Only", Class::Diagnostic,
-                Trace::ConstantDiagnostic, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy,
-                Application::IsolatedCompositionDiagnostic, Depth::Legacy,
-                Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                true, false, Edge::None,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::DiagnosticCompositionBypass:
-            return MakeConfiguration(
-                profile, "Diagnostic Composition Bypass", Class::Diagnostic,
-                Trace::LegacyGenericBitmask, Samples::Runtime,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
-                Temporal::Legacy,
-                Application::BypassCompositionDiagnostic, Depth::Legacy,
-                Bindings::LegacyBroad,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                true, false);
-        case VisibilityPerformanceProfile::ConservativeNumerical:
-            return MakeConfiguration(
-                profile, "Conservative Numerical", Class::Numerical,
-                Trace::LegacyGenericBitmask, Samples::Runtime,
-                Samples::Runtime, Noise::Legacy,
-                Math::ConservativeNumericalFp32, Storage::R16Float,
-                Reconstruction::Legacy, Temporal::Legacy,
-                Application::LegacySeparateComposition, Depth::Legacy,
-                Bindings::LegacyBroad,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Any,
-                false, false, Edge::None, Estimator::Any,
-                Status::PartialBenchmarkControl,
-                "Only the exact-fast FP32 AO filter algebra is compiled; "
-                "no mixed-precision trace permutation exists.");
         case VisibilityPerformanceProfile::AlgorithmicPackedEdges2x2:
             return MakeConfiguration(
-                profile, "Algorithmic Depth Edges 2x2", Class::Algorithmic,
+                profile, "Depth-Guided Reconstruction",
+                Class::Algorithmic,
                 Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float,
+                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat,
                 Reconstruction::PackedEdges2x2, Temporal::Legacy,
                 Application::LegacySeparateComposition, Depth::Legacy,
                 Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Reduced,
-                false, false, Edge::R8Uint,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::AlgorithmicPackedEdges4x4:
-            return MakeConfiguration(
-                profile, "Algorithmic Depth Edges 4x4", Class::Algorithmic,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float,
-                Reconstruction::PackedEdges4x4, Temporal::Legacy,
-                Application::LegacySeparateComposition, Depth::Legacy,
-                Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Reduced,
+                Consumer::Any, Resolution::Reduced,
                 false, false, Edge::R8Uint,
                 Estimator::UniformSolidAngle);
         case VisibilityPerformanceProfile::
                 AlgorithmicPackedEdgesDepthNormal2x2:
             return MakeConfiguration(
-                profile, "Algorithmic Depth And Normal Edges 2x2",
+                profile, "Depth-Normal Reconstruction",
                 Class::Algorithmic,
                 Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::PackedEdges2x2,
+                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::PackedEdges2x2,
                 Temporal::Legacy,
                 Application::LegacySeparateComposition, Depth::Legacy,
                 Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Reduced,
+                Consumer::Any, Resolution::Reduced,
                 false, false, Edge::R8Uint,
                 Estimator::UniformSolidAngle);
         case VisibilityPerformanceProfile::AlgorithmicPackedEdgesSlope2x2:
             return MakeConfiguration(
-                profile, "Algorithmic Slope-Adjusted Edges 2x2",
+                profile, "Slope-Aware Reconstruction",
                 Class::Algorithmic,
                 Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::PackedEdges2x2,
+                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::PackedEdges2x2,
                 Temporal::Legacy,
                 Application::LegacySeparateComposition, Depth::Legacy,
                 Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Reduced,
+                Consumer::Any, Resolution::Reduced,
                 false, false, Edge::R8Uint,
                 Estimator::UniformSolidAngle);
         case VisibilityPerformanceProfile::AlgorithmicPackedEdgesLeakage2x2:
             return MakeConfiguration(
-                profile, "Algorithmic Controlled-Leakage Edges 2x2",
+                profile, "Leakage-Limited Reconstruction",
                 Class::Algorithmic,
                 Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::PackedEdges2x2,
+                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::PackedEdges2x2,
                 Temporal::Legacy,
                 Application::LegacySeparateComposition, Depth::Legacy,
                 Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Reduced,
+                Consumer::Any, Resolution::Reduced,
                 false, false, Edge::R8Uint,
                 Estimator::UniformSolidAngle);
         case VisibilityPerformanceProfile::AlgorithmicFusedPackedEdges2x2:
             return MakeConfiguration(
-                profile, "Algorithmic Fused Packed Edges 2x2",
+                profile, "Fused Depth-Normal Apply",
                 Class::Algorithmic,
                 Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::PackedEdges2x2,
+                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Storage::ScalarFloat, Reconstruction::PackedEdges2x2,
                 Temporal::Legacy,
                 Application::FusedResolveAndApplyPackedEdges,
                 Depth::Legacy, Bindings::MinimalConditional,
@@ -1004,117 +789,12 @@ namespace uvsr
                 Consumer::AmbientOcclusionOnly, Resolution::Reduced,
                 false, false, Edge::R8Uint,
                 Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::AlgorithmicFusedPackedEdges4x4:
-            return MakeConfiguration(
-                profile, "Algorithmic Fused Packed Edges 4x4",
-                Class::Algorithmic,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::PackedEdges4x4,
-                Temporal::Legacy,
-                Application::FusedResolveAndApplyPackedEdges,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Reduced,
-                false, false, Edge::R8Uint,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::AlgorithmicActivisionSchedule:
-            return MakeConfiguration(
-                profile, "Algorithmic Activision Schedule 8", Class::Algorithmic,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Runtime, Noise::ActivisionInterleavedGradient,
-                Math::ReferenceFp32, Storage::R16Float,
-                Reconstruction::Legacy, Temporal::Legacy,
-                Application::LegacySeparateComposition, Depth::Legacy,
-                Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Half,
-                false, false, Edge::None,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::ActivisionClosestMatch:
-            return MakeConfiguration(
-                profile, "UVSR Horizon GTAO Control 8", Class::Algorithmic,
-                Trace::ActivisionHorizon, Samples::Fixed8,
-                Samples::Runtime, Noise::Legacy,
-                Math::ReferenceFp32, Storage::R16Float,
-                Reconstruction::Legacy, Temporal::Legacy,
-                Application::LegacySeparateComposition, Depth::Legacy,
-                Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Half,
-                true, false, Edge::None,
-                Estimator::UniformSolidAngle,
-                Status::PartialBenchmarkControl,
-                "This is the compiled same-engine analytic-horizon control, "
-                "not an Activision PS4 pipeline reproduction.");
-        case VisibilityPerformanceProfile::ActivisionPs4Schedule:
-        case VisibilityPerformanceProfile::ActivisionPs4PackedGather:
-            return MakeConfiguration(
-                profile,
-                profile == VisibilityPerformanceProfile::
-                        ActivisionPs4PackedGather
-                    ? "Activision PS4 GTAO Approximation (Packed 4x4 Gather)"
-                    : "Activision PS4 GTAO Approximation (Scalar 4x4 Filter)",
-                Class::Algorithmic,
-                Trace::ActivisionHorizon, Samples::Fixed8,
-                Samples::Runtime, Noise::ActivisionInterleavedGradient,
-                Math::ReferenceFp32, Storage::R16Float,
-                Reconstruction::ActivisionBilateral4x4,
-                Temporal::ActivisionSixDirectionEma,
-                Application::LegacySeparateComposition,
-                Depth::ActivisionClampedScreenRadius,
-                Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Half,
-                true, false, Edge::None,
-                Estimator::UniformSolidAngle,
-                Status::Implemented,
-                "Published eight-tap schedule and depth-spatial-temporal pass "
-                "order, with disclosed UVSR values for unpublished shipping "
-                "constants; this remains an approximation, not copied "
-                "Activision source code.");
-        case VisibilityPerformanceProfile::XeGtaoClosestMatch:
-        case VisibilityPerformanceProfile::XeGtaoHighInlineHilbert:
-        case VisibilityPerformanceProfile::XeGtaoHighFp32:
-            return MakeConfiguration(
-                profile,
-                profile == VisibilityPerformanceProfile::
-                        XeGtaoHighInlineHilbert
-                    ? "Intel XeGTAO 1.30 High Source Port (Inline Hilbert, "
-                        "Mixed Precision)"
-                    : profile == VisibilityPerformanceProfile::XeGtaoHighFp32
-                        ? "Intel XeGTAO 1.30 High Source Port (LUT, FP32)"
-                        : "Intel XeGTAO 1.30 High Source Port (LUT, Mixed "
-                            "Precision)",
-                Class::Algorithmic,
-                Trace::XeGtaoHorizon, Samples::Fixed18,
-                Samples::Runtime,
-                profile == VisibilityPerformanceProfile::
-                        XeGtaoHighInlineHilbert
-                    ? Noise::XeGtaoInlineHilbertR2
-                    : Noise::XeGtaoHilbertR2,
-                profile == VisibilityPerformanceProfile::XeGtaoHighFp32
-                    ? Math::ReferenceFp32
-                    : Math::XeGtaoMixedPrecision,
-                Storage::R16Float,
-                Reconstruction::XeGtaoDenoise, Temporal::Legacy,
-                Application::LegacySeparateComposition,
-                Depth::XeGtaoPrefilteredMips,
-                Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Full,
-                true, false, Edge::R8Unorm,
-                Estimator::UniformSolidAngle, Status::Implemented,
-                "Direct port of the pinned Intel 1.30 High shader path with "
-                "documented UVSR adapters for R16F AO storage, world normals, "
-                "and view transforms; source math is retained, but engine "
-                "integration prevents bit-identical output.");
         case VisibilityPerformanceProfile::GenericFallback:
             return MakeConfiguration(
                 profile, "Generic Fallback", Class::Exact,
                 Trace::LegacyGenericBitmask, Samples::Runtime,
                 Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
-                Storage::R16Float, Reconstruction::Legacy,
+                Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::LegacySeparateComposition,
                 Depth::Legacy, Bindings::LegacyBroad,
                 Traversal::InterleavedNegativePositiveNearToFar,
@@ -1133,27 +813,27 @@ namespace uvsr
             IsAssignedEnum(configuration.optimizationClass,
                 VisibilityOptimizationClass::Algorithmic) &&
             IsAssignedEnum(configuration.trace,
-                VisibilityTraceImplementation::XeGtaoHorizon) &&
+                VisibilityTraceImplementation::FixedInterleavedBitmask) &&
             IsAssignedEnum(configuration.firstBounceSamples,
-                VisibilitySampleSpecialization::Fixed20) &&
+                VisibilitySampleSpecialization::Fixed64) &&
             IsAssignedEnum(configuration.laterBounceSamples,
-                VisibilitySampleSpecialization::Fixed20) &&
+                VisibilitySampleSpecialization::Fixed64) &&
             IsAssignedEnum(configuration.noise,
-                VisibilityNoiseDelivery::XeGtaoInlineHilbertR2) &&
+                VisibilityNoiseDelivery::PackedCurrentFast) &&
             IsAssignedEnum(configuration.math,
-                VisibilityMathMode::XeGtaoMixedPrecision) &&
+                VisibilityMathMode::ReferenceFp32) &&
             IsAssignedEnum(configuration.rawAoStorage,
-                VisibilityRawAoStorage::PackedCountAndEdgesR16Uint) &&
+                VisibilityRawAoStorage::ScalarFloat) &&
             IsAssignedEnum(configuration.edgeStorage,
-                VisibilityEdgeStorage::R8Unorm) &&
+                VisibilityEdgeStorage::R8Uint) &&
             IsAssignedEnum(configuration.reconstruction,
-                VisibilityReconstructionMode::XeGtaoDenoise) &&
+                VisibilityReconstructionMode::PackedEdges2x2) &&
             IsAssignedEnum(configuration.temporal,
-                VisibilityTemporalMode::ActivisionSixDirectionEma) &&
+                VisibilityTemporalMode::Legacy) &&
             IsAssignedEnum(configuration.application,
-                VisibilityApplicationMode::BypassCompositionDiagnostic) &&
+                VisibilityApplicationMode::FusedResolveAndApplyPackedEdges) &&
             IsAssignedEnum(configuration.depth,
-                VisibilityDepthMode::XeGtaoPrefilteredMips) &&
+                VisibilityDepthMode::Legacy) &&
             IsAssignedEnum(configuration.bindings,
                 VisibilityBindingStrategy::MinimalConditional) &&
             IsAssignedEnum(configuration.traversal,
@@ -1232,16 +912,10 @@ namespace uvsr
             HasIndirectDiffuse(workload.consumer);
         const bool reducedResolution =
             IsReducedResolution(workload.resolution);
-        const bool usesActivisionDepthPreparation = configuration.depth ==
-            VisibilityDepthMode::ActivisionClampedScreenRadius;
-        const bool usesXeGtaoDepthPreparation = configuration.depth ==
-            VisibilityDepthMode::XeGtaoPrefilteredMips;
         const bool usesLegacyDepthPreparation =
             workload.depthHierarchyEnabled;
-        const bool usesDepthPreparation = usesLegacyDepthPreparation ||
-            usesActivisionDepthPreparation || usesXeGtaoDepthPreparation;
-        const bool bindsDepthHierarchy = usesLegacyDepthPreparation ||
-            usesXeGtaoDepthPreparation;
+        const bool usesDepthPreparation = usesLegacyDepthPreparation;
+        const bool bindsDepthHierarchy = usesLegacyDepthPreparation;
 
         if (configuration.consumerRequirement ==
                 VisibilityConsumerRequirement::AmbientOcclusionOnly &&
@@ -1293,24 +967,11 @@ namespace uvsr
             return reject(VisibilityPlanError::ProfileEstimatorMismatch,
                 "The workload estimator does not match the compiled shader.");
         }
-        uint32_t requiredGroupSizeX = 8u;
-        uint32_t requiredGroupSizeY = 8u;
-        if (configuration.profile ==
-            VisibilityPerformanceProfile::ExactGroup16x8)
-        {
-            requiredGroupSizeX = 16u;
-        }
-        else if (configuration.profile ==
-            VisibilityPerformanceProfile::ExactGroup8x16)
-        {
-            requiredGroupSizeY = 16u;
-        }
-        if (workload.threadGroupSizeX != requiredGroupSizeX ||
-            workload.threadGroupSizeY != requiredGroupSizeY)
+        if (workload.threadGroupSizeX != 8u ||
+            workload.threadGroupSizeY != 8u)
         {
             return reject(VisibilityPlanError::ProfileThreadGroupMismatch,
-                "The workload thread-group shape does not match the "
-                "compiled profile.");
+                "Visibility profiles use the retained 8x8 thread-group shape.");
         }
 
         const uint32_t fixedFirstCount =
@@ -1339,165 +1000,28 @@ namespace uvsr
             return reject(VisibilityPlanError::FixedExponentMismatch,
                 "The fixed shader is compiled for a quadratic radial exponent.");
         }
-        if ((fixedFirstCount != 0u || fixedLaterCount != 0u) &&
-            workload.adaptiveSamplingEnabled)
-        {
-            return reject(VisibilityPlanError::AdaptiveFixedCountConflict,
-                "A fixed-count shader cannot use adaptive sample counts.");
-        }
-        if (fixedLaterCount != 0u &&
-            (!hasIndirectDiffuse || workload.bounceCount < 2u))
-        {
-            return reject(
-                VisibilityPlanError::
-                    LaterBounceSpecializationRequiresIndirectDiffuse,
-                "A fixed later-bounce shader requires a later GI bounce.");
-        }
         if (configuration.noise == VisibilityNoiseDelivery::PackedCurrentFast &&
             workload.scheduler != VisibilityPerformanceScheduler::
                 FilterAdaptedSpatiotemporalRankField)
         {
             return reject(VisibilityPlanError::ProfileSchedulerMismatch,
-                "Packed Current FAST requires the current FAST scheduler.");
+                "Offline Packed Spacetime Noise requires the matching "
+                "Offline Spacetime Noise schedule.");
         }
-        if (configuration.noise == VisibilityNoiseDelivery::Legacy &&
-            (workload.scheduler ==
-                    VisibilityPerformanceScheduler::Activision4x4SixPhase ||
-                workload.scheduler ==
-                    VisibilityPerformanceScheduler::XeGtaoHilbertR2 ||
-                workload.scheduler ==
-                    VisibilityPerformanceScheduler::ConstantDiagnostic))
-        {
-            return reject(VisibilityPlanError::ProfileSchedulerMismatch,
-                "The legacy shader supports only Independent, Toroidal, or "
-                "current scalar FAST scheduling.");
-        }
-        if (configuration.noise ==
-                VisibilityNoiseDelivery::ConstantDiagnostic &&
-            workload.scheduler !=
-                VisibilityPerformanceScheduler::ConstantDiagnostic)
-        {
-            return reject(VisibilityPlanError::ProfileSchedulerMismatch,
-                "The constant-scheduler diagnostic requires its fixed "
-                "deterministic scheduler.");
-        }
-        if (configuration.noise ==
-                VisibilityNoiseDelivery::ActivisionInterleavedGradient &&
-            workload.scheduler !=
-                VisibilityPerformanceScheduler::Activision4x4SixPhase)
-        {
-            return reject(VisibilityPlanError::ProfileSchedulerMismatch,
-                "The Activision schedule requires its 4x4-by-6 scheduler.");
-        }
-        if (configuration.noise == VisibilityNoiseDelivery::XeGtaoHilbertR2 &&
-            workload.scheduler !=
-                VisibilityPerformanceScheduler::XeGtaoHilbertR2)
-        {
-            return reject(VisibilityPlanError::ProfileSchedulerMismatch,
-                "The XeGTAO profile requires its Hilbert/R2 scheduler.");
-        }
-        if (configuration.noise ==
-                VisibilityNoiseDelivery::XeGtaoInlineHilbertR2 &&
-            workload.scheduler !=
-                VisibilityPerformanceScheduler::XeGtaoHilbertR2)
-        {
-            return reject(VisibilityPlanError::ProfileSchedulerMismatch,
-                "The inline XeGTAO Hilbert profile requires its R2 scheduler.");
-        }
-        if (usesActivisionDepthPreparation &&
-            (!workload.spatialEnabled ||
-                workload.radialExponent != 1.0f ||
-                workload.depthHierarchyEnabled))
-        {
-            return reject(
-                VisibilityPlanError::BenchmarkProfileContractViolation,
-                "The Activision approximation requires its 4x4 spatial pass, "
-                "linear eight-tap distribution, and dedicated half-resolution "
-                "depth preparation.");
-        }
-        if (usesXeGtaoDepthPreparation &&
-            (!workload.spatialEnabled || workload.temporalEnabled ||
-                workload.depthHierarchyEnabled ||
-                workload.thickness != 0.0f ||
-                workload.radialExponent != 2.0f))
-        {
-            return reject(
-                VisibilityPlanError::BenchmarkProfileContractViolation,
-                "The XeGTAO 1.30 High source port requires its sharp denoise, "
-                "static non-temporal path, intrinsic five-mip prefilter, zero "
-                "thin-occluder compensation, and source distribution power.");
-        }
-        if ((configuration.temporal ==
-                    VisibilityTemporalMode::CopyDiagnostic ||
-                configuration.temporal ==
-                    VisibilityTemporalMode::ActivisionSixDirectionEma) &&
-            !workload.temporalEnabled)
-        {
-            return reject(
-                VisibilityPlanError::TemporalModeRequiresHistory,
-                "The selected temporal mode requires temporal history.");
-        }
-
-        const bool encodedAo = configuration.rawAoStorage !=
-            VisibilityRawAoStorage::R16Float;
-        if (encodedAo && (!hasAmbientOcclusion ||
-                workload.estimator != VisibilityPerformanceEstimator::
-                    UniformProjectedAngle))
-        {
-            return reject(VisibilityPlanError::UnsupportedAoEncoding,
-                "R8 and packed-count AO are valid only for the bounded "
-                "Uniform Projected Angle estimator.");
-        }
-        if (configuration.rawAoStorage == VisibilityRawAoStorage::R8Unorm)
-        {
-            return reject(
-                VisibilityPlanError::ProfileImplementationUnavailable,
-                "Raw R8_UNORM AO is mathematically permitted for this "
-                "estimator, but no compiled trace permutation writes it.");
-        }
-        if (configuration.rawAoStorage ==
-            VisibilityRawAoStorage::PackedCountAndEdgesR16Uint)
-        {
-            return reject(
-                VisibilityPlanError::ProfileImplementationUnavailable,
-                "Packed R16_UINT AO plus edges is modeled as an experiment, "
-                "but no compiled trace or resolve permutation implements it.");
-        }
-        if (configuration.edgeStorage == VisibilityEdgeStorage::R8Unorm &&
-            configuration.reconstruction !=
-                VisibilityReconstructionMode::XeGtaoDenoise)
-        {
-            return reject(
-                VisibilityPlanError::ProfileImplementationUnavailable,
-                "R8_UNORM edge metadata has no compiled writer or resolve; "
-                "the implemented separate edge texture is R8_UINT.");
-        }
-        const bool packedAo = configuration.rawAoStorage ==
-            VisibilityRawAoStorage::PackedCountAndEdgesR16Uint;
         const bool packedReconstruction =
             configuration.reconstruction ==
-                VisibilityReconstructionMode::PackedEdges2x2 ||
-            configuration.reconstruction ==
-                VisibilityReconstructionMode::PackedEdges4x4;
-        const bool xeGtaoEdges = configuration.reconstruction ==
-                VisibilityReconstructionMode::XeGtaoDenoise &&
-            configuration.edgeStorage == VisibilityEdgeStorage::R8Unorm;
-        const bool separatePackedEdges = !xeGtaoEdges &&
-            (configuration.edgeStorage == VisibilityEdgeStorage::R8Uint ||
-                configuration.edgeStorage == VisibilityEdgeStorage::R8Unorm);
-        const bool validEmbeddedPacking = packedAo &&
-            packedReconstruction && !separatePackedEdges;
-        const bool validSeparatePacking = !packedAo &&
-            configuration.rawAoStorage == VisibilityRawAoStorage::R16Float &&
+                VisibilityReconstructionMode::PackedEdges2x2;
+        const bool separatePackedEdges =
+            configuration.edgeStorage == VisibilityEdgeStorage::R8Uint;
+        const bool validSeparatePacking =
             packedReconstruction && separatePackedEdges;
-        const bool noPacking = !packedAo && !packedReconstruction &&
+        const bool noPacking = !packedReconstruction &&
             !separatePackedEdges;
-        if ((!validEmbeddedPacking && !validSeparatePacking && !noPacking) ||
-            (packedAo && workload.temporalEnabled))
+        if (!validSeparatePacking && !noPacking)
         {
             return reject(VisibilityPlanError::InvalidPackedReconstruction,
-                "Packed reconstruction requires either embedded R16_UINT "
-                "count/edges or R16F AO plus a separate R8 edge buffer.");
+                "Packed reconstruction requires R16F AO plus a separate "
+                "R8_UINT edge buffer.");
         }
         if (packedReconstruction && workload.spatialEnabled)
         {
@@ -1547,7 +1071,7 @@ namespace uvsr
         {
             if (!configuration.explicitHalfRoundtrip ||
                 configuration.rawAoStorage !=
-                    VisibilityRawAoStorage::R16Float ||
+                    VisibilityRawAoStorage::ScalarFloat ||
                 configuration.reconstruction !=
                     VisibilityReconstructionMode::Legacy)
             {
@@ -1563,8 +1087,8 @@ namespace uvsr
             {
                 return reject(
                     VisibilityPlanError::FusedApplicationRequiresPackedEdges,
-                    "Packed-edge fusion requires R16F AO, a separate R8 edge "
-                    "buffer, and a packed 2x2 or 4x4 reconstruction mode.");
+                    "Edge-guided fusion requires R16F AO, a separate R8 edge "
+                    "buffer, and edge-guided reconstruction.");
             }
         }
         else if (configuration.explicitHalfRoundtrip)
@@ -1572,19 +1096,6 @@ namespace uvsr
             return reject(
                 VisibilityPlanError::FusedApplicationRequiresHalfRoundtrip,
                 "An explicit resolve roundtrip is meaningful only for exact fusion.");
-        }
-
-        const bool horizonTrace =
-            configuration.trace ==
-                VisibilityTraceImplementation::ActivisionHorizon ||
-            configuration.trace ==
-                VisibilityTraceImplementation::XeGtaoHorizon;
-        if (horizonTrace && (!configuration.benchmarkOnly ||
-                !hasAmbientOcclusion || hasIndirectDiffuse))
-        {
-            return reject(
-                VisibilityPlanError::BenchmarkProfileContractViolation,
-                "Horizon GTAO is an AO-only benchmark and cannot replace the bitmask product.");
         }
 
         plan.selectsLegacyReference = configuration.profile ==
@@ -1602,21 +1113,8 @@ namespace uvsr
         plan.fixedFirstBounceSampleCount = fixedFirstCount;
         plan.fixedLaterBounceSampleCount = fixedLaterCount;
 
-        const bool constantOrBitmaskDiagnostic =
-            configuration.trace ==
-                VisibilityTraceImplementation::ConstantDiagnostic ||
-            configuration.trace ==
-                VisibilityTraceImplementation::BitmaskOnlyDiagnostic;
-        const bool depthDiagnostic = configuration.trace ==
-            VisibilityTraceImplementation::DepthOnlyDiagnostic;
-        const bool traceUsesScheduler = !constantOrBitmaskDiagnostic;
-        const bool activisionTrace = configuration.trace ==
-            VisibilityTraceImplementation::ActivisionHorizon &&
-            usesActivisionDepthPreparation;
-        const bool xeGtaoTrace = configuration.trace ==
-            VisibilityTraceImplementation::XeGtaoHorizon;
-        const bool schedulerTextureBound = traceUsesScheduler &&
-            (configuration.noise ==
+        const bool schedulerTextureBound =
+            configuration.noise ==
                     VisibilityNoiseDelivery::PackedCurrentFast ||
                 (configuration.noise == VisibilityNoiseDelivery::Legacy &&
                     (workload.scheduler ==
@@ -1624,7 +1122,7 @@ namespace uvsr
                                 ToroidalBlueNoiseRankField ||
                         workload.scheduler ==
                             VisibilityPerformanceScheduler::
-                                FilterAdaptedSpatiotemporalRankField)));
+                                FilterAdaptedSpatiotemporalRankField));
 
         if (usesLegacyBroadPipeline)
         {
@@ -1633,33 +1131,6 @@ namespace uvsr
             // particular shader.
             plan.firstTraceSrvCount = 8u;
             plan.firstTraceUavCount = 3u;
-        }
-        else if (constantOrBitmaskDiagnostic)
-        {
-            plan.firstTraceSrvCount = 0u;
-            plan.firstTraceUavCount = 1u;
-        }
-        else if (depthDiagnostic)
-        {
-            // t0/t1 preserve the normal trace's receiver inputs; t3 preserves
-            // its matched sample-depth address stream. Noise is a fourth SRV
-            // only for texture-backed scheduler specializations.
-            plan.firstTraceSrvCount = 3u +
-                (schedulerTextureBound ? 1u : 0u);
-            plan.firstTraceUavCount = 1u;
-        }
-        else if (xeGtaoTrace)
-        {
-            plan.firstTraceSrvCount = configuration.noise ==
-                    VisibilityNoiseDelivery::XeGtaoHilbertR2
-                ? 3u : 2u;
-            plan.firstTraceUavCount = 2u;
-        }
-        else if (activisionTrace)
-        {
-            // Full depth and normals plus the prepared half-resolution depth.
-            plan.firstTraceSrvCount = 3u;
-            plan.firstTraceUavCount = 1u;
         }
         else
         {
@@ -1676,93 +1147,43 @@ namespace uvsr
 
         if (hasAmbientOcclusion)
         {
-            if (!xeGtaoTrace)
-            {
-                switch (configuration.rawAoStorage)
-                {
-                case VisibilityRawAoStorage::R16Float:
-                    plan.resourceMask |=
-                        Bit(VisibilityExecutionResource::RawAmbientR16);
-                    break;
-                case VisibilityRawAoStorage::R8Unorm:
-                    plan.resourceMask |=
-                        Bit(VisibilityExecutionResource::RawAmbientR8);
-                    break;
-                case VisibilityRawAoStorage::PackedCountAndEdgesR16Uint:
-                    plan.resourceMask |= Bit(VisibilityExecutionResource::
-                        RawAmbientPackedCountEdgesR16);
-                    break;
-                default:
-                    break;
-                }
-            }
-            switch (configuration.edgeStorage)
-            {
-            case VisibilityEdgeStorage::R8Uint:
-                plan.resourceMask |=
-                    Bit(VisibilityExecutionResource::PackedEdgesR8Uint);
-                break;
-            case VisibilityEdgeStorage::R8Unorm:
-                plan.resourceMask |=
-                    Bit(VisibilityExecutionResource::PackedEdgesR8Unorm);
-                break;
-            default:
-                break;
-            }
+            plan.resourceMask |=
+                Bit(VisibilityExecutionResource::RawAmbient);
+        }
+        switch (configuration.edgeStorage)
+        {
+        case VisibilityEdgeStorage::R8Uint:
+            plan.resourceMask |=
+                Bit(VisibilityExecutionResource::PackedEdgesR8Uint);
+            break;
+        default:
+            break;
         }
         if (hasIndirectDiffuse)
         {
             plan.resourceMask |=
-                Bit(VisibilityExecutionResource::RawIndirectRgba16);
+                Bit(VisibilityExecutionResource::RawIndirect);
             if (workload.bounceCount > 1u)
             {
                 plan.resourceMask |= Bit(
-                    VisibilityExecutionResource::CumulativeIndirectRgba16);
+                    VisibilityExecutionResource::CumulativeIndirect);
             }
         }
 
         if (workload.temporalEnabled)
         {
             plan.resourceMask |=
-                Bit(VisibilityExecutionResource::TemporalDepthR32);
-            if (!usesActivisionDepthPreparation)
-            {
-                plan.resourceMask |=
-                    Bit(VisibilityExecutionResource::TemporalNormalRgba8);
-            }
+                Bit(VisibilityExecutionResource::TemporalDepth) |
+                Bit(VisibilityExecutionResource::TemporalNormalRgba8);
             if (hasAmbientOcclusion)
             {
-                plan.resourceMask |= configuration.rawAoStorage ==
-                        VisibilityRawAoStorage::R8Unorm
-                    ? Bit(VisibilityExecutionResource::TemporalAmbientR8)
-                    : Bit(VisibilityExecutionResource::TemporalAmbientR16);
+                plan.resourceMask |=
+                    Bit(VisibilityExecutionResource::TemporalAmbient);
             }
             if (hasIndirectDiffuse)
             {
                 plan.resourceMask |= Bit(
-                    VisibilityExecutionResource::TemporalIndirectRgba16);
-            }
-        }
-
-        if (configuration.reconstruction ==
-            VisibilityReconstructionMode::ActivisionBilateral4x4)
-        {
-            plan.resourceMask |=
-                Bit(VisibilityExecutionResource::
-                    ActivisionSpatialAmbientR16) |
-                Bit(VisibilityExecutionResource::
-                    ActivisionPackedDepthGuideR32Uint);
-        }
-        else if (configuration.reconstruction ==
-            VisibilityReconstructionMode::XeGtaoDenoise)
-        {
-            plan.resourceMask |= Bit(
-                VisibilityExecutionResource::XeGtaoWorkingAoR16);
-            if (configuration.noise ==
-                VisibilityNoiseDelivery::XeGtaoHilbertR2)
-            {
-                plan.resourceMask |= Bit(
-                    VisibilityExecutionResource::XeGtaoHilbertLutR16Uint);
+                    VisibilityExecutionResource::TemporalIndirect);
             }
         }
 
@@ -1775,15 +1196,13 @@ namespace uvsr
         {
             if (hasAmbientOcclusion)
             {
-                plan.resourceMask |= configuration.rawAoStorage ==
-                        VisibilityRawAoStorage::R8Unorm
-                    ? Bit(VisibilityExecutionResource::FinalAmbientR8)
-                    : Bit(VisibilityExecutionResource::FinalAmbientR16);
+                plan.resourceMask |=
+                    Bit(VisibilityExecutionResource::FinalAmbient);
             }
             if (hasIndirectDiffuse)
             {
                 plan.resourceMask |= Bit(
-                    VisibilityExecutionResource::FinalIndirectRgba16);
+                    VisibilityExecutionResource::FinalIndirect);
             }
         }
 
@@ -1799,8 +1218,7 @@ namespace uvsr
                 Bit(VisibilityExecutionResource::LegacyToroidalNoise) |
                 Bit(VisibilityExecutionResource::LegacyCurrentFastNoise);
         }
-        else if (traceUsesScheduler &&
-            configuration.noise == VisibilityNoiseDelivery::Legacy)
+        else if (configuration.noise == VisibilityNoiseDelivery::Legacy)
         {
             if (workload.scheduler == VisibilityPerformanceScheduler::
                 ToroidalBlueNoiseRankField)
@@ -1815,7 +1233,7 @@ namespace uvsr
                     Bit(VisibilityExecutionResource::LegacyCurrentFastNoise);
             }
         }
-        else if (traceUsesScheduler && configuration.noise ==
+        else if (configuration.noise ==
             VisibilityNoiseDelivery::PackedCurrentFast)
         {
             plan.resourceMask |=
@@ -1847,7 +1265,7 @@ namespace uvsr
             plan.bindingMask =
                 Bit(VisibilityExecutionBinding::Depth) |
                 Bit(VisibilityExecutionBinding::Normals);
-            if (workload.adaptiveSamplingEnabled || workload.temporalEnabled)
+            if (workload.temporalEnabled)
             {
                 plan.bindingMask |=
                     Bit(VisibilityExecutionBinding::MotionVectors);
@@ -1864,14 +1282,10 @@ namespace uvsr
                     Bit(VisibilityExecutionBinding::GBufferMaterial) |
                     Bit(VisibilityExecutionBinding::IndirectOutput);
             }
-            if (configuration.application !=
-                VisibilityApplicationMode::BypassCompositionDiagnostic)
-            {
-                plan.bindingMask |=
-                    Bit(VisibilityExecutionBinding::BaseLighting) |
-                    Bit(VisibilityExecutionBinding::OutputLighting) |
-                    Bit(VisibilityExecutionBinding::GBufferMaterial);
-            }
+            plan.bindingMask |=
+                Bit(VisibilityExecutionBinding::BaseLighting) |
+                Bit(VisibilityExecutionBinding::OutputLighting) |
+                Bit(VisibilityExecutionBinding::GBufferMaterial);
             if (workload.temporalEnabled)
             {
                 if (hasAmbientOcclusion)
@@ -1889,11 +1303,6 @@ namespace uvsr
             {
                 plan.bindingMask |=
                     Bit(VisibilityExecutionBinding::DepthHierarchy);
-            }
-            if (usesActivisionDepthPreparation)
-            {
-                plan.bindingMask |= Bit(
-                    VisibilityExecutionBinding::ActivisionPreparedDepth);
             }
             if (HasVisibilityExecutionResource(plan.resourceMask,
                     VisibilityExecutionResource::LegacyToroidalNoise))
@@ -1919,18 +1328,6 @@ namespace uvsr
                 plan.bindingMask |=
                     Bit(VisibilityExecutionBinding::PackedEdges);
             }
-            if (xeGtaoTrace)
-            {
-                plan.bindingMask |=
-                    Bit(VisibilityExecutionBinding::XeGtaoEdges);
-                if (HasVisibilityExecutionResource(plan.resourceMask,
-                        VisibilityExecutionResource::
-                            XeGtaoHilbertLutR16Uint))
-                {
-                    plan.bindingMask |= Bit(
-                        VisibilityExecutionBinding::XeGtaoHilbertLut);
-                }
-            }
         }
 
         if (usesDepthPreparation)
@@ -1953,20 +1350,6 @@ namespace uvsr
             case VisibilityTraceImplementation::FixedInterleavedBitmask:
                 plan.passMask |= Bit(VisibilityExecutionPass::FixedTrace);
                 break;
-            case VisibilityTraceImplementation::ConstantDiagnostic:
-            case VisibilityTraceImplementation::DepthOnlyDiagnostic:
-            case VisibilityTraceImplementation::BitmaskOnlyDiagnostic:
-                plan.passMask |=
-                    Bit(VisibilityExecutionPass::DiagnosticTrace);
-                break;
-            case VisibilityTraceImplementation::ActivisionHorizon:
-                plan.passMask |=
-                    Bit(VisibilityExecutionPass::ActivisionHorizonTrace);
-                break;
-            case VisibilityTraceImplementation::XeGtaoHorizon:
-                plan.passMask |=
-                    Bit(VisibilityExecutionPass::XeGtaoHorizonTrace);
-                break;
             default:
                 break;
             }
@@ -1981,10 +1364,6 @@ namespace uvsr
         {
             plan.passMask |= Bit(VisibilityExecutionPass::Temporal);
         }
-        if (activisionTrace || xeGtaoTrace)
-        {
-            plan.passMask |= Bit(VisibilityExecutionPass::SpatialDenoise);
-        }
         if (fusedApplication)
         {
             plan.passMask |=
@@ -1992,22 +1371,12 @@ namespace uvsr
         }
         else
         {
-            if (needsReconstruction && !xeGtaoTrace)
+            if (needsReconstruction)
             {
                 plan.passMask |=
                     Bit(VisibilityExecutionPass::Reconstruction);
             }
-            if (configuration.application == VisibilityApplicationMode::
-                BypassCompositionDiagnostic)
-            {
-                plan.passMask |=
-                    Bit(VisibilityExecutionPass::CompositionBypass);
-            }
-            else
-            {
-                plan.passMask |=
-                    Bit(VisibilityExecutionPass::Composition);
-            }
+            plan.passMask |= Bit(VisibilityExecutionPass::Composition);
         }
 
         plan.optionalResourceMask =
@@ -2017,14 +1386,20 @@ namespace uvsr
         plan.candidatePassMask =
             plan.passMask & VisibilityCandidatePassMask;
 
-        uint64_t dispatchedPasses = plan.passMask &
-            ~Bit(VisibilityExecutionPass::CompositionBypass);
-        plan.dispatchCount = CountBits(dispatchedPasses);
+        plan.dispatchCount = CountBits(plan.passMask);
         if (hasIndirectDiffuse && workload.bounceCount > 2u)
         {
             // The pass bit represents all later bounces; count the remaining
             // dispatches after the one already represented by that bit.
             plan.dispatchCount += workload.bounceCount - 2u;
+        }
+        if (hasIndirectDiffuse &&
+            workload.bounceCount > c_MaximumExplicitBounceCount)
+        {
+            // Contribution-terminated mode runs one single-thread GPU control
+            // dispatch after every possible later bounce. It writes either
+            // the full next dispatch or zero groups without a CPU readback.
+            plan.dispatchCount += workload.bounceCount - 1u;
         }
 
         plan.peakSrvCount = plan.firstTraceSrvCount;
@@ -2036,61 +1411,34 @@ namespace uvsr
         };
         if (usesDepthPreparation)
         {
-            includeLayout(1u,
-                usesActivisionDepthPreparation ? 1u : 5u);
+            includeLayout(1u, 5u);
         }
         if (hasIndirectDiffuse && workload.bounceCount > 1u)
         {
             includeLayout(fixedLaterCount != 0u
                     ? 6u + (schedulerTextureBound ? 1u : 0u)
                     : 11u,
-                2u);
+                workload.bounceCount > c_MaximumExplicitBounceCount
+                    ? 3u : 2u);
         }
         if (workload.temporalEnabled)
         {
-            if (configuration.temporal ==
-                VisibilityTemporalMode::ActivisionSixDirectionEma)
-            {
-                includeLayout(5u, 2u);
-            }
-            else
-            {
-                includeLayout(configuration.temporal ==
-                        VisibilityTemporalMode::CopyDiagnostic
-                        ? 3u : 9u,
-                    configuration.temporal ==
-                        VisibilityTemporalMode::CopyDiagnostic
-                        ? 3u : 4u);
-            }
+            includeLayout(9u, 4u);
         }
-        if (activisionTrace || xeGtaoTrace)
-            includeLayout(2u, 1u);
         if (fusedApplication)
         {
             includeLayout(8u, 1u);
         }
         else
         {
-            if (needsReconstruction && !xeGtaoTrace)
+            if (needsReconstruction)
             {
                 if (packedReconstruction)
                     includeLayout(2u, 1u);
-                else if (configuration.math ==
-                    VisibilityMathMode::ConservativeNumericalFp32)
-                    includeLayout(3u, 1u);
-                else if (configuration.reconstruction ==
-                        VisibilityReconstructionMode::NearestDiagnostic ||
-                    configuration.reconstruction ==
-                        VisibilityReconstructionMode::BilinearDiagnostic)
-                    includeLayout(1u, 1u);
                 else
                     includeLayout(4u, 2u);
             }
-            if (configuration.application !=
-                VisibilityApplicationMode::BypassCompositionDiagnostic)
-            {
-                includeLayout(8u, 1u);
-            }
+            includeLayout(8u, 1u);
         }
 
         if (plan.selectsLegacyReference &&
@@ -2138,26 +1486,11 @@ namespace uvsr
             return MakeVerificationDefinition(profile, "Exact-Fast AO 8T",
                 Implementation::ExactPackedCurrentFast, workload,
                 Status::Implemented);
-        case VisibilityVerificationProfile::MixedPrecisionAo8T:
-            return MakeVerificationDefinition(
-                profile, "Mixed-Precision AO 8T",
-                Implementation::ConservativeNumerical, workload,
-                Status::Unavailable,
-                "No mixed-precision trace permutation is compiled; the "
-                "conservative candidate only changes FP32 filter algebra.");
         case VisibilityVerificationProfile::PackedEdgeAo8T:
             return MakeVerificationDefinition(profile, "Packed-Edge AO 8T",
-                Implementation::AlgorithmicPackedEdges4x4, workload,
+                Implementation::AlgorithmicPackedEdges2x2, workload,
                 Status::Implemented,
                 "Uses R16F raw AO plus a separate R8_UINT edge texture.");
-        case VisibilityVerificationProfile::ActivisionScheduleAo8T:
-            workload.scheduler = Scheduler::Activision4x4SixPhase;
-            return MakeVerificationDefinition(
-                profile, "Activision-Schedule AO 8T",
-                Implementation::AlgorithmicActivisionSchedule, workload,
-                Status::Implemented,
-                "Changes only the sample schedule; the 32-sector UVSR "
-                "bitmask estimator and legacy resolve remain active.");
         case VisibilityVerificationProfile::ReferenceAoGi8T:
             workload.consumer =
                 Consumer::AmbientOcclusionAndIndirectDiffuse;
@@ -2176,68 +1509,35 @@ namespace uvsr
             workload.consumer =
                 Consumer::AmbientOcclusionAndIndirectDiffuse;
             workload.firstBounceSampleCount = 12u;
+            workload.laterBounceSampleCount = 12u;
             return MakeVerificationDefinition(
                 profile, "Exact-Fast AO+GI 12T",
                 Implementation::ExactFixed12, workload,
                 Status::PartialBenchmarkControl,
-                "The exact fixed-12 trace is compiled; packed FAST is only "
-                "compiled for the fixed-8 candidate.");
+                "The exact fixed-12 trace is compiled; offline-computed "
+                "packed noise is only compiled for the fixed-8 candidate.");
         case VisibilityVerificationProfile::ExactFastAoGi16T:
             workload.consumer =
                 Consumer::AmbientOcclusionAndIndirectDiffuse;
             workload.firstBounceSampleCount = 16u;
+            workload.laterBounceSampleCount = 16u;
             return MakeVerificationDefinition(
                 profile, "Exact-Fast AO+GI 16T",
                 Implementation::ExactFixed16, workload,
                 Status::PartialBenchmarkControl,
-                "The exact fixed-16 trace is compiled; packed FAST is only "
-                "compiled for the fixed-8 candidate.");
+                "The exact fixed-16 trace is compiled; offline-computed "
+                "packed noise is only compiled for the fixed-8 candidate.");
         case VisibilityVerificationProfile::ExactFastMultiBounce:
             workload.consumer =
                 Consumer::AmbientOcclusionAndIndirectDiffuse;
             workload.bounceCount = 2u;
             return MakeVerificationDefinition(
                 profile, "Exact-Fast Multi-Bounce",
-                Implementation::ExactFixedAllBounce8, workload,
+                Implementation::ExactFixed8, workload,
                 Status::PartialBenchmarkControl,
                 "The first and later traces use exact fixed-8 shaders; "
-                "packed FAST and fused application are not compiled for the "
-                "multi-bounce path.");
-        case VisibilityVerificationProfile::AggressiveExperimentalAo8T:
-            return MakeVerificationDefinition(
-                profile, "Aggressive Experimental AO 8T",
-                Implementation::Unset, workload, Status::Unavailable,
-                "No aggressive mixed-precision or compact-AO permutation is "
-                "compiled, so this preset cannot honestly select one.");
-        case VisibilityVerificationProfile::XeGtaoClosestMatch:
-            workload.scheduler = Scheduler::XeGtaoHilbertR2;
-            workload.resolution = VisibilityPerformanceResolution::Full;
-            workload.firstBounceSampleCount = 18u;
-            workload.laterBounceSampleCount = 9u;
-            workload.radius = 0.5f;
-            workload.thickness = 0.0f;
-            workload.spatialEnabled = true;
-            return MakeVerificationDefinition(
-                profile, "Intel XeGTAO 1.30 High Source Port",
-                Implementation::XeGtaoClosestMatch, workload,
-                Status::Implemented,
-                "Direct port of pinned Intel 1.30 High shader math with "
-                "Hilbert/R2 noise, five depth mips, sharp edge-aware denoise, "
-                "and disclosed UVSR integration adapters.");
-        case VisibilityVerificationProfile::Ps4GtaoClosestMatch:
-            workload.firstBounceSampleCount = 8u;
-            workload.scheduler = Scheduler::Activision4x4SixPhase;
-            workload.radialExponent = 1.0f;
-            workload.temporalEnabled = true;
-            workload.spatialEnabled = true;
-            return MakeVerificationDefinition(
-                profile, "Activision PS4 GTAO Approximation",
-                Implementation::ActivisionPs4Schedule, workload,
-                Status::Implemented,
-                "Implements the published eight-tap schedule and source-like "
-                "depth, spatial, then temporal pass order; unpublished "
-                "shipping constants remain disclosed UVSR approximation "
-                "values.");
+                "offline-computed packed noise and fused application are not "
+                "compiled for the multi-bounce path.");
         default:
             return {};
         }

@@ -24,7 +24,16 @@ namespace donut::engine
 
 namespace uvsr
 {
-    inline constexpr uint32_t MaxIndirectDiffuseBounceCount = 4;
+    inline constexpr uint32_t MaxIndirectDiffuseBounceCount = 8;
+    inline constexpr uint32_t InstrumentedLaterBounceCount = 3;
+    // Contribution-terminated GI is recorded as a finite command stream. GPU
+    // indirect dispatch removes all full-screen work after convergence; this
+    // guard remains to contain malformed or non-contracting scene data.
+    inline constexpr uint32_t MaxContributionTerminatedBounceCount = 16;
+    inline constexpr float MinimumContributionTerminatedThreshold = 0.001f;
+    inline constexpr float MaximumBounceContributionCutoff = 0.02f;
+    inline constexpr float ContributionTerminatedThresholdGrowth = 4.0f;
+    inline constexpr float VisibilityEmissiveSourceGain = 4.0f;
     inline constexpr uint32_t ImplementedVisibilityEstimatorCount = 3;
 
     inline constexpr uint32_t LightingSource_Direct =
@@ -75,22 +84,71 @@ namespace uvsr
         GaussianJointBilateral
     };
 
+    enum class VisibilityScalarBufferPrecision : uint32_t
+    {
+        Float16,
+        Float32
+    };
+
+    enum class VisibilityVectorBufferPrecision : uint32_t
+    {
+        Rgba16Float,
+        Rgba32Float
+    };
+
+    struct VisibilityBufferPrecisionSettings
+    {
+        VisibilityScalarBufferPrecision rawAmbient =
+            VisibilityScalarBufferPrecision::Float16;
+        VisibilityVectorBufferPrecision rawIndirect =
+            VisibilityVectorBufferPrecision::Rgba16Float;
+        VisibilityVectorBufferPrecision cumulativeIndirect =
+            VisibilityVectorBufferPrecision::Rgba16Float;
+        VisibilityScalarBufferPrecision temporalAmbient =
+            VisibilityScalarBufferPrecision::Float16;
+        VisibilityVectorBufferPrecision temporalIndirect =
+            VisibilityVectorBufferPrecision::Rgba16Float;
+        VisibilityScalarBufferPrecision temporalDepth =
+            VisibilityScalarBufferPrecision::Float32;
+        VisibilityScalarBufferPrecision finalAmbient =
+            VisibilityScalarBufferPrecision::Float16;
+        VisibilityVectorBufferPrecision finalIndirect =
+            VisibilityVectorBufferPrecision::Rgba16Float;
+        VisibilityScalarBufferPrecision depthHierarchy =
+            VisibilityScalarBufferPrecision::Float16;
+    };
+
+    void ApplyVisibilityBufferPrecisionPreset(
+        VisibilityBufferPrecisionSettings& settings,
+        bool use16BitAo,
+        bool use16BitGi);
+
+    enum class VisibilityPackedEdgeMode : uint32_t
+    {
+        Depth,
+        DepthAndNormal,
+        SlopeAdjustedDepthAndNormal,
+        ControlledLeakage
+    };
+
+    struct VisibilityComposableSettings
+    {
+        VisibilityPerformanceProfileConfiguration configuration =
+            GetVisibilityPerformanceProfileConfiguration(
+                VisibilityPerformanceProfile::GenericFallback);
+        VisibilityBufferPrecisionSettings bufferPrecision;
+        VisibilityPackedEdgeMode packedEdgeMode =
+            VisibilityPackedEdgeMode::DepthAndNormal;
+    };
+
     struct SharedSamplingSettings
     {
-        // These are scheduled radial-sample budgets per eligible tracing pixel
-        // on one stochastic slice. The selected budget is stochastically
-        // rounded over a nested radial prefix, so increasing a limit does not
-        // move samples already present at a lower limit.
-        uint32_t minimumSampleCount = 8;
+        // This is the scheduled radial-sample budget per eligible tracing
+        // pixel on one stochastic slice.
         uint32_t maximumSampleCount = 20;
-        // Selects the adaptive importance/feedback specialization. When false,
-        // every eligible pixel traces maximumSampleCount taps on one slice and
-        // the adaptive shader path is compiled out.
-        bool adaptiveSparseSamplingEnabled = false;
         float radius = 3.0f;
         float thickness = 0.5f;
         float stepDistributionExponent = 2.0f;
-        float adaptiveStrength = 1.0f;
         VisibilitySampleScheduler scheduler =
             VisibilitySampleScheduler::ToroidalBlueNoiseRankField;
     };
@@ -99,16 +157,16 @@ namespace uvsr
     {
         bool enabled = true;
         float strength = 1.0f;
+        float power = 1.0f;
     };
 
     struct IndirectDiffuseSettings
     {
         bool enabled = true;
+        bool limitBounces = true;
         uint32_t bounceCount = 1;
         float minimumBounceContribution = 0.001f;
         float intensity = 4.0f;
-        bool includeEmissive = true;
-        float emissiveGain = 4.0f;
     };
 
     struct VisibilityReconstructionSettings
@@ -124,9 +182,11 @@ namespace uvsr
 
     struct ScreenSpaceVisibilitySettings
     {
+        ScreenSpaceVisibilitySettings();
+
         bool enabled = true;
         ScreenSpaceVisibilityQuality quality =
-            ScreenSpaceVisibilityQuality::Medium;
+            ScreenSpaceVisibilityQuality::High;
         VisibilityEstimator estimator =
             VisibilityEstimator::UniformSolidAngle;
         VisibilityResolution resolution = VisibilityResolution::Full;
@@ -134,14 +194,16 @@ namespace uvsr
         AmbientOcclusionSettings ambientOcclusion;
         IndirectDiffuseSettings indirectDiffuse;
         VisibilityReconstructionSettings reconstruction;
-        // Reference is a hard lock to the canonical generic pipeline. Every
-        // advanced profile resolves a complete CPU-side pass/resource plan;
-        // no candidate shader branch or auxiliary resource exists while this
-        // remains Reference.
+        // Start with the compiled exact 20-sample path. Every advanced profile
+        // resolves a complete CPU-side pass/resource plan.
         VisibilityPerformanceProfile performanceProfile =
-            VisibilityPerformanceProfile::Reference;
-        // A deliberately narrow diagnostic exception: composition displays
-        // only material-applied screen-space diffuse GI.
+            VisibilityPerformanceProfile::ExactFixed20;
+        // Presets remain useful reproducible starting points. Once an
+        // individual control changes, this configuration becomes the live
+        // composed plan so unrelated controls no longer erase optimizations.
+        VisibilityComposableSettings performance;
+        // Presentation mode that displays only material-applied screen-space
+        // diffuse GI.
         bool showIndirectDiffuseOnly = false;
 
         [[nodiscard]] bool HasActiveAmbientOcclusion() const
@@ -161,25 +223,30 @@ namespace uvsr
                 (HasActiveAmbientOcclusion() || HasActiveIndirectDiffuse());
         }
 
-        [[nodiscard]] bool UsesAdaptiveSampling() const
-        {
-            return sampling.adaptiveSparseSamplingEnabled &&
-                sampling.adaptiveStrength > 0.f &&
-                sampling.maximumSampleCount >
-                    sampling.minimumSampleCount;
-        }
-
         [[nodiscard]] bool RequiresMotionVectors() const
         {
             return HasActiveConsumer() &&
-                (UsesAdaptiveSampling() ||
-                    reconstruction.temporalEnabled);
+                reconstruction.temporalEnabled;
         }
     };
 
     void ApplyScreenSpaceVisibilityQualityPreset(
         ScreenSpaceVisibilitySettings& settings,
         ScreenSpaceVisibilityQuality quality);
+
+    [[nodiscard]] VisibilityPerformanceProfileConfiguration
+        GetEffectiveVisibilityPerformanceConfiguration(
+            const ScreenSpaceVisibilitySettings& settings);
+
+    void ResetVisibilityComposableSettings(
+        ScreenSpaceVisibilitySettings& settings,
+        VisibilityPerformanceProfile profile);
+
+    void MakeVisibilityPerformanceComposable(
+        ScreenSpaceVisibilitySettings& settings);
+
+    [[nodiscard]] uint64_t GetVisibilityRuntimeConfigurationKey(
+        const ScreenSpaceVisibilitySettings& settings);
 
     struct ScreenSpaceVisibilityInputs
     {
@@ -196,42 +263,13 @@ namespace uvsr
         uint32_t knownInactiveLightingSources = 0u;
     };
 
-    // Matches the reflected row-major layout in the pinned XeGTAO 1.30
-    // adapter shaders. Keep this separate from UVSR's general visibility
-    // constants so Reference never pays for or binds the candidate buffer.
-    struct alignas(16) XeGtaoConstants
-    {
-        dm::int2 viewportSize;
-        dm::float2 viewportPixelSize;
-        dm::float2 depthUnpackConstants;
-        dm::float2 cameraTanHalfFov;
-        dm::float2 ndcToViewMultiply;
-        dm::float2 ndcToViewAdd;
-        dm::float2 ndcToViewMultiplyPixelSize;
-        float effectRadius;
-        float effectFalloffRange;
-        float radiusMultiplier;
-        float padding0;
-        float finalValuePower;
-        float denoiseBlurBeta;
-        float sampleDistributionPower;
-        float thinOccluderCompensation;
-        float depthMipSamplingOffset;
-        int32_t noiseIndex;
-        dm::uint2 viewportOrigin;
-        uint32_t reverseDepth;
-        uint32_t padding1;
-        dm::float4x4 worldToView;
-    };
-    static_assert(sizeof(XeGtaoConstants) == 176u);
-
     struct ScreenSpaceVisibilityTimings
     {
         float depthHierarchyMs = 0.f;
         float samplingMs = 0.f;
         float firstTraceMs = 0.f;
         float laterTraceMs = 0.f;
-        std::array<float, MaxIndirectDiffuseBounceCount - 1u>
+        std::array<float, InstrumentedLaterBounceCount>
             laterBounceMs{};
         float spatialDenoiseMs = 0.f;
         float temporalMs = 0.f;
@@ -250,7 +288,6 @@ namespace uvsr
         uint64_t finalAmbientTextureBytes = 0u;
         uint64_t finalIndirectTextureBytes = 0u;
         uint64_t schedulerResourceBytes = 0u;
-        uint64_t adaptiveFeedbackBytes = 0u;
         uint64_t temporalAmbientHistoryBytes = 0u;
         uint64_t temporalIndirectHistoryBytes = 0u;
         uint64_t temporalDepthHistoryBytes = 0u;
@@ -258,10 +295,6 @@ namespace uvsr
         uint64_t depthHierarchyBytes = 0u;
         uint64_t packedFastNoiseBytes = 0u;
         uint64_t packedEdgeMetadataBytes = 0u;
-        uint64_t activisionWorkingBytes = 0u;
-        uint64_t xeGtaoWorkingAoBytes = 0u;
-        uint64_t xeGtaoEdgeBytes = 0u;
-        uint64_t xeGtaoHilbertLutBytes = 0u;
         uint64_t maskCacheBytes = 0u;
         uint64_t avoidedTextureBytes = 0u;
         // An estimate of duplicate R32 mask payload that the shared
@@ -275,6 +308,12 @@ namespace uvsr
         uint32_t peakSrvCount = 0u;
         uint32_t peakUavCount = 0u;
         uint32_t activeDispatchCount = 0u;
+        // The renderer-resolved workload can differ from the settings-only
+        // forecast when motion vectors are unavailable or inactive lighting
+        // prunes higher GI bounces. UI readiness and benchmarking must compare
+        // against what was actually rendered.
+        VisibilityPerformanceWorkload activeWorkload;
+        bool hasActiveWorkload = false;
         bool profileValid = true;
         std::string activePermutation = "Reference";
         std::string profileError;
@@ -377,21 +416,24 @@ namespace uvsr
         nvrhi::DeviceHandle m_Device;
         std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
         nvrhi::BufferHandle m_ConstantBuffer;
-        nvrhi::BufferHandle m_XeGtaoConstantBuffer;
+        nvrhi::BufferHandle m_BounceContinuation;
+        nvrhi::BufferHandle m_BounceIndirectArguments;
         nvrhi::SamplerHandle m_PointClampSampler;
 
-        // Final dimension selects fixed/adaptive sparse sampling.
-        std::array<std::array<std::array<Pipeline, 2>,
+        std::array<std::array<Pipeline,
             c_ConsumerVariantCount>, ImplementedVisibilityEstimatorCount>
             m_Sampling;
-        std::array<std::array<std::array<Pipeline, 2>, 2>,
+        std::array<std::array<Pipeline, 2>,
             ImplementedVisibilityEstimatorCount> m_MultiBounceFirstSampling;
-        std::array<std::array<std::array<Pipeline, 2>, 2>,
+        std::array<std::array<Pipeline, 2>,
             ImplementedVisibilityEstimatorCount> m_IndirectBounceSampling;
+        Pipeline m_BounceDispatchControl;
         std::array<Pipeline, c_ConsumerVariantCount> m_Temporal;
         std::array<std::array<Pipeline, c_ConsumerVariantCount>, 2> m_Filter;
         Pipeline m_DepthHierarchy;
-        Pipeline m_Composite;
+        // AO Power is a compile-time on/off specialization so its identity
+        // value does not leave a pow instruction in the default compositor.
+        std::array<Pipeline, 2> m_Composite;
         std::unordered_map<uint64_t, Pipeline> m_AdvancedPipelines;
         std::unordered_map<uint64_t, nvrhi::BindingSetHandle>
             m_AdvancedBindingSets;
@@ -402,21 +444,17 @@ namespace uvsr
         bool m_AmbientResourcesEnabled = false;
         bool m_IndirectDiffuseResourcesEnabled = false;
         bool m_MultipleBounceResourcesEnabled = false;
-        bool m_AdaptiveResourcesEnabled = false;
         bool m_TemporalResourcesEnabled = false;
         bool m_PostProcessResourcesEnabled = false;
         bool m_DepthHierarchyResourcesEnabled = false;
         bool m_PackedFastResourcesEnabled = false;
         bool m_PackedEdgeResourcesEnabled = false;
         bool m_FinalAmbientResourcesEnabled = false;
-        bool m_ActivisionResourcesEnabled = false;
-        bool m_XeGtaoResourcesEnabled = false;
-        bool m_XeGtaoHilbertLutResourcesEnabled = false;
+        uint64_t m_BufferPrecisionConfigurationKey = 0u;
 
         nvrhi::TextureHandle m_RawAmbientVisibility;
         nvrhi::TextureHandle m_RawIndirectDiffuse[2];
         nvrhi::TextureHandle m_CumulativeIndirectDiffuse;
-        nvrhi::TextureHandle m_AdaptiveFeedback[2];
         nvrhi::TextureHandle m_TemporalAmbientVisibility[2];
         nvrhi::TextureHandle m_TemporalIndirectDiffuse[2];
         nvrhi::TextureHandle m_TemporalDepth[2];
@@ -428,31 +466,25 @@ namespace uvsr
         nvrhi::TextureHandle m_FilterAdaptedNoiseTexture;
         nvrhi::TextureHandle m_PackedFastNoiseTexture;
         nvrhi::TextureHandle m_PackedEdgesTexture;
-        nvrhi::TextureHandle m_ActivisionCurrentDepth;
-        nvrhi::TextureHandle m_ActivisionSpatialAmbient;
-        nvrhi::TextureHandle m_XeGtaoWorkingAo;
-        nvrhi::TextureHandle m_XeGtaoEdges;
-        nvrhi::TextureHandle m_XeGtaoHilbertLut;
 
         nvrhi::TextureHandle m_DummyAmbientVisibility;
         nvrhi::TextureHandle m_DummyIndirectDiffuse;
-        nvrhi::TextureHandle m_DummyFeedback;
+        nvrhi::TextureHandle m_DummyVector;
         nvrhi::TextureHandle m_DummyAmbientOutput;
         nvrhi::TextureHandle m_DummyIndirectOutput;
-        nvrhi::TextureHandle m_DummyFeedbackOutput;
 
-        // [estimator][consumer][fixed/adaptive][feedback parity]
-        std::array<std::array<std::array<std::array<
-            nvrhi::BindingSetHandle, 2>, 2>, c_ConsumerVariantCount>,
+        // [estimator][consumer]
+        std::array<std::array<nvrhi::BindingSetHandle,
+            c_ConsumerVariantCount>,
             ImplementedVisibilityEstimatorCount> m_SamplingBindingSets;
-        // [estimator][AO variant][fixed/adaptive][feedback parity]
-        std::array<std::array<std::array<std::array<
-            nvrhi::BindingSetHandle, 2>, 2>, 2>,
+        // [estimator][AO variant]
+        std::array<std::array<nvrhi::BindingSetHandle, 2>,
             ImplementedVisibilityEstimatorCount> m_MultiBounceFirstBindingSets;
-        // [estimator][initialize/add][fixed/adaptive][bounce rotation][feedback parity]
-        std::array<std::array<std::array<std::array<std::array<
-            nvrhi::BindingSetHandle, 2>, 3>, 2>, 2>,
+        // [estimator][initialize/add][bounce rotation]
+        std::array<std::array<std::array<
+            nvrhi::BindingSetHandle, 3>, 2>,
             ImplementedVisibilityEstimatorCount> m_IndirectBounceBindingSets;
+        nvrhi::BindingSetHandle m_BounceDispatchControlBindingSet;
         // [consumer][single/multiple-bounce source][history write parity]
         std::array<std::array<std::array<nvrhi::BindingSetHandle, 2>, 2>,
             c_ConsumerVariantCount> m_TemporalBindingSets;
@@ -461,8 +493,9 @@ namespace uvsr
         std::array<std::array<std::array<nvrhi::BindingSetHandle, 4>,
             c_ConsumerVariantCount>, 2> m_FilterBindingSets;
         nvrhi::BindingSetHandle m_DepthHierarchyBindingSet;
-        // Raw single, raw cumulative, and the two temporal ping-pong sources.
-        std::array<nvrhi::BindingSetHandle, 4> m_CompositeBindingSets;
+        // [AO Power off/on][raw single, raw cumulative, temporal ping-pong].
+        std::array<std::array<nvrhi::BindingSetHandle, 4>, 2>
+            m_CompositeBindingSets;
 
         std::array<std::array<nvrhi::TimerQueryHandle, c_TimerLatency>,
             static_cast<size_t>(Stage::Count)> m_TimerQueries;
@@ -475,19 +508,15 @@ namespace uvsr
         std::vector<uint16_t> m_BlueNoiseUpload;
         std::vector<uint8_t> m_FilterAdaptedNoiseUpload;
         std::vector<uint8_t> m_PackedFastNoiseUpload;
-        std::vector<uint16_t> m_XeGtaoHilbertUpload;
         bool m_SamplingNoiseUploaded = false;
         bool m_PackedFastNoiseUploaded = false;
-        bool m_XeGtaoHilbertUploaded = false;
         bool m_HistoryValid = false;
-        bool m_FeedbackValid = false;
         bool m_HistoryConfigurationInitialized = false;
         uint64_t m_HistoryConfigurationKey = 0u;
         bool m_HistoryEstimatorInitialized = false;
         VisibilityEstimator m_HistoryEstimator =
             VisibilityEstimator::UniformProjectedAngle;
         uint32_t m_HistoryIndex = 0u;
-        uint32_t m_FeedbackIndex = 0u;
         uint32_t m_TimerFrame = 0u;
         bool m_TimerFrameWritable = true;
         ScreenSpaceVisibilityTimings m_Timings;
@@ -503,16 +532,13 @@ namespace uvsr
             bool ambientEnabled,
             bool indirectDiffuseEnabled,
             bool multipleBouncesEnabled,
-            bool adaptiveEnabled,
             bool temporalEnabled,
             bool postProcessEnabled,
             bool depthHierarchyEnabled,
             bool finalAmbientEnabled,
             bool packedFastEnabled,
             bool packedEdgesEnabled,
-            bool activisionEnabled,
-            bool xeGtaoEnabled,
-            bool xeGtaoHilbertLutEnabled);
+            const VisibilityBufferPrecisionSettings& bufferPrecision);
         void ReleaseResources();
         void UploadSamplingNoise(nvrhi::ICommandList* commandList);
         Pipeline& GetOrCreateAdvancedPipeline(

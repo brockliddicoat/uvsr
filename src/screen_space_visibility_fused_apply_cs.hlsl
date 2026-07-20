@@ -10,9 +10,17 @@
 #define VISIBILITY_GROUP_SIZE_Y 8
 #endif
 #ifndef FUSED_PACKED_EDGE_RECONSTRUCTION
-// 0 = exact legacy 2x2 guide math, 1 = packed-edge 2x2,
-// 2 = packed-edge 4x4.
+// 0 = exact legacy 2x2 guide math, 1 = packed-edge 2x2.
 #define FUSED_PACKED_EDGE_RECONSTRUCTION 0
+#endif
+#ifndef ENABLE_AO_POWER
+#define ENABLE_AO_POWER 0
+#endif
+#ifndef FILTER_EXPONENTIAL_MODE
+#define FILTER_EXPONENTIAL_MODE 0
+#endif
+#ifndef FILTER_NORMAL_POWER_MODE
+#define FILTER_NORMAL_POWER_MODE 0
 #endif
 
 cbuffer c_Visibility : register(b0)
@@ -122,10 +130,12 @@ float JointWeight(
     float depthScale = max(centerDepth * 0.02f, 0.01f);
     float planeDistance = abs(dot(
         samplePositionVS - centerPositionVS, centerNormalVS));
+    float depthDelta =
+        planeDistance + 0.5f * abs(sampleDepth - centerDepth);
     float depthWeight = exp(-planeDistance / depthScale) *
         exp(-abs(sampleDepth - centerDepth) / (depthScale * 2.0f));
-    float normalWeight = pow(
-        saturate(dot(centerNormalWS, sampleNormalWS)), 16.0f);
+    float normalBase = saturate(dot(centerNormalWS, sampleNormalWS));
+    float normalWeight = pow(normalBase, 16.0f);
     return spatialWeight * depthWeight * normalWeight;
 }
 
@@ -201,13 +211,8 @@ float ResolveAmbient(uint2 pixel, float3 centerNormalWS)
     int2 maximumCoordinate = int2(g_Visibility.samplingResolution) - 1;
     int2 anchor = clamp(int2(round(samplingPosition)),
         int2(0, 0), maximumCoordinate);
-#if FUSED_PACKED_EDGE_RECONSTRUCTION == 1
     int2 base = int2(floor(samplingPosition));
     static const uint width = 2u;
-#else
-    int2 base = int2(floor(samplingPosition)) - 1;
-    static const uint width = 4u;
-#endif
     float totalWeight = 0.0f;
     float ambientSum = 0.0f;
     [unroll]
@@ -220,14 +225,9 @@ float ResolveAmbient(uint2 pixel, float3 centerNormalWS)
             uint2 sourcePixel = uint2(clamp(
                 coordinate, int2(0, 0), maximumCoordinate));
             float2 delta = float2(coordinate) - samplingPosition;
-#if FUSED_PACKED_EDGE_RECONSTRUCTION == 1
             float spatialWeight = max(
                 (1.0f - abs(delta.x)) *
                 (1.0f - abs(delta.y)), 0.0f);
-#else
-            float spatialWeight = max(2.0f - abs(delta.x), 0.0f) *
-                max(2.0f - abs(delta.y), 0.0f);
-#endif
             float weight = spatialWeight * PackedEdgeConnectivity(
                 anchor, int2(sourcePixel), maximumCoordinate);
             totalWeight += weight;
@@ -324,9 +324,15 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float3 normalWS = SafeNormal(
         t_Normal[pixel].xyz, float3(0.0f, 1.0f, 0.0f));
     float ambientVisibility = saturate(ResolveAmbient(pixel, normalWS));
+#if ENABLE_AO_POWER
+    float poweredAmbientVisibility = pow(
+        ambientVisibility, max(g_Visibility.ambientPower, 0.01f));
+#else
+    float poweredAmbientVisibility = ambientVisibility;
+#endif
     float adjustedAmbientVisibility = saturate(
         1.0f - g_Visibility.ambientStrength *
-            (1.0f - ambientVisibility));
+            (1.0f - poweredAmbientVisibility));
 
     float3 baseColor = max(t_GBufferDiffuse[pixel].rgb, 0.0f);
     float metalness = saturate(t_GBufferEmissive[pixel].a);

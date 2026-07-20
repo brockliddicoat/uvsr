@@ -105,6 +105,7 @@ donut_compile_shaders_all_platforms(
     PROJECT_NAME "UVSR"
     CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders.cfg"
     OUTPUT_BASE "${UVSR_SHADER_STAGING_DIR}"
+    SHADERMAKE_OPTIONS "--retryCount=3"
 )
 
 add_executable(uvsr WIN32
@@ -318,31 +319,17 @@ set(UVSR_APP_SHADERS
     pbr_gbuffer_ps
     screen_space_depth_hierarchy_cs
     screen_space_indirect_composite_cs
-    screen_space_visibility_algorithmic_cs
-    screen_space_visibility_activision_depth_cs
-    screen_space_visibility_activision_spatial_cs
-    screen_space_visibility_activision_temporal_cs
-    screen_space_visibility_constant_scheduler_cs
-    screen_space_visibility_diagnostic_cs
-    screen_space_visibility_duplicate_off_cs
-    screen_space_visibility_filter_activision_cs
+    screen_space_visibility_bounce_control_cs
     screen_space_visibility_filter_cs
-    screen_space_visibility_filter_diagnostic_cs
-    screen_space_visibility_filter_exact_cs
     screen_space_visibility_filter_packed_edge_cs
     screen_space_visibility_fixed_cs
-    screen_space_visibility_full_mask_exit_off_cs
     screen_space_visibility_fused_apply_cs
     screen_space_visibility_packed_fast_cs
-    screen_space_visibility_radius_clamp_32_cs
-    screen_space_visibility_radius_clamp_64_cs
-    screen_space_visibility_radius_clamp_128_cs
+    screen_space_visibility_composed_edges_cs
+    screen_space_visibility_composed_packed_fast_cs
+    screen_space_visibility_packed_fast_edges_cs
     screen_space_visibility_cs
-    screen_space_visibility_temporal_copy_cs
     screen_space_visibility_temporal_cs
-    screen_space_visibility_xegtao_denoise_cs
-    screen_space_visibility_xegtao_main_cs
-    screen_space_visibility_xegtao_prefilter_cs
 )
 
 # Keep the runtime package synchronized with every shader source named by the

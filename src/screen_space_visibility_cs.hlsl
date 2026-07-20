@@ -26,8 +26,8 @@
 #ifndef ENABLE_BOUNCE_METADATA
 #define ENABLE_BOUNCE_METADATA 0
 #endif
-#ifndef ENABLE_ADAPTIVE_SPARSE_SAMPLING
-#define ENABLE_ADAPTIVE_SPARSE_SAMPLING 1
+#ifndef ENABLE_BOUNCE_CONTINUATION
+#define ENABLE_BOUNCE_CONTINUATION 0
 #endif
 #ifndef FIXED_SAMPLE_COUNT
 #define FIXED_SAMPLE_COUNT 0
@@ -41,12 +41,6 @@
 #ifndef PACKED_FAST_NOISE
 #define PACKED_FAST_NOISE 0
 #endif
-#ifndef ACTIVISION_SCHEDULE
-#define ACTIVISION_SCHEDULE 0
-#endif
-#ifndef HORIZON_GTAO_CONTROL
-#define HORIZON_GTAO_CONTROL 0
-#endif
 #ifndef OUTPUT_PACKED_EDGES
 #define OUTPUT_PACKED_EDGES 0
 #endif
@@ -54,28 +48,10 @@
 // 1 = depth, 2 = depth + normal, 3 = slope-adjusted depth + normal.
 #define PACKED_EDGE_MODE 2
 #endif
-#ifndef DUPLICATE_PIXEL_REJECTION
-#define DUPLICATE_PIXEL_REJECTION 1
-#endif
-#ifndef FULL_MASK_EARLY_EXIT
-#define FULL_MASK_EARLY_EXIT 1
-#endif
-#ifndef MAX_PROJECTED_RADIUS_PIXELS
-// Zero preserves the current unlimited projected radius.
-#define MAX_PROJECTED_RADIUS_PIXELS 0
-#endif
 #ifndef SCHEDULER_SPECIALIZATION
 // 0 = runtime, 1 = independent hash, 2 = toroidal blue noise,
-// 3 = scalar FAST, 4 = deterministic constant diagnostic.
+// 3 = scalar FAST.
 #define SCHEDULER_SPECIALIZATION 0
-#endif
-#ifndef TRACE_DIAGNOSTIC
-// 0 = product trace, 1 = constant write, 2 = depth-load floor,
-// 3 = register-local interval/mask ALU floor.
-#define TRACE_DIAGNOSTIC 0
-#endif
-#ifndef ACTIVISION_PREPARED_DEPTH
-#define ACTIVISION_PREPARED_DEPTH 0
 #endif
 #ifndef VISIBILITY_GROUP_SIZE_X
 #define VISIBILITY_GROUP_SIZE_X 8
@@ -83,6 +59,29 @@
 #ifndef VISIBILITY_GROUP_SIZE_Y
 #define VISIBILITY_GROUP_SIZE_Y 8
 #endif
+#ifndef VISIBILITY_ACOS_MODE
+// 0 = native standard, 1 = native fast-exact/compiler path,
+// 2 = Lagarde/XeGTAO approximation.
+#define VISIBILITY_ACOS_MODE 2
+#endif
+#ifndef VISIBILITY_TRIG_MODE
+// 0 = separate native sin/cos, 1 = native sincos, 2 = polynomial sincos.
+#define VISIBILITY_TRIG_MODE 0
+#endif
+#ifndef VISIBILITY_RADIAL_POWER_MODE
+// 0 = native pow, 1 = exact special cases, 2 = exp2/log2 approximation.
+#define VISIBILITY_RADIAL_POWER_MODE 1
+#endif
+#ifndef VISIBILITY_NORMALIZATION_MODE
+// 0 = guarded standard normalization, 1 = shared exact reciprocal length,
+// 2 = approximate rsqrt path. HLSL exposes the same intrinsic for 0/1, while
+// the approximate mode permits the compiler's fast-math contraction.
+#define VISIBILITY_NORMALIZATION_MODE 0
+#endif
+#define SELECTED_VISIBILITY_ACOS_MODE VISIBILITY_ACOS_MODE
+#define SELECTED_VISIBILITY_TRIG_MODE VISIBILITY_TRIG_MODE
+#define SELECTED_VISIBILITY_RADIAL_POWER_MODE VISIBILITY_RADIAL_POWER_MODE
+#define SELECTED_VISIBILITY_NORMALIZATION_MODE VISIBILITY_NORMALIZATION_MODE
 
 #define VisibilityEstimator_UniformProjectedAngle 0
 #define VisibilityEstimator_UniformSolidAngle 1
@@ -101,33 +100,28 @@ Texture2D<float> t_DepthHierarchy : register(t3);
 Texture2D<float4> t_GBufferDiffuse : register(t4);
 Texture2D<float4> t_Emissive : register(t5);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t6);
-Texture2D<float4> t_PreviousFeedback : register(t7);
 Texture2DArray<float> t_BlueNoise : register(t8);
 #if PACKED_FAST_NOISE
 Texture2DArray<float4> t_FilterAdaptedNoise : register(t9);
 #else
 Texture2DArray<float> t_FilterAdaptedNoise : register(t9);
 #endif
-Texture2D<float4> t_Motion : register(t10);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_BounceFrontier : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
+#if ENABLE_BOUNCE_CONTINUATION
+globallycoherent RWByteAddressBuffer u_BounceContinuation : register(u2);
+#endif
 #else
 Texture2D<float4> t_SourceRadiance : register(t2);
 Texture2D<float> t_DepthHierarchy : register(t3);
-Texture2D<float4> t_PreviousFeedback : register(t4);
 Texture2DArray<float> t_BlueNoise : register(t5);
 #if PACKED_FAST_NOISE
 Texture2DArray<float4> t_FilterAdaptedNoise : register(t6);
 #else
 Texture2DArray<float> t_FilterAdaptedNoise : register(t6);
 #endif
-Texture2D<float4> t_Motion : register(t7);
-#if ACTIVISION_PREPARED_DEPTH
-Texture2D<uint> t_ActivisionPackedLinearDepth : register(t8);
-#endif
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_AdaptiveFeedback : register(u2);
 #endif
 #if OUTPUT_PACKED_EDGES
 VK_IMAGE_FORMAT("r8ui") RWTexture2D<uint> u_PackedEdges : register(u3);
@@ -136,6 +130,7 @@ VK_IMAGE_FORMAT("r8ui") RWTexture2D<uint> u_PackedEdges : register(u3);
 static const float VisibilityPi = 3.14159265358979323846f;
 static const float VisibilityHalfPi = 1.57079632679489661923f;
 static const float VisibilityEpsilon = 1e-6f;
+static const float BounceContinuationThresholdGrowth = 4.0f;
 
 // Bit i selects radial stratum i. Entry n contains the first n strata in the
 // 5-bit reversal sequence, so budgets remain nested while firstbitlow consumes
@@ -158,7 +153,6 @@ static const uint SchedulerDimension_SampleBudget = 2u;
 static const uint SchedulerDimension_OddSampleSide = 3u;
 static const uint SchedulerDimension_RadialNegative = 4u;
 static const uint SchedulerDimension_RadialPositive = 5u;
-static const uint SchedulerDimension_FeedbackNeighbor = 6u;
 
 static const uint2 BlueNoiseTemporalSteps[8] = {
     uint2(13u, 29u), uint2(31u, 11u),
@@ -196,6 +190,13 @@ float VisibilityRandom(uint2 pixel, uint dimension, uint phase)
 
 float VisibilityFastAcos(float value)
 {
+    if (SELECTED_VISIBILITY_ACOS_MODE < 2u)
+    {
+    // No algebraically exact acos replacement exists. Fast Exact deliberately
+    // retains native acos so the UI never represents an approximation as
+    // exact; driver compilation is free to select its native fast path.
+        return acos(clamp(value, -1.0f, 1.0f));
+    }
     // XeGTAO / Lagarde approximation: avoids two native acos operations per
     // radial sample while retaining sufficient precision for 32 mask sectors.
     float x = abs(clamp(value, -1.0f, 1.0f));
@@ -203,18 +204,58 @@ float VisibilityFastAcos(float value)
     return value >= 0.0f ? result : VisibilityPi - result;
 }
 
+float2 VisibilitySliceSinCos(float angle)
+{
+    if (SELECTED_VISIBILITY_TRIG_MODE == 1u)
+    {
+        float sineValue;
+        float cosineValue;
+        sincos(angle, sineValue, cosineValue);
+        return float2(cosineValue, sineValue);
+    }
+    if (SELECTED_VISIBILITY_TRIG_MODE == 2u)
+    {
+    // The slice angle is in [0, pi). This minimax-style parabolic correction
+    // avoids range reduction and keeps endpoints exact.
+        float normalized = saturate(angle * (1.0f / VisibilityPi));
+        float sineValue = 4.0f * normalized * (1.0f - normalized);
+        sineValue = sineValue *
+            (0.775f + 0.225f * sineValue);
+        float cosineNormalized = frac(normalized + 0.5f);
+        float cosineAbs = 4.0f * cosineNormalized *
+            (1.0f - cosineNormalized);
+        cosineAbs = cosineAbs *
+            (0.775f + 0.225f * cosineAbs);
+        float cosineValue = normalized <= 0.5f
+            ? cosineAbs : -cosineAbs;
+        return float2(cosineValue, sineValue);
+    }
+    return float2(cos(angle), sin(angle));
+}
+
+float VisibilityRadialPower(float value, float exponent)
+{
+    if (SELECTED_VISIBILITY_RADIAL_POWER_MODE == 1u)
+    {
+        if (abs(exponent - 1.0f) < 1e-4f)
+            return value;
+        if (abs(exponent - 2.0f) < 1e-4f)
+            return value * value;
+        return pow(value, exponent);
+    }
+    if (SELECTED_VISIBILITY_RADIAL_POWER_MODE == 2u)
+    {
+        return value > 0.0f
+            ? exp2(log2(value) * exponent)
+            : 0.0f;
+    }
+    return pow(value, exponent);
+}
+
 float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
 {
 #if SCHEDULER_SPECIALIZATION == 1
     return VisibilityRandom(samplingPixel, dimension, phase);
-#elif SCHEDULER_SPECIALIZATION == 4
-    // Fixed, decorrelated semantic constants isolate scheduler texture/hash
-    // cost without collapsing every stochastic dimension to one value.
-    static const float diagnosticValues[8] = {
-        0.125f, 0.625f, 0.375f, 0.875f,
-        0.25f, 0.75f, 0.5f, 0.0f
-    };
-    return diagnosticValues[dimension & 7u];
 #elif SCHEDULER_SPECIALIZATION == 3
     {
         // The 64x64x32 scalar-uniform volume was optimized offline for a
@@ -309,41 +350,6 @@ float4 SchedulerPackedFastRandom(uint2 samplingPixel, uint phase)
 }
 #endif
 
-#if ACTIVISION_SCHEDULE
-float ActivisionSpatialRotation(uint2 pixel)
-{
-    uint pattern = ((((pixel.x + pixel.y) & 3u) << 2u) +
-        (pixel.x & 3u));
-    return float(pattern) * (1.0f / 16.0f);
-}
-
-float ActivisionTemporalRotation(uint phase)
-{
-    static const float rotations[6] = {
-        60.0f / 360.0f, 300.0f / 360.0f, 180.0f / 360.0f,
-        240.0f / 360.0f, 120.0f / 360.0f, 0.0f
-    };
-    // Slide 93 publishes these as full-turn fractions, but they rotate a
-    // bidirectional slice whose outer integral is over [0, pi). Multiplying
-    // this fraction by pi below produces six distinct slice-axis rotations;
-    // converting the table to /180 aliases antipodal entries to three axes.
-    return rotations[phase % 6u];
-}
-
-float ActivisionSpatialRadialOffset(uint2 pixel)
-{
-    // Activision slide 93: four values per row, shifted each row so similar
-    // directions alternate two offsets along the diagonals.
-    return float((pixel.y - pixel.x) & 3u) * 0.25f;
-}
-
-float ActivisionTemporalRadialOffset(uint phase)
-{
-    static const float offsets[4] = { 0.0f, 0.5f, 0.25f, 0.75f };
-    return offsets[(phase / 6u) & 3u];
-}
-#endif
-
 uint2 SamplingToFullPixel(uint2 samplingPixel)
 {
     uint scale = max(g_Visibility.resolutionScale, 1u);
@@ -357,25 +363,6 @@ uint2 FullToSamplingPixel(uint2 fullPixel)
     return min(fullPixel / scale,
         uint2(g_Visibility.samplingResolution) - 1u);
 }
-
-#if ACTIVISION_PREPARED_DEPTH
-static const uint ActivisionGuideOffsetMask = 3u;
-
-float ActivisionLinearDepth(uint packedDepthGuide)
-{
-    return asfloat(packedDepthGuide & ~ActivisionGuideOffsetMask);
-}
-
-uint2 ActivisionGuidePixel(
-    uint2 samplingPixel,
-    uint packedDepthGuide)
-{
-    uint guideOffset = packedDepthGuide & ActivisionGuideOffsetMask;
-    uint2 offset = uint2(guideOffset & 1u, guideOffset >> 1u);
-    uint2 fullSize = uint2(g_Visibility.fullResolution);
-    return min(samplingPixel * 2u + offset, fullSize - 1u);
-}
-#endif
 
 float ProgressiveRadialSample(uint radialStratum, float rotation)
 {
@@ -398,6 +385,14 @@ bool IsFiniteFloat3(float3 value)
 float3 SafeNormalize(float3 value, float3 fallback)
 {
     float lengthSquared = dot(value, value);
+    if (SELECTED_VISIBILITY_NORMALIZATION_MODE == 2u)
+    {
+        // The clamp keeps zero vectors finite but deliberately drops the
+        // non-finite branch and fallback selection.
+        return value * rsqrt(max(
+            lengthSquared,
+            VisibilityEpsilon * VisibilityEpsilon));
+    }
     if (!(lengthSquared > VisibilityEpsilon * VisibilityEpsilon) || !isfinite(lengthSquared))
         return fallback;
     return value * rsqrt(lengthSquared);
@@ -495,24 +490,26 @@ uint ComputePackedReceiverEdges(
         depthDiscontinuity[edgeIndex] = saturate(
             abs(neighborLinearDepth - receiverLinearDepth) /
             max(receiverLinearDepth * 0.08f, 0.01f));
-#if PACKED_EDGE_MODE >= 2
-        float3 neighborNormal = SafeNormalize(
-            t_Normals[neighborPixel].xyz, receiverNormal);
-        normalDiscontinuity[edgeIndex] = saturate(
-            (1.0f - dot(receiverNormal, neighborNormal)) * 4.0f);
-#endif
+        if (g_Visibility.packedEdgeMode >= 2u)
+        {
+            float3 neighborNormal = SafeNormalize(
+                t_Normals[neighborPixel].xyz, receiverNormal);
+            normalDiscontinuity[edgeIndex] = saturate(
+                (1.0f - dot(receiverNormal, neighborNormal)) * 4.0f);
+        }
     }
 
-#if PACKED_EDGE_MODE == 3
-    float horizontalSlope = min(
-        depthDiscontinuity.x, depthDiscontinuity.y);
-    float verticalSlope = min(
-        depthDiscontinuity.z, depthDiscontinuity.w);
-    depthDiscontinuity.xy = saturate(
-        depthDiscontinuity.xy - horizontalSlope.xx);
-    depthDiscontinuity.zw = saturate(
-        depthDiscontinuity.zw - verticalSlope.xx);
-#endif
+    if (g_Visibility.packedEdgeMode == 3u)
+    {
+        float horizontalSlope = min(
+            depthDiscontinuity.x, depthDiscontinuity.y);
+        float verticalSlope = min(
+            depthDiscontinuity.z, depthDiscontinuity.w);
+        depthDiscontinuity.xy = saturate(
+            depthDiscontinuity.xy - horizontalSlope.xx);
+        depthDiscontinuity.zw = saturate(
+            depthDiscontinuity.zw - verticalSlope.xx);
+    }
     float4 continuity = 1.0f - max(
         depthDiscontinuity, normalDiscontinuity);
     return PackEdgeContinuity(continuity);
@@ -622,9 +619,6 @@ void WriteEmptyVisibilityOutput(
 #if ENABLE_GI
     u_IndirectDiffuse[pixel] = 0.0f;
 #endif
-#if ENABLE_ADAPTIVE_SPARSE_SAMPLING
-    u_AdaptiveFeedback[pixel] = 0.0f;
-#endif
 #endif
 }
 
@@ -634,69 +628,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     if (any(dispatchPixel >= uint2(g_Visibility.samplingResolution)))
         return;
 
-#if TRACE_DIAGNOSTIC == 1
-    // Dispatch/write floor: deliberately performs no depth, normal, noise, or
-    // history reads. This permutation is AO-only and benchmark-only.
-#if ENABLE_AO && !ENABLE_BOUNCE_REINJECTION
-    u_AmbientVisibility[dispatchPixel] = 0.5f;
-#endif
-#if ENABLE_GI && !ENABLE_BOUNCE_REINJECTION
-    u_IndirectDiffuse[dispatchPixel] = 0.0f;
-#endif
-    return;
-#elif TRACE_DIAGNOSTIC == 2
-    // Matched-address depth floor. The normal trace below performs receiver
-    // reconstruction, slice/radius projection, stochastic radial placement,
-    // duplicate rejection, and the exact selected depth loads. It exits each
-    // tap immediately after reconstructing the sampled position, before
-    // interval construction, visibility masks, or GI source work.
-    float diagnosticDepthSum = 0.0f;
-#elif TRACE_DIAGNOSTIC == 3
-    // ALU floor: deterministic intervals exercise stochastic-sector mask
-    // construction, union, and popcount without any texture input.
-    RadialVisibilityMask diagnosticMask = MakeEmptyRadialVisibilityMask();
-    const uint diagnosticCount = FIXED_SAMPLE_COUNT > 0
-        ? FIXED_SAMPLE_COUNT : 8u;
-    // Keep the sector work register-local but data-dependent so optimized DXIL
-    // cannot collapse the unrolled interval/mask loop to one literal output.
-    float diagnosticSectorPhase = frac(
-        float((dispatchPixel.x + dispatchPixel.y * 17u) & 31u) /
-            32.0f +
-        g_Visibility.thicknessWorld * (1.0f / 1024.0f));
-    [unroll]
-    for (uint diagnosticTap = 0u;
-        diagnosticTap < diagnosticCount;
-        ++diagnosticTap)
-    {
-        float center = (float(diagnosticTap) + 0.5f) /
-            float(diagnosticCount);
-        VisibilityInterval diagnosticInterval = MakeVisibilityInterval(
-            saturate(center - 0.03125f),
-            saturate(center + 0.03125f));
-        uint diagnosticBits = MakeStochasticSectorRangeMask(
-            diagnosticInterval, diagnosticSectorPhase);
-        AccumulateOccluder(diagnosticMask, diagnosticBits);
-    }
-#if ENABLE_AO && !ENABLE_BOUNCE_REINJECTION
-    u_AmbientVisibility[dispatchPixel] =
-        GetSliceVisibility(diagnosticMask);
-#endif
-#if ENABLE_GI && !ENABLE_BOUNCE_REINJECTION
-    u_IndirectDiffuse[dispatchPixel] = 0.0f;
-#endif
-    return;
-#endif
-
-#if ACTIVISION_PREPARED_DEPTH
-    uint receiverPackedDepthGuide =
-        t_ActivisionPackedLinearDepth[dispatchPixel];
-    float receiverViewDepth =
-        ActivisionLinearDepth(receiverPackedDepthGuide);
-    uint2 receiverPixel = ActivisionGuidePixel(
-        dispatchPixel, receiverPackedDepthGuide);
-#else
     uint2 receiverPixel = SamplingToFullPixel(dispatchPixel);
-#endif
     float receiverDepth = t_Depth[receiverPixel];
     float2 receiverPixelCenter = float2(receiverPixel) + 0.5f;
     float4 previousReceiverFrontier = 0.0f;
@@ -782,19 +714,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #endif
 
     float3 receiverPositionVS;
-#if ACTIVISION_PREPARED_DEPTH
-    // The two packed mantissa bits identify the exact 2x2 texel that supplied
-    // the closest linear depth. Position, normal, device-depth clip anchor,
-    // temporal motion, and upsample guide can therefore describe one receiver
-    // surface instead of mixing closest depth with the footprint center.
-    bool receiverReconstructed = receiverViewDepth > 0.0f &&
-        receiverViewDepth < 65503.0f && isfinite(receiverViewDepth) &&
-        ReconstructViewPositionFromLinearDepth(
-            receiverPixelCenter, receiverViewDepth, receiverPositionVS);
-#else
     bool receiverReconstructed = ReconstructViewPositionSafe(
         receiverPixelCenter, receiverDepth, receiverPositionVS);
-#endif
     if (!receiverReconstructed)
     {
         WriteEmptyVisibilityOutput(
@@ -851,152 +772,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 
     uint phase = g_Visibility.frameIndex;
 #if FIXED_SAMPLE_COUNT == 0
-    uint minimumSampleCount = clamp(
-        g_Visibility.minimumSampleCount, 1u, 64u);
-    uint maximumSampleCount = clamp(
-        g_Visibility.maximumSampleCount, minimumSampleCount, 64u);
-#if ENABLE_ADAPTIVE_SPARSE_SAMPLING
-    float edgeImportance = 0.0f;
-    float disocclusionImportance = 0.0f;
-    float historyImportance = 0.0f;
-    float centerContributionSeed = 0.0f;
-    float neighboringContributionSeed = 0.0f;
-    float reprojectedContributionSignal = 0.0f;
-    bool hasMatchingFeedback = false;
-    {
-        uint2 fullMaximum = uint2(g_Visibility.fullResolution) - 1u;
-        static const int2 edgeOffsets[4] = {
-            int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
-        };
-        [unroll]
-        for (uint edgeIndex = 0u; edgeIndex < 4u; ++edgeIndex)
-        {
-            uint2 neighborPixel = uint2(clamp(
-                int2(receiverPixel) + edgeOffsets[edgeIndex],
-                int2(0, 0), int2(fullMaximum)));
-            float neighborDepth = t_Depth[neighborPixel];
-            if (!IsValidDepth(neighborDepth))
-            {
-                edgeImportance = 1.0f;
-                continue;
-            }
-            float depthDelta = abs(neighborDepth - receiverDepth) /
-                max(max(abs(neighborDepth), abs(receiverDepth)), 1e-4f);
-            float3 neighborNormalVS = mul(float4(
-                t_Normals[neighborPixel].xyz, 0.0f),
-                g_Visibility.view.matWorldToView).xyz;
-            neighborNormalVS = SafeNormalize(neighborNormalVS, receiverNormalVS);
-            float normalEdge = 1.0f - saturate(dot(
-                receiverNormalVS, neighborNormalVS));
-            edgeImportance = max(edgeImportance,
-                max(saturate(depthDelta * 24.0f),
-                    saturate(normalEdge * 4.0f)));
-        }
-
-        if (g_Visibility.feedbackValid != 0u)
-        {
-            float4 motion = t_Motion[receiverPixel];
-            float2 previousFullPosition = receiverPixelCenter + motion.xy;
-            bool validMotion = motion.a > 0.5f &&
-                all(isfinite(motion)) &&
-                all(previousFullPosition >= 0.0f) &&
-                all(previousFullPosition < g_Visibility.fullResolution);
-            if (validMotion)
-            {
-                uint2 previousFullPixel = uint2(previousFullPosition);
-                uint2 previousSamplingPixel =
-                    FullToSamplingPixel(previousFullPixel);
-                float4 feedback = t_PreviousFeedback[previousSamplingPixel];
-                float expectedPreviousDepth = receiverDepth + motion.z;
-                bool finiteFeedback = all(isfinite(feedback)) &&
-                    isfinite(expectedPreviousDepth);
-                if (finiteFeedback)
-                {
-                    float depthError = abs(feedback.a - expectedPreviousDepth) /
-                        max(max(abs(feedback.a),
-                            abs(expectedPreviousDepth)), 1e-4f);
-                    disocclusionImportance = saturate(depthError * 32.0f);
-                    float feedbackDepthSimilarity =
-                        1.0f - disocclusionImportance;
-                    hasMatchingFeedback = feedbackDepthSimilarity > 0.0f;
-                    historyImportance = saturate(feedback.r) *
-                        feedbackDepthSimilarity;
-                    reprojectedContributionSignal = saturate(feedback.g);
-                    centerContributionSeed = saturate(feedback.b) *
-                        feedbackDepthSimilarity;
-
-                    if (hasMatchingFeedback)
-                    {
-                        uint2 samplingMaximum =
-                            uint2(g_Visibility.samplingResolution) - 1u;
-                        static const int2 feedbackOffsets[8] = {
-                            int2(-1, -1), int2(0, -1), int2(1, -1),
-                            int2(-1, 0), int2(1, 0),
-                            int2(-1, 1), int2(0, 1), int2(1, 1)
-                        };
-                        uint feedbackIndex = min(uint(SchedulerRandom(
-                            dispatchPixel,
-                            SchedulerDimension_FeedbackNeighbor,
-                            phase) * 8.0f), 7u);
-                        uint2 feedbackPixel = uint2(clamp(
-                            int2(previousSamplingPixel) +
-                                feedbackOffsets[feedbackIndex],
-                            int2(0, 0), int2(samplingMaximum)));
-                        float4 neighborFeedback =
-                            t_PreviousFeedback[feedbackPixel];
-                        if (all(isfinite(neighborFeedback)))
-                        {
-                            float neighborDepthError = abs(
-                                neighborFeedback.a - feedback.a) /
-                                max(max(abs(neighborFeedback.a),
-                                    abs(feedback.a)), 1e-4f);
-                            float neighborDepthSimilarity = saturate(
-                                1.0f - neighborDepthError * 32.0f);
-                            neighboringContributionSeed =
-                                saturate(neighborFeedback.b) *
-                                feedbackDepthSimilarity *
-                                neighborDepthSimilarity;
-                        }
-                    }
-                }
-                else
-                {
-                    disocclusionImportance = 1.0f;
-                }
-            }
-            else
-            {
-                disocclusionImportance = 1.0f;
-            }
-        }
-    }
-
-    float independentImportance = max(
-        max(edgeImportance, disocclusionImportance), historyImportance);
-    float contributionImportance = max(
-        centerContributionSeed, neighboringContributionSeed * 0.75f);
-    float errorImportance = saturate(max(
-        independentImportance, contributionImportance) *
-        max(g_Visibility.adaptiveStrength, 0.0f));
-    // Preserve the adaptive-sampling paper's one-eighth uniform component so
-    // flat regions never become deterministic starvation zones.
-    float samplingProbability = 0.125f + 0.875f * errorImportance;
-    float desiredSampleCount = lerp(
-        float(minimumSampleCount), float(maximumSampleCount),
-        samplingProbability);
-    uint selectedSampleCount = min(
-        uint(floor(desiredSampleCount)) +
-            (SchedulerRandom(
-                dispatchPixel,
-                SchedulerDimension_SampleBudget,
-                phase) <
-                frac(desiredSampleCount) ? 1u : 0u),
-        maximumSampleCount);
-#else
-    // Fixed-work fallback: this specialization contains no adaptive
-    // importance, reprojection, feedback, or stochastic budget instructions.
-    uint selectedSampleCount = maximumSampleCount;
-#endif
+    uint selectedSampleCount = clamp(
+        g_Visibility.maximumSampleCount, 1u, 64u);
 #else
     // Curated even-count permutations compile out clamping, budget selection,
     // side division, and the odd-side random dimension. The runtime profile
@@ -1008,10 +785,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     float4 packedFastRandom = SchedulerPackedFastRandom(
         dispatchPixel, phase);
     float sliceRotation = packedFastRandom.x;
-#elif ACTIVISION_SCHEDULE
-    float sliceRotation = frac(
-        ActivisionSpatialRotation(dispatchPixel) +
-        ActivisionTemporalRotation(phase));
 #else
     float sliceRotation = SchedulerRandom(
         dispatchPixel, SchedulerDimension_SliceRotation, phase);
@@ -1024,8 +797,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     float sliceAzimuth = sliceRotation * VisibilityPi;
     // Every pixel evaluates one coherent stochastic image-plane slice. The
     // estimator-specific measure remains a compile-time contract.
+    float2 sliceSinCos = VisibilitySliceSinCos(sliceAzimuth);
     float3 screenSliceDirection = float3(
-        cos(sliceAzimuth), sin(sliceAzimuth), 0.0f);
+        sliceSinCos.x, sliceSinCos.y, 0.0f);
     float3 slicePlaneNormal = SafeNormalize(
         cross(screenSliceDirection, viewDirection),
         float3(0.0f, 1.0f, 0.0f));
@@ -1033,39 +807,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         cross(viewDirection, slicePlaneNormal), screenSliceDirection);
 #if PACKED_FAST_NOISE
     float sectorPhase = packedFastRandom.y;
-#elif ACTIVISION_SCHEDULE
-    // GTAO has no sector phase. Keep a decorrelated deterministic phase for
-    // the bitmask estimator while preserving the published slice schedule.
-    float sectorPhase = frac(
-        ActivisionSpatialRotation(dispatchPixel) * 0.754877666f +
-        float(phase & 31u) * 0.569840296f);
 #else
     float sectorPhase = SchedulerRandom(
         dispatchPixel, SchedulerDimension_SectorPhase, phase);
-#endif
-
-#if HORIZON_GTAO_CONTROL
-    // Same-engine horizon control derived from the Activision/XeGTAO analytic
-    // slice integral. It intentionally replaces finite interval masks only in
-    // a benchmark-only AO permutation so the surrounding projection, depth
-    // reads, schedule, output format, timer, and application remain directly
-    // comparable to the visibility-bitmask trace.
-    float3 horizonProjectedNormal = receiverNormalVS - slicePlaneNormal *
-        dot(receiverNormalVS, slicePlaneNormal);
-    float horizonProjectedNormalLength = length(horizonProjectedNormal);
-    horizonProjectedNormal = horizonProjectedNormalLength > VisibilityEpsilon
-        ? horizonProjectedNormal / horizonProjectedNormalLength
-        : viewDirection;
-    float horizonCosNorm = saturate(dot(
-        horizonProjectedNormal, viewDirection));
-    float horizonSign = dot(horizonProjectedNormal, sliceTangent) >= 0.0f
-        ? 1.0f : -1.0f;
-    float horizonNormalAngle = horizonSign *
-        VisibilityFastAcos(horizonCosNorm);
-    float horizonCosine[2] = {
-        cos(horizonNormalAngle - VisibilityHalfPi),
-        cos(horizonNormalAngle + VisibilityHalfPi)
-    };
 #endif
 
 #if VISIBILITY_ESTIMATOR != VisibilityEstimator_UniformProjectedAngle
@@ -1118,11 +862,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 ? projectedRadiusVector / projectedRadiusLength
                 : 0.0f;
             sideProjectedRadius[projectionSideIndex] = projectedRadiusLength;
-#if MAX_PROJECTED_RADIUS_PIXELS > 0
-            sideProjectedRadius[projectionSideIndex] = min(
-                sideProjectedRadius[projectionSideIndex],
-                float(MAX_PROJECTED_RADIUS_PIXELS));
-#endif
         }
 
         RadialVisibilityMask visibilityMask = MakeEmptyRadialVisibilityMask();
@@ -1153,13 +892,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #if PACKED_FAST_NOISE
         float radialSequence[2] = {
             packedFastRandom.z, packedFastRandom.w
-        };
-#elif ACTIVISION_SCHEDULE
-        float activisionRadialOffset = frac(
-            ActivisionSpatialRadialOffset(dispatchPixel) +
-            ActivisionTemporalRadialOffset(phase));
-        float radialSequence[2] = {
-            activisionRadialOffset, activisionRadialOffset
         };
 #else
         float radialSequence[2] = {
@@ -1209,10 +941,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             [unroll]
             for (uint sideIndex = 0u; sideIndex < 2u; ++sideIndex)
             {
-#if FULL_MASK_EARLY_EXIT
                 if (visibilityMask.occludedBits == RadialVisibilityFullMask)
                     break;
-#endif
                 if (!sideActive[sideIndex])
                     continue;
                 uint radialMask = remainingRadialStrata[sideIndex];
@@ -1223,36 +953,15 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     (radialMask - 1u);
 
                 float samplingSide = sideIndex == 0u ? -1.0f : 1.0f;
-#if ACTIVISION_SCHEDULE
-                // The benchmark schedule distributes its inner integral with
-                // one shared spatial+temporal offset over the fixed taps.
-                float normalizedStep =
-                    (float(fixedStepIndex) + activisionRadialOffset) /
-                    float(FIXED_SAMPLE_COUNT / 2u);
-#else
                 float normalizedStep = ProgressiveRadialSample(
                     radialStratum, radialRotation[sideIndex]);
-#endif
                 float distributedStep = saturate(normalizedStep);
-#if ACTIVISION_GTAO_REFERENCE
-                // Activision distributes four samples per side directly over
-                // the radius. A receiver-footprint guard prevents the nearest
-                // half-resolution tap from repeatedly self-sampling.
-                float minimumNormalizedStep = min(
-                    1.3f / max(sideProjectedRadius[sideIndex], 1.3f), 1.0f);
-                distributedStep = lerp(
-                    minimumNormalizedStep, 1.0f, distributedStep);
-#elif FIXED_RADIAL_EXPONENT_TWO
+#if FIXED_RADIAL_EXPONENT_TWO
                 distributedStep *= distributedStep;
 #else
-                if (abs(g_Visibility.stepDistributionExponent - 1.0f) >= 1e-4f)
-                {
-                    distributedStep =
-                        abs(g_Visibility.stepDistributionExponent - 2.0f) < 1e-4f
-                        ? distributedStep * distributedStep
-                        : pow(distributedStep,
-                            g_Visibility.stepDistributionExponent);
-                }
+                distributedStep = VisibilityRadialPower(
+                    distributedStep,
+                    g_Visibility.stepDistributionExponent);
 #endif
                 float sampleDistance = distributedStep * sideProjectedRadius[sideIndex];
                 sampleDistance = max(sampleDistance, 0.5f);
@@ -1267,24 +976,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 
                 uint2 samplePixel = uint2(samplePixelFloat);
                 uint2 sampleRepresentativePixel = samplePixel;
-#if ACTIVISION_PREPARED_DEPTH
-                uint2 sampleSamplingPixel =
-                    FullToSamplingPixel(samplePixel);
-                uint samplePackedDepthGuide =
-                    t_ActivisionPackedLinearDepth[sampleSamplingPixel];
-                float activisionSampleViewDepth =
-                    ActivisionLinearDepth(samplePackedDepthGuide);
-                bool activisionSampleDepthValid =
-                    activisionSampleViewDepth > 0.0f &&
-                    activisionSampleViewDepth < 65503.0f &&
-                    isfinite(activisionSampleViewDepth);
-                if (activisionSampleDepthValid)
-                {
-                    sampleRepresentativePixel = ActivisionGuidePixel(
-                        sampleSamplingPixel, samplePackedDepthGuide);
-                }
-#endif
-#if DUPLICATE_PIXEL_REJECTION
                 if (hasPreviousSample[sideIndex] &&
                     all(sampleRepresentativePixel ==
                         previousSamplePixel[sideIndex]))
@@ -1293,18 +984,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 }
                 previousSamplePixel[sideIndex] = sampleRepresentativePixel;
                 hasPreviousSample[sideIndex] = true;
-#endif
                 float3 samplePositionVS;
                 bool reconstructed = false;
-#if ACTIVISION_PREPARED_DEPTH
-                if (activisionSampleDepthValid)
-                {
-                    reconstructed = ReconstructViewPositionFromLinearDepth(
-                        float2(sampleRepresentativePixel) + 0.5f,
-                        activisionSampleViewDepth,
-                        samplePositionVS);
-                }
-#endif
 #if !FIXED_DIRECT_DEPTH
                 if (g_Visibility.useDepthHierarchy != 0u &&
                     g_Visibility.orthographicProjection == 0u)
@@ -1336,11 +1017,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     }
                 }
 
-#if TRACE_DIAGNOSTIC == 2
-                diagnosticDepthSum += abs(samplePositionVS.z);
-                continue;
-#endif
-
                 float effectiveThickness = g_Visibility.thicknessWorld;
 
                 float3 frontDelta = samplePositionVS - receiverPositionVS;
@@ -1351,36 +1027,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     continue;
                 }
                 float3 directionToSample = frontDelta * rsqrt(frontLengthSquared);
-#if HORIZON_GTAO_CONTROL
-                float candidateHorizon = dot(
-                    directionToSample, viewDirection);
-#if ACTIVISION_GTAO_REFERENCE
-                // The publication conservatively fades occluders through the
-                // outer quarter of the world-space radius instead of applying
-                // a hard, dark cutoff. Fade this sample from the unoccluded
-                // cosine (-1) toward its candidate before the running max;
-                // blending from the accumulated horizon makes falloff depend
-                // on sample order and cannot weaken a distant candidate.
-                float sampleWorldDistance = sqrt(frontLengthSquared);
-                float falloffStart = g_Visibility.radiusWorld * 0.75f;
-                float falloffRange = max(
-                    g_Visibility.radiusWorld - falloffStart,
-                    VisibilityEpsilon);
-                float distanceWeight = saturate(
-                    (g_Visibility.radiusWorld - sampleWorldDistance) /
-                    falloffRange);
-                candidateHorizon = lerp(
-                    -1.0f,
-                    candidateHorizon,
-                    distanceWeight);
-#endif
-                // The paper describes conservative attenuation for thin
-                // occluders, but does not publish its decrement constants.
-                // This approximation intentionally does not invent them.
-                horizonCosine[sideIndex] = max(
-                    horizonCosine[sideIndex], candidateHorizon);
-                continue;
-#endif
                 float3 backDelta = ComputeBackDelta(
                     receiverPositionVS,
                     samplePositionVS,
@@ -1529,38 +1175,16 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #endif
             }
 
-#if FULL_MASK_EARLY_EXIT
-            if (visibilityMask.occludedBits == RadialVisibilityFullMask ||
+            if (visibilityMask.occludedBits ==
+                    RadialVisibilityFullMask ||
                 (!sideActive[0] && !sideActive[1]))
             {
                 break;
             }
-#endif
         }
 
 #if ENABLE_AO
-#if TRACE_DIAGNOSTIC == 2
-        ambientVisibility = 0.5f +
-            frac(abs(diagnosticDepthSum)) * (1.0f / 65536.0f);
-#elif HORIZON_GTAO_CONTROL
-        // Signed horizon cosines are valid. Saturating here collapsed every
-        // back-facing horizon to zero, producing the large black PS4-control
-        // artifacts. VisibilityFastAcos already clamps numerical drift over
-        // the complete [-1,1] cosine domain.
-        float negativeHorizon = -VisibilityFastAcos(horizonCosine[0]);
-        float positiveHorizon = VisibilityFastAcos(horizonCosine[1]);
-        float sineNormal = sin(horizonNormalAngle);
-        float negativeArc = (horizonCosNorm +
-            2.0f * negativeHorizon * sineNormal -
-            cos(2.0f * negativeHorizon - horizonNormalAngle)) * 0.25f;
-        float positiveArc = (horizonCosNorm +
-            2.0f * positiveHorizon * sineNormal -
-            cos(2.0f * positiveHorizon - horizonNormalAngle)) * 0.25f;
-        ambientVisibility = max(
-            horizonProjectedNormalLength *
-                (negativeArc + positiveArc),
-            0.0f);
-#elif VISIBILITY_ESTIMATOR == VisibilityEstimator_UniformSolidAngle
+#if VISIBILITY_ESTIMATOR == VisibilityEstimator_UniformSolidAngle
         ambientVisibility = ResolveGtUniformAmbientVisibility(visibilityMask);
 #elif VISIBILITY_ESTIMATOR == VisibilityEstimator_CosineWeightedSolidAngle
         ambientVisibility = ResolveGtCosineAmbientVisibility(
@@ -1599,8 +1223,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #if ENABLE_GI
 #if ENABLE_BOUNCE_REINJECTION
     float frontierMetadataValue = previousReceiverFrontier.a;
+    float3 storedBounceFrontier = min(indirectDiffuse, 65504.0f);
     u_BounceFrontier[dispatchPixel] = float4(
-        min(indirectDiffuse, 65504.0f), frontierMetadataValue);
+        storedBounceFrontier, frontierMetadataValue);
 #if INITIALIZE_BOUNCE_CUMULATIVE
     float3 cumulativeIndirectDiffuse = max(
         previousReceiverFrontier.rgb, 0.0f) + indirectDiffuse;
@@ -1612,6 +1237,30 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         indirectDiffuse;
     u_IndirectDiffuse[dispatchPixel] = float4(
         min(cumulativeIndirectDiffuse, 65504.0f), cumulativeSample.a);
+#endif
+#if ENABLE_BOUNCE_CONTINUATION
+    LightingContributionGate nextBounceGate = MakeLightingContributionGate(
+        g_Visibility.knownInactiveLightingSources,
+        g_Visibility.minimumBounceContribution *
+            BounceContinuationThresholdGrowth,
+        g_Visibility.lightingExposureScale);
+    const bool pixelCanContinue = LightingClassifyContribution(
+        nextBounceGate,
+        LightingSource_IndirectDiffuse,
+        storedBounceFrontier,
+        bounceToFinalUpperBound) == LightingRejection_None;
+    if (WaveActiveAnyTrue(pixelCanContinue) && WaveIsFirstLane())
+    {
+        // Most waves see the already-set flag and avoid a contended atomic.
+        // The exchange remains the correctness path for simultaneously
+        // arriving first waves.
+        if (u_BounceContinuation.Load(0u) == 0u)
+        {
+            uint previousContinuation = 0u;
+            u_BounceContinuation.InterlockedOr(
+                0u, 1u, previousContinuation);
+        }
+    }
 #endif
 #else
     float receiverFrontierMetadataValue = 0.0f;
@@ -1626,39 +1275,5 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     u_IndirectDiffuse[dispatchPixel] = float4(
         min(indirectDiffuse, 65504.0f), receiverFrontierMetadataValue);
 #endif
-#endif
-#if ENABLE_ADAPTIVE_SPARSE_SAMPLING && !ENABLE_BOUNCE_REINJECTION
-    {
-        float adaptiveSignal = dot(indirectDiffuse,
-            float3(0.2126f, 0.7152f, 0.0722f));
-#if ENABLE_AO
-        adaptiveSignal = max(adaptiveSignal, 1.0f - ambientVisibility);
-#endif
-        float compressedSignal = adaptiveSignal /
-            (1.0f + max(adaptiveSignal, 0.0f));
-        float signalInstability = hasMatchingFeedback
-            ? saturate(abs(compressedSignal -
-                reprojectedContributionSignal) * 4.0f)
-            : 0.0f;
-        float currentInstability = max(
-            max(edgeImportance, disocclusionImportance),
-            max(signalInstability, historyImportance * 0.5f));
-        // A sample found because of a neighboring seed may receive more work,
-        // but it cannot become a fresh outward seed. Existing center seeds and
-        // independently difficult pixels remain eligible, so useful regions
-        // persist without a one-texel-per-frame dilation wave.
-        bool independentContributionDiscovery =
-            centerContributionSeed > 0.0f ||
-            neighboringContributionSeed * 0.75f <=
-                independentImportance + VisibilityEpsilon;
-        float contributionSeed = independentContributionDiscovery
-            ? compressedSignal
-            : 0.0f;
-        u_AdaptiveFeedback[dispatchPixel] = float4(
-            saturate(currentInstability),
-            saturate(compressedSignal),
-            saturate(contributionSeed),
-            receiverDepth);
-    }
 #endif
 }

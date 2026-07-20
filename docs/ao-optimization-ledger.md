@@ -6,28 +6,158 @@ technique, and additional candidates found in primary-source research. It is
 anchored to canonical commit `5f43205ecfe00e31fd64af34cad0f031472a224c` and
 the target profile of 1920x1080 output, half-linear-resolution AO, eight total
 radial samples, radius 3.0, thickness 0.5, quadratic spacing, AO only, and no
-adaptive, temporal, or user-enabled spatial filtering. The separate XeGTAO High
-source port intentionally uses its upstream full-resolution 18-read workload,
-and the Activision approximation intentionally enables its coupled denoisers;
-neither is an equal-estimator substitute for that target.
+adaptive, visibility-temporal, or user-enabled spatial filtering. The
+Activision PS4 approximation and XeGTAO remain in this document only as
+researched and measured rejections; neither is present in the build.
 
 ## Ledger Status
 
-All 413 candidates record a current allowed disposition based on the current
-code, primary-source inspection, and the zero-inactive-cost contract. The final
-audit found 413 unique IDs and the totals are
-64 `Already equivalent`, 64 `Implemented and retained`, 84 `Implemented as
-optional experiment`, 16 `Implemented as benchmark-only control`, 51 `Not
-applicable`, 61 `Blocked by architecture`, and 73 `Blocked by correctness`.
-No row is labeled `Rejected after measurement` because no qualifying controlled
-target run has rejected a candidate, and no row is labeled `Blocked by
-licensing` because the inspected source licenses did not create such a block.
+The inventory contains 414 unique IDs. Historical row text records what was
+implemented and measured during the investigation; the removal table below is
+the current authoritative override for retired families. No inspected source
+created a licensing block.
 
-Results that cite source inspection are established on `5f43205`. The controlled
-local results below record their NVIDIA adapter, build/profile context, 120-frame
-warm-up, 600-frame sample count, median, and p95; they are UVSR evidence for that
-adapter only. Xe-LPG target results remain pending. No timing cited from another
-product or GPU is a UVSR result.
+Results that cite source inspection are established on `5f43205`. The current
+controlled results were collected on the target Intel Arc integrated GPU
+(`DEV_7D55`, driver `32.0.101.8724`) at 1920x1080 in Release, with 120 warm-up
+frames and 600 measured frames per entry. The compatibility, historical per-
+function math, paired-buffer, historical new-candidate, and fixed-sample
+matrices all completed every
+requested measured frame with zero incomplete frames. Older NVIDIA measurements
+remain historical cross-adapter evidence and are labeled as such. No timing
+cited from another product or GPU is a UVSR result.
+
+## Removed Feature Disposition
+
+These decisions override older inventory rows that say an experiment was
+implemented or retained. The measurements remain below so the rejection is
+auditable rather than disappearing with the code.
+
+| Removed Family | Measured Or Generated-Code Evidence | Expected Improvement After Evidence | Why It Was Removed | Current Build Surface |
+| --- | --- | ---: | --- | --- |
+| Per-function Standard/Fast Exact/Fast Approximation math controls | The 24-profile controlled Intel matrix kept nearly every comparison within approximately +/-1%; the strongest directional result was only 0.93% and did not establish a repeatable production win | Approximately 0%; any plausible sub-1% gain is below the current decision threshold | The dropdowns and runtime selectors added substantial UI, benchmark, constant-buffer, and shader complexity without a conclusive benefit | Removed from settings, UI, CLI matrices, benchmark schema, constants, shaders, and tests; retained shaders use their static validated math |
+| Packed-edge 4x4, separate and fused | Generated DXIL retained 209 static texture loads and emitted no gather instruction; runtime measurements put both paths near 4.70 ms against a roughly 2.71 ms compact Reference in that reconstruction run | Negative: approximately 1.99 ms slower, or about a 73% regression in that run | Sixteen source evaluations per full-resolution pixel overwhelmed the intended wider-support benefit | Removed from profiles, planner enums, UI, benchmark sequence, shader macros, packaged permutations, and tests; packed-edge 2x2 remains |
+| XeGTAO LUT/mixed, inline-Hilbert/mixed, and LUT/FP32 profiles | Every controlled Intel XeGTAO variant was slower than canonical Reference. Internal Xe-only tuning changed ordering but never made the family a faster UVSR replacement | Negative versus canonical Reference on this driver; 0% expected production improvement as a UVSR performance profile | It is a different full-resolution 18-read estimator and failed the requested faster-replacement goal on the target Intel driver | Removed from profiles, verification presets, UI, CLI matrices, host resources/passes, shaders, shader package, and tests; historical source and timing evidence remains below |
+| Adaptive sparse sampling | Historical compatibility and paired-format runs did not establish a stable complete-effect win; feedback-related deltas changed direction or had worse p95 behavior | No reliable positive estimate remains after the measured inconsistency | Its neighborhood analysis, feedback history, motion dependency, stochastic budget behavior, formats, and permutations made custom combinations harder to interpret than fixed-count comparisons | Removed from settings, buffer controls, constant buffers, resources, bindings, shader permutations, benchmark serialization, planner keys, and tests; all remaining sampling uses an explicit fixed count |
+| Automated benchmark test matrices and Reference comparison | The completed Intel runs already supplied the fixed-count, noise, reconstruction, math, buffer, compatibility, and candidate evidence used by this ledger | 0%; orchestration never changed renderer GPU work | Multi-run actions made the Statistics UI and benchmark state harder to read; the internal Reference profile remains available to command-line benchmark validation | Removed from the UI and `--benchmark-sequence` command line; only isolated current-profile measurement remains |
+| Activision PS4 scheduler plus scalar/packed-gather GTAO approximation | Both profiles were slower than canonical Reference on the controlled Intel driver; packed versus scalar ordering changed across repeats, and the path required source-specific depth, spatial, temporal, and upsample work | Negative versus Reference: scalar was 23.24% slower and packed was 18.63% slower in the current controlled check | It was an approximate different-estimator research pipeline, not a faster UVSR replacement, and its two filter variants added substantial duplicate code and UI | Removed from planner/profile enums, verification presets, UI, host resources, shaders, packaged permutations, and tests |
+| Visibility temporal accumulation settings and diagnostic profile | The current renderer has TAA, while visibility history was disabled in the primary workload and its paired format timings were inconsistent | 0% expected primary-workload improvement; temporal buffer pairs did not establish a stable win | Two temporal systems exposed overlapping human controls and unnecessary buffer-format choices | Removed from the AO settings surface and profile catalog; the temporal-copy/source shaders and tests are removed, all selectable profiles keep visibility accumulation off, and renderer TAA owns temporal stability |
+| Diagnostic floors, fused debug output, and analytic-horizon attribution controls | These modes intentionally produced invalid, debug, or different-estimator output; none was a shippable performance setting | 0% product improvement by definition | They answered investigation questions but cluttered the profile catalog and could be mistaken for production candidates | Removed from profile and verification enums, planner passes and bindings, UI, host selection, packaged shader variants, and tests; historical measurements remain below |
+| 16x8/8x16 groups, 32/64/128 radius clamps, and conservative filter algebra | Groups were effectively neutral, every clamp regressed against Fixed 8 at radius 3, and conservative algebra was 0.27% slower in the controlled check after an earlier 0.223 ms smoke regression | Approximately 0% for the tested workload; measured directions were neutral or negative | None established a repeatable win, while each expanded profile, permutation, validation, and UI surface | Removed from configuration/profile enums, UI, planner contracts, host shader selection, shader package, and tests |
+| Duplicate-rejection and full-mask-exit feature-off controls | Matched repeats stayed inside system drift and did not justify user-facing toggles | No proven user-selectable improvement | The underlying shortcuts are safe internal behavior; only their investigation controls failed to earn UI or shader variants | Off profiles, uniforms, shader variants, and tests removed; duplicate-pixel rejection and full-mask early exit remain always enabled |
+| Mixed-Precision AO 8T and Aggressive Experimental AO 8T verification presets | Neither preset had a compiled implementation and both reported unavailable | 0% | Unavailable menu entries were not runnable experiments and made the profile list misleading | Removed from verification enums, profile menu, validation, and tests |
+| Planner-only R8 AO, embedded count/edge R16, R8_UNORM edges, and fixed-18 source-port states | Every state was unavailable or belonged only to the removed XeGTAO/packed experiment families; no retained profile selected one | 0% | Keeping impossible enum/resource branches made removed experiments appear architecturally available | Removed from planner enums, resource masks, descriptions, validation branches, and tests |
+
+## Last Cleanup Removal Inventory
+
+This inventory is deliberately limited to the immediately preceding cleanup
+request: make **Buffers** a sibling drawer, decouple buffer presets, remove
+diagnostic presets, and remove failed performance experiments. It excludes
+everything removed in earlier requests, including XeGTAO, the PS4 scheduler,
+scalar/packed-gather GTAO, packed-edge 4x4, adaptive sampling, visibility
+temporal accumulation, benchmark matrices, and per-function math controls.
+
+| Removed In That Cleanup | Exact Features | Developer-Panel Restoration Note |
+| --- | --- | --- |
+| Trace diagnostics | Constant scheduler; constant trace; depth-read-only trace; bitmask-ALU-only trace | Useful only as timing floors; could return behind an explicitly invalid-output developer panel |
+| Reconstruction and composition diagnostics | Nearest resolve; bilinear resolve; composition-only; composition bypass; fused full-resolution AO debug output | Useful for attribution, not product output; safe only when clearly marked diagnostic |
+| Algorithm-attribution control | UVSR analytic-horizon / Activision Closest Match profile | Different estimator rather than a UVSR optimization; a developer panel would need a persistent different-output warning |
+| Failed thread-group experiments | Fixed 16x8 and fixed 8x16 first-trace groups | Both were effectively neutral; reasonable hidden controls if future Intel drivers warrant a retest |
+| Failed radius-clamp experiments | Projected-radius clamps at 32, 64, and 128 pixels | All regressed against the fixed-eight baseline at radius 3; hidden retesting is possible for substantially larger radii |
+| Failed filter-algebra experiment | Conservative FP32 filter algebra with invariant hoists and offline Gaussian weights | Slightly slower in the controlled run; could return only as one bundled developer experiment, not per-function controls |
+| Failed feature-off controls | Duplicate-pixel rejection Off; full-mask early exit Off | Only the Off experiments were deleted; both safe shortcuts remain hard-enabled in every retained shader |
+| Unavailable verification presets | Mixed-Precision AO 8T; Aggressive Experimental AO 8T | These had no compiled implementation, so restoring menu entries alone would still produce unusable controls |
+| Dead planner-only formats and states | Fixed-18 sample specialization; R8 raw AO; embedded R16 count-plus-edge storage; R8_UNORM edge storage and their resource-mask branches | Do not restore as UI until a real retained pass allocates, binds, and validates each state |
+
+## GI Compatibility
+
+The fixed-eight trace used by Low and Medium has always had compiled AO, GI,
+and AO+GI permutations. Its former GI failure came from treating the fixed
+trace as the AO-only fused final-application experiment. Product quality
+presets use compatible separate reconstruction/composition whenever GI is
+active.
+
+The separate packed-edge writer and filter also had GI-capable shader algebra,
+but the host planner restricted the profile to AO and did not allocate or bind
+the edge plane for GI workloads. The four separate packed-edge 2x2 profiles now
+accept AO, GI, or AO+GI, allocate the R8_UINT plane for any active consumer, and
+compile/bind explicit AO/GI filter permutations. The advanced depth-normal
+reconstruction profile can use that path under GI. The fused
+resolve/application profiles remain `(Mutex GI)` because they directly apply
+AO to the lighting target and cannot preserve the separate GI reconstruction
+and composition order without becoming a different multi-output shader.
+
+Buffer configuration appears as a sibling drawer directly below the visibility
+drawer, with a format-only preset dropdown followed by vertically labeled
+**Trace AO**, **Current Bounce GI**, **Accumulated GI**, **Output AO**,
+**Output GI**, and **Long-Range Depth** controls. The presets are
+**Performance Precision**, **Default Precision**, **Compact AO**, and
+**Compact GI**. Low and Medium begin with Performance Precision; High and Ultra
+begin with Default Precision. Manual buffer edits preserve the rest of the
+visibility configuration and change the product profile label to
+**Custom / Advanced**.
+
+## Shared Exact Sampling
+
+The current build replaces the free-form sample slider and separate later-
+bounce specialization selector with one **Exact Sample Count** dropdown. Its
+only selectable totals are 8, 12, 16, 20, 24, 48, and 64. Every value has
+compiled AO-only, GI-only, AO+GI, bounce-metadata, later-bounce reinjection,
+packed-noise composition, and packed-edge composition permutations for every
+retained estimator and scheduler specialization.
+
+AO and every active GI bounce use exactly the selected total. This current
+behavior supersedes historical rows that describe a halving schedule, an
+eight-sample later-bounce floor, or separate fixed-later/fixed-all profiles.
+The generic runtime-count shader remains only for internal Reference benchmarks
+and fallback composition; it is not a product preset or selectable count.
+Exhaustive CPU equivalence coverage now checks all seven exact totals across all
+three estimators and AO, GI, and AO+GI consumers.
+
+## Contribution-Terminated GI
+
+**Limit Bounces** is enabled by default and preserves the explicit one-through-
+eight path. Disabling it records a 16-bounce fault-guard command stream, starts
+at the selected contribution cutoff, and raises that bar by 4x per bounce.
+Each bounce performs a wave-coalesced contribution test and sets one GPU flag
+only when its stored frontier can clear the next bar. A one-thread control pass
+converts the flag into either the normal full-screen indirect dispatch or a
+zero-group dispatch. There is no CPU readback or GPU/CPU synchronization.
+
+The default limited path uses the `ENABLE_BOUNCE_CONTINUATION=0` trace
+specialization. At the default one bounce it records neither a later-bounce
+trace nor a continuation-control dispatch; the unlimited-bounce feature
+therefore contributes no per-frame GPU work until **Limit Bounces** is disabled.
+AO Power similarly defaults to an identity specialization with its `pow`
+instruction compiled out. A distinct powered compositor is selected only after
+the AO Power slider moves away from 1.0.
+
+This mode is not expected to beat a deliberately limited four-bounce render;
+it computes additional visible transport when that transport remains above the
+bar. Its performance comparison is against a naive fixed 16-bounce
+implementation. If convergence occurs after bounce four, it removes 12 of the
+15 possible later full-screen traces, or 80% of that naive later-bounce dispatch
+work, while retaining 15 one-thread control dispatches. Convergence after
+bounce eight removes 8 of 15 later traces, or 53%. Exact total-frame savings
+remain scene, exposure, intensity, resolution, and cutoff dependent and require
+an isolated measurement; the default limited path adds no dispatch.
+
+The final controlled Intel Arc run used 120 warm-up and 240 measured frames at
+the locked 1920x1080 Sponza camera. Both generic and fixed-eight
+contribution-terminated paths completed 240/240 frames with zero incomplete
+frames and visually clean captures. Both converged by bounce four. Generic
+Reference measured 6.7620 ms complete median, 7.0455 ms complete p95, and
+3.5361 ms for **Later Bounces**. Exact fixed-eight first/later tracing measured
+6.0759 ms, 6.4526 ms, and 2.8820 ms respectively: 10.15% lower complete
+median, 8.41% lower complete p95, and 18.50% lower later-bounce median than the
+generic extended-bounce profile. This is a profile-to-profile result, not a
+claim that extended transport is faster than a deliberately capped four-bounce
+render.
+
+Authored emissive sources remain enabled at the calibrated gain 4.0, but their
+checkbox and gain slider have been removed. This preserves current lighting
+behavior while eliminating two controls that were not part of the retained
+performance experiments.
 
 Blocked dispositions are not measured rejections. In particular, F-030 and
 O-039 remain unmet deliverable/evidence gaps. Auto Fixed (D-005), trace LDS
@@ -50,6 +180,21 @@ generation (X-020), and in-main depth-derived normals (X-021). Their row-level
 correctness, architecture, quality, and measurement gates explain why they are
 deferred; none of those dispositions means the experiment is impossible.
 
+## How to Read This Ledger
+
+Start with **Controlled Intel Finalist Ranking** for measured priorities and
+**Removed Feature Disposition** plus **Plain-English Production Disposition**
+for the keep/drop decision. In the
+large inventory, search by optimization name or ID. **Final Disposition** says
+whether the feature is retained, optional, diagnostic-only, already equivalent,
+not applicable, or blocked; **Reason** explains why. A positive saving means
+`baseline - candidate`, so larger is faster. Compare only rows that name the
+same baseline. The removed Activision PS4 GTAO approximation and removed UVSR
+horizon control are different estimators or workloads and are not
+interchangeable with the canonical UVSR visibility-bitmask result. XeGTAO, PS4,
+horizon, and diagnostic comparisons are historical rejection or attribution
+evidence.
+
 ## Classification and Evidence Conventions
 
 - Exact means the same input texels and LODs, sample set and ownership order,
@@ -71,6 +216,201 @@ deferred; none of those dispositions means the experiment is impossible.
   added together. Only a recorded adapter, build, profile key, warm-up, sample
   count, median, and p95 can replace an estimate with a result.
 
+## Remaining Feature Scorecard
+
+This scorecard covers every remaining user-selectable optimization family.
+Fixed-count variants and the four packed-edge reconstruction variants are
+grouped so the ranking describes real decisions rather than repeating near-
+identical rows. Removed diagnostics and failed experiments do not appear in
+these four current tables; their measured scores remain inferable from the
+historical controlled check and the removal table above.
+Ordinary image controls such as AO strength, GI intensity, sample count, and
+spatial radius are not optimizations and are outside this
+scorecard.
+
+Ranks retain their original evidence-order numbers when a removed family is
+deleted; the 0-100 scores, not contiguous numbering, are the prioritization
+signal.
+
+The three component scores have different meanings:
+
+- **Universal Performance** rewards repeatable speed across hardware,
+  consumers, and ordinary settings without changing the estimator or image.
+- **Situational Performance** rewards the best credible speed when the
+  workload, consumer, and quality constraints match.
+- **UI Nonredundancy** gives 100 to a unique, understandable decision that
+  belongs in the ordinary UI and 0 to a duplicate or benchmark-only control
+  that should be hidden.
+- **Average** is the unweighted arithmetic mean of those three scores, rounded
+  to the nearest integer. It is a prioritization aid, not an additive speed
+  estimate or an image-quality approval.
+
+### Current Controlled Intel Check
+
+The current check used PBR Sponza Decorated at 1920x1080 on Intel Arc graphics,
+with 120 warm-up and 480 measured frames per profile. Twenty-two main profiles
+and three matched repeats completed every requested frame with zero incomplete
+frames. The executable reports build identity `96939e1`; it also contains the
+current uncommitted UI and packaging fixes. Raw JSON, CSV, and final-frame
+captures are in
+`visibility-benchmarks/scorecard-controlled-20260719` and
+`visibility-benchmarks/scorecard-controlled-20260719-repeat`.
+The radius-clamp, group-shape, conservative-math, horizon, feature-off,
+Activision Schedule, and PS4 rows below are historical rejection or attribution
+evidence; their user-selectable profiles and implementation paths have since
+been removed. Duplicate rejection and full-mask exit remain internal defaults,
+but their feature-off controls are gone.
+
+| Candidate And Correct Baseline | Current Median Result | Interpretation |
+| --- | ---: | --- |
+| Exact Fixed 8 + Fused versus Reference | 1.9453 versus 2.5543 ms; 23.85% faster | Strong exact AO-only winner; agrees with the earlier 20.6-22.4% controlled Intel range |
+| Exact Fused versus Reference | 2.0179 versus 2.5543 ms; 21.00% faster | Strongest broadly reusable component when the AO-only fused consumer contract applies |
+| Fused Depth-Normal Reconstruction And Apply versus Reference | 1.9970 versus 2.5543 ms; 21.82% faster | Strong algorithmic result; manual edge and motion acceptance remains mandatory |
+| Intel Edge-Guided Reconstruction Methods versus Reference | 2.2467-2.3133 ms; 9.44-12.04% faster | All four retained variants helped here, with depth-guided fastest and depth-plus-normal safer at discontinuities |
+| Activision Schedule versus Reference | 2.4385 versus 2.5543 ms; 4.54% faster | Historical result only; the coupled scheduler was removed with the PS4 approximation |
+| Offline Packed Spacetime Noise versus Reference | 2.4654 versus 2.5543 ms; 3.48% faster | Small exact delivery win on this run; earlier retries were less stable |
+| Exact Fixed 8 versus Reference | 2.4903 versus 2.5543 ms; 2.51% faster | Supporting specialization, consistent with the earlier 1.9-4.7% Intel range |
+| Radius Clamps versus Fixed 8 | 0.24-0.83% slower | No win at radius 3; compare with Fixed 8 because each clamp profile already includes that specialization |
+| 16x8 And 8x16 Groups versus Fixed 8 | 0.02% slower and 0.09% faster | Effectively neutral; absolute Reference deltas would incorrectly credit the bundled Fixed-8 specialization |
+| Conservative Numerical versus Reference | 0.27% slower | No performance reason to promote it |
+| UVSR Horizon GTAO versus Reference | 16.16% faster | Different estimator; useful algorithm ceiling, not an exact UVSR replacement |
+| PS4 Packed Gather versus PS4 Scalar | 3.74% faster | Historical comparison only; both variants were removed after remaining slower than Reference |
+| PS4 Scalar versus Reference | 23.24% slower | Historical source-inspired comparison; the profile is no longer selectable |
+| Duplicate Rejection Off And Full-Mask Exit Off | Repeats were 0.80% and 0.52% faster than Fixed 8 | Both differences are inside current system drift; no universal benefit is claimed for either enabled shortcut |
+
+### Intel Spatial Reconstruction Ranking
+
+This ranking uses complete-effect median time, not just the reconstruction
+dispatch, from the same controlled Intel Arc run: PBR Sponza Decorated,
+1920x1080 output, half-resolution AO, eight fixed samples, 120 warm-up frames,
+and 480 measured frames with zero incomplete frames per option. The first four
+rows are the like-for-like methods in the **Reconstruction Method** dropdown.
+The fused row is shown separately because it also removes the standalone final
+application stage and remains `(Mutex GI)`.
+
+Here **Legacy Reference** means the canonical generic UVSR bitmask path at that
+same workload: AO only, half-resolution tracing, eight samples, radius 3,
+thickness 0.5, quadratic spacing, Toroidal Blue Noise, R16F raw and final AO,
+legacy guide-aware upsampling, and separate composition. Its optional spatial
+denoiser was disabled, but half-resolution output still required the normal
+guide-aware reconstruction pass. The comparator measured 2.5543 ms median and
+2.7731 ms p95; it is not **Unreconstructed Full Resolution Input**.
+
+| Rank | User-Facing Option | Complete Median | Versus 2.5543 ms Legacy Reference | Plain-English Reading |
+| ---: | --- | ---: | ---: | --- |
+| 1 | Depth-Guided Reconstruction (Intel) | 2.2467 ms | 12.04% faster | Fastest separate method; uses depth alone, so it needs the strongest visual check at normal discontinuities |
+| 2 | Depth-Normal Reconstruction (Intel) | 2.2976 ms | 10.05% faster | Slightly slower than depth-only but protects both geometric depth edges and surface-normal changes |
+| 3 | Slope-Aware Reconstruction (Intel) | 2.2993 ms | 9.99% faster | Essentially tied with depth-plus-normal; adjusts depth continuity on slopes and is more scene-dependent |
+| 4 | Leakage-Limited Reconstruction (Intel) | 2.3133 ms | 9.44% faster | Slowest retained Intel method and deliberately permits a tiny cross-edge contribution to avoid fully disconnected corners |
+| Situational Overall | Fused Depth-Normal Reconstruction And Apply (Intel) (Mutex GI) | 1.9970 ms | 21.82% faster | Fastest total AO pipeline here because it combines reconstruction and application; not a like-for-like spatial-only choice |
+
+The first feature-off run showed much larger slowdowns, but unrelated
+composition time moved by the same order and a matched Fixed-8 repeat shifted
+from 2.49 to 2.82 ms. Those two outliers are excluded rather than used to
+inflate the shortcut scores. The PS4 scalar launch also exposed an interrupted
+four-byte shader blob with zero permutations. Regenerating the target produced
+a 23,392-byte blob containing both `ACTIVISION_PACKED_GATHER=0` and `=1`
+permutations before the successful scalar and packed reruns.
+
+### Universal Performance Ranking
+
+The former Legacy Reference, Exact Fast, and Fast Edges product-preset labels
+have been removed. The rows below use the corresponding retained internal or
+advanced implementation names; their measurements still apply to those
+underlying techniques.
+
+| Rank | Remaining Feature | Score | Short Reason |
+| ---: | --- | ---: | --- |
+| 1 | Exact fixed-8 profile | 82 | Repeated large AO savings and exact fixed-eight output; GI keeps only the smaller fixed-trace part |
+| 2 | Exact Fused Resolve And Apply | 70 | Large exact traffic and dispatch saving on Intel and NVIDIA, but only for reduced-resolution AO without the conflicting final stages |
+| 3 | Shared Exact 8/12/16/20/24/48/64 traces | 60 | One exact specialization now covers AO and every GI bounce; earlier fixed-trace gains were modest and adapter-dependent |
+| 3 | Final GI 16-bit precision | 55 | Strong 8.39% Intel GI result, but it is numerical and irrelevant when GI is off |
+| 5 | Offline Packed Spacetime Noise | 52 | Exact delivery with a 3.48% current win, but earlier runs were less stable and it requires the matching offline-computed sequence |
+| 6 | Raw AO 16-bit precision | 45 | Broadly applicable bandwidth reduction, but precision changes and no isolated controlled win is recorded |
+| 6 | Final AO 16-bit precision | 45 | Broad AO storage saving with a measured 1.39% gain; still a numerical format choice |
+| 8 | Depth-Normal Reconstruction profile | 35 | Large current speedup and GI support, but packed reconstruction changes edge behavior |
+| 9 | Intel edge-guided reconstruction methods | 30 | Current 9.44-12.04% gains are real, but every method is algorithmic and scene-sensitive |
+| 9 | Fused Depth-Normal Reconstruction And Apply | 30 | Very fast in AO-only mode, but combines algorithmic edges with the fused consumer restriction |
+| 9 | Depth Hierarchy 16-bit precision | 30 | Measured 3.88% gain when hierarchy storage matters; radius-3 direct-depth work does not use it |
+| 12 | Raw GI Frontier 16-bit precision | 28 | Measured 1.56% GI gain, numerical output, and no AO-only benefit |
+| 13 | Cumulative GI 16-bit precision | 25 | Measured 1.77% gain applies only to active multi-bounce GI |
+| 20 | Noise Pattern choices | 5 | Primarily quality and convergence controls; timing differences were small and pattern-dependent |
+| 25 | Internal Reference benchmark profile | 0 | It is the correctness and timing baseline, not a speed optimization |
+| 25 | Generic Fallback / Custom | 0 | It preserves arbitrary combinations but adds no performance technique by itself |
+
+### Situational Performance Ranking
+
+| Rank | Remaining Feature | Score | Short Reason |
+| ---: | --- | ---: | --- |
+| 1 | Exact fixed-8 profile | 100 | Best exact measured recipe at 23.85% faster for reduced-resolution AO |
+| 1 | Exact Fused Resolve And Apply | 100 | Repeated 17.7-21.0% Intel gains when its AO-only contract fits |
+| 3 | Fused Depth-Normal Reconstruction And Apply | 98 | Saved 21.82% when approximate edge reconstruction and AO-only fusion are acceptable |
+| 4 | Depth-Normal Reconstruction profile | 96 | Near-top speed with one advanced choice and GI-compatible fallback |
+| 5 | Final GI 16-bit precision | 92 | Best measured format result at 8.39% for an active GI workload |
+| 6 | Intel edge-guided reconstruction methods | 88 | Saved 9.44-12.04% in the current view without requiring fused application |
+| 8 | Depth Hierarchy 16-bit precision | 78 | Strong 3.88% format gain when long-radius hierarchy reads are active |
+| 9 | Shared Exact 8/12/16/20/24/48/64 traces | 78 | The selected exact count specializes both the first trace and meaningful later-GI work without a second control |
+| 11 | Offline Packed Spacetime Noise | 70 | Current 3.48% win is useful with the matching offline-computed sequence |
+| 13 | Cumulative GI 16-bit precision | 66 | Measured 1.77% gain for active multi-bounce accumulation |
+| 15 | Raw GI Frontier 16-bit precision | 62 | Measured 1.56% bandwidth win for active GI tracing |
+| 16 | Raw AO 16-bit precision | 60 | Can reduce broad trace-resolution traffic when its precision is sufficient |
+| 17 | Final AO 16-bit precision | 58 | Measured 1.39% gain is modest but applies to a common full-resolution payload |
+| 25 | Noise Pattern choices | 25 | They can reduce variance and therefore required samples, but do not directly remove work at a fixed count |
+| 27 | Generic Fallback / Custom | 5 | Its only performance value is enabling a hand-tuned combination of other features |
+| 29 | Internal Reference benchmark profile | 0 | Baseline selection cannot produce a speedup over itself |
+
+### UI Nonredundancy Ranking
+
+| Rank | Remaining Feature | Score | Short Reason |
+| ---: | --- | ---: | --- |
+| 1 | Exact Fused Resolve And Apply | 95 | It exposes the largest independent exact optimization and its `(Mutex GI)` boundary |
+| 2 | Shared Exact 8/12/16/20/24/48/64 traces | 94 | One dropdown controls the real AO and GI workload and replaces the redundant later-bounce selector |
+| 3 | Generic Fallback / Custom | 90 | It honestly identifies combinations that no longer match a named preset |
+| 4 | Final GI 16-bit precision | 88 | Unique high-impact GI format control with strong evidence |
+| 4 | Noise Pattern choices | 88 | Important quality/convergence decision that is not represented by other controls |
+| 6 | Depth Hierarchy 16-bit precision | 80 | Unique long-trace storage decision with measured evidence |
+| 7 | Final AO 16-bit precision | 78 | Clear full-resolution output decision with no equivalent control |
+| 7 | Offline Packed Spacetime Noise | 78 | It now occupies one distinct choice in the Noise Pattern dropdown instead of duplicating the sample-pattern decision |
+| 9 | Exact fixed-8 profile | 72 | It remains one advanced choice, while Low now owns the approachable eight-sample starting point |
+| 9 | Depth-Normal Reconstruction profile | 72 | It keeps the approximate edge recipe available without duplicating a product preset |
+| 9 | Intel edge-guided reconstruction methods | 72 | One dropdown is justified, with the four methods differentiated by the edge evidence they use |
+| 9 | Raw GI Frontier 16-bit precision | 72 | Unique current-bounce GI payload |
+| 9 | Cumulative GI 16-bit precision | 72 | Unique multi-bounce accumulation payload |
+| 14 | Raw AO 16-bit precision | 70 | Unique trace-resolution AO payload |
+| 15 | Fused Depth-Normal Reconstruction And Apply | 55 | Valuable underlying mode, but the depth-normal reconstruction profile already exposes its main recipe |
+| 16 | Internal Reference benchmark profile | 0 | It remains essential for measurement but no longer occupies product UI |
+
+### Average Ranking
+
+| Rank | Remaining Feature | Score | Short Reason |
+| ---: | --- | ---: | --- |
+| 1 | Exact Fused Resolve And Apply | 88 | Exceptional exact AO speed with one clearly stated compatibility limit |
+| 2 | Exact fixed-8 profile | 85 | Strong exact speed and situational upside; Low now provides the approachable preset role |
+| 3 | Final GI 16-bit precision | 78 | Strong measured GI win and a unique, understandable buffer choice |
+| 4 | Shared Exact 8/12/16/20/24/48/64 traces | 77 | Modest exact speed, broad AO/GI composability, and one nonduplicated workload control |
+| 5 | Depth-Normal Reconstruction profile | 68 | Large speed and a focused advanced control outweigh algorithmic edge risk, but do not erase it |
+| 6 | Offline Packed Spacetime Noise | 67 | Small exact speedup with a clearer, nonduplicated role in the unified Noise Pattern dropdown |
+| 7 | Intel edge-guided reconstruction methods | 63 | Strong situational speed; keep the differentiated methods grouped behind one reconstruction dropdown |
+| 7 | Depth Hierarchy 16-bit precision | 63 | Good long-radius format win and a unique storage decision |
+| 9 | Fused Depth-Normal Reconstruction And Apply | 61 | High AO-only upside but overlaps depth-normal reconstruction and changes the final application |
+| 10 | Final AO 16-bit precision | 60 | Modest measured gain with a clear, common buffer scope |
+| 11 | Raw AO 16-bit precision | 58 | Plausible broad traffic win, but isolated controlled evidence is missing |
+| 12 | Raw GI Frontier 16-bit precision | 54 | Small measured GI win and a unique payload |
+| 12 | Cumulative GI 16-bit precision | 54 | Small measured multi-bounce win and a unique payload |
+| 14 | Noise Pattern choices | 39 | Important quality UI with little direct fixed-work performance value |
+| 15 | Generic Fallback / Custom | 32 | Essential honest state label, not a speed feature |
+| 16 | Internal Reference benchmark profile | 0 | Essential benchmark baseline, deliberately absent from product preset UI |
+
+The plain-English production recommendation from this combined score is to use
+High as the reference-quality factory preset, Low and Medium as
+reduced-resolution performance tiers, and Ultra as the deliberate
+high-cost/two-bounce tier. Retain **Exact Fused Resolve And Apply**,
+depth-normal reconstruction, the shared exact trace count, packed-edge modes,
+and offline-computed packed noise as advanced composable controls. Keep the
+strongest 16-bit buffer defaults. Radius clamps, thread groups, conservative
+math, feature-off controls, diagnostic floors, the horizon control, and the PS4
+pipeline remain removed.
+
 ## Expected Performance Impact
 
 This is the ranked forecast for every distinct implemented runtime candidate
@@ -81,27 +421,36 @@ GPU results. Ranges overlap and are non-additive because fixed specialization,
 bindings, packed noise, reconstruction, and fusion often remove the same work.
 Rank reflects plausible impact and maximum credible upside, not a claim that
 each range has a positive midpoint.
-Retention still requires isolated Release runs on the target Intel Core Ultra 9
-185H/Xe-LPG adapter, 120 warm-up frames, at least 240 complete measured frames,
-median/p95 export, counters where available, and image acceptance.
+Retention still requires manual image acceptance and motion/disocclusion review.
+The target Intel adapter now has isolated Release timing with 120 warm-up and
+600 complete measured frames per entry; native GRF, spill, SIMD-width, and
+occupancy counters remain unavailable.
 
-### Controlled Local Finalist Ranking
+### Controlled Intel Finalist Ranking
 
-The final local run used PBR Sponza Decorated at 1920x1080 on the NVIDIA GeForce
-RTX 4090 Laptop GPU, with 120 warm-up and 600 measured frames per profile. All
-nine profiles completed 600/600 measured frames with zero incomplete frames and
-clean final captures. This ranking compares each optimization with its named
-local baseline; it is not an Xe-LPG prediction, and rows with different
-algorithms are not interchangeable product candidates.
+The controlled Intel runs used PBR Sponza Decorated at 1920x1080 on Intel Arc
+integrated graphics, with 120 warm-up and 600 measured frames per profile. All
+entries listed here completed 600/600 measured frames with zero incomplete
+frames. This ranking compares each optimization with its named baseline; rows
+with different estimators are diagnostic comparisons, not interchangeable
+product candidates.
 
-| Measured Rank | Optimization And Baseline | Median Saving | p95 Saving | Local Interpretation |
-| ---: | --- | ---: | ---: | --- |
-| 1 | XeGTAO LUT/FP32 versus LUT/mixed precision | 0.044032-0.064512 ms; 11.2-15.6% across the controlled main run and independent precision repeat | Main run: 0.070656 ms; 15.5% | Prefer FP32 on this NVIDIA stack; retain both because minimum precision is target- and driver-dependent |
-| 2 | Exact Fixed 8 plus fused resolve/apply versus Reference | 0.017408 ms; 7.870% | 0.050176 ms; 19.066% | Keep for product validation |
-| 3 | Exact fused resolve/apply versus Reference | 0.013824 ms; 6.250% | 0.046080 ms; 17.510% | Keep for product validation |
-| 4 | XeGTAO LUT/mixed versus inline-Hilbert/mixed | 0.006144 ms; 1.463% | 0.000000 ms; 0.000% | Prefer LUT locally; retain inline as an isolated ALU/traffic control |
-| 5 | Activision packed gather versus scalar | 0.004096 ms; 1.338% | 0.026675 ms; 7.845% | Prefer packed for this comparison, but both remain slower than Reference |
-| 6 | Exact Fixed 8 versus Reference | -0.002048 ms; -0.926% | 0.032768 ms; 12.451% | Identical 0.101376 ms trace medians and a complete-median regression make the standalone candidate unhelpful locally |
+| Measured Rank | Optimization And Baseline | Median Saving | Expected Production Interpretation |
+| ---: | --- | ---: | --- |
+| 1 | Exact Fixed 8 plus fused resolve/apply versus Reference | 0.624-0.678 ms; 20.6-22.4% across two controlled runs | Strongest same-estimator candidate; keep for manual image validation and a real performance profile |
+| 2 | Exact fused resolve/apply versus Reference | 0.535-0.570 ms; 17.7-18.8% across two controlled runs | Strong pass/traffic removal; keep for a real performance profile |
+| 3 | UVSR horizon GTAO control 8 versus Reference | 0.451 ms; 15.4% complete, with 0.455 ms or 77.6% lower trace time | Diagnostic algorithm comparison only; it proves bitmask-estimator overhead but changes the estimator |
+| 4 | Final GI `RGBA16_FLOAT` versus `RGBA32_FLOAT` | 0.326 ms; 8.39% | Keep 16-bit final GI storage; strongest paired format result |
+| 5 | Exact Fixed 8 versus Reference | 0.056-0.141 ms; 1.9-4.7% across controlled runs | Keep as an optional supporting specialization; the combination with fusion is much more conclusive |
+| 6 | Depth hierarchy `R16_FLOAT` versus `R32_FLOAT` | 0.125 ms; 3.88% | Keep 16-bit hierarchy storage |
+
+The historical paired buffer run also measured raw GI and cumulative GI
+`RGBA16_FLOAT` at
+1.56% and 1.77% faster than their 32-bit controls, and final AO `R16_FLOAT` at
+1.39% faster than `R32_FLOAT`. Adaptive-feedback, temporal-GI, and temporal-depth
+format deltas changed direction or had worse p95 behavior. Those temporal buffer
+controls are no longer exposed, and their roughly two-percent differences are
+treated as noise rather than recommendations.
 
 ### Forecast Finalist Ranking
 
@@ -111,14 +460,10 @@ are non-additive.
 
 | Rank | Implemented Finalist Or Comparison | Forecast Complete-Effect Saving | Percent Of 2.6 ms | Confidence And Scope |
 | ---: | --- | ---: | ---: | --- |
-| 1 | XeGTAO High LUT/mixed precision versus canonical Reference | -0.40 to 0.80 ms | -15 to 31% | Largest algorithm-level uncertainty and lowest comparability confidence; all local Xe variants were slower than Reference, and full-resolution 18-read horizon GTAO is not the bitmask estimator |
-| 2 | Exact Fixed 8 plus fused resolve/apply versus canonical Reference | 0.20-0.60 ms | 8-23% | Strongest same-estimator forecast; the controlled local run saved 7.870% median and 19.066% p95 |
-| 3 | Exact fused 2x2 resolve/application versus separate resolve/composition | 0.15-0.45 ms | 6-17% | Removes a full-resolution R16F round trip and dispatch; the controlled local run saved 6.250% median and 17.510% p95 |
-| 4 | Fused packed-edge 2x2 versus separate compact resolve/composition | 0.12-0.40 ms | 5-15% | Similar traffic leverage with algorithmic reconstruction and an image gate |
-| 5 | XeGTAO mixed precision versus XeGTAO FP32 | -0.15 to 0.35 ms | -6 to 13% | FP32 was 11.2-15.6% faster across two controlled local comparisons, confirming the upstream warning on this NVIDIA stack |
-| 6 | Activision packed 4x4 gather versus scalar 4x4 filter | -0.08 to 0.25 ms | -3 to 10% | Packed saved 1.338% median and 7.845% p95 locally, but both variants were 36.6-38.4% slower than Reference |
-| 7 | Exact fixed-8 trace versus generic eight-sample trace | 0.04-0.20 ms | 2-8% | Trace medians were identical locally and complete median regressed 0.926%; drop it as a standalone production candidate |
-| 8 | XeGTAO Hilbert LUT versus inline Hilbert | -0.05 to 0.15 ms | -2 to 6% | LUT mixed was 1.463% faster locally; Xe-LPG remains a separate target question |
+| 1 | Exact Fixed 8 plus fused resolve/apply versus canonical Reference | 0.20-0.60 ms | 8-23% | Strongest same-estimator forecast; controlled Intel measurements saved 20.6-22.4% |
+| 2 | Exact fused 2x2 resolve/application versus separate resolve/composition | 0.15-0.45 ms | 6-17% | Removes a full-resolution R16F round trip and dispatch; controlled Intel measurements saved 17.7-18.8% |
+| 3 | Fused packed-edge 2x2 versus separate compact resolve/composition | 0.12-0.40 ms | 5-15% | Similar traffic leverage with algorithmic reconstruction and an image gate |
+| 4 | Exact fixed-8 trace versus generic eight-sample trace | 0.04-0.20 ms | 2-8% | Controlled Intel results saved 1.9-4.7%; keep mainly as a component of the stronger fused profile |
 
 ### Detailed Bitmask Candidate Ranking
 
@@ -127,32 +472,18 @@ are non-additive.
 | 1 | Exact fused 2x2 resolve/application | 0.15-0.45 ms | 6-17% | Removes a 7.9 MiB/frame logical R16F round trip and one dispatch; DXIL comparison drops the separate pair's 50 static loads/four stores to 20 loads/one store |
 | 2 | Fused packed-edge 2x2 | 0.12-0.40 ms | 5-15% | Adds cheap algorithmic connectivity to fusion but pays one R8 edge write/read |
 | 3 | Packed depth-edge 2x2 | 0.08-0.30 ms | 3-12% | Replaces repeated continuous guide arithmetic with four 2-bit connections |
-| 4 | Projected-radius clamp 32 | -0.50 to 0.30 ms | -19 to 12% | Same read count; the comprehensive smokes regressed by 0.070-0.466 ms versus Fixed 8, while cache-stress views may still benefit |
-| 5 | Packed depth-plus-normal 2x2 | 0.06-0.27 ms | 2-10% | Better normal discontinuities with extra trace arithmetic |
-| 6 | Packed slope-adjusted 2x2 | 0.05-0.25 ms | 2-10% | Potentially fewer false slope edges; algorithmic and scene-sensitive |
-| 7 | Packed controlled-leakage 2x2 | 0.04-0.24 ms | 2-9% | Cheap resolve plus deliberate corner leakage; visual gate is essential |
-| 8 | Projected-radius clamp 64 | -0.20 to 0.22 ms | -8 to 8% | Moderate locality cap; the comprehensive smokes regressed by 0.085-0.119 ms versus Fixed 8 |
-| 9 | Exact fixed-8 trace | 0.04-0.20 ms | 2-8% forecast | Controlled local trace medians were both 0.101376 ms and complete median regressed 0.926%; retain only as a benchmark/component of the fused finalist |
-| 10 | Conservative FP32 filter algebra, invariant hoists, and precomputed Gaussian weights | -0.30 to 0.18 ms | -12 to 7% | DXIL confirms 6.4% fewer static IR instructions, 10.5% fewer branches, and 34.0% fewer unary sites, but the zero-warm-up two-frame smoke regressed by 0.223 ms complete-effect; controlled timing is required |
-| 11 | Exact fixed-12 trace | 0.03-0.16 ms | 1-6% | Same-count comparison against generic 12 only |
-| 12 | Exact fixed-16 trace | 0.02-0.13 ms | 1-5% | Same-count comparison against generic 16 only |
-| 13 | Packed current FAST delivery | 0.01-0.14 ms | <1-5% | DXIL texture-load call sites fall from 14 to 11, or 21.4%, versus fixed-eight while retaining the same FAST values |
-| 14 | Projected-radius clamp 128 | -0.12 to 0.14 ms | -5 to 5% | Conservative cap may rarely engage; the comprehensive smokes regressed by 0.067-0.125 ms versus Fixed 8 |
-| 15 | Exact fixed-20 trace | 0.01-0.11 ms | <1-4% | Same-count comparison; control saving is diluted by twenty reads |
-| 16 | Minimal AO/GI bindings and dummy-binding removal | 0.00-0.10 ms | 0-4% | Driver-sensitive; descriptor surface changes but physical depth reads do not |
-| 17 | Exact 16x8 trace group | -0.08 to 0.14 ms | -3 to 5% | Occupancy/locality experiment; no work removed |
-| 18 | Exact 8x16 trace group | -0.08 to 0.12 ms | -3 to 5% | Vertical footprint may help or hurt Xe-LPG cache behavior |
-| 19 | Separate packed-edge 4x4 | -0.10 to 0.20 ms | -4 to 8% | Wider support costs sixteen source evaluations per full-resolution pixel; current DXIL emits 209 static loads and no gather |
-| 20 | Fused packed-edge 4x4 | -0.18 to 0.25 ms | -7 to 10% | One pass can still lose because the 4x4 kernel runs at full resolution |
-| 21 | Activision 4x4-by-6 bitmask schedule | -0.04 to 0.05 ms | -2 to 2% | Same read count; primarily a quality/convergence experiment |
-| 22 | Hierarchy-aware fixed permutation | 0.00 ms at radius 3; 0.01-0.10 ms when hierarchy is already profitable | 0% at target radius | Requested radius 3 selects direct depth; this candidate matters only for eligible radius-8-plus AO |
-| 23 | Fixed later-bounce 8 and fixed all-bounce 8 | 0.00 ms for AO only; 0.02-0.25 ms for active GI | 0% for target AO | Preserves GI owner order but has no AO-only consumer |
-| 24 | Lazy PSO caching and conditional candidate resources | 0.00-0.03 ms steady state | 0-1% | Primarily startup/memory/off-state protection rather than shader speed |
-| 25 | Exact duplicate-pixel rejection Off control | 0.00 ms product saving; forecast 0.00-0.04 ms Off regression | Not Applicable | Measures the benefit of the already-enabled consecutive duplicate skip |
-| 26 | Exact full-mask early-exit Off control | 0.00 ms product saving; forecast 0.00-0.15 ms Off regression | Not Applicable | Measures data-dependent iterations avoided by the already-enabled safe exit |
-| 27 | Constant scheduler diagnostic | 0.00 ms product saving; forecast 0.01-0.12 ms diagnostic trace reduction | Not Applicable | Removes scheduler fetch/address work but has deliberately invalid structured quality |
-| 28 | Eight- and twelve-read analytic-horizon controls | 0.00 ms product saving; trace delta forecast 0.05-0.40 ms | Not Applicable | Different estimator and incomplete downstream match; diagnostic ceiling only |
-| 29 | Constant/depth/bitmask trace, temporal-copy, nearest/bilinear resolve, and composition floors | 0.00 ms product saving | Not Applicable | Isolates component costs rather than proposing product output |
+| 4 | Packed depth-plus-normal 2x2 | 0.06-0.27 ms | 2-10% | Better normal discontinuities with extra trace arithmetic |
+| 5 | Packed slope-adjusted 2x2 | 0.05-0.25 ms | 2-10% | Potentially fewer false slope edges; algorithmic and scene-sensitive |
+| 6 | Packed controlled-leakage 2x2 | 0.04-0.24 ms | 2-9% | Cheap resolve plus deliberate corner leakage; visual gate is essential |
+| 7 | Exact fixed-8 trace | 0.04-0.20 ms | 2-8% forecast | Controlled local trace medians were both 0.101376 ms and complete median regressed 0.926%; retain only as a benchmark/component of the fused finalist |
+| 8 | Exact fixed-12 trace | 0.03-0.16 ms | 1-6% | Same-count comparison against generic 12 only |
+| 9 | Exact fixed-16 trace | 0.02-0.13 ms | 1-5% | Same-count comparison against generic 16 only |
+| 10 | Packed current FAST delivery | 0.01-0.14 ms | <1-5% | DXIL texture-load call sites fall from 14 to 11, or 21.4%, versus fixed-eight while retaining the same FAST values |
+| 11 | Exact fixed-20 trace | 0.01-0.11 ms | <1-4% | Same-count comparison; control saving is diluted by twenty reads |
+| 12 | Minimal AO/GI bindings and dummy-binding removal | 0.00-0.10 ms | 0-4% | Driver-sensitive; descriptor surface changes but physical depth reads do not |
+| 13 | Hierarchy-aware fixed permutation | 0.00 ms at radius 3; 0.01-0.10 ms when hierarchy is already profitable | 0% at target radius | Requested radius 3 selects direct depth; this candidate matters only for eligible radius-8-plus AO |
+| 14 | Fixed later-bounce 8 and fixed all-bounce 8 | 0.00 ms for AO only; 0.02-0.25 ms for active GI | 0% for target AO | Preserves GI owner order but has no AO-only consumer |
+| 15 | Lazy PSO caching and conditional candidate resources | 0.00-0.03 ms steady state | 0-1% | Primarily startup/memory/off-state protection rather than shader speed |
 
 Supporting rows such as fixed loop termination, repeated squaring, edge-byte
 packing, symmetric enforcement, intermediate omission, and barrier removal are
@@ -170,10 +501,9 @@ classification, evidence, quality, and disposition with equal diligence.
 | 4 | Gather/LDS/thread-coarsened reconstruction | -0.12 to 0.35 ms | -5 to 13% | Register, ordering, cache, and target timing evidence are pending |
 | 5 | Conservative mixed-precision trace/filter blocks | -0.12 to 0.30 ms | -5 to 12% | Physical width, conversions, correctness, and image proof are pending |
 
-These values are low-confidence, non-additive design forecasts. XeGTAO and the
-Activision PS4 approximation are algorithmic comparisons rather than exact
-product replacements, so their variants are ranked separately above instead of
-being mixed into the bitmask component table.
+These values are low-confidence, non-additive design forecasts. Removed XeGTAO
+and Activision PS4 evidence is retained in **Removed Feature Disposition** and
+the historical timing sections, not ranked as a current finalist.
 
 ## Primary Source Index
 
@@ -225,9 +555,9 @@ being mixed into the bitmask component table.
 | M-009 | Composition bypass and isolated composition | Supplied prompt, Phase 1 | Application | Diagnostic | Composition now has its own named HUD and benchmark stage | Bypass and isolated full-screen composition controls | Up to two lazy PSOs | None | Diagnostic only - expected 0 ms product improvement; value is isolating trace/filter/composition cost or a matched horizon reference. | Median/p95 and output comparison | Benchmark control and explicit composition attribution are implemented; controlled Intel target timing is not yet measured. | Bypass intentionally invalid; isolated path preserves output | Implemented as benchmark-only control | Separates AO production from lighting application. Implementation evidence: `DiagnosticCompositionOnly`/`DiagnosticCompositionBypass` in `src/visibility_performance_plan.cpp`. It is benchmark-only; Reference selects the canonical product path with no diagnostic work/resources, and the control makes no product-quality claim. |
 | M-010 | Same-engine XeGTAO High source-port control | Supplied prompt; [pinned XeGTAO README](https://github.com/GameTechDev/XeGTAO/blob/a5b1686c7ea37788eeb3576b5be47f7c03db532c/README.md) | Full AO control | Algorithmic benchmark control | Three full-resolution High profiles now select the port directly | LUT/mixed precision closest port, inline-Hilbert/mixed precision, and LUT/FP32 controls under the same camera, timer, application, and export system | Five-mip R16F depth, one R16F working AO, one R8 edge plane, and an optional 8 KiB R16_UINT Hilbert LUT | None; Reference creates no XeGTAO PSO, binding, resource, or pass | Forecast -0.40 to 0.80 ms versus the 2.6 ms UVSR baseline, with low comparability confidence; this is a different estimator | Report depth prefilter, main trace, spatial denoise, composition, complete median/p95, exact profile key, and image review | Direct pinned High path, resource contract, 4096-entry Hilbert fixtures, and 40 strict DXC permutations are implemented. All three profiles completed 600/600 controlled local frames with zero incomplete frames: LUT mixed 0.413696/0.454656 ms, inline mixed 0.419840/0.454656 ms, and LUT FP32 0.349184/0.384000 ms. The independent precision repeat confirmed FP32's local lead. | Clean final captures; different estimator and adapter prevent bit-identical output | Implemented as optional experiment | The port retains five depth mips, 3x3x2 High work, Hilbert/R2, horizon math/falloffs, packed edges, and one sharp denoise. Disclosed adapters transform world normals, preserve the 96-byte constants prefix in a 176-byte buffer, separate logical/padded extents, use R16F AO with emulated R8 rounding, fix the noise phase without matching TAA, omit bent normals/generated normals, and add safety guards. Prefer LUT/FP32 locally; retain all three for quality/reference testing and do not infer Xe-LPG behavior from NVIDIA. |
 | M-011 | Activision PS4 GTAO approximation | Supplied prompt; [Activision 2016 deck, slides 54-104](https://blog.selfshadow.com/publications/s2016-shading-course/activision/s2016_pbs_activision_occlusion.pdf); [expanded 2019 memo](https://www.activision.com/cdn/research/Practical_Real_Time_Strategies_for_Accurate_Indirect_Occlusion_NEW%20VERSION_COLOR.pdf) | Full AO control | Algorithmic benchmark control | Separate scalar-filter and packed-gather profiles run a coupled approximation | Eight-tap linear horizon trace with published 4x4-by-6 schedule, closest-valid half-depth prep, 4x4 spatial pass, temporal accumulation, required upsample, and normal UVSR composition | Conditional prepared depth, spatial AO, AO/depth history, and motion input | None; Reference selects none of these resources or passes | Expected 0 ms exact-product saving; packed gather versus scalar forecast -0.08 to 0.25 ms | Report every named stage separately; compare scalar/gather output, motion, thin geometry, far fade, and complete median/p95 | Both variants completed 600/600 controlled local frames with zero incomplete frames. Scalar measured 0.306176/0.340019 ms and packed 0.302080/0.313344 ms; packed saved 1.338% median and 7.845% p95 versus scalar. | Clean final captures; source-informed approximation because shipping code/constants are unpublished | Implemented as optional experiment | The repair follows the 2016 console workload and restores the depth-trace-spatial-temporal-upsample order, eight total linear taps, six distinct bidirectional slice axes over `[0, pi)`, signed horizon sample domain, outer-quarter fade, derivative-aware 4x4 filtering, and motion/depth history rejection. The closest valid linear depth guides each 2x2 footprint, and one direction per frame converges through the six-phase history after warm-up. Both variants were slower than Reference locally, so retain them as faithful algorithm comparisons rather than local performance profiles; prefer packed when using the comparison. |
-| M-012 | Fixed sample, noise, reconstruction, math, new-candidate, and precision one-at-a-time benchmark actions | Supplied prompt, Verification drawer | Measurement | Exact instrumentation | Current-profile capture plus sequential Reference/current, fixed-count, noise, reconstruction, math, new-candidate, precision, and all-implemented runners | Each entry applies an explicit profile, resets history, captures/exports independently, and restores the exact starting settings on completion, cancellation, or failure | CPU sequence state and result files only | None | Negligible estimated GPU impact - orchestration only; each entry measures the selected renderer profile without an unrestricted combination sweep | Inspect entry order/settings restoration; warm and collect complete-frame median/p95/export for every entry | Fixed 5/5, noise 6/6, reconstruction 12/12, math 2/2, and the final all-implemented 58/58-entry smoke completed; the final smoke produced 116/116 complete frames, zero incomplete frames, and 58 matching JSON/CSV/BMP sets. The new-candidate sequence completed all nine entries at 600/600 controlled frames each, and the precision sequence completed both entries at 600/600, also with zero incomplete frames. | No image effect beyond each selected candidate | Implemented and retained | `New AO Candidates` covers Reference, Fixed 8, exact fusion, Fixed 8 plus fusion, both PS4 approximations, and all three XeGTAO High variants. `XeGTAO Precision Matrix` compares LUT mixed precision against LUT FP32 rather than substituting the unrelated conservative FP32 bitmask filter. |
+| M-012 | Historical one-at-a-time benchmark actions | Supplied prompt, Verification drawer | Measurement | Exact instrumentation | Earlier builds supplied sequential Reference/current, fixed-count, noise, reconstruction, math, new-candidate, precision, and all-implemented runners | Retain only isolated Run Current; a person can select any profile explicitly without sequence state changing settings behind the UI | No remaining sequence state; isolated result files only | None | 0 ms product improvement; orchestration never changed renderer GPU work | Historical entry order/settings restoration and completed export evidence | Fixed 5/5, noise 6/6, reconstruction 12/12, math 2/2, and all-implemented 58/58 smokes completed before removal. Later candidate and precision sequences completed 600/600 frames per entry with zero incomplete frames. | No image effect beyond each selected candidate | Removed after evidence collection | The completed evidence remains valid, but multi-run actions duplicated explicit profile selection and made readiness, cancellation, and settings restoration harder to understand. |
 | M-013 | Benchmark result export with adapter, clocks, settings, and shader key | Supplied prompt, Verification drawer | Measurement | Exact instrumentation | Completed runs automatically produce JSON, raw per-frame CSV, and the last measured frame | Retain the schema-v2, human-readable, canonically FNV-hashed run-settings contract and explicit unavailable clock telemetry where hardware data cannot be queried | CPU-side file data only | None | Negligible estimated GPU impact - serialization occurs after capture and adds no visibility dispatch. | Schema/readback inspection; correlate raw frames with summary distributions and independently reconstruct every setting | The controlled local sequences exported matching JSON, raw CSV, and final-frame BMP sets for every entry. Dynamic artifact paths enforce a 240-character budget by shortening only the filename display token; JSON retains the full human-readable profile name. Extension accounting stays in native path-size arithmetic, and a re-export frame-copy failure removes its new JSON, CSV, and BMP. Controlled Intel timing remains pending. | No image effect | Implemented and retained | `ExportVisibilityBenchmark` records profile/permutation/shader identities, adapter/clock state, scene/camera/API/build/output, stage masks/ingestion/distributions, raw CSV, final measured frame, and a canonical settings string/hash included in filenames, CSV, and JSON. Structured settings include AO/GI controls, sampling/adaptive state, radius/thickness/exponent/scheduler, temporal/spatial controls, implementation modes, formats, group size, exact first-trace and peak-per-pass descriptor counts, dispatch count, and logical resource bytes. `ExportLastVisibilityBenchmark` treats the artifact set as all-or-nothing rather than leaving a summary that names an uncopied frame. |
-| M-014 | Headless single-profile and sequence benchmark command line | Current implementation; user smoke workflow | Measurement | Exact instrumentation | Renderer accepts a one-click profile or named sequence, benchmark request, warm-up/count/output, and auto-close options | Keep validation console-only with nonzero exit status so automated runs cannot block on a modal dialog | CPU arguments and exported files only | None | Negligible estimated GPU impact - launch control only; it makes repeatable isolated smoke runs practical. | Positive runs plus invalid profile/count/sequence/unavailable-profile process-exit tests | Earlier positive profile and five sequence smokes passed; invalid count/profile/sequence and genuinely unavailable profiles returned exit code 1 with stderr and no modal dialog. The final new-candidate and precision runners completed every entry at 600/600 controlled frames with zero incomplete frames. | No image effect beyond the selected profile | Implemented and retained | `--benchmark-sequence` accepts `new-candidates` and `precision` in addition to the previous sequences. All arguments are parsed before device creation; invalid or unavailable values write to standard error and return nonzero without a message box. |
+| M-014 | Headless single-profile benchmark command line | Current implementation; user smoke workflow | Measurement | Exact instrumentation | Renderer accepts one verification or implementation profile, benchmark request, warm-up/count/output, and auto-close options | Keep validation console-only with nonzero exit status so automated runs cannot block on a modal dialog | CPU arguments and exported files only | None | Negligible estimated GPU impact - launch control only; it makes repeatable isolated smoke runs practical | Positive run plus invalid profile/count/unavailable-profile process-exit tests | Positive controlled single-profile runs completed every requested frame. Invalid counts, profile names, and unavailable profiles returned exit code 1 with stderr and no modal dialog. Historical sequence evidence remains in M-012. | No image effect beyond the selected profile | Implemented and retained | All arguments are parsed before device creation; invalid or unavailable values write to standard error and return nonzero without a message box. `--benchmark-sequence` and every multi-run action are removed. |
 
 ## Fast Math and Validation
 
@@ -484,7 +814,7 @@ being mixed into the bitmask component table.
 | E-012 | Four continuity levels near 0, 0.33, 0.66, and 1 | Supplied prompt | Edge quantization | Numerical/Algorithmic | Continuous weights | Standard two-bit decode profile | No extra beyond E-001 | None | Medium-to-high estimate - replaces repeated guide/SFU work or merges metadata in the reported roughly 1.1 ms resolve; quality/cache dominate. | All codes and filter-response tests | Candidate implemented in the current build; controlled Intel target timing is not yet measured. | Quantized transitions | Implemented as optional experiment | Matches requested representation; exact thresholds remain a tunable algorithmic choice. Implementation evidence: two-bit continuity quantization. It is CPU-selected and optional; Reference has no candidate-only bindings, resources, or dispatches, and target timing/quality remain unclaimed. |
 | E-013 | AO count and edges in one R16_UINT | Supplied prompt; visibility paper/XeGTAO | Trace/reconstruction | Exact AO for compatible estimator plus Algorithmic edges | Separate R16F AO, no edges | P-012 | Replaces AO resource; no extra bytes | None | Medium-to-high estimate - replaces repeated guide/SFU work or merges metadata in the reported roughly 1.1 ms resolve; quality/cache dominate. | Count/byte round-trip, mask/AO and edge tests | Feasible for popcount estimators | Pending edges | Blocked by architecture | Avoids an extra edge allocation/load where mathematically valid. Current-build inspection found no CPU-selectable implementation in the cited shader/configuration paths. The row's stated prerequisite or invariant must be resolved before an experiment can be valid. Where a separate PSO or conditional resource can preserve zero Reference cost, the omission remains an explicit deferred/unimplemented limitation; no attempt, generated-code comparison, or target timing establishes rejection. The architecture disposition records missing implementation, not impossibility. |
 
-## Reconstruction and Upsampling
+## Spatial Reconstruction
 
 | ID | Optimization | Source | Pipeline Stage | Exact / Numerical / Algorithmic | Current UVSR Equivalent | Proposed Control or Shader Permutation | Extra Resources While Enabled | Cost While Disabled | Expected Impact (Estimate, Not Measured) | Measurement Method | Result | Quality Result | Final Disposition | Reason |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -518,6 +848,11 @@ being mixed into the bitmask component table.
 | R-028 | CACAO multi-iteration LDS edge blur | [CACAO shader lines 168-412](https://github.com/GPUOpen-Effects/FidelityFX-CACAO/blob/master/ffx-cacao/src/ffx_cacao.hlsl#L168) | Reconstruction | Exact scheduling for selected Algorithmic filter; Numerical FP16 storage | No equivalent | Specialized Blur1 through Blur8 PSOs running iterations in one LDS dispatch | LDS and packed half values only | None | Medium-to-high estimate - replaces repeated guide/SFU work or merges metadata in the reported roughly 1.1 ms resolve; quality/cache dominate. | Iteration-equality, LDS conflicts, occupancy and timing | Primary source vectorizes four pixels and retains tile in LDS | Pending | Blocked by architecture | Can amortize dispatch/global traffic if register/LDS occupancy remains healthy. Current-build inspection found no CPU-selectable implementation in the cited shader/configuration paths. The row's stated prerequisite or invariant must be resolved before an experiment can be valid. Where a separate PSO or conditional resource can preserve zero Reference cost, the omission remains an explicit deferred/unimplemented limitation; no attempt, generated-code comparison, or target timing establishes rejection. The architecture disposition records missing implementation, not impossibility. |
 
 ## Temporal Reconstruction
+
+This section is historical experiment inventory. The current build exposes no
+visibility-owned temporal accumulation setting or diagnostic/source profile;
+renderer TAA owns temporal stability. The **Removed Feature Disposition** table
+overrides rows below that describe a former control as implemented or retained.
 
 | ID | Optimization | Source | Pipeline Stage | Exact / Numerical / Algorithmic | Current UVSR Equivalent | Proposed Control or Shader Permutation | Extra Resources While Enabled | Cost While Disabled | Expected Impact (Estimate, Not Measured) | Measurement Method | Result | Quality Result | Final Disposition | Reason |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -584,6 +919,7 @@ being mixed into the bitmask component table.
 | G-016 | Activision multi-bounce AO polynomial | [Activision memo p.5, Eq.10](https://www.activision.com/cdn/research/PracticalRealtimeStrategiesTRfinal.pdf#page=5) | Lighting | Algorithmic | UVSR has true screen-space multi-bounce GI, not this color-remap approximation | Benchmark-only AO color-remap profile if useful | None | None | Expected 0 ms in primary AO-only because GI is off; medium potential in GI/multi-bounce workloads. | Albedo/AO response and capture | Formula coefficients are source-documented; memo says uniform formulation cannot use it | Different lighting model | Not applicable | Do not substitute for product GI; gate to compatible cosine-weighted formulation only. Current-build inspection found no active prerequisite/consumer or the candidate is cross-referenced as stated earlier in this row. If the preceding reason does not establish that fact, this is a disclosed deferred/unimplemented candidate: a separate PSO or conditional resource could preserve zero Reference cost and no target timing rejects it. The Not applicable label must not be read as a measured rejection. |
 | G-017 | Bent-normal output from horizon vectors/angles | Activision deck slide 84; XeGTAO README | Trace/lighting | Algorithmic | No requested bent-normal product output | Optional benchmark profile only if consumer exists | Extra output channel/texture | None | Expected 0 ms in primary AO-only because GI is off; medium potential in GI/multi-bounce workloads. | Angular quality and cost; consumer audit | XeGTAO reports about 25% extra in its tested path | No current consumer established | Not applicable | Adding unused output is unjustified; if exposed, resource exists only while selected. Current-build inspection found no active prerequisite/consumer or the candidate is cross-referenced as stated earlier in this row. If the preceding reason does not establish that fact, this is a disclosed deferred/unimplemented candidate: a separate PSO or conditional resource could preserve zero Reference cost and no target timing rejects it. The Not applicable label must not be read as a measured rejection. |
 | G-018 | Multi-bounce temporal light-buffer reinjection | Visibility paper p.8 | GI multi-bounce | Algorithmic | UVSR already supports multi-bounce frontier/cumulative reinjection | Preserve current behavior | Existing conditional GI resources | None | Expected 0 ms incremental - already active in the comparison path; retention prevents regression rather than adding a new win. | Bounce energy/feedback and image tests | Present | Product-required multi-bounce | Already equivalent | Paper warns intensity balance is needed to prevent feedback accumulation |
+| G-019 | GPU contribution-terminated extended bounces | PBRT throughput-based path termination; NVRHI `dispatchIndirect`; Microsoft `ExecuteIndirect` | Later GI bounces | Algorithmic threshold policy with conservative next-bounce test | Explicit one-through-eight bounces and a constant cutoff | Default-on **Limit Bounces** preserves the explicit path; disabling it raises the contribution bar 4x per bounce and uses a GPU continuation flag to write the next indirect dispatch | One 4-byte flag, one 24-byte current/maximum indirect-argument buffer, and continuation PSOs | No added dispatch while limited; 28 persistent buffer bytes plus PSO memory | Versus naive fixed 16: convergence after bounce 4 avoids 12/15 later full-screen traces (80%); after bounce 8 it avoids 8/15 (53%). It is not expected to beat an intentionally limited eight-bounce render. | Isolated Intel run with the same scene/exposure/cutoff; report Later Bounces and complete-effect median/p95 plus image review | Controlled Intel generic and fixed-eight runs each completed 240/240 measured frames with zero incomplete frames and clean captures. Both converged by bounce four. Fixed-eight versus generic reduced complete median 10.15%, complete p95 8.41%, and Later Bounces median 18.50%. | Threshold-controlled extra transport; 16 is a fault guard rather than the intended terminator | Implemented as optional experiment | A wave-coalesced flag avoids per-pixel global atomic contention; a one-thread control pass writes full or zero dispatch dimensions after every possible bounce. No CPU readback stalls the frame. |
 
 ## Cache and Shared-Memory Data Layout
 
@@ -712,46 +1048,27 @@ being mixed into the bitmask component table.
 
 ### Activision Approximation Boundary
 
-The current build keeps the older eight- and twelve-read analytic-horizon
-controls, but it no longer presents them as the PS4 approximation. Two new
-profiles run the coupled depth-trace-spatial-temporal-upsample order: closest-
-valid half-resolution linear depth, eight total linear taps, published 4x4 spatial
-and six-phase temporal rotations, outer-quarter far fade, derivative-aware 4x4
-filtering, motion/depth-validated temporal history, and normal UVSR composition.
-The published phase table maps to six bidirectional slice axes over `[0, pi)`;
-it is not six oriented rays over a full circle. The scalar filter and packed-
-gather filter are separate CPU profiles.
+The eight-tap workload and coupled PS4 implementation order came from the 2016
+slide deck. The expanded 2019 `ATVI-TR-19-01` memo supplied a fuller analytical
+derivation, described one, 16, and 96 effective sample directions after spatial
+and temporal reuse, and reported a 0.5 ms PS4 baseline for GTAO plus GI. Neither
+source published replacement shipping shader code, all reconstruction
+constants, or a portable engine integration, so UVSR correctly labeled its
+experiment an approximation.
 
-The eight-tap workload and coupled PS4 implementation order come from the 2016
-slide deck. The expanded 2019 `ATVI-TR-19-01` memo supplies a fuller analytical
-derivation, describes one, 16, and 96 effective sample directions after spatial
-and temporal reuse, and reports a 0.5 ms PS4 baseline for GTAO plus GI. Effective
-directions are not additional physical taps in UVSR's current frame, and the
-2019 memo does not publish a replacement shipping shader or all integration
-constants. This implementation is therefore a 2016 console-workload
-approximation informed by the later analysis, not a direct 2019 code port.
+That experiment is now removed. The planner no longer exposes the 4x4-by-6
+scheduler or the scalar/packed profiles; the host no longer allocates prepared
+depth, PS4 spatial output, or coupled history; and the source shaders and test
+fixtures are deleted. Historical source and timing evidence remains in this
+ledger. The independent analytic-horizon attribution profile and permutation
+are also removed because they changed the estimator without proposing a
+production UVSR result.
 
-This is still an approximation. Activision did not publish its shipping shader
-source, exact curvature allowance, all temporal/disocclusion constants, or a
-portable engine integration. UVSR also supplies G-buffer normals instead of a
-depth-derived-normal mode, does not implement the separate screen-space horizon-
-thickness EMA, and uses its own final upsample/composition. The implementation
-therefore uses the label **Activision PS4 GTAO Approximation**, discloses its
-UVSR constants, and makes no code-copy or pixel-parity claim. Reference selects
-none of the prepared depth, spatial, motion, or history work. The prepared guide
-actually uses R32_UINT storage containing masked FP32 closest-valid-depth bits
-plus a two-bit source offset; it is not an R32F plane despite its logical linear-
-depth payload. Its temporal pass accepts the valid bilinear clamp footprint
-`[-0.5, size - 0.5)` while rejecting nonfinite reprojection, true full-resolution
-viewport exits, and odd-size padding. Orthographic projection, nonzero viewport
-origin, or viewport dimensions that do not exactly match the depth-texture extent
-fall back to Reference for this approximation.
+### Removed XeGTAO Source-Port Boundary
 
-### XeGTAO Source-Port Boundary
-
-The three implemented profiles are pinned to Intel XeGTAO 1.30 commit
+The three removed profiles were pinned to Intel XeGTAO 1.30 commit
 `a5b1686c7ea37788eeb3576b5be47f7c03db532c`. For finite perspective inputs they
-retain High's five smart-average depth mips, three slices by three steps by two
+retained High's five smart-average depth mips, three slices by three steps by two
 sides, golden-ratio step sequence, Hilbert/R2 noise, cosine-space horizon math,
 falloffs, R8 packed edges, final power, and one sharp denoise pass. The profiles
 isolate LUT versus inline Hilbert and mixed precision versus FP32. They use
@@ -767,35 +1084,43 @@ source's UNORM8 rounding; the LUT uses UVSR's binding; the phase is static
 because there is no matching TAA history; bent normals, debug views, and
 generated normals are omitted; and safety guards define invalid/bounds/
 degenerate cases. Orthographic projection, nonzero viewport origin, or viewport
-dimensions that do not exactly match the depth-texture extent fall back to
-Reference.
-Low, Medium, Ultra, repeated denoise, native R8 AO storage, bent normals, and
-generated-normal profiles remain unexposed follow-ups, not missing pieces of
-the selected High control. Reference creates no XeGTAO PSO, resource, binding,
-history, or dispatch.
+dimensions that did not exactly match the depth-texture extent fell back to
+Reference. The complete family was later removed because every controlled Intel
+variant was slower than canonical Reference. The current build creates no
+XeGTAO PSO, resource, binding, history, or dispatch.
 
 ### Plain-English Production Disposition
 
-Keep **Exact Fused Resolve & Apply** and **Exact Fixed 8 + Fused Resolve &
-Apply** for product validation. They saved 6.250%/17.510% and
-7.870%/19.066% median/p95 respectively in the controlled local run. **Fixed 8**
-alone had the same 0.101376 ms trace median as Reference and regressed complete
-median by 0.926%; drop the standalone profile from production consideration
-while retaining it as a benchmark and component of the combined finalist.
+Keep **Exact Fixed 8 + Fused Resolve & Apply** first and **Exact Fused Resolve &
+Apply** second for manual image validation and a real performance profile. On
+the Intel adapter they saved 20.6-22.4% and 17.7-18.8% respectively across two
+controlled runs. Keep **Fixed 8** available as a supporting specialization, but
+do not present its smaller 1.9-4.7% standalone result as equally conclusive.
 
-Retain both Activision profiles as faithful algorithm comparisons, not
-performance profiles on this GPU: scalar and packed were 38.4% and 36.6% slower
-than Reference. Prefer packed when using the comparison because it improved the
-spatial stage and complete timing. Retain all three XeGTAO profiles for
-quality/reference testing; prefer LUT/FP32 locally because FP32 beat mixed
-precision by 11.2-15.6%, and prefer LUT over inline Hilbert by the measured
-1.463%. These NVIDIA choices do not predict Xe-LPG behavior.
+Keep 16-bit storage as the default. The strongest clean paired format results
+were final GI `RGBA16_FLOAT` at 8.39% faster than `RGBA32_FLOAT` and the
+`R16_FLOAT` depth hierarchy at 3.88% faster than `R32_FLOAT`. Raw/cumulative GI
+and final AO had smaller directional wins. Do not draw a production conclusion
+from the inconsistent adaptive-feedback, temporal-GI, or temporal-depth pairs.
 
-Keep packed-edge 2x2 only behind an image gate; do not promote packed-edge 4x4,
-radius clamps, or conservative FP32 filter algebra without controlled evidence
-reversing their earlier smoke trend. Diagnostic floors, Off controls, and older
-partial horizon paths measure attribution and should not ship as quality
-settings.
+Do not promote any approximate per-function math option: almost every exact,
+standard, and approximation trio was within +/-1%, and several approximations
+were directionally slower. The per-function selectors, runtime constants,
+benchmark matrix, and shader paths have been removed. Retained Reference and
+curated shaders use static validated math without a user-selectable math mode.
+
+Remove the Activision PS4 approximation: both variants were slower than
+Reference and scalar/packed ordering changed between repeats. Remove the UVSR
+horizon control as well: its historical 15.4% result exposed an approximately
+18.2% complete/77.6% trace cost for bitmask work, but it changed the visibility
+estimator and was not a production optimization. Remove XeGTAO because every
+variant was slower than Reference on the controlled Intel driver.
+
+Packed-edge 4x4 has been removed: optimized DXIL still contains 209 static
+texture loads and no gather, and the measured reconstruction run was roughly
+73% slower than its compact Reference. Compact-filter conservative algebra,
+neutral group shapes, regressing radius clamps, diagnostic floors, feature-off
+controls, and horizon controls have all been removed from the current build.
 
 ## Profiling and Timing Evidence
 
@@ -845,6 +1170,34 @@ External timing scope must stay explicit:
   is retained in UVSR only when construction plus trace is a net win or a
   semantically compatible producer is genuinely shared.
 
+### Controlled Intel 600-Frame Results
+
+The target Intel Arc integrated GPU run used PBR Sponza Decorated at 1920x1080,
+Benchmark Position 1, driver `32.0.101.8724`, 120 warm-up frames, and 600
+measured frames per entry. Every reported profile completed 600/600 frames with
+zero incomplete frames and `controlled_protocol_valid=true`.
+
+| Matrix | Coverage | Main Result |
+| --- | ---: | --- |
+| Compatibility | 11 profiles | Fused AO saved 15.17% versus combined AO; all composed AO/GI, temporal, adaptive, packed-edge, and packed-FAST paths completed |
+| New Candidates | 9 profiles, repeated | Fused saved 17.7-18.8%, Fixed 8 plus fusion saved 20.6-22.4%, and Fixed 8 alone saved 1.9-4.7% versus Reference |
+| Fixed Sample And Horizon | 6 profiles | Horizon control 8 saved 15.4% complete and 0.455 ms trace versus Reference; Fixed 12/16/20 increased work as expected |
+| Math Functions | 24 profiles | All eight standard/exact/approximation trios stayed near parity; no approximation earned production promotion |
+| Paired Buffers | 20 profiles | Final GI RGBA16 saved 8.39% and R16 depth hierarchy saved 3.88%; inconsistent near-two-percent temporal/adaptive pairs were treated as noise |
+
+In the repeated current-source new-candidate run, Reference measured
+3.0240/3.6807 ms median/p95, fused measured 2.4889/3.2230 ms, and Fixed 8 plus
+fusion measured 2.3999/3.1210 ms. The canonical Reference's large remaining
+cost is full-resolution resolve plus composition, roughly 1.9 ms combined,
+versus about 1.0 ms for trace. That stage evidence explains why fusion is the
+most reliable same-estimator optimization.
+
+The Intel XeGTAO ordering differs from the historical NVIDIA ordering: LUT/mixed
+beat LUT/FP32, LUT beat inline Hilbert by roughly 1.0-1.7%, but every tested Xe
+profile remained slower than canonical Reference. PS4 scalar versus packed
+ordering changed between repeats, so neither is an Intel performance-profile
+winner. These are still useful algorithm and quality controls.
+
 ### Historical Source-Port Smoke
 
 The current local `new-candidates` run completed 9/9 profiles and 18/18 measured
@@ -878,9 +1231,9 @@ scene that previously showed black PS4 AO artifacts.
 | Exact Fixed 8 + Fused Resolve and Apply | 0.203776 / 0.212992 ms | 7.870% median and 19.066% p95 saving; keep for product validation |
 | Activision Scalar | 0.306176 / 0.340019 ms | 38.4% slower than Reference; retain as an algorithm comparison |
 | Activision Packed Gather | 0.302080 / 0.313344 ms | 1.338% median and 7.845% p95 faster than scalar, but 36.6% slower than Reference; prefer for the comparison |
-| XeGTAO LUT + Mixed | 0.413696 / 0.454656 ms | Retain as the closest source-port quality/reference profile |
-| XeGTAO Inline Hilbert + Mixed | 0.419840 / 0.454656 ms | LUT was 1.463% faster; retain as the ALU/traffic control |
-| XeGTAO LUT + FP32 | 0.349184 / 0.384000 ms | Fastest local XeGTAO profile; prefer locally |
+| XeGTAO LUT + Mixed | 0.413696 / 0.454656 ms | Removed; slower than canonical Reference |
+| XeGTAO Inline Hilbert + Mixed | 0.419840 / 0.454656 ms | Removed; LUT was 1.463% faster internally but the family missed the replacement goal |
+| XeGTAO LUT + FP32 | 0.349184 / 0.384000 ms | Removed; fastest local XeGTAO variant still did not justify a UVSR performance profile |
 
 The independent precision repeat measured XeGTAO LUT/mixed at
 0.394240/0.410726 ms and LUT/FP32 at 0.350208/0.371712 ms. FP32 was 11.169%
@@ -890,28 +1243,26 @@ faster by median there and 15.594% faster in the main sequence, an observed
 ## Remaining Validation
 
 The inventory, expected-impact ranking, final dispositions, and explicit
-Activision/XeGTAO integration boundaries are reconciled to the current build.
+Activision plus removed-XeGTAO boundaries are reconciled to the current build.
 Implemented rows identify their shader/profile or CPU resource-plan evidence;
 blocked rows identify the missing correctness proof or complete selectable
 pipeline contract; and all optional paths preserve the Reference zero-cost
 contract by design.
 
-Release compilation, all 13 CTest targets, 40 strict XeGTAO DXC permutations,
-focused profile/resource/Hilbert contracts, the controlled nine-profile local
-sequence, the independent precision repeat, and clean final captures pass. The
-remaining product evidence is exact same-phase GPU image equivalence, dynamic
-motion/disocclusion stress, Intel native ISA/register/occupancy counters, and
-controlled Core Ultra 9 185H/Xe-LPG timing. Until a target result records the
-adapter, Release build, exact profile/permutation key, 120-frame warm-up, at
-least 240 complete frames, median, p95, and quality evidence, no target-GPU
-improvement is claimed. A later measured rejection may replace a current
-experimental or blocked disposition, but an external product timing or unmatched
-scope cannot do so.
+Release compilation, all CTest targets, the Intel controlled matrices, and the
+retained compatibility smoke cover the current feature surface. The remaining
+product evidence is
+exact same-phase GPU image equivalence, dynamic motion/disocclusion stress, and
+Intel native ISA/register/occupancy counters. Target timing is now recorded, but
+manual image acceptance remains required before promoting the measured
+same-estimator finalists. A later measured rejection may replace a current
+experimental or blocked disposition, but an external product timing or
+unmatched scope cannot do so.
 
 Local DXC compilation and reflection can establish that an entry point exists,
 that compile-time macros remove code, and that advanced layouts match reflected
 resource subsets. It does not establish Intel ISA instruction count, register
 allocation, occupancy, EU activity, sampler pressure, cache hit rate, or target
-bandwidth. Those counter fields, the before/after stage table, and reference-
-versus-candidate exact same-phase image acceptance remain deliberately unfilled
-until the user-led target run and remaining motion/image validation exist.
+bandwidth. Those counter fields and reference-versus-candidate exact same-phase
+image acceptance remain deliberately unfilled until native tooling and the
+remaining manual motion/image validation exist.
