@@ -24,4 +24,12 @@ namespace uvsr
     // An empty result reports a missing or malformed field.
     std::vector<uint8_t> LoadVisibilityFilterAdaptedNoise(
         const std::filesystem::path& path);
+
+    // Packs the current scalar FAST values for semantic dimensions
+    // {slice rotation, sector phase, negative radial, positive radial} into
+    // RGBA8 texels. The returned array keeps the original 64x64x32 layout and
+    // changes only delivery: decoding each channel reproduces the scalar
+    // scheduler lookup exactly.
+    std::vector<uint8_t> PackVisibilityFilterAdaptedNoiseRgba8(
+        const std::vector<uint8_t>& scalarNoise);
 }

@@ -305,4 +305,58 @@ namespace uvsr
             return {};
         return result;
     }
+
+    std::vector<uint8_t> PackVisibilityFilterAdaptedNoiseRgba8(
+        const std::vector<uint8_t>& scalarNoise)
+    {
+        constexpr size_t scalarSize =
+            size_t(VisibilityFilterAdaptedNoiseTexelCount) *
+            VisibilityFilterAdaptedNoiseLayerCount;
+        if (scalarNoise.size() != scalarSize)
+            return {};
+
+        // These are the same integer R2 semantic offsets used by
+        // SchedulerRandom in screen_space_visibility_cs.hlsl for dimensions
+        // 0, 1, 4, and 5 respectively.
+        constexpr uint32_t offsets[4][2] = {
+            { 0u, 0u }, { 48u, 36u }, { 1u, 17u }, { 49u, 54u }
+        };
+        constexpr uint32_t mask =
+            VisibilityFilterAdaptedNoiseSize - 1u;
+        std::vector<uint8_t> packed(scalarSize * 4u);
+        for (uint32_t layer = 0u;
+            layer < VisibilityFilterAdaptedNoiseLayerCount;
+            ++layer)
+        {
+            const size_t layerOffset =
+                size_t(layer) * VisibilityFilterAdaptedNoiseTexelCount;
+            for (uint32_t y = 0u;
+                y < VisibilityFilterAdaptedNoiseSize;
+                ++y)
+            {
+                for (uint32_t x = 0u;
+                    x < VisibilityFilterAdaptedNoiseSize;
+                    ++x)
+                {
+                    const size_t destination =
+                        (layerOffset +
+                            size_t(y) * VisibilityFilterAdaptedNoiseSize + x) *
+                        4u;
+                    for (uint32_t channel = 0u; channel < 4u; ++channel)
+                    {
+                        const uint32_t sourceX =
+                            (x + offsets[channel][0]) & mask;
+                        const uint32_t sourceY =
+                            (y + offsets[channel][1]) & mask;
+                        packed[destination + channel] = scalarNoise[
+                            layerOffset +
+                            size_t(sourceY) *
+                                VisibilityFilterAdaptedNoiseSize +
+                            sourceX];
+                    }
+                }
+            }
+        }
+        return packed;
+    }
 }

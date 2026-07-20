@@ -9,6 +9,15 @@
 #ifndef ENABLE_GI
 #define ENABLE_GI 1
 #endif
+#ifndef TEMPORAL_COPY_DIAGNOSTIC
+#define TEMPORAL_COPY_DIAGNOSTIC 0
+#endif
+#ifndef VISIBILITY_GROUP_SIZE_X
+#define VISIBILITY_GROUP_SIZE_X 8
+#endif
+#ifndef VISIBILITY_GROUP_SIZE_Y
+#define VISIBILITY_GROUP_SIZE_Y 8
+#endif
 
 cbuffer c_Visibility : register(b0)
 {
@@ -84,7 +93,7 @@ void CurrentNeighborhoodBounds(
     }
 }
 
-[numthreads(8, 8, 1)]
+[numthreads(VISIBILITY_GROUP_SIZE_X, VISIBILITY_GROUP_SIZE_Y, 1)]
 void main(uint2 pixel : SV_DispatchThreadID)
 {
     if (any(pixel >= uint2(g_Visibility.samplingResolution)))
@@ -105,6 +114,22 @@ void main(uint2 pixel : SV_DispatchThreadID)
     currentIndirect = max(t_CurrentIndirect[pixel].rgb, 0.0f);
     if (any(!isfinite(currentIndirect)))
         currentIndirect = 0.0f;
+#endif
+
+#if TEMPORAL_COPY_DIAGNOSTIC
+    // Benchmark-only copy floor. It preserves the temporal output/history
+    // write footprint while removing motion reprojection, validation,
+    // neighborhood bounds, and previous-history reads.
+#if ENABLE_AO
+    u_AmbientHistory[pixel] = currentAmbient;
+#endif
+#if ENABLE_GI
+    u_IndirectHistory[pixel] = float4(currentIndirect, 0.0f);
+#endif
+    u_DepthHistory[pixel] = currentDepth;
+    u_NormalHistory[pixel] = float4(
+        currentNormal * 0.5f + 0.5f, 1.0f);
+    return;
 #endif
 
     float4 motion = t_Motion[fullPixel];

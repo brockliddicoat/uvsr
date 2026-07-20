@@ -64,32 +64,24 @@ architecture without either add-on.
   performance, and benchmark contract is in
   [`docs/miniengine-taa-options.md`](docs/miniengine-taa-options.md).
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
-  linear resolution. **Temporal Reuse** independently enables SSRT3-style
-  history accumulation, while **Spatial Filter** independently enables compact
-  or Gaussian joint-bilateral filtering. Both start disabled.
-  Full resolution can therefore composite unfiltered current or temporally
-  accumulated output without a spatial dispatch or filter target. Half and
-  quarter resolution always retain a minimal depth/normal-guided 2x2 upsampler
-  when spatial filtering is disabled because raw grid expansion produces
-  coherent GI streaks. The **Reconstruction and Upsampling** drawer starts
-  collapsed.
-- **Samples / Pixel** is one fixed radial budget on the stochastic slice traced
-  for every eligible pixel. Medium defaults to 20 samples; Low, High, and Ultra
-  use 10, 48, and 64. Sampling has no feedback, reprojection, stochastic budget
-  selection, feedback textures, or sampling-only motion dependency. Removing
-  sparse adaptive sampling cut visibility sampling from 42 to 21 PSOs, removed
-  99 cached binding entries, and eliminated two conditional RGBA16F feedback
-  textures (31.64 MiB at full-resolution 1920x1080).
+  linear resolution. Visibility-owned temporal accumulation is not exposed;
+  renderer TAA owns temporal stability in the current build. The **Spatial
+  Reconstruction** section exposes an explicit **Unreconstructed Full
+  Resolution Input** choice, guide-aware upsampling for reduced-resolution data,
+  the two legacy joint-bilateral reconstruction methods, and the retained Intel
+  edge-guided methods. Full-resolution visibility can therefore composite
+  unfiltered current output without a spatial dispatch or filter target.
+- Screen-space visibility uses one exact compiled sample count shared by AO and
+  every GI bounce. The factory default traces one stochastic slice with
+  **20 Exact Samples** for every eligible pixel; the selectable counts are
+  8, 12, 16, 20, 24, 48, and 64. Adaptive sparse sampling, its feedback
+  resources, the free-form sample slider, and the separate later-bounce count
+  selector have been removed.
 - The **Estimator** control exposes **Uniform Projected Angle**, **Uniform Solid
   Angle**, and **Cosine-Weighted Solid Angle**. Uniform Solid Angle is the
   default. The cosine path is fully compiled and uses the complete joint-cosine
   CDF, projected slice mass, `pi` GI normalization, and no duplicate receiver-
   cosine factor.
-- The **Sample Scheduler** compares **Independent Hash Noise**, a first-party
-  **Toroidal Blue Noise**, and an offline optimized
-  **Filter-Adapted Spatiotemporal Noise**. Every scheduler toroidally
-  rotates the complete nested radial prefix, so different fixed budgets do not
-  repeatedly align to the same global radius shells as the sample count changes.
 - Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
@@ -149,11 +141,65 @@ architecture without either add-on.
   does not open the editor automatically.
 - The three footer actions use explicitly centered labels to compensate for the
   system font's visual baseline.
-  Visibility statistics start collapsed and report **All**, **Trace**,
-  **Filter**, and **Other** GPU timings on one row. Two memory rows report exact
-  logical **Outputs**,
+- The single **Noise Pattern** dropdown compares **Independent Hash Noise**,
+  first-party **Toroidal Blue Noise**, **Offline Spacetime Noise**, and
+  **Offline Packed Spacetime Noise**. The packed choice delivers the same
+  offline-computed values through one RGBA8 lookup instead of a separate
+  second control. Noise Pattern appears immediately below Estimator.
+- The **Profile** dropdown directly beneath **Sampling Resolution** begins with
+  exactly four product presets. **Low** uses Uniform Projected Angle, quarter
+  resolution, 8 exact samples, and compact joint-bilateral upsampling;
+  **Medium** uses Uniform Solid Angle, half resolution, the same 8 samples,
+  and the same upsampler. Factory-default **High** uses full resolution and
+  20 samples; **Ultra** uses full resolution, 48 samples, and two GI bounces.
+  High and Ultra use unreconstructed full-resolution input. Every preset uses
+  Offline Packed Spacetime Noise. Low and Medium select Performance Precision
+  buffers; High and Ultra select Default Precision buffers. Failed experiments,
+  diagnostic floors, and implementation-profile presets are not packaged or
+  selectable, while the retained controls remain independently editable.
+- While a benchmark is queued, warming up, or collecting data, an independent
+  top-right overlay remains visible even when the settings UI is hidden. It
+  animates from `Benchmarking.` through `Benchmarking...` and reports collected
+  measured frames over the requested total, for example
+  `Benchmarking... (67/420)`. Warm-up frames intentionally do not increase the
+  collected count.
+- Controlled Intel measurements rejected the XeGTAO profiles as a faster UVSR
+  replacement, the packed-edge 4x4 paths, and the per-function math
+  approximations. Their UI, benchmark entries, host paths, shaders, and
+  test fixtures have been removed. The optimization ledger retains the measured
+  evidence and rejection reasons.
+- The PS4 4x4-by-6 scheduler, scalar and packed-gather spatial paths, prepared
+  depth surface, coupled temporal pass, profiles, shader permutations, test
+  fixtures, and the separate analytic-horizon attribution control have been
+  removed. Their source and timing evidence remains in the ledger.
+- The collapsed **Statistics** drawer begins with an effect selector for the
+  complete renderer, geometry/G-buffer, direct lighting, screen-space
+  visibility, material picking, procedural sky, tone mapping, or output blit.
+  Screen-space visibility expands into its outer effect envelope, named-stage
+  total, signed unattributed timer difference, depth preparation, first trace,
+  one combined later-bounces row, spatial denoise,
+  fused spatial denoise/upsample, required upsample, fused
+  resolve/application, and composition. No stage is labeled **Other** and
+  unrelated concepts are not combined. Benchmark controls and the last result
+  table are in this same drawer. Two memory
+  rows report exact logical **Outputs**,
   **Working**, **Mask Cache**, and **Avoided** payloads; **Shared** is explicitly
   an estimate of duplicate mask payload avoided by shared AO/GI traversal.
+- Visibility controls use compact, scrollable sections modeled on the
+  established AA panel: full-width dropdowns and dedicated Noise, Spatial
+  Reconstruction, and Resolve areas. **Buffers** is its own sibling drawer
+  directly below **Visibility**, and **Statistics** follows it. The unified
+  **Profile** dropdown provides **Low**, **Medium**, **High**, and **Ultra** as
+  the only presets. Only the genuinely AO-only fused final-application choices
+  remain labeled **(Mutex GI)**.
+  Benchmark and scene locations use folder buttons instead of displaying long
+  filesystem paths in the main panel. Ordinary resolution, estimator, AO, or
+  GI edits clear the quality preset and switch the selector to custom settings,
+  so a preset label cannot silently survive a renderer fallback. Buffer-format
+  edits also clear the quality preset because the four recipes own
+  their starting buffer formats. Every compatible custom setting remains
+  active; the internal generic fallback used to compose those settings is not
+  exposed as a selectable profile.
 - The default deferred UVSR PBR path starts enabled. **Visibility > Enabled**
   turns visibility and PBR off or on together. The legacy Donut comparison path
   remains implemented for possible future experiments, but its separate control
@@ -194,10 +240,9 @@ architecture without either add-on.
   reorienting the camera. The preset uses a 60-degree perspective view and a
   1920x1080 reference frame.
 - The first scene light is selected automatically in the **Lights** panel.
-- **Emissive Source Gain** in **Visibility > Indirect Diffuse** globally
-  scales how much light emissive materials contribute to GI without changing
-  the visible emissive surfaces themselves. Raising it expands the visibly
-  illuminated area up to the screen-space sampling radius.
+- Authored emissive materials always remain GI sources at the calibrated 4.0
+  source gain. This is an implementation constant rather than a user-facing
+  checkbox or strength control.
 - **Indirect Diffuse Response** in **World Materials** is the sole retained
   visibility diagnostic. It displays the material-applied screen-space diffuse
   GI contribution without direct light, sky fallback, fallback specular, or
@@ -205,17 +250,22 @@ architecture without either add-on.
   World presentation exits the diagnostic. The entry is available only while
   deferred PBR visibility and effective diffuse GI are active; disabling a
   prerequisite returns the dropdown to **White World Off**.
-- **Bounces** in **Indirect Diffuse** selects one through four finite diffuse
-  bounces. One is the default and keeps the original compact shader path. Later
-  bounces transport only the newest light frontier and accumulate it separately;
-  their GI-only sample budgets halve toward 8 taps without raising a lower
-  first-bounce limit, so stochastic work grows
-  sublinearly while bounce one stays at full quality.
+- **Limit Bounces** is on by default. While on, **Bounces** selects one through
+  eight finite diffuse bounces; one keeps the original compact shader path.
+  Turning the limit off enables GPU-driven contribution termination. Each later
+  bounce transports only the newest light frontier, and the continuation bar
+  becomes four times stricter after every bounce. A wave-coalesced GPU flag and
+  indirect dispatch turn every pass after convergence into zero work without a
+  CPU readback. A 16-bounce fault guard contains malformed or non-contracting
+  data; it is not the normal termination condition.
+- **AO Power** defaults to its identity value of 1.0. The default compositor
+  is a separate shader specialization with the power operation compiled out;
+  moving the slider away from 1.0 selects the powered specialization.
 - **Bounce Contribution Cutoff** skips higher-bounce source shading whose
   conservative exposed upper bound is too small to matter. The default is
-  `0.001`; zero keeps exact-zero exits only. The gate saves source material and
-  lighting work, but each active bounce still dispatches and performs its
-  visibility traversal.
+  `0.001`; zero keeps exact-zero exits only in explicitly limited mode. With
+  **Limit Bounces** off, it becomes the nonzero starting cutoff for the
+  exponentially rising continuation bar.
 - Later bounces reject receivers with proven-zero diffuse throughput before
   view-position reconstruction, normal fetches, or slice setup.
 - AO, GI, the GI source-radiance target, temporal history, filtered outputs,
@@ -262,6 +312,47 @@ promises that the work will merge.
   for degenerate visibility clipping, radial-mask edge cases, and blue-noise
   rank-field paths. This owns only visibility test sources and has no runtime
   rendering, UI, or asset overlap.
+
+- **AO Performance Optimization — Ready for Manual Validation**
+  (`codex/ao-performance-optimization`). Measure and optimize the AO-only
+  visibility-bitmask path from depth preparation through application while
+  retaining the canonical generic implementation as a zero-cost-off reference.
+  This work owns historical visibility performance evidence, curated fixed-sample and
+  resource permutations, optional noise/depth/packed-edge reconstruction
+  experiments, AO-only fused resolve/application, advanced verification UI,
+  focused reference tests, and the optimization ledger. The branch now
+  contains the curated profile and benchmark/export implementation. Controlled
+  Intel Arc integrated-GPU matrices used 120 warm-up and 600 measured frames per
+  entry at 1920x1080 and completed every requested frame with zero incomplete
+  frames. Exact fused resolve/apply saved 17.7-18.8% median across repeats;
+  Fixed 8 plus fusion saved 20.6-22.4%; Fixed 8 alone saved 1.9-4.7%. The
+  strongest paired format results were final GI `RGBA16_FLOAT` at 8.39% faster
+  than `RGBA32_FLOAT` and the `R16_FLOAT` depth hierarchy at 3.88% faster than
+  `R32_FLOAT`. Manual image and motion validation remains required.
+  The current candidate removes the Activision PS4 scheduler, scalar/gather
+  approximations, coupled temporal path, analytic-horizon control, and their
+  resources. Every
+  XeGTAO variant was slower than canonical Reference on the controlled Intel
+  driver, so the XeGTAO runtime family was removed instead of being retained as
+  a misleading faster-UVSR option. Historical PS4 scalar/packed timing remains
+  in the ledger, but neither profile is present in the build.
+  **Ready for Manual Validation** means the curated candidate can be built,
+  launched, and tested; it does not mean every isolatable experiment was
+  implemented or rejected. The explicit implementation/evidence follow-ups are
+  Auto Fixed (D-005), trace LDS (D-020), reconstruction LDS (D-024/R-011),
+  four-output coarsening (D-026/R-013), staged AO-only ILP (L-015/O-022), and
+  exhaustive generated-code coverage (F-030). Feasible curated source
+  experiments also remain: screen-space-size horizon-thickness EMA (A-011),
+  depth-derived receiver normals (A-014), velocity-agreement adaptive clamp
+  width (Q-027), XeGTAO Low (X-002), XeGTAO Medium (X-003), native R8 AO
+  storage/decode (X-018), standalone depth-derived-normal generation (X-020),
+  and in-main depth-derived normals (X-021). These are deferred/unimplemented,
+  not impossible; the [optimization ledger](docs/ao-optimization-ledger.md#ledger-status)
+  records each prerequisite and evidence boundary.
+  It deliberately starts from `5f43205`; PR #10's shared-helper extraction and
+  PR #11's test additions remain later integration dependencies, and the
+  separate bilateral-grid work retains ownership of local tone mapping and AgX
+  integration after visibility composition.
 
 ### Roadmap Ownership
 
@@ -357,6 +448,53 @@ A production build rejects `--aa-execution`, `--aa-kernel`, `--aa-lds`,
 `--aa-reuse`, `--aa-early`, `--aa-fusion`, `--aa-cache`, and `--aa-smaa`
 instead of accepting an override whose static PSO is absent.
 
+### Visibility Benchmark Workflow
+
+Run one visibility profile without UI, export its frame-correlated JSON/CSV and
+last measured frame, and close after completion with:
+
+```powershell
+.\tools\launch_uvsr.ps1 benchmark --benchmark-camera `
+  --visibility-profile exact-fast-ao-8t --visibility-benchmark `
+  --benchmark-warmup 120 --benchmark-frames 240 `
+  --benchmark-output .\benchmark-results --benchmark-auto-close
+```
+
+Profile matching ignores punctuation and case, so either the displayed
+one-click name or a hyphenated form is accepted. `--benchmark-warmup` accepts
+0 through 100000 frames and `--benchmark-frames` accepts 1 through 100000.
+Add `--visibility-contribution-terminated-bounces` to a GI-capable profile to
+turn **Limit Bounces** off before an automated run. This deliberately clears
+the one-click verification label because the effective 16-entry,
+GPU-terminated workload is no longer that preset's fixed-bounce contract.
+Unknown or unavailable profiles and invalid frame counts report to standard
+error and return a nonzero process exit code; they do not open modal dialogs.
+The **Statistics** drawer provides **Run Current**, **Cancel**, and
+**Export Last Run**. Run Current measures the effective configuration being
+rendered, even when it no longer matches the selected preset label. It
+automatically locks Benchmark Position 1, resizes to 1920x1080, waits for the
+matching rendered workload, and restores the previous interactive window size
+afterward. The former comparison, test-matrix runners, and
+`--benchmark-sequence` command-line option have been removed. A live
+`Benchmarking... (completed/total)` overlay continues animating while the
+settings UI is hidden.
+Readiness is based on the workload and permutation reported by the renderer,
+not on a possibly stale preset label. A run can remain unavailable only while
+the current settings have not reached the GPU, while no AO/GI effect is active,
+outside deferred rendering, during another run, or outside PBR Sponza Decorated
+and PBR Sponza Plain. The Sponza restriction remains because those are the only
+scenes with the standardized camera used for comparable results.
+The schema-v2 JSON includes a human-readable and hashed snapshot of the full
+profile-relevant AO/GI, sampling, reconstruction, format, dispatch, and resource
+contract that was active for the run.
+On Windows, artifact filenames dynamically shorten only the redundant display-
+name token so the complete path stays at or below a conservative 240-character
+budget. The full profile name remains in JSON, while hashes, timestamp, extension,
+and collision suffix retain their reserved space. Extension-length accounting
+uses native path-size arithmetic without a narrowing conversion. Re-export is
+all-or-nothing: if the recorded final frame cannot be copied, the newly created
+JSON, CSV, and BMP are removed instead of leaving a misleading partial set.
+
 After building, Windows users can also double-click `LaunchUVSR.cmd`. It
 delegates to the same required experiment launcher with a fixed main-build
 label; optional renderer arguments can be appended from a terminal.
@@ -383,11 +521,12 @@ not already cached.
 
 Build and run the scene-catalog, experiment-title, camera-collision,
 camera-controls, Sponza-camera-preset, PBR, World-Material-view,
-radial-visibility, estimator, visibility-projection, and visibility-sampling
-reference tests separately:
+radial-visibility, estimator, visibility-projection, visibility-sampling,
+visibility-performance-plan, and visibility-benchmark-statistics tests
+separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests uvsr_visibility_performance_plan_tests uvsr_visibility_benchmark_statistics_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
@@ -399,6 +538,26 @@ G-buffer packing, equations, validation, limitations, and extension points.
 The [screen-space visibility design](docs/screen-space-visibility.md) documents
 the shared 32-sector AO/GI traversal, resources, coordinate/radiance contracts,
 controls, limitations, and the upgrade path to persistent unified visibility.
+
+The [AO optimization ledger](docs/ao-optimization-ledger.md) inventories every
+supplied, Activision, XeGTAO, and further-research candidate; records its
+classification, evidence, quality boundary, zero-cost-off disposition, and
+measurement method; and ranks all implemented runtime families with explicitly
+non-additive engineering forecasts. Its
+[Remaining Feature Scorecard](docs/ao-optimization-ledger.md#remaining-feature-scorecard)
+provides four 0-100 rankings for universal performance, situational
+performance, UI nonredundancy, and their unweighted average. XeGTAO is retained
+there as rejected
+historical evidence, pinned to Intel
+commit `a5b1686c7ea37788eeb3576b5be47f7c03db532c`; published Intel timings are
+reported only as upstream provenance and never as UVSR measurements or promises.
+
+The [visibility DXIL evidence](docs/visibility-dxil-evidence.md) provides a
+reproducible historical static generated-shader comparison for the core
+Reference, candidate, diagnostic, reconstruction, and fusion permutations.
+Diagnostic entries describe the investigation and are no longer packaged. It does not
+substitute static IR counts for target-GPU timings or physical Intel register,
+spill, SIMD-width, and occupancy data.
 
 The [visibility estimator validation](docs/visibility-estimator-validation.md)
 records the shared C++/HLSL measure contracts, deterministic reference fixtures,

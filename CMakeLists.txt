@@ -281,6 +281,8 @@ add_executable(uvsr WIN32
     src/temporal_aa_core.cpp
     src/uvsr.cpp
     src/visibility_blue_noise.cpp
+    src/visibility_benchmark_statistics.cpp
+    src/visibility_performance_plan.cpp
 )
 target_include_directories(uvsr BEFORE PRIVATE
     "${UVSR_IMGUI_OVERRIDE_DIR}"
@@ -422,6 +424,32 @@ add_test(
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise/visibility_filter_adapted_gauss1_ema035_r8.bin"
 )
 
+add_executable(uvsr_visibility_performance_plan_tests
+    tests/visibility_performance_plan_tests.cpp
+    src/visibility_performance_plan.cpp
+)
+target_include_directories(
+    uvsr_visibility_performance_plan_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_visibility_performance_plan_reference
+    COMMAND uvsr_visibility_performance_plan_tests
+)
+
+add_executable(uvsr_visibility_benchmark_statistics_tests
+    tests/visibility_benchmark_statistics_tests.cpp
+    src/visibility_benchmark_statistics.cpp
+)
+target_include_directories(
+    uvsr_visibility_benchmark_statistics_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_visibility_benchmark_statistics_reference
+    COMMAND uvsr_visibility_benchmark_statistics_tests
+)
+
 # Donut builds its complete shader catalog as an internal dependency. Stage it
 # outside the runtime tree, then package only the shaders instantiated by UVSR.
 set(UVSR_ROOT_SHADERS
@@ -512,7 +540,15 @@ set(UVSR_APP_SHADERS
     pbr_gbuffer_ps
     screen_space_depth_hierarchy_cs
     screen_space_indirect_composite_cs
+    screen_space_visibility_bounce_control_cs
     screen_space_visibility_filter_cs
+    screen_space_visibility_filter_packed_edge_cs
+    screen_space_visibility_fixed_cs
+    screen_space_visibility_fused_apply_cs
+    screen_space_visibility_packed_fast_cs
+    screen_space_visibility_composed_edges_cs
+    screen_space_visibility_composed_packed_fast_cs
+    screen_space_visibility_packed_fast_edges_cs
     screen_space_visibility_cs
     screen_space_visibility_temporal_cs
     smaa_edge_ps
@@ -539,6 +575,35 @@ file(GENERATE
     OUTPUT "${UVSR_RUNTIME_SHADER_MANIFEST}"
     CONTENT "${UVSR_RUNTIME_SHADER_MANIFEST_CONTENT}"
 )
+
+# Keep the runtime package synchronized with every shader source named by the
+# ShaderMake configuration. Missing entries otherwise compile successfully into
+# the staging directory but fail only when the corresponding lazy PSO is first
+# selected at runtime.
+file(STRINGS "${UVSR_SHADER_CONFIG}"
+    UVSR_SHADER_CONFIG_LINES)
+foreach(shader_config_line IN LISTS UVSR_SHADER_CONFIG_LINES)
+    string(REGEX MATCH "^[^ ]+" shader_source "${shader_config_line}")
+    if(shader_source STREQUAL "")
+        continue()
+    endif()
+    get_filename_component(shader_name "${shader_source}" NAME_WE)
+    list(FIND UVSR_APP_SHADERS "${shader_name}" shader_package_index)
+    if(shader_package_index EQUAL -1)
+        string(REGEX MATCH "(^| )-E ([^ ]+)"
+            shader_entry_match "${shader_config_line}")
+        if(NOT "${shader_entry_match}" STREQUAL "")
+            set(shader_entry_name "${shader_name}_${CMAKE_MATCH_2}")
+            list(FIND UVSR_APP_SHADERS
+                "${shader_entry_name}" shader_package_index)
+        endif()
+    endif()
+    if(shader_package_index EQUAL -1)
+        message(FATAL_ERROR
+            "Shader '${shader_name}' is compiled by src/shaders.cfg but missing "
+            "from UVSR_APP_SHADERS runtime packaging")
+    endif()
+endforeach()
 
 foreach(shader IN LISTS UVSR_APP_SHADERS)
     set(UVSR_RUNTIME_SHADER_SOURCE
