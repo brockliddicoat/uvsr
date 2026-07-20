@@ -75,6 +75,5 @@ resize and renderer-mode transitions, temporal-difference evidence, and
 thermally controlled GPU timings.
 
 No recovery mechanism should be added without a named failing capture.
-Visibility Temporal Reconstruction and Adaptive Sparse Sampling remain mutually
-exclusive with TAA until those histories receive and validate the same
-jitter-delta contract.
+Visibility Temporal Reconstruction remains mutually exclusive with TAA until
+that history receives and validates the same jitter-delta contract.

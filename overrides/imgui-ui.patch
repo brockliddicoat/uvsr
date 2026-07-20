@@ -1,5 +1,5 @@
 diff --git a/imgui.cpp b/imgui.cpp
-index 286171463..0beb567f0 100644
+index 2861714..c6a586d 100644
 --- a/imgui.cpp
 +++ b/imgui.cpp
 @@ -3408,10 +3408,26 @@ ImGuiStyle& ImGui::GetStyle()
@@ -181,15 +181,16 @@ index 286171463..0beb567f0 100644
  }
  
  void ImGui::RenderNavCursor(const ImRect& bb, ImGuiID id, ImGuiNavRenderCursorFlags flags)
-@@ -4011,6 +4144,7 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+@@ -4011,6 +4144,8 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
      InputTextState.Ctx = this;
  
      Initialized = false;
 +    TextShadowAlphaScale = 1.0f;
++    NextSettingsWindowCollapsedHeight = 0.0f;
      Font = NULL;
      FontBaked = NULL;
      FontSize = FontSizeBase = FontBakedScale = CurrentDpiScale = 0.0f;
-@@ -6228,7 +6362,7 @@ bool ImGui::BeginChildEx(const char* name, ImGuiID id, const ImVec2& size_arg, I
+@@ -6228,7 +6363,7 @@ bool ImGui::BeginChildEx(const char* name, ImGuiID id, const ImVec2& size_arg, I
      IM_ASSERT(id != 0);
  
      // Sanity check as it is likely that some user will accidentally pass ImGuiWindowFlags into the ImGuiChildFlags argument.
@@ -198,7 +199,7 @@ index 286171463..0beb567f0 100644
      IM_UNUSED(ImGuiChildFlags_SupportedMask_);
      IM_ASSERT((child_flags & ~ImGuiChildFlags_SupportedMask_) == 0 && "Illegal ImGuiChildFlags value. Did you pass ImGuiWindowFlags values instead of ImGuiChildFlags?");
      IM_ASSERT((window_flags & ImGuiWindowFlags_AlwaysAutoResize) == 0 && "Cannot specify ImGuiWindowFlags_AlwaysAutoResize for BeginChild(). Use ImGuiChildFlags_AlwaysAutoResize!");
-@@ -6489,6 +6623,12 @@ static inline ImVec2 CalcWindowMinSize(ImGuiWindow* window)
+@@ -6489,6 +6624,12 @@ static inline ImVec2 CalcWindowMinSize(ImGuiWindow* window)
      // FIXME: Essentially we want to restrict manual resizing to WindowMinSize+Decoration, and allow api resizing to be smaller.
      // Perhaps should tend further a neater test for this.
      ImGuiContext& g = *GImGui;
@@ -211,11 +212,27 @@ index 286171463..0beb567f0 100644
      ImVec2 size_min;
      if ((window->Flags & ImGuiWindowFlags_ChildWindow) && !(window->Flags & ImGuiWindowFlags_Popup))
      {
-@@ -6947,16 +7087,36 @@ static void ImGui::RenderWindowOuterBorders(ImGuiWindow* window)
+@@ -6938,8 +7079,13 @@ static void ImGui::RenderWindowOuterBorders(ImGuiWindow* window)
+     ImGuiContext& g = *GImGui;
+     const float border_size = window->WindowBorderSize;
+     const ImU32 border_col = GetColorU32(ImGuiCol_Border);
++    const bool is_settings_window =
++        strcmp(window->Name, "Settings") == 0;
+     if (border_size > 0.0f && (window->Flags & ImGuiWindowFlags_NoBackground) == 0)
+-        window->DrawList->AddRect(window->Pos, window->Pos + window->Size, border_col, window->WindowRounding, 0, window->WindowBorderSize);
++    {
++        if (!is_settings_window)
++            window->DrawList->AddRect(window->Pos, window->Pos + window->Size, border_col, window->WindowRounding, 0, window->WindowBorderSize);
++    }
+     else if (border_size > 0.0f)
+     {
+         if (window->ChildFlags & ImGuiChildFlags_ResizeX) // Similar code as 'resize_border_mask' computation in UpdateWindowManualResize() but we specifically only always draw explicit child resize border.
+@@ -6947,16 +7093,37 @@ static void ImGui::RenderWindowOuterBorders(ImGuiWindow* window)
          if (window->ChildFlags & ImGuiChildFlags_ResizeY)
              RenderWindowOuterSingleBorder(window, 3, border_col, border_size);
      }
 +    if (!window->Collapsed &&
++        !is_settings_window &&
 +        (window->Flags & ImGuiWindowFlags_ChildWindow) == 0 &&
 +        (window->Flags & ImGuiWindowFlags_NoBackground) == 0)
 +    {
@@ -250,13 +267,112 @@ index 286171463..0beb567f0 100644
      }
  }
  
-@@ -7008,7 +7168,32 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
+@@ -6979,15 +7146,68 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
+     const float window_border_size = window->WindowBorderSize;
+     if (window->Collapsed)
+     {
+-        // Title bar only
++        // UVSR retains the Settings status block below its collapsed title.
++        // Paint that retained area with the same WindowBg surface used while
++        // expanded instead of leaving only the backdrop blur visible.
++        const bool is_settings_window =
++            strcmp(window->Name, "Settings") == 0;
++        bool has_retained_status_surface = false;
++        ImRect retained_status_rect;
++        float retained_status_rounding = 0.0f;
++        if (is_settings_window &&
++            window->Size.y > window->TitleBarHeight &&
++            !(flags & ImGuiWindowFlags_NoBackground))
++        {
++            const ImU32 bg_col =
++                GetColorU32(GetWindowBgColorIdx(window));
++            const ImVec2 retained_min =
++                window->Pos +
++                ImVec2(0.0f, window->TitleBarHeight - 1.0f);
++            const float retained_rounding = ImMin(
++                window_rounding,
++                ImMax(
++                    0.0f,
++                    (window->Size.y - retained_min.y +
++                        window->Pos.y) *
++                        0.15f));
++            // The collapsed title and renderer status remain touching. Their
++            // one-pixel outlines overlap, while the status surface retains
++            // independent rounding on all four corners.
++            window->DrawList->AddRectFilled(
++                retained_min,
++                window->Pos + window->Size,
++                bg_col,
++                retained_rounding,
++                ImDrawFlags_RoundCornersAll);
++            has_retained_status_surface = true;
++            retained_status_rect =
++                ImRect(retained_min, window->Pos + window->Size);
++            retained_status_rounding = retained_rounding;
++        }
++
++        // Title bar only for ordinary collapsed windows.
+         const float backup_border_size = style.FrameBorderSize;
+         g.Style.FrameBorderSize = window->WindowBorderSize;
+         ImU32 title_bar_col = GetColorU32((title_bar_is_highlight && g.NavCursorVisible) ? ImGuiCol_TitleBgActive : ImGuiCol_TitleBgCollapsed);
+         RenderFrame(title_bar_rect.Min, title_bar_rect.Max, title_bar_col, true, window_rounding);
+         g.Style.FrameBorderSize = backup_border_size;
++        if (has_retained_status_surface)
++        {
++            // Draw this outline last so its rounded top corners remain visible
++            // across the shared one-pixel boundary with the title.
++            RenderGradientFrameOutline(
++                window->DrawList,
++                retained_status_rect,
++                retained_status_rounding);
++        }
+     }
+     else
+     {
++        const bool is_settings_window =
++            strcmp(window->Name, "Settings") == 0;
++        bool has_expanded_settings_body = false;
++        ImRect expanded_settings_body_rect;
++
+         // Window background
+         if (!(flags & ImGuiWindowFlags_NoBackground))
+         {
+@@ -7001,14 +7221,69 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
+             }
+             if (override_alpha)
+                 bg_col = (bg_col & ~IM_COL32_A_MASK) | (IM_F32_TO_INT8_SAT(alpha) << IM_COL32_A_SHIFT);
+-            window->DrawList->AddRectFilled(window->Pos + ImVec2(0, window->TitleBarHeight), window->Pos + window->Size, bg_col, window_rounding, (flags & ImGuiWindowFlags_NoTitleBar) ? 0 : ImDrawFlags_RoundCornersBottom);
++            if (is_settings_window &&
++                !(flags & ImGuiWindowFlags_NoTitleBar))
++            {
++                // The expanded title and renderer/settings body are two
++                // touching rounded surfaces, matching the collapsed state.
++                // Their one-pixel overlap keeps the shared outline continuous
++                // while preserving both upper body arcs.
++                expanded_settings_body_rect = ImRect(
++                    window->Pos +
++                        ImVec2(0.5f, window->TitleBarHeight - 1.0f),
++                    window->Pos + window->Size -
++                        ImVec2(0.5f, 0.5f));
++                window->DrawList->AddRectFilled(
++                    expanded_settings_body_rect.Min,
++                    expanded_settings_body_rect.Max,
++                    bg_col,
++                    window_rounding,
++                    ImDrawFlags_RoundCornersAll);
++                has_expanded_settings_body = true;
++            }
++            else
++            {
++                window->DrawList->AddRectFilled(window->Pos + ImVec2(0, window->TitleBarHeight), window->Pos + window->Size, bg_col, window_rounding, (flags & ImGuiWindowFlags_NoTitleBar) ? 0 : ImDrawFlags_RoundCornersBottom);
++            }
+         }
+ 
+         // Title bar
          if (!(flags & ImGuiWindowFlags_NoTitleBar))
          {
              ImU32 title_bar_col = GetColorU32(title_bar_is_highlight ? ImGuiCol_TitleBgActive : ImGuiCol_TitleBg);
 -            window->DrawList->AddRectFilled(title_bar_rect.Min, title_bar_rect.Max, title_bar_col, window_rounding, ImDrawFlags_RoundCornersTop);
-+            const bool is_settings_window =
-+                strcmp(window->Name, "Settings") == 0;
 +            const ImDrawFlags title_rounding_flags =
 +                is_settings_window
 +                    ? ImDrawFlags_RoundCornersAll
@@ -281,18 +397,31 @@ index 286171463..0beb567f0 100644
 +                    title_fill_rect,
 +                    window_rounding);
 +            }
++        }
++        if (has_expanded_settings_body)
++        {
++            // Draw after the title so the two marked upper corners and the
++            // shared one-pixel boundary cannot be overpainted.
++            RenderGradientFrameOutline(
++                window->DrawList,
++                expanded_settings_body_rect,
++                window_rounding);
          }
  
          // Menu bar
-@@ -7467,6 +7652,7 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+@@ -7467,6 +7742,11 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
              use_current_size_for_scrollbar_x = true;
          if (window_size_y_set_by_api && window->ContentSizeExplicit.y != 0.0f) // #7252
              use_current_size_for_scrollbar_y = true;
 +        float settings_window_collapse_amount = -1.0f;
++        const float settings_window_collapsed_height = ImMax(
++            window->TitleBarHeight,
++            g.NextSettingsWindowCollapsedHeight);
++        g.NextSettingsWindowCollapsedHeight = 0.0f;
  
          // Collapse window by double-clicking on title bar
          // At this point we don't have a clipping rectangle setup yet, so we can use the title bar area for hit detection and drawing
-@@ -7478,7 +7664,95 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+@@ -7478,7 +7758,95 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
              if (g.HoveredWindow == window && g.HoveredId == 0 && g.HoveredIdPreviousFrame == 0 && g.ActiveId == 0 && IsMouseHoveringRect(title_bar_rect.Min, title_bar_rect.Max))
                  if (g.IO.MouseClickedCount[0] == 2 && GetKeyOwner(ImGuiKey_MouseLeft) == ImGuiKeyOwner_NoOwner)
                      window->WantCollapseToggle = true;
@@ -389,7 +518,7 @@ index 286171463..0beb567f0 100644
              {
                  window->Collapsed = !window->Collapsed;
                  if (!window->Collapsed)
-@@ -7539,7 +7813,23 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+@@ -7539,7 +7907,23 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
  
          // Apply minimum/maximum window size constraints and final size
          window->SizeFull = CalcWindowSizeAfterConstraint(window, window->SizeFull);
@@ -400,7 +529,7 @@ index 286171463..0beb567f0 100644
 +            window->Size = window->SizeFull;
 +            window->Size.y = ImLerp(
 +                window->SizeFull.y,
-+                window->TitleBarHeight,
++                settings_window_collapsed_height,
 +                settings_window_collapse_amount);
 +        }
 +        else
@@ -414,7 +543,45 @@ index 286171463..0beb567f0 100644
  
          // POSITION
  
-@@ -11856,9 +12146,34 @@ void ImGui::SetTooltip(const char* fmt, ...)
+@@ -8469,6 +8853,13 @@ void ImGui::SetNextWindowCollapsed(bool collapsed, ImGuiCond cond)
+     g.NextWindowData.CollapsedCond = cond ? cond : ImGuiCond_Always;
+ }
+ 
++void ImGui::SetNextSettingsWindowCollapsedHeight(float collapsed_height)
++{
++    ImGuiContext& g = *GImGui;
++    g.NextSettingsWindowCollapsedHeight =
++        ImMax(0.0f, collapsed_height);
++}
++
+ void ImGui::SetNextWindowBgAlpha(float alpha)
+ {
+     ImGuiContext& g = *GImGui;
+@@ -10166,8 +10557,21 @@ void ImGui::UpdateMouseWheel()
+             {
+                 LockWheelingWindow(window, wheel.y);
+                 float max_step = window->InnerRect.GetHeight() * 0.67f;
+-                float scroll_step = ImTrunc(ImMin(5 * window->FontRefSize, max_step));
+-                SetScrollY(window, window->Scroll.y - wheel.y * scroll_step);
++                const bool is_settings_body =
++                    strstr(window->Name, "##SettingsBody") != NULL;
++                const float wheel_lines =
++                    is_settings_body ? 2.0f : 5.0f;
++                float scroll_step = ImTrunc(
++                    ImMin(
++                        wheel_lines * window->FontRefSize,
++                        max_step));
++                // Keep native content-driven scroll targets and clamping.
++                // The smaller Settings step softens row entry without
++                // maintaining an endpoint that can become stale when future
++                // controls or animated drawers change content height.
++                SetScrollY(
++                    window,
++                    window->Scroll.y - wheel.y * scroll_step);
+                 g.WheelingWindowScrolledFrame = g.FrameCount;
+             }
+         }
+@@ -11856,9 +12260,34 @@ void ImGui::SetTooltip(const char* fmt, ...)
  
  void ImGui::SetTooltipV(const char* fmt, va_list args)
  {
@@ -450,20 +617,8 @@ index 286171463..0beb567f0 100644
      EndTooltip();
  }
  
-diff --git a/imgui.h b/imgui.h
-index 81fb65819..c38b27db8 100644
---- a/imgui.h
-+++ b/imgui.h
-@@ -1202,6 +1202,7 @@ enum ImGuiChildFlags_
-     ImGuiChildFlags_AlwaysAutoResize        = 1 << 6,   // Combined with AutoResizeX/AutoResizeY. Always measure size even when child is hidden, always return true, always disable clipping optimization! NOT RECOMMENDED.
-     ImGuiChildFlags_FrameStyle              = 1 << 7,   // Style the child window like a framed item: use FrameBg, FrameRounding, FrameBorderSize, FramePadding instead of ChildBg, ChildRounding, ChildBorderSize, WindowPadding.
-     ImGuiChildFlags_NavFlattened            = 1 << 8,   // [BETA] Share focus scope, allow keyboard/gamepad navigation to cross over parent border to this child or between sibling child windows.
-+    ImGuiChildFlags_AllowZeroSize           = 1 << 9,   // Permit animation-only child windows to reach a true zero-size endpoint.
- 
-     // Obsolete names
- #ifndef IMGUI_DISABLE_OBSOLETE_FUNCTIONS
 diff --git a/imgui_draw.cpp b/imgui_draw.cpp
-index 34a967a99..ffddc22db 100644
+index 34a967a..ffddc22 100644
 --- a/imgui_draw.cpp
 +++ b/imgui_draw.cpp
 @@ -1717,7 +1717,45 @@ void ImDrawList::AddText(ImFont* font, float font_size, const ImVec2& pos, ImU32
@@ -575,18 +730,19 @@ index 34a967a99..ffddc22db 100644
  
  // Render an arrow. 'pos' is position of the arrow tip. half_sz.x is length from base to tip. half_sz.y is length on each side.
 diff --git a/imgui_internal.h b/imgui_internal.h
-index a11d4e409..6d57b18a9 100644
+index a11d4e4..070722f 100644
 --- a/imgui_internal.h
 +++ b/imgui_internal.h
-@@ -2142,6 +2142,7 @@ struct ImGuiContext
+@@ -2142,6 +2142,8 @@ struct ImGuiContext
      ImGuiIO                 IO;
      ImGuiPlatformIO         PlatformIO;
      ImGuiStyle              Style;
 +    float                   TextShadowAlphaScale;               // Local rendering override used by controls that need subtler text shadowing.
++    float                   NextSettingsWindowCollapsedHeight;  // One-shot retained height for UVSR's Settings status block.
      ImVector<ImFontAtlas*>  FontAtlases;                        // List of font atlases used by the context (generally only contains g.IO.Fonts aka the main font atlas)
      ImFont*                 Font;                               // Currently bound font. (== FontStack.back().Font)
      ImFontBaked*            FontBaked;                          // Currently bound font at currently bound size. (== Font->GetFontBaked(FontSize))
-@@ -3520,6 +3521,7 @@ namespace ImGui
+@@ -3520,6 +3522,7 @@ namespace ImGui
      IMGUI_API void          RenderTextClippedEx(ImDrawList* draw_list, const ImVec2& pos_min, const ImVec2& pos_max, const char* text, const char* text_end, const ImVec2* text_size_if_known, const ImVec2& align = ImVec2(0, 0), const ImRect* clip_rect = NULL);
      IMGUI_API void          RenderTextEllipsis(ImDrawList* draw_list, const ImVec2& pos_min, const ImVec2& pos_max, float ellipsis_max_x, const char* text, const char* text_end, const ImVec2* text_size_if_known);
      IMGUI_API void          RenderFrame(ImVec2 p_min, ImVec2 p_max, ImU32 fill_col, bool borders = true, float rounding = 0.0f);
@@ -595,7 +751,7 @@ index a11d4e409..6d57b18a9 100644
      IMGUI_API void          RenderColorRectWithAlphaCheckerboard(ImDrawList* draw_list, ImVec2 p_min, ImVec2 p_max, ImU32 fill_col, float grid_step, ImVec2 grid_off, float rounding = 0.0f, ImDrawFlags flags = 0);
      IMGUI_API void          RenderNavCursor(const ImRect& bb, ImGuiID id, ImGuiNavRenderCursorFlags flags = ImGuiNavRenderCursorFlags_None); // Navigation highlight
 diff --git a/imgui_widgets.cpp b/imgui_widgets.cpp
-index 23ebf5dcd..4edc77853 100644
+index 23ebf5d..d9d768c 100644
 --- a/imgui_widgets.cpp
 +++ b/imgui_widgets.cpp
 @@ -764,6 +764,51 @@ bool ImGui::ButtonBehavior(const ImRect& bb, ImGuiID id, bool* out_hovered, bool
@@ -1184,7 +1340,91 @@ index 23ebf5dcd..4edc77853 100644
      }
      if (label_size.x > 0)
          RenderText(ImVec2(bb.Max.x + style.ItemInnerSpacing.x, bb.Min.y + style.FramePadding.y), label);
-@@ -3267,6 +3663,54 @@ bool ImGui::SliderBehavior(const ImRect& bb, ImGuiID id, ImGuiDataType data_type
+@@ -2012,7 +2408,44 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
+     // Set position given a custom constraint (peak into expected window size so we can position it)
+     // FIXME: This might be easier to express with an hypothetical SetNextWindowPosConstraints() function?
+     // FIXME: This might be moved to Begin() or at least around the same spot where Tooltips and other Popups are calling FindBestWindowPosForPopupEx()?
+-    if (ImGuiWindow* popup_window = FindWindowByName(name))
++    ImGuiWindow* popup_window = FindWindowByName(name);
++    IM_ASSERT(g.OpenPopupStack.Size > g.BeginPopupStack.Size);
++    const ImGuiPopupData& popup_data =
++        g.OpenPopupStack[g.BeginPopupStack.Size];
++    IM_ASSERT(popup_data.PopupId == popup_id);
++    const ImGuiID popup_animation_key = ImHashStr(
++        "##ComboPopupOpenAnimation",
++        0,
++        popup_id);
++    const ImGuiID popup_open_frame_key = ImHashStr(
++        "##ComboPopupOpenFrame",
++        0,
++        popup_id);
++    const bool same_popup_lifecycle =
++        popup_window != NULL &&
++        popup_window->WasActive &&
++        popup_window->StateStorage.GetInt(
++            popup_open_frame_key,
++            -1) == popup_data.OpenFrameCount;
++    float popup_animation_elapsed =
++        same_popup_lifecycle
++            ? popup_window->StateStorage.GetFloat(
++                popup_animation_key,
++                0.0f)
++            : 0.0f;
++    constexpr float PopupAnimationDuration = 0.12f;
++    const bool popup_animation_was_complete =
++        same_popup_lifecycle &&
++        popup_animation_elapsed >= PopupAnimationDuration;
++    popup_animation_elapsed = ImMin(
++        PopupAnimationDuration,
++        popup_animation_elapsed + ImMax(0.0f, g.IO.DeltaTime));
++    const float popup_animation_progress =
++        ImSaturate(popup_animation_elapsed / PopupAnimationDuration);
++    const float popup_animation_amount =
++        popup_animation_progress * popup_animation_progress *
++        (3.0f - 2.0f * popup_animation_progress);
++    if (popup_window != NULL)
+         if (popup_window->WasActive)
+         {
+             // Always override 'AutoPosLastDirection' to not leave a chance for a past value to affect us.
+@@ -2025,12 +2458,29 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
+ 
+     // We don't use BeginPopupEx() solely because we have a custom name string, which we could make an argument to BeginPopupEx()
+     ImGuiWindowFlags window_flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_Popup | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove;
++    PushStyleVar(
++        ImGuiStyleVar_Alpha,
++        g.Style.Alpha * popup_animation_amount);
+     PushStyleVarX(ImGuiStyleVar_WindowPadding, g.Style.FramePadding.x); // Horizontally align ourselves with the framed text
+     bool ret = Begin(name, NULL, window_flags);
+     PopStyleVar();
++    g.CurrentWindow->StateStorage.SetFloat(
++        popup_animation_key,
++        popup_animation_elapsed);
++    g.CurrentWindow->StateStorage.SetInt(
++        popup_open_frame_key,
++        popup_data.OpenFrameCount);
++    g.CurrentWindow->StateStorage.SetInt(
++        ImHashStr("##ComboPopupInteractionReady"),
++        popup_animation_was_complete ? 1 : 0);
++    if (!same_popup_lifecycle)
++        g.CurrentWindow->StateStorage.SetInt(
++            ImHashStr("##ComboPopupPendingSelectable"),
++            0);
+     if (!ret)
+     {
+         EndPopup();
++        PopStyleVar();
+         IM_ASSERT(0);   // This should never happen as we tested for IsPopupOpen() above
+         return false;
+     }
+@@ -2042,6 +2492,7 @@ void ImGui::EndCombo()
+ {
+     ImGuiContext& g = *GImGui;
+     EndPopup();
++    PopStyleVar();
+     g.BeginComboDepth--;
+ }
+ 
+@@ -3267,6 +3718,54 @@ bool ImGui::SliderBehavior(const ImRect& bb, ImGuiID id, ImGuiDataType data_type
      return false;
  }
  
@@ -1239,7 +1479,7 @@ index 23ebf5dcd..4edc77853 100644
  // Note: p_data, p_min and p_max are _pointers_ to a memory address holding the data. For a slider, they are all required.
  // Read code of e.g. SliderFloat(), SliderInt() etc. or examples in 'Demo->Widgets->Data Types' to understand how to use this function directly.
  bool ImGui::SliderScalar(const char* label, ImGuiDataType data_type, void* p_data, const void* p_min, const void* p_max, const char* format, ImGuiSliderFlags flags)
-@@ -3336,10 +3780,22 @@ bool ImGui::SliderScalar(const char* label, ImGuiDataType data_type, void* p_dat
+@@ -3336,10 +3835,22 @@ bool ImGui::SliderScalar(const char* label, ImGuiDataType data_type, void* p_dat
      const bool value_changed = SliderBehavior(frame_bb, id, data_type, p_data, p_min, p_max, format, flags, &grab_bb);
      if (value_changed)
          MarkItemEdited(id);
@@ -1262,7 +1502,7 @@ index 23ebf5dcd..4edc77853 100644
  
      // Display value using user-provided display format so user can add prefix/suffix/decorations to the value.
      char value_buf[64];
-@@ -3486,10 +3942,22 @@ bool ImGui::VSliderScalar(const char* label, const ImVec2& size, ImGuiDataType d
+@@ -3486,10 +3997,22 @@ bool ImGui::VSliderScalar(const char* label, const ImVec2& size, ImGuiDataType d
      const bool value_changed = SliderBehavior(frame_bb, id, data_type, p_data, p_min, p_max, format, flags | ImGuiSliderFlags_Vertical, &grab_bb);
      if (value_changed)
          MarkItemEdited(id);
@@ -1285,7 +1525,7 @@ index 23ebf5dcd..4edc77853 100644
  
      // Display value using user-provided display format so user can add prefix/suffix/decorations to the value.
      // For the vertical slider we allow centered text to overlap the frame padding
-@@ -6665,7 +7133,8 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
+@@ -6665,7 +7188,8 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
      frame_bb.Max.y = window->DC.CursorPos.y + frame_height;
      if (display_frame)
      {
@@ -1295,7 +1535,7 @@ index 23ebf5dcd..4edc77853 100644
          frame_bb.Min.x -= outer_extend;
          frame_bb.Max.x += outer_extend;
      }
-@@ -6796,6 +7265,11 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
+@@ -6796,6 +7320,11 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
  
      bool hovered, held;
      bool pressed = ButtonBehavior(interact_bb, id, &hovered, &held, button_flags);
@@ -1307,46 +1547,46 @@ index 23ebf5dcd..4edc77853 100644
      bool toggled = false;
      if (!is_leaf)
      {
-@@ -6859,8 +7333,36 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
+@@ -6859,8 +7388,36 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
          if (display_frame)
          {
              // Framed type
 -            const ImU32 bg_col = GetColorU32((held && hovered) ? ImGuiCol_HeaderActive : hovered ? ImGuiCol_HeaderHovered : ImGuiCol_Header);
 -            RenderFrame(frame_bb.Min, frame_bb.Max, bg_col, true, style.FrameRounding);
-+            const ImVec4 background_color = LerpWidgetColor(
-+                style.Colors[ImGuiCol_Header],
-+                style.Colors[
-+                    (held && hovered)
-+                        ? ImGuiCol_HeaderActive
-+                        : ImGuiCol_HeaderHovered],
-+                highlight_amount);
-+            const ImU32 bg_col = GetColorU32(background_color);
++            // Preserve the authored translucent gradient outline in every
++            // state. Hover is a separate inset tint, so it cannot alter the
++            // header's outer silhouette or make it read taller and squarer.
++            RenderFrame(
++                frame_bb.Min,
++                frame_bb.Max,
++                GetColorU32(ImGuiCol_Header),
++                false,
++                style.FrameRounding);
 +            if (highlight_amount > 0.001f)
 +            {
-+                RenderGradientFrame(
-+                    frame_bb.Min,
-+                    frame_bb.Max,
-+                    bg_col,
-+                    GetSelectionGradientBottomColor(
-+                        bg_col,
-+                        0.05f * highlight_amount,
-+                        0.02f * highlight_amount),
-+                    true,
-+                    style.FrameRounding);
-+            }
-+            else
-+            {
-+                RenderFrame(
-+                    frame_bb.Min,
-+                    frame_bb.Max,
-+                    bg_col,
-+                    true,
-+                    style.FrameRounding);
++                constexpr float HighlightInset = 1.0f;
++                ImVec4 highlight_color = style.Colors[
++                    (held && hovered)
++                        ? ImGuiCol_HeaderActive
++                        : ImGuiCol_HeaderHovered];
++                highlight_color.w *=
++                    (held && hovered ? 0.55f : 0.36f) *
++                    highlight_amount;
++                window->DrawList->AddRectFilled(
++                    frame_bb.Min +
++                        ImVec2(HighlightInset, HighlightInset),
++                    frame_bb.Max -
++                        ImVec2(HighlightInset, HighlightInset),
++                    GetColorU32(highlight_color),
++                    ImMax(
++                        0.0f,
++                        style.FrameRounding - HighlightInset),
++                    ImDrawFlags_RoundCornersAll);
 +            }
              RenderNavCursor(frame_bb, id, nav_render_cursor_flags);
              if (span_all_columns && !span_all_columns_label)
                  TablePopBackgroundChannel();
-@@ -6878,10 +7380,48 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
+@@ -6878,10 +7435,48 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
          else
          {
              // Unframed typed for tree nodes
@@ -1398,7 +1638,7 @@ index 23ebf5dcd..4edc77853 100644
              }
              RenderNavCursor(frame_bb, id, nav_render_cursor_flags);
              if (span_all_columns && !span_all_columns_label)
-@@ -7125,6 +7665,7 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+@@ -7125,6 +7720,7 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
  
      ImGuiContext& g = *GImGui;
      const ImGuiStyle& style = g.Style;
@@ -1406,7 +1646,42 @@ index 23ebf5dcd..4edc77853 100644
  
      // Submit label or explicit size to ItemSize(), whereas ItemAdd() will submit a larger/spanning rectangle.
      ImGuiID id = window->GetID(label);
-@@ -7257,15 +7798,147 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+@@ -7217,6 +7813,34 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+ 
+     bool hovered, held;
+     bool pressed = ButtonBehavior(bb, id, &hovered, &held, button_flags);
++    if (combo_popup)
++    {
++        const ImGuiID interaction_ready_key =
++            ImHashStr("##ComboPopupInteractionReady");
++        const ImGuiID pending_selectable_key =
++            ImHashStr("##ComboPopupPendingSelectable");
++        const bool interaction_ready =
++            window->StateStorage.GetInt(
++                interaction_ready_key,
++                0) != 0;
++        if (!interaction_ready)
++        {
++            if (pressed)
++                window->StateStorage.SetInt(
++                    pending_selectable_key,
++                    int(id));
++            pressed = false;
++        }
++        else if (ImGuiID(window->StateStorage.GetInt(
++                     pending_selectable_key,
++                     0)) == id)
++        {
++            window->StateStorage.SetInt(
++                pending_selectable_key,
++                0);
++            pressed = true;
++        }
++    }
+ 
+     // Multi-selection support (footer)
+     if (is_multi_select)
+@@ -7257,15 +7881,147 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
      if (is_visible)
      {
          const bool highlighted = hovered || (flags & ImGuiSelectableFlags_Highlight);
@@ -1415,7 +1690,10 @@ index 23ebf5dcd..4edc77853 100644
 +            (window->Flags & ImGuiWindowFlags_Popup) != 0;
 +        ImRect render_bb = bb;
 +        if (popup_selection)
-+        {
+         {
+-            // Between 1.91.0 and 1.91.4 we made selected Selectable use an arbitrary lerp between _Header and _HeaderHovered. Removed that now. (#8106)
+-            ImU32 col = GetColorU32((held && highlighted) ? ImGuiCol_HeaderActive : highlighted ? ImGuiCol_HeaderHovered : ImGuiCol_Header);
+-            RenderFrame(bb.Min, bb.Max, col, false, 0.0f);
 +            const float inset = 1.0f;
 +            render_bb.Min.x = ImMax(
 +                render_bb.Min.x,
@@ -1493,10 +1771,7 @@ index 23ebf5dcd..4edc77853 100644
 +            }
 +        }
 +        else
-         {
--            // Between 1.91.0 and 1.91.4 we made selected Selectable use an arbitrary lerp between _Header and _HeaderHovered. Removed that now. (#8106)
--            ImU32 col = GetColorU32((held && highlighted) ? ImGuiCol_HeaderActive : highlighted ? ImGuiCol_HeaderHovered : ImGuiCol_Header);
--            RenderFrame(bb.Min, bb.Max, col, false, 0.0f);
++        {
 +            const float highlight_amount =
 +                GetAnimatedHighlightAmount(
 +                    window,
@@ -1559,7 +1834,7 @@ index 23ebf5dcd..4edc77853 100644
              if (is_multi_select)
                  nav_render_cursor_flags |= ImGuiNavRenderCursorFlags_AlwaysDraw; // Always show the nav rectangle
              RenderNavCursor(bb, id, nav_render_cursor_flags);
-@@ -7282,7 +7955,14 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+@@ -7282,7 +8038,14 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
  
      // Text stays at the submission position. Alignment/clipping extents ignore SpanAllColumns.
      if (is_visible)
@@ -1574,3 +1849,23 @@ index 23ebf5dcd..4edc77853 100644
  
      // Automatically close popups
      if (pressed && (window->Flags & ImGuiWindowFlags_Popup) && !(flags & ImGuiSelectableFlags_NoAutoClosePopups) && (g.LastItemData.ItemFlags & ImGuiItemFlags_AutoClosePopups))
+diff --git a/imgui.h b/imgui.h
+index 81fb658..f200d26 100644
+--- a/imgui.h
++++ b/imgui.h
+@@ -468,6 +468,7 @@ namespace ImGui
+     IMGUI_API void          SetNextWindowSizeConstraints(const ImVec2& size_min, const ImVec2& size_max, ImGuiSizeCallback custom_callback = NULL, void* custom_callback_data = NULL); // set next window size limits. use 0.0f or FLT_MAX if you don't want limits. Use -1 for both min and max of same axis to preserve current size (which itself is a constraint). Use callback to apply non-trivial programmatic constraints.
+     IMGUI_API void          SetNextWindowContentSize(const ImVec2& size);                               // set next window content size (~ scrollable client area, which enforce the range of scrollbars). Not including window decorations (title bar, menu bar, etc.) nor WindowPadding. set an axis to 0.0f to leave it automatic. call before Begin()
+     IMGUI_API void          SetNextWindowCollapsed(bool collapsed, ImGuiCond cond = 0);                 // set next window collapsed state. call before Begin()
++    IMGUI_API void          SetNextSettingsWindowCollapsedHeight(float collapsed_height);              // UVSR extension: keep the Settings status block visible when the window collapses.
+     IMGUI_API void          SetNextWindowFocus();                                                       // set next window to be focused / top-most. call before Begin()
+     IMGUI_API void          SetNextWindowScroll(const ImVec2& scroll);                                  // set next window scrolling value (use < 0.0f to not affect a given axis).
+     IMGUI_API void          SetNextWindowBgAlpha(float alpha);                                          // set next window background color alpha. helper to easily override the Alpha component of ImGuiCol_WindowBg/ChildBg/PopupBg. you may also use ImGuiWindowFlags_NoBackground.
+@@ -1202,6 +1203,7 @@ enum ImGuiChildFlags_
+     ImGuiChildFlags_AlwaysAutoResize        = 1 << 6,   // Combined with AutoResizeX/AutoResizeY. Always measure size even when child is hidden, always return true, always disable clipping optimization! NOT RECOMMENDED.
+     ImGuiChildFlags_FrameStyle              = 1 << 7,   // Style the child window like a framed item: use FrameBg, FrameRounding, FrameBorderSize, FramePadding instead of ChildBg, ChildRounding, ChildBorderSize, WindowPadding.
+     ImGuiChildFlags_NavFlattened            = 1 << 8,   // [BETA] Share focus scope, allow keyboard/gamepad navigation to cross over parent border to this child or between sibling child windows.
++    ImGuiChildFlags_AllowZeroSize           = 1 << 9,   // Permit animation-only child windows to reach a true zero-size endpoint.
+ 
+     // Obsolete names
+ #ifndef IMGUI_DISABLE_OBSOLETE_FUNCTIONS

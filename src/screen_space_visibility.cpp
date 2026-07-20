@@ -76,8 +76,8 @@ namespace
     void AppendHistoryConfigurationValue(uint64_t& key, uint64_t value)
     {
         // A process-local change detector, not a serialized identifier. The
-        // boost-style combiner is sufficient to prevent stale temporal and
-        // adaptive values crossing materially different traversal settings.
+        // boost-style combiner is sufficient to prevent stale temporal values
+        // crossing materially different traversal settings.
         key ^= value + 0x9e3779b97f4a7c15ull + (key << 6u) + (key >> 2u);
     }
 
@@ -100,11 +100,8 @@ namespace
         appendFloat(constants.radiusWorld);
         appendFloat(constants.thicknessWorld);
         appendFloat(constants.stepDistributionExponent);
-        appendFloat(constants.adaptiveStrength);
-        appendUint(constants.minimumSampleCount);
-        appendUint(constants.maximumSampleCount);
+        appendUint(constants.sampleCount);
         appendUint(constants.sampleScheduler);
-        appendUint(constants.adaptiveSamplingEnabled);
         appendUint(constants.useDepthHierarchy);
         appendUint(constants.resolutionScale);
         if (constants.enableIndirectDiffuse != 0u)
@@ -143,27 +140,22 @@ namespace uvsr
         settings.sampling.radius = 3.0f;
         settings.sampling.thickness = 0.5f;
         settings.sampling.stepDistributionExponent = 2.0f;
-        settings.sampling.adaptiveStrength = 1.0f;
         settings.sampling.scheduler =
             VisibilitySampleScheduler::ToroidalBlueNoiseRankField;
 
         switch (quality)
         {
         case ScreenSpaceVisibilityQuality::Low:
-            settings.sampling.minimumSampleCount = 4u;
-            settings.sampling.maximumSampleCount = 10u;
+            settings.sampling.sampleCount = 10u;
             break;
         case ScreenSpaceVisibilityQuality::Medium:
-            settings.sampling.minimumSampleCount = 8u;
-            settings.sampling.maximumSampleCount = 20u;
+            settings.sampling.sampleCount = 20u;
             break;
         case ScreenSpaceVisibilityQuality::High:
-            settings.sampling.minimumSampleCount = 12u;
-            settings.sampling.maximumSampleCount = 48u;
+            settings.sampling.sampleCount = 48u;
             break;
         case ScreenSpaceVisibilityQuality::Ultra:
-            settings.sampling.minimumSampleCount = 16u;
-            settings.sampling.maximumSampleCount = 64u;
+            settings.sampling.sampleCount = 64u;
             break;
         default:
             break;
@@ -207,9 +199,9 @@ namespace uvsr
         m_DummyIndirectDiffuse = createDummyTexture(
             nvrhi::Format::RGBA16_FLOAT,
             "ScreenSpaceVisibility/DummyIndirectDiffuse");
-        m_DummyFeedback = createDummyTexture(
+        m_DummyRgba = createDummyTexture(
             nvrhi::Format::RGBA16_FLOAT,
-            "ScreenSpaceVisibility/DummyFeedbackOrMotion");
+            "ScreenSpaceVisibility/DummyRgba");
         // Keep placeholder UAVs distinct from placeholder SRVs. Disabled
         // shader permutations dead-strip these accesses, but binding the same
         // subresource for read and write is still an illegal API state and can
@@ -220,10 +212,6 @@ namespace uvsr
         m_DummyIndirectOutput = createDummyTexture(
             nvrhi::Format::RGBA16_FLOAT,
             "ScreenSpaceVisibility/DummyIndirectOutput");
-        m_DummyFeedbackOutput = createDummyTexture(
-            nvrhi::Format::RGBA16_FLOAT,
-            "ScreenSpaceVisibility/DummyFeedbackOutput");
-
         // Independent void-and-cluster rank layers prevent the ray dimensions
         // from becoming translated copies of one structured scalar field.
         m_BlueNoiseUpload = GenerateVisibilityBlueNoise();
@@ -332,11 +320,8 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(3),
             nvrhi::BindingLayoutItem::Texture_SRV(4),
             nvrhi::BindingLayoutItem::Texture_SRV(5),
-            nvrhi::BindingLayoutItem::Texture_SRV(6),
-            nvrhi::BindingLayoutItem::Texture_SRV(7),
             nvrhi::BindingLayoutItem::Texture_UAV(0),
-            nvrhi::BindingLayoutItem::Texture_UAV(1),
-            nvrhi::BindingLayoutItem::Texture_UAV(2)
+            nvrhi::BindingLayoutItem::Texture_UAV(1)
         };
 
         for (uint32_t estimator = 0u;
@@ -349,49 +334,39 @@ namespace uvsr
             {
                 const bool ambientEnabled = consumer != 1u;
                 const bool indirectEnabled = consumer != 0u;
-                for (uint32_t sparse = 0u; sparse < 2u; ++sparse)
-                {
-                    std::vector<ShaderMacro> macros = {
-                        { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
-                        { "ENABLE_AO", ambientEnabled ? "1" : "0" },
-                        { "ENABLE_GI", indirectEnabled ? "1" : "0" },
-                        { "ENABLE_BOUNCE_REINJECTION", "0" },
-                        { "INITIALIZE_BOUNCE_CUMULATIVE", "0" },
-                        { "ENABLE_BOUNCE_METADATA", "0" },
-                        { "ENABLE_ADAPTIVE_SPARSE_SAMPLING",
-                            sparse != 0u ? "1" : "0" }
-                    };
-                    createPipeline(
-                        m_Sampling[estimator][consumer][sparse],
-                        "uvsr/screen_space_visibility_cs.hlsl",
-                        samplingBindings,
-                        &macros);
-                }
+                std::vector<ShaderMacro> macros = {
+                    { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
+                    { "ENABLE_AO", ambientEnabled ? "1" : "0" },
+                    { "ENABLE_GI", indirectEnabled ? "1" : "0" },
+                    { "ENABLE_BOUNCE_REINJECTION", "0" },
+                    { "INITIALIZE_BOUNCE_CUMULATIVE", "0" },
+                    { "ENABLE_BOUNCE_METADATA", "0" }
+                };
+                createPipeline(
+                    m_Sampling[estimator][consumer],
+                    "uvsr/screen_space_visibility_cs.hlsl",
+                    samplingBindings,
+                    &macros);
             }
 
             for (uint32_t ambientVariant = 0u;
                 ambientVariant < 2u;
                 ++ambientVariant)
             {
-                for (uint32_t sparse = 0u; sparse < 2u; ++sparse)
-                {
-                    std::vector<ShaderMacro> macros = {
-                        { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
-                        { "ENABLE_AO", ambientVariant != 0u ? "1" : "0" },
-                        { "ENABLE_GI", "1" },
-                        { "ENABLE_BOUNCE_REINJECTION", "0" },
-                        { "INITIALIZE_BOUNCE_CUMULATIVE", "0" },
-                        { "ENABLE_BOUNCE_METADATA", "1" },
-                        { "ENABLE_ADAPTIVE_SPARSE_SAMPLING",
-                            sparse != 0u ? "1" : "0" }
-                    };
-                    createPipeline(
-                        m_MultiBounceFirstSampling[estimator]
-                            [ambientVariant][sparse],
-                        "uvsr/screen_space_visibility_cs.hlsl",
-                        samplingBindings,
-                        &macros);
-                }
+                std::vector<ShaderMacro> macros = {
+                    { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
+                    { "ENABLE_AO", ambientVariant != 0u ? "1" : "0" },
+                    { "ENABLE_GI", "1" },
+                    { "ENABLE_BOUNCE_REINJECTION", "0" },
+                    { "INITIALIZE_BOUNCE_CUMULATIVE", "0" },
+                    { "ENABLE_BOUNCE_METADATA", "1" }
+                };
+                createPipeline(
+                    m_MultiBounceFirstSampling[estimator]
+                        [ambientVariant],
+                    "uvsr/screen_space_visibility_cs.hlsl",
+                    samplingBindings,
+                    &macros);
             }
 
             for (uint32_t cumulativeMode = 0u;
@@ -399,41 +374,34 @@ namespace uvsr
                 ++cumulativeMode)
             {
                 const bool initializeCumulative = cumulativeMode == 0u;
-                for (uint32_t sparse = 0u; sparse < 2u; ++sparse)
-                {
-                    std::vector<ShaderMacro> macros = {
-                        { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
-                        { "ENABLE_AO", "0" },
-                        { "ENABLE_GI", "1" },
-                        { "ENABLE_BOUNCE_REINJECTION", "1" },
-                        { "INITIALIZE_BOUNCE_CUMULATIVE",
-                            initializeCumulative ? "1" : "0" },
-                        { "ENABLE_BOUNCE_METADATA", "0" },
-                        { "ENABLE_ADAPTIVE_SPARSE_SAMPLING",
-                            sparse != 0u ? "1" : "0" }
-                    };
-                    createPipeline(
-                        m_IndirectBounceSampling[estimator]
-                            [cumulativeMode][sparse],
-                        "uvsr/screen_space_visibility_cs.hlsl",
-                        {
-                            nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                            nvrhi::BindingLayoutItem::Texture_SRV(0),
-                            nvrhi::BindingLayoutItem::Texture_SRV(1),
-                            nvrhi::BindingLayoutItem::Texture_SRV(2),
-                            nvrhi::BindingLayoutItem::Texture_SRV(3),
-                            nvrhi::BindingLayoutItem::Texture_SRV(4),
-                            nvrhi::BindingLayoutItem::Texture_SRV(5),
-                            nvrhi::BindingLayoutItem::Texture_SRV(6),
-                            nvrhi::BindingLayoutItem::Texture_SRV(7),
-                            nvrhi::BindingLayoutItem::Texture_SRV(8),
-                            nvrhi::BindingLayoutItem::Texture_SRV(9),
-                            nvrhi::BindingLayoutItem::Texture_SRV(10),
-                            nvrhi::BindingLayoutItem::Texture_UAV(0),
-                            nvrhi::BindingLayoutItem::Texture_UAV(1)
-                        },
-                        &macros);
-                }
+                std::vector<ShaderMacro> macros = {
+                    { "VISIBILITY_ESTIMATOR", std::to_string(estimator) },
+                    { "ENABLE_AO", "0" },
+                    { "ENABLE_GI", "1" },
+                    { "ENABLE_BOUNCE_REINJECTION", "1" },
+                    { "INITIALIZE_BOUNCE_CUMULATIVE",
+                        initializeCumulative ? "1" : "0" },
+                    { "ENABLE_BOUNCE_METADATA", "0" }
+                };
+                createPipeline(
+                    m_IndirectBounceSampling[estimator]
+                        [cumulativeMode],
+                    "uvsr/screen_space_visibility_cs.hlsl",
+                    {
+                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(1),
+                        nvrhi::BindingLayoutItem::Texture_SRV(2),
+                        nvrhi::BindingLayoutItem::Texture_SRV(3),
+                        nvrhi::BindingLayoutItem::Texture_SRV(4),
+                        nvrhi::BindingLayoutItem::Texture_SRV(5),
+                        nvrhi::BindingLayoutItem::Texture_SRV(6),
+                        nvrhi::BindingLayoutItem::Texture_SRV(7),
+                        nvrhi::BindingLayoutItem::Texture_SRV(8),
+                        nvrhi::BindingLayoutItem::Texture_UAV(0),
+                        nvrhi::BindingLayoutItem::Texture_UAV(1)
+                    },
+                    &macros);
             }
         }
 
@@ -520,7 +488,6 @@ namespace uvsr
         bool ambientEnabled,
         bool indirectDiffuseEnabled,
         bool multipleBouncesEnabled,
-        bool adaptiveEnabled,
         bool temporalEnabled,
         bool postProcessEnabled,
         bool depthHierarchyEnabled)
@@ -538,7 +505,6 @@ namespace uvsr
             m_AmbientResourcesEnabled == ambientEnabled &&
             m_IndirectDiffuseResourcesEnabled == indirectDiffuseEnabled &&
             m_MultipleBounceResourcesEnabled == multipleBouncesEnabled &&
-            m_AdaptiveResourcesEnabled == adaptiveEnabled &&
             m_TemporalResourcesEnabled == temporalEnabled &&
             m_PostProcessResourcesEnabled == postProcessEnabled &&
             m_DepthHierarchyResourcesEnabled == depthHierarchyEnabled &&
@@ -555,7 +521,6 @@ namespace uvsr
         m_AmbientResourcesEnabled = ambientEnabled;
         m_IndirectDiffuseResourcesEnabled = indirectDiffuseEnabled;
         m_MultipleBounceResourcesEnabled = multipleBouncesEnabled;
-        m_AdaptiveResourcesEnabled = adaptiveEnabled;
         m_TemporalResourcesEnabled = temporalEnabled;
         m_PostProcessResourcesEnabled = postProcessEnabled;
         m_DepthHierarchyResourcesEnabled = depthHierarchyEnabled;
@@ -602,18 +567,6 @@ namespace uvsr
                 samplingSize,
                 nvrhi::Format::RGBA16_FLOAT,
                 "ScreenSpaceVisibility/CumulativeIndirectDiffuse");
-        }
-        if (adaptiveEnabled)
-        {
-            for (uint32_t index = 0u; index < 2u; ++index)
-            {
-                m_AdaptiveFeedback[index] = createTexture(
-                    samplingSize,
-                    nvrhi::Format::RGBA16_FLOAT,
-                    index == 0u
-                        ? "ScreenSpaceVisibility/AdaptiveFeedback0"
-                        : "ScreenSpaceVisibility/AdaptiveFeedback1");
-            }
         }
         if (temporalEnabled)
         {
@@ -706,7 +659,6 @@ namespace uvsr
             (postProcessEnabled && indirectDiffuseEnabled
                 ? finalIndirectBytes : 0u);
         m_Timings.workingTextureBytes = schedulerBytes +
-            (adaptiveEnabled ? rawIndirectBytes * 2u : 0u) +
             (temporalEnabled && ambientEnabled ? rawAmbientBytes * 2u : 0u) +
             (temporalEnabled && indirectDiffuseEnabled
                 ? rawIndirectBytes * 2u : 0u) +
@@ -737,8 +689,6 @@ namespace uvsr
         for (nvrhi::TextureHandle& texture : m_RawIndirectDiffuse)
             texture = nullptr;
         m_CumulativeIndirectDiffuse = nullptr;
-        for (nvrhi::TextureHandle& texture : m_AdaptiveFeedback)
-            texture = nullptr;
         for (nvrhi::TextureHandle& texture : m_TemporalAmbientVisibility)
             texture = nullptr;
         for (nvrhi::TextureHandle& texture : m_TemporalIndirectDiffuse)
@@ -757,7 +707,6 @@ namespace uvsr
         m_AmbientResourcesEnabled = false;
         m_IndirectDiffuseResourcesEnabled = false;
         m_MultipleBounceResourcesEnabled = false;
-        m_AdaptiveResourcesEnabled = false;
         m_TemporalResourcesEnabled = false;
         m_PostProcessResourcesEnabled = false;
         m_DepthHierarchyResourcesEnabled = false;
@@ -773,29 +722,21 @@ namespace uvsr
     void ScreenSpaceVisibilityPass::ResetHistory()
     {
         m_HistoryValid = false;
-        m_FeedbackValid = false;
         m_HistoryIndex = 0u;
-        m_FeedbackIndex = 0u;
     }
 
     void ScreenSpaceVisibilityPass::ResetBindingCache()
     {
         for (auto& estimator : m_SamplingBindingSets)
-            for (auto& consumer : estimator)
-                for (auto& sparse : consumer)
-                    for (nvrhi::BindingSetHandle& bindingSet : sparse)
-                        bindingSet = nullptr;
+            for (nvrhi::BindingSetHandle& bindingSet : estimator)
+                bindingSet = nullptr;
         for (auto& estimator : m_MultiBounceFirstBindingSets)
-            for (auto& ambientVariant : estimator)
-                for (auto& sparse : ambientVariant)
-                    for (nvrhi::BindingSetHandle& bindingSet : sparse)
-                        bindingSet = nullptr;
+            for (nvrhi::BindingSetHandle& bindingSet : estimator)
+                bindingSet = nullptr;
         for (auto& estimator : m_IndirectBounceBindingSets)
             for (auto& cumulativeMode : estimator)
-                for (auto& sparse : cumulativeMode)
-                    for (auto& rotation : sparse)
-                        for (nvrhi::BindingSetHandle& bindingSet : rotation)
-                            bindingSet = nullptr;
+                for (nvrhi::BindingSetHandle& bindingSet : cumulativeMode)
+                    bindingSet = nullptr;
         for (auto& consumer : m_TemporalBindingSets)
             for (auto& source : consumer)
                 for (nvrhi::BindingSetHandle& bindingSet : source)
@@ -974,8 +915,6 @@ namespace uvsr
         const bool ambientEnabled = settings.HasActiveAmbientOcclusion();
         const bool indirectEnabled = settings.HasActiveIndirectDiffuse();
         const bool motionAvailable = inputs.motionVectors != nullptr;
-        const bool adaptiveEnabled =
-            settings.UsesAdaptiveSampling() && motionAvailable;
         const bool temporalEnabled =
             settings.reconstruction.temporalEnabled && motionAvailable;
         const bool spatialFilterEnabled =
@@ -1011,7 +950,6 @@ namespace uvsr
             ambientEnabled,
             indirectEnabled,
             activeBounceCount > 1u,
-            adaptiveEnabled,
             temporalEnabled,
             postProcessEnabled,
             useDepthHierarchy);
@@ -1019,7 +957,7 @@ namespace uvsr
             m_HistoryEstimator != settings.estimator)
         {
             // The three estimators store different measures. Mixing their raw
-            // AO/GI values in temporal or adaptive history produces a visible
+            // AO/GI values in temporal history produces a visible
             // transition and contaminates estimator A/B comparisons.
             ResetHistory();
         }
@@ -1033,10 +971,6 @@ namespace uvsr
         const uint32_t estimatorIndex = std::min(
             static_cast<uint32_t>(settings.estimator),
             ImplementedVisibilityEstimatorCount - 1u);
-        const uint32_t sparseSamplingIndex = adaptiveEnabled ? 1u : 0u;
-        const uint32_t feedbackWrite = adaptiveEnabled
-            ? m_FeedbackIndex : 0u;
-        const uint32_t feedbackRead = 1u - feedbackWrite;
         const uint32_t historyWrite = temporalEnabled
             ? m_HistoryIndex : 0u;
         const uint32_t historyRead = 1u - historyWrite;
@@ -1050,8 +984,6 @@ namespace uvsr
             settings.sampling.thickness, 0.f);
         constants.stepDistributionExponent = std::clamp(
             settings.sampling.stepDistributionExponent, 0.25f, 4.f);
-        constants.adaptiveStrength = std::max(
-            settings.sampling.adaptiveStrength, 0.f);
         constants.ambientStrength = std::max(
             settings.ambientOcclusion.strength, 0.f);
         constants.indirectDiffuseIntensity = std::max(
@@ -1068,11 +1000,8 @@ namespace uvsr
         constants.ambientColorTop = ambientColorTop;
         constants.ambientColorBottom = ambientColorBottom;
         constants.frameIndex = frameIndex;
-        constants.minimumSampleCount = std::clamp(
-            settings.sampling.minimumSampleCount, 1u, 64u);
-        constants.maximumSampleCount = std::clamp(
-            settings.sampling.maximumSampleCount,
-            constants.minimumSampleCount, 64u);
+        constants.sampleCount = std::clamp(
+            settings.sampling.sampleCount, 1u, 64u);
         constants.knownInactiveLightingSources =
             knownInactiveLightingSources;
         constants.enableAmbientOcclusion = ambientEnabled ? 1u : 0u;
@@ -1086,7 +1015,6 @@ namespace uvsr
         constants.resolutionScale = resolutionScale;
         constants.sampleScheduler = static_cast<uint32_t>(
             settings.sampling.scheduler);
-        constants.adaptiveSamplingEnabled = adaptiveEnabled ? 1u : 0u;
         constants.showIndirectDiffuseOnly =
             settings.showIndirectDiffuseOnly ? 1u : 0u;
         const uint64_t historyConfigurationKey =
@@ -1098,7 +1026,6 @@ namespace uvsr
         }
         m_HistoryConfigurationKey = historyConfigurationKey;
         m_HistoryConfigurationInitialized = true;
-        constants.feedbackValid = adaptiveEnabled && m_FeedbackValid ? 1u : 0u;
         constants.historyValid = temporalEnabled && m_HistoryValid ? 1u : 0u;
         commandList->writeBuffer(
             m_ConstantBuffer, &constants, sizeof(constants));
@@ -1120,16 +1047,10 @@ namespace uvsr
             : m_DummyIndirectDiffuse.Get();
         nvrhi::ITexture* sourceRadiance = inputs.sourceRadiance
             ? inputs.sourceRadiance
-            : m_DummyFeedback.Get();
-        nvrhi::ITexture* previousFeedback = adaptiveEnabled
-            ? m_AdaptiveFeedback[feedbackRead].Get()
-            : m_DummyFeedback.Get();
-        nvrhi::ITexture* currentFeedback = adaptiveEnabled
-            ? m_AdaptiveFeedback[feedbackWrite].Get()
-            : m_DummyFeedbackOutput.Get();
+            : m_DummyRgba.Get();
         nvrhi::ITexture* motion = motionAvailable
             ? inputs.motionVectors
-            : m_DummyFeedback.Get();
+            : m_DummyRgba.Get();
         nvrhi::ITexture* hierarchy = useDepthHierarchy
             ? m_DepthHierarchyTexture.Get()
             : inputs.depth;
@@ -1181,26 +1102,20 @@ namespace uvsr
             m_Timings.depthHierarchyMs = 0.f;
         }
 
-        commandList->beginMarker(adaptiveEnabled
-            ? (activeBounceCount > 1u
-                ? "Adaptive Visibility Sampling (Multiple Bounces)"
-                : "Adaptive Visibility Sampling")
-            : (activeBounceCount > 1u
-                ? "Fixed Visibility Sampling (Multiple Bounces)"
-                : "Fixed Visibility Sampling"));
+        commandList->beginMarker(activeBounceCount > 1u
+            ? "Fixed Visibility Sampling (Multiple Bounces)"
+            : "Fixed Visibility Sampling");
         BeginStage(commandList, Stage::Sampling);
         const bool writeBounceMetadata = activeBounceCount > 1u;
         Pipeline& firstPipeline = writeBounceMetadata
             ? m_MultiBounceFirstSampling[estimatorIndex]
-                [ambientEnabled ? 1u : 0u][sparseSamplingIndex]
-            : m_Sampling[estimatorIndex][consumerVariant]
-                [sparseSamplingIndex];
+                [ambientEnabled ? 1u : 0u]
+            : m_Sampling[estimatorIndex][consumerVariant];
         nvrhi::BindingSetHandle& firstBindingSet = writeBounceMetadata
             ? m_MultiBounceFirstBindingSets[estimatorIndex]
                 [ambientEnabled ? 1u : 0u]
-                [sparseSamplingIndex][feedbackWrite]
             : m_SamplingBindingSets[estimatorIndex]
-                [consumerVariant][sparseSamplingIndex][feedbackWrite];
+                [consumerVariant];
         if (!firstBindingSet)
         {
             nvrhi::BindingSetDesc bindings;
@@ -1210,14 +1125,11 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(1, inputs.normals),
                 nvrhi::BindingSetItem::Texture_SRV(2, sourceRadiance),
                 nvrhi::BindingSetItem::Texture_SRV(3, hierarchy),
-                nvrhi::BindingSetItem::Texture_SRV(4, previousFeedback),
-                nvrhi::BindingSetItem::Texture_SRV(5, m_BlueNoiseTexture),
+                nvrhi::BindingSetItem::Texture_SRV(4, m_BlueNoiseTexture),
                 nvrhi::BindingSetItem::Texture_SRV(
-                    6, m_FilterAdaptedNoiseTexture),
-                nvrhi::BindingSetItem::Texture_SRV(7, motion),
+                    5, m_FilterAdaptedNoiseTexture),
                 nvrhi::BindingSetItem::Texture_UAV(0, rawAmbient),
-                nvrhi::BindingSetItem::Texture_UAV(1, rawIndirect),
-                nvrhi::BindingSetItem::Texture_UAV(2, currentFeedback)
+                nvrhi::BindingSetItem::Texture_UAV(1, rawIndirect)
             };
             firstBindingSet = m_Device->createBindingSet(
                 bindings, firstPipeline.bindingLayout);
@@ -1232,22 +1144,15 @@ namespace uvsr
                 samplingDispatchX, samplingDispatchY, 1u);
         }
 
-        const uint32_t primaryMinimumSampleCount =
-            constants.minimumSampleCount;
-        const uint32_t primaryMaximumSampleCount =
-            constants.maximumSampleCount;
+        const uint32_t primarySampleCount = constants.sampleCount;
         for (uint32_t bounceIndex = 1u;
             bounceIndex < activeBounceCount;
             ++bounceIndex)
         {
             const uint32_t outputIndex = bounceIndex & 1u;
             const uint32_t previousIndex = 1u - outputIndex;
-            constants.minimumSampleCount = GetIndirectBounceSampleCount(
-                primaryMinimumSampleCount, bounceIndex);
-            constants.maximumSampleCount = std::max(
-                constants.minimumSampleCount,
-                GetIndirectBounceSampleCount(
-                    primaryMaximumSampleCount, bounceIndex));
+            constants.sampleCount = GetIndirectBounceSampleCount(
+                primarySampleCount, bounceIndex);
             commandList->writeBuffer(
                 m_ConstantBuffer, &constants, sizeof(constants));
 
@@ -1255,11 +1160,10 @@ namespace uvsr
             const uint32_t bounceRotation = bounceIndex - 1u;
             Pipeline& pipeline =
                 m_IndirectBounceSampling[estimatorIndex]
-                    [cumulativeMode][sparseSamplingIndex];
+                    [cumulativeMode];
             nvrhi::BindingSetHandle& bindingSet =
                 m_IndirectBounceBindingSets[estimatorIndex]
-                    [cumulativeMode][sparseSamplingIndex]
-                    [bounceRotation][feedbackWrite];
+                    [cumulativeMode][bounceRotation];
             if (!bindingSet)
             {
                 nvrhi::BindingSetDesc bindings;
@@ -1278,12 +1182,9 @@ namespace uvsr
                     nvrhi::BindingSetItem::Texture_SRV(
                         6, inputs.materialAmbientOcclusion),
                     nvrhi::BindingSetItem::Texture_SRV(
-                        7, previousFeedback),
+                        7, m_BlueNoiseTexture),
                     nvrhi::BindingSetItem::Texture_SRV(
-                        8, m_BlueNoiseTexture),
-                    nvrhi::BindingSetItem::Texture_SRV(
-                        9, m_FilterAdaptedNoiseTexture),
-                    nvrhi::BindingSetItem::Texture_SRV(10, motion),
+                        8, m_FilterAdaptedNoiseTexture),
                     nvrhi::BindingSetItem::Texture_UAV(
                         0, m_RawIndirectDiffuse[outputIndex]),
                     nvrhi::BindingSetItem::Texture_UAV(
@@ -1494,15 +1395,6 @@ namespace uvsr
         }
 
         commandList->endMarker();
-        if (adaptiveEnabled)
-        {
-            m_FeedbackValid = true;
-            m_FeedbackIndex = 1u - feedbackWrite;
-        }
-        else
-        {
-            m_FeedbackValid = false;
-        }
         if (temporalEnabled)
         {
             m_HistoryValid = true;

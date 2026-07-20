@@ -90,8 +90,8 @@ samples.
 - UVSR's UI Half setting is one stored sample per output-space 2x2 block, not a
   two-sample checkerboard layout.
 - A receiver phase is an end-to-end coordinate contract. Receiver selection,
-  temporal and adaptive guides, and reconstruction registration must agree on
-  the same pixel, units, and sign.
+  temporal guides, and reconstruction registration must agree on the same
+  pixel, units, and sign.
 - Complete even 2x2 domains can share one global centered offset. A partial
   block at an odd edge cannot, so exact legacy fallback is the conservative
   no-resource solution.

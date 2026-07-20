@@ -100,9 +100,8 @@ asset/package contracts:
   conversion.
 - Motion remains current-to-previous pixel XY, previous-minus-current device
   depth Z, and explicit validity A.
-- TAA is unavailable while visibility Temporal Reconstruction or Adaptive
-  Sparse Sampling is enabled because those histories do not yet consume TAA's
-  subpixel jitter delta.
+- TAA is unavailable while visibility Temporal Reconstruction is enabled
+  because that history does not yet consume TAA's subpixel jitter delta.
 - Camera mechanics and internal `SponzaCameraLocation::Free` identity remain
   unchanged; only its visible descriptor is `Piloted`.
 
@@ -170,7 +169,7 @@ asset/package contracts:
 | 2026-07-17 | Start a new branch directly from live `origin/main`. | A merge into the old-base experiment would preserve unnecessary documentation commits and make the contender harder to audit. A fresh canonical base plus the two renderer commits produces the clearest lineage. | All |
 | 2026-07-17 | Preserve the prior branch unchanged. | Its accepted artifacts and review evidence remain useful provenance; rewriting it would invalidate cited SHAs. | All |
 | 2026-07-17 | Retain the tonemapper sunset while resolving the `src/uvsr.cpp` cherry-pick conflict. | The TAA UI and pass are required; the retired tonemapper drawer and LUT state are not. | Renderer integration |
-| 2026-07-17 | Make TAA mutually exclusive with visibility Temporal Reconstruction and Adaptive Sparse Sampling. | The current visibility histories reproject de-jittered motion without TAA's jitter delta. A small runtime/UI guard has lower contender risk than adding new cross-temporal shader math. | Renderer and TAA tests |
+| 2026-07-17 | Make TAA mutually exclusive with visibility Temporal Reconstruction. | The current visibility history reprojects de-jittered motion without TAA's jitter delta. A small runtime/UI guard has lower contender risk than adding new cross-temporal shader math. | Renderer and TAA tests |
 | 2026-07-17 | Use the physical short build directory `work/btaacanon`. | DirectX-Headers exceeded the Windows path limit in the generated worktree-local build directory. A worktree `build` junction retains the expected local entry point without changing source. | Verification |
 
 ## Progress and Handoffs
@@ -189,9 +188,9 @@ asset/package contracts:
 - Any conflict repair creates a new artifact and invalidates the prior runtime
   acceptance.
 - The new worktree requires its own initialized submodule and build tree.
-- Visibility Temporal Reconstruction and Adaptive Sparse Sampling do not yet
-  share TAA's jitter-delta contract; the contender explicitly prevents those
-  modes from running together.
+- Visibility Temporal Reconstruction does not yet share TAA's jitter-delta
+  contract; the contender explicitly prevents the two temporal modes from
+  running together.
 
 Stop and ask the user if:
 

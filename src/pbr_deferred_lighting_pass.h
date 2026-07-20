@@ -6,6 +6,7 @@
 #include <nvrhi/nvrhi.h>
 
 #include <array>
+#include <cstdint>
 #include <memory>
 
 namespace donut::engine
@@ -33,6 +34,9 @@ private:
     nvrhi::BufferHandle m_DeferredLightingCB;
     // No source UAV, compact one-bounce source, and packed multi-bounce source.
     std::array<Pipeline, 3> m_Pipelines;
+    // Static 2x, 4x, and 8x per-sample deferred pipelines, each compiled
+    // without and with the single-surface visibility correction.
+    std::array<std::array<Pipeline, 4>, 2> m_MsaaPipelines;
     donut::engine::BindingCache m_BindingSets;
     std::shared_ptr<donut::engine::CommonRenderPasses> m_CommonPasses;
 
@@ -53,7 +57,11 @@ public:
         bool writeBounceMetadata,
         bool includeEmissiveSource,
         float emissiveSourceGain,
-        donut::math::float2 randomOffset = donut::math::float2::zero());
+        donut::math::float2 randomOffset = donut::math::float2::zero(),
+        nvrhi::ITexture* resolvedBackground = nullptr,
+        uint32_t msaaSampleCount = 1u,
+        nvrhi::ITexture* visibilityBaseLighting = nullptr,
+        nvrhi::ITexture* visibilityComposite = nullptr);
 
     void ResetBindingCache();
 };

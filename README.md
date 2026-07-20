@@ -12,19 +12,57 @@ architecture without either add-on.
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
-- **Temporal Anti-Aliasing** starts enabled on the deferred UVSR PBR path. The
-  experiment follows Microsoft's MiniEngine TAA structure: its eight-sample
-  jitter, one bilinear history blend with depth/motion rejection and confidence,
-  followed by either its plain resolve or compact sharpening dispatch.
-  Sharpening starts enabled at MiniEngine's `0.5` reference strength and can be
-  disabled or adjusted without resetting temporal history. TAA resolves
-  scene-linear color before the display stage, reports both GPU dispatch
-  timings in its drawer, and uses 47.5 mib of logical color/depth history at
-  1920x1080. Forward and legacy shading paths leave it unavailable because they
-  do not produce the required validated motion contract. Until the visibility
-  histories carry the same jitter-delta contract, TAA is mutually exclusive
-  with visibility Temporal Reuse and Adaptive Sparse Sampling; turn
-  TAA off to use either visibility feature.
+- The normal **Aliasing** drawer contains **Enabled**, **Run 45-Degree Motion
+  Test**, **Method**, **Quality**, **History Frames**, and **History Strength**.
+  Method independently selects **Temporal**, **Conservative Morphological**,
+  **Multisample**, or **Subpixel Morphological**. SMAA 1x, long-term temporal,
+  and MSAA expose **Low**, **Medium**, **High**, and **Ultra**. CMAA2 exposes
+  **Low**, **Medium**, and **High**.
+  Spatial qualities are full-screen official SMAA 1x. Long-term temporal
+  qualities use
+  progressively stronger MiniEngine temporal bundles with presentation-only
+  selective SMAA. CMAA2 uses Intel's official three-stage compute topology.
+  Multisample displays **Low (2x)**, **Medium (4x)**, **High (8x)**, and
+  **Ultra (16x)**. Every Multisample quality applies CMAA2 by default.
+  In Deferred mode it preserves every G-buffer sample through material decode
+  and PBR lighting, then averages final RGBA16F radiance. Full-screen SMAA or
+  CMAA2 can run after that resolve; Temporal can likewise select CMAA2 as its
+  presentation morphology without resetting history.
+  Screen-space visibility remains available with Deferred MSAA: it selects one
+  coherent closest reverse-Z surface per pixel for visibility and
+  coverage-weights only that surface's signed lighting correction back into
+  the per-sample MSAA result.
+  The shared SMAA source preserves the official 0.15/0.10/0.10/0.05
+  thresholds, actual 8/16/32/64-pixel axial reaches, 0/0/8/16-pixel diagonal
+  reaches, and High/Ultra corner behavior.
+  History Frames reports no history for spatial methods and exposes a 1–31
+  prior-frame slider for long-term temporal
+  methods. Its inherited values are 3/7/15/31. History Strength only reduces
+  otherwise accepted temporal history;
+  it cannot restore a sample rejected by motion, bounds, depth, disocclusion,
+  or rectification.
+  Production shows **Sharpness** only for the four long-term temporal
+  qualities. Developer builds move it into default-open **Aliasing Algorithm
+  Configuration** with resolved **(Preset)** controls; mutually exclusive
+  controls show **(Mutex)**. Performance experiments remain collapsed.
+  MiniEngine TAA owns the temporal history, validity, reset, bounds,
+  motion/jitter, reverse-Z validation, and early-rejection infrastructure.
+  Diagnostic SMAA uses one fixed spatial pixel/dense implementation without
+  temporal phase history or SMAA-specific performance overrides.
+  The motion-test button runs the exact Benchmark Position 1 warm,
+  right-45-degree, hold, and return sequence used by the CLI benchmark. Both
+  paths target 40 rendered frames per second, producing a fixed 15 degrees per
+  second sweep so GPU speed cannot accelerate the camera. The button writes a
+  self-validating 256-sample report, keeps
+  the app open, and returns the camera to Piloted.
+  Effective temporal image or history-layout changes reset state exactly once;
+  presentation-only SMAA, Sharpness, and image-equivalent execution changes do
+  not. Forward and legacy shading leave temporal AA unavailable because they
+  do not produce the required motion contract. Visibility Temporal
+  Reconstruction remains mutually exclusive until that history uses the same
+  jitter convention. The complete method, quality, coordinate, SMAA, reset,
+  performance, and benchmark contract is in
+  [`docs/miniengine-taa-options.md`](docs/miniengine-taa-options.md).
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
   linear resolution. **Temporal Reuse** independently enables SSRT3-style
   history accumulation, while **Spatial Filter** independently enables compact
@@ -33,18 +71,15 @@ architecture without either add-on.
   accumulated output without a spatial dispatch or filter target. Half and
   quarter resolution always retain a minimal depth/normal-guided 2x2 upsampler
   when spatial filtering is disabled because raw grid expansion produces
-  coherent GI streaks. The **Reconstruction** drawer starts collapsed.
-- **Adaptive Sparse Sampling** is off by default. The default fixed-work
-  specialization traces one stochastic slice and **20 Samples Per Pixel**
-  for every eligible pixel, with the adaptive neighborhood, reprojection,
-  feedback, and stochastic budget code compiled out. Its feedback textures and
-  motion dependency are also absent.
-- When adaptive sampling is explicitly enabled, every eligible pixel receives
-  one stochastic slice and a configurable minimum depth-tap budget.
-  Depth/normal edges, disocclusions, unstable history, low confidence, and
-  reprojected neighboring GI contribution stochastically raise the radial
-  budget toward **Maximum Samples / Pixel**. Neighbor-driven work cannot
-  recursively become a new propagation seed.
+  coherent GI streaks. The **Reconstruction and Upsampling** drawer starts
+  collapsed.
+- **Samples / Pixel** is one fixed radial budget on the stochastic slice traced
+  for every eligible pixel. Medium defaults to 20 samples; Low, High, and Ultra
+  use 10, 48, and 64. Sampling has no feedback, reprojection, stochastic budget
+  selection, feedback textures, or sampling-only motion dependency. Removing
+  sparse adaptive sampling cut visibility sampling from 42 to 21 PSOs, removed
+  99 cached binding entries, and eliminated two conditional RGBA16F feedback
+  textures (31.64 MiB at full-resolution 1920x1080).
 - The **Estimator** control exposes **Uniform Projected Angle**, **Uniform Solid
   Angle**, and **Cosine-Weighted Solid Angle**. Uniform Solid Angle is the
   default. The cosine path is fully compiled and uses the complete joint-cosine
@@ -53,9 +88,9 @@ architecture without either add-on.
 - The **Sample Scheduler** compares **Independent Hash Noise**, a first-party
   **Toroidal Blue Noise**, and an offline optimized
   **Filter-Adapted Spatiotemporal Noise**. Every scheduler toroidally
-  rotates the complete nested radial prefix, so fixed-work and adaptive modes
-  do not reuse global radius shells as the budget changes.
-- Renderer settings always start from factory defaults; **Reset**
+  rotates the complete nested radial prefix, so different fixed budgets do not
+  repeatedly align to the same global radius shells as the sample count changes.
+- Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
 - The rounded scrollbar-style loading track and its blue moving grab separate
@@ -82,8 +117,11 @@ architecture without either add-on.
   frame rounding. Slider knobs use the same transparent blue appearance as the
   drawer headers. Two-state toggles animate between endpoints; their active
   track is 50-percent-opaque white and their solid compensated knob matches the
-  rendered header blue. Disabled controls are grayscale at 0.38 opacity. The
-  outer edges retain an 8 px radius.
+  rendered header blue. Mutually exclusive controls ease symmetrically between
+  full opacity and the grayscale 0.38 disabled endpoint. Dropdown selections
+  commit on the first UI frame after their popup closes, then use a synchronized
+  0.30-second smoothstep so renderer reconfiguration cannot hide the transition.
+  The outer edges retain an 8 px radius.
 - The renderer/GPU summary and first performance line are pinned above an
   independently scrolling settings body, so they stay attached and visible at
   every drawer position. The panel shrinks to its open drawers and only scrolls
@@ -180,12 +218,11 @@ architecture without either add-on.
   visibility traversal.
 - Later bounces reject receivers with proven-zero diffuse throughput before
   view-position reconstruction, normal fetches, or slice setup.
-- AO, GI, the GI source-radiance target, adaptive feedback, temporal history,
-  filtered outputs, depth hierarchy, and extra-bounce targets exist only while
-  their consumers require them. AO strength zero or GI intensity zero removes
-  that consumer while the other effect can continue independently. The default
-  directional mask remains register-local and consumes zero persistent mask-
-  cache bytes.
+- AO, GI, the GI source-radiance target, temporal history, filtered outputs,
+  depth hierarchy, and extra-bounce targets exist only while their consumers
+  require them. AO strength zero or GI intensity zero removes that consumer
+  while the other effect can continue independently. The default directional
+  mask remains register-local and consumes zero persistent mask-cache bytes.
 - Proven scene-wide source inactivity terminates the complete higher-bounce
   dispatch chain. The shared CPU/HLSL activity mask is
   extensible to future clustering, probe, cache, visibility, and residency data;
@@ -207,6 +244,12 @@ Coming Soon is UVSR's user-facing roadmap and integration summary for stable,
 active work that has not merged into `main`. It is not a mutex or a live task
 ledger. An entry is not shipped on `main`, and experimental entries are not
 promises that the work will merge.
+
+- **Merged Anti-Aliasing and UI Candidate — Experiment**
+  (`codex/aa-ui-merged-experiment`, local and not published). Integrate the
+  complete MiniEngine TAA, diagnostic spatial SMAA, Intel CMAA2, and diagnostic
+  deferred MSAA feature set with canonical UI mainline `a55e215`. Production
+  uses deterministic spatial SMAA without SMAA-only execution experiments.
 
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate shared
@@ -294,9 +337,32 @@ launch. The benchmark pose is shared by **PBR Sponza Decorated** and **PBR
 Sponza Plain**; benchmark records identify it by that preset ID while the
 separate `scene` field identifies which scene was measured.
 
+### Anti-Aliasing Benchmark Overrides
+
+Production builds accept `--aa-enabled`, `--aa-method`, `--aa-quality`
+(`--aa-preset` alias), `--aa-sharpness`, and `--aa-benchmark-output`.
+Algorithm and execution overrides require a developer build:
+
+The same motion path is available interactively from **Aliasing > Run
+45-Degree Motion Test** on either standardized PBR Sponza scene. It uses the
+current AA settings, writes `aa-motion-test-latest.json` beside the executable,
+and returns Camera Location to **Piloted** when it finishes.
+
+```powershell
+cmake -S . -B build-aa-dev -DUVSR_AA_DEVELOPER_OVERRIDES=ON
+cmake --build build-aa-dev --config Release --target uvsr
+```
+
+A production build rejects `--aa-execution`, `--aa-kernel`, `--aa-lds`,
+`--aa-reuse`, `--aa-early`, `--aa-fusion`, `--aa-cache`, and `--aa-smaa`
+instead of accepting an override whose static PSO is absent.
+
 After building, Windows users can also double-click `LaunchUVSR.cmd`. It
 delegates to the same required experiment launcher with a fixed main-build
 label; optional renderer arguments can be appended from a terminal.
+`tools/launch_uvsr.ps1` also accepts `-BuildDirectory <path>` when an isolated
+production or experiment build needs to be launched without replacing the
+main build.
 
 Windowed launches are centered in the primary monitor's usable work area. If
 the requested client size plus decorations would cross a work-area edge, UVSR

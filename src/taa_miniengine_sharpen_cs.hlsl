@@ -36,7 +36,6 @@ cbuffer InlineConstants : register(b0)
 groupshared float gs_R[TILE_PIXEL_COUNT];
 groupshared float gs_G[TILE_PIXEL_COUNT];
 groupshared float gs_B[TILE_PIXEL_COUNT];
-groupshared float gs_W[TILE_PIXEL_COUNT];
 
 float3 LoadSample(uint ldsIndex)
 {
@@ -57,11 +56,16 @@ void main(
         int2 ST = GroupUL + int2(i % TILE_SIZE_X, i / TILE_SIZE_X);
         ST = clamp(ST, int2(0, 0), int2(BufferDim) - 1);
         float4 Color = TemporalColor[ST];
-        Color.rgb = log2(1.0 + Color.rgb / max(Color.w, 1e-6));
+        // MiniEngine assumes nonnegative radiance. Experimental rectification
+        // modes intentionally tolerate signed HDR, so clamp only the invalid
+        // log domain while preserving the reference path for nonnegative
+        // values. The output is also bounded to finite RGBA16F range.
+        float3 normalizedColor =
+            Color.rgb / max(Color.w, 1e-6);
+        Color.rgb = log2(1.0 + max(normalizedColor, -0.999));
         gs_R[i] = Color.r;
         gs_G[i] = Color.g;
         gs_B[i] = Color.b;
-        gs_W[i] = Color.w;
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -82,5 +86,7 @@ void main(
 
     float3 resolved =
         exp2(max(0, WA * Center - WB * Neighbors)) - 1.0;
-    OutColor[DTid.xy] = float4(resolved, 1.0);
+    OutColor[DTid.xy] = float4(
+        min(resolved, 65504.0),
+        1.0);
 }

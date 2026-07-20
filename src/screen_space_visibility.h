@@ -72,20 +72,13 @@ namespace uvsr
 
     struct SharedSamplingSettings
     {
-        // These are scheduled radial-sample budgets per eligible tracing pixel
-        // on one stochastic slice. The selected budget is stochastically
-        // rounded over a nested radial prefix, so increasing a limit does not
-        // move samples already present at a lower limit.
-        uint32_t minimumSampleCount = 8;
-        uint32_t maximumSampleCount = 20;
-        // Selects the adaptive importance/feedback specialization. When false,
-        // every eligible pixel traces maximumSampleCount taps on one slice and
-        // the adaptive shader path is compiled out.
-        bool adaptiveSparseSamplingEnabled = false;
+        // Fixed radial-sample budget per eligible tracing pixel on one
+        // stochastic slice. The nested radial prefix preserves the locations
+        // of samples already present when this count is increased.
+        uint32_t sampleCount = 20;
         float radius = 3.0f;
         float thickness = 0.5f;
         float stepDistributionExponent = 2.0f;
-        float adaptiveStrength = 1.0f;
         VisibilitySampleScheduler scheduler =
             VisibilitySampleScheduler::ToroidalBlueNoiseRankField;
     };
@@ -150,19 +143,10 @@ namespace uvsr
                 (HasActiveAmbientOcclusion() || HasActiveIndirectDiffuse());
         }
 
-        [[nodiscard]] bool UsesAdaptiveSampling() const
-        {
-            return sampling.adaptiveSparseSamplingEnabled &&
-                sampling.adaptiveStrength > 0.f &&
-                sampling.maximumSampleCount >
-                    sampling.minimumSampleCount;
-        }
-
         [[nodiscard]] bool RequiresMotionVectors() const
         {
             return HasActiveConsumer() &&
-                (UsesAdaptiveSampling() ||
-                    reconstruction.temporalEnabled);
+                reconstruction.temporalEnabled;
         }
     };
 
@@ -261,13 +245,12 @@ namespace uvsr
         nvrhi::DeviceHandle m_Device;
         nvrhi::BufferHandle m_ConstantBuffer;
 
-        // Final dimension selects fixed/adaptive sparse sampling.
-        std::array<std::array<std::array<Pipeline, 2>,
+        std::array<std::array<Pipeline,
             c_ConsumerVariantCount>, ImplementedVisibilityEstimatorCount>
             m_Sampling;
-        std::array<std::array<std::array<Pipeline, 2>, 2>,
+        std::array<std::array<Pipeline, 2>,
             ImplementedVisibilityEstimatorCount> m_MultiBounceFirstSampling;
-        std::array<std::array<std::array<Pipeline, 2>, 2>,
+        std::array<std::array<Pipeline, 2>,
             ImplementedVisibilityEstimatorCount> m_IndirectBounceSampling;
         std::array<Pipeline, c_ConsumerVariantCount> m_Temporal;
         std::array<std::array<Pipeline, c_ConsumerVariantCount>, 2> m_Filter;
@@ -280,7 +263,6 @@ namespace uvsr
         bool m_AmbientResourcesEnabled = false;
         bool m_IndirectDiffuseResourcesEnabled = false;
         bool m_MultipleBounceResourcesEnabled = false;
-        bool m_AdaptiveResourcesEnabled = false;
         bool m_TemporalResourcesEnabled = false;
         bool m_PostProcessResourcesEnabled = false;
         bool m_DepthHierarchyResourcesEnabled = false;
@@ -288,7 +270,6 @@ namespace uvsr
         nvrhi::TextureHandle m_RawAmbientVisibility;
         nvrhi::TextureHandle m_RawIndirectDiffuse[2];
         nvrhi::TextureHandle m_CumulativeIndirectDiffuse;
-        nvrhi::TextureHandle m_AdaptiveFeedback[2];
         nvrhi::TextureHandle m_TemporalAmbientVisibility[2];
         nvrhi::TextureHandle m_TemporalIndirectDiffuse[2];
         nvrhi::TextureHandle m_TemporalDepth[2];
@@ -301,22 +282,20 @@ namespace uvsr
 
         nvrhi::TextureHandle m_DummyAmbientVisibility;
         nvrhi::TextureHandle m_DummyIndirectDiffuse;
-        nvrhi::TextureHandle m_DummyFeedback;
+        nvrhi::TextureHandle m_DummyRgba;
         nvrhi::TextureHandle m_DummyAmbientOutput;
         nvrhi::TextureHandle m_DummyIndirectOutput;
-        nvrhi::TextureHandle m_DummyFeedbackOutput;
 
-        // [estimator][consumer][fixed/adaptive][feedback parity]
-        std::array<std::array<std::array<std::array<
-            nvrhi::BindingSetHandle, 2>, 2>, c_ConsumerVariantCount>,
+        // [estimator][consumer]
+        std::array<std::array<nvrhi::BindingSetHandle,
+            c_ConsumerVariantCount>,
             ImplementedVisibilityEstimatorCount> m_SamplingBindingSets;
-        // [estimator][AO variant][fixed/adaptive][feedback parity]
-        std::array<std::array<std::array<std::array<
-            nvrhi::BindingSetHandle, 2>, 2>, 2>,
+        // [estimator][AO variant]
+        std::array<std::array<nvrhi::BindingSetHandle, 2>,
             ImplementedVisibilityEstimatorCount> m_MultiBounceFirstBindingSets;
-        // [estimator][initialize/add][fixed/adaptive][bounce rotation][feedback parity]
-        std::array<std::array<std::array<std::array<std::array<
-            nvrhi::BindingSetHandle, 2>, 3>, 2>, 2>,
+        // [estimator][initialize/add][bounce rotation]
+        std::array<std::array<std::array<
+            nvrhi::BindingSetHandle, 3>, 2>,
             ImplementedVisibilityEstimatorCount> m_IndirectBounceBindingSets;
         // [consumer][single/multiple-bounce source][history write parity]
         std::array<std::array<std::array<nvrhi::BindingSetHandle, 2>, 2>,
@@ -339,14 +318,12 @@ namespace uvsr
         std::vector<uint8_t> m_FilterAdaptedNoiseUpload;
         bool m_SamplingNoiseUploaded = false;
         bool m_HistoryValid = false;
-        bool m_FeedbackValid = false;
         bool m_HistoryConfigurationInitialized = false;
         uint64_t m_HistoryConfigurationKey = 0u;
         bool m_HistoryEstimatorInitialized = false;
         VisibilityEstimator m_HistoryEstimator =
             VisibilityEstimator::UniformProjectedAngle;
         uint32_t m_HistoryIndex = 0u;
-        uint32_t m_FeedbackIndex = 0u;
         uint32_t m_TimerFrame = 0u;
         ScreenSpaceVisibilityTimings m_Timings;
 
@@ -358,7 +335,6 @@ namespace uvsr
             bool ambientEnabled,
             bool indirectDiffuseEnabled,
             bool multipleBouncesEnabled,
-            bool adaptiveEnabled,
             bool temporalEnabled,
             bool postProcessEnabled,
             bool depthHierarchyEnabled);

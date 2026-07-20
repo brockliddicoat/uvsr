@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -54,6 +55,18 @@ static_assert(sizeof(PbrDeferredLightingConstants) ==
 
 namespace
 {
+    int GetMsaaPipelineIndex(uint32_t sampleCount)
+    {
+        switch (sampleCount)
+        {
+        case 2u: return 0;
+        case 4u: return 1;
+        case 8u: return 2;
+        case 16u: return 3;
+        default: return -1;
+        }
+    }
+
     bool ValidateOutputs(
         const DeferredLightingPass::Inputs& inputs,
         nvrhi::ITexture* sourceRadianceOutput,
@@ -113,6 +126,98 @@ namespace
             return false;
         }
 
+        return true;
+    }
+
+    bool ValidateMsaaInputs(
+        const DeferredLightingPass::Inputs& inputs,
+        nvrhi::ITexture* resolvedBackground,
+        uint32_t sampleCount,
+        nvrhi::ITexture* visibilityBaseLighting,
+        nvrhi::ITexture* visibilityComposite)
+    {
+        if (GetMsaaPipelineIndex(sampleCount) < 0)
+        {
+            log::error(
+                "PbrDeferredLightingPass supports only 2x, 4x, 8x, or 16x diagnostic MSAA.");
+            return false;
+        }
+        if (!inputs.output || !resolvedBackground)
+        {
+            log::error(
+                "PbrDeferredLightingPass MSAA requires resolved background and output textures.");
+            return false;
+        }
+
+        const nvrhi::TextureDesc& outputDesc =
+            inputs.output->getDesc();
+        const nvrhi::TextureDesc& backgroundDesc =
+            resolvedBackground->getDesc();
+        if (outputDesc.format != nvrhi::Format::RGBA16_FLOAT ||
+            outputDesc.sampleCount != 1u ||
+            !outputDesc.isUAV ||
+            backgroundDesc.format != nvrhi::Format::RGBA16_FLOAT ||
+            backgroundDesc.sampleCount != 1u ||
+            outputDesc.width != backgroundDesc.width ||
+            outputDesc.height != backgroundDesc.height)
+        {
+            log::error(
+                "PbrDeferredLightingPass MSAA resolve surfaces must be matching single-sample RGBA16F textures and the output must be a UAV.");
+            return false;
+        }
+
+        constexpr size_t gbufferInputCount = 6u;
+        const nvrhi::ITexture* gbufferInputs[gbufferInputCount] = {
+            inputs.depth,
+            inputs.gbufferDiffuse,
+            inputs.gbufferSpecular,
+            inputs.gbufferNormals,
+            inputs.gbufferEmissive,
+            inputs.indirectDiffuse
+        };
+        for (const nvrhi::ITexture* texture : gbufferInputs)
+        {
+            if (!texture ||
+                texture->getDesc().sampleCount != sampleCount ||
+                texture->getDesc().width != outputDesc.width ||
+                texture->getDesc().height != outputDesc.height)
+            {
+                log::error(
+                    "PbrDeferredLightingPass MSAA G-buffer inputs must match the selected sample count and output extent.");
+                return false;
+            }
+        }
+
+        if (bool(visibilityBaseLighting) !=
+            bool(visibilityComposite))
+        {
+            log::error(
+                "PbrDeferredLightingPass MSAA visibility requires both "
+                "the base and composited lighting surfaces.");
+            return false;
+        }
+        if (visibilityBaseLighting)
+        {
+            const nvrhi::TextureDesc& baseDesc =
+                visibilityBaseLighting->getDesc();
+            const nvrhi::TextureDesc& compositeDesc =
+                visibilityComposite->getDesc();
+            if (baseDesc.format != nvrhi::Format::RGBA16_FLOAT ||
+                compositeDesc.format !=
+                    nvrhi::Format::RGBA16_FLOAT ||
+                baseDesc.sampleCount != 1u ||
+                compositeDesc.sampleCount != 1u ||
+                baseDesc.width != outputDesc.width ||
+                baseDesc.height != outputDesc.height ||
+                compositeDesc.width != outputDesc.width ||
+                compositeDesc.height != outputDesc.height)
+            {
+                log::error(
+                    "PbrDeferredLightingPass MSAA visibility surfaces "
+                    "must be matching single-sample RGBA16F textures.");
+                return false;
+            }
+        }
         return true;
     }
 }
@@ -184,6 +289,71 @@ void PbrDeferredLightingPass::Init(const std::shared_ptr<ShaderFactory>& shaderF
         pipelineDesc.bindingLayouts = { pipeline.bindingLayout };
         pipeline.pso = m_Device->createComputePipeline(pipelineDesc);
     }
+
+    for (uint32_t visibilityVariant = 0u;
+        visibilityVariant < m_MsaaPipelines.size();
+        ++visibilityVariant)
+    {
+        for (uint32_t sampleVariant = 0u;
+            sampleVariant <
+                m_MsaaPipelines[visibilityVariant].size();
+            ++sampleVariant)
+        {
+            const uint32_t sampleCount =
+                2u << sampleVariant;
+            Pipeline& pipeline =
+                m_MsaaPipelines[visibilityVariant][sampleVariant];
+
+            nvrhi::BindingLayoutDesc layoutDesc;
+            layoutDesc.visibility =
+                nvrhi::ShaderType::Compute;
+            layoutDesc.bindings = {
+                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                nvrhi::BindingLayoutItem::Texture_SRV(0),
+                nvrhi::BindingLayoutItem::Texture_SRV(8),
+                nvrhi::BindingLayoutItem::Texture_SRV(9),
+                nvrhi::BindingLayoutItem::Texture_SRV(10),
+                nvrhi::BindingLayoutItem::Texture_SRV(11),
+                nvrhi::BindingLayoutItem::Texture_SRV(12),
+                nvrhi::BindingLayoutItem::Texture_SRV(14),
+                nvrhi::BindingLayoutItem::Texture_SRV(15),
+                nvrhi::BindingLayoutItem::Texture_SRV(16),
+                nvrhi::BindingLayoutItem::Texture_SRV(17),
+                nvrhi::BindingLayoutItem::Texture_UAV(0),
+                nvrhi::BindingLayoutItem::Sampler(1)
+            };
+            if (visibilityVariant != 0u)
+            {
+                layoutDesc.bindings.push_back(
+                    nvrhi::BindingLayoutItem::Texture_SRV(18));
+                layoutDesc.bindings.push_back(
+                    nvrhi::BindingLayoutItem::Texture_SRV(19));
+            }
+            pipeline.bindingLayout =
+                m_Device->createBindingLayout(layoutDesc);
+
+            std::vector<ShaderMacro> macros;
+            macros.emplace_back(
+                "PBR_DEFERRED_MSAA_SAMPLES",
+                std::to_string(sampleCount));
+            macros.emplace_back(
+                "PBR_DEFERRED_MSAA_VISIBILITY",
+                visibilityVariant != 0u ? "1" : "0");
+            pipeline.shader = shaderFactory->CreateShader(
+                "uvsr/pbr_deferred_lighting_msaa_cs.hlsl",
+                "main",
+                &macros,
+                nvrhi::ShaderType::Compute);
+
+            nvrhi::ComputePipelineDesc pipelineDesc;
+            pipelineDesc.CS = pipeline.shader;
+            pipelineDesc.bindingLayouts = {
+                pipeline.bindingLayout
+            };
+            pipeline.pso =
+                m_Device->createComputePipeline(pipelineDesc);
+        }
+    }
 }
 
 void PbrDeferredLightingPass::Render(
@@ -196,9 +366,14 @@ void PbrDeferredLightingPass::Render(
     bool writeBounceMetadata,
     bool includeEmissiveSource,
     float emissiveSourceGain,
-    float2 randomOffset)
+    float2 randomOffset,
+    nvrhi::ITexture* resolvedBackground,
+    uint32_t msaaSampleCount,
+    nvrhi::ITexture* visibilityBaseLighting,
+    nvrhi::ITexture* visibilityComposite)
 {
     assert(!writeBounceMetadata || writeSourceRadiance);
+    const bool msaa = msaaSampleCount > 1u;
     if (!commandList ||
         !inputs.depth ||
         !inputs.gbufferNormals ||
@@ -210,10 +385,38 @@ void PbrDeferredLightingPass::Render(
         return;
     }
 
-    if (!ValidateOutputs(inputs, sourceRadianceOutput, writeSourceRadiance))
+    const bool applyMsaaVisibility =
+        visibilityBaseLighting &&
+        visibilityComposite;
+    if (msaa &&
+        (writeSourceRadiance ||
+            writeBounceMetadata ||
+            (separateIndirect &&
+                !applyMsaaVisibility)))
+    {
+        log::error(
+            "Diagnostic deferred MSAA cannot consume visibility history or emit source-radiance metadata.");
         return;
+    }
+    if (msaa
+            ? !ValidateMsaaInputs(
+                  inputs,
+                  resolvedBackground,
+                  msaaSampleCount,
+                  visibilityBaseLighting,
+                  visibilityComposite)
+            : !ValidateOutputs(
+                  inputs,
+                  sourceRadianceOutput,
+                  writeSourceRadiance))
+    {
+        return;
+    }
 
-    commandList->beginMarker("PBR Deferred Lighting");
+    commandList->beginMarker(
+        msaa
+            ? "PBR Deferred MSAA Per-Sample Lighting"
+            : "PBR Deferred Lighting");
 
     PbrDeferredLightingConstants constants = {};
     DeferredLightingConstants& deferredConstants = constants.deferred;
@@ -314,7 +517,11 @@ void PbrDeferredLightingPass::Render(
         const uint32_t pipelineIndex = writeBounceMetadata
             ? 2u
             : (writeSourceRadiance ? 1u : 0u);
-        const Pipeline& pipeline = m_Pipelines[pipelineIndex];
+        const Pipeline& pipeline = msaa
+            ? m_MsaaPipelines[
+                  applyMsaaVisibility ? 1u : 0u][size_t(
+                  GetMsaaPipelineIndex(msaaSampleCount))]
+            : m_Pipelines[pipelineIndex];
         const IView* view = compositeView.GetChildView(ViewType::PLANAR, viewIndex);
         const nvrhi::TextureSubresourceSet viewSubresources = view->GetSubresources();
 
@@ -345,7 +552,31 @@ void PbrDeferredLightingPass::Render(
                 nvrhi::Format::UNKNOWN, viewSubresources),
             nvrhi::BindingSetItem::Sampler(1, m_ShadowSamplerComparison)
         };
-        if (writeSourceRadiance)
+        if (msaa)
+        {
+            bindingSetDesc.bindings.push_back(
+                nvrhi::BindingSetItem::Texture_SRV(
+                    17,
+                    resolvedBackground,
+                    nvrhi::Format::UNKNOWN,
+                    viewSubresources));
+            if (applyMsaaVisibility)
+            {
+                bindingSetDesc.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        18,
+                        visibilityBaseLighting,
+                        nvrhi::Format::UNKNOWN,
+                        viewSubresources));
+                bindingSetDesc.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        19,
+                        visibilityComposite,
+                        nvrhi::Format::UNKNOWN,
+                        viewSubresources));
+            }
+        }
+        else if (writeSourceRadiance)
         {
             bindingSetDesc.bindings.push_back(nvrhi::BindingSetItem::Texture_UAV(
                 1, sourceRadianceOutput, nvrhi::Format::UNKNOWN, viewSubresources));

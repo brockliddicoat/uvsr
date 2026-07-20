@@ -29,10 +29,10 @@ exact global phase registration.
 
 ## Existing Sample and Jitter Behavior
 
-UVSR currently sets its planar-view pixel offset to zero every frame. It has no
-active camera-projection jitter or scene-level temporal antialiasing sequence.
-The existing `frameIndex` variation belongs to screen-space visibility ray
-scheduling:
+At the time of this retired experiment, UVSR set its planar-view pixel offset
+to zero every frame and had no active camera-projection jitter or scene-level
+temporal antialiasing sequence. The then-existing `frameIndex` variation
+belonged to screen-space visibility ray scheduling:
 
 - Independent hash noise varies slice, radial, budget, and feedback choices.
 - Toroidal blue noise uses a 64-frame cycle with independently optimized

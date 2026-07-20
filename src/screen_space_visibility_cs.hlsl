@@ -26,10 +26,6 @@
 #ifndef ENABLE_BOUNCE_METADATA
 #define ENABLE_BOUNCE_METADATA 0
 #endif
-#ifndef ENABLE_ADAPTIVE_SPARSE_SAMPLING
-#define ENABLE_ADAPTIVE_SPARSE_SAMPLING 1
-#endif
-
 #define VisibilityEstimator_UniformProjectedAngle 0
 #define VisibilityEstimator_UniformSolidAngle 1
 #define VisibilityEstimator_CosineWeightedSolidAngle 2
@@ -47,22 +43,17 @@ Texture2D<float> t_DepthHierarchy : register(t3);
 Texture2D<float4> t_GBufferDiffuse : register(t4);
 Texture2D<float4> t_Emissive : register(t5);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t6);
-Texture2D<float4> t_PreviousFeedback : register(t7);
-Texture2DArray<float> t_BlueNoise : register(t8);
-Texture2DArray<float> t_FilterAdaptedNoise : register(t9);
-Texture2D<float4> t_Motion : register(t10);
+Texture2DArray<float> t_BlueNoise : register(t7);
+Texture2DArray<float> t_FilterAdaptedNoise : register(t8);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_BounceFrontier : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 #else
 Texture2D<float4> t_SourceRadiance : register(t2);
 Texture2D<float> t_DepthHierarchy : register(t3);
-Texture2D<float4> t_PreviousFeedback : register(t4);
-Texture2DArray<float> t_BlueNoise : register(t5);
-Texture2DArray<float> t_FilterAdaptedNoise : register(t6);
-Texture2D<float4> t_Motion : register(t7);
+Texture2DArray<float> t_BlueNoise : register(t4);
+Texture2DArray<float> t_FilterAdaptedNoise : register(t5);
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_AdaptiveFeedback : register(u2);
 #endif
 
 static const float VisibilityPi = 3.14159265358979323846f;
@@ -86,11 +77,12 @@ static const uint ProgressiveRadialPrefixMasks[33] = {
 
 static const uint SchedulerDimension_SliceRotation = 0u;
 static const uint SchedulerDimension_SectorPhase = 1u;
-static const uint SchedulerDimension_SampleBudget = 2u;
+// Dimension two was formerly adaptive sample-budget rounding. Keep the
+// remaining semantic dimensions stable so removing that feature does not
+// silently change the fixed sampler's phase sequence.
 static const uint SchedulerDimension_OddSampleSide = 3u;
 static const uint SchedulerDimension_RadialNegative = 4u;
 static const uint SchedulerDimension_RadialPositive = 5u;
-static const uint SchedulerDimension_FeedbackNeighbor = 6u;
 
 static const uint2 BlueNoiseTemporalSteps[8] = {
     uint2(13u, 29u), uint2(31u, 11u),
@@ -349,9 +341,6 @@ void WriteEmptyVisibilityOutput(
 #if ENABLE_GI
     u_IndirectDiffuse[pixel] = 0.0f;
 #endif
-#if ENABLE_ADAPTIVE_SPARSE_SAMPLING
-    u_AdaptiveFeedback[pixel] = 0.0f;
-#endif
 #endif
 }
 
@@ -497,152 +486,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     }
 
     uint phase = g_Visibility.frameIndex;
-    uint minimumSampleCount = clamp(
-        g_Visibility.minimumSampleCount, 1u, 64u);
-    uint maximumSampleCount = clamp(
-        g_Visibility.maximumSampleCount, minimumSampleCount, 64u);
-#if ENABLE_ADAPTIVE_SPARSE_SAMPLING
-    float edgeImportance = 0.0f;
-    float disocclusionImportance = 0.0f;
-    float historyImportance = 0.0f;
-    float centerContributionSeed = 0.0f;
-    float neighboringContributionSeed = 0.0f;
-    float reprojectedContributionSignal = 0.0f;
-    bool hasMatchingFeedback = false;
-    {
-        uint2 fullMaximum = uint2(g_Visibility.fullResolution) - 1u;
-        static const int2 edgeOffsets[4] = {
-            int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
-        };
-        [unroll]
-        for (uint edgeIndex = 0u; edgeIndex < 4u; ++edgeIndex)
-        {
-            uint2 neighborPixel = uint2(clamp(
-                int2(receiverPixel) + edgeOffsets[edgeIndex],
-                int2(0, 0), int2(fullMaximum)));
-            float neighborDepth = t_Depth[neighborPixel];
-            if (!IsValidDepth(neighborDepth))
-            {
-                edgeImportance = 1.0f;
-                continue;
-            }
-            float depthDelta = abs(neighborDepth - receiverDepth) /
-                max(max(abs(neighborDepth), abs(receiverDepth)), 1e-4f);
-            float3 neighborNormalVS = mul(float4(
-                t_Normals[neighborPixel].xyz, 0.0f),
-                g_Visibility.view.matWorldToView).xyz;
-            neighborNormalVS = SafeNormalize(neighborNormalVS, receiverNormalVS);
-            float normalEdge = 1.0f - saturate(dot(
-                receiverNormalVS, neighborNormalVS));
-            edgeImportance = max(edgeImportance,
-                max(saturate(depthDelta * 24.0f),
-                    saturate(normalEdge * 4.0f)));
-        }
-
-        if (g_Visibility.feedbackValid != 0u)
-        {
-            float4 motion = t_Motion[receiverPixel];
-            float2 previousFullPosition = receiverPixelCenter + motion.xy;
-            bool validMotion = motion.a > 0.5f &&
-                all(isfinite(motion)) &&
-                all(previousFullPosition >= 0.0f) &&
-                all(previousFullPosition < g_Visibility.fullResolution);
-            if (validMotion)
-            {
-                uint2 previousFullPixel = uint2(previousFullPosition);
-                uint2 previousSamplingPixel =
-                    FullToSamplingPixel(previousFullPixel);
-                float4 feedback = t_PreviousFeedback[previousSamplingPixel];
-                float expectedPreviousDepth = receiverDepth + motion.z;
-                bool finiteFeedback = all(isfinite(feedback)) &&
-                    isfinite(expectedPreviousDepth);
-                if (finiteFeedback)
-                {
-                    float depthError = abs(feedback.a - expectedPreviousDepth) /
-                        max(max(abs(feedback.a),
-                            abs(expectedPreviousDepth)), 1e-4f);
-                    disocclusionImportance = saturate(depthError * 32.0f);
-                    float feedbackDepthSimilarity =
-                        1.0f - disocclusionImportance;
-                    hasMatchingFeedback = feedbackDepthSimilarity > 0.0f;
-                    historyImportance = saturate(feedback.r) *
-                        feedbackDepthSimilarity;
-                    reprojectedContributionSignal = saturate(feedback.g);
-                    centerContributionSeed = saturate(feedback.b) *
-                        feedbackDepthSimilarity;
-
-                    if (hasMatchingFeedback)
-                    {
-                        uint2 samplingMaximum =
-                            uint2(g_Visibility.samplingResolution) - 1u;
-                        static const int2 feedbackOffsets[8] = {
-                            int2(-1, -1), int2(0, -1), int2(1, -1),
-                            int2(-1, 0), int2(1, 0),
-                            int2(-1, 1), int2(0, 1), int2(1, 1)
-                        };
-                        uint feedbackIndex = min(uint(SchedulerRandom(
-                            dispatchPixel,
-                            SchedulerDimension_FeedbackNeighbor,
-                            phase) * 8.0f), 7u);
-                        uint2 feedbackPixel = uint2(clamp(
-                            int2(previousSamplingPixel) +
-                                feedbackOffsets[feedbackIndex],
-                            int2(0, 0), int2(samplingMaximum)));
-                        float4 neighborFeedback =
-                            t_PreviousFeedback[feedbackPixel];
-                        if (all(isfinite(neighborFeedback)))
-                        {
-                            float neighborDepthError = abs(
-                                neighborFeedback.a - feedback.a) /
-                                max(max(abs(neighborFeedback.a),
-                                    abs(feedback.a)), 1e-4f);
-                            float neighborDepthSimilarity = saturate(
-                                1.0f - neighborDepthError * 32.0f);
-                            neighboringContributionSeed =
-                                saturate(neighborFeedback.b) *
-                                feedbackDepthSimilarity *
-                                neighborDepthSimilarity;
-                        }
-                    }
-                }
-                else
-                {
-                    disocclusionImportance = 1.0f;
-                }
-            }
-            else
-            {
-                disocclusionImportance = 1.0f;
-            }
-        }
-    }
-
-    float independentImportance = max(
-        max(edgeImportance, disocclusionImportance), historyImportance);
-    float contributionImportance = max(
-        centerContributionSeed, neighboringContributionSeed * 0.75f);
-    float errorImportance = saturate(max(
-        independentImportance, contributionImportance) *
-        max(g_Visibility.adaptiveStrength, 0.0f));
-    // Preserve the adaptive-sampling paper's one-eighth uniform component so
-    // flat regions never become deterministic starvation zones.
-    float samplingProbability = 0.125f + 0.875f * errorImportance;
-    float desiredSampleCount = lerp(
-        float(minimumSampleCount), float(maximumSampleCount),
-        samplingProbability);
-    uint selectedSampleCount = min(
-        uint(floor(desiredSampleCount)) +
-            (SchedulerRandom(
-                dispatchPixel,
-                SchedulerDimension_SampleBudget,
-                phase) <
-                frac(desiredSampleCount) ? 1u : 0u),
-        maximumSampleCount);
-#else
-    // Fixed-work fallback: this specialization contains no adaptive
-    // importance, reprojection, feedback, or stochastic budget instructions.
-    uint selectedSampleCount = maximumSampleCount;
-#endif
+    uint selectedSampleCount = clamp(
+        g_Visibility.sampleCount, 1u, 64u);
 
     float sliceRotation = SchedulerRandom(
         dispatchPixel, SchedulerDimension_SliceRotation, phase);
@@ -1075,39 +920,5 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     u_IndirectDiffuse[dispatchPixel] = float4(
         min(indirectDiffuse, 65504.0f), receiverFrontierMetadataValue);
 #endif
-#endif
-#if ENABLE_ADAPTIVE_SPARSE_SAMPLING && !ENABLE_BOUNCE_REINJECTION
-    {
-        float adaptiveSignal = dot(indirectDiffuse,
-            float3(0.2126f, 0.7152f, 0.0722f));
-#if ENABLE_AO
-        adaptiveSignal = max(adaptiveSignal, 1.0f - ambientVisibility);
-#endif
-        float compressedSignal = adaptiveSignal /
-            (1.0f + max(adaptiveSignal, 0.0f));
-        float signalInstability = hasMatchingFeedback
-            ? saturate(abs(compressedSignal -
-                reprojectedContributionSignal) * 4.0f)
-            : 0.0f;
-        float currentInstability = max(
-            max(edgeImportance, disocclusionImportance),
-            max(signalInstability, historyImportance * 0.5f));
-        // A sample found because of a neighboring seed may receive more work,
-        // but it cannot become a fresh outward seed. Existing center seeds and
-        // independently difficult pixels remain eligible, so useful regions
-        // persist without a one-texel-per-frame dilation wave.
-        bool independentContributionDiscovery =
-            centerContributionSeed > 0.0f ||
-            neighboringContributionSeed * 0.75f <=
-                independentImportance + VisibilityEpsilon;
-        float contributionSeed = independentContributionDiscovery
-            ? compressedSignal
-            : 0.0f;
-        u_AdaptiveFeedback[dispatchPixel] = float4(
-            saturate(currentInstability),
-            saturate(compressedSignal),
-            saturate(contributionSeed),
-            receiverDepth);
-    }
 #endif
 }

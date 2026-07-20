@@ -9,8 +9,8 @@ that mask to memory.
 
 The frame order is:
 
-1. Fill the PBR G-buffer, including motion only when adaptive or temporal
-   visibility requires it.
+1. Fill the PBR G-buffer, including motion only when temporal visibility
+   requires it.
 2. Shade direct light and, when GI can consume it, write source radiance and
    compact diffuse-transport metadata.
 3. Trace visibility at full, half, or quarter linear resolution.
@@ -31,7 +31,6 @@ allocation arithmetic, and external capture tools.
 - Visibility, AO, and GI are enabled at full resolution.
 - Medium quality traces 20 fixed samples on one slice per eligible pixel.
 - Uniform Solid Angle and Toroidal Blue Noise are selected.
-- Adaptive Sparse Sampling is disabled.
 - AO strength is 1.0. GI intensity is 4.0 with one bounce, a 0.001 bounce
   contribution cutoff, and emissive sourcing enabled at gain 4.0.
 - The Indirect Diffuse Response view is disabled.
@@ -131,21 +130,18 @@ instead of hiding a view-distance heuristic in estimator comparisons.
 
 ## Current Sample Distribution
 
-With **Adaptive Sparse Sampling** enabled, **Minimum Samples / Pixel** and
-**Maximum Samples / Pixel** are scheduled radial sample budgets on one
-stochastic slice, not budgets per radial direction.
-Full-mask early termination, invalid projection, and duplicate screen coordinates
-can make the executed depth-read count lower than the selected budget.
-
-Every eligible pixel receives one slice and at least the minimum sample count.
-The selected total is divided between the two near-to-far radial directions.
-Later diffuse bounces halve both limits toward an eight-sample floor, without
-raising a first-bounce limit that was already below eight.
+**Samples / Pixel** is one fixed radial budget on one stochastic slice, not a
+budget per radial direction. Every eligible pixel receives one slice and the
+selected total is divided between its two near-to-far radial directions.
+Full-mask early termination, invalid projection, and duplicate screen
+coordinates can make the executed depth-read count lower than the configured
+budget. Later diffuse bounces halve the fixed budget toward an eight-sample
+floor without raising a first-bounce budget that was already below eight.
 
 Each radial direction owns a 32-stratum bit-reversal sequence. The complete
 selected prefix receives a stochastic toroidal stratum rotation plus an
 independent within-stratum offset every pixel and frame. Increasing a sample
-limit with the same phase appends strata without moving its lower-budget prefix,
+count with the same phase appends strata without moving its lower-budget prefix,
 while changing phase prevents the same global radius shells from accumulating
 into rings. The rotated set is consumed in ascending physical-stratum order.
 Nesting therefore controls set membership without letting a farther GI sample
@@ -154,30 +150,26 @@ claim a sector before a nearer selected source on the same radial direction. The
 `x^exponent`; the default `x^2` concentrates depth taps near the receiver. This
 means:
 
-- lower the minimum first to measure the guaranteed base cost;
-- raise the maximum to give difficult pixels more possible evidence;
+- lower **Samples / Pixel** to measure a smaller fixed traversal cost;
+- raise it when every eligible pixel needs more radial evidence;
 - tune the exponent separately, because it redistributes distance rather than
   changing tap count; and
-- compare scheduler modes with identical sample limits.
+- compare scheduler modes with identical sample counts.
 
-With **Adaptive Sparse Sampling** disabled, as it is by default, UVSR selects a
-separately compiled fixed-work shader. Every eligible pixel receives **Fixed
-Samples / Pixel** on one slice; the default is 20. The fixed specialization
-contains no adaptive depth/normal neighborhood analysis, motion/reprojection
-reads, feedback reads or writes, or stochastic budget rounding. Adaptive
-feedback textures are not allocated and adaptive sampling alone does not
-request motion vectors. The sample scheduler remains independent because it
-determines where the fixed samples land, not how many samples a pixel receives.
+The quality presets set the following fixed first-bounce budgets:
 
-The quality presets set the following first-bounce budgets. With adaptive
-sampling off, only the fixed/max value is executed.
+| Preset | Samples / Pixel |
+| --- | ---: |
+| Low | 10 |
+| Medium (default) | 20 |
+| High | 48 |
+| Ultra | 64 |
 
-| Preset | Adaptive minimum | Fixed/adaptive maximum |
-|---|---:|---:|
-| Low | 4 | 10 |
-| Medium (default) | 8 | 20 |
-| High | 12 | 48 |
-| Ultra | 16 | 64 |
+The sampling shader contains no importance neighborhood, sampling
+reprojection, feedback read or write, or stochastic budget-selection path.
+Sampling therefore allocates no feedback textures and does not request motion
+vectors. The sample scheduler remains independent because it determines where
+the fixed samples land, not how many samples a pixel receives.
 
 Activision's
 [Practical Realtime Strategies for Accurate Indirect Occlusion](https://www.activision.com/cdn/research/PracticalRealtimeStrategiesTRfinal.pdf)
@@ -186,52 +178,19 @@ decision to distribute work across spatial and temporal reconstruction. It is
 not the source of UVSR's finite-thickness bitmask sector definition; calling
 the default estimator "GTAO" would conflate two related but different methods.
 
-## Adaptive Sparse Sampling
-
-UVSR transfers the stochastic allocation principles from
-[Forget Superresolution, Sample Adaptively (when Path Tracing)](https://arxiv.org/html/2602.08642v1)
-without claiming to reproduce its unpublished neural sampler. The renderer has
-no network or learned density. It builds a local error importance from:
-
-- four-neighbor depth and normal discontinuity;
-- invalid motion or reprojected depth mismatch;
-- reprojected instability; and
-- the current pixel plus one stochastically selected, depth-compatible
-  eight-neighbor contribution seed.
-
-The last term makes pixels around previously contributing GI samples
-stochastically more likely to receive extra work without a fixed cross stencil.
-A contribution discovered only because of a neighboring seed is tagged as
-ineligible to seed another outward step; center or independently discovered
-signals remain persistent. This prevents the old one-texel-per-frame positive-
-feedback dilation that appeared as expanding crosses and rings. Stored
-instability decays when no current evidence sustains it. The sample budget uses
-a one-eighth uniform component plus seven-eighths adaptive importance so flat
-regions cannot become permanent starvation zones. Fractional desired sample
-counts use stochastic rounding. Importance changes only radial tap count; every
-pixel retains one stochastic slice.
-
-This is a probability framework, not a hard classification table. Features
-raise the chance of extra work; they do not deterministically force one quality
-tier. **Adaptive Error Strength** scales those probabilities. Zero, or an empty
-refinement range where minimum equals maximum, selects the fixed-work
-specialization. The explicit **Adaptive Sparse
-Sampling** checkbox is the clearer A/B control: off fixes the budget to the
-maximum/fixed count and removes all adaptive instructions and resources.
-
 ## Sample Schedulers
 
 **Independent Hash Noise** independently hashes stochastic decisions and
 consumes no rank-field texture.
 
 **Toroidal Blue Noise** uses eight independently generated 64x64
-toroidal void-and-cluster rank layers. Slice rotation, CDF sector phase, budget
-rounding, odd-sample side, both radial directions, and adaptive-neighbor choice
-receive separate semantic layers rather than translated copies of one scalar
-texture. Dimension-specific toroidal temporal steps preserve each layer's
-spatial spectrum, and hashed cycle offsets prevent exact 64-frame repetition.
-It is spatiotemporal as a runtime sequence, but its eight 2D layers were not
-jointly optimized as one 3D space-time volume.
+toroidal void-and-cluster rank layers. Slice rotation, CDF sector phase,
+odd-sample side, and both radial directions receive separate semantic layers
+rather than translated copies of one scalar texture. Dimension-specific
+toroidal temporal steps preserve each layer's spatial spectrum, and hashed
+cycle offsets prevent exact 64-frame repetition. It is spatiotemporal as a
+runtime sequence, but its eight 2D layers were not jointly optimized as one 3D
+space-time volume.
 This is the default scheduler.
 
 **Filter-Adapted Spatiotemporal Noise** uses a 64x64x32 scalar-uniform
@@ -256,8 +215,8 @@ KiB of logical scheduler storage: 64 KiB of `R16_UNORM` toroidal layers and 128
 KiB of `R8_UNORM` filter-adapted volume data.
 
 The scheduler changes where and when samples appear; it does not change the
-nested radial distribution or the requested budget. Profile all modes at
-identical limits. Human evaluation should look for structured banding,
+nested radial distribution or the requested sample count. Profile all modes at
+identical sample counts. Human evaluation should look for structured banding,
 stationary grain, motion trails, and convergence after disocclusion.
 
 ## Reconstruction and Upsampling
@@ -286,7 +245,7 @@ Temporal reconstruction follows SSRT3's core contract:
 
 Invalid history selects the current frame without reading uninitialized values
 into arithmetic. Camera topology, render-target changes, scene unload, shader
-recreation, White World, estimator changes, traversal-budget changes,
+recreation, White World, estimator changes, sample-count changes,
 radius/thickness changes, and GI source/bounce-contract changes invalidate
 history.
 
@@ -311,7 +270,7 @@ Full, half, and quarter are linear resolution scales, so the nominal sampling
 pixel counts are approximately `1`, `1/4`, and `1/16` of full resolution before
 edge rounding. This is not a predicted end-to-end speedup: the full-resolution
 G-buffer, temporal guides, upsampling/filtering, and composition remain, while
-actual trace cost depends on adaptive budgets, bounce count, divergence, and
+actual trace cost depends on the fixed sample count, bounce count, divergence, and
 hardware occupancy.
 
 For AO-only radii of at least eight world units on perspective cameras, UVSR
@@ -325,9 +284,9 @@ allocate GI outputs or the full-resolution source-radiance target; GI-only does
 not allocate AO outputs. AO strength zero and GI intensity zero make their
 respective effects inactive consumers rather than dispatching mathematically
 zero paths. The source-radiance target is also absent when no scene light is
-present and emissive sourcing is disabled or has zero gain. Adaptive feedback, temporal
-history, full-resolution filtered outputs, higher-bounce frontiers, and the
-depth hierarchy exist only while their consumers require them. Proven
+present and emissive sourcing is disabled or has zero gain. Temporal history,
+full-resolution filtered outputs, higher-bounce frontiers, and the depth
+hierarchy exist only while their consumers require them. Proven
 scene-wide first-bounce inactivity terminates the complete higher-bounce
 dispatch chain.
 
@@ -344,8 +303,8 @@ Two following memory rows separate:
 
 - **Outputs:** exact logical AO, GI, filtered output, and active bounce-frontier
   texel payload.
-- **Working:** exact resident scheduler textures, adaptive feedback, temporal
-  depth/normal/AO/GI history, and depth-hierarchy texel payload.
+- **Working:** exact resident scheduler textures, temporal depth/normal/AO/GI
+  history, and depth-hierarchy texel payload.
 - **Mask Cache:** exact persistent directional-mask storage. It is zero in the
   current register-only architecture.
 - **Avoided:** exact optional AO/GI resources not allocated because their

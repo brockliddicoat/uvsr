@@ -193,6 +193,38 @@ namespace
         return directAndEmissive + fallbackIndirect *
             std::clamp(ambientVisibility, 0.f, 1.f) + screenSpaceGi;
     }
+
+    struct MsaaVisibilityGuide
+    {
+        float depth;
+        bool validNormal;
+    };
+
+    template<std::size_t SampleCount>
+    int ResolveClosestReverseZOwner(
+        const std::array<MsaaVisibilityGuide, SampleCount>& guides)
+    {
+        int owner = -1;
+        float closestDepth = 0.f;
+        for (std::size_t sampleIndex = 0u;
+            sampleIndex < SampleCount;
+            ++sampleIndex)
+        {
+            const MsaaVisibilityGuide& guide =
+                guides[sampleIndex];
+            const bool valid =
+                std::isfinite(guide.depth) &&
+                guide.depth > 0.f &&
+                guide.validNormal;
+            if (valid &&
+                (owner < 0 || guide.depth > closestDepth))
+            {
+                owner = static_cast<int>(sampleIndex);
+                closestDepth = guide.depth;
+            }
+        }
+        return owner;
+    }
 }
 
 int main()
@@ -276,6 +308,44 @@ int main()
         "ambient visibility does not multiply screen-space GI");
     Require(Near(compositeVisible - fallbackIndirect - screenSpaceGi, directAndEmissive),
         "ambient visibility does not alter direct light or emission");
+
+    // The Deferred MSAA visibility bridge must select one complete reverse-Z
+    // owner instead of averaging guides across sparse silhouette coverage.
+    const float nan =
+        std::numeric_limits<float>::quiet_NaN();
+    const std::array<MsaaVisibilityGuide, 8>
+        sparseVisibilityGuides = {{
+            { 0.f, false },
+            { 0.25f, true },
+            { nan, true },
+            { 0.8f, false },
+            { 0.75f, true },
+            { 0.75f, true },
+            { -0.1f, true },
+            { std::numeric_limits<float>::infinity(), true }
+        }};
+    Require(
+        ResolveClosestReverseZOwner(
+            sparseVisibilityGuides) == 4,
+        "closest reverse-Z MSAA visibility owner rejects background, invalid normals, and non-finite depth while preserving the lower-index tie");
+    const std::array<MsaaVisibilityGuide, 2>
+        backgroundVisibilityGuides = {{
+            { 0.f, false },
+            { 0.f, false }
+        }};
+    Require(
+        ResolveClosestReverseZOwner(
+            backgroundVisibilityGuides) == -1,
+        "all-background MSAA visibility has no fabricated surface owner");
+    const float visibilityCorrection = -2.f;
+    Require(
+        Near(
+            visibilityCorrection * (1.f / 4.f),
+            -0.5f) &&
+            Near(
+                visibilityCorrection * (4.f / 4.f),
+                -2.f),
+        "MSAA visibility correction scales continuously from sparse coverage to full coverage");
 
     const float backFacingSourceCosine = std::max(-0.25f, 0.f);
     Require(backFacingSourceCosine == 0.f,

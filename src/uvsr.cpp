@@ -27,12 +27,17 @@
 #include <memory>
 #include <chrono>
 #include <ctime>
+#include <fstream>
 #include <iomanip>
 #include <algorithm>
 #include <cmath>
 #include <sstream>
 #include <cfloat>
 #include <cstdlib>
+#include <functional>
+#include <thread>
+#include <type_traits>
+#include <unordered_map>
 #include <Windows.h>
 #include <GLFW/glfw3.h>
 
@@ -60,15 +65,19 @@
 #include <donut/app/imgui_renderer.h>
 #include <nvrhi/utils.h>
 #include <nvrhi/common/misc.h>
+#include <directx/d3d12.h>
 
 #include "pbr_material.h"
 #include "pbr_deferred_lighting_pass.h"
+#include "msaa_visibility_resolve.h"
 #include "gpu_performance_monitor.h"
 #include "camera_collision.h"
 #include "camera_controllers.h"
+#include "cmaa2.h"
 #include "experiment_title.h"
 #include "scene_catalog.h"
 #include "screen_space_visibility.h"
+#include "smaa.h"
 #include "sponza_camera_preset.h"
 #include "taa_miniengine.h"
 #include "world_material_view.h"
@@ -107,6 +116,8 @@ struct GpuAdapterChoice
     int adapterIndex = -1;
     std::string name;
     uint64_t dedicatedVideoMemory = 0;
+    uint32_t vendorId = 0;
+    uint32_t deviceId = 0;
 };
 
 constexpr float UiBackgroundBlurPixels = 4.f;
@@ -120,6 +131,115 @@ struct UiBackdropRect
     float rounding = 0.f;
     bool visible = false;
 };
+
+struct AaBenchmarkConfig
+{
+    bool enabled = false;
+    std::filesystem::path outputPath;
+    AntiAliasingSettings settings;
+    float sharpness = 0.f;
+};
+
+enum class AaBenchmarkSegment : uint32_t
+{
+    Warm,
+    TurnRight,
+    HoldRight,
+    TurnBack,
+    Drain
+};
+
+static constexpr uint32_t AaBenchmarkWarmFrames = 180u;
+static constexpr uint32_t AaBenchmarkTurnFrames = 120u;
+static constexpr uint32_t AaBenchmarkHoldFrames = 16u;
+static constexpr uint32_t AaBenchmarkTargetFramesPerSecond = 40u;
+static constexpr float AaBenchmarkTurnDegreesPerSecond =
+    0.375f * float(AaBenchmarkTargetFramesPerSecond);
+static constexpr uint32_t AaBenchmarkMotionEndFrame =
+    AaBenchmarkWarmFrames +
+    AaBenchmarkTurnFrames +
+    AaBenchmarkHoldFrames +
+    AaBenchmarkTurnFrames;
+static constexpr uint64_t AaBenchmarkTimingTagFlag = 1ull << 63u;
+static constexpr uint64_t AaBenchmarkTimingTagPayloadMask =
+    ~(AaBenchmarkTimingTagFlag | SmaaTimingCollectTagFlag);
+
+static AaBenchmarkSegment GetAaBenchmarkSegment(uint64_t sourceFrame)
+{
+    if (sourceFrame < AaBenchmarkWarmFrames)
+        return AaBenchmarkSegment::Warm;
+    if (sourceFrame <
+        AaBenchmarkWarmFrames + AaBenchmarkTurnFrames)
+    {
+        return AaBenchmarkSegment::TurnRight;
+    }
+    if (sourceFrame <
+        AaBenchmarkWarmFrames +
+        AaBenchmarkTurnFrames +
+        AaBenchmarkHoldFrames)
+    {
+        return AaBenchmarkSegment::HoldRight;
+    }
+    if (sourceFrame < AaBenchmarkMotionEndFrame)
+        return AaBenchmarkSegment::TurnBack;
+    return AaBenchmarkSegment::Drain;
+}
+
+static bool IsAaBenchmarkMeasurementFrame(uint64_t sourceFrame)
+{
+    const AaBenchmarkSegment segment =
+        GetAaBenchmarkSegment(sourceFrame);
+    return segment == AaBenchmarkSegment::TurnRight ||
+        segment == AaBenchmarkSegment::HoldRight ||
+        segment == AaBenchmarkSegment::TurnBack;
+}
+
+struct AaBenchmarkTimerTag
+{
+    uint32_t sourceFrame = 0u;
+    uint32_t phase = 0u;
+    AaBenchmarkSegment segment = AaBenchmarkSegment::Warm;
+    bool collect = false;
+};
+
+struct AaBenchmarkSample
+{
+    float milliseconds = 0.f;
+    uint32_t sourceFrame = 0u;
+    uint32_t phase = 0u;
+    AaBenchmarkSegment segment = AaBenchmarkSegment::Warm;
+};
+
+struct SmaaBenchmarkSample
+{
+    SmaaTimings timings;
+    AaBenchmarkSegment segment = AaBenchmarkSegment::Warm;
+};
+
+struct AaBenchmarkStatistics
+{
+    float median = 0.f;
+    float worst = 0.f;
+    size_t count = 0u;
+};
+
+static AaBenchmarkStatistics CalculateAaBenchmarkStatistics(
+    const std::vector<float>& samples)
+{
+    std::vector<float> ordered = samples;
+    std::sort(ordered.begin(), ordered.end());
+    AaBenchmarkStatistics result;
+    result.count = ordered.size();
+    if (ordered.empty())
+        return result;
+
+    const size_t middle = ordered.size() / 2u;
+    result.median = ordered.size() % 2u
+        ? ordered[middle]
+        : 0.5f * (ordered[middle - 1u] + ordered[middle]);
+    result.worst = ordered.back();
+    return result;
+}
 
 class PbrGBufferFillPass final : public GBufferFillPass
 {
@@ -285,14 +405,112 @@ static bool RestartCurrentProcess()
     return true;
 }
 
+static uint32_t ResolveSupportedMsaaSampleCount(
+    nvrhi::IDevice* device,
+    uint32_t requestedSampleCount)
+{
+    if (!device || requestedSampleCount <= 1u)
+        return 1u;
+    if (device->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D12)
+        return 1u;
+
+    ID3D12Device* nativeDevice =
+        device->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
+    if (!nativeDevice)
+        return 1u;
+
+    const auto supportsFormat = [nativeDevice](
+        DXGI_FORMAT format,
+        uint32_t sampleCount)
+    {
+        D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS query{};
+        query.Format = format;
+        query.SampleCount = sampleCount;
+        query.Flags =
+            D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
+        return SUCCEEDED(nativeDevice->CheckFeatureSupport(
+                   D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
+                   &query,
+                   sizeof(query))) &&
+            query.NumQualityLevels > 0u;
+    };
+
+    const auto supportsAllocatedFormats =
+        [&](uint32_t sampleCount)
+    {
+        // RenderTargets still allocates the deferred attachments while MSAA
+        // routes drawing through forward PBR. Check every format that receives
+        // the selected sample count rather than only the HDR attachment.
+        constexpr DXGI_FORMAT colorFormats[] = {
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R16G16B16A16_SNORM,
+            DXGI_FORMAT_R16G16B16A16_FLOAT,
+            DXGI_FORMAT_R16G16_FLOAT,
+            DXGI_FORMAT_R8_UNORM
+        };
+        for (DXGI_FORMAT format : colorFormats)
+        {
+            if (!supportsFormat(format, sampleCount))
+                return false;
+        }
+
+        constexpr DXGI_FORMAT depthFormats[] = {
+            DXGI_FORMAT_D24_UNORM_S8_UINT,
+            DXGI_FORMAT_D32_FLOAT_S8X24_UINT,
+            DXGI_FORMAT_D32_FLOAT,
+            DXGI_FORMAT_D16_UNORM
+        };
+        return std::any_of(
+            std::begin(depthFormats),
+            std::end(depthFormats),
+            [&](DXGI_FORMAT format)
+            {
+                return supportsFormat(format, sampleCount);
+            });
+    };
+
+    for (uint32_t candidate : { 16u, 8u, 4u, 2u })
+    {
+        if (candidate <= requestedSampleCount &&
+            supportsAllocatedFormats(candidate))
+        {
+            if (candidate != requestedSampleCount)
+            {
+                log::warning(
+                    "Requested %ux MSAA is unsupported by all UVSR "
+                    "render-target formats; using %ux",
+                    requestedSampleCount,
+                    candidate);
+            }
+            return candidate;
+        }
+    }
+
+    log::warning(
+        "Hardware MSAA is unsupported by the active adapter for UVSR's "
+        "render-target formats; presenting one sample");
+    return 1u;
+}
+
 class RenderTargets : public GBufferRenderTargets
 {
 public:
     nvrhi::TextureHandle HdrColor;
+    nvrhi::TextureHandle ResolvedHdrColor;
+    nvrhi::TextureHandle DeferredMsaaColor;
     nvrhi::TextureHandle BaseLighting;
     nvrhi::TextureHandle DirectDiffuseRadiance;
+    nvrhi::TextureHandle VisibilityComposite;
+    nvrhi::TextureHandle VisibilityDepth;
+    nvrhi::TextureHandle VisibilityGBufferDiffuse;
+    nvrhi::TextureHandle VisibilityGBufferMaterial;
+    nvrhi::TextureHandle VisibilityGBufferNormals;
+    nvrhi::TextureHandle VisibilityGBufferEmissive;
+    nvrhi::TextureHandle VisibilityMaterialAmbientOcclusion;
+    nvrhi::TextureHandle VisibilityMotionVectors;
     nvrhi::TextureHandle LdrColor;
     nvrhi::TextureHandle MaterialIDs;
+    nvrhi::TextureHandle MaterialIDDepth;
     nvrhi::TextureHandle MaterialAmbientOcclusion;
     bool PbrEnabled = true;
     bool VisibilityResourcesEnabled = false;
@@ -376,15 +594,108 @@ public:
         desc.debugName = "HdrColor";
         HdrColor = device->createTexture(desc);
 
+        if (sampleCount > 1u)
+        {
+            nvrhi::TextureDesc resolvedDesc = desc;
+            resolvedDesc.sampleCount = 1u;
+            resolvedDesc.dimension =
+                nvrhi::TextureDimension::Texture2D;
+            resolvedDesc.isRenderTarget = false;
+            // This surface is only a ResolveDest followed by an SRV. D3D12
+            // rejects the optimized clear value inherited from HdrColor when
+            // the placed resource has no RT/DS flag. It also needs no UAV
+            // capability, so strip both inherited creation requirements.
+            resolvedDesc.useClearValue = false;
+            resolvedDesc.isUAV = false;
+            resolvedDesc.initialState =
+                nvrhi::ResourceStates::ShaderResource;
+            resolvedDesc.debugName = "ResolvedHdrColor";
+            ResolvedHdrColor =
+                device->createTexture(resolvedDesc);
+
+            nvrhi::TextureDesc deferredMsaaDesc =
+                resolvedDesc;
+            deferredMsaaDesc.isUAV = true;
+            deferredMsaaDesc.initialState =
+                nvrhi::ResourceStates::UnorderedAccess;
+            deferredMsaaDesc.debugName =
+                "DeferredMsaaColor";
+            DeferredMsaaColor =
+                device->createTexture(deferredMsaaDesc);
+        }
+
         if (enableVisibilityResources)
         {
-            desc.debugName = "ScreenSpaceVisibility/BaseLighting";
-            BaseLighting = device->createTexture(desc);
+            nvrhi::TextureDesc visibilityDesc = desc;
+            visibilityDesc.sampleCount = 1u;
+            visibilityDesc.dimension =
+                nvrhi::TextureDimension::Texture2D;
+            visibilityDesc.isRenderTarget = false;
+            visibilityDesc.isUAV = true;
+            visibilityDesc.useClearValue = false;
+            visibilityDesc.initialState =
+                nvrhi::ResourceStates::UnorderedAccess;
+            visibilityDesc.format =
+                nvrhi::Format::RGBA16_FLOAT;
+            visibilityDesc.debugName =
+                "ScreenSpaceVisibility/BaseLighting";
+            BaseLighting =
+                device->createTexture(visibilityDesc);
 
             if (VisibilitySourceRadianceEnabled)
             {
-                desc.debugName = "ScreenSpaceVisibility/DirectDiffuseRadiance";
-                DirectDiffuseRadiance = device->createTexture(desc);
+                visibilityDesc.debugName =
+                    "ScreenSpaceVisibility/DirectDiffuseRadiance";
+                DirectDiffuseRadiance =
+                    device->createTexture(visibilityDesc);
+            }
+
+            if (sampleCount > 1u)
+            {
+                visibilityDesc.debugName =
+                    "ScreenSpaceVisibility/MsaaComposite";
+                VisibilityComposite =
+                    device->createTexture(visibilityDesc);
+
+                visibilityDesc.format =
+                    nvrhi::Format::R32_FLOAT;
+                visibilityDesc.debugName =
+                    "ScreenSpaceVisibility/ResolvedDepth";
+                VisibilityDepth =
+                    device->createTexture(visibilityDesc);
+
+                visibilityDesc.format =
+                    nvrhi::Format::RGBA16_FLOAT;
+                visibilityDesc.debugName =
+                    "ScreenSpaceVisibility/ResolvedDiffuse";
+                VisibilityGBufferDiffuse =
+                    device->createTexture(visibilityDesc);
+                visibilityDesc.debugName =
+                    "ScreenSpaceVisibility/ResolvedMaterial";
+                VisibilityGBufferMaterial =
+                    device->createTexture(visibilityDesc);
+                visibilityDesc.debugName =
+                    "ScreenSpaceVisibility/ResolvedNormals";
+                VisibilityGBufferNormals =
+                    device->createTexture(visibilityDesc);
+                visibilityDesc.debugName =
+                    "ScreenSpaceVisibility/ResolvedEmissive";
+                VisibilityGBufferEmissive =
+                    device->createTexture(visibilityDesc);
+
+                visibilityDesc.format =
+                    nvrhi::Format::R16_FLOAT;
+                visibilityDesc.debugName =
+                    "ScreenSpaceVisibility/ResolvedMaterialAO";
+                VisibilityMaterialAmbientOcclusion =
+                    device->createTexture(visibilityDesc);
+
+                visibilityDesc.format =
+                    nvrhi::Format::RGBA16_FLOAT;
+                visibilityDesc.debugName =
+                    "ScreenSpaceVisibility/ResolvedMotion";
+                VisibilityMotionVectors =
+                    device->createTexture(visibilityDesc);
             }
         }
 
@@ -392,15 +703,16 @@ public:
         // failed NRA-RTAA v1 needed stable surface IDs every frame; now a
         // compact target plus the existing on-demand material-ID pass avoids
         // an otherwise permanent MRT write and restores the original cost.
+        // Keep picking single-sample. Integer material IDs have no normal
+        // color resolve, and PixelReadbackPass consumes Texture2D.
+        desc.sampleCount = 1u;
+        desc.dimension = nvrhi::TextureDimension::Texture2D;
         desc.format = nvrhi::Format::RG16_UINT;
         desc.isUAV = false;
         desc.debugName = "MaterialIDs";
         MaterialIDs = device->createTexture(desc);
 
         // The render targets below this point are non-MSAA
-        desc.sampleCount = 1;
-        desc.dimension = nvrhi::TextureDimension::Texture2D;
-
         desc.format = nvrhi::Format::SRGBA8_UNORM;
         desc.isUAV = false;
         desc.debugName = "LdrColor";
@@ -409,11 +721,33 @@ public:
         if (desc.isVirtual)
         {
             uint64_t heapSize = 0;
-            std::vector<nvrhi::ITexture*> textures = { HdrColor, MaterialIDs, LdrColor };
+            std::vector<nvrhi::ITexture*> textures = {
+                HdrColor, MaterialIDs, LdrColor };
+            if (ResolvedHdrColor)
+                textures.push_back(ResolvedHdrColor);
+            if (DeferredMsaaColor)
+                textures.push_back(DeferredMsaaColor);
             if (BaseLighting)
                 textures.push_back(BaseLighting);
             if (DirectDiffuseRadiance)
                 textures.push_back(DirectDiffuseRadiance);
+            if (VisibilityComposite)
+                textures.push_back(VisibilityComposite);
+            if (VisibilityDepth)
+                textures.push_back(VisibilityDepth);
+            if (VisibilityGBufferDiffuse)
+                textures.push_back(VisibilityGBufferDiffuse);
+            if (VisibilityGBufferMaterial)
+                textures.push_back(VisibilityGBufferMaterial);
+            if (VisibilityGBufferNormals)
+                textures.push_back(VisibilityGBufferNormals);
+            if (VisibilityGBufferEmissive)
+                textures.push_back(VisibilityGBufferEmissive);
+            if (VisibilityMaterialAmbientOcclusion)
+                textures.push_back(
+                    VisibilityMaterialAmbientOcclusion);
+            if (VisibilityMotionVectors)
+                textures.push_back(VisibilityMotionVectors);
 
             for (auto texture : textures)
             {
@@ -450,7 +784,22 @@ public:
 
         MaterialIDFramebuffer = std::make_shared<FramebufferFactory>(device);
         MaterialIDFramebuffer->RenderTargets = { MaterialIDs };
-        MaterialIDFramebuffer->DepthTarget = Depth;
+        if (sampleCount > 1u)
+        {
+            nvrhi::TextureDesc pickDepthDesc = Depth->getDesc();
+            pickDepthDesc.sampleCount = 1u;
+            pickDepthDesc.dimension =
+                nvrhi::TextureDimension::Texture2D;
+            pickDepthDesc.isVirtual = false;
+            pickDepthDesc.debugName = "MaterialIDDepth";
+            MaterialIDDepth =
+                device->createTexture(pickDepthDesc);
+        }
+        else
+        {
+            MaterialIDDepth = Depth;
+        }
+        MaterialIDFramebuffer->DepthTarget = MaterialIDDepth;
     }
 
     [[nodiscard]] bool IsUpdateRequired(
@@ -626,10 +975,12 @@ struct UIData
     int                                 ActiveGpuAdapterIndex = -1;
     bool                                EnablePbr = true;
     RendererMode                        RenderMode = RendererMode::Deferred;
-    bool                                EnableMiniEngineTaa = true;
-    bool                                EnableMiniEngineTaaSharpen = true;
+    AntiAliasingSettings                AntiAliasing;
+    bool                                MiniEngineTaaSharpenEnabled = true;
     float                               MiniEngineTaaSharpness =
         MiniEngineTaaDefaultSharpness;
+    MiniEngineTaaDebugView              MiniEngineTaaVisualization =
+        MiniEngineTaaDebugView::Off;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
     SkyParameters                       SkyParams;
     bool                                ShaderReloadRequested = false;
@@ -641,26 +992,159 @@ struct UIData
     bool                                ShowMaterialEditor = false;
     bool                                CopyScreenshotToClipboard = false;
 
+    [[nodiscard]] bool UsesHardwareMsaa() const
+    {
+        if (!AntiAliasing.enabled)
+            return false;
+        const AntiAliasingPreset implementation =
+            GetAntiAliasingImplementation(
+                AntiAliasing.method,
+                SanitizeAntiAliasingQuality(
+                    AntiAliasing.method,
+                    AntiAliasing.quality));
+        return implementation == AntiAliasingPreset::Msaa2x ||
+            implementation == AntiAliasingPreset::Msaa4x ||
+            implementation == AntiAliasingPreset::Msaa8x ||
+            implementation == AntiAliasingPreset::Msaa16x;
+    }
+
     [[nodiscard]] bool UsesDeferredShading() const
     {
-        return RenderMode == RendererMode::Deferred;
+        return RenderMode == RendererMode::Deferred &&
+            (!UsesHardwareMsaa() || EnablePbr);
+    }
+
+    [[nodiscard]] bool IsScreenSpaceVisibilityAvailable() const
+    {
+        // Deferred MSAA supplies visibility with one coherent closest-surface
+        // owner per pixel, then coverage-weights the visibility correction
+        // back into its per-sample lighting resolve.
+        return UsesDeferredShading();
     }
 
     [[nodiscard]] bool HasMiniEngineTaaVisibilityConflict() const
     {
         // These visibility histories do not yet receive TAA's subpixel jitter delta.
-        return ScreenSpaceVisibility.reconstruction.temporalEnabled ||
-               ScreenSpaceVisibility.sampling.adaptiveSparseSamplingEnabled;
+        return ScreenSpaceVisibility.reconstruction.temporalEnabled;
     }
 
-    [[nodiscard]] bool UsesMiniEngineTaa() const
+    [[nodiscard]] bool IsTemporalAntiAliasingAvailable() const
     {
         return IsMiniEngineTaaAvailable(
-            EnableMiniEngineTaa,
+            true,
             EnablePbr,
-            UsesDeferredShading(),
-            ScreenSpaceVisibility.reconstruction.temporalEnabled,
-            ScreenSpaceVisibility.sampling.adaptiveSparseSamplingEnabled);
+            RenderMode == RendererMode::Deferred,
+            ScreenSpaceVisibility.reconstruction.temporalEnabled);
+    }
+
+    [[nodiscard]] ResolvedAntiAliasingSettings
+        GetResolvedAntiAliasingSettings(
+            const AntiAliasingSettings& settings) const
+    {
+        ResolvedAntiAliasingSettings result =
+            ResolveCompiledAntiAliasingSettings(settings);
+
+        const auto activeAdapter = std::find_if(
+            GpuAdapterChoices.begin(),
+            GpuAdapterChoices.end(),
+            [this](const GpuAdapterChoice& choice)
+            {
+                return choice.adapterIndex ==
+                    ActiveGpuAdapterIndex;
+            });
+
+        // Adapter-specific Auto entries are deliberately narrow and are only
+        // added after paired warm-camera measurements preserve the image and
+        // improve both the normal path and the camera-turn path. The Intel
+        // Core Ultra 9 185H Arc iGPU (8086:7D55) consistently benefits from
+        // sharing adjacent MiniEngine pixels' overlapping neighborhoods.
+        // Split/packed LDS, MiniEngine fusion, early rejection, and cache
+        // blocking remain explicit experiments because their measured gains
+        // were not repeatable.
+#if UVSR_AA_DEVELOPER_OVERRIDES
+        const bool sharedReuseAutoRequested =
+            settings.performanceOverrides.sharedWorkReuse ==
+                MiniEngineTaaAutoToggle::Auto;
+#else
+        // Hidden override state is sanitized from production. The validated
+        // adapter table therefore remains authoritative there.
+        constexpr bool sharedReuseAutoRequested = true;
+#endif
+        const bool intelCoreUltra185h =
+            activeAdapter != GpuAdapterChoices.end() &&
+            activeAdapter->vendorId == 0x8086u &&
+            activeAdapter->deviceId == 0x7D55u;
+        const AntiAliasingPreset implementation =
+            GetAntiAliasingImplementation(
+                settings.method,
+                settings.quality);
+        if (intelCoreUltra185h &&
+            settings.enabled &&
+            IsLongTermTemporalPreset(
+                implementation) &&
+            !UsesSampleResurrection(result.sampleResurrection) &&
+            sharedReuseAutoRequested)
+        {
+            result.sharedWorkReuse = true;
+        }
+        return result;
+    }
+
+    [[nodiscard]] ResolvedAntiAliasingSettings
+        GetResolvedAntiAliasingSettings() const
+    {
+        return GetResolvedAntiAliasingSettings(AntiAliasing);
+    }
+
+    [[nodiscard]] bool UsesLongTermTemporalAA() const
+    {
+        return AntiAliasing.enabled &&
+            IsLongTermTemporalPreset(
+                GetAntiAliasingImplementation(
+                    AntiAliasing.method,
+                    AntiAliasing.quality)) &&
+            IsTemporalAntiAliasingAvailable();
+    }
+
+    [[nodiscard]] bool UsesJitteredAntiAliasing() const
+    {
+        return UsesLongTermTemporalAA();
+    }
+
+    [[nodiscard]] bool UsesSmaaPass() const
+    {
+        if (!AntiAliasing.enabled)
+            return false;
+        const ResolvedAntiAliasingSettings resolved =
+            GetResolvedAntiAliasingSettings();
+        const AntiAliasingPreset implementation =
+            resolved.implementation;
+        if (implementation == AntiAliasingPreset::Smaa1x)
+            return true;
+        // Keep presentation SMAA resources alive across Temporal morphology
+        // changes so switching a presentation-only filter cannot recreate
+        // the temporal pass or discard its history.
+        if (UsesLongTermTemporalAA())
+            return true;
+        return resolved.subpixelMorphology ==
+                SmaaApplication::FullScreen ||
+            resolved.subpixelMorphology ==
+                SmaaApplication::SelectiveShort ||
+            resolved.subpixelMorphology ==
+                SmaaApplication::SelectiveLong;
+    }
+
+    [[nodiscard]] bool UsesCmaa2() const
+    {
+        return AntiAliasing.enabled &&
+            GetResolvedAntiAliasingSettings()
+                    .subpixelMorphology ==
+                SmaaApplication::ConservativeMorphological;
+    }
+
+    [[nodiscard]] bool RequiresAntiAliasingMotionVectors() const
+    {
+        return UsesLongTermTemporalAA();
     }
 
     [[nodiscard]] bool UsesTonemapper() const
@@ -689,10 +1173,14 @@ private:
     std::shared_ptr<GBufferFillPass>     m_GBufferPass;
     std::shared_ptr<DeferredLightingPass> m_DeferredLightingPass;
     std::unique_ptr<PbrDeferredLightingPass> m_PbrDeferredLightingPass;
+    std::unique_ptr<MsaaVisibilityResolvePass>
+        m_MsaaVisibilityResolvePass;
     std::unique_ptr<SkyPass>            m_SkyPass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
     std::unique_ptr<MiniEngineTemporalAAPass> m_MiniEngineTemporalAAPass;
+    std::unique_ptr<SmaaPass>           m_SmaaPass;
+    std::unique_ptr<Cmaa2Pass>          m_Cmaa2Pass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
     std::unique_ptr<PixelReadbackPass>  m_PixelReadbackPass;
 
@@ -716,6 +1204,36 @@ private:
     bool                                m_Pick = false;
     bool                                m_BenchmarkCameraRequested = false;
     bool                                m_BenchmarkCameraActive = false;
+    AaBenchmarkConfig                   m_AaBenchmark;
+    static constexpr uint32_t           c_AaTimerLatency = 8u;
+    std::array<nvrhi::TimerQueryHandle,
+        c_AaTimerLatency>               m_AaTimerQueries;
+    std::array<bool,
+        c_AaTimerLatency>               m_AaTimerPending{};
+    std::array<AaBenchmarkTimerTag,
+        c_AaTimerLatency>               m_AaTimerTags{};
+    uint32_t                            m_AaTimerFrame = 0u;
+    float                               m_AaGpuMilliseconds = 0.f;
+    uint32_t                            m_AaBenchmarkFrame = 0u;
+    AaBenchmarkTimerTag                 m_AaBenchmarkCurrentTag;
+    uint32_t                            m_AaBenchmarkIssuedSamples = 0u;
+    uint32_t                            m_AaBenchmarkDroppedSamples = 0u;
+    uint32_t                            m_AaBenchmarkOutstandingSamples = 0u;
+    bool                                m_AaBenchmarkStarted = false;
+    bool                                m_AaBenchmarkPacingActive = false;
+    std::chrono::steady_clock::time_point
+                                        m_AaBenchmarkNextFrameDeadline;
+    bool                                m_InteractiveAaMotionTest = false;
+    int                                 m_AaMotionTestPreviousWidth = 0;
+    int                                 m_AaMotionTestPreviousHeight = 0;
+    std::string                         m_AaMotionTestStatus =
+        "Ready to test the current anti-aliasing configuration.";
+    std::vector<AaBenchmarkSample>      m_AaBenchmarkSamples;
+    std::vector<SmaaBenchmarkSample>    m_SmaaBenchmarkSamples;
+    uint64_t                            m_AntiAliasingPhase = 0u;
+    bool                                m_HasAppliedAntiAliasingSettings =
+        false;
+    AntiAliasingSettings                m_AppliedAntiAliasingSettings;
     bool                                m_SponzaCameraLocationsAvailable = false;
     SponzaCameraLocation                m_SponzaCameraLocation =
         SponzaCameraLocation::SimplifiedApproximation;
@@ -728,10 +1246,12 @@ public:
         DeviceManager* deviceManager,
         UIData& ui,
         const std::string& sceneName,
-        bool benchmarkCameraRequested)
+        bool benchmarkCameraRequested,
+        const AaBenchmarkConfig& aaBenchmark)
         : Super(deviceManager)
         , m_BindingCache(deviceManager->GetDevice())
         , m_BenchmarkCameraRequested(benchmarkCameraRequested)
+        , m_AaBenchmark(aaBenchmark)
         , m_ui(ui)
     { 
         m_RootFs = std::make_shared<RootFileSystem>();
@@ -768,6 +1288,8 @@ public:
 
 
         m_CommandList = GetDevice()->createCommandList();
+        for (nvrhi::TimerQueryHandle& query : m_AaTimerQueries)
+            query = GetDevice()->createTimerQuery();
 
         SetAsynchronousLoadingEnabled(true);
 
@@ -856,6 +1378,111 @@ public:
         return m_BenchmarkCameraActive;
     }
 
+    [[nodiscard]] bool CanStartAntiAliasingMotionTest() const
+    {
+        return IsSceneLoaded() &&
+            m_SponzaCameraLocationsAvailable &&
+            !m_AaBenchmark.enabled &&
+            !m_BenchmarkCameraRequested;
+    }
+
+    [[nodiscard]] bool IsAntiAliasingMotionTestRunning() const
+    {
+        return m_InteractiveAaMotionTest && m_AaBenchmark.enabled;
+    }
+
+    [[nodiscard]] std::string GetAntiAliasingMotionTestStatus() const
+    {
+        if (!IsAntiAliasingMotionTestRunning())
+            return m_AaMotionTestStatus;
+
+        if (!m_AaBenchmarkStarted)
+            return "Preparing Benchmark Position 1 at 1920 x 1080...";
+
+        std::ostringstream status;
+        const uint32_t frame = m_AaBenchmarkFrame;
+        const AaBenchmarkSegment segment =
+            GetAaBenchmarkSegment(frame);
+        switch (segment)
+        {
+        case AaBenchmarkSegment::Warm:
+            status << "Warming history " <<
+                std::min(frame, AaBenchmarkWarmFrames) <<
+                " / " << AaBenchmarkWarmFrames;
+            break;
+
+        case AaBenchmarkSegment::TurnRight:
+            status << "Turning right " <<
+                (frame - AaBenchmarkWarmFrames) <<
+                " / " << AaBenchmarkTurnFrames;
+            break;
+
+        case AaBenchmarkSegment::HoldRight:
+            status << "Holding at +45 degrees " <<
+                (frame - AaBenchmarkWarmFrames -
+                    AaBenchmarkTurnFrames) <<
+                " / " << AaBenchmarkHoldFrames;
+            break;
+
+        case AaBenchmarkSegment::TurnBack:
+            status << "Turning back " <<
+                (frame - AaBenchmarkWarmFrames -
+                    AaBenchmarkTurnFrames -
+                    AaBenchmarkHoldFrames) <<
+                " / " << AaBenchmarkTurnFrames;
+            break;
+
+        case AaBenchmarkSegment::Drain:
+            status << "Draining GPU timings ("
+                << m_AaBenchmarkOutstandingSamples
+                << " outstanding)";
+            break;
+        }
+        return status.str();
+    }
+
+    bool StartAntiAliasingMotionTest()
+    {
+        if (!CanStartAntiAliasingMotionTest())
+            return false;
+
+        const SponzaCameraPreset& preset =
+            GetDefaultSponzaCameraPreset();
+        m_AaBenchmark = AaBenchmarkConfig{};
+        m_AaBenchmark.enabled = true;
+        m_AaBenchmark.outputPath =
+            app::GetDirectoryWithExecutable() /
+            "aa-motion-test-latest.json";
+        m_AaBenchmark.settings = m_ui.AntiAliasing;
+        m_AaBenchmark.sharpness = m_ui.MiniEngineTaaSharpness;
+        m_AaBenchmarkStarted = false;
+        m_AaBenchmarkPacingActive = false;
+        m_AaBenchmarkCurrentTag = AaBenchmarkTimerTag{};
+        m_InteractiveAaMotionTest = true;
+        m_AaMotionTestStatus =
+            "Preparing Benchmark Position 1 at 1920 x 1080...";
+
+        GetDeviceManager()->GetWindowDimensions(
+            m_AaMotionTestPreviousWidth,
+            m_AaMotionTestPreviousHeight);
+        ApplySponzaCameraPreset(preset);
+        m_SponzaCameraLocation =
+            SponzaCameraLocation::SimplifiedApproximation;
+        m_BenchmarkCameraActive = true;
+        m_ui.Camera = CameraMode::Static;
+
+        GLFWwindow* window = GetDeviceManager()->GetWindow();
+        glfwSetWindowSize(
+            window,
+            int(preset.ReferenceWidth),
+            int(preset.ReferenceHeight));
+        log::info(
+            "Interactive AA motion test requested for '%s'; evidence will be written to %s",
+            preset.Label,
+            m_AaBenchmark.outputPath.generic_string().c_str());
+        return true;
+    }
+
     [[nodiscard]] bool HasSponzaCameraLocations() const
     {
         return m_SponzaCameraLocationsAvailable;
@@ -864,6 +1491,13 @@ public:
     [[nodiscard]] SponzaCameraLocation GetSponzaCameraLocation() const
     {
         return m_SponzaCameraLocation;
+    }
+
+    void ResetAntiAliasingState()
+    {
+        if (m_MiniEngineTemporalAAPass)
+            m_MiniEngineTemporalAAPass->ResetHistory();
+        m_AntiAliasingPhase = 0u;
     }
 
     void ApplySponzaCameraPreset(const SponzaCameraPreset& preset)
@@ -896,8 +1530,7 @@ public:
         m_PreviousView.reset();
         if (m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetHistory();
-        if (m_MiniEngineTemporalAAPass)
-            m_MiniEngineTemporalAAPass->ResetHistory();
+        ResetAntiAliasingState();
     }
 
     void SetSponzaCameraLocation(SponzaCameraLocation location)
@@ -991,9 +1624,10 @@ public:
 
         m_ui.EnablePbr = true;
         m_ui.RenderMode = RendererMode::Deferred;
-        m_ui.EnableMiniEngineTaa = true;
-        m_ui.EnableMiniEngineTaaSharpen = true;
+        m_ui.AntiAliasing = AntiAliasingSettings{};
+        m_ui.MiniEngineTaaSharpenEnabled = true;
         m_ui.MiniEngineTaaSharpness = MiniEngineTaaDefaultSharpness;
+        m_ui.MiniEngineTaaVisualization = MiniEngineTaaDebugView::Off;
         m_ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
         m_ui.SkyParams = SkyParameters{};
         m_ui.EnableProceduralSky = true;
@@ -1231,8 +1865,695 @@ public:
         return true;
     }
 
+    void CollectCompletedSmaaTimings()
+    {
+        if (!m_SmaaPass)
+            return;
+
+        SmaaTimings timing;
+        while (m_SmaaPass->PopCompletedTiming(timing))
+        {
+            if (!m_AaBenchmark.enabled ||
+                (timing.completedTag & AaBenchmarkTimingTagFlag) == 0u ||
+                (timing.completedTag & SmaaTimingCollectTagFlag) == 0u)
+            {
+                continue;
+            }
+
+            const uint64_t sourceFrame =
+                timing.completedTag & AaBenchmarkTimingTagPayloadMask;
+            if (!IsAaBenchmarkMeasurementFrame(sourceFrame))
+                continue;
+
+            m_SmaaBenchmarkSamples.push_back({
+                timing,
+                GetAaBenchmarkSegment(sourceFrame)
+            });
+        }
+    }
+
+    void AdvanceAntiAliasingTimer()
+    {
+        // Poll every outstanding query. Waiting only for the current modulo
+        // slot delayed some samples by another full latency cycle and made
+        // drain-frame timings appear inside the motion interval.
+        for (uint32_t slot = 0u; slot < c_AaTimerLatency; ++slot)
+        {
+            if (!m_AaTimerPending[slot])
+                continue;
+
+            nvrhi::ITimerQuery* query = m_AaTimerQueries[slot];
+            if (!GetDevice()->pollTimerQuery(query))
+                continue;
+
+            m_AaGpuMilliseconds =
+                GetDevice()->getTimerQueryTime(query) * 1000.f;
+            GetDevice()->resetTimerQuery(query);
+            m_AaTimerPending[slot] = false;
+
+            const AaBenchmarkTimerTag tag = m_AaTimerTags[slot];
+            if (m_AaBenchmark.enabled && tag.collect)
+            {
+                m_AaBenchmarkSamples.push_back({
+                    m_AaGpuMilliseconds,
+                    tag.sourceFrame,
+                    tag.phase,
+                    tag.segment
+                });
+                if (m_AaBenchmarkOutstandingSamples > 0u)
+                    --m_AaBenchmarkOutstandingSamples;
+            }
+        }
+    }
+
+    bool BeginAntiAliasingTimer()
+    {
+        const uint32_t slot =
+            m_AaTimerFrame % c_AaTimerLatency;
+        if (m_AaTimerPending[slot])
+        {
+            if (m_AaBenchmark.enabled &&
+                m_AaBenchmarkCurrentTag.collect)
+            {
+                ++m_AaBenchmarkDroppedSamples;
+            }
+            return false;
+        }
+
+        m_CommandList->beginTimerQuery(m_AaTimerQueries[slot]);
+        m_AaTimerTags[slot] = m_AaBenchmarkCurrentTag;
+        return true;
+    }
+
+    void EndAntiAliasingTimer(bool active)
+    {
+        const uint32_t slot =
+            m_AaTimerFrame % c_AaTimerLatency;
+        if (active)
+        {
+            m_CommandList->endTimerQuery(m_AaTimerQueries[slot]);
+            m_AaTimerPending[slot] = true;
+            if (m_AaBenchmark.enabled &&
+                m_AaTimerTags[slot].collect)
+            {
+                ++m_AaBenchmarkIssuedSamples;
+                ++m_AaBenchmarkOutstandingSamples;
+            }
+        }
+        ++m_AaTimerFrame;
+    }
+
+    void FinishAntiAliasingBenchmark()
+    {
+        const auto collect = [this](
+            const auto& predicate)
+        {
+            std::vector<float> result;
+            result.reserve(m_AaBenchmarkSamples.size());
+            for (const AaBenchmarkSample& sample : m_AaBenchmarkSamples)
+            {
+                if (predicate(sample))
+                    result.push_back(sample.milliseconds);
+            }
+            return result;
+        };
+        const AaBenchmarkStatistics complete =
+            CalculateAaBenchmarkStatistics(collect(
+                [](const AaBenchmarkSample&) { return true; }));
+        const AaBenchmarkStatistics phase0 =
+            CalculateAaBenchmarkStatistics(collect(
+                [](const AaBenchmarkSample& sample)
+                {
+                    return (sample.phase & 1u) == 0u;
+                }));
+        const AaBenchmarkStatistics phase1 =
+            CalculateAaBenchmarkStatistics(collect(
+                [](const AaBenchmarkSample& sample)
+                {
+                    return (sample.phase & 1u) != 0u;
+                }));
+        const auto segmentStatistics = [&](AaBenchmarkSegment segment)
+        {
+            return CalculateAaBenchmarkStatistics(collect(
+                [segment](const AaBenchmarkSample& sample)
+                {
+                    return sample.segment == segment;
+                }));
+        };
+        const AaBenchmarkStatistics turnRight =
+            segmentStatistics(AaBenchmarkSegment::TurnRight);
+        const AaBenchmarkStatistics holdRight =
+            segmentStatistics(AaBenchmarkSegment::HoldRight);
+        const AaBenchmarkStatistics turnBack =
+            segmentStatistics(AaBenchmarkSegment::TurnBack);
+        struct SmaaStageStatistics
+        {
+            AaBenchmarkStatistics edge;
+            AaBenchmarkStatistics weight;
+            AaBenchmarkStatistics neighborhood;
+            AaBenchmarkStatistics complete;
+        };
+        const auto smaaStageStatistics = [this](
+            const auto& predicate)
+        {
+            std::vector<float> edge;
+            std::vector<float> weight;
+            std::vector<float> neighborhood;
+            std::vector<float> complete;
+            edge.reserve(m_SmaaBenchmarkSamples.size());
+            weight.reserve(m_SmaaBenchmarkSamples.size());
+            neighborhood.reserve(m_SmaaBenchmarkSamples.size());
+            complete.reserve(m_SmaaBenchmarkSamples.size());
+            for (const SmaaBenchmarkSample& sample :
+                m_SmaaBenchmarkSamples)
+            {
+                if (!predicate(sample))
+                    continue;
+                edge.push_back(sample.timings.edgeMilliseconds);
+                weight.push_back(sample.timings.weightMilliseconds);
+                neighborhood.push_back(
+                    sample.timings.neighborhoodMilliseconds);
+                complete.push_back(
+                    sample.timings.CompleteEffectMilliseconds());
+            }
+            return SmaaStageStatistics{
+                CalculateAaBenchmarkStatistics(edge),
+                CalculateAaBenchmarkStatistics(weight),
+                CalculateAaBenchmarkStatistics(neighborhood),
+                CalculateAaBenchmarkStatistics(complete)
+            };
+        };
+        const SmaaStageStatistics allSmaaStages =
+            smaaStageStatistics(
+                [](const SmaaBenchmarkSample&) { return true; });
+        const SmaaTimingAccounting smaaTimingAccounting =
+            m_SmaaPass
+                ? m_SmaaPass->GetTimingAccounting()
+                : SmaaTimingAccounting{};
+        const ResolvedAntiAliasingSettings resolved =
+            m_ui.GetResolvedAntiAliasingSettings();
+        const uint64_t smaaExecutionValidSampleCount =
+            static_cast<uint64_t>(std::count_if(
+                m_SmaaBenchmarkSamples.begin(),
+                m_SmaaBenchmarkSamples.end(),
+                [](const SmaaBenchmarkSample& sample)
+                {
+                    return sample.timings.executionValid;
+                }));
+        const uint64_t smaaExecutionFallbackSampleCount =
+            static_cast<uint64_t>(m_SmaaBenchmarkSamples.size()) -
+            smaaExecutionValidSampleCount;
+        const bool expectsSmaaTimings =
+            resolved.enabled &&
+            UsesSmaaApplication(
+                resolved.subpixelMorphology);
+        const bool smaaTimingEvidenceValid =
+            !expectsSmaaTimings ||
+            (m_SmaaBenchmarkSamples.size() == 256u &&
+                smaaExecutionFallbackSampleCount == 0u &&
+                smaaTimingAccounting.issuedSampleCount == 256u &&
+                smaaTimingAccounting.droppedSampleCount == 0u &&
+                smaaTimingAccounting.retiredSampleCount == 256u &&
+                smaaTimingAccounting.OutstandingSampleCount() == 0u);
+        const bool benchmarkEvidenceValid =
+            complete.count == 256u &&
+            m_AaBenchmarkIssuedSamples == 256u &&
+            m_AaBenchmarkDroppedSamples == 0u &&
+            m_AaBenchmarkOutstandingSamples == 0u &&
+            smaaTimingEvidenceValid;
+        const auto activeAdapter = std::find_if(
+            m_ui.GpuAdapterChoices.begin(),
+            m_ui.GpuAdapterChoices.end(),
+            [&](const GpuAdapterChoice& adapter)
+            {
+                return adapter.adapterIndex ==
+                    m_ui.ActiveGpuAdapterIndex;
+            });
+        const std::string adapterName =
+            activeAdapter != m_ui.GpuAdapterChoices.end()
+                ? activeAdapter->name
+                : "Unknown";
+        const uint32_t adapterVendorId =
+            activeAdapter != m_ui.GpuAdapterChoices.end()
+                ? activeAdapter->vendorId
+                : 0u;
+        const uint32_t adapterDeviceId =
+            activeAdapter != m_ui.GpuAdapterChoices.end()
+                ? activeAdapter->deviceId
+                : 0u;
+        const SponzaCameraPreset& benchmarkPreset =
+            GetDefaultSponzaCameraPreset();
+
+        std::ofstream output(m_AaBenchmark.outputPath);
+        if (!output.is_open())
+        {
+            log::error(
+                "AA benchmark could not open output path %s",
+                m_AaBenchmark.outputPath.generic_string().c_str());
+            if (m_InteractiveAaMotionTest)
+            {
+                FinishInteractiveAntiAliasingMotionTest(
+                    false,
+                    0.f,
+                    0.f,
+                    "Could not create the timing report.");
+                return;
+            }
+            glfwSetWindowShouldClose(
+                GetDeviceManager()->GetWindow(),
+                GLFW_TRUE);
+            return;
+        }
+        const auto writeStatistics = [&output](
+            const char* indentation,
+            const char* name,
+            const AaBenchmarkStatistics& statistics,
+            bool trailingComma)
+        {
+            output << indentation << std::quoted(name)
+                << ": { \"sample_count\": " << statistics.count
+                << ", \"median_gpu_ms\": " << statistics.median
+                << ", \"worst_gpu_ms\": " << statistics.worst
+                << " }" << (trailingComma ? "," : "") << "\n";
+        };
+        const auto writeStageSet = [&](
+            const char* indentation,
+            const char* name,
+            const SmaaStageStatistics& statistics,
+            bool trailingComma)
+        {
+            output << indentation << std::quoted(name) << ": {\n";
+            const std::string childIndent =
+                std::string(indentation) + "  ";
+            writeStatistics(
+                childIndent.c_str(), "edge",
+                statistics.edge, true);
+            writeStatistics(
+                childIndent.c_str(), "weight",
+                statistics.weight, true);
+            writeStatistics(
+                childIndent.c_str(), "neighborhood",
+                statistics.neighborhood, true);
+            writeStatistics(
+                childIndent.c_str(), "complete",
+                statistics.complete, false);
+            output << indentation << "}"
+                << (trailingComma ? "," : "") << "\n";
+        };
+        output << std::fixed << std::setprecision(6)
+            << "{\n"
+            << "  \"adapter\": " << std::quoted(adapterName) << ",\n"
+            << "  \"adapter_vendor_id\": " << adapterVendorId << ",\n"
+            << "  \"adapter_device_id\": " << adapterDeviceId << ",\n"
+            << "  \"camera_preset_id\": "
+            << std::quoted(benchmarkPreset.Id) << ",\n"
+            << "  \"camera_preset_label\": "
+            << std::quoted(benchmarkPreset.Label) << ",\n"
+            << "  \"render_width\": "
+            << benchmarkPreset.ReferenceWidth << ",\n"
+            << "  \"render_height\": "
+            << benchmarkPreset.ReferenceHeight << ",\n"
+            << "  \"method\": "
+            << std::quoted(GetAntiAliasingMethodLabel(resolved.method))
+            << ",\n"
+            << "  \"quality\": "
+            << std::quoted(GetAntiAliasingQualityLabel(resolved.quality))
+            << ",\n"
+            << "  \"implementation\": "
+            << std::quoted(GetAntiAliasingPresetLabel(
+                resolved.implementation))
+            << ",\n"
+            << "  \"developer_overrides_compiled\": "
+            << (UVSR_AA_DEVELOPER_OVERRIDES ? "true" : "false")
+            << ",\n"
+            << "  \"execution_path\": "
+            << std::quoted(GetMiniEngineTaaExecutionPathLabel(
+                resolved.executionPath)) << ",\n"
+            << "  \"compute_kernel\": "
+            << std::quoted(GetMiniEngineTaaComputeKernelLabel(
+                resolved.computeKernel)) << ",\n"
+            << "  \"lds_layout\": "
+            << std::quoted(GetMiniEngineTaaLdsLayoutLabel(
+                resolved.ldsLayout)) << ",\n"
+            << "  \"shared_work_reuse\": "
+            << (resolved.sharedWorkReuse ? "true" : "false") << ",\n"
+            << "  \"early_history_rejection\": "
+            << (resolved.earlyHistoryRejection ? "true" : "false")
+            << ",\n"
+            << "  \"pass_fusion\": "
+            << std::quoted(GetMiniEngineTaaPassFusionLabel(
+                resolved.passFusion)) << ",\n"
+            << "  \"cache_blocking\": "
+            << std::quoted(GetMiniEngineTaaCacheBlockingLabel(
+                resolved.cacheBlocking)) << ",\n"
+            << "  \"subpixel_morphology\": "
+            << std::quoted(GetSmaaApplicationLabel(
+                resolved.subpixelMorphology)) << ",\n"
+            << "  \"motion_source\": "
+            << std::quoted(GetMiniEngineTaaMotionSourceLabel(
+                resolved.temporal.motionSource)) << ",\n"
+            << "  \"current_reconstruction\": "
+            << std::quoted(
+                GetMiniEngineTaaCurrentReconstructionLabel(
+                    resolved.temporal.currentReconstruction))
+            << ",\n"
+            << "  \"history_filter\": "
+            << std::quoted(GetMiniEngineTaaHistoryFilterLabel(
+                resolved.temporal.historyFilter)) << ",\n"
+            << "  \"rectification\": "
+            << std::quoted(GetMiniEngineTaaRectificationLabel(
+                resolved.temporal.rectification)) << ",\n"
+            << "  \"stable_interior\": "
+            << std::quoted(GetMiniEngineTaaInteriorWeightingLabel(
+                resolved.temporal.interiorWeighting)) << ",\n"
+            << "  \"sample_resurrection\": "
+            << std::quoted(GetMiniEngineTaaSampleResurrectionLabel(
+                resolved.sampleResurrection)) << ",\n"
+            << "  \"sharpness_enabled\": "
+            << (m_ui.MiniEngineTaaSharpenEnabled ? "true" : "false")
+            << ",\n"
+            << "  \"sharpness\": " << m_ui.MiniEngineTaaSharpness
+            << ",\n"
+            << "  \"turn_degrees\": 45.000000,\n"
+            << "  \"turn_degrees_per_frame\": 0.375000,\n"
+            << "  \"target_frames_per_second\": "
+            << AaBenchmarkTargetFramesPerSecond << ",\n"
+            << "  \"turn_degrees_per_second\": "
+            << AaBenchmarkTurnDegreesPerSecond << ",\n"
+            << "  \"expected_sample_count\": 256,\n"
+            << "  \"issued_sample_count\": "
+            << m_AaBenchmarkIssuedSamples << ",\n"
+            << "  \"dropped_sample_count\": "
+            << m_AaBenchmarkDroppedSamples << ",\n"
+            << "  \"sample_count\": " << complete.count << ",\n"
+            << "  \"benchmark_evidence_valid\": "
+            << (benchmarkEvidenceValid ? "true" : "false") << ",\n"
+            << "  \"smaa_timing_issued_sample_count\": "
+            << smaaTimingAccounting.issuedSampleCount << ",\n"
+            << "  \"smaa_timing_dropped_sample_count\": "
+            << smaaTimingAccounting.droppedSampleCount << ",\n"
+            << "  \"smaa_timing_retired_sample_count\": "
+            << smaaTimingAccounting.retiredSampleCount << ",\n"
+            << "  \"smaa_timing_outstanding_sample_count\": "
+            << smaaTimingAccounting.OutstandingSampleCount() << ",\n"
+            << "  \"smaa_stage_sample_count\": "
+            << m_SmaaBenchmarkSamples.size() << ",\n"
+            << "  \"smaa_execution_valid_sample_count\": "
+            << smaaExecutionValidSampleCount << ",\n"
+            << "  \"smaa_execution_fallback_sample_count\": "
+            << smaaExecutionFallbackSampleCount << ",\n"
+            << "  \"warm_median_gpu_ms\": " << complete.median
+            << ",\n"
+            << "  \"worst_case_gpu_ms\": " << complete.worst
+            << ",\n"
+            << "  \"phase_0\": { \"sample_count\": " << phase0.count
+            << ", \"median_gpu_ms\": " << phase0.median
+            << ", \"worst_gpu_ms\": " << phase0.worst << " },\n"
+            << "  \"phase_1\": { \"sample_count\": " << phase1.count
+            << ", \"median_gpu_ms\": " << phase1.median
+            << ", \"worst_gpu_ms\": " << phase1.worst << " },\n"
+            << "  \"segments\": {\n"
+            << "    \"turn_right\": { \"sample_count\": "
+            << turnRight.count << ", \"median_gpu_ms\": "
+            << turnRight.median << ", \"worst_gpu_ms\": "
+            << turnRight.worst << " },\n"
+            << "    \"hold_right\": { \"sample_count\": "
+            << holdRight.count << ", \"median_gpu_ms\": "
+            << holdRight.median << ", \"worst_gpu_ms\": "
+            << holdRight.worst << " },\n"
+            << "    \"turn_back\": { \"sample_count\": "
+            << turnBack.count << ", \"median_gpu_ms\": "
+            << turnBack.median << ", \"worst_gpu_ms\": "
+            << turnBack.worst << " }\n"
+            << "  },\n"
+            << "  \"smaa_stage_timings\": {\n";
+        writeStageSet(
+            "    ", "all", allSmaaStages, false);
+        output << "  }\n"
+            << "}\n";
+        output.flush();
+        const bool outputWriteSucceeded = output.good();
+        output.close();
+        if (!outputWriteSucceeded)
+        {
+            log::error(
+                "AA benchmark failed while writing %s",
+                m_AaBenchmark.outputPath.generic_string().c_str());
+            if (m_InteractiveAaMotionTest)
+            {
+                FinishInteractiveAntiAliasingMotionTest(
+                    false,
+                    complete.median,
+                    complete.worst,
+                    "The timing report could not be written completely.");
+                return;
+            }
+            glfwSetWindowShouldClose(
+                GetDeviceManager()->GetWindow(),
+                GLFW_TRUE);
+            return;
+        }
+
+        if (benchmarkEvidenceValid)
+        {
+            log::info(
+                "AA benchmark wrote %s: median %.4f ms, worst %.4f ms (%llu validated samples)",
+                m_AaBenchmark.outputPath.generic_string().c_str(),
+                complete.median,
+                complete.worst,
+                static_cast<unsigned long long>(complete.count));
+        }
+        else
+        {
+            log::error(
+                "AA benchmark wrote INVALID evidence to %s "
+                "(AA %llu/256, AA drops %llu, SMAA %llu/256, "
+                "SMAA fallbacks %llu)",
+                m_AaBenchmark.outputPath.generic_string().c_str(),
+                static_cast<unsigned long long>(complete.count),
+                static_cast<unsigned long long>(
+                    m_AaBenchmarkDroppedSamples),
+                static_cast<unsigned long long>(
+                    m_SmaaBenchmarkSamples.size()),
+                static_cast<unsigned long long>(
+                    smaaExecutionFallbackSampleCount));
+        }
+        if (m_InteractiveAaMotionTest)
+        {
+            FinishInteractiveAntiAliasingMotionTest(
+                benchmarkEvidenceValid,
+                complete.median,
+                complete.worst);
+            return;
+        }
+        glfwSetWindowShouldClose(
+            GetDeviceManager()->GetWindow(),
+            GLFW_TRUE);
+    }
+
+    void FinishInteractiveAntiAliasingMotionTest(
+        bool evidenceValid,
+        float medianMilliseconds,
+        float worstMilliseconds,
+        const char* failureReason = nullptr)
+    {
+        std::ostringstream status;
+        if (failureReason)
+        {
+            status << "Motion test failed: " << failureReason;
+        }
+        else
+        {
+            status << (evidenceValid ? "Complete" : "Complete (invalid evidence)")
+                << ": median " << std::fixed << std::setprecision(3)
+                << medianMilliseconds << " ms, worst "
+                << worstMilliseconds << " ms. Report: "
+                << m_AaBenchmark.outputPath.generic_string();
+        }
+        m_AaMotionTestStatus = status.str();
+
+        m_AaBenchmark.enabled = false;
+        m_AaBenchmarkStarted = false;
+        m_AaBenchmarkPacingActive = false;
+        m_AaBenchmarkCurrentTag = AaBenchmarkTimerTag{};
+        m_InteractiveAaMotionTest = false;
+        m_BenchmarkCameraActive = false;
+
+        // Copy the final zero-degree benchmark pose into the interactive
+        // camera before changing its location label. The test therefore ends
+        // exactly where it began but never leaves the user in Locked mode.
+        SetCameraMode(CameraMode::ThirdPerson);
+        m_SponzaCameraLocation = SponzaCameraLocation::Free;
+        log::info("Camera location is now Piloted");
+
+        if (m_AaMotionTestPreviousWidth > 0 &&
+            m_AaMotionTestPreviousHeight > 0)
+        {
+            glfwSetWindowSize(
+                GetDeviceManager()->GetWindow(),
+                m_AaMotionTestPreviousWidth,
+                m_AaMotionTestPreviousHeight);
+        }
+    }
+
+    void UpdateAntiAliasingBenchmark()
+    {
+        if (!m_AaBenchmark.enabled ||
+            !m_BenchmarkCameraActive ||
+            !IsSceneLoaded())
+        {
+            return;
+        }
+
+        constexpr uint32_t MinimumDrainFrames =
+            c_AaTimerLatency * 2u;
+
+        if (m_InteractiveAaMotionTest && !m_AaBenchmarkStarted)
+        {
+            const SponzaCameraPreset& preset =
+                GetDefaultSponzaCameraPreset();
+            int width = 0;
+            int height = 0;
+            GetDeviceManager()->GetWindowDimensions(width, height);
+            if (width != int(preset.ReferenceWidth) ||
+                height != int(preset.ReferenceHeight))
+            {
+                return;
+            }
+        }
+
+        // The camera sequence is defined in rendered frames because temporal
+        // image behavior depends on a fixed 0.375-degree inter-frame motion.
+        // Pace those frames at 40 Hz so the same sample sequence also has a
+        // stable wall-clock rate on both a fast discrete GPU and the Intel
+        // benchmark adapter. GPU timer queries remain scoped only to the AA
+        // command block; the CPU wait is outside the measured interval.
+        using BenchmarkClock = std::chrono::steady_clock;
+        constexpr auto BenchmarkFrameInterval =
+            std::chrono::nanoseconds(
+                1000000000ull /
+                AaBenchmarkTargetFramesPerSecond);
+        const BenchmarkClock::time_point now = BenchmarkClock::now();
+        if (!m_AaBenchmarkPacingActive)
+        {
+            m_AaBenchmarkPacingActive = true;
+            m_AaBenchmarkNextFrameDeadline = now;
+        }
+        else
+        {
+            m_AaBenchmarkNextFrameDeadline +=
+                BenchmarkFrameInterval;
+            if (m_AaBenchmarkNextFrameDeadline > now)
+            {
+                std::this_thread::sleep_until(
+                    m_AaBenchmarkNextFrameDeadline);
+            }
+            else if (now - m_AaBenchmarkNextFrameDeadline >
+                BenchmarkFrameInterval * 4)
+            {
+                // A breakpoint, resize, or slow scene load must not cause a
+                // burst of catch-up frames with a visibly faster sweep.
+                m_AaBenchmarkNextFrameDeadline = now;
+            }
+        }
+
+        if (!m_AaBenchmarkStarted)
+        {
+            m_AaBenchmarkStarted = true;
+            m_AaBenchmarkFrame = 0u;
+            m_AaBenchmarkSamples.clear();
+            m_SmaaBenchmarkSamples.clear();
+            m_AaBenchmarkIssuedSamples = 0u;
+            m_AaBenchmarkDroppedSamples = 0u;
+            m_AaBenchmarkOutstandingSamples = 0u;
+            if (m_SmaaPass)
+                m_SmaaPass->ResetTimingAccounting();
+            ResetAntiAliasingState();
+            log::info(
+                "AA benchmark started: 180 warm frames, 45-degree right turn at 0.375 degrees/frame and a 40 Hz target, then return");
+        }
+
+        float angleDegrees = 0.f;
+        AaBenchmarkSegment segment = AaBenchmarkSegment::Warm;
+        bool collectCurrentFrame = false;
+        if (m_AaBenchmarkFrame >= AaBenchmarkWarmFrames &&
+            m_AaBenchmarkFrame <
+                AaBenchmarkWarmFrames + AaBenchmarkTurnFrames)
+        {
+            const uint32_t turnStep =
+                m_AaBenchmarkFrame - AaBenchmarkWarmFrames + 1u;
+            angleDegrees = 45.f *
+                float(turnStep) /
+                float(AaBenchmarkTurnFrames);
+            segment = AaBenchmarkSegment::TurnRight;
+            collectCurrentFrame = true;
+        }
+        else if (m_AaBenchmarkFrame <
+            AaBenchmarkWarmFrames +
+                AaBenchmarkTurnFrames +
+                AaBenchmarkHoldFrames)
+        {
+            angleDegrees = 45.f;
+            if (m_AaBenchmarkFrame >=
+                AaBenchmarkWarmFrames + AaBenchmarkTurnFrames)
+            {
+                segment = AaBenchmarkSegment::HoldRight;
+                collectCurrentFrame = true;
+            }
+        }
+        else if (m_AaBenchmarkFrame < AaBenchmarkMotionEndFrame)
+        {
+            const uint32_t turnStep =
+                m_AaBenchmarkFrame -
+                AaBenchmarkWarmFrames -
+                AaBenchmarkTurnFrames -
+                AaBenchmarkHoldFrames + 1u;
+            angleDegrees = 45.f * (1.f -
+                float(turnStep) /
+                    float(AaBenchmarkTurnFrames));
+            segment = AaBenchmarkSegment::TurnBack;
+            collectCurrentFrame = true;
+        }
+        else
+        {
+            segment = AaBenchmarkSegment::Drain;
+        }
+
+        m_AaBenchmarkCurrentTag.sourceFrame =
+            m_AaBenchmarkFrame;
+        m_AaBenchmarkCurrentTag.phase =
+            uint32_t(m_AntiAliasingPhase & 1u);
+        m_AaBenchmarkCurrentTag.segment = segment;
+        m_AaBenchmarkCurrentTag.collect = collectCurrentFrame;
+
+        const SponzaCameraPreset& preset =
+            GetDefaultSponzaCameraPreset();
+        const affine3 turn = rotation(
+            preset.Up,
+            -radians(angleDegrees));
+        m_StaticCamera.SetExactPose(
+            preset.Position,
+            normalize(turn.transformVector(preset.Direction)),
+            normalize(turn.transformVector(preset.Up)),
+            normalize(turn.transformVector(preset.Right)));
+
+        ++m_AaBenchmarkFrame;
+        const bool smaaTimingsDrained =
+            !m_SmaaPass ||
+            m_SmaaPass->GetTimingAccounting()
+                    .OutstandingSampleCount() == 0u;
+        if (m_AaBenchmarkFrame >=
+                AaBenchmarkMotionEndFrame + MinimumDrainFrames &&
+            m_AaBenchmarkOutstandingSamples == 0u &&
+            smaaTimingsDrained)
+        {
+            FinishAntiAliasingBenchmark();
+        }
+    }
+
     virtual void Animate(float fElapsedTimeSeconds) override
     {
+        UpdateAntiAliasingBenchmark();
         SynchronizeCameraInput();
 
         switch (m_ui.Camera)
@@ -1295,8 +2616,7 @@ public:
             m_ScreenSpaceVisibilityPass->ResetBindingCache();
             m_ScreenSpaceVisibilityPass->ResetHistory();
         }
-        if (m_MiniEngineTemporalAAPass)
-            m_MiniEngineTemporalAAPass->ResetHistory();
+        ResetAntiAliasingState();
         if (m_GBufferPass) m_GBufferPass->ResetBindingCache();
         m_BindingCache.Clear();
         m_SunLight.reset();
@@ -1327,10 +2647,10 @@ public:
 
             return true;
         }
-        
+
         return false;
     }
-    
+
     virtual void SceneLoaded() override
     {
         Super::SceneLoaded();
@@ -1353,12 +2673,25 @@ public:
 
         for (auto light : m_Scene->GetSceneGraph()->GetLights())
         {
-            if (light->GetLightType() == LightType_Directional)
+            const std::string& lightName = light->GetName();
+            if (string_utils::strcasecmp(lightName, std::string("sun_1")) ||
+                string_utils::strcasecmp(lightName, std::string("Sun")))
+            {
+                light->SetName("sun_1");
+            }
+            else if (string_utils::strcasecmp(
+                lightName,
+                std::string("hdri_sky_1")))
+            {
+                light->SetName("hdri_sky_1");
+            }
+
+            if (!m_SunLight &&
+                light->GetLightType() == LightType_Directional)
             {
                 m_SunLight = std::static_pointer_cast<DirectionalLight>(light);
                 if (m_SunLight->irradiance <= 0.f)
                     m_SunLight->irradiance = 1.f;
-                break;
             }
         }
 
@@ -1371,7 +2704,7 @@ public:
             auto node = std::make_shared<SceneGraphNode>();
             node->SetLeaf(m_SunLight);
             m_SunLight->SetDirection(dm::double3(0.1, -0.9, 0.1));
-            m_SunLight->SetName("Sun");
+            m_SunLight->SetName("sun_1");
             m_Scene->GetSceneGraph()->Attach(m_Scene->GetSceneGraph()->GetRootNode(), node);
         }
 
@@ -1458,8 +2791,8 @@ public:
 
         if (modeChanged && m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetHistory();
-        if (modeChanged && m_MiniEngineTemporalAAPass)
-            m_MiniEngineTemporalAAPass->ResetHistory();
+        if (modeChanged)
+            ResetAntiAliasingState();
 
         const bool enabled = mode != WhiteWorldMode::Off;
         const bool preserveDetailMaps = mode == WhiteWorldMode::PreserveDetail;
@@ -1603,8 +2936,33 @@ public:
         return m_Scene;
     }
 
+    void SynchronizeAntiAliasingSettings()
+    {
+        const bool requiresTemporalReset =
+            m_HasAppliedAntiAliasingSettings &&
+            CompiledAntiAliasingSettingsRequireTemporalReset(
+                m_AppliedAntiAliasingSettings,
+                m_ui.AntiAliasing);
+        if (requiresTemporalReset)
+        {
+            ResetAntiAliasingState();
+            // A new temporal sequence must not inherit a previous view whose
+            // jitter phase belongs to the old preset or history layout.
+            m_PreviousView.reset();
+        }
+        else if (!m_HasAppliedAntiAliasingSettings)
+        {
+            m_AntiAliasingPhase = 0u;
+        }
+
+        m_AppliedAntiAliasingSettings = m_ui.AntiAliasing;
+        m_HasAppliedAntiAliasingSettings = true;
+    }
+
     bool SetupView()
     {
+        SynchronizeAntiAliasingSettings();
+
         float2 renderTargetSize = float2(m_RenderTargets->GetSize());
 
         std::shared_ptr<PlanarView> planarView = std::dynamic_pointer_cast<PlanarView, IView>(m_View);
@@ -1627,10 +2985,12 @@ public:
         planarView->SetViewport(nvrhi::Viewport(
             renderTargetSize.x,
             renderTargetSize.y));
-        const MiniEngineTaaJitterSample jitter =
-            m_ui.UsesMiniEngineTaa()
-            ? GetMiniEngineTaaJitter(uint64_t(GetFrameIndex()))
-            : MiniEngineTaaJitterSample{ 0.f, 0.f };
+        MiniEngineTaaJitterSample jitter{ 0.f, 0.f };
+        if (m_ui.UsesLongTermTemporalAA())
+        {
+            jitter = GetMiniEngineTaaJitter(
+                m_AntiAliasingPhase);
+        }
         planarView->SetPixelOffset(float2(jitter.x, jitter.y));
 
         planarView->SetMatrices(viewMatrix, projection);
@@ -1658,9 +3018,36 @@ public:
         m_PreviousView->UpdateCache();
     }
 
+    [[nodiscard]] nvrhi::ITexture*
+        GetResolvedMorphologySource() const
+    {
+        if (!m_RenderTargets)
+            return nullptr;
+        return m_RenderTargets->GetSampleCount() > 1u
+            ? m_RenderTargets->DeferredMsaaColor.Get()
+            : m_RenderTargets->HdrColor.Get();
+    }
+
+    void CreateCmaa2Pass()
+    {
+        m_Cmaa2Pass = std::make_unique<Cmaa2Pass>(
+            GetDevice(),
+            m_ShaderFactory,
+            m_CommonPasses,
+            GetResolvedMorphologySource());
+        if (!m_Cmaa2Pass->IsValid())
+        {
+            log::error(
+                "Intel CMAA2 initialization failed; "
+                "the scene-color input will be presented unchanged");
+        }
+    }
+
     void CreateRenderPasses()
     {
         m_MiniEngineTemporalAAPass.reset();
+        m_SmaaPass.reset();
+        m_Cmaa2Pass.reset();
 
         ForwardShadingPass::CreateParameters ForwardParams;
         ForwardParams.trackLiveness = false;
@@ -1692,6 +3079,20 @@ public:
             m_PbrDeferredLightingPass = std::make_unique<PbrDeferredLightingPass>(
                 GetDevice(), m_CommonPasses);
             m_PbrDeferredLightingPass->Init(m_ShaderFactory);
+            if (m_RenderTargets->GetSampleCount() > 1u &&
+                m_RenderTargets->VisibilityResourcesEnabled)
+            {
+                m_MsaaVisibilityResolvePass =
+                    std::make_unique<
+                        MsaaVisibilityResolvePass>(
+                        GetDevice());
+                m_MsaaVisibilityResolvePass->Init(
+                    m_ShaderFactory);
+            }
+            else
+            {
+                m_MsaaVisibilityResolvePass.reset();
+            }
             m_ScreenSpaceVisibilityPass = std::make_unique<ScreenSpaceVisibilityPass>(
                 GetDevice(),
                 m_ShaderFactory,
@@ -1701,24 +3102,44 @@ public:
         else
         {
             m_PbrDeferredLightingPass.reset();
+            m_MsaaVisibilityResolvePass.reset();
             m_ScreenSpaceVisibilityPass.reset();
             m_DeferredLightingPass = std::make_shared<DeferredLightingPass>(GetDevice(), m_CommonPasses);
             m_DeferredLightingPass->Init(m_ShaderFactory);
         }
 
-        if (m_ui.UsesMiniEngineTaa())
+        nvrhi::ITexture* morphologySceneColor =
+            GetResolvedMorphologySource();
+
+        if (m_ui.UsesLongTermTemporalAA())
         {
             m_MiniEngineTemporalAAPass =
                 std::make_unique<MiniEngineTemporalAAPass>(
                     GetDevice(),
                     m_ShaderFactory,
+                    m_CommonPasses,
                     m_RenderTargets->HdrColor,
                     m_RenderTargets->Depth,
-                    m_RenderTargets->MotionVectors);
+                    m_RenderTargets->MotionVectors,
+                    m_ui.GetResolvedAntiAliasingSettings()
+                            .temporal.interiorWeighting ==
+                        MiniEngineTaaInteriorWeighting::StableInterior);
         }
 
+        if (m_ui.UsesSmaaPass())
+        {
+            m_SmaaPass = std::make_unique<SmaaPass>(
+                GetDevice(),
+                m_ShaderFactory,
+                m_CommonPasses,
+                morphologySceneColor);
+        }
+
+        if (m_ui.UsesCmaa2())
+            CreateCmaa2Pass();
+
         m_SkyPass = std::make_unique<SkyPass>(GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->ForwardFramebuffer, *m_View);
-        
+
         m_AgxToneMappingPass = std::make_unique<AgxToneMappingPass>(
             GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->LdrFramebuffer);
 
@@ -1748,9 +3169,15 @@ public:
             uint width = windowWidth;
             uint height = windowHeight;
 
-            constexpr uint sampleCount = 1;
+            const ResolvedAntiAliasingSettings
+                resolvedAntiAliasing =
+                    m_ui.GetResolvedAntiAliasingSettings();
+            const uint sampleCount =
+                ResolveSupportedMsaaSampleCount(
+                    GetDevice(),
+                    resolvedAntiAliasing.rasterSampleCount);
             const bool visibilityResourcesRequired = m_ui.EnablePbr &&
-                m_ui.UsesDeferredShading() &&
+                m_ui.IsScreenSpaceVisibilityAvailable() &&
                 m_ui.ScreenSpaceVisibility.HasActiveConsumer();
             const bool visibilitySourceRadianceRequired =
                 visibilityResourcesRequired &&
@@ -1758,11 +3185,16 @@ public:
                 (!sceneLights.empty() ||
                     (m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive &&
                         m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain > 0.f));
-            const bool temporalAARequired = m_ui.UsesMiniEngineTaa();
+            const bool temporalAARequired =
+                m_ui.UsesLongTermTemporalAA();
+            const bool smaaRequired = m_ui.UsesSmaaPass();
+            const bool cmaa2Required = m_ui.UsesCmaa2();
             const bool motionVectorsRequired =
-                temporalAARequired ||
+                m_ui.RequiresAntiAliasingMotionVectors() ||
                 (visibilityResourcesRequired &&
-                    m_ui.ScreenSpaceVisibility.RequiresMotionVectors());
+                    (m_ui.ScreenSpaceVisibility
+                            .RequiresMotionVectors() ||
+                        sampleCount > 1u));
 
             bool needNewPasses = false;
 
@@ -1787,7 +3219,20 @@ public:
 
             if (temporalAARequired != bool(m_MiniEngineTemporalAAPass))
                 needNewPasses = true;
-
+            if (m_MiniEngineTemporalAAPass &&
+                m_MiniEngineTemporalAAPass
+                        ->IsMomentHistoryRequested() !=
+                    (m_ui.GetResolvedAntiAliasingSettings()
+                            .temporal.interiorWeighting ==
+                        MiniEngineTaaInteriorWeighting::StableInterior))
+            {
+                // Stable Interior is the only consumer of moment history.
+                // Its image-key transition already resets temporal state;
+                // recreate here to add or remove the full-resolution pair.
+                needNewPasses = true;
+            }
+            if (smaaRequired != bool(m_SmaaPass))
+                needNewPasses = true;
             if (SetupView())
             {
                 needNewPasses = true;
@@ -1805,9 +3250,22 @@ public:
                 CreateRenderPasses();
             }
 
+            // CMAA2 is a presentation-only spatial filter when Temporal is
+            // active. Allocate or retain it independently so changing only
+            // morphology cannot recreate the temporal pass and lose history.
+            if (cmaa2Required && !m_Cmaa2Pass)
+                CreateCmaa2Pass();
+            else if (!cmaa2Required &&
+                m_Cmaa2Pass &&
+                !temporalAARequired)
+            {
+                m_Cmaa2Pass.reset();
+            }
+
             m_ui.ShaderReloadRequested = false;
         }
 
+        AdvanceAntiAliasingTimer();
         m_CommandList->open();
 
         m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());
@@ -1836,6 +3294,9 @@ public:
         m_RenderTargets->Clear(m_CommandList);
 
         ForwardShadingPass::Context forwardContext;
+        DeferredLightingPass::Inputs deferredMsaaInputs;
+        bool deferredMsaaLightingPending = false;
+        bool deferredMsaaVisibilityPending = false;
 
         if (!m_ui.UsesDeferredShading())
             m_ForwardPass->PrepareLights(forwardContext, m_CommandList, m_Scene->GetSceneGraph()->GetLights(), m_AmbientTop, m_AmbientBottom, {});
@@ -1867,6 +3328,7 @@ public:
             deferredInputs.lights = &sceneLights;
 
             const bool runScreenSpaceVisibility = m_ui.EnablePbr &&
+                m_ui.IsScreenSpaceVisibilityAvailable() &&
                 m_ui.ScreenSpaceVisibility.HasActiveConsumer();
             uint32_t knownInactiveLightingSources = 0u;
             if (sceneLights.empty())
@@ -1889,7 +3351,143 @@ public:
                 ? m_RenderTargets->BaseLighting.Get()
                 : m_RenderTargets->HdrColor.Get();
 
-            if (m_ui.EnablePbr)
+            if (m_ui.UsesHardwareMsaa())
+            {
+                // Preserve every G-buffer sample until after material decode
+                // and nonlinear lighting. The resolved sky is added later as
+                // the exact uncovered-sample contribution.
+                deferredMsaaInputs = deferredInputs;
+                deferredMsaaInputs.output =
+                    m_RenderTargets->DeferredMsaaColor;
+                deferredMsaaLightingPending = true;
+
+                if (runScreenSpaceVisibility &&
+                    m_MsaaVisibilityResolvePass &&
+                    m_ScreenSpaceVisibilityPass)
+                {
+                    MsaaVisibilityResolveInputs resolveInputs;
+                    resolveInputs.depth =
+                        m_RenderTargets->Depth;
+                    resolveInputs.diffuse =
+                        m_RenderTargets->GBufferDiffuse;
+                    resolveInputs.material =
+                        m_RenderTargets->GBufferSpecular;
+                    resolveInputs.normals =
+                        m_RenderTargets->GBufferNormals;
+                    resolveInputs.emissive =
+                        m_RenderTargets->GBufferEmissive;
+                    resolveInputs.materialAmbientOcclusion =
+                        m_RenderTargets
+                            ->MaterialAmbientOcclusion;
+                    resolveInputs.motionVectors =
+                        m_RenderTargets->MotionVectors;
+
+                    MsaaVisibilityResolveOutputs
+                        resolveOutputs;
+                    resolveOutputs.depth =
+                        m_RenderTargets->VisibilityDepth;
+                    resolveOutputs.diffuse =
+                        m_RenderTargets
+                            ->VisibilityGBufferDiffuse;
+                    resolveOutputs.material =
+                        m_RenderTargets
+                            ->VisibilityGBufferMaterial;
+                    resolveOutputs.normals =
+                        m_RenderTargets
+                            ->VisibilityGBufferNormals;
+                    resolveOutputs.emissive =
+                        m_RenderTargets
+                            ->VisibilityGBufferEmissive;
+                    resolveOutputs.materialAmbientOcclusion =
+                        m_RenderTargets
+                            ->VisibilityMaterialAmbientOcclusion;
+                    resolveOutputs.motionVectors =
+                        m_RenderTargets
+                            ->VisibilityMotionVectors;
+                    m_MsaaVisibilityResolvePass->Render(
+                        m_CommandList,
+                        resolveInputs,
+                        resolveOutputs,
+                        m_RenderTargets->GetSampleCount());
+
+                    DeferredLightingPass::Inputs
+                        visibilityDeferredInputs =
+                            deferredInputs;
+                    visibilityDeferredInputs.depth =
+                        resolveOutputs.depth;
+                    visibilityDeferredInputs.gbufferDiffuse =
+                        resolveOutputs.diffuse;
+                    visibilityDeferredInputs.gbufferSpecular =
+                        resolveOutputs.material;
+                    visibilityDeferredInputs.gbufferNormals =
+                        resolveOutputs.normals;
+                    visibilityDeferredInputs.gbufferEmissive =
+                        resolveOutputs.emissive;
+                    visibilityDeferredInputs.indirectDiffuse =
+                        resolveOutputs
+                            .materialAmbientOcclusion;
+                    visibilityDeferredInputs.output =
+                        m_RenderTargets->BaseLighting;
+                    m_PbrDeferredLightingPass->Render(
+                        m_CommandList,
+                        *m_View,
+                        visibilityDeferredInputs,
+                        m_RenderTargets
+                            ->DirectDiffuseRadiance,
+                        true,
+                        writeSourceRadiance,
+                        writeBounceMetadata,
+                        m_ui.ScreenSpaceVisibility
+                            .indirectDiffuse.includeEmissive,
+                        m_ui.ScreenSpaceVisibility
+                            .indirectDiffuse.emissiveGain,
+                        float2(0.f));
+
+                    ScreenSpaceVisibilityInputs
+                        visibilityInputs;
+                    visibilityInputs.depth =
+                        resolveOutputs.depth;
+                    visibilityInputs.normals =
+                        resolveOutputs.normals;
+                    visibilityInputs.motionVectors =
+                        resolveOutputs.motionVectors;
+                    visibilityInputs.sourceRadiance =
+                        m_RenderTargets
+                            ->DirectDiffuseRadiance;
+                    visibilityInputs.gbufferDiffuse =
+                        resolveOutputs.diffuse;
+                    visibilityInputs.gbufferSpecular =
+                        resolveOutputs.material;
+                    visibilityInputs.gbufferEmissive =
+                        resolveOutputs.emissive;
+                    visibilityInputs.materialAmbientOcclusion =
+                        resolveOutputs
+                            .materialAmbientOcclusion;
+                    visibilityInputs.baseLighting =
+                        m_RenderTargets->BaseLighting;
+                    visibilityInputs.output =
+                        m_RenderTargets
+                            ->VisibilityComposite;
+                    visibilityInputs
+                        .knownInactiveLightingSources =
+                            knownInactiveLightingSources;
+                    m_ScreenSpaceVisibilityPass->Render(
+                        m_CommandList,
+                        m_ui.ScreenSpaceVisibility,
+                        *m_View,
+                        visibilityInputs,
+                        m_AmbientTop,
+                        m_AmbientBottom,
+                        1.f,
+                        uint32_t(GetFrameIndex()));
+                    deferredMsaaVisibilityPending = true;
+                }
+                else if (m_ScreenSpaceVisibilityPass)
+                {
+                    m_ScreenSpaceVisibilityPass->Deactivate();
+                }
+            }
+            else if (m_ui.EnablePbr)
             {
                 m_PbrDeferredLightingPass->Render(
                     m_CommandList,
@@ -1961,6 +3559,21 @@ public:
             m_CommandList->clearTextureUInt(
                 m_RenderTargets->MaterialIDs,
                 nvrhi::AllSubresources, 0xffffu);
+            if (m_RenderTargets->MaterialIDDepth !=
+                m_RenderTargets->Depth)
+            {
+                const nvrhi::FormatInfo& depthInfo =
+                    nvrhi::getFormatInfo(
+                        m_RenderTargets->MaterialIDDepth
+                            ->getDesc().format);
+                m_CommandList->clearDepthStencilTexture(
+                    m_RenderTargets->MaterialIDDepth,
+                    nvrhi::AllSubresources,
+                    true,
+                    0.f,
+                    depthInfo.hasStencil,
+                    0u);
+            }
 
             MaterialIDPass::Context materialIdContext;
             RenderCompositeView(m_CommandList,
@@ -1978,26 +3591,253 @@ public:
         if (m_ui.EnableProceduralSky)
             m_SkyPass->Render(m_CommandList, *m_View, *m_SunLight, m_ui.SkyParams);
 
+        nvrhi::ITexture* sceneColor =
+            m_RenderTargets->HdrColor;
+        if (m_RenderTargets->GetSampleCount() > 1u)
+        {
+            if (m_RenderTargets->ResolvedHdrColor)
+            {
+                m_CommandList->resolveTexture(
+                    m_RenderTargets->ResolvedHdrColor,
+                    nvrhi::AllSubresources,
+                    m_RenderTargets->HdrColor,
+                    nvrhi::AllSubresources);
+                sceneColor =
+                    m_RenderTargets->ResolvedHdrColor;
+            }
+            else
+            {
+                log::error(
+                    "MSAA HDR resolve target is unavailable; "
+                    "the multisample surface cannot be presented");
+            }
+        }
+        if (deferredMsaaLightingPending &&
+            m_PbrDeferredLightingPass &&
+            m_RenderTargets->ResolvedHdrColor &&
+            m_RenderTargets->DeferredMsaaColor)
+        {
+            m_PbrDeferredLightingPass->Render(
+                m_CommandList,
+                *m_View,
+                deferredMsaaInputs,
+                nullptr,
+                deferredMsaaVisibilityPending,
+                false,
+                false,
+                false,
+                0.f,
+                float2(0.f),
+                m_RenderTargets->ResolvedHdrColor,
+                m_RenderTargets->GetSampleCount(),
+                deferredMsaaVisibilityPending
+                    ? m_RenderTargets->BaseLighting.Get()
+                    : nullptr,
+                deferredMsaaVisibilityPending
+                    ? m_RenderTargets
+                          ->VisibilityComposite.Get()
+                    : nullptr);
+            sceneColor =
+                m_RenderTargets->DeferredMsaaColor;
+        }
+
+        const bool antiAliasingTimerActive =
+            BeginAntiAliasingTimer();
+        const ResolvedAntiAliasingSettings antiAliasing =
+            m_ui.GetResolvedAntiAliasingSettings();
+#if UVSR_AA_DEVELOPER_OVERRIDES
+        const MiniEngineTaaDebugView activeAaVisualization =
+            m_ui.MiniEngineTaaVisualization;
+#else
+        // Debug shaders and routing are absent from production. Ignore stale
+        // or hostile programmatic state before it can suppress presentation
+        // SMAA or alter the shipping render graph.
+        constexpr MiniEngineTaaDebugView activeAaVisualization =
+            MiniEngineTaaDebugView::Off;
+#endif
+        const bool miniEngineDebugVisualizationActive =
+            m_MiniEngineTemporalAAPass &&
+            IsLongTermTemporalPreset(
+                antiAliasing.implementation) &&
+            IsMiniEngineTaaDebugVisualization(
+                activeAaVisualization);
+        const bool temporalSharpenEnabled =
+            ShouldSharpenMiniEngineTaa(
+                m_ui.MiniEngineTaaSharpenEnabled,
+                m_ui.MiniEngineTaaSharpness);
+        const bool deferTemporalSharpenToPresentation =
+            m_MiniEngineTemporalAAPass &&
+            m_SmaaPass &&
+            IsLongTermTemporalPreset(
+                antiAliasing.implementation) &&
+            antiAliasing.subpixelMorphology !=
+                SmaaApplication::Off &&
+            !miniEngineDebugVisualizationActive &&
+            temporalSharpenEnabled;
+        nvrhi::ITexture* antiAliasedTexture =
+            sceneColor;
         if (m_MiniEngineTemporalAAPass)
         {
             // Resolve scene-linear radiance before any display transform. The
             // pass intentionally has no exposure, grading, LUT, or transfer
             // dependency, so removing or replacing the display stage does not
             // change its contract.
-            m_MiniEngineTemporalAAPass->Render(
+            antiAliasedTexture =
+                m_MiniEngineTemporalAAPass->Render(
                 m_CommandList,
                 *m_View,
                 m_PreviousView.get(),
-                uint64_t(GetFrameIndex()),
-                m_ui.EnableMiniEngineTaaSharpen,
+                m_AntiAliasingPhase,
+                antiAliasing,
+                activeAaVisualization,
+                antiAliasing.subpixelMorphology ==
+                        SmaaApplication::SelectiveShort ||
+                    antiAliasing.subpixelMorphology ==
+                        SmaaApplication::SelectiveLong,
+                temporalSharpenEnabled &&
+                    !deferTemporalSharpenToPresentation,
+                deferTemporalSharpenToPresentation,
                 m_ui.MiniEngineTaaSharpness);
         }
 
-        nvrhi::ITexture* displayTexture = m_RenderTargets->HdrColor;
+        bool cmaa2RenderedThisFrame = false;
+        if (m_Cmaa2Pass &&
+            antiAliasing.subpixelMorphology ==
+                SmaaApplication::ConservativeMorphological)
+        {
+            antiAliasedTexture = m_Cmaa2Pass->Render(
+                m_CommandList,
+                antiAliasedTexture,
+                antiAliasing.quality);
+            cmaa2RenderedThisFrame = true;
+        }
+        if (m_Cmaa2Pass && !cmaa2RenderedThisFrame)
+            m_Cmaa2Pass->MarkInactiveFrame();
+
+        [[maybe_unused]] nvrhi::ITexture* smaaInputTexture =
+            antiAliasedTexture;
+        [[maybe_unused]] nvrhi::ITexture* smaaFilteredTexture =
+            nullptr;
+        const uint64_t smaaTimingTag = m_AaBenchmark.enabled
+            ? AaBenchmarkTimingTagFlag |
+                (m_AaBenchmarkCurrentTag.collect
+                    ? SmaaTimingCollectTagFlag
+                    : 0u) |
+                uint64_t(m_AaBenchmarkCurrentTag.sourceFrame)
+            : uint64_t(m_AaTimerFrame);
+        bool smaaRenderedThisFrame = false;
+        if (m_SmaaPass &&
+            !miniEngineDebugVisualizationActive)
+        {
+            switch (antiAliasing.implementation)
+            {
+            case AntiAliasingPreset::Smaa1x:
+                smaaInputTexture = antiAliasedTexture;
+                antiAliasedTexture = m_SmaaPass->Render1x(
+                    m_CommandList,
+                    antiAliasedTexture,
+                    antiAliasing.quality,
+                    smaaTimingTag);
+                smaaFilteredTexture = antiAliasedTexture;
+                smaaRenderedThisFrame = true;
+                break;
+            default:
+                if (antiAliasing.subpixelMorphology ==
+                    SmaaApplication::FullScreen)
+                {
+                    smaaInputTexture = antiAliasedTexture;
+                    antiAliasedTexture =
+                        m_SmaaPass->RenderFullScreenPresentation(
+                            m_CommandList,
+                            antiAliasedTexture,
+                            antiAliasing.quality,
+                            smaaTimingTag);
+                    smaaFilteredTexture = antiAliasedTexture;
+                    smaaRenderedThisFrame = true;
+                }
+                else if (
+                    m_MiniEngineTemporalAAPass &&
+                    (antiAliasing.subpixelMorphology ==
+                            SmaaApplication::SelectiveShort ||
+                        antiAliasing.subpixelMorphology ==
+                            SmaaApplication::SelectiveLong))
+                {
+                    const bool historyGloballyValid =
+                        m_MiniEngineTemporalAAPass
+                            ->WasHistoryInputValidLastRender();
+                    if (!historyGloballyValid)
+                    {
+                        // A camera cut/current-only frame has no trustworthy
+                        // temporal coverage to make sparse. Run complete
+                        // full-quality SMAA over de-jittered current.
+                        smaaInputTexture =
+                            m_MiniEngineTemporalAAPass
+                                ->GetSelectiveCurrentTexture();
+                        antiAliasedTexture =
+                            m_SmaaPass
+                                ->RenderFullScreenPresentation(
+                                    m_CommandList,
+                                    m_MiniEngineTemporalAAPass
+                                        ->GetSelectiveCurrentTexture(),
+                                    antiAliasing.quality,
+                                    smaaTimingTag);
+                        smaaFilteredTexture = antiAliasedTexture;
+                        smaaRenderedThisFrame = true;
+                    }
+                    else
+                    {
+                        smaaInputTexture = antiAliasedTexture;
+                        antiAliasedTexture =
+                            m_SmaaPass->RenderSelective(
+                                m_CommandList,
+                                m_MiniEngineTemporalAAPass
+                                    ->GetSelectiveCurrentTexture(),
+                                antiAliasedTexture,
+                                m_MiniEngineTemporalAAPass
+                                    ->GetSelectiveRejectionTexture(),
+                                antiAliasing.quality,
+                                smaaTimingTag);
+                        smaaFilteredTexture = antiAliasedTexture;
+                        smaaRenderedThisFrame = true;
+                    }
+                }
+                break;
+            }
+        }
+        if (m_SmaaPass && !smaaRenderedThisFrame)
+            m_SmaaPass->MarkInactiveFrame();
+        if (deferTemporalSharpenToPresentation)
+        {
+            // Apply the same sharpness to the composed presentation result.
+            // Blending sharpened temporal against unsharpened spatial current
+            // made a changing selective rejection mask modulate edge detail.
+            antiAliasedTexture =
+                m_MiniEngineTemporalAAPass
+                    ->SharpenPresentation(
+                        m_CommandList,
+                        antiAliasedTexture);
+        }
+#if UVSR_AA_DEVELOPER_OVERRIDES
+        if (m_SmaaPass &&
+            smaaFilteredTexture &&
+            IsSmaaDebugVisualization(
+                m_ui.MiniEngineTaaVisualization))
+        {
+            antiAliasedTexture = m_SmaaPass->RenderDebugView(
+                m_CommandList,
+                m_ui.MiniEngineTaaVisualization,
+                smaaInputTexture,
+                smaaFilteredTexture);
+        }
+#endif
+        CollectCompletedSmaaTimings();
+        EndAntiAliasingTimer(antiAliasingTimerActive);
+
+        nvrhi::ITexture* displayTexture = antiAliasedTexture;
         if (m_ui.UsesTonemapper())
         {
             m_AgxToneMappingPass->Render(
-                m_CommandList, *m_View, m_RenderTargets->HdrColor);
+                m_CommandList, *m_View, antiAliasedTexture);
 
             displayTexture = m_RenderTargets->LdrColor;
         }
@@ -2014,6 +3854,8 @@ public:
         GetDevice()->executeCommandList(m_CommandList);
         if (m_RenderTargets->MotionVectorsEnabled)
             CaptureCurrentViewForMotionVectors();
+        if (m_ui.UsesJitteredAntiAliasing())
+            ++m_AntiAliasingPhase;
 
         if (m_ui.CopyScreenshotToClipboard)
         {
@@ -2089,6 +3931,27 @@ public:
         return m_MiniEngineTemporalAAPass
             ? &m_MiniEngineTemporalAAPass->GetTimings()
             : nullptr;
+    }
+
+    const SmaaTimings* GetSmaaTimings() const
+    {
+        return m_SmaaPass
+            ? &m_SmaaPass->GetTimings()
+            : nullptr;
+    }
+
+    const Cmaa2Timings* GetCmaa2Timings() const
+    {
+        return m_Cmaa2Pass
+            ? &m_Cmaa2Pass->GetTimings()
+            : nullptr;
+    }
+
+    uint32_t GetRasterSampleCount() const
+    {
+        return m_RenderTargets
+            ? m_RenderTargets->GetSampleCount()
+            : 1u;
     }
 
 };
@@ -2834,6 +4697,77 @@ private:
         }
     }
 
+    static void DrawSettingsScrollEdgeFades()
+    {
+        const float scrollY = ImGui::GetScrollY();
+        const float scrollMaxY = ImGui::GetScrollMaxY();
+        if (scrollMaxY <= 0.5f)
+            return;
+
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const ImVec2 windowMinimum = ImGui::GetWindowPos();
+        const ImVec2 windowSize = ImGui::GetWindowSize();
+        const ImVec2 windowMaximum(
+            windowMinimum.x +
+                std::max(0.f, windowSize.x - style.ScrollbarSize),
+            windowMinimum.y + windowSize.y);
+        const float fadeHeight = std::min(
+            ImGui::GetFrameHeight() * 1.15f,
+            windowSize.y * 0.18f);
+        if (fadeHeight <= 0.5f ||
+            windowMaximum.x <= windowMinimum.x)
+        {
+            return;
+        }
+
+        ImVec4 edgeColor = style.Colors[ImGuiCol_WindowBg];
+        edgeColor.w = std::max(edgeColor.w, 0.82f);
+        ImVec4 clearColor = edgeColor;
+        clearColor.w = 0.f;
+        const ImU32 clear = ImGui::GetColorU32(clearColor);
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const auto edgeForDistance =
+            [&](float distance)
+            {
+                ImVec4 color = edgeColor;
+                color.w *= std::clamp(
+                    distance / std::max(fadeHeight, 1.f),
+                    0.f,
+                    1.f);
+                return ImGui::GetColorU32(color);
+            };
+
+        if (scrollY > 0.5f)
+        {
+            const ImU32 edge = edgeForDistance(scrollY);
+            drawList->AddRectFilledMultiColor(
+                windowMinimum,
+                ImVec2(
+                    windowMaximum.x,
+                    windowMinimum.y + fadeHeight),
+                edge,
+                edge,
+                clear,
+                clear);
+        }
+        const float remainingScroll =
+            std::max(0.f, scrollMaxY - scrollY);
+        if (remainingScroll > 0.5f)
+        {
+            const ImU32 edge =
+                edgeForDistance(remainingScroll);
+            drawList->AddRectFilledMultiColor(
+                ImVec2(
+                    windowMinimum.x,
+                    windowMaximum.y - fadeHeight),
+                windowMaximum,
+                clear,
+                clear,
+                edge,
+                edge);
+        }
+    }
+
     static void EndDrawerBody()
     {
         const float measuredHeight = std::max(
@@ -2884,6 +4818,7 @@ private:
         float openAmount = 0.f;
         bool targetOpen = false;
         bool bodyVisible = false;
+        bool allowHeightMeasurement = true;
     };
 
     inline static NestedDrawerAnimationContext
@@ -2901,6 +4836,8 @@ private:
             headerId ^ ImGuiID(0x34A1F27Du);
         const ImGuiID measuredHeightKey =
             headerId ^ ImGuiID(0x9D63E418u);
+        const ImGuiID measurementFreezeKey =
+            headerId ^ ImGuiID(0x42B6F19Du);
         const bool open = ImGui::TreeNodeEx(
             label,
             flags | ImGuiTreeNodeFlags_NoTreePushOnOpen);
@@ -2909,6 +4846,22 @@ private:
         const int lastFrame = storage->GetInt(frameKey, -2);
         const float measuredHeight =
             storage->GetFloat(measuredHeightKey, 0.f);
+        float measurementFreezeUntil =
+            storage->GetFloat(measurementFreezeKey, 0.f);
+        if (open &&
+            measuredHeight > 0.f &&
+            (std::abs(ImGui::GetIO().MouseWheel) > 0.001f ||
+                ImGui::IsMouseDragging(ImGuiMouseButton_Left)))
+        {
+            measurementFreezeUntil =
+                float(ImGui::GetTime()) + 0.30f;
+            storage->SetFloat(
+                measurementFreezeKey,
+                measurementFreezeUntil);
+        }
+        const bool allowHeightMeasurement =
+            measuredHeight <= 0.f ||
+            float(ImGui::GetTime()) >= measurementFreezeUntil;
         const float target = open ? 1.f : 0.f;
         float openAmount = storage->GetFloat(
             amountKey,
@@ -2967,7 +4920,8 @@ private:
             measuredHeightKey,
             openAmount,
             open,
-            bodyVisible
+            bodyVisible,
+            allowHeightMeasurement
         };
         return true;
     }
@@ -2984,11 +4938,29 @@ private:
 
         if (g_NestedDrawerAnimationContext.storage != nullptr &&
             g_NestedDrawerAnimationContext.targetOpen &&
-            g_NestedDrawerAnimationContext.bodyVisible)
+            g_NestedDrawerAnimationContext.bodyVisible &&
+            g_NestedDrawerAnimationContext.allowHeightMeasurement)
         {
+            const float cachedHeight =
+                g_NestedDrawerAnimationContext.storage->GetFloat(
+                    g_NestedDrawerAnimationContext.measuredHeightKey,
+                    0.f);
+            float nextHeight = measuredHeight;
+            if (cachedHeight > 0.f &&
+                std::abs(nextHeight - cachedHeight) > 0.5f)
+            {
+                const float blend =
+                    1.f -
+                    std::exp(
+                        -18.f *
+                        std::max(0.f, ImGui::GetIO().DeltaTime));
+                nextHeight +=
+                    (cachedHeight - nextHeight) *
+                    (1.f - blend);
+            }
             g_NestedDrawerAnimationContext.storage->SetFloat(
                 g_NestedDrawerAnimationContext.measuredHeightKey,
-                measuredHeight);
+                nextHeight);
         }
 
         ImGui::PopStyleVar(2);
@@ -3080,6 +5052,148 @@ private:
         storage->SetFloat(amountKey, amount);
         storage->SetInt(frameKey, frame);
         return amount;
+    }
+
+    struct UiMutexFadeState
+    {
+        float linearAmount = 0.f;
+        bool targetMutex = false;
+        bool initialized = false;
+        int lastSeenFrame = -1;
+        int transitionFrame = -1;
+        int advancedFrame = -1;
+    };
+
+    inline static std::unordered_map<ImGuiID, UiMutexFadeState>
+        g_UiMutexFadeStates;
+
+    struct PendingAliasingUiAction
+    {
+        std::function<void()> apply;
+        int requestFrame = -1;
+    };
+
+    inline static PendingAliasingUiAction
+        g_PendingAliasingUiAction;
+
+    static void QueueAliasingUiAction(
+        std::function<void()> action)
+    {
+        g_PendingAliasingUiAction.apply = std::move(action);
+        g_PendingAliasingUiAction.requestFrame =
+            ImGui::GetFrameCount();
+    }
+
+    static void ApplyPendingAliasingUiAction()
+    {
+        if (!g_PendingAliasingUiAction.apply ||
+            ImGui::GetFrameCount() <=
+                g_PendingAliasingUiAction.requestFrame)
+        {
+            return;
+        }
+
+        std::function<void()> action =
+            std::move(g_PendingAliasingUiAction.apply);
+        g_PendingAliasingUiAction = {};
+        action();
+    }
+
+    static float GetUiMutexFade(
+        ImGuiID id,
+        bool mutex)
+    {
+        UiMutexFadeState& state = g_UiMutexFadeStates[id];
+        const int frame = ImGui::GetFrameCount();
+        const bool submissionWasInterrupted =
+            state.lastSeenFrame >= 0 &&
+            state.lastSeenFrame < frame - 2;
+
+        if (!state.initialized || submissionWasInterrupted)
+        {
+            state.linearAmount = mutex ? 1.f : 0.f;
+            state.targetMutex = mutex;
+            state.initialized = true;
+            state.transitionFrame = frame;
+        }
+        else if (state.targetMutex != mutex)
+        {
+            state.targetMutex = mutex;
+            state.transitionFrame = frame;
+        }
+
+        // A queued combo choice is committed only after its popup has closed.
+        // Preserve the old endpoint for that complete first new-state frame,
+        // then advance once per later rendered frame. This keeps every row in
+        // sync and prevents a resource-rebuild hitch from consuming the fade.
+        if (frame > state.transitionFrame &&
+            state.advancedFrame != frame)
+        {
+            constexpr float TransitionDuration = 0.30f;
+            const float animationDeltaTime = std::min(
+                std::max(0.f, ImGui::GetIO().DeltaTime),
+                1.f / 30.f);
+            const float step =
+                animationDeltaTime / TransitionDuration;
+            state.linearAmount = state.targetMutex
+                ? std::min(1.f, state.linearAmount + step)
+                : std::max(0.f, state.linearAmount - step);
+            state.advancedFrame = frame;
+        }
+
+        state.lastSeenFrame = frame;
+        return state.linearAmount *
+            state.linearAmount *
+            (3.f - 2.f * state.linearAmount);
+    }
+
+    static void BeginAnimatedMutex(
+        const char* id,
+        bool mutex)
+    {
+        const float amount =
+            GetUiMutexFade(ImGui::GetID(id), mutex);
+        const ImGuiStyle& style = ImGui::GetStyle();
+
+        // A new mutex disables interaction immediately while opacity moves
+        // continuously between the normal and disabled endpoints. Keeping an
+        // item disabled for the short fade-out makes BeginDisabled own alpha
+        // exactly once, including when this scope is nested inside the
+        // motion-test-wide disabled scope.
+        const float opacity =
+            1.f + (style.DisabledAlpha - 1.f) * amount;
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_DisabledAlpha,
+            opacity);
+        ImGui::BeginDisabled(mutex || amount > 0.f);
+    }
+
+    static void EndAnimatedMutex()
+    {
+        ImGui::EndDisabled();
+        ImGui::PopStyleVar();
+    }
+
+    static void BeginAnimatedMutexPreview(
+        const char* id,
+        bool mutex)
+    {
+        const float amount =
+            GetUiMutexFade(ImGui::GetID(id), mutex);
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const bool parentAlreadyDisabled =
+            style.Alpha <= style.DisabledAlpha + 1e-4f;
+        const float opacity = parentAlreadyDisabled
+            ? 1.f
+            : 1.f + (style.DisabledAlpha - 1.f) * amount;
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_Alpha,
+            style.Alpha * opacity);
+    }
+
+    static void EndAnimatedMutexPreview()
+    {
+        ImGui::PopStyleVar();
     }
 
     static ImVec4 LerpUiColor(
@@ -3522,6 +5636,15 @@ public:
             return;
 
         buildUI();
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const ImVec2 crosshairCenter(
+            viewport->Pos.x + viewport->Size.x * 0.5f,
+            viewport->Pos.y + viewport->Size.y * 0.5f);
+        ImGui::GetForegroundDrawList()->AddCircleFilled(
+            crosshairCenter,
+            2.f,
+            IM_COL32(255, 255, 255, 128),
+            12);
         ImGui::Render();
         if (m_BackdropBlurPass)
         {
@@ -3838,18 +5961,40 @@ protected:
             labelledSliderContentWidth);
         const float settingsWidthReadabilityAllowance =
             style.FramePadding.x * 2.f + style.ItemSpacing.x;
-        const float windowMargin = fontSize * 0.6f;
+        const float settingsPanelMarginPixels = std::max(
+            1.f,
+            std::round(fontSize * 0.6f));
         const float availableWindowWidth =
-            std::max(1.f, float(width) - windowMargin * 2.f);
+            std::max(
+                1.f,
+                float(width) - settingsPanelMarginPixels * 2.f);
         const float settingsWindowWidth = std::min(
             std::max(statusContentWidth, minimumSettingsContentWidth) +
                 style.WindowPadding.x * 2.f +
                 settingsWidthReadabilityAllowance,
             availableWindowWidth);
-        ImGui::SetNextWindowPos(ImVec2(windowMargin, windowMargin), 0);
+        ImGui::SetNextWindowPos(
+            ImVec2(
+                settingsPanelMarginPixels,
+                settingsPanelMarginPixels),
+            ImGuiCond_Always);
         ImGui::SetNextWindowSize(
             ImVec2(settingsWindowWidth, 0.f),
             ImGuiCond_Always);
+        constexpr float StatusLineSpacing = 2.f;
+        const bool hasPerformanceStatus =
+            !m_PerformanceStatValues[1].empty();
+        const float settingsCollapsedHeight =
+            fontSize + style.FramePadding.y * 2.f +
+            style.WindowPadding.y +
+            fontSize +
+            style.ItemSpacing.y +
+            1.f +
+            (hasPerformanceStatus
+                ? StatusLineSpacing + fontSize
+                : 0.f);
+        ImGui::SetNextSettingsWindowCollapsedHeight(
+            settingsCollapsedHeight);
         // This is the footer button surface composited over WindowBg, so the
         // Settings title and the three action buttons resolve to one tone.
         const ImVec4 titleAndFooterSurface(
@@ -3874,9 +6019,8 @@ protected:
             style.WindowRounding);
 
         ImGui::TextUnformatted(rendererLine);
-        if (!m_PerformanceStatValues[1].empty())
+        if (hasPerformanceStatus)
         {
-            constexpr float StatusLineSpacing = 2.f;
             ImGui::SetCursorPosY(
                 ImGui::GetCursorPosY() - style.ItemSpacing.y +
                     StatusLineSpacing);
@@ -3889,7 +6033,7 @@ protected:
 
         const float settingsBodyMaxHeight = std::max(
             1.f,
-            float(height) - windowMargin -
+            float(height) - settingsPanelMarginPixels -
                 ImGui::GetCursorScreenPos().y - style.WindowPadding.y);
         ImGui::SetNextWindowSizeConstraints(
             ImVec2(0.f, 0.f),
@@ -4175,7 +6319,8 @@ protected:
                 "##VisibilityBody",
                 settingsControlWidth);
             ScreenSpaceVisibilitySettings& visibility = m_ui.ScreenSpaceVisibility;
-            const bool visibilityAvailable = m_ui.UsesDeferredShading();
+            const bool visibilityAvailable =
+                m_ui.IsScreenSpaceVisibilityAvailable();
             if (!visibilityAvailable)
                 ImGui::BeginDisabled();
 
@@ -4295,87 +6440,22 @@ protected:
                     "Thickness", &sampling.thickness, 0.0f, std::max(m_app->GetSceneDiagonal() * 0.02f, 0.5f), "%.3f");
                 ImGui::SetItemTooltip("Set the assumed thickness of occluders.");
 
-                const bool miniEngineTaaActive = m_ui.UsesMiniEngineTaa();
-                if (miniEngineTaaActive)
-                    ImGui::BeginDisabled();
-                samplingChanged |= ImGui::Checkbox(
-                    "Adaptive Sparse Sampling",
-                    &sampling.adaptiveSparseSamplingEnabled);
-                ImGui::SetItemTooltip(miniEngineTaaActive
-                        ? "Disable MiniEngine TAA before enabling adaptive sparse sampling."
-                        : "Spend more samples where the image is harder to resolve.");
-                if (miniEngineTaaActive)
-                    ImGui::EndDisabled();
-
-                if (sampling.adaptiveSparseSamplingEnabled)
+                int sampleCount =
+                    int(std::clamp(sampling.sampleCount, 1u, 64u));
+                if (DrawSliderInt(
+                        "Samples / Pixel",
+                        &sampleCount,
+                        1,
+                        64))
                 {
-                    int minimumSamples = int(std::clamp(
-                        sampling.minimumSampleCount, 1u, 64u));
-                    if (DrawSliderInt(
-                            "Minimum Samples / Pixel",
-                            &minimumSamples, 1, 64))
-                    {
-                        sampling.minimumSampleCount =
-                            uint32_t(minimumSamples);
-                        sampling.maximumSampleCount = std::max(
-                            sampling.maximumSampleCount,
-                            sampling.minimumSampleCount);
-                        samplingChanged = true;
-                    }
-                    ImGui::SetItemTooltip("Set the samples every pixel receives.");
-
-                    int maximumSamples = int(std::clamp(
-                        sampling.maximumSampleCount,
-                        sampling.minimumSampleCount, 64u));
-                    if (DrawSliderInt(
-                            "Maximum Samples / Pixel",
-                            &maximumSamples,
-                            int(sampling.minimumSampleCount),
-                            64))
-                    {
-                        sampling.maximumSampleCount =
-                            uint32_t(maximumSamples);
-                        samplingChanged = true;
-                    }
-                    ImGui::SetItemTooltip("Cap samples used on difficult pixels.");
-
-                    const bool adaptiveControlsActive =
-                        sampling.maximumSampleCount >
-                            sampling.minimumSampleCount;
-                    if (!adaptiveControlsActive)
-                        ImGui::BeginDisabled();
-                    samplingChanged |= DrawSliderFloat(
-                        "Adaptive Error Strength",
-                        &sampling.adaptiveStrength,
-                        0.0f,
-                        2.0f,
-                        "%.2f");
-                    ImGui::SetItemTooltip("Control how strongly errors add samples.");
-                    if (!adaptiveControlsActive)
-                        ImGui::EndDisabled();
+                    sampling.sampleCount = uint32_t(sampleCount);
+                    samplingChanged = true;
                 }
-                else
-                {
-                    int fixedSamples = int(std::clamp(
-                        sampling.maximumSampleCount, 1u, 64u));
-                    if (DrawSliderInt(
-                            "Samples Per Pixel##FixedSamplesPerPixel",
-                            &fixedSamples,
-                            1,
-                            64))
-                    {
-                        sampling.maximumSampleCount =
-                            uint32_t(fixedSamples);
-                        sampling.minimumSampleCount = std::min(
-                            sampling.minimumSampleCount,
-                            sampling.maximumSampleCount);
-                        samplingChanged = true;
-                    }
-                    ImGui::SetItemTooltip("Set the samples used by every pixel.");
-                }
+                ImGui::SetItemTooltip(
+                    "Set the visibility samples used by every pixel.");
 
                 samplingChanged |= DrawSliderFloat(
-                    "Distribution Exponent",
+                    "Radial Distribution Exponent",
                     &sampling.stepDistributionExponent,
                     0.5f,
                     4.0f,
@@ -4491,14 +6571,15 @@ protected:
             {
                 VisibilityReconstructionSettings& reconstruction =
                     visibility.reconstruction;
-                const bool miniEngineTaaActive = m_ui.UsesMiniEngineTaa();
+                const bool miniEngineTaaActive =
+                    m_ui.UsesJitteredAntiAliasing();
                 if (miniEngineTaaActive)
                     ImGui::BeginDisabled();
                 ImGui::Checkbox(
                     "Temporal Reuse##TemporalReconstruction",
                     &reconstruction.temporalEnabled);
                 ImGui::SetItemTooltip(miniEngineTaaActive
-                        ? "Turn off MiniEngine TAA to use temporal reuse."
+                        ? "Turn off jittered anti-aliasing to use temporal reuse."
                         : "Reuse stable detail from prior frames.");
                 if (miniEngineTaaActive)
                     ImGui::EndDisabled();
@@ -4573,76 +6654,1117 @@ protected:
         }
         ImGui::Spacing();
 
-        const bool temporalAAOpen = DrawCollapsingHeader(
-            "Temporal Anti-Aliasing",
-            "Configure the MiniEngine temporal anti-aliasing experiment.",
+        const bool antiAliasingOpen = DrawCollapsingHeader(
+            "Aliasing",
+            "Choose a complete anti-aliasing pipeline. Technical controls stay in developer overrides.",
             ImGuiTreeNodeFlags_DefaultOpen);
-        if (temporalAAOpen)
+        if (antiAliasingOpen)
         {
             BeginDrawerBody(
-                "##TemporalAABody",
+                "##AliasingBody",
                 settingsControlWidth);
-            const bool temporalAAVisibilityConflict =
-                m_ui.HasMiniEngineTaaVisibilityConflict();
-            const bool temporalAAAvailable = IsMiniEngineTaaAvailable(
-                true,
-                m_ui.EnablePbr,
-                m_ui.UsesDeferredShading(),
-                m_ui.ScreenSpaceVisibility.reconstruction.temporalEnabled,
-                m_ui.ScreenSpaceVisibility.sampling.adaptiveSparseSamplingEnabled);
-            if (!temporalAAAvailable)
+            // CollapsingHeader does not push an ID scope. Keep all Aliasing
+            // controls distinct from equally named controls in other Settings
+            // drawers (notably Visibility's "Quality" combo).
+            ImGui::PushID("AliasingControls");
+
+            AntiAliasingSettings& settings = m_ui.AntiAliasing;
+            ApplyPendingAliasingUiAction();
+            const bool temporalAAAvailable =
+                m_ui.IsTemporalAntiAliasingAvailable();
+            const bool motionTestRunning =
+                m_app->IsAntiAliasingMotionTestRunning();
+            const bool motionTestAvailable =
+                m_app->CanStartAntiAliasingMotionTest();
+
+            if (!motionTestAvailable)
                 ImGui::BeginDisabled();
-            if (ImGui::Checkbox(
-                    "Enabled##MiniEngineTAA",
-                    &m_ui.EnableMiniEngineTaa))
+            if (DrawCenteredActionButton(
+                    motionTestRunning
+                        ? "Running 45-Degree Motion Test..."
+                        : "Run 45-Degree Motion Test",
+                    settingsControlWidth))
             {
-                log::info(
-                    "MiniEngine temporal anti-aliasing %s",
-                    m_ui.EnableMiniEngineTaa ? "enabled" : "disabled");
+                m_app->StartAntiAliasingMotionTest();
             }
+            if (!motionTestAvailable)
+                ImGui::EndDisabled();
             ImGui::SetItemTooltip(
-                "Jitter and accumulate scene-linear color using Microsoft's MiniEngine TAA.");
+                motionTestRunning
+                    ? "The exact 40 Hz Benchmark Position 1 warm, turn, hold, and return sequence is running."
+                    : (m_app->HasSponzaCameraLocations()
+                        ? "Run the exact Benchmark Position 1 test used for AA validation: 180 warm frames, 45 degrees right at 0.375 degrees per frame with a 40 Hz target, a 16-frame hold, and the same return."
+                        : "The motion test requires a standardized PBR Sponza scene."));
+            ImGui::TextWrapped(
+                "%s",
+                m_app->GetAntiAliasingMotionTestStatus().c_str());
 
-            ImGui::Checkbox(
-                "Sharpen##MiniEngineTAA",
-                &m_ui.EnableMiniEngineTaaSharpen);
-            ImGui::SetItemTooltip(
-                "Use MiniEngine's sharpening output pass. When disabled, use its plain resolve pass.");
-
-            if (!m_ui.EnableMiniEngineTaaSharpen)
+            if (motionTestRunning)
                 ImGui::BeginDisabled();
+
+            auto drawEnumOption = [settingsControlWidth](
+                const char* label,
+                auto& selectedValue,
+                uint32_t valueCount,
+                auto getLabel,
+                const char* tooltip,
+                const char* inheritedOrAutoValue = nullptr,
+                bool collapseRedundantInheritedValue = false)
+            {
+                using ValueType =
+                    std::decay_t<decltype(selectedValue)>;
+                bool changed = false;
+                if (collapseRedundantInheritedValue &&
+                    inheritedOrAutoValue &&
+                    static_cast<uint32_t>(selectedValue) != 0u &&
+                    std::string(getLabel(selectedValue)) ==
+                        inheritedOrAutoValue)
+                {
+                    // An explicit value identical to the inherited/Auto value
+                    // has no distinct effect. Normalize it so the UI exposes
+                    // one effective choice and the preset is not needlessly
+                    // marked Custom.
+                    selectedValue =
+                        static_cast<ValueType>(0u);
+                    changed = true;
+                }
+                const auto makeLabel =
+                    [&](ValueType value)
+                    {
+                        std::string result = getLabel(value);
+                        if (static_cast<uint32_t>(value) == 0u &&
+                            inheritedOrAutoValue)
+                        {
+                            result =
+                                std::string(inheritedOrAutoValue) +
+                                " (" + result;
+                            result += ")";
+                        }
+                        return result;
+                    };
+                const std::string preview =
+                    makeLabel(selectedValue);
+                BeginAnimatedMutex(label, false);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (BeginRoundedCombo(label, preview.c_str()))
+                {
+                    for (uint32_t index = 0u;
+                        index < valueCount;
+                        ++index)
+                    {
+                        const ValueType candidate =
+                            static_cast<ValueType>(index);
+                        if (collapseRedundantInheritedValue &&
+                            index != 0u &&
+                            inheritedOrAutoValue &&
+                            std::string(getLabel(candidate)) ==
+                                inheritedOrAutoValue)
+                        {
+                            continue;
+                        }
+                        const bool selected =
+                            candidate == selectedValue;
+                        const std::string candidateLabel =
+                            makeLabel(candidate);
+                        if (ImGui::Selectable(
+                                candidateLabel.c_str(),
+                                selected) &&
+                            !selected)
+                        {
+                            ValueType* selectedValuePointer =
+                                &selectedValue;
+                            QueueAliasingUiAction(
+                                [selectedValuePointer, candidate]()
+                                {
+                                    *selectedValuePointer = candidate;
+                                });
+                            changed = true;
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                EndAnimatedMutex();
+                ImGui::SetItemTooltip(tooltip);
+                return changed;
+            };
+
+            auto drawMutexOption = [settingsControlWidth](
+                const char* label,
+                const char* tooltip)
+            {
+                BeginAnimatedMutex(label, true);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (BeginRoundedCombo(label, "(Mutex)"))
+                    ImGui::EndCombo();
+                EndAnimatedMutex();
+                ImGui::SetItemTooltip(tooltip);
+            };
+
+            auto drawFixedOption = [settingsControlWidth](
+                const char* label,
+                const char* value,
+                const char* tooltip,
+                bool mutex = false)
+            {
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (mutex)
+                    BeginAnimatedMutex(label, true);
+                else
+                    ImGui::BeginDisabled();
+                if (BeginRoundedCombo(label, value))
+                    ImGui::EndCombo();
+                if (mutex)
+                    EndAnimatedMutex();
+                else
+                    ImGui::EndDisabled();
+                ImGui::SetItemTooltip(tooltip);
+            };
+
+            auto drawMutexCheckbox = [](
+                const char* label,
+                const char* tooltip)
+            {
+                bool value = false;
+                std::string displayedLabel =
+                    std::string(label) + " (Mutex)###" + label;
+                BeginAnimatedMutex(label, true);
+                ImGui::Checkbox(displayedLabel.c_str(), &value);
+                EndAnimatedMutex();
+                ImGui::SetItemTooltip(tooltip);
+            };
+
+            ImGui::Checkbox("Enabled", &settings.enabled);
+            ImGui::SetItemTooltip(
+                "Bypass anti-aliasing while retaining the selected method, quality, and overrides.");
+
+            const bool temporalMethodSelected =
+                settings.method ==
+                    AntiAliasingMethod::
+                        TemporalSubpixelMorphological;
+            const bool temporalSelectionUnavailableBeforeSelection =
+                temporalMethodSelected &&
+                !temporalAAAvailable;
+            std::string methodPreview =
+                GetAntiAliasingMethodLabel(settings.method);
+            if (temporalSelectionUnavailableBeforeSelection)
+                methodPreview += " (Mutex)";
+            BeginAnimatedMutexPreview(
+                "##MethodMutexPreview",
+                temporalSelectionUnavailableBeforeSelection);
             ImGui::SetNextItemWidth(settingsControlWidth);
-            DrawSliderFloat(
-                "Sharpness##MiniEngineTAA",
-                &m_ui.MiniEngineTaaSharpness,
-                MiniEngineTaaMinimumSharpness,
-                MiniEngineTaaMaximumSharpness,
-                "%.2f");
+            const bool methodComboOpen = BeginRoundedCombo(
+                "Method",
+                methodPreview.c_str());
+            EndAnimatedMutexPreview();
+            if (methodComboOpen)
+            {
+                for (uint32_t index = 0u;
+                    index <
+                        static_cast<uint32_t>(
+                            AntiAliasingMethod::Count);
+                    ++index)
+                {
+                    const AntiAliasingMethod candidate =
+                        static_cast<AntiAliasingMethod>(index);
+                    const bool candidateUnavailable =
+                        (candidate ==
+                            AntiAliasingMethod::
+                                    TemporalSubpixelMorphological) &&
+                        !temporalAAAvailable;
+                    ImGui::PushID(static_cast<int>(index));
+                    BeginAnimatedMutex(
+                        "##MethodCandidateMutex",
+                        candidateUnavailable);
+
+                    const bool selected =
+                        candidate == settings.method;
+                    std::string candidateLabel =
+                        GetAntiAliasingMethodLabel(candidate);
+                    if (candidateUnavailable)
+                        candidateLabel += " (Mutex)";
+                    candidateLabel += "###MethodCandidate";
+                    if (ImGui::Selectable(
+                            candidateLabel.c_str(),
+                            selected) &&
+                        !candidateUnavailable)
+                    {
+                        AntiAliasingSettings* settingsPointer =
+                            &settings;
+                        QueueAliasingUiAction(
+                            [this, settingsPointer, candidate]()
+                            {
+                                settingsPointer->method =
+                                    candidate;
+                                settingsPointer->quality =
+                                    SanitizeAntiAliasingQuality(
+                                        settingsPointer->method,
+                                        settingsPointer->quality);
+                                m_ui.MiniEngineTaaVisualization =
+                                    MiniEngineTaaDebugView::Off;
+                            });
+                    }
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                    EndAnimatedMutex();
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
             ImGui::SetItemTooltip(
-                "MiniEngine sharpening strength. The reference default is 0.50.");
-            if (!m_ui.EnableMiniEngineTaaSharpen)
-                ImGui::EndDisabled();
+                "Choose diagnostic spatial SMAA, long-term MiniEngine temporal AA, Intel CMAA2, or hardware MSAA. Temporal AA requires deferred UVSR PBR motion and depth.");
 
-            if (m_HasTemporalAAStatSnapshot)
+            std::string qualityPreview =
+                GetAntiAliasingQualityMenuLabel(
+                    settings.method,
+                    settings.quality);
+            if (IsAntiAliasingPresetCustom(settings))
+                qualityPreview += " (Custom)";
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            if (BeginRoundedCombo(
+                    "Quality",
+                    qualityPreview.c_str()))
             {
-                ImGui::TextUnformatted(
-                    m_TemporalAAStatLines[0].c_str());
-                ImGui::SetItemTooltip(
-                    "Recent GPU time for the two MiniEngine TAA dispatches.");
-                ImGui::TextUnformatted(
-                    m_TemporalAAStatLines[1].c_str());
-                ImGui::SetItemTooltip(
-                    "Logical color and depth history payload before API padding.");
+                for (uint32_t index = 0u;
+                    index <
+                        static_cast<uint32_t>(
+                            AntiAliasingQuality::Count);
+                    ++index)
+                {
+                    const AntiAliasingQuality candidate =
+                        static_cast<AntiAliasingQuality>(index);
+                    const bool candidateUnavailable =
+                        !IsAntiAliasingQualitySupported(
+                            settings.method,
+                            candidate);
+                    ImGui::PushID(static_cast<int>(index));
+                    BeginAnimatedMutex(
+                        "##QualityCandidateMutex",
+                        candidateUnavailable);
+                    const bool selected =
+                        candidate == settings.quality;
+                    std::string candidateLabel =
+                        GetAntiAliasingQualityMenuLabel(
+                            settings.method,
+                            candidate);
+                    if (candidateUnavailable)
+                        candidateLabel += " (Mutex)";
+                    candidateLabel += "###QualityCandidate";
+                    if (ImGui::Selectable(
+                            candidateLabel.c_str(),
+                            selected) &&
+                        !selected &&
+                        !candidateUnavailable)
+                    {
+                        AntiAliasingSettings* settingsPointer =
+                            &settings;
+                        QueueAliasingUiAction(
+                            [this, settingsPointer, candidate]()
+                            {
+                                settingsPointer->quality =
+                                    candidate;
+                                m_ui.MiniEngineTaaVisualization =
+                                    MiniEngineTaaDebugView::Off;
+                            });
+                    }
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                    EndAnimatedMutex();
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
             }
+            ImGui::SetItemTooltip(
+                "SMAA uses the pinned official Low through Ultra presets. Temporal has independent Low through Ultra horizons. Conservative Morphological exposes Low through High. Multisample maps Low, Medium, High, and Ultra to 2x, 4x, 8x, and 16x.");
 
-            if (!temporalAAAvailable)
+            const AntiAliasingPreset selectedImplementation =
+                GetAntiAliasingImplementation(
+                    settings.method,
+                    SanitizeAntiAliasingQuality(
+                        settings.method,
+                        settings.quality));
+            const bool longTermTemporalControlsAvailable =
+                IsLongTermTemporalPreset(selectedImplementation) &&
+                temporalAAAvailable;
+            const bool temporalSelectionUnavailable =
+                settings.method ==
+                    AntiAliasingMethod::
+                        TemporalSubpixelMorphological;
+            const bool effectiveTemporalSelectionUnavailable =
+                temporalSelectionUnavailable &&
+                !temporalAAAvailable;
+            if (effectiveTemporalSelectionUnavailable)
             {
-                ImGui::EndDisabled();
                 ImGui::TextDisabled(
-                    temporalAAVisibilityConflict
-                        ? "Disable Visibility Temporal and Adaptive Sampling first."
-                        : "Requires deferred UVSR PBR motion and depth.");
+                    m_ui.HasMiniEngineTaaVisibilityConflict()
+                        ? "Temporal anti-aliasing is paused until visibility Temporal Reconstruction is disabled."
+                        : "Temporal anti-aliasing requires deferred UVSR PBR motion and depth.");
             }
+
+            MiniEngineTaaAlgorithmOverrides& historyOverrides =
+                settings.algorithmOverrides;
+            AntiAliasingSettings historyPresetSettings = settings;
+            historyPresetSettings.algorithmOverrides.historyFrames =
+                -1;
+            historyPresetSettings.algorithmOverrides.historyStrength =
+                -1.f;
+            const ResolvedAntiAliasingSettings historyPreset =
+                m_ui.GetResolvedAntiAliasingSettings(
+                    historyPresetSettings);
+            const bool usesConfigurableHistory =
+                longTermTemporalControlsAvailable;
+            if (usesConfigurableHistory)
+            {
+                int historyFrames =
+                    historyOverrides.historyFrames >= 0
+                        ? historyOverrides.historyFrames
+                        : static_cast<int>(
+                            historyPreset.historyFrames);
+                std::string historyFramesLabel =
+                    "History Frames";
+                if (historyOverrides.historyFrames < 0)
+                    historyFramesLabel += " (Preset)";
+                historyFramesLabel +=
+                    "##ResolvedHistoryFrames";
+                BeginAnimatedMutex("History Frames", false);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (DrawSliderInt(
+                        historyFramesLabel.c_str(),
+                        &historyFrames,
+                        1,
+                        31,
+                        "%d"))
+                {
+                    historyOverrides.historyFrames =
+                        historyFrames ==
+                            static_cast<int>(
+                                historyPreset.historyFrames)
+                            ? -1
+                            : historyFrames;
+                }
+                EndAnimatedMutex();
+                ImGui::SetItemTooltip(
+                    "Cap the logical number of prior frames that can influence temporal AA. The physical allocation remains two ping-pong textures.");
+            }
+            else
+            {
+                drawFixedOption(
+                    "History Frames",
+                    "No History (Mutex)",
+                    "The selected spatial or multisample method does not retain prior frames.",
+                    true);
+            }
+
+            if (usesConfigurableHistory)
+            {
+                float historyStrength =
+                    100.f *
+                    (historyOverrides.historyStrength >= 0.f
+                        ? historyOverrides.historyStrength
+                        : historyPreset.historyStrength);
+                std::string historyStrengthLabel =
+                    "History Strength";
+                if (historyOverrides.historyStrength < 0.f)
+                    historyStrengthLabel += " (Preset)";
+                historyStrengthLabel +=
+                    "##ResolvedHistoryStrength";
+                BeginAnimatedMutex("History Strength", false);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (DrawSliderFloat(
+                        historyStrengthLabel.c_str(),
+                        &historyStrength,
+                        0.f,
+                        100.f,
+                        "%.0f%%"))
+                {
+                    historyOverrides.historyStrength =
+                        std::clamp(
+                            historyStrength * 0.01f,
+                            0.f,
+                            1.f);
+                    if (std::abs(
+                            historyOverrides.historyStrength -
+                            historyPreset.historyStrength) < 1e-4f)
+                    {
+                        historyOverrides.historyStrength = -1.f;
+                    }
+                }
+                EndAnimatedMutex();
+                ImGui::SetItemTooltip(
+                    "Scale accepted history after motion, bounds, reverse-Z depth, disocclusion, rectification, and stable-interior gates. It can only reduce history.");
+            }
+            else
+            {
+                float noHistoryStrength = 0.f;
+                BeginAnimatedMutex("History Strength", true);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                DrawSliderFloat(
+                    "History Strength (Mutex)",
+                    &noHistoryStrength,
+                    0.f,
+                    100.f,
+                    "%.0f%%");
+                EndAnimatedMutex();
+                ImGui::SetItemTooltip(
+                    "History strength is mutually exclusive with a method that retains no prior frames.");
+            }
+
+#if !UVSR_AA_DEVELOPER_OVERRIDES
+            if (longTermTemporalControlsAvailable)
+            {
+                ImGui::Checkbox(
+                    "Sharpness###Sharpness",
+                    &m_ui.MiniEngineTaaSharpenEnabled);
+                ImGui::SetItemTooltip(
+                    "Enable or bypass temporal output sharpening while retaining the selected strength.");
+                if (!m_ui.MiniEngineTaaSharpenEnabled)
+                    ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                DrawSliderFloat(
+                    "Sharpness Strength",
+                    &m_ui.MiniEngineTaaSharpness,
+                    MiniEngineTaaMinimumSharpness,
+                    MiniEngineTaaMaximumSharpness,
+                    "%.2f");
+                if (!m_ui.MiniEngineTaaSharpenEnabled)
+                    ImGui::EndDisabled();
+                ImGui::SetItemTooltip(
+                    "Set temporal output sharpness. The stored value is retained while sharpening is disabled.");
+            }
+#endif
+
+#if UVSR_AA_DEVELOPER_OVERRIDES
+            if (BeginAnimatedTreeNode(
+                    "Aliasing Algorithm Configuration",
+                    ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                MiniEngineTaaAlgorithmOverrides& overrides =
+                    settings.algorithmOverrides;
+                AntiAliasingSettings presetLabelSettings =
+                    settings;
+                presetLabelSettings.algorithmOverrides =
+                    MiniEngineTaaAlgorithmOverrides{};
+                const ResolvedAntiAliasingSettings resolvedForLabels =
+                    m_ui.GetResolvedAntiAliasingSettings(
+                        presetLabelSettings);
+
+                const auto drawMorphologyOption = [&]()
+                {
+                    if (selectedImplementation ==
+                        AntiAliasingPreset::Smaa1x)
+                    {
+                        drawFixedOption(
+                            "Subpixel Morphology##Developer",
+                            "All Pixels (Preset)",
+                            "Diagnostic SMAA 1x always runs the complete full-screen morphology pipeline.");
+                    }
+                    else if (selectedImplementation ==
+                        AntiAliasingPreset::IntelCmaa2)
+                    {
+                        drawFixedOption(
+                            "Subpixel Morphology##Developer",
+                            "Conservative Morphological (Preset)",
+                            "The standalone Conservative Morphological method always runs Intel CMAA2.");
+                    }
+                    else if (
+                        longTermTemporalControlsAvailable ||
+                        selectedImplementation ==
+                            AntiAliasingPreset::Msaa2x ||
+                        selectedImplementation ==
+                            AntiAliasingPreset::Msaa4x ||
+                        selectedImplementation ==
+                            AntiAliasingPreset::Msaa8x ||
+                        selectedImplementation ==
+                            AntiAliasingPreset::Msaa16x)
+                    {
+                        const auto applicationForOverride =
+                            [&](SmaaApplicationOverride value)
+                            {
+                                switch (value)
+                                {
+                                case SmaaApplicationOverride::Off:
+                                    return SmaaApplication::Off;
+                                case SmaaApplicationOverride::FullScreen:
+                                    return SmaaApplication::FullScreen;
+                                case SmaaApplicationOverride::
+                                        ConservativeMorphological:
+                                    return SmaaApplication::
+                                        ConservativeMorphological;
+                                case SmaaApplicationOverride::SelectiveShort:
+                                    return SmaaApplication::SelectiveShort;
+                                case SmaaApplicationOverride::SelectiveLong:
+                                    return SmaaApplication::SelectiveLong;
+                                default:
+                                    return resolvedForLabels
+                                        .subpixelMorphology;
+                                }
+                            };
+                        const auto makeMorphologyLabel =
+                            [&](SmaaApplicationOverride value)
+                            {
+                                const SmaaApplication application =
+                                    applicationForOverride(value);
+                                std::string label =
+                                    value ==
+                                        SmaaApplicationOverride::FromPreset
+                                    ? std::string(
+                                          GetSmaaApplicationLabel(
+                                              application)) +
+                                          " (Preset)"
+                                    : GetSmaaApplicationOverrideLabel(value);
+                                if (!IsMorphologyApplicationSupported(
+                                        selectedImplementation,
+                                        application))
+                                {
+                                    label += " (Mutex)";
+                                }
+                                return label;
+                            };
+                        const SmaaApplication selectedApplication =
+                            applicationForOverride(
+                                overrides.subpixelMorphology);
+                        const bool selectedApplicationUnavailable =
+                            !IsMorphologyApplicationSupported(
+                                selectedImplementation,
+                                selectedApplication);
+                        const std::string morphologyPreview =
+                            makeMorphologyLabel(
+                                overrides.subpixelMorphology);
+                        BeginAnimatedMutexPreview(
+                            "##MorphologyMutexPreview",
+                            selectedApplicationUnavailable);
+                        ImGui::SetNextItemWidth(settingsControlWidth);
+                        const bool morphologyComboOpen =
+                            BeginRoundedCombo(
+                                "Subpixel Morphology##Developer",
+                                morphologyPreview.c_str());
+                        EndAnimatedMutexPreview();
+                        if (morphologyComboOpen)
+                        {
+                            for (uint32_t index = 0u;
+                                index < static_cast<uint32_t>(
+                                    SmaaApplicationOverride::Count);
+                                ++index)
+                            {
+                                const auto candidate =
+                                    static_cast<SmaaApplicationOverride>(
+                                        index);
+                                const SmaaApplication application =
+                                    applicationForOverride(candidate);
+                                const bool available =
+                                    IsMorphologyApplicationSupported(
+                                        selectedImplementation,
+                                        application);
+                                ImGui::PushID(
+                                    static_cast<int>(index));
+                                BeginAnimatedMutex(
+                                    "##MorphologyCandidateMutex",
+                                    !available);
+                                const bool selected =
+                                    candidate ==
+                                    overrides.subpixelMorphology;
+                                std::string candidateLabel =
+                                    makeMorphologyLabel(candidate);
+                                candidateLabel +=
+                                    "###MorphologyCandidate";
+                                if (ImGui::Selectable(
+                                        candidateLabel.c_str(),
+                                        selected) &&
+                                    !selected &&
+                                    available)
+                                {
+                                    MiniEngineTaaAlgorithmOverrides*
+                                        overridesPointer =
+                                            &overrides;
+                                    QueueAliasingUiAction(
+                                        [this,
+                                            overridesPointer,
+                                            candidate]()
+                                        {
+                                            overridesPointer->
+                                                subpixelMorphology =
+                                                    candidate;
+                                            m_ui.MiniEngineTaaVisualization =
+                                                MiniEngineTaaDebugView::Off;
+                                        });
+                                }
+                                if (selected)
+                                    ImGui::SetItemDefaultFocus();
+                                EndAnimatedMutex();
+                                ImGui::PopID();
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SetItemTooltip(
+                            "Choose no morphology, full-screen SMAA, or Intel CMAA2 after the resolved Temporal or Multisample image. Selective SMAA additionally requires Temporal's rejection mask.");
+                    }
+                    else
+                    {
+                        drawMutexOption(
+                            "Subpixel Morphology##Developer",
+                            "This standalone method owns its morphology.");
+                    }
+                };
+
+                if (longTermTemporalControlsAvailable)
+                {
+                    BeginAnimatedMutex("Sharpness", false);
+                    ImGui::Checkbox(
+                        "Sharpness###Sharpness",
+                        &m_ui.MiniEngineTaaSharpenEnabled);
+                    EndAnimatedMutex();
+                    ImGui::SetItemTooltip(
+                        "Enable or bypass temporal output sharpening while retaining the selected strength.");
+                    const bool sharpnessStrengthEnabled =
+                        m_ui.MiniEngineTaaSharpenEnabled &&
+                        IsSharpnessRelevant(selectedImplementation);
+                    if (!sharpnessStrengthEnabled)
+                        ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(
+                        settingsControlWidth);
+                    DrawSliderFloat(
+                        "Sharpness Strength",
+                        &m_ui.MiniEngineTaaSharpness,
+                        MiniEngineTaaMinimumSharpness,
+                        MiniEngineTaaMaximumSharpness,
+                        "%.2f");
+                    if (!sharpnessStrengthEnabled)
+                        ImGui::EndDisabled();
+                    ImGui::SetItemTooltip(
+                        "Set temporal output sharpness. The stored value is retained while sharpening is disabled.");
+
+                    drawMorphologyOption();
+                    drawEnumOption(
+                        "Motion Source",
+                        overrides.motionSource,
+                        static_cast<uint32_t>(
+                            MiniEngineTaaMotionSourceOverride::Count),
+                        GetMiniEngineTaaMotionSourceOverrideLabel,
+                        "Override motion ownership. Changing it resets all temporal state.",
+                        GetMiniEngineTaaMotionSourceLabel(
+                            resolvedForLabels.temporal.motionSource),
+                        true);
+                    drawEnumOption(
+                        "Current Reconstruction",
+                        overrides.currentReconstruction,
+                        static_cast<uint32_t>(
+                            MiniEngineTaaCurrentReconstructionOverride::Count),
+                        GetMiniEngineTaaCurrentReconstructionOverrideLabel,
+                        "Override direct or de-jittered current reconstruction.",
+                        GetMiniEngineTaaCurrentReconstructionLabel(
+                            resolvedForLabels.temporal.currentReconstruction),
+                        true);
+                    drawEnumOption(
+                        "Rectification",
+                        overrides.rectification,
+                        static_cast<uint32_t>(
+                            MiniEngineTaaRectificationOverride::Count),
+                        GetMiniEngineTaaRectificationOverrideLabel,
+                        "Override pair, per-pixel, or variance-aware history rectification.",
+                        GetMiniEngineTaaRectificationLabel(
+                            resolvedForLabels.temporal.rectification),
+                        true);
+                    drawEnumOption(
+                        "History Filter",
+                        overrides.historyFilter,
+                        static_cast<uint32_t>(
+                            MiniEngineTaaHistoryFilterOverride::Count),
+                        GetMiniEngineTaaHistoryFilterOverrideLabel,
+                        "Override the real history sampling filter.",
+                        GetMiniEngineTaaHistoryFilterLabel(
+                            resolvedForLabels.temporal.historyFilter),
+                        true);
+                }
+                else
+                {
+                    drawMutexCheckbox(
+                        "Sharpness",
+                        "Sharpness is mutually exclusive with the current anti-aliasing selection.");
+                    drawMorphologyOption();
+                    drawMutexOption(
+                        "Motion Source",
+                        "Temporal algorithm overrides are mutually exclusive with the current anti-aliasing selection.");
+                    drawMutexOption(
+                        "Current Reconstruction",
+                        "Temporal algorithm overrides are mutually exclusive with the current anti-aliasing selection.");
+                    drawMutexOption(
+                        "Rectification",
+                        "Temporal algorithm overrides are mutually exclusive with the current anti-aliasing selection.");
+                    drawMutexOption(
+                        "History Filter",
+                        "Temporal algorithm overrides are mutually exclusive with the current anti-aliasing selection.");
+                }
+
+                // Resurrection remains last because it is a recovery policy
+                // applied after the primary spatial and temporal choices.
+                if (longTermTemporalControlsAvailable)
+                {
+                    drawEnumOption(
+                        "Sample Resurrection",
+                        overrides.sampleResurrection,
+                        static_cast<uint32_t>(
+                            MiniEngineTaaSampleResurrectionOverride::Count),
+                        GetMiniEngineTaaSampleResurrectionOverrideLabel,
+                        "Reuse one or two older validated samples when immediate history is unreliable.",
+                        GetMiniEngineTaaSampleResurrectionLabel(
+                            resolvedForLabels.sampleResurrection),
+                        true);
+                }
+                else
+                {
+                    drawMutexOption(
+                        "Sample Resurrection",
+                        "Temporal algorithm overrides are mutually exclusive with the current anti-aliasing selection.");
+                }
+
+                EndAnimatedTreeNode();
+            }
+
+            if (BeginAnimatedTreeNode(
+                    "Developer Performance Overrides"))
+            {
+                MiniEngineTaaAlgorithmOverrides& algorithmOverrides =
+                    settings.algorithmOverrides;
+                if (longTermTemporalControlsAvailable)
+                {
+                    AntiAliasingSettings stableInteriorPresetSettings =
+                        settings;
+                    stableInteriorPresetSettings.algorithmOverrides =
+                        MiniEngineTaaAlgorithmOverrides{};
+                    const bool presetStableInterior =
+                        m_ui.GetResolvedAntiAliasingSettings(
+                                stableInteriorPresetSettings)
+                                .temporal.interiorWeighting ==
+                            MiniEngineTaaInteriorWeighting::StableInterior;
+                    const bool inherited =
+                        algorithmOverrides.stableInterior ==
+                        MiniEngineTaaStableInteriorOverride::FromPreset;
+                    bool stableInterior = inherited
+                        ? presetStableInterior
+                        : algorithmOverrides.stableInterior ==
+                            MiniEngineTaaStableInteriorOverride::On;
+                    std::string stableInteriorLabel = "Stable Interior";
+                    if (inherited)
+                        stableInteriorLabel += " (Preset)";
+                    stableInteriorLabel += "###Stable Interior";
+                    BeginAnimatedMutex("Stable Interior", false);
+                    if (ImGui::Checkbox(
+                            stableInteriorLabel.c_str(),
+                            &stableInterior))
+                    {
+                        if (stableInterior == presetStableInterior)
+                        {
+                            algorithmOverrides.stableInterior =
+                                MiniEngineTaaStableInteriorOverride::
+                                    FromPreset;
+                        }
+                        else
+                        {
+                            algorithmOverrides.stableInterior =
+                                stableInterior
+                                ? MiniEngineTaaStableInteriorOverride::On
+                                : MiniEngineTaaStableInteriorOverride::Off;
+                        }
+                    }
+                    EndAnimatedMutex();
+                    ImGui::SetItemTooltip(
+                        "Continuously reduce history toward the controlled clarity floor only in coherent interiors. Preset shows the resolved value.");
+                }
+                else
+                {
+                    drawMutexCheckbox(
+                        "Stable Interior",
+                        "Stable Interior is mutually exclusive with the current anti-aliasing selection.");
+                }
+
+                if (const MiniEngineTemporalAATimings* timings =
+                        m_app->GetMiniEngineTemporalAATimings())
+                {
+                    constexpr double BytesPerMiB =
+                        1024.0 * 1024.0;
+                    const ResolvedAntiAliasingSettings resolved =
+                        m_ui.GetResolvedAntiAliasingSettings(
+                            settings);
+                    ImGui::Text(
+                        "History %.1f MiB | %s | Frames %u | Resets %u",
+                        double(timings->historyTextureBytes) /
+                            BytesPerMiB,
+                        timings->historyValid ? "Valid" : "Invalid",
+                        timings->accumulationCount,
+                        timings->historyResetCount);
+                    ImGui::Text(
+                        "Permutation %u / %u | Color %u | Moments %u | Depth %uG + %uS",
+                        GetMiniEngineTaaBlendPermutationIndex(
+                            resolved.temporal) + 1u,
+                        MiniEngineTaaBlendPermutationCount,
+                        timings->historyColorSamples,
+                        timings->historyMomentSamples,
+                        timings->historyDepthGathers,
+                        timings->historyDepthSamples);
+                    ImGui::Text(
+                        "TAA %.2f ms | Blend %.2f | Output %.2f | Presentation Sharpen %.2f",
+                        timings->CompleteEffectMilliseconds(),
+                        timings->blendMilliseconds,
+                        timings->outputMilliseconds,
+                        timings->presentationSharpenMilliseconds);
+                }
+                if (const SmaaTimings* timings =
+                        m_app->GetSmaaTimings())
+                {
+                    ImGui::Text(
+                        "SMAA %.2f ms | Edge %.2f | Weight %.2f | Blend %.2f",
+                        timings->CompleteEffectMilliseconds(),
+                        timings->edgeMilliseconds,
+                        timings->weightMilliseconds,
+                        timings->neighborhoodMilliseconds);
+                }
+                if (const Cmaa2Timings* timings =
+                        m_app->GetCmaa2Timings())
+                {
+                    ImGui::Text(
+                        "CMAA2 %.2f ms | Edge %.2f | Candidates %.2f | Apply %.2f",
+                        timings->CompleteEffectMilliseconds(),
+                        timings->edgeMilliseconds,
+                        timings->candidateMilliseconds,
+                        timings->applyMilliseconds);
+                }
+                if (m_ui.UsesHardwareMsaa())
+                {
+                    if (m_ui.UsesDeferredShading())
+                    {
+                        ImGui::Text(
+                            "MSAA %ux | Deferred PBR | Per-Sample Lighting",
+                            m_app->GetRasterSampleCount());
+                    }
+                    else
+                    {
+                        ImGui::Text(
+                            "MSAA %ux | Forward PBR | Hardware Resolve",
+                            m_app->GetRasterSampleCount());
+                    }
+                }
+
+                const ResolvedAntiAliasingSettings
+                    resolvedForDebugAvailability =
+                        m_ui.GetResolvedAntiAliasingSettings(
+                            settings);
+                const bool smaaDebugAvailable =
+                    settings.enabled &&
+                    (selectedImplementation ==
+                            AntiAliasingPreset::Smaa1x ||
+                        resolvedForDebugAvailability
+                                .subpixelMorphology ==
+                            SmaaApplication::FullScreen ||
+                        resolvedForDebugAvailability
+                                .subpixelMorphology ==
+                            SmaaApplication::SelectiveShort ||
+                        resolvedForDebugAvailability
+                                .subpixelMorphology ==
+                            SmaaApplication::SelectiveLong);
+                const auto isDebugViewAvailable =
+                    [&](MiniEngineTaaDebugView value)
+                    {
+                        return value ==
+                                MiniEngineTaaDebugView::Off ||
+                            (IsMiniEngineTaaDebugVisualization(
+                                 value) &&
+                                longTermTemporalControlsAvailable) ||
+                            (IsSmaaDebugVisualization(value) &&
+                                smaaDebugAvailable);
+                    };
+                std::string debugPreview =
+                    GetMiniEngineTaaDebugViewLabel(
+                        m_ui.MiniEngineTaaVisualization);
+                const bool selectedDebugViewUnavailable =
+                    !isDebugViewAvailable(
+                        m_ui.MiniEngineTaaVisualization);
+                if (selectedDebugViewUnavailable)
+                {
+                    debugPreview += " (Mutex)";
+                }
+                BeginAnimatedMutexPreview(
+                    "##DebugViewMutexPreview",
+                    selectedDebugViewUnavailable);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                const bool debugViewComboOpen =
+                    BeginRoundedCombo(
+                        "Debug View",
+                        debugPreview.c_str());
+                EndAnimatedMutexPreview();
+                if (debugViewComboOpen)
+                {
+                    for (uint32_t index = 0u;
+                        index < MiniEngineTaaDebugViewCount;
+                        ++index)
+                    {
+                        const MiniEngineTaaDebugView candidate =
+                            static_cast<MiniEngineTaaDebugView>(
+                                index);
+                        const bool available =
+                            isDebugViewAvailable(candidate);
+                        const bool selected =
+                            candidate ==
+                            m_ui.MiniEngineTaaVisualization;
+                        std::string candidateLabel =
+                            GetMiniEngineTaaDebugViewLabel(
+                                candidate);
+                        if (!available)
+                        {
+                            candidateLabel += " (Mutex)";
+                        }
+                        ImGui::PushID(static_cast<int>(index));
+                        BeginAnimatedMutex(
+                            "##DebugViewCandidateMutex",
+                            !available);
+                        candidateLabel += "###DebugViewCandidate";
+                        if (ImGui::Selectable(
+                                candidateLabel.c_str(),
+                                selected) &&
+                            !selected &&
+                            available)
+                        {
+                            QueueAliasingUiAction(
+                                [this, candidate]()
+                                {
+                                    m_ui.MiniEngineTaaVisualization =
+                                        candidate;
+                                });
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                        EndAnimatedMutex();
+                        ImGui::PopID();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Inspect temporal confidence or the active SMAA edge mask, blend weights, and amplified presentation delta. Incompatible views are marked (Mutex).");
+
+                MiniEngineTaaPerformanceOverrides& overrides =
+                    settings.performanceOverrides;
+                AntiAliasingSettings autoLabelSettings =
+                    settings;
+                autoLabelSettings.performanceOverrides =
+                    MiniEngineTaaPerformanceOverrides{};
+                const ResolvedAntiAliasingSettings
+                    resolvedForPerformanceLabels =
+                        m_ui.GetResolvedAntiAliasingSettings(
+                            autoLabelSettings);
+                const ResolvedAntiAliasingSettings
+                    resolvedForPerformanceAvailability =
+                        m_ui.GetResolvedAntiAliasingSettings(
+                            settings);
+                const bool resurrectionActive =
+                    UsesSampleResurrection(
+                        resolvedForPerformanceAvailability
+                            .sampleResurrection);
+                const bool presentationSharpenRequiresFusion =
+                    longTermTemporalControlsAvailable &&
+                    ShouldSharpenMiniEngineTaa(
+                        m_ui.MiniEngineTaaSharpenEnabled,
+                        m_ui.MiniEngineTaaSharpness) &&
+                    resolvedForPerformanceAvailability
+                            .subpixelMorphology !=
+                        SmaaApplication::Off &&
+                    !IsMiniEngineTaaDebugVisualization(
+                        m_ui.MiniEngineTaaVisualization);
+                if (longTermTemporalControlsAvailable)
+                {
+                    drawEnumOption(
+                        "Execution Path",
+                        overrides.executionPath,
+                        static_cast<uint32_t>(
+                            MiniEngineTaaExecutionPath::Count),
+                        GetMiniEngineTaaExecutionPathLabel,
+                        "Auto shows and uses only an adapter-specific validated TAA winner.",
+                        GetMiniEngineTaaExecutionPathLabel(
+                            resolvedForPerformanceLabels.executionPath),
+                        true);
+                    drawEnumOption(
+                        "Compute Kernel",
+                        overrides.computeKernel,
+                        static_cast<uint32_t>(
+                            MiniEngineTaaComputeKernel::Count),
+                        GetMiniEngineTaaComputeKernelLabel,
+                        "Compare the TAA 8x8 paired kernel with the 16x8 one-pixel kernel.",
+                        GetMiniEngineTaaComputeKernelLabel(
+                            resolvedForPerformanceLabels.computeKernel),
+                        true);
+                    drawEnumOption(
+                        "LDS Layout",
+                        overrides.ldsLayout,
+                        static_cast<uint32_t>(
+                            MiniEngineTaaLdsLayout::Count),
+                        GetMiniEngineTaaLdsLayoutLabel,
+                        "Compare TAA legacy, split, and split-and-packed shared-memory layouts.",
+                        GetMiniEngineTaaLdsLayoutLabel(
+                            resolvedForPerformanceLabels.ldsLayout),
+                        true);
+                    drawEnumOption(
+                        "Shared-Work Reuse",
+                        overrides.sharedWorkReuse,
+                        static_cast<uint32_t>(
+                            MiniEngineTaaAutoToggle::Count),
+                        GetMiniEngineTaaAutoToggleLabel,
+                        "Reuse overlapping TAA bounds and reconstruction work.",
+                        resolvedForPerformanceLabels.sharedWorkReuse
+                            ? "On"
+                            : "Off",
+                        true);
+                    drawEnumOption(
+                        "Early History Rejection",
+                        overrides.earlyHistoryRejection,
+                        static_cast<uint32_t>(
+                            MiniEngineTaaAutoToggle::Count),
+                        GetMiniEngineTaaAutoToggleLabel,
+                        "Skip TAA history work only when confidence is exactly zero.",
+                        resolvedForPerformanceLabels.earlyHistoryRejection
+                            ? "On"
+                            : "Off",
+                        true);
+                    if (presentationSharpenRequiresFusion)
+                    {
+                        drawMutexOption(
+                            "Pass Fusion",
+                            "Presentation sharpening currently requires the compatible TAA topology.");
+                    }
+                    else
+                    {
+                        drawEnumOption(
+                            "Pass Fusion",
+                            overrides.passFusion,
+                            static_cast<uint32_t>(
+                                MiniEngineTaaPassFusion::Count),
+                            GetMiniEngineTaaPassFusionLabel,
+                            "Fuse compatible TAA output work when no debug view requires an intermediate.",
+                            GetMiniEngineTaaPassFusionLabel(
+                                resolvedForPerformanceLabels.passFusion),
+                            true);
+                    }
+                    drawEnumOption(
+                        "Cache Blocking",
+                        overrides.cacheBlocking,
+                        static_cast<uint32_t>(
+                            MiniEngineTaaCacheBlocking::Count),
+                        GetMiniEngineTaaCacheBlockingLabel,
+                        "TAA screen-band experiment; Auto remains Off without repeatable stall evidence.",
+                        GetMiniEngineTaaCacheBlockingLabel(
+                            resolvedForPerformanceLabels.cacheBlocking),
+                        true);
+                }
+                else
+                {
+                    ImGui::TextDisabled(
+                        "TAA performance overrides are unavailable for this method.");
+                }
+                EndAnimatedTreeNode();
+            }
+#endif
+            if (motionTestRunning)
+                ImGui::EndDisabled();
+
+            ImGui::PopID();
             EndDrawerBody();
         }
         ImGui::Spacing();
@@ -4764,6 +7886,10 @@ protected:
         ImGui::SetItemTooltip("Restart UVSR.");
         ImGui::PopStyleColor(3);
 
+        // Wheel motion is eased by the UI layer; this viewport fade keeps
+        // partially clipped rows from popping into full contrast at either
+        // edge while the settings list travels.
+        DrawSettingsScrollEdgeFades();
         ImGui::EndChild();
         ImGui::End();
         ImGui::PopStyleColor(3);
@@ -4815,16 +7941,56 @@ protected:
     }
 };
 
-void ProcessCommandLine(
+bool ProcessCommandLine(
     int argc,
     const char* const* argv,
     DeviceCreationParameters& deviceParams,
     std::string& sceneName,
     std::string& experimentDescription,
-    bool& benchmarkCameraRequested)
+    bool& benchmarkCameraRequested,
+    AaBenchmarkConfig& aaBenchmark)
 {
+    const auto invalidValue = [](
+        const char* option,
+        const std::string& value,
+        const char* expected)
+    {
+        log::error(
+            "Invalid %s value '%s'; expected %s",
+            option,
+            value.c_str(),
+            expected);
+        return false;
+    };
+    const auto missingValue = [](const char* option)
+    {
+        log::error("Missing value after %s", option);
+        return false;
+    };
+
+    try
+    {
     for (int i = 1; i < argc; i++)
     {
+#if !UVSR_AA_DEVELOPER_OVERRIDES
+        const bool developerAaOption =
+            !strcmp(argv[i], "--aa-execution") ||
+            !strcmp(argv[i], "--aa-kernel") ||
+            !strcmp(argv[i], "--aa-lds") ||
+            !strcmp(argv[i], "--aa-reuse") ||
+            !strcmp(argv[i], "--aa-early") ||
+            !strcmp(argv[i], "--aa-fusion") ||
+            !strcmp(argv[i], "--aa-cache") ||
+            !strcmp(argv[i], "--aa-smaa");
+        if (developerAaOption)
+        {
+            log::error(
+                "%s requires a build configured with "
+                "UVSR_AA_DEVELOPER_OVERRIDES=ON",
+                argv[i]);
+            return false;
+        }
+#endif
         if (!strcmp(argv[i], "-width") && i + 1 < argc)
         {
             deviceParams.backBufferWidth = std::stoi(argv[++i]);
@@ -4855,11 +8021,270 @@ void ProcessCommandLine(
         {
             benchmarkCameraRequested = true;
         }
+        else if (!strcmp(argv[i], "--aa-benchmark-output") &&
+            i + 1 < argc)
+        {
+            aaBenchmark.enabled = true;
+            aaBenchmark.outputPath = argv[++i];
+            benchmarkCameraRequested = true;
+        }
+        else if (!strcmp(argv[i], "--aa-method"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            const std::string value = argv[++i];
+            if (value == "spatial" ||
+                value == "subpixel" ||
+                value == "subpixel-morphological")
+            {
+                aaBenchmark.settings.method =
+                    AntiAliasingMethod::SubpixelMorphological;
+            }
+            else if (value == "temporal" ||
+                value == "temporal-subpixel" ||
+                value == "temporal-subpixel-morphological")
+            {
+                aaBenchmark.settings.method =
+                    AntiAliasingMethod::TemporalSubpixelMorphological;
+            }
+            else if (value == "cmaa2" ||
+                value == "intel-cmaa2")
+            {
+                aaBenchmark.settings.method =
+                    AntiAliasingMethod::IntelCmaa2;
+            }
+            else if (value == "msaa")
+            {
+                aaBenchmark.settings.method =
+                    AntiAliasingMethod::Msaa;
+            }
+            else
+            {
+                return invalidValue(
+                    "--aa-method",
+                    value,
+                    "spatial|temporal|cmaa2|msaa");
+            }
+        }
+        else if (!strcmp(argv[i], "--aa-quality") ||
+            !strcmp(argv[i], "--aa-preset"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            const std::string value = argv[++i];
+            if (value == "low")
+                aaBenchmark.settings.quality = AntiAliasingQuality::Low;
+            else if (value == "medium")
+                aaBenchmark.settings.quality = AntiAliasingQuality::Medium;
+            else if (value == "high")
+                aaBenchmark.settings.quality = AntiAliasingQuality::High;
+            else if (value == "ultra")
+                aaBenchmark.settings.quality = AntiAliasingQuality::Ultra;
+            else
+                return invalidValue(
+                    argv[i - 1],
+                    value,
+                    "low|medium|high|ultra");
+        }
+        else if (!strcmp(argv[i], "--aa-enabled"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            const std::string value = argv[++i];
+            if (value == "on")
+                aaBenchmark.settings.enabled = true;
+            else if (value == "off")
+                aaBenchmark.settings.enabled = false;
+            else
+                return invalidValue("--aa-enabled", value, "on|off");
+        }
+        else if (!strcmp(argv[i], "--aa-execution"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            const std::string value = argv[++i];
+            if (value == "auto")
+                aaBenchmark.settings.performanceOverrides.executionPath =
+                    MiniEngineTaaExecutionPath::Auto;
+            else if (value == "compute")
+                aaBenchmark.settings.performanceOverrides.executionPath =
+                    MiniEngineTaaExecutionPath::Compute;
+            else if (value == "pixel")
+                aaBenchmark.settings.performanceOverrides.executionPath =
+                    MiniEngineTaaExecutionPath::FullscreenPixelShader;
+            else
+                return invalidValue(
+                    "--aa-execution",
+                    value,
+                    "auto|compute|pixel");
+        }
+        else if (!strcmp(argv[i], "--aa-kernel"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            const std::string value = argv[++i];
+            if (value == "auto")
+                aaBenchmark.settings.performanceOverrides.computeKernel =
+                    MiniEngineTaaComputeKernel::Auto;
+            else if (value == "8x8")
+                aaBenchmark.settings.performanceOverrides.computeKernel =
+                    MiniEngineTaaComputeKernel::Threads8x8TwoPixels;
+            else if (value == "16x8")
+                aaBenchmark.settings.performanceOverrides.computeKernel =
+                    MiniEngineTaaComputeKernel::Threads16x8OnePixel;
+            else
+                return invalidValue(
+                    "--aa-kernel",
+                    value,
+                    "auto|8x8|16x8");
+        }
+        else if (!strcmp(argv[i], "--aa-lds"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            const std::string value = argv[++i];
+            if (value == "auto")
+                aaBenchmark.settings.performanceOverrides.ldsLayout =
+                    MiniEngineTaaLdsLayout::Auto;
+            else if (value == "legacy")
+                aaBenchmark.settings.performanceOverrides.ldsLayout =
+                    MiniEngineTaaLdsLayout::Legacy;
+            else if (value == "split")
+                aaBenchmark.settings.performanceOverrides.ldsLayout =
+                    MiniEngineTaaLdsLayout::Split;
+            else if (value == "packed" || value == "split-packed")
+                aaBenchmark.settings.performanceOverrides.ldsLayout =
+                    MiniEngineTaaLdsLayout::SplitAndPacked;
+            else
+                return invalidValue(
+                    "--aa-lds",
+                    value,
+                    "auto|legacy|split|packed");
+        }
+        else if (!strcmp(argv[i], "--aa-reuse") ||
+            !strcmp(argv[i], "--aa-early"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            const bool reuse = !strcmp(argv[i], "--aa-reuse");
+            const char* option = argv[i];
+            const std::string value = argv[++i];
+            MiniEngineTaaAutoToggle parsed;
+            if (value == "auto")
+                parsed = MiniEngineTaaAutoToggle::Auto;
+            else if (value == "off")
+                parsed = MiniEngineTaaAutoToggle::Off;
+            else if (value == "on")
+                parsed = MiniEngineTaaAutoToggle::On;
+            else
+                return invalidValue(option, value, "auto|off|on");
+            if (reuse)
+                aaBenchmark.settings.performanceOverrides.sharedWorkReuse =
+                    parsed;
+            else
+                aaBenchmark.settings.performanceOverrides
+                    .earlyHistoryRejection = parsed;
+        }
+        else if (!strcmp(argv[i], "--aa-fusion"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            const std::string value = argv[++i];
+            if (value == "auto")
+                aaBenchmark.settings.performanceOverrides.passFusion =
+                    MiniEngineTaaPassFusion::Auto;
+            else if (value == "separate")
+                aaBenchmark.settings.performanceOverrides.passFusion =
+                    MiniEngineTaaPassFusion::Separate;
+            else if (value == "fused")
+                aaBenchmark.settings.performanceOverrides.passFusion =
+                    MiniEngineTaaPassFusion::Fused;
+            else
+                return invalidValue(
+                    "--aa-fusion",
+                    value,
+                    "auto|separate|fused");
+        }
+        else if (!strcmp(argv[i], "--aa-cache"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            const std::string value = argv[++i];
+            if (value == "auto")
+                aaBenchmark.settings.performanceOverrides.cacheBlocking =
+                    MiniEngineTaaCacheBlocking::Auto;
+            else if (value == "off")
+                aaBenchmark.settings.performanceOverrides.cacheBlocking =
+                    MiniEngineTaaCacheBlocking::Off;
+            else if (value == "2")
+                aaBenchmark.settings.performanceOverrides.cacheBlocking =
+                    MiniEngineTaaCacheBlocking::Bands2;
+            else if (value == "3")
+                aaBenchmark.settings.performanceOverrides.cacheBlocking =
+                    MiniEngineTaaCacheBlocking::Bands3;
+            else if (value == "4")
+                aaBenchmark.settings.performanceOverrides.cacheBlocking =
+                    MiniEngineTaaCacheBlocking::Bands4;
+            else
+                return invalidValue(
+                    "--aa-cache",
+                    value,
+                    "auto|off|2|3|4");
+        }
+        else if (!strcmp(argv[i], "--aa-smaa"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            const std::string value = argv[++i];
+            if (value == "preset" || value == "auto")
+                aaBenchmark.settings.algorithmOverrides.subpixelMorphology =
+                    SmaaApplicationOverride::FromPreset;
+            else if (value == "off" || value == "none")
+                aaBenchmark.settings.algorithmOverrides.subpixelMorphology =
+                    SmaaApplicationOverride::Off;
+            else if (value == "full" || value == "all")
+                aaBenchmark.settings.algorithmOverrides.subpixelMorphology =
+                    SmaaApplicationOverride::FullScreen;
+            else if (
+                value == "cmaa" ||
+                value == "cmaa2" ||
+                value == "conservative")
+            {
+                aaBenchmark.settings.algorithmOverrides.subpixelMorphology =
+                    SmaaApplicationOverride::ConservativeMorphological;
+            }
+            else if (value == "short")
+                aaBenchmark.settings.algorithmOverrides.subpixelMorphology =
+                    SmaaApplicationOverride::SelectiveShort;
+            else if (value == "long")
+                aaBenchmark.settings.algorithmOverrides.subpixelMorphology =
+                    SmaaApplicationOverride::SelectiveLong;
+            else
+                return invalidValue(
+                    "--aa-smaa",
+                    value,
+                    "preset|off|full|cmaa2|short|long");
+        }
+        else if (!strcmp(argv[i], "--aa-sharpness"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            aaBenchmark.sharpness = std::stof(argv[++i]);
+        }
         else if (argv[i][0] != '-')
         {
             sceneName = argv[i];
         }
     }
+    }
+    catch (const std::exception& exception)
+    {
+        log::error(
+            "Invalid command-line value: %s",
+            exception.what());
+        return false;
+    }
+    return true;
 }
 
 std::string FormatExperimentLaunchTime(
@@ -4931,7 +8356,9 @@ bool SelectGraphicsAdapter(
         adapterChoices.push_back(GpuAdapterChoice{
             static_cast<int>(index),
             adapter.name,
-            adapter.dedicatedVideoMemory
+            adapter.dedicatedVideoMemory,
+            adapterDescription.VendorId,
+            adapterDescription.DeviceId
         });
 
         if (automaticSelection &&
@@ -4967,9 +8394,12 @@ bool SelectGraphicsAdapter(
     }
 
     log::info(
-        "Selected graphics adapter %d: %s (%llu mib dedicated VRAM)",
+        "Selected graphics adapter %d: %s "
+        "(PCI %04X:%04X, %llu MiB dedicated VRAM)",
         selectedChoice->adapterIndex,
         selectedChoice->name.c_str(),
+        selectedChoice->vendorId,
+        selectedChoice->deviceId,
         static_cast<unsigned long long>(selectedChoice->dedicatedVideoMemory / (1024ull * 1024ull)));
     return true;
 }
@@ -5068,13 +8498,18 @@ int main(int __argc, const char* const* __argv)
     std::string sceneName;
     std::string experimentDescription;
     bool benchmarkCameraRequested = false;
-    ProcessCommandLine(
-        __argc,
-        __argv,
-        deviceParams,
-        sceneName,
-        experimentDescription,
-        benchmarkCameraRequested);
+    AaBenchmarkConfig aaBenchmark;
+    if (!ProcessCommandLine(
+            __argc,
+            __argv,
+            deviceParams,
+            sceneName,
+            experimentDescription,
+            benchmarkCameraRequested,
+            aaBenchmark))
+    {
+        return 1;
+    }
     if (benchmarkCameraRequested)
     {
         const SponzaCameraPreset& preset = GetDefaultSponzaCameraPreset();
@@ -5147,12 +8582,20 @@ int main(int __argc, const char* const* __argv)
         UIData uiData;
         uiData.GpuAdapterChoices = std::move(adapterChoices);
         uiData.ActiveGpuAdapterIndex = deviceParams.adapterIndex;
+        if (aaBenchmark.enabled)
+        {
+            uiData.AntiAliasing = aaBenchmark.settings;
+            uiData.MiniEngineTaaSharpness =
+                ClampMiniEngineTaaSharpness(
+                    aaBenchmark.sharpness);
+        }
 
         std::shared_ptr<UvsrSceneViewer> demo = std::make_shared<UvsrSceneViewer>(
             deviceManager,
             uiData,
             sceneName,
-            benchmarkCameraRequested);
+            benchmarkCameraRequested,
+            aaBenchmark);
         std::shared_ptr<UIRenderer> gui = std::make_shared<UIRenderer>(
             deviceManager,
             demo,

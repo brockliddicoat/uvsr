@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(
+    UVSR_AA_DEVELOPER_OVERRIDES
+    "Compile the complete anti-aliasing override permutation matrix and UI"
+    OFF
+)
+
 # Embed the exact source commit in the executable so experiment titles describe
 # the code that was built, not whichever checkout happens to exist at launch.
 # Watching both the worktree HEAD and its resolved branch ref makes a normal
@@ -207,21 +213,72 @@ endif()
 
 set(UVSR_SHADER_STAGING_DIR "${CMAKE_BINARY_DIR}/uvsr_shaders")
 include(donut/compileshaders.cmake)
-donut_compile_shaders_all_platforms(
-    TARGET uvsr_shaders
-    PROJECT_NAME "UVSR"
-    CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders.cfg"
-    OUTPUT_BASE "${UVSR_SHADER_STAGING_DIR}"
+if (UVSR_AA_DEVELOPER_OVERRIDES)
+    set(UVSR_SHADER_CONFIG
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders.cfg")
+else()
+    set(UVSR_SHADER_CONFIG
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders_production.cfg")
+endif()
+file(GLOB_RECURSE UVSR_SHADER_SOURCES
+    CONFIGURE_DEPENDS
+    LIST_DIRECTORIES false
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsli"
 )
+# Donut's Visual Studio shader target otherwise depends only on ShaderMake
+# itself. Make both source edits and a developer/production config switch
+# invalidate the generated blob instead of staging a stale permutation set.
+set(UVSR_SHADER_CONFIGURATION_STAMP
+    "${CMAKE_CURRENT_BINARY_DIR}/uvsr_shader_configuration.txt")
+file(GENERATE
+    OUTPUT "${UVSR_SHADER_CONFIGURATION_STAMP}"
+    CONTENT "${UVSR_SHADER_CONFIG}\n"
+)
+set(UVSR_SHADER_COMPILE_STAMP
+    "${UVSR_SHADER_STAGING_DIR}/dxil/.uvsr-shaders.stamp")
+add_custom_command(
+    OUTPUT "${UVSR_SHADER_COMPILE_STAMP}"
+    COMMAND ${CMAKE_COMMAND} -E remove_directory
+        "${UVSR_SHADER_STAGING_DIR}/dxil"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${UVSR_SHADER_STAGING_DIR}/dxil"
+    COMMAND ${SHADERMAKE_PATH}
+        --config "${UVSR_SHADER_CONFIG}"
+        --out "${UVSR_SHADER_STAGING_DIR}/dxil"
+        --platform DXIL
+        --binaryBlob
+        --outputExt .bin
+        -I "${CMAKE_CURRENT_SOURCE_DIR}/donut/include"
+        -D TARGET_D3D12
+        --compiler "${SHADERMAKE_DXC_PATH}"
+        --shaderModel 6_5
+        --project UVSR
+    COMMAND ${CMAKE_COMMAND} -E touch
+        "${UVSR_SHADER_COMPILE_STAMP}"
+    DEPENDS
+        ${SHADERMAKE_PATH}
+        "${UVSR_SHADER_CONFIG}"
+        "${UVSR_SHADER_CONFIGURATION_STAMP}"
+        ${UVSR_SHADER_SOURCES}
+    COMMENT "Compiling UVSR shader bundle from ${UVSR_SHADER_CONFIG}"
+    VERBATIM
+)
+add_custom_target(uvsr_shaders
+    DEPENDS "${UVSR_SHADER_COMPILE_STAMP}")
 
 add_executable(uvsr WIN32
     src/camera_collision.cpp
+    src/cmaa2.cpp
     src/gpu_performance_monitor.cpp
+    src/msaa_visibility_resolve.cpp
     src/pbr_deferred_lighting_pass.cpp
     src/scene_catalog.cpp
     src/screen_space_visibility.cpp
+    src/smaa.cpp
     src/sponza_camera_preset.cpp
     src/taa_miniengine.cpp
+    src/temporal_aa_core.cpp
     src/uvsr.cpp
     src/visibility_blue_noise.cpp
 )
@@ -229,7 +286,12 @@ target_include_directories(uvsr BEFORE PRIVATE
     "${UVSR_IMGUI_OVERRIDE_DIR}"
     "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}/include")
 target_link_libraries(uvsr PRIVATE donut_render donut_app donut_engine)
-target_compile_definitions(uvsr PRIVATE "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\"")
+target_compile_definitions(
+    uvsr
+    PRIVATE
+        "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\""
+        "UVSR_AA_DEVELOPER_OVERRIDES=$<BOOL:${UVSR_AA_DEVELOPER_OVERRIDES}>"
+)
 add_dependencies(uvsr uvsr_shaders)
 
 enable_testing()
@@ -254,9 +316,15 @@ target_include_directories(
     uvsr_taa_miniengine_tests
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
+target_compile_definitions(
+    uvsr_taa_miniengine_tests
+    PRIVATE
+        "UVSR_AA_DEVELOPER_OVERRIDES=$<BOOL:${UVSR_AA_DEVELOPER_OVERRIDES}>"
+)
 add_test(
     NAME uvsr_taa_miniengine_reference
     COMMAND uvsr_taa_miniengine_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
 add_executable(uvsr_world_material_view_tests
@@ -378,36 +446,68 @@ set(UVSR_PASS_SHADERS
 
 set(UVSR_RUNTIME_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework/dxil")
 set(UVSR_RUNTIME_APP_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/uvsr/dxil")
+set(UVSR_RUNTIME_SHADER_STAGE_STAMP
+    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/.uvsr-stage.stamp")
+set(UVSR_RUNTIME_SHADER_MANIFEST
+    "${CMAKE_CURRENT_BINARY_DIR}/uvsr_runtime_shaders.manifest")
+set(UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
+    "AA config: ${UVSR_SHADER_CONFIG}\nFramework root:\n")
+string(JOIN "\n" UVSR_RUNTIME_ROOT_SHADER_MANIFEST
+    ${UVSR_ROOT_SHADERS})
+string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
+    "${UVSR_RUNTIME_ROOT_SHADER_MANIFEST}\nFramework passes:\n")
+string(JOIN "\n" UVSR_RUNTIME_PASS_SHADER_MANIFEST
+    ${UVSR_PASS_SHADERS})
+string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
+    "${UVSR_RUNTIME_PASS_SHADER_MANIFEST}\n")
 
-add_custom_command(TARGET uvsr POST_BUILD
+add_custom_command(
+    OUTPUT "${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
     COMMAND ${CMAKE_COMMAND} -E remove_directory
         "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "${UVSR_RUNTIME_SHADER_DIR}/passes"
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "${UVSR_RUNTIME_APP_SHADER_DIR}"
+    VERBATIM
 )
 
 foreach(shader IN LISTS UVSR_ROOT_SHADERS)
-    add_custom_command(TARGET uvsr POST_BUILD
+    set(UVSR_RUNTIME_SHADER_SOURCE
+        "${UVSR_DONUT_SHADER_STAGING_DIR}/dxil/${shader}.bin")
+    add_custom_command(
+        OUTPUT "${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
+        APPEND
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${UVSR_DONUT_SHADER_STAGING_DIR}/dxil/${shader}.bin"
+            "${UVSR_RUNTIME_SHADER_SOURCE}"
             "${UVSR_RUNTIME_SHADER_DIR}/${shader}.bin"
+        DEPENDS "${UVSR_RUNTIME_SHADER_SOURCE}"
     )
 endforeach()
 
 foreach(shader IN LISTS UVSR_PASS_SHADERS)
-    add_custom_command(TARGET uvsr POST_BUILD
+    set(UVSR_RUNTIME_SHADER_SOURCE
+        "${UVSR_DONUT_SHADER_STAGING_DIR}/dxil/passes/${shader}.bin")
+    add_custom_command(
+        OUTPUT "${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
+        APPEND
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${UVSR_DONUT_SHADER_STAGING_DIR}/dxil/passes/${shader}.bin"
+            "${UVSR_RUNTIME_SHADER_SOURCE}"
             "${UVSR_RUNTIME_SHADER_DIR}/passes/${shader}.bin"
+        DEPENDS "${UVSR_RUNTIME_SHADER_SOURCE}"
     )
 endforeach()
 
 set(UVSR_APP_SHADERS
     agx_tonemapping_ps
     backdrop_blur_ps
+    cmaa2_ComputeDispatchArgsCS
+    cmaa2_DeferredColorApply2x2CS
+    cmaa2_EdgesColor2x2CS
+    cmaa2_ProcessCandidatesCS
+    msaa_visibility_resolve_cs
     pbr_deferred_lighting_cs
+    pbr_deferred_lighting_msaa_cs
     pbr_forward_ps
     pbr_gbuffer_ps
     screen_space_depth_hierarchy_cs
@@ -415,18 +515,83 @@ set(UVSR_APP_SHADERS
     screen_space_visibility_filter_cs
     screen_space_visibility_cs
     screen_space_visibility_temporal_cs
+    smaa_edge_ps
+    smaa_blend_weight_ps
+    smaa_neighborhood_ps
+    smaa_selective_neighborhood_cs
     taa_miniengine_blend_cs
     taa_miniengine_resolve_cs
     taa_miniengine_sharpen_cs
 )
+if (UVSR_AA_DEVELOPER_OVERRIDES)
+    list(APPEND UVSR_APP_SHADERS
+        smaa_debug_ps
+    )
+endif()
+
+string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
+    "UVSR shaders:\n")
+string(JOIN "\n" UVSR_RUNTIME_APP_SHADER_MANIFEST
+    ${UVSR_APP_SHADERS})
+string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
+    "${UVSR_RUNTIME_APP_SHADER_MANIFEST}\n")
+file(GENERATE
+    OUTPUT "${UVSR_RUNTIME_SHADER_MANIFEST}"
+    CONTENT "${UVSR_RUNTIME_SHADER_MANIFEST_CONTENT}"
+)
 
 foreach(shader IN LISTS UVSR_APP_SHADERS)
-    add_custom_command(TARGET uvsr POST_BUILD
+    set(UVSR_RUNTIME_SHADER_SOURCE
+        "${UVSR_SHADER_STAGING_DIR}/dxil/${shader}.bin")
+    add_custom_command(
+        OUTPUT "${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
+        APPEND
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${UVSR_SHADER_STAGING_DIR}/dxil/${shader}.bin"
+            "${UVSR_RUNTIME_SHADER_SOURCE}"
             "${UVSR_RUNTIME_APP_SHADER_DIR}/${shader}.bin"
+        DEPENDS "${UVSR_RUNTIME_SHADER_SOURCE}"
     )
 endforeach()
+
+add_custom_command(
+    OUTPUT "${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
+    APPEND
+    COMMAND ${CMAKE_COMMAND} -E touch
+        "${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
+    DEPENDS
+        "${UVSR_SHADER_COMPILE_STAMP}"
+        "${UVSR_RUNTIME_SHADER_MANIFEST}"
+)
+add_custom_target(uvsr_stage_runtime_shaders
+    DEPENDS "${UVSR_RUNTIME_SHADER_STAGE_STAMP}")
+add_dependencies(
+    uvsr_stage_runtime_shaders
+    donut_shaders
+    uvsr_shaders
+)
+add_dependencies(uvsr uvsr_stage_runtime_shaders)
+
+if (NOT UVSR_AA_DEVELOPER_OVERRIDES)
+    add_executable(
+        uvsr_production_shader_bundle_tests
+        tests/production_shader_bundle_tests.cpp
+    )
+    add_dependencies(
+        uvsr_production_shader_bundle_tests
+        uvsr_stage_runtime_shaders
+    )
+    add_test(
+        NAME uvsr_production_shader_bundle_contract
+        COMMAND uvsr_production_shader_bundle_tests
+            "${UVSR_SHADER_CONFIG}"
+            "${UVSR_RUNTIME_SHADER_MANIFEST}"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
+    )
+    set_tests_properties(
+        uvsr_production_shader_bundle_contract
+        PROPERTIES LABELS "production;shaders"
+    )
+endif()
 
 set(UVSR_INTEL_SPONZA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/assets/scenes/intel_sponza")
 set(UVSR_INTEL_SPONZA_STAGING_DIR

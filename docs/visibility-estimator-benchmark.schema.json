@@ -39,9 +39,7 @@
         "radiusWorld",
         "thicknessWorld",
         "radialDistributionExponent",
-        "minimumSamplesPerPixel",
-        "maximumSamplesPerPixel",
-        "adaptiveErrorStrength",
+        "sampleCount",
         "ambientOcclusionStrength",
         "indirectDiffuseIntensity",
         "bounceCount",
@@ -51,7 +49,6 @@
         "projection",
         "resolution",
         "scheduler",
-        "adaptiveSparseSampling",
         "temporalReconstruction",
         "temporalCurrentResponse",
         "spatialFiltering",
@@ -65,9 +62,12 @@
         "radiusWorld": { "type": "number", "exclusiveMinimum": 0 },
         "thicknessWorld": { "type": "number", "minimum": 0 },
         "radialDistributionExponent": { "type": "number", "minimum": 0.5, "maximum": 4 },
-        "minimumSamplesPerPixel": { "type": "integer", "minimum": 1, "maximum": 64 },
-        "maximumSamplesPerPixel": { "type": "integer", "minimum": 1, "maximum": 64 },
-        "adaptiveErrorStrength": { "type": "number", "minimum": 0, "maximum": 2 },
+        "sampleCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Fixed first-bounce radial sample budget per eligible tracing pixel."
+        },
         "ambientOcclusionStrength": { "type": "number", "minimum": 0, "maximum": 2 },
         "indirectDiffuseIntensity": { "type": "number", "minimum": 0, "maximum": 10 },
         "bounceCount": { "type": "integer", "minimum": 1, "maximum": 4 },
@@ -83,7 +83,6 @@
             "filter-adapted-spatiotemporal-noise"
           ]
         },
-        "adaptiveSparseSampling": { "type": "boolean" },
         "temporalReconstruction": { "type": "boolean" },
         "temporalCurrentResponse": { "type": "number", "minimum": 0.05, "maximum": 1 },
         "spatialFiltering": { "type": "boolean" },

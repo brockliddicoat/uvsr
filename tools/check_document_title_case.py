@@ -56,6 +56,7 @@ PRESERVED_WORDS = frozenset(
         "API",
         "BSDF",
         "CDF",
+        "CMAA2",
         "CMake",
         "CPU",
         "D3D12",
@@ -71,12 +72,17 @@ PRESERVED_WORDS = frozenset(
         "ID",
         "LUT",
         "LUTs",
+        "MSAA",
+        "185H",
+        "MiniEngine",
         "NRA-RTAA",
         "PBR",
         "README",
         "README.md",
         "RTAA",
         "SSRT3",
+        "SMAA",
+        "TAA",
         "UI",
         "UVSR",
         "XeGTAO",
@@ -1007,6 +1013,9 @@ def run_self_tests() -> None:
         "Use ``literal lower`` Safely": "Use ``literal lower`` Safely",
         "Use ``lower content``` safely": "Use ``Lower Content``` Safely",
         "DirectX and AgX UI": "DirectX and AgX UI",
+        "MiniEngine TAA Shipping Options Experiment": (
+            "MiniEngine TAA Shipping Options Experiment"
+        ),
         "What was over-engineered too early": "What Was Over-Engineered Too Early",
         "{literal placeholder} and [API docs](https://example.test/path)": (
             "{literal placeholder} and [API Docs](https://example.test/path)"
