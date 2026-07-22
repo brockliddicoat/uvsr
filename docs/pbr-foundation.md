@@ -163,9 +163,73 @@ also recognizes the cleared G-buffer normal as background before decoding the
 other material targets. These are exact exits and do not change production
 lighting.
 
+## Screen-Space Directional Shadows
+
+The optional Bend Studio screen-space shadow pass consumes the existing
+single-sample device-depth texture after the G-buffer pass and produces a
+full-resolution `R8_UNORM` visibility texture. UVSR's adapter preserves Bend's
+released CPU and GPU headers byte-for-byte; projection conversion, reverse-Z
+near/far values, resources, shader permutations, and dispatch bindings remain
+first-party glue outside those headers. The exact source archive, hashes, and
+preservation rules are recorded in the
+[vendored source record](../third_party/bend_sss/README.md).
+
+### Settings and Shader Variants
+
+The **Screen-Space Shadows** drawer starts disabled. Its **Profile** menu has
+four entries:
+
+| Profile | Applied settings |
+|---|---|
+| **Performance** | 60-pixel length, 4 hard samples, 8 fade-out samples, `0.005` surface thickness, `0.02` bilinear threshold, contrast `4`, and every optional mode and debug view off |
+| **Balanced** | Performance settings with a 240-pixel length |
+| **Quality** | Performance settings with a 960-pixel length |
+| **Custom** | Retains individually edited values |
+
+Applying a profile preserves **Enabled**, so restoring Performance does not
+disable an active comparison. Editing any other control selects Custom.
+**Length** maps to compiled `SAMPLE_COUNT` values of 60, 120, 240, 480, or 960
+pixels. **Hard Shadow Samples** maps to compiled counts of 0, 4, or 8, and
+**Fade-Out Samples** maps to compiled counts of 0, 8, or 16. Those three axes
+form 45 registered compute-shader permutations; adding another trace length is
+isolated to the adapter's variant table and shader registration.
+
+The remaining continuous controls are **Surface Thickness**, **Bilinear
+Threshold**, and **Shadow Contrast**. Optional algorithm modes are **Ignore Edge
+Pixels**, **Precision Offset**, **Bilinear Offset Mode**, and **Early Out**.
+**Debug View** selects Off, Edge, Thread, or Wave; the three diagnostics present
+the raw R8 result as grayscale instead of compositing it into scene lighting.
+
+### Directional-Light Composite
+
+Deferred lighting owns a producer-neutral fixed two-slot directional visibility
+interface. Every slot carries only a full-resolution linear `R8_UNORM` texture
+and a non-owning exact light pointer. Incomplete, stale-sized, wrong-format,
+unsupported, or unmatched slots bind white and retain light index `-1`. The
+shader multiplies all factors whose pointer maps to the light currently being
+evaluated. Indirect diffuse, emissive radiance, environment lighting, and
+unrelated lights are unchanged.
+
+Bend and SVSM render independently and know nothing about one another's types,
+settings, resources, UI, caches, or benchmarks. `uvsr.cpp` adapts their
+frame-local results into the neutral interface immediately before deferred
+lighting. This keeps both projects portable while preserving a zero-dispatch
+path for reintegration: if both complete factors target the same exact light,
+their product is applied there and nowhere else.
+
+### Future Hierarchical Boundary
+
+This near tracer is intentionally a standalone producer. A future Hi-Z or
+hierarchical far tracer can replace either neutral visibility slot or extend
+the renderer boundary without modifying the validated Bend implementation.
+The current experiment does not allocate temporal history, stochastic inputs,
+a thickness texture, a depth hierarchy, or a far-trace resource.
+
 ## Validation
 
-PBR and visibility debug views are intentionally absent from the current build.
+General PBR and AO/GI visibility debug views are intentionally absent from the
+current build. The Bend shadow experiment separately exposes its released Edge,
+Thread, and Wave diagnostics as direct grayscale views of the R8 output.
 The Donut legacy comparison path remains implemented for possible future
 experiments, but its **Enable PBR** control is not exposed in the production UI.
 Forward and deferred production lighting both use the same shared BSDF.
@@ -176,7 +240,15 @@ IOR 1.0/1.33/1.5/2.0, directional and point lights, grazing Fresnel,
 geometric-normal rejection, no-light/emission-only behavior, visibility
 0/0.5/1, finite nonnegative output, independence of direct lighting from
 ambient occlusion, source-mask composition, contribution-gate boundary cases,
-and the four-bounce frontier recurrence.
+the four-bounce frontier recurrence, neutral unmatched directional visibility,
+clamping, and exact multiplicative composition.
+
+`tests/bend_screen_space_shadows_tests.cpp` validates Bend Exact reset values,
+Enabled independence, the Long and Maximum Validation lengths, every registered
+sample-count combination, and Bend's released CPU dispatch-list contract for
+projected light points on either side of the camera. Runtime image quality,
+artifact, reliability, and performance conclusions are recorded separately
+only after the corresponding renderer evaluation.
 
 ## Current Limitations and Performance-Sensitive Areas
 
@@ -196,6 +268,11 @@ and the four-bounce frontier recurrence.
 - The fifth `R8_UNORM` render target costs one additional byte of G-buffer
   write/read bandwidth per pixel. It prevents authored ambient occlusion from
   being conflated with direct shadow visibility or discarded.
+- Bend screen-space shadows currently trace only the primary directional light
+  against visible device depth. Occluders outside the screen, hidden behind the
+  first depth layer, or beyond the selected compiled sample count are absent.
+  The full-resolution R8 visibility target adds one logical byte per pixel while
+  the feature is enabled.
 - Deferred direct lighting loops over at most Donut's existing 16 lights per
   pixel. No clustered/tiled list was added; exact contribution gates avoid
   shadow and BSDF work for ineligible lights but do not replace enumeration.

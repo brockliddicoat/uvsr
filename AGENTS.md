@@ -327,6 +327,219 @@ Agent policy version: `2026-07-16.1`.
   unverified experiments isolated from the verified build and label their
   integration status explicitly.
 
+## Performance Benchmark Hygiene
+
+- Treat benchmark camera position 1 as the control measurement for every local
+  performance session. Match the exact executable, source state, scene, camera,
+  resolution, display mode, graphics settings, power source, and laptop thermal
+  preset. Record the executable SHA-256; Git HEAD plus an identity for the dirty
+  diff and untracked source files; adapter name, LUID or device ID, and driver;
+  OS build and HAGS state; display and power configuration; and scene/settings
+  identity. Invalidate the baseline when any identity changes, and never compare
+  unlike runs.
+- Split isolation checks into a preflight phase and a measurement phase. Before
+  launching, require zero `uvsr.exe` processes and zero capture sessions. During
+  measurement, require exactly the expected renderer PID and normalized
+  executable path plus either zero captures or the one expected PresentMon PID
+  and path. The user decides whether and when to close nonessential applications
+  before the run; an agent may stop only stale processes belonging to the
+  current experiment. Resample this identity and the absence of known builds,
+  shader compiles, captures, overlays, and stress tests throughout every quiet
+  or measurement window; a clean final snapshot cannot redeem contamination
+  earlier in the window. Generic Windows counters cannot always attribute work
+  to the selected adapter on hybrid systems, so do not claim they prove the
+  absence of every renamed or unknown GPU workload. Use the bracket controls to
+  reject otherwise hidden contention.
+- For the final build before a benchmark window, disable MSBuild worker-node
+  reuse when the build command supports it, or verify that every compiler and
+  build worker has exited before preflight. Idle worker nodes from the completed
+  task remain process-hygiene blockers; close only workers whose command line
+  and parentage prove they belong to that completed task.
+- UVSR requests Windows High process priority at startup. Record the renderer's
+  live priority class with every baseline and candidate, require `High` for an
+  accepted run, and invalidate comparisons against older runs made at another
+  priority. Never escalate UVSR to Realtime and never lower or otherwise change
+  unrelated process priorities to improve a result.
+- Treat unexplained CPU or GPU activity as evidence that the user may be using
+  the machine, not as permission to compete for the remaining capacity. Never
+  stop, suspend, reprioritize, or reconfigure an unrelated process to make room
+  for a benchmark. After an occupied or thermally failed period, do source-only
+  work; do not opportunistically launch a build or runtime test when utilization
+  briefly dips. Do not repeatedly poll temperatures, processes, or utilization
+  while waiting for availability. Resume monitoring or intensive work only in a
+  testing window the user has made available and after the complete quiet
+  preflight remains clean for its full duration.
+- Establish the machine's cold position-1 baseline before accepting feature
+  measurements. After shader and resource warmup has settled, collect at least
+  1,000 consecutive frames or 15 seconds, whichever is longer. Repeat this
+  three times when creating or replacing a baseline, run a fresh clean preflight
+  immediately before each repeat, retain all three raw runs, and select the
+  median by position-1 total GPU frame time as the primary run.
+  Record UVSR's stat-line TFLOPS, total frame/GPU time, feature time, GPU clock,
+  CPU and GPU temperature, live throttle reasons, and process memory. TFLOPS is
+  a current-clock-and-utilization indicator, so compare it only between
+  identical position-1 control workloads, never between different SVSM options.
+- Keep renderer debug views, GPU captures, validation layers, and diagnostic
+  overlays disabled during accepted performance windows unless the identical
+  control explicitly includes them. SVSM debug views add statistics dispatches
+  and readbacks, so use them in separate diagnostic runs and return the view to
+  Off before collecting a position-1 baseline or candidate measurement. The
+  ordinary stat line may remain visible when it is held identical across every
+  compared run.
+- On Brock's current laptop, use CPU at or below 75 C and GPU at or below 55 C
+  for at least 30 quiet seconds as the provisional preflight gate until a clean
+  cold baseline establishes tighter machine-specific limits. Use the hottest
+  live temperature sensor on the selected GPU, require selected-GPU utilization
+  at or below 5 percent, and require no live thermal limiter. For normalized
+  external CPU utilization, subtract the expected renderer and the complete
+  live ChatGPT/Codex adjacent-task process trees from total CPU before applying
+  a five-sample rolling average at or below 20 percent; allow isolated adjusted
+  samples up to 50 percent. Always record total CPU, renderer CPU, excluded
+  assistant CPU, the adjusted value used by the gate, and a ranked
+  name/PID/percent breakdown of the remaining processes. This exclusion never
+  exempts a detected build, shader compiler, capture, overlay, stress tool,
+  duplicate renderer, or other process-hygiene blocker merely because Codex
+  launched it. Treat 10 to 20
+  percent adjusted background CPU as a recorded warning rather than an
+  automatic contaminant when it is stable and represents the machine's normal
+  resident workload. On another laptop, first record its cold-idle temperatures
+  and official thermal limits, then require comparable cold-start temperature,
+  comfortable thermal headroom, and stable clocks instead of copying these
+  absolute numbers blindly.
+- Use temperature and thermal headroom as hard thermal evidence, and require a
+  live limiter state whenever the adapter exposes one. A cumulative driver
+  throttle counter may be used as a hard gate only after a quiet calibration
+  proves it remains stable while its limiter is inactive. Otherwise record it
+  as diagnostic evidence only. This avoids false failures from drivers that
+  increment unrelated counters while idle.
+- Keep cold-idle and loaded gates distinct. The 55 C temperature and 20 C
+  headroom values are preflight requirements, not loaded measurement limits.
+  During a measurement, require at least 5 C of live selected-GPU thermal
+  headroom and an inactive live limiter, then use the Position-1 clock, TFLOPS,
+  and frame-time bracket as the decisive throttling check. A hot memory junction
+  below its reported limit is recorded but is not by itself proof of throttling.
+- If the host does not expose a live CPU temperature to the non-elevated,
+  vendor-neutral monitor, `-AllowMissingCpuTemperature` may be used for a
+  reduced-evidence preflight. It still requires unconstrained CPU performance,
+  the practical background-load gate, a cool selected GPU with no live thermal
+  limiter, AC power, and position-1 before/after controls within the established
+  clock, TFLOPS, and frame-time bands. Record CPU temperature as unknown; never
+  reinterpret it as cool or use this exception to accept a failed control.
+- Match telemetry to the exact adapter name shown by UVSR. On a hybrid or
+  multi-GPU system, an unqualified vendor query is invalid evidence because it
+  can certify a cool idle adapter while UVSR uses another one. Fail closed when
+  the DXGI adapter cannot be mapped uniquely or when its temperature or required
+  thermal-limit/headroom reading is unavailable. A manually transcribed
+  temperature is useful for one diagnostic snapshot but cannot certify a
+  30-second quiet window because it is not resampled.
+- The thermal script must fail closed by default when live GPU limiter telemetry
+  is unavailable. On an adapter that genuinely does not expose it, agents may
+  use `-AllowMissingGpuThermalLimiter` only after supplying the adapter's
+  official limit with `-GpuThermalLimitC`, establishing a cold position-1 GPU
+  clock and TFLOPS band, and retaining the before-and-after control checks. The
+  reduced-evidence gate still requires a live temperature, sufficient headroom,
+  and a live clock; document that the limiter state was unavailable. Because
+  core, hotspot, and memory limits may differ, the supplied value must be the
+  lowest official limit applicable to every live GPU sensor used by the gate.
+- On Brock's current laptop, treat a Position-1 stat-line result below 30 TFLOPS
+  as the practical throttling floor. At or above 30 TFLOPS is generally
+  thermally usable unless a live limiter, inadequate headroom, or a badly
+  regressed control says otherwise. Still record a candidate whose TFLOPS,
+  steady GPU clock, or control frame time differs by more than 5 percent from
+  the cold baseline as a comparison-quality warning; do not label that variance
+  thermal throttling while the machine-specific floor and limiter checks pass.
+  Establish an equivalent floor empirically before using this rule on another
+  host.
+- Bracket a long experiment with the same position-1 control. If the post-run
+  control fails the baseline band, discard the measurements between the two
+  controls, stop runtime work, and let the machine cool before repeating. Do not
+  report thermally suspect results as measurements.
+- Record the renderer's PID, path, start time, private committed memory, total
+  and private working set, handle and thread counts, and dedicated GPU memory as
+  a time series before and after repeated identical control cycles. Also record
+  shared GPU memory, system commit, available RAM, and adapter budget/usage when
+  the platform exposes them. An
+  unexplained monotonic increase or a control that degrades only inside one
+  long-lived UVSR process is a leak candidate: restart that exact process and
+  reproduce before blaming thermals. Degradation that persists across clean
+  process launches and unrelated programs is stronger evidence of machine-wide
+  thermal or system contention.
+- Prefer one low-rate, read-only sensor logger and UVSR's internal GPU timers.
+  External frame capture must be applied identically to baseline and candidate
+  runs because even a monitoring tool can perturb a sub-millisecond result.
+  Vendor dashboards may be opened read-only before and after a run when no
+  scriptable sensor is available; do not change fan, power, TCC, overclock, or
+  thermal settings without explicit user authorization.
+- Record resident vendor dashboards and sensor pollers such as MSI Afterburner,
+  HWiNFO, HWMonitor, GPU-Z, and laptop-control services, but do not reject a run
+  solely because they are present. Hold them identical across the baseline,
+  candidate, and bracket controls. Active capture, injected overlays, GPU
+  debuggers, and stress tools such as RenderDoc, PIX capture, Nsight capture,
+  RTSS, OCCT, and AIDA64 are always contaminants for accepted performance
+  measurements. Use them only in separately labeled diagnostic runs. The user may
+  close unrelated applications through their normal UI; an agent must not close
+  them. Never terminate an OEM thermal or fan-control service blindly. The
+  thermal preflight reports both blocking and informational process names and
+  IDs so the user can distinguish them.
+- Use portable monitoring binaries only from their official release source,
+  pin the version and SHA-256 digest, verify signatures when provided, and keep
+  downloaded tools under ignored `work/` storage. For Windows/DX12 hosts,
+  use Windows performance counters plus LibreHardwareMonitor as the first
+  non-elevated cross-vendor sensor attempt, and use PresentMon as the
+  vendor-neutral frame-pacing cross-check. Missing temperature sensors remain
+  unknown: do not install PawnIO or another optional driver merely to turn an
+  unknown reading into a pass. UVSR's own GPU timestamps remain authoritative
+  for sub-millisecond pass costs.
+- HWiNFO Portable may be used as an optional cross-vendor Windows corroboration
+  source only when its current license permits the host's use and the user has
+  separately authorized running it. Even portable HWiNFO temporarily loads a
+  kernel driver and may store preferences; downloading it is not permission to
+  execute it, elevate it, enable automatic logging, or retain its driver. Keep
+  it outside the default bootstrap and never redistribute it with UVSR.
+- Run `tools/get_uvsr_performance_tools.ps1` to fetch the pinned
+  LibreHardwareMonitor and PresentMon builds into ignored `work/` storage and
+  verify their release digests, every extracted file, and available signatures.
+  This bootstrap targets UVSR's current Windows x64/DX12 host; the benchmark
+  policy is vendor-neutral, but these particular binaries are not OS- or
+  architecture-neutral.
+  Once the user has explicitly made a testing window available, run
+  `tools/check_uvsr_thermal_state.ps1 -Phase Preflight -ExpectedGpuName "<UVSR
+  Renderer name>"` before launching. Do not invoke it repeatedly to search for
+  a quiet dip outside that window. Its `thermalGateReady` result proves only the
+  resampled sensor, power, and process gate for the selected phase; it does not
+  prove the position-1 baseline, adapter workload, matching power configuration,
+  or post-run control. It neither reads nor enforces the stat-line TFLOPS. On
+  Brock's current laptop, the benchmark procedure must separately reject a
+  Position-1 control below 30 TFLOPS. Run `-Phase Measurement` continuously for
+  every baseline, candidate, and bracket control with
+  `-MeasurementDurationSeconds` covering the exact benchmark window and the
+  exact renderer PID and path; add the exact PresentMon PID and path only when
+  it is actually capturing. For programmatic coordination, pass a unique
+  `-MeasurementReadyPath` and begin the benchmark only after that file reports
+  `state=ready` with the exact run identity, monitor PID, renderer PID and path,
+  and Unix start/deadline fields. The script rejects a pre-existing marker so
+  stale readiness cannot certify a new run. Acceptance additionally requires
+  the same marker to finish as `state=complete`, repeat the exact identity and
+  timing fields, and contain an end time covering the benchmark. A terminal
+  `state=contaminated`, missing terminal state, identity mismatch, early end, or
+  timeout invalidates the evidence. `-TimeoutSeconds` limits how long the script
+  waits for the qualifying window to start; once it starts, the script allows
+  the full requested stable or measurement duration. Any failed sample
+  invalidates the entire measurement. `-DiagnosticSnapshot` takes one
+  diagnostic sample but can never set `thermalGateReady`. Keep the default
+  unique timestamped summary and CSV paths for every preflight and run; never
+  point separate raw repeats at the same explicit output path. After a separately
+  authorized manual download from HWiNFO's official site, the
+  `-VerifyOptionalHWiNFO` switch verifies and extracts the pinned archive but
+  never executes it. On a future host that one of these tools does not support,
+  substitute an equivalent read-only, vendor-neutral OS-native source, pin and
+  verify it the same way, and report any missing evidence explicitly rather
+  than weakening the gate.
+- On Brock's current laptop, where the non-elevated monitor does not expose CPU
+  temperature, add `-AllowMissingCpuTemperature` to the preflight and every
+  measurement command. This invokes the documented reduced-evidence path. Do
+  not add it on another host until its CPU-temperature limitation is confirmed.
+
 ## UI and Rendering Safeguards
 
 - Treat the existing UI layout, wording, order, widths, defaults, and alignment

@@ -120,6 +120,60 @@ architecture without either add-on.
   turns visibility and PBR off or on together. The legacy Donut comparison path
   remains implemented for possible future experiments, but its separate control
   is hidden.
+- **Screen-Space Shadows** starts disabled and is available only for deferred
+  UVSR PBR with a primary directional light. A small UVSR adapter consumes the
+  existing single-sample reverse-Z depth buffer while keeping Bend Studio's
+  released CPU and GPU headers byte-for-byte unchanged, as recorded in the
+  [vendored source record](third_party/bend_sss/README.md). The pass writes one
+  full-resolution `R8_UNORM` visibility texture, and deferred lighting applies
+  it only to the pointer-matched primary directional light's direct
+  contribution.
+- The shadow **Profile** menu offers **Performance**, **Balanced**, **Quality**,
+  and **Custom**. Performance restores 60 samples, 4 hard samples,
+  8 fade-out samples, `0.005` surface thickness, `0.02` bilinear threshold,
+  contrast `4`, and every optional mode and diagnostic off without changing
+  **Enabled**. Balanced applies the same reset with a 240-pixel length; Quality
+  applies it with a 960-pixel length. **Length** selects compiled
+  `SAMPLE_COUNT` variants of 60, 120, 240, 480, or 960 pixels. The drawer also
+  exposes **Surface Thickness**, **Bilinear Threshold**, **Shadow Contrast**,
+  compiled **Hard Shadow Samples** and **Fade-Out Samples**, **Ignore Edge
+  Pixels**, **Precision Offset**, **Bilinear Offset Mode**, and **Early Out**.
+  **Debug View** presents Bend's Edge, Thread, or Wave output directly as
+  grayscale R8 visibility.
+- Bend and **Sparse Virtual Shadow Maps** are independent, initially disabled
+  directional-light visibility producers. Neither pass includes, binds, samples,
+  configures, benchmarks, or names the other. Each resolves its own
+  full-resolution linear `R8_UNORM` texture. A producer-neutral two-slot deferred
+  lighting interface multiplies complete factors only for their exact
+  pointer-identical light, so either project can be removed or ported alone and
+  the same seam can combine them later. Unsupported, missing, invalid, dirty,
+  over-budget, or out-of-range SVSM samples fall back to a valid coarser clipmap
+  and then to white.
+- The SVSM **Profile** menu offers **Performance**, **Balanced**, **Quality**,
+  and **Custom**. Performance uses page-safe adaptive 8-tap filtering with a
+  one-level resolution bias. Balanced removes the resolution bias at the same
+  tap count. Quality uses unbiased full 16-tap filtering. All three use the
+  validated cache, static zero-work, packet culling, batching, sorting, and
+  empty-work skips. **First Clipmap Extent** and **Maximum Light Depth** remain
+  scene controls. **Dense
+  Reference** explicitly backs all six 8192-square atomic-depth clipmaps and can
+  require about 1.5 GiB, so it is intended only for validation.
+- Custom SVSM controls independently expose sparse caching and static reuse,
+  per-pixel or conservative tiled marking, 1/4/8/16-tap filtering, resolution
+  bias, finite-budget static draining, an independent option to include the
+  coarsest clipmap in that budget, allocation saturation skipping, GPU-gated
+  and batched packet submission, packet-page culling, guarded dirty scatter
+  amplification, alpha-test ownership rejection, page-safe translation reuse,
+  detailed or total-only GPU timing, adaptive filtering, and debug views. Dirty
+  scatter activates only with its amplification guard and a
+  nonzero all-clipmap budget of at most four pages whose configured rectangle
+  amplification remains at most 16 pages; other configurations retain the exact
+  compact per-page path. The motion benchmark always uses the total-only timing
+  path so inner query resolves do not perturb its result, and it never changes
+  or measures Bend settings. Reference paths remain selectable through the
+  backend and independent Custom controls. **Fine Caster Exclusion** is visibly
+  unavailable because UVSR does not yet provide every conservative proof needed
+  to exclude a caster safely.
 - The **General** drawer contains **Graphics Adapter**, **Camera Mode**, and
   **Camera Location** for the standardized Sponza scenes. **World Materials**
   contains the White World presentations and the **Indirect Diffuse Response**
@@ -315,13 +369,35 @@ environment variable; omitted descriptions default to `main`.
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the scene-catalog, experiment-title, camera-collision,
-camera-controls, Sponza-camera-preset, PBR, World-Material-view,
-radial-visibility, estimator, visibility-projection, and visibility-sampling
-reference tests separately:
+### Component-Only Builds
+
+Bend and SVSM are separate static-library targets. The full UVSR application
+integrates both by default, while a component-only configuration can omit the
+other producer and its reference test entirely. Each component target publishes
+the include dependencies needed by its public header and compiles only its own
+shader catalog.
+
+Build only SVSM and its deterministic reference test:
 
 ```powershell
-cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake -S . -B build-svsm -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS=OFF
+cmake --build build-svsm --config Release --target uvsr_sparse_virtual_shadow_maps uvsr_sparse_virtual_shadow_map_tests
+```
+
+Build only Bend screen-space shadows and its deterministic reference test:
+
+```powershell
+cmake -S . -B build-bend -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS=OFF
+cmake --build build-bend --config Release --target uvsr_bend_screen_space_shadows uvsr_bend_screen_space_shadow_tests
+```
+
+Build and run the scene-catalog, experiment-title, camera-collision,
+camera-controls, Sponza-camera-preset, PBR, Bend screen-space-shadow, sparse
+virtual-shadow-map, World-Material-view, radial-visibility, estimator,
+visibility-projection, and visibility-sampling reference tests separately:
+
+```powershell
+cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_bend_screen_space_shadow_tests uvsr_sparse_virtual_shadow_map_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 
@@ -369,7 +445,7 @@ The current baseline intentionally omits:
 - Imported scene cameras and translucent rendering
 - Animation playback, ambient-intensity scaling, and material-event
   instrumentation
-- Shadow rendering and shadow-map debugging
+- Shadow maps and shadow-map debugging
 - Light-probe capture, filtering, image-based lighting, probe textures, and
   probe controls
 

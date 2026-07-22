@@ -33,7 +33,8 @@ Texture2D t_GBuffer2 : register(t11);
 Texture2D t_GBuffer3 : register(t12);
 Texture2D t_MaterialAmbientOcclusion : register(t14);
 Texture2D t_IndirectSpecular : register(t15);
-Texture2D t_ShadowBuffer : register(t16);
+Texture2D<float> t_DirectionalVisibility0 : register(t16);
+Texture2D<float> t_DirectionalVisibility1 : register(t17);
 
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Output : register(u0);
 #if WRITE_SOURCE_RADIANCE
@@ -47,15 +48,24 @@ float GetRandom(float2 position)
     return g_Deferred.noisePattern[y][x];
 }
 
-float GetScreenShadowVisibility(LightConstants light, int2 pixelPosition)
+float GetDirectionalLightVisibility(
+    uint lightIndex,
+    int2 pixelPosition)
 {
-    if ((light.shadowChannel.x & 0xfffffffc) == 0)
+    float visibility = 1.0f;
+    if (int(lightIndex) ==
+        g_PbrDeferred.directionalVisibilityLightIndices.x)
     {
-        float4 channels = t_ShadowBuffer[pixelPosition];
-        return saturate(channels[light.shadowChannel.x]);
+        visibility *= saturate(
+            t_DirectionalVisibility0[pixelPosition]);
     }
-
-    return 1.0f;
+    if (int(lightIndex) ==
+        g_PbrDeferred.directionalVisibilityLightIndices.y)
+    {
+        visibility *= saturate(
+            t_DirectionalVisibility1[pixelPosition]);
+    }
+    return visibility;
 }
 
 float EvaluateLightVisibility(
@@ -169,7 +179,8 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         for (uint lightIndex = 0; lightIndex < g_Deferred.numLights; ++lightIndex)
         {
             LightConstants light = g_Deferred.lights[lightIndex];
-            float visibility = GetScreenShadowVisibility(light, pixelPosition);
+            float visibility = GetDirectionalLightVisibility(
+                lightIndex, pixelPosition);
             if (!(visibility > 0.0f))
                 continue;
 

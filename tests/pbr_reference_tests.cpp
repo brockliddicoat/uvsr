@@ -1,3 +1,4 @@
+#include "directional_light_visibility.h"
 #include "pbr_material.h"
 #include "lighting_contribution_shared.h"
 
@@ -197,6 +198,87 @@ namespace
 
 int main()
 {
+    // Independent directional visibility producers compose only when their
+    // exact light identity matches. Missing or unrelated factors are white.
+    Require(uvsr::DirectionalLightVisibilityCount == 2u,
+        "two fixed directional visibility slots");
+    Require(!uvsr::DirectionalLightVisibility{}.IsComplete(),
+        "an empty visibility input is incomplete");
+    int textureToken0 = 0;
+    int textureToken1 = 0;
+    int lightToken0 = 0;
+    int lightToken1 = 0;
+    auto* texture0 = reinterpret_cast<nvrhi::ITexture*>(
+        &textureToken0);
+    auto* texture1 = reinterpret_cast<nvrhi::ITexture*>(
+        &textureToken1);
+    auto* light0 = reinterpret_cast<const donut::engine::Light*>(
+        &lightToken0);
+    auto* light1 = reinterpret_cast<const donut::engine::Light*>(
+        &lightToken1);
+    const uvsr::DirectionalLightVisibility factor0{
+        texture0, light0
+    };
+    const uvsr::DirectionalLightVisibility factor1{
+        texture1, light0
+    };
+    Require(uvsr::TargetsDirectionalLight(factor0, light0),
+        "pointer-identical light accepts its factor");
+    Require(!uvsr::TargetsDirectionalLight(factor0, light1),
+        "distinct light pointer rejects the factor");
+    Require(!uvsr::TargetsDirectionalLight(
+        uvsr::DirectionalLightVisibility{ texture0, nullptr },
+        light0),
+        "incomplete factor remains neutral");
+    float twoFactorVisibility = 1.f;
+    twoFactorVisibility = uvsr::ComposeDirectionalLightVisibility(
+        twoFactorVisibility,
+        0.5f,
+        uvsr::TargetsDirectionalLight(factor0, light0));
+    twoFactorVisibility = uvsr::ComposeDirectionalLightVisibility(
+        twoFactorVisibility,
+        0.25f,
+        uvsr::TargetsDirectionalLight(factor1, light0));
+    Require(twoFactorVisibility == 0.125f,
+        "two same-light producer slots multiply");
+    Require(uvsr::ComposeDirectionalLightVisibility(
+        0.5f, 0.25f, true) == 0.125f,
+        "matching visibility factors multiply");
+    Require(uvsr::ComposeDirectionalLightVisibility(
+        0.25f, 0.f, false) == 0.25f,
+        "unmatched visibility remains neutral");
+    Require(uvsr::ComposeDirectionalLightVisibility(
+        4.f, -1.f, true) == 0.f,
+        "visibility factors clamp before composition");
+
+    const uvsr::DirectionalLightVisibilityTextureProperties
+        compatibleVisibilityTexture{
+            1920u, 1080u, 1u, 1u, 1u, 1u, true, true, true
+        };
+    Require(uvsr::IsDirectionalLightVisibilityTextureCompatible(
+        compatibleVisibilityTexture, 1920u, 1080u),
+        "full-resolution R8 visibility texture is accepted");
+    auto incompatibleVisibilityTexture = compatibleVisibilityTexture;
+    incompatibleVisibilityTexture.width = 1919u;
+    Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(
+        incompatibleVisibilityTexture, 1920u, 1080u),
+        "stale-sized visibility texture fails white");
+    incompatibleVisibilityTexture = compatibleVisibilityTexture;
+    incompatibleVisibilityTexture.r8Unorm = false;
+    Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(
+        incompatibleVisibilityTexture, 1920u, 1080u),
+        "wrong-format visibility texture fails white");
+    incompatibleVisibilityTexture = compatibleVisibilityTexture;
+    incompatibleVisibilityTexture.sampleCount = 2u;
+    Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(
+        incompatibleVisibilityTexture, 1920u, 1080u),
+        "multisampled visibility texture fails white");
+    incompatibleVisibilityTexture = compatibleVisibilityTexture;
+    incompatibleVisibilityTexture.shaderResource = false;
+    Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(
+        incompatibleVisibilityTexture, 1920u, 1080u),
+        "non-SRV visibility texture fails white");
+
     // CPU-side import/upload validation and defaults.
     PbrMaterialParameters defaults;
     Require(defaults.baseColor.x == 1.f && defaults.baseColor.y == 1.f &&

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "directional_light_visibility.h"
+
 #include <donut/core/math/math.h>
 #include <donut/engine/BindingCache.h>
 #include <donut/render/DeferredLightingPass.h>
@@ -12,6 +14,7 @@ namespace donut::engine
 {
     class CommonRenderPasses;
     class ICompositeView;
+    class Light;
     class ShaderFactory;
 }
 
@@ -47,6 +50,8 @@ public:
         nvrhi::ICommandList* commandList,
         const donut::engine::ICompositeView& compositeView,
         const donut::render::DeferredLightingPass::Inputs& inputs,
+        const uvsr::DirectionalLightVisibilitySet&
+            directionalLightVisibility,
         nvrhi::ITexture* sourceRadianceOutput,
         bool separateIndirect,
         bool writeSourceRadiance,
