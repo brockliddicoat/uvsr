@@ -6641,6 +6641,13 @@ private:
         ImGui::SetItemTooltip(reason);
     }
 
+    static void DrawDisabledTextWrapped(const char* text)
+    {
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextDisabled("%s", text);
+        ImGui::PopTextWrapPos();
+    }
+
     static bool DrawCollapsingHeader(
         const char* label,
         const char* tooltip,
@@ -11711,7 +11718,9 @@ protected:
                 ImGui::TextWrapped("%s", motionTestStatus.c_str());
 
             if (!canRunCurrent && !benchmarkBusy)
-                ImGui::TextWrapped("%s", benchmarkBlockedReason.c_str());
+            {
+                DrawDisabledTextWrapped(benchmarkBlockedReason.c_str());
+            }
 
             const bool testRunning =
                 benchmarkBusy || motionTestRunning;
@@ -12242,10 +12251,12 @@ protected:
                 !temporalAAAvailable;
             if (effectiveTemporalSelectionUnavailable)
             {
-                ImGui::TextDisabled(
+                DrawDisabledTextWrapped(
                     m_ui.HasMiniEngineTaaVisibilityConflict()
-                        ? "Temporal anti-aliasing is paused until visibility Temporal Reconstruction is disabled."
-                        : "Temporal anti-aliasing requires deferred UVSR PBR motion and depth.");
+                        ? "Temporal anti-aliasing is paused until visibility\n"
+                            "Temporal Reconstruction is disabled."
+                        : "Temporal anti-aliasing requires deferred UVSR PBR\n"
+                            "motion and depth.");
             }
 
             MiniEngineTaaAlgorithmOverrides& historyOverrides =

@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-07-21.2`.
+UI reference version: `2026-07-22.1`.
 
 ## Purpose
 
@@ -164,6 +164,10 @@ version.
 - Use status copy only for actionable or genuinely changing state. Do not show
   idle readiness prose such as `Ready to test...`, an inert Cancel button, or
   export guidance for functionality that is not present.
+- Render inline unavailable guidance with the shared disabled-text token and
+  wrap it within its owning drawer. Keep each temporal anti-aliasing
+  unavailability explanation on two authored lines at the standard Settings
+  width so neither message clips or changes to ordinary text color.
 - Loading copy is exactly one scene line followed by real object, import-step,
   decoded-texture, and GPU-ready counts. The scene line ends with
   `please wait.`, `please wait..`, or `please wait...` at two updates per second.
@@ -330,7 +334,7 @@ Complete this checklist for every new or materially changed UI control before
 editing. Record the answers in the execution plan or task notes; no item may
 remain unknown when implementation begins.
 
-- [ ] Record UI reference version `2026-07-21.2` for this revision and confirm
+- [ ] Record UI reference version `2026-07-22.1` for this revision and confirm
   that no cached assignment, excerpt, or handoff names an older version.
 
 ### Ownership and State
@@ -1372,6 +1376,11 @@ screenshots were checked.
 
 ## Reference Revision History
 
+- `2026-07-22.1`: Standardized inline unavailable guidance on the shared
+  disabled-text token with owner-width wrapping. Required both temporal
+  anti-aliasing availability explanations to use an authored two-line layout
+  and required Statistics benchmark gating guidance to use the same muted
+  presentation instead of ordinary text color.
 - `2026-07-21.2`: Moved reset icons for nested dropdowns only into the
   immediately preceding tree-indent gutter, preserving the established
   trailing placement for un-nested dropdowns and all non-dropdown controls.

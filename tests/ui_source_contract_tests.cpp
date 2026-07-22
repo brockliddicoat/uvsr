@@ -198,7 +198,7 @@ int main(int argc, char** argv)
         "README line-count verification policy");
     ExpectContains(
         uiReferenceSource,
-        "UI reference version: `2026-07-21.2`.",
+        "UI reference version: `2026-07-22.1`.",
         "current UI reference version");
     ExpectContains(
         uiReferenceSource,
@@ -355,6 +355,24 @@ int main(int argc, char** argv)
         std::cerr << "FAIL: could not read temporal AA sharpening sources\n";
         return 2;
     }
+
+    const std::string_view disabledWrappedTextHelper = ExtractSection(
+        source,
+        "static void DrawDisabledTextWrapped(const char* text)",
+        "static bool DrawCollapsingHeader(",
+        "wrapped disabled text helper");
+    ExpectContains(
+        disabledWrappedTextHelper,
+        "ImGui::PushTextWrapPos(0.f);",
+        "wrapped disabled text helper");
+    ExpectContains(
+        disabledWrappedTextHelper,
+        "ImGui::TextDisabled(\"%s\", text);",
+        "wrapped disabled text helper");
+    ExpectContains(
+        disabledWrappedTextHelper,
+        "ImGui::PopTextWrapPos();",
+        "wrapped disabled text helper");
 
     const std::string_view loading = ExtractSection(
         source,
@@ -781,6 +799,14 @@ int main(int argc, char** argv)
         statistics,
         "OpenVisibilityBenchmarkFolder",
         "removed Visibility benchmark folder UI");
+    ExpectContains(
+        statistics,
+        "DrawDisabledTextWrapped(benchmarkBlockedReason.c_str())",
+        "Statistics unavailable reason color and wrapping");
+    ExpectAbsent(
+        statistics,
+        "ImGui::TextWrapped(\"%s\", benchmarkBlockedReason.c_str())",
+        "Statistics unavailable reason color and wrapping");
     ExpectAbsent(statistics, "ImGui::BeginCombo(", "Statistics drawer");
     ExpectAbsent(statistics, "ImGui::TreeNodeEx(", "Statistics drawer");
     ExpectAbsent(statistics, "ImGui::SliderFloat(", "Statistics drawer");
@@ -804,6 +830,26 @@ int main(int argc, char** argv)
         aliasing,
         "PresentStructuralBody(m_ui.AntiAliasing)",
         "Aliasing staged method-body presentation");
+    ExpectContains(
+        aliasing,
+        "DrawDisabledTextWrapped(",
+        "Aliasing unavailable reason color and wrapping");
+    ExpectContains(
+        aliasing,
+        "Temporal anti-aliasing is paused until visibility\\n",
+        "Aliasing visibility-conflict reason line break");
+    ExpectContains(
+        aliasing,
+        "Temporal Reconstruction is disabled.",
+        "Aliasing visibility-conflict reason second line");
+    ExpectContains(
+        aliasing,
+        "Temporal anti-aliasing requires deferred UVSR PBR\\n",
+        "Aliasing renderer requirement reason line break");
+    ExpectContains(
+        aliasing,
+        "motion and depth.",
+        "Aliasing renderer requirement reason second line");
     const std::string_view aliasingMethodBodyPresentation = ExtractSection(
         aliasing,
         "AntiAliasingSettings& settings =",

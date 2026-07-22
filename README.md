@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 53,295 non-blank source lines.
+**First-Party Lines of Code:** 53,350 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,622 non-blank source lines.
 
-**Total Lines of Code:** 440,917 non-blank source lines.
+**Total Lines of Code:** 440,972 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -70,7 +70,9 @@ architecture without either add-on.
   shading leave temporal AA unavailable because they
   do not produce the required motion contract. Visibility Temporal
   Reconstruction remains mutually exclusive until that history uses the same
-  jitter convention. The complete method, quality, coordinate, reset,
+  jitter convention. Unavailable AA and Statistics guidance uses the same
+  muted status color, and the AA explanation stays on two lines inside
+  Settings. The complete method, quality, coordinate, reset,
   performance, and benchmark contract is in
   [`docs/miniengine-taa-options.md`](docs/miniengine-taa-options.md).
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
