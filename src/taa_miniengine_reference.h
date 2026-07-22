@@ -172,32 +172,6 @@ namespace uvsr
         }
     };
 
-    struct SmaaQualityReference
-    {
-        float edgeThreshold;
-        uint32_t axialSearchSteps;
-        uint32_t diagonalSearchSteps;
-        bool diagonalDetection;
-        bool cornerDetection;
-        uint32_t cornerRoundingPercent;
-    };
-
-    [[nodiscard]] inline constexpr SmaaQualityReference
-        GetSmaaQualityReference(AntiAliasingQuality quality)
-    {
-        switch (quality)
-        {
-        case AntiAliasingQuality::Low:
-            return { 0.15f, 4u, 0u, false, false, 0u };
-        case AntiAliasingQuality::Medium:
-            return { 0.10f, 8u, 0u, false, false, 0u };
-        case AntiAliasingQuality::Ultra:
-            return { 0.05f, 32u, 16u, true, true, 25u };
-        default:
-            return { 0.10f, 16u, 8u, true, true, 25u };
-        }
-    }
-
     struct TemporalAaVector2
     {
         float x;
@@ -1046,7 +1020,7 @@ namespace uvsr
     {
         // Stored MiniEngine confidence begins at 0.5 and reaches 0.8 after
         // four accepted contributions. Use that per-pixel recurrence as the
-        // continuous selective-SMAA fade instead of a binary depth test plus
+        // continuous selective-morphology fade instead of a binary depth test plus
         // a global frame count. This prevents a phase-varying silhouette from
         // switching an entire dilated tile between spatial and temporal color.
         const float rejection =

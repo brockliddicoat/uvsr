@@ -167,3 +167,10 @@ Stop and ask the user if:
 - Active ownership released: yes
 - Archived to completed/abandoned path:
   `docs/exec-plans/completed/aa-ui-merged-experiment.md`
+
+## Canonical Publication
+
+The local-only statements above describe the 2026-07-19 integration checkpoint.
+That checkpoint was subsequently incorporated through merge commit `553e604`,
+received further accepted UI refinements, and was included in the combined
+candidate authorized for canonical `main` publication on 2026-07-22.

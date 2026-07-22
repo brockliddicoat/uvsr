@@ -1,6 +1,6 @@
 # UVSR Agent Guide
 
-Agent policy version: `2026-07-16.1`.
+Agent policy version: `2026-07-22.1`.
 
 ## Product and Scope
 
@@ -329,6 +329,44 @@ Agent policy version: `2026-07-16.1`.
 
 ## UI and Rendering Safeguards
 
+- Before adding, importing, merging, or changing Settings UI, read and follow
+  `docs/ui-integration-agent-procedure.md`, the single canonical UVSR UI
+  reference. Treat its visual design, Title Case, copy, hierarchy, spacing,
+  defaults, reset behavior, animation, scrolling, lifetime, renderer boundary,
+  and live exercise rules as required product behavior rather than optional
+  polish. Amend that reference instead of creating a competing UI guide.
+- Record the exact UI reference version printed below that document's title in
+  the task plan or notes before implementation and again in the final handoff.
+  If the version differs from the one recorded by an assignment, cached excerpt,
+  earlier plan, or prior handoff, reread the current reference and reconcile the
+  implementation before continuing. Treat a version mismatch as direct evidence
+  that stale UI guidance may explain an incorrect element.
+- Before implementing any new or materially changed control, complete the
+  reference's Mandatory New-Element Intake Checklist in the task plan or notes.
+  Record the owner, control class, default and reset behavior, every direct and
+  derived consumer, animation/scroll owner, and renderer cost before editing.
+- Any Settings dropdown that changes dependent layout must use
+  `DeferredUiStructuralPresentation<T>` or an explicitly equivalent tested phase
+  machine, synchronize every dependent consumer, and commit only after the
+  separate shared dropdown barrier. Use the Aliasing Method reference incident
+  for renderer-topology selectors; a delay or disabled scope is not a repair.
+- Dropdown popup motion uses the canonical full-alpha geometric roll. Discard
+  input received before roll-down completes, never replay a delayed click, keep
+  popup size and row layout fixed, and hold renderer-facing changes behind both
+  the originating combo ID's exact popup-transition state and the shared
+  composition-idle barrier. An unrelated combo must never strand the action;
+  finish the scoped transition explicitly when its owner becomes invisible,
+  clipped, or unsubmitted for the current frame, or when its work is canceled.
+  Latch the popup reveal edge for the complete lifecycle, suppress item behavior
+  before blocked input can acquire ownership, and require stable layout before
+  any dependent drawer begins collapsing.
+- Run `uvsr_ui_source_contract`, `uvsr_ui_animation_reference`, and
+  `uvsr_imgui_dropdown_roll_lifecycle` after every Settings, animation,
+  dropdown, scrolling, magnifier, or loading-screen change.
+  Also run `uvsr_renderer_source_contract` and the affected feature contracts
+  when a UI choice changes renderer topology or resources. Update a contract
+  only when the user has explicitly accepted new behavior; never weaken one to
+  make a mismatched integration pass.
 - Treat the existing UI layout, wording, order, widths, defaults, and alignment
   as user-designed product behavior. Change them only when the task explicitly
   calls for a UI change.
@@ -351,6 +389,24 @@ Agent policy version: `2026-07-16.1`.
 ## Documentation
 
 - Keep the root file named `README.md`.
+- Keep the generated codebase-size block immediately below the UVSR tagline at
+  the top of `README.md`. It must report first-party, third-party, and combined
+  non-blank source-line totals. Generate it with
+  `tools/update_readme_line_counts.cmd --write` on Windows or
+  `python3 tools/update_readme_line_counts.py --write` on other hosts; never
+  hand-edit the values or remove the marker comments.
+- Treat UVSR source, tests, tools, root build/launch scripts, and the final
+  first-party additions in dependency override patches as first-party code.
+  Treat the retained source in the pinned Donut dependency, its recursive
+  dependencies, and `src/third_party/`, less lines replaced by UVSR overrides,
+  as third-party code. Documentation, assets, licenses, binaries, and generated
+  build output are outside both totals. The counter is the authoritative
+  implementation of this boundary.
+- Refresh the README totals after any counted source, dependency, or override
+  change and before every commit, push, pull request, or merge. Run
+  `tools/update_readme_line_counts.cmd --check` after the refresh. The GitHub
+  line-count workflow is a required backstop, not a substitute for the local
+  refresh.
 - Every document an agent creates or edits must use conventional English Title
   Case for every visible heading. This includes Markdown headings and any
   standalone paragraph or list lead-in whose heading text is formatted entirely
@@ -405,6 +461,10 @@ Agent policy version: `2026-07-16.1`.
   rebuild.
 - For documentation changes, run the checker command above with `--self-test`,
   then run it again without arguments.
+- Run `tools/update_readme_line_counts.cmd --self-test` and
+  `tools/update_readme_line_counts.cmd --check` before every commit, push, pull
+  request, or merge. On other hosts, run the corresponding Python script
+  directly.
 - Run `git diff --check` before committing.
 - Before declaring the overall task complete, the coordinator maps every
   acceptance criterion to evidence, confirms all workers are done or stopped,

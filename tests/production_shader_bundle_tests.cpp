@@ -71,6 +71,7 @@ namespace
             "pbr_deferred_lighting_msaa_cs",
             "pbr_forward_ps",
             "pbr_gbuffer_ps",
+            "pixel_zoom_ps",
             "screen_space_depth_hierarchy_cs",
             "screen_space_indirect_composite_cs",
             "screen_space_visibility_bounce_control_cs",
@@ -84,10 +85,6 @@ namespace
             "screen_space_visibility_packed_fast_edges_cs",
             "screen_space_visibility_cs",
             "screen_space_visibility_temporal_cs",
-            "smaa_edge_ps",
-            "smaa_blend_weight_ps",
-            "smaa_neighborhood_ps",
-            "smaa_selective_neighborhood_cs",
             "taa_miniengine_blend_cs",
             "taa_miniengine_resolve_cs",
             "taa_miniengine_sharpen_cs"
@@ -145,11 +142,8 @@ int main(int argc, char** argv)
     const std::string config = ReadText(configPath);
     const std::string manifest = ReadText(manifestPath);
     constexpr const char* forbiddenShaders[] = {
-        "smaa_edge_cs",
-        "smaa_classify_tiles_cs",
-        "smaa_selective_edge_cs",
-        "smaa_selective_blend_weight_cs",
-        "smaa_debug_ps"
+        "smaa",
+        "SMAA"
     };
     for (const char* shader : forbiddenShaders)
     {
@@ -171,7 +165,7 @@ int main(int argc, char** argv)
             "taa_miniengine_blend_cs.hlsl") == 3u,
         "production must compile exactly the three long-term temporal preset bundles");
     passed &= Check(
-        CountOccurrences(config, "TAA_EXPORT_SELECTIVE=1") == 3u &&
+        CountOccurrences(config, "TAA_EXPORT_SELECTIVE=0") == 3u &&
             CountOccurrences(config, "TAA_SAMPLE_RESURRECTION=0") == 3u &&
             CountOccurrences(config, "TAA_DEVELOPER_DEBUG=0") == 3u &&
             config.find("TAA_EXPORT_SELECTIVE={") ==
@@ -179,24 +173,21 @@ int main(int argc, char** argv)
             config.find("TAA_DEVELOPER_DEBUG=1") ==
                 std::string::npos &&
             config.find("TAA_PIXEL_SHADER") == std::string::npos,
-        "production TAA bundles must retain only shipping selective output without resurrection, debug, or pixel experiments");
-    passed &= Check(
-        config.find(
-            "smaa_edge_ps.hlsl -T ps -E main -D SMAA_QUALITY_PRESET={0,1,2,3}") !=
-                std::string::npos &&
-            config.find(
-            "smaa_blend_weight_ps.hlsl -T ps -E main -D SMAA_QUALITY_PRESET={0,1,2,3}") !=
-                std::string::npos &&
-            config.find(
-            "smaa_neighborhood_ps.hlsl -T ps -E main") !=
-                std::string::npos,
-        "production must retain the fixed diagnostic SMAA quality pipeline without temporal or execution experiments");
+        "production TAA bundles must disable removed selective morphology output and omit resurrection, debug, and pixel experiments");
     passed &= Check(
         CountOccurrences(config, "cmaa2.hlsl -T cs") == 4u &&
             CountOccurrences(
                 config,
-                "CMAA2_STATIC_QUALITY_PRESET={0,1,2}") == 4u,
-        "production must retain all four official CMAA2 stages for Low, Medium, and High");
+                "CMAA2_STATIC_QUALITY_PRESET={0,1,2,3}") == 4u,
+        "production must retain all four official CMAA2 stages for Low, Medium, High, and Ultra");
+    passed &= Check(
+        CountOccurrences(
+            config,
+            "taa_miniengine_sharpen_cs.hlsl") == 1u &&
+            config.find(
+                "TAA_SHARPEN_INPUT_PREMULTIPLIED={0,1}") !=
+                std::string::npos,
+        "production must package distinct premultiplied-history and resolved-presentation sharpen permutations");
     passed &= Check(
         CountOccurrences(
             config,

@@ -12,7 +12,6 @@ namespace uvsr
         TemporalSubpixelMorphological,
         IntelCmaa2,
         Msaa,
-        SubpixelMorphological,
         Count
     };
 
@@ -29,10 +28,6 @@ namespace uvsr
         AntiAliasingMethod method,
         AntiAliasingQuality quality)
     {
-        if (method == AntiAliasingMethod::IntelCmaa2)
-        {
-            return quality != AntiAliasingQuality::Ultra;
-        }
         return quality < AntiAliasingQuality::Count;
     }
 
@@ -51,7 +46,6 @@ namespace uvsr
     enum class AntiAliasingPreset : uint32_t
     {
         Off,
-        Smaa1x,
         TemporalPerformance,
         TemporalBalanced,
         TemporalQuality,
@@ -64,23 +58,12 @@ namespace uvsr
         Count
     };
 
-    enum class SmaaApplication : uint32_t
+    enum class MorphologyApplication : uint32_t
     {
         Off,
-        FullScreen,
         ConservativeMorphological,
-        SelectiveShort,
-        SelectiveLong,
         Count
     };
-
-    [[nodiscard]] inline constexpr bool UsesSmaaApplication(
-        SmaaApplication application)
-    {
-        return application == SmaaApplication::FullScreen ||
-            application == SmaaApplication::SelectiveShort ||
-            application == SmaaApplication::SelectiveLong;
-    }
 
     enum class MiniEngineTaaMotionSource : uint32_t
     {
@@ -185,14 +168,11 @@ namespace uvsr
         Count
     };
 
-    enum class SmaaApplicationOverride : uint32_t
+    enum class MorphologyApplicationOverride : uint32_t
     {
         FromPreset,
         Off,
-        FullScreen,
         ConservativeMorphological,
-        SelectiveShort,
-        SelectiveLong,
         Count
     };
 
@@ -253,10 +233,7 @@ namespace uvsr
         StableInterior = UVSR_TAA_DEBUG_STABLE_INTERIOR,
         FinalHistoryWeight = UVSR_TAA_DEBUG_FINAL_HISTORY_WEIGHT,
         SampleResurrection = UVSR_TAA_DEBUG_SAMPLE_RESURRECTION,
-        SmaaEdgeMask = UVSR_SMAA_DEBUG_EDGE_MASK,
-        SmaaBlendWeights = UVSR_SMAA_DEBUG_BLEND_WEIGHTS,
-        SmaaOutputDelta = UVSR_SMAA_DEBUG_OUTPUT_DELTA,
-        Count = UVSR_AA_DEBUG_VIEW_COUNT
+        Count = UVSR_TAA_DEBUG_VIEW_COUNT
     };
 
     struct MiniEngineTaaOptions
@@ -303,8 +280,12 @@ namespace uvsr
             MiniEngineTaaStableInteriorOverride::FromPreset;
         MiniEngineTaaSampleResurrectionOverride sampleResurrection =
             MiniEngineTaaSampleResurrectionOverride::FromPreset;
-        SmaaApplicationOverride subpixelMorphology =
-            SmaaApplicationOverride::FromPreset;
+        MorphologyApplicationOverride subpixelMorphology =
+            MorphologyApplicationOverride::FromPreset;
+        // -1 inherits the selected method quality. Non-negative values select
+        // the CMAA2 presentation quality independently, so changing
+        // morphology cannot promote the Temporal or MSAA preset itself.
+        int32_t morphologyQuality = -1;
         // -1 inherits the selected preset. Non-negative values are explicit
         // prior-frame horizons; the resolver clamps temporal presets to the
         // normal-menu slider's closed [1, 31] range.
@@ -329,7 +310,8 @@ namespace uvsr
                 sampleResurrection !=
                     MiniEngineTaaSampleResurrectionOverride::FromPreset ||
                 subpixelMorphology !=
-                    SmaaApplicationOverride::FromPreset ||
+                    MorphologyApplicationOverride::FromPreset ||
+                morphologyQuality >= 0 ||
                 historyFrames >= 0 ||
                 historyStrength >= 0.f;
         }
@@ -345,6 +327,7 @@ namespace uvsr
                 stableInterior == other.stableInterior &&
                 sampleResurrection == other.sampleResurrection &&
                 subpixelMorphology == other.subpixelMorphology &&
+                morphologyQuality == other.morphologyQuality &&
                 historyFrames == other.historyFrames &&
                 historyStrength == other.historyStrength;
         }
@@ -428,8 +411,10 @@ namespace uvsr
         AntiAliasingPreset implementation =
             AntiAliasingPreset::TemporalPerformance;
         MiniEngineTaaOptions temporal;
-        SmaaApplication subpixelMorphology =
-            SmaaApplication::SelectiveShort;
+        MorphologyApplication subpixelMorphology =
+            MorphologyApplication::ConservativeMorphological;
+        AntiAliasingQuality morphologyQuality =
+            AntiAliasingQuality::Medium;
         MiniEngineTaaExecutionPath executionPath =
             MiniEngineTaaExecutionPath::Compute;
         MiniEngineTaaComputeKernel computeKernel =
@@ -564,8 +549,6 @@ namespace uvsr
             AntiAliasingMethod method,
             AntiAliasingQuality quality)
     {
-        if (method == AntiAliasingMethod::SubpixelMorphological)
-            return AntiAliasingPreset::Smaa1x;
         if (method == AntiAliasingMethod::IntelCmaa2)
             return AntiAliasingPreset::IntelCmaa2;
         if (method == AntiAliasingMethod::Msaa)
@@ -639,59 +622,49 @@ namespace uvsr
         return mode != MiniEngineTaaSampleResurrection::Off;
     }
 
-    [[nodiscard]] inline constexpr SmaaApplication
-        GetPresetSmaaApplication(AntiAliasingPreset preset)
+    [[nodiscard]] inline constexpr MorphologyApplication
+        GetPresetMorphologyApplication(AntiAliasingPreset preset)
     {
         switch (preset)
         {
-        case AntiAliasingPreset::Smaa1x:
-            return SmaaApplication::FullScreen;
         case AntiAliasingPreset::TemporalPerformance:
         case AntiAliasingPreset::TemporalBalanced:
-            return SmaaApplication::SelectiveShort;
         case AntiAliasingPreset::TemporalQuality:
-            return SmaaApplication::SelectiveLong;
         case AntiAliasingPreset::TemporalUltra:
-            return SmaaApplication::FullScreen;
         case AntiAliasingPreset::IntelCmaa2:
-            return SmaaApplication::ConservativeMorphological;
+            return MorphologyApplication::ConservativeMorphological;
         case AntiAliasingPreset::Msaa2x:
         case AntiAliasingPreset::Msaa4x:
         case AntiAliasingPreset::Msaa8x:
         case AntiAliasingPreset::Msaa16x:
-            return SmaaApplication::ConservativeMorphological;
+            return MorphologyApplication::ConservativeMorphological;
         default:
-            return SmaaApplication::Off;
+            return MorphologyApplication::Off;
         }
     }
 
     [[nodiscard]] inline constexpr bool
         IsMorphologyApplicationSupported(
             AntiAliasingPreset preset,
-            SmaaApplication application)
+            MorphologyApplication application)
     {
-        if (preset == AntiAliasingPreset::Smaa1x)
-        {
-            return application == SmaaApplication::FullScreen;
-        }
         if (preset == AntiAliasingPreset::IntelCmaa2)
         {
             return application ==
-                SmaaApplication::ConservativeMorphological;
+                MorphologyApplication::ConservativeMorphological;
         }
         if (IsLongTermTemporalPreset(preset))
-            return application < SmaaApplication::Count;
+            return application < MorphologyApplication::Count;
         if (preset == AntiAliasingPreset::Msaa2x ||
             preset == AntiAliasingPreset::Msaa4x ||
             preset == AntiAliasingPreset::Msaa8x ||
             preset == AntiAliasingPreset::Msaa16x)
         {
-            return application == SmaaApplication::Off ||
-                application == SmaaApplication::FullScreen ||
+            return application == MorphologyApplication::Off ||
                 application ==
-                    SmaaApplication::ConservativeMorphological;
+                    MorphologyApplication::ConservativeMorphological;
         }
-        return application == SmaaApplication::Off;
+        return application == MorphologyApplication::Off;
     }
 
     [[nodiscard]] inline constexpr MiniEngineTaaOptions
@@ -756,11 +729,11 @@ namespace uvsr
         case AntiAliasingPreset::TemporalPerformance:
             return 3u;
         case AntiAliasingPreset::TemporalBalanced:
-            return 7u;
+            return 6u;
         case AntiAliasingPreset::TemporalQuality:
-            return 15u;
+            return 9u;
         case AntiAliasingPreset::TemporalUltra:
-            return 31u;
+            return 12u;
         default:
             return 0u;
         }
@@ -896,25 +869,109 @@ namespace uvsr
         }
     }
 
-    [[nodiscard]] inline constexpr SmaaApplication
-        ResolveSmaaApplicationOverride(
-            SmaaApplication preset,
-            SmaaApplicationOverride overrideValue)
+    [[nodiscard]] inline constexpr MorphologyApplication
+        ResolveMorphologyApplicationOverride(
+            MorphologyApplication preset,
+            MorphologyApplicationOverride overrideValue)
     {
         switch (overrideValue)
         {
-        case SmaaApplicationOverride::Off:
-            return SmaaApplication::Off;
-        case SmaaApplicationOverride::FullScreen:
-            return SmaaApplication::FullScreen;
-        case SmaaApplicationOverride::ConservativeMorphological:
-            return SmaaApplication::ConservativeMorphological;
-        case SmaaApplicationOverride::SelectiveShort:
-            return SmaaApplication::SelectiveShort;
-        case SmaaApplicationOverride::SelectiveLong:
-            return SmaaApplication::SelectiveLong;
+        case MorphologyApplicationOverride::Off:
+            return MorphologyApplication::Off;
+        case MorphologyApplicationOverride::ConservativeMorphological:
+            return MorphologyApplication::ConservativeMorphological;
         default:
             return preset;
+        }
+    }
+
+    // Collapse only overrides whose explicit value is identical to the
+    // currently selected preset. This is an explicit settings transition,
+    // not a presentation-time mutation: UI composition may call the resolver
+    // freely without changing renderer-facing state.
+    inline constexpr void NormalizeRedundantAntiAliasingOverrides(
+        AntiAliasingSettings& settings)
+    {
+        const AntiAliasingQuality quality = SanitizeAntiAliasingQuality(
+            settings.method,
+            settings.quality);
+        const AntiAliasingPreset implementation =
+            GetAntiAliasingImplementation(settings.method, quality);
+        MiniEngineTaaAlgorithmOverrides& overrides =
+            settings.algorithmOverrides;
+
+        if (IsLongTermTemporalPreset(implementation))
+        {
+            const MiniEngineTaaOptions preset =
+                GetPresetTemporalOptions(implementation);
+            if (overrides.motionSource !=
+                    MiniEngineTaaMotionSourceOverride::FromPreset &&
+                ResolveMotionSourceOverride(
+                    preset.motionSource,
+                    overrides.motionSource) == preset.motionSource)
+            {
+                overrides.motionSource =
+                    MiniEngineTaaMotionSourceOverride::FromPreset;
+            }
+            if (overrides.currentReconstruction !=
+                    MiniEngineTaaCurrentReconstructionOverride::FromPreset &&
+                ResolveCurrentReconstructionOverride(
+                    preset.currentReconstruction,
+                    overrides.currentReconstruction) ==
+                        preset.currentReconstruction)
+            {
+                overrides.currentReconstruction =
+                    MiniEngineTaaCurrentReconstructionOverride::FromPreset;
+            }
+            if (overrides.historyFilter !=
+                    MiniEngineTaaHistoryFilterOverride::FromPreset &&
+                ResolveHistoryFilterOverride(
+                    preset.historyFilter,
+                    overrides.historyFilter) == preset.historyFilter)
+            {
+                overrides.historyFilter =
+                    MiniEngineTaaHistoryFilterOverride::FromPreset;
+            }
+            if (overrides.rectification !=
+                    MiniEngineTaaRectificationOverride::FromPreset &&
+                ResolveRectificationOverride(
+                    preset.rectification,
+                    overrides.rectification) == preset.rectification)
+            {
+                overrides.rectification =
+                    MiniEngineTaaRectificationOverride::FromPreset;
+            }
+
+            const MiniEngineTaaSampleResurrection presetResurrection =
+                GetPresetSampleResurrection(implementation);
+            if (overrides.sampleResurrection !=
+                    MiniEngineTaaSampleResurrectionOverride::FromPreset &&
+                ResolveSampleResurrectionOverride(
+                    presetResurrection,
+                    overrides.sampleResurrection) == presetResurrection)
+            {
+                overrides.sampleResurrection =
+                    MiniEngineTaaSampleResurrectionOverride::FromPreset;
+            }
+        }
+
+        const bool supportsConfigurableMorphology =
+            IsLongTermTemporalPreset(implementation) ||
+            implementation == AntiAliasingPreset::Msaa2x ||
+            implementation == AntiAliasingPreset::Msaa4x ||
+            implementation == AntiAliasingPreset::Msaa8x ||
+            implementation == AntiAliasingPreset::Msaa16x;
+        if (supportsConfigurableMorphology &&
+            overrides.morphologyQuality < 0 &&
+            overrides.subpixelMorphology !=
+                MorphologyApplicationOverride::FromPreset &&
+            ResolveMorphologyApplicationOverride(
+                GetPresetMorphologyApplication(implementation),
+                overrides.subpixelMorphology) ==
+                    GetPresetMorphologyApplication(implementation))
+        {
+            overrides.subpixelMorphology =
+                MorphologyApplicationOverride::FromPreset;
         }
     }
 
@@ -936,6 +993,7 @@ namespace uvsr
         result.enabled = settings.enabled;
         result.method = settings.method;
         result.quality = quality;
+        result.morphologyQuality = quality;
         result.implementation = settings.enabled
             ? implementation
             : AntiAliasingPreset::Off;
@@ -996,27 +1054,36 @@ namespace uvsr
                 result.temporal.interiorWeighting,
                 settings.algorithmOverrides.stableInterior);
 
-        // Spatial SMAA 1x and standalone CMAA2 are complete methods, not
-        // presentation modes. An override left over
-        // from a combined Temporal or MSAA configuration must not replace
-        // their defining morphology.
+        // Standalone CMAA2 is a complete method, not a presentation mode.
+        // An override left over from a combined Temporal or MSAA
+        // configuration must not replace its defining morphology.
         result.subpixelMorphology =
-            implementation == AntiAliasingPreset::Smaa1x
-                ? SmaaApplication::FullScreen
-                : implementation == AntiAliasingPreset::IntelCmaa2
-                    ? SmaaApplication::ConservativeMorphological
-                : ResolveSmaaApplicationOverride(
-                    GetPresetSmaaApplication(implementation),
+            implementation == AntiAliasingPreset::IntelCmaa2
+                    ? MorphologyApplication::ConservativeMorphological
+                : ResolveMorphologyApplicationOverride(
+                    GetPresetMorphologyApplication(implementation),
                     settings.algorithmOverrides.subpixelMorphology);
-        // Selective SMAA consumes the long-term temporal rejection mask.
-        // MSAA has no equivalent history classification, but full-screen SMAA
-        // and CMAA2 are valid post-resolve choices.
+        // Temporal and MSAA can optionally apply CMAA2 after their resolved
+        // scene color. Standalone CMAA2 always retains that morphology.
         if (!IsMorphologyApplicationSupported(
                 implementation,
                 result.subpixelMorphology))
         {
             result.subpixelMorphology =
-                GetPresetSmaaApplication(implementation);
+                GetPresetMorphologyApplication(implementation);
+        }
+        if (implementation != AntiAliasingPreset::IntelCmaa2 &&
+            settings.algorithmOverrides.morphologyQuality >= 0)
+        {
+            const uint32_t morphologyQuality = static_cast<uint32_t>(
+                settings.algorithmOverrides.morphologyQuality);
+            result.morphologyQuality =
+                morphologyQuality <
+                        static_cast<uint32_t>(
+                            AntiAliasingQuality::Count)
+                    ? static_cast<AntiAliasingQuality>(
+                        morphologyQuality)
+                    : AntiAliasingQuality::Ultra;
         }
         result.executionPath =
             settings.performanceOverrides.executionPath ==
@@ -1143,15 +1210,13 @@ namespace uvsr
             requested.passFusion != preset.passFusion ||
             requested.cacheBlocking != preset.cacheBlocking;
 
-        if (implementation == AntiAliasingPreset::Smaa1x)
-        {
-            return false;
-        }
         if (IsLongTermTemporalPreset(implementation))
         {
             return requested.temporal != preset.temporal ||
                 requested.subpixelMorphology !=
                     preset.subpixelMorphology ||
+                requested.morphologyQuality !=
+                    preset.morphologyQuality ||
                 requested.sampleResurrection !=
                     preset.sampleResurrection ||
                 requested.historyFrames != preset.historyFrames ||
@@ -1165,7 +1230,9 @@ namespace uvsr
             implementation == AntiAliasingPreset::Msaa16x)
         {
             return requested.subpixelMorphology !=
-                preset.subpixelMorphology;
+                    preset.subpixelMorphology ||
+                requested.morphologyQuality !=
+                    preset.morphologyQuality;
         }
         return false;
     }
@@ -1238,8 +1305,8 @@ namespace uvsr
         const ResolvedAntiAliasingSettings requestedResolved =
             ResolveAntiAliasingSettings(requested);
 
-        // The effective image key intentionally excludes spatial SMAA 1x,
-        // presentation-only SMAA, debug views, sharpness, and every
+        // The effective image key intentionally excludes presentation-only
+        // morphology, debug views, sharpness, and every
         // image-equivalent execution experiment.
         return GetTemporalAntiAliasingImageKey(activeResolved) !=
             GetTemporalAntiAliasingImageKey(requestedResolved);
@@ -1365,8 +1432,6 @@ namespace uvsr
         {
         case AntiAliasingPreset::Off:
             return "Off";
-        case AntiAliasingPreset::Smaa1x:
-            return "Subpixel Morphological";
         case AntiAliasingPreset::TemporalPerformance:
             return "Temporal Low";
         case AntiAliasingPreset::TemporalBalanced:
@@ -1395,14 +1460,12 @@ namespace uvsr
     {
         switch (value)
         {
-        case AntiAliasingMethod::SubpixelMorphological:
-            return "Subpixel Morphological";
         case AntiAliasingMethod::TemporalSubpixelMorphological:
-            return "Temporal";
+            return "Temporal Reconstructive";
         case AntiAliasingMethod::IntelCmaa2:
             return "Conservative Morphological";
         case AntiAliasingMethod::Msaa:
-            return "Multisample";
+            return "Multisample Reference";
         default:
             return "Unavailable";
         }
@@ -1451,18 +1514,13 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr const char*
-        GetSmaaApplicationLabel(SmaaApplication value)
+        GetMorphologyApplicationLabel(MorphologyApplication value)
     {
         switch (value)
         {
-        case SmaaApplication::Off: return "No Pixels";
-        case SmaaApplication::FullScreen: return "All Pixels";
-        case SmaaApplication::ConservativeMorphological:
+        case MorphologyApplication::Off: return "No Pixels";
+        case MorphologyApplication::ConservativeMorphological:
             return "Conservative Morphological";
-        case SmaaApplication::SelectiveShort:
-            return "Selective Short Search";
-        case SmaaApplication::SelectiveLong:
-            return "Selective Long Search";
         default:
             return "Unavailable";
         }
@@ -1545,22 +1603,17 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr const char*
-        GetSmaaApplicationOverrideLabel(SmaaApplicationOverride value)
+        GetMorphologyApplicationOverrideLabel(
+            MorphologyApplicationOverride value)
     {
         switch (value)
         {
-        case SmaaApplicationOverride::FromPreset:
+        case MorphologyApplicationOverride::FromPreset:
             return "Preset";
-        case SmaaApplicationOverride::Off:
+        case MorphologyApplicationOverride::Off:
             return "No Pixels";
-        case SmaaApplicationOverride::FullScreen:
-            return "All Pixels";
-        case SmaaApplicationOverride::ConservativeMorphological:
+        case MorphologyApplicationOverride::ConservativeMorphological:
             return "Conservative Morphological";
-        case SmaaApplicationOverride::SelectiveShort:
-            return "Selective Short Search";
-        case SmaaApplicationOverride::SelectiveLong:
-            return "Selective Long Search";
         default:
             return "Unavailable";
         }
@@ -1702,12 +1755,6 @@ namespace uvsr
             return "Final History Weight";
         case MiniEngineTaaDebugView::SampleResurrection:
             return "Sample Resurrection";
-        case MiniEngineTaaDebugView::SmaaEdgeMask:
-            return "SMAA Edge Mask";
-        case MiniEngineTaaDebugView::SmaaBlendWeights:
-            return "SMAA Blend Weights";
-        case MiniEngineTaaDebugView::SmaaOutputDelta:
-            return "SMAA Output Delta (16x)";
         default: return "Unavailable";
         }
     }
@@ -1719,21 +1766,5 @@ namespace uvsr
         const uint32_t index = static_cast<uint32_t>(value);
         return index > UVSR_TAA_DEBUG_OFF &&
             index < UVSR_TAA_DEBUG_VIEW_COUNT;
-    }
-
-    [[nodiscard]] inline constexpr bool IsSmaaDebugVisualization(
-        MiniEngineTaaDebugView value)
-    {
-        const uint32_t index = static_cast<uint32_t>(value);
-        return index >= UVSR_SMAA_DEBUG_EDGE_MASK &&
-            index < UVSR_AA_DEBUG_VIEW_COUNT;
-    }
-
-    [[nodiscard]] inline constexpr uint32_t
-        GetSmaaDebugPermutationIndex(
-            MiniEngineTaaDebugView value)
-    {
-        return static_cast<uint32_t>(value) -
-            UVSR_SMAA_DEBUG_EDGE_MASK;
     }
 }

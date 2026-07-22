@@ -37,7 +37,7 @@ namespace uvsr
         explicit UvsrFirstPersonCamera(bool translationEnabled = true)
             : m_TranslationEnabled(translationEnabled)
         {
-            UpdateMoveSpeed();
+            SetMoveSpeed(6.f);
         }
 
         void SetExactPose(
@@ -65,23 +65,61 @@ namespace uvsr
             case GLFW_KEY_RIGHT: m_LookRight = pressed; break;
             case GLFW_KEY_UP: m_LookUp = pressed; break;
             case GLFW_KEY_DOWN: m_LookDown = pressed; break;
-            case GLFW_KEY_LEFT_SHIFT: m_LeftSprint = m_TranslationEnabled && pressed; break;
-            case GLFW_KEY_RIGHT_SHIFT: m_RightSprint = m_TranslationEnabled && pressed; break;
             default: break;
+            }
+
+            if (key == GLFW_KEY_V && pressed)
+            {
+                // Clear either held roll latch before leveling the camera.
+                FirstPersonCamera::KeyboardUpdate(
+                    GLFW_KEY_Z, 0, GLFW_RELEASE, 0);
+                FirstPersonCamera::KeyboardUpdate(
+                    GLFW_KEY_C, 0, GLFW_RELEASE, 0);
+                ResetRoll();
+                return;
             }
 
             int forwardedAction = action;
             if (!m_TranslationEnabled && IsTranslationKey(key))
                 forwardedAction = GLFW_RELEASE;
 
-            FirstPersonCamera::KeyboardUpdate(key, scancode, forwardedAction, mods);
-            if (m_TranslationEnabled && (m_LeftSprint || m_RightSprint))
+            // Donut assigns roll-left to Z. UVSR reserves Z for the pixel zoom
+            // cycle, so X feeds that existing camera action. Space and either
+            // Shift key reuse Donut's up/down actions without retaining its
+            // former Shift sprint behavior.
+            int forwardedKey = key;
+            if (key == GLFW_KEY_X)
+                forwardedKey = GLFW_KEY_Z;
+            else if (key == GLFW_KEY_Z)
+                forwardedAction = GLFW_RELEASE;
+            else if (key == GLFW_KEY_SPACE)
+                forwardedKey = GLFW_KEY_E;
+            else if (key == GLFW_KEY_LEFT_SHIFT ||
+                key == GLFW_KEY_RIGHT_SHIFT)
             {
-                // Donut maps both Shift keys to one latch. Reassert the shared
-                // latch when either independently tracked key remains held.
-                FirstPersonCamera::KeyboardUpdate(GLFW_KEY_LEFT_SHIFT, 0, GLFW_PRESS, 0);
+                forwardedKey = GLFW_KEY_Q;
             }
-            UpdateMoveSpeed();
+
+            FirstPersonCamera::KeyboardUpdate(
+                forwardedKey,
+                scancode,
+                forwardedAction,
+                mods);
+        }
+
+        void ResetRoll()
+        {
+            const donut::math::float3 worldUp(0.f, 1.f, 0.f);
+            const donut::math::float3 fallbackUp(0.f, 0.f, 1.f);
+            const donut::math::float3 referenceUp =
+                std::abs(donut::math::dot(m_CameraDir, worldUp)) < 0.999f
+                    ? worldUp
+                    : fallbackUp;
+            m_CameraRight = donut::math::normalize(
+                donut::math::cross(m_CameraDir, referenceUp));
+            m_CameraUp = donut::math::normalize(
+                donut::math::cross(m_CameraRight, m_CameraDir));
+            UpdateWorldToView();
         }
 
         void Animate(float deltaT) override
@@ -119,6 +157,7 @@ namespace uvsr
             {
             case GLFW_KEY_Q:
             case GLFW_KEY_E:
+            case GLFW_KEY_SPACE:
             case GLFW_KEY_A:
             case GLFW_KEY_D:
             case GLFW_KEY_W:
@@ -133,25 +172,11 @@ namespace uvsr
             }
         }
 
-        void UpdateMoveSpeed()
-        {
-            constexpr float BaseMoveSpeed = 6.f;
-            constexpr float DesiredSprintMultiplier = 2.f;
-            constexpr float DonutSprintMultiplier = 3.f;
-            const bool sprinting = m_TranslationEnabled &&
-                (m_LeftSprint || m_RightSprint);
-            SetMoveSpeed(sprinting
-                ? BaseMoveSpeed * DesiredSprintMultiplier / DonutSprintMultiplier
-                : BaseMoveSpeed);
-        }
-
         bool m_TranslationEnabled = true;
         bool m_LookLeft = false;
         bool m_LookRight = false;
         bool m_LookUp = false;
         bool m_LookDown = false;
-        bool m_LeftSprint = false;
-        bool m_RightSprint = false;
     };
 
     class UvsrThirdPersonCamera : public UvsrFirstPersonCamera
@@ -164,8 +189,9 @@ namespace uvsr
         }
 
         // Derive a conservative dolly scale from the initial framing, then
-        // carry that scale with the free-moving eye. Wheel, W/S dolly, and A/D
-        // strafe share a Shift-doubled speed without a fixed pivot limit.
+        // carry that scale with the free-moving eye. Wheel, W/S dolly, A/D
+        // strafe, and Space/Shift vertical travel share smooth finite motion
+        // without a fixed pivot limit.
         void ResetZoomReferenceDistance(float distance)
         {
             m_ReferenceZoomDistance = std::max(distance, 1e-3f);
@@ -179,12 +205,13 @@ namespace uvsr
             m_RemainingWheelDistance = 0.f;
             m_KeyboardDollyVelocity = 0.f;
             m_KeyboardStrafeVelocity = 0.f;
+            m_KeyboardVerticalVelocity = 0.f;
             m_DollyForward = false;
             m_DollyBackward = false;
             m_StrafeLeft = false;
             m_StrafeRight = false;
-            m_LeftSpeedBoost = false;
-            m_RightSpeedBoost = false;
+            m_MoveUp = false;
+            m_MoveDown = false;
         }
 
         [[nodiscard]] float GetReferenceZoomDistance() const
@@ -212,9 +239,9 @@ namespace uvsr
             return m_KeyboardStrafeVelocity;
         }
 
-        [[nodiscard]] bool IsSpeedBoosted() const
+        [[nodiscard]] float GetKeyboardVerticalVelocity() const
         {
-            return m_LeftSpeedBoost || m_RightSpeedBoost;
+            return m_KeyboardVerticalVelocity;
         }
 
         void CancelPendingMotion()
@@ -222,12 +249,13 @@ namespace uvsr
             m_RemainingWheelDistance = 0.f;
             m_KeyboardDollyVelocity = 0.f;
             m_KeyboardStrafeVelocity = 0.f;
+            m_KeyboardVerticalVelocity = 0.f;
             m_DollyForward = false;
             m_DollyBackward = false;
             m_StrafeLeft = false;
             m_StrafeRight = false;
-            m_LeftSpeedBoost = false;
-            m_RightSpeedBoost = false;
+            m_MoveUp = false;
+            m_MoveDown = false;
         }
 
         void KeyboardUpdate(int key, int scancode, int action, int mods) override
@@ -241,10 +269,13 @@ namespace uvsr
                 m_StrafeLeft = pressed;
             else if (key == GLFW_KEY_D)
                 m_StrafeRight = pressed;
-            else if (key == GLFW_KEY_LEFT_SHIFT)
-                m_LeftSpeedBoost = pressed;
-            else if (key == GLFW_KEY_RIGHT_SHIFT)
-                m_RightSpeedBoost = pressed;
+            else if (key == GLFW_KEY_SPACE)
+                m_MoveUp = pressed;
+            else if (key == GLFW_KEY_LEFT_SHIFT ||
+                key == GLFW_KEY_RIGHT_SHIFT)
+            {
+                m_MoveDown = pressed;
+            }
 
             // The parent remains translation-disabled, so it records arrow
             // look and mouse state but filters every movement key.
@@ -264,11 +295,10 @@ namespace uvsr
             constexpr float WheelScaleStep = 0.025f;
             constexpr float MinimumDollyScale = 0.4f;
             constexpr float MaximumDollyScale = 4.f;
-            const float speedMultiplier = IsSpeedBoosted() ? 2.f : 1.f;
             if (yoffset > 0.0)
             {
                 m_RemainingWheelDistance +=
-                    m_BaseWheelStepDistance * m_DollyScale * speedMultiplier;
+                    m_BaseWheelStepDistance * m_DollyScale;
                 m_DollyScale = std::max(
                     MinimumDollyScale,
                     m_DollyScale - WheelScaleStep);
@@ -279,7 +309,7 @@ namespace uvsr
                     MaximumDollyScale,
                     m_DollyScale + WheelScaleStep);
                 m_RemainingWheelDistance -=
-                    m_BaseWheelStepDistance * m_DollyScale * speedMultiplier;
+                    m_BaseWheelStepDistance * m_DollyScale;
             }
         }
 
@@ -294,7 +324,8 @@ namespace uvsr
                 float(m_DollyForward) - float(m_DollyBackward);
             const float strafeInput =
                 float(m_StrafeRight) - float(m_StrafeLeft);
-            const float speedMultiplier = IsSpeedBoosted() ? 2.f : 1.f;
+            const float verticalInput =
+                float(m_MoveUp) - float(m_MoveDown);
 
             // W moves inward and gently lowers close-range sensitivity; S
             // restores it. Use a linear, bounded change so holding W reaches a
@@ -312,13 +343,12 @@ namespace uvsr
             }
 
             const float targetVelocity = dollyInput *
-                m_BaseKeyboardDollySpeed * m_DollyScale * speedMultiplier;
+                m_BaseKeyboardDollySpeed * m_DollyScale;
             // Reach the requested velocity and return to rest in finite time.
             // This keeps the input smooth without an exponential drift tail.
             constexpr float KeyboardAccelerationRate = 5.f;
             constexpr float KeyboardDecelerationRate = 8.f;
             const float velocityRate = m_BaseKeyboardDollySpeed *
-                speedMultiplier *
                 (dollyInput == 0.f
                     ? KeyboardDecelerationRate
                     : KeyboardAccelerationRate);
@@ -329,9 +359,8 @@ namespace uvsr
             m_KeyboardDollyVelocity += velocityDelta;
 
             const float targetStrafeVelocity = strafeInput *
-                m_BaseKeyboardDollySpeed * m_DollyScale * speedMultiplier;
+                m_BaseKeyboardDollySpeed * m_DollyScale;
             const float strafeVelocityRate = m_BaseKeyboardDollySpeed *
-                speedMultiplier *
                 (strafeInput == 0.f
                     ? KeyboardDecelerationRate
                     : KeyboardAccelerationRate);
@@ -340,6 +369,18 @@ namespace uvsr
                 -strafeVelocityRate * clampedDeltaT,
                 strafeVelocityRate * clampedDeltaT);
             m_KeyboardStrafeVelocity += strafeVelocityDelta;
+
+            const float targetVerticalVelocity = verticalInput *
+                m_BaseKeyboardDollySpeed * m_DollyScale;
+            const float verticalVelocityRate = m_BaseKeyboardDollySpeed *
+                (verticalInput == 0.f
+                    ? KeyboardDecelerationRate
+                    : KeyboardAccelerationRate);
+            const float verticalVelocityDelta = donut::math::clamp(
+                targetVerticalVelocity - m_KeyboardVerticalVelocity,
+                -verticalVelocityRate * clampedDeltaT,
+                verticalVelocityRate * clampedDeltaT);
+            m_KeyboardVerticalVelocity += verticalVelocityDelta;
 
             constexpr float WheelMotionResponse = 14.f;
             const float wheelBlend = 1.f - std::exp(
@@ -354,10 +395,15 @@ namespace uvsr
                 m_KeyboardDollyVelocity * clampedDeltaT + wheelMovement;
             const float strafeMovement =
                 m_KeyboardStrafeVelocity * clampedDeltaT;
-            if (dollyMovement != 0.f || strafeMovement != 0.f)
+            const float verticalMovement =
+                m_KeyboardVerticalVelocity * clampedDeltaT;
+            if (dollyMovement != 0.f ||
+                strafeMovement != 0.f ||
+                verticalMovement != 0.f)
             {
                 m_CameraPos += m_CameraDir * dollyMovement +
-                    m_CameraRight * strafeMovement;
+                    m_CameraRight * strafeMovement +
+                    donut::math::float3(0.f, verticalMovement, 0.f);
                 UpdateWorldToView();
             }
         }
@@ -379,12 +425,13 @@ namespace uvsr
         float m_RemainingWheelDistance = 0.f;
         float m_KeyboardDollyVelocity = 0.f;
         float m_KeyboardStrafeVelocity = 0.f;
+        float m_KeyboardVerticalVelocity = 0.f;
         bool m_DollyForward = false;
         bool m_DollyBackward = false;
         bool m_StrafeLeft = false;
         bool m_StrafeRight = false;
-        bool m_LeftSpeedBoost = false;
-        bool m_RightSpeedBoost = false;
+        bool m_MoveUp = false;
+        bool m_MoveDown = false;
     };
 
     class StaticViewCamera : public donut::app::BaseCamera

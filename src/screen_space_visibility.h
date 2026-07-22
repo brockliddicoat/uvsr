@@ -187,6 +187,8 @@ namespace uvsr
         bool enabled = true;
         ScreenSpaceVisibilityQuality quality =
             ScreenSpaceVisibilityQuality::High;
+        ScreenSpaceVisibilityQuality qualityPresetOrigin =
+            ScreenSpaceVisibilityQuality::High;
         VisibilityEstimator estimator =
             VisibilityEstimator::UniformSolidAngle;
         VisibilityResolution resolution = VisibilityResolution::Full;
@@ -233,6 +235,16 @@ namespace uvsr
     void ApplyScreenSpaceVisibilityQualityPreset(
         ScreenSpaceVisibilitySettings& settings,
         ScreenSpaceVisibilityQuality quality);
+
+    void MarkScreenSpaceVisibilityQualityCustom(
+        ScreenSpaceVisibilitySettings& settings);
+
+    [[nodiscard]] bool MatchesScreenSpaceVisibilityQualityPreset(
+        const ScreenSpaceVisibilitySettings& settings,
+        ScreenSpaceVisibilityQuality quality);
+
+    void ReconcileScreenSpaceVisibilityQualityPreset(
+        ScreenSpaceVisibilitySettings& settings);
 
     [[nodiscard]] VisibilityPerformanceProfileConfiguration
         GetEffectiveVisibilityPerformanceConfiguration(

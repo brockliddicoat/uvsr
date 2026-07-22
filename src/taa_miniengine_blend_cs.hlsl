@@ -127,8 +127,8 @@ static float4 PixelOutTemporal;
 static float PixelOutDepth;
 static float2 PixelOutMoments;
 static float2 PixelOutDebug;
-static float4 PixelOutSmaaCurrent;
-static float PixelOutSmaaRejection;
+static float4 PixelOutMorphologyCurrent;
+static float PixelOutMorphologyRejection;
 static float4 PixelOutFusedScene;
 #else
 RWTexture2D<float4> OutTemporal : register(u0);
@@ -137,8 +137,8 @@ RWTexture2D<float2> OutMoments : register(u2);
 #if TAA_DEVELOPER_DEBUG
 RWTexture2D<float2> OutDebug : register(u3);
 #endif
-RWTexture2D<float4> OutSmaaCurrent : register(u4);
-RWTexture2D<float> OutSmaaRejection : register(u5);
+RWTexture2D<float4> OutMorphologyCurrent : register(u4);
+RWTexture2D<float> OutMorphologyRejection : register(u5);
 #if TAA_FUSED_OUTPUT
 RWTexture2D<float4> OutFusedScene : register(u6);
 #endif
@@ -1727,36 +1727,36 @@ float FarthestReverseZDeviceDepth(float4 depths)
 }
 
 #if TAA_EXPORT_SELECTIVE
-float3 GetSelectiveSmaaCurrent(
+float3 GetSelectiveMorphologyCurrent(
     uint ldsIdx,
     float3 reusedDeJittered)
 {
 #if TAA_SHARED_WORK_REUSE && !TAA_PIXEL_SHADER && \
     TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_8X8_TWO_PIXELS
-    float3 smaaCurrentWorking = reusedDeJittered;
+    float3 morphologyCurrentWorking = reusedDeJittered;
 #elif TAA_SHARED_WORK_REUSE && !TAA_PIXEL_SHADER && \
     TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_16X8_ONE_PIXEL
-    float3 smaaCurrentWorking = reusedDeJittered;
+    float3 morphologyCurrentWorking = reusedDeJittered;
 #else
-    float3 smaaCurrentWorking =
+    float3 morphologyCurrentWorking =
         ReconstructDeJitteredCurrent(ldsIdx);
 #endif
-    // Selective SMAA is presentation-only and must follow an unjittered pixel
+    // Selective morphology is presentation-only and follows an unjittered pixel
     // center even at silhouettes. ReconstructDeJitteredCurrent and its shared
     // adjacent variant already apply their positive-footprint anti-ringing;
     // returning to the raw jittered center here made rejected edges swim.
-    return WorkingToRgb(smaaCurrentWorking);
+    return WorkingToRgb(morphologyCurrentWorking);
 }
 
-void WriteSelectiveSmaa(
+void WriteSelectiveMorphology(
     uint2 ST,
     float3 current,
     float acceptedHistoryWeight)
 {
 #if TAA_PIXEL_SHADER
-    PixelOutSmaaCurrent = float4(current, 1.0);
+    PixelOutMorphologyCurrent = float4(current, 1.0);
 #else
-    OutSmaaCurrent[ST] = float4(current, 1.0);
+    OutMorphologyCurrent[ST] = float4(current, 1.0);
 #endif
     // MiniEngine confidence starts at 0.5 and reaches 0.8 after four accepted
     // contributions. Smoothly remap that per-pixel recurrence to an exact
@@ -1771,9 +1771,9 @@ void WriteSelectiveSmaa(
         (rejection - UVSR_TAA_SELECTIVE_REJECTION_FLOOR) /
         (1.0 - UVSR_TAA_SELECTIVE_REJECTION_FLOOR));
 #if TAA_PIXEL_SHADER
-    PixelOutSmaaRejection = rejection;
+    PixelOutMorphologyRejection = rejection;
 #else
-    OutSmaaRejection[ST] = rejection;
+    OutMorphologyRejection[ST] = rejection;
 #endif
 }
 #endif
@@ -1861,9 +1861,9 @@ void WriteRejectedCurrent(
 #endif
     WriteDebugOutput(ST, float2(0.0, 0.0));
 #if TAA_EXPORT_SELECTIVE
-    WriteSelectiveSmaa(
+    WriteSelectiveMorphology(
         ST,
-        GetSelectiveSmaaCurrent(
+        GetSelectiveMorphologyCurrent(
             ldsIdx,
             reusedDeJittered),
         0.0);
@@ -2305,12 +2305,12 @@ void ApplyTemporalBlend(
 #endif
             resurrectionDebugValue));
 #if TAA_EXPORT_SELECTIVE
-    // Selective SMAA consumes de-jittered current only as a presentation
+    // Selective morphology consumes de-jittered current only as a presentation
     // source. It is deliberately separate from OutTemporal and can never be
     // sampled by the next temporal frame.
-    WriteSelectiveSmaa(
+    WriteSelectiveMorphology(
         ST,
-        GetSelectiveSmaaCurrent(
+        GetSelectiveMorphologyCurrent(
             ldsIdx,
             reusedDeJittered),
         max(baseHistoryWeight, resurrectionPresentationTrust));
@@ -2739,8 +2739,8 @@ TaaPixelOutputs main(float4 position : SV_Position)
     PixelOutDepth = 0.0;
     PixelOutMoments = 0.0;
     PixelOutDebug = 0.0;
-    PixelOutSmaaCurrent = 0.0;
-    PixelOutSmaaRejection = 0.0;
+    PixelOutMorphologyCurrent = 0.0;
+    PixelOutMorphologyRejection = 0.0;
     PixelOutFusedScene = 0.0;
 
     uint ldsIdx =
@@ -2792,8 +2792,8 @@ TaaPixelOutputs main(float4 position : SV_Position)
     output.depth = PixelOutDepth;
     output.moments = PixelOutMoments;
     output.debugValue = PixelOutDebug;
-    output.selectiveCurrent = PixelOutSmaaCurrent;
-    output.selectiveRejection = PixelOutSmaaRejection;
+    output.selectiveCurrent = PixelOutMorphologyCurrent;
+    output.selectiveRejection = PixelOutMorphologyRejection;
     output.fusedScene = PixelOutFusedScene;
     return output;
 }

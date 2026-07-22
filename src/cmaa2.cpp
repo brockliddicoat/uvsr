@@ -291,6 +291,27 @@ namespace uvsr
         m_BoundSource = sourceColor;
     }
 
+    void Cmaa2Pass::UpdateSourceColor(
+        nvrhi::ITexture* sourceColor)
+    {
+        if (!sourceColor)
+            return;
+
+        const nvrhi::TextureDesc& sourceDesc =
+            sourceColor->getDesc();
+        if (sourceDesc.width != m_Size.x ||
+            sourceDesc.height != m_Size.y ||
+            sourceDesc.sampleCount != 1u ||
+            sourceDesc.dimension !=
+                nvrhi::TextureDimension::Texture2D ||
+            sourceDesc.format != nvrhi::Format::RGBA16_FLOAT)
+        {
+            return;
+        }
+
+        RebuildBindingSet(sourceColor);
+    }
+
     void Cmaa2Pass::AdvanceTimers()
     {
         for (uint32_t stageIndex = 0u;

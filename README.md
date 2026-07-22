@@ -2,6 +2,19 @@
 
 **Unified Visibility Stochastic Rendering**
 
+<!-- uvsr-codebase-size:start -->
+**First-Party Lines of Code:** 53,295 non-blank source lines.
+
+**Third-Party Lines of Code:** 387,622 non-blank source lines.
+
+**Total Lines of Code:** 440,917 non-blank source lines.
+
+Counts cover UVSR source, tests, tools, build scripts, retained pinned
+dependency source, and final first-party dependency overrides. Documentation,
+assets, licenses, binaries, and generated build output are excluded. Regenerate
+with `tools/update_readme_line_counts.cmd --write`.
+<!-- uvsr-codebase-size:end -->
+
 UVSR is a DirectX 12 renderer built on NVIDIA's pinned Donut framework and its
 NVRHI graphics abstraction layer. It ships with two ready-to-run Intel PBR
 Sponza flat-roof scenes. The default **PBR Sponza Decorated** includes Intel's
@@ -12,43 +25,38 @@ architecture without either add-on.
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
-- The normal **Aliasing** drawer contains **Enabled**, **Run 45-Degree Motion
-  Test**, **Method**, **Quality**, **History Frames**, and **History Strength**.
-  Method independently selects **Temporal**, **Conservative Morphological**,
-  **Multisample**, or **Subpixel Morphological**. SMAA 1x, long-term temporal,
-  and MSAA expose **Low**, **Medium**, **High**, and **Ultra**. CMAA2 exposes
-  **Low**, **Medium**, and **High**.
-  Spatial qualities are full-screen official SMAA 1x. Long-term temporal
-  qualities use
-  progressively stronger MiniEngine temporal bundles with presentation-only
-  selective SMAA. CMAA2 uses Intel's official three-stage compute topology.
-  Multisample displays **Low (2x)**, **Medium (4x)**, **High (8x)**, and
-  **Ultra (16x)**. Every Multisample quality applies CMAA2 by default.
+- The normal **Aliasing** drawer contains **Enabled**, **Method**, **Quality**,
+  **History Frames**, and **History Strength**. The **Statistics** drawer places
+  **Run Current With Motion** directly below **Run Current**.
+  Method independently selects **Temporal Reconstructive**, **Conservative
+  Morphological**, or **Multisample Reference**. Every method exposes **Low**,
+  **Medium**, **High**, and **Ultra**. Long-term temporal qualities use progressively stronger
+  MiniEngine temporal bundles, and CMAA2 supplies the optional presentation
+  morphology with its four conservative strength levels.
+  Multisample Reference displays **Low (2x)**, **Medium (4x)**, **High (8x)**,
+  and **Ultra (16x)**. Every Multisample Reference quality applies CMAA2 by default.
   In Deferred mode it preserves every G-buffer sample through material decode
-  and PBR lighting, then averages final RGBA16F radiance. Full-screen SMAA or
-  CMAA2 can run after that resolve; Temporal can likewise select CMAA2 as its
-  presentation morphology without resetting history.
+  and PBR lighting, then averages final RGBA16F radiance. CMAA2 can run after
+  that resolve; Temporal Reconstructive can likewise select CMAA2 as its presentation
+  morphology without resetting history.
   Screen-space visibility remains available with Deferred MSAA: it selects one
   coherent closest reverse-Z surface per pixel for visibility and
   coverage-weights only that surface's signed lighting correction back into
   the per-sample MSAA result.
-  The shared SMAA source preserves the official 0.15/0.10/0.10/0.05
-  thresholds, actual 8/16/32/64-pixel axial reaches, 0/0/8/16-pixel diagonal
-  reaches, and High/Ultra corner behavior.
   History Frames reports no history for spatial methods and exposes a 1–31
   prior-frame slider for long-term temporal
-  methods. Its inherited values are 3/7/15/31. History Strength only reduces
+  methods. Its inherited values are 3/6/9/12. History Strength only reduces
   otherwise accepted temporal history;
   it cannot restore a sample rejected by motion, bounds, depth, disocclusion,
   or rectification.
   Production shows **Sharpness** only for the four long-term temporal
   qualities. Developer builds move it into default-open **Aliasing Algorithm
-  Configuration** with resolved **(Preset)** controls; mutually exclusive
-  controls show **(Mutex)**. Performance experiments remain collapsed.
+  Configuration** without annotating inherited controls. Sharpness is disabled
+  by default for every quality. The separate developer performance section was
+  removed. **Stable Interior** appears immediately above **Sharpness** and is
+  off in every preset.
   MiniEngine TAA owns the temporal history, validity, reset, bounds,
   motion/jitter, reverse-Z validation, and early-rejection infrastructure.
-  Diagnostic SMAA uses one fixed spatial pixel/dense implementation without
-  temporal phase history or SMAA-specific performance overrides.
   The motion-test button runs the exact Benchmark Position 1 warm,
   right-45-degree, hold, and return sequence used by the CLI benchmark. Both
   paths target 40 rendered frames per second, producing a fixed 15 degrees per
@@ -56,11 +64,13 @@ architecture without either add-on.
   self-validating 256-sample report, keeps
   the app open, and returns the camera to Piloted.
   Effective temporal image or history-layout changes reset state exactly once;
-  presentation-only SMAA, Sharpness, and image-equivalent execution changes do
-  not. Forward and legacy shading leave temporal AA unavailable because they
+  presentation-only CMAA2, Sharpness, and image-equivalent execution changes do
+  not. Post-CMAA2 sharpening uses the resolved-RGB shader permutation rather
+  than treating CMAA2's unused alpha as temporal confidence. Forward and legacy
+  shading leave temporal AA unavailable because they
   do not produce the required motion contract. Visibility Temporal
   Reconstruction remains mutually exclusive until that history uses the same
-  jitter convention. The complete method, quality, coordinate, SMAA, reset,
+  jitter convention. The complete method, quality, coordinate, reset,
   performance, and benchmark contract is in
   [`docs/miniengine-taa-options.md`](docs/miniengine-taa-options.md).
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
@@ -85,14 +95,39 @@ architecture without either add-on.
 - Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
-- The rounded scrollbar-style loading track and its blue moving grab separate
-  scene import, texture decoding, and render-thread texture finalization into
-  weighted phases. Import progress comes from real parser, buffer, material,
-  mesh, node, and animation milestones rather than one whole-model completion
-  bit. It reports decoded and GPU-ready texture counts, eases monotonically
-  between completed milestones, and reserves its final 5 percent for the scene
-  setup that dismisses the loading screen. A launch counter begins at program
-  entry and displays milliseconds to one decimal place on every loading screen.
+- The loading screen has no progress track. Its first line uses
+  `Loading scene: <name>, please wait...`, with the suffix cycling continuously
+  through one, two, and three dots while scene work remains active. It still
+  reports real object, import-step, decoded-texture, and GPU-ready texture
+  counts, without an unreliable launch timer.
+- Off, 2x, 3x, 4x, and 5x are one cycle shared by the footer **Zoom** button and Z.
+  The button text stays **Zoom** in every state. The first press enables 2x;
+  pressing Z at 5x disables zoom, and the next press enables 2x again. The
+  centered 50-percent white crosshair is visible only while zoom is active.
+- The zoom panel occupies 28 percent of the renderer width at the top-right
+  Settings margin. Its height is derived from that width and the current
+  renderer aspect ratio. It copies the untouched presented scene before UI
+  composition, then loads integer source texels without a sampler so the pixel
+  under the crosshair becomes an exact 2x2, 3x3, 4x4, or 5x5 destination group. Its
+  8 px rounded silhouette is cut away from that exact image before the
+  full-weight Settings-style one-pixel translucent gradient outline is layered
+  on top. The panel grows smoothly from a centered 86-percent rectangle while
+  it fades in, and reverses that scale and opacity motion while fading out over
+  180 ms. Changes between enabled magnification levels use a separate
+  symmetric 180 ms scale pulse: the outgoing exact integer factor eases to the
+  86-percent midpoint, switches without blending, and the incoming exact factor
+  eases back to full size. Every intermediate rectangle remains integer-sized.
+  A slightly shadowed bottom-center label reports the magnified pixel area as
+  **4x**, **9x**, **16x**, or **25x** and follows the same fade, animated
+  bounds, and midpoint level switch as the panel.
+  Once the fade-out reaches zero, disabled zoom submits no capture or composite
+  GPU work. Benchmark runs suspend it immediately.
+- Settings launches hidden. The first Escape press opens only General;
+  Visibility, Buffers, Statistics, Aliasing, Sky, and Lights start collapsed.
+  The complete panel uses the magnifier-matched 180 ms grow-and-fade from a
+  centered 86-percent rectangle in both directions, including every nested
+  child surface and its backdrop blur. Its analytic outside-only shadow matches
+  the magnifier's 10 px softness, 0.34 opacity, and 3 px downward offset.
 - The settings overlay uses the installed Codex desktop app's Windows system
   UI face: 16 px Segoe UI Semibold with a 65-percent-wider word-space advance.
   Non-Windows builds fall back to bundled Geist 1.7.2 under the SIL Open Font
@@ -101,19 +136,31 @@ architecture without either add-on.
   drawer body. Drawer headers use the authored transparent ImGui blue.
   Dropdown fields, dropdown-arrow and folder-button backgrounds, and slider
   tracks all reuse the panel's tinted-black RGB at 0.72 opacity, with
-  opacity-only hover and active states. The three footer action buttons reuse
-  the neutral Settings title-bar color. Dropdowns replace ImGui's sharp arrow
-  with a compact Bézier-rounded triangle, and the larger drawer and tree
+  opacity-only hover and active states. The four footer action buttons reuse
+  the drawer's transparent graphite surface. Dropdowns replace ImGui's sharp
+  arrow with a compact Bézier-rounded triangle, and the larger drawer and tree
   disclosure triangles use the same rounded-corner construction in both
   orientations. The Settings title-bar disclosure hover uses the menu's 4 px
   frame rounding. Slider knobs use the same transparent blue appearance as the
   drawer headers. Two-state toggles animate between endpoints; their active
   track is 50-percent-opaque white and their solid compensated knob matches the
-  rendered header blue. Mutually exclusive controls ease symmetrically between
-  full opacity and the grayscale 0.38 disabled endpoint. Dropdown selections
-  commit on the first UI frame after their popup closes, then use a synchronized
-  0.30-second smoothstep so renderer reconfiguration cannot hide the transition.
-  The outer edges retain an 8 px radius.
+  rendered header blue. Dropdown popups roll down and roll up at full alpha by
+  clipping a fixed-size, fixed-layout popup; rows never stretch or reflow, and
+  input received before roll-down completes is discarded instead of replayed.
+  Selections remain staged for at least 250 ms, through the originating popup's
+  exact scoped roll transition, every affected layout/appearance transition,
+  and one later fully composed idle frame before renderer commit. A selection that
+  changes dependent rows waits for roll-up, collapses the committed structure,
+  swaps to staged structure only while hidden, and expands completely before
+  that commit. Controls directly owned by an enabled/disabled toggle do
+  not rest in gray:
+  their old layout remains for the setting-change frame, then the complete
+  region collapses over 180 ms after the renderer consumes the disabled state.
+  Enabling applies the setting first and reverses the same animation.
+  Top-level drawer bodies animate through the same measured-height path,
+  including Visibility, Buffers, and Statistics, and every sibling header is
+  separated by the authored vertical item-spacing gap. The outer edges retain
+  an 8 px radius.
 - The renderer/GPU summary and first performance line are pinned above an
   independently scrolling settings body, so they stay attached and visible at
   every drawer position. The panel shrinks to its open drawers and only scrolls
@@ -139,11 +186,11 @@ architecture without either add-on.
   copy and a consistent inner safety margin.
 - Press **M** to open or close the material editor. Selecting a scene material
   does not open the editor automatically.
-- The three footer actions use explicitly centered labels to compensate for the
+- The four footer actions use explicitly centered labels to compensate for the
   system font's visual baseline.
-- The single **Noise Pattern** dropdown compares **Independent Hash Noise**,
-  first-party **Toroidal Blue Noise**, **Offline Spacetime Noise**, and
-  **Offline Packed Spacetime Noise**. The packed choice delivers the same
+- The single **Noise Pattern** dropdown compares **Independent Hash**,
+  first-party **Toroidal Blue**, **Unpacked Offline**, and **Packed Offline**.
+  The packed choice delivers the same
   offline-computed values through one RGBA8 lookup instead of a separate
   second control. Noise Pattern appears immediately below Estimator.
 - The **Profile** dropdown directly beneath **Sampling Resolution** begins with
@@ -173,8 +220,9 @@ architecture without either add-on.
   fixtures, and the separate analytic-horizon attribution control have been
   removed. Their source and timing evidence remains in the ledger.
 - The collapsed **Statistics** drawer begins with an effect selector for the
-  complete renderer, geometry/G-buffer, direct lighting, screen-space
-  visibility, material picking, procedural sky, tone mapping, or output blit.
+  **Complete Renderer**, **Geometry**, **Direct Lighting**,
+  **Screen-Space Visibility**, **Anti-Aliasing**, **Material Picking**,
+  **Procedural Sky**, **Tone Mapping**, or **Output Blit**.
   Screen-space visibility expands into its outer effect envelope, named-stage
   total, signed unattributed timer difference, depth preparation, first trace,
   one combined later-bounces row, spatial denoise,
@@ -195,7 +243,8 @@ architecture without either add-on.
   Benchmark and scene locations use folder buttons instead of displaying long
   filesystem paths in the main panel. Ordinary resolution, estimator, AO, or
   GI edits clear the quality preset and switch the selector to custom settings,
-  so a preset label cannot silently survive a renderer fallback. Buffer-format
+  so a preset label cannot silently survive a renderer fallback. Custom labels
+  retain their originating recipe, such as **Medium (Custom)**. Buffer-format
   edits also clear the quality preset because the four recipes own
   their starting buffer formats. Every compatible custom setting remains
   active; the internal generic fallback used to compose those settings is not
@@ -219,7 +268,10 @@ architecture without either add-on.
   collision-enabled: mouse and arrow keys rotate the view, A/D strafe left and
   right, the wheel applies a small damped dolly, and W/S dolly at up to 16% of
   the initial framing distance per second with smooth acceleration and finite
-  deceleration. Holding Shift doubles A/D strafe, W/S dolly, and wheel zoom.
+  deceleration. Space moves upward in world space and either Shift key moves
+  downward. X rolls the camera left, C rolls it right, V levels only that roll
+  while preserving position and look direction, and Z is reserved for the
+  pixel-zoom cycle.
   Moving inward gently
   lowers dolly sensitivity on a linear scale that bottoms out at 40% of the
   starting speed; the floor affects speed rather than position, so the eye
@@ -295,12 +347,6 @@ active work that has not merged into `main`. It is not a mutex or a live task
 ledger. An entry is not shipped on `main`, and experimental entries are not
 promises that the work will merge.
 
-- **Merged Anti-Aliasing and UI Candidate — Experiment**
-  (`codex/aa-ui-merged-experiment`, local and not published). Integrate the
-  complete MiniEngine TAA, diagnostic spatial SMAA, Intel CMAA2, and diagnostic
-  deferred MSAA feature set with canonical UI mainline `a55e215`. Production
-  uses deterministic spatial SMAA without SMAA-only execution experiments.
-
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate shared
   depth, pixel-coordinate, and safe-normal helpers used by the visibility
@@ -312,47 +358,6 @@ promises that the work will merge.
   for degenerate visibility clipping, radial-mask edge cases, and blue-noise
   rank-field paths. This owns only visibility test sources and has no runtime
   rendering, UI, or asset overlap.
-
-- **AO Performance Optimization — Ready for Manual Validation**
-  (`codex/ao-performance-optimization`). Measure and optimize the AO-only
-  visibility-bitmask path from depth preparation through application while
-  retaining the canonical generic implementation as a zero-cost-off reference.
-  This work owns historical visibility performance evidence, curated fixed-sample and
-  resource permutations, optional noise/depth/packed-edge reconstruction
-  experiments, AO-only fused resolve/application, advanced verification UI,
-  focused reference tests, and the optimization ledger. The branch now
-  contains the curated profile and benchmark/export implementation. Controlled
-  Intel Arc integrated-GPU matrices used 120 warm-up and 600 measured frames per
-  entry at 1920x1080 and completed every requested frame with zero incomplete
-  frames. Exact fused resolve/apply saved 17.7-18.8% median across repeats;
-  Fixed 8 plus fusion saved 20.6-22.4%; Fixed 8 alone saved 1.9-4.7%. The
-  strongest paired format results were final GI `RGBA16_FLOAT` at 8.39% faster
-  than `RGBA32_FLOAT` and the `R16_FLOAT` depth hierarchy at 3.88% faster than
-  `R32_FLOAT`. Manual image and motion validation remains required.
-  The current candidate removes the Activision PS4 scheduler, scalar/gather
-  approximations, coupled temporal path, analytic-horizon control, and their
-  resources. Every
-  XeGTAO variant was slower than canonical Reference on the controlled Intel
-  driver, so the XeGTAO runtime family was removed instead of being retained as
-  a misleading faster-UVSR option. Historical PS4 scalar/packed timing remains
-  in the ledger, but neither profile is present in the build.
-  **Ready for Manual Validation** means the curated candidate can be built,
-  launched, and tested; it does not mean every isolatable experiment was
-  implemented or rejected. The explicit implementation/evidence follow-ups are
-  Auto Fixed (D-005), trace LDS (D-020), reconstruction LDS (D-024/R-011),
-  four-output coarsening (D-026/R-013), staged AO-only ILP (L-015/O-022), and
-  exhaustive generated-code coverage (F-030). Feasible curated source
-  experiments also remain: screen-space-size horizon-thickness EMA (A-011),
-  depth-derived receiver normals (A-014), velocity-agreement adaptive clamp
-  width (Q-027), XeGTAO Low (X-002), XeGTAO Medium (X-003), native R8 AO
-  storage/decode (X-018), standalone depth-derived-normal generation (X-020),
-  and in-main depth-derived normals (X-021). These are deferred/unimplemented,
-  not impossible; the [optimization ledger](docs/ao-optimization-ledger.md#ledger-status)
-  records each prerequisite and evidence boundary.
-  It deliberately starts from `5f43205`; PR #10's shared-helper extraction and
-  PR #11's test additions remain later integration dependencies, and the
-  separate bilateral-grid work retains ownership of local tone mapping and AgX
-  integration after visibility composition.
 
 ### Roadmap Ownership
 
@@ -434,10 +439,10 @@ Production builds accept `--aa-enabled`, `--aa-method`, `--aa-quality`
 (`--aa-preset` alias), `--aa-sharpness`, and `--aa-benchmark-output`.
 Algorithm and execution overrides require a developer build:
 
-The same motion path is available interactively from **Aliasing > Run
-45-Degree Motion Test** on either standardized PBR Sponza scene. It uses the
-current AA settings, writes `aa-motion-test-latest.json` beside the executable,
-and returns Camera Location to **Piloted** when it finishes.
+The same motion path is available interactively from **Statistics > Run Current
+With Motion** on either standardized PBR Sponza scene. It uses the current AA
+settings, writes `aa-motion-test-latest.json` beside the executable, and returns
+Camera Location to **Piloted** when it finishes.
 
 ```powershell
 cmake -S . -B build-aa-dev -DUVSR_AA_DEVELOPER_OVERRIDES=ON
@@ -445,19 +450,18 @@ cmake --build build-aa-dev --config Release --target uvsr
 ```
 
 A production build rejects `--aa-execution`, `--aa-kernel`, `--aa-lds`,
-`--aa-reuse`, `--aa-early`, `--aa-fusion`, `--aa-cache`, and `--aa-smaa`
+`--aa-reuse`, `--aa-early`, `--aa-fusion`, and `--aa-cache`
 instead of accepting an override whose static PSO is absent.
 
 ### Visibility Benchmark Workflow
 
-Run one visibility profile without UI, export its frame-correlated JSON/CSV and
-last measured frame, and close after completion with:
+Run one visibility profile without UI and close after its in-memory timing
+summary completes with:
 
 ```powershell
 .\tools\launch_uvsr.ps1 benchmark --benchmark-camera `
   --visibility-profile exact-fast-ao-8t --visibility-benchmark `
-  --benchmark-warmup 120 --benchmark-frames 240 `
-  --benchmark-output .\benchmark-results --benchmark-auto-close
+  --benchmark-warmup 120 --benchmark-frames 240 --benchmark-auto-close
 ```
 
 Profile matching ignores punctuation and case, so either the displayed
@@ -469,31 +473,24 @@ the one-click verification label because the effective 16-entry,
 GPU-terminated workload is no longer that preset's fixed-bounce contract.
 Unknown or unavailable profiles and invalid frame counts report to standard
 error and return a nonzero process exit code; they do not open modal dialogs.
-The **Statistics** drawer provides **Run Current**, **Cancel**, and
-**Export Last Run**. Run Current measures the effective configuration being
-rendered, even when it no longer matches the selected preset label. It
-automatically locks Benchmark Position 1, resizes to 1920x1080, waits for the
-matching rendered workload, and restores the previous interactive window size
-afterward. The former comparison, test-matrix runners, and
-`--benchmark-sequence` command-line option have been removed. A live
-`Benchmarking... (completed/total)` overlay continues animating while the
-settings UI is hidden.
+The **Statistics** drawer provides **Run Current**, **Run Current With Motion**,
+and **Cancel**. Run Current measures the effective visibility configuration
+being rendered, even when it no longer matches the selected preset label, and
+keeps its latest stage medians and p95 values in memory for the Statistics
+drawer. Run Current With Motion exercises the current AA configuration through
+the controlled 45-degree path. Both actions lock Benchmark Position 1 as
+required; the visibility run resizes to 1920x1080, waits for the matching
+rendered workload, and restores the previous interactive window size afterward.
+The former comparison, test-matrix runners, result export, benchmark-folder UI,
+`--benchmark-output`, and `--benchmark-sequence` have been removed. A live
+`Benchmarking... (completed/total)` overlay continues animating while Settings
+is hidden.
 Readiness is based on the workload and permutation reported by the renderer,
 not on a possibly stale preset label. A run can remain unavailable only while
 the current settings have not reached the GPU, while no AO/GI effect is active,
 outside deferred rendering, during another run, or outside PBR Sponza Decorated
 and PBR Sponza Plain. The Sponza restriction remains because those are the only
 scenes with the standardized camera used for comparable results.
-The schema-v2 JSON includes a human-readable and hashed snapshot of the full
-profile-relevant AO/GI, sampling, reconstruction, format, dispatch, and resource
-contract that was active for the run.
-On Windows, artifact filenames dynamically shorten only the redundant display-
-name token so the complete path stays at or below a conservative 240-character
-budget. The full profile name remains in JSON, while hashes, timestamp, extension,
-and collision suffix retain their reserved space. Extension-length accounting
-uses native path-size arithmetic without a narrowing conversion. Re-export is
-all-or-nothing: if the recorded final frame cannot be copied, the newly created
-JSON, CSV, and BMP are removed instead of leaving a misleading partial set.
 
 After building, Windows users can also double-click `LaunchUVSR.cmd`. It
 delegates to the same required experiment launcher with a fixed main-build
@@ -502,10 +499,11 @@ label; optional renderer arguments can be appended from a terminal.
 production or experiment build needs to be launched without replacing the
 main build.
 
-Windowed launches are centered in the primary monitor's usable work area. If
-the requested client size plus decorations would cross a work-area edge, UVSR
-preserves its aspect ratio while fitting it inside the available bounds before
-centering, so taskbars cannot cover its right or bottom edges.
+Windowed launches first fit inside the primary monitor's usable work area.
+Windows then measures the visible DWM frame, excluding the invisible resize
+border, and expands the client height so the visible top, taskbar, left, and
+right gaps all match. The initial renderer may therefore be slightly taller
+than 16:9 when the usable work area is taller than the requested aspect ratio.
 
 The title reports the active graphics API followed by the description, the
 seven-character source commit embedded at build time, and the local launch time
@@ -531,6 +529,14 @@ ctest --test-dir build -C Release --output-on-failure
 ```
 
 ## Documentation and Conventions
+
+The [UVSR UI design and integration reference](docs/ui-integration-agent-procedure.md)
+is the single source for visible hierarchy, Title Case, copy and value
+formatting, visual tokens, spacing, reset behavior, animations, scrolling,
+renderer-facing dropdown transactions, implementation procedure, and required
+verification. Its version line is authoritative: an implementer records that
+exact version before editing and in the handoff so a stale reference can be
+identified when a UI element does not match the current contract.
 
 The [PBR foundation](docs/pbr-foundation.md) documents the material contract,
 G-buffer packing, equations, validation, limitations, and extension points.
@@ -582,8 +588,8 @@ documentation changes on GitHub.
 UVSR runs uncapped with a single planar view. UVSR-owned interactive controls
 provide short, plain-English hover tooltips; new controls should follow the same
 convention.
-The bottom action row exposes equally sized **Reset**, **Screenshot**, and
-**Restart** buttons.
+The bottom action row exposes equally sized **Reset**, **Screenshot**, **Zoom**,
+and **Restart** buttons.
 
 ## Intentional Omissions
 

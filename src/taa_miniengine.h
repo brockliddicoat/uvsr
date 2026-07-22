@@ -66,7 +66,7 @@ namespace uvsr
             uint64_t frameIndex,
             const ResolvedAntiAliasingSettings& settings,
             MiniEngineTaaDebugView debugView,
-            bool exportSelectiveSmaa,
+            bool exportSelectiveMorphology,
             bool enableSharpen,
             bool deferSharpenToPresentation,
             float sharpness);
@@ -149,6 +149,7 @@ namespace uvsr
         std::array<nvrhi::ShaderHandle,
             MiniEngineTaaResolveDebugViewCount> m_ResolveShaders;
         nvrhi::ShaderHandle m_SharpenShader;
+        nvrhi::ShaderHandle m_PresentationSharpenShader;
         nvrhi::BindingLayoutHandle m_BlendBindingLayout;
         nvrhi::BindingLayoutHandle m_OutputBindingLayout;
         std::array<nvrhi::ComputePipelineHandle,
@@ -159,6 +160,7 @@ namespace uvsr
         std::array<nvrhi::ComputePipelineHandle,
             MiniEngineTaaResolveDebugViewCount> m_ResolvePipelines;
         nvrhi::ComputePipelineHandle m_SharpenPipeline;
+        nvrhi::ComputePipelineHandle m_PresentationSharpenPipeline;
 #if UVSR_AA_DEVELOPER_OVERRIDES
         std::array<nvrhi::ShaderHandle,
             c_PixelPermutationCount> m_PixelBlendShaders;

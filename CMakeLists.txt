@@ -73,7 +73,7 @@ set(DONUT_WITH_AFTERMATH OFF CACHE BOOL "" FORCE)
 # the custom loading telemetry and UI behavior.
 function(uvsr_stage_patched_sources
     source_root
-    patch_file
+    patch_files
     output_root)
     file(REMOVE_RECURSE "${output_root}")
     foreach(relative_path IN LISTS ARGN)
@@ -87,23 +87,25 @@ function(uvsr_stage_patched_sources
             COPYONLY)
     endforeach()
 
-    execute_process(
-        COMMAND "${CMAKE_COMMAND}" -E env
-            "GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}"
-            "${GIT_EXECUTABLE}" apply
-            --no-index
-            --whitespace=nowarn
-            "${patch_file}"
-        WORKING_DIRECTORY "${output_root}"
-        RESULT_VARIABLE patch_result
-        ERROR_VARIABLE patch_error)
-    if (NOT patch_result EQUAL 0)
-        message(FATAL_ERROR
-            "Failed to stage UVSR dependency override ${patch_file}: "
-            "${patch_error}")
-    endif()
-    set_property(DIRECTORY APPEND PROPERTY
-        CMAKE_CONFIGURE_DEPENDS "${patch_file}")
+    foreach(patch_file IN LISTS patch_files)
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" -E env
+                "GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}"
+                "${GIT_EXECUTABLE}" apply
+                --no-index
+                --whitespace=nowarn
+                "${patch_file}"
+            WORKING_DIRECTORY "${output_root}"
+            RESULT_VARIABLE patch_result
+            ERROR_VARIABLE patch_error)
+        if (NOT patch_result EQUAL 0)
+            message(FATAL_ERROR
+                "Failed to stage UVSR dependency override ${patch_file}: "
+                "${patch_error}")
+        endif()
+        set_property(DIRECTORY APPEND PROPERTY
+            CMAKE_CONFIGURE_DEPENDS "${patch_file}")
+    endforeach()
 endfunction()
 
 function(uvsr_replace_target_sources
@@ -139,44 +141,41 @@ uvsr_stage_patched_sources(
     src/engine/Scene.cpp
     src/engine/TextureCache.cpp)
 
+set(UVSR_DONUT_APP_OVERRIDE_DIR
+    "${CMAKE_BINARY_DIR}/uvsr_donut_app_overrides")
+uvsr_stage_patched_sources(
+    "${CMAKE_CURRENT_SOURCE_DIR}/donut"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-app.patch"
+    "${UVSR_DONUT_APP_OVERRIDE_DIR}"
+    include/donut/app/ApplicationBase.h
+    include/donut/app/UserInterfaceUtils.h
+    src/app/UserInterfaceUtils.cpp)
+
 set(UVSR_IMGUI_OVERRIDE_DIR
     "${CMAKE_BINARY_DIR}/uvsr_imgui_overrides")
+set(UVSR_IMGUI_PATCH_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-ui.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-dropdown-roll.patch")
 uvsr_stage_patched_sources(
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/thirdparty/imgui"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-ui.patch"
+    "${UVSR_IMGUI_PATCH_FILES}"
     "${UVSR_IMGUI_OVERRIDE_DIR}"
     imgui.cpp
     imgui.h
+    imgui_demo.cpp
     imgui_draw.cpp
     imgui_internal.h
+    imgui_tables.cpp
     imgui_widgets.cpp)
 
-# Donut's asynchronous loader writes m_SceneLoaded on a worker thread and
-# reads it on the render thread. Generate an atomic header override alongside
-# the staged source patches.
-set(UVSR_DONUT_OVERRIDE_DIR "${CMAKE_BINARY_DIR}/uvsr_donut_overrides")
-set(UVSR_DONUT_APPLICATION_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/donut/include/donut/app/ApplicationBase.h")
-file(READ "${UVSR_DONUT_APPLICATION_HEADER}" UVSR_DONUT_APPLICATION_HEADER_CONTENT)
-string(REPLACE
-    "#include <filesystem>"
-    "#include <filesystem>\n#include <atomic>"
-    UVSR_DONUT_APPLICATION_HEADER_CONTENT
-    "${UVSR_DONUT_APPLICATION_HEADER_CONTENT}"
-)
-string(REPLACE
-    "bool m_SceneLoaded;"
-    "std::atomic_bool m_SceneLoaded;"
-    UVSR_DONUT_APPLICATION_HEADER_CONTENT
-    "${UVSR_DONUT_APPLICATION_HEADER_CONTENT}"
-)
-file(MAKE_DIRECTORY "${UVSR_DONUT_OVERRIDE_DIR}/donut/app")
-file(WRITE
-    "${UVSR_DONUT_OVERRIDE_DIR}/donut/app/ApplicationBase.h"
-    "${UVSR_DONUT_APPLICATION_HEADER_CONTENT}"
-)
-
 add_subdirectory(donut)
-target_include_directories(donut_app BEFORE PUBLIC "${UVSR_DONUT_OVERRIDE_DIR}")
+uvsr_replace_target_sources(
+    donut_app
+    "${CMAKE_CURRENT_SOURCE_DIR}/donut"
+    "${UVSR_DONUT_APP_OVERRIDE_DIR}"
+    src/app/UserInterfaceUtils.cpp)
+target_include_directories(donut_app BEFORE PUBLIC
+    "${UVSR_DONUT_APP_OVERRIDE_DIR}/include")
 uvsr_replace_target_sources(
     donut_engine
     "${CMAKE_CURRENT_SOURCE_DIR}/donut"
@@ -194,8 +193,10 @@ uvsr_replace_target_sources(
     "${UVSR_IMGUI_OVERRIDE_DIR}"
     imgui.cpp
     imgui.h
+    imgui_demo.cpp
     imgui_draw.cpp
     imgui_internal.h
+    imgui_tables.cpp
     imgui_widgets.cpp)
 target_include_directories(imgui BEFORE PUBLIC
     "${UVSR_IMGUI_OVERRIDE_DIR}")
@@ -275,7 +276,6 @@ add_executable(uvsr WIN32
     src/pbr_deferred_lighting_pass.cpp
     src/scene_catalog.cpp
     src/screen_space_visibility.cpp
-    src/smaa.cpp
     src/sponza_camera_preset.cpp
     src/taa_miniengine.cpp
     src/temporal_aa_core.cpp
@@ -286,8 +286,12 @@ add_executable(uvsr WIN32
 )
 target_include_directories(uvsr BEFORE PRIVATE
     "${UVSR_IMGUI_OVERRIDE_DIR}"
+    "${UVSR_DONUT_APP_OVERRIDE_DIR}/include"
     "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}/include")
-target_link_libraries(uvsr PRIVATE donut_render donut_app donut_engine)
+target_link_libraries(
+    uvsr
+    PRIVATE donut_render donut_app donut_engine dwmapi
+)
 target_compile_definitions(
     uvsr
     PRIVATE
@@ -307,6 +311,18 @@ target_include_directories(
 )
 target_link_libraries(uvsr_scene_catalog_tests PRIVATE donut_core)
 add_test(NAME uvsr_scene_catalog_reference COMMAND uvsr_scene_catalog_tests)
+
+add_executable(uvsr_scene_light_names_tests
+    tests/scene_light_names_tests.cpp
+)
+target_include_directories(
+    uvsr_scene_light_names_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_scene_light_names_reference
+    COMMAND uvsr_scene_light_names_tests
+)
 
 add_executable(uvsr_pbr_tests tests/pbr_reference_tests.cpp)
 target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -450,6 +466,61 @@ add_test(
     COMMAND uvsr_visibility_benchmark_statistics_tests
 )
 
+add_executable(uvsr_ui_source_contract_tests
+    tests/ui_source_contract_tests.cpp
+)
+add_test(
+    NAME uvsr_ui_source_contract
+    COMMAND uvsr_ui_source_contract_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+add_executable(uvsr_renderer_source_contract_tests
+    tests/renderer_source_contract_tests.cpp
+)
+add_test(
+    NAME uvsr_renderer_source_contract
+    COMMAND uvsr_renderer_source_contract_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+add_executable(uvsr_ui_animation_tests
+    tests/ui_animation_tests.cpp
+)
+target_include_directories(
+    uvsr_ui_animation_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_ui_animation_reference
+    COMMAND uvsr_ui_animation_tests
+)
+
+add_executable(uvsr_imgui_dropdown_roll_tests
+    tests/imgui_dropdown_roll_tests.cpp
+)
+target_link_libraries(
+    uvsr_imgui_dropdown_roll_tests
+    PRIVATE imgui
+)
+add_test(
+    NAME uvsr_imgui_dropdown_roll_lifecycle
+    COMMAND uvsr_imgui_dropdown_roll_tests
+)
+
+add_executable(uvsr_pixel_zoom_tests
+    tests/pixel_zoom_tests.cpp
+)
+target_include_directories(
+    uvsr_pixel_zoom_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_pixel_zoom_reference
+    COMMAND uvsr_pixel_zoom_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 # Donut builds its complete shader catalog as an internal dependency. Stage it
 # outside the runtime tree, then package only the shaders instantiated by UVSR.
 set(UVSR_ROOT_SHADERS
@@ -529,6 +600,7 @@ endforeach()
 set(UVSR_APP_SHADERS
     agx_tonemapping_ps
     backdrop_blur_ps
+    pixel_zoom_ps
     cmaa2_ComputeDispatchArgsCS
     cmaa2_DeferredColorApply2x2CS
     cmaa2_EdgesColor2x2CS
@@ -551,20 +623,10 @@ set(UVSR_APP_SHADERS
     screen_space_visibility_packed_fast_edges_cs
     screen_space_visibility_cs
     screen_space_visibility_temporal_cs
-    smaa_edge_ps
-    smaa_blend_weight_ps
-    smaa_neighborhood_ps
-    smaa_selective_neighborhood_cs
     taa_miniengine_blend_cs
     taa_miniengine_resolve_cs
     taa_miniengine_sharpen_cs
 )
-if (UVSR_AA_DEVELOPER_OVERRIDES)
-    list(APPEND UVSR_APP_SHADERS
-        smaa_debug_ps
-    )
-endif()
-
 string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
     "UVSR shaders:\n")
 string(JOIN "\n" UVSR_RUNTIME_APP_SHADER_MANIFEST

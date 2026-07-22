@@ -1,0 +1,453 @@
+diff --git a/imgui.h b/imgui.h
+index f200d26..0bfc474 100644
+--- a/imgui.h
++++ b/imgui.h
+@@ -651,6 +651,8 @@ namespace ImGui
+     // - The old Combo() api are helpers over BeginCombo()/EndCombo() which are kept available for convenience purpose. This is analogous to how ListBox are created.
+     IMGUI_API bool          BeginCombo(const char* label, const char* preview_value, ImGuiComboFlags flags = 0);
+     IMGUI_API void          EndCombo(); // only call EndCombo() if BeginCombo() returns true!
++    IMGUI_API bool          IsComboPopupTransitionActive(ImGuiID combo_id); // UVSR extension: query the exact combo popup's roll-down or roll-up.
++    IMGUI_API void          FinishComboPopupTransition(ImGuiID combo_id);   // UVSR extension: close the exact combo immediately when its owner becomes invisible.
+     IMGUI_API bool          Combo(const char* label, int* current_item, const char* const items[], int items_count, int popup_max_height_in_items = -1);
+     IMGUI_API bool          Combo(const char* label, int* current_item, const char* items_separated_by_zeros, int popup_max_height_in_items = -1);      // Separate items with \0 within a string, end item-list with \0\0. e.g. "One\0Two\0Three\0"
+     IMGUI_API bool          Combo(const char* label, int* current_item, const char* (*getter)(void* user_data, int idx), void* user_data, int items_count, int popup_max_height_in_items = -1);
+diff --git a/imgui_widgets.cpp b/imgui_widgets.cpp
+index 4d03ea6..1eb7cd7 100644
+--- a/imgui_widgets.cpp
++++ b/imgui_widgets.cpp
+@@ -1433,6 +1433,110 @@ static bool IsComboPopupWindow(const ImGuiWindow* window)
+         strncmp(window->Name, "##Combo_", 8) == 0;
+ }
+ 
++static constexpr float UvsrComboPopupRollDuration = 0.18f;
++static constexpr float UvsrComboPopupMaximumDelta = 1.0f / 30.0f;
++
++static float AdvanceComboPopupRollElapsed(float elapsed, float delta_time)
++{
++    return ImMin(
++        UvsrComboPopupRollDuration,
++        elapsed + ImMin(
++            ImMax(delta_time, 0.0f),
++            UvsrComboPopupMaximumDelta));
++}
++
++static float SmoothComboPopupRoll(float elapsed)
++{
++    const float progress = ImSaturate(
++        elapsed / UvsrComboPopupRollDuration);
++    return progress * progress * (3.0f - 2.0f * progress);
++}
++
++static void ApplyComboPopupRollClip(ImGuiWindow* window)
++{
++    if (!IsComboPopupWindow(window))
++        return;
++
++    const float amount = ImSaturate(window->StateStorage.GetFloat(
++        ImHashStr("##ComboPopupRollAmount"),
++        1.0f));
++    if (amount >= 1.0f)
++        return;
++
++    const bool roll_from_bottom = window->StateStorage.GetInt(
++        ImHashStr("##ComboPopupRollFromBottom"),
++        0) != 0;
++    const float top = window->Pos.y;
++    const float bottom = window->Pos.y + window->Size.y;
++    const float boundary = IM_ROUND(
++        roll_from_bottom
++            ? ImLerp(bottom, top, amount)
++            : ImLerp(top, bottom, amount));
++
++    for (int command_index = 0;
++        command_index < window->DrawList->CmdBuffer.Size;
++        ++command_index)
++    {
++        ImDrawCmd& command =
++            window->DrawList->CmdBuffer[command_index];
++        if (roll_from_bottom)
++            command.ClipRect.y = ImMax(command.ClipRect.y, boundary);
++        else
++            command.ClipRect.w = ImMin(command.ClipRect.w, boundary);
++        if (command.ClipRect.w < command.ClipRect.y)
++            command.ClipRect.w = command.ClipRect.y;
++    }
++}
++
++bool ImGui::IsComboPopupTransitionActive(ImGuiID combo_id)
++{
++    if (combo_id == 0)
++        return false;
++
++    ImGuiContext& g = *GImGui;
++    const ImGuiID popup_id = ImHashStr("##ComboPopup", 0, combo_id);
++    for (int popup_index = 0;
++        popup_index < g.OpenPopupStack.Size;
++        ++popup_index)
++    {
++        const ImGuiPopupData& popup_data =
++            g.OpenPopupStack[popup_index];
++        if (popup_data.PopupId != popup_id)
++            continue;
++        ImGuiWindow* window = popup_data.Window;
++        if (!IsComboPopupWindow(window))
++            return true;
++        if (window->StateStorage.GetInt(
++                ImHashStr("##ComboPopupClosing"),
++                0) != 0 ||
++            window->StateStorage.GetInt(
++                ImHashStr("##ComboPopupInteractionReady"),
++                0) == 0)
++        {
++            return true;
++        }
++    }
++    return false;
++}
++
++void ImGui::FinishComboPopupTransition(ImGuiID combo_id)
++{
++    if (combo_id == 0)
++        return;
++
++    ImGuiContext& g = *GImGui;
++    const ImGuiID popup_id = ImHashStr("##ComboPopup", 0, combo_id);
++    for (int popup_index = 0;
++        popup_index < g.OpenPopupStack.Size;
++        ++popup_index)
++    {
++        if (g.OpenPopupStack[popup_index].PopupId != popup_id)
++            continue;
++        ClosePopupToLevel(popup_index, true);
++        return;
++    }
++}
++
+ bool ImGui::Checkbox(const char* label, bool* v)
+ {
+     ImGuiWindow* window = GetCurrentWindow();
+@@ -2278,15 +2382,18 @@ bool ImGui::BeginCombo(const char* label, const char* preview_value, ImGuiComboF
+     ImGuiContext& g = *GImGui;
+     ImGuiWindow* window = GetCurrentWindow();
+ 
+     ImGuiNextWindowDataFlags backup_next_window_data_flags = g.NextWindowData.HasFlags;
+     g.NextWindowData.ClearFlags(); // We behave like Begin() and need to consume those values
++    const ImGuiID id = window->GetID(label);
+     if (window->SkipItems)
++    {
++        FinishComboPopupTransition(id);
+         return false;
++    }
+ 
+     const ImGuiStyle& style = g.Style;
+-    const ImGuiID id = window->GetID(label);
+     IM_ASSERT((flags & (ImGuiComboFlags_NoArrowButton | ImGuiComboFlags_NoPreview)) != (ImGuiComboFlags_NoArrowButton | ImGuiComboFlags_NoPreview)); // Can't use both flags together
+     if (flags & ImGuiComboFlags_WidthFitPreview)
+         IM_ASSERT((flags & (ImGuiComboFlags_NoPreview | (ImGuiComboFlags)ImGuiComboFlags_CustomPreview)) == 0);
+ 
+     const float arrow_size = (flags & ImGuiComboFlags_NoArrowButton) ? 0.0f : GetFrameHeight();
+@@ -2295,11 +2402,14 @@ bool ImGui::BeginCombo(const char* label, const char* preview_value, ImGuiComboF
+     const float w = (flags & ImGuiComboFlags_NoPreview) ? arrow_size : ((flags & ImGuiComboFlags_WidthFitPreview) ? (arrow_size + preview_width + style.FramePadding.x * 2.0f) : CalcItemWidth());
+     const ImRect bb(window->DC.CursorPos, window->DC.CursorPos + ImVec2(w, label_size.y + style.FramePadding.y * 2.0f));
+     const ImRect total_bb(bb.Min, bb.Max + ImVec2(label_size.x > 0.0f ? style.ItemInnerSpacing.x + label_size.x : 0.0f, 0.0f));
+     ItemSize(total_bb, style.FramePadding.y);
+     if (!ItemAdd(total_bb, id, &bb))
++    {
++        FinishComboPopupTransition(id);
+         return false;
++    }
+ 
+     // Open on click
+     bool hovered, held;
+     bool pressed = ButtonBehavior(bb, id, &hovered, &held);
+     const ImGuiID popup_id = ImHashStr("##ComboPopup", 0, id);
+@@ -2413,8 +2523,8 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
+     const ImGuiPopupData& popup_data =
+         g.OpenPopupStack[g.BeginPopupStack.Size];
+     IM_ASSERT(popup_data.PopupId == popup_id);
+-    const ImGuiID popup_animation_key = ImHashStr(
+-        "##ComboPopupOpenAnimation",
++    const ImGuiID popup_open_elapsed_key = ImHashStr(
++        "##ComboPopupOpenElapsed",
+         0,
+         popup_id);
+     const ImGuiID popup_open_frame_key = ImHashStr(
+@@ -2427,24 +2537,70 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
+         popup_window->StateStorage.GetInt(
+             popup_open_frame_key,
+             -1) == popup_data.OpenFrameCount;
+-    float popup_animation_elapsed =
++    const ImGuiID popup_closing_key =
++        ImHashStr("##ComboPopupClosing");
++    const ImGuiID popup_close_elapsed_key =
++        ImHashStr("##ComboPopupCloseElapsed");
++    const ImGuiID popup_close_ready_frame_key =
++        ImHashStr("##ComboPopupCloseReadyFrame");
++    const bool popup_closing =
++        same_popup_lifecycle &&
++        popup_window->StateStorage.GetInt(
++            popup_closing_key,
++            0) != 0;
++    const int popup_close_ready_frame =
++        same_popup_lifecycle
++            ? popup_window->StateStorage.GetInt(
++                popup_close_ready_frame_key,
++                -1)
++            : -1;
++    if (popup_closing &&
++        popup_close_ready_frame >= 0 &&
++        g.FrameCount > popup_close_ready_frame)
++    {
++        ClosePopupToLevel(g.BeginPopupStack.Size, true);
++        g.NextWindowData.ClearFlags();
++        return false;
++    }
++
++    float popup_open_elapsed =
+         same_popup_lifecycle
+             ? popup_window->StateStorage.GetFloat(
+-                popup_animation_key,
++                popup_open_elapsed_key,
+                 0.0f)
+             : 0.0f;
+-    constexpr float PopupAnimationDuration = 0.12f;
+-    const bool popup_animation_was_complete =
+-        same_popup_lifecycle &&
+-        popup_animation_elapsed >= PopupAnimationDuration;
+-    popup_animation_elapsed = ImMin(
+-        PopupAnimationDuration,
+-        popup_animation_elapsed + ImMax(0.0f, g.IO.DeltaTime));
+-    const float popup_animation_progress =
+-        ImSaturate(popup_animation_elapsed / PopupAnimationDuration);
+-    const float popup_animation_amount =
+-        popup_animation_progress * popup_animation_progress *
+-        (3.0f - 2.0f * popup_animation_progress);
++    float popup_close_elapsed =
++        popup_closing
++            ? popup_window->StateStorage.GetFloat(
++                popup_close_elapsed_key,
++                0.0f)
++            : 0.0f;
++    int next_popup_close_ready_frame = popup_close_ready_frame;
++    float popup_roll_amount = 0.0f;
++    bool popup_interaction_ready = false;
++    if (popup_closing)
++    {
++        popup_roll_amount =
++            1.0f - SmoothComboPopupRoll(popup_close_elapsed);
++        if (popup_close_elapsed >= UvsrComboPopupRollDuration &&
++            next_popup_close_ready_frame < 0)
++        {
++            next_popup_close_ready_frame = g.FrameCount;
++        }
++        popup_close_elapsed = AdvanceComboPopupRollElapsed(
++            popup_close_elapsed,
++            g.IO.DeltaTime);
++    }
++    else
++    {
++        popup_roll_amount = SmoothComboPopupRoll(popup_open_elapsed);
++        popup_interaction_ready =
++            same_popup_lifecycle &&
++            popup_open_elapsed >= UvsrComboPopupRollDuration;
++        popup_open_elapsed = AdvanceComboPopupRollElapsed(
++            popup_open_elapsed,
++            g.IO.DeltaTime);
++    }
+     if (popup_window != NULL)
+         if (popup_window->WasActive)
+         {
+@@ -2458,26 +2614,40 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
+ 
+     // We don't use BeginPopupEx() solely because we have a custom name string, which we could make an argument to BeginPopupEx()
+     ImGuiWindowFlags window_flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_Popup | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove;
+-    PushStyleVar(
+-        ImGuiStyleVar_Alpha,
+-        g.Style.Alpha * popup_animation_amount);
+     PushStyleVarX(ImGuiStyleVar_WindowPadding, g.Style.FramePadding.x); // Horizontally align ourselves with the framed text
+     bool ret = Begin(name, NULL, window_flags);
+     PopStyleVar();
+     g.CurrentWindow->StateStorage.SetFloat(
+-        popup_animation_key,
+-        popup_animation_elapsed);
++        popup_open_elapsed_key,
++        popup_open_elapsed);
+     g.CurrentWindow->StateStorage.SetInt(
+         popup_open_frame_key,
+         popup_data.OpenFrameCount);
++    g.CurrentWindow->StateStorage.SetFloat(
++        ImHashStr("##ComboPopupRollAmount"),
++        popup_roll_amount);
+     g.CurrentWindow->StateStorage.SetInt(
+         ImHashStr("##ComboPopupInteractionReady"),
+-        popup_animation_was_complete ? 1 : 0);
++        popup_interaction_ready ? 1 : 0);
+     if (!same_popup_lifecycle)
+     {
++        // Popup placement may move with a scrolling owner. Keep the reveal
++        // edge fixed for the entire lifecycle so the roll cannot reverse.
++        g.CurrentWindow->StateStorage.SetInt(
++            ImHashStr("##ComboPopupRollFromBottom"),
++            g.CurrentWindow->Pos.y + g.CurrentWindow->Size.y <=
++                    bb.Min.y + 0.5f
++                ? 1
++                : 0);
+         g.CurrentWindow->StateStorage.SetInt(
+-            ImHashStr("##ComboPopupPendingSelectable"),
++            popup_closing_key,
+             0);
++        g.CurrentWindow->StateStorage.SetFloat(
++            popup_close_elapsed_key,
++            0.0f);
++        g.CurrentWindow->StateStorage.SetInt(
++            popup_close_ready_frame_key,
++            -1);
+         g.CurrentWindow->StateStorage.SetInt(
+             ImHashStr(
+                 "##ComboHighlightFrame",
+@@ -2485,10 +2655,18 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
+                 g.CurrentWindow->ID),
+             -2);
+     }
++    else if (popup_closing)
++    {
++        g.CurrentWindow->StateStorage.SetFloat(
++            popup_close_elapsed_key,
++            popup_close_elapsed);
++        g.CurrentWindow->StateStorage.SetInt(
++            popup_close_ready_frame_key,
++            next_popup_close_ready_frame);
++    }
+     if (!ret)
+     {
+         EndPopup();
+-        PopStyleVar();
+         IM_ASSERT(0);   // This should never happen as we tested for IsPopupOpen() above
+         return false;
+     }
+@@ -2499,8 +2677,8 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
+ void ImGui::EndCombo()
+ {
+     ImGuiContext& g = *GImGui;
++    ApplyComboPopupRollClip(g.CurrentWindow);
+     EndPopup();
+-    PopStyleVar();
+     g.BeginComboDepth--;
+ }
+ 
+@@ -7761,7 +7939,18 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+     //if (g.IO.KeyCtrl) { GetForegroundDrawList()->AddRect(bb.Min, bb.Max, IM_COL32(0, 255, 0, 255)); }
+ 
+     const bool disabled_item = (flags & ImGuiSelectableFlags_Disabled) != 0;
+-    const ImGuiItemFlags extra_item_flags = disabled_item ? (ImGuiItemFlags)ImGuiItemFlags_Disabled : ImGuiItemFlags_None;
++    const bool combo_popup_interaction_blocked =
++        combo_popup &&
++        (window->StateStorage.GetInt(
++             ImHashStr("##ComboPopupClosing"),
++             0) != 0 ||
++         window->StateStorage.GetInt(
++             ImHashStr("##ComboPopupInteractionReady"),
++             0) == 0);
++    const ImGuiItemFlags extra_item_flags =
++        disabled_item || combo_popup_interaction_blocked
++            ? (ImGuiItemFlags)ImGuiItemFlags_Disabled
++            : ImGuiItemFlags_None;
+     bool is_visible;
+     if (span_all_columns)
+     {
+@@ -7817,39 +8006,28 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+     {
+         // Handle multi-select + alter button flags for it
+         MultiSelectItemHeader(id, &selected, &button_flags);
+     }
+ 
+-    bool hovered, held;
+-    bool pressed = ButtonBehavior(bb, id, &hovered, &held, button_flags);
+-    if (combo_popup)
+-    {
+-        const ImGuiID interaction_ready_key =
+-            ImHashStr("##ComboPopupInteractionReady");
+-        const ImGuiID pending_selectable_key =
+-            ImHashStr("##ComboPopupPendingSelectable");
+-        const bool interaction_ready =
+-            window->StateStorage.GetInt(
+-                interaction_ready_key,
+-                0) != 0;
+-        if (!interaction_ready)
+-        {
+-            if (pressed)
+-                window->StateStorage.SetInt(
+-                    pending_selectable_key,
+-                    int(id));
+-            pressed = false;
+-        }
+-        else if (ImGuiID(window->StateStorage.GetInt(
+-                     pending_selectable_key,
+-                     0)) == id)
+-        {
+-            window->StateStorage.SetInt(
+-                pending_selectable_key,
+-                0);
+-            pressed = true;
+-        }
++    bool hovered = false;
++    bool held = false;
++    bool pressed = false;
++    if (!combo_popup_interaction_blocked)
++    {
++        pressed = ButtonBehavior(
++            bb,
++            id,
++            &hovered,
++            &held,
++            button_flags);
++    }
++    else if (g.ActiveId == id)
++    {
++        // Input that begins behind the moving clip is discarded. In
++        // particular, do not retain a mouse-down and replay its release after
++        // the row becomes visible and interactive.
++        ClearActiveID();
+     }
+ 
+     // Multi-selection support (footer)
+     if (is_multi_select)
+     {
+@@ -7862,7 +8040,7 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+         //   - (1) it would require focus scope to be set, need exposing PushFocusScope() or equivalent (e.g. BeginSelection() calling PushFocusScope())
+         //   - (2) usage will fail with clipped items
+         //   The multi-select API aim to fix those issues, e.g. may be replaced with a BeginSelection() API.
+-        if ((flags & ImGuiSelectableFlags_SelectOnNav) && g.NavJustMovedToId != 0 && g.NavJustMovedToFocusScopeId == g.CurrentFocusScopeId)
++        if (!combo_popup_interaction_blocked && (flags & ImGuiSelectableFlags_SelectOnNav) && g.NavJustMovedToId != 0 && g.NavJustMovedToFocusScopeId == g.CurrentFocusScopeId)
+             if (g.NavJustMovedToId == id)
+                 selected = pressed = true;
+     }
+@@ -8057,7 +8235,27 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+ 
+     // Automatically close popups
+     if (pressed && (window->Flags & ImGuiWindowFlags_Popup) && !(flags & ImGuiSelectableFlags_NoAutoClosePopups) && (g.LastItemData.ItemFlags & ImGuiItemFlags_AutoClosePopups))
+-        CloseCurrentPopup();
++    {
++        if (combo_popup)
++        {
++            window->StateStorage.SetInt(
++                ImHashStr("##ComboPopupClosing"),
++                1);
++            window->StateStorage.SetFloat(
++                ImHashStr("##ComboPopupCloseElapsed"),
++                AdvanceComboPopupRollElapsed(0.0f, g.IO.DeltaTime));
++            window->StateStorage.SetInt(
++                ImHashStr("##ComboPopupCloseReadyFrame"),
++                -1);
++            window->StateStorage.SetInt(
++                ImHashStr("##ComboPopupInteractionReady"),
++                0);
++        }
++        else
++        {
++            CloseCurrentPopup();
++        }
++    }
+ 
+     if (disabled_item && !disabled_global)
+         EndDisabled();

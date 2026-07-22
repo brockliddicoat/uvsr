@@ -17,6 +17,11 @@ struct BackdropBlurConstants
     float2 reciprocalWindowSize;
 
     float cornerRadius;
+    float opacity;
+    float shadowBlur;
+    float shadowOpacity;
+
+    float shadowOffsetY;
     float3 padding;
 };
 
@@ -89,22 +94,68 @@ float RoundedRectangleMask(
     return saturate(0.5 - signedDistance);
 }
 
+float RoundedRectangleSignedDistance(
+    float2 localPosition,
+    float2 rectangleSize,
+    float cornerRadius)
+{
+    const float clampedRadius = min(
+        cornerRadius,
+        min(rectangleSize.x, rectangleSize.y) * 0.5);
+    const float2 halfSize = rectangleSize * 0.5;
+    const float2 distanceToCorner =
+        abs(localPosition - halfSize) -
+        (halfSize - clampedRadius);
+    return
+        length(max(distanceToCorner, 0.0)) +
+        min(max(distanceToCorner.x, distanceToCorner.y), 0.0) -
+        clampedRadius;
+}
+
 void main(
     in float4 position : SV_Position,
     in float2 uv : UV,
     out float4 outputColor : SV_Target)
 {
-#if COMPOSITE
-    const float2 windowPosition =
-        g_BackdropBlur.panelMin +
-        uv * g_BackdropBlur.panelSize;
+#if COMPOSITE == 1
+    const float2 windowPosition = position.xy;
     const float2 sourceUv =
         windowPosition * g_BackdropBlur.reciprocalWindowSize;
     outputColor = SampleGaussianBlur(sourceUv);
-    outputColor.a = RoundedRectangleMask(
-        uv * g_BackdropBlur.panelSize,
+    outputColor.a =
+        RoundedRectangleMask(
+            windowPosition - g_BackdropBlur.panelMin,
+            g_BackdropBlur.panelSize,
+            g_BackdropBlur.cornerRadius) *
+        saturate(g_BackdropBlur.opacity);
+#elif COMPOSITE == 2
+    const float2 panelPosition =
+        position.xy - g_BackdropBlur.panelMin;
+    const float panelDistance = RoundedRectangleSignedDistance(
+        panelPosition,
         g_BackdropBlur.panelSize,
         g_BackdropBlur.cornerRadius);
+    if (panelDistance <= 0.0)
+        discard;
+
+    const float2 shadowPosition =
+        panelPosition - float2(0.0, g_BackdropBlur.shadowOffsetY);
+    const float shadowDistance = RoundedRectangleSignedDistance(
+        shadowPosition,
+        g_BackdropBlur.panelSize,
+        g_BackdropBlur.cornerRadius);
+    const float shadowCoverage =
+        1.0 - smoothstep(
+            -0.5,
+            max(g_BackdropBlur.shadowBlur, 0.5),
+            shadowDistance);
+    const float shadowAlpha =
+        shadowCoverage *
+        g_BackdropBlur.shadowOpacity *
+        saturate(g_BackdropBlur.opacity);
+    if (shadowAlpha <= 0.001)
+        discard;
+    outputColor = float4(0.0, 0.0, 0.0, shadowAlpha);
 #else
     outputColor = SampleGaussianBlur(uv);
     outputColor.a = 1.0;

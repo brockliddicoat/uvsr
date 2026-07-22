@@ -201,10 +201,10 @@ namespace uvsr
         historyDesc.debugName = "MiniEngineTAA/FusedOutput";
         m_FusedOutput = device->createTexture(historyDesc);
         historyDesc.format = sceneColorDesc.format;
-        historyDesc.debugName = "MiniEngineTAA/SelectiveSmaaCurrent";
+        historyDesc.debugName = "MiniEngineTAA/SelectiveMorphologyCurrent";
         m_SelectiveCurrent = device->createTexture(historyDesc);
         historyDesc.format = nvrhi::Format::R16_FLOAT;
-        historyDesc.debugName = "MiniEngineTAA/SelectiveSmaaRejection";
+        historyDesc.debugName = "MiniEngineTAA/SelectiveMorphologyRejection";
         m_SelectiveRejection = device->createTexture(historyDesc);
 #if !UVSR_AA_DEVELOPER_OVERRIDES
         // Shipping blend shaders compile debug output away. Reuse the
@@ -292,10 +292,8 @@ namespace uvsr
         {
             const MiniEngineTaaOptions options =
                 GetPresetTemporalOptions(preset);
-            // Every shipping long-term preset applies selective SMAA. The
-            // no-export variant is an algorithm override and therefore stays
-            // developer-only instead of consuming a dormant release PSO.
-            constexpr uint32_t exportSelective = 1u;
+            // Selective morphology is no longer part of the shipping path.
+            constexpr uint32_t exportSelective = 0u;
             for (uint32_t fused = 0u;
                 fused < 2u;
                 ++fused)
@@ -400,13 +398,26 @@ namespace uvsr
             m_ResolvePipelines[debugView] =
                 device->createComputePipeline(outputPipelineDesc);
         }
-        m_SharpenShader = shaderFactory->CreateShader(
-            "uvsr/taa_miniengine_sharpen_cs.hlsl",
-            "main",
-            nullptr,
-            nvrhi::ShaderType::Compute);
+        const auto createSharpenShader =
+            [&](bool premultipliedInput)
+        {
+            std::vector<ShaderMacro> macros = {
+                { "TAA_SHARPEN_INPUT_PREMULTIPLIED",
+                    premultipliedInput ? "1" : "0" }
+            };
+            return shaderFactory->CreateShader(
+                "uvsr/taa_miniengine_sharpen_cs.hlsl",
+                "main",
+                &macros,
+                nvrhi::ShaderType::Compute);
+        };
+        m_SharpenShader = createSharpenShader(true);
         outputPipelineDesc.CS = m_SharpenShader;
         m_SharpenPipeline =
+            device->createComputePipeline(outputPipelineDesc);
+        m_PresentationSharpenShader = createSharpenShader(false);
+        outputPipelineDesc.CS = m_PresentationSharpenShader;
+        m_PresentationSharpenPipeline =
             device->createComputePipeline(outputPipelineDesc);
 
         for (uint32_t source = 0u; source < 2u; ++source)
@@ -793,7 +804,7 @@ namespace uvsr
         uint64_t frameIndex,
         const ResolvedAntiAliasingSettings& settings,
         MiniEngineTaaDebugView debugView,
-        bool exportSelectiveSmaa,
+        bool exportSelectiveMorphology,
         bool enableSharpen,
         bool deferSharpenToPresentation,
         float sharpness)
@@ -937,9 +948,7 @@ namespace uvsr
             sizeof(outputConstants));
 
         nvrhi::ComputeState outputState;
-        // SMAA diagnostics share the developer UI enum, but the temporal
-        // resolve must remain its normal static Off permutation while the
-        // later presentation pass produces those views.
+        // The temporal resolve accepts only its own compact diagnostic range.
 #if UVSR_AA_DEVELOPER_OVERRIDES
         const uint32_t requestedDebugIndex =
             static_cast<uint32_t>(debugView);
@@ -994,10 +1003,9 @@ namespace uvsr
 #endif
         const auto bypassMissingPermutation = [&]()
         {
-            // A selective-SMAA caller switches to fullscreen spatial AA when
-            // history is invalid. Seed that path with this frame's real scene
-            // color instead of leaving stale selective exports behind.
-            if (exportSelectiveSmaa)
+            // Seed dormant selective exports deterministically if a developer
+            // caller explicitly requests them.
+            if (exportSelectiveMorphology)
             {
                 commandList->copyTexture(
                     m_SelectiveCurrent,
@@ -1026,7 +1034,7 @@ namespace uvsr
                     (2u *
                         MiniEngineTaaSampleResurrectionCount *
                         2u) +
-                uint32_t(exportSelectiveSmaa) *
+                uint32_t(exportSelectiveMorphology) *
                     (MiniEngineTaaSampleResurrectionCount *
                         2u) +
                 static_cast<uint32_t>(sampleResurrection) * 2u +
@@ -1034,7 +1042,7 @@ namespace uvsr
 #if UVSR_AA_DEVELOPER_OVERRIDES
             if (!CreateBlendComputePermutation(
                 options,
-                uint32_t(exportSelectiveSmaa),
+                uint32_t(exportSelectiveMorphology),
                 static_cast<uint32_t>(sampleResurrection),
                 performance,
                 m_BlendShaders[blendPermutation],
@@ -1068,10 +1076,10 @@ namespace uvsr
                 algorithmIndex *
                     MiniEngineTaaStaticPerformanceCount * 2u +
                 performanceIndex * 2u +
-                uint32_t(exportSelectiveSmaa);
+                uint32_t(exportSelectiveMorphology);
             if (!CreateBlendComputePermutation(
                 options,
-                uint32_t(exportSelectiveSmaa),
+                uint32_t(exportSelectiveMorphology),
                 0u,
                 performance,
                 m_PerformanceBlendShaders[permutation],
@@ -1093,11 +1101,11 @@ namespace uvsr
             pixelPermutation =
                 GetMiniEngineTaaBlendPermutationIndex(options) * 8u +
                 uint32_t(settings.earlyHistoryRejection) * 4u +
-                uint32_t(exportSelectiveSmaa) * 2u +
+                uint32_t(exportSelectiveMorphology) * 2u +
                 uint32_t(useFusedOutput);
             if (!CreateBlendPixelPermutation(
                 options,
-                uint32_t(exportSelectiveSmaa),
+                uint32_t(exportSelectiveMorphology),
                 settings.earlyHistoryRejection,
                 useFusedOutput,
                 m_PixelBlendShaders[pixelPermutation],
@@ -1338,7 +1346,7 @@ namespace uvsr
         }
 
         nvrhi::ComputeState state;
-        state.pipeline = m_SharpenPipeline;
+        state.pipeline = m_PresentationSharpenPipeline;
         state.bindings = { m_PresentationSharpenBindingSet };
         commandList->beginMarker(
             "MiniEngine TAA Presentation Sharpen");

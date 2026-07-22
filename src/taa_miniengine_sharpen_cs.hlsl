@@ -15,6 +15,10 @@
 // 357ade6ec6ff0d9dcadc48f35c7a28e37c0cdf7a.
 //
 
+#ifndef TAA_SHARPEN_INPUT_PREMULTIPLIED
+#error TAA_SHARPEN_INPUT_PREMULTIPLIED must be a compile-time shader define
+#endif
+
 Texture2D<float4> TemporalColor : register(t0);
 RWTexture2D<float4> OutColor : register(u0);
 
@@ -56,12 +60,20 @@ void main(
         int2 ST = GroupUL + int2(i % TILE_SIZE_X, i / TILE_SIZE_X);
         ST = clamp(ST, int2(0, 0), int2(BufferDim) - 1);
         float4 Color = TemporalColor[ST];
+        // Temporal history stores premultiplied radiance and confidence.
+        // Presentation inputs such as CMAA2 are already resolved RGB; CMAA2
+        // uses alpha as scratch/unused output and writes zero on processed
+        // edges, so dividing that path by alpha creates white overflow.
+#if TAA_SHARPEN_INPUT_PREMULTIPLIED
+        float3 normalizedColor =
+            Color.rgb / max(Color.w, 1e-6);
+#else
+        float3 normalizedColor = Color.rgb;
+#endif
         // MiniEngine assumes nonnegative radiance. Experimental rectification
         // modes intentionally tolerate signed HDR, so clamp only the invalid
         // log domain while preserving the reference path for nonnegative
         // values. The output is also bounded to finite RGBA16F range.
-        float3 normalizedColor =
-            Color.rgb / max(Color.w, 1e-6);
         Color.rgb = log2(1.0 + max(normalizedColor, -0.999));
         gs_R[i] = Color.r;
         gs_G[i] = Color.g;

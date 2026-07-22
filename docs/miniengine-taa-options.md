@@ -9,27 +9,29 @@ The **Aliasing** drawer exposes:
 - **Quality**
 - **History Frames**
 - **History Strength**
-- **Run 45-Degree Motion Test**
+
+The **Statistics** drawer places **Run Current With Motion** immediately below
+**Run Current** so the static and motion benchmark actions stay together. Its
+**Anti-Aliasing** effect selection owns the history, permutation, timing,
+CMAA2, and MSAA statistic lines; the Aliasing drawer does not duplicate them.
+The Cancel control animates into the drawer only while a test is active.
 
 The available methods are:
 
-- **Temporal**: long-term MiniEngine TAA with optional presentation morphology
+- **Temporal Reconstructive**: long-term MiniEngine TAA with optional presentation morphology
 - **Conservative Morphological**: Intel CMAA2
-- **Multisample**: diagnostic deferred MSAA followed by CMAA2 by default
-- **Subpixel Morphological**: diagnostic full-screen SMAA 1x
+- **Multisample Reference**: diagnostic deferred MSAA followed by CMAA2 by default
 
-SMAA T2x was removed. It no longer owns a menu method, shader bundle,
-phase-history allocation, benchmark mode, or developer performance control.
-Spatial SMAA remains only as a fixed diagnostic comparison with CMAA2.
+The retired SMAA method, pass, benchmark telemetry, shaders, lookup assets, and
+third-party source bundle are not built or staged.
 
 ## Quality Mapping
 
 | Method | Low | Medium | High | Ultra |
 | --- | --- | --- | --- | --- |
-| Temporal | 3 prior frames | 7 prior frames | 15 prior frames | 31 prior frames |
-| Conservative Morphological | CMAA2 Low | CMAA2 Medium | CMAA2 High | Mutex |
-| Multisample | 2x + CMAA2 | 4x + CMAA2 | 8x + CMAA2 | 16x + CMAA2 |
-| Subpixel Morphological | SMAA Low | SMAA Medium | SMAA High | SMAA Ultra |
+| Temporal Reconstructive | 3 prior frames | 6 prior frames | 9 prior frames | 12 prior frames |
+| Conservative Morphological | CMAA2 Low | CMAA2 Medium | CMAA2 High | CMAA2 Ultra |
+| Multisample Reference | 2x + CMAA2 | 4x + CMAA2 | 8x + CMAA2 | 16x + CMAA2 |
 
 MSAA uses static shader permutations for 2x, 4x, 8x, and 16x. At runtime,
 UVSR checks every multisampled render-target format and falls back to the
@@ -49,39 +51,40 @@ morphology and image-equivalent performance changes do not reset it.
 
 Every MSAA quality defaults to **Conservative Morphological**, so Intel CMAA2
 runs after the multisample lighting resolve. The developer algorithm drawer
-can still compare no morphology or full-screen SMAA where the selected method
-supports those diagnostic combinations.
-
-Spatial SMAA preserves the pinned official thresholds and search behavior for
-Low, Medium, High, and Ultra. It uses one fixed pixel edge pass, dense weight
-pass, and neighborhood pass. SMAA-specific compute, stencil, compact-tile,
-indirect-dispatch, and fusion experiments are not compiled or exposed.
+can select **Off**, **Conservative Low**, **Conservative Medium**,
+**Conservative High**, or **Conservative Ultra** after a Temporal or
+Multisample resolve. Its quality is independent from the main Temporal or
+Multisample quality: choosing Conservative Ultra while Temporal Low is active
+changes only the CMAA2 presentation pass. Changing only presentation morphology
+preserves temporal history.
 
 ## Developer Algorithm Configuration
 
 The default-open **Aliasing Algorithm Configuration** drawer exposes resolved
-algorithm controls. A resolved preset value and **(Preset)** are displayed as
-one entry. Mutually exclusive entries display **(Mutex)**.
+algorithm controls without adding **(Preset)** to inherited values. Mutually
+exclusive entries display **(Mutex)**.
 
 Temporal controls include motion source, current reconstruction, history
-filter, rectification, stable-interior weighting, sample resurrection, and
-presentation morphology. SMAA quality is selected only through the normal
-Low, Medium, High, and Ultra presets.
+filter, rectification, sample resurrection, and presentation morphology.
 
-## Developer Performance Overrides
+## Stable Interior
 
-The collapsed performance drawer contains only options that operate on the
-MiniEngine temporal path:
+**Stable Interior** appears immediately above **Sharpness** in the temporal
+algorithm controls and remains off in every preset. Sharpness also starts
+disabled for every preset while retaining its stored strength when the user
+toggles it off. The separate developer performance drawer is removed.
+Execution path, compute kernel, LDS layout, shared-work reuse, early rejection,
+pass fusion, cache blocking, and developer debug dropdowns are not exposed.
 
-- Execution Path
-- Compute Kernel
-- LDS Layout
-- Shared-Work Reuse
-- Early History Rejection
-- Pass Fusion
-- Cache Blocking
+## Presentation Sharpening Contract
 
-Spatial SMAA has no optional performance overrides.
+Temporal history stores premultiplied RGB and confidence in alpha, so its
+sharpen permutation divides by valid history alpha. CMAA2 emits resolved RGB
+and uses alpha as an unused output channel; processed edge pixels can therefore
+contain zero alpha. Post-CMAA2 sharpening selects a separate resolved-input
+permutation that never divides RGB by this alpha. This prevents finite HDR
+edges from expanding to RGBA16F white while preserving MiniEngine's original
+history sharpening behavior.
 
 ## Motion and Jitter Convention
 
@@ -97,21 +100,19 @@ history before history color is trusted.
 
 ## Dropdown Commit Timing
 
-Combo popups use a 120 ms fade. A selection made during that fade is queued and
-commits on the first rendered frame after the fade reached completion. This
-prevents a long frame from both skipping the visible animation and applying a
-topology-changing selection while stale popup pixels are still presented.
+Dropdown selection closes without a fade. Topology-changing Aliasing choices
+are queued for the next rendered UI frame so dependent rows can disappear only
+after the renderer consumes the selection.
 
 ## Center Crosshair
 
 A two-pixel-radius white dot with 50% alpha is drawn at the exact main viewport
-center after scene anti-aliasing. It is presentation-only and cannot enter TAA,
-CMAA2, SMAA, or MSAA history.
+center only while pixel zoom is active. It is presentation-only and cannot
+enter TAA, CMAA2, or MSAA history.
 
 ## Benchmark
 
 The in-app motion-test button and benchmark CLI use Benchmark Position 1,
 turn right 45 degrees at 15 degrees per second, hold, and return at the same
-rate. Reports include warm median, worst-case GPU time, and spatial SMAA stage
-timings when SMAA is active. Removed T2x phase and SMAA execution-experiment
-telemetry is not emitted.
+rate. Reports include warm median and worst-case GPU time. Retired morphology
+stage telemetry is not emitted.

@@ -9,7 +9,7 @@
   `C:\Users\brock\Documents\Codex\2026-07-19\aa-ui-merged-experiment`
 - Base commit: `58813cb` (`checkpoint: preserve newest aa and ui candidate`)
 - Started: 2026-07-20
-- Last updated: 2026-07-20
+- Last updated: 2026-07-22
 - Planned archive:
   `docs/exec-plans/completed/visibility-aa-ui-integration.md`
 
@@ -24,15 +24,16 @@ Done when:
 - [x] The four visibility presets, buffer controls, benchmark/statistics
       workflow, production shader permutations, optimization ledger, and
       source behavior from `16d8fc8` remain present.
-- [x] The destination's MiniEngine TAA, CMAA2, diagnostic SMAA, deferred MSAA,
-      production shader bundle, and accepted ImGui UI behavior remain present.
+- [x] The destination's MiniEngine TAA, CMAA2, deferred MSAA, production shader
+      bundle, and accepted ImGui UI behavior remain present. Diagnostic SMAA
+      was subsequently retired by explicit user request.
 - [x] Shared CPU, HLSL, build, shader-registry, schema, documentation, and
       `src/uvsr.cpp` conflicts are resolved semantically.
 - [x] All developer and production shaders plus the Release executable rebuild.
 - [x] Relevant CPU tests, production shader-bundle tests, document checks, and
       source audits pass, with any unavoidable incompatibility documented.
-- [x] The result remains local for user evaluation; nothing is pushed or merged
-      into canonical history.
+- [x] The result remained local through user evaluation and received separate
+      canonical publication authorization on 2026-07-22.
 
 ## Scope
 
@@ -92,8 +93,9 @@ asset/package contracts:
 - Preserve destination AA/UI layout, ordering, defaults, tooltips, fade timing,
   crosshair, and shader-bundle split.
 - Preserve source visibility preset identity, configuration-to-permutation
-  mapping, resource/barrier lifetime, buffers, benchmark JSON/CSV schema, and
-  statistics semantics.
+  mapping, resource/barrier lifetime, buffers, benchmark execution, in-memory
+  results, and statistics semantics. The export schema was removed later by
+  explicit user request.
 - Keep CPU/HLSL constant-buffer layouts synchronized after composition.
 - Keep visibility output consumable by both normal deferred lighting and the
   destination's multisampled deferred-lighting path.
@@ -131,8 +133,9 @@ asset/package contracts:
 - Stop and report if: retaining the source visibility semantics necessarily
   changes an accepted AA/UI visible outcome or retaining AA/UI necessarily
   removes a required visibility behavior
-- Handoff revision/artifact: pending
-- Handoff acknowledged by/on: pending
+- Handoff revision/artifact: merged candidate base `553e604` plus the accepted
+  working-tree refinements recorded in this publication
+- Handoff acknowledged by/on: user authorization on 2026-07-22
 
 ## Integration Order
 
@@ -150,11 +153,11 @@ asset/package contracts:
 | --- | --- | --- | --- |
 | Four visibility presets retained | CPU/UI/shader mapping and tests | Source audit plus visibility tests | Low, Medium, High, and Ultra mappings retained; visibility sampling/performance tests pass |
 | Buffer controls retained | UI/state/resource path audit and build | Source audit plus Release build | Four buffer presets and per-surface controls compile in both Release builds |
-| Benchmark/statistics retained | Targets, tests, schema, CLI workflow | CTest and source audit | Statistics and performance-plan tests pass; schema-v2 export and CLI paths compile |
+| Benchmark/statistics retained | Targets, tests, and CLI workflow | CTest and source audit | Statistics and performance-plan tests pass; the runner, progress, cancel action, and in-memory latest summary remain after the later requested export removal |
 | Shader permutations retained | Developer/production compile and registry audit | Build both shader bundles | Developer bundle passes; production compiles 2,214 tasks and its bundle contract passes |
 | Optimization ledger retained | Title-case checker and content audit | Document checks and `rg` | Ledger imported; checker self-test and 487-heading full scan pass |
-| AA/UI retained | AA tests, production bundle, UI source audit | CTest, build, labeled smoke | MiniEngine TAA test passes; CMAA2/SMAA/MSAA blobs required; both executables open responsive windows |
-| Composed candidate valid | Clean first-party diff, full tests, executable hash | Repository verification suite | Developer 14/14 and production 15/15 tests pass; both Release hashes recorded below |
+| AA/UI retained | AA tests, production bundle, UI source audit | CTest, build, labeled smoke | MiniEngine TAA and CMAA2 tests pass; deferred MSAA remains; retired SMAA names, source, and blobs are absent; the executable opens a responsive window |
+| Composed candidate valid | Clean first-party diff, full tests, executable hash | Repository verification suite | The integration checkpoint passed developer 14/14 and production 15/15 tests; later combined verification is recorded under Canonical Publication |
 
 ## Decisions
 
@@ -198,7 +201,8 @@ Stop and ask the user if:
 
 ## Completion
 
-- Final integrated commit: the local merge commit containing this completed plan
+- Final integrated commit at this integration checkpoint: the local merge
+  commit containing this completed plan
 - Verification summary: developer and production shader targets and Release
   executables pass; developer CTest is 14/14 and production CTest is 15/15;
   document self-test/full scan, first-party diff check, feature-marker audit,
@@ -207,9 +211,24 @@ Stop and ask the user if:
   completed; no independent subagent was used under the execution constraints
 - Coming Soon/documentation update: the imported visibility design, optimization
   ledger, DXIL evidence, and completed source/integration plans are reconciled
-- Pushed/PR/merged, or intentionally local: intentionally local
-- Remaining experiments or follow-ups: user visual/product acceptance and the
-  source plan's disclosed target Intel timing/dynamic-motion evidence
+- Pushed/PR/merged at this integration checkpoint: intentionally local
+- Remaining experiments or follow-ups at this integration checkpoint: user
+  visual/product acceptance and the source plan's disclosed target Intel
+  timing/dynamic-motion evidence
 - Active ownership released: yes
 - Archived to completed/abandoned path:
   `docs/exec-plans/completed/visibility-aa-ui-integration.md`
+
+## Canonical Publication
+
+The local-only and earlier test-count statements above preserve the original
+2026-07-20 checkpoint evidence. The user subsequently accepted the combined
+visibility, AA, and UI behavior, including later animation, scrolling,
+magnifier, dropdown, naming, and statistics refinements. Benchmark export and
+SMAA were deliberately removed without removing the retained visibility
+presets, buffer controls, statistics, shader permutations, or optimization
+ledger. On 2026-07-22, the complete combined candidate was authorized for a
+fast-forward publication to canonical `main`; the publication verification is
+the developer Release build with 20 of 20 tests, a from-source production build
+of 2,211 UVSR DXIL tasks with 21 of 21 tests, the packaged-shader contract, the
+documentation checks, and the line-count checks run for the containing commit.

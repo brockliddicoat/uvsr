@@ -83,14 +83,21 @@ int main()
     firstPerson.Animate(1.f);
     passed &= Check(NearlyEqual(firstPerson.GetPosition().x, 6.f),
         "first-person base movement is 6 units per second");
-
-    firstPerson.KeyboardUpdate(GLFW_KEY_LEFT_SHIFT, 0, GLFW_PRESS, 0);
-    const float sprintStart = firstPerson.GetPosition().x;
-    firstPerson.Animate(1.f);
-    passed &= Check(NearlyEqual(firstPerson.GetPosition().x - sprintStart, 12.f),
-        "first-person Shift sprint is 12 units per second");
-    firstPerson.KeyboardUpdate(GLFW_KEY_LEFT_SHIFT, 0, GLFW_RELEASE, 0);
     firstPerson.KeyboardUpdate(GLFW_KEY_W, 0, GLFW_RELEASE, 0);
+
+    const float firstPersonVerticalStart = firstPerson.GetPosition().y;
+    firstPerson.KeyboardUpdate(GLFW_KEY_SPACE, 0, GLFW_PRESS, 0);
+    firstPerson.Animate(0.25f);
+    firstPerson.KeyboardUpdate(GLFW_KEY_SPACE, 0, GLFW_RELEASE, 0);
+    passed &= Check(
+        firstPerson.GetPosition().y > firstPersonVerticalStart,
+        "Space moves the first-person camera upward");
+    firstPerson.KeyboardUpdate(GLFW_KEY_LEFT_SHIFT, 0, GLFW_PRESS, 0);
+    firstPerson.Animate(0.25f);
+    firstPerson.KeyboardUpdate(GLFW_KEY_LEFT_SHIFT, 0, GLFW_RELEASE, 0);
+    passed &= Check(
+        NearlyEqual(firstPerson.GetPosition().y, firstPersonVerticalStart),
+        "Shift moves the first-person camera downward");
 
     const float3 firstDirectionBeforeArrow = firstPerson.GetDir();
     firstPerson.KeyboardUpdate(GLFW_KEY_LEFT, 0, GLFW_PRESS, 0);
@@ -98,6 +105,38 @@ int main()
     firstPerson.KeyboardUpdate(GLFW_KEY_LEFT, 0, GLFW_RELEASE, 0);
     passed &= Check(lengthSquared(firstPerson.GetDir() - firstDirectionBeforeArrow) > 0.01f,
         "arrow keys rotate the first-person view");
+
+    UvsrFirstPersonCamera rollCamera(true);
+    rollCamera.LookTo(
+        float3(0.f),
+        float3(0.f, 0.f, 1.f),
+        float3(0.f, 1.f, 0.f));
+    const float3 upBeforeReservedZoomKey = rollCamera.GetUp();
+    rollCamera.KeyboardUpdate(GLFW_KEY_Z, 0, GLFW_PRESS, 0);
+    rollCamera.Animate(0.25f);
+    rollCamera.KeyboardUpdate(GLFW_KEY_Z, 0, GLFW_RELEASE, 0);
+    passed &= Check(
+        lengthSquared(rollCamera.GetUp() - upBeforeReservedZoomKey) <
+            1e-8f,
+        "Z is reserved for pixel zoom and no longer rolls the camera");
+
+    rollCamera.KeyboardUpdate(GLFW_KEY_X, 0, GLFW_PRESS, 0);
+    rollCamera.Animate(0.25f);
+    rollCamera.KeyboardUpdate(GLFW_KEY_X, 0, GLFW_RELEASE, 0);
+    passed &= Check(
+        lengthSquared(rollCamera.GetUp() - upBeforeReservedZoomKey) >
+            1e-6f,
+        "X performs the former Z roll-left camera action");
+    const float3 positionBeforeRollReset = rollCamera.GetPosition();
+    const float3 directionBeforeRollReset = rollCamera.GetDir();
+    rollCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    rollCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_RELEASE, 0);
+    passed &= Check(
+        all(rollCamera.GetPosition() == positionBeforeRollReset) &&
+            all(rollCamera.GetDir() == directionBeforeRollReset) &&
+            lengthSquared(rollCamera.GetUp() - float3(0.f, 1.f, 0.f)) <
+                1e-6f,
+        "V levels X/C roll without moving or redirecting the camera");
 
     UvsrFirstPersonCamera pivot(false);
     pivot.LookTo(float3(2.f, 3.f, 4.f), float3(1.f, 0.f, 0.f));
@@ -189,112 +228,36 @@ int main()
         NearlyEqual(sustainedDolly.GetKeyboardDollyVelocity(), 0.64f, 1e-3f),
         "third-person sustained W dolly holds the doubled minimum cruise speed");
 
-    const auto measureSteadyFreelookSpeed = [](
-        int movementKey,
-        int shiftKey,
-        bool strafe)
-    {
-        UvsrThirdPersonCamera camera;
-        camera.LookTo(float3(0.f, 0.f, -10.f), float3(0.f, 0.f, 1.f));
-        camera.ResetZoomReferenceDistance(10.f);
-        if (shiftKey != GLFW_KEY_UNKNOWN)
-            camera.KeyboardUpdate(shiftKey, 0, GLFW_PRESS, 0);
-        camera.KeyboardUpdate(movementKey, 0, GLFW_PRESS, 0);
-        AnimateFrames(camera, 120);
-        return std::abs(strafe
-            ? camera.GetKeyboardStrafeVelocity()
-            : camera.GetKeyboardDollyVelocity());
-    };
-
-    const float normalForwardSpeed = measureSteadyFreelookSpeed(
-        GLFW_KEY_W,
-        GLFW_KEY_UNKNOWN,
-        false);
-    const float boostedForwardSpeed = measureSteadyFreelookSpeed(
-        GLFW_KEY_W,
-        GLFW_KEY_LEFT_SHIFT,
-        false);
-    const float normalBackwardSpeed = measureSteadyFreelookSpeed(
-        GLFW_KEY_S,
-        GLFW_KEY_UNKNOWN,
-        false);
-    const float boostedBackwardSpeed = measureSteadyFreelookSpeed(
-        GLFW_KEY_S,
-        GLFW_KEY_RIGHT_SHIFT,
-        false);
+    UvsrThirdPersonCamera verticalCamera;
+    verticalCamera.LookTo(
+        float3(2.f, 3.f, 4.f),
+        float3(0.f, 0.f, 1.f),
+        float3(1.f, 0.f, 0.f));
+    verticalCamera.ResetZoomReferenceDistance(10.f);
+    const float3 verticalStart = verticalCamera.GetPosition();
+    verticalCamera.KeyboardUpdate(GLFW_KEY_SPACE, 0, GLFW_PRESS, 0);
+    AnimateFrames(verticalCamera, 60);
+    verticalCamera.KeyboardUpdate(GLFW_KEY_SPACE, 0, GLFW_RELEASE, 0);
     passed &= Check(
-        NearlyEqual(boostedForwardSpeed, normalForwardSpeed * 2.f, 2e-3f) &&
-        NearlyEqual(boostedBackwardSpeed, normalBackwardSpeed * 2.f, 2e-3f),
-        "either Shift key doubles steady Freelook W/S dolly speed");
-
-    const float normalLeftSpeed = measureSteadyFreelookSpeed(
-        GLFW_KEY_A,
-        GLFW_KEY_UNKNOWN,
-        true);
-    const float boostedLeftSpeed = measureSteadyFreelookSpeed(
-        GLFW_KEY_A,
-        GLFW_KEY_LEFT_SHIFT,
-        true);
-    const float normalRightSpeed = measureSteadyFreelookSpeed(
-        GLFW_KEY_D,
-        GLFW_KEY_UNKNOWN,
-        true);
-    const float boostedRightSpeed = measureSteadyFreelookSpeed(
-        GLFW_KEY_D,
-        GLFW_KEY_RIGHT_SHIFT,
-        true);
+        verticalCamera.GetPosition().y > verticalStart.y &&
+            NearlyEqual(verticalCamera.GetPosition().x, verticalStart.x) &&
+            NearlyEqual(verticalCamera.GetPosition().z, verticalStart.z),
+        "Freelook Space moves world-up even when the camera is rolled");
+    AnimateFrames(verticalCamera, 180);
+    const float heightBeforeShift = verticalCamera.GetPosition().y;
+    verticalCamera.KeyboardUpdate(
+        GLFW_KEY_RIGHT_SHIFT, 0, GLFW_PRESS, 0);
+    AnimateFrames(verticalCamera, 60);
+    verticalCamera.KeyboardUpdate(
+        GLFW_KEY_RIGHT_SHIFT, 0, GLFW_RELEASE, 0);
     passed &= Check(
-        NearlyEqual(boostedLeftSpeed, normalLeftSpeed * 2.f, 2e-3f) &&
-        NearlyEqual(boostedRightSpeed, normalRightSpeed * 2.f, 2e-3f),
-        "either Shift key doubles steady Freelook A/D strafe speed");
+        verticalCamera.GetPosition().y < heightBeforeShift,
+        "either Shift key moves Freelook downward");
 
-    const auto measureWheelTravel = [](int shiftKey)
-    {
-        UvsrThirdPersonCamera camera;
-        camera.LookTo(float3(0.f, 0.f, -10.f), float3(0.f, 0.f, 1.f));
-        camera.ResetZoomReferenceDistance(10.f);
-        if (shiftKey != GLFW_KEY_UNKNOWN)
-            camera.KeyboardUpdate(shiftKey, 0, GLFW_PRESS, 0);
-        const float3 start = camera.GetPosition();
-        camera.MouseScrollUpdate(0.0, 1.0);
-        AnimateFrames(camera, 180);
-        return dot(camera.GetPosition() - start, camera.GetDir());
-    };
-    const float normalWheelTravel = measureWheelTravel(GLFW_KEY_UNKNOWN);
-    const float leftShiftWheelTravel = measureWheelTravel(GLFW_KEY_LEFT_SHIFT);
-    const float rightShiftWheelTravel = measureWheelTravel(GLFW_KEY_RIGHT_SHIFT);
+    verticalCamera.CancelPendingMotion();
     passed &= Check(
-        NearlyEqual(leftShiftWheelTravel, normalWheelTravel * 2.f, 4e-4f) &&
-        NearlyEqual(rightShiftWheelTravel, normalWheelTravel * 2.f, 4e-4f),
-        "either Shift key doubles Freelook wheel travel");
-
-    UvsrThirdPersonCamera dualShiftBoost;
-    dualShiftBoost.KeyboardUpdate(GLFW_KEY_LEFT_SHIFT, 0, GLFW_PRESS, 0);
-    dualShiftBoost.KeyboardUpdate(GLFW_KEY_RIGHT_SHIFT, 0, GLFW_PRESS, 0);
-    dualShiftBoost.KeyboardUpdate(GLFW_KEY_LEFT_SHIFT, 0, GLFW_RELEASE, 0);
-    passed &= Check(dualShiftBoost.IsSpeedBoosted(),
-        "releasing one Shift key keeps Freelook boosted while the other is held");
-    dualShiftBoost.KeyboardUpdate(GLFW_KEY_RIGHT_SHIFT, 0, GLFW_RELEASE, 0);
-    passed &= Check(!dualShiftBoost.IsSpeedBoosted(),
-        "Freelook boost ends after both Shift keys are released");
-
-    UvsrThirdPersonCamera clearedBoost;
-    clearedBoost.KeyboardUpdate(GLFW_KEY_LEFT_SHIFT, 0, GLFW_PRESS, 0);
-    clearedBoost.KeyboardUpdate(GLFW_KEY_W, 0, GLFW_PRESS, 0);
-    AnimateFrames(clearedBoost, 10);
-    clearedBoost.ResetZoomReferenceDistance(12.f);
-    passed &= Check(
-        !clearedBoost.IsSpeedBoosted() &&
-        clearedBoost.GetKeyboardDollyVelocity() == 0.f,
-        "resetting Freelook motion clears Shift boost and dolly velocity");
-    clearedBoost.KeyboardUpdate(GLFW_KEY_RIGHT_SHIFT, 0, GLFW_PRESS, 0);
-    clearedBoost.KeyboardUpdate(GLFW_KEY_D, 0, GLFW_PRESS, 0);
-    AnimateFrames(clearedBoost, 10);
-    clearedBoost.CancelPendingMotion();
-    passed &= Check(
-        !clearedBoost.IsSpeedBoosted() &&
-        clearedBoost.GetKeyboardStrafeVelocity() == 0.f,
-        "canceling Freelook motion clears Shift boost and strafe velocity");
+        verticalCamera.GetKeyboardVerticalVelocity() == 0.f,
+        "canceling Freelook motion clears vertical velocity");
 
     const float3 strafeDirection(0.f, 0.f, 1.f);
     const float3 strafeUp(0.f, 1.f, 0.f);

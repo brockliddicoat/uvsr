@@ -406,3 +406,12 @@ Stop and ask the user if:
 - Active ownership released: yes
 - Archived to completed/abandoned path:
   `docs/exec-plans/completed/ao-performance-optimization.md`
+
+## Canonical Publication
+
+The local-only statements above describe the original optimization checkpoint.
+Commit `16d8fc8` was subsequently incorporated through merge commit `553e604`;
+later accepted cleanup removed benchmark export and retired comparison
+permutations while preserving the four visibility presets, buffer controls,
+statistics, production shader paths, and optimization ledger. The combined
+candidate was authorized for canonical `main` publication on 2026-07-22.

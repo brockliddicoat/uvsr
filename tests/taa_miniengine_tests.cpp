@@ -87,24 +87,38 @@ int main(int argc, char** argv)
     using Method = uvsr::AntiAliasingMethod;
     using Quality = uvsr::AntiAliasingQuality;
     using Preset = uvsr::AntiAliasingPreset;
-    using Morphology = uvsr::SmaaApplication;
+    using Morphology = uvsr::MorphologyApplication;
 
     passed &= Check(
-        static_cast<uint32_t>(Method::Count) == 4u,
-        "the normal AA method matrix must contain four methods");
+        static_cast<uint32_t>(Method::Count) == 3u,
+        "the normal AA method matrix must contain three methods");
     passed &= Check(
-        uvsr::GetAntiAliasingImplementation(
-            Method::SubpixelMorphological,
-            Quality::Ultra) == Preset::Smaa1x,
-        "spatial SMAA must remain a single non-temporal implementation");
+        std::string(uvsr::GetAntiAliasingMethodLabel(
+            Method::TemporalSubpixelMorphological)) ==
+                "Temporal Reconstructive" &&
+            std::string(uvsr::GetAntiAliasingMethodLabel(
+                Method::IntelCmaa2)) ==
+                "Conservative Morphological" &&
+            std::string(uvsr::GetAntiAliasingMethodLabel(
+                Method::Msaa)) ==
+                "Multisample Reference",
+        "the AA method menu must use the accepted product labels");
+    passed &= Check(
+        std::string(uvsr::GetAntiAliasingQualityMenuLabel(
+            Method::IntelCmaa2,
+            Quality::Ultra)) == "Ultra" &&
+            std::string(uvsr::GetAntiAliasingQualityMenuLabel(
+                Method::Msaa,
+                Quality::Ultra)) == "Ultra (16x)",
+        "only the morphology control prefixes conservative strengths");
     passed &= Check(
         uvsr::GetAntiAliasingImplementation(
             Method::IntelCmaa2,
             Quality::High) == Preset::IntelCmaa2 &&
-            !uvsr::IsAntiAliasingQualitySupported(
+            uvsr::IsAntiAliasingQualitySupported(
                 Method::IntelCmaa2,
                 Quality::Ultra),
-        "CMAA2 must expose Low, Medium, and High only");
+        "CMAA2 must expose Low, Medium, High, and Ultra");
 
     constexpr std::array<Preset, 4> expectedMsaa = {
         Preset::Msaa2x,
@@ -134,42 +148,6 @@ int main(int argc, char** argv)
             "every MSAA quality must resolve to 2x/4x/8x/16x plus CMAA2");
     }
 
-    constexpr std::array<uint32_t, 4> expectedSearch = {
-        4u, 8u, 16u, 32u
-    };
-    constexpr std::array<float, 4> expectedThreshold = {
-        0.15f, 0.10f, 0.10f, 0.05f
-    };
-    for (uint32_t qualityIndex = 0u;
-        qualityIndex < expectedSearch.size();
-        ++qualityIndex)
-    {
-        const uvsr::SmaaQualityReference reference =
-            uvsr::GetSmaaQualityReference(
-                static_cast<Quality>(qualityIndex));
-        passed &= Check(
-            reference.axialSearchSteps ==
-                    expectedSearch[qualityIndex] &&
-                NearlyEqual(
-                    reference.edgeThreshold,
-                    expectedThreshold[qualityIndex]),
-            "SMAA qualities must preserve the pinned source thresholds and searches");
-    }
-    passed &= Check(
-        !uvsr::GetSmaaQualityReference(
-            Quality::Low)
-                .diagonalDetection &&
-            !uvsr::GetSmaaQualityReference(
-                Quality::Medium)
-                .cornerDetection &&
-            uvsr::GetSmaaQualityReference(
-                Quality::High)
-                .diagonalDetection &&
-            uvsr::GetSmaaQualityReference(
-                Quality::Ultra)
-                .cornerDetection,
-        "SMAA diagonal and corner behavior must follow the pinned quality presets");
-
     constexpr std::array<Preset, 4> expectedTemporal = {
         Preset::TemporalPerformance,
         Preset::TemporalBalanced,
@@ -177,7 +155,7 @@ int main(int argc, char** argv)
         Preset::TemporalUltra
     };
     constexpr std::array<uint32_t, 4> expectedHistoryFrames = {
-        3u, 7u, 15u, 31u
+        3u, 6u, 9u, 12u
     };
     for (uint32_t qualityIndex = 0u;
         qualityIndex < expectedTemporal.size();
@@ -281,12 +259,50 @@ int main(int argc, char** argv)
 
     uvsr::AntiAliasingSettings spatialChange = temporal;
     spatialChange.algorithmOverrides.subpixelMorphology =
-        uvsr::SmaaApplicationOverride::FullScreen;
+        uvsr::MorphologyApplicationOverride::Off;
     passed &= Check(
         !uvsr::AntiAliasingSettingsRequireTemporalReset(
             temporal,
             spatialChange),
         "presentation-only morphology changes must preserve TAA history");
+
+    uvsr::AntiAliasingSettings morphologyQualityChange = temporal;
+    morphologyQualityChange.algorithmOverrides.subpixelMorphology =
+        uvsr::MorphologyApplicationOverride::ConservativeMorphological;
+    morphologyQualityChange.algorithmOverrides.morphologyQuality =
+        static_cast<int32_t>(Quality::Ultra);
+    const auto morphologyQualityResolved =
+        uvsr::ResolveAntiAliasingSettings(morphologyQualityChange);
+    passed &= Check(
+        morphologyQualityResolved.implementation ==
+                Preset::TemporalBalanced &&
+            morphologyQualityResolved.quality == Quality::Medium &&
+            morphologyQualityResolved.morphologyQuality ==
+                Quality::Ultra &&
+            morphologyQualityResolved.historyFrames == 6u,
+        "changing presentation morphology quality must not change the Temporal preset");
+    passed &= Check(
+        !uvsr::AntiAliasingSettingsRequireTemporalReset(
+            temporal,
+            morphologyQualityChange),
+        "presentation morphology quality must preserve TAA history");
+
+    uvsr::AntiAliasingSettings multisampleMorphology;
+    multisampleMorphology.method = Method::Msaa;
+    multisampleMorphology.quality = Quality::Low;
+    multisampleMorphology.algorithmOverrides.subpixelMorphology =
+        uvsr::MorphologyApplicationOverride::ConservativeMorphological;
+    multisampleMorphology.algorithmOverrides.morphologyQuality =
+        static_cast<int32_t>(Quality::Ultra);
+    const auto multisampleMorphologyResolved =
+        uvsr::ResolveAntiAliasingSettings(multisampleMorphology);
+    passed &= Check(
+        multisampleMorphologyResolved.implementation == Preset::Msaa2x &&
+            multisampleMorphologyResolved.rasterSampleCount == 2u &&
+            multisampleMorphologyResolved.quality == Quality::Low &&
+            multisampleMorphologyResolved.morphologyQuality ==
+                Quality::Ultra,
+        "changing presentation morphology quality must not change the Multisample preset");
 
     uvsr::AntiAliasingSettings strengthChange = temporal;
     strengthChange.algorithmOverrides.historyStrength = 0.5f;
@@ -305,6 +321,53 @@ int main(int argc, char** argv)
         clampedResolved.historyFrames == 31u &&
             clampedResolved.historyStrength == 1.f,
         "history sliders must clamp to their documented ranges");
+
+    uvsr::AntiAliasingSettings redundantOverrides;
+    redundantOverrides.algorithmOverrides.motionSource =
+        uvsr::MiniEngineTaaMotionSourceOverride::
+            CenterFirstEdgeDilation;
+    redundantOverrides.algorithmOverrides.currentReconstruction =
+        uvsr::MiniEngineTaaCurrentReconstructionOverride::DeJittered;
+    redundantOverrides.algorithmOverrides.historyFilter =
+        uvsr::MiniEngineTaaHistoryFilterOverride::OneSampleBicubic;
+    redundantOverrides.algorithmOverrides.rectification =
+        uvsr::MiniEngineTaaRectificationOverride::PerPixelYCoCg;
+    redundantOverrides.algorithmOverrides.sampleResurrection =
+        uvsr::MiniEngineTaaSampleResurrectionOverride::Off;
+    redundantOverrides.algorithmOverrides.subpixelMorphology =
+        uvsr::MorphologyApplicationOverride::
+            ConservativeMorphological;
+    uvsr::NormalizeRedundantAntiAliasingOverrides(
+        redundantOverrides);
+    passed &= Check(
+        redundantOverrides.algorithmOverrides.motionSource ==
+                uvsr::MiniEngineTaaMotionSourceOverride::FromPreset &&
+            redundantOverrides.algorithmOverrides.currentReconstruction ==
+                uvsr::MiniEngineTaaCurrentReconstructionOverride::
+                    FromPreset &&
+            redundantOverrides.algorithmOverrides.historyFilter ==
+                uvsr::MiniEngineTaaHistoryFilterOverride::FromPreset &&
+            redundantOverrides.algorithmOverrides.rectification ==
+                uvsr::MiniEngineTaaRectificationOverride::FromPreset &&
+            redundantOverrides.algorithmOverrides.sampleResurrection ==
+                uvsr::MiniEngineTaaSampleResurrectionOverride::FromPreset &&
+            redundantOverrides.algorithmOverrides.subpixelMorphology ==
+                uvsr::MorphologyApplicationOverride::FromPreset,
+        "redundant Aliasing overrides must normalize only at an explicit "
+        "settings transition");
+
+    uvsr::AntiAliasingSettings distinctOverrides;
+    distinctOverrides.algorithmOverrides.motionSource =
+        uvsr::MiniEngineTaaMotionSourceOverride::Center;
+    distinctOverrides.algorithmOverrides.subpixelMorphology =
+        uvsr::MorphologyApplicationOverride::Off;
+    uvsr::NormalizeRedundantAntiAliasingOverrides(distinctOverrides);
+    passed &= Check(
+        distinctOverrides.algorithmOverrides.motionSource ==
+                uvsr::MiniEngineTaaMotionSourceOverride::Center &&
+            distinctOverrides.algorithmOverrides.subpixelMorphology ==
+                uvsr::MorphologyApplicationOverride::Off,
+        "normalization must retain image-changing Aliasing overrides");
 
     passed &= Check(
         uvsr::GetMiniEngineTaaHistoryColorSampleCount(
@@ -350,8 +413,6 @@ int main(int argc, char** argv)
             ReadTextFile(sourceDirectory / "shaders.cfg");
         const std::string productionManifest =
             ReadTextFile(sourceDirectory / "shaders_production.cfg");
-        const std::string smaaSource =
-            ReadTextFile(sourceDirectory / "smaa.cpp");
         const std::string applicationSource =
             ReadTextFile(sourceDirectory / "uvsr.cpp");
 
@@ -364,23 +425,17 @@ int main(int argc, char** argv)
                     std::string::npos,
             "developer and production shader bundles must compile MSAA 16x");
         passed &= Check(
-            shaderManifest.find("smaa_t2x") ==
-                    std::string::npos &&
-                productionManifest.find("smaa_t2x") ==
-                    std::string::npos &&
-                shaderManifest.find("smaa_edge_cs") ==
-                    std::string::npos &&
-                shaderManifest.find("smaa_classify_tiles") ==
-                    std::string::npos,
-            "removed temporal and SMAA-only performance shaders returned");
+            shaderManifest.find("smaa") == std::string::npos &&
+                shaderManifest.find("SMAA") == std::string::npos &&
+                productionManifest.find("smaa") == std::string::npos &&
+                productionManifest.find("SMAA") == std::string::npos,
+            "removed SMAA shaders returned to a shader manifest");
         passed &= Check(
-            smaaSource.find("TemporalHistoryState") ==
-                    std::string::npos &&
-                smaaSource.find("SmaaEdgeKernel") ==
-                    std::string::npos &&
-                smaaSource.find("SmaaWeightCulling") ==
-                    std::string::npos,
-            "spatial SMAA must not own temporal history or execution experiments");
+            !std::filesystem::exists(sourceDirectory / "smaa.cpp") &&
+                !std::filesystem::exists(sourceDirectory / "smaa.h") &&
+                !std::filesystem::exists(
+                    sourceDirectory / "third_party" / "smaa"),
+            "SMAA sources and third-party assets must remain removed");
         passed &= Check(
             applicationSource.find(
                 "##ComboPopupInteractionReady") ==
@@ -388,11 +443,20 @@ int main(int argc, char** argv)
             "combo interaction state must remain inside the pinned ImGui patch");
         passed &= Check(
             applicationSource.find(
-                "AddCircleFilled(") != std::string::npos &&
+                "if (pixelZoomRequested && pixelZoomOpacity > 0.f)") !=
+                    std::string::npos &&
                 applicationSource.find(
-                    "IM_COL32(255, 255, 255, 128)") !=
+                    "AddCircleFilled(") != std::string::npos &&
+                applicationSource.find(
+                    "128.f * pixelZoomOpacity") !=
                     std::string::npos,
-            "the centered 50-percent white crosshair dot is missing");
+            "the fading zoom-only centered white crosshair dot is missing");
+        passed &= Check(
+            shaderManifest.find("pixel_zoom_ps.hlsl") !=
+                    std::string::npos &&
+                productionManifest.find("pixel_zoom_ps.hlsl") !=
+                    std::string::npos,
+            "developer and production bundles must compile pixel zoom");
     }
 
     return passed ? 0 : 1;

@@ -395,13 +395,21 @@ namespace uvsr
             *this, ScreenSpaceVisibilityQuality::High);
     }
 
+    void MarkScreenSpaceVisibilityQualityCustom(
+        ScreenSpaceVisibilitySettings& settings)
+    {
+        if (settings.quality != ScreenSpaceVisibilityQuality::Custom)
+            settings.qualityPresetOrigin = settings.quality;
+        settings.quality = ScreenSpaceVisibilityQuality::Custom;
+    }
+
     void ApplyScreenSpaceVisibilityQualityPreset(
         ScreenSpaceVisibilitySettings& settings,
         ScreenSpaceVisibilityQuality quality)
     {
         if (quality == ScreenSpaceVisibilityQuality::Custom)
         {
-            settings.quality = quality;
+            MarkScreenSpaceVisibilityQualityCustom(settings);
             return;
         }
 
@@ -543,7 +551,137 @@ namespace uvsr
             break;
         }
 
+        settings.qualityPresetOrigin = quality;
         settings.quality = quality;
+    }
+
+    bool MatchesScreenSpaceVisibilityQualityPreset(
+        const ScreenSpaceVisibilitySettings& settings,
+        ScreenSpaceVisibilityQuality quality)
+    {
+        if (quality == ScreenSpaceVisibilityQuality::Custom)
+            return false;
+
+        ScreenSpaceVisibilitySettings preset;
+        ApplyScreenSpaceVisibilityQualityPreset(preset, quality);
+
+        const auto configurationsMatch =
+            [](const VisibilityPerformanceProfileConfiguration& left,
+                const VisibilityPerformanceProfileConfiguration& right)
+            {
+                return
+                    left.optimizationClass == right.optimizationClass &&
+                    left.trace == right.trace &&
+                    left.firstBounceSamples == right.firstBounceSamples &&
+                    left.laterBounceSamples == right.laterBounceSamples &&
+                    left.noise == right.noise &&
+                    left.math == right.math &&
+                    left.rawAoStorage == right.rawAoStorage &&
+                    left.edgeStorage == right.edgeStorage &&
+                    left.reconstruction == right.reconstruction &&
+                    left.temporal == right.temporal &&
+                    left.application == right.application &&
+                    left.depth == right.depth &&
+                    left.bindings == right.bindings &&
+                    left.traversal == right.traversal &&
+                    left.consumerRequirement ==
+                        right.consumerRequirement &&
+                    left.estimatorRequirement ==
+                        right.estimatorRequirement &&
+                    left.resolutionRequirement ==
+                        right.resolutionRequirement &&
+                    left.implementationStatus ==
+                        right.implementationStatus &&
+                    left.benchmarkOnly == right.benchmarkOnly &&
+                    left.explicitHalfRoundtrip ==
+                        right.explicitHalfRoundtrip;
+            };
+        const auto bufferPrecisionsMatch =
+            [](const VisibilityBufferPrecisionSettings& left,
+                const VisibilityBufferPrecisionSettings& right)
+            {
+                return left.rawAmbient == right.rawAmbient &&
+                    left.rawIndirect == right.rawIndirect &&
+                    left.cumulativeIndirect == right.cumulativeIndirect &&
+                    left.temporalAmbient == right.temporalAmbient &&
+                    left.temporalIndirect == right.temporalIndirect &&
+                    left.temporalDepth == right.temporalDepth &&
+                    left.finalAmbient == right.finalAmbient &&
+                    left.finalIndirect == right.finalIndirect &&
+                    left.depthHierarchy == right.depthHierarchy;
+            };
+
+        const VisibilityPerformanceProfileConfiguration actualConfiguration =
+            GetEffectiveVisibilityPerformanceConfiguration(settings);
+        const VisibilityPerformanceProfileConfiguration presetConfiguration =
+            GetEffectiveVisibilityPerformanceConfiguration(preset);
+
+        return settings.enabled == preset.enabled &&
+            settings.estimator == preset.estimator &&
+            settings.resolution == preset.resolution &&
+            settings.sampling.maximumSampleCount ==
+                preset.sampling.maximumSampleCount &&
+            settings.sampling.radius == preset.sampling.radius &&
+            settings.sampling.thickness == preset.sampling.thickness &&
+            settings.sampling.stepDistributionExponent ==
+                preset.sampling.stepDistributionExponent &&
+            settings.sampling.scheduler == preset.sampling.scheduler &&
+            settings.ambientOcclusion.enabled ==
+                preset.ambientOcclusion.enabled &&
+            settings.ambientOcclusion.strength ==
+                preset.ambientOcclusion.strength &&
+            settings.ambientOcclusion.power ==
+                preset.ambientOcclusion.power &&
+            settings.indirectDiffuse.enabled ==
+                preset.indirectDiffuse.enabled &&
+            settings.indirectDiffuse.limitBounces ==
+                preset.indirectDiffuse.limitBounces &&
+            settings.indirectDiffuse.bounceCount ==
+                preset.indirectDiffuse.bounceCount &&
+            settings.indirectDiffuse.minimumBounceContribution ==
+                preset.indirectDiffuse.minimumBounceContribution &&
+            settings.indirectDiffuse.intensity ==
+                preset.indirectDiffuse.intensity &&
+            settings.reconstruction.temporalEnabled ==
+                preset.reconstruction.temporalEnabled &&
+            settings.reconstruction.spatialEnabled ==
+                preset.reconstruction.spatialEnabled &&
+            settings.reconstruction.temporalResponse ==
+                preset.reconstruction.temporalResponse &&
+            settings.reconstruction.spatialFilter ==
+                preset.reconstruction.spatialFilter &&
+            settings.reconstruction.spatialRadius ==
+                preset.reconstruction.spatialRadius &&
+            settings.performance.packedEdgeMode ==
+                preset.performance.packedEdgeMode &&
+            settings.showIndirectDiffuseOnly ==
+                preset.showIndirectDiffuseOnly &&
+            configurationsMatch(
+                actualConfiguration, presetConfiguration) &&
+            bufferPrecisionsMatch(
+                settings.performance.bufferPrecision,
+                preset.performance.bufferPrecision);
+    }
+
+    void ReconcileScreenSpaceVisibilityQualityPreset(
+        ScreenSpaceVisibilitySettings& settings)
+    {
+        ScreenSpaceVisibilityQuality origin =
+            settings.quality == ScreenSpaceVisibilityQuality::Custom
+                ? settings.qualityPresetOrigin
+                : settings.quality;
+        if (origin == ScreenSpaceVisibilityQuality::Custom)
+            origin = ScreenSpaceVisibilityQuality::High;
+
+        if (MatchesScreenSpaceVisibilityQualityPreset(settings, origin))
+        {
+            ApplyScreenSpaceVisibilityQualityPreset(settings, origin);
+        }
+        else
+        {
+            settings.qualityPresetOrigin = origin;
+            settings.quality = ScreenSpaceVisibilityQuality::Custom;
+        }
     }
 
     ScreenSpaceVisibilityPass::ScreenSpaceVisibilityPass(

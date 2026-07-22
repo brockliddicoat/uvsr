@@ -1,0 +1,28 @@
+name: README Line Counts
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Out Repository And Dependencies
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Set Up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Test Line Counter
+        run: python tools/update_readme_line_counts.py --self-test
+      - name: Check README Line Counts
+        run: python tools/update_readme_line_counts.py --check

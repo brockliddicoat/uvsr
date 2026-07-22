@@ -70,7 +70,8 @@ separate:
   **Output AO**, **Output GI**, and **Long-Range Depth** dropdowns. Actual
   formats and conditional resource cost are reported with the controls. A
   preset or individual format change preserves every non-buffer choice and
-  changes the product profile label to **Custom / Advanced**.
+  changes the product profile label to its originating preset plus **(Custom)**,
+  such as **Medium (Custom)**.
 - **Dispatch, Memory & Cache** reports thread-group, fixed specialization,
   depth mode, minimal bindings, lazy pipeline selection, resource counts, and
   traffic. The fixed shaders compile both direct-depth and hierarchy-aware
@@ -142,7 +143,7 @@ Angle. All four use Offline Packed Spacetime Noise, radius 3, thickness 0.5,
 radial exponent 2, AO strength/power 1, and GI intensity 4. Low and Medium use
 Performance Precision buffers; High and Ultra use full-precision Default
 Precision buffers. Any later advanced visibility or buffer edit remains active
-and changes the profile label to **Custom / Advanced**. The Profile dropdown
+and changes the profile label to its originating preset plus **(Custom)**. The Profile dropdown
 contains no implementation-profile presets. The remaining `(Mutex GI)`
 constraint belongs only to fused final-application shaders: those shaders
 directly write the AO-modulated lighting target and do not preserve the
@@ -439,7 +440,7 @@ while changing phase prevents the same global radius shells from accumulating
 into rings. The rotated set is consumed in ascending physical-stratum order.
 Nesting therefore controls set membership without letting a farther GI sample
 claim a sector before a nearer selected source on the same radial direction. The
-**Radial Distribution Exponent** transforms each normalized stratum by
+**Distribution Exponent** transforms each normalized stratum by
 `x^exponent`; the default `x^2` concentrates depth taps near the receiver. This
 means:
 
@@ -612,7 +613,7 @@ dispatch chain.
 ## HUD Statistics
 
 The collapsed **Statistics** drawer starts with a selector for **Complete
-Renderer**, **Geometry / G-Buffer**, **Direct Lighting**, **Screen-Space
+Renderer**, **Geometry**, **Direct Lighting**, **Screen-Space
 Visibility**, **Material Picking**, **Procedural Sky**, **Tone Mapping**, and
 **Output Blit**. Complete Renderer shows the outer frame and every named
 renderer pass. Selecting one non-visibility effect shows that pass beside the
@@ -663,25 +664,21 @@ Outputs, Working, Mask Cache, and Avoided exclude API alignment, residency, and
 driver allocation. Shared is deliberately labeled as an estimate. Avoided does
 not count hypothetical recomputation or bandwidth savings.
 
-## Benchmark Export and Command Line
+## Benchmark and Command Line
 
-**Benchmark Current Profile** locks Benchmark Position 1, resets history,
-collects one isolated profile, and automatically exports a schema-v2 JSON
-summary, raw per-frame CSV, and the last measured frame. The JSON includes
-profile and permutation identity, shader-only key, adapter, available clock
-state, scene, camera preset, API, build identity, output dimensions, run window,
-stage masks, ingestion diagnostics, every stage distribution, producer
-subtotal, summed stages, signed residual, complete envelope, and controlled/
-smoke classification. Clock telemetry is retained as an explicit unavailable
-string when the renderer cannot query it; it is never invented.
+**Run Current** locks Benchmark Position 1, resets history, and collects one
+isolated visibility profile. The Statistics drawer retains the latest
+per-stage median and p95 distributions in memory; it does not serialize JSON,
+CSV, or a measured-frame image.
 
 The same drawer contains the warm-up/measured-frame controls, **Run Current**,
-**Cancel**, the benchmark progress and latest results, **Export Last Run**, and
-the benchmark-folder button. Run Current benchmarks the effective rendered
-configuration rather than rejecting a modified preset label. Interactive runs
-automatically lock Benchmark Position 1, resize to 1920x1080, wait for the
-matching rendered workload, and restore the previous window size afterward.
-The former Reference comparison and all other multi-run actions are removed.
+**Run Current With Motion**, **Cancel**, benchmark progress, and the latest
+results. Run Current benchmarks the effective rendered configuration rather
+than rejecting a modified preset label. Interactive runs automatically lock
+Benchmark Position 1, resize to 1920x1080, wait for the matching rendered
+workload, and restore the previous window size afterward. The former Reference
+comparison, all other multi-run actions, result export, and benchmark-folder
+action are removed.
 Readiness follows the renderer-reported workload and active permutation rather
 than the selected preset label. Modified presets therefore remain runnable once
 their settings reach the GPU. A run is blocked only for another active run,
@@ -691,28 +688,6 @@ camera. Only PBR Sponza Decorated and PBR Sponza Plain currently provide that
 camera. Command-line runs queued before asynchronous scene loading finishes now
 wait for `SceneLoaded` instead of being misclassified as an unsupported scene.
 
-The run-settings object is both human-readable and canonically FNV-hashed. It
-serializes output and trace dimensions; AO/GI enablement, strengths, bounce
-mode, cutoff, and intensity; the fixed emissive-source policy; estimator,
-fixed count, radius,
-thickness, exponent, and scheduler; implementation,
-specializations, noise, math, precision, temporal, reconstruction, application,
-depth, and binding modes; temporal/spatial settings; formats; group size; exact
-first-trace and peak-per-pass descriptors; dispatch count; and logical resource
-bytes. The opaque pipeline/history keys remain separate compiled and history
-identities rather than substitutes for those values.
-
-On Windows, artifact naming dynamically budgets the profile display token so
-the complete path remains at or below 240 characters, including the output
-directory, two identity hashes, timestamp, extension, and reserved collision
-suffix. Only the redundant filename token is shortened; JSON preserves the full
-profile name and settings. Extension length remains in native `size_t` path
-arithmetic instead of narrowing before the budget calculation. This keeps
-descriptive output folders usable without silently discarding identity data.
-Re-export is transactional at the artifact-set level: if the recorded final
-frame cannot be copied, the newly generated JSON, CSV, and BMP are all removed
-and the UI reports the failure.
-
 The command-line surface is:
 
 ```text
@@ -721,7 +696,6 @@ The command-line surface is:
 --visibility-benchmark
 --benchmark-warmup <0..100000>
 --benchmark-frames <1..100000>
---benchmark-output <directory>
 --benchmark-auto-close
 ```
 
@@ -729,7 +703,7 @@ Invalid or unavailable profiles and invalid counts print a command-line error
 to standard error and return a nonzero exit code. They do not create modal
 message boxes. The contribution-terminated override enables GI, turns
 **Limit Bounces** off, and clears the fixed one-click verification identity so
-the exported run describes the effective implementation profile and 16-entry
+the run measures the effective implementation profile and 16-entry
 GPU-terminated command stream. The former fixed-count, noise, reconstruction, math, buffer,
 compatibility, new-candidate, and all-profile test-matrix runners and the
 `--benchmark-sequence` option have been removed. The former **Compare

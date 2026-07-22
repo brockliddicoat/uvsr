@@ -50,6 +50,7 @@ namespace uvsr
             nvrhi::ICommandList* commandList,
             nvrhi::ITexture* sourceColor,
             AntiAliasingQuality quality);
+        void UpdateSourceColor(nvrhi::ITexture* sourceColor);
         void MarkInactiveFrame();
 
         [[nodiscard]] bool IsValid() const;
@@ -67,7 +68,7 @@ namespace uvsr
             Count
         };
 
-        static constexpr uint32_t c_QualityCount = 3u;
+        static constexpr uint32_t c_QualityCount = 4u;
         static constexpr uint32_t c_TimerLatency = 4u;
 
         nvrhi::IDevice* m_Device = nullptr;

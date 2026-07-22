@@ -41,13 +41,7 @@
 #define UVSR_TAA_DEBUG_SAMPLE_RESURRECTION 3
 #define UVSR_TAA_DEBUG_VIEW_COUNT 4
 
-// Developer-only presentation diagnostics share the UI's debug-view enum but
-// never enter the MiniEngine resolve shader. Production shader bundles omit
-// their static SMAA permutations entirely.
-#define UVSR_SMAA_DEBUG_EDGE_MASK 4
-#define UVSR_SMAA_DEBUG_BLEND_WEIGHTS 5
-#define UVSR_SMAA_DEBUG_OUTPUT_DELTA 6
-#define UVSR_AA_DEBUG_VIEW_COUNT 7
+#define UVSR_AA_DEBUG_VIEW_COUNT UVSR_TAA_DEBUG_VIEW_COUNT
 
 #define UVSR_TAA_STABLE_INTERIOR_FLOOR 0.875
 #define UVSR_TAA_SELECTIVE_HISTORY_MINIMUM 0.5

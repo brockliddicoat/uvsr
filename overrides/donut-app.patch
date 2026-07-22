@@ -1,0 +1,77 @@
+diff --git a/include/donut/app/ApplicationBase.h b/include/donut/app/ApplicationBase.h
+index e9bfeb6..32d3f24 100644
+--- a/include/donut/app/ApplicationBase.h
++++ b/include/donut/app/ApplicationBase.h
+@@ -26,6 +26,7 @@
+ #include <donut/core/vfs/VFS.h>
+ #include <nvrhi/nvrhi.h>
+ #include <filesystem>
++#include <atomic>
+ #include <thread>
+ #include <vector>
+ 
+@@ -40,7 +41,7 @@ namespace donut::app
+     class ApplicationBase : public IRenderPass
+     {
+     private:
+-        bool m_SceneLoaded;
++        std::atomic_bool m_SceneLoaded;
+         bool m_AllTexturesFinalized;
+ 
+     protected:
+diff --git a/include/donut/app/UserInterfaceUtils.h b/include/donut/app/UserInterfaceUtils.h
+index 76e27c0..002e865 100644
+--- a/include/donut/app/UserInterfaceUtils.h
++++ b/include/donut/app/UserInterfaceUtils.h
+@@ -39,7 +39,10 @@ namespace donut::app
+     bool FileDialog(bool bOpen, const char* pFilters, std::string& fileName);
+     bool FolderDialog(const char* pTitle, const char* pDefaultFolder, std::string& outFolderName);
+     
+-    bool MaterialEditor(engine::Material* material, bool allowMaterialDomainChanges);
++    bool MaterialEditor(
++        engine::Material* material,
++        bool allowMaterialDomainChanges,
++        bool showMaterialDomain = true);
+ 
+     bool LightEditor_Directional(engine::DirectionalLight& light);
+     bool LightEditor_Point(engine::PointLight& light);
+diff --git a/src/app/UserInterfaceUtils.cpp b/src/app/UserInterfaceUtils.cpp
+index 1808e0c..9b62daf 100644
+--- a/src/app/UserInterfaceUtils.cpp
++++ b/src/app/UserInterfaceUtils.cpp
+@@ -169,19 +169,29 @@ bool donut::app::FolderDialog(const char* pTitle, const char* pDefaultFolder, st
+ }
+ #endif
+ 
+-bool donut::app::MaterialEditor(engine::Material* material, bool allowMaterialDomainChanges)
++bool donut::app::MaterialEditor(
++    engine::Material* material,
++    bool allowMaterialDomainChanges,
++    bool showMaterialDomain)
+ {
+     bool update = false;
+ 
+     float itemWidth = ImGui::CalcItemWidth();
+ 
+-    if (allowMaterialDomainChanges)
++    if (showMaterialDomain && allowMaterialDomainChanges)
+     {
+-        update |= ImGui::Combo("Material Domain", (int*)&material->domain,
+-            "Opaque\0Alpha-tested\0Alpha-blended\0Transmissive\0"
+-            "Transmissive alpha-tested\0Transmissive alpha-blended\0");
++        int domainIndex = int(material->domain);
++        if (ImGui::Combo(
++                "Material Domain",
++                &domainIndex,
++                "Opaque\0Alpha-tested\0Alpha-blended\0Transmissive\0"
++                "Transmissive alpha-tested\0Transmissive alpha-blended\0"))
++        {
++            material->domain = engine::MaterialDomain(domainIndex);
++            update = true;
++        }
+     }
+-    else
++    else if (showMaterialDomain)
+     {
+         ImGui::Text("Material Domain: %s", MaterialDomainToString(material->domain));
+     }

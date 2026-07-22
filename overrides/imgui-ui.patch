@@ -267,7 +267,7 @@ index 2861714..c6a586d 100644
      }
  }
  
-@@ -6979,15 +7146,68 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
+@@ -6979,15 +7146,69 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
      const float window_border_size = window->WindowBorderSize;
      if (window->Collapsed)
      {
@@ -279,6 +279,7 @@ index 2861714..c6a586d 100644
 +            strcmp(window->Name, "Settings") == 0;
 +        bool has_retained_status_surface = false;
 +        ImRect retained_status_rect;
++        ImRect collapsed_title_rect = title_bar_rect;
 +        float retained_status_rounding = 0.0f;
 +        if (is_settings_window &&
 +            window->Size.y > window->TitleBarHeight &&
@@ -288,7 +289,7 @@ index 2861714..c6a586d 100644
 +                GetColorU32(GetWindowBgColorIdx(window));
 +            const ImVec2 retained_min =
 +                window->Pos +
-+                ImVec2(0.0f, window->TitleBarHeight - 1.0f);
++                ImVec2(0.5f, window->TitleBarHeight - 1.0f);
 +            const float retained_rounding = ImMin(
 +                window_rounding,
 +                ImMax(
@@ -296,36 +297,37 @@ index 2861714..c6a586d 100644
 +                    (window->Size.y - retained_min.y +
 +                        window->Pos.y) *
 +                        0.15f));
-+            // The collapsed title and renderer status remain touching. Their
-+            // one-pixel outlines overlap, while the status surface retains
-+            // independent rounding on all four corners.
++            collapsed_title_rect = ImRect(
++                title_bar_rect.Min + ImVec2(0.5f, 0.5f),
++                title_bar_rect.Max - ImVec2(0.5f, 0.5f));
 +            window->DrawList->AddRectFilled(
 +                retained_min,
-+                window->Pos + window->Size,
++                window->Pos + window->Size - ImVec2(0.5f, 0.5f),
 +                bg_col,
 +                retained_rounding,
 +                ImDrawFlags_RoundCornersAll);
 +            has_retained_status_surface = true;
 +            retained_status_rect =
-+                ImRect(retained_min, window->Pos + window->Size);
++                ImRect(retained_min, window->Pos + window->Size - ImVec2(0.5f, 0.5f));
 +            retained_status_rounding = retained_rounding;
 +        }
 +
-+        // Title bar only for ordinary collapsed windows.
-         const float backup_border_size = style.FrameBorderSize;
-         g.Style.FrameBorderSize = window->WindowBorderSize;
-         ImU32 title_bar_col = GetColorU32((title_bar_is_highlight && g.NavCursorVisible) ? ImGuiCol_TitleBgActive : ImGuiCol_TitleBgCollapsed);
-         RenderFrame(title_bar_rect.Min, title_bar_rect.Max, title_bar_col, true, window_rounding);
-         g.Style.FrameBorderSize = backup_border_size;
 +        if (has_retained_status_surface)
 +        {
-+            // Draw this outline last so its rounded top corners remain visible
-+            // across the shared one-pixel boundary with the title.
++            window->WindowBorderSize = 0.0f;
++            // Draw the status outline before the matching title outline.
 +            RenderGradientFrameOutline(
 +                window->DrawList,
 +                retained_status_rect,
 +                retained_status_rounding);
 +        }
++        // Title bar only for ordinary collapsed windows.
+         const float backup_border_size = style.FrameBorderSize;
+         g.Style.FrameBorderSize = window->WindowBorderSize;
+         ImU32 title_bar_col = GetColorU32((title_bar_is_highlight && g.NavCursorVisible) ? ImGuiCol_TitleBgActive : ImGuiCol_TitleBgCollapsed);
+-        RenderFrame(title_bar_rect.Min, title_bar_rect.Max, title_bar_col, true, window_rounding);
++        RenderFrame(collapsed_title_rect.Min, collapsed_title_rect.Max, title_bar_col, true, window_rounding);
+         g.Style.FrameBorderSize = backup_border_size;
      }
      else
      {
@@ -1386,7 +1388,7 @@ index 23ebf5d..d9d768c 100644
          if (popup_window->WasActive)
          {
              // Always override 'AutoPosLastDirection' to not leave a chance for a past value to affect us.
-@@ -2025,12 +2458,29 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
+@@ -2025,12 +2458,37 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
  
      // We don't use BeginPopupEx() solely because we have a custom name string, which we could make an argument to BeginPopupEx()
      ImGuiWindowFlags window_flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_Popup | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove;
@@ -1406,9 +1408,17 @@ index 23ebf5d..d9d768c 100644
 +        ImHashStr("##ComboPopupInteractionReady"),
 +        popup_animation_was_complete ? 1 : 0);
 +    if (!same_popup_lifecycle)
++    {
 +        g.CurrentWindow->StateStorage.SetInt(
 +            ImHashStr("##ComboPopupPendingSelectable"),
 +            0);
++        g.CurrentWindow->StateStorage.SetInt(
++            ImHashStr(
++                "##ComboHighlightFrame",
++                0,
++                g.CurrentWindow->ID),
++            -2);
++    }
      if (!ret)
      {
          EndPopup();
