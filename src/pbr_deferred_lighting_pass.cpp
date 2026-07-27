@@ -49,8 +49,8 @@ static_assert(offsetof(PbrDeferredLightingConstants, separateIndirect) ==
     sizeof(DeferredLightingConstants),
     "The UVSR extension must follow Donut's deferred constants without padding drift.");
 static_assert(sizeof(PbrDeferredLightingConstants) ==
-    sizeof(DeferredLightingConstants) + 32,
-    "The UVSR deferred extension must occupy two constant-buffer registers.");
+    sizeof(DeferredLightingConstants) + 48,
+    "The UVSR deferred extension must occupy three constant-buffer registers.");
 static_assert(offsetof(
         PbrDeferredLightingConstants,
         directionalVisibilityLightIndices) ==
@@ -184,6 +184,9 @@ void PbrDeferredLightingPass::Init(const std::shared_ptr<ShaderFactory>& shaderF
         layoutDesc.bindings = {
             nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
             nvrhi::BindingLayoutItem::Texture_SRV(0),
+            nvrhi::BindingLayoutItem::Texture_SRV(1),
+            nvrhi::BindingLayoutItem::Texture_SRV(2),
+            nvrhi::BindingLayoutItem::Texture_SRV(3),
             nvrhi::BindingLayoutItem::Texture_SRV(8),
             nvrhi::BindingLayoutItem::Texture_SRV(9),
             nvrhi::BindingLayoutItem::Texture_SRV(10),
@@ -193,11 +196,14 @@ void PbrDeferredLightingPass::Init(const std::shared_ptr<ShaderFactory>& shaderF
             nvrhi::BindingLayoutItem::Texture_SRV(15),
             nvrhi::BindingLayoutItem::Texture_SRV(16),
             nvrhi::BindingLayoutItem::Texture_SRV(17),
+            nvrhi::BindingLayoutItem::Texture_SRV(18),
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         };
         if (writeSourceRadiance)
             layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Texture_UAV(1));
         layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Sampler(1));
+        layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Sampler(2));
+        layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Sampler(3));
         pipeline.bindingLayout = m_Device->createBindingLayout(layoutDesc);
 
         std::vector<ShaderMacro> macros;
@@ -224,12 +230,14 @@ void PbrDeferredLightingPass::Render(
     const DeferredLightingPass::Inputs& inputs,
     const uvsr::DirectionalLightVisibilitySet&
         directionalLightVisibility,
+    const LightProbe* environment,
     nvrhi::ITexture* sourceRadianceOutput,
     bool separateIndirect,
     bool writeSourceRadiance,
     bool writeBounceMetadata,
     bool includeEmissiveSource,
     float emissiveSourceGain,
+    uint32_t lightingDebugView,
     float2 randomOffset)
 {
     assert(!writeBounceMetadata || writeSourceRadiance);
@@ -270,14 +278,20 @@ void PbrDeferredLightingPass::Render(
     constants.writeSourceRadiance = writeSourceRadiance ? 1 : 0;
     constants.includeEmissiveSource = includeEmissiveSource ? 1 : 0;
     constants.emissiveSourceGain = std::max(emissiveSourceGain, 0.f);
-    constants.directionalVisibilityLightIndices = int2(-1);
+    constants.lightingDebugView = lightingDebugView;
+    constants.directionalVisibilityLightIndices = int4(-1);
     deferredConstants.randomOffset = randomOffset;
     deferredConstants.noisePattern[0] = float4(0.059f, 0.529f, 0.176f, 0.647f);
     deferredConstants.noisePattern[1] = float4(0.765f, 0.294f, 0.882f, 0.412f);
     deferredConstants.noisePattern[2] = float4(0.235f, 0.706f, 0.118f, 0.588f);
     deferredConstants.noisePattern[3] = float4(0.941f, 0.471f, 0.824f, 0.353f);
-    deferredConstants.ambientColorTop = float4(inputs.ambientColorTop, 0.f);
-    deferredConstants.ambientColorBottom = float4(inputs.ambientColorBottom, 0.f);
+    deferredConstants.numLightProbes =
+        environment && environment->IsActive() ? 1u : 0u;
+    if (deferredConstants.numLightProbes > 0u)
+    {
+        environment->FillLightProbeConstants(
+            deferredConstants.lightProbes[0]);
+    }
     deferredConstants.indirectDiffuseScale = 1.f;
     deferredConstants.indirectSpecularScale = inputs.indirectSpecular ? 1.f : 0.f;
 
@@ -384,6 +398,18 @@ void PbrDeferredLightingPass::Render(
             nvrhi::BindingSetItem::ConstantBuffer(0, m_DeferredLightingCB),
             nvrhi::BindingSetItem::Texture_SRV(0,
                 shadowMapTexture ? shadowMapTexture : m_CommonPasses->m_BlackDepthStencilTexture2DArray.Get()),
+            nvrhi::BindingSetItem::Texture_SRV(1,
+                environment && environment->diffuseMap
+                    ? environment->diffuseMap.Get()
+                    : m_CommonPasses->m_BlackCubeMapArray.Get()),
+            nvrhi::BindingSetItem::Texture_SRV(2,
+                environment && environment->specularMap
+                    ? environment->specularMap.Get()
+                    : m_CommonPasses->m_BlackCubeMapArray.Get()),
+            nvrhi::BindingSetItem::Texture_SRV(3,
+                environment && environment->environmentBrdf
+                    ? environment->environmentBrdf.Get()
+                    : m_CommonPasses->m_BlackTexture.Get()),
             nvrhi::BindingSetItem::Texture_SRV(8, inputs.depth,
                 nvrhi::Format::UNKNOWN, viewSubresources),
             nvrhi::BindingSetItem::Texture_SRV(9, inputs.gbufferDiffuse,
@@ -408,9 +434,17 @@ void PbrDeferredLightingPass::Render(
                 activeVisibility[1].texture
                     ? activeVisibility[1].texture
                     : m_CommonPasses->m_WhiteTexture.Get()),
+            nvrhi::BindingSetItem::Texture_SRV(18,
+                activeVisibility[2].texture
+                    ? activeVisibility[2].texture
+                    : m_CommonPasses->m_WhiteTexture.Get()),
             nvrhi::BindingSetItem::Texture_UAV(0, inputs.output,
                 nvrhi::Format::UNKNOWN, viewSubresources),
-            nvrhi::BindingSetItem::Sampler(1, m_ShadowSamplerComparison)
+            nvrhi::BindingSetItem::Sampler(1, m_ShadowSamplerComparison),
+            nvrhi::BindingSetItem::Sampler(
+                2, m_CommonPasses->m_LinearWrapSampler),
+            nvrhi::BindingSetItem::Sampler(
+                3, m_CommonPasses->m_LinearClampSampler)
         };
         if (writeSourceRadiance)
         {

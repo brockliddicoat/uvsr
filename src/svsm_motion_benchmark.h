@@ -277,6 +277,28 @@ namespace uvsr
                 benchmarkEndUnixMilliseconds;
     }
 
+    struct SvsmMotionBenchmarkPathObservation
+    {
+        bool requestedObserved = false;
+        bool activeObserved = false;
+        bool inactiveObserved = false;
+        bool unavailableObserved = false;
+    };
+
+    constexpr void ObserveSvsmMotionBenchmarkPath(
+        SvsmMotionBenchmarkPathObservation& observation,
+        bool requested,
+        bool active,
+        bool unavailable)
+    {
+        observation.requestedObserved |= requested;
+        observation.activeObserved |= requested && active;
+        observation.inactiveObserved |=
+            requested && !active && !unavailable;
+        observation.unavailableObserved |=
+            requested && unavailable;
+    }
+
     struct SvsmMotionBenchmarkTimingSummary
     {
         std::size_t sampleCount = 0u;
@@ -340,9 +362,28 @@ namespace uvsr
         Complete
     };
 
+    enum class SvsmMotionBenchmarkKind : uint32_t
+    {
+        Camera,
+        SunSlow
+    };
+
+    enum class SvsmMotionBenchmarkPhase : uint32_t
+    {
+        Warm,
+        Baseline,
+        Forward,
+        Recovery,
+        Reverse,
+        FinalRecovery,
+        Complete
+    };
+
     constexpr uint32_t SvsmMotionBenchmarkWarmFrames = 180u;
     constexpr uint32_t SvsmMotionBenchmarkTurnFrames = 450u;
-    constexpr uint32_t SvsmMotionBenchmarkHoldFrames = 16u;
+    // The stationary hold brings the measured camera lane to exactly 1,000
+    // frames without changing either 0.1-degree motion sweep.
+    constexpr uint32_t SvsmMotionBenchmarkHoldFrames = 100u;
     constexpr float SvsmMotionBenchmarkDegreesPerFrame = 0.1f;
     constexpr float SvsmMotionBenchmarkMaximumAngleDegrees = 45.f;
     constexpr uint32_t SvsmMotionBenchmarkEndFrame =
@@ -353,6 +394,29 @@ namespace uvsr
     constexpr uint32_t SvsmMotionBenchmarkMeasurementFrames =
         SvsmMotionBenchmarkEndFrame -
         SvsmMotionBenchmarkWarmFrames;
+    // The moving-sun lane deliberately includes stationary measurements
+    // before, between, and after its two sweeps. The 164-frame recovery is
+    // UE's 100-frame static-light qualification window plus 64 frames in
+    // which the recovered cache can be measured without another SetDirection.
+    constexpr uint32_t SvsmSunMotionBenchmarkWarmFrames = 120u;
+    constexpr uint32_t SvsmSunMotionBenchmarkBaselineFrames = 60u;
+    constexpr uint32_t SvsmSunMotionBenchmarkTurnFrames = 450u;
+    constexpr uint32_t SvsmSunMotionBenchmarkRecoveryFrames = 164u;
+    constexpr int32_t SvsmSunMotionBenchmarkMaximumTenthDegreeTicks = 450;
+    constexpr uint32_t SvsmSunMotionBenchmarkEndFrame =
+        SvsmSunMotionBenchmarkWarmFrames +
+        SvsmSunMotionBenchmarkBaselineFrames +
+        SvsmSunMotionBenchmarkTurnFrames +
+        SvsmSunMotionBenchmarkRecoveryFrames +
+        SvsmSunMotionBenchmarkTurnFrames +
+        SvsmSunMotionBenchmarkRecoveryFrames;
+    constexpr uint32_t SvsmSunMotionBenchmarkMeasurementFrames =
+        SvsmSunMotionBenchmarkEndFrame -
+        SvsmSunMotionBenchmarkWarmFrames;
+    constexpr uint32_t SvsmMotionBenchmarkMaximumMeasurementFrames =
+        std::max(
+            SvsmMotionBenchmarkMeasurementFrames,
+            SvsmSunMotionBenchmarkMeasurementFrames);
     constexpr uint32_t SvsmMotionBenchmarkPreparationFrameLimit = 120u;
     constexpr uint32_t SvsmMotionBenchmarkDrainFrameLimit = 240u;
     constexpr uint32_t SvsmMotionAutostartBaselineFrames = 8u;
@@ -458,12 +522,47 @@ namespace uvsr
     [[nodiscard]] constexpr bool
     IsSvsmMotionBenchmarkAcceptanceConfiguration(
         uint32_t physicalPageCount,
+        uint32_t pageRenderBudget,
+        bool coarsestPageRenderBudgetEnabled,
         bool renderPacketCachingEnabled,
         bool gpuGatedDrawSubmission)
     {
         return physicalPageCount == 4096u &&
+            pageRenderBudget == 4u &&
+            !coarsestPageRenderBudgetEnabled &&
             renderPacketCachingEnabled &&
             gpuGatedDrawSubmission;
+    }
+
+    [[nodiscard]] constexpr bool
+    IsSvsmMotionBenchmarkHierarchyRequested(
+        bool packetPageCullingRequested,
+        bool hierarchicalScheduledPageMaskEnabled)
+    {
+        // Scatter consumes the same scheduled-page hierarchy as exact
+        // per-page raster. Keep the request contract independent of the
+        // downstream raster submission mode so unavailable hierarchy
+        // resources cannot silently pass the evidence gate.
+        return packetPageCullingRequested &&
+            hierarchicalScheduledPageMaskEnabled;
+    }
+
+    [[nodiscard]] constexpr bool
+    IsSvsmMotionBenchmarkPageMaintenancePathSatisfied(
+        bool requested,
+        bool active,
+        bool unavailable,
+        bool staticPageRequestReuseActive,
+        bool staticPageDrainActive)
+    {
+        // Packet-page maintenance is deliberately inactive on the exact
+        // zero-work cache path. Accept that state only when requests are
+        // already reusable and no finite-budget drain remains. Unsupported
+        // resources still fail closed even when this frame has no work.
+        const bool noPageMaintenanceRequired =
+            staticPageRequestReuseActive && !staticPageDrainActive;
+        return !unavailable &&
+            (!requested || active || noPageMaintenanceRequired);
     }
 
     [[nodiscard]] inline std::size_t
@@ -497,6 +596,27 @@ namespace uvsr
             frame < SvsmMotionBenchmarkEndFrame;
     }
 
+    [[nodiscard]] constexpr bool IsSvsmMotionBenchmarkEvidenceValidForFrameCount(
+        uint64_t expectedSamples,
+        uint64_t gpuSamples,
+        uint64_t cpuSamples,
+        uint64_t issued,
+        uint64_t dropped,
+        uint64_t retired,
+        uint64_t outstanding,
+        bool duplicateTag,
+        bool invalidTag)
+    {
+        return gpuSamples == expectedSamples &&
+            cpuSamples == expectedSamples &&
+            issued == expectedSamples &&
+            dropped == 0u &&
+            retired == expectedSamples &&
+            outstanding == 0u &&
+            !duplicateTag &&
+            !invalidTag;
+    }
+
     [[nodiscard]] constexpr bool IsSvsmMotionBenchmarkEvidenceValid(
         uint64_t gpuSamples,
         uint64_t cpuSamples,
@@ -507,14 +627,16 @@ namespace uvsr
         bool duplicateTag,
         bool invalidTag)
     {
-        return gpuSamples == SvsmMotionBenchmarkMeasurementFrames &&
-            cpuSamples == SvsmMotionBenchmarkMeasurementFrames &&
-            issued == SvsmMotionBenchmarkMeasurementFrames &&
-            dropped == 0u &&
-            retired == SvsmMotionBenchmarkMeasurementFrames &&
-            outstanding == 0u &&
-            !duplicateTag &&
-            !invalidTag;
+        return IsSvsmMotionBenchmarkEvidenceValidForFrameCount(
+            SvsmMotionBenchmarkMeasurementFrames,
+            gpuSamples,
+            cpuSamples,
+            issued,
+            dropped,
+            retired,
+            outstanding,
+            duplicateTag,
+            invalidTag);
     }
 
     [[nodiscard]] constexpr SvsmMotionBenchmarkSegment
@@ -577,5 +699,162 @@ namespace uvsr
         }
 
         return 0.f;
+    }
+
+    [[nodiscard]] constexpr uint32_t
+    GetSvsmMotionBenchmarkWarmFrameCount(
+        SvsmMotionBenchmarkKind kind)
+    {
+        return kind == SvsmMotionBenchmarkKind::SunSlow
+            ? SvsmSunMotionBenchmarkWarmFrames
+            : SvsmMotionBenchmarkWarmFrames;
+    }
+
+    [[nodiscard]] constexpr uint32_t
+    GetSvsmMotionBenchmarkEndFrame(
+        SvsmMotionBenchmarkKind kind)
+    {
+        return kind == SvsmMotionBenchmarkKind::SunSlow
+            ? SvsmSunMotionBenchmarkEndFrame
+            : SvsmMotionBenchmarkEndFrame;
+    }
+
+    [[nodiscard]] constexpr uint32_t
+    GetSvsmMotionBenchmarkMeasurementFrameCount(
+        SvsmMotionBenchmarkKind kind)
+    {
+        return kind == SvsmMotionBenchmarkKind::SunSlow
+            ? SvsmSunMotionBenchmarkMeasurementFrames
+            : SvsmMotionBenchmarkMeasurementFrames;
+    }
+
+    [[nodiscard]] constexpr SvsmMotionBenchmarkPhase
+    GetSvsmMotionBenchmarkPhase(
+        SvsmMotionBenchmarkKind kind,
+        uint64_t frame)
+    {
+        if (kind == SvsmMotionBenchmarkKind::Camera)
+        {
+            switch (GetSvsmMotionBenchmarkSegment(frame))
+            {
+            case SvsmMotionBenchmarkSegment::Warm:
+                return SvsmMotionBenchmarkPhase::Warm;
+            case SvsmMotionBenchmarkSegment::TurnRight:
+                return SvsmMotionBenchmarkPhase::Forward;
+            case SvsmMotionBenchmarkSegment::HoldRight:
+                return SvsmMotionBenchmarkPhase::Recovery;
+            case SvsmMotionBenchmarkSegment::TurnBack:
+                return SvsmMotionBenchmarkPhase::Reverse;
+            case SvsmMotionBenchmarkSegment::Complete:
+                return SvsmMotionBenchmarkPhase::Complete;
+            }
+            return SvsmMotionBenchmarkPhase::Complete;
+        }
+
+        uint64_t boundary = SvsmSunMotionBenchmarkWarmFrames;
+        if (frame < boundary)
+            return SvsmMotionBenchmarkPhase::Warm;
+        boundary += SvsmSunMotionBenchmarkBaselineFrames;
+        if (frame < boundary)
+            return SvsmMotionBenchmarkPhase::Baseline;
+        boundary += SvsmSunMotionBenchmarkTurnFrames;
+        if (frame < boundary)
+            return SvsmMotionBenchmarkPhase::Forward;
+        boundary += SvsmSunMotionBenchmarkRecoveryFrames;
+        if (frame < boundary)
+            return SvsmMotionBenchmarkPhase::Recovery;
+        boundary += SvsmSunMotionBenchmarkTurnFrames;
+        if (frame < boundary)
+            return SvsmMotionBenchmarkPhase::Reverse;
+        boundary += SvsmSunMotionBenchmarkRecoveryFrames;
+        if (frame < boundary)
+            return SvsmMotionBenchmarkPhase::FinalRecovery;
+        return SvsmMotionBenchmarkPhase::Complete;
+    }
+
+    [[nodiscard]] constexpr int32_t
+    GetSvsmMotionBenchmarkTenthDegreeTicks(
+        SvsmMotionBenchmarkKind kind,
+        uint64_t frame)
+    {
+        if (kind == SvsmMotionBenchmarkKind::Camera)
+        {
+            switch (GetSvsmMotionBenchmarkSegment(frame))
+            {
+            case SvsmMotionBenchmarkSegment::TurnRight:
+                return int32_t(
+                    frame - SvsmMotionBenchmarkWarmFrames + 1u);
+            case SvsmMotionBenchmarkSegment::HoldRight:
+                return int32_t(SvsmMotionBenchmarkTurnFrames);
+            case SvsmMotionBenchmarkSegment::TurnBack:
+                return int32_t(SvsmMotionBenchmarkTurnFrames) -
+                    int32_t(
+                        frame -
+                        SvsmMotionBenchmarkWarmFrames -
+                        SvsmMotionBenchmarkTurnFrames -
+                        SvsmMotionBenchmarkHoldFrames +
+                        1u);
+            case SvsmMotionBenchmarkSegment::Warm:
+            case SvsmMotionBenchmarkSegment::Complete:
+                return 0;
+            }
+            return 0;
+        }
+
+        const SvsmMotionBenchmarkPhase phase =
+            GetSvsmMotionBenchmarkPhase(kind, frame);
+        const uint64_t forwardBegin =
+            SvsmSunMotionBenchmarkWarmFrames +
+            SvsmSunMotionBenchmarkBaselineFrames;
+        const uint64_t reverseBegin =
+            forwardBegin +
+            SvsmSunMotionBenchmarkTurnFrames +
+            SvsmSunMotionBenchmarkRecoveryFrames;
+        switch (phase)
+        {
+        case SvsmMotionBenchmarkPhase::Forward:
+            return int32_t(frame - forwardBegin + 1u);
+        case SvsmMotionBenchmarkPhase::Recovery:
+            return SvsmSunMotionBenchmarkMaximumTenthDegreeTicks;
+        case SvsmMotionBenchmarkPhase::Reverse:
+            return SvsmSunMotionBenchmarkMaximumTenthDegreeTicks -
+                int32_t(frame - reverseBegin + 1u);
+        case SvsmMotionBenchmarkPhase::Warm:
+        case SvsmMotionBenchmarkPhase::Baseline:
+        case SvsmMotionBenchmarkPhase::FinalRecovery:
+        case SvsmMotionBenchmarkPhase::Complete:
+            return 0;
+        }
+        return 0;
+    }
+
+    [[nodiscard]] constexpr float
+    GetSvsmMotionBenchmarkAngleDegrees(
+        SvsmMotionBenchmarkKind kind,
+        uint64_t frame)
+    {
+        return float(GetSvsmMotionBenchmarkTenthDegreeTicks(kind, frame)) *
+            0.1f;
+    }
+
+    [[nodiscard]] constexpr bool IsSvsmMotionBenchmarkMeasurementFrame(
+        SvsmMotionBenchmarkKind kind,
+        uint64_t frame)
+    {
+        return frame >= GetSvsmMotionBenchmarkWarmFrameCount(kind) &&
+            frame < GetSvsmMotionBenchmarkEndFrame(kind);
+    }
+
+    [[nodiscard]] constexpr bool
+    IsSvsmMotionBenchmarkDirectionUpdateFrame(
+        SvsmMotionBenchmarkKind kind,
+        uint64_t frame)
+    {
+        if (kind != SvsmMotionBenchmarkKind::SunSlow)
+            return false;
+        const SvsmMotionBenchmarkPhase phase =
+            GetSvsmMotionBenchmarkPhase(kind, frame);
+        return phase == SvsmMotionBenchmarkPhase::Forward ||
+            phase == SvsmMotionBenchmarkPhase::Reverse;
     }
 }

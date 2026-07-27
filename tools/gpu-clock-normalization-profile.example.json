@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "profileId": "replace-with-a-machine-local-profile-id",
+  "warning": "This profile belongs to one physical GPU only. Never reuse its reference clock for another GPU, including another GPU with the same marketing name.",
+  "gpuIdentity": {
+    "hostIdentity": "replace-with-a-stable-host-identity",
+    "adapterIdentity": "replace-with-a-persistent-pci-or-plug-and-play-identity",
+    "sessionDxgiLuid": "optional-session-evidence",
+    "adapterName": "informational-only-marketing-name"
+  },
+  "reference": {
+    "graphicsClockMHz": 0,
+    "validatedGraphicsClockRangeMHz": {
+      "minimum": 0,
+      "maximum": 0
+    },
+    "memoryClockMHz": null,
+    "currentClockMemoryBandwidthGBps": null,
+    "gpuPowerWatts": null,
+    "powerProfile": "replace-with-the-exact-power-profile",
+    "thermalProfile": "replace-with-the-exact-fan-and-thermal-profile",
+    "driverIdentity": "replace-with-the-driver-version",
+    "hagsState": "replace-with-on-or-off"
+  },
+  "displayAndPresentation": {
+    "primaryOutputIdentity": "replace-with-the-primary-monitor-and-port",
+    "activeDisplays": [
+      {
+        "identity": "replace-with-a-local-display-identity",
+        "resolution": "replace-with-width-by-height",
+        "refreshRateHz": 0,
+        "hdrState": "replace-with-on-or-off",
+        "colorDepthBits": 0,
+        "drivingAdapter": "replace-with-the-machine-local-adapter-identity"
+      }
+    ],
+    "vrrState": "replace-with-on-or-off",
+    "vsyncState": "replace-with-on-or-off",
+    "frameCap": "replace-with-off-or-the-exact-cap",
+    "latencyMode": "replace-with-the-driver-and-application-state",
+    "windowMode": "replace-with-windowed-borderless-or-exclusive",
+    "desktopScalingPercent": 0,
+    "muxOrHybridRoute": "replace-with-the-output-route",
+    "captureAndOverlayState": "replace-with-the-exact-state"
+  },
+  "calibration": {
+    "controlWorkloadIdentity": "benchmark-position-1-and-complete-render-settings",
+    "runCount": 3,
+    "minimumFramesPerRun": 1000,
+    "minimumSecondsPerRun": 15,
+    "selection": "median-run-by-raw-total-gpu-time",
+    "telemetrySource": "replace-with-the-clock-and-sensor-source",
+    "telemetryPollIntervalMilliseconds": 0,
+    "createdUtc": "replace-with-an-iso-8601-timestamp",
+    "notes": "Store a completed machine profile under untracked outputs/gpu-clock-normalization."
+  }
+}

@@ -1,6 +1,9 @@
 #include "directional_light_visibility.h"
+#include "diffuse_environment_math.h"
 #include "pbr_material.h"
 #include "lighting_contribution_shared.h"
+#include "screen_space_indirect_composite_shared.h"
+#include "screen_space_visibility_defaults.h"
 
 #include <algorithm>
 #include <array>
@@ -9,6 +12,9 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <vector>
+
+#include "image_based_lighting_shared.h"
 
 namespace
 {
@@ -191,27 +197,323 @@ namespace
         float ambientVisibility,
         float screenSpaceGi)
     {
-        return directAndEmissive + fallbackIndirect *
-            std::clamp(ambientVisibility, 0.f, 1.f) + screenSpaceGi;
+        return ComposeScreenSpaceIndirectLighting(
+            directAndEmissive,
+            fallbackIndirect,
+            std::clamp(ambientVisibility, 0.f, 1.f),
+            screenSpaceGi);
+    }
+
+    bool Near(
+        dm::float3 actual,
+        dm::float3 expected,
+        float tolerance = 1e-4f)
+    {
+        return Near(actual.x, expected.x, tolerance) &&
+            Near(actual.y, expected.y, tolerance) &&
+            Near(actual.z, expected.z, tolerance);
+    }
+
+    bool FiniteNonnegative(dm::float3 value)
+    {
+        return std::isfinite(value.x) && std::isfinite(value.y) &&
+            std::isfinite(value.z) &&
+            value.x >= 0.f && value.y >= 0.f && value.z >= 0.f;
     }
 }
 
 int main()
 {
+    for (uint32_t mip = 0u; mip < 9u; ++mip)
+    {
+        const float normalizedMip = float(mip) / 8.f;
+        Require(Near(
+            uvsr::ImageBasedLightingGenerationRoughness(normalizedMip),
+            normalizedMip * normalizedMip),
+            "IBL prefilter mip generation follows Donut's squared schedule");
+    }
+    constexpr std::array<float, 6> IblRoughnessSweep = {
+        0.f, 0.01f, 0.25f, 0.5f, 0.75f, 1.f
+    };
+    for (float perceptualRoughness : IblRoughnessSweep)
+    {
+        Require(Near(
+            uvsr::ImageBasedLightingReceiverMip(
+                perceptualRoughness, 9.f),
+            std::sqrt(perceptualRoughness) * 8.f),
+            "IBL receiver selects the matching fractional specular mip");
+    }
+    Require(
+        uvsr::ImageBasedLightingReceiverMip(-1.f, 9.f) == 0.f &&
+            uvsr::ImageBasedLightingReceiverMip(2.f, 9.f) == 8.f &&
+            uvsr::ImageBasedLightingReceiverMip(0.5f, 0.f) == 0.f,
+        "IBL receiver mip selection clamps roughness and empty mip ranges");
+    for (float perceptualRoughness : IblRoughnessSweep)
+    {
+        float previousOcclusion = 0.f;
+        for (uint32_t aoStep = 0u; aoStep <= 8u; ++aoStep)
+        {
+            const float ambientOcclusion = float(aoStep) / 8.f;
+            const float occlusion =
+                uvsr::ImageBasedLightingSpecularOcclusion(
+                    0.35f,
+                    ambientOcclusion,
+                    perceptualRoughness);
+            Require(
+                std::isfinite(occlusion) &&
+                    occlusion >= 0.f &&
+                    occlusion <= 1.f,
+                "IBL specular occlusion stays finite and normalized");
+            Require(
+                occlusion + 1e-6f >= previousOcclusion,
+                "IBL specular occlusion is monotonic in ambient visibility");
+            previousOcclusion = occlusion;
+        }
+        Require(
+            uvsr::ImageBasedLightingSpecularOcclusion(
+                0.35f, 0.f, perceptualRoughness) == 0.f &&
+                uvsr::ImageBasedLightingSpecularOcclusion(
+                    0.35f, 1.f, perceptualRoughness) == 1.f,
+            "IBL specular occlusion preserves fully blocked and open endpoints");
+    }
+
+    Require(uvsr::ScreenSpaceIndirectDiffuseReferenceIntensity == 1.f,
+        "screen-space GI defaults to reference energy");
+    Require(uvsr::ScreenSpaceEmissiveReferenceGain == 1.f,
+        "emissive GI source defaults to reference energy");
+
+    const uvsr::ImageBasedLightingScales referenceIblScales =
+        uvsr::ResolveImageBasedLightingScales(
+            1.f, 0.f, true, 1.f, true, 1.f);
+    Require(
+        Near(referenceIblScales.radiance, 1.f) &&
+            Near(referenceIblScales.diffuse, 1.f) &&
+            Near(referenceIblScales.specular, 1.f),
+        "reference IBL settings preserve unit radiance and lobe energy");
+
+    const uvsr::ImageBasedLightingScales adjustedIblScales =
+        uvsr::ResolveImageBasedLightingScales(
+            2.f, 2.f, true, 0.5f, true, 2.f);
+    Require(
+        Near(adjustedIblScales.radiance, 8.f) &&
+            Near(adjustedIblScales.diffuse, 4.f) &&
+            Near(adjustedIblScales.specular, 16.f),
+        "IBL base scale and exposure precede independent lobe gains");
+
+    const uvsr::ImageBasedLightingScales disabledIblScales =
+        uvsr::ResolveImageBasedLightingScales(
+            2.f, 2.f, false, 0.5f, false, 2.f);
+    Require(
+        Near(disabledIblScales.radiance, adjustedIblScales.radiance) &&
+            disabledIblScales.diffuse == 0.f &&
+            disabledIblScales.specular == 0.f,
+        "disabled IBL lobes are zero without changing common radiance");
+
+    const uvsr::ImageBasedLightingScales invalidStrengthIblScales =
+        uvsr::ResolveImageBasedLightingScales(
+            1.f,
+            0.f,
+            true,
+            std::numeric_limits<float>::quiet_NaN(),
+            true,
+            -1.f);
+    Require(
+        invalidStrengthIblScales.radiance == 1.f &&
+            invalidStrengthIblScales.diffuse == 0.f &&
+            invalidStrengthIblScales.specular == 0.f,
+        "invalid IBL strengths resolve to zero lobe energy");
+    const uvsr::ImageBasedLightingScales invalidBaseIblScales =
+        uvsr::ResolveImageBasedLightingScales(
+            std::numeric_limits<float>::quiet_NaN(),
+            std::numeric_limits<float>::quiet_NaN(),
+            true,
+            1.f,
+            true,
+            1.f);
+    Require(
+        invalidBaseIblScales.radiance == 1.f &&
+            invalidBaseIblScales.diffuse == 1.f &&
+            invalidBaseIblScales.specular == 1.f,
+        "nonfinite IBL base and exposure fall back to reference settings");
+    Require(
+        uvsr::ResolveImageBasedLightingScales(
+            -1.f, 12.f, true, 1.f, true, 1.f).radiance == 0.f,
+        "negative IBL base scale cannot produce negative radiance");
+
+    Require(
+        uvsr::IsImageBasedLightingLobeActive(true, 1.f) &&
+            uvsr::IsImageBasedLightingLobeActive(true, 0.001f),
+        "enabled finite positive IBL lobes are active");
+    Require(
+        !uvsr::IsImageBasedLightingLobeActive(false, 1.f) &&
+            !uvsr::IsImageBasedLightingLobeActive(true, 0.f) &&
+            !uvsr::IsImageBasedLightingLobeActive(true, -1.f) &&
+            !uvsr::IsImageBasedLightingLobeActive(
+                true, std::numeric_limits<float>::quiet_NaN()) &&
+            !uvsr::IsImageBasedLightingLobeActive(
+                true, std::numeric_limits<float>::infinity()),
+        "disabled, nonpositive, and nonfinite IBL lobes are inactive");
+
+    // The diffuse environment stores unit-albedo outgoing diffuse response.
+    // Projecting a constant scene-linear lat-long source must therefore
+    // reproduce the same constant without a second pi factor at the receiver.
+    constexpr uint32_t ConstantEnvironmentWidth = 64u;
+    constexpr uint32_t ConstantEnvironmentHeight = 32u;
+    const dm::float3 constantRadiance(0.2f, 0.4f, 0.8f);
+    std::vector<float> constantPixels(
+        std::size_t(ConstantEnvironmentWidth) *
+            std::size_t(ConstantEnvironmentHeight) * 3u);
+    for (std::size_t pixel = 0u;
+        pixel < constantPixels.size();
+        pixel += 3u)
+    {
+        constantPixels[pixel + 0u] = constantRadiance.x;
+        constantPixels[pixel + 1u] = constantRadiance.y;
+        constantPixels[pixel + 2u] = constantRadiance.z;
+    }
+
+    const auto constantProjection =
+        uvsr::ProjectDiffuseEnvironmentLatLongRgb(
+            constantPixels.data(),
+            ConstantEnvironmentWidth,
+            ConstantEnvironmentHeight);
+    Require(
+        constantProjection.has_value(),
+        "constant lat-long radiance projects to diffuse SH");
+    const std::array<dm::float3, 7> referenceDirections = {
+        dm::float3(1.f, 0.f, 0.f),
+        dm::float3(-1.f, 0.f, 0.f),
+        dm::float3(0.f, 1.f, 0.f),
+        dm::float3(0.f, -1.f, 0.f),
+        dm::float3(0.f, 0.f, 1.f),
+        dm::float3(0.f, 0.f, -1.f),
+        dm::float3(1.f, 1.f, 1.f)
+    };
+    for (dm::float3 direction : referenceDirections)
+    {
+        Require(Near(
+            uvsr::EvaluateDiffuseEnvironmentSh(
+                constantProjection->sh,
+                direction),
+            constantRadiance,
+            2e-3f),
+            "constant lat-long projects to a constant diffuse response");
+    }
+    Require(Near(
+        uvsr::EvaluateDiffuseEnvironmentSh(
+            constantProjection->sh,
+            dm::float3(0.f)),
+        uvsr::EvaluateDiffuseEnvironmentSh(
+            constantProjection->sh,
+            dm::float3(0.f, 1.f, 0.f)),
+        1e-6f),
+        "zero diffuse direction uses the stable up fallback");
+    Require(Near(
+        uvsr::EvaluateDiffuseEnvironmentSh(
+            constantProjection->sh,
+            dm::float3(
+                std::numeric_limits<float>::quiet_NaN(),
+                0.f,
+                0.f)),
+        uvsr::EvaluateDiffuseEnvironmentSh(
+            constantProjection->sh,
+            dm::float3(0.f, 1.f, 0.f)),
+        1e-6f),
+        "nonfinite diffuse direction uses the stable up fallback");
+
+    // Cubemap face order must match Donut/NVRHI's TextureCubeArray contract.
+    const std::array<dm::float3, 6> expectedFaceAxes = {
+        dm::float3(1.f, 0.f, 0.f),
+        dm::float3(-1.f, 0.f, 0.f),
+        dm::float3(0.f, 1.f, 0.f),
+        dm::float3(0.f, -1.f, 0.f),
+        dm::float3(0.f, 0.f, 1.f),
+        dm::float3(0.f, 0.f, -1.f)
+    };
+    for (uint32_t face = 0u; face < expectedFaceAxes.size(); ++face)
+    {
+        Require(Near(
+            uvsr::DiffuseEnvironmentCubeDirection(
+                face, 0u, 0u, 1u),
+            expectedFaceAxes[face]),
+            "diffuse environment cubemap face axis");
+    }
+
+    std::vector<float> nonfinitePixels = constantPixels;
+    nonfinitePixels[0] = std::numeric_limits<float>::quiet_NaN();
+    nonfinitePixels[1] = std::numeric_limits<float>::infinity();
+    nonfinitePixels[2] = -std::numeric_limits<float>::infinity();
+    const auto sanitizedProjection =
+        uvsr::ProjectDiffuseEnvironmentLatLongRgb(
+            nonfinitePixels.data(),
+            ConstantEnvironmentWidth,
+            ConstantEnvironmentHeight);
+    Require(
+        sanitizedProjection.has_value(),
+        "isolated nonfinite source texels are sanitized during projection");
+    for (dm::float3 direction : referenceDirections)
+    {
+        Require(FiniteNonnegative(
+            uvsr::EvaluateDiffuseEnvironmentSh(
+                sanitizedProjection->sh,
+                direction)),
+            "sanitized imported diffuse response is finite and nonnegative");
+    }
+
+    const dm::float3 halfClamped =
+        uvsr::ClampDiffuseEnvironmentForHalf(dm::float3(
+            std::numeric_limits<float>::max(),
+            uvsr::DiffuseEnvironmentHalfMaximum * 2.f,
+            -1.f));
+    Require(Near(
+        halfClamped,
+        dm::float3(
+            uvsr::DiffuseEnvironmentHalfMaximum,
+            uvsr::DiffuseEnvironmentHalfMaximum,
+            0.f),
+        1.f),
+        "finite diffuse radiance clamps to the nonnegative half range");
+    Require(all(
+        uvsr::ClampDiffuseEnvironmentForHalf(dm::float3(
+            std::numeric_limits<float>::quiet_NaN(),
+            std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity())) ==
+            dm::float3(0.f)),
+        "nonfinite diffuse radiance sanitizes before half packing");
+
+    std::vector<float> blackPixels(8u * 4u * 3u, 0.f);
+    Require(
+        !uvsr::ProjectDiffuseEnvironmentLatLongRgb(
+            nullptr, 4u, 2u).has_value() &&
+            !uvsr::ProjectDiffuseEnvironmentLatLongRgb(
+                constantPixels.data(), 2u, 2u).has_value() &&
+            !uvsr::ProjectDiffuseEnvironmentLatLongRgb(
+                constantPixels.data(), 4u, 1u).has_value() &&
+            !uvsr::ProjectDiffuseEnvironmentLatLongRgb(
+                constantPixels.data(), 8u, 2u).has_value(),
+        "null, undersized, and non-lat-long projection inputs are rejected");
+    Require(
+        !uvsr::ProjectDiffuseEnvironmentLatLongRgb(
+            blackPixels.data(), 8u, 4u).has_value(),
+        "zero-energy lat-long input is rejected");
+
     // Independent directional visibility producers compose only when their
     // exact light identity matches. Missing or unrelated factors are white.
-    Require(uvsr::DirectionalLightVisibilityCount == 2u,
-        "two fixed directional visibility slots");
+    Require(uvsr::DirectionalLightVisibilityCount == 3u,
+        "three fixed directional visibility slots");
     Require(!uvsr::DirectionalLightVisibility{}.IsComplete(),
         "an empty visibility input is incomplete");
     int textureToken0 = 0;
     int textureToken1 = 0;
+    int textureToken2 = 0;
     int lightToken0 = 0;
     int lightToken1 = 0;
     auto* texture0 = reinterpret_cast<nvrhi::ITexture*>(
         &textureToken0);
     auto* texture1 = reinterpret_cast<nvrhi::ITexture*>(
         &textureToken1);
+    auto* texture2 = reinterpret_cast<nvrhi::ITexture*>(
+        &textureToken2);
     auto* light0 = reinterpret_cast<const donut::engine::Light*>(
         &lightToken0);
     auto* light1 = reinterpret_cast<const donut::engine::Light*>(
@@ -222,6 +524,9 @@ int main()
     const uvsr::DirectionalLightVisibility factor1{
         texture1, light0
     };
+    const uvsr::DirectionalLightVisibility factor2{
+        texture2, light0
+    };
     Require(uvsr::TargetsDirectionalLight(factor0, light0),
         "pointer-identical light accepts its factor");
     Require(!uvsr::TargetsDirectionalLight(factor0, light1),
@@ -230,17 +535,21 @@ int main()
         uvsr::DirectionalLightVisibility{ texture0, nullptr },
         light0),
         "incomplete factor remains neutral");
-    float twoFactorVisibility = 1.f;
-    twoFactorVisibility = uvsr::ComposeDirectionalLightVisibility(
-        twoFactorVisibility,
+    float threeFactorVisibility = 1.f;
+    threeFactorVisibility = uvsr::ComposeDirectionalLightVisibility(
+        threeFactorVisibility,
         0.5f,
         uvsr::TargetsDirectionalLight(factor0, light0));
-    twoFactorVisibility = uvsr::ComposeDirectionalLightVisibility(
-        twoFactorVisibility,
+    threeFactorVisibility = uvsr::ComposeDirectionalLightVisibility(
+        threeFactorVisibility,
         0.25f,
         uvsr::TargetsDirectionalLight(factor1, light0));
-    Require(twoFactorVisibility == 0.125f,
-        "two same-light producer slots multiply");
+    threeFactorVisibility = uvsr::ComposeDirectionalLightVisibility(
+        threeFactorVisibility,
+        0.5f,
+        uvsr::TargetsDirectionalLight(factor2, light0));
+    Require(threeFactorVisibility == 0.0625f,
+        "three same-light producer slots multiply");
     Require(uvsr::ComposeDirectionalLightVisibility(
         0.5f, 0.25f, true) == 0.125f,
         "matching visibility factors multiply");
@@ -289,6 +598,8 @@ int main()
     Require(defaults.emissive.x == 0.f && defaults.emissive.y == 0.f &&
         defaults.emissive.z == 0.f, "default emission");
     Require(defaults.opacity == 1.f, "default opacity");
+    Require(Near(Alpha(0.f), MinAlpha),
+        "GGX alpha retains the deterministic minimum roughness floor");
 
     PbrMaterialParameters invalid;
     invalid.baseColor.x = std::numeric_limits<float>::quiet_NaN();
@@ -358,6 +669,10 @@ int main()
         "ambient visibility does not multiply screen-space GI");
     Require(Near(compositeVisible - fallbackIndirect - screenSpaceGi, directAndEmissive),
         "ambient visibility does not alter direct light or emission");
+    Require(Near(
+        IndirectComposite(directAndEmissive, fallbackIndirect, 1.f, 0.f),
+        directAndEmissive + fallbackIndirect),
+        "separated neutral indirect composite adds no hidden specular term");
 
     const float backFacingSourceCosine = std::max(-0.25f, 0.f);
     Require(backFacingSourceCosine == 0.f,
@@ -412,6 +727,31 @@ int main()
         "all relevant known-inactive sources permit an early out");
     Require(!HasPotentialSource(0u, 0u),
         "an empty relevant-source set has no work");
+    constexpr std::uint32_t FirstBounceSources =
+        DirectSource | EmissiveSource | EnvironmentSource;
+    Require(HasPotentialSource(
+            DirectSource | EmissiveSource,
+            FirstBounceSources),
+        "environment-only source radiance keeps first-bounce GI active");
+    Require(!HasPotentialSource(
+            FirstBounceSources,
+            FirstBounceSources),
+        "GI can early out only when every first-bounce source is inactive");
+    Require(uvsr::HasActiveScreenSpaceLightingConsumer(
+            true, false, true, false, false),
+        "active diffuse GI is an independent visibility consumer");
+    Require(uvsr::HasActiveScreenSpaceLightingConsumer(
+            true, true, false, true, false),
+        "AO remains active for diffuse environment lighting");
+    Require(uvsr::HasActiveScreenSpaceLightingConsumer(
+            true, true, false, false, true),
+        "AO remains active for specular environment lighting");
+    Require(!uvsr::HasActiveScreenSpaceLightingConsumer(
+            true, true, false, false, false),
+        "AO without GI or an environment lobe is a no-op");
+    Require(!uvsr::HasActiveScreenSpaceLightingConsumer(
+            false, true, true, true, true),
+        "the visibility master toggle disables every consumer");
 
     const Color positiveSignal = { 0.001f, 0.00025f, 0.0005f };
     Require(ClassifyContribution(

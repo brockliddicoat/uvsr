@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lighting_contribution_shared.h"
+#include "screen_space_visibility_defaults.h"
 
 #include <donut/core/math/math.h>
 #include <nvrhi/nvrhi.h>
@@ -13,6 +14,7 @@
 
 namespace donut::engine
 {
+    class CommonRenderPasses;
     class ICompositeView;
     class ShaderFactory;
 }
@@ -101,9 +103,13 @@ namespace uvsr
         bool enabled = true;
         uint32_t bounceCount = 1;
         float minimumBounceContribution = 0.001f;
-        float intensity = 4.0f;
+        // One is the radiometric reference. Values above one remain available
+        // as an explicit artistic boost, but must not be the factory baseline:
+        // the traversal already returns irradiance and the composite applies
+        // the receiving Lambert factor exactly once.
+        float intensity = ScreenSpaceIndirectDiffuseReferenceIntensity;
         bool includeEmissive = true;
-        float emissiveGain = 4.0f;
+        float emissiveGain = ScreenSpaceEmissiveReferenceGain;
     };
 
     struct VisibilityReconstructionSettings
@@ -180,6 +186,14 @@ namespace uvsr
         nvrhi::ITexture* gbufferSpecular = nullptr;
         nvrhi::ITexture* gbufferEmissive = nullptr;
         nvrhi::ITexture* materialAmbientOcclusion = nullptr;
+        nvrhi::ITexture* diffuseEnvironment = nullptr;
+        float diffuseEnvironmentScale = 1.f;
+        uint32_t diffuseEnvironmentArrayIndex = 0u;
+        nvrhi::ITexture* specularEnvironment = nullptr;
+        nvrhi::ITexture* environmentBrdf = nullptr;
+        float specularEnvironmentScale = 1.f;
+        float specularEnvironmentMipLevels = 0.f;
+        uint32_t specularEnvironmentArrayIndex = 0u;
         nvrhi::ITexture* baseLighting = nullptr;
         nvrhi::ITexture* output = nullptr;
         uint32_t knownInactiveLightingSources = 0u;
@@ -216,6 +230,7 @@ namespace uvsr
         ScreenSpaceVisibilityPass(
             nvrhi::IDevice* device,
             const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
+            std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses,
             const std::filesystem::path& filterAdaptedNoisePath);
 
         void Render(
@@ -223,8 +238,6 @@ namespace uvsr
             const ScreenSpaceVisibilitySettings& settings,
             const donut::engine::ICompositeView& compositeView,
             const ScreenSpaceVisibilityInputs& inputs,
-            dm::float3 ambientColorTop,
-            dm::float3 ambientColorBottom,
             float exposureScale,
             uint32_t frameIndex);
 
@@ -260,6 +273,7 @@ namespace uvsr
 
         nvrhi::DeviceHandle m_Device;
         nvrhi::BufferHandle m_ConstantBuffer;
+        std::shared_ptr<donut::engine::CommonRenderPasses> m_CommonPasses;
 
         // Final dimension selects fixed/adaptive sparse sampling.
         std::array<std::array<std::array<Pipeline, 2>,

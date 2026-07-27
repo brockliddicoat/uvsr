@@ -6,3 +6,6 @@
 
 # Generated local artifacts.
 /work/
+
+# Machine-local GPU identities and clock-normalization calibrations.
+/outputs/gpu-clock-normalization/

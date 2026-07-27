@@ -15,6 +15,7 @@
 #include <nvrhi/utils.h>
 
 #include <algorithm>
+#include <bitset>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -22,6 +23,9 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <typeinfo>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -45,6 +49,16 @@ static_assert(offsetof(
     "SVSM dense resolve tail must occupy one exact HLSL register.");
 static_assert(sizeof(SparseVirtualShadowMapSparseConstants) % 16u == 0u,
     "SVSM sparse constants must preserve HLSL register alignment.");
+static_assert(
+    offsetof(
+        SparseVirtualShadowMapSparseConstants,
+        receiverToClip) ==
+        offsetof(
+            SparseVirtualShadowMapSparseConstants,
+            worldToClip) +
+            sizeof(
+                SparseVirtualShadowMapSparseConstants::worldToClip),
+    "SVSM caster and receiver transforms must occupy distinct HLSL rows.");
 static_assert(offsetof(
         SparseVirtualShadowMapSparseConstants,
         debugView) ==
@@ -56,7 +70,7 @@ static_assert(offsetof(
     sizeof(SparseVirtualShadowMapSparseConstants) ==
         offsetof(
             SparseVirtualShadowMapSparseConstants,
-            drawPacketCount) + 16u,
+            staticDepthHierarchyBias) + 16u,
     "SVSM sparse constant-buffer tail rows must match HLSL packing.");
 static_assert(SVSM_CLIPMAP_COUNT == uvsr::SvsmClipmapCount,
     "The CPU and HLSL clipmap counts must match.");
@@ -76,6 +90,50 @@ static_assert(
     SVSM_SPARSE_FLAG_COARSEST_PAGE_RENDER_BUDGET ==
         uvsr::SvsmSparseFlagCoarsestPageRenderBudget,
     "The CPU and HLSL coarsest-page budget flags must match.");
+static_assert(
+    SVSM_SPARSE_FLAG_BILINEAR_PCF ==
+        uvsr::SvsmSparseFlagBilinearPcf,
+    "The CPU and HLSL bilinear-filter flags must match.");
+static_assert(
+    SVSM_SPARSE_FLAG_PAIRED_STATIC_DYNAMIC_DEPTH ==
+        uvsr::SvsmSparseFlagPairedStaticDynamicDepth,
+    "The CPU and HLSL paired-depth flags must match.");
+static_assert(
+    SVSM_SPARSE_FLAG_PRESERVE_PHYSICAL_MAPPINGS ==
+        uvsr::SvsmSparseFlagPreservePhysicalMappings,
+    "The CPU and HLSL allocation-preservation flags must match.");
+static_assert(
+    SVSM_SPARSE_FLAG_STATIC_DEPTH_HIERARCHY_CULLING ==
+        uvsr::SvsmSparseFlagStaticDepthHierarchyCulling,
+    "The CPU and HLSL static-depth hierarchy flags must match.");
+static_assert(
+    SVSM_SPARSE_FLAG_STATIC_DEPTH_HIERARCHY_RESOURCE ==
+        uvsr::SvsmSparseFlagStaticDepthHierarchyResource,
+    "The CPU and HLSL static-depth hierarchy resource flags must match.");
+static_assert(
+    SVSM_SPARSE_FLAG_STATIC_DEPTH_HIERARCHY_BOOTSTRAP ==
+        uvsr::SvsmSparseFlagStaticDepthHierarchyBootstrap,
+    "The CPU and HLSL static-depth hierarchy bootstrap flags must match.");
+static_assert(
+    SVSM_SPARSE_FLAG_RECEIVER_PAGE_MASK_CULLING ==
+        uvsr::SvsmSparseFlagReceiverPageMaskCulling,
+    "The CPU and HLSL receiver-page mask flags must match.");
+static_assert(
+    SVSM_PACKET_STATIC_CASTER_BIT ==
+            uvsr::SvsmPacketStaticCasterBit &&
+        SVSM_PACKET_OBJECT_INSTANCE_MASK ==
+            uvsr::SvsmPacketObjectInstanceMask,
+    "The CPU and HLSL packet caster encoding must match.");
+static_assert(
+    SVSM_PAGE_STATIC_DIRTY_BIT ==
+        uvsr::SvsmPageStaticDirtyBit,
+    "The CPU and HLSL static-dirty page bit must match.");
+static_assert(
+    SVSM_LOCAL_INVALIDATION_STATIC_BIT ==
+            uvsr::SvsmLocalInvalidationStaticBit &&
+        SVSM_LOCAL_INVALIDATION_OWNER_MASK ==
+            uvsr::SvsmLocalInvalidationOwnerMask,
+    "The CPU and HLSL local-invalidation encoding must match.");
 static_assert(sizeof(nvrhi::DrawIndexedIndirectArguments) == 20u,
     "SVSM relies on NVRHI's packed indexed indirect layout.");
 static_assert(
@@ -85,13 +143,16 @@ static_assert(
     "SVSM indirect instance counts must remain the second word.");
 static_assert(
     sizeof(SparseVirtualShadowMapPacketMetadata) ==
-        4u * sizeof(uint32_t),
-    "SVSM packet-page metadata must remain four uint32 words.");
+        8u * sizeof(uint32_t),
+    "SVSM packet-page metadata must remain eight uint32 words.");
 static_assert(
     offsetof(SparseVirtualShadowMapPacketMetadata, packedMinimumPage) == 0u &&
     offsetof(SparseVirtualShadowMapPacketMetadata, packedMaximumPage) == 4u &&
     offsetof(SparseVirtualShadowMapPacketMetadata, pageListOffset) == 8u &&
-    offsetof(SparseVirtualShadowMapPacketMetadata, objectInstanceIndex) == 12u,
+    offsetof(SparseVirtualShadowMapPacketMetadata, objectInstanceIndex) == 12u &&
+    offsetof(SparseVirtualShadowMapPacketMetadata, packedMinimumTexel) == 16u &&
+    offsetof(SparseVirtualShadowMapPacketMetadata, packedMaximumTexel) == 20u &&
+    offsetof(SparseVirtualShadowMapPacketMetadata, nearestReverseDepth) == 24u,
     "SVSM packet-page metadata member offsets must match HLSL.");
 static_assert(
     sizeof(SparseVirtualShadowMapPushConstants) ==
@@ -160,6 +221,76 @@ static_assert(
 static_assert(
     SVSM_SPARSE_COUNTER_COUNT == uvsr::SvsmCounterCount,
     "SVSM CPU and HLSL counter buffer sizes must match.");
+static_assert(
+    SVSM_STATIC_DEPTH_HIERARCHY_BASE_CELL_WIDTH ==
+            uvsr::SvsmStaticDepthHierarchyBaseCellWidth &&
+        SVSM_STATIC_DEPTH_HIERARCHY_BASE_AXIS ==
+            uvsr::SvsmStaticDepthHierarchyBaseAxis &&
+        SVSM_STATIC_DEPTH_HIERARCHY_LEVEL_ONE_OFFSET ==
+            uvsr::SvsmStaticDepthHierarchyLevelOneOffset &&
+        SVSM_STATIC_DEPTH_HIERARCHY_LEVEL_TWO_OFFSET ==
+            uvsr::SvsmStaticDepthHierarchyLevelTwoOffset &&
+        SVSM_STATIC_DEPTH_HIERARCHY_ROOT_OFFSET ==
+            uvsr::SvsmStaticDepthHierarchyRootOffset &&
+        SVSM_STATIC_DEPTH_HIERARCHY_TAG_OFFSET ==
+            uvsr::SvsmStaticDepthHierarchyTagOffset &&
+        SVSM_STATIC_DEPTH_HIERARCHY_WORDS_PER_PAGE ==
+            uvsr::SvsmStaticDepthHierarchyWordsPerPage,
+    "SVSM CPU and HLSL static-depth hierarchy layouts must match.");
+static_assert(
+    SVSM_STATIC_DEPTH_HIERARCHY_QUERY_COUNTER ==
+            uvsr::SvsmStaticDepthHierarchyQueryCounter &&
+        SVSM_STATIC_DEPTH_HIERARCHY_CULL_COUNTER ==
+            uvsr::SvsmStaticDepthHierarchyCullCounter &&
+        SVSM_STATIC_DEPTH_HIERARCHY_FAIL_OPEN_COUNTER ==
+            uvsr::SvsmStaticDepthHierarchyFailOpenCounter &&
+        SVSM_STATIC_DEPTH_HIERARCHY_BUILT_PAGE_COUNTER ==
+            uvsr::SvsmStaticDepthHierarchyBuiltPageCounter,
+    "SVSM CPU and HLSL static-depth hierarchy counters must match.");
+static_assert(
+    SVSM_RECEIVER_PAGE_MASK_QUERY_COUNTER ==
+            uvsr::SvsmReceiverPageMaskQueryCounter &&
+        SVSM_RECEIVER_PAGE_MASK_CULL_COUNTER ==
+            uvsr::SvsmReceiverPageMaskCullCounter &&
+        SVSM_RECEIVER_PAGE_MASK_FAIL_OPEN_COUNTER ==
+            uvsr::SvsmReceiverPageMaskFailOpenCounter,
+    "SVSM CPU and HLSL receiver-page mask counters must match.");
+static_assert(
+    SVSM_RECEIVER_PAGE_MASK_CELL_WIDTH ==
+            uvsr::SvsmReceiverPageMaskCellWidth &&
+        SVSM_RECEIVER_PAGE_MASK_AXIS ==
+            uvsr::SvsmReceiverPageMaskAxis &&
+        SVSM_RECEIVER_PAGE_MASK_QUADRANT_AXIS ==
+            uvsr::SvsmReceiverPageMaskQuadrantAxis &&
+        SVSM_RECEIVER_PAGE_MASK_QUADRANT_CELL_AXIS ==
+            uvsr::SvsmReceiverPageMaskQuadrantCellAxis &&
+        SVSM_RECEIVER_PAGE_MASK_TAG_OFFSET ==
+            uvsr::SvsmReceiverPageMaskTagOffset &&
+        SVSM_RECEIVER_PAGE_MASK_QUADRANT_OFFSET ==
+            uvsr::SvsmReceiverPageMaskQuadrantOffset &&
+        SVSM_RECEIVER_PAGE_MASK_QUADRANT_COUNT ==
+            uvsr::SvsmReceiverPageMaskQuadrantCount &&
+        SVSM_RECEIVER_PAGE_MASK_WORDS_PER_PAGE ==
+            uvsr::SvsmReceiverPageMaskWordsPerPage,
+    "SVSM CPU and HLSL receiver-page mask layouts must match.");
+static_assert(
+    SVSM_SCHEDULED_TILE_PAGE_WIDTH ==
+            uvsr::SvsmScheduledTilePageWidth &&
+        SVSM_SCHEDULED_TILES_PER_AXIS ==
+            uvsr::SvsmScheduledTilesPerAxis &&
+        SVSM_SCHEDULED_TILE_MASK_WORDS_PER_LEVEL ==
+            uvsr::SvsmScheduledTileMaskWordsPerLevel,
+    "SVSM CPU and HLSL scheduled-page hierarchy layouts must match.");
+static_assert(
+    SVSM_SCHEDULED_TILE_MASK_QUERY_COUNTER ==
+            uvsr::SvsmScheduledTileMaskQueryCounter &&
+        SVSM_SCHEDULED_TILE_MASK_EARLY_REJECT_COUNTER ==
+            uvsr::SvsmScheduledTileMaskEarlyRejectCounter &&
+        SVSM_SCHEDULED_TILE_MASK_FAIL_OPEN_COUNTER ==
+            uvsr::SvsmScheduledTileMaskFailOpenCounter &&
+        SVSM_SCHEDULED_TILE_MASK_POSITIVE_EXACT_ZERO_COUNTER ==
+            uvsr::SvsmScheduledTileMaskPositiveExactZeroCounter,
+    "SVSM CPU and HLSL scheduled-page hierarchy counters must match.");
 
 namespace uvsr
 {
@@ -180,6 +311,10 @@ namespace uvsr
         constexpr uint32_t SparseFinalize = 5u;
         constexpr uint32_t SparseStats = 6u;
         constexpr uint32_t SparseFillIndirect = 7u;
+        constexpr uint32_t SparseInvalidatePages = 8u;
+        constexpr uint32_t SparseBuildScheduledPageTileMasks = 9u;
+        constexpr uint32_t SparseBuildStaticDepthHierarchy = 10u;
+        constexpr uint32_t SparseScheduleFine = 11u;
         constexpr uint32_t CompactPageDispatchArgumentBase = 0u;
         constexpr uint32_t PacketFillDispatchArgumentBase =
             SvsmClipmapCount;
@@ -251,6 +386,14 @@ namespace uvsr
                 uint64_t(arraySize) * uint64_t(bytesPerPixel);
         }
 
+        uint32_t FloatBits(float value)
+        {
+            uint32_t bits = 0u;
+            static_assert(sizeof(bits) == sizeof(value));
+            std::memcpy(&bits, &value, sizeof(bits));
+            return bits;
+        }
+
         SparseVirtualShadowMapPacketMetadata
         BuildPacketPageMetadata(
             const DrawItem& item,
@@ -268,6 +411,11 @@ namespace uvsr
                 ? uint32_t(std::max(
                     item.instance->GetInstanceIndex(), 0))
                 : 0u;
+            metadata.packedMinimumTexel =
+                SvsmInvalidPacketPageBounds;
+            metadata.packedMaximumTexel =
+                SvsmInvalidPacketPageBounds;
+            metadata.nearestReverseDepth = 0u;
             pageListCapacity = 0u;
 
             const SceneGraphNode* node = item.instance
@@ -305,6 +453,8 @@ namespace uvsr
                 float2(std::numeric_limits<float>::infinity());
             float2 maximumVirtual =
                 float2(-std::numeric_limits<float>::infinity());
+            float nearestReverseDepth =
+                -std::numeric_limits<float>::infinity();
             for (uint32_t corner = 0u; corner < 8u; ++corner)
             {
                 const float3 objectPosition = {
@@ -332,6 +482,9 @@ namespace uvsr
                     return metadata;
                 }
                 const float2 ndc = clip.xy() / clip.w;
+                const float ndcDepth = clip.z / clip.w;
+                if (!std::isfinite(ndcDepth))
+                    return metadata;
                 const float2 virtualPosition =
                     (ndc * float2(0.5f, -0.5f) +
                         float2(0.5f)) *
@@ -344,10 +497,13 @@ namespace uvsr
                     maximumVirtual.x, virtualPosition.x);
                 maximumVirtual.y = std::max(
                     maximumVirtual.y, virtualPosition.y);
+                nearestReverseDepth = std::max(
+                    nearestReverseDepth, ndcDepth);
             }
 
             if (!dm::all(dm::isfinite(minimumVirtual)) ||
-                !dm::all(dm::isfinite(maximumVirtual)))
+                !dm::all(dm::isfinite(maximumVirtual)) ||
+                !std::isfinite(nearestReverseDepth))
             {
                 return metadata;
             }
@@ -359,6 +515,1623 @@ namespace uvsr
                     maximumVirtual.y);
             metadata.packedMinimumPage = rectangle.packedMinimum;
             metadata.packedMaximumPage = rectangle.packedMaximum;
+            const SvsmPacketTexelRectangle texelRectangle =
+                GetSvsmPacketTexelRectangle(
+                    minimumVirtual.x,
+                    minimumVirtual.y,
+                    maximumVirtual.x,
+                    maximumVirtual.y);
+            metadata.packedMinimumTexel =
+                texelRectangle.packedMinimum;
+            metadata.packedMaximumTexel =
+                texelRectangle.packedMaximum;
+            const float conservativeNearestReverseDepth =
+                std::nextafter(
+                    std::clamp(nearestReverseDepth, 0.f, 1.f),
+                    std::numeric_limits<float>::infinity());
+            metadata.nearestReverseDepth =
+                FloatBits(conservativeNearestReverseDepth);
+            pageListCapacity = GetSvsmPacketPageListCapacity(
+                metadata.packedMinimumPage,
+                metadata.packedMaximumPage);
+            return metadata;
+        }
+
+        bool IsFiniteSvsmBox(const box3& bounds)
+        {
+            return !bounds.isempty() &&
+                dm::all(dm::isfinite(bounds.m_mins)) &&
+                dm::all(dm::isfinite(bounds.m_maxs)) &&
+                dm::all(bounds.m_mins <= bounds.m_maxs);
+        }
+
+        bool IsSvsmStaticCacheCandidate(const DrawItem& item)
+        {
+            if (!item.instance ||
+                !item.mesh ||
+                !item.geometry ||
+                !item.material ||
+                item.material->domain != MaterialDomain::Opaque ||
+                item.instance->GetInstanceIndex() < 0 ||
+                uint32_t(item.instance->GetInstanceIndex()) >
+                    SvsmPacketObjectInstanceMask ||
+                !item.instance->GetNode())
+            {
+                return false;
+            }
+            return CanUseSvsmStaticPacketBounds(
+                    bool(item.mesh->skinPrototype),
+                    item.mesh->isSkinPrototype,
+                    item.mesh->isMorphTargetAnimationMesh) &&
+                IsFiniteSvsmBox(item.geometry->objectSpaceBounds);
+        }
+
+        struct SvsmCasterKey
+        {
+            const MeshInstance* instance = nullptr;
+            const MeshGeometry* geometry = nullptr;
+
+            [[nodiscard]] bool operator==(
+                const SvsmCasterKey& other) const
+            {
+                return instance == other.instance &&
+                    geometry == other.geometry;
+            }
+        };
+
+        struct SvsmCasterKeyHash
+        {
+            [[nodiscard]] size_t operator()(
+                const SvsmCasterKey& key) const
+            {
+                const size_t left =
+                    std::hash<const void*>{}(key.instance);
+                const size_t right =
+                    std::hash<const void*>{}(key.geometry);
+                return left ^ (right + 0x9e3779b9u +
+                    (left << 6u) + (left >> 2u));
+            }
+        };
+
+        struct SvsmMaterialShadowSignature
+        {
+            MaterialDomain domain = MaterialDomain::Count;
+            const void* material = nullptr;
+            const void* materialConstants = nullptr;
+            const void* baseTextureObject = nullptr;
+            const void* opacityTextureObject = nullptr;
+            const void* baseTexture = nullptr;
+            const void* opacityTexture = nullptr;
+            float opacity = 1.f;
+            float alphaCutoff = 0.5f;
+            bool baseTextureEnabled = false;
+            bool opacityTextureEnabled = false;
+            bool doubleSided = false;
+
+            [[nodiscard]] bool operator==(
+                const SvsmMaterialShadowSignature& other) const
+            {
+                return domain == other.domain &&
+                    material == other.material &&
+                    materialConstants == other.materialConstants &&
+                    baseTextureObject == other.baseTextureObject &&
+                    opacityTextureObject ==
+                        other.opacityTextureObject &&
+                    baseTexture == other.baseTexture &&
+                    opacityTexture == other.opacityTexture &&
+                    opacity == other.opacity &&
+                    alphaCutoff == other.alphaCutoff &&
+                    baseTextureEnabled == other.baseTextureEnabled &&
+                    opacityTextureEnabled ==
+                        other.opacityTextureEnabled &&
+                    doubleSided == other.doubleSided;
+            }
+        };
+
+        struct SvsmCasterTopologySignature
+        {
+            const void* mesh = nullptr;
+            const void* buffers = nullptr;
+            const void* indexBuffer = nullptr;
+            const void* vertexBuffer = nullptr;
+            const void* instanceBuffer = nullptr;
+            uint32_t meshVertexOffset = 0u;
+            uint32_t meshIndexOffset = 0u;
+            uint32_t meshVertexCount = 0u;
+            uint32_t meshIndexCount = 0u;
+            uint32_t geometryVertexOffset = 0u;
+            uint32_t geometryIndexOffset = 0u;
+            uint32_t vertexCount = 0u;
+            uint32_t indexCount = 0u;
+            uint64_t positionByteOffset = 0u;
+            uint64_t positionByteSize = 0u;
+            uint64_t texCoordByteOffset = 0u;
+            uint64_t texCoordByteSize = 0u;
+            MeshGeometryPrimitiveType primitiveType =
+                MeshGeometryPrimitiveType::Triangles;
+
+            [[nodiscard]] bool operator==(
+                const SvsmCasterTopologySignature& other) const
+            {
+                return mesh == other.mesh &&
+                    buffers == other.buffers &&
+                    indexBuffer == other.indexBuffer &&
+                    vertexBuffer == other.vertexBuffer &&
+                    instanceBuffer == other.instanceBuffer &&
+                    meshVertexOffset == other.meshVertexOffset &&
+                    meshIndexOffset == other.meshIndexOffset &&
+                    meshVertexCount == other.meshVertexCount &&
+                    meshIndexCount == other.meshIndexCount &&
+                    geometryVertexOffset ==
+                        other.geometryVertexOffset &&
+                    geometryIndexOffset ==
+                        other.geometryIndexOffset &&
+                    vertexCount == other.vertexCount &&
+                    indexCount == other.indexCount &&
+                    positionByteOffset == other.positionByteOffset &&
+                    positionByteSize == other.positionByteSize &&
+                    texCoordByteOffset == other.texCoordByteOffset &&
+                    texCoordByteSize == other.texCoordByteSize &&
+                    primitiveType == other.primitiveType;
+            }
+        };
+
+        [[nodiscard]] SvsmCasterTopologySignature
+        GetSvsmCasterTopologySignature(
+            const MeshInfo& mesh,
+            const MeshGeometry& geometry)
+        {
+            const nvrhi::BufferRange& positionRange =
+                mesh.buffers->getVertexBufferRange(
+                    VertexAttribute::Position);
+            const nvrhi::BufferRange& texCoordRange =
+                mesh.buffers->getVertexBufferRange(
+                    VertexAttribute::TexCoord1);
+            return {
+                &mesh,
+                mesh.buffers.get(),
+                mesh.buffers->indexBuffer.Get(),
+                mesh.buffers->vertexBuffer.Get(),
+                mesh.buffers->instanceBuffer.Get(),
+                mesh.vertexOffset,
+                mesh.indexOffset,
+                mesh.totalVertices,
+                mesh.totalIndices,
+                geometry.vertexOffsetInMesh,
+                geometry.indexOffsetInMesh,
+                geometry.numVertices,
+                geometry.numIndices,
+                positionRange.byteOffset,
+                positionRange.byteSize,
+                texCoordRange.byteOffset,
+                texCoordRange.byteSize,
+                geometry.type
+            };
+        }
+
+        struct SvsmObjectInvalidationPolicyConfiguration
+        {
+            SvsmObjectInvalidationMode defaultMode =
+                SvsmObjectInvalidationMode::Auto;
+            SvsmObjectInvalidationResolver resolver;
+            bool resolverEnabled = false;
+            bool valid = true;
+
+            [[nodiscard]] bool operator==(
+                const SvsmObjectInvalidationPolicyConfiguration&
+                    other) const
+            {
+                if (valid != other.valid)
+                    return false;
+                return
+                    HasSameSvsmObjectInvalidationPolicyConfiguration(
+                        defaultMode,
+                        resolverEnabled ? &resolver : nullptr,
+                        other.defaultMode,
+                        other.resolverEnabled
+                            ? &other.resolver
+                            : nullptr);
+            }
+        };
+
+        [[nodiscard]] SvsmObjectInvalidationPolicyConfiguration
+        MakeSvsmObjectInvalidationPolicyConfiguration(
+            SvsmObjectInvalidationMode defaultMode,
+            const SvsmObjectInvalidationResolver* resolver)
+        {
+            SvsmObjectInvalidationPolicyConfiguration result;
+            result.defaultMode = defaultMode;
+            result.resolverEnabled = resolver != nullptr;
+            result.valid =
+                IsSvsmObjectInvalidationModeValid(defaultMode);
+            if (resolver)
+            {
+                result.resolver = *resolver;
+                result.valid =
+                    result.valid && resolver->IsValid();
+            }
+            return result;
+        }
+
+        struct SvsmCasterSnapshot
+        {
+            SvsmCasterKey key;
+            // Keep structural identities alive across the old/new diff. This
+            // prevents allocator-address reuse from aliasing a removed caster
+            // with a newly added one while localized invalidation is pending.
+            std::shared_ptr<MeshInstance> instanceReference;
+            std::shared_ptr<MeshGeometry> geometryReference;
+            box3 objectSpaceBounds = box3::empty();
+            box3 worldBounds = box3::empty();
+            std::array<float, 12u> localToWorld{};
+            SvsmMaterialShadowSignature material;
+            SvsmCasterTopologySignature topology;
+            bool reliableBounds = false;
+            bool deforming = false;
+            bool deformationRevisionReliable = false;
+            uint32_t deformationRevision = 0u;
+            SvsmObjectInvalidationMode invalidationMode =
+                SvsmObjectInvalidationMode::Auto;
+            bool staticCacheEligible = false;
+            bool staticCacheCandidate = false;
+            // A suppressed state can be opportunistically rasterized into
+            // pages dirtied for another caster. Until a full authoritative
+            // refresh, cached coverage may therefore be a union of more than
+            // the observed and published snapshots.
+            bool suppressedCoverageDebt = false;
+            uint64_t promotionDeadline =
+                SvsmNoPromotionDeadline;
+        };
+
+        [[nodiscard]] std::array<float, 12u>
+        MakeSvsmTransformSignature(const affine3& transform)
+        {
+            SvsmAffineSignatureParts parts;
+            uint32_t element = 0u;
+            for (uint32_t row = 0u; row < 3u; ++row)
+            {
+                for (uint32_t column = 0u; column < 3u; ++column)
+                    parts.linear[element++] =
+                        transform.m_linear[row][column];
+            }
+            parts.translation = {
+                transform.m_translation.x,
+                transform.m_translation.y,
+                transform.m_translation.z
+            };
+            return MakeSvsmAffineSignature(parts);
+        }
+
+        [[nodiscard]] bool IsFiniteSvsmTransformSignature(
+            const std::array<float, 12u>& signature)
+        {
+            return std::all_of(
+                signature.begin(),
+                signature.end(),
+                [](float value) { return std::isfinite(value); });
+        }
+
+        [[nodiscard]] bool TryMakeSvsmAffineFromTransformSignature(
+            const std::array<float, 12u>& signature,
+            affine3& transform)
+        {
+            SvsmAffineSignatureParts parts;
+            if (!DecodeSvsmAffineSignature(signature, parts))
+                return false;
+            uint32_t element = 0u;
+            for (uint32_t row = 0u; row < 3u; ++row)
+            {
+                for (uint32_t column = 0u; column < 3u; ++column)
+                    transform.m_linear[row][column] =
+                        parts.linear[element++];
+            }
+            transform.m_translation = float3(
+                parts.translation[0],
+                parts.translation[1],
+                parts.translation[2]);
+            return true;
+        }
+
+        [[nodiscard]] SvsmMaterialShadowSignature
+        GetSvsmMaterialShadowSignature(const Material* material)
+        {
+            SvsmMaterialShadowSignature result;
+            if (!material)
+                return result;
+            result.domain = material->domain;
+            result.material = material;
+            result.materialConstants =
+                material->materialConstants.Get();
+            result.baseTextureObject =
+                material->baseOrDiffuseTexture.get();
+            result.opacityTextureObject =
+                material->opacityTexture.get();
+            result.baseTexture = material->baseOrDiffuseTexture
+                ? material->baseOrDiffuseTexture->texture.Get()
+                : nullptr;
+            result.opacityTexture = material->opacityTexture
+                ? material->opacityTexture->texture.Get()
+                : nullptr;
+            result.opacity = material->opacity;
+            result.alphaCutoff = material->alphaCutoff;
+            result.baseTextureEnabled =
+                material->enableBaseOrDiffuseTexture;
+            result.opacityTextureEnabled =
+                material->enableOpacityTexture;
+            result.doubleSided = material->doubleSided;
+            return result;
+        }
+
+        enum class SvsmAlphaTextureSource : uint32_t
+        {
+            None,
+            BaseOrDiffuse,
+            Opacity
+        };
+
+        struct SvsmAlphaTextureState
+        {
+            SvsmAlphaTextureSource source =
+                SvsmAlphaTextureSource::None;
+            const void* texture = nullptr;
+
+            [[nodiscard]] bool operator==(
+                const SvsmAlphaTextureState& other) const
+            {
+                return source == other.source &&
+                    texture == other.texture;
+            }
+        };
+
+        [[nodiscard]] SvsmAlphaTextureState
+        GetSvsmAlphaTextureState(
+            const SvsmMaterialShadowSignature& material)
+        {
+            if (material.opacityTextureEnabled &&
+                material.opacityTextureObject)
+            {
+                return {
+                    SvsmAlphaTextureSource::Opacity,
+                    material.opacityTexture
+                };
+            }
+            if (material.baseTextureEnabled &&
+                material.baseTextureObject)
+            {
+                return {
+                    SvsmAlphaTextureSource::BaseOrDiffuse,
+                    material.baseTexture
+                };
+            }
+            return {};
+        }
+
+        [[nodiscard]] bool HasSvsmDepthMaterialChange(
+            const SvsmMaterialShadowSignature& previous,
+            const SvsmMaterialShadowSignature& current)
+        {
+            if (previous.domain != current.domain ||
+                previous.doubleSided != current.doubleSided)
+            {
+                return true;
+            }
+            const bool alphaRelevant =
+                previous.domain == MaterialDomain::AlphaTested ||
+                current.domain == MaterialDomain::AlphaTested;
+            if (!alphaRelevant)
+                return false;
+            return HasSvsmAlphaTestScalarDepthChange(
+                    true,
+                    previous.opacity,
+                    current.opacity,
+                    previous.alphaCutoff,
+                    current.alphaCutoff) ||
+                !(GetSvsmAlphaTextureState(previous) ==
+                    GetSvsmAlphaTextureState(current));
+        }
+
+        [[nodiscard]] bool EqualSvsmBox(
+            const box3& left,
+            const box3& right);
+
+        [[nodiscard]] SvsmCopiedBoundsSignature
+        MakeSvsmCopiedBoundsSignature(const box3& bounds)
+        {
+            return {
+                {
+                    bounds.m_mins.x,
+                    bounds.m_mins.y,
+                    bounds.m_mins.z
+                },
+                {
+                    bounds.m_maxs.x,
+                    bounds.m_maxs.y,
+                    bounds.m_maxs.z
+                }
+            };
+        }
+
+        [[nodiscard]] SvsmCasterEvent GetSvsmCasterEvent(
+            const SvsmCasterSnapshot* previous,
+            const SvsmCasterSnapshot* current,
+            bool includeStaticClassification)
+        {
+            SvsmCasterEvent event;
+            event.previousExists = previous != nullptr;
+            event.currentExists = current != nullptr;
+            if (!previous || !current)
+                return event;
+
+            event.transformChanged =
+                previous->localToWorld != current->localToWorld ||
+                HasSvsmCopiedBoundsChanged(
+                    MakeSvsmCopiedBoundsSignature(
+                        previous->objectSpaceBounds),
+                    MakeSvsmCopiedBoundsSignature(
+                        current->objectSpaceBounds)) ||
+                (!current->deforming &&
+                    !EqualSvsmBox(
+                        previous->worldBounds,
+                        current->worldBounds));
+            const bool rawMaterialChanged =
+                !(previous->material == current->material);
+            event.depthMaterialChanged =
+                HasSvsmDepthMaterialChange(
+                    previous->material,
+                    current->material);
+            event.bindingOnlyMaterialChanged =
+                rawMaterialChanged &&
+                !event.depthMaterialChanged;
+            event.deformationChanged =
+                previous->deforming != current->deforming ||
+                ((previous->deforming || current->deforming) &&
+                    (!previous->deformationRevisionReliable ||
+                        !current->deformationRevisionReliable ||
+                        previous->deformationRevision !=
+                            current->deformationRevision));
+            event.topologyChanged =
+                !(previous->topology == current->topology);
+            event.invalidationModeChanged =
+                previous->invalidationMode !=
+                    current->invalidationMode;
+            event.staticClassificationChanged =
+                includeStaticClassification &&
+                previous->staticCacheCandidate !=
+                    current->staticCacheCandidate;
+            event.reliable =
+                IsSvsmCasterSnapshotTrackable(
+                    previous->deforming,
+                    previous->reliableBounds,
+                    previous->deformationRevisionReliable) &&
+                IsSvsmCasterSnapshotTrackable(
+                    current->deforming,
+                    current->reliableBounds,
+                    current->deformationRevisionReliable);
+            return event;
+        }
+
+        [[nodiscard]] bool EqualSvsmBox(
+            const box3& left,
+            const box3& right)
+        {
+            return all(left.m_mins == right.m_mins) &&
+                all(left.m_maxs == right.m_maxs);
+        }
+
+        [[nodiscard]] SvsmPacketPageRectangle
+        ProjectSvsmWorldBoundsToPages(
+            const box3& worldBounds,
+            const float4x4& worldToClip)
+        {
+            if (!IsFiniteSvsmBox(worldBounds))
+                return {};
+
+            float2 minimumVirtual =
+                float2(std::numeric_limits<float>::infinity());
+            float2 maximumVirtual =
+                float2(-std::numeric_limits<float>::infinity());
+            for (uint32_t corner = 0u; corner < 8u; ++corner)
+            {
+                const float3 worldPosition = {
+                    (corner & 1u) != 0u
+                        ? worldBounds.m_maxs.x
+                        : worldBounds.m_mins.x,
+                    (corner & 2u) != 0u
+                        ? worldBounds.m_maxs.y
+                        : worldBounds.m_mins.y,
+                    (corner & 4u) != 0u
+                        ? worldBounds.m_maxs.z
+                        : worldBounds.m_mins.z
+                };
+                const float4 clip =
+                    float4(worldPosition, 1.f) * worldToClip;
+                if (!all(isfinite(clip)) || !(clip.w > 1e-8f))
+                    return {};
+                const float2 ndc = clip.xy() / clip.w;
+                const float2 virtualPosition =
+                    (ndc * float2(0.5f, -0.5f) +
+                        float2(0.5f)) *
+                    float(SvsmVirtualResolution);
+                minimumVirtual = min(
+                    minimumVirtual, virtualPosition);
+                maximumVirtual = max(
+                    maximumVirtual, virtualPosition);
+            }
+            return GetSvsmPacketPageRectangle(
+                minimumVirtual.x,
+                minimumVirtual.y,
+                maximumVirtual.x,
+                maximumVirtual.y);
+        }
+
+        [[nodiscard]] SvsmTightInvalidationProjection
+        ProjectSvsmObjectBoundsToPages(
+            const box3& objectBounds,
+            const std::array<float, 12u>& localToWorldSignature,
+            const float4x4& worldToClip)
+        {
+            SvsmTightInvalidationProjection result;
+            if (!IsFiniteSvsmBox(objectBounds))
+                return result;
+
+            affine3 localToWorld;
+            if (!TryMakeSvsmAffineFromTransformSignature(
+                    localToWorldSignature,
+                    localToWorld))
+            {
+                return result;
+            }
+
+            std::array<std::array<float, 4u>, 8u> clipCorners{};
+            for (uint32_t corner = 0u; corner < 8u; ++corner)
+            {
+                const float3 objectPosition = {
+                    (corner & 1u) != 0u
+                        ? objectBounds.m_maxs.x
+                        : objectBounds.m_mins.x,
+                    (corner & 2u) != 0u
+                        ? objectBounds.m_maxs.y
+                        : objectBounds.m_mins.y,
+                    (corner & 4u) != 0u
+                        ? objectBounds.m_maxs.z
+                        : objectBounds.m_mins.z
+                };
+                const float3 worldPosition =
+                    localToWorld.transformPoint(objectPosition);
+                const float4 clip =
+                    float4(worldPosition, 1.f) * worldToClip;
+                clipCorners[corner] = {
+                    clip.x,
+                    clip.y,
+                    clip.z,
+                    clip.w
+                };
+            }
+            return ProjectSvsmClipCornersForInvalidation(
+                clipCorners);
+        }
+
+        bool GatherSvsmCasterSnapshots(
+            const std::shared_ptr<SceneGraphNode>& rootNode,
+            const SvsmObjectInvalidationPolicyConfiguration&
+                policyConfiguration,
+            std::vector<SvsmCasterSnapshot>& snapshots,
+            bool& containsAlwaysMode,
+            bool& policyResolutionReliable)
+        {
+            snapshots.clear();
+            containsAlwaysMode = false;
+            policyResolutionReliable =
+                policyConfiguration.valid;
+            if (!rootNode || !policyConfiguration.valid)
+                return false;
+
+            bool reliable = true;
+            std::unordered_map<SvsmCasterKey, uint8_t, SvsmCasterKeyHash>
+                seenKeys;
+            SceneGraphWalker walker(rootNode.get());
+            while (walker)
+            {
+                const SceneContentFlags relevantContentFlags =
+                    SceneContentFlags::OpaqueMeshes |
+                    SceneContentFlags::AlphaTestedMeshes;
+                const bool subgraphRelevant =
+                    (walker->GetSubgraphContentFlags() &
+                        relevantContentFlags) != 0;
+                const bool leafRelevant =
+                    (walker->GetLeafContentFlags() &
+                        relevantContentFlags) != 0;
+
+                if (leafRelevant)
+                {
+                    const auto instanceReference =
+                        std::dynamic_pointer_cast<MeshInstance>(
+                            walker->GetLeaf());
+                    auto* instance = instanceReference.get();
+                    const MeshInfo* mesh =
+                        instance ? instance->GetMesh().get() : nullptr;
+                    SceneGraphNode* node =
+                        instance ? instance->GetNode() : nullptr;
+                    if (!instance ||
+                        !mesh ||
+                        !node ||
+                        !mesh->buffers ||
+                        instance->GetInstanceIndex() < 0)
+                    {
+                        reliable = false;
+                    }
+                    else
+                    {
+                        const bool deforming =
+                            bool(mesh->skinPrototype) ||
+                            mesh->isSkinPrototype ||
+                            mesh->isMorphTargetAnimationMesh;
+                        const auto* skinnedInstance =
+                            dynamic_cast<const SkinnedMeshInstance*>(
+                                instance);
+                        const affine3 localToWorld =
+                            node->GetLocalToWorldTransformFloat();
+                        const auto transformSignature =
+                            MakeSvsmTransformSignature(localToWorld);
+                        const bool transformReliable =
+                            IsFiniteSvsmTransformSignature(
+                                transformSignature);
+
+                        for (size_t geometryOrdinal = 0u;
+                            geometryOrdinal <
+                                mesh->geometries.size();
+                            ++geometryOrdinal)
+                        {
+                            const auto& geometry =
+                                mesh->geometries[geometryOrdinal];
+                            if (!geometry ||
+                                geometry->type !=
+                                    MeshGeometryPrimitiveType::Triangles)
+                            {
+                                continue;
+                            }
+                            const Material* material =
+                                geometry->material.get();
+                            if (!material ||
+                                (material->domain !=
+                                        MaterialDomain::Opaque &&
+                                    material->domain !=
+                                        MaterialDomain::AlphaTested))
+                            {
+                                continue;
+                            }
+
+                            SvsmCasterSnapshot snapshot;
+                            snapshot.key = {
+                                instance,
+                                geometry.get()
+                            };
+                            snapshot.instanceReference =
+                                instanceReference;
+                            snapshot.geometryReference = geometry;
+                            const
+                                SvsmObjectInvalidationResolverKey
+                                    resolverKey = {
+                                        uint32_t(instance->
+                                            GetInstanceIndex()),
+                                        geometryOrdinal <=
+                                            std::numeric_limits<
+                                                uint32_t>::max()
+                                            ? uint32_t(
+                                                geometryOrdinal)
+                                            : 0u,
+                                        geometry.get(),
+                                        instance
+                                    };
+                            if (geometryOrdinal >
+                                    std::numeric_limits<
+                                        uint32_t>::max() ||
+                                !TryResolveSvsmObjectInvalidationMode(
+                                    policyConfiguration.defaultMode,
+                                    policyConfiguration.resolverEnabled
+                                        ? &policyConfiguration.resolver
+                                        : nullptr,
+                                    resolverKey,
+                                    snapshot.invalidationMode))
+                            {
+                                reliable = false;
+                                policyResolutionReliable = false;
+                            }
+                            containsAlwaysMode =
+                                containsAlwaysMode ||
+                                snapshot.invalidationMode ==
+                                    SvsmObjectInvalidationMode::
+                                        Always;
+                            snapshot.localToWorld =
+                                transformSignature;
+                            snapshot.material =
+                                GetSvsmMaterialShadowSignature(
+                                    material);
+                            snapshot.topology =
+                                GetSvsmCasterTopologySignature(
+                                    *mesh, *geometry);
+                            snapshot.deforming = deforming;
+                            snapshot.deformationRevisionReliable =
+                                !deforming ||
+                                (skinnedInstance != nullptr &&
+                                    !mesh->
+                                        isMorphTargetAnimationMesh);
+                            snapshot.deformationRevision =
+                                skinnedInstance
+                                ? skinnedInstance->
+                                    GetLastUpdateFrameIndex()
+                                : 0u;
+                            snapshot.objectSpaceBounds =
+                                geometry->objectSpaceBounds;
+                            // Donut's node/global boxes are derived from the
+                            // bind-pose mesh box and are not an application
+                            // guarantee that encloses arbitrary skin or morph
+                            // deformation. Never project them as localized
+                            // invalidation bounds.
+                            snapshot.worldBounds = deforming
+                                ? box3::empty()
+                                : snapshot.objectSpaceBounds *
+                                    localToWorld;
+                            snapshot.reliableBounds =
+                                !deforming &&
+                                transformReliable &&
+                                IsFiniteSvsmBox(
+                                    snapshot.worldBounds);
+                            snapshot.staticCacheEligible =
+                                snapshot.reliableBounds &&
+                                !deforming &&
+                                material->domain ==
+                                    MaterialDomain::Opaque &&
+                                uint32_t(
+                                    instance->GetInstanceIndex()) <=
+                                    SvsmPacketObjectInstanceMask;
+                            snapshot.staticCacheCandidate =
+                                snapshot.staticCacheEligible;
+                            snapshot.promotionDeadline =
+                                SvsmNoPromotionDeadline;
+
+                            const bool snapshotTrackable =
+                                transformReliable &&
+                                IsSvsmObjectInvalidationModeValid(
+                                    snapshot.invalidationMode) &&
+                                IsSvsmCasterSnapshotTrackable(
+                                    snapshot.deforming,
+                                    snapshot.reliableBounds,
+                                    snapshot.
+                                        deformationRevisionReliable);
+                            if (!snapshotTrackable ||
+                                !seenKeys.emplace(
+                                    snapshot.key, uint8_t(1u)).second)
+                            {
+                                reliable = false;
+                            }
+                            snapshots.push_back(
+                                std::move(snapshot));
+                        }
+                    }
+                }
+
+                walker.Next(subgraphRelevant);
+            }
+            return reliable;
+        }
+
+        bool ReconcileSvsmAdaptiveCasterClassification(
+            const std::vector<SvsmCasterSnapshot>& previousObserved,
+            const std::vector<SvsmCasterSnapshot>& previousPublished,
+            std::vector<SvsmCasterSnapshot>& current,
+            bool adaptiveClassificationEnabled,
+            uint64_t successfulSparseStateCommits,
+            bool& classificationTransition)
+        {
+            classificationTransition = false;
+            std::unordered_map<SvsmCasterKey, size_t, SvsmCasterKeyHash>
+                previousObservedByKey;
+            previousObservedByKey.reserve(previousObserved.size());
+            for (size_t index = 0u;
+                index < previousObserved.size();
+                ++index)
+            {
+                if (!previousObservedByKey.emplace(
+                        previousObserved[index].key, index).second)
+                {
+                    return false;
+                }
+            }
+            std::unordered_map<SvsmCasterKey, size_t, SvsmCasterKeyHash>
+                previousPublishedByKey;
+            previousPublishedByKey.reserve(previousPublished.size());
+            for (size_t index = 0u;
+                index < previousPublished.size();
+                ++index)
+            {
+                if (!previousPublishedByKey.emplace(
+                        previousPublished[index].key, index).second ||
+                    previousObservedByKey.find(
+                        previousPublished[index].key) ==
+                            previousObservedByKey.end())
+                {
+                    return false;
+                }
+            }
+
+            for (SvsmCasterSnapshot& snapshot : current)
+            {
+                const auto previousObservedIt =
+                    previousObservedByKey.find(snapshot.key);
+                const SvsmCasterSnapshot* oldObserved =
+                    previousObservedIt == previousObservedByKey.end()
+                    ? nullptr
+                    : &previousObserved[
+                        previousObservedIt->second];
+                const auto previousPublishedIt =
+                    previousPublishedByKey.find(snapshot.key);
+                const SvsmCasterSnapshot* oldPublished =
+                    previousPublishedIt ==
+                        previousPublishedByKey.end()
+                    ? nullptr
+                    : &previousPublished[
+                        previousPublishedIt->second];
+
+                if (!oldObserved)
+                {
+                    if (oldPublished)
+                        return false;
+                    // Donut exposes no authoritative primitive mobility.
+                    // Treat a newly observed rigid opaque caster as authored
+                    // static, then demote it immediately on its first
+                    // shadow-relevant change. This preserves fast initial
+                    // warmup while learning movable behavior over time.
+                    snapshot.staticCacheCandidate =
+                        snapshot.staticCacheEligible;
+                    snapshot.promotionDeadline =
+                        SvsmNoPromotionDeadline;
+                }
+                else
+                {
+                    if (!oldPublished)
+                        return false;
+                    const SvsmCasterEventDecision eventDecision =
+                        ReconcileSvsmCasterEvent(
+                            snapshot.invalidationMode,
+                            GetSvsmCasterEvent(
+                                oldPublished,
+                                &snapshot,
+                                false));
+                    if (eventDecision.category ==
+                        SvsmCasterEventCategory::Unexplained)
+                    {
+                        return false;
+                    }
+                    const bool depthMatchesPublished =
+                        eventDecision.category ==
+                            SvsmCasterEventCategory::Unchanged ||
+                        eventDecision.category ==
+                            SvsmCasterEventCategory::BindingOnly;
+                    const SvsmCasterSnapshot* classificationBaseline =
+                        depthMatchesPublished
+                        ? oldPublished
+                        : oldObserved;
+                    const bool invalidated =
+                        eventDecision.category ==
+                            SvsmCasterEventCategory::Invalidating;
+                    const SvsmAdaptiveCasterDeadlineClassification
+                        classification =
+                            AdvanceSvsmAdaptiveCasterDeadlineClassification(
+                                adaptiveClassificationEnabled,
+                                snapshot.staticCacheEligible,
+                                invalidated,
+                                classificationBaseline->
+                                    staticCacheCandidate,
+                                classificationBaseline->
+                                    promotionDeadline,
+                                successfulSparseStateCommits);
+                    snapshot.staticCacheCandidate =
+                        classification.staticCacheCandidate;
+                    snapshot.promotionDeadline =
+                        classification.promotionDeadline;
+                    snapshot.suppressedCoverageDebt =
+                        ShouldAccumulateSvsmSuppressedCoverageDebt(
+                            oldObserved->suppressedCoverageDebt,
+                            eventDecision.category);
+                }
+
+                if (oldObserved &&
+                    oldObserved->staticCacheCandidate !=
+                        snapshot.staticCacheCandidate)
+                {
+                    classificationTransition = true;
+                }
+            }
+            return true;
+        }
+
+        [[nodiscard]] uint64_t GetSvsmMinimumPromotionDeadline(
+            const std::vector<SvsmCasterSnapshot>& snapshots)
+        {
+            uint64_t minimumDeadline = SvsmNoPromotionDeadline;
+            for (const SvsmCasterSnapshot& snapshot : snapshots)
+            {
+                if (snapshot.staticCacheEligible &&
+                    !snapshot.staticCacheCandidate)
+                {
+                    minimumDeadline = std::min(
+                        minimumDeadline,
+                        snapshot.promotionDeadline);
+                }
+            }
+            return minimumDeadline;
+        }
+
+        bool PromoteDueSvsmDynamicCasters(
+            std::vector<SvsmCasterSnapshot>& snapshots,
+            uint64_t successfulSparseStateCommits,
+            bool& classificationTransition)
+        {
+            classificationTransition = false;
+            for (SvsmCasterSnapshot& snapshot : snapshots)
+            {
+                if (!snapshot.staticCacheEligible ||
+                    snapshot.staticCacheCandidate ||
+                    !IsSvsmDynamicCasterPromotionDue(
+                        successfulSparseStateCommits,
+                        snapshot.promotionDeadline))
+                {
+                    continue;
+                }
+                snapshot.staticCacheCandidate = true;
+                snapshot.promotionDeadline =
+                    SvsmNoPromotionDeadline;
+                classificationTransition = true;
+            }
+            return true;
+        }
+
+        bool AppendSvsmSnapshotInvalidationPages(
+            const SvsmCasterSnapshot& snapshot,
+            bool staticDirty,
+            const std::array<std::shared_ptr<PlanarView>,
+                SvsmClipmapCount>& views,
+            bool tightLocalizedInvalidationBoundsEnabled,
+            std::array<std::bitset<SvsmPagesPerClipmap>,
+                SvsmClipmapCount>& dynamicPages,
+            std::array<std::bitset<SvsmPagesPerClipmap>,
+                SvsmClipmapCount>& staticPages)
+        {
+            if (!snapshot.reliableBounds)
+                return false;
+
+            for (uint32_t level = 0u;
+                level < SvsmClipmapCount;
+                ++level)
+            {
+                if (!views[level])
+                    return false;
+                const float4x4 worldToClip =
+                    views[level]->GetViewProjectionMatrix(false);
+                SvsmPacketPageRectangle rectangle;
+                if (tightLocalizedInvalidationBoundsEnabled)
+                {
+                    const SvsmTightInvalidationProjection
+                        projection =
+                            ProjectSvsmObjectBoundsToPages(
+                                snapshot.objectSpaceBounds,
+                                snapshot.localToWorld,
+                                worldToClip);
+                    if (!projection.valid)
+                        return false;
+                    rectangle = projection.pages;
+                }
+                else
+                {
+                    rectangle =
+                        ProjectSvsmWorldBoundsToPages(
+                            snapshot.worldBounds,
+                            worldToClip);
+                }
+                if (rectangle.packedMinimum ==
+                        SvsmInvalidPacketPageBounds ||
+                    rectangle.packedMaximum ==
+                        SvsmInvalidPacketPageBounds)
+                {
+                    return false;
+                }
+                if (rectangle.packedMinimum ==
+                        SvsmEmptyPacketPageBounds &&
+                    rectangle.packedMaximum ==
+                        SvsmEmptyPacketPageBounds)
+                {
+                    continue;
+                }
+                if (rectangle.packedMinimum ==
+                        SvsmEmptyPacketPageBounds ||
+                    rectangle.packedMaximum ==
+                        SvsmEmptyPacketPageBounds)
+                {
+                    return false;
+                }
+
+                const SvsmPageCoordinate minimum =
+                    UnpackSvsmPacketPageCoordinate(
+                        rectangle.packedMinimum);
+                const SvsmPageCoordinate maximum =
+                    UnpackSvsmPacketPageCoordinate(
+                        rectangle.packedMaximum);
+                if (minimum.x < 0 ||
+                    minimum.y < 0 ||
+                    maximum.x < minimum.x ||
+                    maximum.y < minimum.y ||
+                    maximum.x >= int32_t(SvsmPagesPerAxis) ||
+                    maximum.y >= int32_t(SvsmPagesPerAxis))
+                {
+                    return false;
+                }
+
+                for (int32_t y = minimum.y;
+                    y <= maximum.y;
+                    ++y)
+                {
+                    for (int32_t x = minimum.x;
+                        x <= maximum.x;
+                        ++x)
+                    {
+                        const uint32_t localPage =
+                            uint32_t(y) * SvsmPagesPerAxis +
+                            uint32_t(x);
+                        if (staticDirty)
+                            staticPages[level].set(localPage);
+                        else
+                            dynamicPages[level].set(localPage);
+                    }
+                }
+            }
+            return true;
+        }
+
+        struct SvsmLocalizedInvalidationReconciliation
+        {
+            std::array<uint32_t, 5u> observedCategories{};
+            std::array<uint32_t, 5u> publishedCategories{};
+            bool observedSceneEvent = false;
+            bool unexplainedEvent = false;
+        };
+
+        void RecordSvsmCasterEventCategory(
+            std::array<uint32_t, 5u>& categories,
+            SvsmCasterEventCategory category)
+        {
+            const uint32_t index = uint32_t(category);
+            if (index < categories.size())
+                ++categories[index];
+        }
+
+        bool BuildSvsmLocalizedInvalidationPages(
+            const std::vector<SvsmCasterSnapshot>& previousObserved,
+            const std::vector<SvsmCasterSnapshot>& previousPublished,
+            std::vector<SvsmCasterSnapshot>& currentObserved,
+            const std::array<std::shared_ptr<PlanarView>,
+                SvsmClipmapCount>& views,
+            bool tightLocalizedInvalidationBoundsEnabled,
+            bool requireExplainedSceneStateChange,
+            bool callerChangeChannelsExhaustive,
+            std::vector<uint32_t>& pages,
+            std::vector<SvsmCasterSnapshot>& nextPublished,
+            SvsmLocalizedInvalidationReconciliation& reconciliation)
+        {
+            pages.clear();
+            nextPublished.clear();
+            reconciliation = {};
+            if (previousObserved.size() != previousPublished.size())
+            {
+                reconciliation.unexplainedEvent = true;
+                return false;
+            }
+            std::unordered_map<SvsmCasterKey, size_t, SvsmCasterKeyHash>
+                previousObservedByKey;
+            previousObservedByKey.reserve(previousObserved.size());
+            for (size_t index = 0u;
+                index < previousObserved.size();
+                ++index)
+            {
+                const bool trackable =
+                    IsSvsmObjectInvalidationModeValid(
+                        previousObserved[index].
+                            invalidationMode) &&
+                    IsSvsmCasterSnapshotTrackable(
+                        previousObserved[index].deforming,
+                        previousObserved[index].reliableBounds,
+                        previousObserved[index].
+                            deformationRevisionReliable);
+                if (!trackable ||
+                    !previousObservedByKey.emplace(
+                        previousObserved[index].key, index).second)
+                {
+                    reconciliation.unexplainedEvent = true;
+                    return false;
+                }
+            }
+            std::unordered_map<SvsmCasterKey, size_t, SvsmCasterKeyHash>
+                previousPublishedByKey;
+            previousPublishedByKey.reserve(previousPublished.size());
+            for (size_t index = 0u;
+                index < previousPublished.size();
+                ++index)
+            {
+                const bool trackable =
+                    IsSvsmObjectInvalidationModeValid(
+                        previousPublished[index].
+                            invalidationMode) &&
+                    IsSvsmCasterSnapshotTrackable(
+                        previousPublished[index].deforming,
+                        previousPublished[index].reliableBounds,
+                        previousPublished[index].
+                            deformationRevisionReliable);
+                if (!trackable ||
+                    !previousPublishedByKey.emplace(
+                        previousPublished[index].key, index).second ||
+                    previousObservedByKey.find(
+                        previousPublished[index].key) ==
+                            previousObservedByKey.end())
+                {
+                    reconciliation.unexplainedEvent = true;
+                    return false;
+                }
+            }
+
+            std::vector<bool> previousObservedSeen(
+                previousObserved.size(), false);
+            std::vector<bool> previousPublishedSeen(
+                previousPublished.size(), false);
+            std::array<std::bitset<SvsmPagesPerClipmap>,
+                SvsmClipmapCount> dynamicPages;
+            std::array<std::bitset<SvsmPagesPerClipmap>,
+                SvsmClipmapCount> staticPages;
+            nextPublished.reserve(currentObserved.size());
+
+            for (SvsmCasterSnapshot& snapshot : currentObserved)
+            {
+                const bool trackable =
+                    IsSvsmObjectInvalidationModeValid(
+                        snapshot.invalidationMode) &&
+                    IsSvsmCasterSnapshotTrackable(
+                        snapshot.deforming,
+                        snapshot.reliableBounds,
+                        snapshot.deformationRevisionReliable);
+                if (!trackable)
+                {
+                    reconciliation.unexplainedEvent = true;
+                    return false;
+                }
+
+                const auto previousObservedIt =
+                    previousObservedByKey.find(snapshot.key);
+                const SvsmCasterSnapshot* oldObserved =
+                    previousObservedIt == previousObservedByKey.end()
+                    ? nullptr
+                    : &previousObserved[
+                        previousObservedIt->second];
+                if (oldObserved)
+                {
+                    previousObservedSeen[
+                        previousObservedIt->second] = true;
+                }
+
+                const SvsmCasterEventDecision observedDecision =
+                    ReconcileSvsmCasterEvent(
+                        snapshot.invalidationMode,
+                        GetSvsmCasterEvent(
+                            oldObserved,
+                            &snapshot,
+                            true));
+                RecordSvsmCasterEventCategory(
+                    reconciliation.observedCategories,
+                    observedDecision.category);
+                reconciliation.observedSceneEvent =
+                    reconciliation.observedSceneEvent ||
+                    observedDecision.sceneEventPresent;
+                if (observedDecision.category ==
+                    SvsmCasterEventCategory::Unexplained)
+                {
+                    reconciliation.unexplainedEvent = true;
+                    return false;
+                }
+
+                const auto previousPublishedIt =
+                    previousPublishedByKey.find(snapshot.key);
+                const SvsmCasterSnapshot* oldPublished =
+                    previousPublishedIt ==
+                        previousPublishedByKey.end()
+                    ? nullptr
+                    : &previousPublished[
+                        previousPublishedIt->second];
+                if ((oldObserved == nullptr) !=
+                    (oldPublished == nullptr))
+                {
+                    reconciliation.unexplainedEvent = true;
+                    return false;
+                }
+                if (oldPublished)
+                {
+                    previousPublishedSeen[
+                        previousPublishedIt->second] = true;
+                }
+
+                const SvsmCasterEventDecision publishedDecision =
+                    ReconcileSvsmCasterEvent(
+                        snapshot.invalidationMode,
+                        GetSvsmCasterEvent(
+                            oldPublished,
+                            &snapshot,
+                            true));
+                RecordSvsmCasterEventCategory(
+                    reconciliation.publishedCategories,
+                    publishedDecision.category);
+                if (publishedDecision.category ==
+                    SvsmCasterEventCategory::Unexplained)
+                {
+                    reconciliation.unexplainedEvent = true;
+                    return false;
+                }
+
+                const bool previousSuppressedCoverageDebt =
+                    oldObserved &&
+                    oldObserved->suppressedCoverageDebt;
+                snapshot.suppressedCoverageDebt =
+                    ShouldAccumulateSvsmSuppressedCoverageDebt(
+                        previousSuppressedCoverageDebt,
+                        publishedDecision.category);
+                if (RequiresSvsmFullRefreshForSuppressedCoverageDebt(
+                        previousSuppressedCoverageDebt,
+                        observedDecision) ||
+                    RequiresSvsmFullRefreshForSuppressedCoverageDebt(
+                        previousSuppressedCoverageDebt,
+                        publishedDecision))
+                {
+                    // Cached pages may contain any suppressed intermediate
+                    // state. Old/current bounds alone are insufficient to
+                    // clear that union when the policy, layer, topology, or
+                    // caster state next becomes authoritative.
+                    reconciliation.unexplainedEvent = true;
+                    return false;
+                }
+
+                switch (publishedDecision.publishedAction)
+                {
+                case SvsmPublishedCasterAction::PublishCurrent:
+                {
+                    const SvsmCasterInvalidationClasses
+                        invalidationClasses =
+                            GetSvsmCasterInvalidationClasses(
+                                oldPublished
+                                    ? oldPublished->
+                                        staticCacheCandidate
+                                    : false,
+                                snapshot.staticCacheCandidate);
+                    if ((publishedDecision.
+                                invalidatePreviousCoverage &&
+                            (!oldPublished ||
+                                !AppendSvsmSnapshotInvalidationPages(
+                                    *oldPublished,
+                                    invalidationClasses.
+                                        previousStatic,
+                                    views,
+                                    tightLocalizedInvalidationBoundsEnabled,
+                                    dynamicPages,
+                                    staticPages))) ||
+                        (publishedDecision.
+                                invalidateCurrentCoverage &&
+                            !AppendSvsmSnapshotInvalidationPages(
+                                snapshot,
+                                invalidationClasses.currentStatic,
+                                views,
+                                tightLocalizedInvalidationBoundsEnabled,
+                                dynamicPages,
+                                staticPages)))
+                    {
+                        reconciliation.unexplainedEvent = true;
+                        return false;
+                    }
+                    nextPublished.push_back(snapshot);
+                    break;
+                }
+                case SvsmPublishedCasterAction::Retain:
+                    if (!oldPublished)
+                    {
+                        reconciliation.unexplainedEvent = true;
+                        return false;
+                    }
+                    nextPublished.push_back(*oldPublished);
+                    break;
+                case SvsmPublishedCasterAction::Remove:
+                default:
+                    reconciliation.unexplainedEvent = true;
+                    return false;
+                }
+            }
+
+            for (size_t index = 0u;
+                index < previousObserved.size();
+                ++index)
+            {
+                if (previousObservedSeen[index])
+                    continue;
+                const SvsmCasterEventDecision observedDecision =
+                    ReconcileSvsmCasterEvent(
+                        previousObserved[index].invalidationMode,
+                        GetSvsmCasterEvent(
+                            &previousObserved[index],
+                            nullptr,
+                            true));
+                RecordSvsmCasterEventCategory(
+                    reconciliation.observedCategories,
+                    observedDecision.category);
+                reconciliation.observedSceneEvent =
+                    reconciliation.observedSceneEvent ||
+                    observedDecision.sceneEventPresent;
+                if (previousObserved[index].
+                        suppressedCoverageDebt)
+                {
+                    reconciliation.unexplainedEvent = true;
+                    return false;
+                }
+                if (observedDecision.category !=
+                        SvsmCasterEventCategory::Invalidating ||
+                    !observedDecision.invalidatePreviousCoverage ||
+                    !AppendSvsmSnapshotInvalidationPages(
+                        previousObserved[index],
+                        previousObserved[index].
+                            staticCacheCandidate,
+                        views,
+                        tightLocalizedInvalidationBoundsEnabled,
+                        dynamicPages,
+                        staticPages))
+                {
+                    reconciliation.unexplainedEvent = true;
+                    return false;
+                }
+            }
+
+            for (size_t index = 0u;
+                index < previousPublished.size();
+                ++index)
+            {
+                if (previousPublishedSeen[index])
+                    continue;
+                const SvsmCasterEventDecision publishedDecision =
+                    ReconcileSvsmCasterEvent(
+                        previousPublished[index].
+                            invalidationMode,
+                        GetSvsmCasterEvent(
+                            &previousPublished[index],
+                            nullptr,
+                            true));
+                RecordSvsmCasterEventCategory(
+                    reconciliation.publishedCategories,
+                    publishedDecision.category);
+                if (publishedDecision.category !=
+                        SvsmCasterEventCategory::Invalidating ||
+                    !publishedDecision.invalidatePreviousCoverage ||
+                    !AppendSvsmSnapshotInvalidationPages(
+                        previousPublished[index],
+                        previousPublished[index].
+                            staticCacheCandidate,
+                        views,
+                        tightLocalizedInvalidationBoundsEnabled,
+                        dynamicPages,
+                        staticPages))
+                {
+                    reconciliation.unexplainedEvent = true;
+                    return false;
+                }
+            }
+
+            if (!IsSvsmObservedSceneChangeExplained(
+                    requireExplainedSceneStateChange,
+                    reconciliation.observedSceneEvent,
+                    reconciliation.unexplainedEvent,
+                    callerChangeChannelsExhaustive))
+            {
+                // A scene hash or reliable revision changed without a
+                // corresponding observed caster event in the exhaustive
+                // snapshot schema. Conservatively refresh the full cache.
+                reconciliation.unexplainedEvent = true;
+                return false;
+            }
+
+            pages.reserve(
+                SvsmPagesPerClipmap * SvsmClipmapCount);
+            for (uint32_t level = 0u;
+                level < SvsmClipmapCount;
+                ++level)
+            {
+                for (uint32_t localPage = 0u;
+                    localPage < SvsmPagesPerClipmap;
+                    ++localPage)
+                {
+                    if (staticPages[level].test(localPage))
+                    {
+                        pages.push_back(
+                            PackSvsmLocalInvalidationPage(
+                                level * SvsmPagesPerClipmap +
+                                    localPage,
+                                true));
+                    }
+                    else if (dynamicPages[level].test(localPage))
+                    {
+                        pages.push_back(
+                            PackSvsmLocalInvalidationPage(
+                                level * SvsmPagesPerClipmap +
+                                    localPage,
+                                false));
+                    }
+                }
+            }
+            return pages.size() <=
+                SvsmPagesPerClipmap * SvsmClipmapCount;
+        }
+
+        bool TryBuildSvsmCommonLightBounds(
+            const box3& objectBounds,
+            const affine3& localToWorld,
+            const affine3& worldToLight,
+            box3& lightBounds)
+        {
+            lightBounds = box3::empty();
+            if (!IsFiniteSvsmBox(objectBounds))
+                return false;
+
+            float3 minimumLight =
+                float3(std::numeric_limits<float>::infinity());
+            float3 maximumLight =
+                float3(-std::numeric_limits<float>::infinity());
+            for (uint32_t corner = 0u; corner < 8u; ++corner)
+            {
+                const float3 objectPosition = {
+                    (corner & 1u) != 0u
+                        ? objectBounds.m_maxs.x
+                        : objectBounds.m_mins.x,
+                    (corner & 2u) != 0u
+                        ? objectBounds.m_maxs.y
+                        : objectBounds.m_mins.y,
+                    (corner & 4u) != 0u
+                        ? objectBounds.m_maxs.z
+                        : objectBounds.m_mins.z
+                };
+                const float3 lightPosition =
+                    worldToLight.transformPoint(
+                        localToWorld.transformPoint(objectPosition));
+                if (!dm::all(dm::isfinite(lightPosition)))
+                    return false;
+                minimumLight = dm::min(minimumLight, lightPosition);
+                maximumLight = dm::max(maximumLight, lightPosition);
+            }
+            lightBounds.m_mins = minimumLight;
+            lightBounds.m_maxs = maximumLight;
+            return IsFiniteSvsmBox(lightBounds);
+        }
+
+        bool TryBuildSvsmCommonLightBounds(
+            const DrawItem& item,
+            const affine3& localToWorld,
+            const affine3& worldToLight,
+            box3& lightBounds)
+        {
+            if (!item.instance ||
+                !item.mesh ||
+                !item.geometry ||
+                !CanUseSvsmStaticPacketBounds(
+                    bool(item.mesh->skinPrototype),
+                    item.mesh->isSkinPrototype,
+                    item.mesh->isMorphTargetAnimationMesh))
+            {
+                lightBounds = box3::empty();
+                return false;
+            }
+            return TryBuildSvsmCommonLightBounds(
+                item.geometry->objectSpaceBounds,
+                localToWorld,
+                worldToLight,
+                lightBounds);
+        }
+
+        SparseVirtualShadowMapPacketMetadata
+        BuildPacketPageMetadataFromCommonLightBounds(
+            uint32_t objectInstanceIndex,
+            const box3& lightBounds,
+            const float4x4& lightToClip,
+            uint32_t pageListOffset,
+            uint32_t& pageListCapacity)
+        {
+            SparseVirtualShadowMapPacketMetadata metadata = {};
+            metadata.packedMinimumPage =
+                SvsmInvalidPacketPageBounds;
+            metadata.packedMaximumPage =
+                SvsmInvalidPacketPageBounds;
+            metadata.pageListOffset = pageListOffset;
+            metadata.objectInstanceIndex = objectInstanceIndex;
+            metadata.packedMinimumTexel =
+                SvsmInvalidPacketPageBounds;
+            metadata.packedMaximumTexel =
+                SvsmInvalidPacketPageBounds;
+            metadata.nearestReverseDepth = 0u;
+            pageListCapacity = 0u;
+            if (!IsFiniteSvsmBox(lightBounds))
+            {
+                return metadata;
+            }
+
+            float2 minimumVirtual =
+                float2(std::numeric_limits<float>::infinity());
+            float2 maximumVirtual =
+                float2(-std::numeric_limits<float>::infinity());
+            float nearestReverseDepth =
+                -std::numeric_limits<float>::infinity();
+            for (uint32_t corner = 0u; corner < 8u; ++corner)
+            {
+                const float3 lightPosition = {
+                    (corner & 1u) != 0u
+                        ? lightBounds.m_maxs.x
+                        : lightBounds.m_mins.x,
+                    (corner & 2u) != 0u
+                        ? lightBounds.m_maxs.y
+                        : lightBounds.m_mins.y,
+                    (corner & 4u) != 0u
+                        ? lightBounds.m_maxs.z
+                        : lightBounds.m_mins.z
+                };
+                const float4 clip =
+                    float4(lightPosition, 1.f) * lightToClip;
+                if (!dm::all(dm::isfinite(clip)) ||
+                    !(clip.w > 1e-8f))
+                {
+                    return metadata;
+                }
+                const float2 ndc = clip.xy() / clip.w;
+                const float ndcDepth = clip.z / clip.w;
+                if (!std::isfinite(ndcDepth))
+                    return metadata;
+                const float2 virtualPosition =
+                    (ndc * float2(0.5f, -0.5f) +
+                        float2(0.5f)) *
+                    float(SvsmVirtualResolution);
+                minimumVirtual =
+                    dm::min(minimumVirtual, virtualPosition);
+                maximumVirtual =
+                    dm::max(maximumVirtual, virtualPosition);
+                nearestReverseDepth = std::max(
+                    nearestReverseDepth, ndcDepth);
+            }
+
+            if (!dm::all(dm::isfinite(minimumVirtual)) ||
+                !dm::all(dm::isfinite(maximumVirtual)) ||
+                !std::isfinite(nearestReverseDepth))
+            {
+                return metadata;
+            }
+            const SvsmPacketPageRectangle rectangle =
+                GetSvsmPacketPageRectangle(
+                    minimumVirtual.x,
+                    minimumVirtual.y,
+                    maximumVirtual.x,
+                    maximumVirtual.y);
+            metadata.packedMinimumPage = rectangle.packedMinimum;
+            metadata.packedMaximumPage = rectangle.packedMaximum;
+            const SvsmPacketTexelRectangle texelRectangle =
+                GetSvsmPacketTexelRectangle(
+                    minimumVirtual.x,
+                    minimumVirtual.y,
+                    maximumVirtual.x,
+                    maximumVirtual.y);
+            metadata.packedMinimumTexel =
+                texelRectangle.packedMinimum;
+            metadata.packedMaximumTexel =
+                texelRectangle.packedMaximum;
+            const float conservativeNearestReverseDepth =
+                std::nextafter(
+                    std::clamp(nearestReverseDepth, 0.f, 1.f),
+                    std::numeric_limits<float>::infinity());
+            metadata.nearestReverseDepth =
+                FloatBits(conservativeNearestReverseDepth);
             pageListCapacity = GetSvsmPacketPageListCapacity(
                 metadata.packedMinimumPage,
                 metadata.packedMaximumPage);
@@ -375,6 +2148,59 @@ namespace uvsr
                 depthDesc.sampleCount == 1u &&
                 depthDesc.dimension == nvrhi::TextureDimension::Texture2D;
         }
+    }
+
+    struct SparseVirtualShadowMapPass::CasterSnapshotState
+    {
+        // Observed state follows the live scene after a successful
+        // transaction. Published state follows only depth that was actually
+        // invalidated and rendered; policy-suppressed changes must not move it.
+        std::vector<SvsmCasterSnapshot> observed;
+        std::vector<SvsmCasterSnapshot> published;
+        std::vector<SvsmCasterSnapshot> pendingObserved;
+        std::vector<SvsmCasterSnapshot> pendingPublished;
+        std::shared_ptr<SceneGraphNode> root;
+        std::shared_ptr<SceneGraphNode> pendingRoot;
+        SvsmObjectInvalidationPolicyConfiguration
+            policyConfiguration;
+        SvsmObjectInvalidationPolicyConfiguration
+            pendingPolicyConfiguration;
+        bool containsAlwaysMode = false;
+        bool pendingContainsAlwaysMode = false;
+        bool policyResolutionReliable = true;
+        bool pendingPolicyResolutionReliable = true;
+        bool adaptiveClassificationEnabled = true;
+        bool pendingAdaptiveClassificationEnabled = true;
+        uint64_t classificationGeneration = 0u;
+        uint64_t pendingClassificationGeneration = 0u;
+        uint64_t successfulSparseStateCommits = 0u;
+        uint64_t minimumPromotionDeadline =
+            SvsmNoPromotionDeadline;
+        uint64_t pendingMinimumPromotionDeadline =
+            SvsmNoPromotionDeadline;
+        bool valid = false;
+        bool reliable = false;
+        bool pendingReady = false;
+        bool pendingReliable = false;
+    };
+
+    [[nodiscard]] bool IsSvsmRasterStateComplete(
+        const nvrhi::GraphicsState& state,
+        bool indirectSubmission)
+    {
+        if (!state.pipeline ||
+            !state.framebuffer ||
+            !state.indexBuffer.buffer ||
+            (indirectSubmission && !state.indirectParams))
+        {
+            return false;
+        }
+        for (nvrhi::IBindingSet* bindingSet : state.bindings)
+        {
+            if (!bindingSet)
+                return false;
+        }
+        return !state.bindings.empty();
     }
 
     class SparseVirtualShadowMapPass::DenseDepthPass final
@@ -500,6 +2326,144 @@ namespace uvsr
             GBufferFillPass::SetupView(
                 context, commandList, view, viewPrev);
         }
+
+        bool RenderViewReference(
+            nvrhi::ICommandList* commandList,
+            const IView* view,
+            nvrhi::IFramebuffer* framebuffer,
+            IDrawStrategy& drawStrategy,
+            Context& context)
+        {
+            if (!commandList ||
+                !view ||
+                !framebuffer ||
+                !m_ViewBindings)
+            {
+                return false;
+            }
+
+            SetupView(context, commandList, view, view);
+
+            const Material* lastMaterial = nullptr;
+            const BufferGroup* lastBuffers = nullptr;
+            nvrhi::RasterCullMode lastCullMode =
+                nvrhi::RasterCullMode::Back;
+            bool stateValid = false;
+
+            nvrhi::GraphicsState graphicsState;
+            graphicsState.framebuffer = framebuffer;
+            graphicsState.viewport = view->GetViewportState();
+            graphicsState.shadingRateState =
+                view->GetVariableRateShadingState();
+
+            nvrhi::DrawArguments currentDraw;
+            currentDraw.instanceCount = 0u;
+            auto flushDraw = [&]() {
+                if (currentDraw.instanceCount == 0u)
+                    return;
+                SetPushConstants(
+                    context,
+                    commandList,
+                    graphicsState,
+                    currentDraw);
+                commandList->drawIndexed(currentDraw);
+                currentDraw.instanceCount = 0u;
+            };
+
+            while (const DrawItem* item = drawStrategy.GetNextItem())
+            {
+                if (!item->material)
+                    continue;
+                if (!item->buffers ||
+                    !item->geometry ||
+                    !item->mesh ||
+                    !item->instance ||
+                    item->instance->GetInstanceIndex() < 0)
+                {
+                    return false;
+                }
+
+                const bool newBuffers =
+                    item->buffers != lastBuffers;
+                const bool newMaterial =
+                    item->material != lastMaterial ||
+                    item->cullMode != lastCullMode;
+                if (newBuffers || newMaterial)
+                    flushDraw();
+
+                if (newBuffers)
+                {
+                    SetupInputBuffers(
+                        context, item->buffers, graphicsState);
+                    lastBuffers = item->buffers;
+                    stateValid = false;
+                }
+                if (newMaterial)
+                {
+                    if (!SetupMaterial(
+                            context,
+                            item->material,
+                            item->cullMode,
+                            graphicsState))
+                    {
+                        return false;
+                    }
+                    lastMaterial = item->material;
+                    lastCullMode = item->cullMode;
+                    stateValid = false;
+                }
+                if (!IsSvsmRasterStateComplete(
+                        graphicsState, false))
+                {
+                    return false;
+                }
+                if (!stateValid)
+                {
+                    commandList->setGraphicsState(graphicsState);
+                    stateValid = true;
+                }
+
+                const uint64_t vertexOffset =
+                    uint64_t(item->mesh->vertexOffset) +
+                    item->geometry->vertexOffsetInMesh;
+                const uint64_t indexOffset =
+                    uint64_t(item->mesh->indexOffset) +
+                    item->geometry->indexOffsetInMesh;
+                if (vertexOffset >
+                        std::numeric_limits<uint32_t>::max() ||
+                    indexOffset >
+                        std::numeric_limits<uint32_t>::max())
+                {
+                    return false;
+                }
+
+                nvrhi::DrawArguments args;
+                args.vertexCount = item->geometry->numIndices;
+                args.instanceCount = 1u;
+                args.startVertexLocation = uint32_t(vertexOffset);
+                args.startIndexLocation = uint32_t(indexOffset);
+                args.startInstanceLocation =
+                    uint32_t(item->instance->GetInstanceIndex());
+
+                if (currentDraw.instanceCount > 0u &&
+                    currentDraw.startIndexLocation ==
+                        args.startIndexLocation &&
+                    uint64_t(currentDraw.startInstanceLocation) +
+                            currentDraw.instanceCount ==
+                        uint64_t(args.startInstanceLocation))
+                {
+                    ++currentDraw.instanceCount;
+                }
+                else
+                {
+                    flushDraw();
+                    currentDraw = args;
+                }
+            }
+
+            flushDraw();
+            return true;
+        }
     };
 
     class SparseVirtualShadowMapPass::SparseDepthPass final
@@ -516,12 +2480,29 @@ namespace uvsr
         nvrhi::IBuffer* m_PacketPageMetadata;
         nvrhi::IBuffer* m_PacketPageRuntime;
         nvrhi::IBuffer* m_PacketRenderPages;
+        nvrhi::IBuffer* m_ReceiverPageMasks;
         uint32_t m_PhysicalPageCount;
+        bool m_PairedStaticDynamicDepthEnabled = false;
+        bool m_DeferredStaticDepthMergeEnabled = false;
         nvrhi::ShaderHandle m_BatchedVertexShader;
+        nvrhi::ShaderHandle m_PositionOnlyVertexShader;
+        nvrhi::ShaderHandle m_BatchedPositionOnlyVertexShader;
+        nvrhi::ShaderHandle m_MaterialFreeOpaquePixelShader;
         std::array<nvrhi::GraphicsPipelineHandle, PipelineKey::Count>
             m_BatchedPipelines;
+        std::array<nvrhi::GraphicsPipelineHandle, PipelineKey::Count>
+            m_PositionOnlyPipelines;
+        std::array<nvrhi::GraphicsPipelineHandle, PipelineKey::Count>
+            m_BatchedPositionOnlyPipelines;
+        nvrhi::BindingLayoutHandle m_OpaqueViewBindingLayout;
+        nvrhi::BindingSetHandle m_OpaqueViewBindings;
         bool m_BatchedDrawSupported = false;
         bool m_BatchedPipelineActive = false;
+        bool m_OpaqueRasterSpecializationRequested = true;
+        bool m_OpaqueRasterSpecializationSupported = false;
+        bool m_OpaqueRasterSpecializationFailureLogged = false;
+        bool m_LeanAlphaTestedBindingsEnabled = false;
+        bool m_TrackMaterialBindingLiveness = true;
         bool m_TrackViewBindingLiveness = false;
 
         struct RenderPacket
@@ -544,6 +2525,40 @@ namespace uvsr
             bool batchable = false;
         };
 
+        struct SharedCasterRecord
+        {
+            DrawItem draw;
+            std::shared_ptr<Material> materialReference;
+            std::shared_ptr<BufferGroup> buffersReference;
+            nvrhi::DrawArguments arguments;
+            box3 commonLightBounds = box3::empty();
+            uint32_t clipmapMask = 0u;
+            bool reliableCommonLightBounds = false;
+            bool staticCacheCandidate = false;
+            bool argumentsValid = false;
+            bool alphaTested = false;
+            bool validatedStableDrawState = false;
+        };
+
+        struct PersistentCasterSourceRecord
+        {
+            std::shared_ptr<MeshInstance> instance;
+            std::shared_ptr<MeshInfo> mesh;
+            std::shared_ptr<MeshGeometry> geometry;
+            std::shared_ptr<BufferGroup> buffers;
+            std::shared_ptr<Material> material;
+            affine3 localToWorld;
+            box3 objectSpaceBounds = box3::empty();
+            box3 worldBounds = box3::empty();
+            SvsmCasterTopologySignature topology;
+            SvsmMaterialShadowSignature materialSignature;
+            nvrhi::RasterCullMode cullMode =
+                nvrhi::RasterCullMode::Back;
+            nvrhi::DrawArguments arguments;
+            uint32_t instanceIndex = 0u;
+            bool staticCacheCandidate = false;
+        };
+
         std::array<std::vector<RenderPacket>, SvsmClipmapCount>
             m_RenderPackets;
         std::array<std::vector<RenderPacketGroup>, SvsmClipmapCount>
@@ -554,7 +2569,11 @@ namespace uvsr
             m_RenderPacketOffsets{};
         uint32_t m_BatchedRasterStateMask = 0u;
         std::shared_ptr<SceneGraphNode> m_RenderPacketRoot;
+        const DirectionalLight* m_RenderPacketLight = nullptr;
+        const IDrawStrategy* m_RenderPacketDrawStrategy = nullptr;
         uint64_t m_RenderPacketSceneStateHash = 0u;
+        uint64_t m_RenderPacketSceneStateRevision = 0u;
+        bool m_RenderPacketSceneStateRevisionReliable = false;
         uint32_t m_RenderPacketCount = 0u;
         uint32_t m_RenderPacketPageEntryCount = 0u;
         uint32_t m_RenderPacketFirstClipmap = 0u;
@@ -562,19 +2581,710 @@ namespace uvsr
         bool m_RenderPacketExactPageListsRequested = false;
         bool m_RenderPacketDirtyPageScatterRasterRequested = false;
         bool m_RenderPacketStateSortingRequested = false;
+        bool m_RenderPacketSharedBuilderActive = false;
+        bool m_RenderPacketPairedDepthClassificationActive = false;
+        bool m_RenderPacketAdaptiveClassificationActive = false;
+        uint64_t m_RenderPacketClassificationGeneration = 0u;
         bool m_RenderPacketPageMetadataSupported = false;
         bool m_RenderPacketPageDispatchSupported = false;
         bool m_RenderPacketCacheValid = false;
+        std::vector<SharedCasterRecord> m_SharedCasterScratch;
+        std::vector<uint32_t> m_SharedCasterMaskStackScratch;
+        std::unordered_set<const SceneGraphNode*>
+            m_SharedUnboundedDeformerAncestorsScratch;
+        std::shared_ptr<SceneGraphNode>
+            m_SharedUnboundedDeformerAncestorRoot;
+        uint64_t m_SharedUnboundedDeformerAncestorSceneStateHash = 0u;
+        bool m_SharedUnboundedDeformerAncestorCacheValid = false;
+        std::array<float4x4, SvsmClipmapCount>
+            m_SharedLightToClipMatrices{};
+        std::vector<PersistentCasterSourceRecord>
+            m_PersistentCasterSources;
+        std::vector<PersistentCasterSourceRecord>
+            m_PendingPersistentCasterSources;
+        SvsmPersistentCasterSourceKey
+            m_PersistentCasterSourceKey;
+        SvsmPersistentCasterSourceKey
+            m_PendingPersistentCasterSourceKey;
+        bool m_PersistentCasterSourceCacheValid = false;
+        bool m_PendingPersistentCasterSourceReady = false;
+        bool m_PersistentCasterSourceRequested = false;
+        bool m_PersistentCasterSourceActive = false;
+        bool m_PersistentCasterSourceRebuilt = false;
+        bool m_PersistentCasterSourceReused = false;
+        std::unordered_map<SvsmCasterKey, bool, SvsmCasterKeyHash>
+            m_AdaptiveStaticCasterClassification;
+        bool m_AdaptiveStaticCasterClassificationActive = false;
+        const void* m_AdaptiveStaticCasterClassificationRoot = nullptr;
+        uint64_t m_AdaptiveStaticCasterClassificationGeneration = 0u;
+        uint32_t m_AdaptiveStaticCasterClassificationRecordCount = 0u;
+
+        [[nodiscard]] bool IsPacketStaticCacheCandidate(
+            const DrawItem& item) const
+        {
+            if (!m_AdaptiveStaticCasterClassificationActive)
+                return IsSvsmStaticCacheCandidate(item);
+            if (!item.instance || !item.geometry)
+                return false;
+            const auto found =
+                m_AdaptiveStaticCasterClassification.find({
+                    item.instance,
+                    item.geometry
+                });
+            return found !=
+                    m_AdaptiveStaticCasterClassification.end() &&
+                found->second;
+        }
+
+        [[nodiscard]] bool ValidateCachedPersistentCasterSourceRecord(
+            const PersistentCasterSourceRecord& record) const
+        {
+            return record.instance &&
+                record.mesh &&
+                record.geometry &&
+                record.buffers &&
+                record.material &&
+                record.topology.mesh == record.mesh.get() &&
+                record.topology.buffers == record.buffers.get() &&
+                record.topology.indexBuffer != nullptr &&
+                record.topology.vertexBuffer != nullptr &&
+                record.topology.instanceBuffer != nullptr &&
+                record.materialSignature.material ==
+                    record.material.get() &&
+                record.topology.primitiveType ==
+                    MeshGeometryPrimitiveType::Triangles &&
+                (record.materialSignature.domain ==
+                        MaterialDomain::Opaque ||
+                    record.materialSignature.domain ==
+                        MaterialDomain::AlphaTested) &&
+                record.arguments.instanceCount == 1u &&
+                record.arguments.startInstanceLocation ==
+                    record.instanceIndex &&
+                IsFiniteSvsmTransformSignature(
+                    MakeSvsmTransformSignature(
+                        record.localToWorld)) &&
+                IsFiniteSvsmBox(record.objectSpaceBounds) &&
+                IsFiniteSvsmBox(record.worldBounds);
+        }
+
+        [[nodiscard]] bool ValidatePersistentCasterSourceRecordForBuild(
+            const PersistentCasterSourceRecord& record) const
+        {
+            return ValidateCachedPersistentCasterSourceRecord(record) &&
+                record.instance->GetMesh().get() ==
+                    record.mesh.get() &&
+                record.mesh->buffers.get() ==
+                    record.buffers.get() &&
+                record.geometry->material.get() ==
+                    record.material.get() &&
+                record.topology.indexBuffer ==
+                    record.buffers->indexBuffer.Get() &&
+                record.topology.vertexBuffer ==
+                    record.buffers->vertexBuffer.Get() &&
+                record.topology.instanceBuffer ==
+                    record.buffers->instanceBuffer.Get() &&
+                record.geometry->type ==
+                    record.topology.primitiveType &&
+                record.material->domain ==
+                    record.materialSignature.domain &&
+                record.instance->GetInstanceIndex() >= 0 &&
+                uint32_t(record.instance->GetInstanceIndex()) ==
+                    record.instanceIndex;
+        }
+
+        bool PreparePersistentCasterSources(
+            const std::shared_ptr<SceneGraphNode>& rootNode,
+            const std::vector<SvsmCasterSnapshot>& snapshots,
+            uint64_t sourceGeneration,
+            uint64_t casterStateHash)
+        {
+            if (!rootNode ||
+                sourceGeneration == 0u ||
+                snapshots.size() >
+                    std::numeric_limits<uint32_t>::max())
+            {
+                return false;
+            }
+
+            const SvsmPersistentCasterSourceKey key = {
+                rootNode.get(),
+                sourceGeneration,
+                casterStateHash,
+                uint32_t(snapshots.size()),
+                true
+            };
+            if (m_PersistentCasterSourceCacheValid &&
+                IsSameSvsmPersistentCasterSourceKey(
+                    m_PersistentCasterSourceKey, key))
+            {
+                m_PersistentCasterSourceReused = true;
+                return true;
+            }
+
+            std::vector<PersistentCasterSourceRecord> pending;
+            pending.reserve(snapshots.size());
+            std::unordered_set<SvsmCasterKey, SvsmCasterKeyHash>
+                seenKeys;
+            seenKeys.reserve(snapshots.size());
+            for (const SvsmCasterSnapshot& snapshot : snapshots)
+            {
+                if (!snapshot.instanceReference ||
+                    !snapshot.geometryReference ||
+                    snapshot.key.instance !=
+                        snapshot.instanceReference.get() ||
+                    snapshot.key.geometry !=
+                        snapshot.geometryReference.get() ||
+                    !seenKeys.insert(snapshot.key).second ||
+                    snapshot.deforming ||
+                    !snapshot.reliableBounds ||
+                    !IsFiniteSvsmBox(snapshot.objectSpaceBounds) ||
+                    !IsFiniteSvsmBox(snapshot.worldBounds))
+                {
+                    return false;
+                }
+
+                const std::shared_ptr<MeshInfo> mesh =
+                    snapshot.instanceReference->GetMesh();
+                const std::shared_ptr<MeshGeometry> geometry =
+                    snapshot.geometryReference;
+                const std::shared_ptr<BufferGroup> buffers =
+                    mesh ? mesh->buffers : nullptr;
+                const std::shared_ptr<Material> material =
+                    geometry ? geometry->material : nullptr;
+                if (!mesh ||
+                    !buffers ||
+                    !material ||
+                    !buffers->indexBuffer ||
+                    !buffers->vertexBuffer ||
+                    !buffers->instanceBuffer ||
+                    geometry->type !=
+                        MeshGeometryPrimitiveType::Triangles ||
+                    (material->domain != MaterialDomain::Opaque &&
+                        material->domain !=
+                            MaterialDomain::AlphaTested) ||
+                    std::find(
+                        mesh->geometries.begin(),
+                        mesh->geometries.end(),
+                        geometry) == mesh->geometries.end() ||
+                    !(GetSvsmCasterTopologySignature(
+                        *mesh, *geometry) == snapshot.topology) ||
+                    !(GetSvsmMaterialShadowSignature(
+                        material.get()) == snapshot.material))
+                {
+                    return false;
+                }
+
+                affine3 localToWorld;
+                if (!TryMakeSvsmAffineFromTransformSignature(
+                        snapshot.localToWorld, localToWorld))
+                {
+                    return false;
+                }
+                const box3 rebuiltWorldBounds =
+                    snapshot.objectSpaceBounds * localToWorld;
+                if (!IsFiniteSvsmBox(rebuiltWorldBounds) ||
+                    !EqualSvsmBox(
+                        rebuiltWorldBounds,
+                        snapshot.worldBounds))
+                {
+                    return false;
+                }
+
+                const int instanceIndex =
+                    snapshot.instanceReference->
+                        GetInstanceIndex();
+                const uint64_t vertexOffset =
+                    uint64_t(mesh->vertexOffset) +
+                    geometry->vertexOffsetInMesh;
+                const uint64_t indexOffset =
+                    uint64_t(mesh->indexOffset) +
+                    geometry->indexOffsetInMesh;
+                if (instanceIndex < 0 ||
+                    vertexOffset >
+                        std::numeric_limits<uint32_t>::max() ||
+                    indexOffset >
+                        std::numeric_limits<uint32_t>::max())
+                {
+                    return false;
+                }
+
+                PersistentCasterSourceRecord record;
+                record.instance = snapshot.instanceReference;
+                record.mesh = mesh;
+                record.geometry = geometry;
+                record.buffers = buffers;
+                record.material = material;
+                record.localToWorld = localToWorld;
+                record.objectSpaceBounds =
+                    snapshot.objectSpaceBounds;
+                record.worldBounds = snapshot.worldBounds;
+                record.topology = snapshot.topology;
+                record.materialSignature = snapshot.material;
+                record.cullMode = material->doubleSided
+                    ? nvrhi::RasterCullMode::None
+                    : nvrhi::RasterCullMode::Back;
+                record.arguments.vertexCount =
+                    geometry->numIndices;
+                record.arguments.instanceCount = 1u;
+                record.arguments.startVertexLocation =
+                    uint32_t(vertexOffset);
+                record.arguments.startIndexLocation =
+                    uint32_t(indexOffset);
+                record.arguments.startInstanceLocation =
+                    uint32_t(instanceIndex);
+                record.instanceIndex = uint32_t(instanceIndex);
+                record.staticCacheCandidate =
+                    snapshot.staticCacheCandidate;
+                if (!ValidatePersistentCasterSourceRecordForBuild(
+                        record))
+                    return false;
+                pending.push_back(std::move(record));
+            }
+
+            m_PendingPersistentCasterSources.swap(pending);
+            m_PendingPersistentCasterSourceKey = key;
+            m_PendingPersistentCasterSourceReady = true;
+            m_PersistentCasterSourceRebuilt = true;
+            return true;
+        }
+
+        bool BuildSharedCasterRecordsFromPersistentSources(
+            const std::array<frustum, SvsmClipmapCount>&
+                clipmapFrusta,
+            uint32_t firstClipmap,
+            uint32_t activeClipmapMask,
+            const affine3& worldToCommonLight)
+        {
+            const std::vector<PersistentCasterSourceRecord>& sources =
+                m_PendingPersistentCasterSourceReady
+                ? m_PendingPersistentCasterSources
+                : m_PersistentCasterSources;
+            for (const PersistentCasterSourceRecord& source : sources)
+            {
+                if (!ValidateCachedPersistentCasterSourceRecord(source))
+                    return false;
+                uint32_t clipmapMask = 0u;
+                for (uint32_t level = firstClipmap;
+                    level < SvsmClipmapCount;
+                    ++level)
+                {
+                    const uint32_t bit = 1u << level;
+                    if ((activeClipmapMask & bit) != 0u &&
+                        clipmapFrusta[level].intersectsWith(
+                            source.worldBounds))
+                    {
+                        clipmapMask |= bit;
+                    }
+                }
+                if (clipmapMask == 0u)
+                    continue;
+
+                SharedCasterRecord record;
+                record.draw.instance = source.instance.get();
+                record.draw.mesh = source.mesh.get();
+                record.draw.geometry = source.geometry.get();
+                record.draw.material = source.material.get();
+                record.draw.buffers = source.buffers.get();
+                record.draw.cullMode = source.cullMode;
+                record.draw.distanceToCamera = 0.f;
+                record.draw.userData = nullptr;
+                record.materialReference = source.material;
+                record.buffersReference = source.buffers;
+                record.arguments = source.arguments;
+                record.argumentsValid = true;
+                record.alphaTested =
+                    source.materialSignature.domain ==
+                        MaterialDomain::AlphaTested;
+                record.validatedStableDrawState = true;
+                record.clipmapMask = clipmapMask;
+                record.reliableCommonLightBounds =
+                    TryBuildSvsmCommonLightBounds(
+                        source.objectSpaceBounds,
+                        source.localToWorld,
+                        worldToCommonLight,
+                        record.commonLightBounds);
+                if (!record.reliableCommonLightBounds)
+                    return false;
+                record.staticCacheCandidate =
+                    source.staticCacheCandidate;
+                m_SharedCasterScratch.push_back(
+                    std::move(record));
+            }
+            return true;
+        }
+
+        bool BuildSharedCasterRecords(
+            const std::shared_ptr<SceneGraphNode>& rootNode,
+            const std::array<std::shared_ptr<PlanarView>,
+                SvsmClipmapCount>& views,
+            uint32_t firstClipmap,
+            uint64_t sceneStateHash,
+            bool persistentCasterSourceCachingEnabled,
+            const std::vector<SvsmCasterSnapshot>*
+                sourceSnapshots,
+            uint64_t sourceGeneration)
+        {
+            m_SharedCasterScratch.clear();
+            m_SharedCasterMaskStackScratch.clear();
+            m_PersistentCasterSourceRequested =
+                persistentCasterSourceCachingEnabled;
+            m_PersistentCasterSourceActive = false;
+            m_PersistentCasterSourceRebuilt = false;
+            m_PersistentCasterSourceReused = false;
+            m_PendingPersistentCasterSources.clear();
+            m_PendingPersistentCasterSourceKey = {};
+            m_PendingPersistentCasterSourceReady = false;
+            if (!rootNode ||
+                firstClipmap >= SvsmClipmapCount ||
+                !views[firstClipmap])
+            {
+                return false;
+            }
+
+            std::array<frustum, SvsmClipmapCount> clipmapFrusta;
+            uint32_t activeClipmapMask = 0u;
+            for (uint32_t level = firstClipmap;
+                level < SvsmClipmapCount;
+                ++level)
+            {
+                if (!views[level])
+                    return false;
+                clipmapFrusta[level] = views[level]->GetViewFrustum();
+                activeClipmapMask |= 1u << level;
+            }
+
+            // Every directional clipmap has the same linear light basis. Strip
+            // the independently snapped translation once, then project the
+            // exact caster box into that common basis for all six levels.
+            affine3 worldToCommonLight =
+                views[firstClipmap]->GetViewMatrix();
+            worldToCommonLight.m_translation = float3(0.f);
+            const affine3 commonLightToWorld =
+                inverse(worldToCommonLight);
+            for (uint32_t level = firstClipmap;
+                level < SvsmClipmapCount;
+                ++level)
+            {
+                m_SharedLightToClipMatrices[level] =
+                    affineToHomogeneous(commonLightToWorld) *
+                    views[level]->GetViewProjectionMatrix(false);
+            }
+
+            auto clipmapMaskForBounds =
+                [&](const box3& bounds, uint32_t candidateMask) {
+                    if (!IsFiniteSvsmBox(bounds))
+                        return candidateMask;
+                    uint32_t result = 0u;
+                    for (uint32_t level = firstClipmap;
+                        level < SvsmClipmapCount;
+                        ++level)
+                    {
+                        const uint32_t bit = 1u << level;
+                        if ((candidateMask & bit) != 0u &&
+                            clipmapFrusta[level].intersectsWith(bounds))
+                        {
+                            result |= bit;
+                        }
+                    }
+                    return result;
+                };
+
+            if (ShouldUseSvsmPersistentCasterSource(
+                    persistentCasterSourceCachingEnabled,
+                    true,
+                    sourceSnapshots != nullptr,
+                    sourceSnapshots != nullptr &&
+                        sourceGeneration != 0u,
+                    false) &&
+                PreparePersistentCasterSources(
+                    rootNode,
+                    *sourceSnapshots,
+                    sourceGeneration,
+                    sceneStateHash))
+            {
+                if (BuildSharedCasterRecordsFromPersistentSources(
+                        clipmapFrusta,
+                        firstClipmap,
+                        activeClipmapMask,
+                        worldToCommonLight))
+                {
+                    m_PersistentCasterSourceActive = true;
+                    return true;
+                }
+                m_SharedCasterScratch.clear();
+            }
+
+            // Donut's aggregate node boxes are formed from prototype mesh
+            // bounds. Before using those boxes for hierarchical pruning, mark
+            // every ancestor of a skinned or morph caster whose deformed
+            // envelope is not authoritative. Only those ancestor paths fail
+            // open; unrelated rigid subtrees retain coarse culling.
+            const bool reuseUnboundedDeformerAncestors =
+                m_SharedUnboundedDeformerAncestorCacheValid &&
+                m_SharedUnboundedDeformerAncestorRoot == rootNode &&
+                m_SharedUnboundedDeformerAncestorSceneStateHash ==
+                    sceneStateHash;
+            if (!reuseUnboundedDeformerAncestors)
+            {
+                std::unordered_set<const SceneGraphNode*>
+                    pendingUnboundedDeformerAncestors;
+                SceneGraphWalker deformerWalker(rootNode.get());
+                while (deformerWalker)
+                {
+                    const SceneContentFlags relevantContentFlags =
+                        SceneContentFlags::OpaqueMeshes |
+                        SceneContentFlags::AlphaTestedMeshes;
+                    const bool subgraphRelevant =
+                        (deformerWalker->
+                            GetSubgraphContentFlags() &
+                            relevantContentFlags) != 0;
+                    const bool leafRelevant =
+                        (deformerWalker->GetLeafContentFlags() &
+                            relevantContentFlags) != 0;
+                    if (leafRelevant)
+                    {
+                        const auto* instance =
+                            dynamic_cast<const MeshInstance*>(
+                                deformerWalker->GetLeaf().get());
+                        const MeshInfo* mesh = instance
+                            ? instance->GetMesh().get()
+                            : nullptr;
+                        const bool unboundedDeformer =
+                            mesh &&
+                            !CanUseSvsmStaticPacketBounds(
+                                bool(mesh->skinPrototype),
+                                mesh->isSkinPrototype,
+                                mesh->isMorphTargetAnimationMesh);
+                        if (unboundedDeformer)
+                        {
+                            for (const SceneGraphNode* node =
+                                    deformerWalker.Get();
+                                node;
+                                node = node->GetParent())
+                            {
+                                pendingUnboundedDeformerAncestors
+                                    .insert(node);
+                                if (node == rootNode.get())
+                                    break;
+                            }
+                        }
+                    }
+                    deformerWalker.Next(subgraphRelevant);
+                }
+                m_SharedUnboundedDeformerAncestorsScratch =
+                    std::move(pendingUnboundedDeformerAncestors);
+                m_SharedUnboundedDeformerAncestorRoot = rootNode;
+                m_SharedUnboundedDeformerAncestorSceneStateHash =
+                    sceneStateHash;
+                m_SharedUnboundedDeformerAncestorCacheValid = true;
+            }
+
+            m_SharedCasterMaskStackScratch.reserve(32u);
+            m_SharedCasterMaskStackScratch.push_back(
+                activeClipmapMask);
+            SceneGraphWalker walker(rootNode.get());
+            while (walker)
+            {
+                const uint32_t parentMask =
+                    m_SharedCasterMaskStackScratch.back();
+                const SceneContentFlags relevantContentFlags =
+                    SceneContentFlags::OpaqueMeshes |
+                    SceneContentFlags::AlphaTestedMeshes;
+                const bool subgraphRelevant =
+                    (walker->GetSubgraphContentFlags() &
+                        relevantContentFlags) != 0;
+                const bool leafRelevant =
+                    (walker->GetLeafContentFlags() &
+                        relevantContentFlags) != 0;
+
+                uint32_t nodeMask = 0u;
+                if (subgraphRelevant)
+                {
+                    const bool containsUnboundedDeformer =
+                        m_SharedUnboundedDeformerAncestorsScratch
+                            .find(walker.Get()) !=
+                        m_SharedUnboundedDeformerAncestorsScratch
+                            .end();
+                    nodeMask = containsUnboundedDeformer
+                        ? parentMask
+                        : clipmapMaskForBounds(
+                            walker->GetGlobalBoundingBox(),
+                            parentMask);
+                }
+                const bool nodeVisible = nodeMask != 0u;
+                if (nodeVisible && leafRelevant)
+                {
+                    auto* instance = dynamic_cast<MeshInstance*>(
+                        walker->GetLeaf().get());
+                    const MeshInfo* mesh =
+                        instance ? instance->GetMesh().get() : nullptr;
+                    SceneGraphNode* instanceNode =
+                        instance ? instance->GetNode() : nullptr;
+                    if (instance &&
+                        mesh &&
+                        instanceNode &&
+                        instance->GetInstanceIndex() >= 0 &&
+                        mesh->buffers)
+                    {
+                        const affine3 localToWorld =
+                            instanceNode->
+                                GetLocalToWorldTransformFloat();
+                        const bool reliableRigidBounds =
+                            CanUseSvsmStaticPacketBounds(
+                                bool(mesh->skinPrototype),
+                                mesh->isSkinPrototype,
+                                mesh->isMorphTargetAnimationMesh);
+                        for (const auto& geometry : mesh->geometries)
+                        {
+                            const Material* material = geometry
+                                ? geometry->material.get()
+                                : nullptr;
+                            if (!geometry ||
+                                !material ||
+                                (material->domain !=
+                                        MaterialDomain::Opaque &&
+                                    material->domain !=
+                                        MaterialDomain::AlphaTested))
+                            {
+                                continue;
+                            }
+
+                            uint32_t geometryMask = nodeMask;
+                            if (reliableRigidBounds &&
+                                IsFiniteSvsmBox(
+                                    geometry->objectSpaceBounds))
+                            {
+                                const box3 worldBounds =
+                                    geometry->objectSpaceBounds *
+                                    localToWorld;
+                                geometryMask = clipmapMaskForBounds(
+                                    worldBounds, nodeMask);
+                            }
+                            if (geometryMask == 0u)
+                                continue;
+
+                            SharedCasterRecord record;
+                            record.draw.instance = instance;
+                            record.draw.mesh = mesh;
+                            record.draw.geometry = geometry.get();
+                            record.draw.material = material;
+                            record.draw.buffers =
+                                mesh->buffers.get();
+                            record.draw.cullMode =
+                                material->doubleSided
+                                ? nvrhi::RasterCullMode::None
+                                : nvrhi::RasterCullMode::Back;
+                            record.draw.distanceToCamera = 0.f;
+                            record.draw.userData = nullptr;
+                            const uint64_t vertexOffset =
+                                uint64_t(mesh->vertexOffset) +
+                                geometry->vertexOffsetInMesh;
+                            const uint64_t indexOffset =
+                                uint64_t(mesh->indexOffset) +
+                                geometry->indexOffsetInMesh;
+                            if (vertexOffset <=
+                                    std::numeric_limits<
+                                        uint32_t>::max() &&
+                                indexOffset <=
+                                    std::numeric_limits<
+                                        uint32_t>::max())
+                            {
+                                record.arguments.vertexCount =
+                                    geometry->numIndices;
+                                record.arguments.instanceCount = 1u;
+                                record.arguments.
+                                    startVertexLocation =
+                                        uint32_t(vertexOffset);
+                                record.arguments.
+                                    startIndexLocation =
+                                        uint32_t(indexOffset);
+                                record.arguments.
+                                    startInstanceLocation =
+                                        uint32_t(instance->
+                                            GetInstanceIndex());
+                                record.argumentsValid = true;
+                            }
+                            record.clipmapMask = geometryMask;
+                            record.reliableCommonLightBounds =
+                                reliableRigidBounds &&
+                                TryBuildSvsmCommonLightBounds(
+                                    record.draw,
+                                    localToWorld,
+                                    worldToCommonLight,
+                                    record.commonLightBounds);
+                            record.staticCacheCandidate =
+                                IsPacketStaticCacheCandidate(
+                                    record.draw);
+                            m_SharedCasterScratch.push_back(
+                                std::move(record));
+                        }
+                    }
+                }
+
+                const int depthChange = walker.Next(nodeVisible);
+                if (depthChange > 0)
+                {
+                    m_SharedCasterMaskStackScratch.push_back(
+                        nodeMask);
+                }
+                else if (depthChange < 0)
+                {
+                    const size_t popCount = std::min(
+                        size_t(-depthChange),
+                        m_SharedCasterMaskStackScratch.size() - 1u);
+                    m_SharedCasterMaskStackScratch.resize(
+                        m_SharedCasterMaskStackScratch.size() -
+                        popCount);
+                }
+            }
+            return true;
+        }
+
+        nvrhi::BindingLayoutHandle CreateSparseViewBindingLayout(
+            bool includeMaterialSampler)
+        {
+            nvrhi::BindingLayoutDesc layoutDesc;
+            layoutDesc.visibility =
+                nvrhi::ShaderType::Vertex | nvrhi::ShaderType::Pixel;
+            layoutDesc.registerSpace = GBUFFER_SPACE_VIEW;
+            layoutDesc.registerSpaceIsDescriptorSet = true;
+            layoutDesc.bindings = {
+                nvrhi::BindingLayoutItem::VolatileConstantBuffer(
+                    GBUFFER_BINDING_VIEW_CONSTANTS)
+            };
+            if (includeMaterialSampler)
+            {
+                layoutDesc.bindings.push_back(
+                    nvrhi::BindingLayoutItem::Sampler(
+                        GBUFFER_BINDING_MATERIAL_SAMPLER));
+            }
+            layoutDesc.bindings.insert(
+                layoutDesc.bindings.end(), {
+                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(3),
+                    nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
+                    nvrhi::BindingLayoutItem::StructuredBuffer_SRV(8),
+                    nvrhi::BindingLayoutItem::StructuredBuffer_SRV(9),
+                    nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10),
+                    nvrhi::BindingLayoutItem::Texture_SRV(11),
+                    nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
+                    nvrhi::BindingLayoutItem::StructuredBuffer_SRV(13),
+                    nvrhi::BindingLayoutItem::Texture_UAV(0)
+                });
+            return m_Device->createBindingLayout(layoutDesc);
+        }
 
         nvrhi::BindingSetHandle CreateSparseViewBindingSet(
+            nvrhi::IBindingLayout* layout,
+            bool includeMaterialSampler,
             bool trackLiveness)
         {
-            if (!m_ViewBindingLayout ||
+            if (!layout ||
                 !m_PacketPageMetadata ||
                 !m_PacketPageRuntime ||
                 !m_PacketRenderPages ||
                 !m_PageTable ||
-                !m_RenderPages)
+                !m_RenderPages ||
+                !m_Counters)
             {
                 return nullptr;
             }
@@ -582,10 +3292,17 @@ namespace uvsr
             setDesc.trackLiveness = trackLiveness;
             setDesc.bindings = {
                 nvrhi::BindingSetItem::ConstantBuffer(
-                    GBUFFER_BINDING_VIEW_CONSTANTS, m_GBufferCB),
-                nvrhi::BindingSetItem::Sampler(
-                    GBUFFER_BINDING_MATERIAL_SAMPLER,
-                    m_CommonPasses->m_AnisotropicWrapSampler),
+                    GBUFFER_BINDING_VIEW_CONSTANTS, m_GBufferCB)
+            };
+            if (includeMaterialSampler)
+            {
+                setDesc.bindings.push_back(
+                    nvrhi::BindingSetItem::Sampler(
+                        GBUFFER_BINDING_MATERIAL_SAMPLER,
+                        m_CommonPasses->m_AnisotropicWrapSampler));
+            }
+            setDesc.bindings.insert(
+                setDesc.bindings.end(), {
                 nvrhi::BindingSetItem::ConstantBuffer(
                     3, m_SparseConstants),
                 nvrhi::BindingSetItem::StructuredBuffer_SRV(
@@ -600,15 +3317,24 @@ namespace uvsr
                     11, m_PageTable),
                 nvrhi::BindingSetItem::StructuredBuffer_SRV(
                     12, m_RenderPages),
+                nvrhi::BindingSetItem::StructuredBuffer_SRV(
+                    13,
+                    m_ReceiverPageMasks
+                        ? m_ReceiverPageMasks
+                        : m_Counters),
                 nvrhi::BindingSetItem::Texture_UAV(
                     0,
                     m_PhysicalDepth,
                     nvrhi::Format::R32_UINT,
-                    nvrhi::TextureSubresourceSet(0, 1, 0, 1),
-                    nvrhi::TextureDimension::Texture2D)
-            };
+                    nvrhi::TextureSubresourceSet(
+                        0,
+                        1,
+                        0,
+                        m_PairedStaticDynamicDepthEnabled ? 2u : 1u),
+                    nvrhi::TextureDimension::Texture2DArray)
+                });
             return m_Device->createBindingSet(
-                setDesc, m_ViewBindingLayout);
+                setDesc, layout);
         }
 
     protected:
@@ -618,6 +3344,7 @@ namespace uvsr
         {
             std::vector<ShaderMacro> macros;
             macros.emplace_back("SVSM_BATCHED_DRAW", "0");
+            macros.emplace_back("SVSM_POSITION_ONLY", "0");
             return shaderFactory.CreateShader(
                 "uvsr/sparse_virtual_shadow_map_sparse_depth.hlsl",
                 "vertexMain",
@@ -633,11 +3360,56 @@ namespace uvsr
             std::vector<ShaderMacro> macros;
             macros.emplace_back(
                 "ALPHA_TESTED", alphaTested ? "1" : "0");
+            // Shader-library permutation keys are emitted in macro-name
+            // order. Keep this request in that exact order or an otherwise
+            // compiled permutation cannot be found at runtime.
+            macros.emplace_back(
+                "SVSM_DEFER_STATIC_MERGE",
+                m_DeferredStaticDepthMergeEnabled ? "1" : "0");
+            macros.emplace_back(
+                "SVSM_LEAN_ALPHA_BINDINGS",
+                m_LeanAlphaTestedBindingsEnabled ? "1" : "0");
+            macros.emplace_back("SVSM_MATERIAL_FREE_OPAQUE", "0");
             return shaderFactory.CreateShader(
                 "uvsr/sparse_virtual_shadow_map_sparse_depth.hlsl",
                 "pixelMain",
                 &macros,
                 nvrhi::ShaderType::Pixel);
+        }
+
+        std::shared_ptr<MaterialBindingCache>
+        CreateMaterialBindingCache(
+            CommonRenderPasses& commonPasses) override
+        {
+            if (!m_LeanAlphaTestedBindingsEnabled)
+            {
+                return GBufferFillPass::CreateMaterialBindingCache(
+                    commonPasses);
+            }
+
+            const std::vector<MaterialResourceBinding> bindings = {
+                {
+                    MaterialResource::ConstantBuffer,
+                    GBUFFER_BINDING_MATERIAL_CONSTANTS
+                },
+                {
+                    MaterialResource::DiffuseTexture,
+                    GBUFFER_BINDING_MATERIAL_DIFFUSE_TEXTURE
+                },
+                {
+                    MaterialResource::OpacityTexture,
+                    GBUFFER_BINDING_MATERIAL_OPACITY_TEXTURE
+                }
+            };
+            return std::make_shared<MaterialBindingCache>(
+                m_Device,
+                nvrhi::ShaderType::Pixel,
+                GBUFFER_SPACE_MATERIAL,
+                true,
+                bindings,
+                commonPasses.m_AnisotropicWrapSampler,
+                commonPasses.m_GrayTexture,
+                m_TrackMaterialBindingLiveness);
         }
 
         nvrhi::BindingLayoutHandle CreateInputBindingLayout() override
@@ -682,28 +3454,16 @@ namespace uvsr
             nvrhi::BindingSetHandle& set,
             const CreateParameters& params) override
         {
-            nvrhi::BindingLayoutDesc layoutDesc;
-            layoutDesc.visibility =
-                nvrhi::ShaderType::Vertex | nvrhi::ShaderType::Pixel;
-            layoutDesc.registerSpace = GBUFFER_SPACE_VIEW;
-            layoutDesc.registerSpaceIsDescriptorSet = true;
-            layoutDesc.bindings = {
-                nvrhi::BindingLayoutItem::VolatileConstantBuffer(
-                    GBUFFER_BINDING_VIEW_CONSTANTS),
-                nvrhi::BindingLayoutItem::Sampler(
-                    GBUFFER_BINDING_MATERIAL_SAMPLER),
-                nvrhi::BindingLayoutItem::VolatileConstantBuffer(3),
-                nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
-                nvrhi::BindingLayoutItem::StructuredBuffer_SRV(8),
-                nvrhi::BindingLayoutItem::StructuredBuffer_SRV(9),
-                nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10),
-                nvrhi::BindingLayoutItem::Texture_SRV(11),
-                nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
-                nvrhi::BindingLayoutItem::Texture_UAV(0)
-            };
-            layout = m_Device->createBindingLayout(layoutDesc);
             m_TrackViewBindingLiveness = params.trackLiveness;
-            set = CreateSparseViewBindingSet(params.trackLiveness);
+            layout = CreateSparseViewBindingLayout(true);
+            set = CreateSparseViewBindingSet(
+                layout, true, params.trackLiveness);
+            m_OpaqueViewBindingLayout =
+                CreateSparseViewBindingLayout(false);
+            m_OpaqueViewBindings = CreateSparseViewBindingSet(
+                m_OpaqueViewBindingLayout,
+                false,
+                params.trackLiveness);
         }
 
         nvrhi::GraphicsPipelineHandle CreateGraphicsPipelineForVertexShader(
@@ -734,6 +3494,50 @@ namespace uvsr
                 pipelineDesc, framebufferInfo);
         }
 
+        nvrhi::GraphicsPipelineHandle
+        CreateOpaqueSpecializedGraphicsPipeline(
+            PipelineKey key,
+            nvrhi::FramebufferInfo const& framebufferInfo,
+            nvrhi::IShader* vertexShader)
+        {
+            if (key.bits.alphaTested ||
+                !vertexShader ||
+                !m_MaterialFreeOpaquePixelShader ||
+                !m_OpaqueViewBindingLayout ||
+                !m_OpaqueViewBindings)
+            {
+                return nullptr;
+            }
+
+            nvrhi::GraphicsPipelineDesc pipelineDesc;
+            pipelineDesc.inputLayout = nullptr;
+            pipelineDesc.VS = vertexShader;
+            pipelineDesc.PS = m_MaterialFreeOpaquePixelShader;
+            pipelineDesc.renderState.rasterState
+                .setFrontCounterClockwise(
+                    key.bits.frontCounterClockwise)
+                .setCullMode(key.bits.cullMode);
+            pipelineDesc.renderState.depthStencilState.disableDepthTest();
+            pipelineDesc.renderState.blendState.disableAlphaToCoverage();
+            pipelineDesc.bindingLayouts = {
+                m_OpaqueViewBindingLayout,
+                m_InputBindingLayout
+            };
+            return m_Device->createGraphicsPipeline(
+                pipelineDesc, framebufferInfo);
+        }
+
+        void DisableOpaqueRasterSpecialization()
+        {
+            m_OpaqueRasterSpecializationSupported = false;
+            if (!m_OpaqueRasterSpecializationFailureLogged)
+            {
+                log::warning(
+                    "SVSM opaque raster specialization is unavailable; retaining the exact material-bound sparse raster path.");
+                m_OpaqueRasterSpecializationFailureLogged = true;
+            }
+        }
+
         nvrhi::GraphicsPipelineHandle CreateGraphicsPipeline(
             PipelineKey key,
             nvrhi::FramebufferInfo const& framebufferInfo) override
@@ -756,7 +3560,11 @@ namespace uvsr
             nvrhi::IBuffer* packetPageMetadata,
             nvrhi::IBuffer* packetPageRuntime,
             nvrhi::IBuffer* packetRenderPages,
-            uint32_t physicalPageCount)
+            nvrhi::IBuffer* receiverPageMasks,
+            uint32_t physicalPageCount,
+            bool pairedStaticDynamicDepthEnabled,
+            bool deferredStaticDepthMergeEnabled,
+            bool leanAlphaTestedBindingsEnabled)
             : GBufferFillPass(device, commonPasses)
             , m_PhysicalDepth(physicalDepth)
             , m_PageTable(pageTable)
@@ -768,7 +3576,14 @@ namespace uvsr
             , m_PacketPageMetadata(packetPageMetadata)
             , m_PacketPageRuntime(packetPageRuntime)
             , m_PacketRenderPages(packetRenderPages)
+            , m_ReceiverPageMasks(receiverPageMasks)
             , m_PhysicalPageCount(physicalPageCount)
+            , m_PairedStaticDynamicDepthEnabled(
+                pairedStaticDynamicDepthEnabled)
+            , m_DeferredStaticDepthMergeEnabled(
+                deferredStaticDepthMergeEnabled)
+            , m_LeanAlphaTestedBindingsEnabled(
+                leanAlphaTestedBindingsEnabled)
         {
             m_BatchedDrawSupported =
                 HasExtendedCommandInfoSupport(device);
@@ -778,11 +3593,44 @@ namespace uvsr
             ShaderFactory& shaderFactory,
             const CreateParameters& parameters) override
         {
+            m_TrackMaterialBindingLiveness =
+                parameters.trackLiveness;
             GBufferFillPass::Init(shaderFactory, parameters);
+
+            {
+                std::vector<ShaderMacro> macros;
+                macros.emplace_back("SVSM_BATCHED_DRAW", "0");
+                macros.emplace_back("SVSM_POSITION_ONLY", "1");
+                m_PositionOnlyVertexShader =
+                    shaderFactory.CreateShader(
+                        "uvsr/sparse_virtual_shadow_map_sparse_depth.hlsl",
+                        "vertexMain",
+                        &macros,
+                        nvrhi::ShaderType::Vertex);
+            }
+            {
+                std::vector<ShaderMacro> macros;
+                macros.emplace_back("ALPHA_TESTED", "0");
+                macros.emplace_back(
+                    "SVSM_DEFER_STATIC_MERGE",
+                    m_DeferredStaticDepthMergeEnabled ? "1" : "0");
+                macros.emplace_back(
+                    "SVSM_LEAN_ALPHA_BINDINGS", "0");
+                macros.emplace_back(
+                    "SVSM_MATERIAL_FREE_OPAQUE", "1");
+                m_MaterialFreeOpaquePixelShader =
+                    shaderFactory.CreateShader(
+                        "uvsr/sparse_virtual_shadow_map_sparse_depth.hlsl",
+                        "pixelMain",
+                        &macros,
+                        nvrhi::ShaderType::Pixel);
+            }
+
             if (m_BatchedDrawSupported)
             {
                 std::vector<ShaderMacro> macros;
                 macros.emplace_back("SVSM_BATCHED_DRAW", "1");
+                macros.emplace_back("SVSM_POSITION_ONLY", "0");
                 m_BatchedVertexShader = shaderFactory.CreateShader(
                     "uvsr/sparse_virtual_shadow_map_sparse_depth.hlsl",
                     "vertexMain",
@@ -790,12 +3638,133 @@ namespace uvsr
                     nvrhi::ShaderType::Vertex);
                 m_BatchedDrawSupported =
                     bool(m_BatchedVertexShader);
+
+                std::vector<ShaderMacro> positionOnlyMacros;
+                positionOnlyMacros.emplace_back(
+                    "SVSM_BATCHED_DRAW", "1");
+                positionOnlyMacros.emplace_back(
+                    "SVSM_POSITION_ONLY", "1");
+                m_BatchedPositionOnlyVertexShader =
+                    shaderFactory.CreateShader(
+                        "uvsr/sparse_virtual_shadow_map_sparse_depth.hlsl",
+                        "vertexMain",
+                        &positionOnlyMacros,
+                        nvrhi::ShaderType::Vertex);
             }
+
+            m_OpaqueRasterSpecializationSupported =
+                bool(m_PositionOnlyVertexShader) &&
+                bool(m_MaterialFreeOpaquePixelShader) &&
+                bool(m_OpaqueViewBindingLayout) &&
+                bool(m_OpaqueViewBindings) &&
+                (!m_BatchedDrawSupported ||
+                    bool(m_BatchedPositionOnlyVertexShader));
+            if (!m_OpaqueRasterSpecializationSupported)
+                DisableOpaqueRasterSpecialization();
+        }
+
+        [[nodiscard]] bool IsReferenceRasterReady() const
+        {
+            return bool(m_VertexShader) &&
+                bool(m_PixelShader) &&
+                bool(m_PixelShaderAlphaTested) &&
+                bool(m_InputBindingLayout) &&
+                bool(m_ViewBindingLayout) &&
+                bool(m_ViewBindings) &&
+                bool(m_GBufferCB) &&
+                bool(m_MaterialBindings) &&
+                m_MaterialBindings->GetLayout() != nullptr;
         }
 
         [[nodiscard]] bool SupportsBatchedDrawSubmission() const
         {
             return m_BatchedDrawSupported;
+        }
+
+        void InvalidateRenderPacketCache()
+        {
+            m_RenderPacketCacheValid = false;
+        }
+
+        void InvalidatePersistentCasterSourceCache()
+        {
+            m_PersistentCasterSources.clear();
+            m_PendingPersistentCasterSources.clear();
+            m_PersistentCasterSourceKey = {};
+            m_PendingPersistentCasterSourceKey = {};
+            m_PersistentCasterSourceCacheValid = false;
+            m_PendingPersistentCasterSourceReady = false;
+            m_PersistentCasterSourceActive = false;
+            m_PersistentCasterSourceRebuilt = false;
+            m_PersistentCasterSourceReused = false;
+            m_AdaptiveStaticCasterClassification.clear();
+            m_AdaptiveStaticCasterClassificationActive = false;
+            m_AdaptiveStaticCasterClassificationRoot = nullptr;
+            m_AdaptiveStaticCasterClassificationGeneration = 0u;
+            m_AdaptiveStaticCasterClassificationRecordCount = 0u;
+        }
+
+        void SetOpaqueRasterSpecializationEnabled(bool enabled)
+        {
+            m_OpaqueRasterSpecializationRequested = enabled;
+        }
+
+        bool PrepareAdaptiveStaticCasterClassification(
+            const std::vector<SvsmCasterSnapshot>& snapshots,
+            bool active,
+            const void* rootIdentity,
+            uint64_t generation)
+        {
+            if (!active)
+            {
+                m_AdaptiveStaticCasterClassification.clear();
+                m_AdaptiveStaticCasterClassificationActive = false;
+                m_AdaptiveStaticCasterClassificationRoot = nullptr;
+                m_AdaptiveStaticCasterClassificationGeneration = 0u;
+                m_AdaptiveStaticCasterClassificationRecordCount = 0u;
+                return true;
+            }
+            if (snapshots.size() >
+                std::numeric_limits<uint32_t>::max())
+            {
+                return false;
+            }
+            if (ShouldReuseSvsmAdaptiveCasterClassification(
+                    m_AdaptiveStaticCasterClassificationActive,
+                    m_AdaptiveStaticCasterClassificationRoot,
+                    m_AdaptiveStaticCasterClassificationGeneration,
+                    m_AdaptiveStaticCasterClassificationRecordCount,
+                    rootIdentity,
+                    generation,
+                    uint32_t(snapshots.size())))
+            {
+                return true;
+            }
+
+            std::unordered_map<
+                SvsmCasterKey,
+                bool,
+                SvsmCasterKeyHash> pendingClassification;
+            pendingClassification.reserve(
+                snapshots.size());
+            for (const SvsmCasterSnapshot& snapshot : snapshots)
+            {
+                if (!pendingClassification.emplace(
+                        snapshot.key,
+                        snapshot.staticCacheCandidate).second)
+                {
+                    return false;
+                }
+            }
+            m_AdaptiveStaticCasterClassification.swap(
+                pendingClassification);
+            m_AdaptiveStaticCasterClassificationActive = true;
+            m_AdaptiveStaticCasterClassificationRoot = rootIdentity;
+            m_AdaptiveStaticCasterClassificationGeneration =
+                generation;
+            m_AdaptiveStaticCasterClassificationRecordCount =
+                uint32_t(snapshots.size());
+            return true;
         }
 
         bool SetupMaterial(
@@ -804,14 +3773,64 @@ namespace uvsr
             nvrhi::RasterCullMode cullMode,
             nvrhi::GraphicsState& state) override
         {
+            auto& context =
+                static_cast<Context&>(abstractContext);
+            const bool opaqueMaterial =
+                material &&
+                material->domain == MaterialDomain::Opaque;
+            if (ShouldUseSvsmOpaqueRasterSpecialization(
+                    m_OpaqueRasterSpecializationRequested,
+                    m_OpaqueRasterSpecializationSupported,
+                    opaqueMaterial))
+            {
+                PipelineKey key = context.keyTemplate;
+                key.bits.cullMode = cullMode;
+                key.bits.alphaTested = false;
+                nvrhi::GraphicsPipelineHandle& pipeline =
+                    m_BatchedPipelineActive
+                    ? m_BatchedPositionOnlyPipelines[key.value]
+                    : m_PositionOnlyPipelines[key.value];
+                if (!pipeline)
+                {
+                    std::lock_guard<std::mutex> lockGuard(m_Mutex);
+                    if (!pipeline)
+                    {
+                        pipeline =
+                            CreateOpaqueSpecializedGraphicsPipeline(
+                                key,
+                                state.framebuffer->
+                                    getFramebufferInfo(),
+                                m_BatchedPipelineActive
+                                    ? m_BatchedPositionOnlyVertexShader
+                                        .Get()
+                                    : m_PositionOnlyVertexShader.Get());
+                    }
+                }
+                if (pipeline)
+                {
+                    assert(
+                        pipeline->getFramebufferInfo() ==
+                        state.framebuffer->getFramebufferInfo());
+                    state.pipeline = pipeline;
+                    state.bindings = {
+                        m_OpaqueViewBindings,
+                        context.inputBindingSet
+                    };
+                    return true;
+                }
+
+                // Shader or pipeline creation can fail independently of the
+                // reference path. Disable this optional specialization and
+                // retry the same material through the original bindings.
+                DisableOpaqueRasterSpecialization();
+            }
+
             if (!m_BatchedPipelineActive)
             {
                 return GBufferFillPass::SetupMaterial(
                     abstractContext, material, cullMode, state);
             }
 
-            auto& context =
-                static_cast<Context&>(abstractContext);
             PipelineKey key = context.keyTemplate;
             key.bits.cullMode = cullMode;
             switch (material->domain)
@@ -886,6 +3905,8 @@ namespace uvsr
             m_PacketRenderPages = renderPages;
             nvrhi::BindingSetHandle bindingSet =
                 CreateSparseViewBindingSet(
+                    m_ViewBindingLayout,
+                    true,
                     m_TrackViewBindingLiveness);
             if (!bindingSet)
             {
@@ -894,7 +3915,21 @@ namespace uvsr
                 m_PacketRenderPages = previousRenderPages;
                 return false;
             }
+            nvrhi::BindingSetHandle opaqueBindingSet =
+                CreateSparseViewBindingSet(
+                    m_OpaqueViewBindingLayout,
+                    false,
+                    m_TrackViewBindingLiveness);
             m_ViewBindings = bindingSet;
+            if (opaqueBindingSet)
+            {
+                m_OpaqueViewBindings = opaqueBindingSet;
+            }
+            else
+            {
+                m_OpaqueViewBindings = nullptr;
+                DisableOpaqueRasterSpecialization();
+            }
             return true;
         }
 
@@ -903,62 +3938,135 @@ namespace uvsr
             const std::array<std::shared_ptr<PlanarView>,
                 SvsmClipmapCount>& views,
             uint64_t sceneStateHash,
+            uint64_t sceneStateRevision,
+            bool sceneStateRevisionReliable,
+            const DirectionalLight* light,
             IDrawStrategy& drawStrategy,
             uint32_t firstClipmap,
             bool buildPacketPageMetadata,
             bool reserveExactPacketPageLists,
             bool dirtyPageScatterRaster,
             bool sortPacketsByState,
+            bool sharedClipmapPacketBuilderEnabled,
+            bool persistentCasterSourceCachingEnabled,
+            const std::vector<SvsmCasterSnapshot>*
+                sourceSnapshots,
+            uint64_t sourceGeneration,
+            bool pairedStaticDynamicDepthEnabled,
+            const std::vector<SvsmCasterSnapshot>*
+                classificationSnapshots,
+            bool adaptiveClassificationActive,
+            uint64_t classificationGeneration,
             bool allowReuse,
             bool& rebuilt)
         {
             rebuilt = false;
+            m_PendingPersistentCasterSources.clear();
+            m_PendingPersistentCasterSourceKey = {};
+            m_PendingPersistentCasterSourceReady = false;
+            m_PersistentCasterSourceRequested =
+                persistentCasterSourceCachingEnabled;
+            m_PersistentCasterSourceActive = false;
+            m_PersistentCasterSourceRebuilt = false;
+            m_PersistentCasterSourceReused = false;
             reserveExactPacketPageLists =
                 buildPacketPageMetadata && reserveExactPacketPageLists;
-            if (dirtyPageScatterRaster !=
-                    (buildPacketPageMetadata &&
-                        !reserveExactPacketPageLists))
+            if (dirtyPageScatterRaster && !buildPacketPageMetadata)
             {
                 return false;
             }
             firstClipmap = std::min(
                 firstClipmap, SvsmClipmapCount - 1u);
-            bool matricesMatch = m_RenderPacketCacheValid;
-            if (matricesMatch)
+            const bool sharedBuilderCompatible =
+                sharedClipmapPacketBuilderEnabled &&
+                typeid(drawStrategy) ==
+                    typeid(InstancedOpaqueDrawStrategy);
+            const bool pairedDepthClassificationActive =
+                pairedStaticDynamicDepthEnabled &&
+                buildPacketPageMetadata;
+            adaptiveClassificationActive =
+                pairedDepthClassificationActive &&
+                adaptiveClassificationActive;
+            if (adaptiveClassificationActive &&
+                classificationSnapshots == nullptr)
             {
-                for (uint32_t level = firstClipmap;
-                    level < SvsmClipmapCount;
-                    ++level)
+                return false;
+            }
+            if (!adaptiveClassificationActive)
+                classificationGeneration = 0u;
+            bool exactPacketKeyMatches = false;
+            if (allowReuse)
+            {
+                bool matricesMatch = m_RenderPacketCacheValid;
+                if (matricesMatch)
                 {
-                    const float4x4 matrix =
-                        views[level]->GetViewProjectionMatrix(false);
-                    if (std::memcmp(
-                            &matrix,
-                            &m_RenderPacketMatrices[level],
-                            sizeof(matrix)) != 0)
+                    for (uint32_t level = firstClipmap;
+                        level < SvsmClipmapCount;
+                        ++level)
                     {
-                        matricesMatch = false;
-                        break;
+                        const float4x4 matrix =
+                            views[level]->
+                                GetViewProjectionMatrix(false);
+                        if (std::memcmp(
+                                &matrix,
+                                &m_RenderPacketMatrices[level],
+                                sizeof(matrix)) != 0)
+                        {
+                            matricesMatch = false;
+                            break;
+                        }
                     }
                 }
+                exactPacketKeyMatches =
+                    m_RenderPacketCacheValid &&
+                    m_RenderPacketRoot == rootNode &&
+                    m_RenderPacketLight == light &&
+                    m_RenderPacketDrawStrategy == &drawStrategy &&
+                    m_RenderPacketSceneStateHash == sceneStateHash &&
+                    m_RenderPacketSceneStateRevisionReliable ==
+                        sceneStateRevisionReliable &&
+                    (!sceneStateRevisionReliable ||
+                        m_RenderPacketSceneStateRevision ==
+                            sceneStateRevision) &&
+                    m_RenderPacketFirstClipmap == firstClipmap &&
+                    m_RenderPacketPageMetadataRequested ==
+                        buildPacketPageMetadata &&
+                    m_RenderPacketExactPageListsRequested ==
+                        reserveExactPacketPageLists &&
+                    m_RenderPacketDirtyPageScatterRasterRequested ==
+                        dirtyPageScatterRaster &&
+                    m_RenderPacketStateSortingRequested ==
+                        sortPacketsByState &&
+                    m_RenderPacketSharedBuilderActive ==
+                        sharedBuilderCompatible &&
+                    m_RenderPacketPairedDepthClassificationActive ==
+                        pairedDepthClassificationActive &&
+                    m_RenderPacketAdaptiveClassificationActive ==
+                        adaptiveClassificationActive &&
+                    m_RenderPacketClassificationGeneration ==
+                        classificationGeneration &&
+                    matricesMatch;
             }
-
-            if (allowReuse &&
-                m_RenderPacketCacheValid &&
-                m_RenderPacketRoot == rootNode &&
-                m_RenderPacketSceneStateHash == sceneStateHash &&
-                m_RenderPacketFirstClipmap == firstClipmap &&
-                m_RenderPacketPageMetadataRequested ==
-                    buildPacketPageMetadata &&
-                m_RenderPacketExactPageListsRequested ==
-                    reserveExactPacketPageLists &&
-                m_RenderPacketDirtyPageScatterRasterRequested ==
-                    dirtyPageScatterRaster &&
-                m_RenderPacketStateSortingRequested ==
-                    sortPacketsByState &&
-                matricesMatch)
+            if (ShouldReuseSvsmRenderPackets(
+                    allowReuse, exactPacketKeyMatches))
             {
                 return true;
+            }
+
+            static const std::vector<SvsmCasterSnapshot>
+                emptyCasterSnapshots;
+            if (!PrepareAdaptiveStaticCasterClassification(
+                    classificationSnapshots
+                        ? *classificationSnapshots
+                        : emptyCasterSnapshots,
+                    adaptiveClassificationActive,
+                    rootNode.get(),
+                    classificationGeneration))
+            {
+                // Validation is transactional: retain the last valid packet
+                // cache and classifier rather than destroying them before the
+                // caller can fail open.
+                return false;
             }
 
             for (auto& packets : m_RenderPackets)
@@ -967,7 +4075,12 @@ namespace uvsr
                 groups.clear();
             m_BatchedRasterStateMask = 0u;
             m_RenderPacketRoot = rootNode;
+            m_RenderPacketLight = light;
+            m_RenderPacketDrawStrategy = &drawStrategy;
             m_RenderPacketSceneStateHash = sceneStateHash;
+            m_RenderPacketSceneStateRevision = sceneStateRevision;
+            m_RenderPacketSceneStateRevisionReliable =
+                sceneStateRevisionReliable;
             m_RenderPacketCount = 0u;
             m_RenderPacketPageEntryCount = 0u;
             m_RenderPacketFirstClipmap = firstClipmap;
@@ -979,6 +4092,14 @@ namespace uvsr
                 dirtyPageScatterRaster;
             m_RenderPacketStateSortingRequested =
                 sortPacketsByState;
+            m_RenderPacketSharedBuilderActive =
+                sharedBuilderCompatible;
+            m_RenderPacketPairedDepthClassificationActive =
+                pairedDepthClassificationActive;
+            m_RenderPacketAdaptiveClassificationActive =
+                adaptiveClassificationActive;
+            m_RenderPacketClassificationGeneration =
+                classificationGeneration;
             m_RenderPacketPageMetadataSupported =
                 buildPacketPageMetadata;
             m_RenderPacketPageDispatchSupported =
@@ -989,6 +4110,20 @@ namespace uvsr
                 std::numeric_limits<uint32_t>::max() /
                 uint32_t(sizeof(
                     nvrhi::DrawIndexedIndirectArguments));
+            if (m_RenderPacketSharedBuilderActive &&
+                !BuildSharedCasterRecords(
+                    rootNode,
+                    views,
+                    firstClipmap,
+                    sceneStateHash,
+                    persistentCasterSourceCachingEnabled,
+                    sourceSnapshots,
+                    sourceGeneration))
+            {
+                // Any unsupported or unreliable shared-builder setup falls
+                // back to the six-view reference traversal for this cache.
+                m_RenderPacketSharedBuilderActive = false;
+            }
             for (uint32_t level = 0u;
                 level < SvsmClipmapCount;
                 ++level)
@@ -1008,32 +4143,102 @@ namespace uvsr
                     m_RenderPackets[level];
                 std::vector<RenderPacketGroup>& levelGroups =
                     m_RenderPacketGroups[level];
-                drawStrategy.PrepareForView(
-                    rootNode, *views[level]);
-                while (const DrawItem* item =
-                        drawStrategy.GetNextItem())
+                if (!m_RenderPacketSharedBuilderActive)
                 {
-                    if (!item->instance ||
-                        !item->mesh ||
-                        !item->geometry ||
-                        !item->material ||
-                        !item->buffers)
+                    drawStrategy.PrepareForView(
+                        rootNode, *views[level]);
+                }
+                size_t sharedCasterIndex = 0u;
+                while (true)
+                {
+                    const SharedCasterRecord* sharedCaster = nullptr;
+                    const DrawItem* item = nullptr;
+                    if (m_RenderPacketSharedBuilderActive)
+                    {
+                        const uint32_t clipmapBit = 1u << level;
+                        while (sharedCasterIndex <
+                            m_SharedCasterScratch.size())
+                        {
+                            const SharedCasterRecord& candidate =
+                                m_SharedCasterScratch[
+                                    sharedCasterIndex++];
+                            if ((candidate.clipmapMask &
+                                    clipmapBit) != 0u)
+                            {
+                                sharedCaster = &candidate;
+                                item = &candidate.draw;
+                                break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        item = drawStrategy.GetNextItem();
+                    }
+                    if (!item)
+                        break;
+
+                    SvsmPacketDrawItemDisposition disposition =
+                        SvsmPacketDrawItemDisposition::Accept;
+                    if (!sharedCaster ||
+                        !sharedCaster->validatedStableDrawState)
+                    {
+                        const bool geometryHasMaterial =
+                            item->geometry &&
+                            bool(item->geometry->material);
+                        const bool meshHasBuffers =
+                            item->mesh &&
+                            bool(item->mesh->buffers);
+                        disposition =
+                            ClassifySvsmPacketDrawItem(
+                                item->material != nullptr,
+                                item->instance != nullptr,
+                                item->mesh != nullptr,
+                                item->geometry != nullptr,
+                                item->buffers != nullptr,
+                                geometryHasMaterial,
+                                meshHasBuffers,
+                                geometryHasMaterial &&
+                                    item->geometry->material.get() ==
+                                        item->material,
+                                meshHasBuffers &&
+                                    item->mesh->buffers.get() ==
+                                        item->buffers,
+                                item->instance &&
+                                    item->instance->
+                                        GetInstanceIndex() >= 0);
+                    }
+                    if (disposition ==
+                        SvsmPacketDrawItemDisposition::Skip)
                     {
                         continue;
+                    }
+                    if (disposition ==
+                        SvsmPacketDrawItemDisposition::Abort)
+                    {
+                        log::error(
+                            "SVSM caster packet contains incomplete or inconsistent draw state.");
+                        for (auto& packets : m_RenderPackets)
+                            packets.clear();
+                        for (auto& groups : m_RenderPacketGroups)
+                            groups.clear();
+                        m_RenderPacketCount = 0u;
+                        m_RenderPacketPageEntryCount = 0u;
+                        return false;
                     }
 
                     const std::shared_ptr<Material> material =
-                        item->geometry->material;
+                        sharedCaster &&
+                            sharedCaster->
+                                validatedStableDrawState
+                        ? sharedCaster->materialReference
+                        : item->geometry->material;
                     const std::shared_ptr<BufferGroup> buffers =
-                        item->mesh->buffers;
-                    if (!material ||
-                        !buffers ||
-                        material.get() != item->material ||
-                        buffers.get() != item->buffers ||
-                        item->instance->GetInstanceIndex() < 0)
-                    {
-                        continue;
-                    }
+                        sharedCaster &&
+                            sharedCaster->
+                                validatedStableDrawState
+                        ? sharedCaster->buffersReference
+                        : item->mesh->buffers;
                     if (m_RenderPacketCount >=
                         maximumPacketCount)
                     {
@@ -1047,25 +4252,48 @@ namespace uvsr
                         return false;
                     }
 
-                    const uint64_t vertexOffset =
-                        uint64_t(item->mesh->vertexOffset) +
-                        item->geometry->vertexOffsetInMesh;
-                    const uint64_t indexOffset =
-                        uint64_t(item->mesh->indexOffset) +
-                        item->geometry->indexOffsetInMesh;
-                    if (vertexOffset >
-                            std::numeric_limits<uint32_t>::max() ||
-                        indexOffset >
-                            std::numeric_limits<uint32_t>::max())
+                    nvrhi::DrawArguments drawArguments;
+                    if (sharedCaster &&
+                        sharedCaster->argumentsValid)
                     {
-                        log::error(
-                            "SVSM caster packet offsets exceed the 32-bit indexed draw range.");
-                        for (auto& packets : m_RenderPackets)
-                            packets.clear();
-                        for (auto& groups : m_RenderPacketGroups)
-                            groups.clear();
-                        m_RenderPacketCount = 0u;
-                        return false;
+                        drawArguments =
+                            sharedCaster->arguments;
+                    }
+                    else
+                    {
+                        const uint64_t vertexOffset =
+                            uint64_t(item->mesh->vertexOffset) +
+                            item->geometry->vertexOffsetInMesh;
+                        const uint64_t indexOffset =
+                            uint64_t(item->mesh->indexOffset) +
+                            item->geometry->indexOffsetInMesh;
+                        if (vertexOffset >
+                                std::numeric_limits<
+                                    uint32_t>::max() ||
+                            indexOffset >
+                                std::numeric_limits<
+                                    uint32_t>::max())
+                        {
+                            log::error(
+                                "SVSM caster packet offsets exceed the 32-bit indexed draw range.");
+                            for (auto& packets : m_RenderPackets)
+                                packets.clear();
+                            for (auto& groups : m_RenderPacketGroups)
+                                groups.clear();
+                            m_RenderPacketCount = 0u;
+                            return false;
+                        }
+                        drawArguments.vertexCount =
+                            item->geometry->numIndices;
+                        drawArguments.instanceCount = 1u;
+                        drawArguments.startVertexLocation =
+                            uint32_t(vertexOffset);
+                        drawArguments.startIndexLocation =
+                            uint32_t(indexOffset);
+                        drawArguments.startInstanceLocation =
+                            uint32_t(
+                                item->instance->
+                                    GetInstanceIndex());
                     }
 
                     RenderPacket packet;
@@ -1073,22 +4301,18 @@ namespace uvsr
                     packet.buffers = buffers;
                     packet.cullMode = item->cullMode;
                     const bool alphaTested =
-                        material->domain == MaterialDomain::AlphaTested;
+                        sharedCaster &&
+                            sharedCaster->
+                                validatedStableDrawState
+                        ? sharedCaster->alphaTested
+                        : material->domain ==
+                            MaterialDomain::AlphaTested;
                     packet.stateKey = MakeSvsmBatchedDrawStateKey(
                         reinterpret_cast<uintptr_t>(buffers.get()),
                         reinterpret_cast<uintptr_t>(material.get()),
                         uint32_t(item->cullMode),
                         alphaTested);
-                    packet.arguments.vertexCount =
-                        item->geometry->numIndices;
-                    packet.arguments.instanceCount = 1u;
-                    packet.arguments.startVertexLocation =
-                        uint32_t(vertexOffset);
-                    packet.arguments.startIndexLocation =
-                        uint32_t(indexOffset);
-                    packet.arguments.startInstanceLocation =
-                        uint32_t(
-                            item->instance->GetInstanceIndex());
+                    packet.arguments = drawArguments;
                     packet.argumentIndex =
                         m_RenderPacketCount++;
                     if (buildPacketPageMetadata)
@@ -1099,11 +4323,31 @@ namespace uvsr
                                 ? m_RenderPacketPageEntryCount
                                 : 0u;
                         packet.pageMetadata =
-                            BuildPacketPageMetadata(
+                            sharedCaster &&
+                                sharedCaster->
+                                    reliableCommonLightBounds
+                            ? BuildPacketPageMetadataFromCommonLightBounds(
+                                packet.arguments.
+                                    startInstanceLocation,
+                                sharedCaster->commonLightBounds,
+                                m_SharedLightToClipMatrices[level],
+                                pageListOffset,
+                                packetPageCapacity)
+                            : BuildPacketPageMetadata(
                                 *item,
                                 m_RenderPacketMatrices[level],
                                 pageListOffset,
-                                packetPageCapacity);
+                                 packetPageCapacity);
+                        const bool staticCacheCandidate =
+                            sharedCaster
+                            ? sharedCaster->staticCacheCandidate
+                            : IsPacketStaticCacheCandidate(*item);
+                        if (m_RenderPacketPairedDepthClassificationActive &&
+                            staticCacheCandidate)
+                        {
+                            packet.pageMetadata.objectInstanceIndex |=
+                                SvsmPacketStaticCasterBit;
+                        }
                         packetPageCapacity = std::min(
                             packetPageCapacity,
                             m_PhysicalPageCount);
@@ -1230,6 +4474,17 @@ namespace uvsr
                 }
             }
 
+            if (m_PendingPersistentCasterSourceReady)
+            {
+                m_PersistentCasterSources.swap(
+                    m_PendingPersistentCasterSources);
+                m_PersistentCasterSourceKey =
+                    m_PendingPersistentCasterSourceKey;
+                m_PersistentCasterSourceCacheValid = true;
+                m_PendingPersistentCasterSources.clear();
+                m_PendingPersistentCasterSourceKey = {};
+                m_PendingPersistentCasterSourceReady = false;
+            }
             m_RenderPacketCacheValid = true;
             rebuilt = true;
             return true;
@@ -1288,18 +4543,45 @@ namespace uvsr
             {
                 if (!requiredKeys[keyValue])
                     continue;
-                nvrhi::GraphicsPipelineHandle& pipeline =
-                    m_BatchedPipelines[keyValue];
-                if (!pipeline)
+                PipelineKey key;
+                key.value = keyValue;
+                const bool useOpaqueSpecialization =
+                    ShouldUseSvsmOpaqueRasterSpecialization(
+                        m_OpaqueRasterSpecializationRequested,
+                        m_OpaqueRasterSpecializationSupported,
+                        !key.bits.alphaTested);
+                nvrhi::GraphicsPipelineHandle* pipeline =
+                    useOpaqueSpecialization
+                    ? std::addressof(
+                        m_BatchedPositionOnlyPipelines[keyValue])
+                    : std::addressof(m_BatchedPipelines[keyValue]);
+                if (!*pipeline)
                 {
-                    PipelineKey key;
-                    key.value = keyValue;
-                    pipeline = CreateGraphicsPipelineForVertexShader(
-                        key,
-                        framebufferInfo,
-                        m_BatchedVertexShader);
+                    *pipeline = useOpaqueSpecialization
+                        ? CreateOpaqueSpecializedGraphicsPipeline(
+                            key,
+                            framebufferInfo,
+                            m_BatchedPositionOnlyVertexShader)
+                        : CreateGraphicsPipelineForVertexShader(
+                            key,
+                            framebufferInfo,
+                            m_BatchedVertexShader);
                 }
-                if (!pipeline)
+                if (!*pipeline && useOpaqueSpecialization)
+                {
+                    DisableOpaqueRasterSpecialization();
+                    pipeline = std::addressof(
+                        m_BatchedPipelines[keyValue]);
+                    if (!*pipeline)
+                    {
+                        *pipeline =
+                            CreateGraphicsPipelineForVertexShader(
+                                key,
+                                framebufferInfo,
+                                m_BatchedVertexShader);
+                    }
+                }
+                if (!*pipeline)
                 {
                     log::warning(
                         "SVSM batched draw pipeline creation failed; retaining the per-packet reference path.");
@@ -1340,6 +4622,33 @@ namespace uvsr
         [[nodiscard]] bool HasRenderPacketCache() const
         {
             return m_RenderPacketCacheValid;
+        }
+
+        [[nodiscard]] bool IsPersistentCasterSourceRequested() const
+        {
+            return m_PersistentCasterSourceRequested;
+        }
+
+        [[nodiscard]] bool IsPersistentCasterSourceActive() const
+        {
+            return m_PersistentCasterSourceActive;
+        }
+
+        [[nodiscard]] bool WasPersistentCasterSourceRebuilt() const
+        {
+            return m_PersistentCasterSourceRebuilt;
+        }
+
+        [[nodiscard]] bool WasPersistentCasterSourceReused() const
+        {
+            return m_PersistentCasterSourceReused;
+        }
+
+        [[nodiscard]] uint32_t GetPersistentCasterSourceCount() const
+        {
+            return uint32_t(std::min(
+                m_PersistentCasterSources.size(),
+                size_t(std::numeric_limits<uint32_t>::max())));
         }
 
         [[nodiscard]] bool UsesExactPacketPageLists() const
@@ -1482,7 +4791,7 @@ namespace uvsr
                 &constants, sizeof(constants));
         }
 
-        void RenderViewReference(
+        [[nodiscard]] bool RenderViewReference(
             nvrhi::ICommandList* commandList,
             const IView* view,
             nvrhi::IFramebuffer* framebuffer,
@@ -1490,6 +4799,15 @@ namespace uvsr
             Context& context,
             uint32_t selectedClipmap)
         {
+            if (!commandList ||
+                !view ||
+                !framebuffer ||
+                selectedClipmap >= SvsmClipmapCount ||
+                !m_IndirectDrawArguments ||
+                !m_Counters)
+            {
+                return false;
+            }
             m_BatchedPipelineActive = false;
             SetupView(context, commandList, view, view);
 
@@ -1511,6 +4829,14 @@ namespace uvsr
             {
                 if (!item->material)
                     continue;
+                if (!item->buffers ||
+                    !item->geometry ||
+                    !item->mesh ||
+                    !item->instance ||
+                    item->instance->GetInstanceIndex() < 0)
+                {
+                    return false;
+                }
 
                 const bool newBuffers =
                     item->buffers != lastBuffers;
@@ -1535,19 +4861,34 @@ namespace uvsr
                     lastCullMode = item->cullMode;
                 }
                 if (!drawMaterial)
-                    continue;
+                    return false;
+                if (!IsSvsmRasterStateComplete(
+                        graphicsState, true))
+                {
+                    return false;
+                }
+
+                const uint64_t vertexOffset =
+                    uint64_t(item->mesh->vertexOffset) +
+                    item->geometry->vertexOffsetInMesh;
+                const uint64_t indexOffset =
+                    uint64_t(item->mesh->indexOffset) +
+                    item->geometry->indexOffsetInMesh;
+                if (vertexOffset >
+                        std::numeric_limits<uint32_t>::max() ||
+                    indexOffset >
+                        std::numeric_limits<uint32_t>::max())
+                {
+                    return false;
+                }
 
                 nvrhi::DrawArguments args;
                 args.vertexCount = item->geometry->numIndices;
                 args.instanceCount = 1u;
-                args.startVertexLocation =
-                    item->mesh->vertexOffset +
-                    item->geometry->vertexOffsetInMesh;
-                args.startIndexLocation =
-                    item->mesh->indexOffset +
-                    item->geometry->indexOffsetInMesh;
-                args.startInstanceLocation =
-                    item->instance->GetInstanceIndex();
+                args.startVertexLocation = uint32_t(vertexOffset);
+                args.startIndexLocation = uint32_t(indexOffset);
+                args.startInstanceLocation = uint32_t(
+                    item->instance->GetInstanceIndex());
 
                 nvrhi::DrawIndexedIndirectArguments indirectArgs;
                 indirectArgs.indexCount = args.vertexCount;
@@ -1579,9 +4920,10 @@ namespace uvsr
                     context, commandList, graphicsState, args);
                 commandList->drawIndexedIndirect(0u, 1u);
             }
+            return true;
         }
 
-        void RenderPackets(
+        [[nodiscard]] bool RenderPackets(
             nvrhi::ICommandList* commandList,
             const IView* view,
             nvrhi::IFramebuffer* framebuffer,
@@ -1592,12 +4934,33 @@ namespace uvsr
             bool batched,
             bool levelEmptyWorkSkip,
             bool packetPageCulling,
-            bool dirtyPageScatterRaster)
+            bool dirtyPageScatterRaster,
+            bool validateOnly = false)
         {
+            if (!commandList ||
+                !view ||
+                !framebuffer ||
+                selectedClipmap >= SvsmClipmapCount ||
+                !m_IndirectDrawArguments ||
+                !m_Counters)
+            {
+                return false;
+            }
             m_BatchedPipelineActive = false;
-            selectedClipmap = std::min(
-                selectedClipmap, SvsmClipmapCount - 1u);
-            SetupView(context, commandList, view, view);
+            if (validateOnly)
+            {
+                // Pipeline selection needs only these two view bits.
+                // Prevalidation must not record GBuffer constant-buffer
+                // writes outside the SVSM timer or consume volatile versions.
+                context.keyTemplate.bits.frontCounterClockwise =
+                    view->IsMirrored();
+                context.keyTemplate.bits.reverseDepth =
+                    view->IsReverseDepth();
+            }
+            else
+            {
+                SetupView(context, commandList, view, view);
+            }
 
             const Material* lastMaterial = nullptr;
             const BufferGroup* lastBuffers = nullptr;
@@ -1617,20 +4980,47 @@ namespace uvsr
                 graphicsState.indirectCountBuffer = m_Counters;
 
             const auto& packets = m_RenderPackets[selectedClipmap];
+            const uint64_t levelArgumentBegin =
+                m_RenderPacketOffsets[selectedClipmap];
+            const uint64_t levelArgumentEnd =
+                levelArgumentBegin + uint64_t(packets.size());
+            if (levelArgumentEnd >
+                    uint64_t(m_RenderPacketCount) ||
+                (gpuGated &&
+                    levelArgumentEnd >
+                        uint64_t(indirectDrawCapacity)))
+            {
+                return false;
+            }
+            for (size_t packetIndex = 0u;
+                packetIndex < packets.size();
+                ++packetIndex)
+            {
+                const RenderPacket& packet = packets[packetIndex];
+                if (!packet.material ||
+                    !packet.buffers ||
+                    uint64_t(packet.argumentIndex) !=
+                        levelArgumentBegin +
+                            uint64_t(packetIndex))
+                {
+                    return false;
+                }
+            }
             if (gpuGated && batched)
             {
                 const auto& groups =
                     m_RenderPacketGroups[selectedClipmap];
+                size_t expectedFirstPacket = 0u;
                 for (const RenderPacketGroup& group : groups)
                 {
                     if (group.packetCount == 0u ||
+                        group.firstPacket != expectedFirstPacket ||
                         group.firstPacket >= packets.size() ||
                         group.packetCount >
                             packets.size() - group.firstPacket)
                     {
-                        continue;
+                        return false;
                     }
-
                     const RenderPacket& firstPacket =
                         packets[group.firstPacket];
                     const uint64_t groupArgumentEnd =
@@ -1641,23 +5031,33 @@ namespace uvsr
                         groupArgumentEnd >
                             uint64_t(indirectDrawCapacity))
                     {
-                        assert(false &&
-                            "SVSM packet group exceeds indirect argument bounds");
-                        continue;
+                        return false;
                     }
-#ifndef NDEBUG
                     for (uint32_t packetOffset = 0u;
                         packetOffset < group.packetCount;
                         ++packetOffset)
                     {
-                        assert(
-                            uint64_t(packets[
-                                group.firstPacket + packetOffset]
-                                .argumentIndex) ==
-                            uint64_t(firstPacket.argumentIndex) +
-                                uint64_t(packetOffset));
+                        const RenderPacket& packet =
+                            packets[
+                                group.firstPacket + packetOffset];
+                        if (!packet.material ||
+                            !packet.buffers ||
+                            uint64_t(packet.argumentIndex) !=
+                                uint64_t(firstPacket.argumentIndex) +
+                                    uint64_t(packetOffset))
+                        {
+                            return false;
+                        }
                     }
-#endif
+                    expectedFirstPacket += group.packetCount;
+                }
+                if (expectedFirstPacket != packets.size())
+                    return false;
+
+                for (const RenderPacketGroup& group : groups)
+                {
+                    const RenderPacket& firstPacket =
+                        packets[group.firstPacket];
                     const bool pipelineChanged =
                         m_BatchedPipelineActive != group.batchable;
                     m_BatchedPipelineActive = group.batchable;
@@ -1688,16 +5088,27 @@ namespace uvsr
                         stateValid = false;
                     }
                     if (!drawMaterial)
-                        continue;
+                        return false;
+                    if (!IsSvsmRasterStateComplete(
+                            graphicsState, true))
+                    {
+                        return false;
+                    }
 
                     if (!stateValid)
                     {
-                        commandList->setGraphicsState(graphicsState);
+                        if (!validateOnly)
+                        {
+                            commandList->setGraphicsState(
+                                graphicsState);
+                        }
                         stateValid = true;
                     }
 
                     if (group.batchable)
                     {
+                        if (validateOnly)
+                            continue;
                         SetBatchedPushConstants(
                             context,
                             commandList,
@@ -1732,6 +5143,8 @@ namespace uvsr
                             const RenderPacket& packet =
                                 packets[
                                     group.firstPacket + packetOffset];
+                            if (validateOnly)
+                                continue;
                             nvrhi::DrawArguments args =
                                 packet.arguments;
                             SetSparsePushConstants(
@@ -1752,7 +5165,7 @@ namespace uvsr
                         }
                     }
                 }
-                return;
+                return true;
             }
 
             for (const RenderPacket& packet : packets)
@@ -1784,10 +5197,15 @@ namespace uvsr
                     stateValid = false;
                 }
                 if (!drawMaterial)
-                    continue;
+                    return false;
+                if (!IsSvsmRasterStateComplete(
+                        graphicsState, true))
+                {
+                    return false;
+                }
 
                 nvrhi::DrawArguments args = packet.arguments;
-                if (!gpuGated)
+                if (!gpuGated && !validateOnly)
                 {
                     nvrhi::DrawIndexedIndirectArguments
                         indirectArgs;
@@ -1821,9 +5239,15 @@ namespace uvsr
 
                 if (!stateValid)
                 {
-                    commandList->setGraphicsState(graphicsState);
+                    if (!validateOnly)
+                    {
+                        commandList->setGraphicsState(
+                            graphicsState);
+                    }
                     stateValid = true;
                 }
+                if (validateOnly)
+                    continue;
                 SetSparsePushConstants(
                     context,
                     commandList,
@@ -1847,6 +5271,7 @@ namespace uvsr
                     commandList->drawIndexedIndirect(0u, 1u);
                 }
             }
+            return true;
         }
     };
 
@@ -1857,6 +5282,8 @@ namespace uvsr
         : m_Device(device)
         , m_ShaderFactory(shaderFactory)
         , m_CommonPasses(commonPasses)
+        , m_CasterSnapshotState(
+            std::make_unique<CasterSnapshotState>())
     {
         m_Timings.supported = HasRequiredFormatSupport(device);
         if (!m_Timings.supported)
@@ -1918,6 +5345,7 @@ namespace uvsr
             nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
             nvrhi::BindingLayoutItem::Texture_SRV(0),
             nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+            nvrhi::BindingLayoutItem::StructuredBuffer_SRV(2),
             nvrhi::BindingLayoutItem::Texture_UAV(0),
             nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1),
             nvrhi::BindingLayoutItem::StructuredBuffer_UAV(2),
@@ -1927,7 +5355,11 @@ namespace uvsr
             nvrhi::BindingLayoutItem::StructuredBuffer_UAV(6),
             nvrhi::BindingLayoutItem::StructuredBuffer_UAV(7),
             nvrhi::BindingLayoutItem::StructuredBuffer_UAV(8),
-            nvrhi::BindingLayoutItem::StructuredBuffer_UAV(9)
+            nvrhi::BindingLayoutItem::StructuredBuffer_UAV(9),
+            nvrhi::BindingLayoutItem::StructuredBuffer_UAV(10),
+            nvrhi::BindingLayoutItem::StructuredBuffer_UAV(11),
+            nvrhi::BindingLayoutItem::StructuredBuffer_UAV(12),
+            nvrhi::BindingLayoutItem::StructuredBuffer_UAV(13)
         };
         m_SparseBindingLayout =
             device->createBindingLayout(sparseLayoutDesc);
@@ -1940,16 +5372,42 @@ namespace uvsr
             "clearPages",
             "finalize",
             "stats",
-            "fillIndirect"
+            "fillIndirect",
+            "invalidatePages",
+            "buildScheduledPageTileMasks",
+            "buildStaticDepthHierarchy",
+            "scheduleFine"
         };
         for (uint32_t stage = 0u;
             stage < m_SparseShaders.size();
             ++stage)
         {
+            std::vector<ShaderMacro> macros;
+            if (stage == SparseMark)
+            {
+                macros.emplace_back(
+                    "SVSM_PRECOMPOSED_CLIPMAP_TRANSFORMS", "0");
+                macros.emplace_back(
+                    "SVSM_RECEIVER_PAGE_MASK", "0");
+            }
+            else if (stage == SparseFillIndirect)
+            {
+                macros.emplace_back(
+                    "SVSM_SCHEDULED_TILE_MASK", "0");
+                macros.emplace_back(
+                    "SVSM_STATIC_DEPTH_HIERARCHY", "0");
+                macros.emplace_back(
+                    "SVSM_RECEIVER_PAGE_MASK", "0");
+            }
+            else if (stage == SparseBuildStaticDepthHierarchy)
+            {
+                macros.emplace_back(
+                    "SVSM_DEFER_STATIC_MERGE", "0");
+            }
             m_SparseShaders[stage] = shaderFactory->CreateShader(
                 "uvsr/sparse_virtual_shadow_map_sparse_cs.hlsl",
                 sparseEntries[stage],
-                nullptr,
+                macros.empty() ? nullptr : &macros,
                 nvrhi::ShaderType::Compute);
             nvrhi::ComputePipelineDesc sparsePipelineDesc;
             sparsePipelineDesc.CS = m_SparseShaders[stage];
@@ -1957,6 +5415,219 @@ namespace uvsr
                 m_SparseBindingLayout
             };
             m_SparsePipelines[stage] =
+                device->createComputePipeline(sparsePipelineDesc);
+        }
+        if (!m_ResolveBindingLayout ||
+            !m_ResolveConstants ||
+            !m_ResolveShader ||
+            !m_ResolvePipeline ||
+            !m_SparseBindingLayout ||
+            std::any_of(
+                m_SparseShaders.begin(),
+                m_SparseShaders.end(),
+                [](const nvrhi::ShaderHandle& shader) {
+                    return !shader;
+                }) ||
+            std::any_of(
+                m_SparsePipelines.begin(),
+                m_SparsePipelines.end(),
+                [](const nvrhi::ComputePipelineHandle& pipeline) {
+                    return !pipeline;
+                }))
+        {
+            // A staged shader set can lag the executable after a new
+            // permutation key is introduced. Treat every base compute stage
+            // as mandatory and disable SVSM cleanly instead of dispatching a
+            // null pipeline or rendering partial shadow contents.
+            m_Timings.supported = false;
+            log::error(
+                "SVSM base compute shaders or pipelines are unavailable; visibility will remain white. Rebuild and restage the SVSM shader set.");
+            return;
+        }
+        {
+            std::vector<ShaderMacro> macros = {
+                ShaderMacro("SVSM_DEFER_STATIC_MERGE", "1")
+            };
+            m_SparseDeferredStaticDepthMergeShader =
+                shaderFactory->CreateShader(
+                    "uvsr/sparse_virtual_shadow_map_sparse_cs.hlsl",
+                    "buildStaticDepthHierarchy",
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            nvrhi::ComputePipelineDesc sparsePipelineDesc;
+            sparsePipelineDesc.CS =
+                m_SparseDeferredStaticDepthMergeShader;
+            sparsePipelineDesc.bindingLayouts = {
+                m_SparseBindingLayout
+            };
+            m_SparseDeferredStaticDepthMergePipeline =
+                device->createComputePipeline(sparsePipelineDesc);
+        }
+        {
+            std::vector<ShaderMacro> macros = {
+                ShaderMacro("SVSM_SCHEDULED_TILE_MASK", "1"),
+                ShaderMacro("SVSM_STATIC_DEPTH_HIERARCHY", "0"),
+                ShaderMacro("SVSM_RECEIVER_PAGE_MASK", "0")
+            };
+            m_SparseScheduledTileMaskFillShader =
+                shaderFactory->CreateShader(
+                    "uvsr/sparse_virtual_shadow_map_sparse_cs.hlsl",
+                    "fillIndirect",
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            nvrhi::ComputePipelineDesc sparsePipelineDesc;
+            sparsePipelineDesc.CS =
+                m_SparseScheduledTileMaskFillShader;
+            sparsePipelineDesc.bindingLayouts = {
+                m_SparseBindingLayout
+            };
+            m_SparseScheduledTileMaskFillPipeline =
+                device->createComputePipeline(sparsePipelineDesc);
+        }
+        {
+            std::vector<ShaderMacro> macros = {
+                ShaderMacro("SVSM_SCHEDULED_TILE_MASK", "0"),
+                ShaderMacro("SVSM_STATIC_DEPTH_HIERARCHY", "1"),
+                ShaderMacro("SVSM_RECEIVER_PAGE_MASK", "0")
+            };
+            m_SparseStaticDepthHierarchyFillShader =
+                shaderFactory->CreateShader(
+                    "uvsr/sparse_virtual_shadow_map_sparse_cs.hlsl",
+                    "fillIndirect",
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            nvrhi::ComputePipelineDesc sparsePipelineDesc;
+            sparsePipelineDesc.CS =
+                m_SparseStaticDepthHierarchyFillShader;
+            sparsePipelineDesc.bindingLayouts = {
+                m_SparseBindingLayout
+            };
+            m_SparseStaticDepthHierarchyFillPipeline =
+                device->createComputePipeline(sparsePipelineDesc);
+        }
+        {
+            std::vector<ShaderMacro> macros = {
+                ShaderMacro("SVSM_SCHEDULED_TILE_MASK", "1"),
+                ShaderMacro("SVSM_STATIC_DEPTH_HIERARCHY", "1"),
+                ShaderMacro("SVSM_RECEIVER_PAGE_MASK", "0")
+            };
+            m_SparseScheduledTileMaskStaticDepthHierarchyFillShader =
+                shaderFactory->CreateShader(
+                    "uvsr/sparse_virtual_shadow_map_sparse_cs.hlsl",
+                    "fillIndirect",
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            nvrhi::ComputePipelineDesc sparsePipelineDesc;
+            sparsePipelineDesc.CS =
+                m_SparseScheduledTileMaskStaticDepthHierarchyFillShader;
+            sparsePipelineDesc.bindingLayouts = {
+                m_SparseBindingLayout
+            };
+            m_SparseScheduledTileMaskStaticDepthHierarchyFillPipeline =
+                device->createComputePipeline(sparsePipelineDesc);
+        }
+        {
+            std::vector<ShaderMacro> macros = {
+                ShaderMacro(
+                    "SVSM_PRECOMPOSED_CLIPMAP_TRANSFORMS", "1"),
+                ShaderMacro("SVSM_RECEIVER_PAGE_MASK", "0")
+            };
+            m_SparsePrecomposedMarkShader =
+                shaderFactory->CreateShader(
+                    "uvsr/sparse_virtual_shadow_map_sparse_cs.hlsl",
+                    "mark",
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            nvrhi::ComputePipelineDesc sparsePipelineDesc;
+            sparsePipelineDesc.CS = m_SparsePrecomposedMarkShader;
+            sparsePipelineDesc.bindingLayouts = {
+                m_SparseBindingLayout
+            };
+            m_SparsePrecomposedMarkPipeline =
+                device->createComputePipeline(sparsePipelineDesc);
+        }
+        {
+            std::vector<ShaderMacro> macros = {
+                ShaderMacro(
+                    "SVSM_PRECOMPOSED_CLIPMAP_TRANSFORMS", "0"),
+                ShaderMacro("SVSM_RECEIVER_PAGE_MASK", "1")
+            };
+            m_SparseReceiverPageMaskMarkShader =
+                shaderFactory->CreateShader(
+                    "uvsr/sparse_virtual_shadow_map_sparse_cs.hlsl",
+                    "mark",
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            nvrhi::ComputePipelineDesc sparsePipelineDesc;
+            sparsePipelineDesc.CS =
+                m_SparseReceiverPageMaskMarkShader;
+            sparsePipelineDesc.bindingLayouts = {
+                m_SparseBindingLayout
+            };
+            m_SparseReceiverPageMaskMarkPipeline =
+                device->createComputePipeline(sparsePipelineDesc);
+        }
+        {
+            std::vector<ShaderMacro> macros = {
+                ShaderMacro(
+                    "SVSM_PRECOMPOSED_CLIPMAP_TRANSFORMS", "1"),
+                ShaderMacro("SVSM_RECEIVER_PAGE_MASK", "1")
+            };
+            m_SparsePrecomposedReceiverPageMaskMarkShader =
+                shaderFactory->CreateShader(
+                    "uvsr/sparse_virtual_shadow_map_sparse_cs.hlsl",
+                    "mark",
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            nvrhi::ComputePipelineDesc sparsePipelineDesc;
+            sparsePipelineDesc.CS =
+                m_SparsePrecomposedReceiverPageMaskMarkShader;
+            sparsePipelineDesc.bindingLayouts = {
+                m_SparseBindingLayout
+            };
+            m_SparsePrecomposedReceiverPageMaskMarkPipeline =
+                device->createComputePipeline(sparsePipelineDesc);
+        }
+        {
+            std::vector<ShaderMacro> macros = {
+                ShaderMacro("SVSM_SCHEDULED_TILE_MASK", "0"),
+                ShaderMacro("SVSM_STATIC_DEPTH_HIERARCHY", "0"),
+                ShaderMacro("SVSM_RECEIVER_PAGE_MASK", "1")
+            };
+            m_SparseReceiverPageMaskFillShader =
+                shaderFactory->CreateShader(
+                    "uvsr/sparse_virtual_shadow_map_sparse_cs.hlsl",
+                    "fillIndirect",
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            nvrhi::ComputePipelineDesc sparsePipelineDesc;
+            sparsePipelineDesc.CS =
+                m_SparseReceiverPageMaskFillShader;
+            sparsePipelineDesc.bindingLayouts = {
+                m_SparseBindingLayout
+            };
+            m_SparseReceiverPageMaskFillPipeline =
+                device->createComputePipeline(sparsePipelineDesc);
+        }
+        {
+            std::vector<ShaderMacro> macros = {
+                ShaderMacro("SVSM_SCHEDULED_TILE_MASK", "1"),
+                ShaderMacro("SVSM_STATIC_DEPTH_HIERARCHY", "0"),
+                ShaderMacro("SVSM_RECEIVER_PAGE_MASK", "1")
+            };
+            m_SparseScheduledTileReceiverPageMaskFillShader =
+                shaderFactory->CreateShader(
+                    "uvsr/sparse_virtual_shadow_map_sparse_cs.hlsl",
+                    "fillIndirect",
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            nvrhi::ComputePipelineDesc sparsePipelineDesc;
+            sparsePipelineDesc.CS =
+                m_SparseScheduledTileReceiverPageMaskFillShader;
+            sparsePipelineDesc.bindingLayouts = {
+                m_SparseBindingLayout
+            };
+            m_SparseScheduledTileReceiverPageMaskFillPipeline =
                 device->createComputePipeline(sparsePipelineDesc);
         }
 
@@ -1982,42 +5653,94 @@ namespace uvsr
             "8",
             "16"
         };
-        for (uint32_t translationCache = 0u;
-            translationCache <
-                c_SparseResolveTranslationPermutationCount;
-            ++translationCache)
+        static constexpr SvsmTapCount c_SparseResolveTapCounts[] = {
+            SvsmTapCount::One,
+            SvsmTapCount::Four,
+            SvsmTapCount::Eight,
+            SvsmTapCount::Sixteen
+        };
+        for (uint32_t poissonOrdering = 0u;
+            poissonOrdering <
+                c_SparseResolvePoissonOrderingPermutationCount;
+            ++poissonOrdering)
         {
-            for (uint32_t tapPermutation = 0u;
-                tapPermutation <
-                    c_SparseResolveTapPermutationCount;
-                ++tapPermutation)
+            for (uint32_t filterKernel = 0u;
+                filterKernel <
+                    c_SparseResolveFilterKernelPermutationCount;
+                ++filterKernel)
             {
-                const uint32_t permutation =
-                    translationCache *
-                        c_SparseResolveTapPermutationCount +
-                    tapPermutation;
-                std::vector<ShaderMacro> macros;
-                macros.emplace_back(
-                    "SVSM_PAGE_TRANSLATION_CACHE",
-                    translationCache != 0u ? "1" : "0");
-                macros.emplace_back(
-                    "SVSM_FILTER_TAPS",
-                    c_SparseResolveTapMacros[tapPermutation]);
-                m_SparseResolveShaders[permutation] =
-                    shaderFactory->CreateShader(
-                        "uvsr/sparse_virtual_shadow_map_sparse_resolve_cs.hlsl",
-                        "main",
-                        &macros,
-                        nvrhi::ShaderType::Compute);
-                nvrhi::ComputePipelineDesc sparseResolvePipelineDesc;
-                sparseResolvePipelineDesc.CS =
-                    m_SparseResolveShaders[permutation];
-                sparseResolvePipelineDesc.bindingLayouts = {
-                    m_SparseResolveBindingLayout
-                };
-                m_SparseResolvePipelines[permutation] =
-                    device->createComputePipeline(
-                        sparseResolvePipelineDesc);
+                for (uint32_t receiverTransform = 0u;
+                    receiverTransform <
+                        c_SparseResolveReceiverTransformPermutationCount;
+                    ++receiverTransform)
+                {
+                    for (uint32_t translationCache = 0u;
+                        translationCache <
+                            c_SparseResolveTranslationPermutationCount;
+                        ++translationCache)
+                    {
+                        for (uint32_t tapPermutation = 0u;
+                            tapPermutation <
+                                c_SparseResolveTapPermutationCount;
+                            ++tapPermutation)
+                        {
+                            const SvsmPoissonOrdering ordering =
+                                SvsmPoissonOrdering(poissonOrdering);
+                            const SvsmFilterKernel kernel =
+                                filterKernel != 0u
+                                    ? SvsmFilterKernel::BilinearPcf
+                                    : SvsmFilterKernel::NearestPoisson;
+                            const SvsmTapCount tapCount =
+                                c_SparseResolveTapCounts[tapPermutation];
+                            const uint32_t permutation =
+                                GetSvsmSparseResolvePermutationIndex(
+                                    ordering,
+                                    kernel,
+                                    receiverTransform != 0u,
+                                    translationCache != 0u,
+                                    tapCount);
+                            std::vector<ShaderMacro> macros;
+                            macros.emplace_back(
+                                "SVSM_PAGE_TRANSLATION_CACHE",
+                                translationCache != 0u ? "1" : "0");
+                            macros.emplace_back(
+                                "SVSM_BALANCED_POISSON",
+                                poissonOrdering != 0u ? "1" : "0");
+                            macros.emplace_back(
+                                "SVSM_FILTER_TAPS",
+                                c_SparseResolveTapMacros[tapPermutation]);
+                            macros.emplace_back(
+                                "SVSM_PRECOMPOSED_CLIPMAP_TRANSFORMS",
+                                receiverTransform != 0u ? "1" : "0");
+                            macros.emplace_back(
+                                "SVSM_BILINEAR_PCF",
+                                filterKernel != 0u ? "1" : "0");
+                            const char* shaderPath =
+                                translationCache != 0u
+                                    ? (poissonOrdering != 0u
+                                        ? "uvsr/sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_balanced.hlsl"
+                                        : "uvsr/sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_legacy.hlsl")
+                                    : (poissonOrdering != 0u
+                                        ? "uvsr/sparse_virtual_shadow_map_sparse_resolve_cs_reference_balanced.hlsl"
+                                        : "uvsr/sparse_virtual_shadow_map_sparse_resolve_cs_reference_legacy.hlsl");
+                            m_SparseResolveShaders[permutation] =
+                                shaderFactory->CreateShader(
+                                    shaderPath,
+                                    "main",
+                                    &macros,
+                                    nvrhi::ShaderType::Compute);
+                            nvrhi::ComputePipelineDesc sparseResolvePipelineDesc;
+                            sparseResolvePipelineDesc.CS =
+                                m_SparseResolveShaders[permutation];
+                            sparseResolvePipelineDesc.bindingLayouts = {
+                                m_SparseResolveBindingLayout
+                            };
+                            m_SparseResolvePipelines[permutation] =
+                                device->createComputePipeline(
+                                    sparseResolvePipelineDesc);
+                        }
+                    }
+                }
             }
         }
 
@@ -2171,6 +5894,8 @@ namespace uvsr
                 cameraDesc.width, cameraDesc.height, 1u, 1u);
             m_Timings.packetPageMetadataBytes = 0u;
             m_Timings.packetPageListBytes = 0u;
+            m_Timings.staticDepthHierarchyBytes = 0u;
+            m_Timings.receiverPageMaskBytes = 0u;
         }
         const bool ready = bool(m_ResolveBindingSet);
         if (ready)
@@ -2180,8 +5905,22 @@ namespace uvsr
 
     bool SparseVirtualShadowMapPass::EnsureSparseResources(
         nvrhi::ITexture* cameraDepth,
-        uint32_t physicalPageCount)
+        uint32_t physicalPageCount,
+        bool pairedStaticDynamicDepthEnabled,
+        bool deferredStaticDepthMergeEnabled,
+        bool leanAlphaTestedBindingsEnabled)
     {
+        // A runtime graphics-pipeline failure is latched to the exact
+        // dual-atomic reference permutation. Toggling the feature off is the
+        // explicit retry boundary; ordinary resize/resource recreation must
+        // not retry a failing optional specialization every frame.
+        m_DeferredStaticDepthMergeRasterFallbackLatched =
+            GetNextSvsmDeferredStaticDepthRasterFallbackLatched(
+                m_DeferredStaticDepthMergeRasterFallbackLatched,
+                deferredStaticDepthMergeEnabled,
+                false,
+                true);
+
         if (!cameraDepth ||
             !m_Timings.supported ||
             physicalPageCount == 0u ||
@@ -2192,6 +5931,9 @@ namespace uvsr
 
         const nvrhi::TextureDesc& cameraDesc =
             cameraDepth->getDesc();
+        const SvsmSparseAlphaBindingLayout requestedAlphaBindingLayout =
+            GetSvsmSparseAlphaBindingLayout(
+                leanAlphaTestedBindingsEnabled);
         const bool recreate =
             RequiresSvsmResourceRecreation(
                 m_ResourceBackend,
@@ -2199,24 +5941,42 @@ namespace uvsr
             !m_PageTable ||
             !m_SparsePhysicalDepth ||
             !m_DirtyPageRectangles ||
+            !m_LocalInvalidationPages ||
+            !m_FinePageCandidateMasks ||
             !m_Visibility ||
             m_Visibility->getDesc().width != cameraDesc.width ||
             m_Visibility->getDesc().height != cameraDesc.height ||
-            m_AllocatedPhysicalPageCount != physicalPageCount;
-        const bool rebind =
+            m_AllocatedPhysicalPageCount != physicalPageCount ||
+            m_AllocatedPairedStaticDynamicDepth !=
+                pairedStaticDynamicDepthEnabled;
+        const bool recreateSparseDepthPass =
+            recreate ||
+            !m_SparseDepthPass ||
+            !m_AllocatedSparseAlphaBindingLayoutValid ||
+            !m_AllocatedDeferredStaticDepthMergeValid ||
+            !m_DeferredStaticDepthMergeRequestValid ||
+            RequiresSvsmSparseDepthPassRecreation(
+                m_AllocatedSparseAlphaBindingLayout,
+                m_DeferredStaticDepthMergeRequest,
+                leanAlphaTestedBindingsEnabled,
+                deferredStaticDepthMergeEnabled);
+        const bool rebindComputeResources =
             recreate ||
             !m_SparseBindingSet ||
             !m_SparseResolveBindingSets[0] ||
             m_BoundCameraDepth != cameraDepth;
-        if (!rebind)
+        if (!rebindComputeResources && !recreateSparseDepthPass)
             return true;
 
-        m_SparseBindingSet = nullptr;
-        m_SparseResolveBindingSets = {};
-        if (m_BoundCameraDepth != cameraDepth)
+        if (rebindComputeResources)
         {
-            m_StaticVisibilityValid.fill(false);
+            m_SparseBindingSet = nullptr;
+            m_SparseResolveBindingSets = {};
+            if (m_BoundCameraDepth != cameraDepth)
+                m_StaticVisibilityValid.fill(false);
         }
+        if (recreateSparseDepthPass)
+            m_SparseDepthPass.reset();
         if (recreate)
         {
             InvalidateUiTimings();
@@ -2225,10 +5985,20 @@ namespace uvsr
             m_SparseDepthPass.reset();
             m_PageTable = nullptr;
             m_SparsePhysicalDepth = nullptr;
+            m_AllocatedPairedStaticDynamicDepth = false;
+            m_AllocatedDeferredStaticDepthMergeValid = false;
+            m_DeferredStaticDepthMergeRequestValid = false;
+            m_AllocatedSparseAlphaBindingLayoutValid = false;
             m_PhysicalOwners = nullptr;
             m_RenderPages = nullptr;
             m_CompactRenderPages = nullptr;
             m_DirtyPageRectangles = nullptr;
+            m_LocalInvalidationPages = nullptr;
+            m_ScheduledPageTileMasks = nullptr;
+            m_StaticDepthHierarchy = nullptr;
+            m_ReceiverPageMasks = nullptr;
+            m_FinePageCandidateMasks = nullptr;
+            m_StaticDepthHierarchyBootstrapRequired = true;
             m_Counters = nullptr;
             m_IndirectPageDispatchArguments = nullptr;
             m_IndirectDrawArguments = nullptr;
@@ -2244,6 +6014,9 @@ namespace uvsr
             m_PacketPageCullingReady = false;
             m_PacketPageCullingUnavailableForPacketCache = false;
             m_ReportedPacketPageCullingFallback = false;
+            m_ReportedScheduledTileMaskFallback = false;
+            m_ReportedStaticDepthHierarchyFallback = false;
+            m_ReportedReceiverPageMaskFallback = false;
             m_DebugCounterReadbacks = {};
             m_DebugCounterReadbackPending.fill(false);
             m_DebugCounterReadbackGenerations.fill(0u);
@@ -2273,9 +6046,12 @@ namespace uvsr
                 div_ceil(physicalPageCount, SvsmPagesPerAxis);
             physicalDepthDesc.height =
                 physicalPageRows * SvsmPageSize;
+            physicalDepthDesc.arraySize =
+                GetSvsmPhysicalDepthArraySize(
+                    pairedStaticDynamicDepthEnabled);
             physicalDepthDesc.format = nvrhi::Format::R32_UINT;
             physicalDepthDesc.dimension =
-                nvrhi::TextureDimension::Texture2D;
+                nvrhi::TextureDimension::Texture2DArray;
             physicalDepthDesc.isUAV = true;
             physicalDepthDesc.debugName =
                 "SVSM Sparse Physical Depth Pool";
@@ -2331,6 +6107,37 @@ namespace uvsr
                 SvsmClipmapCount *
                     SVSM_DIRTY_PAGE_RECT_WORDS_PER_LEVEL,
                 "SVSM Dirty Page Rectangles");
+            m_LocalInvalidationPages = createUintBuffer(
+                SvsmClipmapCount * SvsmPagesPerClipmap,
+                "SVSM Local Invalidation Pages");
+            m_ScheduledPageTileMasks = createUintBuffer(
+                SvsmClipmapCount *
+                    SvsmScheduledTileMaskWordsPerLevel,
+                "SVSM Scheduled Page Tile Masks");
+            // At 86 uints per physical page this is about 1.34 MiB for the
+            // 4096-page reference pool. Keeping the compact optional resource
+            // resident avoids any cache or physical-pool recreation when its
+            // independent runtime toggle changes.
+            m_StaticDepthHierarchy = createUintBuffer(
+                physicalPageCount *
+                    SvsmStaticDepthHierarchyWordsPerPage,
+                "SVSM Static Depth Page Hierarchy");
+            // Five uints per virtual page hold a generation plus four 4x4
+            // quadrants, representing an 8x8 receiver mask inside every
+            // 128x128 virtual page. The fixed six-clipmap allocation is
+            // 480 KiB and is optional: any failure keeps the exact path.
+            m_ReceiverPageMasks = createUintBuffer(
+                SvsmClipmapCount *
+                    SvsmPagesPerClipmap *
+                    SvsmReceiverPageMaskWordsPerPage,
+                "SVSM Receiver Subpage Masks");
+            // One bit per virtual page in each fine clipmap. Allocation writes
+            // these 2.5 KiB of centered-Morton candidate masks so one global
+            // selector can preserve stable level-first winners without
+            // rescanning five page-table slices.
+            m_FinePageCandidateMasks = createUintBuffer(
+                SvsmFinePageCandidateMaskWordCount,
+                "SVSM Fine Page Candidate Masks");
             m_Counters = createUintBuffer(
                 c_CounterCount,
                 "SVSM Counters",
@@ -2393,7 +6200,8 @@ namespace uvsr
 
             nvrhi::BufferDesc readbackDesc;
             readbackDesc.byteSize =
-                uint64_t(c_DebugCounterCount) * sizeof(uint32_t);
+                uint64_t(c_DebugCounterReadbackCount) *
+                    sizeof(uint32_t);
             readbackDesc.cpuAccess = nvrhi::CpuAccessMode::Read;
             readbackDesc.debugName =
                 "SVSM Optional Debug Counter Readback";
@@ -2429,6 +6237,8 @@ namespace uvsr
                 !m_RenderPages ||
                 !m_CompactRenderPages ||
                 !m_DirtyPageRectangles ||
+                !m_LocalInvalidationPages ||
+                !m_FinePageCandidateMasks ||
                 !m_Counters ||
                 !m_IndirectPageDispatchArguments ||
                 !m_IndirectDrawArguments ||
@@ -2447,30 +6257,16 @@ namespace uvsr
                     "SVSM could not allocate the fixed sparse physical pool.");
                 return false;
             }
-
-            m_SparseDepthPass = std::make_unique<SparseDepthPass>(
-                m_Device,
-                m_CommonPasses,
-                m_SparsePhysicalDepth,
-                m_PageTable,
-                m_CompactRenderPages,
-                m_RenderPages,
-                m_SparseConstants,
-                m_Counters,
-                m_IndirectDrawArguments,
-                m_PacketPageMetadata,
-                m_PacketPageRuntime,
-                m_PacketRenderPages,
-                physicalPageCount);
-            GBufferFillPass::CreateParameters depthParameters;
-            depthParameters.enableDepthWrite = false;
-            depthParameters.enableMotionVectors = false;
-            // Packet-page buffer growth can replace this pass's custom view
-            // binding set while prior frames are still in flight. Let NVRHI
-            // retain those mutable sets and their resources through GPU use.
-            depthParameters.trackLiveness = true;
-            m_SparseDepthPass->Init(
-                *m_ShaderFactory, depthParameters);
+            if (!m_StaticDepthHierarchy)
+            {
+                log::warning(
+                    "SVSM static-depth hierarchy allocation is unavailable; dynamic caster HZB rejection will fail open.");
+            }
+            if (!m_ReceiverPageMasks)
+            {
+                log::warning(
+                    "SVSM receiver-page mask allocation is unavailable; uncached caster culling will retain the exact packet-page list.");
+            }
 
             for (uint32_t level = 0u;
                 level < SvsmClipmapCount;
@@ -2489,6 +6285,8 @@ namespace uvsr
             }
 
             m_AllocatedPhysicalPageCount = physicalPageCount;
+            m_AllocatedPairedStaticDynamicDepth =
+                pairedStaticDynamicDepthEnabled;
             m_SparseResourcesNeedClear = true;
             m_CacheStateValid = false;
             m_StaticPageRequestCacheReady = false;
@@ -2507,7 +6305,8 @@ namespace uvsr
             m_Timings.physicalDepthBytes = TextureByteSize(
                 SvsmVirtualResolution,
                 physicalPageRows * SvsmPageSize,
-                1u,
+                GetSvsmPhysicalDepthArraySize(
+                    pairedStaticDynamicDepthEnabled),
                 sizeof(uint32_t));
             m_Timings.visibilityBytes = TextureByteSize(
                 cameraDesc.width,
@@ -2520,8 +6319,164 @@ namespace uvsr
                     sizeof(uint32_t) +
                 uint64_t(SvsmClipmapCount) *
                     SVSM_DIRTY_PAGE_RECT_WORDS_PER_LEVEL *
-                    sizeof(uint32_t);
+                    sizeof(uint32_t) +
+                uint64_t(SvsmClipmapCount) *
+                    SvsmPagesPerClipmap *
+                    sizeof(uint32_t) +
+                uint64_t(SvsmFinePageCandidateMaskWordCount) *
+                    sizeof(uint32_t) +
+                (m_ScheduledPageTileMasks
+                    ? uint64_t(SvsmClipmapCount) *
+                        SvsmScheduledTileMaskWordsPerLevel *
+                        sizeof(uint32_t)
+                    : 0u);
+            m_Timings.staticDepthHierarchyBytes =
+                m_StaticDepthHierarchy
+                ? uint64_t(physicalPageCount) *
+                    SvsmStaticDepthHierarchyWordsPerPage *
+                    sizeof(uint32_t)
+                : 0u;
+            m_Timings.receiverPageMaskBytes =
+                m_ReceiverPageMasks
+                ? uint64_t(SvsmClipmapCount) *
+                    SvsmPagesPerClipmap *
+                    SvsmReceiverPageMaskWordsPerPage *
+                    sizeof(uint32_t)
+                : 0u;
             m_Timings.packetPageListBytes = sizeof(uint32_t);
+        }
+
+        if (recreateSparseDepthPass)
+        {
+            const bool effectiveDeferredStaticDepthMergeRequest =
+                IsSvsmDeferredStaticDepthMergeRequestEffective(
+                    deferredStaticDepthMergeEnabled,
+                    m_DeferredStaticDepthMergeRasterFallbackLatched);
+            const SvsmDeferredStaticDepthPassAttempt deferredAttempt =
+                GetSvsmDeferredStaticDepthPassAttempt(
+                    effectiveDeferredStaticDepthMergeRequest,
+                    pairedStaticDynamicDepthEnabled,
+                    bool(m_SparseDeferredStaticDepthMergePipeline));
+            bool effectiveDeferredStaticDepthMerge =
+                deferredAttempt ==
+                SvsmDeferredStaticDepthPassAttempt::
+                    DeferredThenReference;
+            const auto createDepthPass =
+                [&](bool leanBindings, bool deferredStaticMerge) {
+                    auto pass = std::make_unique<SparseDepthPass>(
+                        m_Device,
+                        m_CommonPasses,
+                        m_SparsePhysicalDepth,
+                        m_PageTable,
+                        m_CompactRenderPages,
+                        m_RenderPages,
+                        m_SparseConstants,
+                        m_Counters,
+                        m_IndirectDrawArguments,
+                        m_PacketPageMetadata,
+                        m_PacketPageRuntime,
+                        m_PacketRenderPages,
+                        m_ReceiverPageMasks,
+                        physicalPageCount,
+                        pairedStaticDynamicDepthEnabled,
+                        deferredStaticMerge,
+                        leanBindings);
+                    GBufferFillPass::CreateParameters depthParameters;
+                    depthParameters.enableDepthWrite = false;
+                    depthParameters.enableMotionVectors = false;
+                    // Packet-page buffer growth can replace this pass's custom
+                    // bindings while prior frames are still in flight.
+                    depthParameters.trackLiveness = true;
+                    pass->Init(*m_ShaderFactory, depthParameters);
+                    return pass;
+                };
+
+            m_SparseDepthPass = createDepthPass(
+                leanAlphaTestedBindingsEnabled,
+                effectiveDeferredStaticDepthMerge);
+            if ((!m_SparseDepthPass ||
+                    !m_SparseDepthPass->IsReferenceRasterReady()) &&
+                leanAlphaTestedBindingsEnabled)
+            {
+                log::warning(
+                    "SVSM lean alpha-tested bindings are unavailable; retaining the full GBuffer material-binding reference path.");
+                m_SparseDepthPass = createDepthPass(
+                    false,
+                    effectiveDeferredStaticDepthMerge);
+            }
+            if (ShouldFallbackSvsmDeferredStaticDepthPass(
+                    deferredAttempt,
+                    m_SparseDepthPass &&
+                        m_SparseDepthPass->
+                            IsReferenceRasterReady()))
+            {
+                effectiveDeferredStaticDepthMerge = false;
+                if (!m_ReportedDeferredStaticDepthMergeFallback)
+                {
+                    log::warning(
+                        "SVSM deferred static-depth merge raster is unavailable; retaining the exact dual-atomic static raster reference path.");
+                    m_ReportedDeferredStaticDepthMergeFallback =
+                        true;
+                }
+                m_SparseDepthPass = createDepthPass(
+                    leanAlphaTestedBindingsEnabled,
+                    false);
+                if ((!m_SparseDepthPass ||
+                        !m_SparseDepthPass->
+                            IsReferenceRasterReady()) &&
+                    leanAlphaTestedBindingsEnabled)
+                {
+                    m_SparseDepthPass = createDepthPass(
+                        false,
+                        false);
+                }
+            }
+            if (!m_SparseDepthPass ||
+                !m_SparseDepthPass->IsReferenceRasterReady())
+            {
+                log::error(
+                    "SVSM could not create the sparse depth raster pass.");
+                m_SparseDepthPass.reset();
+                m_AllocatedSparseAlphaBindingLayoutValid = false;
+                m_AllocatedDeferredStaticDepthMergeValid = false;
+                m_DeferredStaticDepthMergeRequestValid = false;
+                return false;
+            }
+            if (deferredStaticDepthMergeEnabled &&
+                pairedStaticDynamicDepthEnabled &&
+                deferredAttempt ==
+                    SvsmDeferredStaticDepthPassAttempt::
+                        ReferenceOnly &&
+                !m_DeferredStaticDepthMergeRasterFallbackLatched &&
+                !m_ReportedDeferredStaticDepthMergeFallback)
+            {
+                log::warning(
+                    "SVSM deferred static-depth merge compute pipeline is unavailable; retaining the exact dual-atomic static raster reference path.");
+                m_ReportedDeferredStaticDepthMergeFallback = true;
+            }
+            if (effectiveDeferredStaticDepthMerge ||
+                !deferredStaticDepthMergeEnabled)
+            {
+                m_ReportedDeferredStaticDepthMergeFallback = false;
+            }
+            // Store the requested identity even when the optional layout fell
+            // back. That prevents a failed specialization from retrying every
+            // frame; toggling away and back deliberately retries it.
+            m_AllocatedSparseAlphaBindingLayout =
+                requestedAlphaBindingLayout;
+            m_AllocatedSparseAlphaBindingLayoutValid = true;
+            m_AllocatedDeferredStaticDepthMerge =
+                effectiveDeferredStaticDepthMerge;
+            m_AllocatedDeferredStaticDepthMergeValid = true;
+            m_DeferredStaticDepthMergeRequest =
+                deferredStaticDepthMergeEnabled;
+            m_DeferredStaticDepthMergeRequestValid = true;
+        }
+
+        if (!rebindComputeResources)
+        {
+            m_ResourceBackend = SvsmResourceBackend::Sparse;
+            return true;
         }
 
         if (!CreateSparseComputeBindingSet(cameraDepth))
@@ -2599,6 +6554,8 @@ namespace uvsr
             !m_SparsePhysicalDepth ||
             !m_CompactRenderPages ||
             !m_DirtyPageRectangles ||
+            !m_LocalInvalidationPages ||
+            !m_FinePageCandidateMasks ||
             !indirectDrawArguments ||
             !packetPageMetadata ||
             !packetPageRuntime ||
@@ -2614,6 +6571,8 @@ namespace uvsr
             nvrhi::BindingSetItem::Texture_SRV(0, cameraDepth),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
                 1, packetPageMetadata),
+            nvrhi::BindingSetItem::StructuredBuffer_SRV(
+                2, m_LocalInvalidationPages),
             nvrhi::BindingSetItem::Texture_UAV(0, m_PageTable),
             nvrhi::BindingSetItem::StructuredBuffer_UAV(
                 1, m_PhysicalOwners),
@@ -2632,7 +6591,33 @@ namespace uvsr
             nvrhi::BindingSetItem::StructuredBuffer_UAV(
                 8, packetRenderPages),
             nvrhi::BindingSetItem::StructuredBuffer_UAV(
-                9, m_DirtyPageRectangles)
+                9, m_DirtyPageRectangles),
+            // The hierarchy is optional. Binding the counter buffer as a
+            // harmless fallback keeps the exact fill permutation available
+            // when the tiny mask allocation fails; neither the reference
+            // fill nor any other stage reads or writes u10.
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(
+                10,
+                m_ScheduledPageTileMasks
+                    ? m_ScheduledPageTileMasks.Get()
+                    : m_Counters.Get()),
+            // The optional allocation is never accessed unless the effective
+            // HZB flag is active. A harmless counter-buffer fallback keeps all
+            // reference permutations valid on allocation failure.
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(
+                11,
+                m_StaticDepthHierarchy
+                    ? m_StaticDepthHierarchy.Get()
+                    : m_Counters.Get()),
+            // Receiver masks are optional and only accessed by their explicit
+            // mark/fill permutations when the effective runtime flag is set.
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(
+                12,
+                m_ReceiverPageMasks
+                    ? m_ReceiverPageMasks.Get()
+                    : m_Counters.Get()),
+            nvrhi::BindingSetItem::StructuredBuffer_UAV(
+                13, m_FinePageCandidateMasks)
         };
         return m_Device->createBindingSet(
             sparseSetDesc, m_SparseBindingLayout);
@@ -2827,6 +6812,8 @@ namespace uvsr
                     sizeof(uint32_t)) +
             uint64_t(SvsmClipmapCount) *
                 SVSM_DIRTY_PAGE_RECT_WORDS_PER_LEVEL *
+                sizeof(uint32_t) +
+            uint64_t(SvsmFinePageCandidateMaskWordCount) *
                 sizeof(uint32_t);
         m_Timings.packetPageListBytes =
             uint64_t(listCapacity) * sizeof(uint32_t);
@@ -2896,6 +6883,9 @@ namespace uvsr
             uncenteredWorldToView.transformPoint(anchor);
         if (!all(donut::math::isfinite(anchorView)))
             return false;
+        const float cameraAnchorDepth = anchorView.z;
+        SvsmProjectedDepthInterval projectedRootDepthInterval;
+        bool projectedRootDepthIntervalValid = false;
         if (rootNode)
         {
             const box3& sceneBounds =
@@ -2906,13 +6896,71 @@ namespace uvsr
                 all(donut::math::isfinite(
                     sceneBounds.m_maxs)))
             {
-                anchorView.z =
+                const float projectedRootCenter =
                     uncenteredWorldToView.transformPoint(
                         sceneBounds.center()).z;
+                projectedRootDepthIntervalValid =
+                    TryBuildSvsmProjectedAabbDepthInterval(
+                        projectedRootCenter,
+                        {
+                            sceneBounds.m_mins.x,
+                            sceneBounds.m_mins.y,
+                            sceneBounds.m_mins.z
+                        },
+                        {
+                            sceneBounds.m_maxs.x,
+                            sceneBounds.m_maxs.y,
+                            sceneBounds.m_maxs.z
+                        },
+                        {
+                            uncenteredWorldToView.m_linear.row2.x,
+                            uncenteredWorldToView.m_linear.row2.y,
+                            uncenteredWorldToView.m_linear.row2.z
+                        },
+                        true,
+                        cameraAnchorDepth,
+                        projectedRootDepthInterval);
+                // Preserve the existing requested mapping even when the
+                // interval proof fails. An invalid or unrepresentable bound
+                // only disables retention; it does not invent a new center.
+                anchorView.z = projectedRootCenter;
             }
         }
         if (!all(donut::math::isfinite(anchorView)))
             return false;
+
+        const std::array<float3, 3> currentLightBasis = {
+            uncenteredWorldToView.m_linear.row0,
+            uncenteredWorldToView.m_linear.row1,
+            uncenteredWorldToView.m_linear.row2
+        };
+        const bool sameLightBasis =
+            m_PreviousLightBasisValid &&
+            !any(currentLightBasis[0] != m_PreviousLightBasis[0]) &&
+            !any(currentLightBasis[1] != m_PreviousLightBasis[1]) &&
+            !any(currentLightBasis[2] != m_PreviousLightBasis[2]);
+        const SvsmLightDepthOriginDecision depthOriginDecision =
+            SelectSvsmLightDepthOrigin(
+                settings.lightDepthOriginGuardBandEnabled,
+                settings.mode == SvsmMode::SparseCached &&
+                    settings.cachingEnabled,
+                m_CacheStateValid,
+                m_PreviousLightBasisValid,
+                m_PreviousProducingLight == &light,
+                sameLightBasis,
+                settings.maximumLightDepth ==
+                    m_PreviousMaximumLightDepth,
+                anchorView.z,
+                m_PreviousLightDepthOrigin,
+                settings.maximumLightDepth,
+                settings.lightDepthOriginGuardBandFraction,
+                projectedRootDepthIntervalValid,
+                projectedRootDepthInterval);
+        if (!depthOriginDecision.valid)
+            return false;
+        anchorView.z = depthOriginDecision.selectedOrigin;
+        m_Timings.lightDepthOriginGuardBandRetained =
+            depthOriginDecision.retainedCommittedOrigin;
 
         std::array<int2, SvsmClipmapCount> renderOrigins{};
         std::array<float3, SvsmClipmapCount> centers{};
@@ -3267,6 +7315,151 @@ namespace uvsr
         return hash;
     }
 
+    SparseVirtualShadowMapPass::BindingResourceSignature
+    SparseVirtualShadowMapPass::ComputeBindingResourceSignature(
+        const std::shared_ptr<SceneGraphNode>& rootNode) const
+    {
+        BindingResourceSignature result;
+        if (!rootNode)
+            return result;
+
+        uint64_t hash = 1469598103934665603ull;
+        auto appendBytes = [&hash](
+            const void* data,
+            size_t size) {
+            const auto* bytes =
+                static_cast<const uint8_t*>(data);
+            for (size_t index = 0u; index < size; ++index)
+            {
+                hash ^= uint64_t(bytes[index]);
+                hash *= 1099511628211ull;
+            }
+        };
+        auto appendPointer = [&appendBytes](const void* pointer) {
+            const uintptr_t identity =
+                reinterpret_cast<uintptr_t>(pointer);
+            appendBytes(&identity, sizeof(identity));
+        };
+
+        appendPointer(rootNode.get());
+        SceneGraphWalker walker(rootNode.get());
+        while (walker)
+        {
+            const auto& leaf = walker->GetLeaf();
+            const auto* instance =
+                dynamic_cast<const MeshInstance*>(leaf.get());
+            if (instance)
+            {
+                appendPointer(instance);
+                const int instanceIndex =
+                    instance->GetInstanceIndex();
+                appendBytes(&instanceIndex, sizeof(instanceIndex));
+
+                const auto& mesh = instance->GetMesh();
+                appendPointer(mesh.get());
+                if (mesh)
+                {
+                    appendBytes(
+                        &mesh->vertexOffset,
+                        sizeof(mesh->vertexOffset));
+                    appendBytes(
+                        &mesh->indexOffset,
+                        sizeof(mesh->indexOffset));
+                    appendBytes(
+                        &mesh->totalVertices,
+                        sizeof(mesh->totalVertices));
+                    appendBytes(
+                        &mesh->totalIndices,
+                        sizeof(mesh->totalIndices));
+
+                    const auto& buffers = mesh->buffers;
+                    appendPointer(buffers.get());
+                    if (buffers)
+                    {
+                        appendPointer(buffers->indexBuffer.Get());
+                        appendPointer(buffers->vertexBuffer.Get());
+                        appendPointer(buffers->instanceBuffer.Get());
+                        const nvrhi::BufferRange& positionRange =
+                            buffers->getVertexBufferRange(
+                                VertexAttribute::Position);
+                        const nvrhi::BufferRange& texCoordRange =
+                            buffers->getVertexBufferRange(
+                                VertexAttribute::TexCoord1);
+                        appendBytes(
+                            &positionRange.byteOffset,
+                            sizeof(positionRange.byteOffset));
+                        appendBytes(
+                            &positionRange.byteSize,
+                            sizeof(positionRange.byteSize));
+                        appendBytes(
+                            &texCoordRange.byteOffset,
+                            sizeof(texCoordRange.byteOffset));
+                        appendBytes(
+                            &texCoordRange.byteSize,
+                            sizeof(texCoordRange.byteSize));
+                    }
+
+                    for (const auto& geometry : mesh->geometries)
+                    {
+                        const Material* material = geometry
+                            ? geometry->material.get()
+                            : nullptr;
+                        if (!geometry ||
+                            geometry->type !=
+                                MeshGeometryPrimitiveType::Triangles ||
+                            !material ||
+                            (material->domain !=
+                                    MaterialDomain::Opaque &&
+                                material->domain !=
+                                    MaterialDomain::AlphaTested))
+                        {
+                            continue;
+                        }
+
+                        ++result.casterCount;
+                        appendPointer(geometry.get());
+                        appendBytes(
+                            &geometry->vertexOffsetInMesh,
+                            sizeof(geometry->vertexOffsetInMesh));
+                        appendBytes(
+                            &geometry->indexOffsetInMesh,
+                            sizeof(geometry->indexOffsetInMesh));
+                        appendBytes(
+                            &geometry->numVertices,
+                            sizeof(geometry->numVertices));
+                        appendBytes(
+                            &geometry->numIndices,
+                            sizeof(geometry->numIndices));
+                        appendPointer(material);
+                        appendBytes(
+                            &material->domain,
+                            sizeof(material->domain));
+                        appendPointer(
+                            material->materialConstants.Get());
+                        appendPointer(
+                            material->baseOrDiffuseTexture.get());
+                        appendPointer(
+                            material->baseOrDiffuseTexture
+                                ? material->baseOrDiffuseTexture->
+                                    texture.Get()
+                                : nullptr);
+                        appendPointer(
+                            material->opacityTexture.get());
+                        appendPointer(
+                            material->opacityTexture
+                                ? material->opacityTexture->
+                                    texture.Get()
+                                : nullptr);
+                    }
+                }
+            }
+            walker.Next(true);
+        }
+
+        result.hash = hash;
+        return result;
+    }
+
     void SparseVirtualShadowMapPass::InvalidateUiTimings()
     {
         ++m_UiTimingGeneration;
@@ -3292,6 +7485,45 @@ namespace uvsr
         SvsmResourceBackend backend,
         bool detailedGpuTimingEnabled)
     {
+        const uint32_t firstClipmapLevel =
+            GetSvsmFirstClipmapLevel(settings.resolutionBias);
+        const float finestExtent = settings.firstClipmapExtent *
+            float(1u << firstClipmapLevel);
+        const float coarsestExtent = settings.firstClipmapExtent *
+            float(1u << (SvsmClipmapCount - 1u));
+        const uint32_t filterSamples = uint32_t(settings.tapCount);
+        const bool bilinearFilterActive =
+            backend == SvsmResourceBackend::Sparse &&
+            settings.filterKernel == SvsmFilterKernel::BilinearPcf;
+        const uint32_t filterComparisons =
+            filterSamples *
+            (bilinearFilterActive
+                ? 4u
+                : 1u);
+        m_Timings.comparisonVirtualResolution = SvsmVirtualResolution;
+        m_Timings.comparisonClipmapCount = SvsmClipmapCount;
+        m_Timings.comparisonFirstClipmapLevel = firstClipmapLevel;
+        m_Timings.comparisonFilterSampleCount = filterSamples;
+        m_Timings.comparisonFilterComparisonCount =
+            filterComparisons;
+        m_Timings.comparisonFinestCoverageExtent = finestExtent;
+        m_Timings.comparisonCoarsestCoverageExtent = coarsestExtent;
+        m_Timings.comparisonFinestWorldTexelSize =
+            finestExtent / float(SvsmVirtualResolution);
+        m_Timings.comparisonCoarsestWorldTexelSize =
+            coarsestExtent / float(SvsmVirtualResolution);
+        m_Timings.comparisonMaximumLightDepth =
+            settings.maximumLightDepth;
+        m_Timings.comparisonFilterRadiusTexels =
+            float(GetSvsmFilterRadius(
+                settings.tapCount,
+                bilinearFilterActive
+                    ? settings.filterKernel
+                    : SvsmFilterKernel::NearestPoisson));
+        m_Timings.comparisonFilterMode = settings.filterMode;
+        m_Timings.comparisonAdaptiveFiltering =
+            settings.adaptiveFiltering;
+
         const bool unchanged = m_UiTimingContextValid &&
             IsSameSvsmConfiguration(
                 m_UiTimingContext.settings, settings) &&
@@ -3314,10 +7546,50 @@ namespace uvsr
                 m_Timings.levelEmptyWorkSkipActive &&
             m_UiTimingContext.packetPageCullingActive ==
                 m_Timings.packetPageCullingActive &&
+            m_UiTimingContext.hierarchicalScheduledPageMaskActive ==
+                m_Timings.hierarchicalScheduledPageMaskActive &&
+            m_UiTimingContext.
+                    hierarchicalScheduledPageMaskUnavailable ==
+                m_Timings.
+                    hierarchicalScheduledPageMaskUnavailable &&
+            m_UiTimingContext.receiverPageMaskCullingRequested ==
+                m_Timings.receiverPageMaskCullingRequested &&
+            m_UiTimingContext.receiverPageMaskCullingActive ==
+                m_Timings.receiverPageMaskCullingActive &&
+            m_UiTimingContext.receiverPageMaskCullingUnavailable ==
+                m_Timings.receiverPageMaskCullingUnavailable &&
+            m_UiTimingContext.staticDepthHierarchyCullingRequested ==
+                m_Timings.staticDepthHierarchyCullingRequested &&
+            m_UiTimingContext.staticDepthHierarchyCullingActive ==
+                m_Timings.staticDepthHierarchyCullingActive &&
+            m_UiTimingContext.staticDepthHierarchyCullingUnavailable ==
+                m_Timings.staticDepthHierarchyCullingUnavailable &&
+            m_UiTimingContext.deferredStaticDepthMergeRequested ==
+                m_Timings.deferredStaticDepthMergeRequested &&
+            m_UiTimingContext.deferredStaticDepthMergeActive ==
+                m_Timings.deferredStaticDepthMergeActive &&
+            m_UiTimingContext.deferredStaticDepthMergeUnavailable ==
+                m_Timings.deferredStaticDepthMergeUnavailable &&
             m_UiTimingContext.dirtyPageScatterRasterActive ==
                 m_Timings.dirtyPageScatterRasterActive &&
             m_UiTimingContext.packetPageCullingUnavailable ==
                 m_Timings.packetPageCullingUnavailable &&
+            m_UiTimingContext.movingLightUncachedActive ==
+                m_Timings.movingLightUncachedActive &&
+            m_UiTimingContext.movingLightCacheTransitionActive ==
+                m_Timings.movingLightCacheTransitionActive &&
+            m_UiTimingContext.effectivePairedStaticDynamicDepth ==
+                m_Timings.effectivePairedStaticDynamicDepth &&
+            m_UiTimingContext.physicalMappingRetentionActive ==
+                m_Timings.physicalMappingRetentionActive &&
+            m_UiTimingContext.
+                    effectiveReceiverDistanceMipClampStart ==
+                m_Timings.
+                    effectiveReceiverDistanceMipClampStart &&
+            m_UiTimingContext.
+                    receiverDistanceMipClampMaximumLevel ==
+                m_Timings.
+                    receiverDistanceMipClampMaximumLevel &&
             m_UiTimingContext.staticPageRequestReuseRejectMask ==
                 m_Timings.staticPageRequestReuseRejectMask;
         if (unchanged)
@@ -3343,10 +7615,44 @@ namespace uvsr
             m_Timings.levelEmptyWorkSkipActive;
         m_UiTimingContext.packetPageCullingActive =
             m_Timings.packetPageCullingActive;
+        m_UiTimingContext.hierarchicalScheduledPageMaskActive =
+            m_Timings.hierarchicalScheduledPageMaskActive;
+        m_UiTimingContext.hierarchicalScheduledPageMaskUnavailable =
+            m_Timings.hierarchicalScheduledPageMaskUnavailable;
+        m_UiTimingContext.receiverPageMaskCullingRequested =
+            m_Timings.receiverPageMaskCullingRequested;
+        m_UiTimingContext.receiverPageMaskCullingActive =
+            m_Timings.receiverPageMaskCullingActive;
+        m_UiTimingContext.receiverPageMaskCullingUnavailable =
+            m_Timings.receiverPageMaskCullingUnavailable;
+        m_UiTimingContext.staticDepthHierarchyCullingRequested =
+            m_Timings.staticDepthHierarchyCullingRequested;
+        m_UiTimingContext.staticDepthHierarchyCullingActive =
+            m_Timings.staticDepthHierarchyCullingActive;
+        m_UiTimingContext.staticDepthHierarchyCullingUnavailable =
+            m_Timings.staticDepthHierarchyCullingUnavailable;
+        m_UiTimingContext.deferredStaticDepthMergeRequested =
+            m_Timings.deferredStaticDepthMergeRequested;
+        m_UiTimingContext.deferredStaticDepthMergeActive =
+            m_Timings.deferredStaticDepthMergeActive;
+        m_UiTimingContext.deferredStaticDepthMergeUnavailable =
+            m_Timings.deferredStaticDepthMergeUnavailable;
         m_UiTimingContext.dirtyPageScatterRasterActive =
             m_Timings.dirtyPageScatterRasterActive;
         m_UiTimingContext.packetPageCullingUnavailable =
             m_Timings.packetPageCullingUnavailable;
+        m_UiTimingContext.movingLightUncachedActive =
+            m_Timings.movingLightUncachedActive;
+        m_UiTimingContext.movingLightCacheTransitionActive =
+            m_Timings.movingLightCacheTransitionActive;
+        m_UiTimingContext.effectivePairedStaticDynamicDepth =
+            m_Timings.effectivePairedStaticDynamicDepth;
+        m_UiTimingContext.physicalMappingRetentionActive =
+            m_Timings.physicalMappingRetentionActive;
+        m_UiTimingContext.effectiveReceiverDistanceMipClampStart =
+            m_Timings.effectiveReceiverDistanceMipClampStart;
+        m_UiTimingContext.receiverDistanceMipClampMaximumLevel =
+            m_Timings.receiverDistanceMipClampMaximumLevel;
         m_UiTimingContext.staticPageRequestReuseRejectMask =
             m_Timings.staticPageRequestReuseRejectMask;
         m_UiTimingContextValid = true;
@@ -3437,7 +7743,25 @@ namespace uvsr
             sample.totalMilliseconds =
                 m_TimerSlotValues[slot][TimerTotal];
 
-            if (ShouldAcceptSvsmTelemetrySample(
+            const bool discardSample =
+                m_TimerSlotDiscarded[slot];
+            // Keep work history independently of latest-frame UI freshness.
+            // A newer KnownZero publication is allowed to supersede this
+            // query in the primary UI, but must not erase evidence that the
+            // older frame submitted real SVSM GPU work.
+            RetainSvsmCompletedUntaggedWorkTiming(
+                m_Timings,
+                sample,
+                m_TimerSourceFrames[slot],
+                discardSample);
+            const SvsmTimerRetirementAction retirementAction =
+                GetSvsmTimerRetirementAction(
+                    discardSample,
+                    sample.sourceTag != 0u,
+                    m_CompletedTimingSamples.size() <
+                        c_MaxCompletedTimingSamples);
+            if (retirementAction.allowUiPublication &&
+                ShouldAcceptSvsmTelemetrySample(
                     m_TimerUiTimingGenerations[slot],
                     m_UiTimingGeneration,
                     m_TimerSourceFrames[slot],
@@ -3451,24 +7775,27 @@ namespace uvsr
                 newestUiSample = sample;
             }
 
+            // Retire any readback ownership even for a discarded timing slot.
+            // Its generation was invalidated at the failure site, so this can
+            // release the slot without publishing partial counters.
             ReadDebugCounters(slot);
-            if (sample.sourceTag != 0u)
+            if (retirementAction.retireTaggedSample)
             {
                 if (m_TimingAccounting.outstanding > 0u)
                     --m_TimingAccounting.outstanding;
                 ++m_TimingAccounting.retired;
-                if (m_CompletedTimingSamples.size() <
-                    c_MaxCompletedTimingSamples)
+                if (retirementAction.enqueueTaggedSample)
                 {
                     m_CompletedTimingSamples.push_back(sample);
                 }
-                else
+                else if (retirementAction.dropTaggedSample)
                 {
                     ++m_TimingAccounting.dropped;
                 }
             }
 
             m_TimerIssuedStageMasks[slot] = 0u;
+            m_TimerSlotDiscarded[slot] = false;
             m_TimerSourceTags[slot] = 0u;
             m_TimerSourceFrames[slot] = 0u;
             m_TimerUiTimingGenerations[slot] = 0u;
@@ -3536,6 +7863,17 @@ namespace uvsr
         m_Timings.packetPageCandidatePackets = 0u;
         m_Timings.packetPageCompactedPackets = 0u;
         m_Timings.packetPageFailOpenPackets = 0u;
+        m_Timings.scheduledTileMaskQueries = 0u;
+        m_Timings.scheduledTileMaskEarlyRejects = 0u;
+        m_Timings.scheduledTileMaskFailOpens = 0u;
+        m_Timings.scheduledTileMaskPositiveExactZero = 0u;
+        m_Timings.receiverPageMaskQueries = 0u;
+        m_Timings.receiverPageMaskCulledPages = 0u;
+        m_Timings.receiverPageMaskFailOpens = 0u;
+        m_Timings.staticDepthHierarchyQueries = 0u;
+        m_Timings.staticDepthHierarchyCulledPages = 0u;
+        m_Timings.staticDepthHierarchyFailOpens = 0u;
+        m_Timings.staticDepthHierarchyBuiltPages = 0u;
     }
 
     void SparseVirtualShadowMapPass::SetDebugCounterRequestedBackend(
@@ -3596,6 +7934,31 @@ namespace uvsr
             m_Timings.packetPageCandidatePackets = counters[14];
             m_Timings.packetPageCompactedPackets = counters[15];
             m_Timings.packetPageFailOpenPackets = counters[16];
+            m_Timings.scheduledTileMaskQueries =
+                counters[SvsmScheduledTileMaskQueryCounter];
+            m_Timings.scheduledTileMaskEarlyRejects =
+                counters[
+                    SvsmScheduledTileMaskEarlyRejectCounter];
+            m_Timings.scheduledTileMaskFailOpens =
+                counters[
+                    SvsmScheduledTileMaskFailOpenCounter];
+            m_Timings.scheduledTileMaskPositiveExactZero =
+                counters[
+                    SvsmScheduledTileMaskPositiveExactZeroCounter];
+            m_Timings.receiverPageMaskQueries =
+                counters[SvsmReceiverPageMaskQueryCounter];
+            m_Timings.receiverPageMaskCulledPages =
+                counters[SvsmReceiverPageMaskCullCounter];
+            m_Timings.receiverPageMaskFailOpens =
+                counters[SvsmReceiverPageMaskFailOpenCounter];
+            m_Timings.staticDepthHierarchyQueries =
+                counters[SvsmStaticDepthHierarchyQueryCounter];
+            m_Timings.staticDepthHierarchyCulledPages =
+                counters[SvsmStaticDepthHierarchyCullCounter];
+            m_Timings.staticDepthHierarchyFailOpens =
+                counters[SvsmStaticDepthHierarchyFailOpenCounter];
+            m_Timings.staticDepthHierarchyBuiltPages =
+                counters[SvsmStaticDepthHierarchyBuiltPageCounter];
             m_LastAcceptedDebugCounterSourceFrame = sourceFrame;
             m_LastAcceptedDebugCounterSourceFrameValid = true;
             const uint64_t ageFrames = m_TimerFrame >= sourceFrame
@@ -3638,7 +8001,17 @@ namespace uvsr
         if (m_TimerFrameAdmitted)
         {
             m_TimerSlotValues[m_CurrentTimerSlot].fill(0.f);
+            m_TimerSlotDiscarded[m_CurrentTimerSlot] = false;
             m_TimerUiTimingGenerations[m_CurrentTimerSlot] = 0u;
+        }
+    }
+
+    void SparseVirtualShadowMapPass::DiscardCurrentTimerFrame()
+    {
+        if (m_TimerFrameAdmitted &&
+            m_CurrentTimerIssuedStageMask != 0u)
+        {
+            m_TimerSlotDiscarded[m_CurrentTimerSlot] = true;
         }
     }
 
@@ -3710,10 +8083,23 @@ namespace uvsr
         const std::shared_ptr<SceneGraphNode>& rootNode,
         uint64_t sceneStateRevision,
         bool sceneStateRevisionReliable,
+        bool requiresFullSceneInvalidation,
+        bool requiresDepthBindingCacheReset,
         InstancedOpaqueDrawStrategy& drawStrategy,
         uint64_t timingSourceTag,
-        bool forceTotalOnlyGpuTiming)
+        bool forceTotalOnlyGpuTiming,
+        const SvsmObjectInvalidationResolver*
+            objectInvalidationResolver)
     {
+        m_DepthBindingCacheResetLatched =
+            m_DepthBindingCacheResetLatched ||
+            requiresDepthBindingCacheReset;
+        m_RequiresFullSceneInvalidationLatched =
+            GetEffectiveSvsmFullInvalidation(
+                m_RequiresFullSceneInvalidationLatched,
+                requiresFullSceneInvalidation);
+        const bool effectiveFullSceneInvalidation =
+            m_RequiresFullSceneInvalidationLatched;
         const auto totalCpuStart =
             std::chrono::steady_clock::now();
         auto finishCpuTiming = [this, &totalCpuStart]() {
@@ -3754,13 +8140,65 @@ namespace uvsr
         m_Timings.staticPageDrainActive = false;
         m_Timings.staticPageDrainFramesRemaining = 0u;
         m_Timings.staticVisibilityReuseActive = false;
+        m_Timings.cachedShadowDrawListsRequested =
+            settings.renderPacketCachingEnabled;
+        m_Timings.cachedShadowDrawListsActive = false;
+        m_Timings.cachedShadowDrawListsReused = false;
+        m_Timings.cachedShadowDrawListsRebuilt = false;
+        m_Timings.cachedShadowDrawListPacketCount = 0u;
+        m_Timings.persistentCasterSourceRequested =
+            settings.persistentCasterSourceCachingEnabled;
+        m_Timings.persistentCasterSourceActive = false;
+        m_Timings.persistentCasterSourceReused = false;
+        m_Timings.persistentCasterSourceRebuilt = false;
+        m_Timings.persistentCasterSourceRecordCount =
+            m_SparseDepthPass
+            ? m_SparseDepthPass->
+                GetPersistentCasterSourceCount()
+            : 0u;
+        m_Timings.casterOnlySceneRevisionActive =
+            settings.sceneStateCachingEnabled &&
+            settings.casterOnlySceneRevisionEnabled;
         m_Timings.batchedDrawSupported = false;
         m_Timings.batchedDrawActive = false;
         m_Timings.packetStateSortingActive = false;
         m_Timings.levelEmptyWorkSkipActive = false;
         m_Timings.packetPageCullingActive = false;
+        m_Timings.hierarchicalScheduledPageMaskActive = false;
+        m_Timings.hierarchicalScheduledPageMaskUnavailable = false;
+        m_Timings.receiverPageMaskCullingRequested =
+            settings.receiverPageMaskCullingEnabled;
+        m_Timings.receiverPageMaskCullingActive = false;
+        m_Timings.receiverPageMaskCullingUnavailable = false;
+        m_Timings.staticDepthHierarchyCullingRequested =
+            settings.staticDepthHierarchyCullingEnabled;
+        m_Timings.staticDepthHierarchyCullingActive = false;
+        m_Timings.staticDepthHierarchyCullingUnavailable = false;
+        m_Timings.deferredStaticDepthMergeRequested =
+            settings.deferredStaticDepthMergeEnabled;
+        m_Timings.deferredStaticDepthMergeActive = false;
+        m_Timings.deferredStaticDepthMergeUnavailable =
+            settings.deferredStaticDepthMergeEnabled &&
+            settings.mode != SvsmMode::DenseReference &&
+            settings.pairedStaticDynamicDepthEnabled &&
+            !m_SparseDeferredStaticDepthMergePipeline;
         m_Timings.dirtyPageScatterRasterActive = false;
         m_Timings.packetPageCullingUnavailable = false;
+        m_Timings.movingLightUncachedActive = false;
+        m_Timings.movingLightCacheTransitionActive = false;
+        m_Timings.effectivePairedStaticDynamicDepth = false;
+        m_Timings.physicalMappingRetentionActive = false;
+        m_Timings.lightDepthOriginGuardBandRequested =
+            settings.lightDepthOriginGuardBandEnabled &&
+            settings.mode == SvsmMode::SparseCached &&
+            settings.cachingEnabled;
+        m_Timings.lightDepthOriginGuardBandRetained = false;
+        m_Timings.movingLightLodRecoveryFactor = 0.f;
+        m_Timings.effectiveResolutionBias = settings.resolutionBias;
+        m_Timings.receiverDistanceMipClampActive = false;
+        m_Timings.movingLightContinuousReceiverBiasActive = false;
+        m_Timings.effectiveReceiverDistanceMipClampStart = 0.f;
+        m_Timings.receiverDistanceMipClampMaximumLevel = 0u;
         m_Timings.staticPageRequestReuseRejectMask = 0u;
         m_Timings.sceneValidationCpuMilliseconds = 0.f;
         m_Timings.clipmapUpdateCpuMilliseconds = 0.f;
@@ -3812,15 +8250,53 @@ namespace uvsr
             std::chrono::steady_clock::now();
         const bool reuseSceneStateHash =
             settings.sceneStateCachingEnabled &&
+            !effectiveFullSceneInvalidation &&
             sceneStateRevisionReliable &&
             m_CachedSceneStateRoot == rootNode.get() &&
             m_CachedSceneStateRevision == sceneStateRevision;
         const uint64_t sceneStateHash = reuseSceneStateHash
             ? m_CachedSceneStateHash
             : ComputeSceneStateHash(rootNode);
+        const bool reuseBindingResourceSignature =
+            settings.sceneStateCachingEnabled &&
+            !effectiveFullSceneInvalidation &&
+            !requiresDepthBindingCacheReset &&
+            sceneStateRevisionReliable &&
+            m_CachedBindingResourceRoot == rootNode.get() &&
+            m_CachedBindingResourceRevision ==
+                sceneStateRevision;
+        const BindingResourceSignature bindingResourceSignature =
+            reuseBindingResourceSignature
+            ? m_CachedBindingResourceSignature
+            : ComputeBindingResourceSignature(rootNode);
         m_CachedSceneStateRoot = rootNode.get();
         m_CachedSceneStateRevision = sceneStateRevision;
         m_CachedSceneStateHash = sceneStateHash;
+        m_CachedBindingResourceRoot = rootNode.get();
+        m_CachedBindingResourceRevision = sceneStateRevision;
+        m_CachedBindingResourceSignature =
+            bindingResourceSignature;
+        m_DepthBindingCacheResetLatched =
+            GetEffectiveSvsmDepthBindingCacheReset(
+                m_DepthBindingCacheResetLatched,
+                requiresDepthBindingCacheReset,
+                m_CommittedBindingResourceSignatureValid,
+                m_CommittedBindingResourceSignature.hash,
+                m_CommittedBindingResourceSignature.casterCount,
+                bindingResourceSignature.hash,
+                bindingResourceSignature.casterCount);
+        if (m_DepthBindingCacheResetLatched)
+        {
+            if (m_DenseDepthPass)
+                m_DenseDepthPass->ResetBindingCache();
+            if (m_SparseDepthPass)
+            {
+                m_SparseDepthPass->ResetBindingCache();
+                m_SparseDepthPass->InvalidateRenderPacketCache();
+                m_SparseDepthPass->
+                    InvalidatePersistentCasterSourceCache();
+            }
+        }
         m_Timings.sceneValidationCpuMilliseconds =
             std::chrono::duration<float, std::milli>(
                 std::chrono::steady_clock::now() -
@@ -3843,7 +8319,18 @@ namespace uvsr
                 light,
                 rootNode,
                 drawStrategy,
-                sceneStateHash);
+                sceneStateHash,
+                sceneStateRevision,
+                sceneStateRevisionReliable,
+                effectiveFullSceneInvalidation,
+                objectInvalidationResolver);
+        if (result.visibility)
+        {
+            m_CommittedBindingResourceSignature =
+                bindingResourceSignature;
+            m_CommittedBindingResourceSignatureValid = true;
+            m_DepthBindingCacheResetLatched = false;
+        }
         finishCpuTiming();
         return result;
     }
@@ -3902,6 +8389,7 @@ namespace uvsr
             settings,
             SvsmResourceBackend::Dense,
             m_CurrentDetailedGpuTimingEnabled);
+        RecordSvsmGpuWorkSubmission(m_Timings);
         commandList->beginMarker("SVSM Dense Reference");
         BeginTimer(commandList, TimerTotal);
         m_Timings.pageMarkingMilliseconds = 0.f;
@@ -3915,6 +8403,7 @@ namespace uvsr
         commandList->clearTextureUInt(
             m_DenseDepth, nvrhi::AllSubresources, 0u);
 
+        bool rasterSubmissionSucceeded = true;
         for (uint32_t level = firstLevel;
             level < SvsmClipmapCount;
             ++level)
@@ -3923,17 +8412,47 @@ namespace uvsr
             m_DenseDepthPass->SelectSlice(level);
             drawStrategy.PrepareForView(
                 rootNode, *m_ClipmapViews[level]);
-            RenderView(
-                commandList,
-                m_ClipmapViews[level].get(),
-                m_ClipmapViews[level].get(),
-                m_RasterFramebuffer,
-                drawStrategy,
-                *m_DenseDepthPass,
-                context,
-                false);
+            if (!m_DenseDepthPass->RenderViewReference(
+                    commandList,
+                    m_ClipmapViews[level].get(),
+                    m_RasterFramebuffer,
+                    drawStrategy,
+                    context))
+            {
+                rasterSubmissionSucceeded = false;
+                break;
+            }
         }
         EndTimer(commandList, TimerPageRendering);
+        if (!rasterSubmissionSucceeded)
+        {
+            const SvsmRasterSubmissionTransactionAction action =
+                GetSvsmRasterSubmissionTransactionAction(false, false);
+            EndTimer(commandList, TimerTotal);
+            commandList->endMarker();
+            // Seal the timer slot before changing its generation so the
+            // partial sample can never be accepted as a later valid frame.
+            DiscardCurrentTimerFrame();
+            EndTimerFrame();
+            if (action.invalidateVisibilityCaches)
+            {
+                m_StaticVisibilityValid.fill(false);
+                m_StaticVisibilitySettingsValid = false;
+            }
+            if (action.resetDepthBindings)
+                m_DepthBindingCacheResetLatched = true;
+            InvalidateUiTimings();
+            InvalidateDebugCounters();
+            m_Timings.active = false;
+            if (!m_ReportedRasterSubmissionFailure)
+            {
+                log::error(
+                    "SVSM dense raster submission failed; discarding partial depth and returning white visibility.");
+                m_ReportedRasterSubmissionFailure = true;
+            }
+            return {};
+        }
+        m_ReportedRasterSubmissionFailure = false;
 
         SparseVirtualShadowMapResolveConstants constants = {};
         cameraView.FillPlanarViewConstants(constants.cameraView);
@@ -3995,6 +8514,9 @@ namespace uvsr
         m_Timings.packetPageCandidatePackets = 0u;
         m_Timings.packetPageCompactedPackets = 0u;
         m_Timings.packetPageFailOpenPackets = 0u;
+        m_Timings.receiverPageMaskQueries = 0u;
+        m_Timings.receiverPageMaskCulledPages = 0u;
+        m_Timings.receiverPageMaskFailOpens = 0u;
         // Dense mode has deterministic page totals but no GPU counter
         // readback. Do not present its zero-valued pixel diagnostics as
         // measurements.
@@ -4016,14 +8538,22 @@ namespace uvsr
         const DirectionalLight* light,
         const std::shared_ptr<SceneGraphNode>& rootNode,
         InstancedOpaqueDrawStrategy& drawStrategy,
-        uint64_t sceneStateHash)
+        uint64_t sceneStateHash,
+        uint64_t sceneStateRevision,
+        bool sceneStateRevisionReliable,
+        bool requiresFullSceneInvalidation,
+        const SvsmObjectInvalidationResolver*
+            objectInvalidationResolver)
     {
         const nvrhi::TextureDesc& cameraDepthDesc =
             cameraDepth->getDesc();
         if (!IsDenseInputValid(cameraView, cameraDepthDesc) ||
             !EnsureSparseResources(
                 cameraDepth,
-                settings.physicalPageCount))
+                settings.physicalPageCount,
+                settings.pairedStaticDynamicDepthEnabled,
+                settings.deferredStaticDepthMergeEnabled,
+                settings.leanAlphaTestedBindingsEnabled))
         {
             InvalidateUiTimings();
             InvalidateDebugCounters();
@@ -4076,14 +8606,6 @@ namespace uvsr
             settings.pageRenderBudget >= settings.physicalPageCount ||
             (settings.finiteBudgetStaticDrainEnabled &&
                 settings.pageRenderBudget > 0u);
-        const bool staticPageRequestConfiguration =
-            CanUseSvsmStaticPageRequestConfiguration(
-                settings.staticPageRequestReuseEnabled,
-                cacheEnabled,
-                settings.physicalPageCount,
-                settings.pageRenderBudget,
-                staticReuseJitterSupported,
-                settings.finiteBudgetStaticDrainEnabled);
         const affine3 lightView =
             m_ClipmapViews[0]->GetViewMatrix();
         const std::array<float3, 3> lightBasis = {
@@ -4096,21 +8618,509 @@ namespace uvsr
             any(lightBasis[0] != m_PreviousLightBasis[0]) ||
             any(lightBasis[1] != m_PreviousLightBasis[1]) ||
             any(lightBasis[2] != m_PreviousLightBasis[2]);
+        const bool committedLightKeyChanged =
+            light != m_PreviousProducingLight ||
+            lightBasisChanged;
+        const SvsmMovingLightFramePolicy movingLightPolicy =
+            GetSvsmMovingLightFramePolicy(
+                settings.movingLightUncachedEnabled,
+                cacheEnabled,
+                settings.pairedStaticDynamicDepthEnabled,
+                committedLightKeyChanged,
+                m_PreviousSparseLightUncached,
+                m_MovingLightLodRecoveryFramesRemaining,
+                settings.movingLightLodRecoveryFrames);
+        const bool effectiveCacheEnabled =
+            movingLightPolicy.effectiveCacheEnabled;
+        const bool effectivePairedStaticDynamicDepthEnabled =
+            movingLightPolicy.effectivePairedDepthEnabled;
+        const bool continuousReceiverBiasActive =
+            settings.receiverDistanceMipClampEnabled &&
+            settings.movingLightContinuousReceiverBiasEnabled;
+        const SvsmResolutionBias effectiveResolutionBias =
+            GetEffectiveSvsmReceiverAwareMovingLightResolutionBias(
+                settings.resolutionBias,
+                settings.movingLightLodBiasEnabled,
+                settings.movingLightResolutionBias,
+                movingLightPolicy.lodRecoveryFactor,
+                settings.receiverDistanceMipClampEnabled,
+                settings.movingLightContinuousReceiverBiasEnabled);
+        const float effectiveReceiverDistanceMipClampStart =
+            GetEffectiveSvsmReceiverDistanceMipClampStart(
+                settings.receiverDistanceMipClampEnabled,
+                settings.firstClipmapExtent,
+                settings.receiverDistanceMipClampStartScale,
+                continuousReceiverBiasActive,
+                settings.movingLightLodBiasEnabled,
+                settings.movingLightResolutionBias,
+                movingLightPolicy.lodRecoveryFactor);
+        const uint32_t receiverDistanceMipClampMaximumLevel =
+            effectiveReceiverDistanceMipClampStart > 0.f
+            ? std::min(
+                settings.receiverDistanceMipClampMaximumLevel,
+                SvsmMaximumReceiverDistanceMipClampLevel)
+            : 0u;
+        const bool staticPageRequestConfiguration =
+            CanUseSvsmStaticPageRequestConfiguration(
+                settings.staticPageRequestReuseEnabled,
+                effectiveCacheEnabled,
+                settings.physicalPageCount,
+                settings.pageRenderBudget,
+                staticReuseJitterSupported,
+                settings.finiteBudgetStaticDrainEnabled);
+        m_Timings.movingLightUncachedActive =
+            movingLightPolicy.uncached;
+        m_Timings.movingLightCacheTransitionActive =
+            movingLightPolicy.transitioningToCached;
+        m_Timings.effectivePairedStaticDynamicDepth =
+            effectivePairedStaticDynamicDepthEnabled;
+        const bool deferredStaticDepthMergeRasterPermutationActive =
+            m_AllocatedDeferredStaticDepthMergeValid &&
+            m_AllocatedDeferredStaticDepthMerge;
+        const bool deferredStaticDepthMergeImplementationAvailable =
+            bool(m_SparseDeferredStaticDepthMergePipeline) &&
+            deferredStaticDepthMergeRasterPermutationActive;
+        const bool deferredStaticDepthMergeActive =
+            IsSvsmDeferredStaticDepthMergeActive(
+                settings.deferredStaticDepthMergeEnabled,
+                effectivePairedStaticDynamicDepthEnabled,
+                true,
+                deferredStaticDepthMergeImplementationAvailable);
+        m_Timings.deferredStaticDepthMergeActive =
+            deferredStaticDepthMergeActive;
+        m_Timings.deferredStaticDepthMergeUnavailable =
+            settings.deferredStaticDepthMergeEnabled &&
+            settings.pairedStaticDynamicDepthEnabled &&
+            !deferredStaticDepthMergeImplementationAvailable;
+        m_Timings.movingLightLodRecoveryFactor =
+            movingLightPolicy.lodRecoveryFactor;
+        m_Timings.effectiveResolutionBias =
+            effectiveResolutionBias;
+        m_Timings.receiverDistanceMipClampActive =
+            receiverDistanceMipClampMaximumLevel > 0u;
+        m_Timings.movingLightContinuousReceiverBiasActive =
+            continuousReceiverBiasActive &&
+            settings.movingLightLodBiasEnabled &&
+            uint32_t(settings.movingLightResolutionBias) > 0u;
+        m_Timings.effectiveReceiverDistanceMipClampStart =
+            effectiveReceiverDistanceMipClampStart;
+        m_Timings.receiverDistanceMipClampMaximumLevel =
+            receiverDistanceMipClampMaximumLevel;
+        const bool sceneRevisionChanged =
+            m_PreviousSceneStateRevisionReliable !=
+                sceneStateRevisionReliable ||
+            (sceneStateRevisionReliable &&
+                m_PreviousSceneStateRevision != sceneStateRevision);
+        const bool sceneStateChanged =
+            !m_CacheStateValid ||
+            sceneStateHash != m_PreviousSceneStateHash ||
+            sceneRevisionChanged;
+        // The caller's revision includes light-node transforms. The caster
+        // hash is exhaustive for the stable metadata in these snapshots, so a
+        // light-only revision must not force a second caster traversal.
+        const bool casterStateHashChanged =
+            !m_CacheStateValid ||
+            sceneStateHash != m_PreviousSceneStateHash ||
+            m_PreviousSceneStateRevisionReliable !=
+                sceneStateRevisionReliable;
+        const bool casterCacheConfigurationChanged =
+            m_CacheStateValid &&
+            (settings.localizedInvalidationEnabled !=
+                    m_PreviousLocalizedInvalidationEnabled ||
+                settings.adaptiveCasterCacheClassificationEnabled !=
+                    m_PreviousAdaptiveCasterCacheClassificationEnabled);
         const bool mappingChanged =
             !m_CacheStateValid ||
             light != m_PreviousProducingLight ||
             lightBasisChanged ||
             m_CurrentLightDepthOrigin !=
                 m_PreviousLightDepthOrigin ||
-            sceneStateHash != m_PreviousSceneStateHash ||
             settings.firstClipmapExtent !=
                 m_PreviousFirstClipmapExtent ||
             settings.maximumLightDepth !=
-                m_PreviousMaximumLightDepth;
-        const bool fullInvalidation =
+                m_PreviousMaximumLightDepth ||
+            casterCacheConfigurationChanged;
+
+        std::vector<uint32_t> localInvalidationPages;
+        CasterSnapshotState& casterSnapshots =
+            *m_CasterSnapshotState;
+        const SvsmObjectInvalidationPolicyConfiguration
+            policyConfiguration =
+                MakeSvsmObjectInvalidationPolicyConfiguration(
+                    settings.defaultObjectInvalidationMode,
+                    objectInvalidationResolver);
+        casterSnapshots.pendingReady = false;
+        casterSnapshots.pendingReliable = false;
+        casterSnapshots.pendingContainsAlwaysMode = false;
+        casterSnapshots.pendingPolicyResolutionReliable = true;
+        casterSnapshots.pendingObserved.clear();
+        casterSnapshots.pendingPublished.clear();
+        casterSnapshots.pendingMinimumPromotionDeadline =
+            SvsmNoPromotionDeadline;
+        casterSnapshots.pendingClassificationGeneration =
+            casterSnapshots.classificationGeneration;
+        const bool snapshotRootChanged =
+            casterSnapshots.valid &&
+            casterSnapshots.root.get() != rootNode.get();
+        const bool snapshotPolicyConfigurationChanged =
+            casterSnapshots.valid &&
+            !(casterSnapshots.policyConfiguration ==
+                policyConfiguration);
+        const bool snapshotClassifierChanged =
+            casterSnapshots.valid &&
+            casterSnapshots.adaptiveClassificationEnabled !=
+                settings.adaptiveCasterCacheClassificationEnabled;
+        const bool snapshotGatherRequested =
+            cacheEnabled &&
+            settings.localizedInvalidationEnabled &&
+            (!casterSnapshots.valid ||
+                !casterSnapshots.policyResolutionReliable ||
+                !policyConfiguration.valid ||
+                snapshotRootChanged ||
+                snapshotPolicyConfigurationChanged ||
+                snapshotClassifierChanged ||
+                casterStateHashChanged ||
+                casterSnapshots.containsAlwaysMode ||
+                (!policyConfiguration.resolverEnabled &&
+                    policyConfiguration.defaultMode ==
+                        SvsmObjectInvalidationMode::Always));
+        bool localizedInvalidationFailedOpen = false;
+        bool adaptiveClassificationTransition = false;
+        if (snapshotGatherRequested)
+        {
+            casterSnapshots.pendingReliable =
+                GatherSvsmCasterSnapshots(
+                    rootNode,
+                    policyConfiguration,
+                    casterSnapshots.pendingObserved,
+                    casterSnapshots.pendingContainsAlwaysMode,
+                    casterSnapshots.
+                        pendingPolicyResolutionReliable);
+            casterSnapshots.pendingRoot = rootNode;
+            casterSnapshots.pendingPolicyConfiguration =
+                policyConfiguration;
+            casterSnapshots.pendingAdaptiveClassificationEnabled =
+                settings.adaptiveCasterCacheClassificationEnabled;
+            casterSnapshots.pendingClassificationGeneration =
+                GetNextSvsmPacketClassificationGeneration(
+                    casterSnapshots.classificationGeneration);
+            casterSnapshots.pendingReady = true;
+            if (casterSnapshots.pendingReliable)
+            {
+                static const std::vector<SvsmCasterSnapshot>
+                    emptyCasterSnapshots;
+                casterSnapshots.pendingReliable =
+                    ReconcileSvsmAdaptiveCasterClassification(
+                        casterSnapshots.valid
+                            ? casterSnapshots.observed
+                            : emptyCasterSnapshots,
+                        casterSnapshots.valid
+                            ? casterSnapshots.published
+                            : emptyCasterSnapshots,
+                        casterSnapshots.pendingObserved,
+                        settings.
+                            adaptiveCasterCacheClassificationEnabled,
+                        casterSnapshots.
+                            successfulSparseStateCommits,
+                        adaptiveClassificationTransition);
+            }
+            if (casterSnapshots.pendingReliable)
+            {
+                casterSnapshots.pendingMinimumPromotionDeadline =
+                    GetSvsmMinimumPromotionDeadline(
+                        casterSnapshots.pendingObserved);
+            }
+        }
+        else if (cacheEnabled &&
+            settings.localizedInvalidationEnabled &&
+            settings.pairedStaticDynamicDepthEnabled &&
+            settings.adaptiveCasterCacheClassificationEnabled &&
+            casterSnapshots.valid &&
+            casterSnapshots.reliable &&
+            IsSvsmDynamicCasterPromotionDue(
+                casterSnapshots.successfulSparseStateCommits,
+                casterSnapshots.minimumPromotionDeadline))
+        {
+            // Normal waiting frames are O(1). Only copy/reconcile the caster
+            // table when the absolute minimum deadline is actually due.
+            casterSnapshots.pendingObserved =
+                casterSnapshots.observed;
+            casterSnapshots.pendingReliable =
+                PromoteDueSvsmDynamicCasters(
+                    casterSnapshots.pendingObserved,
+                    casterSnapshots.successfulSparseStateCommits,
+                    adaptiveClassificationTransition);
+            casterSnapshots.pendingMinimumPromotionDeadline =
+                GetSvsmMinimumPromotionDeadline(
+                    casterSnapshots.pendingObserved);
+            if (adaptiveClassificationTransition)
+            {
+                casterSnapshots.pendingRoot = rootNode;
+                casterSnapshots.pendingPolicyConfiguration =
+                    casterSnapshots.policyConfiguration;
+                casterSnapshots.pendingContainsAlwaysMode =
+                    casterSnapshots.containsAlwaysMode;
+                casterSnapshots.pendingPolicyResolutionReliable =
+                    casterSnapshots.policyResolutionReliable;
+                casterSnapshots.
+                    pendingAdaptiveClassificationEnabled = true;
+                casterSnapshots.pendingClassificationGeneration =
+                    GetNextSvsmPacketClassificationGeneration(
+                        casterSnapshots.classificationGeneration);
+                casterSnapshots.pendingReady = true;
+            }
+            else
+            {
+                // A stale/saturated minimum cannot justify GPU work. Repair
+                // the O(1) deadline state after the already-due O(N) scan.
+                casterSnapshots.minimumPromotionDeadline =
+                    casterSnapshots.pendingMinimumPromotionDeadline;
+                casterSnapshots.pendingObserved.clear();
+            }
+        }
+
+        SvsmLocalizedInvalidationReconciliation
+            localizedReconciliation;
+        if (casterSnapshots.pendingReady)
+        {
+            const bool localDiffRequested =
+                casterStateHashChanged ||
+                snapshotPolicyConfigurationChanged ||
+                !casterSnapshots.policyResolutionReliable ||
+                !casterSnapshots.
+                    pendingPolicyResolutionReliable ||
+                adaptiveClassificationTransition ||
+                casterSnapshots.pendingContainsAlwaysMode;
+            const bool canLocalize =
+                localDiffRequested &&
+                CanUseSvsmLocalizedInvalidation(
+                    effectiveCacheEnabled,
+                    settings.localizedInvalidationEnabled,
+                    m_CacheStateValid,
+                    casterSnapshots.valid &&
+                        casterSnapshots.reliable,
+                    !snapshotRootChanged,
+                    !snapshotClassifierChanged,
+                    casterSnapshots.pendingReliable,
+                    sceneStateRevisionReliable,
+                    m_PreviousSceneStateRevisionReliable,
+                    requiresFullSceneInvalidation,
+                    mappingChanged);
+            if (canLocalize)
+            {
+                localizedInvalidationFailedOpen =
+                    !BuildSvsmLocalizedInvalidationPages(
+                        casterSnapshots.observed,
+                        casterSnapshots.published,
+                        casterSnapshots.pendingObserved,
+                        m_ClipmapViews,
+                        settings.
+                            tightLocalizedInvalidationBoundsEnabled,
+                        casterStateHashChanged,
+                        !requiresFullSceneInvalidation,
+                        localInvalidationPages,
+                        casterSnapshots.pendingPublished,
+                        localizedReconciliation);
+            }
+            else if (localDiffRequested)
+            {
+                localizedInvalidationFailedOpen = true;
+            }
+        }
+        else if (casterStateHashChanged)
+        {
+            localizedInvalidationFailedOpen = true;
+        }
+
+        bool fullInvalidation =
             m_SparseResourcesNeedClear ||
-            !cacheEnabled ||
-            mappingChanged;
+            !effectiveCacheEnabled ||
+            mappingChanged ||
+            movingLightPolicy.forceContentInvalidation ||
+            requiresFullSceneInvalidation ||
+            (cacheEnabled &&
+                settings.localizedInvalidationEnabled &&
+                !policyConfiguration.valid) ||
+            localizedInvalidationFailedOpen;
+        if (!fullInvalidation &&
+            casterSnapshots.pendingReady &&
+            casterSnapshots.pendingPublished.size() !=
+                casterSnapshots.pendingObserved.size())
+        {
+            // A partial publication must retain exactly one published state
+            // for every observed caster. Any bookkeeping mismatch fails open
+            // before page work is submitted.
+            fullInvalidation = true;
+            localizedInvalidationFailedOpen = true;
+        }
+        if (fullInvalidation)
+        {
+            localInvalidationPages.clear();
+            if (casterSnapshots.pendingReady)
+            {
+                // A full refresh renders the current observed scene, so it
+                // also resolves every previously suppressed publication debt.
+                for (SvsmCasterSnapshot& snapshot :
+                    casterSnapshots.pendingObserved)
+                {
+                    snapshot.suppressedCoverageDebt = false;
+                }
+                casterSnapshots.pendingPublished =
+                    casterSnapshots.pendingObserved;
+            }
+        }
+        const bool preservePhysicalMappings =
+            fullInvalidation &&
+            settings.
+                retainPhysicalMappingsOnContentInvalidationEnabled &&
+            !m_SparseResourcesNeedClear;
+        m_Timings.physicalMappingRetentionActive =
+            preservePhysicalMappings;
+        const bool invalidateCasterSnapshotsOnSuccess =
+            ShouldInvalidateSvsmCasterSnapshotsOnSuccess(
+                cacheEnabled,
+                settings.localizedInvalidationEnabled);
+        const bool publishObservedOnFullInvalidation =
+            fullInvalidation && !casterSnapshots.pendingReady;
+        auto commitCasterSnapshots = [
+            &casterSnapshots,
+            invalidateCasterSnapshotsOnSuccess,
+            publishObservedOnFullInvalidation]() {
+            if (invalidateCasterSnapshotsOnSuccess)
+            {
+                casterSnapshots.observed.clear();
+                casterSnapshots.published.clear();
+                casterSnapshots.pendingObserved.clear();
+                casterSnapshots.pendingPublished.clear();
+                casterSnapshots.root.reset();
+                casterSnapshots.pendingRoot.reset();
+                casterSnapshots.valid = false;
+                casterSnapshots.reliable = false;
+                casterSnapshots.containsAlwaysMode = false;
+                casterSnapshots.policyResolutionReliable = true;
+                casterSnapshots.classificationGeneration = 0u;
+                casterSnapshots.pendingClassificationGeneration = 0u;
+                casterSnapshots.minimumPromotionDeadline =
+                    SvsmNoPromotionDeadline;
+                casterSnapshots.pendingReady = false;
+                casterSnapshots.pendingContainsAlwaysMode = false;
+                casterSnapshots.pendingPolicyResolutionReliable =
+                    true;
+                return;
+            }
+            if (!casterSnapshots.pendingReady)
+            {
+                if (publishObservedOnFullInvalidation &&
+                    casterSnapshots.valid)
+                {
+                    for (SvsmCasterSnapshot& snapshot :
+                        casterSnapshots.observed)
+                    {
+                        snapshot.suppressedCoverageDebt = false;
+                    }
+                    casterSnapshots.published =
+                        casterSnapshots.observed;
+                }
+                return;
+            }
+            casterSnapshots.observed =
+                std::move(casterSnapshots.pendingObserved);
+            casterSnapshots.published =
+                std::move(casterSnapshots.pendingPublished);
+            casterSnapshots.root =
+                casterSnapshots.pendingRoot;
+            casterSnapshots.policyConfiguration =
+                casterSnapshots.pendingPolicyConfiguration;
+            casterSnapshots.containsAlwaysMode =
+                casterSnapshots.pendingContainsAlwaysMode;
+            casterSnapshots.policyResolutionReliable =
+                casterSnapshots.
+                    pendingPolicyResolutionReliable;
+            casterSnapshots.adaptiveClassificationEnabled =
+                casterSnapshots.
+                    pendingAdaptiveClassificationEnabled;
+            casterSnapshots.classificationGeneration =
+                casterSnapshots.pendingClassificationGeneration;
+            casterSnapshots.minimumPromotionDeadline =
+                casterSnapshots.pendingMinimumPromotionDeadline;
+            casterSnapshots.valid =
+                true;
+            casterSnapshots.reliable =
+                casterSnapshots.pendingReliable;
+            casterSnapshots.pendingReady = false;
+            casterSnapshots.pendingObserved.clear();
+            casterSnapshots.pendingPublished.clear();
+            casterSnapshots.pendingRoot.reset();
+        };
+        auto commitSuccessfulSparseState = [
+            this,
+            &casterSnapshots,
+            &commitCasterSnapshots,
+            &movingLightPolicy,
+            &lightBasis,
+            light]() {
+            commitCasterSnapshots();
+            ++casterSnapshots.successfulSparseStateCommits;
+            m_RequiresFullSceneInvalidationLatched = false;
+            m_PreviousLightBasis = lightBasis;
+            m_PreviousLightBasisValid = true;
+            m_PreviousProducingLight = light;
+            m_PreviousSparseLightUncached =
+                movingLightPolicy.previousUncachedAfterCommit;
+            m_MovingLightLodRecoveryFramesRemaining =
+                movingLightPolicy.recoveryFramesAfterCommit;
+        };
+        auto discardFailedSparseRasterTransaction = [
+            this,
+            deferredStaticDepthMergeRasterPermutationActive]() {
+            if (ShouldLatchSvsmDeferredStaticDepthRasterFallback(
+                    deferredStaticDepthMergeRasterPermutationActive,
+                    false))
+            {
+                m_DeferredStaticDepthMergeRasterFallbackLatched =
+                    GetNextSvsmDeferredStaticDepthRasterFallbackLatched(
+                        m_DeferredStaticDepthMergeRasterFallbackLatched,
+                        true,
+                        deferredStaticDepthMergeRasterPermutationActive,
+                        false);
+                // Force one reference-pass recreation on the next frame.
+                // The raw requested identity remains unchanged so the latch
+                // then prevents retries until the user toggles the feature
+                // off and back on.
+                m_AllocatedDeferredStaticDepthMergeValid = false;
+                m_ReportedDeferredStaticDepthMergeFallback = true;
+            }
+            const SvsmRasterSubmissionTransactionAction action =
+                GetSvsmRasterSubmissionTransactionAction(false, true);
+            if (action.latchFullRebuild)
+            {
+                m_RequiresFullSceneInvalidationLatched = true;
+                m_CacheStateValid = false;
+                m_StaticDepthHierarchyBootstrapRequired = true;
+            }
+            if (action.clearSparseResources)
+            {
+                m_SparseResourcesNeedClear = true;
+                m_IndirectDrawArgumentsInitialized = false;
+                m_PacketPageCullingReady = false;
+            }
+            if (action.invalidateVisibilityCaches)
+            {
+                m_StaticPageRequestCacheReady = false;
+                m_StaticPageRequestJitterActive = false;
+                m_StaticPageDrainFramesRemaining = 0u;
+                m_StaticPageRequestCameraDepth = nullptr;
+                m_StaticJitterOffsetValid.fill(false);
+                m_StaticVisibilityValid.fill(false);
+                m_StaticVisibilitySettingsValid = false;
+            }
+            if (action.resetDepthBindings)
+            {
+                m_DepthBindingCacheResetLatched = true;
+                if (m_SparseDepthPass)
+                    m_SparseDepthPass->InvalidateRenderPacketCache();
+            }
+        };
 
         SparseVirtualShadowMapSparseConstants constants = {};
         cameraView.FillPlanarViewConstants(constants.cameraView);
@@ -4118,8 +9128,15 @@ namespace uvsr
             level < SvsmClipmapCount;
             ++level)
         {
+            const auto transforms = BuildSvsmClipmapTransformPair(
+                settings.precomposedClipmapTransformsEnabled,
+                constants.cameraView.matClipToWorld,
+                m_ClipmapViews[level]->
+                    GetViewProjectionMatrix(false));
             constants.worldToClip[level] =
-                m_ClipmapViews[level]->GetViewProjectionMatrix(false);
+                transforms.worldToClip;
+            constants.receiverToClip[level] =
+                transforms.receiverToClip;
             const SvsmPageCoordinate currentOrigin = {
                 m_CurrentRenderOrigins[level].x,
                 m_CurrentRenderOrigins[level].y
@@ -4150,16 +9167,21 @@ namespace uvsr
             settings.pageRenderBudget;
         constants.tapCount = uint32_t(settings.tapCount);
         constants.resolutionBias =
-            uint32_t(settings.resolutionBias);
+            uint32_t(effectiveResolutionBias);
         constants.flags =
             (fullInvalidation
                 ? SVSM_SPARSE_FLAG_FULL_INVALIDATION
                 : 0u) |
-            (cacheEnabled ? SVSM_SPARSE_FLAG_CACHING : 0u) |
+            (effectiveCacheEnabled
+                ? SVSM_SPARSE_FLAG_CACHING
+                : 0u) |
+            (preservePhysicalMappings
+                ? SVSM_SPARSE_FLAG_PRESERVE_PHYSICAL_MAPPINGS
+                : 0u) |
             (settings.gpuGatedDrawSubmission
                 ? SVSM_SPARSE_FLAG_COMPACT_PAGE_DISPATCH
                 : 0u) |
-            (cacheEnabled &&
+            (effectiveCacheEnabled &&
                     settings.recentPageEvictionGraceEnabled
                 ? SVSM_SPARSE_FLAG_RECENT_PAGE_EVICTION_GRACE
                 : 0u) |
@@ -4175,10 +9197,22 @@ namespace uvsr
                 : 0u) |
             (settings.coarsestPageRenderBudgetEnabled
                 ? SVSM_SPARSE_FLAG_COARSEST_PAGE_RENDER_BUDGET
+                : 0u) |
+            (settings.filterKernel == SvsmFilterKernel::BilinearPcf
+                ? SVSM_SPARSE_FLAG_BILINEAR_PCF
+                : 0u) |
+            (effectivePairedStaticDynamicDepthEnabled
+                ? SVSM_SPARSE_FLAG_PAIRED_STATIC_DYNAMIC_DEPTH
+                : 0u) |
+            (m_StaticDepthHierarchy
+                ? SVSM_SPARSE_FLAG_STATIC_DEPTH_HIERARCHY_RESOURCE
                 : 0u);
         constants.selectedClipmap = 0u;
         constants.depthBias = 0.0001f;
         constants.debugView = uint32_t(settings.debugView);
+        constants.padding0 = GetSvsmFilterRadius(
+            settings.tapCount,
+            settings.filterKernel);
         constants.markingMode =
             uint32_t(settings.markingMode);
         constants.filterMode = uint32_t(settings.filterMode);
@@ -4186,10 +9220,19 @@ namespace uvsr
             settings.adaptiveFiltering ? 1u : 0u;
         constants.drawPacketOffset = 0u;
         constants.drawPacketCount = 0u;
+        constants.localInvalidationPageCount =
+            uint32_t(localInvalidationPages.size());
         constants.dirtyPageScatterMaximumAmplification = std::clamp(
             settings.dirtyPageScatterMaximumAmplification,
             1u,
             SvsmMaximumDirtyPageScatterAmplification);
+        constants.hierarchyGeneration = 0u;
+        constants.staticDepthHierarchyBias =
+            settings.staticDepthHierarchyBias;
+        constants.receiverDistanceMipClampStart =
+            effectiveReceiverDistanceMipClampStart;
+        constants.receiverDistanceMipClampMaximumLevel =
+            receiverDistanceMipClampMaximumLevel;
 
         const float4x4 cameraWorldToClip =
             cameraView.GetViewProjectionMatrix(false);
@@ -4215,10 +9258,18 @@ namespace uvsr
                 settings.markingMode &&
             m_StaticPageRequestFilterMode ==
                 settings.filterMode &&
+            m_StaticPageRequestFilterKernel ==
+                settings.filterKernel &&
+            m_StaticPageRequestPoissonOrdering ==
+                settings.poissonOrdering &&
             m_StaticPageRequestTapCount ==
                 settings.tapCount &&
             m_StaticPageRequestResolutionBias ==
-                settings.resolutionBias &&
+                effectiveResolutionBias &&
+            m_StaticPageRequestReceiverDistanceMipClampStart ==
+                effectiveReceiverDistanceMipClampStart &&
+            m_StaticPageRequestReceiverDistanceMipClampMaximumLevel ==
+                receiverDistanceMipClampMaximumLevel &&
             std::memcmp(
                 &cameraWorldToClip,
                 &m_StaticPageRequestCameraWorldToClip,
@@ -4233,9 +9284,12 @@ namespace uvsr
                     settings.pageRenderBudget ||
                 m_StaticPageRequestCoarsestPageRenderBudgetEnabled !=
                     settings.coarsestPageRenderBudgetEnabled);
+        const bool localizedPageMaintenancePending =
+            !localInvalidationPages.empty();
         const bool staticPageMaintenancePending =
             staticPageRequestStateCompatible &&
             (staticPageRequestBudgetChanged ||
+                localizedPageMaintenancePending ||
                 m_StaticPageDrainFramesRemaining > 0u);
         if (!staticPageRequestStateCompatible)
         {
@@ -4287,7 +9341,8 @@ namespace uvsr
             SelectSvsmStaticPageRequestAction(
                 staticPageRequestStateCompatible,
                 staticJitterPreviouslySeen,
-                staticPageMaintenancePending);
+                staticPageMaintenancePending,
+                sceneStateChanged);
         const bool reuseStaticPageRequests =
             staticPageRequestAction ==
                 SvsmStaticPageRequestAction::Reuse;
@@ -4311,7 +9366,8 @@ namespace uvsr
                     SvsmStaticPageRequestAction::Rebuild ||
                 staticPageRequestAction ==
                     SvsmStaticPageRequestAction::ExtendUnion ||
-                staticPageRequestBudgetChanged)
+                staticPageRequestBudgetChanged ||
+                localizedPageMaintenancePending)
             {
                 staticPageDrainPassesIncludingThisFrame =
                     staticPageDrainPassCount;
@@ -4339,15 +9395,26 @@ namespace uvsr
             constants.flags |= SVSM_SPARSE_FLAG_PRESERVE_REQUIRED;
         }
         const bool staticVisibilitySettingsMatch =
-            m_StaticVisibilitySettingsValid &&
-            m_StaticVisibilityFilterMode == settings.filterMode &&
-            m_StaticVisibilityTapCount == settings.tapCount &&
-            m_StaticVisibilityResolutionBias ==
-                settings.resolutionBias &&
-            m_StaticVisibilityPageTranslationCaching ==
-                settings.pageTranslationCachingEnabled &&
-            m_StaticVisibilityAdaptiveFiltering ==
-                settings.adaptiveFiltering;
+            IsSvsmStaticVisibilityConfigurationCompatible(
+                m_StaticVisibilitySettingsValid,
+                m_StaticVisibilityFilterMode,
+                m_StaticVisibilityFilterKernel,
+                m_StaticVisibilityPoissonOrdering,
+                m_StaticVisibilityTapCount,
+                m_StaticVisibilityResolutionBias,
+                m_StaticVisibilityPageTranslationCaching,
+                m_StaticVisibilityAdaptiveFiltering,
+                settings.filterMode,
+                settings.filterKernel,
+                settings.poissonOrdering,
+                settings.tapCount,
+                effectiveResolutionBias,
+                settings.pageTranslationCachingEnabled,
+                settings.adaptiveFiltering) &&
+            m_StaticVisibilityReceiverDistanceMipClampStart ==
+                effectiveReceiverDistanceMipClampStart &&
+            m_StaticVisibilityReceiverDistanceMipClampMaximumLevel ==
+                receiverDistanceMipClampMaximumLevel;
         if (!staticVisibilitySettingsMatch)
             m_StaticVisibilityValid.fill(false);
         const bool reuseStaticVisibility =
@@ -4362,7 +9429,7 @@ namespace uvsr
         staticPageRequestReuseRejectMask |=
             settings.staticPageRequestReuseEnabled ? 0u : (1u << 0u);
         staticPageRequestReuseRejectMask |=
-            cacheEnabled ? 0u : (1u << 1u);
+            effectiveCacheEnabled ? 0u : (1u << 1u);
         staticPageRequestReuseRejectMask |=
             settings.physicalPageCount > 0u &&
                     settings.physicalPageCount <= SvsmPagesPerClipmap
@@ -4397,9 +9464,14 @@ namespace uvsr
                 : (1u << 9u);
         staticPageRequestReuseRejectMask |=
             m_StaticPageRequestResolutionBias ==
-                    settings.resolutionBias
+                    effectiveResolutionBias
                 ? 0u
                 : (1u << 10u);
+        staticPageRequestReuseRejectMask |=
+            m_StaticPageRequestPoissonOrdering ==
+                    settings.poissonOrdering
+                ? 0u
+                : (1u << 25u);
         staticPageRequestReuseRejectMask |=
             std::memcmp(
                 &cameraWorldToClip,
@@ -4444,6 +9516,19 @@ namespace uvsr
             staticReuseJitterSupported ? 0u : (1u << 21u);
         staticPageRequestReuseRejectMask |=
             staticJitterPreviouslySeen ? 0u : (1u << 22u);
+        staticPageRequestReuseRejectMask |=
+            sceneRevisionChanged ? (1u << 23u) : 0u;
+        staticPageRequestReuseRejectMask |=
+            m_StaticPageRequestFilterKernel == settings.filterKernel
+                ? 0u
+                : (1u << 24u);
+        staticPageRequestReuseRejectMask |=
+            m_StaticPageRequestReceiverDistanceMipClampStart ==
+                    effectiveReceiverDistanceMipClampStart &&
+                m_StaticPageRequestReceiverDistanceMipClampMaximumLevel ==
+                    receiverDistanceMipClampMaximumLevel
+                ? 0u
+                : (1u << 26u);
         m_Timings.staticPageRequestReuseActive =
             staticPageRequestStateCompatible &&
             !markStaticPageRequests;
@@ -4458,11 +9543,15 @@ namespace uvsr
         m_Timings.staticPageRequestReuseRejectMask =
             staticPageRequestReuseRejectMask;
 
+        m_SparseDepthPass->SetOpaqueRasterSpecializationEnabled(
+            settings.opaqueRasterSpecializationEnabled);
         const bool useRenderPackets =
-            (cacheEnabled && settings.renderPacketCachingEnabled) ||
-            settings.gpuGatedDrawSubmission;
+            ShouldUseSvsmShadowDrawLists(
+                settings.renderPacketCachingEnabled ||
+                    effectivePairedStaticDynamicDepthEnabled,
+                settings.gpuGatedDrawSubmission);
         const uint32_t firstScheduledClipmap = std::min(
-            uint32_t(settings.resolutionBias),
+            uint32_t(effectiveResolutionBias),
             SvsmClipmapCount - 1u);
         bool useBatchedDrawSubmission =
             settings.gpuGatedDrawSubmission &&
@@ -4486,18 +9575,16 @@ namespace uvsr
                 settings.coarsestPageRenderBudgetEnabled,
                 settings.pageRenderBudget,
                 settings.dirtyPageScatterMaximumAmplification);
-        // Virtual scatter has two potentially expensive fail-open shapes: a
-        // large virtual rectangle and a compact-page instance expansion. Only
-        // activate it when the independent guard is enabled and one small
-        // shared reservation hard-bounds every clipmap, including coarsest.
-        // Otherwise retain the exact compact per-page reference path.
+        // Production scatter derives an exact scheduled-page list and bounds
+        // for each packet. Its independent amplification guard can therefore
+        // choose the one-draw virtual path or that packet's exact per-page
+        // fallback without a tiny global render-budget restriction.
         const bool dirtyPageScatterRasterRequested =
             packetPageCullingRequested &&
             settings.dirtyPageScatterRasterEnabled &&
             dirtyPageScatterSafetyBounded;
         const bool exactPacketPageListsRequested =
-            packetPageCullingRequested &&
-            !dirtyPageScatterRasterRequested;
+            packetPageCullingRequested;
         if (!packetPageCullingRequested)
         {
             m_PacketPageCullingUnavailableForPacketCache = false;
@@ -4505,40 +9592,81 @@ namespace uvsr
         bool usePacketPageCulling =
             packetPageCullingRequested &&
             m_PacketPageCullingReady;
-        const bool packetPageModeTransition =
-            RequiresSvsmPacketPageModeTransition(
-                settings.gpuGatedDrawSubmission,
-                packetPageCullingRequested,
-                m_IndirectDrawArgumentsPacketPageCulling,
-                m_PacketPageCullingReady,
-                m_PacketPageCullingUnavailableForPacketCache,
-                m_SparseDepthPass->HasRenderPacketCache(),
-                m_SparseDepthPass->UsesExactPacketPageLists(),
-                exactPacketPageListsRequested);
         std::vector<nvrhi::DrawIndexedIndirectArguments>
             indirectArgumentTemplates;
         std::vector<SparseVirtualShadowMapPacketMetadata>
             packetPageMetadata;
         bool packetPageMetadataUploadPending = false;
         float packetPreparationMilliseconds = 0.f;
-        if (useRenderPackets &&
-            (!reuseStaticPageRequests || packetPageModeTransition))
+        if (useRenderPackets)
         {
             const auto packetPreparationStart =
                 std::chrono::steady_clock::now();
+            const std::vector<SvsmCasterSnapshot>*
+                classificationSnapshots = nullptr;
+            if (casterSnapshots.pendingReady &&
+                casterSnapshots.pendingReliable)
+            {
+                classificationSnapshots =
+                    &casterSnapshots.pendingObserved;
+            }
+            else if (!casterSnapshots.pendingReady &&
+                casterSnapshots.valid &&
+                casterSnapshots.reliable)
+            {
+                classificationSnapshots =
+                    &casterSnapshots.observed;
+            }
+            const bool adaptiveClassificationActive =
+                settings.pairedStaticDynamicDepthEnabled &&
+                settings.localizedInvalidationEnabled &&
+                settings.
+                    adaptiveCasterCacheClassificationEnabled &&
+                classificationSnapshots != nullptr;
+            const uint64_t classificationGeneration =
+                !adaptiveClassificationActive
+                ? 0u
+                : casterSnapshots.pendingReady
+                ? casterSnapshots.pendingClassificationGeneration
+                : casterSnapshots.classificationGeneration;
+            const std::vector<SvsmCasterSnapshot>*
+                persistentSourceSnapshots = nullptr;
+            uint64_t persistentSourceGeneration = 0u;
+            if (!casterSnapshots.pendingReady &&
+                casterSnapshots.valid &&
+                casterSnapshots.reliable &&
+                casterSnapshots.root.get() == rootNode.get())
+            {
+                persistentSourceSnapshots =
+                    &casterSnapshots.observed;
+                persistentSourceGeneration =
+                    casterSnapshots.classificationGeneration;
+            }
             const bool allowPacketReuse =
-                cacheEnabled &&
-                settings.renderPacketCachingEnabled;
+                CanAttemptSvsmRenderPacketReuse(
+                    settings.renderPacketCachingEnabled);
             if (!m_SparseDepthPass->PrepareRenderPackets(
                     rootNode,
                     m_ClipmapViews,
                     sceneStateHash,
+                    sceneStateRevision,
+                    sceneStateRevisionReliable,
+                    light,
                     drawStrategy,
                     firstScheduledClipmap,
                     packetPageCullingRequested,
                     exactPacketPageListsRequested,
                     dirtyPageScatterRasterRequested,
                     packetStateSortingRequested,
+                    settings.sharedClipmapPacketBuilderEnabled,
+                    settings.
+                        persistentCasterSourceCachingEnabled,
+                    persistentSourceSnapshots,
+                    persistentSourceGeneration,
+                    effectivePairedStaticDynamicDepthEnabled,
+                    classificationSnapshots,
+                    adaptiveClassificationActive,
+                    classificationGeneration,
                     allowPacketReuse,
                     renderPacketsRebuilt))
             {
@@ -4549,11 +9677,36 @@ namespace uvsr
                 EndTimerFrame();
                 return {};
             }
+            m_Timings.cachedShadowDrawListsRebuilt =
+                settings.renderPacketCachingEnabled &&
+                renderPacketsRebuilt;
+            m_Timings.cachedShadowDrawListsReused =
+                settings.renderPacketCachingEnabled &&
+                !renderPacketsRebuilt;
+            m_Timings.persistentCasterSourceRequested =
+                m_SparseDepthPass->
+                    IsPersistentCasterSourceRequested();
+            m_Timings.persistentCasterSourceActive =
+                m_SparseDepthPass->
+                    IsPersistentCasterSourceActive();
+            m_Timings.persistentCasterSourceReused =
+                m_SparseDepthPass->
+                    WasPersistentCasterSourceReused();
+            m_Timings.persistentCasterSourceRebuilt =
+                m_SparseDepthPass->
+                    WasPersistentCasterSourceRebuilt();
+            m_Timings.persistentCasterSourceRecordCount =
+                m_SparseDepthPass->
+                    GetPersistentCasterSourceCount();
             if (renderPacketsRebuilt)
             {
                 m_PacketPageCullingReady = false;
                 m_PacketPageCullingUnavailableForPacketCache = false;
             }
+            m_IndirectDrawArgumentsInitialized =
+                KeepSvsmIndirectArgumentTemplatesInitialized(
+                    m_IndirectDrawArgumentsInitialized,
+                    renderPacketsRebuilt);
             if (useBatchedDrawSubmission &&
                 !m_SparseDepthPass->PrepareBatchedPipelines(
                     m_RasterFramebuffer,
@@ -4660,19 +9813,249 @@ namespace uvsr
                     packetPreparationEnd -
                     packetPreparationStart).count();
         }
+        if (useRenderPackets && renderPacketsRebuilt)
+        {
+            const auto packetPrevalidationStart =
+                std::chrono::steady_clock::now();
+            // Packet rebuilds are the only time their material/input state can
+            // change without an exact-key miss. Validate those unique states
+            // before page clears, so the normal failure case cannot create a
+            // partially cleared or partially rendered cache transaction.
+            const bool prevalidationDirtyPageScatterRaster =
+                dirtyPageScatterRasterRequested &&
+                usePacketPageCulling;
+            bool packetStatesValid = true;
+            for (uint32_t level = firstScheduledClipmap;
+                level < SvsmClipmapCount;
+                ++level)
+            {
+                if (m_SparseDepthPass->
+                        GetRenderPacketCount(level) == 0u)
+                {
+                    continue;
+                }
+                SparseDepthPass::Context context;
+                if (!m_SparseDepthPass->RenderPackets(
+                        commandList,
+                        m_ClipmapViews[level].get(),
+                        m_RasterFramebuffer,
+                        context,
+                        level,
+                        m_IndirectDrawCapacity,
+                        settings.gpuGatedDrawSubmission,
+                        useBatchedDrawSubmission,
+                        false,
+                        usePacketPageCulling,
+                        prevalidationDirtyPageScatterRaster,
+                        true))
+                {
+                    packetStatesValid = false;
+                    break;
+                }
+            }
+            packetPreparationMilliseconds +=
+                std::chrono::duration<float, std::milli>(
+                    std::chrono::steady_clock::now() -
+                    packetPrevalidationStart).count();
+            if (!packetStatesValid)
+            {
+                // No page work has been recorded yet, but apply the same
+                // conservative recovery contract as a mid-raster failure.
+                EndTimerFrame();
+                discardFailedSparseRasterTransaction();
+                InvalidateUiTimings();
+                InvalidateDebugCounters();
+                m_Timings.active = false;
+                if (!m_ReportedRasterSubmissionFailure)
+                {
+                    log::error(
+                        "SVSM sparse raster state prevalidation failed; latching a full rebuild and returning white visibility.");
+                    m_ReportedRasterSubmissionFailure = true;
+                }
+                return {};
+            }
+        }
+        if (ShouldUpgradeSvsmLocalizedPagesToStatic(
+                effectivePairedStaticDynamicDepthEnabled,
+                usePacketPageCulling))
+        {
+            // The reference raster path deliberately treats every caster as
+            // static because it has no per-packet classification. Upgrade
+            // localized dirtiness to clear both slices in that mode; restoring
+            // slice one for a moved caster would otherwise resurrect its old
+            // silhouette before the all-static raster rejects the page.
+            for (uint32_t& page : localInvalidationPages)
+                page |= SvsmLocalInvalidationStaticBit;
+        }
         const bool useDirtyPageScatterRaster =
             dirtyPageScatterRasterRequested &&
             usePacketPageCulling;
+        const bool scheduledTileMaskRequested =
+            settings.hierarchicalScheduledPageMaskEnabled &&
+            usePacketPageCulling;
+        const bool scheduledTileMaskResourcesAvailable =
+            bool(m_ScheduledPageTileMasks) &&
+            bool(m_SparsePipelines[
+                SparseBuildScheduledPageTileMasks]) &&
+            bool(m_SparseScheduledTileMaskFillPipeline);
+        const uint32_t scheduledTileMaskGeneration =
+            uint32_t(
+                m_TimerFrame %
+                uint64_t(std::numeric_limits<uint32_t>::max())) + 1u;
+        const bool useScheduledTileMask =
+            ShouldUseSvsmScheduledPageTileMask(
+                settings.hierarchicalScheduledPageMaskEnabled,
+                usePacketPageCulling,
+                useDirtyPageScatterRaster,
+                scheduledTileMaskResourcesAvailable,
+                scheduledTileMaskGeneration);
+        if (useScheduledTileMask)
+        {
+            constants.hierarchyGeneration =
+                scheduledTileMaskGeneration;
+            m_ReportedScheduledTileMaskFallback = false;
+        }
+        else if (scheduledTileMaskRequested &&
+            !scheduledTileMaskResourcesAvailable &&
+            !m_ReportedScheduledTileMaskFallback)
+        {
+            log::warning(
+                "SVSM scheduled-page tile-mask resources are unavailable; retaining the exact packet-page scan.");
+            m_ReportedScheduledTileMaskFallback = true;
+        }
+        else if (!scheduledTileMaskRequested)
+        {
+            m_ReportedScheduledTileMaskFallback = false;
+        }
+        const bool receiverPageMaskRequestedForFrame =
+            settings.receiverPageMaskCullingEnabled &&
+            usePacketPageCulling &&
+            !effectiveCacheEnabled &&
+            !effectivePairedStaticDynamicDepthEnabled &&
+            markStaticPageRequests;
+        const nvrhi::ComputePipelineHandle&
+            selectedReceiverPageMaskMarkPipeline =
+                settings.precomposedClipmapTransformsEnabled
+                ? m_SparsePrecomposedReceiverPageMaskMarkPipeline
+                : m_SparseReceiverPageMaskMarkPipeline;
+        const nvrhi::ComputePipelineHandle&
+            selectedReceiverPageMaskFillPipeline =
+                useScheduledTileMask
+                ? m_SparseScheduledTileReceiverPageMaskFillPipeline
+                : m_SparseReceiverPageMaskFillPipeline;
+        const bool receiverPageMaskResourcesAvailable =
+            bool(m_ReceiverPageMasks) &&
+            bool(selectedReceiverPageMaskMarkPipeline) &&
+            bool(selectedReceiverPageMaskFillPipeline);
+        const bool useReceiverPageMask =
+            ShouldUseSvsmReceiverPageMaskCulling(
+                settings.mode,
+                settings.receiverPageMaskCullingEnabled,
+                usePacketPageCulling,
+                effectiveCacheEnabled,
+                effectivePairedStaticDynamicDepthEnabled,
+                useDirtyPageScatterRaster,
+                markStaticPageRequests,
+                receiverPageMaskResourcesAvailable,
+                scheduledTileMaskGeneration);
+        if (useReceiverPageMask)
+        {
+            constants.hierarchyGeneration =
+                scheduledTileMaskGeneration;
+            m_ReportedReceiverPageMaskFallback = false;
+        }
+        else if (receiverPageMaskRequestedForFrame &&
+            !receiverPageMaskResourcesAvailable &&
+            !m_ReportedReceiverPageMaskFallback)
+        {
+            log::warning(
+                "SVSM receiver-page mask resources are unavailable; retaining the exact uncached packet-page list.");
+            m_ReportedReceiverPageMaskFallback = true;
+        }
+        else if (!receiverPageMaskRequestedForFrame)
+        {
+            m_ReportedReceiverPageMaskFallback = false;
+        }
+        const bool staticDepthHierarchyRequested =
+            settings.staticDepthHierarchyCullingEnabled &&
+            usePacketPageCulling &&
+            effectivePairedStaticDynamicDepthEnabled &&
+            !useDirtyPageScatterRaster;
+        const nvrhi::ComputePipelineHandle&
+            staticDepthPostRasterPipeline =
+                deferredStaticDepthMergeActive
+                ? m_SparseDeferredStaticDepthMergePipeline
+                : m_SparsePipelines[
+                    SparseBuildStaticDepthHierarchy];
+        const bool staticDepthHierarchyResourcesAvailable =
+            bool(m_StaticDepthHierarchy) &&
+            bool(staticDepthPostRasterPipeline) &&
+            bool(m_SparseStaticDepthHierarchyFillPipeline) &&
+            (!useScheduledTileMask ||
+                bool(
+                    m_SparseScheduledTileMaskStaticDepthHierarchyFillPipeline));
+        const bool useStaticDepthHierarchy =
+            ShouldUseSvsmStaticDepthHierarchyCulling(
+                settings.mode,
+                settings.staticDepthHierarchyCullingEnabled,
+                usePacketPageCulling,
+                effectivePairedStaticDynamicDepthEnabled,
+                useDirtyPageScatterRaster,
+                staticDepthHierarchyResourcesAvailable);
+        if (!useStaticDepthHierarchy)
+        {
+            m_StaticDepthHierarchyBootstrapRequired =
+                GetNextSvsmStaticDepthHierarchyBootstrapRequired(
+                    m_StaticDepthHierarchyBootstrapRequired,
+                    false,
+                    false);
+        }
+        const bool bootstrapStaticDepthHierarchy =
+            ShouldBootstrapSvsmStaticDepthHierarchy(
+                m_StaticDepthHierarchyBootstrapRequired,
+                useStaticDepthHierarchy);
+        if (useStaticDepthHierarchy)
+        {
+            constants.flags |=
+                SVSM_SPARSE_FLAG_STATIC_DEPTH_HIERARCHY_CULLING;
+            if (bootstrapStaticDepthHierarchy)
+            {
+                constants.flags |=
+                    SVSM_SPARSE_FLAG_STATIC_DEPTH_HIERARCHY_BOOTSTRAP;
+            }
+            constants.hierarchyGeneration =
+                scheduledTileMaskGeneration;
+            m_ReportedStaticDepthHierarchyFallback = false;
+        }
+        else if (staticDepthHierarchyRequested &&
+            !staticDepthHierarchyResourcesAvailable &&
+            !m_ReportedStaticDepthHierarchyFallback)
+        {
+            log::warning(
+                "SVSM static-depth hierarchy resources are unavailable; retaining the exact dynamic caster packet-page list.");
+            m_ReportedStaticDepthHierarchyFallback = true;
+        }
+        else if (!staticDepthHierarchyRequested)
+        {
+            m_ReportedStaticDepthHierarchyFallback = false;
+        }
         if (usePacketPageCulling)
         {
             constants.flags |= SVSM_SPARSE_FLAG_PACKET_PAGE_CULLING;
-            if (settings.packetRectangleDirectScanEnabled &&
-                !useDirtyPageScatterRaster)
+            if (settings.packetRectangleDirectScanEnabled)
             {
                 constants.flags |=
                     SVSM_SPARSE_FLAG_PACKET_RECTANGLE_DIRECT_SCAN;
             }
         }
+        if (useReceiverPageMask)
+        {
+            constants.flags |=
+                SVSM_SPARSE_FLAG_RECEIVER_PAGE_MASK_CULLING;
+        }
+        const bool useGlobalDirtyPageRectangle =
+            useDirtyPageScatterRaster &&
+            !settings.dirtyPageScatterAmplificationGuardEnabled;
         if (useDirtyPageScatterRaster)
         {
             constants.flags |=
@@ -4702,11 +10085,40 @@ namespace uvsr
                 reuseStaticVisibility,
                 packetPageMetadataUploadPending,
                 indirectArgumentTemplatesPrepared,
-                m_CurrentTimerSourceTag != 0u);
+                m_CurrentTimerSourceTag != 0u) &&
+            !bootstrapStaticDepthHierarchy &&
+            !ShouldBlockSvsmStaticZeroWorkForSnapshotTransaction(
+                casterSnapshots.pendingReady,
+                sceneStateChanged,
+                requiresFullSceneInvalidation);
         m_Timings.packetPageCullingActive =
             IsSvsmStaticPageMaintenanceOptimizationActive(
                 usePacketPageCulling,
                 staticPageRequestAction);
+        m_Timings.hierarchicalScheduledPageMaskActive =
+            IsSvsmStaticPageMaintenanceOptimizationActive(
+                useScheduledTileMask,
+                staticPageRequestAction);
+        m_Timings.hierarchicalScheduledPageMaskUnavailable =
+            scheduledTileMaskRequested &&
+            !scheduledTileMaskResourcesAvailable;
+        m_Timings.receiverPageMaskCullingRequested =
+            settings.receiverPageMaskCullingEnabled;
+        m_Timings.receiverPageMaskCullingActive =
+            useReceiverPageMask;
+        m_Timings.receiverPageMaskCullingUnavailable =
+            receiverPageMaskRequestedForFrame &&
+            !receiverPageMaskResourcesAvailable;
+        m_Timings.staticDepthHierarchyCullingRequested =
+            settings.staticDepthHierarchyCullingEnabled;
+        m_Timings.staticDepthHierarchyCullingActive =
+            bootstrapStaticDepthHierarchy ||
+            IsSvsmStaticPageMaintenanceOptimizationActive(
+                useStaticDepthHierarchy,
+                staticPageRequestAction);
+        m_Timings.staticDepthHierarchyCullingUnavailable =
+            staticDepthHierarchyRequested &&
+            !staticDepthHierarchyResourcesAvailable;
         m_Timings.dirtyPageScatterRasterActive =
             IsSvsmStaticPageMaintenanceOptimizationActive(
                 useDirtyPageScatterRaster,
@@ -4720,8 +10132,22 @@ namespace uvsr
             useLevelEmptyWorkSkip;
         m_Timings.packetPageCullingUnavailable =
             m_PacketPageCullingUnavailableForPacketCache;
+        m_Timings.cachedShadowDrawListsActive =
+            settings.renderPacketCachingEnabled &&
+            useRenderPackets &&
+            m_SparseDepthPass->HasRenderPacketCache();
+        if (m_Timings.cachedShadowDrawListsActive)
+        {
+            m_Timings.cachedShadowDrawListPacketCount =
+                m_SparseDepthPass->GetRenderPacketCount();
+            if (!m_Timings.cachedShadowDrawListsRebuilt)
+                m_Timings.cachedShadowDrawListsReused = true;
+        }
+        SparseVirtualShadowMapSettings effectiveTimingSettings = settings;
+        effectiveTimingSettings.resolutionBias =
+            effectiveResolutionBias;
         UpdateUiTimingContext(
-            settings,
+            effectiveTimingSettings,
             SvsmResourceBackend::Sparse,
             m_CurrentDetailedGpuTimingEnabled);
 
@@ -4753,8 +10179,17 @@ namespace uvsr
             m_Timings.packetPageCandidatePackets = 0u;
             m_Timings.packetPageCompactedPackets = 0u;
             m_Timings.packetPageFailOpenPackets = 0u;
+            m_Timings.receiverPageMaskQueries = 0u;
+            m_Timings.receiverPageMaskCulledPages = 0u;
+            m_Timings.receiverPageMaskFailOpens = 0u;
+            m_Timings.staticDepthHierarchyQueries = 0u;
+            m_Timings.staticDepthHierarchyCulledPages = 0u;
+            m_Timings.staticDepthHierarchyFailOpens = 0u;
+            m_Timings.staticDepthHierarchyBuiltPages = 0u;
+            RecordSvsmStaticZeroWorkFrame(m_Timings);
             PublishKnownZeroUiTiming();
             m_Timings.active = true;
+            commitSuccessfulSparseState();
             EndTimerFrame();
             return {
                 m_SparseVisibilityCache[resolveVisibilitySlot],
@@ -4763,8 +10198,11 @@ namespace uvsr
             };
         }
 
+        RecordSvsmGpuWorkSubmission(m_Timings);
         commandList->beginMarker(
-            cacheEnabled ? "SVSM Sparse Cached" : "SVSM Sparse Uncached");
+            effectiveCacheEnabled
+                ? "SVSM Sparse Cached"
+                : "SVSM Sparse Uncached");
 #ifdef _WIN32
         SetD3d12DredMarker(commandList, L"SVSM Sparse Begin");
 #endif
@@ -4784,6 +10222,14 @@ namespace uvsr
                     std::chrono::steady_clock::now() -
                     metadataUploadStart).count();
         }
+        if (!localInvalidationPages.empty())
+        {
+            commandList->writeBuffer(
+                m_LocalInvalidationPages,
+                localInvalidationPages.data(),
+                uint64_t(localInvalidationPages.size()) *
+                    sizeof(uint32_t));
+        }
 
         if (m_SparseResourcesNeedClear)
         {
@@ -4800,6 +10246,16 @@ namespace uvsr
                 0u);
             commandList->clearBufferUInt(
                 m_PhysicalOwners, SvsmInvalidPhysicalPage);
+            if (m_StaticDepthHierarchy)
+            {
+                commandList->clearBufferUInt(
+                    m_StaticDepthHierarchy, 0u);
+            }
+            if (m_ReceiverPageMasks)
+            {
+                commandList->clearBufferUInt(
+                    m_ReceiverPageMasks, 0u);
+            }
         }
         if (performStaticPageMaintenance ||
             settings.debugView != SvsmDebugView::None)
@@ -4810,7 +10266,11 @@ namespace uvsr
         }
 
         auto dispatchSparse =
-            [this, commandList, &constants](
+            [this, commandList, &constants, &settings,
+                useScheduledTileMask,
+                useReceiverPageMask,
+                useStaticDepthHierarchy,
+                deferredStaticDepthMergeActive](
                 uint32_t stage,
                 uint32_t x,
                 uint32_t y,
@@ -4820,7 +10280,31 @@ namespace uvsr
                     &constants,
                     sizeof(constants));
                 nvrhi::ComputeState state;
-                state.pipeline = m_SparsePipelines[stage];
+                state.pipeline =
+                    stage == SparseMark
+                    ? (useReceiverPageMask
+                        ? (settings.precomposedClipmapTransformsEnabled
+                            ? m_SparsePrecomposedReceiverPageMaskMarkPipeline
+                            : m_SparseReceiverPageMaskMarkPipeline)
+                        : (settings.precomposedClipmapTransformsEnabled
+                            ? m_SparsePrecomposedMarkPipeline
+                            : m_SparsePipelines[SparseMark]))
+                    : stage == SparseFillIndirect
+                    ? (useReceiverPageMask
+                        ? (useScheduledTileMask
+                            ? m_SparseScheduledTileReceiverPageMaskFillPipeline
+                            : m_SparseReceiverPageMaskFillPipeline)
+                        : (useStaticDepthHierarchy
+                            ? (useScheduledTileMask
+                                ? m_SparseScheduledTileMaskStaticDepthHierarchyFillPipeline
+                                : m_SparseStaticDepthHierarchyFillPipeline)
+                            : (useScheduledTileMask
+                                ? m_SparseScheduledTileMaskFillPipeline
+                                : m_SparsePipelines[SparseFillIndirect])))
+                    : stage == SparseBuildStaticDepthHierarchy &&
+                            deferredStaticDepthMergeActive
+                    ? m_SparseDeferredStaticDepthMergePipeline
+                    : m_SparsePipelines[stage];
                 state.bindings = { m_SparseBindingSet };
                 commandList->setComputeState(state);
                 commandList->dispatch(x, y, z);
@@ -4852,7 +10336,7 @@ namespace uvsr
 
         if (performStaticPageMaintenance)
         {
-        if (useDirtyPageScatterRaster)
+        if (useGlobalDirtyPageRectangle)
         {
             commandList->clearBufferUInt(
                 m_DirtyPageRectangles, 0u);
@@ -4860,33 +10344,69 @@ namespace uvsr
                 commandList, m_DirtyPageRectangles);
             commandList->commitBarriers();
         }
-        if (markStaticPageRequests)
+        if (markStaticPageRequests ||
+            !localInvalidationPages.empty())
         {
 #ifdef _WIN32
             SetD3d12DredMarker(commandList, L"SVSM Mark Required Pages");
 #endif
             BeginTimer(commandList, TimerPageMarking);
-            dispatchSparse(
-                SparsePrepare,
-                div_ceil(SvsmPagesPerAxis, 8u),
-                div_ceil(SvsmPagesPerAxis, 8u),
-                SvsmClipmapCount);
-            nvrhi::utils::TextureUavBarrier(
-                commandList, m_PageTable);
-            nvrhi::utils::BufferUavBarrier(
-                commandList, m_PhysicalOwners);
-            commandList->commitBarriers();
-            const uint32_t markingGroupCoverage =
-                settings.markingMode == SvsmMarkingMode::Tile16
-                    ? 16u
-                    : 8u;
-            dispatchSparse(
-                SparseMark,
-                div_ceil(cameraDepthDesc.width, markingGroupCoverage),
-                div_ceil(cameraDepthDesc.height, markingGroupCoverage));
-            nvrhi::utils::TextureUavBarrier(
-                commandList, m_PageTable);
-            commandList->commitBarriers();
+            if (markStaticPageRequests)
+            {
+                if (useReceiverPageMask)
+                {
+                    // Receiver masks are current-camera coverage. Clear all
+                    // words before atomically rebuilding them so a newly
+                    // published generation cannot inherit stale coverage.
+                    commandList->clearBufferUInt(
+                        m_ReceiverPageMasks, 0u);
+                    nvrhi::utils::BufferUavBarrier(
+                        commandList, m_ReceiverPageMasks);
+                    commandList->commitBarriers();
+                }
+                dispatchSparse(
+                    SparsePrepare,
+                    div_ceil(SvsmPagesPerAxis, 8u),
+                    div_ceil(SvsmPagesPerAxis, 8u),
+                    SvsmClipmapCount);
+                nvrhi::utils::TextureUavBarrier(
+                    commandList, m_PageTable);
+                nvrhi::utils::BufferUavBarrier(
+                    commandList, m_PhysicalOwners);
+                commandList->commitBarriers();
+                const uint32_t markingGroupCoverage =
+                    settings.markingMode == SvsmMarkingMode::Tile16
+                        ? 16u
+                        : 8u;
+                dispatchSparse(
+                    SparseMark,
+                    div_ceil(
+                        cameraDepthDesc.width,
+                        markingGroupCoverage),
+                    div_ceil(
+                        cameraDepthDesc.height,
+                        markingGroupCoverage));
+                nvrhi::utils::TextureUavBarrier(
+                    commandList, m_PageTable);
+                if (useReceiverPageMask)
+                {
+                    nvrhi::utils::BufferUavBarrier(
+                        commandList, m_ReceiverPageMasks);
+                }
+                commandList->commitBarriers();
+            }
+            if (!localInvalidationPages.empty())
+            {
+                dispatchSparse(
+                    SparseInvalidatePages,
+                    div_ceil(
+                        uint32_t(localInvalidationPages.size()),
+                        64u),
+                    1u);
+                nvrhi::utils::TextureUavBarrier(
+                    commandList, m_PageTable);
+                commandList->commitBarriers();
+            }
             EndTimer(commandList, TimerPageMarking);
         }
         else
@@ -4898,9 +10418,24 @@ namespace uvsr
         SetD3d12DredMarker(commandList, L"SVSM Allocate Pages");
 #endif
         BeginTimer(commandList, TimerAllocation);
+        const bool deterministicFinePageBudget =
+            ShouldUseSvsmDeterministicFinePageBudget(
+                settings.pageRenderBudget,
+                settings.physicalPageCount,
+                settings.coarsestPageRenderBudgetEnabled);
+        if (deterministicFinePageBudget)
+        {
+            commandList->clearBufferUInt(
+                m_FinePageCandidateMasks, 0u);
+            nvrhi::utils::BufferUavBarrier(
+                commandList, m_FinePageCandidateMasks);
+            commandList->commitBarriers();
+        }
         dispatchSparse(
             SparseRecycle,
-            div_ceil(settings.physicalPageCount, 64u),
+            div_ceil(
+                settings.physicalPageCount,
+                64u),
             1u);
         nvrhi::utils::BufferUavBarrier(
             commandList, m_PhysicalOwners);
@@ -4908,32 +10443,119 @@ namespace uvsr
             commandList, m_CompactRenderPages);
         nvrhi::utils::BufferUavBarrier(
             commandList, m_Counters);
-        commandList->commitBarriers();
-        for (int level = int(SvsmClipmapCount) - 1;
-            level >= int(firstScheduledClipmap);
-            --level)
+        if (deterministicFinePageBudget)
         {
-            constants.selectedClipmap = uint32_t(level);
-            dispatchSparse(
-                SparseAllocate,
-                div_ceil(SvsmPagesPerClipmap, 64u),
-                1u);
-            nvrhi::utils::TextureUavBarrier(
-                commandList, m_PageTable);
+            // Recycle records required fine owners in a priority bitmask.
+            // Coarse allocation assigns unique reverse-priority victim ranks
+            // only after every classification write is visible.
             nvrhi::utils::BufferUavBarrier(
-                commandList, m_PhysicalOwners);
+                commandList, m_FinePageCandidateMasks);
+        }
+        commandList->commitBarriers();
+        auto dispatchAllocationLevel =
+            [&](uint32_t level, uint32_t groupCount) {
+                constants.selectedClipmap = level;
+                dispatchSparse(
+                    SparseAllocate,
+                    groupCount,
+                    1u);
+                nvrhi::utils::TextureUavBarrier(
+                    commandList, m_PageTable);
+                nvrhi::utils::BufferUavBarrier(
+                    commandList, m_PhysicalOwners);
+                nvrhi::utils::BufferUavBarrier(
+                    commandList, m_RenderPages);
+                nvrhi::utils::BufferUavBarrier(
+                    commandList, m_CompactRenderPages);
+                nvrhi::utils::BufferUavBarrier(
+                    commandList, m_Counters);
+                if (deterministicFinePageBudget &&
+                    level == SvsmClipmapCount - 1u)
+                {
+                    nvrhi::utils::BufferUavBarrier(
+                        commandList, m_FinePageCandidateMasks);
+                }
+                if (useGlobalDirtyPageRectangle)
+                {
+                    nvrhi::utils::BufferUavBarrier(
+                        commandList, m_DirtyPageRectangles);
+                }
+                commandList->commitBarriers();
+            };
+        if (deterministicFinePageBudget)
+        {
+            // Publish the complete coarse fallback first. Each fine allocation
+            // scan then validates residency and records compact candidates.
+            // One global selector consumes those masks level-first and
+            // centered-Morton within each level.
+            const uint32_t coarsestLevel =
+                SvsmClipmapCount - 1u;
+            if (firstScheduledClipmap <= coarsestLevel)
+            {
+                dispatchAllocationLevel(
+                    coarsestLevel,
+                    div_ceil(
+                        SvsmPagesPerClipmap,
+                        64u));
+            }
+            // Coarse fallback has finished reading the deterministic
+            // required-fine victim mask. Clear and reuse the same 2.5 KiB
+            // allocation for current fine candidates.
+            commandList->clearBufferUInt(
+                m_FinePageCandidateMasks, 0u);
             nvrhi::utils::BufferUavBarrier(
-                commandList, m_RenderPages);
-            nvrhi::utils::BufferUavBarrier(
-                commandList, m_CompactRenderPages);
-            nvrhi::utils::BufferUavBarrier(
-                commandList, m_Counters);
-            if (useDirtyPageScatterRaster)
+                commandList, m_FinePageCandidateMasks);
+            commandList->commitBarriers();
+            for (uint32_t level = firstScheduledClipmap;
+                level < coarsestLevel;
+                ++level)
+            {
+                dispatchAllocationLevel(
+                    level,
+                    div_ceil(
+                        SvsmPagesPerClipmap,
+                        64u));
+            }
+            if (firstScheduledClipmap < coarsestLevel)
             {
                 nvrhi::utils::BufferUavBarrier(
-                    commandList, m_DirtyPageRectangles);
+                    commandList, m_FinePageCandidateMasks);
+                commandList->commitBarriers();
+                constants.selectedClipmap = 0u;
+                dispatchSparse(
+                    SparseScheduleFine,
+                    1u,
+                    1u);
+                nvrhi::utils::TextureUavBarrier(
+                    commandList, m_PageTable);
+                nvrhi::utils::BufferUavBarrier(
+                    commandList, m_PhysicalOwners);
+                nvrhi::utils::BufferUavBarrier(
+                    commandList, m_RenderPages);
+                nvrhi::utils::BufferUavBarrier(
+                    commandList, m_CompactRenderPages);
+                nvrhi::utils::BufferUavBarrier(
+                    commandList, m_Counters);
+                if (useGlobalDirtyPageRectangle)
+                {
+                    nvrhi::utils::BufferUavBarrier(
+                        commandList, m_DirtyPageRectangles);
+                }
+                commandList->commitBarriers();
             }
-            commandList->commitBarriers();
+        }
+        else
+        {
+            for (int level = int(SvsmClipmapCount) - 1;
+                level >= int(firstScheduledClipmap);
+                --level)
+            {
+                dispatchAllocationLevel(
+                    uint32_t(level),
+                    div_ceil(
+                        SvsmPagesPerClipmap,
+                        64u));
+            }
         }
         constants.selectedClipmap = 0u;
         EndTimer(commandList, TimerAllocation);
@@ -5019,7 +10641,8 @@ namespace uvsr
 
         auto dispatchCompactPageStage =
             [this, commandList, &constants,
-                firstScheduledClipmap](uint32_t stage) {
+                firstScheduledClipmap,
+                deferredStaticDepthMergeActive](uint32_t stage) {
                 for (uint32_t level = firstScheduledClipmap;
                     level < SvsmClipmapCount;
                     ++level)
@@ -5030,7 +10653,11 @@ namespace uvsr
                         &constants,
                         sizeof(constants));
                     nvrhi::ComputeState state;
-                    state.pipeline = m_SparsePipelines[stage];
+                    state.pipeline =
+                        stage == SparseBuildStaticDepthHierarchy &&
+                            deferredStaticDepthMergeActive
+                        ? m_SparseDeferredStaticDepthMergePipeline
+                        : m_SparsePipelines[stage];
                     state.bindings = { m_SparseBindingSet };
                     state.indirectParams =
                         m_IndirectPageDispatchArguments;
@@ -5056,8 +10683,32 @@ namespace uvsr
         }
         nvrhi::utils::TextureUavBarrier(
             commandList, m_SparsePhysicalDepth);
+        if (m_StaticDepthHierarchy)
+        {
+            nvrhi::utils::BufferUavBarrier(
+                commandList, m_StaticDepthHierarchy);
+        }
         commandList->commitBarriers();
         EndTimer(commandList, TimerClearing);
+
+        if (usePacketPageCulling)
+            BeginTimer(commandList, TimerPacketPageCulling);
+        if (useScheduledTileMask)
+        {
+#ifdef _WIN32
+            SetD3d12DredMarker(
+                commandList,
+                L"SVSM Build Scheduled Page Tile Masks");
+#endif
+            dispatchSparse(
+                SparseBuildScheduledPageTileMasks,
+                1u,
+                1u,
+                SvsmClipmapCount);
+            nvrhi::utils::BufferUavBarrier(
+                commandList, m_ScheduledPageTileMasks);
+            commandList->commitBarriers();
+        }
 
         if (settings.gpuGatedDrawSubmission)
         {
@@ -5083,8 +10734,6 @@ namespace uvsr
                 m_IndirectDrawArgumentsPacketPageCulling =
                     usePacketPageCulling;
             }
-            if (usePacketPageCulling)
-                BeginTimer(commandList, TimerPacketPageCulling);
             for (uint32_t level = firstScheduledClipmap;
                 level < SvsmClipmapCount;
                 ++level)
@@ -5111,7 +10760,17 @@ namespace uvsr
                         sizeof(constants));
                     nvrhi::ComputeState state;
                     state.pipeline =
-                        m_SparsePipelines[SparseFillIndirect];
+                        useReceiverPageMask
+                        ? (useScheduledTileMask
+                            ? m_SparseScheduledTileReceiverPageMaskFillPipeline
+                            : m_SparseReceiverPageMaskFillPipeline)
+                        : (useStaticDepthHierarchy
+                            ? (useScheduledTileMask
+                                ? m_SparseScheduledTileMaskStaticDepthHierarchyFillPipeline
+                                : m_SparseStaticDepthHierarchyFillPipeline)
+                            : (useScheduledTileMask
+                                ? m_SparseScheduledTileMaskFillPipeline
+                                : m_SparsePipelines[SparseFillIndirect]));
                     state.bindings = { m_SparseBindingSet };
                     state.indirectParams =
                         m_IndirectPageDispatchArguments;
@@ -5165,6 +10824,7 @@ namespace uvsr
 
         const auto submissionStart =
             std::chrono::steady_clock::now();
+        bool rasterSubmissionSucceeded = true;
         for (uint32_t level = firstScheduledClipmap;
             level < SvsmClipmapCount;
             ++level)
@@ -5178,32 +10838,36 @@ namespace uvsr
                 if (m_SparseDepthPass->
                         GetRenderPacketCount(level) > 0u)
                 {
-                    m_SparseDepthPass->RenderPackets(
-                        commandList,
-                        m_ClipmapViews[level].get(),
-                        m_RasterFramebuffer,
-                        context,
-                        level,
-                        m_IndirectDrawCapacity,
-                        settings.gpuGatedDrawSubmission,
-                        useBatchedDrawSubmission,
-                        useLevelEmptyWorkSkip,
-                        usePacketPageCulling,
-                        useDirtyPageScatterRaster);
+                    rasterSubmissionSucceeded =
+                        m_SparseDepthPass->RenderPackets(
+                            commandList,
+                            m_ClipmapViews[level].get(),
+                            m_RasterFramebuffer,
+                            context,
+                            level,
+                            m_IndirectDrawCapacity,
+                            settings.gpuGatedDrawSubmission,
+                            useBatchedDrawSubmission,
+                            useLevelEmptyWorkSkip,
+                            usePacketPageCulling,
+                            useDirtyPageScatterRaster);
                 }
             }
             else
             {
                 drawStrategy.PrepareForView(
                     rootNode, *m_ClipmapViews[level]);
-                m_SparseDepthPass->RenderViewReference(
-                    commandList,
-                    m_ClipmapViews[level].get(),
-                    m_RasterFramebuffer,
-                    drawStrategy,
-                    context,
-                    level);
+                rasterSubmissionSucceeded =
+                    m_SparseDepthPass->RenderViewReference(
+                        commandList,
+                        m_ClipmapViews[level].get(),
+                        m_RasterFramebuffer,
+                        drawStrategy,
+                        context,
+                        level);
             }
+            if (!rasterSubmissionSucceeded)
+                break;
         }
         const auto submissionEnd =
             std::chrono::steady_clock::now();
@@ -5212,10 +10876,92 @@ namespace uvsr
             std::chrono::duration<float, std::milli>(
                 submissionEnd - submissionStart).count();
 
+        if (!rasterSubmissionSucceeded)
+        {
+            EndTimer(commandList, TimerPageRendering);
+            EndTimer(commandList, TimerTotal);
+            commandList->endMarker();
+            // Seal issued queries with the old generation. Invalidating after
+            // this point makes the partial transaction impossible to publish
+            // through delayed timing or counter readback.
+            DiscardCurrentTimerFrame();
+            EndTimerFrame();
+            discardFailedSparseRasterTransaction();
+            InvalidateUiTimings();
+            InvalidateDebugCounters();
+            m_Timings.active = false;
+            if (!m_ReportedRasterSubmissionFailure)
+            {
+                log::error(
+                    "SVSM sparse raster submission failed; discarding the page transaction, latching a full rebuild, and returning white visibility.");
+                m_ReportedRasterSubmissionFailure = true;
+            }
+            return {};
+        }
+        m_ReportedRasterSubmissionFailure = false;
+
         constants.selectedClipmap = 0u;
         nvrhi::utils::TextureUavBarrier(
             commandList, m_SparsePhysicalDepth);
         commandList->commitBarriers();
+        const SvsmStaticDepthPostRasterWork staticDepthPostRasterWork =
+            GetSvsmStaticDepthPostRasterWork(
+                deferredStaticDepthMergeActive,
+                useStaticDepthHierarchy);
+        if (staticDepthPostRasterWork !=
+            SvsmStaticDepthPostRasterWork::None)
+        {
+#ifdef _WIN32
+            SetD3d12DredMarker(
+                commandList,
+                staticDepthPostRasterWork ==
+                        SvsmStaticDepthPostRasterWork::
+                            MergeAndHierarchy
+                    ? L"SVSM Merge Static Depth And Build Hierarchy"
+                    : staticDepthPostRasterWork ==
+                            SvsmStaticDepthPostRasterWork::MergeOnly
+                        ? L"SVSM Merge Static Depth"
+                        : L"SVSM Build Static Depth Hierarchy");
+#endif
+            if (bootstrapStaticDepthHierarchy)
+            {
+                // Bootstrap scans the fixed physical pool once. Clean pages
+                // need no shadow redraw: their paired static slice is already
+                // complete. The deferred permutation also merges only
+                // scheduled static-dirty pages after their raster work.
+                dispatchSparse(
+                    SparseBuildStaticDepthHierarchy,
+                    settings.physicalPageCount,
+                    1u);
+            }
+            else if (!settings.gpuGatedDrawSubmission)
+            {
+                // Without compact indirect lists, scan the fixed pool once.
+                // The shader accepts only exact current render-page owners.
+                dispatchSparse(
+                    SparseBuildStaticDepthHierarchy,
+                    settings.physicalPageCount,
+                    1u);
+            }
+            else
+            {
+                // Steady-state rebuilds consume only the exact compact
+                // per-level dirty-page counts.
+                dispatchCompactPageStage(
+                    SparseBuildStaticDepthHierarchy);
+            }
+            if (useStaticDepthHierarchy)
+            {
+                nvrhi::utils::BufferUavBarrier(
+                    commandList, m_StaticDepthHierarchy);
+            }
+            if (deferredStaticDepthMergeActive)
+            {
+                nvrhi::utils::TextureUavBarrier(
+                    commandList, m_SparsePhysicalDepth);
+            }
+            commandList->commitBarriers();
+        }
 #ifdef _WIN32
         SetD3d12DredMarker(commandList, L"SVSM Finalize Pages");
 #endif
@@ -5264,6 +11010,13 @@ namespace uvsr
             m_Timings.packetPageCandidatePackets = 0u;
             m_Timings.packetPageCompactedPackets = 0u;
             m_Timings.packetPageFailOpenPackets = 0u;
+            m_Timings.receiverPageMaskQueries = 0u;
+            m_Timings.receiverPageMaskCulledPages = 0u;
+            m_Timings.receiverPageMaskFailOpens = 0u;
+            m_Timings.staticDepthHierarchyQueries = 0u;
+            m_Timings.staticDepthHierarchyCulledPages = 0u;
+            m_Timings.staticDepthHierarchyFailOpens = 0u;
+            m_Timings.staticDepthHierarchyBuiltPages = 0u;
             if (settings.debugView != SvsmDebugView::None)
             {
                 dispatchSparse(
@@ -5277,6 +11030,29 @@ namespace uvsr
                     commandList, m_Counters);
                 commandList->commitBarriers();
             }
+        }
+        if (bootstrapStaticDepthHierarchy &&
+            !performStaticPageMaintenance)
+        {
+#ifdef _WIN32
+            SetD3d12DredMarker(
+                commandList,
+                L"SVSM Bootstrap Static Depth Hierarchy");
+#endif
+            BeginTimer(commandList, TimerPageRendering);
+            dispatchSparse(
+                SparseBuildStaticDepthHierarchy,
+                settings.physicalPageCount,
+                1u);
+            nvrhi::utils::BufferUavBarrier(
+                commandList, m_StaticDepthHierarchy);
+            if (deferredStaticDepthMergeActive)
+            {
+                nvrhi::utils::TextureUavBarrier(
+                    commandList, m_SparsePhysicalDepth);
+            }
+            commandList->commitBarriers();
+            EndTimer(commandList, TimerPageRendering);
         }
 
         bool resolvedVisibilityThisFrame = false;
@@ -5295,9 +11071,12 @@ namespace uvsr
                 m_SparseConstants, &constants, sizeof(constants));
             nvrhi::ComputeState resolveState;
             const uint32_t resolvePermutation =
-                (settings.pageTranslationCachingEnabled ? 1u : 0u) *
-                    c_SparseResolveTapPermutationCount +
-                SvsmTapCountPermutationIndex(settings.tapCount);
+                GetSvsmSparseResolvePermutationIndex(
+                    settings.poissonOrdering,
+                    settings.filterKernel,
+                    settings.precomposedClipmapTransformsEnabled,
+                    settings.pageTranslationCachingEnabled,
+                    settings.tapCount);
             resolveState.pipeline =
                 m_SparseResolvePipelines[resolvePermutation];
             resolveState.bindings = {
@@ -5320,7 +11099,7 @@ namespace uvsr
                         0u,
                         m_Counters,
                         0u,
-                        uint64_t(c_DebugCounterCount) *
+                        uint64_t(c_DebugCounterReadbackCount) *
                             sizeof(uint32_t));
                     m_DebugCounterReadbackPending[readbackSlot] = true;
                     m_DebugCounterReadbackGenerations[readbackSlot] =
@@ -5339,15 +11118,23 @@ namespace uvsr
         commandList->endMarker();
 
         m_PreviousRenderOrigins = m_CurrentRenderOrigins;
-        m_PreviousLightDepthOrigin = m_CurrentLightDepthOrigin;
-        m_PreviousLightBasis = lightBasis;
-        m_PreviousLightBasisValid = true;
-        m_PreviousProducingLight = light;
+        m_PreviousLightDepthOrigin =
+            GetNextSvsmCommittedLightDepthOrigin(
+                m_PreviousLightDepthOrigin,
+                m_CurrentLightDepthOrigin,
+                true);
         m_PreviousSceneStateHash = sceneStateHash;
+        m_PreviousSceneStateRevision = sceneStateRevision;
+        m_PreviousSceneStateRevisionReliable =
+            sceneStateRevisionReliable;
         m_PreviousFirstClipmapExtent =
             settings.firstClipmapExtent;
         m_PreviousMaximumLightDepth =
             settings.maximumLightDepth;
+        m_PreviousLocalizedInvalidationEnabled =
+            settings.localizedInvalidationEnabled;
+        m_PreviousAdaptiveCasterCacheClassificationEnabled =
+            settings.adaptiveCasterCacheClassificationEnabled;
         m_StaticPageRequestCacheReady =
             staticPageRequestConfiguration;
         m_StaticPageRequestJitterActive = staticJitterActive;
@@ -5377,9 +11164,17 @@ namespace uvsr
             settings.markingMode;
         m_StaticPageRequestFilterMode =
             settings.filterMode;
+        m_StaticPageRequestFilterKernel =
+            settings.filterKernel;
+        m_StaticPageRequestPoissonOrdering =
+            settings.poissonOrdering;
         m_StaticPageRequestTapCount = settings.tapCount;
         m_StaticPageRequestResolutionBias =
-            settings.resolutionBias;
+            effectiveResolutionBias;
+        m_StaticPageRequestReceiverDistanceMipClampStart =
+            effectiveReceiverDistanceMipClampStart;
+        m_StaticPageRequestReceiverDistanceMipClampMaximumLevel =
+            receiverDistanceMipClampMaximumLevel;
         if (staticPageRequestConfiguration &&
             staticJitterSlot <
                 c_StaticVisibilityCacheSlotCount)
@@ -5396,13 +11191,26 @@ namespace uvsr
         }
         m_StaticVisibilitySettingsValid = true;
         m_StaticVisibilityFilterMode = settings.filterMode;
+        m_StaticVisibilityFilterKernel = settings.filterKernel;
+        m_StaticVisibilityPoissonOrdering =
+            settings.poissonOrdering;
         m_StaticVisibilityTapCount = settings.tapCount;
         m_StaticVisibilityResolutionBias =
-            settings.resolutionBias;
+            effectiveResolutionBias;
+        m_StaticVisibilityReceiverDistanceMipClampStart =
+            effectiveReceiverDistanceMipClampStart;
+        m_StaticVisibilityReceiverDistanceMipClampMaximumLevel =
+            receiverDistanceMipClampMaximumLevel;
         m_StaticVisibilityPageTranslationCaching =
             settings.pageTranslationCachingEnabled;
         m_StaticVisibilityAdaptiveFiltering =
             settings.adaptiveFiltering;
+        m_StaticDepthHierarchyBootstrapRequired =
+            GetNextSvsmStaticDepthHierarchyBootstrapRequired(
+                m_StaticDepthHierarchyBootstrapRequired,
+                useStaticDepthHierarchy,
+                bootstrapStaticDepthHierarchy);
+        commitSuccessfulSparseState();
         m_CacheStateValid = true;
         m_SparseResourcesNeedClear = false;
         m_Timings.active = true;
@@ -5479,6 +11287,18 @@ namespace uvsr
 
     void SparseVirtualShadowMapPass::Deactivate()
     {
+        // Deactivation can span arbitrary scene edits while no sparse state is
+        // being committed. The first later sparse frame must rebuild rather
+        // than trusting cache state preserved across the inactive interval.
+        m_RequiresFullSceneInvalidationLatched = true;
+        m_DepthBindingCacheResetLatched = true;
+        m_StaticDepthHierarchyBootstrapRequired = true;
+        if (m_SparseDepthPass)
+        {
+            m_SparseDepthPass->InvalidateRenderPacketCache();
+            m_SparseDepthPass->
+                InvalidatePersistentCasterSourceCache();
+        }
         if (m_Timings.active ||
             m_DebugCounterRequestedBackend !=
                 SvsmResourceBackend::None ||

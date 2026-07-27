@@ -28,11 +28,6 @@ struct ScreenSpaceVisibilityConstants
     float spatialRadius;
     float padding0;
 
-    float3 ambientColorTop;
-    float padding1;
-    float3 ambientColorBottom;
-    float padding2;
-
     uint frameIndex;
     uint minimumSampleCount;
     uint maximumSampleCount;
@@ -54,9 +49,14 @@ struct ScreenSpaceVisibilityConstants
     uint historyValid;
 
     uint showIndirectDiffuseOnly;
-    uint padding3;
-    uint padding4;
-    uint padding5;
+    uint diffuseEnvironmentEnabled;
+    float diffuseEnvironmentScale;
+    uint diffuseEnvironmentArrayIndex;
+
+    uint specularEnvironmentEnabled;
+    float specularEnvironmentScale;
+    float specularEnvironmentMipLevels;
+    uint specularEnvironmentArrayIndex;
 };
 
 #endif // UVSR_SCREEN_SPACE_VISIBILITY_CB_H

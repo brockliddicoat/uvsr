@@ -3,6 +3,14 @@
 #include <donut/shaders/gbuffer.hlsli>
 #include "sparse_virtual_shadow_map_sparse_cb.h"
 
+#ifndef SVSM_PRECOMPOSED_CLIPMAP_TRANSFORMS
+#define SVSM_PRECOMPOSED_CLIPMAP_TRANSFORMS 0
+#endif
+
+#ifndef SVSM_BILINEAR_PCF
+#define SVSM_BILINEAR_PCF 0
+#endif
+
 #define SVSM_PHYSICAL_MASK 0x7fffu
 #define SVSM_RESIDENT_BIT (1u << 15u)
 #define SVSM_REQUIRED_BIT (1u << 16u)
@@ -22,14 +30,20 @@
 #define SVSM_FILTER_TAPS 16
 #endif
 
+#ifndef SVSM_BALANCED_POISSON
+#define SVSM_BALANCED_POISSON 0
+#endif
+
 cbuffer c_Svsm : register(b0)
 {
     SparseVirtualShadowMapSparseConstants g_Svsm;
 };
 
+#include "sparse_virtual_shadow_map_receiver_lod.hlsli"
+
 Texture2D<float> t_CameraDepth : register(t0);
 Texture2DArray<uint> t_PageTable : register(t1);
-Texture2D<uint> t_PhysicalDepth : register(t2);
+Texture2DArray<uint> t_PhysicalDepth : register(t2);
 StructuredBuffer<uint> t_PhysicalOwners : register(t3);
 StructuredBuffer<uint> t_RenderPages : register(t4);
 RWTexture2D<float> u_Visibility : register(u0);
@@ -54,6 +68,15 @@ static const float2 c_Poisson16[16] = {
     float2(0.8114883f, -0.4580260f),
     float2(0.08265103f, -0.8939569f)
 };
+
+#if SVSM_BALANCED_POISSON
+static const uint c_PoissonOrder[16] = {
+    1u, 5u, 12u, 13u,
+    4u, 7u, 8u, 11u,
+    0u, 2u, 3u, 6u,
+    9u, 10u, 14u, 15u
+};
+#endif
 
 int WrapPage(int coordinate)
 {
@@ -123,7 +146,7 @@ float ReadSparseVisibility(
     float receiverDepth)
 {
     float casterDepth =
-        asfloat(t_PhysicalDepth.Load(int3(physicalTexel, 0)));
+        asfloat(t_PhysicalDepth.Load(int4(physicalTexel, 0, 0)));
     return casterDepth <= receiverDepth + g_Svsm.depthBias
         ? 1.0f
         : 0.0f;
@@ -131,9 +154,13 @@ float ReadSparseVisibility(
 
 float2 SparseTapOffset(uint tap, uint taps)
 {
-    return taps == 1u
-        ? 0.0f
-        : c_Poisson16[tap * (16u / taps)] * 3.0f;
+    if (taps == 1u)
+        return 0.0f;
+#if SVSM_BALANCED_POISSON
+    return c_Poisson16[c_PoissonOrder[tap]] * 3.0f;
+#else
+    return c_Poisson16[tap * (16u / taps)] * 3.0f;
+#endif
 }
 
 bool TrySparseTap(
@@ -148,6 +175,81 @@ bool TrySparseTap(
 {
     float2 tapPosition =
         virtualPosition + SparseTapOffset(tap, taps);
+#if SVSM_BILINEAR_PCF
+    // virtualPosition is expressed in texel-edge coordinates. Match
+    // hardware bilinear/SampleCmp convention by moving to texel-center
+    // coordinates before choosing the 2x2 footprint. At n + 0.5 this must
+    // select texel n exactly rather than blending n and n + 1.
+    float2 texelPosition = tapPosition - 0.5f;
+    float2 minimumTap = floor(texelPosition);
+    float2 tapFraction = texelPosition - minimumTap;
+    lit = 0.0f;
+    [unroll]
+    for (uint y = 0u; y < 2u; ++y)
+    {
+        [unroll]
+        for (uint x = 0u; x < 2u; ++x)
+        {
+            float weight =
+                (x == 0u
+                    ? 1.0f - tapFraction.x
+                    : tapFraction.x) *
+                (y == 0u
+                    ? 1.0f - tapFraction.y
+                    : tapFraction.y);
+            // Hardware bilinear filtering has no dependency on a zero-weight
+            // corner. Skipping its translation prevents a mathematically
+            // unused texel in a missing neighboring virtual page from
+            // forcing a needless coarser-clipmap fallback.
+            if (weight == 0.0f)
+                continue;
+
+            float2 pointPosition =
+                minimumTap + float2(x, y);
+            if (any(pointPosition < 0.0f) ||
+                any(pointPosition >= float(SVSM_ATLAS_SIZE)))
+            {
+                lit = 1.0f;
+                return false;
+            }
+
+            uint2 physicalTexel = 0u;
+            if (reuseCenterTranslation)
+            {
+                uint2 pageTexel =
+                    uint2(pointPosition) % SVSM_PAGE_SIZE;
+                uint2 physicalCoordinate = uint2(
+                    centerPhysical % SVSM_PAGES_PER_AXIS,
+                    centerPhysical / SVSM_PAGES_PER_AXIS);
+                physicalTexel =
+                    physicalCoordinate * SVSM_PAGE_SIZE +
+                    pageTexel;
+            }
+            else
+            {
+                uint ignoredPacked = 0u;
+                uint ignoredPhysical = SVSM_INVALID_PAGE;
+                uint ignoredOwner = SVSM_INVALID_PAGE;
+                if (!TryTranslateSparseTexel(
+                        level,
+                        pointPosition,
+                        physicalTexel,
+                        ignoredPacked,
+                        ignoredPhysical,
+                        ignoredOwner))
+                {
+                    lit = 1.0f;
+                    return false;
+                }
+            }
+
+            lit += weight *
+                ReadSparseVisibility(
+                    physicalTexel, receiverDepth);
+        }
+    }
+    return true;
+#else
     uint2 physicalTexel = 0u;
     if (reuseCenterTranslation)
     {
@@ -184,6 +286,7 @@ bool TrySparseTap(
     }
     lit = ReadSparseVisibility(physicalTexel, receiverDepth);
     return true;
+#endif
 }
 
 #if SVSM_PAGE_TRANSLATION_CACHE
@@ -257,6 +360,80 @@ bool TrySparseTapWithTranslationCache(
 {
     float2 tapPosition =
         virtualPosition + SparseTapOffset(tap, taps);
+#if SVSM_BILINEAR_PCF
+    // Keep the cached and uncached page-translation paths bit-identical.
+    // See TrySparseTap for the texel-edge to texel-center convention.
+    float2 texelPosition = tapPosition - 0.5f;
+    float2 minimumTap = floor(texelPosition);
+    float2 tapFraction = texelPosition - minimumTap;
+    lit = 0.0f;
+    [unroll]
+    for (uint y = 0u; y < 2u; ++y)
+    {
+        [unroll]
+        for (uint x = 0u; x < 2u; ++x)
+        {
+            float weight =
+                (x == 0u
+                    ? 1.0f - tapFraction.x
+                    : tapFraction.x) *
+                (y == 0u
+                    ? 1.0f - tapFraction.y
+                    : tapFraction.y);
+            if (weight == 0.0f)
+                continue;
+
+            float2 pointPosition =
+                minimumTap + float2(x, y);
+            if (any(pointPosition < 0.0f) ||
+                any(pointPosition >= float(SVSM_ATLAS_SIZE)))
+            {
+                lit = 1.0f;
+                return false;
+            }
+
+            int2 localPage = int2(floor(
+                pointPosition / float(SVSM_PAGE_SIZE)));
+            uint physical = SVSM_INVALID_PAGE;
+            uint2 physicalTexel = 0u;
+            if (!FindCachedPhysicalPage(
+                    cache, localPage, physical))
+            {
+                uint ignoredPacked = 0u;
+                uint ignoredOwner = SVSM_INVALID_PAGE;
+                if (!TryTranslateSparseTexel(
+                        level,
+                        pointPosition,
+                        physicalTexel,
+                        ignoredPacked,
+                        physical,
+                        ignoredOwner))
+                {
+                    lit = 1.0f;
+                    return false;
+                }
+                AddCachedPhysicalPage(
+                    cache, localPage, physical);
+            }
+            else
+            {
+                uint2 pageTexel =
+                    uint2(pointPosition) % SVSM_PAGE_SIZE;
+                uint2 physicalCoordinate = uint2(
+                    physical % SVSM_PAGES_PER_AXIS,
+                    physical / SVSM_PAGES_PER_AXIS);
+                physicalTexel =
+                    physicalCoordinate * SVSM_PAGE_SIZE +
+                    pageTexel;
+            }
+
+            lit += weight *
+                ReadSparseVisibility(
+                    physicalTexel, receiverDepth);
+        }
+    }
+    return true;
+#else
     if (any(tapPosition < 0.0f) ||
         any(tapPosition >= float(SVSM_ATLAS_SIZE)))
     {
@@ -298,12 +475,13 @@ bool TrySparseTapWithTranslationCache(
 
     lit = ReadSparseVisibility(physicalTexel, receiverDepth);
     return true;
+#endif
 }
 #endif
 
 bool TrySparseClipmap(
     uint level,
-    float3 worldPosition,
+    float4 receiverPosition,
     out float visibility,
     out uint centerPacked,
     out uint centerPhysical,
@@ -313,8 +491,8 @@ bool TrySparseClipmap(
     centerPhysical = SVSM_INVALID_PAGE;
     centerOwner = SVSM_INVALID_PAGE;
     float4 clip = mul(
-        float4(worldPosition, 1.0f),
-        g_Svsm.worldToClip[level]);
+        receiverPosition,
+        g_Svsm.receiverToClip[level]);
     if (!(clip.w != 0.0f) || !all(isfinite(clip)))
     {
         visibility = 1.0f;
@@ -348,9 +526,10 @@ bool TrySparseClipmap(
     static const uint taps = SVSM_FILTER_TAPS;
     int2 centerTexel = int2(floor(virtualPosition));
     int2 pageTexel = centerTexel % int(SVSM_PAGE_SIZE);
+    int filterRadius = int(g_Svsm.padding0);
     bool pageSafeFootprint =
-        all(pageTexel >= 3) &&
-        all(pageTexel <= int(SVSM_PAGE_SIZE) - 4);
+        all(pageTexel >= filterRadius) &&
+        all(pageTexel + filterRadius < int(SVSM_PAGE_SIZE));
     bool reuseCenterTranslation =
         g_Svsm.filterMode == 1u &&
         pageSafeFootprint;
@@ -380,8 +559,7 @@ bool TrySparseClipmap(
         [unroll]
         for (uint probe = 0u; probe < probeCount; ++probe)
         {
-            uint probeTap =
-                probe * (taps / probeCount);
+            uint probeTap = probe;
             if (!TrySparseTap(
                     level,
                     virtualPosition,
@@ -419,8 +597,7 @@ bool TrySparseClipmap(
                 probe < probeCount;
                 ++probe)
             {
-                uint probeTap =
-                    probe * (taps / probeCount);
+                uint probeTap = probe;
                 if (tap == probeTap)
                 {
                     tapLit = probeLit[probe];
@@ -541,11 +718,20 @@ void main(uint2 pixel : SV_DispatchThreadID)
         }
         return;
     }
-    float3 worldPosition = ReconstructWorldPosition(
+#if SVSM_PRECOMPOSED_CLIPMAP_TRANSFORMS
+    float4 receiverPosition = ReconstructClipPosition(
         g_Svsm.cameraView,
         float2(pixel) + 0.5f,
         cameraDepth);
-    if (!all(isfinite(worldPosition)))
+#else
+    float4 receiverPosition = float4(
+        ReconstructWorldPosition(
+            g_Svsm.cameraView,
+            float2(pixel) + 0.5f,
+            cameraDepth),
+        1.0f);
+#endif
+    if (!all(isfinite(receiverPosition)))
     {
         u_Visibility[pixel] = 1.0f;
         if (g_Svsm.debugView != 0u)
@@ -562,9 +748,8 @@ void main(uint2 pixel : SV_DispatchThreadID)
         return;
     }
 
-    uint firstLevel = min(
-        g_Svsm.resolutionBias,
-        uint(SVSM_SPARSE_CLIPMAP_COUNT - 1));
+    uint firstLevel =
+        GetSvsmReceiverFirstClipmapLevelFromDepth(cameraDepth);
     float visibility = 1.0f;
     uint debugPacked = 0u;
     uint debugPhysical = SVSM_INVALID_PAGE;
@@ -576,7 +761,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
     {
         if (TrySparseClipmap(
                 level,
-                worldPosition,
+                receiverPosition,
                 visibility,
                 debugPacked,
                 debugPhysical,

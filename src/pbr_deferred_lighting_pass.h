@@ -8,6 +8,7 @@
 #include <nvrhi/nvrhi.h>
 
 #include <array>
+#include <cstdint>
 #include <memory>
 
 namespace donut::engine
@@ -15,6 +16,7 @@ namespace donut::engine
     class CommonRenderPasses;
     class ICompositeView;
     class Light;
+    class LightProbe;
     class ShaderFactory;
 }
 
@@ -52,12 +54,14 @@ public:
         const donut::render::DeferredLightingPass::Inputs& inputs,
         const uvsr::DirectionalLightVisibilitySet&
             directionalLightVisibility,
+        const donut::engine::LightProbe* environment,
         nvrhi::ITexture* sourceRadianceOutput,
         bool separateIndirect,
         bool writeSourceRadiance,
         bool writeBounceMetadata,
         bool includeEmissiveSource,
         float emissiveSourceGain,
+        uint32_t lightingDebugView,
         donut::math::float2 randomOffset = donut::math::float2::zero());
 
     void ResetBindingCache();

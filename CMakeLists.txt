@@ -12,14 +12,17 @@ option(UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS
     "Build the standalone Bend screen-space-shadow component" ON)
 option(UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS
     "Build the standalone sparse-virtual-shadow-map component" ON)
+option(UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS
+    "Build the standalone diagnostic cascaded-shadow-map component" ON)
 
 if (UVSR_BUILD_APPLICATION AND
     (NOT UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS OR
-        NOT UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS))
+        NOT UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS OR
+        NOT UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS))
     message(FATAL_ERROR
-        "The aggregate UVSR application currently integrates both visibility "
+        "The aggregate UVSR application currently integrates all three visibility "
         "producers. Set UVSR_BUILD_APPLICATION=OFF to configure and build "
-        "either component independently.")
+        "a component independently.")
 endif()
 
 if (UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS)
@@ -270,6 +273,16 @@ if (UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS)
     )
 endif()
 
+if (UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS)
+    donut_compile_shaders_all_platforms(
+        TARGET uvsr_diagnostic_cascaded_shadow_map_shaders
+        PROJECT_NAME "UVSR Diagnostic Cascaded Shadow Maps"
+        CONFIG
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostic_cascaded_shadow_map_shaders.cfg"
+        OUTPUT_BASE "${UVSR_SHADER_STAGING_DIR}"
+    )
+endif()
+
 if (UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS)
     add_library(uvsr_bend_screen_space_shadows STATIC
         src/bend_screen_space_shadows.cpp
@@ -313,10 +326,29 @@ if (UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS)
         uvsr_sparse_virtual_shadow_map_shaders)
 endif()
 
+if (UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS)
+    add_library(uvsr_diagnostic_cascaded_shadow_maps STATIC
+        src/diagnostic_cascaded_shadow_map.cpp
+    )
+    target_include_directories(uvsr_diagnostic_cascaded_shadow_maps
+        PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(uvsr_diagnostic_cascaded_shadow_maps
+        PUBLIC
+            donut_core
+            nvrhi
+        PRIVATE
+            donut_render
+            donut_engine)
+    add_dependencies(uvsr_diagnostic_cascaded_shadow_maps
+        uvsr_diagnostic_cascaded_shadow_map_shaders)
+endif()
+
 if (UVSR_BUILD_APPLICATION)
     add_executable(uvsr WIN32
         src/camera_collision.cpp
         src/gpu_performance_monitor.cpp
+        src/image_based_lighting_background_pass.cpp
+        src/image_based_lighting_environment.cpp
         src/pbr_deferred_lighting_pass.cpp
         src/scene_catalog.cpp
         src/screen_space_visibility.cpp
@@ -332,12 +364,42 @@ if (UVSR_BUILD_APPLICATION)
         donut_render
         donut_app
         donut_engine
+        bcrypt
         uvsr_gpu_crash_diagnostics
         uvsr_bend_screen_space_shadows
+        uvsr_diagnostic_cascaded_shadow_maps
         uvsr_sparse_virtual_shadow_maps)
     target_compile_definitions(uvsr PRIVATE
         "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\"")
-    add_dependencies(uvsr uvsr_shaders)
+    set(UVSR_ENVIRONMENT_SOURCE_DIR
+        "${CMAKE_SOURCE_DIR}/assets/environments")
+    set(UVSR_ENVIRONMENT_STAGE_DIR
+        "${CMAKE_BINARY_DIR}/media/environments")
+    file(GLOB_RECURSE UVSR_ENVIRONMENT_ASSETS
+        CONFIGURE_DEPENDS
+        LIST_DIRECTORIES false
+        "${UVSR_ENVIRONMENT_SOURCE_DIR}/*")
+    list(SORT UVSR_ENVIRONMENT_ASSETS)
+    set(UVSR_ENVIRONMENT_STAGE_STAMP
+        "${UVSR_ENVIRONMENT_STAGE_DIR}/.uvsr-stage.stamp")
+    add_custom_command(
+        OUTPUT "${UVSR_ENVIRONMENT_STAGE_STAMP}"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory
+            "${UVSR_ENVIRONMENT_STAGE_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${UVSR_ENVIRONMENT_SOURCE_DIR}"
+            "${UVSR_ENVIRONMENT_STAGE_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E touch
+            "${UVSR_ENVIRONMENT_STAGE_STAMP}"
+        DEPENDS ${UVSR_ENVIRONMENT_ASSETS}
+        COMMENT "Staging the CC0 image-based-lighting environments"
+        VERBATIM
+    )
+    add_custom_target(uvsr_stage_environments
+        DEPENDS "${UVSR_ENVIRONMENT_STAGE_STAMP}")
+    add_dependencies(uvsr
+        uvsr_shaders
+        uvsr_stage_environments)
 endif()
 
 enable_testing()
@@ -356,6 +418,19 @@ add_executable(uvsr_pbr_tests tests/pbr_reference_tests.cpp)
 target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
 add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
+
+add_executable(uvsr_diffuse_environment_asset_tests
+    tests/diffuse_environment_asset_tests.cpp)
+target_include_directories(uvsr_diffuse_environment_asset_tests
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/donut/thirdparty/stb")
+target_compile_definitions(uvsr_diffuse_environment_asset_tests PRIVATE
+    "UVSR_TEST_ENVIRONMENT_DIRECTORY=\"${CMAKE_SOURCE_DIR}/assets/environments\"")
+target_link_libraries(uvsr_diffuse_environment_asset_tests PRIVATE donut_core)
+add_test(
+    NAME uvsr_diffuse_environment_asset_reference
+    COMMAND uvsr_diffuse_environment_asset_tests)
 
 if (UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS)
     add_executable(uvsr_bend_screen_space_shadow_tests
@@ -378,6 +453,18 @@ if (UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS)
     add_test(
         NAME uvsr_sparse_virtual_shadow_map_reference
         COMMAND uvsr_sparse_virtual_shadow_map_tests
+    )
+endif()
+
+if (UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS)
+    add_executable(uvsr_diagnostic_cascaded_shadow_map_tests
+        tests/diagnostic_cascaded_shadow_map_tests.cpp
+    )
+    target_link_libraries(uvsr_diagnostic_cascaded_shadow_map_tests
+        PRIVATE uvsr_diagnostic_cascaded_shadow_maps)
+    add_test(
+        NAME uvsr_diagnostic_cascaded_shadow_map_reference
+        COMMAND uvsr_diagnostic_cascaded_shadow_map_tests
     )
 endif()
 
@@ -503,10 +590,21 @@ set(UVSR_PASS_SHADERS
     forward_vs_buffer_loads
     gbuffer_ps
     gbuffer_vs_buffer_loads
+    light_probe_cubemap_gs
+    light_probe_diffuse_probe_ps
+    light_probe_environment_brdf_ps
+    light_probe_mip_ps
+    light_probe_specular_probe_ps
     material_id_ps
     pixel_readback_cs
-    sky_ps
 )
+
+if (UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS)
+    list(APPEND UVSR_PASS_SHADERS
+        depth_ps
+        depth_vs_buffer_loads
+    )
+endif()
 
 set(UVSR_RUNTIME_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework/dxil")
 set(UVSR_RUNTIME_APP_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/uvsr/dxil")
@@ -543,6 +641,14 @@ set(UVSR_APP_SHADERS
     backdrop_blur_ps
     bend_screen_space_shadows_cs
     bend_screen_space_shadows_debug_ps
+    diagnostic_cascaded_shadow_map_clear_vs
+    diagnostic_cascaded_shadow_map_depth_vs
+    diagnostic_cascaded_shadow_map_depth_vs_alpha_tested
+    diagnostic_cascaded_shadow_map_depth_vs_alpha_tested_input_assembler
+    diagnostic_cascaded_shadow_map_depth_vs_main_input_assembler
+    diagnostic_cascaded_shadow_map_scroll_ps
+    diagnostic_cascaded_shadow_map_resolve_cs
+    image_based_lighting_background_ps
     pbr_deferred_lighting_cs
     pbr_forward_ps
     pbr_gbuffer_ps
@@ -555,16 +661,23 @@ set(UVSR_APP_SHADERS
     sparse_virtual_shadow_map_debug_ps
     sparse_virtual_shadow_map_resolve_cs
     sparse_virtual_shadow_map_sparse_cs_allocate
+    sparse_virtual_shadow_map_sparse_cs_buildScheduledPageTileMasks
+    sparse_virtual_shadow_map_sparse_cs_buildStaticDepthHierarchy
     sparse_virtual_shadow_map_sparse_cs_clearPages
     sparse_virtual_shadow_map_sparse_cs_fillIndirect
     sparse_virtual_shadow_map_sparse_cs_finalize
+    sparse_virtual_shadow_map_sparse_cs_invalidatePages
     sparse_virtual_shadow_map_sparse_cs_mark
     sparse_virtual_shadow_map_sparse_cs_prepare
     sparse_virtual_shadow_map_sparse_cs_recycle
+    sparse_virtual_shadow_map_sparse_cs_scheduleFine
     sparse_virtual_shadow_map_sparse_cs_stats
     sparse_virtual_shadow_map_sparse_depth_pixelMain
     sparse_virtual_shadow_map_sparse_depth_vertexMain
-    sparse_virtual_shadow_map_sparse_resolve_cs
+    sparse_virtual_shadow_map_sparse_resolve_cs_reference_legacy
+    sparse_virtual_shadow_map_sparse_resolve_cs_reference_balanced
+    sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_legacy
+    sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_balanced
     taa_miniengine_blend_cs
     taa_miniengine_resolve_cs
     taa_miniengine_sharpen_cs

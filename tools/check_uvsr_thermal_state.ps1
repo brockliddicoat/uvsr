@@ -1098,6 +1098,7 @@ function Get-ProcessHygieneSample
         "FrameViewService",
         "CapFrameX",
         "obs64",
+        "codex-computer-use",
         "RTSS",
         "RTSSHooksLoader",
         "OCCT",

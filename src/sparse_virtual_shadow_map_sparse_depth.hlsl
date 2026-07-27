@@ -6,6 +6,23 @@
 #include <donut/shaders/binding_helpers.hlsli>
 #include "sparse_virtual_shadow_map_sparse_cb.h"
 
+#ifndef SVSM_POSITION_ONLY
+#define SVSM_POSITION_ONLY 0
+#endif
+
+#ifndef SVSM_MATERIAL_FREE_OPAQUE
+#define SVSM_MATERIAL_FREE_OPAQUE 0
+#endif
+
+#ifndef SVSM_LEAN_ALPHA_BINDINGS
+#define SVSM_LEAN_ALPHA_BINDINGS 0
+#endif
+
+#ifndef SVSM_DEFER_STATIC_MERGE
+#define SVSM_DEFER_STATIC_MERGE 0
+#endif
+
+#if !SVSM_POSITION_ONLY && !SVSM_MATERIAL_FREE_OPAQUE
 #define MATERIAL_REGISTER_SPACE     GBUFFER_SPACE_MATERIAL
 #define MATERIAL_CB_SLOT            GBUFFER_BINDING_MATERIAL_CONSTANTS
 #define MATERIAL_DIFFUSE_SLOT       GBUFFER_BINDING_MATERIAL_DIFFUSE_TEXTURE
@@ -19,7 +36,32 @@
 #define MATERIAL_SAMPLER_SLOT GBUFFER_BINDING_MATERIAL_SAMPLER
 
 #include <donut/shaders/scene_material.hlsli>
+#if SVSM_LEAN_ALPHA_BINDINGS
+cbuffer c_Material :
+    REGISTER_CBUFFER(MATERIAL_CB_SLOT, MATERIAL_REGISTER_SPACE)
+{
+    MaterialConstants g_Material;
+};
+Texture2D t_BaseOrDiffuse :
+    REGISTER_SRV(MATERIAL_DIFFUSE_SLOT, MATERIAL_REGISTER_SPACE);
+Texture2D t_Opacity :
+    REGISTER_SRV(MATERIAL_OPACITY_SLOT, MATERIAL_REGISTER_SPACE);
+SamplerState s_MaterialSampler :
+    REGISTER_SAMPLER(
+        MATERIAL_SAMPLER_SLOT,
+        MATERIAL_SAMPLER_REGISTER_SPACE);
+#else
 #include <donut/shaders/material_bindings.hlsli>
+#endif
+#endif
+
+#if SVSM_MATERIAL_FREE_OPAQUE && ALPHA_TESTED
+#error Material-free SVSM raster is valid only for opaque casters.
+#endif
+
+#if SVSM_MATERIAL_FREE_OPAQUE && SVSM_LEAN_ALPHA_BINDINGS
+#error Material-free SVSM raster has no material binding layout.
+#endif
 
 #define SVSM_INVALID_PAGE 0xffffffffu
 #define SVSM_PAGES_PER_AXIS 64u
@@ -53,7 +95,9 @@ Texture2DArray<uint> t_PageTable :
     REGISTER_SRV(11, GBUFFER_SPACE_VIEW);
 StructuredBuffer<uint> t_RenderPages :
     REGISTER_SRV(12, GBUFFER_SPACE_VIEW);
-RWTexture2D<uint> u_PhysicalDepth :
+StructuredBuffer<uint> t_ReceiverPageMasks :
+    REGISTER_SRV(13, GBUFFER_SPACE_VIEW);
+RWTexture2DArray<uint> u_PhysicalDepth :
     REGISTER_UAV(0, GBUFFER_SPACE_VIEW);
 
 StructuredBuffer<InstanceData> t_Instances :
@@ -70,6 +114,63 @@ int WrapPage(int coordinate)
 {
     int wrapped = coordinate % int(SVSM_PAGES_PER_AXIS);
     return wrapped < 0 ? wrapped + int(SVSM_PAGES_PER_AXIS) : wrapped;
+}
+
+// Receiver masks are a current-camera optimization for uncached, unpaired
+// scatter raster. Missing generations and malformed words fail open. A valid
+// zero bit can reject the fragment because marking conservatively dilates the
+// mask by the active filter footprint, including cross-page neighbors.
+bool ScatterReceiverPageMaskKeepsTexel(
+    uint owner,
+    uint2 pageTexel)
+{
+    if ((g_Svsm.flags &
+            SVSM_SPARSE_FLAG_RECEIVER_PAGE_MASK_CULLING) == 0u ||
+        (g_Svsm.flags & SVSM_SPARSE_FLAG_CACHING) != 0u ||
+        (g_Svsm.flags &
+            SVSM_SPARSE_FLAG_PAIRED_STATIC_DYNAMIC_DEPTH) != 0u ||
+        g_Svsm.hierarchyGeneration == 0u ||
+        owner >=
+            SVSM_SPARSE_CLIPMAP_COUNT * SVSM_PAGES_PER_CLIPMAP ||
+        any(pageTexel >= SVSM_PAGE_SIZE))
+    {
+        return true;
+    }
+
+    const uint maskBase =
+        owner * SVSM_RECEIVER_PAGE_MASK_WORDS_PER_PAGE;
+    if (t_ReceiverPageMasks[
+            maskBase + SVSM_RECEIVER_PAGE_MASK_TAG_OFFSET] !=
+        g_Svsm.hierarchyGeneration)
+    {
+        return true;
+    }
+
+    const uint2 cell =
+        pageTexel / SVSM_RECEIVER_PAGE_MASK_CELL_WIDTH;
+    if (any(cell >= SVSM_RECEIVER_PAGE_MASK_AXIS))
+        return true;
+    const uint2 quadrant =
+        cell / SVSM_RECEIVER_PAGE_MASK_QUADRANT_CELL_AXIS;
+    if (any(quadrant >= SVSM_RECEIVER_PAGE_MASK_QUADRANT_AXIS))
+        return true;
+    const uint quadrantIndex =
+        quadrant.y * SVSM_RECEIVER_PAGE_MASK_QUADRANT_AXIS +
+        quadrant.x;
+    const uint receiverMask = t_ReceiverPageMasks[
+        maskBase +
+        SVSM_RECEIVER_PAGE_MASK_QUADRANT_OFFSET +
+        quadrantIndex];
+    if ((receiverMask & 0xffff0000u) != 0u)
+        return true;
+    const uint2 quadrantCell =
+        cell % SVSM_RECEIVER_PAGE_MASK_QUADRANT_CELL_AXIS;
+    const uint bit =
+        1u << (
+            quadrantCell.y *
+                SVSM_RECEIVER_PAGE_MASK_QUADRANT_CELL_AXIS +
+            quadrantCell.x);
+    return (receiverMask & bit) != 0u;
 }
 
 bool TryLoadDirtyPageRectangle(
@@ -127,13 +228,26 @@ void vertexMain(
     uint drawInstanceOffset : SV_StartInstanceLocation,
 #endif
     out float4 outputPosition : SV_Position,
+#if !SVSM_POSITION_ONLY
     out float2 outputTexCoord : TEXCOORD,
+#endif
     nointerpolation out uint outputScatterRaster : TEXCOORD1,
+    nointerpolation out uint outputStaticCaster : TEXCOORD2,
     out float4 clipDistance : SV_ClipDistance)
 {
     outputPosition = float4(-2.0f, -2.0f, 0.0f, 1.0f);
+#if !SVSM_POSITION_ONLY
     outputTexCoord = 0.0f;
+#endif
     outputScatterRaster = 0u;
+    // Without packet classification, fail open by caching every caster in
+    // both slices. Scene changes on that reference path remain globally
+    // invalidating, so slice 1 can never retain a stale movable silhouette.
+    outputStaticCaster =
+        (g_Svsm.flags &
+            SVSM_SPARSE_FLAG_PAIRED_STATIC_DYNAMIC_DEPTH) != 0u
+        ? 1u
+        : 0u;
     clipDistance = -1.0f;
     if (g_Push.physicalPageCount == 0u)
         return;
@@ -162,8 +276,15 @@ void vertexMain(
     if (packetPageCulling)
     {
         packetIndex = drawInstanceOffset;
-        instanceIndex =
+        uint encodedInstanceIndex =
             t_PacketPageMetadata[packetIndex].objectInstanceIndex;
+        outputStaticCaster =
+            (encodedInstanceIndex &
+                SVSM_PACKET_STATIC_CASTER_BIT) != 0u
+            ? 1u
+            : 0u;
+        instanceIndex =
+            encodedInstanceIndex & SVSM_PACKET_OBJECT_INSTANCE_MASK;
     }
     else
     {
@@ -184,8 +305,15 @@ void vertexMain(
     {
         packetIndex = g_Push.packetIndex;
         pageInstance = instanceId;
-        instanceIndex =
+        uint encodedInstanceIndex =
             t_PacketPageMetadata[packetIndex].objectInstanceIndex;
+        outputStaticCaster =
+            (encodedInstanceIndex &
+                SVSM_PACKET_STATIC_CASTER_BIT) != 0u
+            ? 1u
+            : 0u;
+        instanceIndex =
+            encodedInstanceIndex & SVSM_PACKET_OBJECT_INSTANCE_MASK;
     }
     else
     {
@@ -233,8 +361,7 @@ void vertexMain(
             if (pageInstance >= packetPageCount)
                 return;
             if ((runtimeState &
-                    (SVSM_PACKET_PAGE_RUNTIME_FAIL_OPEN |
-                        SVSM_PACKET_PAGE_RUNTIME_PER_PAGE)) != 0u)
+                    SVSM_PACKET_PAGE_RUNTIME_FAIL_OPEN) != 0u)
             {
                 uint compactIndex =
                     g_Svsm.selectedClipmap *
@@ -277,6 +404,15 @@ void vertexMain(
         localPage = int2(
             WrapPage(tablePage.x - pageOffset.x),
             WrapPage(tablePage.y - pageOffset.y));
+        if (outputStaticCaster != 0u &&
+            (g_Svsm.flags &
+                SVSM_SPARSE_FLAG_PAIRED_STATIC_DYNAMIC_DEPTH) != 0u)
+        {
+            uint packed = t_PageTable.Load(int4(
+                tablePage, int(level), 0));
+            if ((packed & SVSM_PAGE_STATIC_DIRTY_BIT) == 0u)
+                return;
+        }
         // Ratio-guard fallback can still clip compact pages to trustworthy
         // packet bounds. Guarded fail-open deliberately has no trustworthy
         // rectangle, so it must traverse every bounded compact page instead.
@@ -302,9 +438,11 @@ void vertexMain(
     float3 objectPosition = asfloat(t_Vertices.Load3(
         g_Push.positionOffset +
         vertexIndex * c_SizeOfPosition));
+#if !SVSM_POSITION_ONLY
     outputTexCoord = asfloat(t_Vertices.Load2(
         g_Push.texCoordOffset +
         vertexIndex * c_SizeOfTexcoord));
+#endif
     float3 worldPosition =
         mul(instance.transform, float4(objectPosition, 1.0f)).xyz;
     float4 clip = mul(
@@ -365,8 +503,11 @@ void vertexMain(
 
 void pixelMain(
     in float4 position : SV_Position,
+#if !SVSM_MATERIAL_FREE_OPAQUE
     in float2 texCoord : TEXCOORD,
-    nointerpolation in uint inputScatterRaster : TEXCOORD1)
+#endif
+    nointerpolation in uint inputScatterRaster : TEXCOORD1,
+    nointerpolation in uint inputStaticCaster : TEXCOORD2)
 {
     bool dirtyPageScatterRaster = inputScatterRaster != 0u;
 #if ALPHA_TESTED
@@ -386,6 +527,24 @@ void pixelMain(
     }
     else
     {
+#if SVSM_LEAN_ALPHA_BINDINGS
+        float textureOpacity = 1.0f;
+        if ((g_Material.flags &
+                MaterialFlags_UseOpacityTexture) != 0)
+        {
+            textureOpacity = t_Opacity.Sample(
+                s_MaterialSampler, texCoord).r;
+        }
+        else if ((g_Material.flags &
+                MaterialFlags_UseBaseOrDiffuseTexture) != 0)
+        {
+            textureOpacity = t_BaseOrDiffuse.Sample(
+                s_MaterialSampler, texCoord).a;
+        }
+        float opacity = saturate(
+            g_Material.opacity * textureOpacity);
+        clip(opacity - g_Material.alphaCutoff);
+#else
         MaterialTextureSample textures = DefaultMaterialTextures();
         if ((g_Material.flags &
                 MaterialFlags_UseBaseOrDiffuseTexture) != 0)
@@ -404,6 +563,7 @@ void pixelMain(
             g_Material,
             textures);
         clip(material.opacity - g_Material.alphaCutoff);
+#endif
     }
 #endif
 
@@ -440,16 +600,52 @@ void pixelMain(
         {
             return;
         }
+        if (inputStaticCaster != 0u &&
+            (g_Svsm.flags &
+                SVSM_SPARSE_FLAG_PAIRED_STATIC_DYNAMIC_DEPTH) != 0u &&
+            (packed & SVSM_PAGE_STATIC_DIRTY_BIT) == 0u)
+        {
+            return;
+        }
 
         uint physicalPage = packed & SVSM_PHYSICAL_MASK;
         if (physicalPage >= g_Svsm.physicalPageCount)
             return;
         if (t_RenderPages[physicalPage] != owner)
             return;
+        if (!ScatterReceiverPageMaskKeepsTexel(
+                owner, pageTexel))
+        {
+            return;
+        }
 
 #if ALPHA_TESTED
         if (scatterAlphaTestEarlyReject)
         {
+#if SVSM_LEAN_ALPHA_BINDINGS
+            float textureOpacity = 1.0f;
+            if ((g_Material.flags &
+                    MaterialFlags_UseOpacityTexture) != 0)
+            {
+                textureOpacity = t_Opacity.SampleGrad(
+                    s_MaterialSampler,
+                    texCoord,
+                    texCoordDdx,
+                    texCoordDdy).r;
+            }
+            else if ((g_Material.flags &
+                    MaterialFlags_UseBaseOrDiffuseTexture) != 0)
+            {
+                textureOpacity = t_BaseOrDiffuse.SampleGrad(
+                    s_MaterialSampler,
+                    texCoord,
+                    texCoordDdx,
+                    texCoordDdy).a;
+            }
+            float opacity = saturate(
+                g_Material.opacity * textureOpacity);
+            clip(opacity - g_Material.alphaCutoff);
+#else
             MaterialTextureSample textures = DefaultMaterialTextures();
             if ((g_Material.flags &
                     MaterialFlags_UseBaseOrDiffuseTexture) != 0)
@@ -475,6 +671,7 @@ void pixelMain(
                 g_Material,
                 textures);
             clip(material.opacity - g_Material.alphaCutoff);
+#endif
         }
 #endif
 
@@ -486,9 +683,37 @@ void pixelMain(
             pageTexel;
     }
 
+    const uint reverseDepth = asuint(saturate(position.z));
+    const bool pairedStaticCaster =
+        inputStaticCaster != 0u &&
+        (g_Svsm.flags &
+            SVSM_SPARSE_FLAG_PAIRED_STATIC_DYNAMIC_DEPTH) != 0u;
     uint ignored;
+#if SVSM_DEFER_STATIC_MERGE
+    // Match UE's paired physical-page update: a static fragment updates only
+    // the persistent static slice. A compact post-raster pass folds static
+    // depth into the receiver-visible merged slice after all dynamic writes.
+    // When paired depth is ineffective (notably moving-light uncached mode),
+    // every caster retains the ordinary slice-zero reference write.
+    if (!pairedStaticCaster)
+    {
+        InterlockedMax(
+            u_PhysicalDepth[uint3(depthCoordinate, 0u)],
+            reverseDepth,
+            ignored);
+    }
+#else
+    // Exact legacy reference: static fragments issue both atomics.
     InterlockedMax(
-        u_PhysicalDepth[depthCoordinate],
-        asuint(saturate(position.z)),
+        u_PhysicalDepth[uint3(depthCoordinate, 0u)],
+        reverseDepth,
         ignored);
+#endif
+    if (pairedStaticCaster)
+    {
+        InterlockedMax(
+            u_PhysicalDepth[uint3(depthCoordinate, 1u)],
+            reverseDepth,
+            ignored);
+    }
 }

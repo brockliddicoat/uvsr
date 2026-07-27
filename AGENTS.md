@@ -379,6 +379,16 @@ Agent policy version: `2026-07-16.1`.
   CPU and GPU temperature, live throttle reasons, and process memory. TFLOPS is
   a current-clock-and-utilization indicator, so compare it only between
   identical position-1 control workloads, never between different SVSM options.
+- Match and record the complete display/presentation state: active refresh rate
+  for every display, primary-output identity, VRR/G-SYNC/FreeSync, VSync and
+  frame caps, latency controls, HDR/color depth, desktop resolution/scaling,
+  window/fullscreen mode, compositor and overlay conditions, secondary
+  displays, and MUX/hybrid-copy route. Refresh rate can affect presentation
+  cadence, queue depth, memory clocks, heat, telemetry aliasing, and periodic
+  spike positions, but it is never a multiplier or divisor in the GPU-clock
+  normalization formula. Report spikes in both frames and wall-clock time and
+  compare their period with refresh, compositor, telemetry, logging, and cache
+  intervals. A refresh-rate change is a diagnostic run, not a matched score.
 - Keep renderer debug views, GPU captures, validation layers, and diagnostic
   overlays disabled during accepted performance windows unless the identical
   control explicitly includes them. SVSM debug views add statistics dispatches
@@ -386,6 +396,30 @@ Agent policy version: `2026-07-16.1`.
   Off before collecting a position-1 baseline or candidate measurement. The
   ordinary stat line may remain visible when it is held identical across every
   compared run.
+- Treat the Codex computer-control worker as capture infrastructure even though
+  its CPU time belongs to the excluded ChatGPT/Codex process tree. Use it to
+  configure the renderer and collect screenshots only outside an accepted
+  timing window, then stop that exact task-owned worker before the preflight or
+  measurement. Its cursor overlay and screen-capture session remain process
+  hygiene blockers; assistant attribution must never exempt them.
+- If an otherwise idle discrete GPU remains at its high-performance clock and
+  power state, identify the exact process that owns its compute or graphics
+  context before changing anything. An isolated Chromium/Electron
+  `on_device_model` utility may be closed only after verifying its executable,
+  parent, and command line; never close the main assistant host by inference.
+  Require a new full cold preflight after closing the verified utility, and do
+  not treat the process name alone as portable evidence on another machine.
+- On Brock's current laptop, P0 near 1,815 MHz and roughly 35 W at zero
+  reported utilization is a recorded extra-heat warning and must not be called
+  the cold-idle baseline; established cold-idle evidence is P8 near 210 MHz and
+  roughly 5 to 10 W. After a warm or P0 result, close the poller and cool
+  without telemetry, then make one bounded follow-up preflight at a five-second
+  requested cadence. P0 alone does not override the user's loaded acceptance
+  rule: a run may remain usable when the full temperature/headroom gate passes,
+  no unexplained context or limiter exists, live Position-1 throughput stays at
+  or above 30 TFLOPS, and before/after controls agree. On other hardware,
+  establish its own idle P-state, clock, and power band instead of copying
+  these NVIDIA-specific values.
 - On Brock's current laptop, use CPU at or below 75 C and GPU at or below 55 C
   for at least 30 quiet seconds as the provisional preflight gate until a clean
   cold baseline establishes tighter machine-specific limits. Use the hottest
@@ -450,10 +484,56 @@ Agent policy version: `2026-07-16.1`.
   thermal throttling while the machine-specific floor and limiter checks pass.
   Establish an equivalent floor empirically before using this rule on another
   host.
+- Retain two performance result classes. An official score remains the raw GPU
+  time from a complete clean benchmark window. An unofficial same-adapter trend
+  estimate may normalize raw GPU milliseconds to the established current-clock
+  capacity with `estimated ms = raw ms * observed clock TFLOPS / reference
+  clock TFLOPS`. The exact adapter-name calibration for Brock's `NVIDIA GeForce
+  RTX 4090 Laptop GPU` is 42.5 clock TFLOPS and 582.464 GB/s; normalization is
+  unavailable for every other adapter until that exact adapter has its own
+  measured calibration. Also retain `raw ms * observed clock TFLOPS` as the
+  smaller-is-better work index. Derive observed clock TFLOPS from the unsmoothed
+  graphics clock and shader-core count, never from UVSR's utilization-scaled
+  stat-line TFLOPS. Pair telemetry captured when the measured GPU frame was
+  issued, record its generation and age, and never substitute 100 percent when
+  utilization is unavailable. Grade a same-workload estimate A near 38 to 47
+  clock TFLOPS with at least 95 percent utilization, B from 30 to 38 clock
+  TFLOPS with at least 90 percent utilization, C down to 25 clock TFLOPS or
+  when utilization is unavailable or materially low, and directional below
+  25. Downgrade for telemetry older than the calibrated poll cadence and for
+  memory bandwidth more than 5 percent from calibration; treat more than
+  15 percent bandwidth drift as directional. Report run coverage and an
+  aggregate grade, and publish a normalized run summary only when at least
+  95 percent of samples normalize. A limiter, contention, memory-clock drift,
+  or unlike work can lower the grade or invalidate comparison without deleting
+  the raw sample. Never normalize CPU time, compare unlike adapters or workload
+  identities, call an estimate official, or let normalization excuse unsafe
+  temperatures, a device error, or visibly incorrect output.
+- Use `docs/performance/gpu-clock-normalization.md` as the canonical
+  agent-facing normalization procedure and
+  `tools/normalize_gpu_clock_benchmark.ps1` as its fail-closed calculation
+  helper. A stored profile belongs to one physical GPU, not merely one adapter
+  name or model. Each physical GPU and power/thermal profile selects its own
+  measured reference graphics clock and validated clock range. Never reuse a
+  reference clock across GPUs, including two GPUs with the same marketing name,
+  and never compare GPU-local normalized values across devices. Record and
+  grade utilization, memory clock/bandwidth, power, temperature/headroom,
+  limiter state, telemetry age, paired-sample coverage, process load, warmup,
+  cache state, and before/after controls; these support or reject the clock
+  estimate and are never silently normalized away.
+- The renderer's current built-in normalization calibration is selected by
+  adapter name and therefore does not prove physical-GPU identity. An agent must
+  verify the current sample against the machine-local profile before accepting
+  the displayed estimate. On an unprofiled machine, or on a separate GPU with
+  the same model name, report built-in normalization as unavailable.
 - Bracket a long experiment with the same position-1 control. If the post-run
-  control fails the baseline band, discard the measurements between the two
-  controls, stop runtime work, and let the machine cool before repeating. Do not
-  report thermally suspect results as measurements.
+  control fails the baseline band, remove official-score status from the
+  measurements between the two controls and stop runtime work before repeating.
+  Preserve their raw timings and same-adapter advisory normalized estimates when
+  the device stayed healthy, the workload identity stayed exact, and output was
+  visibly correct; label the grade and failed-bracket reason. A device error,
+  unsafe temperature, corrupted artifact, changed workload, or visibly
+  incorrect output invalidates both official and advisory comparison.
 - Record the renderer's PID, path, start time, private committed memory, total
   and private working set, handle and thread counts, and dedicated GPU memory as
   a time series before and after repeated identical control cycles. Also record

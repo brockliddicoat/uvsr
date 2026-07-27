@@ -15,10 +15,11 @@ transform, output gamut conversion, and display transfer happen afterward.
   alpha testing remains active; transmission/refraction is not part of the
   base BSDF.
 - Ambient occlusion is not part of the BSDF or direct lighting. Authored
-  material occlusion modulates the approximate indirect fallback and
-  screen-space diffuse transport, while screen-space ambient visibility
-  modulates only the approximate sky fallback. Screen-space GI is not
-  multiplied by ambient visibility.
+  material occlusion modulates global diffuse IBL, roughness-aware specular
+  occlusion, and screen-space diffuse transport. When screen-space ambient
+  visibility is active, it attenuates diffuse IBL and joins authored
+  material occlusion as the input to specular occlusion. Screen-space GI is
+  not multiplied by screen-space ambient visibility.
 
 ## CPU Material Contract
 
@@ -65,7 +66,7 @@ pick request; it is not an every-frame MRT.
 | G1 | `RGBA8_UNORM` | Octahedral geometric normal in RG; IOR remapped from `[1,3]` in B; 8-bit feature mask in A |
 | G2 | `RGBA16_SNORM` | Linear shading normal in RGB; perceptual roughness in A |
 | G3 | `RGBA16_FLOAT` | Scene-linear emissive radiance in RGB; metalness in A |
-| G4 | `R8_UNORM` | Authored material ambient occlusion for the approximate indirect-light fallback and screen-space diffuse transport |
+| G4 | `R8_UNORM` | Authored material ambient occlusion for global diffuse/specular IBL and screen-space diffuse transport |
 | G5 (conditional) | `RGBA16_FLOAT` | Current-to-previous pixel motion in XY; previous-minus-current device-depth delta in Z; validity in A |
 
 Base-color quantization follows ordinary sRGB8 material storage. Geometric
@@ -134,6 +135,124 @@ and directional PDFs are both one. Directional lights have constant incident
 radiance. Point and spot lights use inverse-square attenuation with a minimum
 distance squared of `1e-4`; their authored range, when nonzero, supplies the
 only smooth range cutoff. Spot lights add their authored cone falloff.
+
+## Global Image-Based Lighting
+
+UVSR owns one infinite global IBL environment. It is deliberately not a
+general probe-volume system: one selected radiance source, one persistent
+resource set, and one receiver implementation serve forward, deferred, and
+screen-space composition.
+
+The selected imported source is decoded once in scene-linear radiance and
+converted to a persistent 512-by-512 `RGBA16_FLOAT` source cube with ten mips.
+Both radiance-derived lighting maps and the background come from that exact
+cube or the exact source samples used to build it:
+
+1. A CPU SH9 projection applies the normalized Lambert kernel and writes a
+   16-by-16 `RGBA16_FLOAT` cube containing unit-albedo outgoing diffuse
+   response `E / pi`. Receivers apply material diffuse weight and occlusion;
+   they do not divide by pi again.
+2. Mip zero of a 256-by-256 `RGBA16_FLOAT` specular cube retains the sharp
+   source. Its remaining eight mips use Donut's 1,024-sample GGX prefilter.
+   Mip `m` is generated for perceptual roughness
+   `(m / (mipCount - 1))^2`, and receivers select
+   `sqrt(perceptualRoughness) * (mipCount - 1)`.
+3. **Show Environment Background** depth-tests the unfiltered source cube
+   behind scene geometry. It uses the same cube orientation and radiance
+   scale as lighting; it is not a separately exposed or graded sky image.
+
+Donut's deterministic 1,024-sample split-sum integration builds one persistent
+64-by-64 `RG16_FLOAT` environment BRDF LUT. The LUT is source independent; it
+completes the material receiver as
+`prefilteredRadiance * (F0 * A + B)`.
+
+The shared receiver applies roughness-aware Schlick diffuse/specular energy
+sharing. It also fades reflections that a perturbed shading normal sends below
+the geometric horizon. Forward and deferred lighting use the same evaluator.
+When screen-space visibility owns the final indirect composite, both global
+IBL lobes move to that composite so occlusion is applied exactly once.
+
+### No-Hidden-Ambient Invariant
+
+Before IBL, the UVSR receiver always added a hidden two-color hemispherical
+ambient term:
+`lerp(bottom, top, normal.y * 0.5 + 0.5)`. That normal-only gradient illuminated
+every surface without visibility and could not distinguish open sky from a
+fully enclosed or fully shadowed region.
+
+IBL integration removed the term rather than layering the new environment over
+it. When both IBL lobes are disabled or have zero strength, the indirect
+environment contribution is exactly zero; the remaining image contains
+shadowed direct lighting, emission, and actual SSGI, so regions with no
+contribution can reach deep black. Neither the shared direct-light BSDF nor the
+fixed neutral AgX tonemapper changed as part of this removal. This is a
+future-project invariant: do not restore the hemispherical term or replace it
+with a constant, procedural, missing-asset, or other visibility-free ambient
+fallback.
+
+### Sources, Exposure, and Strength
+
+| UI Source | Kind | Default Exposure |
+|---|---|---:|
+| **Day - Kloppenheim 03** | Imported balanced day; factory default | `-2.75 EV` |
+| **Bright Overcast - Snow Field 2** | Imported low-contrast overcast | `-2.50 EV` |
+| **Soft Day - Farm Field** | Imported neutral-warm day | `-3.25 EV` |
+| **Night - Kloppenheim 07** | Imported dedicated cloudy night | `-5.00 EV` |
+| **Starry Night - Qwantani** | Imported dedicated clear night | `-6.50 EV` |
+| **Legacy - Quadrangle Cloudy** | Imported comparison source | `-3.00 EV` |
+
+These are the complete six-source catalog; UVSR has no procedural source. The
+files and source hashes are recorded in the
+[environment catalog](../assets/environments/README.md). Each source retains
+its authored relative radiance and is not normalized to another source.
+Selecting a source restores its calibrated default exposure.
+The two night selections do not rotate, recolor, or disable the separate
+directional scene light.
+
+All IBL controls are grouped in the **Sky** drawer. Exposure is one common
+`2^EV` multiplier for diffuse IBL, specular IBL, and the optional background.
+Changing it does not regenerate any texture. **Diffuse Strength** and
+**Specular Strength** independently range from `0.00` to `2.00`, default to the
+`1.00` radiometric reference, and multiply their lobes after common exposure.
+They do not change the background. **Diffuse IBL** and **Specular IBL**
+independently set their lobe scale to zero when disabled; a zero strength has
+the same exact-zero lighting result. **Show Environment Background** is
+independent from both lighting toggles. White World neutralizes the selected
+radiance before all derivations and applies the same common reference scale to
+every consumer.
+
+An unchanged imported source performs no upload, convolution, prefilter, or
+BRDF-LUT work after warmup. The BRDF LUT is generated once. Exposure, lobe, and
+strength controls update constants only. A missing or invalid imported asset
+clears the active probe and background, deactivating the environment to exact
+zero. It cannot reveal a procedural fallback or retain a stale previous
+source. The failed request is latched so the render loop does not retry
+synchronous disk I/O or repeat the warning every frame.
+
+### Ambient and Specular Occlusion
+
+With screen-space visibility disabled, authored material AO linearly
+attenuates diffuse IBL and supplies the roughness- and view-aware specular
+occlusion input. It never attenuates direct lighting.
+
+With screen-space visibility enabled, deferred lighting leaves both global
+IBL lobes for the final composite. Adjusted screen-space ambient visibility
+linearly attenuates diffuse IBL. Its product with authored material AO feeds
+the specular-occlusion function, keeping a covered interior from reflecting
+an unobstructed full sky. Screen-space GI continues to use material diffuse
+throughput and authored material AO, but not screen-space ambient visibility.
+Its first-bounce source radiance includes directly reflected environment
+diffuse alongside shadowed direct diffuse and emission, so sky-lit surfaces
+can supply the next diffuse bounce. Specular IBL remains outside this diffuse
+transport path. An environment-only scene therefore remains a valid GI source.
+Diffuse strength scales that environment source at the same point it scales the
+visible diffuse IBL, preventing SSGI from rebroadcasting a different-gain copy.
+This is an occlusion heuristic rather than a bent-normal or traced glossy
+visibility solution.
+
+AO has no active lighting consumer when both environment lobes and diffuse GI
+are disabled. UVSR skips the screen-space pipeline and its resources in that
+state instead of dispatching a no-op composite.
 
 ## Shared Contribution-Gate Contract
 
@@ -227,12 +346,18 @@ a thickness texture, a depth hierarchy, or a far-trace resource.
 
 ## Validation
 
-General PBR and AO/GI visibility debug views are intentionally absent from the
-current build. The Bend shadow experiment separately exposes its released Edge,
-Thread, and Wave diagnostics as direct grayscale views of the R8 output.
-The Donut legacy comparison path remains implemented for possible future
-experiments, but its **Enable PBR** control is not exposed in the production UI.
-Forward and deferred production lighting both use the same shared BSDF.
+The General drawer exposes scene-wide PBR lighting diagnostics for **Shading
+Normal**, **Geometric Normal**, **Normal Difference**, **Diffuse
+Environment**, **Cardinal Environment Test**, **Prefiltered Specular**,
+**Environment BRDF**, **Final Specular IBL**, **Combined IBL**, **Specular
+Occlusion**, and **Environment Mip**. These views isolate normal encoding,
+source orientation, convolution, roughness selection, split-sum response, and
+occlusion without changing the production path. The Bend shadow experiment
+separately exposes its released Edge, Thread, and Wave diagnostics as direct
+grayscale views of the R8 output. The Donut legacy comparison path remains
+implemented for possible future experiments, but its **Enable PBR** control is
+not exposed in the production UI. Forward and deferred production lighting
+both use the same shared BSDF and IBL evaluator.
 
 `tests/pbr_reference_tests.cpp` validates defaults and invalid-value repair,
 roughness extremes, dielectric and metallic behavior, dark/bright base colors,
@@ -241,7 +366,20 @@ geometric-normal rejection, no-light/emission-only behavior, visibility
 0/0.5/1, finite nonnegative output, independence of direct lighting from
 ambient occlusion, source-mask composition, contribution-gate boundary cases,
 the four-bounce frontier recurrence, neutral unmatched directional visibility,
-clamping, and exact multiplicative composition.
+clamping, exact multiplicative composition, common-exposure and independent
+lobe-strength scaling, zero-strength inactivity, the squared specular prefilter
+schedule, matching receiver mip selection, and specular-occlusion limits and
+monotonicity.
+
+`tests/diffuse_environment_asset_tests.cpp` validates the authoritative
+six-entry imported source catalog, its unique names and paths, two night
+classifications, calibrated default exposures, and all six checked-in HDR
+files. It decodes every source, projects it through the production
+lat-long-to-SH9 implementation, and verifies dimensions, finite positive
+energy, cardinal directional contrast, source-derived orientation goldens, and
+exposure-scaled luminance. Asset staging is dependency-driven, so changing or
+restoring an HDR source reruns staging even when the renderer executable does
+not otherwise need relinking.
 
 `tests/bend_screen_space_shadows_tests.cpp` validates Bend Exact reset values,
 Enabled independence, the Long and Maximum Validation lengths, every registered
@@ -254,9 +392,32 @@ only after the corresponding renderer evaluation.
 
 - GGX is single scattering. No unverified compensation term is present; the
   compensation integration point is the result of `EvaluateGGX`.
-- There is no image-based specular lighting or BRDF integration LUT in UVSR's
-  PBR path yet. Sky colors provide only an explicit approximate indirect
-  diffuse irradiance term.
+- IBL is one infinite global environment. UVSR does not capture the scene into
+  probes, blend local probes, correct parallax, stream probe data, or represent
+  indoor/outdoor transitions automatically.
+- Imported environments have a fixed authored orientation. There is no
+  user-facing rotation control or automatic alignment between an HDR sky and
+  the separate directional light. Dedicated night selections likewise do not
+  change that light.
+- Source switching performs synchronous HDR decode, source-cube upload, mip
+  generation, and GGX prefiltering. This can hitch an interactive frame; it is
+  intentionally absent from unchanged warm frames but is not yet an
+  asynchronous streaming pipeline.
+- The 16-by-16 diffuse cube is an SH9 Lambert response, so it intentionally
+  cannot retain sharp high-frequency lighting. The 256-by-256, nine-mip
+  specular cube and 64-by-64 BRDF LUT are fixed-quality resources rather than
+  scalable quality tiers.
+- Specular occlusion is a bounded material/screen-visibility heuristic. UVSR
+  has no bent-normal diffuse lookup, glossy visibility trace, or local
+  reflection occluder representation.
+- The implemented ambient visibility estimate is screen-space and scalar; it
+  is not yet source-side directional sky visibility. The staged future path is
+  documented under **Future Sky Visibility Recommendations** in
+  [the screen-space visibility design](screen-space-visibility.md).
+- Automated tests cover source/catalog invariants and shared roughness and
+  occlusion math, but they do not yet read back the generated GPU cubemaps or
+  BRDF LUT against an independent integrator. Runtime debug views remain the
+  integration check for those generated textures.
 - Point/spot radii and directional angular size are not integrated as area
   lights by the initial core.
 - IOR currently defaults to 1.5 at glTF import because UVSR has not yet added
@@ -297,16 +458,6 @@ only after the corresponding renderer evaluation.
 2. Bind it once for deferred, forward, and future path/radiance-cache passes.
 3. Add a compensation result beside `EvaluateGGX`, not inside light sampling.
 4. Re-run furnace tests across roughness, F0, view angle, and metalness.
-
-### Image-Based Lighting
-
-1. Add a prefiltered scene-linear specular environment and diffuse irradiance
-   representation.
-2. Add the matching split-sum BRDF LUT using this core's roughness convention.
-3. Evaluate diffuse IBL separately from direct light and apply ambient
-   occlusion only to the explicitly missing indirect diffuse visibility.
-4. Add specular-occlusion policy only after validating it against traced
-   reference images.
 
 ### Importance Sampling
 

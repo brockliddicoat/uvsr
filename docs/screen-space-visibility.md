@@ -11,20 +11,74 @@ The frame order is:
 
 1. Fill the PBR G-buffer, including motion only when adaptive or temporal
    visibility requires it.
-2. Shade direct light and, when GI can consume it, write source radiance and
-   compact diffuse-transport metadata.
+2. Shade direct light and, when GI can consume it, write shadowed direct
+   diffuse, directly reflected environment diffuse, emission, and compact
+   diffuse-transport metadata to the source buffers.
 3. Trace visibility at full, half, or quarter linear resolution.
 4. Optionally reproject and accumulate AO/GI history.
 5. Optionally joint-bilateral filter to full resolution; reduced output always
    receives at least a minimal depth/normal-guided 2x2 upsample.
-6. Composite approximate sky fallback, AO, screen-space GI, and direct light.
+6. Composite diffuse and specular IBL from the selected global radiance
+   source, AO, screen-space GI, and direct/emissive lighting.
 7. Apply the normal AgX display pipeline.
 
-There are no visibility or PBR debug-shader views in the current build. The
-sole diagnostic exception is **World Materials > Indirect Diffuse Response**,
-a composition mode that shows the final material-applied screen-space diffuse
-GI contribution. Profiling is otherwise limited to GPU stage timings, logical
-allocation arithmetic, and external capture tools.
+The General drawer provides PBR diagnostics for decoded normals, diffuse IBL,
+prefiltered specular radiance, the environment BRDF, final and combined IBL,
+specular occlusion, and selected environment mip. **World Materials > Indirect
+Diffuse Response** separately shows the final material-applied screen-space
+diffuse GI contribution. Visibility stage timings, logical allocation
+arithmetic, and external capture tools remain the performance diagnostics.
+
+## Global Image-Based Lighting Composite Contract
+
+UVSR supplies the visibility composite with the same infinite global probe
+used by forward and deferred lighting. Its diffuse cube contains SH9
+Lambert-convolved `E / pi`; its specular cube contains the matching
+roughness-prefiltered GGX radiance; and a source-independent split-sum BRDF LUT
+evaluates the receiver response. Both radiance maps are derived from one
+of six imported scene-linear HDR sources. The optional visible environment
+background samples that same source and exposure, but is drawn separately and
+is not part of AO/GI.
+
+When visibility composition is active, deferred lighting writes direct light,
+emission, and unrelated indirect-specular input to the base-lighting target
+without either global IBL lobe. The final composite then evaluates both lobes
+once:
+
+- Authored material AO modulates diffuse IBL. Adjusted screen-space ambient
+  visibility applies the user strength and then attenuates that diffuse result.
+- The product of authored material AO and adjusted screen-space ambient
+  visibility feeds the view- and roughness-aware specular-occlusion function.
+  It does not multiply direct specular lighting.
+- Screen-space GI uses material diffuse throughput and authored material AO,
+  but not screen-space ambient visibility. Its first-bounce source includes
+  environment diffuse as well as direct diffuse and emission; specular IBL is
+  deliberately excluded from diffuse transport. **Diffuse Strength** scales
+  both the visible diffuse lobe and this environment-diffuse SSGI source.
+
+All IBL controls live in the **Sky** drawer. Common exposure scales diffuse
+IBL, specular IBL, and the background together. Independent **Diffuse
+Strength** and **Specular Strength** controls range from `0.00` to `2.00`,
+default to `1.00`, and do not change the background. A disabled or
+zero-strength lobe is exactly zero; the composite never substitutes the legacy
+top/bottom hemispheric ambient.
+
+A missing or invalid source clears the active probe and background. It cannot
+fall back to procedural illumination or retain a stale previous source, and
+the failed request is latched instead of retried every frame. AO alone is not a
+consumer when both IBL lobes and diffuse GI are disabled, so that configuration
+allocates and dispatches no screen-space visibility work.
+
+### No-Hidden-Ambient Invariant
+
+Before IBL, UVSR always composited the hidden two-color hemispherical term
+`lerp(bottom, top, normal.y * 0.5 + 0.5)`. It illuminated every surface from
+the normal alone, without asking whether any sky was visible. IBL integration
+removed it. With both IBL lobes off or at zero strength, the renderer now shows
+shadowed direct lighting plus actual SSGI; pixels reached by neither can become
+deep black. The direct BSDF and fixed neutral AgX tonemapper were unchanged.
+Future projects must not restore this term or another visibility-free ambient
+fill.
 
 ## Factory Defaults
 
@@ -32,8 +86,12 @@ allocation arithmetic, and external capture tools.
 - Medium quality traces 20 fixed samples on one slice per eligible pixel.
 - Uniform Solid Angle and Toroidal Blue Noise are selected.
 - Adaptive Sparse Sampling is disabled.
-- AO strength is 1.0. GI intensity is 4.0 with one bounce, a 0.001 bounce
-  contribution cutoff, and emissive sourcing enabled at gain 4.0.
+- AO strength is 1.0. GI intensity is 1.0 with one bounce, a 0.001 bounce
+  contribution cutoff, and emissive sourcing enabled at gain 1.0. Higher gains
+  remain explicit artistic controls rather than reference defaults.
+- Global diffuse and specular IBL start enabled with **Day - Kloppenheim 03**
+  at its calibrated `-2.75 EV` and `1.00` strength. The matching visible
+  background also starts enabled.
 - The Indirect Diffuse Response view is disabled.
 - Temporal reconstruction and spatial filtering are disabled. Their dormant
   settings remain a 0.35 temporal current response and Gaussian joint-bilateral
@@ -324,10 +382,10 @@ Source activity and output allocation are consumer driven. AO-only does not
 allocate GI outputs or the full-resolution source-radiance target; GI-only does
 not allocate AO outputs. AO strength zero and GI intensity zero make their
 respective effects inactive consumers rather than dispatching mathematically
-zero paths. The source-radiance target is also absent when no scene light is
-present and emissive sourcing is disabled or has zero gain. Adaptive feedback, temporal
-history, full-resolution filtered outputs, higher-bounce frontiers, and the
-depth hierarchy exist only while their consumers require them. Proven
+zero paths. The source-radiance target is also absent when direct-light,
+diffuse-environment, and emissive sources are all inactive. Adaptive feedback,
+temporal history, full-resolution filtered outputs, higher-bounce frontiers,
+and the depth hierarchy exist only while their consumers require them. Proven
 scene-wide first-bounce inactivity terminates the complete higher-bounce
 dispatch chain.
 
@@ -362,9 +420,9 @@ not count hypothetical recomputation or bandwidth savings.
 
 Future techniques should consume visibility in one of two ways:
 
-1. Fuse same-frame directional ambient, rough-specular approximation, or
-   confidence generation into the visibility dispatch and consume the register-
-   local mask. This has no mask write, allocation, or later read.
+1. Fuse a future rough-specular approximation or confidence generation into
+   the visibility dispatch and consume the register-local mask. This has no
+   mask write, allocation, or later read.
 2. Allocate a compact canonical `R32_UINT` mask cache only for a genuine cross-
    pass, cross-frame, temporal-reprojection, path-guiding, spatial-reuse, or
    world-space-fallback consumer.
@@ -374,12 +432,64 @@ layout. A rotating slice is not a canonical directional representation: an
 arbitrary new slice direction cannot be recovered by bit rotation. UVSR must
 never persist one rotating slice and assume otherwise.
 
+## Future Sky Visibility Recommendations
+
+This section is a future design direction, not implemented behavior. The
+current renderer has scalar screen-space ambient visibility and material AO;
+it does not yet evaluate source-directional environment visibility, output a
+bent normal, represent offscreen occluders, consume baked sky occlusion, or
+offer environment rotation.
+
+1. **Define Source-Side Environment Visibility.** Treat sky visibility as
+   visibility of incoming environment radiance,
+   `V(x, omega) * L_environment(omega)`, before receiver integration. Diffuse
+   and specular consumers may filter that directional field differently, but
+   they must share one source-side visibility contract. A post-lighting
+   brightness scalar is only an approximation and must not become a hidden
+   ambient replacement.
+2. **Build the Near-Term Screen-Space Solution at Multiple Scales.** Extend
+   screen-space traversal across near, medium, and long horizons, retain
+   directional information in a canonical representation, and derive both a
+   sky-visibility factor and bent normal. Use those outputs to sample or
+   integrate the environment directionally. This is the nearest practical
+   improvement for visible occluders, but disocclusion and screen-edge failures
+   must remain explicit because screen space cannot prove offscreen visibility.
+3. **Add an Offscreen World-Space Source.** For occluders absent from the
+   primary depth buffer, evaluate a world-space voxel or SDF representation, a
+   scene-space or multiview HZB, or ray-traced hemisphere visibility. The
+   representation must cover the environment hemisphere rather than only the
+   primary light direction, and its quality/performance tier must be measured
+   independently from the screen-space pass.
+4. **Keep Static Baked Sky Occlusion Optional.** Static scenes may provide
+   baked directional sky occlusion or a bent normal as a low-cost, stable
+   source. Store it separately from authored material AO, define behavior for
+   movable geometry and changed environments, and never require it for dynamic
+   or asset-agnostic rendering.
+5. **Compose a Hybrid Conservatively.** Prefer detailed screen-space evidence
+   where valid, use world-space or baked data for missing directions, and blend
+   with confidence and temporal stability rather than taking an unexplained
+   global minimum. Apply sufficient environment visibility before environment
+   diffuse is written into the SSGI source, or carry the visibility contract
+   with that source; otherwise under-occluded IBL can be rebroadcast as
+   screen-space GI and refill the enclosure that visibility was meant to
+   darken.
+6. **Calibrate with Independent References.** Add controlled environment
+   rotation so asymmetric HDR features can be checked against the bent normal
+   and visibility field. Preserve a direct-only reference with both IBL lobes
+   and SSGI off, then compare diffuse-only, specular-only, and SSGI-enabled
+   states at `1.00` strength before artistic gain. Do not reuse the directional
+   sun shadow as sky visibility: one hard-light direction cannot represent the
+   broad environment hemisphere. Exposure and lobe strength are calibration
+   controls, not occlusion fixes.
+
 ## Validation Boundary
 
 Automated checks cover shared C++/HLSL CDF math, numerical quadrature, AO/GI
-fixtures, normalization, homogeneous endpoint clipping, PBR composition, shader
-permutations, and Release compilation. They do not replace human review of
-thin geometry, motion, temporal trails, reduced-resolution edge stability, or
-filter quality. No runtime performance improvement should be claimed without
-controlled timings plus register/occupancy and traffic evidence on the target
-adapters.
+fixtures, normalization, homogeneous endpoint clipping, PBR composition,
+common-exposure and lobe-strength contracts, shader permutations, and Release
+compilation. They do not replace human review of thin geometry, motion,
+temporal trails, reduced-resolution edge stability, environment failure, or
+filter quality. The future recommendations above require their own reference
+images and tests when implemented. No runtime performance improvement should
+be claimed without controlled timings plus register/occupancy and traffic
+evidence on the target adapters.
