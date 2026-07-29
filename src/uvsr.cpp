@@ -80,6 +80,7 @@
 #include "gpu_crash_diagnostics.h"
 #include "camera_collision.h"
 #include "camera_controllers.h"
+#include "command_line_options.h"
 #include "experiment_title.h"
 #include "scene_catalog.h"
 #include "screen_space_visibility.h"
@@ -1041,6 +1042,10 @@ private:
         false;
     bool                                m_SvsmMotionBenchmarkInvalidGpuTag =
         false;
+    bool                                m_SvsmMotionBenchmarkInvalidGpuTiming =
+        false;
+    bool                                m_SvsmMotionBenchmarkInvalidCpuTiming =
+        false;
     bool                                m_SvsmMotionBenchmarkDetailedTimingObserved =
         false;
     bool                                m_SvsmMotionBenchmarkBatchedSupported =
@@ -1667,6 +1672,8 @@ public:
             false);
         m_SvsmMotionBenchmarkDuplicateGpuTag = false;
         m_SvsmMotionBenchmarkInvalidGpuTag = false;
+        m_SvsmMotionBenchmarkInvalidGpuTiming = false;
+        m_SvsmMotionBenchmarkInvalidCpuTiming = false;
         m_SvsmMotionBenchmarkDetailedTimingObserved = false;
         m_SvsmMotionBenchmarkBatchedSupported = false;
         m_SvsmMotionBenchmarkBatchedActive = false;
@@ -2196,32 +2203,10 @@ public:
 
         static constexpr const char* ResultPath =
             "outputs/svsm-motion-benchmark-latest.txt";
-        std::error_code directoryError;
-        std::filesystem::create_directories("outputs", directoryError);
-        if (directoryError)
+        if (!WriteBenchmarkArtifactAtomically(ResultPath, contents))
         {
             log::warning(
-                "SVSM motion benchmark could not create output directory (%s)",
-                directoryError.message().c_str());
-            return;
-        }
-        std::ofstream result(
-            ResultPath,
-            std::ios::binary | std::ios::trunc);
-        if (!result)
-        {
-            log::warning(
-                "SVSM motion benchmark could not open result file '%s'",
-                ResultPath);
-            return;
-        }
-
-        result << contents;
-        result.flush();
-        if (!result.good())
-        {
-            log::warning(
-                "SVSM motion benchmark could not finish result file '%s'",
+                "SVSM motion benchmark could not atomically publish '%s'",
                 ResultPath);
         }
     }
@@ -2238,6 +2223,12 @@ public:
             << (m_SvsmMotionExecutableSha256.empty()
                     ? "unavailable"
                     : m_SvsmMotionExecutableSha256) << "\n"
+            << "configurationId="
+            << BuildSvsmMotionBenchmarkConfigurationId(
+                m_SvsmMotionAutostartTargetSettings) << "\n"
+            << "configuration="
+            << BuildSvsmMotionBenchmarkConfigurationIdentity(
+                m_SvsmMotionAutostartTargetSettings) << "\n"
             << "measurementGateConfigured="
             << (!m_SvsmMotionMeasurementReadyPath.empty() ? 1u : 0u)
             << "\n"
@@ -2344,9 +2335,17 @@ public:
     {
         m_SvsmMotionBenchmarkStatus =
             std::string("Aborted: ") + reason;
-        WriteSvsmMotionBenchmarkResultFile(
-            "state=aborted\nstatus=" +
-            m_SvsmMotionBenchmarkStatus + "\n");
+        std::ostringstream result;
+        result << "state=aborted\n"
+            << "evidenceValid=0\n"
+            << "status=" << m_SvsmMotionBenchmarkStatus << "\n"
+            << "configurationId="
+            << BuildSvsmMotionBenchmarkConfigurationId(
+                m_SvsmMotionBenchmarkStartSettings) << "\n"
+            << "configuration="
+            << BuildSvsmMotionBenchmarkConfigurationIdentity(
+                m_SvsmMotionBenchmarkStartSettings) << "\n";
+        WriteSvsmMotionBenchmarkResultFile(result.str());
         log::warning(
             "SVSM motion benchmark aborted: %s",
             reason);
@@ -2379,6 +2378,21 @@ public:
             if (index >= m_SvsmMotionBenchmarkSeenGpuFrames.size())
             {
                 m_SvsmMotionBenchmarkInvalidGpuTag = true;
+                continue;
+            }
+            if (!IsValidSvsmMotionBenchmarkGpuTiming(
+                    timing.pageMarkingMilliseconds,
+                    timing.allocationMilliseconds,
+                    timing.clearingMilliseconds,
+                    timing.packetPageCullingMilliseconds,
+                    timing.pageRenderingMilliseconds,
+                    timing.filteringMilliseconds,
+                    timing.totalMilliseconds,
+                    timing.detailedGpuTimingEnabled,
+                    m_SvsmMotionBenchmarkStartSettings.
+                        detailedGpuTimingEnabled))
+            {
+                m_SvsmMotionBenchmarkInvalidGpuTiming = true;
                 continue;
             }
             if (m_SvsmMotionBenchmarkSeenGpuFrames[index])
@@ -2433,14 +2447,7 @@ public:
         const bool diagnosticConfiguration =
             m_SvsmMotionDiagnosticConfiguration ||
             !IsSvsmMotionBenchmarkAcceptanceConfiguration(
-                m_SvsmMotionBenchmarkStartSettings.physicalPageCount,
-                m_SvsmMotionBenchmarkStartSettings.pageRenderBudget,
-                m_SvsmMotionBenchmarkStartSettings.
-                    coarsestPageRenderBudgetEnabled,
-                m_SvsmMotionBenchmarkStartSettings.
-                    renderPacketCachingEnabled,
-                m_SvsmMotionBenchmarkStartSettings.
-                    gpuGatedDrawSubmission);
+                m_SvsmMotionBenchmarkStartSettings);
         const bool detailedGpuTiming =
             m_SvsmMotionBenchmarkStartSettings.detailedGpuTimingEnabled ||
             m_SvsmMotionBenchmarkDetailedTimingObserved;
@@ -2469,7 +2476,9 @@ public:
                 accounting.retired,
                 accounting.outstanding,
                 m_SvsmMotionBenchmarkDuplicateGpuTag,
-                m_SvsmMotionBenchmarkInvalidGpuTag);
+                m_SvsmMotionBenchmarkInvalidGpuTag,
+                m_SvsmMotionBenchmarkInvalidGpuTiming,
+                m_SvsmMotionBenchmarkInvalidCpuTiming);
         const SvsmMotionBenchmarkTimingSummary gpuSummary =
             SummarizeSvsmMotionBenchmarkSamples(
                 m_SvsmMotionBenchmarkGpuSamples);
@@ -2698,6 +2707,18 @@ public:
             << (m_SvsmMotionExecutableSha256.empty()
                     ? "unavailable"
                     : m_SvsmMotionExecutableSha256) << "\n"
+            << "configurationId="
+            << BuildSvsmMotionBenchmarkConfigurationId(
+                m_SvsmMotionBenchmarkStartSettings) << "\n"
+            << "configuration="
+            << BuildSvsmMotionBenchmarkConfigurationIdentity(
+                m_SvsmMotionBenchmarkStartSettings) << "\n"
+            << "invalidGpuTiming="
+            << (m_SvsmMotionBenchmarkInvalidGpuTiming ? 1u : 0u)
+            << "\n"
+            << "invalidCpuTiming="
+            << (m_SvsmMotionBenchmarkInvalidCpuTiming ? 1u : 0u)
+            << "\n"
             << "width=1920\n"
             << "height=1080\n"
             << "benchmarkKind="
@@ -2985,9 +3006,6 @@ public:
                     .detailedGpuTimingEnabled ? 1u : 0u) << "\n"
             << "adaptiveFiltering=" << (
                 m_SvsmMotionBenchmarkStartSettings.adaptiveFiltering
-                    ? 1u : 0u) << "\n"
-            << "fineCasterExclusion=" << (
-                m_SvsmMotionBenchmarkStartSettings.fineCasterExclusion
                     ? 1u : 0u) << "\n"
             << "taaEnabled=" << (
                 m_SvsmMotionBenchmarkStartTaaEnabled ? 1u : 0u) << "\n"
@@ -3550,21 +3568,33 @@ public:
                         timings.dirtyPageScatterRasterActive;
                     m_SvsmMotionBenchmarkPacketCullingUnavailable |=
                         timings.packetPageCullingUnavailable;
-                    m_SvsmMotionBenchmarkCpuTimings.push_back({
-                        m_SvsmMotionBenchmarkPreparedFrame,
-                        timings.sceneValidationCpuMilliseconds,
-                        timings.clipmapUpdateCpuMilliseconds,
-                        timings.cullingCpuMilliseconds,
-                        timings.totalCpuMilliseconds
-                    });
-                    m_SvsmMotionBenchmarkSceneValidationCpuSamples.push_back(
-                        timings.sceneValidationCpuMilliseconds);
-                    m_SvsmMotionBenchmarkClipmapUpdateCpuSamples.push_back(
-                        timings.clipmapUpdateCpuMilliseconds);
-                    m_SvsmMotionBenchmarkPacketCpuSamples.push_back(
-                        timings.cullingCpuMilliseconds);
-                    m_SvsmMotionBenchmarkCpuSamples.push_back(
-                        timings.totalCpuMilliseconds);
+                    if (!IsValidSvsmMotionBenchmarkCpuTiming(
+                            timings.sceneValidationCpuMilliseconds,
+                            timings.clipmapUpdateCpuMilliseconds,
+                            timings.cullingCpuMilliseconds,
+                            timings.totalCpuMilliseconds))
+                    {
+                        m_SvsmMotionBenchmarkInvalidCpuTiming = true;
+                    }
+                    else
+                    {
+                        m_SvsmMotionBenchmarkCpuTimings.push_back({
+                            m_SvsmMotionBenchmarkPreparedFrame,
+                            timings.sceneValidationCpuMilliseconds,
+                            timings.clipmapUpdateCpuMilliseconds,
+                            timings.cullingCpuMilliseconds,
+                            timings.totalCpuMilliseconds
+                        });
+                        m_SvsmMotionBenchmarkSceneValidationCpuSamples.
+                            push_back(
+                                timings.sceneValidationCpuMilliseconds);
+                        m_SvsmMotionBenchmarkClipmapUpdateCpuSamples.push_back(
+                            timings.clipmapUpdateCpuMilliseconds);
+                        m_SvsmMotionBenchmarkPacketCpuSamples.push_back(
+                            timings.cullingCpuMilliseconds);
+                        m_SvsmMotionBenchmarkCpuSamples.push_back(
+                            timings.totalCpuMilliseconds);
+                    }
                 }
             }
             m_SvsmMotionBenchmarkFramePrepared = false;
@@ -4549,91 +4579,7 @@ public:
         const DiagnosticCsmStats& left,
         const DiagnosticCsmStats& right)
     {
-        return left.outputWidth == right.outputWidth &&
-            left.outputHeight == right.outputHeight &&
-            left.cascadeCount == right.cascadeCount &&
-            left.shadowMapResolution == right.shadowMapResolution &&
-            left.depthBitsPerTexel == right.depthBitsPerTexel &&
-            left.filterSampleCount == right.filterSampleCount &&
-            left.filterComparisonCount == right.filterComparisonCount &&
-            left.maximumShadowDistance == right.maximumShadowDistance &&
-            left.maximumLightDepth == right.maximumLightDepth &&
-            left.maximumActualLightDepthSpan ==
-                right.maximumActualLightDepthSpan &&
-            left.filterRadiusTexels == right.filterRadiusTexels &&
-            left.finestCoverageExtent == right.finestCoverageExtent &&
-            left.coarsestCoverageExtent == right.coarsestCoverageExtent &&
-            left.candidateCasterProjectionPairs ==
-                right.candidateCasterProjectionPairs &&
-            left.coarseCasterProjectionPairs ==
-                right.coarseCasterProjectionPairs &&
-            left.accuratelyCulledCasterProjectionPairs ==
-                right.accuratelyCulledCasterProjectionPairs &&
-            left.radiusCulledCasterProjectionPairs ==
-                right.radiusCulledCasterProjectionPairs &&
-            left.renderedCasterProjectionPairs ==
-                right.renderedCasterProjectionPairs &&
-            left.alphaTestedCasterProjectionPairs ==
-                right.alphaTestedCasterProjectionPairs &&
-            left.submittedDrawCalls == right.submittedDrawCalls &&
-            left.submittedAlphaTestedDrawCalls ==
-                right.submittedAlphaTestedDrawCalls &&
-            left.submittedTranslationOnlyDrawCalls ==
-                right.submittedTranslationOnlyDrawCalls &&
-            left.manualCasterProjectionPairs ==
-                right.manualCasterProjectionPairs &&
-            left.inputAssemblerCasterProjectionPairs ==
-                right.inputAssemblerCasterProjectionPairs &&
-            left.submittedInstances == right.submittedInstances &&
-            left.submittedTriangles == right.submittedTriangles &&
-            left.submittedTranslationOnlyTriangles ==
-                right.submittedTranslationOnlyTriangles &&
-            left.casterSceneTraversals == right.casterSceneTraversals &&
-            left.casterSorts == right.casterSorts &&
-            left.cachedShadowDrawListHits ==
-                right.cachedShadowDrawListHits &&
-            left.cachedShadowDrawListMisses ==
-                right.cachedShadowDrawListMisses &&
-            left.cachedShadowDrawListEntries ==
-                right.cachedShadowDrawListEntries &&
-            left.cachedShadowDrawListCasterProjectionPairs ==
-                right.cachedShadowDrawListCasterProjectionPairs &&
-            left.reusedCascades == right.reusedCascades &&
-            left.scrolledCascades == right.scrolledCascades &&
-            left.dirtyCascades == right.dirtyCascades &&
-            left.redrawnCascades == right.redrawnCascades &&
-            left.dirtyRectangleCount == right.dirtyRectangleCount &&
-            left.receiverRasterScissoredCascades ==
-                right.receiverRasterScissoredCascades &&
-            left.logicalTexels == right.logicalTexels &&
-            left.updatedTexels == right.updatedTexels &&
-            left.copiedTexels == right.copiedTexels &&
-            left.clearedTexels == right.clearedTexels &&
-            left.fullRedrawRasterBoundTexels ==
-                right.fullRedrawRasterBoundTexels &&
-            left.fullRedrawRasterExcludedTexels ==
-                right.fullRedrawRasterExcludedTexels &&
-            left.submissionStatsAvailable ==
-                right.submissionStatsAvailable &&
-            left.translationOnlyCasterTransformRequested ==
-                right.translationOnlyCasterTransformRequested &&
-            left.translationOnlyCasterTransformEnabled ==
-                right.translationOnlyCasterTransformEnabled &&
-            left.inputAssemblerCasterFetchRequested ==
-                right.inputAssemblerCasterFetchRequested &&
-            left.inputAssemblerCasterFetchEnabled ==
-                right.inputAssemblerCasterFetchEnabled &&
-            left.cachedShadowDrawListsRequested ==
-                right.cachedShadowDrawListsRequested &&
-            left.cachedShadowDrawListsActive ==
-                right.cachedShadowDrawListsActive &&
-            left.batchedFullRedrawClearActive ==
-                right.batchedFullRedrawClearActive &&
-            left.receiverRasterScissorEnabled ==
-                right.receiverRasterScissorEnabled &&
-            left.light == right.light &&
-            left.filter == right.filter &&
-            left.cascadeActions == right.cascadeActions;
+        return HasSameDiagnosticCsmBenchmarkWorkIdentity(left, right);
     }
 
     [[nodiscard]] std::filesystem::path
@@ -4648,7 +4594,7 @@ public:
                 extension);
     }
 
-    [[nodiscard]] bool WriteDiagnosticCsmBenchmarkArtifactAtomically(
+    [[nodiscard]] bool WriteBenchmarkArtifactAtomically(
         const std::filesystem::path& targetPath,
         const std::string& contents) const
     {
@@ -4659,14 +4605,15 @@ public:
         if (directoryError)
         {
             log::error(
-                "Diagnostic CSM benchmark could not create '%s' (%s)",
+                "Benchmark artifact writer could not create '%s' (%s)",
                 targetPath.parent_path().string().c_str(),
                 directoryError.message().c_str());
             return false;
         }
 
         std::filesystem::path temporaryPath = targetPath;
-        temporaryPath += "." + m_DiagnosticCsmRecordRunId + ".tmp";
+        temporaryPath += "." +
+            std::to_string(GetCurrentProcessId()) + ".tmp";
         {
             std::ofstream output(
                 temporaryPath,
@@ -4674,7 +4621,7 @@ public:
             if (!output)
             {
                 log::error(
-                    "Diagnostic CSM benchmark could not open temporary artifact '%s'",
+                    "Benchmark artifact writer could not open temporary artifact '%s'",
                     temporaryPath.string().c_str());
                 return false;
             }
@@ -4685,7 +4632,7 @@ public:
             if (!output.good())
             {
                 log::error(
-                    "Diagnostic CSM benchmark could not finish temporary artifact '%s'",
+                    "Benchmark artifact writer could not finish temporary artifact '%s'",
                     temporaryPath.string().c_str());
                 output.close();
                 std::error_code removeError;
@@ -4703,7 +4650,7 @@ public:
                     MOVEFILE_WRITE_THROUGH))
         {
             log::error(
-                "Diagnostic CSM benchmark could not publish '%s' (Windows error %lu)",
+                "Benchmark artifact writer could not publish '%s' (Windows error %lu)",
                 targetPath.string().c_str(),
                 GetLastError());
             std::error_code removeError;
@@ -4721,7 +4668,8 @@ public:
         result << "state=" << state << "\n"
             << "runId=" << m_DiagnosticCsmRecordRunId << "\n"
             << "official=0\n"
-            << "rawAuthoritative=1\n"
+            << "rawAuthoritative=0\n"
+            << "evidenceValid=0\n"
             << "normalizationAdvisory=1\n"
             << "executableSha256="
             << (m_DiagnosticCsmExecutableSha256.empty()
@@ -4737,7 +4685,7 @@ public:
                     : m_DiagnosticCsmTimingConfiguration) << "\n";
         if (reason && reason[0] != '\0')
             result << "reason=" << reason << "\n";
-        return WriteDiagnosticCsmBenchmarkArtifactAtomically(
+        return WriteBenchmarkArtifactAtomically(
             GetDiagnosticCsmBenchmarkArtifactPath("txt"),
             result.str());
     }
@@ -4976,6 +4924,12 @@ public:
         const DiagnosticCsmBenchmarkSample& last =
             m_DiagnosticCsmBenchmarkSamples.back();
         const DiagnosticCsmStats& stats = first.stats;
+        const bool expectedDetailedGpuTimings =
+            m_DiagnosticCsmBenchmarkSettings.detailedGpuTimingEnabled;
+        bool timingsValid = true;
+        bool detailedGpuTimingModeUniform = true;
+        bool workIdentityStable = true;
+        bool issuedFrameContextsValid = true;
         uint64_t missingSourceFrames = 0u;
         uint64_t sourceFrameGapEvents = 0u;
         uint64_t maximumSourceFrameGap = 0u;
@@ -4985,11 +4939,43 @@ public:
             [](const DiagnosticCsmBenchmarkSample& sample) {
                 return !sample.issuedFrameContextAvailable;
             }));
+        for (const DiagnosticCsmBenchmarkSample& sample :
+            m_DiagnosticCsmBenchmarkSamples)
+        {
+            timingsValid &=
+                IsValidDiagnosticCsmBenchmarkTiming(sample.timings);
+            detailedGpuTimingModeUniform &=
+                sample.timings.detailedGpuTimingEnabled ==
+                    detailedGpuTimings;
+            workIdentityStable &=
+                IsSameDiagnosticCsmBenchmarkWork(stats, sample.stats);
+            issuedFrameContextsValid &=
+                IsValidDiagnosticCsmBenchmarkIssuedFrameContext(
+                    sample.issuedFrameContextAvailable,
+                    sample.frameIntervalMilliseconds);
+        }
+        bool sourceFrameArithmeticValid = true;
+        bool sourceFramesStrictlyConsecutive = true;
         for (size_t index = 1u; index < sampleCount; ++index)
         {
-            const uint64_t gap =
-                m_DiagnosticCsmBenchmarkSamples[index].sourceFrame -
+            const uint64_t previousSourceFrame =
                 m_DiagnosticCsmBenchmarkSamples[index - 1u].sourceFrame;
+            const uint64_t currentSourceFrame =
+                m_DiagnosticCsmBenchmarkSamples[index].sourceFrame;
+            if (!AreDiagnosticCsmBenchmarkSourceFramesConsecutive(
+                    previousSourceFrame,
+                    currentSourceFrame))
+            {
+                sourceFramesStrictlyConsecutive = false;
+            }
+            if (currentSourceFrame <= previousSourceFrame)
+            {
+                sourceFrameArithmeticValid = false;
+                ++sourceFrameGapEvents;
+                continue;
+            }
+            const uint64_t gap =
+                currentSourceFrame - previousSourceFrame;
             maximumSourceFrameGap =
                 std::max(maximumSourceFrameGap, gap);
             if (gap > 1u)
@@ -4998,13 +4984,60 @@ public:
                 missingSourceFrames += gap - 1u;
             }
         }
+        const std::string expectedTimingConfiguration =
+            BuildDiagnosticCsmTimingConfigurationIdentity(
+                m_DiagnosticCsmBenchmarkSettings);
+        const std::string expectedTimingConfigurationId =
+            BuildDiagnosticCsmTimingConfigurationId(
+                m_DiagnosticCsmBenchmarkSettings);
+        DiagnosticCsmBenchmarkEvidence benchmarkEvidence;
+        benchmarkEvidence.expectedSampleCount =
+            DiagnosticCsmBenchmarkMeasurementFrames;
+        benchmarkEvidence.sampleCount = sampleCount;
+        benchmarkEvidence.missingIssuedFrameContexts =
+            missingIssuedFrameContexts;
+        benchmarkEvidence.sourceFrameGapEvents = sourceFrameGapEvents;
+        benchmarkEvidence.missingSourceFrames = missingSourceFrames;
+        benchmarkEvidence.maximumSourceFrameGap = maximumSourceFrameGap;
+        benchmarkEvidence.executableIdentityValid =
+            m_DiagnosticCsmExecutableSha256.size() == 64u;
+        benchmarkEvidence.timingConfigurationIdentityValid =
+            m_DiagnosticCsmTimingConfiguration ==
+                expectedTimingConfiguration &&
+            m_DiagnosticCsmTimingConfigurationId ==
+                expectedTimingConfigurationId;
+        benchmarkEvidence.timingsValid = timingsValid;
+        benchmarkEvidence.detailedGpuTimingModeUniform =
+            detailedGpuTimingModeUniform;
+        benchmarkEvidence.detailedGpuTimingModeMatchesConfiguration =
+            detailedGpuTimings == expectedDetailedGpuTimings;
+        benchmarkEvidence.workIdentityStable = workIdentityStable;
+        benchmarkEvidence.sourceFrameArithmeticValid =
+            sourceFrameArithmeticValid;
+        benchmarkEvidence.sourceFramesStrictlyConsecutive =
+            sourceFramesStrictlyConsecutive;
+        benchmarkEvidence.issuedFrameContextsValid =
+            issuedFrameContextsValid;
+        const bool rawAuthoritative =
+            IsDiagnosticCsmBenchmarkRawAuthoritative(
+                "complete",
+                benchmarkEvidence);
+        if (!rawAuthoritative)
+        {
+            WriteDiagnosticCsmBenchmarkFailure(
+                "raw timing evidence was incomplete or internally inconsistent");
+            return false;
+        }
 
         std::ostringstream result;
         result << std::fixed << std::setprecision(6)
             << "state=complete\n"
             << "runId=" << m_DiagnosticCsmRecordRunId << "\n"
             << "official=0\n"
-            << "rawAuthoritative=1\n"
+            << "rawAuthoritative=" << (rawAuthoritative ? 1u : 0u)
+            << "\n"
+            << "evidenceValid=" << (rawAuthoritative ? 1u : 0u)
+            << "\n"
             << "normalizationAdvisory=1\n"
             << "sameAdapterOnly=1\n"
             << "normalizationVersion=calibrated-issue-frame-clock-capacity-v2\n"
@@ -5423,7 +5456,7 @@ public:
             GetDiagnosticCsmBenchmarkArtifactPath("csv");
         const std::filesystem::path textPath =
             GetDiagnosticCsmBenchmarkArtifactPath("txt");
-        if (!WriteDiagnosticCsmBenchmarkArtifactAtomically(
+        if (!WriteBenchmarkArtifactAtomically(
                 csvPath,
                 samples.str()))
         {
@@ -5431,7 +5464,7 @@ public:
                 "could not publish the buffered CSV artifact");
             return false;
         }
-        if (!WriteDiagnosticCsmBenchmarkArtifactAtomically(
+        if (!WriteBenchmarkArtifactAtomically(
                 textPath,
                 result.str()))
         {
@@ -8607,9 +8640,812 @@ private:
         return changed;
     }
 
-    static bool DrawCenteredActionButton(
-        const char* label,
-        float width)
+    static bool DrawSvsmSettingsSurface(
+        SparseVirtualShadowMapSettings& shadows,
+        float settingsControlWidth)
+    {
+        // These implementation booleans remain in the settings contract for
+        // benchmark compatibility, but the UI exposes one authoritative state
+        // for each policy so it cannot construct contradictory combinations.
+        shadows.cachingEnabled =
+            shadows.mode == SvsmMode::SparseCached;
+        shadows.movingLightLodBiasEnabled =
+            shadows.movingLightResolutionBias !=
+                SvsmResolutionBias::Zero;
+        if (shadows.dirtyPageScatterRasterEnabled)
+        {
+            shadows.dirtyPageScatterAmplificationGuardEnabled =
+                true;
+        }
+
+        bool customChanged = false;
+
+        const auto drawCheckbox = [&](
+            const char* label,
+            bool& value,
+            bool available,
+            const char* tooltip)
+        {
+            if (!available)
+                ImGui::BeginDisabled();
+            const bool changed = ImGui::Checkbox(label, &value);
+            if (!available)
+                ImGui::EndDisabled();
+            if (tooltip != nullptr)
+                ImGui::SetItemTooltip("%s", tooltip);
+            return changed;
+        };
+
+        const auto drawCombo = [&](
+            const char* label,
+            int currentIndex,
+            const char* const* labels,
+            int labelCount,
+            bool available,
+            const char* tooltip)
+        {
+            int selectedIndex = -1;
+            currentIndex = std::clamp(
+                currentIndex,
+                0,
+                labelCount - 1);
+            if (!available)
+                ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            if (BeginRoundedCombo(label, labels[currentIndex]))
+            {
+                for (int index = 0; index < labelCount; ++index)
+                {
+                    const bool selected = index == currentIndex;
+                    if (ImGui::Selectable(labels[index], selected))
+                        selectedIndex = index;
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            if (!available)
+                ImGui::EndDisabled();
+            if (tooltip != nullptr)
+                ImGui::SetItemTooltip("%s", tooltip);
+            return selectedIndex;
+        };
+
+        const auto drawFloat = [&](
+            const char* label,
+            float& value,
+            float minimum,
+            float maximum,
+            const char* format,
+            bool available,
+            const char* tooltip)
+        {
+            if (!available)
+                ImGui::BeginDisabled();
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            const bool changed = DrawSliderFloat(
+                label,
+                &value,
+                minimum,
+                maximum,
+                format);
+            if (!available)
+                ImGui::EndDisabled();
+            if (tooltip != nullptr)
+                ImGui::SetItemTooltip("%s", tooltip);
+            return changed;
+        };
+
+        const auto sparseMode = [&]()
+        {
+            return shadows.mode != SvsmMode::DenseReference;
+        };
+        const auto cachedSparseMode = [&]()
+        {
+            return shadows.mode == SvsmMode::SparseCached;
+        };
+        const auto cacheReuseAvailable = [&]()
+        {
+            return cachedSparseMode() && shadows.cachingEnabled;
+        };
+        const auto finitePageBudget = [&]()
+        {
+            return shadows.pageRenderBudget !=
+                std::numeric_limits<uint32_t>::max();
+        };
+
+        static const char* presetLabels[] = {
+            "Performance",
+            "Balanced",
+            "Quality",
+            "Custom"
+        };
+        const int selectedPreset = drawCombo(
+            "Profile##SparseVirtualShadowMaps",
+            int(shadows.preset),
+            presetLabels,
+            int(std::size(presetLabels)),
+            true,
+            "Choose the speed-to-quality balance. Named profiles reset "
+            "Developer and Unabstracted controls while retaining "
+            "the scene extent, light-depth range, pool size, and Enabled state.");
+        if (selectedPreset >= 0)
+        {
+            ApplySvsmPreset(
+                shadows,
+                SvsmPreset(selectedPreset));
+        }
+
+        customChanged |= drawFloat(
+            "First Clipmap Extent",
+            shadows.firstClipmapExtent,
+            1.f,
+            500.f,
+            "%.1f",
+            true,
+            "Set the world-space width covered by the finest clipmap.");
+        customChanged |= drawFloat(
+            "Maximum Light Depth",
+            shadows.maximumLightDepth,
+            1.f,
+            2000.f,
+            "%.1f",
+            true,
+            "Set the caster depth range centered on each clipmap.");
+
+        static const char* filterKernelLabels[] = {
+            "Nearest Poisson Reference",
+            "Bilinear PCF"
+        };
+        const int selectedKernel = drawCombo(
+            "Filter Kernel",
+            int(shadows.filterKernel),
+            filterKernelLabels,
+            int(std::size(filterKernelLabels)),
+            sparseMode(),
+            sparseMode()
+                ? "Choose the deterministic nearest reference or bilinear "
+                  "page-safe PCF."
+                : "Dense Reference retains its point-load receiver.");
+        if (selectedKernel >= 0)
+        {
+            shadows.filterKernel = SvsmFilterKernel(selectedKernel);
+            customChanged = true;
+        }
+
+        static const char* tapLabels[] = {
+            "1",
+            "4",
+            "8",
+            "16"
+        };
+        static const SvsmTapCount tapValues[] = {
+            SvsmTapCount::One,
+            SvsmTapCount::Four,
+            SvsmTapCount::Eight,
+            SvsmTapCount::Sixteen
+        };
+        int currentTapIndex = 0;
+        for (int index = 0; index < int(std::size(tapValues)); ++index)
+        {
+            if (tapValues[index] == shadows.tapCount)
+                currentTapIndex = index;
+        }
+        const int selectedTap = drawCombo(
+            "Filter Taps",
+            currentTapIndex,
+            tapLabels,
+            int(std::size(tapLabels)),
+            true,
+            "Select the page-safe 1, 4, 8, or 16-tap receiver.");
+        if (selectedTap >= 0)
+        {
+            shadows.tapCount = tapValues[selectedTap];
+            customChanged = true;
+        }
+        customChanged |= drawCheckbox(
+            "Adaptive Filtering",
+            shadows.adaptiveFiltering,
+            shadows.tapCount != SvsmTapCount::One,
+            "Use a page-safe agreement probe set before the selected full "
+            "filter. One-tap filtering has no adaptive shortcut.");
+
+        static const char* biasLabels[] = {
+            "0",
+            "+1 Mip",
+            "+2 Mips"
+        };
+        const int selectedBias = drawCombo(
+            "Resolution Bias",
+            int(shadows.resolutionBias),
+            biasLabels,
+            int(std::size(biasLabels)),
+            true,
+            "Apply the same clipmap bias to marking, allocation, resolve, "
+            "fallback, dense clipmap drawing, and diagnostics.");
+        if (selectedBias >= 0)
+        {
+            shadows.resolutionBias = SvsmResolutionBias(selectedBias);
+            customChanged = true;
+        }
+
+        customChanged |=
+            drawCheckbox("Receiver Distance Mip Clamp",
+                         shadows.receiverDistanceMipClampEnabled,
+                         sparseMode(),
+                         "Prevent distant receivers from requesting unnecessarily fine "
+                         "clipmaps while retaining the complete coarsest fallback.");
+
+        if (BeginAnimatedTreeNode("Developer Options##SparseVirtualShadowMaps"))
+        {
+            const bool movingLightPolicyAvailable =
+                cacheReuseAvailable() && shadows.movingLightUncachedEnabled;
+            const bool movingBiasActive =
+                movingLightPolicyAvailable &&
+                shadows.movingLightLodBiasEnabled &&
+                shadows.movingLightResolutionBias != SvsmResolutionBias::Zero;
+            const bool receiverDistanceClampAvailable =
+                sparseMode() && shadows.receiverDistanceMipClampEnabled;
+            const bool packetCullingAvailable =
+                sparseMode() && shadows.gpuGatedDrawSubmission;
+            const bool packetPageCullingActive =
+                packetCullingAvailable && shadows.packetPageCullingEnabled;
+            const bool dirtyScatterAvailable = packetPageCullingActive;
+
+            const bool resourcesAndCacheOpen =
+                ImGui::TreeNodeEx("Resources And Cache Policy##SparseVirtualShadowMaps");
+            ImGui::SetItemTooltip(
+                "Configure sparse pool capacity, scheduling limits, cache mode, "
+                "paired depth, eviction, and reusable draw lists.");
+            if (resourcesAndCacheOpen)
+            {
+                if (sparseMode())
+                {
+                    int physicalPageCount = int(shadows.physicalPageCount);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (DrawSliderInt("Physical Pool Pages",
+                                      &physicalPageCount,
+                                      64,
+                                      int(SvsmPagesPerClipmap)))
+                    {
+                        shadows.physicalPageCount = uint32_t(physicalPageCount);
+                        if (finitePageBudget())
+                        {
+                            shadows.pageRenderBudget = std::min(
+                                shadows.pageRenderBudget, shadows.physicalPageCount);
+                        }
+                        customChanged = true;
+                    }
+                    ImGui::SetItemTooltip("Set the logical size of the shared fixed "
+                                          "physical page pool.");
+
+                    static uint32_t rememberedFinitePageBudget = 256u;
+                    if (finitePageBudget())
+                    {
+                        rememberedFinitePageBudget =
+                            std::min(shadows.pageRenderBudget, shadows.physicalPageCount);
+                    }
+                    bool unlimitedBudget = !finitePageBudget();
+                    if (ImGui::Checkbox("Unlimited Page Render Budget", &unlimitedBudget))
+                    {
+                        if (unlimitedBudget)
+                        {
+                            shadows.pageRenderBudget =
+                                std::numeric_limits<uint32_t>::max();
+                        }
+                        else
+                        {
+                            shadows.pageRenderBudget = std::min(
+                                rememberedFinitePageBudget, shadows.physicalPageCount);
+                        }
+                        customChanged = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Remove the finite dirty-page scheduling limit. Returning "
+                        "to a finite budget restores the last finite value.");
+
+                    if (!unlimitedBudget)
+                    {
+                        int pageBudget = int(std::min(shadows.pageRenderBudget,
+                                                      shadows.physicalPageCount));
+                        ImGui::SetNextItemWidth(settingsControlWidth);
+                        if (DrawSliderInt("Page Render Budget",
+                                          &pageBudget,
+                                          0,
+                                          int(shadows.physicalPageCount)))
+                        {
+                            shadows.pageRenderBudget = uint32_t(pageBudget);
+                            rememberedFinitePageBudget = uint32_t(pageBudget);
+                            customChanged = true;
+                        }
+                        ImGui::SetItemTooltip(
+                            "Limit dirty-page scheduling across the fine clipmaps.");
+                    }
+                }
+                else
+                {
+                    ImGui::TextDisabled(
+                        "Dense Reference does not use a physical page pool.");
+                }
+
+                customChanged |= drawCheckbox(
+                    "Paired Static/Dynamic Depth",
+                    shadows.pairedStaticDynamicDepthEnabled,
+                    cacheReuseAvailable(),
+                    "Use one page identity with persistent static depth and a "
+                    "receiver-visible merged slice. This doubles physical-depth "
+                    "pool memory and therefore requires Sparse Cached mode.");
+
+                ImGui::Separator();
+
+                static const char* modeLabels[] = {
+                    "Dense Reference", "Sparse Uncached", "Sparse Cached"};
+                const int selectedMode =
+                    drawCombo("Mode##SparseVirtualShadowMaps",
+                              int(shadows.mode),
+                              modeLabels,
+                              int(std::size(modeLabels)),
+                              true,
+                              "Select fully backed validation, sparse full redraw, or "
+                              "sparse cached page reuse. Cache state follows this mode.");
+                if (selectedMode >= 0)
+                {
+                    shadows.mode = SvsmMode(selectedMode);
+                    shadows.cachingEnabled = shadows.mode == SvsmMode::SparseCached;
+                    customChanged = true;
+                }
+
+                customChanged |= drawCheckbox(
+                    "Include Coarsest in Page Budget",
+                    shadows.coarsestPageRenderBudgetEnabled,
+                    sparseMode() && finitePageBudget(),
+                    "Apply the finite shared render reservation to all six "
+                    "clipmaps instead of preserving the complete coarse fallback.");
+
+                static const char* markingLabels[] = {
+                    "Per Pixel", "8 by 8 Tile", "16 by 16 Tile"};
+                const int selectedMarking = drawCombo(
+                    "Page Marking",
+                    int(shadows.markingMode),
+                    markingLabels,
+                    int(std::size(markingLabels)),
+                    sparseMode(),
+                    "Choose exact per-pixel requests or conservative deduplicated "
+                    "tile marking.");
+                if (selectedMarking >= 0)
+                {
+                    shadows.markingMode = SvsmMarkingMode(selectedMarking);
+                    customChanged = true;
+                }
+
+                customChanged |=
+                    drawCheckbox("Recent Page Eviction Grace",
+                                 shadows.recentPageEvictionGraceEnabled,
+                                 cacheReuseAvailable(),
+                                 "Protect recently used pages from immediate fixed-pool "
+                                 "eviction.");
+                customChanged |=
+                    drawCheckbox("Cached Shadow Draw Lists",
+                                 shadows.renderPacketCachingEnabled,
+                                 sparseMode(),
+                                 "Reuse compatible conservative per-clipmap caster "
+                                 "packet lists.");
+
+                ImGui::TreePop();
+            }
+
+            const bool movementAndInvalidationOpen =
+                ImGui::TreeNodeEx("Movement And Invalidation##SparseVirtualShadowMaps");
+            ImGui::SetItemTooltip(
+                "Tune moving-light recovery, receiver-distance clamping, and "
+                "localized caster invalidation policy.");
+            if (movementAndInvalidationOpen)
+            {
+                static const char* movingBiasLabels[] = {"Off", "+1 Mip", "+2 Mips"};
+                const int effectiveMovingBias =
+                    shadows.movingLightLodBiasEnabled
+                        ? int(shadows.movingLightResolutionBias)
+                        : 0;
+                const int selectedMovingBias = drawCombo(
+                    "Moving-Light Resolution Bias",
+                    effectiveMovingBias,
+                    movingBiasLabels,
+                    int(std::size(movingBiasLabels)),
+                    movingLightPolicyAvailable,
+                    "Temporarily coarsen moving-light work, then recover. Off is "
+                    "the exact no-bias path.");
+                if (selectedMovingBias >= 0)
+                {
+                    shadows.movingLightResolutionBias =
+                        SvsmResolutionBias(selectedMovingBias);
+                    shadows.movingLightLodBiasEnabled = selectedMovingBias != 0;
+                    customChanged = true;
+                }
+
+                int movingLightRecoveryFrames = int(shadows.movingLightLodRecoveryFrames);
+                if (!movingBiasActive)
+                    ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (DrawSliderInt("Moving-Light Recovery Frames",
+                                  &movingLightRecoveryFrames,
+                                  0,
+                                  60))
+                {
+                    shadows.movingLightLodRecoveryFrames =
+                        uint32_t(movingLightRecoveryFrames);
+                    customChanged = true;
+                }
+                if (!movingBiasActive)
+                    ImGui::EndDisabled();
+                ImGui::SetItemTooltip(
+                    "Hold the selected moving-light bias, then recover after this "
+                    "many successful sparse frames.");
+
+                if (!receiverDistanceClampAvailable)
+                    ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (ImGui::DragFloat("Distance Clamp Start x Extent",
+                                     &shadows.receiverDistanceMipClampStartScale,
+                                     0.05f,
+                                     0.25f,
+                                     8.f,
+                                     "%.2f"))
+                {
+                    customChanged = true;
+                }
+                int receiverDistanceMaximumLevel =
+                    int(shadows.receiverDistanceMipClampMaximumLevel);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (DrawSliderInt("Maximum Distance Clamp Level",
+                                  &receiverDistanceMaximumLevel,
+                                  0,
+                                  int(SvsmMaximumReceiverDistanceMipClampLevel)))
+                {
+                    shadows.receiverDistanceMipClampMaximumLevel =
+                        uint32_t(receiverDistanceMaximumLevel);
+                    customChanged = true;
+                }
+                if (!receiverDistanceClampAvailable)
+                    ImGui::EndDisabled();
+                ImGui::SetItemTooltip(
+                    "Set the first distance threshold and maximum fine-clipmap "
+                    "clamp level.");
+
+                const bool adaptiveCasterClassificationAvailable =
+                    cacheReuseAvailable() && shadows.localizedInvalidationEnabled &&
+                    shadows.pairedStaticDynamicDepthEnabled;
+                customChanged |= drawCheckbox(
+                    "Adaptive Static Caster Cache",
+                    shadows.adaptiveCasterCacheClassificationEnabled,
+                    adaptiveCasterClassificationAvailable,
+                    "Demote changed rigid opaque casters immediately and promote "
+                    "them back to persistent static depth after stabilization.");
+
+                static const char* invalidationModeLabels[] = {
+                    "Auto", "Always", "Rigid", "Static"};
+                const int selectedInvalidationMode = drawCombo(
+                    "Object Invalidation Mode",
+                    int(shadows.defaultObjectInvalidationMode),
+                    invalidationModeLabels,
+                    int(std::size(invalidationModeLabels)),
+                    cacheReuseAvailable() && shadows.localizedInvalidationEnabled,
+                    "Choose the default per-object transform and deformation "
+                    "invalidation policy.");
+                if (selectedInvalidationMode >= 0)
+                {
+                    shadows.defaultObjectInvalidationMode =
+                        SvsmObjectInvalidationMode(selectedInvalidationMode);
+                    customChanged = true;
+                }
+
+                ImGui::TreePop();
+            }
+
+            const bool cullingAndRasterOpen =
+                ImGui::TreeNodeEx("Culling And Raster##SparseVirtualShadowMaps");
+            ImGui::SetItemTooltip(
+                "Tune packet rejection, scheduled-page masks, static-depth "
+                "occlusion, and dirty-page raster.");
+            if (cullingAndRasterOpen)
+            {
+                customChanged |= drawCheckbox(
+                    "Packet State Sorting",
+                    shadows.packetStateSortingEnabled,
+                    sparseMode() &&
+                        shadows.gpuGatedDrawSubmission &&
+                        shadows.batchedDrawSubmissionEnabled,
+                    "Group compatible packet state before indirect submission.");
+                customChanged |= drawCheckbox("Packet Page Culling",
+                                              shadows.packetPageCullingEnabled,
+                                              packetCullingAvailable,
+                                              "Intersect each cached caster packet "
+                                              "with scheduled dirty work.");
+                customChanged |= drawCheckbox(
+                    "Hierarchical Scheduled-Page Mask",
+                    shadows.hierarchicalScheduledPageMaskEnabled,
+                    packetPageCullingActive,
+                    "Reject packet rectangles against an exact-validated coarse "
+                    "scheduled-page hierarchy.");
+                customChanged |= drawCheckbox(
+                    "Receiver Subpage Mask Culling",
+                    shadows.receiverPageMaskCullingEnabled,
+                    packetPageCullingActive,
+                    "Cull caster/page work outside the current receiver subpage "
+                    "mask.");
+
+                const bool staticDepthHierarchyAvailable =
+                    packetPageCullingActive && cacheReuseAvailable() &&
+                    shadows.pairedStaticDynamicDepthEnabled &&
+                    !shadows.dirtyPageScatterRasterEnabled;
+                customChanged |= drawCheckbox(
+                    "Static-Depth Page HZB Culling",
+                    shadows.staticDepthHierarchyCullingEnabled,
+                    staticDepthHierarchyAvailable,
+                    "Reject only fully occluded dynamic caster/page pairs against "
+                    "the complete persistent static page hierarchy.");
+                customChanged |=
+                    drawFloat("Static HZB Conservative Bias",
+                              shadows.staticDepthHierarchyBias,
+                              0.f,
+                              0.01f,
+                              "%.6f",
+                              staticDepthHierarchyAvailable &&
+                                  shadows.staticDepthHierarchyCullingEnabled,
+                              "Increase the reverse-Z fail-open guard used by "
+                              "static HZB culling.");
+
+                bool dirtyScatterEnabled = shadows.dirtyPageScatterRasterEnabled;
+                if (drawCheckbox(
+                        "Dirty Page Scatter Raster",
+                        dirtyScatterEnabled,
+                        dirtyScatterAvailable,
+                        "Request one virtual-space draw per intersecting packet. "
+                        "The amplification guard is intrinsic and falls back to "
+                        "the exact page list when a rectangle covers too many "
+                        "holes."))
+                {
+                    shadows.dirtyPageScatterRasterEnabled = dirtyScatterEnabled;
+                    if (dirtyScatterEnabled)
+                    {
+                        shadows.dirtyPageScatterAmplificationGuardEnabled = true;
+                    }
+                    customChanged = true;
+                }
+                int scatterMaximumAmplification =
+                    int(shadows.dirtyPageScatterMaximumAmplification);
+                if (!dirtyScatterAvailable || !shadows.dirtyPageScatterRasterEnabled)
+                {
+                    ImGui::BeginDisabled();
+                }
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (DrawSliderInt("Scatter Maximum Page Amplification",
+                                  &scatterMaximumAmplification,
+                                  1,
+                                  int(SvsmMaximumDirtyPageScatterAmplification)))
+                {
+                    shadows.dirtyPageScatterMaximumAmplification =
+                        uint32_t(scatterMaximumAmplification);
+                    customChanged = true;
+                }
+                if (!dirtyScatterAvailable || !shadows.dirtyPageScatterRasterEnabled)
+                {
+                    ImGui::EndDisabled();
+                }
+                ImGui::SetItemTooltip(
+                    "Fall back to the exact per-page packet list above this "
+                    "rectangle-to-exact-page amplification ratio.");
+
+                ImGui::TreePop();
+            }
+
+            const bool unabstractedOpen =
+                ImGui::TreeNodeEx("Unabstracted##SparseVirtualShadowMaps");
+            ImGui::SetItemTooltip(
+                "Raw independently toggleable optimizations that are proven "
+                "enough to trend toward an abstracted always-on policy, but "
+                "retain their reference paths during validation.");
+            if (unabstractedOpen)
+            {
+                customChanged |=
+                    drawCheckbox("Allocation Budget Saturation Early-Out",
+                                 shadows.allocationBudgetSaturationEarlyOutEnabled,
+                                 sparseMode() && finitePageBudget(),
+                                 "Bypass redundant reservation atomics after the shared "
+                                 "finite budget is saturated.");
+                customChanged |= drawCheckbox(
+                    "Deduplicate Per-Pixel Requests",
+                    shadows.perPixelMarkingDedupeEnabled,
+                    sparseMode() && shadows.markingMode == SvsmMarkingMode::PerPixel,
+                    "Deduplicate each 8-by-8 group's page requests through a "
+                    "bounded shared hash that fails open on collisions.");
+
+                static const char* poissonOrderingLabels[] = {"Legacy Stride Reference",
+                                                              "Balanced Progressive"};
+                const int selectedPoissonOrdering = drawCombo(
+                    "Poisson Ordering",
+                    int(shadows.poissonOrdering),
+                    poissonOrderingLabels,
+                    int(std::size(poissonOrderingLabels)),
+                    sparseMode(),
+                    "Choose the legacy stride or balanced progressive tap prefix.");
+                if (selectedPoissonOrdering >= 0)
+                {
+                    shadows.poissonOrdering =
+                        SvsmPoissonOrdering(selectedPoissonOrdering);
+                    customChanged = true;
+                }
+
+                static const char* filteringLabels[] = {"Manual Page Safe", "Hybrid"};
+                const int selectedFiltering =
+                    drawCombo("Filtering",
+                              int(shadows.filterMode),
+                              filteringLabels,
+                              int(std::size(filteringLabels)),
+                              sparseMode(),
+                              "Hybrid filtering reuses one translation only when the "
+                              "complete footprint stays in one valid page.");
+                if (selectedFiltering >= 0)
+                {
+                    shadows.filterMode = SvsmFilterMode(selectedFiltering);
+                    customChanged = true;
+                }
+
+                customChanged |=
+                    drawCheckbox("Precomposed Clipmap Transforms",
+                                 shadows.precomposedClipmapTransformsEnabled,
+                                 sparseMode(),
+                                 "Transform camera-clip positions directly into each "
+                                 "clipmap in marking and resolve.");
+                customChanged |=
+                    drawCheckbox("Page Translation Cache",
+                                 shadows.pageTranslationCachingEnabled,
+                                 sparseMode(),
+                                 "Reuse exact page-table translations within one pixel's "
+                                 "validated filter footprint.");
+
+                customChanged |= drawCheckbox(
+                    "Light-Depth Origin Guard Band",
+                    shadows.lightDepthOriginGuardBandEnabled,
+                    cacheReuseAvailable(),
+                    "Keep the light-depth origin stable until the configured "
+                    "scene-depth guard band is exceeded.");
+                customChanged |= drawFloat(
+                    "Light-Depth Guard Fraction",
+                    shadows.lightDepthOriginGuardBandFraction,
+                    0.1f,
+                    1.f,
+                    "%.2f",
+                    cacheReuseAvailable() && shadows.lightDepthOriginGuardBandEnabled,
+                    "Set the usable fraction of the cached light-depth range.");
+                customChanged |=
+                    drawCheckbox("Finite-Budget Static Drain",
+                                 shadows.finiteBudgetStaticDrainEnabled,
+                                 cacheReuseAvailable() && finitePageBudget(),
+                                 "Drain persistent static-dirty work without starving "
+                                 "dynamic fine pages under a finite budget.");
+                customChanged |= drawCheckbox(
+                    "Static Page Request Reuse",
+                    shadows.staticPageRequestReuseEnabled,
+                    cacheReuseAvailable(),
+                    "Reuse validated static page requests while camera, light, "
+                    "and scene mapping remain compatible.");
+                customChanged |=
+                    drawCheckbox("Static Visibility Cache",
+                                 shadows.staticVisibilityCachingEnabled,
+                                 cacheReuseAvailable(),
+                                 "Reuse the full-resolution visibility result when all "
+                                 "receiver and shadow inputs remain compatible.");
+                customChanged |=
+                    drawCheckbox("Scene State Caching",
+                                 shadows.sceneStateCachingEnabled,
+                                 true,
+                                 "Reuse validated scene revisions until UVSR reports a "
+                                 "shadow-relevant scene change.");
+                customChanged |=
+                    drawCheckbox("Caster-Only Scene Revision",
+                                 shadows.casterOnlySceneRevisionEnabled,
+                                 shadows.sceneStateCachingEnabled,
+                                 "Distinguish caster changes from light-only transforms "
+                                 "using Donut's dirty scene branches.");
+                customChanged |= drawCheckbox(
+                    "Shared Six-Clipmap Packet Builder",
+                    shadows.sharedClipmapPacketBuilderEnabled,
+                    sparseMode(),
+                    "Traverse compatible casters once and classify the shared "
+                    "metadata across all six clipmaps.");
+                customChanged |= drawCheckbox(
+                    "Persistent Caster Source Cache",
+                    shadows.persistentCasterSourceCachingEnabled,
+                    sparseMode() && shadows.sharedClipmapPacketBuilderEnabled,
+                    "Reuse validated caster source references, transforms, "
+                    "bounds, topology, materials, and draw arguments.");
+                customChanged |= drawCheckbox(
+                    "Opaque Raster Specialization",
+                    shadows.opaqueRasterSpecializationEnabled,
+                    sparseMode(),
+                    "Use the position-only, material-free opaque depth path.");
+                customChanged |=
+                    drawCheckbox("Lean Alpha-Tested Bindings",
+                                 shadows.leanAlphaTestedBindingsEnabled,
+                                 sparseMode(),
+                                 "Bind only shadow-relevant alpha material resources.");
+                customChanged |= drawCheckbox(
+                    "Deferred Static-Depth Merge",
+                    shadows.deferredStaticDepthMergeEnabled,
+                    cacheReuseAvailable() && shadows.pairedStaticDynamicDepthEnabled,
+                    "Merge scheduled static-dirty pages after static raster "
+                    "instead of issuing duplicate static depth atomics.");
+                customChanged |=
+                    drawCheckbox("Moving-Light Uncached Policy",
+                                 shadows.movingLightUncachedEnabled,
+                                 cachedSparseMode(),
+                                 "Use the receiver-visible merged slice while the light "
+                                 "moves, then rebuild and resume compatible caching.");
+                customChanged |= drawCheckbox(
+                    "Preserve Page Mappings On Content Invalidation",
+                    shadows.retainPhysicalMappingsOnContentInvalidationEnabled,
+                    sparseMode(),
+                    "Retain validated physical ownership across logical content "
+                    "invalidation; resource recreation remains destructive.");
+                customChanged |= drawCheckbox(
+                    "Continuous Moving-Light Distance Bias",
+                    shadows.movingLightContinuousReceiverBiasEnabled,
+                    receiverDistanceClampAvailable && movingBiasActive,
+                    "Shift distance thresholds continuously during moving-light "
+                    "recovery instead of globally dropping a clipmap.");
+                customChanged |= drawCheckbox(
+                    "Localized Caster Invalidation",
+                    shadows.localizedInvalidationEnabled,
+                    cacheReuseAvailable(),
+                    "Dirty only conservative old-plus-new virtual coverage for "
+                    "reliable stable caster identities.");
+                customChanged |= drawCheckbox(
+                    "Tight Localized Bounds",
+                    shadows.tightLocalizedInvalidationBoundsEnabled,
+                    cacheReuseAvailable() && shadows.localizedInvalidationEnabled,
+                    "Project original object-space bounds directly and fail "
+                    "open when identity or bounds are unreliable.");
+                customChanged |=
+                    drawCheckbox("GPU-Gated Draw Submission",
+                                 shadows.gpuGatedDrawSubmission,
+                                 sparseMode(),
+                                 "Let compact GPU work determine which prepared caster "
+                                 "packets reach raster.");
+                customChanged |= drawCheckbox(
+                    "Batched Draw Submission",
+                    shadows.batchedDrawSubmissionEnabled,
+                    sparseMode() && shadows.gpuGatedDrawSubmission,
+                    "Reuse compatible state and submit compact indirect draw "
+                    "batches.");
+                customChanged |=
+                    drawCheckbox("Per-Level Empty-Work Skip",
+                                 shadows.levelEmptyWorkSkipEnabled,
+                                 sparseMode() && shadows.gpuGatedDrawSubmission &&
+                                     shadows.batchedDrawSubmissionEnabled,
+                                 "Skip parsing indirect commands for clipmap levels with "
+                                 "zero dirty work.");
+                customChanged |= drawCheckbox(
+                    "Packet Rectangle Direct Scan",
+                    shadows.packetRectangleDirectScanEnabled,
+                    packetPageCullingActive,
+                    "Probe small wrapped packet rectangles directly instead of "
+                    "scanning the full compact dirty-page list.");
+                customChanged |= drawCheckbox(
+                    "Scatter Alpha-Test Early Reject",
+                    shadows.scatterAlphaTestEarlyRejectEnabled,
+                    dirtyScatterAvailable && shadows.dirtyPageScatterRasterEnabled,
+                    "Reject unscheduled scatter holes before sampling opacity.");
+
+                ImGui::TreePop();
+            }
+
+            EndAnimatedTreeNode();
+        }
+
+        return customChanged;
+    }
+
+    static bool DrawCenteredActionButton(const char* label, float width)
     {
         const ImGuiStyle& style = ImGui::GetStyle();
         const ImVec2 size(width, ImGui::GetFrameHeight());
@@ -8622,35 +9458,23 @@ private:
 
         const ImVec2 textSize = ImGui::CalcTextSize(label);
         const ImVec2 textPosition(
-            std::floor(
-                buttonMin.x +
-                (buttonMax.x - buttonMin.x - textSize.x) * 0.5f),
-            std::floor(
-                buttonMin.y +
-                (buttonMax.y - buttonMin.y - textSize.y) * 0.5f +
-                1.f));
-        drawList->AddText(
-            textPosition,
-            ImGui::GetColorU32(ImGuiCol_Text),
-            label);
+            std::floor(buttonMin.x + (buttonMax.x - buttonMin.x - textSize.x) * 0.5f),
+            std::floor(buttonMin.y + (buttonMax.y - buttonMin.y - textSize.y) * 0.5f +
+                       1.f));
+        drawList->AddText(textPosition, ImGui::GetColorU32(ImGuiCol_Text), label);
         return pressed;
     }
 
-public:
-    UIRenderer(
-        DeviceManager* deviceManager,
-        std::shared_ptr<UvsrSceneViewer> app,
-        UIData& ui,
-        std::chrono::steady_clock::time_point programLaunchTime)
-        : ImGui_Renderer(deviceManager)
-        , m_app(app)
-        , m_ProgramLaunchTime(programLaunchTime)
-        , m_ui(ui)
+  public:
+    UIRenderer(DeviceManager* deviceManager,
+               std::shared_ptr<UvsrSceneViewer> app,
+               UIData& ui,
+               std::chrono::steady_clock::time_point programLaunchTime)
+        : ImGui_Renderer(deviceManager), m_app(app),
+          m_ProgramLaunchTime(programLaunchTime), m_ui(ui)
     {
         m_Font = CreateFontFromFile(
-            *(app->GetRootFs()),
-            "/media/fonts/System/CodexUI-Semibold.ttf",
-            16.f);
+            *(app->GetRootFs()), "/media/fonts/System/CodexUI-Semibold.ttf", 16.f);
 
         ImGui::GetIO().IniFilename = nullptr;
     }
@@ -8661,9 +9485,7 @@ public:
             return false;
 
         m_BackdropBlurPass = std::make_unique<BackdropBlurPass>(
-            GetDevice(),
-            shaderFactory,
-            m_app->GetCommonPasses());
+            GetDevice(), shaderFactory, m_app->GetCommonPasses());
         return true;
     }
 
@@ -9233,9 +10055,11 @@ protected:
                     view == m_ui.LightingDebugView;
                 if (ImGui::Selectable(
                         PbrLightingDebugLabels[index],
-                        selected))
+                        selected) &&
+                    !selected)
                 {
                     m_ui.LightingDebugView = view;
+                    m_app->ResetImageBasedLightingHistory(true);
                 }
                 if (selected)
                     ImGui::SetItemDefaultFocus();
@@ -9810,1154 +10634,126 @@ protected:
 
             const bool motionTestAvailable =
                 m_app->CanStartSvsmMotionBenchmark();
-            if (!motionTestAvailable)
-                ImGui::BeginDisabled();
-            if (ImGui::Button(
-                    motionTestRunning
-                        ? "Running 45-Degree Motion Test..."
-                        : "Run 45-Degree Motion Test",
-                    ImVec2(settingsControlWidth, 0.f)))
-            {
-                m_app->StartSvsmMotionBenchmark();
-            }
-            ImGui::SetItemTooltip(
-                motionTestRunning
-                    ? "Benchmark Position 1 is turning by exactly 0.1 degrees per rendered frame without wall-clock pacing."
-                    : (m_app->HasSponzaCameraLocations()
-                        ? "Run 180 warm frames, turn Benchmark Position 1 right by exactly 0.1 degrees per rendered frame to 45 degrees, hold for 16 frames, and return at the same rate. The sequence has no 40 Hz lock or other time-based throttle."
-                        : "The motion test requires a standardized PBR Sponza scene."));
-            if (ImGui::Button(
-                    motionTestRunning
-                        ? "Running SVSM Motion Benchmark..."
-                        : "Run SunSlow Motion Test",
-                    ImVec2(settingsControlWidth, 0.f)))
-            {
-                m_app->StartSvsmSunMotionBenchmark();
-            }
-            ImGui::SetItemTooltip(
-                motionTestRunning
-                    ? "The active SVSM benchmark owns the camera, light, and isolated visibility configuration."
-                    : (m_app->HasSponzaCameraLocations()
-                        ? "Hold Benchmark Position 1 static, measure a baseline, rotate the same sun by exactly 0.1 degrees per rendered frame to 45 degrees, recover without SetDirection calls, return at the same rate, and measure final recovery. TAA, Bend, diagnostic CSM, and screen-space visibility are locked off."
-                        : "The SunSlow test requires a standardized PBR Sponza scene."));
-            if (!motionTestAvailable)
-                ImGui::EndDisabled();
-            ImGui::TextWrapped(
-                "%s",
-                m_app->GetSvsmMotionBenchmarkStatus().c_str());
             if (motionTestRunning)
                 ImGui::BeginDisabled();
 
-            static const char* presetLabels[] = {
-                "Performance",
-                "Balanced",
-                "Quality",
-                "Custom"
-            };
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Profile##SparseVirtualShadowMaps",
-                    presetLabels[int(shadows.preset)]))
+            bool customChanged = DrawSvsmSettingsSurface(
+                shadows,
+                settingsControlWidth);
+
+            if (BeginAnimatedTreeNode(
+                    "Diagnostics##SparseVirtualShadowMaps"))
             {
-                for (int index = 0;
-                    index < int(std::size(presetLabels));
-                    ++index)
+                if (!motionTestAvailable)
+                    ImGui::BeginDisabled();
+                if (ImGui::Button(
+                        motionTestRunning
+                            ? "Running 45-Degree Motion Test..."
+                            : "Run 45-Degree Motion Test",
+                        ImVec2(settingsControlWidth, 0.f)))
                 {
-                    const SvsmPreset preset = SvsmPreset(index);
-                    const bool selected = shadows.preset == preset;
-                    if (ImGui::Selectable(
-                            presetLabels[index], selected))
-                    {
-                        ApplySvsmPreset(shadows, preset);
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::SetItemTooltip(
-                "Choose the SVSM speed-to-quality balance.");
-
-            bool customChanged = false;
-            static const char* modeLabels[] = {
-                "Dense Reference",
-                "Sparse Uncached",
-                "Sparse Cached"
-            };
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Mode##SparseVirtualShadowMaps",
-                    modeLabels[int(shadows.mode)]))
-            {
-                for (int index = 0;
-                    index < int(std::size(modeLabels));
-                    ++index)
-                {
-                    const SvsmMode mode = SvsmMode(index);
-                    const bool selected = shadows.mode == mode;
-                    if (ImGui::Selectable(modeLabels[index], selected))
-                    {
-                        shadows.mode = mode;
-                        customChanged = true;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::SetItemTooltip(
-                shadows.mode == SvsmMode::DenseReference
-                    ? "Fully backs six 8192-square R32_UINT clipmaps; this explicit validation mode can require about 1.5 GiB for atomic depth."
-                    : "Use the software-managed fixed physical page pool, with optional page reuse in cached mode.");
-
-            const bool sparseMode =
-                shadows.mode != SvsmMode::DenseReference;
-            const bool cachedSparseMode =
-                shadows.mode == SvsmMode::SparseCached;
-            const bool cacheReuseAvailable =
-                cachedSparseMode && shadows.cachingEnabled;
-
-            customChanged |= DrawSliderFloat(
-                "First Clipmap Extent",
-                &shadows.firstClipmapExtent,
-                1.f,
-                500.f,
-                "%.1f");
-            ImGui::SetItemTooltip(
-                "Set the world-space width covered by the finest clipmap.");
-            customChanged |= DrawSliderFloat(
-                "Maximum Light Depth",
-                &shadows.maximumLightDepth,
-                1.f,
-                2000.f,
-                "%.1f");
-            ImGui::SetItemTooltip(
-                "Set the caster depth range centered on each clipmap.");
-
-            if (shadows.mode != SvsmMode::DenseReference)
-            {
-                int physicalPageCount =
-                    int(shadows.physicalPageCount);
-                if (DrawSliderInt(
-                        "Physical Pool Pages",
-                        &physicalPageCount,
-                        64,
-                        int(SvsmPagesPerClipmap)))
-                {
-                    shadows.physicalPageCount =
-                        uint32_t(physicalPageCount);
-                    customChanged = true;
+                    m_app->StartSvsmMotionBenchmark();
                 }
                 ImGui::SetItemTooltip(
-                    "Set the logical size of the shared fixed physical page pool.");
-
-                bool unlimitedBudget =
-                    shadows.pageRenderBudget ==
-                    std::numeric_limits<uint32_t>::max();
-                if (ImGui::Checkbox(
-                        "Unlimited Page Render Budget",
-                        &unlimitedBudget))
+                    motionTestRunning
+                        ? "Benchmark Position 1 is turning by exactly 0.1 degrees per rendered frame without wall-clock pacing."
+                        : (m_app->HasSponzaCameraLocations()
+                            ? "Run 180 warm frames, turn Benchmark Position 1 right by exactly 0.1 degrees per rendered frame to 45 degrees, hold for 16 frames, and return at the same rate."
+                            : "The motion test requires a standardized PBR Sponza scene."));
+                if (ImGui::Button(
+                        motionTestRunning
+                            ? "Running SVSM Motion Benchmark..."
+                            : "Run SunSlow Motion Test",
+                        ImVec2(settingsControlWidth, 0.f)))
                 {
-                    shadows.pageRenderBudget = unlimitedBudget
-                        ? std::numeric_limits<uint32_t>::max()
-                        : 256u;
-                    customChanged = true;
+                    m_app->StartSvsmSunMotionBenchmark();
                 }
                 ImGui::SetItemTooltip(
-                    "Disable the finite dirty-page scheduling limit. The reference path is unlimited and leaves the coarsest clipmap outside finite budgets.");
-                if (!unlimitedBudget)
+                    motionTestRunning
+                        ? "The active SVSM benchmark owns the camera, light, and isolated visibility configuration."
+                        : (m_app->HasSponzaCameraLocations()
+                            ? "Hold Benchmark Position 1 static, rotate the sun by exactly 0.1 degrees per rendered frame, then measure cache recovery."
+                            : "The SunSlow test requires a standardized PBR Sponza scene."));
+                if (!motionTestAvailable)
+                    ImGui::EndDisabled();
+
+                ImGui::TextWrapped(
+                    "%s",
+                    m_app->GetSvsmMotionBenchmarkStatus().c_str());
+
+                customChanged |= ImGui::Checkbox(
+                    "Detailed GPU Stage Timing",
+                    &shadows.detailedGpuTimingEnabled);
+                ImGui::SetItemTooltip(
+                    "Measure Mark, Allocate, Clear, Packet, Render, and Filter separately. Disable for the lowest-overhead total-only timing path.");
+
+                static const char* debugLabels[] = {
+                    "Off",
+                    "Clipmap Selection",
+                    "Required Pages",
+                    "Resident Pages",
+                    "Cached Pages",
+                    "Dirty Pages",
+                    "Rendered Pages",
+                    "Physical Pool",
+                    "Fallback Level",
+                    "Missing Pages",
+                    "Tap Count",
+                    "Visibility"
+                };
+                const int debugIndex = std::clamp(
+                    int(shadows.debugView),
+                    0,
+                    int(std::size(debugLabels)) - 1);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (BeginRoundedCombo(
+                        "Debug View##SparseVirtualShadowMaps",
+                        debugLabels[debugIndex]))
                 {
-                    int pageBudget =
-                        int(std::min(
-                            shadows.pageRenderBudget,
-                            shadows.physicalPageCount));
-                    if (DrawSliderInt(
-                            "Page Render Budget",
-                            &pageBudget,
-                            0,
-                            int(shadows.physicalPageCount)))
+                    for (int index = 0;
+                        index < int(std::size(debugLabels));
+                        ++index)
                     {
-                        shadows.pageRenderBudget =
-                            uint32_t(pageBudget);
-                        customChanged = true;
+                        const SvsmDebugView debugView =
+                            SvsmDebugView(index);
+                        const bool selected =
+                            shadows.debugView == debugView;
+                        if (ImGui::Selectable(
+                                debugLabels[index],
+                                selected))
+                        {
+                            shadows.debugView = debugView;
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
                     }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Present the selected full-screen diagnostic. Debug views enable asynchronous page-counter readback and can disable otherwise reusable visibility work.");
+
+                ImGui::TextDisabled(
+                    "SVSM resolves to full-resolution R8 visibility before deferred lighting.");
+                if (m_HasSparseShadowStatSnapshot)
+                {
+                    ImGui::BeginGroup();
+                    for (const std::string& line :
+                        m_SparseShadowStatLines)
+                    {
+                        ImGui::TextUnformatted(line.c_str());
+                    }
+                    ImGui::EndGroup();
                     ImGui::SetItemTooltip(
-                        "Limit dirty-page scheduling across fine clipmaps 0 through 4. Include Coarsest in Page Budget independently extends this shared limit to all six clipmaps.");
+                        shadows.debugView == SvsmDebugView::None
+                            ? "GPU page counters are copied to the CPU only while an SVSM debug view is active; normal cached rendering has no readback."
+                            : "GPU page counters remain unavailable until a current debug readback retires. Available counters report their source-frame age.");
                 }
 
-                if (unlimitedBudget)
-                    ImGui::BeginDisabled();
-                customChanged |= ImGui::Checkbox(
-                    "Include Coarsest in Page Budget",
-                    &shadows.coarsestPageRenderBudgetEnabled);
-                if (unlimitedBudget)
-                    ImGui::EndDisabled();
-                ImGui::SetItemTooltip(
-                    unlimitedBudget
-                        ? "The coarsest-page budget switch applies only to a finite page-render budget; the saved value is retained."
-                        : "Share this frame's finite page-render reservation with the coarsest clipmap. This hard-bounds scheduled clear, culling, and raster work after allocation; disable to retain the published coarse-fallback exemption.");
-
-                if (unlimitedBudget)
-                    ImGui::BeginDisabled();
-                customChanged |= ImGui::Checkbox(
-                    "Allocation Budget Saturation Early-Out",
-                    &shadows.allocationBudgetSaturationEarlyOutEnabled);
-                if (unlimitedBudget)
-                    ImGui::EndDisabled();
-                ImGui::SetItemTooltip(
-                    unlimitedBudget
-                        ? "The allocation saturation early-out applies only to a finite page-render budget; the saved value is retained."
-                        : "After the shared page budget is saturated, use a relaxed counter probe to bypass redundant reservation atomics. The existing atomic and post-check remain authoritative. Disable to retain the reference allocation path.");
+                EndAnimatedTreeNode();
             }
-
-            static const char* markingLabels[] = {
-                "Per Pixel",
-                "8 by 8 Tile",
-                "16 by 16 Tile"
-            };
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Page Marking",
-                    markingLabels[int(shadows.markingMode)]))
-            {
-                for (int index = 0;
-                    index < int(std::size(markingLabels));
-                    ++index)
-                {
-                    const SvsmMarkingMode mode =
-                        SvsmMarkingMode(index);
-                    const bool selected =
-                        shadows.markingMode == mode;
-                    if (ImGui::Selectable(
-                            markingLabels[index], selected))
-                    {
-                        shadows.markingMode = mode;
-                        customChanged = true;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Choose exact per-pixel requests or a conservative deduplicated tile volume."
-                    : "Page marking applies only to sparse modes; the saved value is retained in Dense Reference.");
-
-            const bool perPixelMarkingDedupeAvailable =
-                sparseMode &&
-                shadows.markingMode == SvsmMarkingMode::PerPixel;
-            if (!perPixelMarkingDedupeAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Deduplicate Per-Pixel Requests",
-                &shadows.perPixelMarkingDedupeEnabled);
-            if (!perPixelMarkingDedupeAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                perPixelMarkingDedupeAvailable
-                    ? "Deduplicate each 8-by-8 group's page requests through a bounded shared hash; collisions fail open to direct page-table atomics."
-                    : "This optimization applies only to Per Pixel sparse marking; the saved value is retained in other modes.");
-
-            static const char* filterKernelLabels[] = {
-                "Nearest Poisson Reference",
-                "Bilinear PCF"
-            };
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Filter Kernel",
-                    filterKernelLabels[int(shadows.filterKernel)]))
-            {
-                for (int index = 0;
-                    index < int(std::size(filterKernelLabels));
-                    ++index)
-                {
-                    const SvsmFilterKernel kernel =
-                        SvsmFilterKernel(index);
-                    const bool selected =
-                        shadows.filterKernel == kernel;
-                    if (ImGui::Selectable(
-                            filterKernelLabels[index], selected))
-                    {
-                        shadows.filterKernel = kernel;
-                        customChanged = true;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                !sparseMode
-                    ? "Bilinear page-safe filtering applies only to sparse modes; Dense Reference retains its point-load receiver and the saved value is retained."
-                    : shadows.filterKernel == SvsmFilterKernel::BilinearPcf
-                    ? "Preserve fractional Poisson offsets and blend four page-safe reverse-Z comparisons per logical tap. Missing footprint pages still fall back to a coarser clipmap."
-                    : "Retain the original nearest-texel Poisson reference kernel for deterministic comparison.");
-
-            static const char* poissonOrderingLabels[] = {
-                "Legacy Stride Reference",
-                "Balanced Progressive"
-            };
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Poisson Ordering",
-                    poissonOrderingLabels[
-                        int(shadows.poissonOrdering)]))
-            {
-                for (int index = 0;
-                    index < int(std::size(poissonOrderingLabels));
-                    ++index)
-                {
-                    const SvsmPoissonOrdering ordering =
-                        SvsmPoissonOrdering(index);
-                    const bool selected =
-                        shadows.poissonOrdering == ordering;
-                    if (ImGui::Selectable(
-                            poissonOrderingLabels[index],
-                            selected))
-                    {
-                        shadows.poissonOrdering = ordering;
-                        customChanged = true;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                !sparseMode
-                    ? "Dense Reference retains the original stride receiver; this saved sparse ordering is unchanged."
-                    : shadows.poissonOrdering ==
-                            SvsmPoissonOrdering::BalancedProgressive
-                        ? "Use a centered progressive sequence: four taps cover every quadrant once and eight taps cover every quadrant twice."
-                        : "Use the exact original stride subsets for reference comparisons. This independently selectable path remains available in Custom.");
-
-            static const char* tapLabels[] = {
-                "1", "4", "8", "16"
-            };
-            static const SvsmTapCount tapValues[] = {
-                SvsmTapCount::One,
-                SvsmTapCount::Four,
-                SvsmTapCount::Eight,
-                SvsmTapCount::Sixteen
-            };
-            int selectedTap = 0;
-            for (int index = 0; index < int(std::size(tapValues)); ++index)
-            {
-                if (shadows.tapCount == tapValues[index])
-                    selectedTap = index;
-            }
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Filter Taps",
-                    tapLabels[selectedTap]))
-            {
-                for (int index = 0;
-                    index < int(std::size(tapValues));
-                    ++index)
-                {
-                    const bool selected =
-                        shadows.tapCount == tapValues[index];
-                    if (ImGui::Selectable(tapLabels[index], selected))
-                    {
-                        shadows.tapCount = tapValues[index];
-                        customChanged = true;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-
-            static const char* filterLabels[] = {
-                "Manual Page Safe",
-                "Hybrid"
-            };
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Filtering",
-                    filterLabels[int(shadows.filterMode)]))
-            {
-                for (int index = 0;
-                    index < int(std::size(filterLabels));
-                    ++index)
-                {
-                    const SvsmFilterMode mode =
-                        SvsmFilterMode(index);
-                    const bool selected = shadows.filterMode == mode;
-                    if (ImGui::Selectable(filterLabels[index], selected))
-                    {
-                        shadows.filterMode = mode;
-                        customChanged = true;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Manual mode translates every tap independently. Hybrid reuses one translation only for a complete same-page footprint."
-                    : "Page-translation filtering modes apply only to sparse modes; the saved value is retained in Dense Reference.");
-
-            static const char* biasLabels[] = {
-                "0", "+1 Mip", "+2 Mips"
-            };
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Resolution Bias",
-                    biasLabels[int(shadows.resolutionBias)]))
-            {
-                for (int index = 0;
-                    index < int(std::size(biasLabels));
-                    ++index)
-                {
-                    const SvsmResolutionBias bias =
-                        SvsmResolutionBias(index);
-                    const bool selected =
-                        shadows.resolutionBias == bias;
-                    if (ImGui::Selectable(biasLabels[index], selected))
-                    {
-                        shadows.resolutionBias = bias;
-                        customChanged = true;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-
-            if (!cachedSparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Caching", &shadows.cachingEnabled);
-            if (!cachedSparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                cachedSparseMode
-                    ? "Reuse valid physical pages across frames."
-                    : "Caching is available only in Sparse Cached mode; the saved value is retained.");
-            if (!cacheReuseAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Light-Depth Origin Guard Band",
-                &shadows.lightDepthOriginGuardBandEnabled);
-            if (!cacheReuseAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                cacheReuseAvailable
-                    ? "Retain the last successfully committed light-space depth center while the complete root caster interval and camera anchor remain inside the configured guard band. Exact light, basis, and depth-range changes still rebase."
-                    : "The light-depth origin guard band requires active Sparse Cached page reuse; the saved value is retained.");
-            const bool lightDepthGuardBandFractionAvailable =
-                cacheReuseAvailable &&
-                shadows.lightDepthOriginGuardBandEnabled;
-            if (!lightDepthGuardBandFractionAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= DrawSliderFloat(
-                "Light-Depth Guard Fraction",
-                &shadows.lightDepthOriginGuardBandFraction,
-                0.5f,
-                1.f,
-                "%.2f");
-            if (!lightDepthGuardBandFractionAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                lightDepthGuardBandFractionAvailable
-                    ? "Use this fraction of the committed half-depth as the inclusive cache-safe interval. UE's reference guard is 0.90; smaller values rebase sooner."
-                    : "Enable the Sparse Cached light-depth origin guard band to edit its retained fraction.");
-            if (!cacheReuseAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Recent Page Eviction Grace",
-                &shadows.recentPageEvictionGraceEnabled);
-            if (!cacheReuseAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                cacheReuseAvailable
-                    ? "Protect pages used within the last eight frames until free and older cached pages are exhausted. Disable to retain the original unordered cached-page allocator."
-                    : "Recent-page protection requires active Sparse Cached page reuse; the saved value is retained.");
-            const bool finiteBudgetStaticDrainAvailable =
-                cacheReuseAvailable &&
-                shadows.pageRenderBudget > 0u &&
-                shadows.pageRenderBudget < shadows.physicalPageCount;
-            if (!finiteBudgetStaticDrainAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Finite-Budget Static Drain",
-                &shadows.finiteBudgetStaticDrainEnabled);
-            if (!finiteBudgetStaticDrainAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                finiteBudgetStaticDrainAvailable
-                    ? "Preserve an unchanged request union and run a conservative bounded number of allocation, clear, cull, and raster passes before entering the zero-work static cache path. Disable to retain continuous finite-budget maintenance."
-                    : "Finite-budget static draining requires active Sparse Cached page reuse and a nonzero fine-page budget below the physical-pool size; the saved value is retained.");
-            const bool staticPageRequestReuseAvailable =
-                cacheReuseAvailable &&
-                (shadows.pageRenderBudget >= shadows.physicalPageCount ||
-                    (shadows.finiteBudgetStaticDrainEnabled &&
-                        shadows.pageRenderBudget > 0u));
-            if (!staticPageRequestReuseAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Static Page Request Reuse",
-                &shadows.staticPageRequestReuseEnabled);
-            if (!staticPageRequestReuseAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                staticPageRequestReuseAvailable
-                    ? "Reuse the proven page-request set for an unchanged static frame. A finite budget drains conservatively when its independent toggle is enabled; missing pages retain normal coarser or white fallback."
-                    : "Static request reuse requires active Sparse Cached page reuse plus either a complete-pool budget or an enabled nonzero finite-budget drain; the saved value is retained.");
-            const bool staticVisibilityCacheAvailable =
-                staticPageRequestReuseAvailable &&
-                shadows.staticPageRequestReuseEnabled &&
-                shadows.debugView == SvsmDebugView::None;
-            if (!staticVisibilityCacheAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Static Visibility Cache",
-                &shadows.staticVisibilityCachingEnabled);
-            if (!staticVisibilityCacheAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                staticVisibilityCacheAvailable
-                    ? "Cache one exact full-resolution R8 resolve for each of UVSR's eight repeating TAA jitter positions; disable to run the selected resolve shader every frame."
-                    : "Static visibility reuse requires active static page-request reuse and debug view Off; the saved value is retained.");
-            customChanged |= ImGui::Checkbox(
-                "Scene State Caching",
-                &shadows.sceneStateCachingEnabled);
-            ImGui::SetItemTooltip(
-                "Reuse scene validation while UVSR's pre-refresh transform, content, and material revision is unchanged. Applied animation changes advance the same revision; dormant animation data does not force a full hash walk.");
-            const bool casterOnlyRevisionAvailable =
-                sparseMode &&
-                shadows.sceneStateCachingEnabled;
-            if (!casterOnlyRevisionAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Caster-Only Scene Revision",
-                &shadows.casterOnlySceneRevisionEnabled);
-            if (!casterOnlyRevisionAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                casterOnlyRevisionAvailable
-                    ? "Walk only Donut's pre-refresh dirty branches to distinguish caster changes from light-only transforms. A moving directional light can then reuse the caster hash, binding signature, and persistent source metadata. Structural or uncertain content changes still fail open."
-                    : "Caster-only revision reuse requires sparse mode and Scene State Caching; the saved value is retained.");
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Cached Shadow Draw Lists",
-                &shadows.renderPacketCachingEnabled);
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Independently reuse conservative per-clipmap shadow caster draw lists while the exact scene revision, producing light, draw strategy, and page-aligned light views remain unchanged. Disable to rebuild any GPU-gated packet lists every frame."
-                    : "Cached shadow draw lists apply to sparse modes. Dense Reference retains its direct uncached caster path; the saved value is retained.");
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Shared Six-Clipmap Packet Builder",
-                &shadows.sharedClipmapPacketBuilderEnabled);
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Traverse Donut opaque casters once, compute each rigid caster's common directional-light bounds once, and classify it into all active clipmaps. Unsupported custom draw strategies automatically retain the six-view reference builder."
-                    : "Shared packet preparation applies only to sparse modes; the saved value is retained in Dense Reference.");
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Persistent Caster Source Cache",
-                &shadows.persistentCasterSourceCachingEnabled);
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Reuse validated stable caster references, copied transforms and bounds, draw arguments, topology, material identity, and static classification while light or clipmap matrices change. Any unreliable or mismatched source falls back to the shared scene traversal."
-                    : "Persistent caster sources apply only to sparse shared packet preparation; the saved value is retained in Dense Reference.");
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Opaque Raster Specialization",
-                &shadows.opaqueRasterSpecializationEnabled);
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Rasterize opaque casters with position-only vertex fetches and no material binding set. Alpha-tested casters retain the exact opacity-material path. Disable to use the original material-bound sparse raster reference path."
-                    : "Opaque raster specialization applies only to sparse modes; Dense Reference and the saved sparse value are retained.");
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Lean Alpha-Tested Bindings",
-                &shadows.leanAlphaTestedBindingsEnabled);
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Bind only material constants, base/diffuse alpha, and explicit opacity for sparse alpha-tested casters. Explicit opacity takes precedence without sampling base alpha. Disable to retain the full GBuffer material layout and EvaluateSceneMaterial reference shader."
-                    : "Lean alpha-tested bindings apply only to sparse modes; Dense Reference and the saved sparse value are retained.");
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Paired Static/Dynamic Depth",
-                &shadows.pairedStaticDynamicDepthEnabled);
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Use one page mapping and physical identity with persistent static depth plus a receiver-visible merged slice. Dynamic-only pages restore cached static depth before rerasterizing movable casters; this doubles physical-depth pool memory. Disable for the original single-slice reference path."
-                    : "Paired static/dynamic depth applies only to sparse modes; the saved value is retained in Dense Reference.");
-            const bool deferredStaticDepthMergeAvailable =
-                sparseMode &&
-                shadows.pairedStaticDynamicDepthEnabled;
-            if (!deferredStaticDepthMergeAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Deferred Static-Depth Merge",
-                &shadows.deferredStaticDepthMergeEnabled);
-            if (!deferredStaticDepthMergeAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                deferredStaticDepthMergeAvailable
-                    ? "Write static casters only to the persistent static slice, then merge scheduled static-dirty pages into receiver-visible reverse-Z depth with max after raster. Static HZB construction shares the same page scan when active. Disable for the exact legacy dual-atomic static raster path."
-                    : "Deferred static-depth merge requires sparse paired static/dynamic depth. Its saved value is retained while unavailable.");
-            if (!cachedSparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Moving-Light Uncached Policy",
-                &shadows.movingLightUncachedEnabled);
-            if (!cachedSparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                cachedSparseMode
-                    ? "Match UE-style directional-light cache transitions: an exact producing-light or basis change uses the merged depth slice without static caching, the first unchanged frame rebuilds the configured paired cache, and the second unchanged frame may reuse it."
-                    : "The moving-light cache transition policy requires Sparse Cached mode; the saved value is retained.");
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Preserve Page Mappings On Content Invalidation",
-                &shadows.
-                    retainPhysicalMappingsOnContentInvalidationEnabled);
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Keep validated physical owner, residency, and age fields across a logical full-content invalidation while clearing required and dirtying depth. Resource recreation remains destructive. Disable to release every mapping on full invalidation."
-                    : "Physical mapping retention applies only to sparse modes; the saved value is retained in Dense Reference.");
-            const bool movingLightBiasAvailable =
-                cachedSparseMode &&
-                shadows.movingLightUncachedEnabled;
-            if (!movingLightBiasAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Moving-Light Resolution Bias",
-                &shadows.movingLightLodBiasEnabled);
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Maximum Moving-Light Bias",
-                    biasLabels[
-                        int(shadows.movingLightResolutionBias)]))
-            {
-                for (int index = 0;
-                    index < int(std::size(biasLabels));
-                    ++index)
-                {
-                    const SvsmResolutionBias bias =
-                        SvsmResolutionBias(index);
-                    const bool selected =
-                        shadows.movingLightResolutionBias == bias;
-                    if (ImGui::Selectable(
-                            biasLabels[index], selected))
-                    {
-                        shadows.movingLightResolutionBias = bias;
-                        customChanged = true;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            int movingLightRecoveryFrames = int(
-                shadows.movingLightLodRecoveryFrames);
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (ImGui::SliderInt(
-                    "Moving-Light Recovery Frames",
-                    &movingLightRecoveryFrames,
-                    0,
-                    60))
-            {
-                shadows.movingLightLodRecoveryFrames =
-                    uint32_t(movingLightRecoveryFrames);
-                customChanged = true;
-            }
-            if (!movingLightBiasAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                movingLightBiasAvailable
-                    ? "Hold the selected extra coarse clipmap bias while the light moves, then recover after this many successful sparse frames. Failed, dense, disabled, and inactive frames do not advance recovery."
-                    : "Moving-light bias and recovery require the cached moving-light transition policy; the saved values are retained.");
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Receiver Distance Mip Clamp",
-                &shadows.receiverDistanceMipClampEnabled);
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Prevent distant receivers from requesting unnecessarily fine clipmaps. Marking and resolve use the same camera-view distance, tiled marking uses the conservative nearest receiver, and the coarsest complete fallback remains available. Disable for the exact unclamped reference path."
-                    : "Receiver-distance clamping applies only to sparse modes; the saved value is retained in Dense Reference.");
-            const bool receiverDistanceClampAvailable =
-                sparseMode &&
-                shadows.receiverDistanceMipClampEnabled;
-            if (!receiverDistanceClampAvailable)
-                ImGui::BeginDisabled();
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            customChanged |= ImGui::DragFloat(
-                "Distance Clamp Start x Extent",
-                &shadows.receiverDistanceMipClampStartScale,
-                0.05f,
-                0.25f,
-                8.f,
-                "%.2f");
-            int receiverDistanceMaximumLevel = int(
-                shadows.receiverDistanceMipClampMaximumLevel);
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (ImGui::SliderInt(
-                    "Maximum Distance Clamp Level",
-                    &receiverDistanceMaximumLevel,
-                    0,
-                    int(SvsmMaximumReceiverDistanceMipClampLevel)))
-            {
-                shadows.receiverDistanceMipClampMaximumLevel =
-                    uint32_t(receiverDistanceMaximumLevel);
-                customChanged = true;
-            }
-            if (!receiverDistanceClampAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                receiverDistanceClampAvailable
-                    ? "The first coarsening threshold is First Clipmap Extent multiplied by this scale; each doubled distance advances one additional clipmap, capped here. Level 5 remains the complete fallback rather than a distance clamp target."
-                    : "Distance thresholds require Receiver Distance Mip Clamp; saved values are retained.");
-            const bool continuousReceiverBiasAvailable =
-                receiverDistanceClampAvailable &&
-                movingLightBiasAvailable &&
-                shadows.movingLightLodBiasEnabled;
-            if (!continuousReceiverBiasAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Continuous Moving-Light Distance Bias",
-                &shadows.movingLightContinuousReceiverBiasEnabled);
-            if (!continuousReceiverBiasAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                continuousReceiverBiasAvailable
-                    ? "Apply moving-light bias by smoothly shifting spatial distance thresholds, retaining configured quality near the camera. Disable to use the discrete global clipmap-bias reference path."
-                    : "Continuous moving-light distance bias requires the cached moving-light policy, moving-light bias, and receiver-distance clamp; the saved value is retained.");
-            const bool localizedInvalidationAvailable =
-                cachedSparseMode &&
-                shadows.cachingEnabled;
-            if (!localizedInvalidationAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Localized Caster Invalidation",
-                &shadows.localizedInvalidationEnabled);
-            if (!localizedInvalidationAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                localizedInvalidationAvailable
-                    ? "Track stable caster snapshots and dirty only conservative old-plus-new virtual-page coverage. Unreliable identity, bounds, content changes, or mapping changes fail open to full invalidation."
-                    : "Localized caster invalidation requires active Sparse Cached page reuse; the saved value is retained.");
-            const bool tightLocalizedBoundsAvailable =
-                localizedInvalidationAvailable &&
-                shadows.localizedInvalidationEnabled;
-            if (!tightLocalizedBoundsAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Tight Localized Bounds",
-                &shadows.tightLocalizedInvalidationBoundsEnabled);
-            if (!tightLocalizedBoundsAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                tightLocalizedBoundsAvailable
-                    ? "Project each caster's original object-space box directly through its transform and reject coverage wholly outside the clipmap reverse-Z range. Disable to retain the conservative world-AABB reference path; malformed bounds always fail open."
-                    : "Tight bounds require active localized caster invalidation; the saved value is retained.");
-            const bool adaptiveCasterClassificationAvailable =
-                localizedInvalidationAvailable &&
-                shadows.localizedInvalidationEnabled &&
-                shadows.pairedStaticDynamicDepthEnabled;
-            if (!adaptiveCasterClassificationAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Adaptive Static Caster Cache",
-                &shadows.adaptiveCasterCacheClassificationEnabled);
-            if (!adaptiveCasterClassificationAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                adaptiveCasterClassificationAvailable
-                    ? "Demote a changed rigid opaque caster to the merged dynamic layer immediately, then promote it back to persistent static depth after more than 100 unchanged frames. Promotion invalidates both layers before publishing the new class."
-                    : "Adaptive caster classification requires paired depth and localized caster invalidation; the saved value is retained.");
-            static const char* invalidationModeLabels[] = {
-                "Auto",
-                "Always",
-                "Rigid",
-                "Static"
-            };
-            const bool invalidationModeAvailable =
-                localizedInvalidationAvailable &&
-                shadows.localizedInvalidationEnabled;
-            if (!invalidationModeAvailable)
-                ImGui::BeginDisabled();
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Object Invalidation Mode",
-                    invalidationModeLabels[
-                        int(shadows.defaultObjectInvalidationMode)]))
-            {
-                for (int index = 0;
-                    index < int(std::size(invalidationModeLabels));
-                    ++index)
-                {
-                    const auto mode =
-                        SvsmObjectInvalidationMode(index);
-                    const bool selected =
-                        shadows.defaultObjectInvalidationMode == mode;
-                    if (ImGui::Selectable(
-                            invalidationModeLabels[index],
-                            selected))
-                    {
-                        shadows.defaultObjectInvalidationMode = mode;
-                        customChanged = true;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            if (!invalidationModeAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                invalidationModeAvailable
-                    ? "Auto tracks transform, shadow material, topology, and deformation. Always refreshes every caster; Rigid trusts only transforms; Static trusts the application never to mutate the object. Added and removed casters remain conservative."
-                    : "Choose an invalidation policy after enabling localized caster invalidation. Auto is the safe default.");
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "GPU-Gated Draw Submission",
-                &shadows.gpuGatedDrawSubmission);
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Use GPU page counts to suppress empty cached shadow draws; disable to retain the original per-item submission path."
-                    : "GPU-gated draw submission applies only to sparse modes; the saved value is retained.");
-            const bool batchedDrawAvailable =
-                sparseMode && shadows.gpuGatedDrawSubmission;
-            if (!batchedDrawAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Batched Draw Submission",
-                &shadows.batchedDrawSubmissionEnabled);
-            if (!batchedDrawAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                batchedDrawAvailable
-                    ? "Group consecutive compatible cached caster packets into multi-draw commands on supported D3D12 hardware. The SVSM status lines report whether this path is supported and active."
-                    : "Batched draw submission requires sparse mode and GPU-gated draw submission; the saved value is retained.");
-            const bool packetStateSortingAvailable =
-                shadows.mode != SvsmMode::DenseReference &&
-                shadows.gpuGatedDrawSubmission &&
-                shadows.batchedDrawSubmissionEnabled;
-            if (!packetStateSortingAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Packet State Sorting",
-                &shadows.packetStateSortingEnabled);
-            if (!packetStateSortingAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                packetStateSortingAvailable
-                    ? "Stable-sort cached packets per clipmap by compatible buffer, raster, and exact alpha-tested state so batched packets collapse into fewer multi-draw groups. Nonbatchable packets retain exact material identity and singleton draws. Disable to retain DrawStrategy order."
-                    : "Packet state sorting requires sparse mode, GPU-gated draw submission, and Batched Draw Submission. Its saved value is retained while unavailable.");
-            const bool levelEmptyWorkSkipAvailable =
-                sparseMode &&
-                shadows.gpuGatedDrawSubmission &&
-                shadows.batchedDrawSubmissionEnabled;
-            if (!levelEmptyWorkSkipAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Per-Level Empty-Work Skip",
-                &shadows.levelEmptyWorkSkipEnabled);
-            if (!levelEmptyWorkSkipAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                levelEmptyWorkSkipAvailable
-                    ? "Use one persistent GPU count word per clipmap so a batched level with zero dirty pages parses zero indirect draw commands. Any nonzero level still permits the complete group; disable to retain the original multi-draw path."
-                    : "Per-level empty-work skipping requires sparse mode, GPU-gated draw submission, and Batched Draw Submission. Its saved value is retained while unavailable.");
-            const bool packetPageCullingAvailable =
-                shadows.mode != SvsmMode::DenseReference &&
-                shadows.gpuGatedDrawSubmission;
-            if (!packetPageCullingAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Packet Page Culling",
-                &shadows.packetPageCullingEnabled);
-            if (!packetPageCullingAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                packetPageCullingAvailable
-                    ? "Intersect each cached caster packet's conservative bounds with scheduled dirty work on the GPU. Scatter mode uses one conservative dirty rectangle; its fragment ownership checks reject holes. The per-page path retains exact compact lists. Invalid state fails open. Off by default."
-                    : "Packet page culling requires sparse mode and GPU-gated draw submission. Its saved value is retained while unavailable.");
-            const bool hierarchicalScheduledPageMaskAvailable =
-                packetPageCullingAvailable &&
-                shadows.packetPageCullingEnabled;
-            if (!hierarchicalScheduledPageMaskAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Hierarchical Scheduled-Page Mask",
-                &shadows.hierarchicalScheduledPageMaskEnabled);
-            if (!hierarchicalScheduledPageMaskAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                hierarchicalScheduledPageMaskAvailable
-                    ? "Build one exact-validated 8x8 coarse tile mask per clipmap and reject packets whose bounds touch no scheduled tile before the authoritative page scan. Static casters use the paired static-dirty mask. Exact and scatter raster share the same fail-open hierarchy contract."
-                    : "The scheduled-page hierarchy requires active Packet Page Culling. Its saved value is retained while unavailable.");
-            const bool receiverPageMaskCullingAvailable =
-                packetPageCullingAvailable &&
-                shadows.packetPageCullingEnabled;
-            if (!receiverPageMaskCullingAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Receiver Subpage Mask Culling",
-                &shadows.receiverPageMaskCullingEnabled);
-            if (!receiverPageMaskCullingAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                receiverPageMaskCullingAvailable
-                    ? "Build a current-camera 8x8 receiver mask inside every 128x128 requested virtual page. Exact raster rejects caster/page pairs; scatter also rejects unmarked filter-dilated cells before alpha sampling or depth atomics. The path activates only for an effective uncached, unpaired transaction, and invalid state fails open."
-                    : "Receiver subpage masks require sparse Packet Page Culling. The saved value is retained while unavailable.");
-            const bool staticDepthHierarchyAvailable =
-                packetPageCullingAvailable &&
-                shadows.packetPageCullingEnabled &&
-                shadows.pairedStaticDynamicDepthEnabled &&
-                !shadows.dirtyPageScatterRasterEnabled;
-            if (!staticDepthHierarchyAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Static-Depth Page HZB Culling",
-                &shadows.staticDepthHierarchyCullingEnabled);
-            if (!staticDepthHierarchyAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                staticDepthHierarchyAvailable
-                    ? "Build a compact min-reduction hierarchy from each complete static depth page and reject only fully occluded dynamic caster/page pairs. Static casters, static-dirty pages, scatter raster, invalid bounds, stale owners, empty cells, and unavailable resources fail open. Disable to retain the exact packet-page list without hierarchy build or query work."
-                    : "Static-depth page HZB culling requires paired static/dynamic depth, GPU-gated Packet Page Culling, and exact per-page raster rather than Dirty Page Scatter Raster. Its saved value is retained while unavailable.");
-            const bool staticDepthHierarchyBiasAvailable =
-                staticDepthHierarchyAvailable &&
-                shadows.staticDepthHierarchyCullingEnabled;
-            if (!staticDepthHierarchyBiasAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= DrawSliderFloat(
-                "Static HZB Conservative Bias",
-                &shadows.staticDepthHierarchyBias,
-                0.f,
-                0.01f,
-                "%.6f");
-            if (!staticDepthHierarchyBiasAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                staticDepthHierarchyBiasAvailable
-                    ? "Add this reverse-Z depth guard to the dynamic caster's nearest conservative bound before a strict occlusion rejection. Larger values fail open more often."
-                    : "Enable Static-Depth Page HZB Culling with its exact paired-page prerequisites to edit this retained bias.");
-            const bool dirtyPageScatterRasterAvailable =
-                packetPageCullingAvailable &&
-                shadows.packetPageCullingEnabled;
-            if (!dirtyPageScatterRasterAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Dirty Page Scatter Raster",
-                &shadows.dirtyPageScatterRasterEnabled);
-            if (!dirtyPageScatterRasterAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                dirtyPageScatterRasterAvailable
-                    ? "Request one virtual-space draw per intersecting caster packet, matching UE's non-Nanite VSM raster architecture. Runtime activation requires Scatter Amplification Guard. A cooperative exact page scan supplies tight bounds and automatically falls back to that packet's exact list when rectangle amplification is excessive."
-                    : "Dirty page scatter raster requires sparse mode, GPU-gated draw submission, and active Packet Page Culling. Its saved value is retained while unavailable.");
-            const bool scatterAlphaTestEarlyRejectAvailable =
-                dirtyPageScatterRasterAvailable &&
-                shadows.dirtyPageScatterRasterEnabled;
-            if (!scatterAlphaTestEarlyRejectAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Scatter Alpha-Test Early Reject",
-                &shadows.scatterAlphaTestEarlyRejectEnabled);
-            if (!scatterAlphaTestEarlyRejectAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                scatterAlphaTestEarlyRejectAvailable
-                    ? "For actual virtual scatter packets, reject unscheduled page holes before sampling alpha textures. Explicit gradients preserve the original texture LOD. Per-page fallback and the disabled reference path retain the original alpha-test order. Off by default."
-                    : "Scatter alpha-test early rejection requires active Dirty Page Scatter Raster. Its saved value is retained while unavailable.");
-            const bool dirtyPageScatterAmplificationGuardAvailable =
-                dirtyPageScatterRasterAvailable &&
-                shadows.dirtyPageScatterRasterEnabled;
-            if (!dirtyPageScatterAmplificationGuardAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Scatter Amplification Guard",
-                &shadows.dirtyPageScatterAmplificationGuardEnabled);
-            if (!dirtyPageScatterAmplificationGuardAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                dirtyPageScatterAmplificationGuardAvailable
-                    ? "When a packet's tight scheduled-page rectangle covers too many holes, draw through its exact compact page list instead. Invalid metadata fails open through the bounded global compact list. This is required for scatter activation; disabling it leaves the exact per-page reference path active."
-                    : "The amplification guard requires active Dirty Page Scatter Raster. Its saved value is retained while unavailable.");
-            const bool dirtyPageScatterAmplificationLimitAvailable =
-                dirtyPageScatterAmplificationGuardAvailable &&
-                shadows.dirtyPageScatterAmplificationGuardEnabled;
-            if (!dirtyPageScatterAmplificationLimitAvailable)
-                ImGui::BeginDisabled();
-            int dirtyPageScatterMaximumAmplification = int(
-                shadows.dirtyPageScatterMaximumAmplification);
-            if (DrawSliderInt(
-                    "Scatter Maximum Page Amplification",
-                    &dirtyPageScatterMaximumAmplification,
-                    1,
-                    int(SvsmMaximumDirtyPageScatterAmplification)))
-            {
-                shadows.dirtyPageScatterMaximumAmplification = uint32_t(
-                    dirtyPageScatterMaximumAmplification);
-                customChanged = true;
-            }
-            if (!dirtyPageScatterAmplificationLimitAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                dirtyPageScatterAmplificationLimitAvailable
-                    ? "Use the exact per-page packet list when the tight scatter rectangle exceeds this multiple of that packet's exact scheduled-page count."
-                    : "Enable Scatter Amplification Guard to edit this retained threshold.");
-            const bool packetRectangleDirectScanAvailable =
-                packetPageCullingAvailable &&
-                shadows.packetPageCullingEnabled;
-            if (!packetRectangleDirectScanAvailable)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Packet Rectangle Direct Scan",
-                &shadows.packetRectangleDirectScanEnabled);
-            if (!packetRectangleDirectScanAvailable)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                packetRectangleDirectScanAvailable
-                    ? "When a packet rectangle has at most half as many pages as the current dirty list, probe its wrapped page-table pages directly. This applies to exact and scatter raster and avoids an O(all dirty pages) scan for small casters. Disable to retain compact-list scanning."
-                    : "Packet rectangle direct scan requires active Packet Page Culling. Its saved value is retained while unavailable.");
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Precomposed Clipmap Transforms",
-                &shadows.precomposedClipmapTransformsEnabled);
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Transform reconstructed camera-clip positions directly into each clipmap in marking and resolve. Disable to retain the exact world-space reference shaders."
-                    : "Precomposed receiver transforms apply only to sparse modes; the saved value is retained in Dense Reference.");
-            if (!sparseMode)
-                ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Page Translation Cache",
-                &shadows.pageTranslationCachingEnabled);
-            if (!sparseMode)
-                ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                sparseMode
-                    ? "Reuse exact page-table translations only among this pixel's filter taps; disable to retain the per-tap reference shader."
-                    : "Page translation caching applies only to sparse resolve; the saved value is retained.");
-            customChanged |= ImGui::Checkbox(
-                "Adaptive Filtering", &shadows.adaptiveFiltering);
-            ImGui::BeginDisabled();
-            customChanged |= ImGui::Checkbox(
-                "Fine Caster Exclusion", &shadows.fineCasterExclusion);
-            ImGui::EndDisabled();
-            ImGui::SetItemTooltip(
-                "Unavailable: UVSR does not yet expose conservative camera-depth proof for every required exclusion condition. The saved value is retained and no caster is excluded.");
-
-            customChanged |= ImGui::Checkbox(
-                "Detailed GPU Stage Timing",
-                &shadows.detailedGpuTimingEnabled);
-            ImGui::SetItemTooltip(
-                "Enable separate Mark, Allocate, Clear, Packet, Render, and Filter GPU queries. Disable to issue only the outer total query and avoid per-stage query-resolve overhead. Accepted motion benchmarks use total-only timing; --svsm-motion-detailed retains stage queries in a diagnostic run.");
-
-            static const char* debugLabels[] = {
-                "Off",
-                "Clipmap Selection",
-                "Required Pages",
-                "Resident Pages",
-                "Cached Pages",
-                "Dirty Pages",
-                "Rendered Pages",
-                "Physical Pool",
-                "Fallback Level",
-                "Missing Pages",
-                "Tap Count",
-                "Visibility"
-            };
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Debug View##SparseVirtualShadowMaps",
-                    debugLabels[int(shadows.debugView)]))
-            {
-                for (int index = 0;
-                    index < int(std::size(debugLabels));
-                    ++index)
-                {
-                    const SvsmDebugView debugView =
-                        SvsmDebugView(index);
-                    const bool selected =
-                        shadows.debugView == debugView;
-                    if (ImGui::Selectable(
-                            debugLabels[index], selected))
-                    {
-                        shadows.debugView = debugView;
-                    }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::SetItemTooltip(
-                "Present the selected full-screen SVSM diagnostic without changing the lighting visibility texture.");
 
             if (customChanged)
                 shadows.preset = SvsmPreset::Custom;
-
-            ImGui::TextDisabled(
-                "SVSM resolves to full-resolution R8 visibility before deferred lighting.");
-            if (m_HasSparseShadowStatSnapshot)
-            {
-                for (const std::string& line :
-                    m_SparseShadowStatLines)
-                {
-                    ImGui::TextUnformatted(line.c_str());
-                }
-                ImGui::SetItemTooltip(
-                    shadows.debugView == SvsmDebugView::None
-                        ? "GPU page counters are copied to the CPU only while an SVSM debug view is active; normal cached rendering has no readback."
-                        : "GPU page counters remain unavailable until a current debug readback retires. Available counters show their source-frame age; stale backend or debug-mode samples are discarded.");
-            }
 
             if (motionTestRunning)
                 ImGui::EndDisabled();
@@ -10973,57 +10769,44 @@ protected:
         }
         ImGui::Spacing();
 
-        const bool diagnosticCsmOpen = DrawCollapsingHeader(
-            "Diagnostic Cascaded Shadow Maps",
-            "Compare a conventional UE5-style CSM and cache update policies against SVSM.");
+        const bool diagnosticCsmOpen =
+            DrawCollapsingHeader("Diagnostic Cascaded Shadow Maps",
+                                 "Compare a conventional UE5-style CSM and cache update "
+                                 "policies against SVSM.");
         if (diagnosticCsmOpen)
         {
-            BeginDrawerBody(
-                "##DiagnosticCascadedShadowMapsBody",
-                settingsControlWidth);
+            BeginDrawerBody("##DiagnosticCascadedShadowMapsBody", settingsControlWidth);
             DiagnosticCascadedShadowMapSettings& shadows =
                 m_ui.DiagnosticCascadedShadowMaps;
-            const bool shadowsAvailable =
-                m_ui.EnablePbr &&
-                m_ui.UsesDeferredShading() &&
-                m_app->HasPrimaryDirectionalLight();
+            const bool shadowsAvailable = m_ui.EnablePbr && m_ui.UsesDeferredShading() &&
+                                          m_app->HasPrimaryDirectionalLight();
             if (!shadowsAvailable)
                 ImGui::BeginDisabled();
 
-            ImGui::Checkbox(
-                "Enabled##DiagnosticCascadedShadowMaps",
-                &shadows.enabled);
-            ImGui::SetItemTooltip(
-                "Resolve an independent full-resolution R8 directional visibility factor before deferred lighting.");
+            ImGui::Checkbox("Enabled##DiagnosticCascadedShadowMaps", &shadows.enabled);
+            ImGui::SetItemTooltip("Resolve an independent full-resolution R8 directional "
+                                  "visibility factor before deferred lighting.");
             if (!shadows.enabled)
                 ImGui::BeginDisabled();
 
-            static const char* profileLabels[] = {
-                "Single-Map Reference",
-                "Low-Cost CSM",
-                "UE5 CSM Reference",
-                "Cached Single Shadow",
-                "Optimized Cached Single Shadow",
-                "Optimized Cached CSM",
-                "(Custom)"
-            };
-            const int profileIndex = std::clamp(
-                int(shadows.profile),
-                0,
-                int(std::size(profileLabels)) - 1);
+            static const char* profileLabels[] = {"Single-Map Reference",
+                                                  "Low-Cost CSM",
+                                                  "UE5 CSM Reference",
+                                                  "Cached Single Shadow",
+                                                  "Optimized Cached Single Shadow",
+                                                  "Optimized Cached CSM",
+                                                  "(Custom)"};
+            const int profileIndex =
+                std::clamp(int(shadows.profile), 0, int(std::size(profileLabels)) - 1);
             ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Profile##DiagnosticCascadedShadowMaps",
-                    profileLabels[profileIndex]))
+            if (BeginRoundedCombo("Profile##DiagnosticCascadedShadowMaps",
+                                  profileLabels[profileIndex]))
             {
-                for (int index = 0;
-                    index < int(std::size(profileLabels));
-                    ++index)
+                for (int index = 0; index < int(std::size(profileLabels)); ++index)
                 {
                     const auto profile = DiagnosticCsmProfile(index);
                     const bool selected = shadows.profile == profile;
-                    if (ImGui::Selectable(
-                            profileLabels[index], selected))
+                    if (ImGui::Selectable(profileLabels[index], selected))
                     {
                         if (profile == DiagnosticCsmProfile::Custom)
                         {
@@ -11031,8 +10814,7 @@ protected:
                         }
                         else
                         {
-                            shadows = ApplyDiagnosticCsmProfile(
-                                shadows, profile);
+                            shadows = ApplyDiagnosticCsmProfile(shadows, profile);
                         }
                     }
                     if (selected)
@@ -11040,160 +10822,64 @@ protected:
                 }
                 ImGui::EndCombo();
             }
-            ImGui::SetItemTooltip(
-                "Select the requested full-redraw or cache-policy diagnostic. Custom retains every edited value.");
+            ImGui::SetItemTooltip("Select the requested full-redraw or cache-policy "
+                                  "diagnostic. Custom retains every edited value.");
 
             bool customChanged = false;
-            int cascadeCount = int(std::clamp(
-                shadows.cascadeCount,
-                1u,
-                DiagnosticCsmMaximumCascades));
-            if (DrawSliderInt(
-                    "Cascades##DiagnosticCascadedShadowMaps",
-                    &cascadeCount,
-                    1,
-                    int(DiagnosticCsmMaximumCascades)))
+            int cascadeCount =
+                int(std::clamp(shadows.cascadeCount, 1u, DiagnosticCsmMaximumCascades));
+            if (DrawSliderInt("Cascades##DiagnosticCascadedShadowMaps",
+                              &cascadeCount,
+                              1,
+                              int(DiagnosticCsmMaximumCascades)))
             {
                 shadows.cascadeCount = uint32_t(cascadeCount);
                 customChanged = true;
             }
             ImGui::SetItemTooltip("Use one to four directional cascades.");
 
-            int shadowMapResolution = int(std::clamp(
-                shadows.shadowMapResolution, 128u, 8192u));
-            if (DrawSliderInt(
-                    "Resolution Per Cascade",
-                    &shadowMapResolution,
-                    128,
-                    8192,
-                    "%d",
-                    ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp))
+            int shadowMapResolution =
+                int(std::clamp(shadows.shadowMapResolution, 128u, 8192u));
+            if (DrawSliderInt("Resolution Per Cascade",
+                              &shadowMapResolution,
+                              128,
+                              8192,
+                              "%d",
+                              ImGuiSliderFlags_Logarithmic |
+                                  ImGuiSliderFlags_AlwaysClamp))
             {
-                shadows.shadowMapResolution =
-                    uint32_t(shadowMapResolution);
+                shadows.shadowMapResolution = uint32_t(shadowMapResolution);
                 customChanged = true;
             }
             ImGui::SetItemTooltip(
-                "Set the persistent square resolution of every cascade. The UE path prefers D16 and falls back to D32 when required; match format, texel density, and filtering when comparing paths.");
+                "Set the persistent square resolution of every cascade. The UE path "
+                "prefers D16 and falls back to D32 when required; match format, texel "
+                "density, and filtering when comparing paths.");
 
-            customChanged |= DrawSliderFloat(
-                "Maximum Shadow Distance",
-                &shadows.maximumShadowDistance,
-                1.f,
-                5000.f,
-                "%.1f");
+            customChanged |= DrawSliderFloat("Maximum Shadow Distance",
+                                             &shadows.maximumShadowDistance,
+                                             1.f,
+                                             5000.f,
+                                             "%.1f");
+            ImGui::SetItemTooltip("Set the camera-space range covered by all cascades.");
+            customChanged |= DrawSliderFloat("Maximum Light Depth##DiagnosticCsm",
+                                             &shadows.maximumLightDepth,
+                                             1.f,
+                                             10000.f,
+                                             "%.1f");
             ImGui::SetItemTooltip(
-                "Set the camera-space range covered by all cascades.");
-            customChanged |= DrawSliderFloat(
-                "Maximum Light Depth##DiagnosticCsm",
-                &shadows.maximumLightDepth,
-                1.f,
-                10000.f,
-                "%.1f");
-            ImGui::SetItemTooltip(
-                "Set the conservative caster depth range around each cascade.");
-            customChanged |= ImGui::Checkbox(
-                "UE Minimum Light Depth##DiagnosticCsm",
-                &shadows.enforceUeMinimumLightDepth);
-            ImGui::SetItemTooltip(
-                "Enforce UE's conventional directional-shadow minimum 10,000-unit subject depth span; disable only for an explicitly unmatched low-depth diagnostic.");
-            customChanged |= DrawSliderFloat(
-                "Split Distribution Exponent",
-                &shadows.cascadeDistributionExponent,
-                1.f,
-                8.f,
-                "%.2f");
-            ImGui::SetItemTooltip(
-                "Use UE's geometric split weighting; a fully dynamic movable directional light resolves the reference profile to 4.");
-            customChanged |= DrawSliderFloat(
-                "Cascade Transition Fraction",
-                &shadows.cascadeTransitionFraction,
-                0.f,
-                0.5f,
-                "%.3f");
-            ImGui::SetItemTooltip(
-                "Extend and cross-fade adjacent cascades over this fraction of each split.");
-            customChanged |= DrawSliderFloat(
-                "Shadow Distance Fade Fraction",
-                &shadows.shadowDistanceFadeoutFraction,
-                0.f,
-                0.5f,
-                "%.3f");
-            ImGui::SetItemTooltip(
-                "Fade the last cascade to unshadowed visibility at the maximum distance.");
+                "Set the saved conservative caster depth range. UE Minimum Light "
+                "Depth raises the effective range to at least 10,000 units.");
 
-            int projectionSnapTexelMultiple = int(std::clamp(
-                shadows.projectionSnapTexelMultiple, 1u, 16u));
-            if (DrawSliderInt(
-                    "Projection Snap Multiple##DiagnosticCsm",
-                    &projectionSnapTexelMultiple,
-                    1,
-                    16))
-            {
-                shadows.projectionSnapTexelMultiple =
-                    uint32_t(projectionSnapTexelMultiple);
-                customChanged = true;
-            }
-            ImGui::SetItemTooltip(
-                "Snap stable cascade centers in this many shadow texels; UE's conventional CSM path uses four.");
-
-            customChanged |= DrawSliderFloat(
-                "Depth Bias##DiagnosticCsm",
-                &shadows.depthBias,
-                0.f,
-                100.f,
-                "%.2f");
-            ImGui::SetItemTooltip(
-                "Set UE's r.Shadow.CSMDepthBias base value; the light bias, light-depth span, and world-space texel size determine the effective normalized vertex bias.");
-            customChanged |= DrawSliderFloat(
-                "Slope-Scaled Depth Bias##DiagnosticCsm",
-                &shadows.slopeScaledDepthBias,
-                0.f,
-                10.f,
-                "%.2f");
-            ImGui::SetItemTooltip(
-                "Set UE's r.Shadow.CSMSlopeScaleDepthBias base value; the directional-light slope factor and a slope clamped to one determine the effective term.");
-            customChanged |= DrawSliderFloat(
-                "Directional-Light Shadow Bias##DiagnosticCsm",
-                &shadows.directionalLightShadowBias,
-                0.f,
-                1.f,
-                "%.2f");
-            ImGui::SetItemTooltip(
-                "Match the directional-light component Shadow Bias multiplier; UE's default is 0.5.");
-            customChanged |= DrawSliderFloat(
-                "Directional-Light Slope Bias##DiagnosticCsm",
-                &shadows.directionalLightShadowSlopeBias,
-                0.f,
-                1.f,
-                "%.2f");
-            ImGui::SetItemTooltip(
-                "Match the directional-light component Shadow Slope Bias multiplier; UE's default is 0.5.");
-            customChanged |= DrawSliderFloat(
-                "Receiver Depth Bias##DiagnosticCsm",
-                &shadows.receiverDepthBias,
-                0.f,
-                1.f,
-                "%.3f");
-            ImGui::SetItemTooltip(
-                "Match r.Shadow.CSMReceiverBias by widening the soft comparison transition at grazing receiver angles; this is not a direct depth offset.");
-
-            static const char* filterLabels[] = {
-                "UE5 Manual 5x5 PCF",
-                "SVSM-Matched Point Poisson"
-            };
-            const int filterIndex = std::clamp(
-                int(shadows.filter),
-                0,
-                int(std::size(filterLabels)) - 1);
+            static const char* filterLabels[] = {"UE5 Manual 5x5 PCF",
+                                                 "SVSM-Matched Point Poisson"};
+            const int filterIndex =
+                std::clamp(int(shadows.filter), 0, int(std::size(filterLabels)) - 1);
             ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Filter##DiagnosticCascadedShadowMaps",
-                    filterLabels[filterIndex]))
+            if (BeginRoundedCombo("Filter##DiagnosticCascadedShadowMaps",
+                                  filterLabels[filterIndex]))
             {
-                for (int index = 0;
-                    index < int(std::size(filterLabels));
-                    ++index)
+                for (int index = 0; index < int(std::size(filterLabels)); ++index)
                 {
                     const auto filter = DiagnosticCsmFilter(index);
                     const bool selected = shadows.filter == filter;
@@ -11208,35 +10894,25 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Use UE's nine-Gather4 manual 5x5 kernel and soft depth transition, or SVSM's fixed point-load Poisson footprint for matched comparisons.");
+                "Use UE's nine-Gather4 manual 5x5 kernel and soft depth transition, or "
+                "SVSM's fixed point-load Poisson footprint for matched comparisons.");
 
             if (shadows.filter == DiagnosticCsmFilter::Poisson)
             {
-                static const uint32_t tapCounts[] = { 1u, 4u, 8u, 16u };
+                static const uint32_t tapCounts[] = {1u, 4u, 8u, 16u};
                 const uint32_t normalizedTapCount =
-                    NormalizeDiagnosticCsmTapCount(
-                        shadows.poissonTapCount);
+                    NormalizeDiagnosticCsmTapCount(shadows.poissonTapCount);
                 char tapPreview[16];
                 snprintf(
-                    tapPreview,
-                    std::size(tapPreview),
-                    "%u taps",
-                    normalizedTapCount);
+                    tapPreview, std::size(tapPreview), "%u taps", normalizedTapCount);
                 ImGui::SetNextItemWidth(settingsControlWidth);
-                if (BeginRoundedCombo(
-                        "Filter Taps##DiagnosticCsm",
-                        tapPreview))
+                if (BeginRoundedCombo("Filter Taps##DiagnosticCsm", tapPreview))
                 {
                     for (uint32_t tapCount : tapCounts)
                     {
                         char label[16];
-                        snprintf(
-                            label,
-                            std::size(label),
-                            "%u taps",
-                            tapCount);
-                        const bool selected =
-                            normalizedTapCount == tapCount;
+                        snprintf(label, std::size(label), "%u taps", tapCount);
+                        const bool selected = normalizedTapCount == tapCount;
                         if (ImGui::Selectable(label, selected))
                         {
                             shadows.poissonTapCount = tapCount;
@@ -11254,242 +10930,481 @@ protected:
                 shadows.filter == DiagnosticCsmFilter::Poisson;
             if (!configurableFilterRadius)
                 ImGui::BeginDisabled();
-            customChanged |= DrawSliderFloat(
-                "Filter Radius##DiagnosticCsm",
-                &shadows.filterRadiusTexels,
-                0.f,
-                8.f,
-                "%.2f texels");
+            customChanged |= DrawSliderFloat("Filter Radius##DiagnosticCsm",
+                                             &shadows.filterRadiusTexels,
+                                             0.f,
+                                             8.f,
+                                             "%.2f texels");
             if (!configurableFilterRadius)
                 ImGui::EndDisabled();
             ImGui::SetItemTooltip(
                 configurableFilterRadius
-                    ? "Set the fixed point-load Poisson footprint and dirty-rectangle safety halo in shadow texels; one tap always uses the center only."
-                    : "UE's manual PCF reconstructs its fixed 5x5 footprint from nine Gather4 fetches; this saved Poisson radius is retained.");
+                    ? "Set the fixed point-load Poisson footprint and dirty-rectangle "
+                      "safety halo in shadow texels; one tap always uses the center only."
+                    : "UE's manual PCF reconstructs its fixed 5x5 footprint from nine "
+                      "Gather4 fetches; this saved Poisson radius is retained.");
 
-            if (BeginAnimatedTreeNode(
-                    "UE Depth Path##DiagnosticCsm"))
+            if (BeginAnimatedTreeNode("Developer Options##DiagnosticCsm"))
             {
-                customChanged |= ImGui::Checkbox(
-                    "16-Bit Shadow Depth",
-                    &shadows.use16BitDepthEnabled);
-                ImGui::SetItemTooltip(
-                    "Prefer UE D3D12's R16-typeless/D16 shadow-depth format; fall back to sampleable D32 when D16 is unsupported.");
-                customChanged |= ImGui::Checkbox(
-                    "Opaque Depth State Merging",
-                    &shadows.opaqueDepthStateMergingEnabled);
-                ImGui::SetItemTooltip(
-                    "Canonicalize eligible opaque depth-only materials and sort by effective depth state; alpha-tested materials remain distinct.");
-                customChanged |= ImGui::Checkbox(
-                    "Position-Only Opaque Casters",
-                    &shadows.positionOnlyOpaqueEnabled);
-                ImGui::SetItemTooltip(
-                    "Use a CSM-local opaque vertex permutation that omits unused texture-coordinate loads; alpha-tested casters keep the generic vertex shader.");
-                customChanged |= ImGui::Checkbox(
-                    "Translation-Only Caster Transforms",
-                    &shadows.translationOnlyCasterTransformEnabled);
-                ImGui::SetItemTooltip(
-                    "Push the exact finite translation for single-instance casters whose linear transform is canonical identity, avoiding redundant instance-buffer loads and affine position/normal transforms. Every other caster retains the unchanged instance-buffer path.");
-            customChanged |= ImGui::Checkbox(
-                    "Input-Assembler Caster Fetch",
-                    &shadows.inputAssemblerCasterFetchEnabled);
-            ImGui::SetItemTooltip(
-                    "Experimentally route only non-deforming, non-translation casters with complete position, UV, normal, and instance buffers through a CSM-local input-assembler pass. Translation-only, deforming, missing, and unsupported inputs retain the manual-fetch reference path. Named profiles leave this off.");
-                customChanged |= ImGui::Checkbox(
-                    "Precomputed Depth-Axis Normalization",
-                    &shadows.precomputedDepthAxisInverseLengthEnabled);
-                ImGui::SetItemTooltip(
-                    "Normalize the exact directional world-to-clip depth axis once per cascade and reuse its inverse length in the opaque and alpha-tested depth shaders. Disable to retain the exact per-vertex reference calculation.");
-                customChanged |= ImGui::Checkbox(
-                    "Conservative Saturated-Slope Shortcut",
-                    &shadows.conservativeSaturatedSlopeEnabled);
-                ImGui::SetItemTooltip(
-                    "With precomputed depth-axis normalization active, branch directly to UE's maximum clamped slope when squared NoL is one float step below or less than the exact 0.5 saturation boundary. Invalid, degenerate, and higher-NoL inputs retain the exact reference math; disabling selects the unchanged shader path.");
-                customChanged |= ImGui::Checkbox(
-                    "Algebraic Slow-Slope Reduction",
-                    &shadows.algebraicSlowSlopeEnabled);
-                ImGui::SetItemTooltip(
-                    "With precomputed depth-axis normalization active, evaluate the unsaturated UE slope as the perpendicular-to-parallel normal ratio, removing one reciprocal square root while preserving the same clamped result. Invalid inputs retain the exact reference calculation; disabling selects the preceding shader path byte-for-byte.");
-                customChanged |= ImGui::Checkbox(
-                    "Pre-Normalized Receiver Light Direction",
-                    &shadows.preNormalizedReceiverLightDirectionEnabled);
-                ImGui::SetItemTooltip(
-                    "Reuse the finite CPU-normalized directional-light vector directly in the CSM receiver. Disable to select the exact legacy resolve shader, which normalizes the same vector per receiver invocation.");
-                customChanged |= ImGui::Checkbox(
-                    "Precomposed Clip-to-Shadow Transform",
-                    &shadows.precomposedClipToShadowEnabled);
-                ImGui::SetItemTooltip(
-                    "Precompose each cascade's camera-clip-to-shadow transform once on the CPU, matching UE's screen-to-shadow matrix organization and avoiding per-pixel world reconstruction. Disable to select the exact world-space receiver path.");
-                customChanged |= ImGui::Checkbox(
-                    "One-Pass Cascade Classification",
-                    &shadows.singleTraversalCasterClassificationEnabled);
-                ImGui::SetItemTooltip(
-                    "Traverse the scene once and classify each caster across every redrawn cascade, matching UE's gather organization. Disable to retain the original independent traversal and sort for each cascade.");
-                customChanged |= ImGui::Checkbox(
-                    "Precomputed Receiver Hull Axes",
-                    &shadows.precomputedReceiverHullAxesEnabled);
-                ImGui::SetItemTooltip(
-                    "Precompute the normalized receiver-hull axes and intervals once per cascade. Disable to retain the original per-caster, per-cascade projected-hull calculations.");
-                customChanged |= ImGui::Checkbox(
-                    "Shared Caster Light Projection",
-                    &shadows.sharedCasterLightProjectionEnabled);
-                ImGui::SetItemTooltip(
-                    "Project reliable caster bounds once into a compatible directional-light basis and reuse that shape across updating cascades. Disable to retain the original per-cascade projection path.");
-                customChanged |= ImGui::Checkbox(
-                    "Direct Caster Submission",
-                    &shadows.directCasterSubmissionEnabled);
-                ImGui::SetItemTooltip(
-                    "Let Donut consume the sorted caster records directly without rebuilding a contiguous DrawItem scratch vector. Disable to retain the original copy-based submission path.");
-                customChanged |= ImGui::Checkbox(
-                    "Cached Shadow Draw Lists",
-                    &shadows.cachedShadowDrawListsEnabled);
-                ImGui::SetItemTooltip(
-                    "Reuse the exact final sorted caster lists for repeating full-redraw camera, TAA-jitter, light, projection, scene-revision, and culling configurations. Eight exact entries cover UVSR's repeating jitter phases. Unreliable or deforming snapshots fail closed; cached shadow maps already skip gathering and take precedence.");
-                customChanged |= ImGui::Checkbox(
-                    "Batched Full-Redraw Clear",
-                    &shadows.batchedFullRedrawClearEnabled);
-                ImGui::SetItemTooltip(
-                    "Clear a contiguous set of two or more all-full-redraw cascade array slices with one depth clear. Disable to retain one full-map clear call per cascade; mixed and localized updates always keep their legacy commands.");
-                customChanged |= ImGui::Checkbox(
-                    "Receiver Raster Scissor",
-                    &shadows.receiverRasterScissorEnabled);
-                ImGui::SetItemTooltip(
-                    "Conservatively scissor uncached full-redraw caster raster to all eight snapped receiver corners plus the projection and filter guard. UE exposes the analogous r.Shadow.CSMScissorOptim as default-off; cached and localized updates gate this optimization off.");
-                customChanged |= ImGui::Checkbox(
-                    "Accurate Caster Hull Culling",
-                    &shadows.accurateCasterCullingEnabled);
-                ImGui::SetItemTooltip(
-                    "Conservatively reject reliable bounds outside the one-sided light-extruded receiver hull. Cached profiles gate this view-dependent optimization off so reused texels retain a complete caster set.");
-                customChanged |= ImGui::Checkbox(
-                    "UE Caster Radius Threshold",
-                    &shadows.ueCasterRadiusThresholdEnabled);
-                ImGui::SetItemTooltip(
-                    "Apply UE's independently toggleable camera-projected caster size rejection. Cached profiles gate it off because its admitted caster set changes with the camera.");
-                if (!shadows.ueCasterRadiusThresholdEnabled)
-                    ImGui::BeginDisabled();
-                customChanged |= DrawSliderFloat(
-                    "Caster Radius Threshold##DiagnosticCsm",
-                    &shadows.casterRadiusThreshold,
-                    0.f,
-                    0.05f,
-                    "%.3f");
-                if (!shadows.ueCasterRadiusThresholdEnabled)
-                    ImGui::EndDisabled();
-                ImGui::SetItemTooltip(
-                    "Cull reliable casters whose bounding-sphere radius is below this fraction of camera distance; UE's reference value is 0.01.");
-                EndAnimatedTreeNode();
-            }
+                const bool cachePolicyActive = HasAnyDiagnosticCsmCachePolicy(shadows);
+                const bool viewDependentCasterCullingAvailable =
+                    CanUseDiagnosticCsmViewDependentCasterCulling(shadows);
 
-            if (BeginAnimatedTreeNode(
-                    "Cache Update Policy##DiagnosticCsm"))
-            {
-                customChanged |= ImGui::Checkbox(
-                    "Whole-Map Reuse",
-                    &shadows.wholeMapReuseEnabled);
+                const bool projectionAndBiasOpen =
+                    ImGui::TreeNodeEx("Projection And Bias##DiagnosticCsm");
                 ImGui::SetItemTooltip(
-                    "Reuse all cascades only when every projection and the scene revision are unchanged.");
-                customChanged |= ImGui::Checkbox(
-                    "Whole-Cascade Reuse",
-                    &shadows.wholeCascadeReuseEnabled);
-                ImGui::SetItemTooltip(
-                    "Classify and reuse each cascade independently. When both reuse modes are enabled, this finer policy takes precedence.");
-                customChanged |= ImGui::Checkbox(
-                    "Dirty Rectangles",
-                    &shadows.dirtyRectanglesEnabled);
-                ImGui::SetItemTooltip(
-                    "For compatible cached cascades, clear old and new changed bounds and rerender every overlapping caster.");
-                customChanged |= ImGui::Checkbox(
-                    "Scrolling",
-                    &shadows.scrollingEnabled);
-                ImGui::SetItemTooltip(
-                    "Reuse only exactly compatible integer-shifted texels, then clear and rerender exposed regions.");
-                customChanged |= DrawSliderFloat(
-                    "Minimum Scroll Overlap",
-                    &shadows.minimumScrollOverlap,
-                    0.5f,
-                    1.f,
-                    "%.2f");
-                ImGui::SetItemTooltip(
-                    "Require at least this compatible texel overlap before accepting a scroll update.");
-                EndAnimatedTreeNode();
-            }
-
-            ImGui::Checkbox(
-                "Detailed GPU Stage Timing##DiagnosticCsm",
-                &shadows.detailedGpuTimingEnabled);
-            ImGui::SetItemTooltip(
-                "Measure clear/update, raster, and full-resolution sampling separately; setup and caster culling remain CPU timings.");
-
-            static const char* debugLabels[] = {
-                "Off",
-                "Visibility",
-                "Cascade Selection",
-                "Cache Action"
-            };
-            const int debugIndex = std::clamp(
-                int(shadows.debugView),
-                0,
-                int(std::size(debugLabels)) - 1);
-            ImGui::SetNextItemWidth(settingsControlWidth);
-            if (BeginRoundedCombo(
-                    "Debug View##DiagnosticCascadedShadowMaps",
-                    debugLabels[debugIndex]))
-            {
-                for (int index = 0;
-                    index < int(std::size(debugLabels));
-                    ++index)
+                    "Tune UE-style split distribution, transition fades, "
+                    "stable projection snapping, and receiver bias.");
+                if (projectionAndBiasOpen)
                 {
-                    const auto debugView = DiagnosticCsmDebugView(index);
-                    const bool selected = shadows.debugView == debugView;
-                    if (ImGui::Selectable(debugLabels[index], selected))
+                    customChanged |=
+                        ImGui::Checkbox("UE Minimum Light Depth##DiagnosticCsm",
+                                        &shadows.enforceUeMinimumLightDepth);
+                    ImGui::SetItemTooltip(
+                        "Enforce UE's conventional directional-shadow minimum "
+                        "10,000-unit subject depth span; disable only for an explicitly "
+                        "unmatched low-depth diagnostic.");
+                    customChanged |= DrawSliderFloat("Split Distribution Exponent",
+                                                     &shadows.cascadeDistributionExponent,
+                                                     1.f,
+                                                     8.f,
+                                                     "%.2f");
+                    ImGui::SetItemTooltip(
+                        "Use UE's geometric split weighting; a fully dynamic movable "
+                        "directional light resolves the reference profile to 4.");
+                    customChanged |= DrawSliderFloat("Cascade Transition Fraction",
+                                                     &shadows.cascadeTransitionFraction,
+                                                     0.f,
+                                                     0.5f,
+                                                     "%.3f");
+                    ImGui::SetItemTooltip("Extend and cross-fade adjacent cascades over "
+                                          "this fraction of each split.");
+                    customChanged |=
+                        DrawSliderFloat("Shadow Distance Fade Fraction",
+                                        &shadows.shadowDistanceFadeoutFraction,
+                                        0.f,
+                                        0.5f,
+                                        "%.3f");
+                    ImGui::SetItemTooltip("Fade the last cascade to unshadowed "
+                                          "visibility at the maximum distance.");
+
+                    int projectionSnapTexelMultiple =
+                        int(std::clamp(shadows.projectionSnapTexelMultiple, 1u, 16u));
+                    if (DrawSliderInt("Projection Snap Multiple##DiagnosticCsm",
+                                      &projectionSnapTexelMultiple,
+                                      1,
+                                      16))
                     {
-                        shadows.debugView = debugView;
+                        shadows.projectionSnapTexelMultiple =
+                            uint32_t(projectionSnapTexelMultiple);
+                        customChanged = true;
                     }
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
+                    ImGui::SetItemTooltip(
+                        "Snap stable cascade centers in this many shadow texels; UE's "
+                        "conventional CSM path uses four.");
+
+                    customChanged |= DrawSliderFloat("Depth Bias##DiagnosticCsm",
+                                                     &shadows.depthBias,
+                                                     0.f,
+                                                     100.f,
+                                                     "%.2f");
+                    ImGui::SetItemTooltip(
+                        "Set UE's r.Shadow.CSMDepthBias base value; the light bias, "
+                        "light-depth span, and world-space texel size determine the "
+                        "effective normalized vertex bias.");
+                    customChanged |=
+                        DrawSliderFloat("Slope-Scaled Depth Bias##DiagnosticCsm",
+                                        &shadows.slopeScaledDepthBias,
+                                        0.f,
+                                        10.f,
+                                        "%.2f");
+                    ImGui::SetItemTooltip(
+                        "Set UE's r.Shadow.CSMSlopeScaleDepthBias base value; the "
+                        "directional-light slope factor and a slope clamped to one "
+                        "determine the effective term.");
+                    customChanged |=
+                        DrawSliderFloat("Directional-Light Shadow Bias##DiagnosticCsm",
+                                        &shadows.directionalLightShadowBias,
+                                        0.f,
+                                        1.f,
+                                        "%.2f");
+                    ImGui::SetItemTooltip("Match the directional-light component Shadow "
+                                          "Bias multiplier; UE's default is 0.5.");
+                    customChanged |=
+                        DrawSliderFloat("Directional-Light Slope Bias##DiagnosticCsm",
+                                        &shadows.directionalLightShadowSlopeBias,
+                                        0.f,
+                                        1.f,
+                                        "%.2f");
+                    ImGui::SetItemTooltip("Match the directional-light component Shadow "
+                                          "Slope Bias multiplier; UE's default is 0.5.");
+                    customChanged |= DrawSliderFloat("Receiver Depth Bias##DiagnosticCsm",
+                                                     &shadows.receiverDepthBias,
+                                                     0.f,
+                                                     1.f,
+                                                     "%.3f");
+                    ImGui::SetItemTooltip(
+                        "Match r.Shadow.CSMReceiverBias by widening the soft comparison "
+                        "transition at grazing receiver angles; this is not a direct "
+                        "depth offset.");
+
+                    ImGui::TreePop();
                 }
-                ImGui::EndCombo();
+
+                const auto drawUnabstracted = [&]() {
+                    const bool unabstractedOpen =
+                        ImGui::TreeNodeEx("Unabstracted##DiagnosticCsm");
+                    ImGui::SetItemTooltip(
+                        "Retain independently reversible depth, receiver, "
+                        "classification, and submission paths trending toward "
+                        "abstracted always-on policy.");
+                    if (unabstractedOpen)
+                    {
+                        customChanged |= ImGui::Checkbox("16-Bit Shadow Depth",
+                                                         &shadows.use16BitDepthEnabled);
+                        ImGui::SetItemTooltip(
+                            "Prefer UE D3D12's R16-typeless/D16 shadow-depth format; "
+                            "fall back to sampleable D32 when D16 is unsupported.");
+                        customChanged |=
+                            ImGui::Checkbox("Opaque Depth State Merging",
+                                            &shadows.opaqueDepthStateMergingEnabled);
+                        ImGui::SetItemTooltip("Canonicalize eligible opaque depth-only "
+                                              "materials and sort by "
+                                              "effective depth state; alpha-tested "
+                                              "materials remain distinct.");
+                        customChanged |=
+                            ImGui::Checkbox("Position-Only Opaque Casters",
+                                            &shadows.positionOnlyOpaqueEnabled);
+                        ImGui::SetItemTooltip(
+                            "Use a CSM-local opaque vertex permutation that omits unused "
+                            "texture-coordinate loads; alpha-tested casters keep the "
+                            "generic "
+                            "vertex shader.");
+                        customChanged |= ImGui::Checkbox(
+                            "Translation-Only Caster Transforms",
+                            &shadows.translationOnlyCasterTransformEnabled);
+                        ImGui::SetItemTooltip(
+                            "Push the exact finite translation for single-instance "
+                            "casters "
+                            "whose linear transform is canonical identity, avoiding "
+                            "redundant instance-buffer loads and affine position/normal "
+                            "transforms. Every other caster retains the unchanged "
+                            "instance-buffer path.");
+                        customChanged |= ImGui::Checkbox(
+                            "Precomputed Depth-Axis Normalization",
+                            &shadows.precomputedDepthAxisInverseLengthEnabled);
+                        ImGui::SetItemTooltip(
+                            "Normalize the exact directional world-to-clip depth axis "
+                            "once "
+                            "per cascade and reuse its inverse length in the opaque and "
+                            "alpha-tested depth shaders. Disable to retain the exact "
+                            "per-vertex reference calculation.");
+                        if (!shadows.precomputedDepthAxisInverseLengthEnabled)
+                            ImGui::BeginDisabled();
+                        customChanged |=
+                            ImGui::Checkbox("Conservative Saturated-Slope Shortcut",
+                                            &shadows.conservativeSaturatedSlopeEnabled);
+                        ImGui::SetItemTooltip(
+                            "With precomputed depth-axis normalization active, branch "
+                            "directly to UE's maximum clamped slope when squared NoL is "
+                            "one "
+                            "float step below or less than the exact 0.5 saturation "
+                            "boundary. Invalid, degenerate, and higher-NoL inputs retain "
+                            "the "
+                            "exact reference math; disabling selects the unchanged "
+                            "shader "
+                            "path.");
+                        customChanged |=
+                            ImGui::Checkbox("Algebraic Slow-Slope Reduction",
+                                            &shadows.algebraicSlowSlopeEnabled);
+                        ImGui::SetItemTooltip(
+                            "With precomputed depth-axis normalization active, evaluate "
+                            "the "
+                            "unsaturated UE slope as the perpendicular-to-parallel "
+                            "normal "
+                            "ratio, removing one reciprocal square root while preserving "
+                            "the "
+                            "same clamped result. Invalid inputs retain the exact "
+                            "reference "
+                            "calculation; disabling selects the preceding shader path "
+                            "byte-for-byte.");
+                        if (!shadows.precomputedDepthAxisInverseLengthEnabled)
+                            ImGui::EndDisabled();
+                        customChanged |= ImGui::Checkbox(
+                            "Pre-Normalized Receiver Light Direction",
+                            &shadows.preNormalizedReceiverLightDirectionEnabled);
+                        ImGui::SetItemTooltip(
+                            "Reuse the finite CPU-normalized directional-light vector "
+                            "directly in the CSM receiver. Disable to select the exact "
+                            "legacy resolve shader, which normalizes the same vector per "
+                            "receiver invocation.");
+                        customChanged |=
+                            ImGui::Checkbox("Precomposed Clip-to-Shadow Transform",
+                                            &shadows.precomposedClipToShadowEnabled);
+                        ImGui::SetItemTooltip("Precompose each cascade's "
+                                              "camera-clip-to-shadow transform once "
+                                              "on the CPU, matching UE's "
+                                              "screen-to-shadow matrix organization "
+                                              "and avoiding per-pixel world "
+                                              "reconstruction. Disable to select "
+                                              "the exact world-space receiver path.");
+                        customChanged |= ImGui::Checkbox(
+                            "One-Pass Cascade Classification",
+                            &shadows.singleTraversalCasterClassificationEnabled);
+                        ImGui::SetItemTooltip(
+                            "Traverse the scene once and classify each caster across "
+                            "every "
+                            "redrawn cascade, matching UE's gather organization. Disable "
+                            "to "
+                            "retain the original independent traversal and sort for each "
+                            "cascade.");
+                        const bool receiverHullAxesAvailable =
+                            viewDependentCasterCullingAvailable &&
+                            shadows.accurateCasterCullingEnabled;
+                        if (!receiverHullAxesAvailable)
+                            ImGui::BeginDisabled();
+                        customChanged |=
+                            ImGui::Checkbox("Precomputed Receiver Hull Axes",
+                                            &shadows.precomputedReceiverHullAxesEnabled);
+                        ImGui::SetItemTooltip(
+                            "Precompute the normalized receiver-hull axes and intervals "
+                            "once "
+                            "per cascade. Disable to retain the original per-caster, "
+                            "per-cascade projected-hull calculations.");
+                        if (!receiverHullAxesAvailable)
+                            ImGui::EndDisabled();
+                        customChanged |=
+                            ImGui::Checkbox("Shared Caster Light Projection",
+                                            &shadows.sharedCasterLightProjectionEnabled);
+                        ImGui::SetItemTooltip(
+                            "Project reliable caster bounds once into a compatible "
+                            "directional-light basis and reuse that shape across "
+                            "updating "
+                            "cascades. Disable to retain the original per-cascade "
+                            "projection "
+                            "path.");
+                        customChanged |=
+                            ImGui::Checkbox("Direct Caster Submission",
+                                            &shadows.directCasterSubmissionEnabled);
+                        ImGui::SetItemTooltip(
+                            "Let Donut consume the sorted caster records directly "
+                            "without "
+                            "rebuilding a contiguous DrawItem scratch vector. Disable to "
+                            "retain the original copy-based submission path.");
+                        customChanged |=
+                            ImGui::Checkbox("Batched Full-Redraw Clear",
+                                            &shadows.batchedFullRedrawClearEnabled);
+                        ImGui::SetItemTooltip(
+                            "Clear a contiguous set of two or more all-full-redraw "
+                            "cascade "
+                            "array slices with one depth clear. Disable to retain one "
+                            "full-map clear call per cascade; mixed and localized "
+                            "updates "
+                            "always keep their legacy commands.");
+                        ImGui::TreePop();
+                    }
+                };
+
+                const bool cacheUpdatePolicyOpen =
+                    ImGui::TreeNodeEx("Cache Update Policy##DiagnosticCsm");
+                ImGui::SetItemTooltip(
+                    "Tune whole-map or per-cascade reuse, localized dirty "
+                    "updates, and exactly compatible scrolling.");
+                if (cacheUpdatePolicyOpen)
+                {
+                    if (cachePolicyActive)
+                        ImGui::BeginDisabled();
+                    customChanged |=
+                        ImGui::Checkbox("Cached Shadow Draw Lists",
+                                        &shadows.cachedShadowDrawListsEnabled);
+                    if (cachePolicyActive)
+                        ImGui::EndDisabled();
+                    ImGui::SetItemTooltip(
+                        "Reuse exact final sorted caster lists only for repeating "
+                        "full-redraw configurations; map-cache policies already "
+                        "skip gathering and take precedence.");
+
+                    customChanged |=
+                        ImGui::Checkbox("Whole-Map Reuse", &shadows.wholeMapReuseEnabled);
+                    ImGui::SetItemTooltip("Reuse all cascades only when every projection "
+                                          "and the scene revision are unchanged.");
+                    customChanged |= ImGui::Checkbox("Whole-Cascade Reuse",
+                                                     &shadows.wholeCascadeReuseEnabled);
+                    ImGui::SetItemTooltip(
+                        "Classify and reuse each cascade independently. When both reuse "
+                        "modes are enabled, this finer policy takes precedence.");
+                    if (!shadows.wholeCascadeReuseEnabled)
+                        ImGui::BeginDisabled();
+                    customChanged |= ImGui::Checkbox("Dirty Rectangles",
+                                                     &shadows.dirtyRectanglesEnabled);
+                    ImGui::SetItemTooltip(
+                        "For compatible cached cascades, clear old and new changed "
+                        "bounds and rerender every overlapping caster.");
+                    customChanged |=
+                        ImGui::Checkbox("Scrolling", &shadows.scrollingEnabled);
+                    if (!shadows.wholeCascadeReuseEnabled)
+                        ImGui::EndDisabled();
+                    ImGui::SetItemTooltip(
+                        "Reuse only exactly compatible integer-shifted texels, then "
+                        "clear and rerender exposed regions.");
+                    if (!shadows.wholeCascadeReuseEnabled || !shadows.scrollingEnabled)
+                    {
+                        ImGui::BeginDisabled();
+                    }
+                    customChanged |= DrawSliderFloat("Minimum Scroll Overlap",
+                                                     &shadows.minimumScrollOverlap,
+                                                     0.5f,
+                                                     1.f,
+                                                     "%.2f");
+                    if (!shadows.wholeCascadeReuseEnabled || !shadows.scrollingEnabled)
+                    {
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::SetItemTooltip("Require at least this compatible texel "
+                                          "overlap before accepting a scroll update.");
+                    ImGui::TreePop();
+                }
+
+                const bool cullingAndRasterOpen =
+                    ImGui::TreeNodeEx("Culling And Raster##DiagnosticCsm");
+                ImGui::SetItemTooltip(
+                    "Tune experimental caster fetch and view-dependent "
+                    "full-redraw culling without changing cached-map policy.");
+                if (cullingAndRasterOpen)
+                {
+                    customChanged |=
+                        ImGui::Checkbox("Input-Assembler Caster Fetch",
+                                        &shadows.inputAssemblerCasterFetchEnabled);
+                    ImGui::SetItemTooltip(
+                        "Experimentally route only eligible non-deforming, "
+                        "non-translation casters through a CSM-local "
+                        "input-assembler path. Named profiles leave this off.");
+
+                    if (!viewDependentCasterCullingAvailable)
+                        ImGui::BeginDisabled();
+                    customChanged |= ImGui::Checkbox(
+                        "Receiver Raster Scissor", &shadows.receiverRasterScissorEnabled);
+                    ImGui::SetItemTooltip(
+                        "Conservatively scissor uncached full-redraw caster "
+                        "raster to the snapped receiver footprint.");
+                    customChanged |=
+                        ImGui::Checkbox("Accurate Caster Hull Culling",
+                                        &shadows.accurateCasterCullingEnabled);
+                    ImGui::SetItemTooltip(
+                        "Reject reliable bounds outside the one-sided "
+                        "light-extruded receiver hull during full redraws.");
+                    customChanged |=
+                        ImGui::Checkbox("UE Caster Radius Threshold",
+                                        &shadows.ueCasterRadiusThresholdEnabled);
+                    ImGui::SetItemTooltip(
+                        "Apply UE's camera-projected caster-size rejection "
+                        "only when no map-cache policy is active.");
+                    if (!viewDependentCasterCullingAvailable)
+                        ImGui::EndDisabled();
+
+                    const bool casterRadiusThresholdAvailable =
+                        viewDependentCasterCullingAvailable &&
+                        shadows.ueCasterRadiusThresholdEnabled;
+                    if (!casterRadiusThresholdAvailable)
+                        ImGui::BeginDisabled();
+                    customChanged |=
+                        DrawSliderFloat("Caster Radius Threshold##DiagnosticCsm",
+                                        &shadows.casterRadiusThreshold,
+                                        0.f,
+                                        0.05f,
+                                        "%.3f");
+                    ImGui::SetItemTooltip(
+                        "Cull reliable casters whose bounding-sphere radius is "
+                        "below this fraction of camera distance; UE's reference "
+                        "value is 0.01.");
+                    if (!casterRadiusThresholdAvailable)
+                        ImGui::EndDisabled();
+
+                    ImGui::TreePop();
+                }
+
+                drawUnabstracted();
+
+                EndAnimatedTreeNode();
             }
-            ImGui::SetItemTooltip(
-                "Present the CSM visibility, selected cascade, or cache action without changing its lighting input.");
 
             if (customChanged)
                 shadows.profile = DiagnosticCsmProfile::Custom;
 
-            ImGui::TextDisabled(
-                "Diagnostic only: one persistent depth array, one caster path, and one full-resolution R8 receiver are shared by every update policy.");
-            if (m_HasDiagnosticCsmStatSnapshot)
+            if (BeginAnimatedTreeNode("Diagnostics##DiagnosticCsm"))
             {
-                for (size_t lineIndex = 0;
-                    lineIndex < m_DiagnosticCsmStatLines.size();
-                    ++lineIndex)
+                ImGui::Checkbox("Detailed GPU Stage Timing##DiagnosticCsm",
+                                &shadows.detailedGpuTimingEnabled);
+                ImGui::SetItemTooltip(
+                    "Measure clear/update, raster, and full-resolution sampling "
+                    "separately; setup and caster culling remain CPU timings.");
+
+                static const char* debugLabels[] = {
+                    "Off", "Visibility", "Cascade Selection", "Cache Action"};
+                const int debugIndex = std::clamp(
+                    int(shadows.debugView), 0, int(std::size(debugLabels)) - 1);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (BeginRoundedCombo("Debug View##DiagnosticCascadedShadowMaps",
+                                      debugLabels[debugIndex]))
                 {
-                    const std::string& line =
-                        m_DiagnosticCsmStatLines[lineIndex];
-                    ImGui::TextUnformatted(line.c_str());
-                    if (lineIndex == 10u)
+                    for (int index = 0; index < int(std::size(debugLabels)); ++index)
                     {
-                        ImGui::SetItemTooltip(
-                            "Trend estimate for this same adapter and exact workload only. "
-                            "It scales raw GPU time by unsmoothed current-clock FP32 capacity, "
-                            "never by utilization. Raw GPU and every CPU timing remain authoritative.");
+                        const auto debugView = DiagnosticCsmDebugView(index);
+                        const bool selected = shadows.debugView == debugView;
+                        if (ImGui::Selectable(debugLabels[index], selected))
+                        {
+                            shadows.debugView = debugView;
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Present the CSM visibility, selected cascade, or cache action "
+                    "without changing its lighting input.");
+
+                ImGui::TextDisabled(
+                    "Diagnostic only: one persistent depth array, one caster path, and "
+                    "one full-resolution R8 receiver are shared by every update policy.");
+                if (m_HasDiagnosticCsmStatSnapshot)
+                {
+                    for (size_t lineIndex = 0;
+                         lineIndex < m_DiagnosticCsmStatLines.size();
+                         ++lineIndex)
+                    {
+                        const std::string& line = m_DiagnosticCsmStatLines[lineIndex];
+                        ImGui::TextUnformatted(line.c_str());
+                        if (lineIndex == 10u)
+                        {
+                            ImGui::SetItemTooltip(
+                                "Trend estimate for this same adapter and exact workload "
+                                "only. "
+                                "It scales raw GPU time by unsmoothed current-clock FP32 "
+                                "capacity, "
+                                "never by utilization. Raw GPU and every CPU timing "
+                                "remain authoritative.");
+                        }
                     }
                 }
-            }
-            else if (shadows.enabled)
-            {
-                const DiagnosticCsmTimings* timings =
-                    m_app->GetDiagnosticCascadedShadowMapTimings();
-                if (timings && !timings->supported)
+                else if (shadows.enabled)
                 {
-                    ImGui::TextDisabled(
-                        "Unavailable: this adapter lacks sampleable/loadable D16 and D32 depth or R8 UAV support, or CSM initialization failed.");
+                    const DiagnosticCsmTimings* timings =
+                        m_app->GetDiagnosticCascadedShadowMapTimings();
+                    if (timings && !timings->supported)
+                    {
+                        ImGui::TextDisabled(
+                            "Unavailable: this adapter lacks sampleable/loadable D16 and "
+                            "D32 depth or R8 UAV support, or CSM initialization failed.");
+                    }
+                    else
+                    {
+                        ImGui::TextDisabled("Waiting for the first valid CSM frame and "
+                                            "retired GPU timing query.");
+                    }
                 }
-                else
-                {
-                    ImGui::TextDisabled(
-                        "Waiting for the first valid CSM frame and retired GPU timing query.");
-                }
+
+                EndAnimatedTreeNode();
             }
 
             if (!shadows.enabled)
@@ -12194,13 +12109,37 @@ bool ProcessCommandLine(
 {
     for (int i = 1; i < argc; i++)
     {
-        if (!strcmp(argv[i], "-width") && i + 1 < argc)
+        if (!strcmp(argv[i], "-width"))
         {
-            deviceParams.backBufferWidth = std::stoi(argv[++i]);
+            int value = 0;
+            if (i + 1 >= argc ||
+                !ParseCommandLineInt(
+                    argv[i + 1],
+                    1,
+                    std::numeric_limits<int>::max(),
+                    value))
+            {
+                log::error("-width requires an exact positive integer value");
+                return false;
+            }
+            deviceParams.backBufferWidth = value;
+            ++i;
         }
-        else if (!strcmp(argv[i], "-height") && i + 1 < argc)
+        else if (!strcmp(argv[i], "-height"))
         {
-            deviceParams.backBufferHeight = std::stoi(argv[++i]);
+            int value = 0;
+            if (i + 1 >= argc ||
+                !ParseCommandLineInt(
+                    argv[i + 1],
+                    1,
+                    std::numeric_limits<int>::max(),
+                    value))
+            {
+                log::error("-height requires an exact positive integer value");
+                return false;
+            }
+            deviceParams.backBufferHeight = value;
+            ++i;
         }
         else if (!strcmp(argv[i], "-fullscreen"))
         {
@@ -12211,9 +12150,21 @@ bool ProcessCommandLine(
             deviceParams.enableDebugRuntime = true;
             deviceParams.enableNvrhiValidationLayer = true;
         }
-        else if (!strcmp(argv[i], "-adapter") && i + 1 < argc)
+        else if (!strcmp(argv[i], "-adapter"))
         {
-            deviceParams.adapterIndex = std::stoi(argv[++i]);
+            int value = 0;
+            if (i + 1 >= argc ||
+                !ParseCommandLineInt(
+                    argv[i + 1],
+                    0,
+                    std::numeric_limits<int>::max(),
+                    value))
+            {
+                log::error("-adapter requires an exact nonnegative integer value");
+                return false;
+            }
+            deviceParams.adapterIndex = value;
+            ++i;
         }
         else if ((!strcmp(argv[i], "--experiment") || !strcmp(argv[i], "-experiment"))
             && i + 1 < argc)
@@ -12288,14 +12239,9 @@ bool ProcessCommandLine(
         else if (!strcmp(argv[i], "--svsm-motion-pool") &&
             i + 1 < argc)
         {
-            const char* valueText = argv[++i];
-            const char* valueEnd = valueText + std::strlen(valueText);
-            const auto parseResult = std::from_chars(
-                valueText,
-                valueEnd,
-                svsmMotionPoolPageCount);
-            if (parseResult.ec != std::errc{} ||
-                parseResult.ptr != valueEnd)
+            if (!ParseCommandLineUint32(
+                    argv[++i],
+                    svsmMotionPoolPageCount))
             {
                 log::error(
                     "--svsm-motion-pool requires an exact unsigned integer value");
@@ -12311,14 +12257,9 @@ bool ProcessCommandLine(
         else if (!strcmp(argv[i], "--svsm-motion-budget") &&
             i + 1 < argc)
         {
-            const char* valueText = argv[++i];
-            const char* valueEnd = valueText + std::strlen(valueText);
-            const auto parseResult = std::from_chars(
-                valueText,
-                valueEnd,
-                svsmMotionPageRenderBudget);
-            if (parseResult.ec != std::errc{} ||
-                parseResult.ptr != valueEnd)
+            if (!ParseCommandLineUint32(
+                    argv[++i],
+                    svsmMotionPageRenderBudget))
             {
                 log::error(
                     "--svsm-motion-budget requires an exact unsigned integer value");
@@ -12334,6 +12275,10 @@ bool ProcessCommandLine(
         else if (!strcmp(argv[i], "--dred"))
         {
             dredDiagnosticsRequested = true;
+        }
+        else if (IsDonutGraphicsApiOption(argv[i]))
+        {
+            // Donut consumes this token when it creates the device manager.
         }
         else if (!std::strncmp(
                      argv[i],
@@ -12353,6 +12298,11 @@ bool ProcessCommandLine(
         else if (argv[i][0] != '-')
         {
             sceneName = argv[i];
+        }
+        else
+        {
+            log::error("Unknown command-line option '%s'", argv[i]);
+            return false;
         }
     }
     return true;
@@ -12940,42 +12890,16 @@ int main(int __argc, const char* const* __argv)
             uiData.BendScreenSpaceShadows.enabled = false;
             uiData.DiagnosticCascadedShadowMaps.enabled = false;
             uiData.ScreenSpaceVisibility.enabled = false;
-            uiData.SparseVirtualShadowMaps.enabled = true;
-            ApplySvsmPreset(
-                uiData.SparseVirtualShadowMaps,
-                SvsmPreset::Performance);
+            uiData.SparseVirtualShadowMaps =
+                BuildSvsmMotionBenchmarkAcceptanceSettings();
             uiData.SparseVirtualShadowMaps.physicalPageCount =
                 svsmMotionPoolPageCount;
-            uiData.SparseVirtualShadowMaps.packetStateSortingEnabled =
-                true;
-            uiData.SparseVirtualShadowMaps.levelEmptyWorkSkipEnabled =
-                true;
             ApplySvsmFinePageRenderBudget(
                 uiData.SparseVirtualShadowMaps,
                 svsmMotionPageRenderBudget);
             uiData.SparseVirtualShadowMaps.
-                finiteBudgetStaticDrainEnabled = true;
-            uiData.SparseVirtualShadowMaps.
-                allocationBudgetSaturationEarlyOutEnabled = true;
-            uiData.SparseVirtualShadowMaps.
-                perPixelMarkingDedupeEnabled = true;
-            uiData.SparseVirtualShadowMaps.packetPageCullingEnabled =
-                true;
-            uiData.SparseVirtualShadowMaps.
                 dirtyPageScatterRasterEnabled =
                     svsmMotionScatterRequested;
-            uiData.SparseVirtualShadowMaps.
-                scatterAlphaTestEarlyRejectEnabled = true;
-            uiData.SparseVirtualShadowMaps.
-                dirtyPageScatterAmplificationGuardEnabled = true;
-            uiData.SparseVirtualShadowMaps.
-                dirtyPageScatterMaximumAmplification = 1u;
-            uiData.SparseVirtualShadowMaps.
-                packetRectangleDirectScanEnabled = true;
-            uiData.SparseVirtualShadowMaps.
-                recentPageEvictionGraceEnabled = true;
-            uiData.SparseVirtualShadowMaps.preset =
-                SvsmPreset::Custom;
 
             if (svsmMotionIsolationRequested)
             {
@@ -13012,6 +12936,8 @@ int main(int __argc, const char* const* __argv)
                 shadows.retainPhysicalMappingsOnContentInvalidationEnabled =
                     false;
                 shadows.movingLightLodBiasEnabled = false;
+                shadows.movingLightResolutionBias =
+                    SvsmResolutionBias::Zero;
                 shadows.receiverDistanceMipClampEnabled = false;
                 shadows.movingLightContinuousReceiverBiasEnabled = false;
                 shadows.gpuGatedDrawSubmission = false;
@@ -13028,7 +12954,6 @@ int main(int __argc, const char* const* __argv)
                 shadows.packetRectangleDirectScanEnabled = false;
                 shadows.recentPageEvictionGraceEnabled = false;
                 shadows.perPixelMarkingDedupeEnabled = false;
-                shadows.fineCasterExclusion = false;
             }
             else if (svsmMotionUnbatchedRequested)
             {

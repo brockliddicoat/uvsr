@@ -321,26 +321,37 @@ the raw R8 result as grayscale instead of compositing it into scene lighting.
 
 ### Directional-Light Composite
 
-Deferred lighting owns a producer-neutral fixed two-slot directional visibility
-interface. Every slot carries only a full-resolution linear `R8_UNORM` texture
-and a non-owning exact light pointer. Incomplete, stale-sized, wrong-format,
-unsupported, or unmatched slots bind white and retain light index `-1`. The
-shader multiplies all factors whose pointer maps to the light currently being
-evaluated. Indirect diffuse, emissive radiance, environment lighting, and
+Deferred lighting owns a producer-neutral fixed three-slot directional
+visibility interface. Every slot carries only a full-resolution linear
+`R8_UNORM` texture and a non-owning exact light pointer. Incomplete, stale-sized,
+wrong-format, unsupported, or unmatched slots bind white and retain light index
+`-1`. The shader multiplies all factors whose pointer maps to the light currently
+being evaluated. Indirect diffuse, emissive radiance, environment lighting, and
 unrelated lights are unchanged.
 
-Bend and SVSM render independently and know nothing about one another's types,
-settings, resources, UI, caches, or benchmarks. `uvsr.cpp` adapts their
-frame-local results into the neutral interface immediately before deferred
-lighting. This keeps both projects portable while preserving a zero-dispatch
-path for reintegration: if both complete factors target the same exact light,
-their product is applied there and nowhere else.
+Bend, SVSM, and diagnostic CSM render independently and know nothing about one
+another's types, settings, resources, UI, caches, or benchmarks. `uvsr.cpp`
+adapts their frame-local results into the neutral interface immediately before
+deferred lighting. This keeps all three projects portable while preserving a
+zero-dispatch path for reintegration: every complete factor that targets the
+same exact light is multiplied there and nowhere else.
+
+### Canonical Integration Boundary
+
+This experimental branch validates its single-sample PBR deferred receiver and
+the existing forward and screen-space indirect lighting paths. It intentionally
+does not copy canonical `main`'s MSAA or fused-visibility shaders. Integration
+must preserve those canonical paths while extending the three exact-light slots
+and no-hidden-ambient invariant to every production lighting permutation. Every
+imported lighting shader must also be added to the source-contract test rather
+than weakening that contract.
 
 ### Future Hierarchical Boundary
 
 This near tracer is intentionally a standalone producer. A future Hi-Z or
-hierarchical far tracer can replace either neutral visibility slot or extend
-the renderer boundary without modifying the validated Bend implementation.
+hierarchical far tracer can replace one neutral producer slot or deliberately
+extend the renderer boundary without modifying the validated Bend
+implementation.
 The current experiment does not allocate temporal history, stochastic inputs,
 a thickness texture, a depth hierarchy, or a far-trace resource.
 

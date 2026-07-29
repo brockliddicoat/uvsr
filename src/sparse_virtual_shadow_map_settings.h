@@ -4042,7 +4042,7 @@ namespace uvsr
         bool deferredStaticDepthMergeEnabled = true;
         bool movingLightUncachedEnabled = true;
         bool retainPhysicalMappingsOnContentInvalidationEnabled = true;
-        bool movingLightLodBiasEnabled = true;
+        bool movingLightLodBiasEnabled = false;
         SvsmResolutionBias movingLightResolutionBias =
             SvsmResolutionBias::Zero;
         // The discrete global clipmap bias stays conservative until each
@@ -4091,7 +4091,6 @@ namespace uvsr
         bool pageTranslationCachingEnabled = true;
         bool detailedGpuTimingEnabled = false;
         bool adaptiveFiltering = false;
-        bool fineCasterExclusion = false;
     };
 
     inline void ApplySvsmFinePageRenderBudget(
@@ -4674,8 +4673,7 @@ namespace uvsr
                 right.pageTranslationCachingEnabled &&
             left.detailedGpuTimingEnabled ==
                 right.detailedGpuTimingEnabled &&
-            left.adaptiveFiltering == right.adaptiveFiltering &&
-            left.fineCasterExclusion == right.fineCasterExclusion;
+            left.adaptiveFiltering == right.adaptiveFiltering;
     }
 
     inline void ApplySvsmPreset(
@@ -4719,7 +4717,6 @@ namespace uvsr
                 SvsmResolutionBias::PlusOne;
             settings.receiverDistanceMipClampEnabled = true;
             settings.receiverDistanceMipClampStartScale = 1.f;
-            settings.adaptiveFiltering = true;
             break;
         case SvsmPreset::Quality:
             break;
@@ -4727,6 +4724,9 @@ namespace uvsr
             // Handled before reset so selecting Custom retains every edit.
             break;
         }
+        settings.movingLightLodBiasEnabled =
+            settings.movingLightResolutionBias !=
+                SvsmResolutionBias::Zero;
     }
 
     inline bool ValidateSvsmSettings(

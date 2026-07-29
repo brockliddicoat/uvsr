@@ -5796,7 +5796,7 @@ namespace
         assert(settings.movingLightUncachedEnabled);
         assert(settings.
             retainPhysicalMappingsOnContentInvalidationEnabled);
-        assert(settings.movingLightLodBiasEnabled);
+        assert(!settings.movingLightLodBiasEnabled);
         assert(settings.movingLightResolutionBias ==
             SvsmResolutionBias::Zero);
         assert(settings.movingLightLodRecoveryFrames ==
@@ -5937,9 +5937,10 @@ namespace
             SvsmPoissonOrdering::BalancedProgressive);
         assert(settings.tapCount == SvsmTapCount::Four);
         assert(settings.resolutionBias == SvsmResolutionBias::Zero);
-        assert(settings.adaptiveFiltering);
+        assert(!settings.adaptiveFiltering);
         assert(settings.receiverDistanceMipClampEnabled);
         assert(settings.receiverDistanceMipClampStartScale == 1.f);
+        assert(settings.movingLightLodBiasEnabled);
         assert(settings.movingLightResolutionBias ==
             SvsmResolutionBias::PlusOne);
         assert(settings.lightDepthOriginGuardBandEnabled);
@@ -5957,6 +5958,7 @@ namespace
         assert(!settings.adaptiveFiltering);
         assert(!settings.receiverDistanceMipClampEnabled);
         assert(settings.receiverDistanceMipClampStartScale == 1.5f);
+        assert(!settings.movingLightLodBiasEnabled);
         assert(settings.movingLightResolutionBias ==
             SvsmResolutionBias::Zero);
         assert(settings.lightDepthOriginGuardBandEnabled);
@@ -6862,16 +6864,27 @@ namespace
             SvsmSunMotionBenchmarkEndFrame));
         assert(IsSvsmMotionBenchmarkEvidenceValidForFrameCount(
             SvsmSunMotionBenchmarkMeasurementFrames,
-            1288u, 1288u, 1288u, 0u, 1288u, 0u, false, false));
+            1288u, 1288u, 1288u, 0u, 1288u, 0u,
+            false, false, false, false));
 
         assert(IsSvsmMotionBenchmarkEvidenceValid(
-            1000u, 1000u, 1000u, 0u, 1000u, 0u, false, false));
+            1000u, 1000u, 1000u, 0u, 1000u, 0u,
+            false, false, false, false));
         assert(!IsSvsmMotionBenchmarkEvidenceValid(
-            999u, 1000u, 1000u, 0u, 1000u, 0u, false, false));
+            999u, 1000u, 1000u, 0u, 1000u, 0u,
+            false, false, false, false));
         assert(!IsSvsmMotionBenchmarkEvidenceValid(
-            1000u, 1000u, 999u, 1u, 999u, 0u, false, false));
+            1000u, 1000u, 999u, 1u, 999u, 0u,
+            false, false, false, false));
         assert(!IsSvsmMotionBenchmarkEvidenceValid(
-            1000u, 1000u, 1000u, 0u, 1000u, 1u, false, false));
+            1000u, 1000u, 1000u, 0u, 1000u, 1u,
+            false, false, false, false));
+        assert(!IsSvsmMotionBenchmarkEvidenceValid(
+            1000u, 1000u, 1000u, 0u, 1000u, 0u,
+            false, false, true, false));
+        assert(!IsSvsmMotionBenchmarkEvidenceValid(
+            1000u, 1000u, 1000u, 0u, 1000u, 0u,
+            false, false, false, true));
 
         SparseVirtualShadowMapSettings original;
         const SparseVirtualShadowMapSettings identical = original;
@@ -7048,6 +7061,397 @@ namespace
         // material-bound reference path.
         assert(!ShouldUseSvsmOpaqueRasterSpecialization(
             true, true, false));
+    }
+
+    void TestMotionBenchmarkConfigurationIdentityAndTimingValidation()
+    {
+        const SparseVirtualShadowMapSettings accepted =
+            BuildSvsmMotionBenchmarkAcceptanceSettings();
+        assert(accepted.enabled);
+        assert(accepted.preset == SvsmPreset::Custom);
+        assert(accepted.mode == SvsmMode::SparseCached);
+        assert(accepted.filterKernel ==
+            SvsmFilterKernel::NearestPoisson);
+        assert(accepted.tapCount == SvsmTapCount::Eight);
+        assert(accepted.resolutionBias == SvsmResolutionBias::PlusOne);
+        assert(accepted.physicalPageCount == 4096u);
+        assert(accepted.pageRenderBudget == 4u);
+        assert(!accepted.coarsestPageRenderBudgetEnabled);
+        assert(accepted.renderPacketCachingEnabled);
+        assert(accepted.gpuGatedDrawSubmission);
+        assert(!accepted.detailedGpuTimingEnabled);
+        assert(ValidateSvsmSettings(accepted));
+        assert(IsSvsmMotionBenchmarkAcceptanceConfiguration(accepted));
+
+        const std::string identity =
+            BuildSvsmMotionBenchmarkConfigurationIdentity(accepted);
+        const std::string identityId =
+            BuildSvsmMotionBenchmarkConfigurationId(accepted);
+        assert(identity.find("svsm-motion-timing-v2") == 0u);
+        assert(identity.find(";enabled=1") != std::string::npos);
+        assert(identityId.size() == 16u);
+        assert(BuildSvsmMotionBenchmarkConfigurationIdentity(accepted) ==
+            identity);
+        assert(BuildSvsmMotionBenchmarkConfigurationId(accepted) ==
+            identityId);
+
+        const auto requireIdentityChange =
+            [&accepted, &identity, &identityId](auto mutate)
+        {
+            SparseVirtualShadowMapSettings changed = accepted;
+            mutate(changed);
+            assert(!IsSameSvsmConfiguration(accepted, changed));
+            assert(!IsSvsmMotionBenchmarkAcceptanceConfiguration(changed));
+            assert(BuildSvsmMotionBenchmarkConfigurationIdentity(changed) !=
+                identity);
+            assert(BuildSvsmMotionBenchmarkConfigurationId(changed) !=
+                identityId);
+        };
+
+        requireIdentityChange([](auto& value) {
+            value.enabled = !value.enabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.preset = SvsmPreset::Performance;
+        });
+        requireIdentityChange([](auto& value) {
+            value.mode = SvsmMode::DenseReference;
+        });
+        requireIdentityChange([](auto& value) {
+            value.markingMode = SvsmMarkingMode::Tile8;
+        });
+        requireIdentityChange([](auto& value) {
+            value.filterMode = SvsmFilterMode::Hybrid;
+        });
+        requireIdentityChange([](auto& value) {
+            value.filterKernel = SvsmFilterKernel::BilinearPcf;
+        });
+        requireIdentityChange([](auto& value) {
+            value.poissonOrdering = SvsmPoissonOrdering::LegacyStride;
+        });
+        requireIdentityChange([](auto& value) {
+            value.tapCount = SvsmTapCount::Four;
+        });
+        requireIdentityChange([](auto& value) {
+            value.resolutionBias = SvsmResolutionBias::Zero;
+        });
+        requireIdentityChange([](auto& value) {
+            value.debugView = SvsmDebugView::Visibility;
+        });
+        requireIdentityChange([](auto& value) {
+            value.firstClipmapExtent += 1.f;
+        });
+        requireIdentityChange([](auto& value) {
+            value.maximumLightDepth += 1.f;
+        });
+        requireIdentityChange([](auto& value) {
+            value.physicalPageCount = 1024u;
+        });
+        requireIdentityChange([](auto& value) {
+            value.pageRenderBudget += 1u;
+        });
+        requireIdentityChange([](auto& value) {
+            value.coarsestPageRenderBudgetEnabled =
+                !value.coarsestPageRenderBudgetEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.perPixelMarkingDedupeEnabled =
+                !value.perPixelMarkingDedupeEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.cachingEnabled = !value.cachingEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.lightDepthOriginGuardBandEnabled =
+                !value.lightDepthOriginGuardBandEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.lightDepthOriginGuardBandFraction -= 0.1f;
+        });
+        requireIdentityChange([](auto& value) {
+            value.staticPageRequestReuseEnabled =
+                !value.staticPageRequestReuseEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.allocationBudgetSaturationEarlyOutEnabled =
+                !value.allocationBudgetSaturationEarlyOutEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.finiteBudgetStaticDrainEnabled =
+                !value.finiteBudgetStaticDrainEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.staticVisibilityCachingEnabled =
+                !value.staticVisibilityCachingEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.sceneStateCachingEnabled =
+                !value.sceneStateCachingEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.casterOnlySceneRevisionEnabled =
+                !value.casterOnlySceneRevisionEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.renderPacketCachingEnabled =
+                !value.renderPacketCachingEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.sharedClipmapPacketBuilderEnabled =
+                !value.sharedClipmapPacketBuilderEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.persistentCasterSourceCachingEnabled =
+                !value.persistentCasterSourceCachingEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.opaqueRasterSpecializationEnabled =
+                !value.opaqueRasterSpecializationEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.leanAlphaTestedBindingsEnabled =
+                !value.leanAlphaTestedBindingsEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.pairedStaticDynamicDepthEnabled =
+                !value.pairedStaticDynamicDepthEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.deferredStaticDepthMergeEnabled =
+                !value.deferredStaticDepthMergeEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.movingLightUncachedEnabled =
+                !value.movingLightUncachedEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.retainPhysicalMappingsOnContentInvalidationEnabled =
+                !value.retainPhysicalMappingsOnContentInvalidationEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.movingLightLodBiasEnabled =
+                !value.movingLightLodBiasEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.movingLightResolutionBias =
+                SvsmResolutionBias::PlusOne;
+        });
+        requireIdentityChange([](auto& value) {
+            value.movingLightLodRecoveryFrames += 1u;
+        });
+        requireIdentityChange([](auto& value) {
+            value.receiverDistanceMipClampEnabled =
+                !value.receiverDistanceMipClampEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.receiverDistanceMipClampStartScale += 0.25f;
+        });
+        requireIdentityChange([](auto& value) {
+            value.receiverDistanceMipClampMaximumLevel -= 1u;
+        });
+        requireIdentityChange([](auto& value) {
+            value.movingLightContinuousReceiverBiasEnabled =
+                !value.movingLightContinuousReceiverBiasEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.localizedInvalidationEnabled =
+                !value.localizedInvalidationEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.tightLocalizedInvalidationBoundsEnabled =
+                !value.tightLocalizedInvalidationBoundsEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.adaptiveCasterCacheClassificationEnabled =
+                !value.adaptiveCasterCacheClassificationEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.defaultObjectInvalidationMode =
+                SvsmObjectInvalidationMode::Rigid;
+        });
+        requireIdentityChange([](auto& value) {
+            value.gpuGatedDrawSubmission =
+                !value.gpuGatedDrawSubmission;
+        });
+        requireIdentityChange([](auto& value) {
+            value.batchedDrawSubmissionEnabled =
+                !value.batchedDrawSubmissionEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.packetStateSortingEnabled =
+                !value.packetStateSortingEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.levelEmptyWorkSkipEnabled =
+                !value.levelEmptyWorkSkipEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.packetPageCullingEnabled =
+                !value.packetPageCullingEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.hierarchicalScheduledPageMaskEnabled =
+                !value.hierarchicalScheduledPageMaskEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.receiverPageMaskCullingEnabled =
+                !value.receiverPageMaskCullingEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.staticDepthHierarchyCullingEnabled =
+                !value.staticDepthHierarchyCullingEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.staticDepthHierarchyBias += 0.001f;
+        });
+        requireIdentityChange([](auto& value) {
+            value.dirtyPageScatterRasterEnabled =
+                !value.dirtyPageScatterRasterEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.scatterAlphaTestEarlyRejectEnabled =
+                !value.scatterAlphaTestEarlyRejectEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.dirtyPageScatterAmplificationGuardEnabled =
+                !value.dirtyPageScatterAmplificationGuardEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.dirtyPageScatterMaximumAmplification += 1u;
+        });
+        requireIdentityChange([](auto& value) {
+            value.packetRectangleDirectScanEnabled =
+                !value.packetRectangleDirectScanEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.recentPageEvictionGraceEnabled =
+                !value.recentPageEvictionGraceEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.precomposedClipmapTransformsEnabled =
+                !value.precomposedClipmapTransformsEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.pageTranslationCachingEnabled =
+                !value.pageTranslationCachingEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.detailedGpuTimingEnabled =
+                !value.detailedGpuTimingEnabled;
+        });
+        requireIdentityChange([](auto& value) {
+            value.adaptiveFiltering = !value.adaptiveFiltering;
+        });
+
+        const auto validGpuTiming = [](
+            const std::array<float, 7u>& values,
+            bool detailed = false,
+            bool expectedDetailed = false)
+        {
+            return IsValidSvsmMotionBenchmarkGpuTiming(
+                values[0],
+                values[1],
+                values[2],
+                values[3],
+                values[4],
+                values[5],
+                values[6],
+                detailed,
+                expectedDetailed);
+        };
+        const std::array<float, 7u> zeroGpuTiming{};
+        assert(!validGpuTiming(zeroGpuTiming));
+        assert(!validGpuTiming(zeroGpuTiming, true, false));
+        assert(!validGpuTiming(zeroGpuTiming, true, true));
+        std::array<float, 7u> validTotalOnlyGpuTiming = zeroGpuTiming;
+        validTotalOnlyGpuTiming[6] = 0.1f;
+        assert(validGpuTiming(validTotalOnlyGpuTiming));
+        assert(!validGpuTiming(
+            validTotalOnlyGpuTiming, true, false));
+        assert(validGpuTiming(
+            validTotalOnlyGpuTiming, true, true));
+        std::array<float, 7u> staleTotalOnlyGpuTiming =
+            validTotalOnlyGpuTiming;
+        staleTotalOnlyGpuTiming[0] = 0.001f;
+        assert(!validGpuTiming(staleTotalOnlyGpuTiming));
+        assert(validGpuTiming(
+            staleTotalOnlyGpuTiming, true, true));
+        std::array<float, 7u> oversizedDetailedStage =
+            validTotalOnlyGpuTiming;
+        oversizedDetailedStage[0] = 0.2f;
+        assert(!validGpuTiming(
+            oversizedDetailedStage, true, true));
+        std::array<float, 7u> oversizedDetailedStageSum =
+            validTotalOnlyGpuTiming;
+        for (size_t index = 0u; index < 6u; ++index)
+            oversizedDetailedStageSum[index] = 0.02f;
+        assert(!validGpuTiming(
+            oversizedDetailedStageSum, true, true));
+        std::array<float, 7u> roundedDetailedStageSum =
+            validTotalOnlyGpuTiming;
+        for (size_t index = 0u; index < 5u; ++index)
+            roundedDetailedStageSum[index] = 0.02f;
+        roundedDetailedStageSum[5] = 0.00005f;
+        assert(validGpuTiming(
+            roundedDetailedStageSum, true, true));
+        for (size_t index = 0u;
+            index < validTotalOnlyGpuTiming.size();
+            ++index)
+        {
+            std::array<float, 7u> invalid =
+                validTotalOnlyGpuTiming;
+            invalid[index] = -0.001f;
+            assert(!validGpuTiming(invalid));
+            invalid[index] = std::numeric_limits<float>::quiet_NaN();
+            assert(!validGpuTiming(invalid));
+            invalid[index] = std::numeric_limits<float>::infinity();
+            assert(!validGpuTiming(invalid));
+            invalid[index] = -std::numeric_limits<float>::infinity();
+            assert(!validGpuTiming(invalid));
+        }
+
+        const auto validCpuTiming = [](
+            const std::array<float, 4u>& values)
+        {
+            return IsValidSvsmMotionBenchmarkCpuTiming(
+                values[0], values[1], values[2], values[3]);
+        };
+        const std::array<float, 4u> zeroCpuTiming{};
+        assert(!validCpuTiming(zeroCpuTiming));
+        std::array<float, 4u> validCpuTimingValues = zeroCpuTiming;
+        validCpuTimingValues[3] = 0.1f;
+        assert(validCpuTiming(validCpuTimingValues));
+        std::array<float, 4u> oversizedCpuStage =
+            validCpuTimingValues;
+        oversizedCpuStage[0] = 0.2f;
+        assert(!validCpuTiming(oversizedCpuStage));
+        std::array<float, 4u> oversizedCpuStageSum =
+            validCpuTimingValues;
+        oversizedCpuStageSum[0] = 0.04f;
+        oversizedCpuStageSum[1] = 0.04f;
+        oversizedCpuStageSum[2] = 0.04f;
+        assert(!validCpuTiming(oversizedCpuStageSum));
+        std::array<float, 4u> roundedCpuStageSum =
+            validCpuTimingValues;
+        roundedCpuStageSum[0] = 0.05f;
+        roundedCpuStageSum[1] = 0.05f;
+        roundedCpuStageSum[2] = 0.00005f;
+        assert(validCpuTiming(roundedCpuStageSum));
+        for (size_t index = 0u;
+            index < validCpuTimingValues.size();
+            ++index)
+        {
+            std::array<float, 4u> invalid =
+                validCpuTimingValues;
+            invalid[index] = -0.001f;
+            assert(!validCpuTiming(invalid));
+            invalid[index] = std::numeric_limits<float>::quiet_NaN();
+            assert(!validCpuTiming(invalid));
+            invalid[index] = std::numeric_limits<float>::infinity();
+            assert(!validCpuTiming(invalid));
+            invalid[index] = -std::numeric_limits<float>::infinity();
+            assert(!validCpuTiming(invalid));
+        }
     }
 
     void TestResourceRecreationAndModeSwitch()
@@ -7236,20 +7640,31 @@ namespace
         assert(IsSvsmMotionBenchmarkEnvironmentValid(false, false));
         assert(!IsSvsmMotionBenchmarkEnvironmentValid(true, false));
         assert(!IsSvsmMotionBenchmarkEnvironmentValid(false, true));
+        const SparseVirtualShadowMapSettings acceptanceSettings =
+            BuildSvsmMotionBenchmarkAcceptanceSettings();
         assert(IsSvsmMotionBenchmarkAcceptanceConfiguration(
-            4096u, 4u, false, true, true));
+            acceptanceSettings));
+        SparseVirtualShadowMapSettings rejectedSettings =
+            acceptanceSettings;
+        rejectedSettings.pageRenderBudget = 3u;
         assert(!IsSvsmMotionBenchmarkAcceptanceConfiguration(
-            4096u, 3u, false, true, true));
+            rejectedSettings));
+        rejectedSettings = acceptanceSettings;
+        rejectedSettings.physicalPageCount = 1024u;
         assert(!IsSvsmMotionBenchmarkAcceptanceConfiguration(
-            4096u, 5u, false, true, true));
+            rejectedSettings));
+        rejectedSettings = acceptanceSettings;
+        rejectedSettings.renderPacketCachingEnabled = false;
         assert(!IsSvsmMotionBenchmarkAcceptanceConfiguration(
-            1024u, 4u, false, true, true));
+            rejectedSettings));
+        rejectedSettings = acceptanceSettings;
+        rejectedSettings.gpuGatedDrawSubmission = false;
         assert(!IsSvsmMotionBenchmarkAcceptanceConfiguration(
-            4096u, 4u, false, false, true));
+            rejectedSettings));
+        rejectedSettings = acceptanceSettings;
+        rejectedSettings.coarsestPageRenderBudgetEnabled = true;
         assert(!IsSvsmMotionBenchmarkAcceptanceConfiguration(
-            4096u, 4u, false, true, false));
-        assert(!IsSvsmMotionBenchmarkAcceptanceConfiguration(
-            4096u, 4u, true, true, true));
+            rejectedSettings));
 
         assert(!IsSvsmMotionBenchmarkHierarchyRequested(
             false, false));
@@ -7597,6 +8012,7 @@ int main()
     TestCachedShadowDrawListPolicy();
     TestBatchedDrawPackingAndGrouping();
     TestMotionBenchmarkSequence();
+    TestMotionBenchmarkConfigurationIdentityAndTimingValidation();
     TestMotionBenchmarkAutostart();
     TestResourceRecreationAndModeSwitch();
     TestTelemetrySampleOrdering();

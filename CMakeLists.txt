@@ -244,13 +244,21 @@ if (NVRHI_WITH_DX12)
     )
 endif()
 
-set(UVSR_SHADER_STAGING_DIR "${CMAKE_BINARY_DIR}/uvsr_shaders")
+set(UVSR_SHADER_STAGING_ROOT "${CMAKE_BINARY_DIR}/uvsr_shaders")
+set(UVSR_CORE_SHADER_STAGING_DIR
+    "${UVSR_SHADER_STAGING_ROOT}/core")
+set(UVSR_BEND_SHADER_STAGING_DIR
+    "${UVSR_SHADER_STAGING_ROOT}/bend")
+set(UVSR_SVSM_SHADER_STAGING_DIR
+    "${UVSR_SHADER_STAGING_ROOT}/svsm")
+set(UVSR_CSM_SHADER_STAGING_DIR
+    "${UVSR_SHADER_STAGING_ROOT}/csm")
 include(donut/compileshaders.cmake)
 donut_compile_shaders_all_platforms(
     TARGET uvsr_shaders
     PROJECT_NAME "UVSR"
     CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders.cfg"
-    OUTPUT_BASE "${UVSR_SHADER_STAGING_DIR}"
+    OUTPUT_BASE "${UVSR_CORE_SHADER_STAGING_DIR}"
 )
 
 if (UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS)
@@ -259,7 +267,7 @@ if (UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS)
         PROJECT_NAME "UVSR Bend Screen-Space Shadows"
         CONFIG
             "${CMAKE_CURRENT_SOURCE_DIR}/src/bend_screen_space_shadows_shaders.cfg"
-        OUTPUT_BASE "${UVSR_SHADER_STAGING_DIR}"
+        OUTPUT_BASE "${UVSR_BEND_SHADER_STAGING_DIR}"
     )
 endif()
 
@@ -269,7 +277,7 @@ if (UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS)
         PROJECT_NAME "UVSR Sparse Virtual Shadow Maps"
         CONFIG
             "${CMAKE_CURRENT_SOURCE_DIR}/src/sparse_virtual_shadow_map_shaders.cfg"
-        OUTPUT_BASE "${UVSR_SHADER_STAGING_DIR}"
+        OUTPUT_BASE "${UVSR_SVSM_SHADER_STAGING_DIR}"
     )
 endif()
 
@@ -279,7 +287,7 @@ if (UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS)
         PROJECT_NAME "UVSR Diagnostic Cascaded Shadow Maps"
         CONFIG
             "${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostic_cascaded_shadow_map_shaders.cfg"
-        OUTPUT_BASE "${UVSR_SHADER_STAGING_DIR}"
+        OUTPUT_BASE "${UVSR_CSM_SHADER_STAGING_DIR}"
     )
 endif()
 
@@ -372,7 +380,7 @@ if (UVSR_BUILD_APPLICATION)
     target_compile_definitions(uvsr PRIVATE
         "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\"")
     set(UVSR_ENVIRONMENT_SOURCE_DIR
-        "${CMAKE_SOURCE_DIR}/assets/environments")
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/environments")
     set(UVSR_ENVIRONMENT_STAGE_DIR
         "${CMAKE_BINARY_DIR}/media/environments")
     file(GLOB_RECURSE UVSR_ENVIRONMENT_ASSETS
@@ -380,6 +388,13 @@ if (UVSR_BUILD_APPLICATION)
         LIST_DIRECTORIES false
         "${UVSR_ENVIRONMENT_SOURCE_DIR}/*")
     list(SORT UVSR_ENVIRONMENT_ASSETS)
+    string(JOIN "\n" UVSR_ENVIRONMENT_ASSET_MANIFEST_CONTENT
+        ${UVSR_ENVIRONMENT_ASSETS})
+    set(UVSR_ENVIRONMENT_ASSET_MANIFEST
+        "${CMAKE_BINARY_DIR}/uvsr_environment_assets.manifest")
+    file(GENERATE
+        OUTPUT "${UVSR_ENVIRONMENT_ASSET_MANIFEST}"
+        CONTENT "${UVSR_ENVIRONMENT_ASSET_MANIFEST_CONTENT}\n")
     set(UVSR_ENVIRONMENT_STAGE_STAMP
         "${UVSR_ENVIRONMENT_STAGE_DIR}/.uvsr-stage.stamp")
     add_custom_command(
@@ -391,7 +406,9 @@ if (UVSR_BUILD_APPLICATION)
             "${UVSR_ENVIRONMENT_STAGE_DIR}"
         COMMAND ${CMAKE_COMMAND} -E touch
             "${UVSR_ENVIRONMENT_STAGE_STAMP}"
-        DEPENDS ${UVSR_ENVIRONMENT_ASSETS}
+        DEPENDS
+            ${UVSR_ENVIRONMENT_ASSETS}
+            "${UVSR_ENVIRONMENT_ASSET_MANIFEST}"
         COMMENT "Staging the CC0 image-based-lighting environments"
         VERBATIM
     )
@@ -419,6 +436,25 @@ target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/s
 target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
 add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
 
+add_executable(uvsr_pbr_lighting_source_contract_tests
+    tests/pbr_lighting_source_contract_tests.cpp)
+target_include_directories(
+    uvsr_pbr_lighting_source_contract_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(
+    NAME uvsr_pbr_lighting_source_contract
+    COMMAND uvsr_pbr_lighting_source_contract_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_executable(uvsr_command_line_options_tests
+    tests/command_line_options_tests.cpp)
+target_include_directories(
+    uvsr_command_line_options_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(
+    NAME uvsr_command_line_options_reference
+    COMMAND uvsr_command_line_options_tests)
+
 add_executable(uvsr_diffuse_environment_asset_tests
     tests/diffuse_environment_asset_tests.cpp)
 target_include_directories(uvsr_diffuse_environment_asset_tests
@@ -426,7 +462,7 @@ target_include_directories(uvsr_diffuse_environment_asset_tests
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${CMAKE_CURRENT_SOURCE_DIR}/donut/thirdparty/stb")
 target_compile_definitions(uvsr_diffuse_environment_asset_tests PRIVATE
-    "UVSR_TEST_ENVIRONMENT_DIRECTORY=\"${CMAKE_SOURCE_DIR}/assets/environments\"")
+    "UVSR_TEST_ENVIRONMENT_DIRECTORY=\"${CMAKE_CURRENT_SOURCE_DIR}/assets/environments\"")
 target_link_libraries(uvsr_diffuse_environment_asset_tests PRIVATE donut_core)
 add_test(
     NAME uvsr_diffuse_environment_asset_reference
@@ -609,33 +645,6 @@ endif()
 set(UVSR_RUNTIME_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework/dxil")
 set(UVSR_RUNTIME_APP_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/uvsr/dxil")
 
-if (UVSR_BUILD_APPLICATION)
-    add_custom_command(TARGET uvsr POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E remove_directory
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "${UVSR_RUNTIME_SHADER_DIR}/passes"
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "${UVSR_RUNTIME_APP_SHADER_DIR}"
-    )
-
-    foreach(shader IN LISTS UVSR_ROOT_SHADERS)
-        add_custom_command(TARGET uvsr POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${UVSR_DONUT_SHADER_STAGING_DIR}/dxil/${shader}.bin"
-                "${UVSR_RUNTIME_SHADER_DIR}/${shader}.bin"
-        )
-    endforeach()
-
-    foreach(shader IN LISTS UVSR_PASS_SHADERS)
-        add_custom_command(TARGET uvsr POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${UVSR_DONUT_SHADER_STAGING_DIR}/dxil/passes/${shader}.bin"
-                "${UVSR_RUNTIME_SHADER_DIR}/passes/${shader}.bin"
-        )
-    endforeach()
-endif()
-
 set(UVSR_APP_SHADERS
     agx_tonemapping_ps
     backdrop_blur_ps
@@ -683,17 +692,234 @@ set(UVSR_APP_SHADERS
     taa_miniengine_sharpen_cs
 )
 
+set(UVSR_BEND_APP_SHADERS
+    bend_screen_space_shadows_cs
+    bend_screen_space_shadows_debug_ps
+)
+set(UVSR_CSM_APP_SHADERS
+    diagnostic_cascaded_shadow_map_clear_vs
+    diagnostic_cascaded_shadow_map_depth_vs
+    diagnostic_cascaded_shadow_map_depth_vs_alpha_tested
+    diagnostic_cascaded_shadow_map_depth_vs_alpha_tested_input_assembler
+    diagnostic_cascaded_shadow_map_depth_vs_main_input_assembler
+    diagnostic_cascaded_shadow_map_scroll_ps
+    diagnostic_cascaded_shadow_map_resolve_cs
+)
+set(UVSR_SVSM_APP_SHADERS
+    sparse_virtual_shadow_map_depth_ps
+    sparse_virtual_shadow_map_debug_ps
+    sparse_virtual_shadow_map_resolve_cs
+    sparse_virtual_shadow_map_sparse_cs_allocate
+    sparse_virtual_shadow_map_sparse_cs_buildScheduledPageTileMasks
+    sparse_virtual_shadow_map_sparse_cs_buildStaticDepthHierarchy
+    sparse_virtual_shadow_map_sparse_cs_clearPages
+    sparse_virtual_shadow_map_sparse_cs_fillIndirect
+    sparse_virtual_shadow_map_sparse_cs_finalize
+    sparse_virtual_shadow_map_sparse_cs_invalidatePages
+    sparse_virtual_shadow_map_sparse_cs_mark
+    sparse_virtual_shadow_map_sparse_cs_prepare
+    sparse_virtual_shadow_map_sparse_cs_recycle
+    sparse_virtual_shadow_map_sparse_cs_scheduleFine
+    sparse_virtual_shadow_map_sparse_cs_stats
+    sparse_virtual_shadow_map_sparse_depth_pixelMain
+    sparse_virtual_shadow_map_sparse_depth_vertexMain
+    sparse_virtual_shadow_map_sparse_resolve_cs_reference_legacy
+    sparse_virtual_shadow_map_sparse_resolve_cs_reference_balanced
+    sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_legacy
+    sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_balanced
+)
+
 if (UVSR_BUILD_APPLICATION)
-    foreach(shader IN LISTS UVSR_APP_SHADERS)
-        add_custom_command(TARGET uvsr POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${UVSR_SHADER_STAGING_DIR}/dxil/${shader}.bin"
-                "${UVSR_RUNTIME_APP_SHADER_DIR}/${shader}.bin"
-        )
+    function(uvsr_require_shader_config_packaged
+        shader_config
+        component_shader_list_name)
+        file(STRINGS "${shader_config}" shader_config_lines)
+        foreach(shader_config_line IN LISTS shader_config_lines)
+            string(REGEX MATCH
+                "^[^ \t#]+"
+                shader_source
+                "${shader_config_line}")
+            if (shader_source STREQUAL "")
+                continue()
+            endif()
+
+            get_filename_component(shader_name "${shader_source}" NAME_WE)
+            set(packaged_shader_name "${shader_name}")
+            string(REGEX MATCH
+                "(^|[ \t])-s[ \t]+([^ \t]+)"
+                shader_suffix_match
+                "${shader_config_line}")
+            if (NOT shader_suffix_match STREQUAL "")
+                string(APPEND packaged_shader_name "${CMAKE_MATCH_2}")
+            else()
+                string(REGEX MATCH
+                    "(^|[ \t])-E[ \t]+([^ \t]+)"
+                    shader_entry_match
+                    "${shader_config_line}")
+                if (NOT shader_entry_match STREQUAL "" AND
+                    NOT CMAKE_MATCH_2 STREQUAL "main")
+                    string(APPEND packaged_shader_name "_${CMAKE_MATCH_2}")
+                endif()
+            endif()
+
+            if (NOT packaged_shader_name IN_LIST UVSR_APP_SHADERS)
+                message(FATAL_ERROR
+                    "Shader '${packaged_shader_name}' is compiled by "
+                    "${shader_config} but missing from UVSR_APP_SHADERS "
+                    "runtime packaging")
+            endif()
+            if (NOT component_shader_list_name STREQUAL "")
+                if (NOT packaged_shader_name IN_LIST ${component_shader_list_name})
+                    message(FATAL_ERROR
+                        "Shader '${packaged_shader_name}' is compiled by "
+                        "${shader_config} but missing from "
+                        "${component_shader_list_name} staging ownership")
+                endif()
+            endif()
+        endforeach()
+    endfunction()
+
+    uvsr_require_shader_config_packaged(
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders.cfg"
+        "")
+    uvsr_require_shader_config_packaged(
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/bend_screen_space_shadows_shaders.cfg"
+        UVSR_BEND_APP_SHADERS)
+    uvsr_require_shader_config_packaged(
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostic_cascaded_shadow_map_shaders.cfg"
+        UVSR_CSM_APP_SHADERS)
+    uvsr_require_shader_config_packaged(
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/sparse_virtual_shadow_map_shaders.cfg"
+        UVSR_SVSM_APP_SHADERS)
+
+    file(GLOB_RECURSE UVSR_RUNTIME_SHADER_INPUTS
+        CONFIGURE_DEPENDS
+        LIST_DIRECTORIES false
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsl"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsli"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bend_sss/upstream/bend_sss_gpu.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/donut/shaders/*"
+        "${CMAKE_CURRENT_SOURCE_DIR}/donut/include/donut/shaders/*")
+    list(SORT UVSR_RUNTIME_SHADER_INPUTS)
+
+    set(UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES)
+    set(UVSR_RUNTIME_SHADER_SOURCE_MANIFEST_ENTRIES)
+    set(UVSR_RUNTIME_SHADER_BYPRODUCTS)
+    foreach(shader IN LISTS UVSR_ROOT_SHADERS)
+        list(APPEND UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES
+            "framework/dxil/${shader}.bin")
+        list(APPEND UVSR_RUNTIME_SHADER_SOURCE_MANIFEST_ENTRIES
+            "${UVSR_DONUT_SHADER_STAGING_DIR}/dxil/${shader}.bin|framework/dxil/${shader}.bin")
+        list(APPEND UVSR_RUNTIME_SHADER_BYPRODUCTS
+            "${UVSR_RUNTIME_SHADER_DIR}/${shader}.bin")
     endforeach()
+    foreach(shader IN LISTS UVSR_PASS_SHADERS)
+        list(APPEND UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES
+            "framework/dxil/passes/${shader}.bin")
+        list(APPEND UVSR_RUNTIME_SHADER_SOURCE_MANIFEST_ENTRIES
+            "${UVSR_DONUT_SHADER_STAGING_DIR}/dxil/passes/${shader}.bin|framework/dxil/passes/${shader}.bin")
+        list(APPEND UVSR_RUNTIME_SHADER_BYPRODUCTS
+            "${UVSR_RUNTIME_SHADER_DIR}/passes/${shader}.bin")
+    endforeach()
+    foreach(shader IN LISTS UVSR_APP_SHADERS)
+        set(shader_staging_dir "${UVSR_CORE_SHADER_STAGING_DIR}")
+        if ("${shader}" IN_LIST UVSR_BEND_APP_SHADERS)
+            set(shader_staging_dir "${UVSR_BEND_SHADER_STAGING_DIR}")
+        elseif ("${shader}" IN_LIST UVSR_CSM_APP_SHADERS)
+            set(shader_staging_dir "${UVSR_CSM_SHADER_STAGING_DIR}")
+        elseif ("${shader}" IN_LIST UVSR_SVSM_APP_SHADERS)
+            set(shader_staging_dir "${UVSR_SVSM_SHADER_STAGING_DIR}")
+        endif()
+        list(APPEND UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES
+            "uvsr/dxil/${shader}.bin")
+        list(APPEND UVSR_RUNTIME_SHADER_SOURCE_MANIFEST_ENTRIES
+            "${shader_staging_dir}/dxil/${shader}.bin|uvsr/dxil/${shader}.bin")
+        list(APPEND UVSR_RUNTIME_SHADER_BYPRODUCTS
+            "${UVSR_RUNTIME_APP_SHADER_DIR}/${shader}.bin")
+    endforeach()
+    list(SORT UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES)
+    list(SORT UVSR_RUNTIME_SHADER_SOURCE_MANIFEST_ENTRIES)
+    list(SORT UVSR_RUNTIME_SHADER_BYPRODUCTS)
+    string(JOIN "\n" UVSR_RUNTIME_SHADER_PATH_MANIFEST_CONTENT
+        ${UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES})
+    set(UVSR_RUNTIME_SHADER_PATH_MANIFEST
+        "${CMAKE_BINARY_DIR}/uvsr_runtime_shader_paths.manifest")
+    file(GENERATE
+        OUTPUT "${UVSR_RUNTIME_SHADER_PATH_MANIFEST}"
+        CONTENT "${UVSR_RUNTIME_SHADER_PATH_MANIFEST_CONTENT}\n")
+    string(JOIN "\n" UVSR_RUNTIME_SHADER_SOURCE_MANIFEST_CONTENT
+        ${UVSR_RUNTIME_SHADER_SOURCE_MANIFEST_ENTRIES})
+    set(UVSR_RUNTIME_SHADER_SOURCE_MANIFEST
+        "${CMAKE_BINARY_DIR}/uvsr_runtime_shader_sources.manifest")
+    file(GENERATE
+        OUTPUT "${UVSR_RUNTIME_SHADER_SOURCE_MANIFEST}"
+        CONTENT "${UVSR_RUNTIME_SHADER_SOURCE_MANIFEST_CONTENT}\n")
+
+    set(UVSR_RUNTIME_SHADER_STAGE_STAMP
+        "${CMAKE_BINARY_DIR}/uvsr_runtime_shaders.stamp")
+    add_custom_command(
+        OUTPUT "${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
+        BYPRODUCTS ${UVSR_RUNTIME_SHADER_BYPRODUCTS}
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+        COMMAND ${CMAKE_COMMAND}
+            "-DUVSR_RUNTIME_SHADER_SOURCE_MANIFEST=${UVSR_RUNTIME_SHADER_SOURCE_MANIFEST}"
+            "-DUVSR_RUNTIME_SHADER_ALLOWED_PARENT=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+            "-DUVSR_RUNTIME_SHADER_ROOT=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
+            "-DUVSR_RUNTIME_SHADER_STAGE_STAMP=${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SyncRuntimeShaderBundle.cmake"
+        COMMAND ${CMAKE_COMMAND} -E touch
+            "${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
+        DEPENDS
+            ${UVSR_RUNTIME_SHADER_INPUTS}
+            "${UVSR_RUNTIME_SHADER_PATH_MANIFEST}"
+            "${UVSR_RUNTIME_SHADER_SOURCE_MANIFEST}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders.cfg"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/bend_screen_space_shadows_shaders.cfg"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostic_cascaded_shadow_map_shaders.cfg"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/sparse_virtual_shadow_map_shaders.cfg"
+            "${SHADERMAKE_PATH}"
+            "${SHADERMAKE_DXC_PATH}"
+        COMMENT "Synchronizing the exact UVSR runtime shader bundle"
+        VERBATIM)
+    add_custom_target(uvsr_stage_runtime_shaders
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+        COMMAND ${CMAKE_COMMAND}
+            "-DUVSR_RUNTIME_SHADER_SOURCE_MANIFEST=${UVSR_RUNTIME_SHADER_SOURCE_MANIFEST}"
+            "-DUVSR_RUNTIME_SHADER_ALLOWED_PARENT=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+            "-DUVSR_RUNTIME_SHADER_ROOT=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
+            "-DUVSR_RUNTIME_SHADER_STAGE_STAMP=${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
+            -P
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SyncRuntimeShaderBundle.cmake"
+        DEPENDS
+            "${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SyncRuntimeShaderBundle.cmake"
+        COMMENT "Verifying the exact UVSR runtime shader bundle"
+        VERBATIM)
+    add_dependencies(uvsr_stage_runtime_shaders
+        donut_shaders
+        uvsr_shaders
+        uvsr_bend_screen_space_shadow_shaders
+        uvsr_diagnostic_cascaded_shadow_map_shaders
+        uvsr_sparse_virtual_shadow_map_shaders)
+    add_dependencies(uvsr uvsr_stage_runtime_shaders)
+
+    add_executable(uvsr_runtime_shader_bundle_tests
+        tests/runtime_shader_bundle_tests.cpp)
+    add_dependencies(uvsr_runtime_shader_bundle_tests
+        uvsr_stage_runtime_shaders)
+    add_test(
+        NAME uvsr_runtime_shader_bundle_contract
+        COMMAND uvsr_runtime_shader_bundle_tests
+            "${UVSR_RUNTIME_SHADER_SOURCE_MANIFEST}"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders")
 endif()
 
-set(UVSR_INTEL_SPONZA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/assets/scenes/intel_sponza")
+set(UVSR_INTEL_SPONZA_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/intel_sponza")
 set(UVSR_INTEL_SPONZA_STAGING_DIR
     "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/intel_sponza")
 file(GLOB_RECURSE UVSR_INTEL_SPONZA_RUNTIME_ASSETS
@@ -759,9 +985,9 @@ if (WIN32)
     endif()
 else()
     set(UVSR_UI_FONT_SOURCE
-        "${CMAKE_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
     set(UVSR_UI_HEADER_FONT_SOURCE
-        "${CMAKE_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
 endif()
 
 if (UVSR_BUILD_APPLICATION)
@@ -791,9 +1017,9 @@ if (UVSR_BUILD_APPLICATION)
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "${CMAKE_BINARY_DIR}/media/noise"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/assets/noise/visibility_filter_adapted_gauss1_ema035_r8.bin"
-            "${CMAKE_SOURCE_DIR}/assets/noise/FAST-LICENSE.txt"
-            "${CMAKE_SOURCE_DIR}/assets/noise/README.md"
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise/visibility_filter_adapted_gauss1_ema035_r8.bin"
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise/FAST-LICENSE.txt"
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise/README.md"
             "${CMAKE_BINARY_DIR}/media/noise"
     )
 endif()

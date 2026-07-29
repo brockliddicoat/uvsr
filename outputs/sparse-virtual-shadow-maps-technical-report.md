@@ -5,13 +5,13 @@
 UVSR can add SVSM without changing Bend, Donut, or NVRHI. The lowest-conflict
 boundary is a first-party directional visibility producer that resolves to its
 own full-resolution linear `R8_UNORM` texture immediately after the G-buffer
-and before deferred lighting. A producer-neutral fixed two-slot interface maps
+and before deferred lighting. A producer-neutral fixed three-slot interface maps
 each complete texture to an exact light pointer and multiplies matching factors.
-Bend and SVSM do not include, bind, configure, benchmark, or name one another.
-They also build as separate static-library targets. With the aggregate
-application disabled, each component and its reference test configure, build,
-and pass while the other component is disabled. Each target publishes its
-public header dependencies and owns an independent shader catalog.
+Bend, SVSM, and diagnostic CSM do not include, bind, configure, benchmark, or
+name one another. They also build as separate static-library targets. With the
+aggregate application disabled, each component and its reference test
+configure, build, and pass while the other components are disabled. Each target
+publishes its public header dependencies and owns an independent shader catalog.
 
 The public reference record is useful but not production-complete. K. T.
 Stephano's article describes the intended design in detail, and older
@@ -149,7 +149,7 @@ The existing render order is:
 
 SVSM belongs between the G-buffer and deferred lighting as a standalone
 producer. Its result carries only a texture and its exact directional-light
-pointer. The renderer boundary adapts enabled producers into two neutral slots;
+pointer. The renderer boundary adapts enabled producers into three neutral slots;
 deferred lighting applies each texture only to its pointer-identical light and
 computes:
 
@@ -240,30 +240,64 @@ SVSM optimizations remain producer-local:
 - Resolution bias is applied consistently to marking, allocation, resolving,
   fallback, and debug presentation.
 - Adaptive filtering follows the page-safe probe rule.
-- Fine-caster exclusion remains off until existing bounds and camera-depth
-  evidence can conservatively prove every exclusion condition.
+- Fine-caster exclusion has no runtime or UI control until existing bounds and
+  camera-depth evidence can conservatively prove every exclusion condition.
 
 ## Profile Contract
 
 ### Performance
 
-Cached SVSM with adaptive page-safe 8-tap filtering and a plus-one resolution
-bias. Static visibility caching, packet culling, batched submission, packet
-sorting, empty-work skipping, and other validated no-work paths are enabled.
+Cached SVSM with manual page-safe, balanced-progressive nearest-Poisson
+filtering, 8 taps, adaptive filtering, a global `+1` resolution bias, a
+temporary moving-light `+2` bias, and receiver-distance clamping beginning at
+`0.75` times the finest clipmap extent. Static visibility caching, packet
+culling, batched submission, packet sorting, empty-work skipping, and the other
+validated no-work paths are enabled.
 
 ### Balanced
 
-The same validated cache and submission paths with unbiased adaptive 8-tap
-filtering.
+The same validated cache and submission paths with manual page-safe,
+balanced-progressive bilinear PCF, 4 taps, no global resolution bias, a
+temporary moving-light `+1` bias, receiver-distance clamping beginning at one
+finest-clipmap extent, and adaptive filtering disabled.
 
 ### Quality
 
-The same validated cache and submission paths with unbiased full 16-tap
-filtering and adaptive filtering disabled.
+The same validated cache and submission paths with manual page-safe,
+balanced-progressive bilinear PCF, 8 taps, no global or moving-light resolution
+bias, no receiver-distance clamp, and adaptive filtering disabled.
 
 ### Custom
 
 Every validated option is editable independently.
+
+## Control Surface
+
+The normal enabled SVSM surface exposes the speed-to-quality profile, first
+clipmap extent, maximum light depth, filter kernel, filter tap count, global
+resolution bias, receiver-distance mip clamp, and Adaptive Filtering beside
+Filter Taps. These are the controls most likely to be changed during ordinary
+scene and quality tuning.
+
+The remaining controls are grouped by purpose and collapsed by default:
+
+| Panel | Contents |
+| --- | --- |
+| **Developer Options > Resources And Cache Policy** | Physical-pool capacity, page-render budget, paired static/dynamic depth, backend mode, page marking, eviction, and reusable draw lists. |
+| **Developer Options > Movement And Invalidation** | Moving-light bias and recovery, receiver-distance thresholds, caster cache classification, and per-object invalidation policy. |
+| **Developer Options > Culling And Raster** | Packet sorting and culling, scheduled-page and receiver masks, static-depth HZB policy, and guarded dirty-page scatter. |
+| **Developer Options > Unabstracted** | Independently toggleable low-risk implementation details that are trending toward an abstracted always-on policy, including request deduplication, page-safe translation and transform reuse, scene/static caches, the shared six-clipmap packet builder, raster specializations, localized invalidation, GPU-gated batching, empty-work skipping, and scatter alpha rejection. The panel remains available for exact reference A/B validation. |
+| **Diagnostics** | Camera-motion and SunSlow benchmarks, detailed stage timing, full-screen debug views, and asynchronous page counters. Opening debug views can add readback or suppress otherwise reusable visibility work. |
+
+Developer Options and each of its four raw subgroups are collapsed by default.
+
+Three policies have one authoritative UI state. **Mode** selects dense
+reference, sparse full redraw, or sparse cached reuse; there is no second cache
+checkbox. **Moving-Light Resolution Bias** selects `Off`, `+1`, or `+2`; there
+is no separate enable switch. **Dirty Page Scatter Raster** enables its
+mandatory amplification guard as part of the same action; only the maximum
+allowed amplification remains separately tunable. Fine-caster exclusion is not
+shown because it has no conservative implementation.
 
 ## Validation State
 
@@ -390,9 +424,9 @@ dependencies:
   debug-only rendered/failure atomics;
 - one-tap marking requests only the center page, while every current multi-tap
   Poisson variant retains the conservative three-texel neighbor footprint;
-- dense resolve now gates Bend rejection on an actual exact-light Bend texture,
-  skips debug UAV writes when debug is off, distributes adaptive probes like
-  sparse resolve, and omits biased fine clipmaps from geometry drawing;
+- dense resolve skips debug UAV writes when debug is off, distributes adaptive
+  probes like sparse resolve, and omits biased fine clipmaps from geometry
+  drawing without reading another visibility producer;
 - the pinned D3D12 backend was verified to ignore array-slice bounds for integer
   UAV clears, so dense depth safely retains a whole-resource clear rather than
   using an invalid partial transition;
@@ -428,9 +462,8 @@ dependencies:
   in pinned NVRHI's pending-state tracker, while packet-list UAV barriers remain
   on their distinct buffers; and
 - controls whose runtime prerequisites are absent are disabled with retained
-  values, batching support and active state are reported, and the unimplemented
-  fine-caster exclusion control is explicitly unavailable instead of acting as
-  a silent no-op.
+  values, batching support and active state are reported, and unimplemented
+  fine-caster exclusion is absent instead of acting as a silent no-op.
 
 The motion benchmark rotates the camera, not the sun; it aborts if the
 directional light changes. The old thermally unqualified trace remains only
@@ -482,15 +515,17 @@ source-proven workload bound; explicit reference configurations remain
 intentionally unlimited. This is not yet proof of driver stability, so one
 thermally controlled diagnostic motion retry remains required.
 
-The current Release application and every sparse shader permutation compile.
-All 14 Release CTest targets pass, including the deterministic SVSM, frozen
-Bend, and generic PBR exact-light composition suites. The document title-case
-checker and working-tree whitespace check also pass. Separate component-only
-configurations build and pass the SVSM reference test with Bend disabled and
-the Bend reference test with SVSM disabled. A bounded launch of the current
-Release build showed a normal Sponza frame, separate SVSM and Screen-Space
-Shadows drawers, and no error dialog; active human input prevented automated
-toggle clicks, so this is only a launch smoke test. The next valid runtime
+At the recorded validation checkpoint, the Release application and every sparse
+shader permutation compiled. The full then-configured Release CTest suite passed
+all 14 targets, including the deterministic SVSM, frozen Bend, and generic PBR
+exact-light composition suites. The document title-case checker and working-tree
+whitespace check also passed. Separate component-only configurations built and
+passed the SVSM reference test with Bend disabled and the Bend reference test
+with SVSM disabled. A bounded launch of that Release build showed a normal
+Sponza frame, separate SVSM and Screen-Space Shadows drawers, and no error
+dialog; active human input prevented automated toggle clicks, so this remains
+historical launch-smoke evidence rather than validation of the current
+integration-preparation build. The next valid runtime
 sequence remains a trusted 30-second preflight, one exact renderer instance,
 three Position-1 controls, independent Bend-only and SVSM-only image checks,
 static and motion debug/image validation, and post-run Position-1 controls.

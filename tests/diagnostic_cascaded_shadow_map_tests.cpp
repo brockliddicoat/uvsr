@@ -284,35 +284,119 @@ namespace
 
     void TestDiagnosticCsmBenchmarkTimingValidation()
     {
-        DiagnosticCsmTimings timings;
-        timings.supported = true;
-        timings.active = true;
-        timings.gpuTimingSource =
+        DiagnosticCsmTimings valid;
+        valid.supported = true;
+        valid.active = true;
+        valid.gpuTimingSource =
             DiagnosticCsmGpuTimingSource::TimerQuery;
-        timings.totalMilliseconds = 1.f;
-        Require(IsValidDiagnosticCsmBenchmarkTiming(timings),
+        valid.totalMilliseconds = 1.f;
+        valid.totalCpuMilliseconds = 1.f;
+        Require(IsValidDiagnosticCsmBenchmarkTiming(valid),
             "finite positive timer-query results must be benchmarkable");
 
-        timings.totalMilliseconds = 0.f;
+        const auto requireInvalid = [&valid](
+            auto mutate,
+            const std::string& message)
+        {
+            DiagnosticCsmTimings timings = valid;
+            mutate(timings);
+            Require(!IsValidDiagnosticCsmBenchmarkTiming(timings),
+                message);
+        };
+        requireInvalid([](auto& value) {
+            value.totalMilliseconds = 0.f;
+        }, "zero total GPU time must be rejected by the recorder");
+        requireInvalid([](auto& value) {
+            value.totalMilliseconds = -0.1f;
+        }, "negative total GPU time must be rejected by the recorder");
+        requireInvalid([](auto& value) {
+            value.totalMilliseconds =
+                std::numeric_limits<float>::quiet_NaN();
+        }, "NaN total GPU time must be rejected by the recorder");
+        requireInvalid([](auto& value) {
+            value.totalMilliseconds =
+                std::numeric_limits<float>::infinity();
+        }, "infinite total GPU time must be rejected by the recorder");
+        requireInvalid([](auto& value) {
+            value.totalMilliseconds =
+                -std::numeric_limits<float>::infinity();
+        }, "negative-infinite total GPU time must be rejected");
+
+        const auto requireInvalidFloatField = [&valid](
+            auto select,
+            const std::string& field)
+        {
+            for (const float invalid : {
+                    -0.1f,
+                    std::numeric_limits<float>::quiet_NaN(),
+                    std::numeric_limits<float>::infinity(),
+                    -std::numeric_limits<float>::infinity() })
+            {
+                DiagnosticCsmTimings timings = valid;
+                select(timings) = invalid;
+                Require(!IsValidDiagnosticCsmBenchmarkTiming(timings),
+                    field + " must reject invalid values");
+            }
+        };
+        requireInvalidFloatField([](auto& value) -> float& {
+            return value.setupCpuMilliseconds;
+        }, "setup CPU timing");
+        requireInvalidFloatField([](auto& value) -> float& {
+            return value.cullingCpuMilliseconds;
+        }, "culling CPU timing");
+        requireInvalidFloatField([](auto& value) -> float& {
+            return value.recordingCpuMilliseconds;
+        }, "recording CPU timing");
+        requireInvalidFloatField([](auto& value) -> float& {
+            return value.totalCpuMilliseconds;
+        }, "total CPU timing");
+        requireInvalidFloatField([](auto& value) -> float& {
+            return value.cullingGpuMilliseconds;
+        }, "culling GPU timing");
+        requireInvalidFloatField([](auto& value) -> float& {
+            return value.clearUpdateMilliseconds;
+        }, "clear/update GPU timing");
+        requireInvalidFloatField([](auto& value) -> float& {
+            return value.rasterMilliseconds;
+        }, "raster GPU timing");
+        requireInvalidFloatField([](auto& value) -> float& {
+            return value.samplingMilliseconds;
+        }, "sampling GPU timing");
+
+        DiagnosticCsmTimings cpuTimings = valid;
+        cpuTimings.setupCpuMilliseconds = 1.1f;
+        Require(!IsValidDiagnosticCsmBenchmarkTiming(cpuTimings),
+            "a nested CSM CPU stage cannot exceed its total interval");
+        cpuTimings.setupCpuMilliseconds = 0.4f;
+        cpuTimings.cullingCpuMilliseconds = 0.4f;
+        cpuTimings.recordingCpuMilliseconds = 0.4f;
+        Require(!IsValidDiagnosticCsmBenchmarkTiming(cpuTimings),
+            "nested CSM CPU stages cannot sum beyond their total");
+        cpuTimings.setupCpuMilliseconds = 0.5f;
+        cpuTimings.cullingCpuMilliseconds = 0.5f;
+        cpuTimings.recordingCpuMilliseconds = 0.00005f;
+        Require(IsValidDiagnosticCsmBenchmarkTiming(cpuTimings),
+            "CPU stage rounding within the documented tolerance must pass");
+
+        DiagnosticCsmTimings timings = valid;
+        timings.cullingGpuMilliseconds = 0.1f;
         Require(!IsValidDiagnosticCsmBenchmarkTiming(timings),
-            "zero total GPU time must be rejected by the recorder");
-        timings.totalMilliseconds =
-            std::numeric_limits<float>::quiet_NaN();
-        Require(!IsValidDiagnosticCsmBenchmarkTiming(timings),
-            "non-finite total GPU time must be rejected by the recorder");
-        timings.totalMilliseconds = 1.f;
-        timings.cullingCpuMilliseconds = -0.1f;
-        Require(!IsValidDiagnosticCsmBenchmarkTiming(timings),
-            "negative CPU stage time must be rejected by the recorder");
-        timings.cullingCpuMilliseconds = 0.f;
+            "total-only timing must reject stale positive stage data");
         timings.detailedGpuTimingEnabled = true;
         Require(IsValidDiagnosticCsmBenchmarkTiming(timings),
-            "zero finite detailed stages must remain valid");
-        timings.samplingMilliseconds =
-            std::numeric_limits<float>::infinity();
+            "detailed timing may contain finite nonnegative stage data");
+        timings.cullingGpuMilliseconds = 1.1f;
         Require(!IsValidDiagnosticCsmBenchmarkTiming(timings),
-            "non-finite detailed GPU stages must be rejected");
-        timings.samplingMilliseconds = 0.f;
+            "a nested CSM stage cannot exceed its total GPU interval");
+        timings.cullingGpuMilliseconds = 0.3f;
+        timings.clearUpdateMilliseconds = 0.3f;
+        timings.rasterMilliseconds = 0.3f;
+        timings.samplingMilliseconds = 0.2f;
+        Require(!IsValidDiagnosticCsmBenchmarkTiming(timings),
+            "nested CSM stage intervals cannot sum beyond their total");
+        timings.samplingMilliseconds = 0.1f;
+        Require(IsValidDiagnosticCsmBenchmarkTiming(timings),
+            "nested CSM stage intervals may exactly fill their total");
         timings.gpuTimingSource =
             DiagnosticCsmGpuTimingSource::KnownZero;
         Require(!IsValidDiagnosticCsmBenchmarkTiming(timings),
@@ -322,6 +406,283 @@ namespace
         timings.supported = false;
         Require(!IsValidDiagnosticCsmBenchmarkTiming(timings),
             "unsupported timing must be rejected");
+    }
+
+    void TestDiagnosticCsmBenchmarkWorkIdentity()
+    {
+        const DiagnosticCsmStats baseline;
+        Require(HasSameDiagnosticCsmBenchmarkWorkIdentity(
+                    baseline, baseline),
+            "identical CSM work records must compare equal");
+
+        uint32_t DiagnosticCsmStats::* uint32Fields[] = {
+            &DiagnosticCsmStats::outputWidth,
+            &DiagnosticCsmStats::outputHeight,
+            &DiagnosticCsmStats::cascadeCount,
+            &DiagnosticCsmStats::shadowMapResolution,
+            &DiagnosticCsmStats::depthBitsPerTexel,
+            &DiagnosticCsmStats::filterSampleCount,
+            &DiagnosticCsmStats::filterComparisonCount,
+            &DiagnosticCsmStats::candidateCasterProjectionPairs,
+            &DiagnosticCsmStats::coarseCasterProjectionPairs,
+            &DiagnosticCsmStats::accuratelyCulledCasterProjectionPairs,
+            &DiagnosticCsmStats::radiusCulledCasterProjectionPairs,
+            &DiagnosticCsmStats::renderedCasterProjectionPairs,
+            &DiagnosticCsmStats::alphaTestedCasterProjectionPairs,
+            &DiagnosticCsmStats::submittedDrawCalls,
+            &DiagnosticCsmStats::submittedAlphaTestedDrawCalls,
+            &DiagnosticCsmStats::submittedTranslationOnlyDrawCalls,
+            &DiagnosticCsmStats::manualCasterProjectionPairs,
+            &DiagnosticCsmStats::inputAssemblerCasterProjectionPairs,
+            &DiagnosticCsmStats::casterSceneTraversals,
+            &DiagnosticCsmStats::casterSorts,
+            &DiagnosticCsmStats::cachedShadowDrawListHits,
+            &DiagnosticCsmStats::cachedShadowDrawListMisses,
+            &DiagnosticCsmStats::cachedShadowDrawListEntries,
+            &DiagnosticCsmStats::cachedShadowDrawListCasterProjectionPairs,
+            &DiagnosticCsmStats::reusedCascades,
+            &DiagnosticCsmStats::scrolledCascades,
+            &DiagnosticCsmStats::dirtyCascades,
+            &DiagnosticCsmStats::redrawnCascades,
+            &DiagnosticCsmStats::dirtyRectangleCount,
+            &DiagnosticCsmStats::receiverRasterScissoredCascades,
+            &DiagnosticCsmStats::invalidationMask
+        };
+        for (const auto field : uint32Fields)
+        {
+            DiagnosticCsmStats changed = baseline;
+            changed.*field = 1u;
+            Require(!HasSameDiagnosticCsmBenchmarkWorkIdentity(
+                        baseline, changed),
+                "every uint32 CSM workload fact must affect identity");
+        }
+
+        uint64_t DiagnosticCsmStats::* uint64Fields[] = {
+            &DiagnosticCsmStats::submittedInstances,
+            &DiagnosticCsmStats::submittedTriangles,
+            &DiagnosticCsmStats::submittedTranslationOnlyTriangles,
+            &DiagnosticCsmStats::logicalTexels,
+            &DiagnosticCsmStats::updatedTexels,
+            &DiagnosticCsmStats::copiedTexels,
+            &DiagnosticCsmStats::clearedTexels,
+            &DiagnosticCsmStats::fullRedrawRasterBoundTexels,
+            &DiagnosticCsmStats::fullRedrawRasterExcludedTexels,
+            &DiagnosticCsmStats::depthBytes,
+            &DiagnosticCsmStats::visibilityBytes,
+            &DiagnosticCsmStats::debugVisualizationBytes,
+            &DiagnosticCsmStats::scrollingScratchBytes
+        };
+        for (const auto field : uint64Fields)
+        {
+            DiagnosticCsmStats changed = baseline;
+            changed.*field = 1u;
+            Require(!HasSameDiagnosticCsmBenchmarkWorkIdentity(
+                        baseline, changed),
+                "every uint64 CSM workload fact must affect identity");
+        }
+
+        float DiagnosticCsmStats::* floatFields[] = {
+            &DiagnosticCsmStats::maximumShadowDistance,
+            &DiagnosticCsmStats::maximumLightDepth,
+            &DiagnosticCsmStats::maximumActualLightDepthSpan,
+            &DiagnosticCsmStats::filterRadiusTexels,
+            &DiagnosticCsmStats::finestCoverageExtent,
+            &DiagnosticCsmStats::coarsestCoverageExtent,
+            &DiagnosticCsmStats::finestWorldTexelSize,
+            &DiagnosticCsmStats::coarsestWorldTexelSize,
+            &DiagnosticCsmStats::casterRadiusThreshold
+        };
+        for (const auto field : floatFields)
+        {
+            DiagnosticCsmStats changed = baseline;
+            changed.*field = 1.f;
+            Require(!HasSameDiagnosticCsmBenchmarkWorkIdentity(
+                        baseline, changed),
+                "every floating-point CSM workload fact must affect identity");
+        }
+
+        bool DiagnosticCsmStats::* boolFields[] = {
+            &DiagnosticCsmStats::submissionStatsAvailable,
+            &DiagnosticCsmStats::opaqueDepthStateMergingEnabled,
+            &DiagnosticCsmStats::positionOnlyOpaqueEnabled,
+            &DiagnosticCsmStats::translationOnlyCasterTransformRequested,
+            &DiagnosticCsmStats::translationOnlyCasterTransformEnabled,
+            &DiagnosticCsmStats::inputAssemblerCasterFetchRequested,
+            &DiagnosticCsmStats::inputAssemblerCasterFetchEnabled,
+            &DiagnosticCsmStats::precomputedDepthAxisInverseLengthRequested,
+            &DiagnosticCsmStats::precomputedDepthAxisInverseLengthEnabled,
+            &DiagnosticCsmStats::conservativeSaturatedSlopeRequested,
+            &DiagnosticCsmStats::conservativeSaturatedSlopeActive,
+            &DiagnosticCsmStats::algebraicSlowSlopeRequested,
+            &DiagnosticCsmStats::algebraicSlowSlopeActive,
+            &DiagnosticCsmStats::
+                preNormalizedReceiverLightDirectionRequested,
+            &DiagnosticCsmStats::
+                preNormalizedReceiverLightDirectionEnabled,
+            &DiagnosticCsmStats::precomposedClipToShadowRequested,
+            &DiagnosticCsmStats::precomposedClipToShadowEnabled,
+            &DiagnosticCsmStats::accurateCasterCullingRequested,
+            &DiagnosticCsmStats::accurateCasterCullingEnabled,
+            &DiagnosticCsmStats::ueCasterRadiusThresholdRequested,
+            &DiagnosticCsmStats::ueCasterRadiusThresholdEnabled,
+            &DiagnosticCsmStats::
+                singleTraversalCasterClassificationRequested,
+            &DiagnosticCsmStats::
+                singleTraversalCasterClassificationEnabled,
+            &DiagnosticCsmStats::precomputedReceiverHullAxesRequested,
+            &DiagnosticCsmStats::precomputedReceiverHullAxesEnabled,
+            &DiagnosticCsmStats::sharedCasterLightProjectionRequested,
+            &DiagnosticCsmStats::sharedCasterLightProjectionEnabled,
+            &DiagnosticCsmStats::directCasterSubmissionRequested,
+            &DiagnosticCsmStats::directCasterSubmissionEnabled,
+            &DiagnosticCsmStats::cachedShadowDrawListsRequested,
+            &DiagnosticCsmStats::cachedShadowDrawListsActive,
+            &DiagnosticCsmStats::batchedFullRedrawClearRequested,
+            &DiagnosticCsmStats::batchedFullRedrawClearActive,
+            &DiagnosticCsmStats::receiverRasterScissorRequested,
+            &DiagnosticCsmStats::receiverRasterScissorEnabled
+        };
+        for (const auto field : boolFields)
+        {
+            DiagnosticCsmStats changed = baseline;
+            changed.*field = true;
+            Require(!HasSameDiagnosticCsmBenchmarkWorkIdentity(
+                        baseline, changed),
+                "every Boolean CSM workload fact must affect identity");
+        }
+
+        DiagnosticCsmStats changed = baseline;
+        changed.light = reinterpret_cast<
+            const donut::engine::DirectionalLight*>(uintptr_t{ 1u });
+        Require(!HasSameDiagnosticCsmBenchmarkWorkIdentity(
+                    baseline, changed),
+            "the exact CSM light pointer must affect workload identity");
+        changed = baseline;
+        changed.filter = DiagnosticCsmFilter::Poisson;
+        Require(!HasSameDiagnosticCsmBenchmarkWorkIdentity(
+                    baseline, changed),
+            "the CSM receiver filter must affect workload identity");
+        changed = baseline;
+        changed.cascadeActions[0] =
+            DiagnosticCsmUpdateAction::FullRedraw;
+        Require(!HasSameDiagnosticCsmBenchmarkWorkIdentity(
+                    baseline, changed),
+            "per-cascade update actions must affect workload identity");
+    }
+
+    void TestDiagnosticCsmBenchmarkEvidenceValidation()
+    {
+        Require(AreDiagnosticCsmBenchmarkSourceFramesConsecutive(
+                    7u, 8u),
+            "adjacent source frames must be consecutive");
+        Require(!AreDiagnosticCsmBenchmarkSourceFramesConsecutive(
+                    7u, 7u) &&
+                !AreDiagnosticCsmBenchmarkSourceFramesConsecutive(
+                    8u, 7u) &&
+                !AreDiagnosticCsmBenchmarkSourceFramesConsecutive(
+                    std::numeric_limits<uint64_t>::max(), 0u),
+            "duplicate, backward, and wrapping source frames must fail");
+        Require(IsValidDiagnosticCsmBenchmarkIssuedFrameContext(
+                    true, 0.f) &&
+                IsValidDiagnosticCsmBenchmarkIssuedFrameContext(
+                    true, 16.6f),
+            "available finite nonnegative issue contexts must be valid");
+        Require(!IsValidDiagnosticCsmBenchmarkIssuedFrameContext(
+                    false, 16.6f) &&
+                !IsValidDiagnosticCsmBenchmarkIssuedFrameContext(
+                    true, -0.1f) &&
+                !IsValidDiagnosticCsmBenchmarkIssuedFrameContext(
+                    true,
+                    std::numeric_limits<float>::quiet_NaN()) &&
+                !IsValidDiagnosticCsmBenchmarkIssuedFrameContext(
+                    true,
+                    std::numeric_limits<float>::infinity()),
+            "missing or invalid issue contexts must fail closed");
+
+        DiagnosticCsmBenchmarkEvidence evidence;
+        evidence.expectedSampleCount = 1024u;
+        evidence.sampleCount = 1024u;
+        evidence.maximumSourceFrameGap = 1u;
+        evidence.executableIdentityValid = true;
+        evidence.timingConfigurationIdentityValid = true;
+        evidence.timingsValid = true;
+        evidence.detailedGpuTimingModeUniform = true;
+        evidence.detailedGpuTimingModeMatchesConfiguration = true;
+        evidence.workIdentityStable = true;
+        evidence.sourceFrameArithmeticValid = true;
+        evidence.sourceFramesStrictlyConsecutive = true;
+        evidence.issuedFrameContextsValid = true;
+        Require(IsDiagnosticCsmBenchmarkEvidenceAuthoritative(evidence),
+            "complete frame/query evidence must be authoritative");
+        Require(IsDiagnosticCsmBenchmarkRawAuthoritative(
+                    "complete", evidence) &&
+                !IsDiagnosticCsmBenchmarkRawAuthoritative(
+                    "running", evidence) &&
+                !IsDiagnosticCsmBenchmarkRawAuthoritative(
+                    "aborted", evidence),
+            "only a complete valid artifact may claim raw authority");
+
+        const auto requireNonAuthoritative = [&evidence](
+            auto mutate,
+            const std::string& message)
+        {
+            DiagnosticCsmBenchmarkEvidence changed = evidence;
+            mutate(changed);
+            Require(!IsDiagnosticCsmBenchmarkEvidenceAuthoritative(
+                    changed),
+                message);
+            Require(!IsDiagnosticCsmBenchmarkRawAuthoritative(
+                    "complete", changed),
+                message + " must clear raw authority");
+        };
+        requireNonAuthoritative([](auto& value) {
+            value.expectedSampleCount = 0u;
+        }, "an empty expected sample set");
+        requireNonAuthoritative([](auto& value) {
+            value.sampleCount = 1023u;
+        }, "an incomplete sample set");
+        requireNonAuthoritative([](auto& value) {
+            value.missingIssuedFrameContexts = 1u;
+        }, "a missing issued-frame context");
+        requireNonAuthoritative([](auto& value) {
+            value.sourceFrameGapEvents = 1u;
+        }, "a source-frame gap event");
+        requireNonAuthoritative([](auto& value) {
+            value.missingSourceFrames = 1u;
+        }, "a missing source frame");
+        requireNonAuthoritative([](auto& value) {
+            value.maximumSourceFrameGap = 2u;
+        }, "a source-frame gap larger than one");
+        requireNonAuthoritative([](auto& value) {
+            value.maximumSourceFrameGap = 0u;
+        }, "an impossible zero maximum gap for multiple samples");
+        requireNonAuthoritative([](auto& value) {
+            value.executableIdentityValid = false;
+        }, "missing executable identity");
+        requireNonAuthoritative([](auto& value) {
+            value.timingConfigurationIdentityValid = false;
+        }, "missing timing-configuration identity");
+        requireNonAuthoritative([](auto& value) {
+            value.timingsValid = false;
+        }, "invalid timing data");
+        requireNonAuthoritative([](auto& value) {
+            value.detailedGpuTimingModeUniform = false;
+        }, "mixed detailed timing modes");
+        requireNonAuthoritative([](auto& value) {
+            value.detailedGpuTimingModeMatchesConfiguration = false;
+        }, "a timing mode that differs from the frozen configuration");
+        requireNonAuthoritative([](auto& value) {
+            value.workIdentityStable = false;
+        }, "changing CSM work identity");
+        requireNonAuthoritative([](auto& value) {
+            value.sourceFrameArithmeticValid = false;
+        }, "overflowing source-frame arithmetic");
+        requireNonAuthoritative([](auto& value) {
+            value.sourceFramesStrictlyConsecutive = false;
+        }, "nonconsecutive source frames");
+        requireNonAuthoritative([](auto& value) {
+            value.issuedFrameContextsValid = false;
+        }, "invalid issued-frame context values");
     }
 
     void TestGpuTimingSourceFrameClassification()
@@ -3181,6 +3542,8 @@ int main()
     {
         TestGpuTimingNormalization();
         TestDiagnosticCsmBenchmarkTimingValidation();
+        TestDiagnosticCsmBenchmarkWorkIdentity();
+        TestDiagnosticCsmBenchmarkEvidenceValidation();
         TestGpuTimingSourceFrameClassification();
         TestProfilesAndCustomRetention();
         TestTranslationOnlyCasterTransformContract();

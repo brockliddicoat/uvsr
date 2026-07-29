@@ -8547,12 +8547,19 @@ namespace uvsr
     {
         const nvrhi::TextureDesc& cameraDepthDesc =
             cameraDepth->getDesc();
+        const bool cacheEnabled =
+            settings.mode == SvsmMode::SparseCached &&
+            settings.cachingEnabled;
+        const bool configuredPairedStaticDynamicDepthEnabled =
+            cacheEnabled &&
+            settings.pairedStaticDynamicDepthEnabled;
         if (!IsDenseInputValid(cameraView, cameraDepthDesc) ||
             !EnsureSparseResources(
                 cameraDepth,
                 settings.physicalPageCount,
-                settings.pairedStaticDynamicDepthEnabled,
-                settings.deferredStaticDepthMergeEnabled,
+                configuredPairedStaticDynamicDepthEnabled,
+                configuredPairedStaticDynamicDepthEnabled &&
+                    settings.deferredStaticDepthMergeEnabled,
                 settings.leanAlphaTestedBindingsEnabled))
         {
             InvalidateUiTimings();
@@ -8591,9 +8598,6 @@ namespace uvsr
         }
         m_ReportedInvalidInput = false;
 
-        const bool cacheEnabled =
-            settings.mode == SvsmMode::SparseCached &&
-            settings.cachingEnabled;
         const nvrhi::Viewport cameraViewport =
             cameraView.GetViewportState().viewports[0];
         const float2 cameraPixelOffset =

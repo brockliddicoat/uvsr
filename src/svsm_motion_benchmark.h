@@ -1,15 +1,326 @@
 #pragma once
 
+#include "sparse_virtual_shadow_map_settings.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
 #include <limits>
+#include <locale>
+#include <sstream>
+#include <string>
 #include <string_view>
 #include <vector>
 
 namespace uvsr
 {
+    [[nodiscard]] inline SparseVirtualShadowMapSettings
+    BuildSvsmMotionBenchmarkAcceptanceSettings()
+    {
+        SparseVirtualShadowMapSettings settings;
+        settings.enabled = true;
+        ApplySvsmPreset(settings, SvsmPreset::Performance);
+        settings.physicalPageCount = 4096u;
+        settings.packetStateSortingEnabled = true;
+        settings.levelEmptyWorkSkipEnabled = true;
+        ApplySvsmFinePageRenderBudget(settings, 4u);
+        settings.finiteBudgetStaticDrainEnabled = true;
+        settings.allocationBudgetSaturationEarlyOutEnabled = true;
+        settings.perPixelMarkingDedupeEnabled = true;
+        settings.packetPageCullingEnabled = true;
+        settings.dirtyPageScatterRasterEnabled = false;
+        settings.scatterAlphaTestEarlyRejectEnabled = true;
+        settings.dirtyPageScatterAmplificationGuardEnabled = true;
+        settings.dirtyPageScatterMaximumAmplification = 1u;
+        settings.packetRectangleDirectScanEnabled = true;
+        settings.recentPageEvictionGraceEnabled = true;
+        settings.detailedGpuTimingEnabled = false;
+        // The benchmark workload is a frozen configuration, not a mutable
+        // user-facing preset. Label it Custom after applying every accepted
+        // override so a later preset edit cannot silently redefine evidence.
+        settings.preset = SvsmPreset::Custom;
+        return settings;
+    }
+
+    [[nodiscard]] inline std::string
+    BuildSvsmMotionBenchmarkConfigurationIdentity(
+        const SparseVirtualShadowMapSettings& settings)
+    {
+        std::ostringstream identity;
+        identity.imbue(std::locale::classic());
+        identity << std::setprecision(
+            std::numeric_limits<float>::max_digits10)
+            << "svsm-motion-timing-v2"
+            << ";enabled=" << uint32_t(settings.enabled)
+            << ";preset=" << uint32_t(settings.preset)
+            << ";mode=" << uint32_t(settings.mode)
+            << ";markingMode=" << uint32_t(settings.markingMode)
+            << ";filterMode=" << uint32_t(settings.filterMode)
+            << ";filterKernel=" << uint32_t(settings.filterKernel)
+            << ";poissonOrdering=" << uint32_t(settings.poissonOrdering)
+            << ";tapCount=" << uint32_t(settings.tapCount)
+            << ";resolutionBias=" << uint32_t(settings.resolutionBias)
+            << ";debugView=" << uint32_t(settings.debugView)
+            << ";firstClipmapExtent=" << settings.firstClipmapExtent
+            << ";maximumLightDepth=" << settings.maximumLightDepth
+            << ";physicalPageCount=" << settings.physicalPageCount
+            << ";pageRenderBudget=" << settings.pageRenderBudget
+            << ";coarsestPageRenderBudgetEnabled="
+            << uint32_t(settings.coarsestPageRenderBudgetEnabled)
+            << ";perPixelMarkingDedupeEnabled="
+            << uint32_t(settings.perPixelMarkingDedupeEnabled)
+            << ";cachingEnabled=" << uint32_t(settings.cachingEnabled)
+            << ";lightDepthOriginGuardBandEnabled="
+            << uint32_t(settings.lightDepthOriginGuardBandEnabled)
+            << ";lightDepthOriginGuardBandFraction="
+            << settings.lightDepthOriginGuardBandFraction
+            << ";staticPageRequestReuseEnabled="
+            << uint32_t(settings.staticPageRequestReuseEnabled)
+            << ";allocationBudgetSaturationEarlyOutEnabled="
+            << uint32_t(
+                settings.allocationBudgetSaturationEarlyOutEnabled)
+            << ";finiteBudgetStaticDrainEnabled="
+            << uint32_t(settings.finiteBudgetStaticDrainEnabled)
+            << ";staticVisibilityCachingEnabled="
+            << uint32_t(settings.staticVisibilityCachingEnabled)
+            << ";sceneStateCachingEnabled="
+            << uint32_t(settings.sceneStateCachingEnabled)
+            << ";casterOnlySceneRevisionEnabled="
+            << uint32_t(settings.casterOnlySceneRevisionEnabled)
+            << ";renderPacketCachingEnabled="
+            << uint32_t(settings.renderPacketCachingEnabled)
+            << ";sharedClipmapPacketBuilderEnabled="
+            << uint32_t(settings.sharedClipmapPacketBuilderEnabled)
+            << ";persistentCasterSourceCachingEnabled="
+            << uint32_t(settings.persistentCasterSourceCachingEnabled)
+            << ";opaqueRasterSpecializationEnabled="
+            << uint32_t(settings.opaqueRasterSpecializationEnabled)
+            << ";leanAlphaTestedBindingsEnabled="
+            << uint32_t(settings.leanAlphaTestedBindingsEnabled)
+            << ";pairedStaticDynamicDepthEnabled="
+            << uint32_t(settings.pairedStaticDynamicDepthEnabled)
+            << ";deferredStaticDepthMergeEnabled="
+            << uint32_t(settings.deferredStaticDepthMergeEnabled)
+            << ";movingLightUncachedEnabled="
+            << uint32_t(settings.movingLightUncachedEnabled)
+            << ";retainPhysicalMappingsOnContentInvalidationEnabled="
+            << uint32_t(settings
+                .retainPhysicalMappingsOnContentInvalidationEnabled)
+            << ";movingLightLodBiasEnabled="
+            << uint32_t(settings.movingLightLodBiasEnabled)
+            << ";movingLightResolutionBias="
+            << uint32_t(settings.movingLightResolutionBias)
+            << ";movingLightLodRecoveryFrames="
+            << settings.movingLightLodRecoveryFrames
+            << ";receiverDistanceMipClampEnabled="
+            << uint32_t(settings.receiverDistanceMipClampEnabled)
+            << ";receiverDistanceMipClampStartScale="
+            << settings.receiverDistanceMipClampStartScale
+            << ";receiverDistanceMipClampMaximumLevel="
+            << settings.receiverDistanceMipClampMaximumLevel
+            << ";movingLightContinuousReceiverBiasEnabled="
+            << uint32_t(
+                settings.movingLightContinuousReceiverBiasEnabled)
+            << ";localizedInvalidationEnabled="
+            << uint32_t(settings.localizedInvalidationEnabled)
+            << ";tightLocalizedInvalidationBoundsEnabled="
+            << uint32_t(settings.tightLocalizedInvalidationBoundsEnabled)
+            << ";adaptiveCasterCacheClassificationEnabled="
+            << uint32_t(
+                settings.adaptiveCasterCacheClassificationEnabled)
+            << ";defaultObjectInvalidationMode="
+            << uint32_t(settings.defaultObjectInvalidationMode)
+            << ";gpuGatedDrawSubmission="
+            << uint32_t(settings.gpuGatedDrawSubmission)
+            << ";batchedDrawSubmissionEnabled="
+            << uint32_t(settings.batchedDrawSubmissionEnabled)
+            << ";packetStateSortingEnabled="
+            << uint32_t(settings.packetStateSortingEnabled)
+            << ";levelEmptyWorkSkipEnabled="
+            << uint32_t(settings.levelEmptyWorkSkipEnabled)
+            << ";packetPageCullingEnabled="
+            << uint32_t(settings.packetPageCullingEnabled)
+            << ";hierarchicalScheduledPageMaskEnabled="
+            << uint32_t(settings.hierarchicalScheduledPageMaskEnabled)
+            << ";receiverPageMaskCullingEnabled="
+            << uint32_t(settings.receiverPageMaskCullingEnabled)
+            << ";staticDepthHierarchyCullingEnabled="
+            << uint32_t(settings.staticDepthHierarchyCullingEnabled)
+            << ";staticDepthHierarchyBias="
+            << settings.staticDepthHierarchyBias
+            << ";dirtyPageScatterRasterEnabled="
+            << uint32_t(settings.dirtyPageScatterRasterEnabled)
+            << ";scatterAlphaTestEarlyRejectEnabled="
+            << uint32_t(settings.scatterAlphaTestEarlyRejectEnabled)
+            << ";dirtyPageScatterAmplificationGuardEnabled="
+            << uint32_t(
+                settings.dirtyPageScatterAmplificationGuardEnabled)
+            << ";dirtyPageScatterMaximumAmplification="
+            << settings.dirtyPageScatterMaximumAmplification
+            << ";packetRectangleDirectScanEnabled="
+            << uint32_t(settings.packetRectangleDirectScanEnabled)
+            << ";recentPageEvictionGraceEnabled="
+            << uint32_t(settings.recentPageEvictionGraceEnabled)
+            << ";precomposedClipmapTransformsEnabled="
+            << uint32_t(settings.precomposedClipmapTransformsEnabled)
+            << ";pageTranslationCachingEnabled="
+            << uint32_t(settings.pageTranslationCachingEnabled)
+            << ";detailedGpuTimingEnabled="
+            << uint32_t(settings.detailedGpuTimingEnabled)
+            << ";adaptiveFiltering="
+            << uint32_t(settings.adaptiveFiltering);
+        return identity.str();
+    }
+
+    [[nodiscard]] inline uint64_t
+    HashSvsmMotionBenchmarkConfigurationIdentity(
+        std::string_view identity)
+    {
+        uint64_t hash = 14695981039346656037ull;
+        for (const unsigned char value : identity)
+        {
+            hash ^= uint64_t(value);
+            hash *= 1099511628211ull;
+        }
+        return hash;
+    }
+
+    [[nodiscard]] inline std::string
+    BuildSvsmMotionBenchmarkConfigurationId(
+        const SparseVirtualShadowMapSettings& settings)
+    {
+        const std::string identity =
+            BuildSvsmMotionBenchmarkConfigurationIdentity(settings);
+        std::ostringstream result;
+        result.imbue(std::locale::classic());
+        result << std::hex << std::uppercase << std::setfill('0')
+            << std::setw(16)
+            << HashSvsmMotionBenchmarkConfigurationIdentity(identity);
+        return result.str();
+    }
+
+    [[nodiscard]] inline bool
+    IsSvsmMotionBenchmarkAcceptanceConfiguration(
+        const SparseVirtualShadowMapSettings& settings)
+    {
+        return IsSameSvsmConfiguration(
+            settings,
+            BuildSvsmMotionBenchmarkAcceptanceSettings());
+    }
+
+    [[nodiscard]] inline bool IsValidSvsmMotionBenchmarkTimingValue(
+        float value)
+    {
+        return std::isfinite(value) && value >= 0.f;
+    }
+
+    [[nodiscard]] inline bool IsValidSvsmMotionBenchmarkGpuTiming(
+        float pageMarkingMilliseconds,
+        float allocationMilliseconds,
+        float clearingMilliseconds,
+        float packetPageCullingMilliseconds,
+        float pageRenderingMilliseconds,
+        float filteringMilliseconds,
+        float totalMilliseconds,
+        bool detailedGpuTimingEnabled,
+        bool expectedDetailedGpuTimingEnabled)
+    {
+        const bool timingValuesValid =
+            IsValidSvsmMotionBenchmarkTimingValue(
+                pageMarkingMilliseconds) &&
+            IsValidSvsmMotionBenchmarkTimingValue(
+                allocationMilliseconds) &&
+            IsValidSvsmMotionBenchmarkTimingValue(
+                clearingMilliseconds) &&
+            IsValidSvsmMotionBenchmarkTimingValue(
+                packetPageCullingMilliseconds) &&
+            IsValidSvsmMotionBenchmarkTimingValue(
+                pageRenderingMilliseconds) &&
+            IsValidSvsmMotionBenchmarkTimingValue(
+                filteringMilliseconds) &&
+            std::isfinite(totalMilliseconds) &&
+            totalMilliseconds > 0.f;
+        if (detailedGpuTimingEnabled !=
+                expectedDetailedGpuTimingEnabled ||
+            !timingValuesValid)
+        {
+            return false;
+        }
+
+        const double total = double(totalMilliseconds);
+        const double nestingTolerance =
+            std::max(0.0001, total * 0.0001);
+        const double stageSum =
+            double(pageMarkingMilliseconds) +
+            double(allocationMilliseconds) +
+            double(clearingMilliseconds) +
+            double(packetPageCullingMilliseconds) +
+            double(pageRenderingMilliseconds) +
+            double(filteringMilliseconds);
+        const bool nestedStageTimingsValid =
+            double(pageMarkingMilliseconds) <=
+                total + nestingTolerance &&
+            double(allocationMilliseconds) <=
+                total + nestingTolerance &&
+            double(clearingMilliseconds) <=
+                total + nestingTolerance &&
+            double(packetPageCullingMilliseconds) <=
+                total + nestingTolerance &&
+            double(pageRenderingMilliseconds) <=
+                total + nestingTolerance &&
+            double(filteringMilliseconds) <=
+                total + nestingTolerance &&
+            stageSum <= total + nestingTolerance;
+
+        // A total-only slot issues only the total timer query. Every stage
+        // value is initialized to exact zero, so any positive stage value is
+        // stale or mixed-mode evidence and must fail closed.
+        return detailedGpuTimingEnabled
+            ? nestedStageTimingsValid
+            : (pageMarkingMilliseconds == 0.f &&
+                allocationMilliseconds == 0.f &&
+                clearingMilliseconds == 0.f &&
+                packetPageCullingMilliseconds == 0.f &&
+                pageRenderingMilliseconds == 0.f &&
+                filteringMilliseconds == 0.f);
+    }
+
+    [[nodiscard]] inline bool IsValidSvsmMotionBenchmarkCpuTiming(
+        float sceneValidationMilliseconds,
+        float clipmapUpdateMilliseconds,
+        float packetCullingMilliseconds,
+        float totalMilliseconds)
+    {
+        const bool timingValuesValid =
+            IsValidSvsmMotionBenchmarkTimingValue(
+                sceneValidationMilliseconds) &&
+            IsValidSvsmMotionBenchmarkTimingValue(
+                clipmapUpdateMilliseconds) &&
+            IsValidSvsmMotionBenchmarkTimingValue(
+                packetCullingMilliseconds) &&
+            std::isfinite(totalMilliseconds) &&
+            totalMilliseconds > 0.f;
+        if (!timingValuesValid)
+            return false;
+
+        const double total = double(totalMilliseconds);
+        const double nestingTolerance =
+            std::max(0.0001, total * 0.0001);
+        const double stageSum =
+            double(sceneValidationMilliseconds) +
+            double(clipmapUpdateMilliseconds) +
+            double(packetCullingMilliseconds);
+        return double(sceneValidationMilliseconds) <=
+                total + nestingTolerance &&
+            double(clipmapUpdateMilliseconds) <=
+                total + nestingTolerance &&
+            double(packetCullingMilliseconds) <=
+                total + nestingTolerance &&
+            stageSum <= total + nestingTolerance;
+    }
+
     enum class SvsmMotionMeasurementMarkerState : uint32_t
     {
         Invalid,
@@ -520,21 +831,6 @@ namespace uvsr
     }
 
     [[nodiscard]] constexpr bool
-    IsSvsmMotionBenchmarkAcceptanceConfiguration(
-        uint32_t physicalPageCount,
-        uint32_t pageRenderBudget,
-        bool coarsestPageRenderBudgetEnabled,
-        bool renderPacketCachingEnabled,
-        bool gpuGatedDrawSubmission)
-    {
-        return physicalPageCount == 4096u &&
-            pageRenderBudget == 4u &&
-            !coarsestPageRenderBudgetEnabled &&
-            renderPacketCachingEnabled &&
-            gpuGatedDrawSubmission;
-    }
-
-    [[nodiscard]] constexpr bool
     IsSvsmMotionBenchmarkHierarchyRequested(
         bool packetPageCullingRequested,
         bool hierarchicalScheduledPageMaskEnabled)
@@ -605,7 +901,9 @@ namespace uvsr
         uint64_t retired,
         uint64_t outstanding,
         bool duplicateTag,
-        bool invalidTag)
+        bool invalidTag,
+        bool invalidGpuTiming,
+        bool invalidCpuTiming)
     {
         return gpuSamples == expectedSamples &&
             cpuSamples == expectedSamples &&
@@ -614,7 +912,9 @@ namespace uvsr
             retired == expectedSamples &&
             outstanding == 0u &&
             !duplicateTag &&
-            !invalidTag;
+            !invalidTag &&
+            !invalidGpuTiming &&
+            !invalidCpuTiming;
     }
 
     [[nodiscard]] constexpr bool IsSvsmMotionBenchmarkEvidenceValid(
@@ -625,7 +925,9 @@ namespace uvsr
         uint64_t retired,
         uint64_t outstanding,
         bool duplicateTag,
-        bool invalidTag)
+        bool invalidTag,
+        bool invalidGpuTiming,
+        bool invalidCpuTiming)
     {
         return IsSvsmMotionBenchmarkEvidenceValidForFrameCount(
             SvsmMotionBenchmarkMeasurementFrames,
@@ -636,7 +938,9 @@ namespace uvsr
             retired,
             outstanding,
             duplicateTag,
-            invalidTag);
+            invalidTag,
+            invalidGpuTiming,
+            invalidCpuTiming);
     }
 
     [[nodiscard]] constexpr SvsmMotionBenchmarkSegment

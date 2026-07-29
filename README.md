@@ -154,30 +154,39 @@ architecture without either add-on.
   or out-of-range SVSM samples fall back to a valid coarser clipmap and then to
   white.
 - The SVSM **Profile** menu offers **Performance**, **Balanced**, **Quality**,
-  and **Custom**. Performance uses page-safe adaptive 8-tap filtering with a
-  one-level resolution bias. Balanced removes the resolution bias at the same
-  tap count. Quality uses unbiased full 16-tap filtering. All three use the
+  and **Custom**. Performance uses adaptive page-safe nearest-Poisson filtering
+  with 8 taps, a global `+1` resolution bias, a temporary moving-light `+2`
+  bias, and receiver-distance clamping. Balanced uses page-safe bilinear PCF
+  with 4 taps, no global bias, a temporary moving-light `+1` bias,
+  receiver-distance clamping, and adaptive filtering off. Quality uses
+  page-safe bilinear PCF with 8 taps, no global or moving-light bias, no
+  receiver-distance clamp, and adaptive filtering off. All three use the
   validated cache, static zero-work, packet culling, batching, sorting, and
   empty-work skips. **First Clipmap Extent** and **Maximum Light Depth** remain
-  scene controls. **Dense
-  Reference** explicitly backs all six 8192-square atomic-depth clipmaps and can
-  require about 1.5 GiB, so it is intended only for validation.
-- Custom SVSM controls independently expose sparse caching and static reuse,
-  per-pixel or conservative tiled marking, 1/4/8/16-tap filtering, resolution
-  bias, finite-budget static draining, an independent option to include the
-  coarsest clipmap in that budget, allocation saturation skipping, GPU-gated
-  and batched packet submission, packet-page culling, guarded dirty scatter
-  amplification, alpha-test ownership rejection, page-safe translation reuse,
-  detailed or total-only GPU timing, adaptive filtering, and debug views. Dirty
-  scatter activates only with its amplification guard and a
-  nonzero all-clipmap budget of at most four pages whose configured rectangle
-  amplification remains at most 16 pages; other configurations retain the exact
-  compact per-page path. The motion benchmark always uses the total-only timing
-  path so inner query resolves do not perturb its result, and it never changes
-  or measures Bend settings. Reference paths remain selectable through the
-  backend and independent Custom controls. **Fine Caster Exclusion** is visibly
-  unavailable because UVSR does not yet provide every conservative proof needed
-  to exclude a caster safely.
+  scene controls. **Dense Reference** explicitly backs all six 8192-square
+  atomic-depth clipmaps and can require about 1.5 GiB, so it is intended only
+  for validation.
+- The normal SVSM surface keeps **Profile**, scene extent and light-depth range,
+  filter kernel, tap count and adjacent **Adaptive Filtering**, global
+  resolution bias, and receiver-distance clamping visible. Collapsed
+  **Developer Options** contains four default-collapsed raw subgroups:
+  **Resources And Cache Policy**, **Movement And Invalidation**,
+  **Culling And Raster**, and **Unabstracted**. The last retains low-risk
+  optimization switches that are trending toward always-on behavior while
+  preserving their reference paths for validation. Collapsed **Diagnostics**
+  owns benchmarks, detailed stage timing, debug views, and counters.
+- Custom SVSM controls independently expose per-pixel or conservative tiled
+  marking, 1/4/8/16-tap filtering, resolution policies, static reuse,
+  localized invalidation, GPU-gated and batched packet submission, packet-page
+  culling, guarded dirty scatter, alpha-tested specialization, and page-safe
+  translation reuse. **Mode** is the single cache-policy selector,
+  **Moving-Light Resolution Bias** is the single `Off`/`+1`/`+2` state, and
+  enabling **Dirty Page Scatter Raster** also enables its mandatory
+  amplification guard; duplicate checkboxes no longer create contradictory
+  states. Fine-caster exclusion is not exposed because UVSR cannot yet prove
+  every exclusion condition conservatively. The motion benchmark uses the
+  total-only timing path so inner query resolves do not perturb its result, and
+  it never changes or measures Bend settings.
 - Diagnostic CSM is a conventional UE5-style comparison path, not UVSR's
   preferred shadow renderer. One shared persistent depth array, opaque and
   alpha-tested caster path, and full-resolution receiver serve one through four
@@ -199,6 +208,16 @@ architecture without either add-on.
   The drawer reports paired setup, culling, clear/update, raster, and sampling
   timings plus an explicit SVSM coverage, resolution, filter, and depth match
   check. Debug views show visibility, cascade selection, and cache action.
+- The normal CSM surface keeps **Enabled**, **Profile**, **Cascades**,
+  **Resolution Per Cascade**, **Maximum Shadow Distance**, **Maximum Light
+  Depth**, **Filter**, **Filter Taps**, and **Filter Radius** visible. Collapsed
+  **Developer Options** contains four default-collapsed subgroups:
+  **Projection And Bias**, **Cache Update Policy**, **Culling And Raster**, and
+  the further nested **Unabstracted** group. **Unabstracted** retains reversible
+  low-risk implementation paths that are trending toward always-on behavior,
+  preserving their reference paths for exact validation. Collapsed
+  **Diagnostics** owns detailed GPU stage timing, debug views, and live stat
+  lines.
 - The **General** drawer contains **Graphics Adapter**, **Camera Mode**, and
   **Camera Location** for the standardized Sponza scenes. **World Materials**
   contains the White World presentations and the **Indirect Diffuse Response**
@@ -334,11 +353,13 @@ promises that the work will merge.
   rank-field paths. This owns only visibility test sources and has no runtime
   rendering, UI, or asset overlap.
 
-- **Diagnostic Ue5-Style Cascaded Shadow Maps — In Development**
-  (`codex/bend-screen-space-shadows`, local uncommitted work). Add a diagnostic
-  one-to-four-cascade reference and cache-update comparison for improving SVSM.
-  It reuses UVSR and Donut rendering infrastructure, adds no virtual pages or
-  CSM-only indirect renderer, and remains disabled and nonpreferred by default.
+- **Diagnostic Ue5-Style Cascaded Shadow Maps — Integration Preparation**
+  (`experimental/shadow-maps-ibl-20260726`, published experimental branch).
+  Add a diagnostic one-to-four-cascade reference and cache-update comparison
+  for improving SVSM. It reuses UVSR and Donut rendering infrastructure, adds
+  no virtual pages or CSM-only indirect renderer, and remains disabled and
+  nonpreferred by default. Canonical MSAA and fused-visibility paths remain
+  integration work rather than being copied into this experiment.
 
 ### Roadmap Ownership
 

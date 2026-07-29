@@ -9,14 +9,24 @@ param(
         Options = [System.Text.RegularExpressions.RegexOptions]::None)]
     [string] $Experiment,
 
+    [ValidateNotNullOrEmpty()]
+    [string] $BuildDirectory = 'build',
+
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]] $RendererArguments
 )
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-$executable = Join-Path $repositoryRoot 'build\bin\uvsr.exe'
+if ([System.IO.Path]::IsPathRooted($BuildDirectory)) {
+    $resolvedBuildDirectory = [System.IO.Path]::GetFullPath($BuildDirectory)
+}
+else {
+    $resolvedBuildDirectory = [System.IO.Path]::GetFullPath(
+        (Join-Path $repositoryRoot $BuildDirectory))
+}
+$executable = Join-Path $resolvedBuildDirectory 'bin\uvsr.exe'
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-    throw "UVSR is not built. Run: cmake --build build --config Release --target uvsr"
+    throw "UVSR is not built at '$resolvedBuildDirectory'. Run: cmake --build `"$resolvedBuildDirectory`" --config Release --target uvsr"
 }
 
 # Pass the validated lowercase one-word description through the child
