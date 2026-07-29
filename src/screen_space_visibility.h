@@ -290,6 +290,9 @@ namespace uvsr
         float fullResolutionApplyMs = 0.f;
         float compositionMs = 0.f;
         float effectEnvelopeMs = 0.f;
+        uint64_t firstTraceFrameId = 0u;
+        uint64_t compositionFrameId = 0u;
+        uint64_t effectEnvelopeFrameId = 0u;
 
         // Exact logical texel arithmetic, excluding API alignment/residency.
         uint64_t outputTextureBytes = 0u;
@@ -370,6 +373,18 @@ namespace uvsr
         [[nodiscard]] const ScreenSpaceVisibilityTimings& GetTimings() const
         {
             return m_Timings;
+        }
+
+        [[nodiscard]] const VisibilityExecutionPlan&
+            GetSelectedExecutionPlan() const
+        {
+            return m_SelectedExecutionPlan;
+        }
+
+        [[nodiscard]] const VisibilityExecutionPlan&
+            GetExecutionPlan() const
+        {
+            return m_ExecutionPlan;
         }
 
         bool BeginBenchmark(
@@ -532,7 +547,9 @@ namespace uvsr
         uint32_t m_TimerFrame = 0u;
         bool m_TimerFrameWritable = true;
         ScreenSpaceVisibilityTimings m_Timings;
+        VisibilityExecutionPlan m_SelectedExecutionPlan;
         VisibilityExecutionPlan m_ExecutionPlan;
+        bool m_HasExecutionPlanCache = false;
         VisibilityBenchmarkStatistics m_BenchmarkStatistics;
         bool m_BenchmarkActive = false;
 

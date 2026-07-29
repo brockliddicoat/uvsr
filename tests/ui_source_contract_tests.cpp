@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -115,7 +116,11 @@ namespace
             return {};
         std::ostringstream contents;
         contents << input.rdbuf();
-        return contents.str();
+        std::string source = contents.str();
+        source.erase(
+            std::remove(source.begin(), source.end(), '\r'),
+            source.end());
+        return source;
     }
 
     size_t CountOccurrences(
@@ -198,7 +203,7 @@ int main(int argc, char** argv)
         "README line-count verification policy");
     ExpectContains(
         uiReferenceSource,
-        "UI reference version: `2026-07-22.1`.",
+        "UI reference version: `2026-07-29.1`.",
         "current UI reference version");
     ExpectContains(
         uiReferenceSource,
@@ -624,6 +629,120 @@ int main(int argc, char** argv)
         "Visibility drawer");
     ExpectContains(visibility, "BeginRoundedCombo(", "Visibility drawer");
     ExpectContains(visibility, "DrawSliderFloat(", "Visibility drawer");
+    const std::string_view visibilityResolutionOrder = ExtractSection(
+        visibility,
+        "resolutionOrder = {",
+        "for (const VisibilityResolution resolution : resolutionOrder)",
+        "Visibility sampling-resolution expense order");
+    ExpectOrdered(
+        visibilityResolutionOrder,
+        "VisibilityResolution::Quarter",
+        "VisibilityResolution::Half",
+        "Visibility sampling-resolution expense order");
+    ExpectOrdered(
+        visibilityResolutionOrder,
+        "VisibilityResolution::Half",
+        "VisibilityResolution::Full",
+        "Visibility sampling-resolution expense order");
+    ExpectContains(
+        visibility,
+        "\"Sample Count Mode\"",
+        "Visibility sample-count mode");
+    ExpectContains(
+        visibility,
+        "{ \"Fixed\",\n"
+        "                                VisibilitySampleSpecialization::Fixed20 }",
+        "Visibility fixed sample-count option");
+    ExpectContains(
+        visibility,
+        "{ \"Generic\",\n"
+        "                                VisibilitySampleSpecialization::Generic },",
+        "Visibility generic sample-count option");
+    ExpectContains(
+        visibility,
+        "{ \"Runtime\",\n"
+        "                                VisibilitySampleSpecialization::Runtime },",
+        "Visibility optimized runtime sample-count option");
+    ExpectOrdered(
+        visibility,
+        "{ \"Runtime\",",
+        "{ \"Generic\",",
+        "Visibility sample-count mode cost order");
+    ExpectOrdered(
+        visibility,
+        "{ \"Generic\",",
+        "{ \"Fixed\",",
+        "Visibility sample-count mode cost order");
+    ExpectContains(
+        visibility,
+        "DrawSliderInt(",
+        "Visibility sample-count slider");
+    ExpectContains(
+        visibility,
+        "\"Samples##VisibilitySamples\"",
+        "Visibility shared sample-count slider");
+    ExpectContains(
+        visibility,
+        "GetNearestVisibilityFixedSampleSpecialization(",
+        "Visibility fixed sample-count snapping");
+    ExpectContains(
+        visibility,
+        "\"slider positions are 8, 12, 16, 20, 24, 48, and \"",
+        "Visibility fixed sample-count archive contract");
+    ExpectContains(
+        source,
+        "static bool CanonicalizeFixedVisibilitySampling(",
+        "Visibility fixed-mode state canonicalization");
+    const std::string_view fixedSamplingCanonicalization = ExtractSection(
+        source,
+        "static bool CanonicalizeFixedVisibilitySampling(",
+        "static bool ApplyVisibilityVerificationProfileDefaults(",
+        "Visibility fixed-mode state canonicalization");
+    ExpectContains(
+        fixedSamplingCanonicalization,
+        "VisibilityTraceImplementation::FixedInterleavedBitmask",
+        "Visibility fixed-mode trace identification");
+    ExpectContains(
+        fixedSamplingCanonicalization,
+        "visibility.sampling.stepDistributionExponent = 2.f;",
+        "Visibility fixed-mode quadratic state repair");
+    ExpectContains(
+        source,
+        "CanonicalizeFixedVisibilitySampling(\n"
+        "                m_ui.ScreenSpaceVisibility)",
+        "Visibility fixed-mode pre-render canonicalization");
+    ExpectContains(
+        visibility,
+        "CanonicalizeFixedVisibilitySampling(visibility);",
+        "Visibility fixed-mode pre-UI canonicalization");
+    ExpectContains(
+        visibility,
+        "ImGui::BeginDisabled(fixedSampleCount);",
+        "Visibility fixed-mode exponent lock");
+    ExpectContains(
+        visibility,
+        "\"Fixed sample shaders bake a quadratic (2.00) \"",
+        "Visibility fixed-mode exponent explanation");
+    ExpectContains(
+        visibility,
+        "\"Offline Packed Spacetime Noise, Performance Precision \"",
+        "High visibility profile precision description");
+    ExpectContains(
+        source,
+        "\"Low, Medium, and High begin at Performance Precision; Ultra \"",
+        "Visibility buffer precision preset explanation");
+    ExpectContains(
+        visibility,
+        "!ImGui::IsItemActive()",
+        "Visibility sample slider inactive-or-release commit");
+    ExpectAbsent(
+        visibility,
+        "\"##VisibilityRuntimeSampleCountControls\"",
+        "removed runtime-only sample controls");
+    ExpectAbsent(
+        visibility,
+        "\"Runtime Samples##VisibilityRuntimeSamples\"",
+        "removed runtime-only sample slider");
     ExpectContains(
         visibility,
         "BeginAnimatedToggleRegion(",
@@ -645,8 +764,48 @@ int main(int argc, char** argv)
     }
     ExpectContains(
         visibility,
-        "\"Distribution Exponent\"",
+        "\"Distribution\"",
         "Visibility distribution label");
+    const std::string_view sharedVisibilitySampling = ExtractSection(
+        visibility,
+        "\"Shared Visibility Sampling\"",
+        "\"Ambient Occlusion\"",
+        "Shared Visibility Sampling panel");
+    ExpectAbsent(
+        sharedVisibilitySampling,
+        "\"Distribution\"",
+        "Shared Visibility Sampling production controls");
+    ExpectAbsent(
+        sharedVisibilitySampling,
+        "\"Sample Count Mode\"",
+        "Shared Visibility Sampling developer sample-count mode");
+    ExpectContains(
+        visibility,
+        "if (BeginAnimatedTreeNode(\n"
+        "                    \"Developer Options##VisibilityDeveloperOptions\"))",
+        "default-collapsed Visibility Developer Options panel");
+    ExpectOrdered(
+        visibility,
+        "\"Reconstruction##VisibilityReconstruction\"",
+        "\"Developer Options##VisibilityDeveloperOptions\"",
+        "Visibility Developer Options panel position");
+    const std::string_view visibilityDeveloperOptions = ExtractSection(
+        visibility,
+        "\"Developer Options##VisibilityDeveloperOptions\"",
+        "EndAnimatedToggleRegion();",
+        "Visibility Developer Options panel");
+    ExpectContains(
+        visibilityDeveloperOptions,
+        "drawSampleCountModeControl();",
+        "Sample Count Mode Developer Options placement");
+    ExpectContains(
+        visibilityDeveloperOptions,
+        "\"Distribution\"",
+        "Visibility Developer Options panel");
+    ExpectAbsent(
+        visibilityDeveloperOptions,
+        "BeginAnimatedTreeNode(",
+        "Visibility controls after Developer Options");
     ExpectAbsent(
         visibility,
         "\"Radial Distribution Exponent\"",
@@ -891,7 +1050,7 @@ int main(int argc, char** argv)
         "Aliasing Method reset staging");
     const std::string_view aliasingMethodSelection = ExtractSection(
         aliasingMethodControl,
-        "candidateLabel += \"###MethodCandidate\";",
+        "candidateLabel += \"##MethodCandidate\";",
         "if (selected)",
         "Aliasing Method selection staging");
     ExpectOrdered(
@@ -927,7 +1086,7 @@ int main(int argc, char** argv)
         "Aliasing Quality reset staging");
     const std::string_view aliasingQualitySelection = ExtractSection(
         aliasingQualityControl,
-        "candidateLabel += \"###QualityCandidate\";",
+        "candidateLabel += \"##QualityCandidate\";",
         "if (selected)",
         "Aliasing Quality selection staging");
     const std::string_view aliasingQualitySelectionStage = ExtractSection(
@@ -939,6 +1098,26 @@ int main(int argc, char** argv)
         aliasingQualitySelectionStage,
         "false,",
         "Aliasing Quality nonstructural selection staging");
+    ExpectAbsent(
+        aliasing,
+        "###MethodCandidate",
+        "Aliasing Method options with shared ImGui IDs");
+    ExpectAbsent(
+        aliasing,
+        "###QualityCandidate",
+        "Aliasing Quality options with shared ImGui IDs");
+    ExpectAbsent(
+        aliasing,
+        "###MorphologyCandidate",
+        "Aliasing Morphology options with shared ImGui IDs");
+    ExpectAbsent(
+        aliasing,
+        "###Stable Interior",
+        "Aliasing Stable Interior options with shared ImGui IDs");
+    ExpectAbsent(
+        source,
+        "###VisibilitySampleCountMode",
+        "Visibility Sample Count Mode options with shared ImGui IDs");
     const size_t aliasingQualityResetBegin =
         aliasingQualityControl.find("\"Aliasing Quality\",");
     const std::string_view aliasingQualityReset =
@@ -984,10 +1163,214 @@ int main(int argc, char** argv)
         aliasing,
         "\"MiniEngine",
         "Aliasing UI attribution");
-    ExpectContains(
+    ExpectAbsent(
         aliasing,
         "\"##AliasingEnabledControls\"",
-        "Aliasing enabled collapse region");
+        "Aliasing enabled selector gate");
+    ExpectOrdered(
+        aliasing,
+        "ImGui::Checkbox(\"Enabled\", &selectorSettings.enabled);",
+        "const bool methodComboOpen = BeginRoundedCombo(",
+        "Aliasing method remains an ordinary sibling while bypassed");
+    const std::string_view methodOrder = ExtractSection(
+        aliasing,
+        "methodOrder = {",
+        "for (const AntiAliasingMethod candidate : methodOrder)",
+        "Aliasing Method expense order");
+    ExpectOrdered(
+        methodOrder,
+        "AntiAliasingMethod::IntelCmaa2",
+        "TemporalSubpixelMorphological",
+        "Aliasing Method expense order");
+    ExpectOrdered(
+        methodOrder,
+        "TemporalSubpixelMorphological",
+        "AntiAliasingMethod::Msaa",
+        "Aliasing Method expense order");
+    ExpectContains(
+        aliasing,
+        "const std::string preview = inherited",
+        "resolved concrete inherited-value preview");
+    ExpectContains(
+        aliasing,
+        "candidateLabel == inheritedOrAutoValue",
+        "resolved concrete inherited-value row selection");
+    ExpectAbsent(
+        aliasing,
+        "\"Preset\"",
+        "visible neutral Preset entry");
+    for (const std::string_view normalTaaControl : {
+            std::string_view("\"Dejitter##AliasingDejitter\""),
+            std::string_view("\"Motion Source\""),
+            std::string_view("\"Reconstruction\""),
+            std::string_view("\"Subpixel Morphology##Developer\"") })
+    {
+        ExpectContains(
+            aliasing,
+            normalTaaControl,
+            "normal production TAA controls");
+    }
+    ExpectAbsent(
+        aliasing,
+        "\"Current Reconstruction\"",
+        "removed Current Reconstruction dropdown");
+    ExpectAbsent(
+        aliasing,
+        "\"History Reconstruction\"",
+        "renamed Reconstruction dropdown");
+    const std::string_view qualityOrder = ExtractSection(
+        aliasing,
+        "qualityOrder = {",
+        "for (const AntiAliasingQuality candidate : qualityOrder)",
+        "Aliasing Quality expense order");
+    ExpectOrdered(
+        qualityOrder,
+        "AntiAliasingQuality::Low",
+        "AntiAliasingQuality::Medium",
+        "Aliasing Quality expense order");
+    ExpectOrdered(
+        qualityOrder,
+        "AntiAliasingQuality::Medium",
+        "AntiAliasingQuality::High",
+        "Aliasing Quality expense order");
+    ExpectOrdered(
+        qualityOrder,
+        "AntiAliasingQuality::High",
+        "AntiAliasingQuality::Ultra",
+        "Aliasing Quality expense order");
+    const std::string_view morphologyOrder = ExtractSection(
+        aliasing,
+        "morphologyQualityOrder = {",
+        "for (const AntiAliasingQuality candidateQuality :",
+        "Aliasing Morphology expense order");
+    ExpectOrdered(
+        morphologyOrder,
+        "AntiAliasingQuality::Low",
+        "AntiAliasingQuality::Medium",
+        "Aliasing Morphology expense order");
+    ExpectOrdered(
+        morphologyOrder,
+        "AntiAliasingQuality::Medium",
+        "AntiAliasingQuality::High",
+        "Aliasing Morphology expense order");
+    ExpectOrdered(
+        morphologyOrder,
+        "AntiAliasingQuality::High",
+        "AntiAliasingQuality::Ultra",
+        "Aliasing Morphology expense order");
+    ExpectOrdered(
+        aliasing,
+        "\"Off##MorphologyCandidate\"",
+        "morphologyQualityOrder)",
+        "Aliasing Morphology expense order");
+    ExpectAbsent(
+        aliasing,
+        "\"Preset##MorphologyCandidate\"",
+        "Aliasing Morphology neutral Preset row");
+    const std::string_view motionSourceOrder = ExtractSection(
+        aliasing,
+        "motionSourceOrder = {",
+        "reconstructionOrder = {",
+        "TAA Motion Source expense order");
+    ExpectAbsent(
+        motionSourceOrder,
+        "FromPreset",
+        "TAA Motion Source neutral Preset row");
+    ExpectOrdered(
+        motionSourceOrder,
+        "MiniEngineTaaMotionSourceOverride::Center",
+        "ClosestCross",
+        "TAA Motion Source expense order");
+    ExpectOrdered(
+        motionSourceOrder,
+        "ClosestCross",
+        "CenterFirstEdgeDilation",
+        "TAA Motion Source expense order");
+    const std::string_view rectificationOrder = ExtractSection(
+        aliasing,
+        "rectificationOrder = {",
+        "drawEnumOption(",
+        "TAA Rectification expense order");
+    ExpectAbsent(
+        rectificationOrder,
+        "FromPreset",
+        "TAA Rectification neutral Preset row");
+    ExpectOrdered(
+        rectificationOrder,
+        "PairRgb",
+        "PerPixelRgb",
+        "TAA Rectification expense order");
+    ExpectOrdered(
+        rectificationOrder,
+        "PerPixelRgb",
+        "PerPixelYCoCg",
+        "TAA Rectification expense order");
+    ExpectOrdered(
+        rectificationOrder,
+        "PerPixelYCoCg",
+        "VarianceYCoCg",
+        "TAA Rectification expense order");
+    const std::string_view reconstructionOrder = ExtractSection(
+        aliasing,
+        "reconstructionOrder = {",
+        "#if UVSR_AA_DEVELOPER_OVERRIDES",
+        "TAA Reconstruction expense order");
+    ExpectAbsent(
+        reconstructionOrder,
+        "FromPreset",
+        "TAA Reconstruction neutral Preset row");
+    ExpectOrdered(
+        reconstructionOrder,
+        "MiniEngineTaaHistoryFilterOverride::Bilinear",
+        "OneSampleBicubic",
+        "TAA Reconstruction expense order");
+    ExpectOrdered(
+        reconstructionOrder,
+        "OneSampleBicubic",
+        "FiveTapCatmullRom",
+        "TAA Reconstruction expense order");
+    ExpectOrdered(
+        reconstructionOrder,
+        "FiveTapCatmullRom",
+        "NineTapCatmullRom",
+        "TAA Reconstruction expense order");
+    const std::string_view resurrectionOrder = ExtractSection(
+        aliasing,
+        "sampleResurrectionOrder = {",
+        "#endif",
+        "TAA Sample Resurrection expense order");
+    ExpectAbsent(
+        resurrectionOrder,
+        "FromPreset",
+        "TAA Sample Resurrection neutral Preset row");
+    ExpectOrdered(
+        resurrectionOrder,
+        "MiniEngineTaaSampleResurrectionOverride::Off",
+        "OneOlderFrame",
+        "TAA Sample Resurrection expense order");
+    ExpectOrdered(
+        resurrectionOrder,
+        "OneOlderFrame",
+        "TwoOlderFrames",
+        "TAA Sample Resurrection expense order");
+    ExpectContains(
+        aliasing,
+        "&historyFrames,\n"
+        "                        1,\n"
+        "                        32,",
+        "32-frame TAA history range");
+    ExpectContains(
+        aliasing,
+        "&historyStrength,\n"
+        "                        0.f,\n"
+        "                        200.f,",
+        "200-percent TAA history-strength range");
+    ExpectContains(
+        aliasing,
+        "ImGui::SetItemTooltip(\n"
+        "                    \"%s\",\n"
+        "                    \"Scale accepted history",
+        "literal-safe History Strength tooltip");
     ExpectAbsent(
         aliasing,
         "drawMutexOption",
@@ -1025,9 +1408,38 @@ int main(int argc, char** argv)
         "removed Aliasing developer performance drawer");
     ExpectOrdered(
         aliasing,
-        "drawStableInteriorControl();",
+        "drawDejitterControl();",
         "\"Sharpness###Sharpness\"",
-        "Stable Interior control order");
+        "Dejitter control order");
+    ExpectContains(
+        aliasing,
+        "if (longTermTemporalControlsAvailable &&\n"
+        "                BeginAnimatedTreeNode(\n"
+        "                    \"Developer Options##AliasingDeveloperOptions\"))",
+        "default-collapsed Aliasing Developer Options panel");
+    ExpectOrdered(
+        aliasing,
+        "\"Aliasing Algorithm Configuration\"",
+        "\"Developer Options##AliasingDeveloperOptions\"",
+        "Aliasing Developer Options panel position");
+    const std::string_view aliasingDeveloperOptions = ExtractSection(
+        aliasing,
+        "\"Developer Options##AliasingDeveloperOptions\"",
+        "EndAnimatedToggleRegion();",
+        "Aliasing Developer Options panel");
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "drawRectificationControl();",
+        "Rectification Developer Options placement");
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "drawStableInteriorControl();",
+        "Stable Interior Developer Options placement");
+    ExpectOrdered(
+        aliasingDeveloperOptions,
+        "drawRectificationControl();",
+        "drawStableInteriorControl();",
+        "Aliasing Developer Options control order");
     ExpectAbsent(
         aliasing,
         "(Preset)",
@@ -1038,16 +1450,25 @@ int main(int argc, char** argv)
         "indirect Aliasing inherited-value suffixes");
     ExpectContains(
         aliasing,
-        "result = inheritedOrAutoValue;",
-        "plain Aliasing inherited-value previews");
+        "const std::string preview = inherited",
+        "resolved Aliasing inherited-value previews");
     ExpectContains(
         aliasing,
-        "const ValueType presentationValue =",
-        "read-only redundant Aliasing enum presentation");
+        "const bool candidateRepresentsInherited =",
+        "resolved Aliasing inherited row selection");
     ExpectContains(
         aliasing,
-        "const bool redundantInheritedMorphology =",
-        "read-only redundant Aliasing morphology presentation");
+        "*selectedValuePointer =\n"
+        "                                static_cast<ValueType>(0u);",
+        "Aliasing reset restores inheritance");
+    ExpectContains(
+        aliasing,
+        "const ResolvedAntiAliasingSettings resolvedCurrent =",
+        "resolved Aliasing morphology presentation");
+    ExpectContains(
+        aliasing,
+        "const bool morphologyOff =",
+        "explicit Aliasing morphology-off presentation");
     ExpectContains(
         aliasingMethodControl,
         "NormalizeRedundantAntiAliasingOverrides(",
@@ -1113,10 +1534,6 @@ int main(int argc, char** argv)
         source,
         "GetPixelZoomButtonLabel(m_ui.PixelZoom)",
         "pixel zoom controls");
-    ExpectContains(
-        source,
-        "ImGui::CalcTextSize(\"Zoom\")",
-        "constant pixel zoom footer label");
     ExpectContains(
         source,
         "if (pixelZoomRequested && pixelZoomOpacity > 0.f)",
@@ -1252,7 +1669,7 @@ int main(int argc, char** argv)
     constexpr const char* nestedResetCalls[] = {
         "DrawNestedDropdownResetIcon(\"VisibilityEstimator\",",
         "DrawNestedDropdownResetIcon(\"VisibilityNoisePattern\",",
-        "DrawNestedDropdownResetIcon(\"VisibilityExactSampleCount\",",
+        "DrawNestedDropdownResetIcon(\"VisibilitySampleCountMode\",",
         "DrawNestedDropdownResetIcon(\"VisibilityReconstructionMethod\",",
         "DrawNestedDropdownResetIcon(\"VisibilityFinalApplication\",",
         "DrawNestedDropdownResetIcon(\"AliasingSubpixelMorphology\",",
@@ -1317,13 +1734,81 @@ int main(int argc, char** argv)
     ExpectOrdered(
         animatedNestedSection,
         "g_NestedDrawerAnimationContexts.pop_back();",
+        "ImGui::PopItemWidth();",
+        "nested control-width lifetime balance");
+    ExpectOrdered(
+        animatedNestedSection,
+        "ImGui::PopItemWidth();",
         "ImGui::Unindent(context.indentSpacing);",
         "nested gutter lifetime balance");
+    ExpectOrdered(
+        animatedNestedSection,
+        "const float inheritedItemWidth = ImGui::CalcItemWidth();",
+        "ImGui::BeginChild(",
+        "nested control-width capture");
+    ExpectOrdered(
+        animatedNestedSection,
+        "ImGui::Indent(indentSpacing);",
+        "ImGui::PushItemWidth(inheritedItemWidth);",
+        "nested control-width inheritance");
     ExpectOrdered(
         animatedNestedSection,
         "ImGui::Unindent(context.indentSpacing);",
         "ImGui::EndChild();",
         "nested gutter inside the animated child");
+    ExpectContains(
+        animatedNestedSection,
+        "ImGuiID measurementValidKey = 0;",
+        "zero-height nested-tree measurement validity");
+    ExpectContains(
+        animatedNestedSection,
+        "SubmitUiExpandedMeasurement(",
+        "zero-height nested-tree measurement completion");
+    const std::string_view animatedToggleSection = ExtractSection(
+        source,
+        "struct UiToggleRegionAnimationState",
+        "static ImVec2 MovePointToward(",
+        "toggle-region measurement state");
+    ExpectContains(
+        animatedToggleSection,
+        "UiExpandedMeasurementState measurement;",
+        "zero-height toggle-region measurement state");
+    ExpectContains(
+        animatedToggleSection,
+        "NeedsInitialUiExpandedMeasurement(",
+        "zero-height toggle-region initial measurement");
+    ExpectContains(
+        animatedToggleSection,
+        "SubmitUiExpandedMeasurement(",
+        "zero-height toggle-region measurement completion");
+    ExpectOrdered(
+        animatedToggleSection,
+        "const float inheritedItemWidth = ImGui::CalcItemWidth();",
+        "ImGui::BeginChild(",
+        "toggle-region control-width capture");
+    ExpectOrdered(
+        animatedToggleSection,
+        "ImGui::BeginChild(",
+        "ImGui::PushItemWidth(inheritedItemWidth);",
+        "toggle-region control-width inheritance");
+    ExpectOrdered(
+        animatedToggleSection,
+        "ImGui::EndDisabled();",
+        "ImGui::PopItemWidth();",
+        "toggle-region control-width lifetime balance");
+    ExpectOrdered(
+        animatedToggleSection,
+        "ImGui::PopItemWidth();",
+        "ImGui::EndChild();",
+        "toggle-region control-width inside child");
+    ExpectAbsent(
+        animatedToggleSection,
+        "state.measuredHeight <= 0.f",
+        "zero-height toggle-region sentinel");
+    ExpectAbsent(
+        source,
+        "measuredHeight <= 0.f",
+        "zero-height animated-region sentinel");
     ExpectContains(
         source,
         "DefaultStatisticsEffect",
@@ -1372,6 +1857,73 @@ int main(int argc, char** argv)
         source,
         "DWMWA_EXTENDED_FRAME_BOUNDS",
         "balanced visible startup margins");
+    ExpectContains(
+        source,
+        "MONITOR_DEFAULTTONEAREST",
+        "current-monitor startup placement");
+    ExpectAbsent(
+        source,
+        "GetDpiForWindow(nativeWindow)",
+        "work-area-driven startup shrink");
+    ExpectAbsent(
+        source,
+        "maximumClientWidth",
+        "work-area-driven client-width clamp");
+    ExpectContains(
+        source,
+        "deviceParams.backBufferWidth = 1920;",
+        "exact default startup width");
+    ExpectContains(
+        source,
+        "deviceParams.backBufferHeight = 1080;",
+        "exact default startup height");
+    ExpectContains(
+        source,
+        "CenterWindowInMonitorWorkArea(",
+        "work-area-centered startup placement");
+    ExpectContains(
+        source,
+        "value & ~7",
+        "divisible-by-eight startup client dimensions");
+    ExpectContains(
+        source,
+        "SWP_NOSIZE",
+        "move-only final startup centering");
+    ExpectContains(
+        source,
+        "!benchmarkCameraRequested",
+        "exact-size benchmark placement bypass");
+    ExpectContains(
+        source,
+        "constexpr float SettingsWindowWidthInFontHeights = 29.3f;",
+        "red-line-aligned constant Settings window width");
+    ExpectAbsent(
+        source,
+        "const float statusContentWidth =",
+        "live-status-driven Settings window width");
+    ExpectContains(
+        source,
+        "std::array<std::string, 6> m_PerformanceStatValues;",
+        "triangle performance-stat slot");
+    const std::string_view performanceLine = ExtractSection(
+        source,
+        "static std::string BuildPerformanceLine(",
+        "static double StepTowardByTenth(",
+        "performance status line");
+    ExpectOrdered(
+        performanceLine,
+        "values[0]",
+        "values[5]",
+        "triangle counter after resolution");
+    ExpectOrdered(
+        performanceLine,
+        "values[5]",
+        "values[3]",
+        "triangle counter before bandwidth");
+    ExpectContains(
+        source,
+        "FormatTriangleCount(snapshot.submittedTriangles)",
+        "compact submitted-triangle status");
     ExpectContains(
         source,
         "return \"Unpacked Offline\"",

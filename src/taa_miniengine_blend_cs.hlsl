@@ -277,11 +277,19 @@ struct CatmullRomCross
     float2 rightPosition;
     float2 northPosition;
     float2 southPosition;
+    float2 northWestPosition;
+    float2 northEastPosition;
+    float2 southWestPosition;
+    float2 southEastPosition;
     float centerWeight;
     float leftWeight;
     float rightWeight;
     float northWeight;
     float southWeight;
+    float northWestWeight;
+    float northEastWeight;
+    float southWestWeight;
+    float southEastWeight;
 };
 
 float3 SanitizeHdr(float3 rgb)
@@ -695,11 +703,21 @@ CatmullRomCross GetCatmullRomCross(float2 pixelPosition)
     cross.rightPosition = float2(base.x + 2.0, center.y);
     cross.northPosition = float2(center.x, base.y - 1.0);
     cross.southPosition = float2(center.x, base.y + 2.0);
+    cross.northWestPosition = base - 1.0;
+    cross.northEastPosition =
+        float2(base.x + 2.0, base.y - 1.0);
+    cross.southWestPosition =
+        float2(base.x - 1.0, base.y + 2.0);
+    cross.southEastPosition = base + 2.0;
     cross.centerWeight = w12.x * w12.y;
     cross.leftWeight = wx.x * w12.y;
     cross.rightWeight = wx.w * w12.y;
     cross.northWeight = w12.x * wy.x;
     cross.southWeight = w12.x * wy.w;
+    cross.northWestWeight = wx.x * wy.x;
+    cross.northEastWeight = wx.w * wy.x;
+    cross.southWestWeight = wx.x * wy.w;
+    cross.southEastWeight = wx.w * wy.w;
     return cross;
 }
 
@@ -1291,8 +1309,7 @@ float HistoryTapDepthCoherence(
     // footprint by adding the same previous-minus-current jitter delta used by
     // the central history-depth gather. Interpolating raw reverse-Z depth can
     // fabricate a surface at a foreground/background boundary, so each of the
-    // four existing outer depth operations is a Gather and is reduced before
-    // comparison.
+    // outer depth operation is a Gather and is reduced before comparison.
     float2 historyDepthPixel =
         historyColorPixel + CurrentToPreviousJitter;
     float4 tapDeviceDepths = PreDepth.Gather(
@@ -1609,15 +1626,21 @@ HistorySample SampleHistory(
         antiRingMax);
     return baseHistory;
 #else
-    // Five real bilinear history-color fetches in the cross-shaped
-    // approximation of optimized 9-tap Catmull-Rom. The four corner fetches
-    // are removed. Directional current-depth coherence suppresses the wider
-    // lobes at silhouettes. The scalar history-depth support comes from the
-    // existing 2x2 gather and prevents a moving old silhouette from
-    // contaminating the wider outer taps. Four additional discrete depth
-    // Gathers match the four actual outer color footprints; this preserves the
-    // existing four-operation cost while preventing reverse-Z interpolation
-    // from fabricating support between geometry and background.
+    // The 5x option uses the cardinal cross approximation. The 9x option adds
+    // all four corner bilinear taps, completing the separable optimized 4x4
+    // Catmull-Rom kernel. Every real outer color footprint receives its own
+    // discrete reverse-Z depth Gather; no interpolated depth is allowed to
+    // fabricate support across a silhouette.
+    float2 exactHistoryPixel = round(historyPixel);
+    if (all(abs(historyPixel - exactHistoryPixel) < 1e-5))
+    {
+        int2 exactCoordinate = clamp(
+            int2(exactHistoryPixel),
+            int2(0, 0),
+            int2(BufferDim) - 1);
+        return RecoverHistory(
+            InTemporal.Load(int3(exactCoordinate, 0)));
+    }
     CatmullRomCross cross = GetCatmullRomCross(historyPixel);
     float leftSupport =
         depthSupport.x *
@@ -1651,11 +1674,55 @@ HistorySample SampleHistory(
             expectedPreviousDeviceDepth,
             quantizedDeviceDepthDelta,
             expectedPreviousDepthValid);
+#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
+    float northWestSupport =
+        min(depthSupport.x, depthSupport.z) *
+        historyDepthSupport *
+        HistoryTapDepthCoherence(
+            cross.northWestPosition,
+            expectedPreviousDeviceDepth,
+            quantizedDeviceDepthDelta,
+            expectedPreviousDepthValid);
+    float northEastSupport =
+        min(depthSupport.y, depthSupport.z) *
+        historyDepthSupport *
+        HistoryTapDepthCoherence(
+            cross.northEastPosition,
+            expectedPreviousDeviceDepth,
+            quantizedDeviceDepthDelta,
+            expectedPreviousDepthValid);
+    float southWestSupport =
+        min(depthSupport.x, depthSupport.w) *
+        historyDepthSupport *
+        HistoryTapDepthCoherence(
+            cross.southWestPosition,
+            expectedPreviousDeviceDepth,
+            quantizedDeviceDepthDelta,
+            expectedPreviousDepthValid);
+    float southEastSupport =
+        min(depthSupport.y, depthSupport.w) *
+        historyDepthSupport *
+        HistoryTapDepthCoherence(
+            cross.southEastPosition,
+            expectedPreviousDeviceDepth,
+            quantizedDeviceDepthDelta,
+            expectedPreviousDepthValid);
+#endif
     float centerWeight = cross.centerWeight;
     float leftWeight = cross.leftWeight * leftSupport;
     float rightWeight = cross.rightWeight * rightSupport;
     float northWeight = cross.northWeight * northSupport;
     float southWeight = cross.southWeight * southSupport;
+#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
+    float northWestWeight =
+        cross.northWestWeight * northWestSupport;
+    float northEastWeight =
+        cross.northEastWeight * northEastSupport;
+    float southWestWeight =
+        cross.southWestWeight * southWestSupport;
+    float southEastWeight =
+        cross.southEastWeight * southEastSupport;
+#endif
 
     float4 center = InTemporal.SampleLevel(
         LinearSampler, STtoUV(cross.centerPosition), 0);
@@ -1667,15 +1734,36 @@ HistorySample SampleHistory(
         LinearSampler, STtoUV(cross.northPosition), 0);
     float4 south = InTemporal.SampleLevel(
         LinearSampler, STtoUV(cross.southPosition), 0);
+#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
+    float4 northWest = InTemporal.SampleLevel(
+        LinearSampler, STtoUV(cross.northWestPosition), 0);
+    float4 northEast = InTemporal.SampleLevel(
+        LinearSampler, STtoUV(cross.northEastPosition), 0);
+    float4 southWest = InTemporal.SampleLevel(
+        LinearSampler, STtoUV(cross.southWestPosition), 0);
+    float4 southEast = InTemporal.SampleLevel(
+        LinearSampler, STtoUV(cross.southEastPosition), 0);
+#endif
 
     float normalization = centerWeight +
         leftWeight + rightWeight + northWeight + southWeight;
+#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
+    normalization += northWestWeight + northEastWeight +
+        southWestWeight + southEastWeight;
+#endif
     float4 reconstructed = (
         center * centerWeight +
         left * leftWeight +
         right * rightWeight +
         north * northWeight +
-        south * southWeight) /
+        south * southWeight
+#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
+        + northWest * northWestWeight +
+        northEast * northEastWeight +
+        southWest * southWestWeight +
+        southEast * southEastWeight
+#endif
+        ) /
         max(abs(normalization), 1e-5);
     HistorySample result = RecoverHistory(reconstructed);
     float2 centerDepthPosition =
@@ -1707,6 +1795,28 @@ HistorySample SampleHistory(
         centerHistory.color,
         southHistory.color,
         southSupport);
+#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
+    HistorySample northWestHistory = RecoverHistory(northWest);
+    HistorySample northEastHistory = RecoverHistory(northEast);
+    HistorySample southWestHistory = RecoverHistory(southWest);
+    HistorySample southEastHistory = RecoverHistory(southEast);
+    northWestHistory.color = lerp(
+        centerHistory.color,
+        northWestHistory.color,
+        northWestSupport);
+    northEastHistory.color = lerp(
+        centerHistory.color,
+        northEastHistory.color,
+        northEastSupport);
+    southWestHistory.color = lerp(
+        centerHistory.color,
+        southWestHistory.color,
+        southWestSupport);
+    southEastHistory.color = lerp(
+        centerHistory.color,
+        southEastHistory.color,
+        southEastSupport);
+#endif
     float3 antiRingMin = min(
         centerHistory.color,
         min(min(leftHistory.color, rightHistory.color),
@@ -1715,6 +1825,16 @@ HistorySample SampleHistory(
         centerHistory.color,
         max(max(leftHistory.color, rightHistory.color),
             max(northHistory.color, southHistory.color)));
+#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
+    antiRingMin = min(
+        antiRingMin,
+        min(min(northWestHistory.color, northEastHistory.color),
+            min(southWestHistory.color, southEastHistory.color)));
+    antiRingMax = max(
+        antiRingMax,
+        max(max(northWestHistory.color, northEastHistory.color),
+            max(southWestHistory.color, southEastHistory.color)));
+#endif
     result.color = ClipColor(result.color, antiRingMin, antiRingMax);
     return result;
 #endif
@@ -1992,8 +2112,9 @@ void ApplyTemporalBlend(
         return;
     }
 
-    // One history-depth gather is retained for every color-filter
-    // specialization. The five-tap color mode never adds five depth fetches.
+    // One central history-depth gather is retained for every color-filter
+    // specialization. Both wide Catmull-Rom modes use its coherence as a
+    // common gate before testing each outer tap against a discrete footprint.
     float4 historyDeviceDepths = PreDepth.Gather(
         LinearSampler,
         STtoUV(historyDepthPixel));
@@ -2005,7 +2126,8 @@ void ApplyTemporalBlend(
     float expectedPreviousDepth =
         LinearViewDepth(expectedPreviousDeviceDepth);
     float rawTemporalDepth = LinearViewDepth(temporalDeviceDepth);
-#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_FIVE_TAP_CATMULL_ROM
+#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_FIVE_TAP_CATMULL_ROM || \
+    TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
     float historyDepthSupport = HistoryDepthFootprintCoherence(
         historyDepthFootprint);
 #else
@@ -2262,10 +2384,13 @@ void ApplyTemporalBlend(
         reductionTarget,
         stableInteriorScore);
 #endif
-    // MiniEngine's temporal blend factor is exposed as a normalized strength.
-    // Apply it last so it can only reduce history that survived every
-    // ownership, bounds, reverse-Z, disocclusion, and clarity gate.
-    finalHistoryWeight *= saturate(TemporalBlendFactor);
+    // Strength is applied only after every ownership, bounds, reverse-Z,
+    // disocclusion, and clarity gate. Values above 100% can reinforce accepted
+    // history but cannot resurrect a rejected sample or exceed the logical
+    // frame-horizon cap.
+    finalHistoryWeight = min(
+        finalHistoryWeight * clamp(TemporalBlendFactor, 0.0, 2.0),
+        MaximumHistoryWeight);
 
     float3 temporalColor = ITM(lerp(
         TM(currentRgb),

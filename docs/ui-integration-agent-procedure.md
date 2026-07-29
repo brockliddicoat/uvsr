@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-07-22.1`.
+UI reference version: `2026-07-29.1`.
 
 ## Purpose
 
@@ -121,7 +121,7 @@ version.
 ### Labels, Options, Values, and Units
 
 - Prefer a short noun phrase that states the user's decision, such as
-  `Distribution Exponent`, `Depth Normal`, `Geometry`, `Multisample Reference`,
+  `Distribution`, `Depth Normal`, `Geometry`, `Multisample Reference`,
   or `Temporal Reconstructive`. Put explanation in the tooltip, not the label.
 - Keep every label and dropdown option readable at the current minimum Settings
   width. Shorten the wording before widening one control or clipping text. Do
@@ -132,15 +132,22 @@ version.
   its originating quality when edited, for example `Medium (Custom)`. A
   temporary unavailable candidate may use `(Mutex)` inside the open popup. The
   selected preview may retain `(Mutex)` only when an external renderer mode has
-  made its stored choice unavailable; dependent setting rows collapse instead
-  of remaining as gray `(Mutex)` rows.
+  made its stored choice unavailable. Ordinary toggle-owned dependent rows
+  collapse instead of remaining as gray `(Mutex)` rows. Aliasing is the
+  deliberate exception: **Enabled** is an execution bypass, so Method, Quality,
+  and stored algorithm controls remain selectable while execution is off or a
+  Temporal renderer prerequisite is unavailable.
+- Order cost-ranked dropdown choices from least expensive to most expensive,
+  and preserve that order in every preset, inherited, custom, and unavailable
+  state.
 - Use `###HiddenId` or `##HiddenId` only for stable ImGui identity; hidden ID
   text must never become visible. Every repeated label needs a unique enclosing
   `PushID` or hidden suffix.
 - Format numbers with one stable precision and a compact unit: `%`, `ms`, `fps`,
   `MiB`, `gb/s`, `tflops`, or `x` as established by the neighboring values.
-  Keep the performance line ordered as resolution, bandwidth, compute, frame
-  time, then frame rate. Do not report a timer that is stale, frozen, or not
+  Keep the performance line ordered as resolution, submitted triangles,
+  bandwidth, compute, frame time, then frame rate. Use compact triangle labels
+  such as `1.2m tris`. Do not report a timer that is stale, frozen, or not
   derived from the work it claims to measure.
 - Distinguish a magnification factor from its pixel-area descriptor: the control
   cycles 2x through 5x, while the overlay reports `4x`, `9x`, `16x`, or `25x`.
@@ -255,7 +262,9 @@ version.
 - Use animated two-state toggles. Collapse toggle-owned controls into nothing
   after the renderer consumes a disable, and reverse the motion after enable.
   Grayscale is reserved for genuine external unavailability or benchmark locks,
-  not ordinary gating.
+  not ordinary gating. Aliasing Enabled is a tested exception because it
+  bypasses execution while preserving editable Method, Quality, and override
+  state.
 - Make the complete clickable area use the accepted hover, active, focus, and
   disabled treatments. Reset recycled popup highlight state so one dropdown's
   cursor animation cannot appear in another.
@@ -264,10 +273,11 @@ version.
   that control owns and reconcile the profile afterward. Do not attach reset
   icons to adapters, scene destinations, folder buttons, run/cancel commands,
   Screenshot, Restart, or Zoom.
-- Defaults are product behavior. Aliasing presets keep Stable Interior and
-  Sharpness off; changing morphology changes only the CMAA2 morphology override;
-  Visibility custom labels retain their originating profile. Do not silently
-  redefine a preset while adding its control.
+- Defaults are product behavior. Aliasing presets keep Stable Interior,
+  Sharpness, and Subpixel Morphology off. Dejitter is off for Low, Medium, and
+  High and on for Ultra. Changing morphology changes only the CMAA2 morphology
+  override; Visibility custom labels retain their originating profile. Do not
+  silently redefine a preset while adding its control.
 - Preserve the factory baseline unless the user explicitly changes it: PBR with
   Deferred shading, enabled Temporal Reconstructive Medium AA, Sharpness off,
   Visibility High, procedural sky on, White World off, Freelook camera,
@@ -334,7 +344,7 @@ Complete this checklist for every new or materially changed UI control before
 editing. Record the answers in the execution plan or task notes; no item may
 remain unknown when implementation begins.
 
-- [ ] Record UI reference version `2026-07-22.1` for this revision and confirm
+- [ ] Record UI reference version `2026-07-29.1` for this revision and confirm
   that no cached assignment, excerpt, or handoff names an older version.
 
 ### Ownership and State
@@ -496,11 +506,11 @@ treating deferred commit timing as a substitute for renderer-side optimization.
 
 ### Host Window and Activity Overlay
 
-- Fit a windowed launch inside the primary monitor's usable work area. On
-  Windows, measure the visible DWM frame separately from the invisible resize
-  border, then make the visible top, taskbar, left, and right gaps equal. The
-  initial client may become slightly taller than 16:9 to preserve those visible
-  margins; do not force the requested aspect after native-frame correction.
+- On Windows, align each requested client axis down to a multiple of eight, then
+  center the DWM-visible frame in the nearest monitor's usable work area.
+  Preserve the aligned client size instead of stretching its height to equalize
+  gaps. When the work area can contain the requested frame, the visible top and
+  taskbar-side gaps match.
 - Keep the title diagnostic and reproducible: active graphics API, one-word
   experiment label, seven-character embedded source revision, and local launch
   time in 24-hour `HHmm` form. The required launcher validates a lowercase
@@ -977,13 +987,17 @@ bindings or history are correctness failures.
   actions only; running status and Cancel appear only while their run state
   exists.
 - Do not restore removed TAA execution-path, kernel, LDS, reuse, early-reject,
-  fusion, cache-blocking, or debug dropdowns. Do not create a separate developer
-  performance drawer. Stable Interior is the only retained performance control,
-  appears immediately above Sharpness, and remains off in every preset unless
-  new measured evidence and an explicit product decision authorize a change.
-- Do not append `(Preset)` to inherited Aliasing controls. Keep Sharpness
-  disabled by default for every Aliasing preset, but preserve the user's stored
-  strength while the toggle is off.
+  fusion, cache-blocking, Sample Resurrection, or debug dropdowns in production.
+  Do not create a separate developer performance drawer. The default-collapsed
+  Aliasing **Developer Options** panel contains Rectification followed by Stable
+  Interior; Stable Interior remains off in every preset unless new measured
+  evidence and an explicit product decision authorize a change.
+- Do not append `(Preset)` to inherited Aliasing controls. The default-open
+  algorithm configuration exposes concrete Subpixel Morphology, Motion Source,
+  and Reconstruction selections in least-to-most-expensive order. Keep
+  Sharpness disabled by default for every Aliasing preset, but preserve the
+  user's stored strength while the toggle is off. Place Dejitter above
+  Sharpness; it is off for Low, Medium, and High and on for Ultra.
 - Keep temporal-history sharpening and resolved presentation sharpening as
   separate shader permutations. Temporal history is premultiplied by confidence;
   CMAA2 output is resolved RGB with non-semantic alpha and must never be divided
@@ -1376,6 +1390,11 @@ screenshots were checked.
 
 ## Reference Revision History
 
+- `2026-07-29.1`: Defined the current constant-width settings drawer and status
+  line, including the compact visible-triangle count. Recorded exact
+  `1920 x 1080` work-area centering, the middle-click material picker, the
+  least-to-most-expensive option ordering, the temporal aliasing layout and
+  developer panels, and the compact visibility sample-count controls.
 - `2026-07-22.1`: Standardized inline unavailable guidance on the shared
   disabled-text token with owner-width wrapping. Required both temporal
   anti-aliasing availability explanations to use an authored two-line layout

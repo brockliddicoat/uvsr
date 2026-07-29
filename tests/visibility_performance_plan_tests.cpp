@@ -1564,13 +1564,122 @@ namespace
                 ResolveVisibilityExecutionPlan(
                     VisibilityPerformanceProfile::Reference,
                     runtimeOnly);
+            const bool changesShaderSpecialization =
+                runtimeVariant == 3u;
             Require(runtimePlan.valid &&
-                    runtimePlan.shaderPermutationKey ==
-                        base.shaderPermutationKey &&
+                    (runtimePlan.shaderPermutationKey !=
+                        base.shaderPermutationKey) ==
+                        changesShaderSpecialization &&
                     runtimePlan.permutationKey != base.permutationKey,
-                "Runtime constants retain full evidence identity without "
-                "duplicating cached shader pipelines");
+                "Runtime constants retain full evidence identity while the "
+                "quadratic exponent specialization owns a distinct pipeline");
         }
+
+        auto runtimeLoopConfiguration =
+            GetVisibilityPerformanceProfileConfiguration(
+                VisibilityPerformanceProfile::ExactFixed20);
+        runtimeLoopConfiguration.trace =
+            VisibilityTraceImplementation::LegacyGenericBitmask;
+        runtimeLoopConfiguration.firstBounceSamples =
+            VisibilitySampleSpecialization::Runtime;
+        runtimeLoopConfiguration.laterBounceSamples =
+            VisibilitySampleSpecialization::Runtime;
+        runtimeLoopConfiguration.noise =
+            VisibilityNoiseDelivery::PackedCurrentFast;
+        VisibilityPerformanceWorkload runtimeLoopWorkload;
+        runtimeLoopWorkload.consumer = VisibilityPerformanceConsumer::
+            AmbientOcclusionAndIndirectDiffuse;
+        runtimeLoopWorkload.estimator =
+            VisibilityPerformanceEstimator::UniformSolidAngle;
+        runtimeLoopWorkload.scheduler = VisibilityPerformanceScheduler::
+            FilterAdaptedSpatiotemporalRankField;
+        runtimeLoopWorkload.firstBounceSampleCount = 20u;
+        runtimeLoopWorkload.laterBounceSampleCount = 20u;
+        const VisibilityExecutionPlan runtimeEven20 =
+            ResolveVisibilityExecutionPlan(
+                runtimeLoopConfiguration,
+                runtimeLoopWorkload);
+        runtimeLoopWorkload.firstBounceSampleCount = 12u;
+        runtimeLoopWorkload.laterBounceSampleCount = 12u;
+        const VisibilityExecutionPlan runtimeEven12 =
+            ResolveVisibilityExecutionPlan(
+                runtimeLoopConfiguration,
+                runtimeLoopWorkload);
+        runtimeLoopWorkload.firstBounceSampleCount = 21u;
+        runtimeLoopWorkload.laterBounceSampleCount = 21u;
+        const VisibilityExecutionPlan runtimeOdd21 =
+            ResolveVisibilityExecutionPlan(
+                runtimeLoopConfiguration,
+                runtimeLoopWorkload);
+        runtimeLoopWorkload.firstBounceSampleCount = 20u;
+        runtimeLoopWorkload.laterBounceSampleCount = 20u;
+        runtimeLoopWorkload.radialExponent = 3.0f;
+        const VisibilityExecutionPlan runtimeExponent =
+            ResolveVisibilityExecutionPlan(
+                runtimeLoopConfiguration,
+                runtimeLoopWorkload);
+        Require(runtimeEven20.valid && runtimeEven12.valid &&
+                runtimeOdd21.valid && runtimeExponent.valid &&
+                runtimeEven20.firstBounceRuntimeSamples ==
+                    VisibilityRuntimeSampleContract::TrustedEven &&
+                runtimeEven12.firstBounceRuntimeSamples ==
+                    VisibilityRuntimeSampleContract::TrustedEven &&
+                runtimeOdd21.firstBounceRuntimeSamples ==
+                    VisibilityRuntimeSampleContract::TrustedOdd &&
+                runtimeExponent.firstBounceRuntimeSamples ==
+                    VisibilityRuntimeSampleContract::Generic &&
+                runtimeEven20.laterBounceRuntimeSamples ==
+                    VisibilityRuntimeSampleContract::Generic &&
+                runtimeEven20.shaderPermutationKey ==
+                    runtimeEven12.shaderPermutationKey &&
+                runtimeEven20.permutationKey !=
+                    runtimeEven12.permutationKey &&
+                runtimeEven20.historyResetKey !=
+                    runtimeEven12.historyResetKey &&
+                runtimeEven20.shaderPermutationKey !=
+                    runtimeOdd21.shaderPermutationKey &&
+                runtimeEven20.shaderPermutationKey !=
+                    runtimeExponent.shaderPermutationKey,
+            "Runtime counts must share compact parity-specialized shader "
+            "keys while preserving numeric evidence and history identity");
+
+        auto genericDynamicConfiguration = runtimeLoopConfiguration;
+        genericDynamicConfiguration.firstBounceSamples =
+            VisibilitySampleSpecialization::Generic;
+        genericDynamicConfiguration.laterBounceSamples =
+            VisibilitySampleSpecialization::Generic;
+        runtimeLoopWorkload.radialExponent = 2.0f;
+        runtimeLoopWorkload.firstBounceSampleCount = 20u;
+        runtimeLoopWorkload.laterBounceSampleCount = 20u;
+        const VisibilityExecutionPlan genericDynamic20 =
+            ResolveVisibilityExecutionPlan(
+                genericDynamicConfiguration,
+                runtimeLoopWorkload);
+        runtimeLoopWorkload.firstBounceSampleCount = 12u;
+        runtimeLoopWorkload.laterBounceSampleCount = 12u;
+        const VisibilityExecutionPlan genericDynamic12 =
+            ResolveVisibilityExecutionPlan(
+                genericDynamicConfiguration,
+                runtimeLoopWorkload);
+        runtimeLoopWorkload.radialExponent = 3.0f;
+        const VisibilityExecutionPlan genericDynamicExponent3 =
+            ResolveVisibilityExecutionPlan(
+                genericDynamicConfiguration,
+                runtimeLoopWorkload);
+        Require(genericDynamic20.valid && genericDynamic12.valid &&
+                genericDynamicExponent3.valid &&
+                genericDynamic20.firstBounceRuntimeSamples ==
+                    VisibilityRuntimeSampleContract::Generic &&
+                genericDynamic20.shaderPermutationKey ==
+                    genericDynamic12.shaderPermutationKey &&
+                genericDynamic20.permutationKey !=
+                    genericDynamic12.permutationKey &&
+                genericDynamic12.shaderPermutationKey !=
+                    genericDynamicExponent3.shaderPermutationKey,
+            "Generic sample counts must share one robust dynamic shader "
+            "while retaining numeric evidence and radial-specialization "
+            "identity");
+
         Require(base.permutationName.find("output=1920x1080") !=
                 std::string::npos &&
                 base.permutationName.find("group=8x8") != std::string::npos &&

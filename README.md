@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 53,350 non-blank source lines.
+**First-Party Lines of Code:** 56,200 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,622 non-blank source lines.
 
-**Total Lines of Code:** 440,972 non-blank source lines.
+**Total Lines of Code:** 443,822 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -26,35 +26,40 @@ architecture without either add-on.
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
 - The normal **Aliasing** drawer contains **Enabled**, **Method**, **Quality**,
-  **History Frames**, and **History Strength**. The **Statistics** drawer places
-  **Run Current With Motion** directly below **Run Current**.
+  **History Frames**, **History Strength**, **Dejitter**, and **Sharpness**.
+  The **Statistics** drawer places **Run Current With Motion** directly below
+  **Run Current**.
   Method independently selects **Temporal Reconstructive**, **Conservative
   Morphological**, or **Multisample Reference**. Every method exposes **Low**,
-  **Medium**, **High**, and **Ultra**. Long-term temporal qualities use progressively stronger
-  MiniEngine temporal bundles, and CMAA2 supplies the optional presentation
-  morphology with its four conservative strength levels.
+  **Medium**, **High**, and **Ultra**. Long-term temporal qualities use
+  progressively stronger MiniEngine temporal bundles, and CMAA2 supplies an
+  optional presentation morphology with four conservative strength levels.
   Multisample Reference displays **Low (2x)**, **Medium (4x)**, **High (8x)**,
-  and **Ultra (16x)**. Every Multisample Reference quality applies CMAA2 by default.
-  In Deferred mode it preserves every G-buffer sample through material decode
-  and PBR lighting, then averages final RGBA16F radiance. CMAA2 can run after
-  that resolve; Temporal Reconstructive can likewise select CMAA2 as its presentation
-  morphology without resetting history.
+  and **Ultra (16x)**. Temporal and Multisample presets leave CMAA2 off by
+  default so each method has no hidden full-screen morphology pass. In Deferred
+  mode, MSAA preserves every G-buffer sample through material decode and PBR
+  lighting, then averages final RGBA16F radiance. CMAA2 can be selected after
+  that resolve; Temporal Reconstructive can likewise select CMAA2 as its
+  presentation morphology without resetting history.
   Screen-space visibility remains available with Deferred MSAA: it selects one
   coherent closest reverse-Z surface per pixel for visibility and
   coverage-weights only that surface's signed lighting correction back into
   the per-sample MSAA result.
-  History Frames reports no history for spatial methods and exposes a 1–31
-  prior-frame slider for long-term temporal
-  methods. Its inherited values are 3/6/9/12. History Strength only reduces
-  otherwise accepted temporal history;
-  it cannot restore a sample rejected by motion, bounds, depth, disocclusion,
-  or rectification.
-  Production shows **Sharpness** only for the four long-term temporal
-  qualities. Developer builds move it into default-open **Aliasing Algorithm
-  Configuration** without annotating inherited controls. Sharpness is disabled
-  by default for every quality. The separate developer performance section was
-  removed. **Stable Interior** appears immediately above **Sharpness** and is
-  off in every preset.
+  History Frames reports no history for spatial methods and exposes a 1-32
+  prior-frame slider for long-term temporal methods. Its inherited values are
+  3/6/9/12. History Strength ranges from 0% to 200%. Values above 100% reinforce
+  only history that already passed motion, bounds, reverse-Z depth,
+  disocclusion, rectification, and stable-interior gates, and remain capped by
+  the selected frame horizon; they do not resurrect rejected history.
+  Low and Medium use **1x Bilinear** reconstruction and Pair Tristimulus
+  rectification. High uses **1x Bicubic**, and Ultra uses **5x Bicubic** with
+  Dejitter enabled. The Reconstruction dropdown also exposes **9x Bicubic**,
+  the complete nine-bilinear-tap Catmull-Rom reconstruction.
+  **Aliasing Algorithm Configuration** exposes concrete Subpixel Morphology,
+  Motion Source, and Reconstruction selections in least-to-most-expensive
+  order. The folded **Developer Options** section contains Rectification and
+  **Stable Interior**. Sharpness and Stable Interior are disabled by default
+  for every quality.
   MiniEngine TAA owns the temporal history, validity, reset, bounds,
   motion/jitter, reverse-Z validation, and early-rejection infrastructure.
   The motion-test button runs the exact Benchmark Position 1 warm,
@@ -83,12 +88,15 @@ architecture without either add-on.
   the two legacy joint-bilateral reconstruction methods, and the retained Intel
   edge-guided methods. Full-resolution visibility can therefore composite
   unfiltered current output without a spatial dispatch or filter target.
-- Screen-space visibility uses one exact compiled sample count shared by AO and
-  every GI bounce. The factory default traces one stochastic slice with
-  **20 Exact Samples** for every eligible pixel; the selectable counts are
-  8, 12, 16, 20, 24, 48, and 64. Adaptive sparse sampling, its feedback
-  resources, the free-form sample slider, and the separate later-bounce count
-  selector have been removed.
+- Screen-space visibility uses one exact sample budget shared by AO and every
+  GI bounce. The factory High preset traces 20 samples through the compact
+  Runtime loop. Generic retains the fully guarded dynamic loop, while Fixed
+  fully unrolls one of the packaged 8, 12, 16, 20, 24, 48, or 64 counts.
+  Generic and Runtime use a 1-64 Samples slider; Fixed uses the same slider to
+  select one packaged count. **Sample Count Mode** and **Distribution** live in
+  the folded Visibility **Developer Options** section. Adaptive sparse
+  sampling, its feedback resources, and the separate later-bounce count
+  selector remain removed.
 - The **Estimator** control exposes **Uniform Projected Angle**, **Uniform Solid
   Angle**, and **Cosine-Weighted Solid Angle**. Uniform Solid Angle is the
   default. The cosine path is fully compiled and uses the complete joint-cosine
@@ -166,26 +174,27 @@ architecture without either add-on.
 - The renderer/GPU summary and first performance line are pinned above an
   independently scrolling settings body, so they stay attached and visible at
   every drawer position. The panel shrinks to its open drawers and only scrolls
-  when its content reaches the available screen height. Its width follows the
-  widest status or control-and-label row rather than a proportional estimate.
+  when its content reaches the available screen height. Its fixed 29.3-font-
+  height width is independent of changing status digits and is capped only by
+  the available window width. Standard sliders and dropdowns retain the same
+  track width through nested animated children.
   The performance line flows naturally from the left, and the status lines use
   an explicit 2 px gap. One queued snapshot captures and applies the top,
   visibility, and temporal-AA stats together 24 times per second. The first GPU clock
   sample is displayed directly; later hardware targets remain sampled every
   500 ms. Displayed gb/s follows each raw sample directly, while tflops alone
   moves toward each new target in 0.1 increments on each 24 Hz snapshot. The
-  performance line reports resolution, current-clock memory bandwidth,
-  utilization-adjusted current-clock FP32 tflops, frame time, and fps in that
-  order, leaving fps at the outside edge. Millisecond and tflops values use one
-  decimal place.
+  performance line reports resolution, frustum-culled submitted triangles,
+  current-clock memory bandwidth, utilization-adjusted current-clock FP32
+  tflops, frame time, and fps in that order, leaving fps at the outside edge.
+  Triangle counts use compact labels such as `1.2m tris`. Millisecond and
+  tflops values use one decimal place.
 - Tree-row hover states, popup selections, and keyboard selection highlights
   use the same 4 px radius as other controls. The material editor continuously
   auto-fits its selected material, including immediately after a new surface is
-  picked. The visibility panel uses the shorter **Distribution Exponent** label
-  when determining its minimum width, then keeps a small readability allowance
-  so its longest rows clear the scrollbar without clipping. Every text tooltip
-  uses one compact fixed width and height at every nesting depth, with wrapped
-  copy and a consistent inner safety margin.
+  picked. The visibility developer slider is labeled **Distribution**. Every
+  text tooltip uses one compact fixed width and height at every nesting depth,
+  with wrapped copy and a consistent inner safety margin.
 - Press **M** to open or close the material editor. Selecting a scene material
   does not open the editor automatically.
 - The four footer actions use explicitly centered labels to compensate for the
@@ -202,10 +211,11 @@ architecture without either add-on.
   and the same upsampler. Factory-default **High** uses full resolution and
   20 samples; **Ultra** uses full resolution, 48 samples, and two GI bounces.
   High and Ultra use unreconstructed full-resolution input. Every preset uses
-  Offline Packed Spacetime Noise. Low and Medium select Performance Precision
-  buffers; High and Ultra select Default Precision buffers. Failed experiments,
-  diagnostic floors, and implementation-profile presets are not packaged or
-  selectable, while the retained controls remain independently editable.
+  Offline Packed Spacetime Noise. Low, Medium, and High select Performance
+  Precision buffers; Ultra selects Default Precision buffers. Failed
+  experiments, diagnostic floors, and implementation-profile presets are not
+  packaged or selectable, while the retained controls remain independently
+  editable.
 - While a benchmark is queued, warming up, or collecting data, an independent
   top-right overlay remains visible even when the settings UI is hidden. It
   animates from `Benchmarking.` through `Benchmarking...` and reports collected
@@ -281,7 +291,8 @@ architecture without either add-on.
   Q/E translation stays disabled. Locked freezes the current view.
   Camera keys and mouse buttons are reconciled with physical input after UI or
   window focus transitions, preventing a consumed release event from latching
-  motion.
+  motion. Right-click remains camera input; middle-click performs material
+  picking so a right-click cannot teleport the camera to a picked surface.
 - **PBR Sponza Decorated** and **PBR Sponza Plain** open in **Freelook** at
   **Benchmark Position 1**, the
   `intel-pbr-sponza-courtyard-simplified-v1` preset. The **Camera Location**
@@ -438,8 +449,10 @@ separate `scene` field identifies which scene was measured.
 ### Anti-Aliasing Benchmark Overrides
 
 Production builds accept `--aa-enabled`, `--aa-method`, `--aa-quality`
-(`--aa-preset` alias), `--aa-sharpness`, and `--aa-benchmark-output`.
-Algorithm and execution overrides require a developer build:
+(`--aa-preset` alias), `--aa-sharpness`, `--aa-rectification`
+(`preset`, `pair-rgb`, `per-pixel-rgb`, `per-pixel-ycocg`, or
+`variance-ycocg`), and `--aa-benchmark-output`. Experimental execution-path
+overrides require a developer build:
 
 The same motion path is available interactively from **Statistics > Run Current
 With Motion** on either standardized PBR Sponza scene. It uses the current AA
@@ -501,11 +514,13 @@ label; optional renderer arguments can be appended from a terminal.
 production or experiment build needs to be launched without replacing the
 main build.
 
-Windowed launches first fit inside the primary monitor's usable work area.
-Windows then measures the visible DWM frame, excluding the invisible resize
-border, and expands the client height so the visible top, taskbar, left, and
-right gaps all match. The initial renderer may therefore be slightly taller
-than 16:9 when the usable work area is taller than the requested aspect ratio.
+Windowed launches request a 1920x1080 client area, keep both dimensions
+divisible by eight, and center the DWM-visible frame in the selected monitor's
+usable work area. The visible gap above the title bar therefore matches the gap
+between the window and the taskbar whenever the work area can contain the
+requested frame. UVSR requests Windows High process priority at startup;
+controlled performance captures can explicitly request Normal priority for
+matched comparisons.
 
 The title reports the active graphics API followed by the description, the
 seven-character source commit embedded at build time, and the local launch time

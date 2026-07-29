@@ -9,6 +9,12 @@ The **Aliasing** drawer exposes:
 - **Quality**
 - **History Frames**
 - **History Strength**
+- **Dejitter**
+- **Sharpness**
+
+**Enabled** is a true execution bypass. Method, Quality, and retained settings
+remain selectable while AA is off, so disabling AA does not erase or strand the
+configuration that will run when it is enabled again.
 
 The **Statistics** drawer places **Run Current With Motion** immediately below
 **Run Current** so the static and motion benchmark actions stay together. Its
@@ -18,9 +24,10 @@ The Cancel control animates into the drawer only while a test is active.
 
 The available methods are:
 
-- **Temporal Reconstructive**: long-term MiniEngine TAA with optional presentation morphology
+- **Temporal Reconstructive**: long-term MiniEngine TAA with optional
+  presentation morphology
 - **Conservative Morphological**: Intel CMAA2
-- **Multisample Reference**: diagnostic deferred MSAA followed by CMAA2 by default
+- **Multisample Reference**: diagnostic deferred MSAA with optional CMAA2
 
 The retired SMAA method, pass, benchmark telemetry, shaders, lookup assets, and
 third-party source bundle are not built or staged.
@@ -31,7 +38,16 @@ third-party source bundle are not built or staged.
 | --- | --- | --- | --- | --- |
 | Temporal Reconstructive | 3 prior frames | 6 prior frames | 9 prior frames | 12 prior frames |
 | Conservative Morphological | CMAA2 Low | CMAA2 Medium | CMAA2 High | CMAA2 Ultra |
-| Multisample Reference | 2x + CMAA2 | 4x + CMAA2 | 8x + CMAA2 | 16x + CMAA2 |
+| Multisample Reference | 2x | 4x | 8x | 16x |
+
+The Temporal presets resolve as follows:
+
+| Quality | Reconstruction | Dejitter | Rectification | Subpixel Morphology |
+| --- | --- | --- | --- | --- |
+| Low | 1x Bilinear | Off | Pair Tristimulus | Off |
+| Medium | 1x Bilinear | Off | Pair Tristimulus | Off |
+| High | 1x Bicubic | Off | Variance YCoCg | Off |
+| Ultra | 5x Bicubic | On | Variance YCoCg | Off |
 
 MSAA uses static shader permutations for 2x, 4x, 8x, and 16x. At runtime,
 UVSR checks every multisampled render-target format and falls back to the
@@ -40,18 +56,24 @@ highest supported sample count rather than creating an invalid resource.
 ## Temporal History
 
 MiniEngine TAA owns the only anti-aliasing temporal history. History Frames is
-a 1–31 prior-frame horizon, while History Strength can only reduce accepted
-history. It cannot restore history rejected by invalid motion, reprojection
-bounds, reverse-Z depth validation, disocclusion, or rectification.
+a 1-32 prior-frame horizon. History Strength ranges from 0% to 200% and scales
+only history that already passed invalid-motion, reprojection-bounds,
+reverse-Z depth, disocclusion, rectification, and stable-interior gates.
+Strength above 100% reinforces accepted partial history before the
+horizon-derived cap; it cannot revive a rejected sample.
+
+History Strength is not Sample Resurrection. Resurrection owns older validated
+history resources and remains a separate developer-only experiment.
 
 Effective temporal image changes reset history exactly once. Presentation-only
 morphology and image-equivalent performance changes do not reset it.
 
 ## Morphology
 
-Every MSAA quality defaults to **Conservative Morphological**, so Intel CMAA2
-runs after the multisample lighting resolve. The developer algorithm drawer
-can select **Off**, **Conservative Low**, **Conservative Medium**,
+Temporal and Multisample presets default Subpixel Morphology to **Off**, so no
+hidden CMAA2 pass is charged to either complete method. **Conservative
+Morphological** remains the explicit standalone CMAA2 method. The algorithm
+drawer can select **Off**, **Conservative Low**, **Conservative Medium**,
 **Conservative High**, or **Conservative Ultra** after a Temporal or
 Multisample resolve. Its quality is independent from the main Temporal or
 Multisample quality: choosing Conservative Ultra while Temporal Low is active
@@ -60,21 +82,36 @@ preserves temporal history.
 
 ## Developer Algorithm Configuration
 
-The default-open **Aliasing Algorithm Configuration** drawer exposes resolved
-algorithm controls without adding **(Preset)** to inherited values. Mutually
-exclusive entries display **(Mutex)**.
+The default-open **Aliasing Algorithm Configuration** drawer shows the concrete
+resolved selection rather than a generic **Preset** row. Cost-ranked dropdown
+choices are ordered from least expensive to most expensive in every state.
+Mutually exclusive entries display **(Mutex)**.
 
-Temporal controls include motion source, current reconstruction, history
-filter, rectification, sample resurrection, and presentation morphology.
+Temporal controls include **Subpixel Morphology**, **Motion Source**, and
+**Reconstruction**. Reconstruction offers **1x Bilinear**, **1x Bicubic**,
+**5x Bicubic**, and **9x Bicubic**. The last option performs the complete
+nine-bilinear-tap Catmull-Rom reconstruction, including all four corners.
 
 ## Stable Interior
 
-**Stable Interior** appears immediately above **Sharpness** in the temporal
-algorithm controls and remains off in every preset. Sharpness also starts
-disabled for every preset while retaining its stored strength when the user
-toggles it off. The separate developer performance drawer is removed.
+**Dejitter** appears above **Sharpness** in the normal temporal controls. It is
+off for Low, Medium, and High and on for Ultra. Sharpness starts disabled for
+every preset while retaining its stored strength when toggled off.
+
+The default-collapsed **Developer Options** panel contains **Rectification**
+followed by **Stable Interior**. Stable Interior remains off in every preset.
 Execution path, compute kernel, LDS layout, shared-work reuse, early rejection,
-pass fusion, cache blocking, and developer debug dropdowns are not exposed.
+pass fusion, cache blocking, Sample Resurrection, and developer debug
+dropdowns are not exposed in production.
+
+## Rectification
+
+Rectification is primarily a history-quality policy, not a blanket performance
+optimization. Pair Tristimulus uses paired neighborhood bounds; Per-Pixel RGB
+and Per-Pixel YCoCg clamp individual pixels in their respective color spaces;
+Variance YCoCg uses variance-aware bounds. Their relative GPU cost depends on
+the active temporal permutation and adapter, while their visible tradeoff is
+how aggressively valid history is constrained.
 
 ## Presentation Sharpening Contract
 

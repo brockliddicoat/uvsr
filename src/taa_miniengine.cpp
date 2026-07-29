@@ -1039,7 +1039,6 @@ namespace uvsr
                         2u) +
                 static_cast<uint32_t>(sampleResurrection) * 2u +
                 uint32_t(useFusedOutput);
-#if UVSR_AA_DEVELOPER_OVERRIDES
             if (!CreateBlendComputePermutation(
                 options,
                 uint32_t(exportSelectiveMorphology),
@@ -1050,25 +1049,13 @@ namespace uvsr
             {
                 return bypassMissingPermutation();
             }
-#endif
             blendState.pipeline =
                 m_BlendPipelines[blendPermutation];
         }
         else if (!usePixelPath)
         {
-#if UVSR_AA_DEVELOPER_OVERRIDES
             const uint32_t algorithmIndex =
                 GetMiniEngineTaaBlendPermutationIndex(options);
-#else
-            const uint32_t algorithmIndex =
-                settings.implementation ==
-                        AntiAliasingPreset::TemporalBalanced
-                    ? 1u
-                    : settings.implementation ==
-                            AntiAliasingPreset::TemporalQuality
-                        ? 2u
-                        : 0u;
-#endif
             const uint32_t performanceIndex =
                 GetMiniEngineTaaStaticPerformanceIndex(
                     performance);

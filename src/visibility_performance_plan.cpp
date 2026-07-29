@@ -119,6 +119,7 @@ namespace uvsr
         {
             switch (specialization)
             {
+            case VisibilitySampleSpecialization::Generic:
             case VisibilitySampleSpecialization::Runtime:
                 return 0u;
             case VisibilitySampleSpecialization::Fixed8:
@@ -401,6 +402,8 @@ namespace uvsr
             HashBool(hash, workload.spatialEnabled);
             HashBool(hash, workload.depthHierarchyEnabled);
             HashUint64(hash, workload.runtimeConfigurationKey);
+            HashEnum(hash, plan.firstBounceRuntimeSamples);
+            HashEnum(hash, plan.laterBounceRuntimeSamples);
             HashUint64(hash, plan.resourceMask);
             HashUint64(hash, plan.bindingMask);
             HashUint64(hash, plan.passMask);
@@ -430,8 +433,11 @@ namespace uvsr
             HashEnum(hash, workload.estimator);
             HashEnum(hash, workload.resolution);
             HashEnum(hash, workload.scheduler);
-            HashUint32(hash, workload.firstBounceSampleCount);
-            HashUint32(hash, workload.laterBounceSampleCount);
+            // Composed generic shaders specialize the common quadratic
+            // radial distribution independently of the dynamic sample
+            // count. Keep that compile-time choice in the pipeline identity
+            // so changing the exponent cannot reuse an x^2 pipeline.
+            HashBool(hash, workload.radialExponent == 2.0f);
             HashUint32(hash, workload.bounceCount);
             HashUint32(hash, workload.threadGroupSizeX);
             HashUint32(hash, workload.threadGroupSizeY);
@@ -439,6 +445,8 @@ namespace uvsr
             HashBool(hash, workload.spatialEnabled);
             HashBool(hash, workload.depthHierarchyEnabled);
             HashUint64(hash, workload.runtimeConfigurationKey);
+            HashEnum(hash, plan.firstBounceRuntimeSamples);
+            HashEnum(hash, plan.laterBounceRuntimeSamples);
             HashUint64(hash, plan.resourceMask);
             HashUint64(hash, plan.bindingMask);
             HashUint64(hash, plan.passMask);
@@ -602,8 +610,8 @@ namespace uvsr
         case VisibilityPerformanceProfile::Reference:
             return MakeConfiguration(
                 profile, "Reference", Class::Reference,
-                Trace::LegacyGenericBitmask, Samples::Runtime,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
+                Trace::LegacyGenericBitmask, Samples::Generic,
+                Samples::Generic, Noise::Legacy, Math::ReferenceFp32,
                 Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::LegacySeparateComposition,
                 Depth::Legacy, Bindings::LegacyBroad,
@@ -697,8 +705,8 @@ namespace uvsr
         case VisibilityPerformanceProfile::ExactFusedResolveApply:
             return MakeConfiguration(
                 profile, "Fused Apply", Class::Exact,
-                Trace::LegacyGenericBitmask, Samples::Runtime,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
+                Trace::LegacyGenericBitmask, Samples::Generic,
+                Samples::Generic, Noise::Legacy, Math::ReferenceFp32,
                 Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::FusedResolveAndApplyExact,
                 Depth::Legacy, Bindings::LegacyBroad,
@@ -792,8 +800,8 @@ namespace uvsr
         case VisibilityPerformanceProfile::GenericFallback:
             return MakeConfiguration(
                 profile, "Generic Fallback", Class::Exact,
-                Trace::LegacyGenericBitmask, Samples::Runtime,
-                Samples::Runtime, Noise::Legacy, Math::ReferenceFp32,
+                Trace::LegacyGenericBitmask, Samples::Generic,
+                Samples::Generic, Noise::Legacy, Math::ReferenceFp32,
                 Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::LegacySeparateComposition,
                 Depth::Legacy, Bindings::LegacyBroad,
@@ -1112,6 +1120,36 @@ namespace uvsr
             configuration.explicitHalfRoundtrip;
         plan.fixedFirstBounceSampleCount = fixedFirstCount;
         plan.fixedLaterBounceSampleCount = fixedLaterCount;
+        const bool optimizedRuntimeLoop =
+            configuration.trace ==
+                VisibilityTraceImplementation::LegacyGenericBitmask &&
+            configuration.firstBounceSamples ==
+                VisibilitySampleSpecialization::Runtime &&
+            configuration.noise ==
+                VisibilityNoiseDelivery::PackedCurrentFast &&
+            configuration.bindings ==
+                VisibilityBindingStrategy::MinimalConditional &&
+            configuration.edgeStorage == VisibilityEdgeStorage::None &&
+            configuration.reconstruction ==
+                VisibilityReconstructionMode::Legacy &&
+            workload.consumer ==
+                VisibilityPerformanceConsumer::
+                    AmbientOcclusionAndIndirectDiffuse &&
+            workload.estimator ==
+                VisibilityPerformanceEstimator::UniformSolidAngle &&
+            workload.scheduler ==
+                VisibilityPerformanceScheduler::
+                    FilterAdaptedSpatiotemporalRankField &&
+            workload.bounceCount == 1u &&
+            workload.radialExponent == 2.0f &&
+            !workload.depthHierarchyEnabled;
+        if (optimizedRuntimeLoop)
+        {
+            plan.firstBounceRuntimeSamples =
+                (workload.firstBounceSampleCount & 1u) == 0u
+                    ? VisibilityRuntimeSampleContract::TrustedEven
+                    : VisibilityRuntimeSampleContract::TrustedOdd;
+        }
 
         const bool schedulerTextureBound =
             configuration.noise ==

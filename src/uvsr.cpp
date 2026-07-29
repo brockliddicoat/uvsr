@@ -66,6 +66,7 @@
 #include <donut/render/ForwardShadingPass.h>
 #include <donut/render/GBuffer.h>
 #include <donut/render/GBufferFillPass.h>
+#include <donut/render/GeometryPasses.h>
 #include <donut/render/PixelReadbackPass.h>
 #include <donut/render/SkyPass.h>
 #include <donut/app/ApplicationBase.h>
@@ -87,12 +88,14 @@
 #include "cmaa2.h"
 #include "experiment_title.h"
 #include "pixel_zoom.h"
+#include "renderer_statistics.h"
 #include "scene_catalog.h"
 #include "scene_light_names.h"
 #include "screen_space_visibility.h"
 #include "sponza_camera_preset.h"
 #include "taa_miniengine.h"
 #include "ui_animation.h"
+#include "visibility_perf_capture.h"
 #include "world_material_view.h"
 
 using namespace donut;
@@ -107,8 +110,60 @@ static bool g_RestartRequested = false;
 static int g_RestartAdapterIndex = -1;
 static GLFWkeyfun g_BenchmarkForwardKeyCallback = nullptr;
 static bool g_VisibilityBenchmarkFailed = false;
+static VisibilityPerfCapture g_VisibilityPerfCapture(
+    LoadVisibilityPerfCaptureOptions());
+static bool g_VisibilityPerfDisableRendererTimers =
+    g_VisibilityPerfCapture.Enabled() &&
+    g_VisibilityPerfCapture.Options().HasVariant("timersoff");
+static uint32_t g_VisibilityTaaPrimeFramesRemaining =
+    g_VisibilityPerfCapture.Enabled() &&
+        g_VisibilityPerfCapture.Options().HasVariant("taaprime")
+    ? 120u : 0u;
 static constexpr uint32_t MaxVisibilityBenchmarkWarmupFrames = 100000u;
 static constexpr uint64_t VisibilityBenchmarkQueryDrainAllowanceFrames = 120u;
+
+static const char* GetLiveProcessPriorityLabel()
+{
+    switch (GetPriorityClass(GetCurrentProcess()))
+    {
+    case IDLE_PRIORITY_CLASS: return "Idle";
+    case BELOW_NORMAL_PRIORITY_CLASS: return "Below Normal";
+    case NORMAL_PRIORITY_CLASS: return "Normal";
+    case ABOVE_NORMAL_PRIORITY_CLASS: return "Above Normal";
+    case HIGH_PRIORITY_CLASS: return "High";
+    case REALTIME_PRIORITY_CLASS: return "Realtime";
+    default: return "Unknown";
+    }
+}
+
+static void ApplyVisibilityPerfProcessPriority()
+{
+    // This experimental performance build runs at High priority by default.
+    // Captures can still request Normal explicitly for controlled A/B tests.
+    DWORD requested = HIGH_PRIORITY_CLASS;
+    if (g_VisibilityPerfCapture.Enabled() &&
+        g_VisibilityPerfCapture.Options().priority ==
+        VisibilityPerfPriority::Normal)
+    {
+        requested = NORMAL_PRIORITY_CLASS;
+    }
+    else if (g_VisibilityPerfCapture.Enabled() &&
+        g_VisibilityPerfCapture.Options().priority ==
+        VisibilityPerfPriority::High)
+    {
+        requested = HIGH_PRIORITY_CLASS;
+    }
+    if (requested != 0u &&
+        !SetPriorityClass(GetCurrentProcess(), requested))
+    {
+        log::warning(
+            "UVSR_PERF could not set process priority (Win32 error %lu)",
+            GetLastError());
+    }
+    log::info(
+        "UVSR_PERF live process priority: %s",
+        GetLiveProcessPriorityLabel());
+}
 
 void BenchmarkWindowKeyCallback(
     GLFWwindow* window,
@@ -312,6 +367,76 @@ protected:
 
 private:
     bool m_WhiteWorld = false;
+};
+
+class SubmittedTriangleCountingPass final : public IGeometryPass
+{
+public:
+    explicit SubmittedTriangleCountingPass(IGeometryPass& pass)
+        : m_Pass(pass)
+    {
+    }
+
+    [[nodiscard]] ViewType::Enum GetSupportedViewTypes() const override
+    {
+        return m_Pass.GetSupportedViewTypes();
+    }
+
+    void SetupView(
+        GeometryPassContext& context,
+        nvrhi::ICommandList* commandList,
+        const IView* view,
+        const IView* viewPrev) override
+    {
+        m_Pass.SetupView(context, commandList, view, viewPrev);
+    }
+
+    bool SetupMaterial(
+        GeometryPassContext& context,
+        const Material* material,
+        nvrhi::RasterCullMode cullMode,
+        nvrhi::GraphicsState& state) override
+    {
+        return m_Pass.SetupMaterial(
+            context,
+            material,
+            cullMode,
+            state);
+    }
+
+    void SetupInputBuffers(
+        GeometryPassContext& context,
+        const BufferGroup* buffers,
+        nvrhi::GraphicsState& state) override
+    {
+        m_Pass.SetupInputBuffers(context, buffers, state);
+    }
+
+    void SetPushConstants(
+        GeometryPassContext& context,
+        nvrhi::ICommandList* commandList,
+        nvrhi::GraphicsState& state,
+        nvrhi::DrawArguments& arguments) override
+    {
+        m_Pass.SetPushConstants(
+            context,
+            commandList,
+            state,
+            arguments);
+        m_SubmittedTriangles +=
+            CountSubmittedTriangleListPrimitives(
+                arguments.vertexCount,
+                arguments.instanceCount);
+    }
+
+    [[nodiscard]] uint64_t GetSubmittedTriangles() const
+    {
+        return m_SubmittedTriangles;
+    }
+
+private:
+    IGeometryPass& m_Pass;
+    uint64_t m_SubmittedTriangles = 0u;
 };
 
 static bool CopyBmpToClipboard(const std::filesystem::path& fileName)
@@ -1271,6 +1396,83 @@ static uint32_t GetVisibilityFixedSampleCount(
     }
 }
 
+static constexpr std::array<std::pair<
+    uint32_t,
+    VisibilitySampleSpecialization>, 7>
+    VisibilityFixedSampleSpecializations = {{
+        { 8u, VisibilitySampleSpecialization::Fixed8 },
+        { 12u, VisibilitySampleSpecialization::Fixed12 },
+        { 16u, VisibilitySampleSpecialization::Fixed16 },
+        { 20u, VisibilitySampleSpecialization::Fixed20 },
+        { 24u, VisibilitySampleSpecialization::Fixed24 },
+        { 48u, VisibilitySampleSpecialization::Fixed48 },
+        { 64u, VisibilitySampleSpecialization::Fixed64 }
+    }};
+
+static VisibilitySampleSpecialization
+    GetNearestVisibilityFixedSampleSpecialization(uint32_t requestedCount)
+{
+    auto nearest = VisibilityFixedSampleSpecializations.front();
+    uint32_t nearestDistance =
+        requestedCount > nearest.first
+            ? requestedCount - nearest.first
+            : nearest.first - requestedCount;
+    for (const auto& candidate : VisibilityFixedSampleSpecializations)
+    {
+        const uint32_t distance =
+            requestedCount > candidate.first
+                ? requestedCount - candidate.first
+                : candidate.first - requestedCount;
+        if (distance < nearestDistance)
+        {
+            nearest = candidate;
+            nearestDistance = distance;
+        }
+    }
+    return nearest.second;
+}
+
+static int GetVisibilityFixedSampleSpecializationIndex(
+    VisibilitySampleSpecialization specialization)
+{
+    for (size_t index = 0u;
+        index < VisibilityFixedSampleSpecializations.size();
+        ++index)
+    {
+        if (VisibilityFixedSampleSpecializations[index].second ==
+            specialization)
+        {
+            return int(index);
+        }
+    }
+    return 0;
+}
+
+static bool CanonicalizeFixedVisibilitySampling(
+    ScreenSpaceVisibilitySettings& visibility)
+{
+    const VisibilityPerformanceProfileConfiguration configuration =
+        GetEffectiveVisibilityPerformanceConfiguration(visibility);
+    const bool usesFixedDistribution =
+        configuration.trace ==
+            VisibilityTraceImplementation::FixedInterleavedBitmask &&
+        (GetVisibilityFixedSampleCount(
+                configuration.firstBounceSamples) != 0u ||
+            GetVisibilityFixedSampleCount(
+                configuration.laterBounceSamples) != 0u);
+    if (!usesFixedDistribution ||
+        visibility.sampling.stepDistributionExponent == 2.f)
+    {
+        return false;
+    }
+
+    // Fixed traversal bakes the quadratic radial distribution into the shader.
+    // Repair stale/custom state instead of letting plan selection reject the
+    // fixed shader and silently run the generic fallback.
+    visibility.sampling.stepDistributionExponent = 2.f;
+    return true;
+}
+
 static bool ApplyVisibilityVerificationProfileDefaults(
     ScreenSpaceVisibilitySettings& visibility,
     VisibilityVerificationProfile profile)
@@ -1925,6 +2127,7 @@ private:
     StaticViewCamera                    m_StaticCamera;
     CameraCollisionWorld                m_CameraCollisionWorld;
     BindingCache                        m_BindingCache;
+    uint64_t                            m_SubmittedMainViewTriangles = 0u;
 
     float                               m_CameraVerticalFov = 60.f;
     float                               m_SceneDiagonal = 100.f;
@@ -2686,8 +2889,11 @@ public:
     {
         GetActiveCamera().MouseButtonUpdate(button, action, mods);
 
-        if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_2)
+        if (action == GLFW_PRESS &&
+            button == GLFW_MOUSE_BUTTON_MIDDLE)
+        {
             m_Pick = true;
+        }
 
         return true;
     }
@@ -2701,6 +2907,8 @@ public:
 
     void AdvanceAntiAliasingTimer()
     {
+        if (g_VisibilityPerfDisableRendererTimers)
+            return;
         // Poll every outstanding query. Waiting only for the current modulo
         // slot delayed some samples by another full latency cycle and made
         // drain-frame timings appear inside the motion interval.
@@ -2735,6 +2943,13 @@ public:
 
     bool BeginAntiAliasingTimer()
     {
+        if (g_VisibilityPerfDisableRendererTimers)
+            return false;
+        // The query exists only for the interactive AA benchmark. Issuing an
+        // empty timestamp envelope every frame while AA and its benchmark are
+        // off adds D3D12 query and resolve work with no consumer.
+        if (!m_AaBenchmark.enabled)
+            return false;
         const uint32_t slot =
             m_AaTimerFrame % c_AaTimerLatency;
         if (m_AaTimerPending[slot])
@@ -2754,6 +2969,10 @@ public:
 
     void EndAntiAliasingTimer(bool active)
     {
+        if (g_VisibilityPerfDisableRendererTimers)
+            return;
+        if (!m_AaBenchmark.enabled)
+            return;
         const uint32_t slot =
             m_AaTimerFrame % c_AaTimerLatency;
         if (active)
@@ -3298,6 +3517,7 @@ public:
         m_OriginalMaterials.clear();
         m_PreviousView.reset();
         m_CameraCollisionWorld.Clear();
+        m_SubmittedMainViewTriangles = 0u;
 
     }
 
@@ -3604,6 +3824,22 @@ public:
 
     void SynchronizeAntiAliasingSettings()
     {
+        const AntiAliasingSettings& applied =
+            m_AppliedAntiAliasingSettings;
+        const AntiAliasingSettings& requested =
+            m_ui.AntiAliasing;
+        if (m_HasAppliedAntiAliasingSettings &&
+            applied.enabled == requested.enabled &&
+            applied.method == requested.method &&
+            applied.quality == requested.quality &&
+            applied.algorithmOverrides ==
+                requested.algorithmOverrides &&
+            applied.performanceOverrides ==
+                requested.performanceOverrides)
+        {
+            return;
+        }
+
         const bool requiresTemporalReset =
             m_HasAppliedAntiAliasingSettings &&
             CompiledAntiAliasingSettingsRequireTemporalReset(
@@ -3931,8 +4167,49 @@ public:
 
     virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override
     {
+        if (CanonicalizeFixedVisibilitySampling(
+                m_ui.ScreenSpaceVisibility))
+        {
+            log::warning(
+                "Fixed visibility sampling restored its required 2.00 "
+                "distribution exponent");
+        }
+        if (g_VisibilityTaaPrimeFramesRemaining != 0u &&
+            --g_VisibilityTaaPrimeFramesRemaining == 0u)
+        {
+            m_ui.AntiAliasing.enabled = false;
+            log::info(
+                "UVSR_PERF TAA prime complete; AA disabled before capture");
+        }
         int windowWidth, windowHeight;
         GetDeviceManager()->GetWindowDimensions(windowWidth, windowHeight);
+        constexpr int visibilityCaptureWidth = 1896;
+        constexpr int visibilityCaptureHeight = 1064;
+        if (g_VisibilityPerfCapture.Enabled() &&
+            (windowWidth != visibilityCaptureWidth ||
+                windowHeight != visibilityCaptureHeight))
+        {
+            glfwSetWindowSize(
+                GetDeviceManager()->GetWindow(),
+                visibilityCaptureWidth,
+                visibilityCaptureHeight);
+        }
+        const bool visibilityPerfReady =
+            g_VisibilityPerfCapture.Enabled() &&
+            m_BenchmarkCameraActive &&
+            windowWidth == visibilityCaptureWidth &&
+            windowHeight == visibilityCaptureHeight &&
+            m_ScreenSpaceVisibilityPass &&
+            m_ScreenSpaceVisibilityPass->GetTimings().profileValid &&
+            m_ui.EnablePbr &&
+            m_ui.UsesDeferredShading() &&
+            m_ui.ScreenSpaceVisibility.HasActiveConsumer();
+        g_VisibilityPerfCapture.BeginFrame(visibilityPerfReady);
+        if (g_VisibilityPerfCapture.ReadyToClose())
+        {
+            glfwSetWindowShouldClose(
+                GetDeviceManager()->GetWindow(), GLFW_TRUE);
+        }
         if ((m_VisibilityBenchmarkQueued || IsVisibilityBenchmarkActive()) &&
             (!m_ui.EnablePbr || !m_ui.UsesDeferredShading() ||
                 !m_ui.ScreenSpaceVisibility.HasActiveConsumer()))
@@ -3952,13 +4229,13 @@ public:
             uint width = windowWidth;
             uint height = windowHeight;
 
-            const ResolvedAntiAliasingSettings
-                resolvedAntiAliasing =
-                    m_ui.GetResolvedAntiAliasingSettings();
             const uint sampleCount =
-                ResolveSupportedMsaaSampleCount(
-                    GetDevice(),
-                    resolvedAntiAliasing.rasterSampleCount);
+                !m_ui.AntiAliasing.enabled
+                    ? 1u
+                    : ResolveSupportedMsaaSampleCount(
+                        GetDevice(),
+                        m_ui.GetResolvedAntiAliasingSettings()
+                            .rasterSampleCount);
             const bool visibilityResourcesRequired = m_ui.EnablePbr &&
                 m_ui.IsScreenSpaceVisibilityAvailable() &&
                 m_ui.ScreenSpaceVisibility.HasActiveConsumer();
@@ -4108,6 +4385,7 @@ public:
         DeferredLightingPass::Inputs deferredMsaaInputs;
         bool deferredMsaaLightingPending = false;
         bool deferredMsaaVisibilityPending = false;
+        m_SubmittedMainViewTriangles = 0u;
 
         if (!m_ui.UsesDeferredShading())
             m_ForwardPass->PrepareLights(forwardContext, m_CommandList, m_Scene->GetSceneGraph()->GetLights(), m_AmbientTop, m_AmbientBottom, {});
@@ -4116,6 +4394,8 @@ public:
         if (m_ui.UsesDeferredShading())
         {
             GBufferFillPass::Context gbufferContext;
+            SubmittedTriangleCountingPass geometryPass(
+                *m_GBufferPass);
 
             BeginRendererStage(RendererTimingStage::Geometry);
             RenderCompositeView(m_CommandList,
@@ -4123,10 +4403,12 @@ public:
                 *m_RenderTargets->GBufferFramebuffer,
                 m_Scene->GetSceneGraph()->GetRootNode(),
                 *m_OpaqueDrawStrategy,
-                *m_GBufferPass,
+                geometryPass,
                 gbufferContext,
                 "GBufferFill",
                 false);
+            m_SubmittedMainViewTriangles =
+                geometryPass.GetSubmittedTriangles();
             EndRendererStage(RendererTimingStage::Geometry);
 
             DeferredLightingPass::Inputs deferredInputs;
@@ -4367,16 +4649,20 @@ public:
         }
         else
         {
+            SubmittedTriangleCountingPass geometryPass(
+                *m_ForwardPass);
             BeginRendererStage(RendererTimingStage::Geometry);
             RenderCompositeView(m_CommandList,
                 m_View.get(), m_View.get(),
                 *m_RenderTargets->ForwardFramebuffer,
                 m_Scene->GetSceneGraph()->GetRootNode(),
                 *m_OpaqueDrawStrategy,
-                *m_ForwardPass,
+                geometryPass,
                 forwardContext,
                 "ForwardOpaque",
                 false);
+            m_SubmittedMainViewTriangles =
+                geometryPass.GetSubmittedTriangles();
             EndRendererStage(RendererTimingStage::Geometry);
         }
 
@@ -4475,84 +4761,88 @@ public:
 
         const bool antiAliasingTimerActive =
             BeginAntiAliasingTimer();
-        const ResolvedAntiAliasingSettings antiAliasing =
-            m_ui.GetResolvedAntiAliasingSettings();
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        const MiniEngineTaaDebugView activeAaVisualization =
-            m_ui.MiniEngineTaaVisualization;
-#else
-        // Debug shaders and routing are absent from production. Ignore stale
-        // or hostile programmatic state before it can alter the shipping
-        // render graph.
-        constexpr MiniEngineTaaDebugView activeAaVisualization =
-            MiniEngineTaaDebugView::Off;
-#endif
-        const bool miniEngineDebugVisualizationActive =
-            m_MiniEngineTemporalAAPass &&
-            IsLongTermTemporalPreset(
-                antiAliasing.implementation) &&
-            IsMiniEngineTaaDebugVisualization(
-                activeAaVisualization);
-        const bool temporalSharpenEnabled =
-            ShouldSharpenMiniEngineTaa(
-                m_ui.MiniEngineTaaSharpenEnabled,
-                m_ui.MiniEngineTaaSharpness);
-        const bool deferTemporalSharpenToPresentation =
-            m_MiniEngineTemporalAAPass &&
-            m_Cmaa2Pass &&
-            IsLongTermTemporalPreset(
-                antiAliasing.implementation) &&
-            antiAliasing.subpixelMorphology !=
-                MorphologyApplication::Off &&
-            !miniEngineDebugVisualizationActive &&
-            temporalSharpenEnabled;
         nvrhi::ITexture* antiAliasedTexture =
             sceneColor;
-        if (m_MiniEngineTemporalAAPass)
+        if (m_ui.AntiAliasing.enabled)
         {
-            // Resolve scene-linear radiance before any display transform. The
-            // pass intentionally has no exposure, grading, LUT, or transfer
-            // dependency, so removing or replacing the display stage does not
-            // change its contract.
-            antiAliasedTexture =
-                m_MiniEngineTemporalAAPass->Render(
-                m_CommandList,
-                *m_View,
-                m_PreviousView.get(),
-                m_AntiAliasingPhase,
-                antiAliasing,
-                activeAaVisualization,
-                false,
-                temporalSharpenEnabled &&
-                    !deferTemporalSharpenToPresentation,
-                deferTemporalSharpenToPresentation,
-                m_ui.MiniEngineTaaSharpness);
-        }
+            const ResolvedAntiAliasingSettings antiAliasing =
+                m_ui.GetResolvedAntiAliasingSettings();
+#if UVSR_AA_DEVELOPER_OVERRIDES
+            const MiniEngineTaaDebugView activeAaVisualization =
+                m_ui.MiniEngineTaaVisualization;
+#else
+            // Debug shaders and routing are absent from production. Ignore
+            // stale or hostile programmatic state before it can alter the
+            // shipping render graph.
+            constexpr MiniEngineTaaDebugView activeAaVisualization =
+                MiniEngineTaaDebugView::Off;
+#endif
+            const bool miniEngineDebugVisualizationActive =
+                m_MiniEngineTemporalAAPass &&
+                IsLongTermTemporalPreset(
+                    antiAliasing.implementation) &&
+                IsMiniEngineTaaDebugVisualization(
+                    activeAaVisualization);
+            const bool temporalSharpenEnabled =
+                ShouldSharpenMiniEngineTaa(
+                    m_ui.MiniEngineTaaSharpenEnabled,
+                    m_ui.MiniEngineTaaSharpness);
+            const bool deferTemporalSharpenToPresentation =
+                m_MiniEngineTemporalAAPass &&
+                m_Cmaa2Pass &&
+                IsLongTermTemporalPreset(
+                    antiAliasing.implementation) &&
+                antiAliasing.subpixelMorphology !=
+                    MorphologyApplication::Off &&
+                !miniEngineDebugVisualizationActive &&
+                temporalSharpenEnabled;
+            if (m_MiniEngineTemporalAAPass)
+            {
+                // Resolve scene-linear radiance before any display transform.
+                // The pass intentionally has no exposure, grading, LUT, or
+                // transfer dependency, so removing or replacing the display
+                // stage does not change its contract.
+                antiAliasedTexture =
+                    m_MiniEngineTemporalAAPass->Render(
+                    m_CommandList,
+                    *m_View,
+                    m_PreviousView.get(),
+                    m_AntiAliasingPhase,
+                    antiAliasing,
+                    activeAaVisualization,
+                    false,
+                    temporalSharpenEnabled &&
+                        !deferTemporalSharpenToPresentation,
+                    deferTemporalSharpenToPresentation,
+                    m_ui.MiniEngineTaaSharpness);
+            }
 
-        bool cmaa2RenderedThisFrame = false;
-        if (m_Cmaa2Pass &&
-            antiAliasing.subpixelMorphology ==
-                MorphologyApplication::ConservativeMorphological)
-        {
-            antiAliasedTexture = m_Cmaa2Pass->Render(
-                m_CommandList,
-                antiAliasedTexture,
-                antiAliasing.morphologyQuality);
-            cmaa2RenderedThisFrame = true;
-        }
-        if (m_Cmaa2Pass && !cmaa2RenderedThisFrame)
-            m_Cmaa2Pass->MarkInactiveFrame();
+            bool cmaa2RenderedThisFrame = false;
+            if (m_Cmaa2Pass &&
+                antiAliasing.subpixelMorphology ==
+                    MorphologyApplication::ConservativeMorphological)
+            {
+                antiAliasedTexture = m_Cmaa2Pass->Render(
+                    m_CommandList,
+                    antiAliasedTexture,
+                    antiAliasing.morphologyQuality);
+                cmaa2RenderedThisFrame = true;
+            }
+            if (m_Cmaa2Pass && !cmaa2RenderedThisFrame)
+                m_Cmaa2Pass->MarkInactiveFrame();
 
-        if (deferTemporalSharpenToPresentation)
-        {
-            // Apply the same sharpness to the composed presentation result.
-            // Blending sharpened temporal against unsharpened spatial current
-            // made a changing selective rejection mask modulate edge detail.
-            antiAliasedTexture =
-                m_MiniEngineTemporalAAPass
-                    ->SharpenPresentation(
-                        m_CommandList,
-                        antiAliasedTexture);
+            if (deferTemporalSharpenToPresentation)
+            {
+                // Apply the same sharpness to the composed presentation
+                // result. Blending sharpened temporal against unsharpened
+                // spatial current made a changing selective rejection mask
+                // modulate edge detail.
+                antiAliasedTexture =
+                    m_MiniEngineTemporalAAPass
+                        ->SharpenPresentation(
+                            m_CommandList,
+                            antiAliasedTexture);
+            }
         }
         EndAntiAliasingTimer(antiAliasingTimerActive);
 
@@ -4581,6 +4871,92 @@ public:
 
         m_CommandList->close();
         GetDevice()->executeCommandList(m_CommandList);
+        if (visibilityPerfReady)
+        {
+            const ScreenSpaceVisibilityTimings& timings =
+                m_ScreenSpaceVisibilityPass->GetTimings();
+            const VisibilityBufferPrecisionSettings& precision =
+                m_ui.ScreenSpaceVisibility.performance.bufferPrecision;
+            const VisibilityPerformanceProfileConfiguration configuration =
+                GetEffectiveVisibilityPerformanceConfiguration(
+                    m_ui.ScreenSpaceVisibility);
+            std::ostringstream settings;
+            settings
+                << "resolution=full;samples=20;"
+                << "estimator=uniform-solid-angle;radius=3;"
+                << "thickness=0.5;exponent=2;ao=on;gi=on;"
+                << "bounces=1;temporal=off;spatial=off;"
+                << "scheduler="
+                << (m_ui.ScreenSpaceVisibility.sampling.scheduler ==
+                            VisibilitySampleScheduler::
+                                ToroidalBlueNoiseRankField
+                        ? "toroidal"
+                        : m_ui.ScreenSpaceVisibility.sampling.scheduler ==
+                                VisibilitySampleScheduler::
+                                    FilterAdaptedSpatiotemporalRankField
+                            ? "filter-adapted"
+                            : m_ui.ScreenSpaceVisibility.sampling.scheduler ==
+                                    VisibilitySampleScheduler::IndependentHash
+                                ? "independent-hash"
+                                : "offline-unpacked")
+                << ";noise="
+                << (configuration.noise ==
+                        VisibilityNoiseDelivery::PackedCurrentFast
+                    ? "packed-current-fast" : "legacy")
+                << ";trace="
+                << (configuration.trace ==
+                        VisibilityTraceImplementation::LegacyGenericBitmask
+                    ? "generic-runtime" : "fixed20")
+                << ";ao_precision="
+                << (precision.rawAmbient ==
+                        VisibilityScalarBufferPrecision::Float16
+                    ? "r16f" : "r32f")
+                << ";gi_precision="
+                << (precision.rawIndirect ==
+                        VisibilityVectorBufferPrecision::Rgba16Float
+                    ? "rgba16f" : "rgba32f");
+
+            VisibilityPerfCaptureMetadata metadata;
+            metadata.build =
+                std::string(UVSR_GIT_COMMIT) +
+                "-main-fix-runtime-parity";
+            metadata.adapter = GetActiveAdapterName();
+            metadata.livePriority = GetLiveProcessPriorityLabel();
+            metadata.permutation = timings.activePermutation;
+            metadata.settings = settings.str();
+            metadata.timingProvenance =
+                "independently fresh NVRHI trace and composition queries; "
+                "their origin frame IDs are recorded because stages can "
+                "become readable on different polling cycles; outer effect "
+                "envelope is a main-only diagnostic; cross-build matched "
+                "total is the sum of separate trace and composition "
+                "medians; CPU interval is arrival-frame start-to-start";
+            metadata.framebufferWidth = windowWidth;
+            metadata.framebufferHeight = windowHeight;
+            metadata.outputTextureBytes = timings.outputTextureBytes;
+            metadata.workingTextureBytes = timings.workingTextureBytes;
+            metadata.rawAmbientTextureBytes =
+                timings.rawAmbientTextureBytes;
+            metadata.rawIndirectTextureBytes =
+                timings.rawIndirectFrontierBytes;
+            if (g_VisibilityPerfCapture.Observe(
+                    uint64_t(GetFrameIndex()),
+                    timings.firstTraceFrameId,
+                    timings.compositionFrameId,
+                    timings.effectEnvelopeFrameId,
+                    timings.firstTraceMs,
+                    timings.compositionMs,
+                    timings.effectEnvelopeMs,
+                    timings.depthHierarchyMs,
+                    timings.temporalMs,
+                    timings.spatialDenoiseMs +
+                        timings.fusedSpatialDenoiseUpsampleMs,
+                    metadata))
+            {
+                glfwSetWindowShouldClose(
+                    GetDeviceManager()->GetWindow(), GLFW_TRUE);
+            }
+        }
         if (m_RenderTargets->MotionVectorsEnabled)
             CaptureCurrentViewForMotionVectors();
         if (m_ui.UsesJitteredAntiAliasing())
@@ -4674,6 +5050,11 @@ public:
         return m_RenderTargets
             ? m_RenderTargets->GetSampleCount()
             : 1u;
+    }
+
+    [[nodiscard]] uint64_t GetSubmittedMainViewTriangles() const
+    {
+        return m_SubmittedMainViewTriangles;
     }
 
     [[nodiscard]] const RendererTimings& GetRendererTimings() const
@@ -5435,6 +5816,12 @@ std::string UvsrSceneViewer::GetActiveAdapterName() const
 
 void UvsrSceneViewer::AdvanceRendererTimers()
 {
+    if (g_VisibilityPerfDisableRendererTimers)
+    {
+        m_RendererTimerFrameWritable = false;
+        m_RendererTimerActive.fill(false);
+        return;
+    }
     const uint32_t slot =
         m_RendererTimerFrame % c_RendererTimerLatency;
     m_RendererTimerFrameWritable = true;
@@ -5464,6 +5851,8 @@ void UvsrSceneViewer::AdvanceRendererTimers()
 
 void UvsrSceneViewer::BeginRendererStage(RendererTimingStage stage)
 {
+    if (g_VisibilityPerfDisableRendererTimers)
+        return;
     if (!m_RendererTimerFrameWritable)
         return;
 
@@ -5480,6 +5869,8 @@ void UvsrSceneViewer::BeginRendererStage(RendererTimingStage stage)
 
 void UvsrSceneViewer::EndRendererStage(RendererTimingStage stage)
 {
+    if (g_VisibilityPerfDisableRendererTimers)
+        return;
     const size_t stageIndex = static_cast<size_t>(stage);
     if (!m_RendererTimerActive[stageIndex])
         return;
@@ -5494,6 +5885,8 @@ void UvsrSceneViewer::EndRendererStage(RendererTimingStage stage)
 
 void UvsrSceneViewer::CompleteRendererTimerFrame()
 {
+    if (g_VisibilityPerfDisableRendererTimers)
+        return;
     if (m_RendererTimerFrameWritable)
         ++m_RendererTimerFrame;
 }
@@ -5706,19 +6099,12 @@ void UvsrSceneViewer::UpdateVisibilityBenchmarkAfterRender()
     }
     const ScreenSpaceVisibilityTimings& timings =
         m_ScreenSpaceVisibilityPass->GetTimings();
-    const VisibilityPerformanceWorkload workload =
-        GetRenderedVisibilityPerformanceWorkload(
-            m_ui.ScreenSpaceVisibility,
-            uint32_t(std::max(width, 0)),
-            uint32_t(std::max(height, 0)),
-            &timings);
-    const VisibilityExecutionPlan plan = ResolveVisibilityExecutionPlan(
-        GetEffectiveVisibilityPerformanceConfiguration(
-            m_ui.ScreenSpaceVisibility),
-        workload);
 
     if (m_VisibilityBenchmarkQueued)
     {
+        const VisibilityExecutionPlan& plan =
+            m_ScreenSpaceVisibilityPass->GetSelectedExecutionPlan();
+        const VisibilityPerformanceWorkload& workload = plan.workload;
         if (!plan.valid)
         {
             FailVisibilityBenchmark(
@@ -5766,10 +6152,7 @@ void UvsrSceneViewer::UpdateVisibilityBenchmarkAfterRender()
         }
         if (profileName.empty())
         {
-            const VisibilityPerformanceProfileConfiguration configuration =
-                GetEffectiveVisibilityPerformanceConfiguration(
-                    m_ui.ScreenSpaceVisibility);
-            profileName.assign(configuration.name);
+            profileName.assign(plan.configuration.name);
         }
 
         std::ostringstream permutationMetadata;
@@ -5867,6 +6250,7 @@ private:
     {
         int width = 0;
         int height = 0;
+        uint64_t submittedTriangles = 0u;
         double frameTimeSeconds = 0.0;
         GpuPerformanceMetrics gpuMetrics;
         ScreenSpaceVisibilityTimings visibilityTimings;
@@ -5887,7 +6271,7 @@ private:
     double m_StatSnapshotElapsed = 0.0;
     double m_StatFrameTimeSum = 0.0;
     uint32_t m_StatFrameTimeCount = 0;
-    std::array<std::string, 5> m_PerformanceStatValues;
+    std::array<std::string, 6> m_PerformanceStatValues;
     std::array<std::string, 3> m_VisibilityStatLines;
     std::array<std::string, 2> m_TemporalAAStatLines;
     std::deque<StatSnapshot> m_StatUpdateQueue;
@@ -6438,22 +6822,18 @@ private:
     {
         switch (specialization)
         {
+        case VisibilitySampleSpecialization::Generic:
+            return "Generic";
         case VisibilitySampleSpecialization::Runtime:
             return "Runtime";
         case VisibilitySampleSpecialization::Fixed8:
-            return "8 Samples";
         case VisibilitySampleSpecialization::Fixed12:
-            return "12 Samples";
         case VisibilitySampleSpecialization::Fixed16:
-            return "16 Samples";
         case VisibilitySampleSpecialization::Fixed20:
-            return "20 Samples";
         case VisibilitySampleSpecialization::Fixed24:
-            return "24 Samples";
         case VisibilitySampleSpecialization::Fixed48:
-            return "48 Samples";
         case VisibilitySampleSpecialization::Fixed64:
-            return "64 Samples";
+            return "Fixed";
         default:
             return "Unknown";
         }
@@ -6661,6 +7041,8 @@ private:
             headerId ^ ImGuiID(0x71C6B42Du);
         const ImGuiID measuredHeightKey =
             headerId ^ ImGuiID(0xD14F83A9u);
+        const ImGuiID measurementValidKey =
+            headerId ^ ImGuiID(0x82E4C76Bu);
         ImGui::PushStyleColor(
             ImGuiCol_Header,
             ImVec4(0.26f, 0.59f, 0.98f, 0.31f));
@@ -6690,10 +7072,13 @@ private:
         float openAmount = storage->GetFloat(
             amountKey,
             open ? 1.f : 0.f);
-        const float measuredHeight =
-            storage->GetFloat(measuredHeightKey, 0.f);
+        const UiExpandedMeasurementState measurement = {
+            storage->GetFloat(measuredHeightKey, 0.f),
+            storage->GetBool(measurementValidKey, false)
+        };
+        const float measuredHeight = measurement.height;
         const bool needsInitialMeasurement =
-            open && measuredHeight <= 0.f;
+            NeedsInitialUiExpandedMeasurement(open, measurement);
         if (lastFrame < frame - 1)
         {
             openAmount = needsInitialMeasurement
@@ -7005,19 +7390,28 @@ private:
             const ImGuiID measuredHeightKey =
                 g_DrawerAnimationContext.headerId ^
                 ImGuiID(0xD14F83A9u);
-            const float cachedHeight =
+            const ImGuiID measurementValidKey =
+                g_DrawerAnimationContext.headerId ^
+                ImGuiID(0x82E4C76Bu);
+            UiExpandedMeasurementState measurement = {
                 g_DrawerAnimationContext.storage->GetFloat(
-                    measuredHeightKey,
-                    0.f);
+                    measuredHeightKey, 0.f),
+                g_DrawerAnimationContext.storage->GetBool(
+                    measurementValidKey, false)
+            };
             const float renderedHeight =
                 ImGui::GetItemRectSize().y;
+            measurement = SubmitUiExpandedMeasurement(
+                measurement,
+                measuredHeight,
+                g_DrawerAnimationContext.targetOpen,
+                g_DrawerAnimationContext.bodyVisible);
             g_DrawerAnimationContext.storage->SetFloat(
                 measuredHeightKey,
-                ResolveUiExpandedMeasurement(
-                    cachedHeight,
-                    measuredHeight,
-                    g_DrawerAnimationContext.targetOpen,
-                    g_DrawerAnimationContext.bodyVisible));
+                measurement.height);
+            g_DrawerAnimationContext.storage->SetBool(
+                measurementValidKey,
+                measurement.valid);
             TrackSettingsDrawerHeight(
                 g_DrawerAnimationContext.storage,
                 g_DrawerAnimationContext.headerId,
@@ -7037,6 +7431,7 @@ private:
         ImGuiStorage* storage = nullptr;
         ImGuiWindow* bodyWindow = nullptr;
         ImGuiID measuredHeightKey = 0;
+        ImGuiID measurementValidKey = 0;
         float indentSpacing = 0.f;
         bool targetOpen = false;
         bool bodyVisible = false;
@@ -7049,6 +7444,11 @@ private:
         const char* label,
         ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None)
     {
+        // Item-width stacks belong to an ImGui window. Preserve the drawer's
+        // standard control width before entering this animated child so
+        // sliders and dropdowns retain identical tracks at every nesting
+        // level.
+        const float inheritedItemWidth = ImGui::CalcItemWidth();
         const ImGuiID headerId = ImGui::GetID(label);
         ImGuiStorage* storage = ImGui::GetStateStorage();
         const ImGuiID amountKey =
@@ -7057,6 +7457,8 @@ private:
             headerId ^ ImGuiID(0x34A1F27Du);
         const ImGuiID measuredHeightKey =
             headerId ^ ImGuiID(0x9D63E418u);
+        const ImGuiID measurementValidKey =
+            headerId ^ ImGuiID(0xC1A7095Fu);
         const bool open = ImGui::TreeNodeEx(
             label,
             flags | ImGuiTreeNodeFlags_NoTreePushOnOpen);
@@ -7066,10 +7468,13 @@ private:
 
         const int frame = ImGui::GetFrameCount();
         const int lastFrame = storage->GetInt(frameKey, -2);
-        const float measuredHeight =
-            storage->GetFloat(measuredHeightKey, 0.f);
+        const UiExpandedMeasurementState measurement = {
+            storage->GetFloat(measuredHeightKey, 0.f),
+            storage->GetBool(measurementValidKey, false)
+        };
+        const float measuredHeight = measurement.height;
         const bool needsInitialMeasurement =
-            open && measuredHeight <= 0.f;
+            NeedsInitialUiExpandedMeasurement(open, measurement);
         float openAmount = storage->GetFloat(
             amountKey,
             open ? 1.f : 0.f);
@@ -7146,10 +7551,12 @@ private:
         // every existing control's absolute position and right edge.
         const float indentSpacing = ImGui::GetStyle().IndentSpacing;
         ImGui::Indent(indentSpacing);
+        ImGui::PushItemWidth(inheritedItemWidth);
         g_NestedDrawerAnimationContexts.push_back({
             storage,
             ImGui::GetCurrentWindow(),
             measuredHeightKey,
+            measurementValidKey,
             indentSpacing,
             open,
             bodyVisible
@@ -7169,23 +7576,30 @@ private:
         const float itemSpacingY = style.ItemSpacing.y;
         style.ItemSpacing.y = 0.f;
         assert(ImGui::GetCurrentWindow() == context.bodyWindow);
+        ImGui::PopItemWidth();
         ImGui::Unindent(context.indentSpacing);
         ImGui::EndChild();
         style.ItemSpacing.y = itemSpacingY;
 
         if (context.storage != nullptr)
         {
-            const float cachedHeight =
+            UiExpandedMeasurementState measurement = {
                 context.storage->GetFloat(
-                    context.measuredHeightKey,
-                    0.f);
+                    context.measuredHeightKey, 0.f),
+                context.storage->GetBool(
+                    context.measurementValidKey, false)
+            };
+            measurement = SubmitUiExpandedMeasurement(
+                measurement,
+                measuredHeight,
+                context.targetOpen,
+                context.bodyVisible);
             context.storage->SetFloat(
                 context.measuredHeightKey,
-                ResolveUiExpandedMeasurement(
-                    cachedHeight,
-                    measuredHeight,
-                    context.targetOpen,
-                    context.bodyVisible));
+                measurement.height);
+            context.storage->SetBool(
+                context.measurementValidKey,
+                measurement.valid);
         }
 
         ImGui::PopStyleVar(3);
@@ -7195,7 +7609,7 @@ private:
     struct UiToggleRegionAnimationState
     {
         float linearAmount = 0.f;
-        float measuredHeight = 0.f;
+        UiExpandedMeasurementState measurement;
         bool targetVisible = false;
         bool initialized = false;
         int lastSeenFrame = -1;
@@ -7232,6 +7646,10 @@ private:
         const char* id,
         bool visible)
     {
+        // BeginChild starts a fresh item-width stack. Carry the enclosing
+        // drawer width into toggle regions instead of letting ImGui choose its
+        // wider default slider width.
+        const float inheritedItemWidth = ImGui::CalcItemWidth();
         const ImGuiID regionId = ImGui::GetID(id);
         UiToggleRegionAnimationState& state =
             g_UiToggleRegionAnimationStates[regionId];
@@ -7259,8 +7677,9 @@ private:
         }
 
         const bool needsInitialMeasurement =
-            state.targetVisible &&
-            state.measuredHeight <= 0.f;
+            NeedsInitialUiExpandedMeasurement(
+                state.targetVisible,
+                state.measurement);
         if (needsInitialMeasurement)
         {
             // Keep this first layout pass invisible and at zero progress. The
@@ -7297,7 +7716,7 @@ private:
             needsInitialMeasurement
                 ? 0.001f
                 : std::max(
-                    state.measuredHeight * easedAmount,
+                    state.measurement.height * easedAmount,
                     0.001f);
 
         ImGui::PushStyleColor(
@@ -7337,6 +7756,7 @@ private:
         EnsureAnimatedChildLayoutSubmission(bodyVisible);
         TrackSettingsAppearanceDrawList(
             ImGui::GetWindowDrawList());
+        ImGui::PushItemWidth(inheritedItemWidth);
 
         // Interaction is blocked during both directions, but DisabledAlpha is
         // one so controls never take on the old gray gated appearance.
@@ -7360,6 +7780,7 @@ private:
             std::max(0.f, ImGui::GetCursorPosY());
 
         ImGui::EndDisabled();
+        ImGui::PopItemWidth();
         ImGui::EndChild();
 
         const auto stateIterator =
@@ -7369,12 +7790,15 @@ private:
         {
             UiToggleRegionAnimationState& state =
                 stateIterator->second;
-            state.measuredHeight =
-                ResolveUiExpandedMeasurement(
-                    state.measuredHeight,
-                    measuredHeight,
-                    state.targetVisible,
-                    context.bodyVisible);
+            state.measurement = SubmitUiExpandedMeasurement(
+                state.measurement,
+                measuredHeight,
+                state.targetVisible,
+                context.bodyVisible);
+            // A legitimate empty child measures zero. Keep measurement state
+            // separate from the numeric result so empty method-specific
+            // layouts complete instead of re-entering the hidden measurement
+            // pass forever and blocking deferred dropdown commits.
         }
 
         ImGui::PopStyleVar(4);
@@ -7890,9 +8314,10 @@ private:
     }
 
     static std::string BuildPerformanceLine(
-        const std::array<std::string, 5>& values)
+        const std::array<std::string, 6>& values)
     {
         return values[0] + " / " +
+            values[5] + " / " +
             values[3] + " / " +
             values[4] + " / " +
             values[1] + " / " +
@@ -7953,6 +8378,8 @@ private:
         StatSnapshot snapshot;
         snapshot.width = width;
         snapshot.height = height;
+        snapshot.submittedTriangles =
+            m_app->GetSubmittedMainViewTriangles();
         snapshot.frameTimeSeconds = m_StatFrameTimeCount > 0
             ? m_StatFrameTimeSum / double(m_StatFrameTimeCount)
             : m_DisplayedFrameTime;
@@ -8004,6 +8431,8 @@ private:
             "%d x %d",
             snapshot.width,
             snapshot.height);
+        m_PerformanceStatValues[5] =
+            FormatTriangleCount(snapshot.submittedTriangles);
         if (m_DisplayedFrameTime > 0.0)
         {
             FormatStatLine(
@@ -8841,33 +9270,11 @@ protected:
         const std::string performanceLine =
             BuildPerformanceLine(m_PerformanceStatValues);
 
-        const float statusContentWidth = std::max(
-            ImGui::CalcTextSize(rendererLine).x,
-            ImGui::CalcTextSize(performanceLine.c_str()).x);
-        const float longestSettingsLabelWidth =
-            ImGui::CalcTextSize("Distribution Exponent").x;
-        const float drawerBodyHorizontalOverhead =
-            style.ScrollbarSize +
-            style.FramePadding.x * 2.f +
-            style.WindowPadding.x * 2.f +
-            style.ItemSpacing.x;
-        const float labelledSliderContentWidth =
-            settingsControlWidth + style.ItemInnerSpacing.x +
-            longestSettingsLabelWidth +
-            drawerBodyHorizontalOverhead;
-        const float actionButtonsContentWidth =
-            ImGui::CalcTextSize("Reset").x +
-            ImGui::CalcTextSize("Restart").x +
-            ImGui::CalcTextSize("Screenshot").x +
-            ImGui::CalcTextSize("Zoom").x +
-            style.FramePadding.x * 8.f +
-            style.ItemSpacing.x * 3.f +
-            style.ScrollbarSize;
-        const float minimumSettingsContentWidth = std::max(
-            actionButtonsContentWidth,
-            labelledSliderContentWidth);
-        const float settingsWidthReadabilityAllowance =
-            style.FramePadding.x * 2.f + style.ItemSpacing.x;
+        // Keep Settings independent of live status digits. At the current
+        // 20-pixel UI font, 29.3 font heights place the visible right border
+        // at the screenshot's marked boundary while retaining the resolution,
+        // triangle counter, and performance line.
+        constexpr float SettingsWindowWidthInFontHeights = 29.3f;
         const float settingsPanelMarginPixels =
             float(m_SettingsPanelMarginPixels);
         const float availableWindowWidth =
@@ -8875,9 +9282,7 @@ protected:
                 1.f,
                 float(width) - settingsPanelMarginPixels * 2.f);
         const float settingsWindowWidth = std::min(
-            std::max(statusContentWidth, minimumSettingsContentWidth) +
-                style.WindowPadding.x * 2.f +
-                settingsWidthReadabilityAllowance,
+            fontSize * SettingsWindowWidthInFontHeights,
             availableWindowWidth);
         ImGui::SetNextWindowPos(
             ImVec2(
@@ -8939,6 +9344,9 @@ protected:
                     StatusLineSpacing);
             ImGui::TextUnformatted(performanceLine.c_str());
             ImGui::SetItemTooltip(
+                "tris counts frustum-culled triangle instances submitted by "
+                "the main geometry pass; occluded, back-facing, and "
+                "alpha-discarded triangles can still be included. "
                 "Bandwidth is the current theoretical limit. "
                 "tflops is current-clock FP32 peak scaled by GPU utilization.");
         }
@@ -9322,6 +9730,7 @@ protected:
                 "##VisibilityBody",
                 settingsControlWidth);
             ScreenSpaceVisibilitySettings& visibility = m_ui.ScreenSpaceVisibility;
+            CanonicalizeFixedVisibilitySampling(visibility);
             const bool visibilityAvailable =
                 m_ui.IsScreenSpaceVisibilityAvailable();
             if (!visibilityAvailable)
@@ -9390,37 +9799,6 @@ protected:
                 {
                     switchVisibilityToCustom();
                     return visibilityPointer->performance.configuration;
-                };
-            auto applyTraceCategory =
-                [editableConfiguration, visibilityPointer](
-                    VisibilityPerformanceProfile profile)
-                {
-                    const auto source =
-                        GetVisibilityPerformanceProfileConfiguration(profile);
-                    auto& target = editableConfiguration();
-                    target.trace = source.trace;
-                    target.firstBounceSamples =
-                        source.firstBounceSamples;
-                    target.laterBounceSamples =
-                        source.firstBounceSamples;
-                    target.bindings = VisibilityBindingStrategy::
-                        MinimalConditional;
-                    target.estimatorRequirement =
-                        VisibilityEstimatorRequirement::Any;
-                    target.consumerRequirement =
-                        VisibilityConsumerRequirement::Any;
-                    target.benchmarkOnly = false;
-                    const uint32_t fixedCount =
-                        GetVisibilityFixedSampleCount(
-                            source.firstBounceSamples);
-                    if (fixedCount != 0u)
-                    {
-                        visibilityPointer->sampling.maximumSampleCount =
-                            fixedCount;
-                        visibilityPointer->sampling
-                            .stepDistributionExponent =
-                            2.f;
-                    }
                 };
             auto applyNoiseCategory =
                 [editableConfiguration, visibilityPointer](
@@ -9562,11 +9940,15 @@ protected:
                     "Sampling Resolution",
                     resolutionLabels[int(visibility.resolution)]))
             {
-                for (int index = 0;
-                    index < int(std::size(resolutionLabels));
-                    ++index)
+                static constexpr std::array<
+                    VisibilityResolution, 3> resolutionOrder = {
+                        VisibilityResolution::Quarter,
+                        VisibilityResolution::Half,
+                        VisibilityResolution::Full
+                    };
+                for (const VisibilityResolution resolution : resolutionOrder)
                 {
-                    const auto resolution = VisibilityResolution(index);
+                    const int index = int(resolution);
                     const bool selected = visibility.resolution == resolution;
                     DrawDeferredDropdownOption(
                         resolutionLabels[index],
@@ -9606,7 +9988,7 @@ protected:
                     "Noise, compact depth-normal joint-bilateral upsampling, "
                     "and one GI bounce.",
                 "Factory default: full resolution, exact 20 samples, "
-                    "Offline Packed Spacetime Noise, Default Precision "
+                    "Offline Packed Spacetime Noise, Performance Precision "
                     "buffers, and one GI bounce.",
                 "Full resolution, exact 48 samples, Offline Packed "
                     "Spacetime Noise, Default Precision buffers, and two "
@@ -9665,6 +10047,141 @@ protected:
                 applyQualityPreset(
                     ScreenSpaceVisibilityQuality::High);
             }
+
+            const auto drawSampleCountModeControl = [&]()
+                {
+                    SharedSamplingSettings& sampling = visibility.sampling;
+                    const auto setSampleCountMode =
+                        [editableConfiguration, visibilityPointer](
+                            VisibilitySampleSpecialization mode)
+                        {
+                            auto& target = editableConfiguration();
+                            target.bindings =
+                                VisibilityBindingStrategy::MinimalConditional;
+                            target.estimatorRequirement =
+                                VisibilityEstimatorRequirement::Any;
+                            target.consumerRequirement =
+                                VisibilityConsumerRequirement::Any;
+                            target.benchmarkOnly = false;
+                            if (GetVisibilityFixedSampleCount(mode) != 0u)
+                            {
+                                const VisibilitySampleSpecialization fixedMode =
+                                    GetNearestVisibilityFixedSampleSpecialization(
+                                        visibilityPointer->sampling
+                                            .maximumSampleCount);
+                                target.trace = VisibilityTraceImplementation::
+                                    FixedInterleavedBitmask;
+                                target.firstBounceSamples = fixedMode;
+                                target.laterBounceSamples = fixedMode;
+                                visibilityPointer->sampling.maximumSampleCount =
+                                    GetVisibilityFixedSampleCount(fixedMode);
+                                visibilityPointer->sampling
+                                    .stepDistributionExponent = 2.f;
+                            }
+                            else
+                            {
+                                target.trace = VisibilityTraceImplementation::
+                                    LegacyGenericBitmask;
+                                target.firstBounceSamples = mode;
+                                target.laterBounceSamples = mode;
+                            }
+                        };
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            "Sample Count Mode",
+                            GetSampleSpecializationLabel(
+                                activeConfiguration.firstBounceSamples)))
+                    {
+                        struct SampleModeOption
+                        {
+                            const char* label;
+                            VisibilitySampleSpecialization specialization;
+                        };
+                        // Intel validation established Runtime as the compact
+                        // path and Fixed as the most expensive path.
+                        constexpr SampleModeOption sampleModes[] = {
+                            { "Runtime",
+                                VisibilitySampleSpecialization::Runtime },
+                            { "Generic",
+                                VisibilitySampleSpecialization::Generic },
+                            { "Fixed",
+                                VisibilitySampleSpecialization::Fixed20 }
+                        };
+                        for (const SampleModeOption& option : sampleModes)
+                        {
+                            const uint32_t firstFixedCount =
+                                GetVisibilityFixedSampleCount(
+                                    activeConfiguration.firstBounceSamples);
+                            const bool selected =
+                                GetVisibilityFixedSampleCount(
+                                    option.specialization) != 0u
+                                    ? firstFixedCount != 0u &&
+                                        activeConfiguration
+                                                .firstBounceSamples ==
+                                            activeConfiguration
+                                                .laterBounceSamples
+                                    : activeConfiguration
+                                                .firstBounceSamples ==
+                                            option.specialization &&
+                                        activeConfiguration
+                                                .laterBounceSamples ==
+                                            option.specialization;
+                            std::string optionId = option.label;
+                            // Keep the visible option text in the ImGui ID. A
+                            // triple-hash would give every row the same ID.
+                            optionId += "##VisibilitySampleCountMode";
+                            DrawDeferredDropdownOption(
+                                optionId.c_str(),
+                                option.label,
+                                selected,
+                                [setSampleCountMode, option]()
+                                {
+                                    setSampleCountMode(
+                                        option.specialization);
+                                });
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Fixed fully unrolls one of seven packaged counts. "
+                        "Generic uses the robust dynamic loop. Runtime selects "
+                        "a compact CPU-validated even or odd loop while "
+                        "retaining the full 1-64 range.");
+                    if (DrawNestedDropdownResetIcon(
+                            "Visibility Sample Count Mode",
+                            activeConfiguration.trace !=
+                                    visibilityPresetConfiguration.trace ||
+                                activeConfiguration.firstBounceSamples !=
+                                    visibilityPresetConfiguration
+                                        .firstBounceSamples ||
+                                activeConfiguration.laterBounceSamples !=
+                                    visibilityPresetConfiguration
+                                        .laterBounceSamples ||
+                                sampling.maximumSampleCount !=
+                                    visibilityPreset.sampling
+                                        .maximumSampleCount))
+                    {
+                        auto& target = editableConfiguration();
+                        target.trace = visibilityPresetConfiguration.trace;
+                        target.firstBounceSamples =
+                            visibilityPresetConfiguration.firstBounceSamples;
+                        target.laterBounceSamples =
+                            visibilityPresetConfiguration.laterBounceSamples;
+                        target.bindings =
+                            visibilityPresetConfiguration.bindings;
+                        target.estimatorRequirement =
+                            visibilityPresetConfiguration
+                                .estimatorRequirement;
+                        target.consumerRequirement =
+                            visibilityPresetConfiguration
+                                .consumerRequirement;
+                        target.benchmarkOnly =
+                            visibilityPresetConfiguration.benchmarkOnly;
+                        sampling.maximumSampleCount =
+                            visibilityPreset.sampling.maximumSampleCount;
+                        finishVisibilityPresetReset();
+                    }
+                };
 
             if (BeginAnimatedTreeNode(
                     "Shared Visibility Sampling",
@@ -9801,76 +10318,151 @@ protected:
                     finishVisibilityPresetReset();
                 }
 
-                ImGui::SetNextItemWidth(settingsControlWidth);
-                if (BeginRoundedCombo(
-                        "Exact Sample Count",
-                        GetSampleSpecializationLabel(
-                            activeConfiguration.firstBounceSamples)))
+                const bool fixedSampleCount =
+                    GetVisibilityFixedSampleCount(
+                        activeConfiguration.firstBounceSamples) != 0u &&
+                    activeConfiguration.firstBounceSamples ==
+                        activeConfiguration.laterBounceSamples;
+                const ImGuiID sampleSliderId =
+                    ImGui::GetID("Samples##VisibilitySamples");
+                ImGuiStorage* sampleSliderStorage =
+                    ImGui::GetStateStorage();
+                const ImGuiID samplePreviewKey =
+                    sampleSliderId ^ ImGuiID(0x65D1A903u);
+                const ImGuiID samplePendingKey =
+                    sampleSliderId ^ ImGuiID(0x49BC2E17u);
+                const int committedSliderValue =
+                    fixedSampleCount
+                        ? GetVisibilityFixedSampleSpecializationIndex(
+                            activeConfiguration.firstBounceSamples)
+                        : int(std::clamp(
+                            sampling.maximumSampleCount,
+                            1u,
+                            64u));
+                if (!sampleSliderStorage->GetBool(
+                        samplePendingKey, false))
                 {
-                    const VisibilityPerformanceProfile fixedProfiles[] = {
-                        VisibilityPerformanceProfile::ExactFixed8,
-                        VisibilityPerformanceProfile::ExactFixed12,
-                        VisibilityPerformanceProfile::ExactFixed16,
-                        VisibilityPerformanceProfile::ExactFixed20,
-                        VisibilityPerformanceProfile::ExactFixed24,
-                        VisibilityPerformanceProfile::ExactFixed48,
-                        VisibilityPerformanceProfile::ExactFixed64
-                    };
-                    for (VisibilityPerformanceProfile profile : fixedProfiles)
+                    sampleSliderStorage->SetInt(
+                        samplePreviewKey,
+                        committedSliderValue);
+                }
+                int sampleSliderValue =
+                    sampleSliderStorage->GetInt(
+                        samplePreviewKey,
+                        committedSliderValue);
+                sampleSliderValue = std::clamp(
+                    sampleSliderValue,
+                    0,
+                    fixedSampleCount
+                        ? int(VisibilityFixedSampleSpecializations.size()) - 1
+                        : 64);
+                const std::string fixedSampleFormat =
+                    fixedSampleCount
+                        ? std::to_string(
+                            VisibilityFixedSampleSpecializations[
+                                size_t(sampleSliderValue)].first)
+                        : std::string("%d");
+                const bool sampleSliderChanged = DrawSliderInt(
+                        "Samples##VisibilitySamples",
+                        &sampleSliderValue,
+                        fixedSampleCount ? 0 : 1,
+                        fixedSampleCount
+                            ? int(
+                                VisibilityFixedSampleSpecializations.size()) -
+                                1
+                            : 64,
+                        fixedSampleFormat.c_str(),
+                        ImGuiSliderFlags_AlwaysClamp);
+                if (sampleSliderChanged)
+                {
+                    sampleSliderStorage->SetInt(
+                        samplePreviewKey,
+                        sampleSliderValue);
+                    sampleSliderStorage->SetBool(
+                        samplePendingKey,
+                        true);
+                }
+                const bool commitSampleSlider =
+                    sampleSliderStorage->GetBool(
+                        samplePendingKey, false) &&
+                    !ImGui::IsItemActive();
+                if (commitSampleSlider)
+                {
+                    const int committedPreview =
+                        sampleSliderStorage->GetInt(
+                            samplePreviewKey,
+                            committedSliderValue);
+                    if (fixedSampleCount)
                     {
-                        const auto configuration =
-                            GetVisibilityPerformanceProfileConfiguration(
-                                profile);
-                        const char* profileLabel =
-                            GetPerformanceProfileUiLabel(profile).data();
-                        DrawDeferredDropdownOption(
-                            profileLabel,
-                            profileLabel,
-                            activeConfiguration.firstBounceSamples ==
-                                configuration.firstBounceSamples,
-                            [applyTraceCategory, profile]()
-                            {
-                                applyTraceCategory(profile);
-                            });
+                        const VisibilitySampleSpecialization fixedMode =
+                            VisibilityFixedSampleSpecializations[
+                                size_t(std::clamp(
+                                    committedPreview,
+                                    0,
+                                    int(
+                                        VisibilityFixedSampleSpecializations
+                                            .size()) - 1))].second;
+                        auto& target = editableConfiguration();
+                        target.trace = VisibilityTraceImplementation::
+                            FixedInterleavedBitmask;
+                        target.firstBounceSamples = fixedMode;
+                        target.laterBounceSamples = fixedMode;
+                        sampling.maximumSampleCount =
+                            GetVisibilityFixedSampleCount(fixedMode);
+                        sampling.stepDistributionExponent = 2.f;
                     }
-                    ImGui::EndCombo();
+                    else
+                    {
+                        sampling.maximumSampleCount =
+                            uint32_t(std::clamp(
+                                committedPreview,
+                                1,
+                                64));
+                    }
+                    sampleSliderStorage->SetBool(
+                        samplePendingKey,
+                        false);
+                    samplingChanged = true;
                 }
                 ImGui::SetItemTooltip(
-                    "Choose one compiled exact count. AO and every GI bounce "
-                    "use this same total count, split evenly across both "
-                    "trace directions.");
-                if (DrawNestedDropdownResetIcon(
-                        "Visibility Exact Sample Count",
-                        activeConfiguration.trace !=
-                                visibilityPresetConfiguration.trace ||
-                            activeConfiguration.firstBounceSamples !=
-                                visibilityPresetConfiguration
-                                    .firstBounceSamples ||
-                            activeConfiguration.laterBounceSamples !=
-                                visibilityPresetConfiguration
-                                    .laterBounceSamples ||
-                            sampling.maximumSampleCount !=
-                                visibilityPreset.sampling
-                                    .maximumSampleCount))
+                    fixedSampleCount
+                        ? "Choose a packaged fully unrolled count. The seven "
+                            "slider positions are 8, 12, 16, 20, 24, 48, and "
+                            "64, avoiding a "
+                            "roughly 900 MiB all-count shader archive."
+                        : "Set the radial-sample budget used by AO and every "
+                            "GI bounce. Generic is always robust; Runtime "
+                            "selects a compact parity shader for the supported "
+                            "High-style AO+GI path and otherwise falls back "
+                            "safely to Generic.");
+                if (DrawPresetResetIcon(
+                        "Visibility Samples",
+                        sampling.maximumSampleCount !=
+                            visibilityPreset.sampling.maximumSampleCount))
                 {
-                    auto& target = editableConfiguration();
-                    target.trace = visibilityPresetConfiguration.trace;
-                    target.firstBounceSamples =
-                        visibilityPresetConfiguration.firstBounceSamples;
-                    target.laterBounceSamples =
-                        visibilityPresetConfiguration.laterBounceSamples;
-                    target.bindings =
-                        visibilityPresetConfiguration.bindings;
-                    target.estimatorRequirement =
-                        visibilityPresetConfiguration
-                            .estimatorRequirement;
-                    target.consumerRequirement =
-                        visibilityPresetConfiguration
-                            .consumerRequirement;
-                    target.benchmarkOnly =
-                        visibilityPresetConfiguration.benchmarkOnly;
-                    sampling.maximumSampleCount =
-                        visibilityPreset.sampling.maximumSampleCount;
+                    sampleSliderStorage->SetBool(
+                        samplePendingKey,
+                        false);
+                    if (fixedSampleCount)
+                    {
+                        const VisibilitySampleSpecialization fixedMode =
+                            GetNearestVisibilityFixedSampleSpecialization(
+                                visibilityPreset.sampling
+                                    .maximumSampleCount);
+                        auto& target = editableConfiguration();
+                        target.trace = VisibilityTraceImplementation::
+                            FixedInterleavedBitmask;
+                        target.firstBounceSamples = fixedMode;
+                        target.laterBounceSamples = fixedMode;
+                        sampling.maximumSampleCount =
+                            GetVisibilityFixedSampleCount(fixedMode);
+                        sampling.stepDistributionExponent = 2.f;
+                    }
+                    else
+                    {
+                        sampling.maximumSampleCount =
+                            visibilityPreset.sampling.maximumSampleCount;
+                    }
                     finishVisibilityPresetReset();
                 }
 
@@ -9894,25 +10486,6 @@ protected:
                 {
                     sampling.thickness =
                         visibilityPreset.sampling.thickness;
-                    finishVisibilityPresetReset();
-                }
-
-                samplingChanged |= DrawSliderFloat(
-                    "Distribution Exponent",
-                    &sampling.stepDistributionExponent,
-                    0.5f,
-                    4.0f,
-                    "%.2f");
-                ImGui::SetItemTooltip("Higher values place more samples nearby.");
-                if (DrawPresetResetIcon(
-                        "Visibility Distribution Exponent",
-                        sampling.stepDistributionExponent !=
-                            visibilityPreset.sampling
-                                .stepDistributionExponent))
-                {
-                    sampling.stepDistributionExponent =
-                        visibilityPreset.sampling
-                            .stepDistributionExponent;
                     finishVisibilityPresetReset();
                 }
 
@@ -10494,6 +11067,52 @@ protected:
                 EndAnimatedTreeNode();
             }
 
+            if (BeginAnimatedTreeNode(
+                    "Developer Options##VisibilityDeveloperOptions"))
+            {
+                drawSampleCountModeControl();
+                SharedSamplingSettings& sampling = visibility.sampling;
+                const bool fixedSampleCount =
+                    GetVisibilityFixedSampleCount(
+                        activeConfiguration.firstBounceSamples) != 0u &&
+                    activeConfiguration.firstBounceSamples ==
+                        activeConfiguration.laterBounceSamples;
+                ImGui::BeginDisabled(fixedSampleCount);
+                const bool distributionExponentChanged = DrawSliderFloat(
+                    "Distribution",
+                    &sampling.stepDistributionExponent,
+                    0.5f,
+                    4.0f,
+                    "%.2f");
+                ImGui::SetItemTooltip(
+                    fixedSampleCount
+                        ? "Fixed sample shaders bake a quadratic (2.00) "
+                            "distribution. Choose Generic or Runtime to edit "
+                            "this value."
+                        : "Higher values place more samples nearby.");
+                if (DrawPresetResetIcon(
+                        "Visibility Distribution Exponent",
+                        sampling.stepDistributionExponent !=
+                            visibilityPreset.sampling
+                                .stepDistributionExponent))
+                {
+                    sampling.stepDistributionExponent =
+                        visibilityPreset.sampling
+                            .stepDistributionExponent;
+                    finishVisibilityPresetReset();
+                }
+                ImGui::EndDisabled();
+
+                if (distributionExponentChanged)
+                {
+                    MarkScreenSpaceVisibilityQualityCustom(visibility);
+                    MakeVisibilityPerformanceComposable(visibility);
+                    m_ui.VisibilityVerification =
+                        VisibilityVerificationProfile::Unset;
+                }
+                EndAnimatedTreeNode();
+            }
+
                 EndAnimatedToggleRegion();
             }
             if (visibilityBenchmarkBusy)
@@ -10660,10 +11279,10 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Low and Medium begin at Performance Precision; High and "
-                "Ultra begin at Default Precision. A later buffer edit keeps "
-                "every other setting and appends (Custom) to the originating "
-                "Profile label.");
+                "Low, Medium, and High begin at Performance Precision; Ultra "
+                "begins at Default Precision. A later buffer edit keeps every "
+                "other setting and appends (Custom) to the originating Profile "
+                "label.");
 
             static const char* scalarPrecisionLabels[] = {
                 "Half Precision (16-bit)",
@@ -11918,72 +12537,49 @@ protected:
             auto drawEnumOption = [settingsControlWidth](
                 const char* label,
                 auto& selectedValue,
-                uint32_t valueCount,
+                const auto& orderedValues,
                 auto getLabel,
                 const char* tooltip,
-                const char* inheritedOrAutoValue = nullptr,
-                bool collapseRedundantInheritedValue = false)
+                const char* inheritedOrAutoValue = nullptr)
             {
                 using ValueType =
                     std::decay_t<decltype(selectedValue)>;
                 bool changed = false;
-                const bool redundantInheritedValue =
-                    collapseRedundantInheritedValue &&
+                const bool inherited =
                     inheritedOrAutoValue &&
-                    static_cast<uint32_t>(selectedValue) != 0u &&
-                    std::string(getLabel(selectedValue)) ==
-                        inheritedOrAutoValue;
-                // Present a redundant explicit value as inherited without
-                // mutating the settings object during UI composition. Method
-                // and Quality transitions normalize the staged snapshot at
-                // their explicit mutation boundary.
-                const ValueType presentationValue =
-                    redundantInheritedValue
-                        ? static_cast<ValueType>(0u)
-                        : selectedValue;
-                const auto makeLabel =
-                    [&](ValueType value)
-                    {
-                        std::string result = getLabel(value);
-                        if (static_cast<uint32_t>(value) == 0u &&
-                            inheritedOrAutoValue)
-                        {
-                            result = inheritedOrAutoValue;
-                        }
-                        return result;
-                    };
-                const std::string preview =
-                    makeLabel(presentationValue);
+                    static_cast<uint32_t>(selectedValue) == 0u;
+                const std::string preview = inherited
+                    ? inheritedOrAutoValue
+                    : getLabel(selectedValue);
                 ImGui::SetNextItemWidth(settingsControlWidth);
                 if (BeginRoundedCombo(label, preview.c_str()))
                 {
-                    for (uint32_t index = 0u;
-                        index < valueCount;
-                        ++index)
+                    // Show only concrete choices in their fixed
+                    // least-expensive-to-most-expensive order. When the
+                    // setting is inherited, select its resolved concrete row.
+                    for (const ValueType candidate : orderedValues)
                     {
-                        const ValueType candidate =
-                            static_cast<ValueType>(index);
-                        if (collapseRedundantInheritedValue &&
-                            index != 0u &&
-                            inheritedOrAutoValue &&
-                            std::string(getLabel(candidate)) ==
-                                inheritedOrAutoValue)
-                        {
-                            continue;
-                        }
-                        const bool selected =
-                            candidate == presentationValue;
                         const std::string candidateLabel =
-                            makeLabel(candidate);
+                            getLabel(candidate);
+                        const bool candidateRepresentsInherited =
+                            inherited &&
+                            candidateLabel == inheritedOrAutoValue;
+                        const bool selected =
+                            candidateRepresentsInherited ||
+                            candidate == selectedValue;
+                        const ValueType committedValue =
+                            candidateRepresentsInherited
+                            ? static_cast<ValueType>(0u)
+                            : candidate;
                         ValueType* selectedValuePointer =
                             &selectedValue;
                         if (DrawDeferredDropdownOption(
                                 candidateLabel.c_str(),
                                 candidateLabel.c_str(),
                                 selected,
-                                [selectedValuePointer, candidate]()
+                                [selectedValuePointer, committedValue]()
                                 {
-                                    *selectedValuePointer = candidate;
+                                    *selectedValuePointer = committedValue;
                                 }))
                         {
                             changed = true;
@@ -11996,7 +12592,7 @@ protected:
                 ImGui::SetItemTooltip(tooltip);
                 if (DrawNestedDropdownResetIcon(
                         label,
-                        static_cast<uint32_t>(presentationValue) != 0u))
+                        !inherited))
                 {
                     ValueType* selectedValuePointer = &selectedValue;
                     QueueDeferredControlUiAction(
@@ -12033,10 +12629,6 @@ protected:
                 selectorSettings.enabled = true;
             }
 
-            if (BeginAnimatedToggleRegion(
-                    "##AliasingEnabledControls",
-                    selectorSettings.enabled))
-            {
             const bool temporalMethodSelected =
                 selectorSettings.method ==
                     AntiAliasingMethod::
@@ -12054,30 +12646,32 @@ protected:
                 methodPreview.c_str());
             if (methodComboOpen)
             {
-                for (uint32_t index = 0u;
-                    index <
-                        static_cast<uint32_t>(
-                            AntiAliasingMethod::Count);
-                    ++index)
+                static constexpr std::array<
+                    AntiAliasingMethod, 3> methodOrder = {
+                        AntiAliasingMethod::IntelCmaa2,
+                        AntiAliasingMethod::
+                            TemporalSubpixelMorphological,
+                        AntiAliasingMethod::Msaa
+                    };
+                for (const AntiAliasingMethod candidate : methodOrder)
                 {
-                    const AntiAliasingMethod candidate =
-                        static_cast<AntiAliasingMethod>(index);
-                    const bool candidateUnavailable =
+                    const uint32_t index =
+                        static_cast<uint32_t>(candidate);
+                    const bool candidateMutex =
                         (candidate ==
                             AntiAliasingMethod::
                                     TemporalSubpixelMorphological) &&
                         !temporalAAAvailable;
                     ImGui::PushID(static_cast<int>(index));
-                    ImGui::BeginDisabled(candidateUnavailable);
 
                     const bool selected =
                         candidate == selectorSettings.method;
                     std::string candidatePreview =
                         GetAntiAliasingMethodLabel(candidate);
-                    if (candidateUnavailable)
+                    if (candidateMutex)
                         candidatePreview += " (Mutex)";
                     std::string candidateLabel = candidatePreview;
-                    candidateLabel += "###MethodCandidate";
+                    candidateLabel += "##MethodCandidate";
                     if (DrawDeferredDropdownOption(
                         candidateLabel.c_str(),
                         candidatePreview.c_str(),
@@ -12103,7 +12697,6 @@ protected:
                     }
                     if (selected)
                         ImGui::SetItemDefaultFocus();
-                    ImGui::EndDisabled();
                     ImGui::PopID();
                 }
                 ImGui::EndCombo();
@@ -12148,14 +12741,17 @@ protected:
                     "Quality",
                     qualityPreview.c_str()))
             {
-                for (uint32_t index = 0u;
-                    index <
-                        static_cast<uint32_t>(
-                            AntiAliasingQuality::Count);
-                    ++index)
+                static constexpr std::array<
+                    AntiAliasingQuality, 4> qualityOrder = {
+                        AntiAliasingQuality::Low,
+                        AntiAliasingQuality::Medium,
+                        AntiAliasingQuality::High,
+                        AntiAliasingQuality::Ultra
+                    };
+                for (const AntiAliasingQuality candidate : qualityOrder)
                 {
-                    const AntiAliasingQuality candidate =
-                        static_cast<AntiAliasingQuality>(index);
+                    const uint32_t index =
+                        static_cast<uint32_t>(candidate);
                     const bool candidateUnavailable =
                         !IsAntiAliasingQualitySupported(
                             selectorSettings.method,
@@ -12171,7 +12767,7 @@ protected:
                     if (candidateUnavailable)
                         candidatePreview += " (Mutex)";
                     std::string candidateLabel = candidatePreview;
-                    candidateLabel += "###QualityCandidate";
+                    candidateLabel += "##QualityCandidate";
                     if (DrawDeferredDropdownOption(
                         candidateLabel.c_str(),
                         candidatePreview.c_str(),
@@ -12240,8 +12836,7 @@ protected:
                         settings.method,
                         settings.quality));
             const bool longTermTemporalControlsAvailable =
-                IsLongTermTemporalPreset(selectedImplementation) &&
-                temporalAAAvailable;
+                IsLongTermTemporalPreset(selectedImplementation);
             const bool temporalSelectionUnavailable =
                 settings.method ==
                     AntiAliasingMethod::
@@ -12291,7 +12886,7 @@ protected:
                         historyFramesLabel.c_str(),
                         &historyFrames,
                         1,
-                        31,
+                        32,
                         "%d"))
                 {
                     historyOverrides.historyFrames =
@@ -12323,14 +12918,14 @@ protected:
                         historyStrengthLabel.c_str(),
                         &historyStrength,
                         0.f,
-                        100.f,
+                        200.f,
                         "%.0f%%"))
                 {
                     historyOverrides.historyStrength =
                         std::clamp(
                             historyStrength * 0.01f,
                             0.f,
-                            1.f);
+                            2.f);
                     if (std::abs(
                             historyOverrides.historyStrength -
                             historyPreset.historyStrength) < 1e-4f)
@@ -12339,7 +12934,12 @@ protected:
                     }
                 }
                 ImGui::SetItemTooltip(
-                    "Scale accepted history after motion, bounds, reverse-Z depth, disocclusion, rectification, and stable-interior gates. It can only reduce history.");
+                    "%s",
+                    "Scale accepted history after motion, bounds, reverse-Z "
+                    "depth, disocclusion, rectification, and stable-interior "
+                    "gates. Values above 100% strengthen only accepted "
+                    "history, remain capped by the selected frame horizon, "
+                    "and cannot revive a rejected sample.");
                 if (DrawPresetResetIcon(
                         "Aliasing History Strength",
                         historyOverrides.historyStrength >= 0.f))
@@ -12347,6 +12947,62 @@ protected:
                     historyOverrides.historyStrength = -1.f;
                 }
             }
+
+            const auto drawDejitterControl = [&]()
+                {
+                    MiniEngineTaaAlgorithmOverrides& algorithmOverrides =
+                        settings.algorithmOverrides;
+                    AntiAliasingSettings dejitterPresetSettings =
+                        settings;
+                    dejitterPresetSettings.algorithmOverrides =
+                        MiniEngineTaaAlgorithmOverrides{};
+                    const bool presetDejitter =
+                        m_ui.GetResolvedAntiAliasingSettings(
+                                dejitterPresetSettings)
+                                .temporal.currentReconstruction ==
+                            MiniEngineTaaCurrentReconstruction::DeJittered;
+                    const bool inherited =
+                        algorithmOverrides.currentReconstruction ==
+                        MiniEngineTaaCurrentReconstructionOverride::
+                            FromPreset;
+                    bool dejitter = inherited
+                        ? presetDejitter
+                        : algorithmOverrides.currentReconstruction ==
+                            MiniEngineTaaCurrentReconstructionOverride::
+                                DeJittered;
+                    if (ImGui::Checkbox(
+                            "Dejitter##AliasingDejitter",
+                            &dejitter))
+                    {
+                        if (dejitter == presetDejitter)
+                        {
+                            algorithmOverrides.currentReconstruction =
+                                MiniEngineTaaCurrentReconstructionOverride::
+                                    FromPreset;
+                        }
+                        else
+                        {
+                            algorithmOverrides.currentReconstruction =
+                                dejitter
+                                ? MiniEngineTaaCurrentReconstructionOverride::
+                                    DeJittered
+                                : MiniEngineTaaCurrentReconstructionOverride::
+                                    Direct;
+                        }
+                    }
+                    ImGui::SetItemTooltip(
+                        "Reconstruct the current frame at the unjittered "
+                        "pixel center. Ultra enables this by default; Low, "
+                        "Medium, and High leave it off.");
+                    if (DrawPresetResetIcon(
+                            "Aliasing Dejitter",
+                            !inherited))
+                    {
+                        algorithmOverrides.currentReconstruction =
+                            MiniEngineTaaCurrentReconstructionOverride::
+                                FromPreset;
+                    }
+                };
 
             const auto drawStableInteriorControl = [&]()
                 {
@@ -12369,7 +13025,7 @@ protected:
                         : algorithmOverrides.stableInterior ==
                             MiniEngineTaaStableInteriorOverride::On;
                     std::string stableInteriorLabel = "Stable Interior";
-                    stableInteriorLabel += "###Stable Interior";
+                    stableInteriorLabel += "##Stable Interior";
                     if (ImGui::Checkbox(
                             stableInteriorLabel.c_str(),
                             &stableInterior))
@@ -12400,10 +13056,39 @@ protected:
                     }
                 };
 
-#if !UVSR_AA_DEVELOPER_OVERRIDES
+            const auto drawRectificationControl = [&]()
+                {
+                    MiniEngineTaaAlgorithmOverrides& algorithmOverrides =
+                        settings.algorithmOverrides;
+                    AntiAliasingSettings rectificationPresetSettings =
+                        settings;
+                    rectificationPresetSettings.algorithmOverrides =
+                        MiniEngineTaaAlgorithmOverrides{};
+                    const ResolvedAntiAliasingSettings resolvedForLabels =
+                        m_ui.GetResolvedAntiAliasingSettings(
+                            rectificationPresetSettings);
+                    static constexpr std::array<
+                        MiniEngineTaaRectificationOverride, 4>
+                        rectificationOrder = {
+                            MiniEngineTaaRectificationOverride::PairRgb,
+                            MiniEngineTaaRectificationOverride::PerPixelRgb,
+                            MiniEngineTaaRectificationOverride::PerPixelYCoCg,
+                            MiniEngineTaaRectificationOverride::VarianceYCoCg
+                        };
+                    drawEnumOption(
+                        "Rectification",
+                        algorithmOverrides.rectification,
+                        rectificationOrder,
+                        GetMiniEngineTaaRectificationOverrideLabel,
+                        "Override pair, per-pixel, or variance-aware history "
+                        "rectification.",
+                        GetMiniEngineTaaRectificationLabel(
+                            resolvedForLabels.temporal.rectification));
+                };
+
             if (longTermTemporalControlsAvailable)
             {
-                drawStableInteriorControl();
+                drawDejitterControl();
                 ImGui::Checkbox(
                     "Sharpness###Sharpness",
                     &m_ui.MiniEngineTaaSharpenEnabled);
@@ -12441,9 +13126,7 @@ protected:
                     EndAnimatedToggleRegion();
                 }
             }
-#endif
 
-#if UVSR_AA_DEVELOPER_OVERRIDES
             const bool algorithmConfigurationAvailable =
                 longTermTemporalControlsAvailable ||
                 selectedImplementation == AntiAliasingPreset::IntelCmaa2 ||
@@ -12465,6 +13148,8 @@ protected:
                 const ResolvedAntiAliasingSettings resolvedForLabels =
                     m_ui.GetResolvedAntiAliasingSettings(
                         presetLabelSettings);
+                const ResolvedAntiAliasingSettings resolvedCurrent =
+                    m_ui.GetResolvedAntiAliasingSettings(settings);
 
                 const auto drawMorphologyOption = [&]()
                 {
@@ -12492,23 +13177,17 @@ protected:
                         selectedImplementation ==
                             AntiAliasingPreset::Msaa16x)
                     {
-                        const bool morphologyOff =
+                        const bool morphologyInherited =
                             overrides.subpixelMorphology ==
-                                MorphologyApplicationOverride::Off;
-                        const AntiAliasingQuality morphologyQuality =
-                            overrides.morphologyQuality >= 0
-                                ? static_cast<AntiAliasingQuality>(
-                                    std::min(
-                                        overrides.morphologyQuality,
-                                        int32_t(
-                                            AntiAliasingQuality::Ultra)))
-                                : settings.quality;
-                        const bool redundantInheritedMorphology =
-                            overrides.subpixelMorphology ==
-                                MorphologyApplicationOverride::
-                                    ConservativeMorphological &&
+                                MorphologyApplicationOverride::FromPreset &&
                             overrides.morphologyQuality < 0;
-                        const std::string morphologyPreview = morphologyOff
+                        const bool morphologyOff =
+                            resolvedCurrent.subpixelMorphology ==
+                                MorphologyApplication::Off;
+                        const AntiAliasingQuality morphologyQuality =
+                            resolvedCurrent.morphologyQuality;
+                        const std::string morphologyPreview =
+                            morphologyOff
                             ? "Off"
                             : std::string("Conservative ") +
                                 GetAntiAliasingQualityLabel(
@@ -12520,66 +13199,78 @@ protected:
                                 morphologyPreview.c_str());
                         if (morphologyComboOpen)
                         {
-                            MiniEngineTaaAlgorithmOverrides*
-                                overridesPointer = &overrides;
-                            DrawDeferredDropdownOption(
-                                "Off###MorphologyCandidate",
-                                "Off",
-                                morphologyOff,
-                                [this, overridesPointer]()
-                                {
-                                    overridesPointer->subpixelMorphology =
-                                        MorphologyApplicationOverride::Off;
-                                    m_ui.MiniEngineTaaVisualization =
-                                        MiniEngineTaaDebugView::Off;
-                                });
                             constexpr const char* morphologyLabels[] = {
                                 "Conservative Low",
                                 "Conservative Medium",
                                 "Conservative High",
                                 "Conservative Ultra"
                             };
-                            for (uint32_t index = 0u;
-                                index < std::size(morphologyLabels);
-                                ++index)
+                            static constexpr std::array<
+                                AntiAliasingQuality, 4>
+                                morphologyQualityOrder = {
+                                    AntiAliasingQuality::Low,
+                                    AntiAliasingQuality::Medium,
+                                    AntiAliasingQuality::High,
+                                    AntiAliasingQuality::Ultra
+                                };
+                            MiniEngineTaaAlgorithmOverrides*
+                                overridesPointer = &overrides;
+                            const bool offRepresentsInherited =
+                                morphologyInherited && morphologyOff;
+                            DrawDeferredDropdownOption(
+                                "Off##MorphologyCandidate",
+                                "Off",
+                                morphologyOff,
+                                [this,
+                                    overridesPointer,
+                                    offRepresentsInherited]()
+                                {
+                                    overridesPointer->subpixelMorphology =
+                                        offRepresentsInherited
+                                        ? MorphologyApplicationOverride::
+                                            FromPreset
+                                        : MorphologyApplicationOverride::Off;
+                                    overridesPointer->morphologyQuality = -1;
+                                    m_ui.MiniEngineTaaVisualization =
+                                        MiniEngineTaaDebugView::Off;
+                                });
+                            for (const AntiAliasingQuality candidateQuality :
+                                morphologyQualityOrder)
                             {
-                                const AntiAliasingQuality candidateQuality =
-                                    static_cast<AntiAliasingQuality>(index);
+                                const uint32_t index =
+                                    static_cast<uint32_t>(
+                                        candidateQuality);
                                 const bool selected =
                                     !morphologyOff &&
                                     morphologyQuality == candidateQuality;
+                                const bool candidateRepresentsInherited =
+                                    morphologyInherited && selected;
                                 ImGui::PushID(static_cast<int>(index));
                                 std::string candidateLabel =
                                     morphologyLabels[index];
-                                candidateLabel += "###MorphologyCandidate";
+                                candidateLabel += "##MorphologyCandidate";
                                 MiniEngineTaaAlgorithmOverrides*
                                     overridesPointer = &overrides;
-                                AntiAliasingSettings*
-                                    settingsPointer = &settings;
                                 DrawDeferredDropdownOption(
                                     candidateLabel.c_str(),
                                     morphologyLabels[index],
                                     selected,
                                     [this,
                                         overridesPointer,
-                                        settingsPointer,
-                                        candidateQuality]()
+                                        candidateQuality,
+                                        candidateRepresentsInherited]()
                                     {
                                         overridesPointer->
                                             subpixelMorphology =
-                                                candidateQuality ==
-                                                        settingsPointer->
-                                                            quality
-                                                    ? MorphologyApplicationOverride::
-                                                        FromPreset
-                                                    : MorphologyApplicationOverride::
-                                                        ConservativeMorphological;
+                                                candidateRepresentsInherited
+                                                ? MorphologyApplicationOverride::
+                                                    FromPreset
+                                                : MorphologyApplicationOverride::
+                                                    ConservativeMorphological;
                                         overridesPointer->morphologyQuality =
-                                            candidateQuality ==
-                                                    settingsPointer->quality
-                                                ? -1
-                                                : int32_t(
-                                                    candidateQuality);
+                                            candidateRepresentsInherited
+                                            ? -1
+                                            : int32_t(candidateQuality);
                                         m_ui.MiniEngineTaaVisualization =
                                             MiniEngineTaaDebugView::Off;
                                     });
@@ -12594,10 +13285,9 @@ protected:
                             "resolved Temporal or Multisample image.");
                         if (DrawNestedDropdownResetIcon(
                                 "Aliasing Subpixel Morphology",
-                                (!redundantInheritedMorphology &&
-                                    overrides.subpixelMorphology !=
-                                        MorphologyApplicationOverride::
-                                            FromPreset) ||
+                                overrides.subpixelMorphology !=
+                                    MorphologyApplicationOverride::
+                                        FromPreset ||
                                     overrides.morphologyQuality >= 0))
                         {
                             MiniEngineTaaAlgorithmOverrides*
@@ -12616,91 +13306,57 @@ protected:
                     }
                 };
 
+                static constexpr std::array<
+                    MiniEngineTaaMotionSourceOverride, 3>
+                    motionSourceOrder = {
+                        MiniEngineTaaMotionSourceOverride::Center,
+                        MiniEngineTaaMotionSourceOverride::ClosestCross,
+                        MiniEngineTaaMotionSourceOverride::
+                            CenterFirstEdgeDilation
+                    };
+                static constexpr std::array<
+                    MiniEngineTaaHistoryFilterOverride, 4>
+                    reconstructionOrder = {
+                        MiniEngineTaaHistoryFilterOverride::Bilinear,
+                        MiniEngineTaaHistoryFilterOverride::
+                            OneSampleBicubic,
+                        MiniEngineTaaHistoryFilterOverride::
+                            FiveTapCatmullRom,
+                        MiniEngineTaaHistoryFilterOverride::
+                            NineTapCatmullRom
+                    };
+#if UVSR_AA_DEVELOPER_OVERRIDES
+                static constexpr std::array<
+                    MiniEngineTaaSampleResurrectionOverride, 3>
+                    sampleResurrectionOrder = {
+                        MiniEngineTaaSampleResurrectionOverride::Off,
+                        MiniEngineTaaSampleResurrectionOverride::
+                            OneOlderFrame,
+                        MiniEngineTaaSampleResurrectionOverride::
+                            TwoOlderFrames
+                    };
+#endif
+
                 if (longTermTemporalControlsAvailable)
                 {
-                    drawStableInteriorControl();
-                    ImGui::Checkbox(
-                        "Sharpness###Sharpness",
-                        &m_ui.MiniEngineTaaSharpenEnabled);
-                    ImGui::SetItemTooltip(
-                        "Enable or bypass temporal output sharpening while retaining the selected strength.");
-                    if (DrawPresetResetIcon(
-                            "Aliasing Sharpness Enabled",
-                            m_ui.MiniEngineTaaSharpenEnabled))
-                    {
-                        m_ui.MiniEngineTaaSharpenEnabled = false;
-                    }
-                    const bool sharpnessStrengthEnabled =
-                        m_ui.MiniEngineTaaSharpenEnabled &&
-                        IsSharpnessRelevant(selectedImplementation);
-                    if (BeginAnimatedToggleRegion(
-                            "##DeveloperSharpnessStrengthControls",
-                            sharpnessStrengthEnabled))
-                    {
-                        ImGui::SetNextItemWidth(
-                            settingsControlWidth);
-                        DrawSliderFloat(
-                            "Sharpness Strength",
-                            &m_ui.MiniEngineTaaSharpness,
-                            MiniEngineTaaMinimumSharpness,
-                            MiniEngineTaaMaximumSharpness,
-                            "%.2f");
-                        ImGui::SetItemTooltip(
-                            "Set temporal output sharpness. The stored value "
-                            "is retained while sharpening is disabled.");
-                        if (DrawPresetResetIcon(
-                                "Aliasing Sharpness Strength",
-                                std::abs(
-                                    m_ui.MiniEngineTaaSharpness -
-                                    MiniEngineTaaDefaultSharpness) > 1e-4f))
-                        {
-                            m_ui.MiniEngineTaaSharpness =
-                                MiniEngineTaaDefaultSharpness;
-                        }
-                        EndAnimatedToggleRegion();
-                    }
-
                     drawMorphologyOption();
                     drawEnumOption(
                         "Motion Source",
                         overrides.motionSource,
-                        static_cast<uint32_t>(
-                            MiniEngineTaaMotionSourceOverride::Count),
+                        motionSourceOrder,
                         GetMiniEngineTaaMotionSourceOverrideLabel,
                         "Override motion ownership. Changing it resets all temporal state.",
                         GetMiniEngineTaaMotionSourceLabel(
-                            resolvedForLabels.temporal.motionSource),
-                        true);
+                            resolvedForLabels.temporal.motionSource));
                     drawEnumOption(
-                        "Current Reconstruction",
-                        overrides.currentReconstruction,
-                        static_cast<uint32_t>(
-                            MiniEngineTaaCurrentReconstructionOverride::Count),
-                        GetMiniEngineTaaCurrentReconstructionOverrideLabel,
-                        "Override direct or de-jittered current reconstruction.",
-                        GetMiniEngineTaaCurrentReconstructionLabel(
-                            resolvedForLabels.temporal.currentReconstruction),
-                        true);
-                    drawEnumOption(
-                        "Rectification",
-                        overrides.rectification,
-                        static_cast<uint32_t>(
-                            MiniEngineTaaRectificationOverride::Count),
-                        GetMiniEngineTaaRectificationOverrideLabel,
-                        "Override pair, per-pixel, or variance-aware history rectification.",
-                        GetMiniEngineTaaRectificationLabel(
-                            resolvedForLabels.temporal.rectification),
-                        true);
-                    drawEnumOption(
-                        "History Filter",
+                        "Reconstruction",
                         overrides.historyFilter,
-                        static_cast<uint32_t>(
-                            MiniEngineTaaHistoryFilterOverride::Count),
+                        reconstructionOrder,
                         GetMiniEngineTaaHistoryFilterOverrideLabel,
-                        "Override the real history sampling filter.",
+                        "Choose the real history reconstruction filter, "
+                        "including the full nine-tap Catmull-Rom option.",
                         GetMiniEngineTaaHistoryFilterLabel(
-                            resolvedForLabels.temporal.historyFilter),
-                        true);
+                            resolvedForLabels.temporal.historyFilter));
                 }
                 else
                 {
@@ -12709,25 +13365,29 @@ protected:
 
                 // Resurrection remains last because it is a recovery policy
                 // applied after the primary spatial and temporal choices.
+#if UVSR_AA_DEVELOPER_OVERRIDES
                 if (longTermTemporalControlsAvailable)
                 {
                     drawEnumOption(
                         "Sample Resurrection",
                         overrides.sampleResurrection,
-                        static_cast<uint32_t>(
-                            MiniEngineTaaSampleResurrectionOverride::Count),
+                        sampleResurrectionOrder,
                         GetMiniEngineTaaSampleResurrectionOverrideLabel,
                         "Reuse one or two older validated samples when immediate history is unreliable.",
                         GetMiniEngineTaaSampleResurrectionLabel(
-                            resolvedForLabels.sampleResurrection),
-                        true);
+                            resolvedForLabels.sampleResurrection));
                 }
+#endif
 
                 EndAnimatedTreeNode();
             }
-
-#endif
-            EndAnimatedToggleRegion();
+            if (longTermTemporalControlsAvailable &&
+                BeginAnimatedTreeNode(
+                    "Developer Options##AliasingDeveloperOptions"))
+            {
+                drawRectificationControl();
+                drawStableInteriorControl();
+                EndAnimatedTreeNode();
             }
             EndAnimatedToggleRegion();
             }
@@ -13683,6 +14343,48 @@ bool ProcessCommandLine(
             else
                 return invalidValue("--aa-enabled", value, "on|off");
         }
+        else if (!strcmp(argv[i], "--aa-rectification"))
+        {
+            if (i + 1 >= argc)
+                return missingValue(argv[i]);
+            const std::string value = argv[++i];
+            if (value == "preset")
+            {
+                aaBenchmark.settings.algorithmOverrides.rectification =
+                    MiniEngineTaaRectificationOverride::FromPreset;
+            }
+            else if (value == "pair" || value == "pair-rgb")
+            {
+                aaBenchmark.settings.algorithmOverrides.rectification =
+                    MiniEngineTaaRectificationOverride::PairRgb;
+            }
+            else if (value == "pixel-rgb" ||
+                value == "per-pixel-rgb")
+            {
+                aaBenchmark.settings.algorithmOverrides.rectification =
+                    MiniEngineTaaRectificationOverride::PerPixelRgb;
+            }
+            else if (value == "pixel-ycocg" ||
+                value == "per-pixel-ycocg")
+            {
+                aaBenchmark.settings.algorithmOverrides.rectification =
+                    MiniEngineTaaRectificationOverride::PerPixelYCoCg;
+            }
+            else if (value == "variance" ||
+                value == "variance-ycocg")
+            {
+                aaBenchmark.settings.algorithmOverrides.rectification =
+                    MiniEngineTaaRectificationOverride::VarianceYCoCg;
+            }
+            else
+            {
+                return invalidValue(
+                    "--aa-rectification",
+                    value,
+                    "preset|pair-rgb|per-pixel-rgb|"
+                    "per-pixel-ycocg|variance-ycocg");
+            }
+        }
         else if (!strcmp(argv[i], "--aa-execution"))
         {
             if (i + 1 >= argc)
@@ -14057,136 +14759,100 @@ bool SelectGraphicsAdapter(
     return true;
 }
 
-void PlaceWindowWithBalancedWorkAreaMargins(GLFWwindow* window)
+void CenterWindowInMonitorWorkArea(GLFWwindow* window)
 {
     if (!window)
         return;
 
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-    if (!monitor)
+    HWND nativeWindow = glfwGetWin32Window(window);
+    if (!nativeWindow)
         return;
 
-    int workX = 0;
-    int workY = 0;
-    int workWidth = 0;
-    int workHeight = 0;
-    glfwGetMonitorWorkarea(
-        monitor,
-        &workX,
-        &workY,
-        &workWidth,
-        &workHeight);
-
-    int frameLeft = 0;
-    int frameTop = 0;
-    int frameRight = 0;
-    int frameBottom = 0;
-    glfwGetWindowFrameSize(
-        window,
-        &frameLeft,
-        &frameTop,
-        &frameRight,
-        &frameBottom);
-
-    int clientWidth = 0;
-    int clientHeight = 0;
-    glfwGetWindowSize(window, &clientWidth, &clientHeight);
-    const int maximumClientWidth = std::max(
-        1,
-        workWidth - frameLeft - frameRight);
-    const int maximumClientHeight = std::max(
-        1,
-        workHeight - frameTop - frameBottom);
-
-    if (clientWidth > maximumClientWidth ||
-        clientHeight > maximumClientHeight)
-    {
-        const double fitScale = std::min(
-            double(maximumClientWidth) / double(clientWidth),
-            double(maximumClientHeight) / double(clientHeight));
-        clientWidth = std::max(
-            1,
-            int(std::floor(double(clientWidth) * fitScale)));
-        clientHeight = std::max(
-            1,
-            int(std::floor(double(clientHeight) * fitScale)));
-        glfwSetWindowSize(window, clientWidth, clientHeight);
-    }
-
-    const int outerWidth =
-        clientWidth + frameLeft + frameRight;
-    const int outerHeight =
-        clientHeight + frameTop + frameBottom;
-    const int clientX =
-        workX + (workWidth - outerWidth) / 2 + frameLeft;
-    const int clientY =
-        workY + (workHeight - outerHeight) / 2 + frameTop;
-    glfwSetWindowPos(window, clientX, clientY);
-
-    // GLFW's frame size includes Windows' invisible resize border. Match the
-    // visible top and taskbar gaps to the already-balanced visible left/right
-    // gaps, then translate that visible rectangle back to the native window
-    // rectangle expected by SetWindowPos.
-    HWND nativeWindow = glfwGetWin32Window(window);
-    RECT nativeRect{};
-    RECT visibleRect{};
     MONITORINFO monitorInfo{};
     monitorInfo.cbSize = sizeof(monitorInfo);
-    if (!nativeWindow ||
-        !GetWindowRect(nativeWindow, &nativeRect) ||
-        FAILED(DwmGetWindowAttribute(
-            nativeWindow,
-            DWMWA_EXTENDED_FRAME_BOUNDS,
-            &visibleRect,
-            sizeof(visibleRect))) ||
-        !GetMonitorInfoW(
+    if (!GetMonitorInfoW(
             MonitorFromWindow(
                 nativeWindow,
-                MONITOR_DEFAULTTOPRIMARY),
+                MONITOR_DEFAULTTONEAREST),
             &monitorInfo))
     {
         return;
     }
 
-    const int visibleLeftGap =
-        visibleRect.left - monitorInfo.rcWork.left;
-    const int visibleRightGap =
-        monitorInfo.rcWork.right - visibleRect.right;
-    const int balancedMargin = std::max(
-        0,
-        std::min(visibleLeftGap, visibleRightGap));
-    const RECT targetVisibleRect = {
-        monitorInfo.rcWork.left + balancedMargin,
-        monitorInfo.rcWork.top + balancedMargin,
-        monitorInfo.rcWork.right - balancedMargin,
-        monitorInfo.rcWork.bottom - balancedMargin
-    };
+    int clientWidth = 0;
+    int clientHeight = 0;
+    glfwGetWindowSize(window, &clientWidth, &clientHeight);
+    RECT nativeRect{};
+    RECT visibleRect{};
+    if (!GetWindowRect(nativeWindow, &nativeRect))
+        return;
+    if (FAILED(DwmGetWindowAttribute(
+            nativeWindow,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &visibleRect,
+            sizeof(visibleRect))))
+    {
+        visibleRect = nativeRect;
+    }
 
+    const auto alignDownToEight = [](int value)
+    {
+        return std::max(8, value & ~7);
+    };
+    const int alignedClientWidth =
+        alignDownToEight(clientWidth);
+    const int alignedClientHeight =
+        alignDownToEight(clientHeight);
+    if (clientWidth != alignedClientWidth ||
+        clientHeight != alignedClientHeight)
+    {
+        clientWidth = alignedClientWidth;
+        clientHeight = alignedClientHeight;
+        glfwSetWindowSize(window, clientWidth, clientHeight);
+    }
+
+    // Re-read both rectangles after any client alignment, then move only the
+    // native window. Centering the DWM-visible frame in rcWork balances the
+    // top gap against the taskbar-side gap without changing 1920 x 1080.
+    if (!GetWindowRect(nativeWindow, &nativeRect))
+        return;
+    if (FAILED(DwmGetWindowAttribute(
+            nativeWindow,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &visibleRect,
+            sizeof(visibleRect))))
+    {
+        visibleRect = nativeRect;
+    }
+    const int workWidth =
+        monitorInfo.rcWork.right - monitorInfo.rcWork.left;
+    const int workHeight =
+        monitorInfo.rcWork.bottom - monitorInfo.rcWork.top;
+    const int visibleWidth = visibleRect.right - visibleRect.left;
+    const int visibleHeight = visibleRect.bottom - visibleRect.top;
+    const int targetVisibleLeft =
+        monitorInfo.rcWork.left + (workWidth - visibleWidth) / 2;
+    const int targetVisibleTop =
+        monitorInfo.rcWork.top + (workHeight - visibleHeight) / 2;
     const int nativeLeft =
-        targetVisibleRect.left -
-        (visibleRect.left - nativeRect.left);
+        targetVisibleLeft - (visibleRect.left - nativeRect.left);
     const int nativeTop =
-        targetVisibleRect.top -
-        (visibleRect.top - nativeRect.top);
-    const int nativeRight =
-        targetVisibleRect.right +
-        (nativeRect.right - visibleRect.right);
-    const int nativeBottom =
-        targetVisibleRect.bottom +
-        (nativeRect.bottom - visibleRect.bottom);
+        targetVisibleTop - (visibleRect.top - nativeRect.top);
     SetWindowPos(
         nativeWindow,
         nullptr,
         nativeLeft,
         nativeTop,
-        nativeRight - nativeLeft,
-        nativeBottom - nativeTop,
-        SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+        0,
+        0,
+        SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER |
+            SWP_NOSIZE);
 }
 
 #ifdef _WIN32
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+    ApplyVisibilityPerfProcessPriority();
     const auto launchTime = std::chrono::system_clock::now();
     nvrhi::GraphicsAPI api = app::GetGraphicsAPIFromCommandLine(__argc, __argv);
 #else //  _WIN32
@@ -14222,6 +14888,11 @@ int main(int __argc, const char* const* __argv)
             visibilityBenchmark))
     {
         return 1;
+    }
+    if (g_VisibilityPerfCapture.Enabled())
+    {
+        log::ConsoleApplicationMode();
+        benchmarkCameraRequested = true;
     }
     if (visibilityBenchmark.benchmarkRequested)
     {
@@ -14326,9 +14997,10 @@ int main(int __argc, const char* const* __argv)
 		return 1;
 	}
     if (!deviceParams.startFullscreen &&
-        !deviceParams.startMaximized)
+        !deviceParams.startMaximized &&
+        !benchmarkCameraRequested)
     {
-        PlaceWindowWithBalancedWorkAreaMargins(
+        CenterWindowInMonitorWorkArea(
             deviceManager->GetWindow());
     }
 
@@ -14351,6 +15023,107 @@ int main(int __argc, const char* const* __argv)
             uiData.MiniEngineTaaSharpness =
                 ClampMiniEngineTaaSharpness(
                     aaBenchmark.sharpness);
+        }
+        if (g_VisibilityPerfCapture.Enabled())
+        {
+            uiData.ShowUI = false;
+            uiData.EnablePbr = true;
+            uiData.RenderMode = RendererMode::Deferred;
+            if (!g_VisibilityPerfCapture.Options().HasVariant("taaprime"))
+                uiData.AntiAliasing.enabled = false;
+            else
+                log::info(
+                    "UVSR_PERF applied variant token: taaprime");
+            uiData.MiniEngineTaaSharpenEnabled = false;
+
+            ScreenSpaceVisibilitySettings& visibility =
+                uiData.ScreenSpaceVisibility;
+            ApplyScreenSpaceVisibilityQualityPreset(
+                visibility, ScreenSpaceVisibilityQuality::High);
+            visibility.enabled = true;
+            visibility.estimator = VisibilityEstimator::UniformSolidAngle;
+            visibility.resolution = VisibilityResolution::Full;
+            visibility.sampling.maximumSampleCount = 20u;
+            visibility.sampling.radius = 3.f;
+            visibility.sampling.thickness = 0.5f;
+            visibility.sampling.stepDistributionExponent = 2.f;
+            visibility.ambientOcclusion.enabled = true;
+            visibility.ambientOcclusion.strength = 1.f;
+            visibility.ambientOcclusion.power = 1.f;
+            visibility.indirectDiffuse.enabled = true;
+            visibility.indirectDiffuse.limitBounces = true;
+            visibility.indirectDiffuse.bounceCount = 1u;
+            visibility.indirectDiffuse.intensity = 1.f;
+            visibility.reconstruction.temporalEnabled = false;
+            visibility.reconstruction.spatialEnabled = false;
+
+            const VisibilityPerfCaptureOptions& perf =
+                g_VisibilityPerfCapture.Options();
+            if (perf.HasVariant("performance16"))
+            {
+                ApplyVisibilityBufferPrecisionPreset(
+                    visibility.performance.bufferPrecision, true, true);
+                log::info(
+                    "UVSR_PERF applied variant token: performance16");
+            }
+            if (perf.HasVariant("performance32"))
+            {
+                ApplyVisibilityBufferPrecisionPreset(
+                    visibility.performance.bufferPrecision, false, false);
+                log::info(
+                    "UVSR_PERF applied variant token: performance32");
+            }
+            if (perf.HasVariant("legacynoise"))
+            {
+                visibility.performance.configuration.noise =
+                    VisibilityNoiseDelivery::Legacy;
+                log::info(
+                    "UVSR_PERF applied variant token: legacynoise");
+            }
+            if (perf.HasVariant("toroidal"))
+            {
+                visibility.sampling.scheduler =
+                    VisibilitySampleScheduler::ToroidalBlueNoiseRankField;
+                visibility.performance.configuration.noise =
+                    VisibilityNoiseDelivery::Legacy;
+                log::info("UVSR_PERF applied variant token: toroidal");
+            }
+            if (perf.HasVariant("generic20"))
+            {
+                VisibilityPerformanceProfileConfiguration& configuration =
+                    visibility.performance.configuration;
+                configuration.trace =
+                    VisibilityTraceImplementation::LegacyGenericBitmask;
+                configuration.firstBounceSamples =
+                    VisibilitySampleSpecialization::Runtime;
+                configuration.laterBounceSamples =
+                    VisibilitySampleSpecialization::Runtime;
+                configuration.name = "UVSR PERF Generic Runtime 20";
+                log::info("UVSR_PERF applied variant token: generic20");
+            }
+            if (perf.HasVariant("fixed20"))
+            {
+                VisibilityPerformanceProfileConfiguration& configuration =
+                    visibility.performance.configuration;
+                configuration.trace =
+                    VisibilityTraceImplementation::FixedInterleavedBitmask;
+                configuration.firstBounceSamples =
+                    VisibilitySampleSpecialization::Fixed20;
+                configuration.laterBounceSamples =
+                    VisibilitySampleSpecialization::Fixed20;
+                configuration.name = "UVSR PERF Fixed 20";
+                log::info("UVSR_PERF applied variant token: fixed20");
+            }
+            if (perf.HasVariant("timersoff"))
+            {
+                log::info("UVSR_PERF applied variant token: timersoff");
+            }
+            if (perf.HasVariant("factory"))
+            {
+                log::info("UVSR_PERF applied variant token: factory");
+            }
+            if (perf.isolateVisibility)
+                uiData.EnableProceduralSky = false;
         }
         if (visibilityBenchmark.implementationProfileSpecified)
         {
@@ -14446,6 +15219,12 @@ int main(int __argc, const char* const* __argv)
 
     if (g_VisibilityBenchmarkFailed)
         return 1;
+    if (g_VisibilityPerfCapture.Enabled() &&
+        (!g_VisibilityPerfCapture.Complete() ||
+            g_VisibilityPerfCapture.Failed()))
+    {
+        return 1;
+    }
 	
 	return 0;
 }

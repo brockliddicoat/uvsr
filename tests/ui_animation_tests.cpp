@@ -588,6 +588,35 @@ int main()
             120.f),
         "an offscreen open body retains its last trustworthy measurement");
 
+    UiExpandedMeasurementState emptyMeasurement;
+    passed &= Check(
+        NeedsInitialUiExpandedMeasurement(true, emptyMeasurement) &&
+            !NeedsInitialUiExpandedMeasurement(false, emptyMeasurement),
+        "only a visible unmeasured toggle region requests initial layout");
+    emptyMeasurement = SubmitUiExpandedMeasurement(
+        emptyMeasurement,
+        0.f,
+        true,
+        true);
+    passed &= Check(
+        emptyMeasurement.valid &&
+            Near(emptyMeasurement.height, 0.f) &&
+            !NeedsInitialUiExpandedMeasurement(true, emptyMeasurement),
+        "a submitted zero-height body is a completed measurement");
+    const UiExpandedMeasurementState skippedMeasurement =
+        SubmitUiExpandedMeasurement(
+            UiExpandedMeasurementState{},
+            64.f,
+            true,
+            false);
+    passed &= Check(
+        !skippedMeasurement.valid &&
+            Near(skippedMeasurement.height, 0.f) &&
+            NeedsInitialUiExpandedMeasurement(
+                true,
+                skippedMeasurement),
+        "an offscreen body cannot complete initial measurement");
+
     if (!passed)
         return 1;
 
