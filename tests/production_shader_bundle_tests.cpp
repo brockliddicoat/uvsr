@@ -127,9 +127,21 @@ int main(int argc, char** argv)
     const std::filesystem::path configPath = argv[1];
     const std::filesystem::path manifestPath = argv[2];
     const std::filesystem::path stageRoot = argv[3];
+    const std::filesystem::path sourceDirectory =
+        configPath.parent_path();
+    const std::filesystem::path developerConfigPath =
+        sourceDirectory / "shaders.cfg";
+    const std::filesystem::path visibilitySourcePath =
+        sourceDirectory / "screen_space_visibility_cs.hlsl";
     passed &= Check(
         std::filesystem::is_regular_file(configPath),
         "production shader config must exist");
+    passed &= Check(
+        std::filesystem::is_regular_file(developerConfigPath),
+        "developer shader config must exist");
+    passed &= Check(
+        std::filesystem::is_regular_file(visibilitySourcePath),
+        "visibility shader source must exist");
     passed &= Check(
         std::filesystem::is_regular_file(manifestPath),
         "generated production runtime manifest must exist");
@@ -140,7 +152,40 @@ int main(int argc, char** argv)
         return 1;
 
     const std::string config = ReadText(configPath);
+    const std::string developerConfig = ReadText(developerConfigPath);
+    const std::string visibilitySource = ReadText(visibilitySourcePath);
     const std::string manifest = ReadText(manifestPath);
+    constexpr const char* runtimeParityBundle =
+        "screen_space_visibility_composed_packed_fast_cs.hlsl -T cs -E main -D VISIBILITY_ESTIMATOR=1 -D ENABLE_AO=1 -D ENABLE_GI=1 -D ENABLE_BOUNCE_REINJECTION=0 -D INITIALIZE_BOUNCE_CUMULATIVE=0 -D ENABLE_BOUNCE_METADATA=0 -D FIXED_SAMPLE_COUNT=0 -D RUNTIME_SAMPLE_PARITY={1,2} -D FIXED_RADIAL_EXPONENT_TWO=1 -D FIXED_DIRECT_DEPTH=1 -D OUTPUT_PACKED_EDGES=0";
+    passed &= Check(
+        CountOccurrences(config, runtimeParityBundle) == 1u &&
+            CountOccurrences(developerConfig, runtimeParityBundle) == 1u,
+        "developer and production configs must each package the compact even "
+        "and odd Runtime visibility loops");
+    passed &= Check(
+        visibilitySource.find("#ifndef RUNTIME_SAMPLE_PARITY") !=
+                std::string::npos &&
+            visibilitySource.find("#define RUNTIME_SAMPLE_PARITY 0") !=
+                std::string::npos &&
+            visibilitySource.find(
+                "#elif RUNTIME_SAMPLE_PARITY > 0") !=
+                std::string::npos &&
+            visibilitySource.find(
+                "#elif RUNTIME_SAMPLE_PARITY == 1") !=
+                std::string::npos &&
+            visibilitySource.find(
+                "#elif RUNTIME_SAMPLE_PARITY == 2") !=
+                std::string::npos &&
+            visibilitySource.find(
+                "uint selectedSampleCount = "
+                "g_Visibility.maximumSampleCount;") !=
+                std::string::npos &&
+            visibilitySource.find(
+                "SchedulerDimension_OddSampleSide") !=
+                std::string::npos,
+        "Runtime visibility must retain a robust Generic path, omit the "
+        "odd-side fetch for trusted-even counts, and keep stochastic "
+        "assignment for trusted-odd counts");
     constexpr const char* forbiddenShaders[] = {
         "smaa",
         "SMAA"
@@ -162,12 +207,18 @@ int main(int argc, char** argv)
     passed &= Check(
         CountOccurrences(
             config,
-            "taa_miniengine_blend_cs.hlsl") == 3u,
-        "production must compile exactly the three long-term temporal preset bundles");
+            "taa_miniengine_blend_cs.hlsl") == 1u,
+        "production must describe the complete normal-user temporal matrix once");
+    constexpr const char* temporalUserMatrix =
+        "taa_miniengine_blend_cs.hlsl -T cs -E main -D TAA_MOTION_SOURCE={0,1,2} -D TAA_CURRENT_RECONSTRUCTION={0,1} -D TAA_INTERIOR_WEIGHTING={0,1} -D TAA_HISTORY_FILTER={0,1,2,3} -D TAA_RECTIFICATION={0,1,2,3}";
     passed &= Check(
-        CountOccurrences(config, "TAA_EXPORT_SELECTIVE=0") == 3u &&
-            CountOccurrences(config, "TAA_SAMPLE_RESURRECTION=0") == 3u &&
-            CountOccurrences(config, "TAA_DEVELOPER_DEBUG=0") == 3u &&
+        CountOccurrences(config, temporalUserMatrix) == 1u,
+        "production TAA must package motion, de-jittering, stable-interior, "
+        "1x/5x/9x reconstruction, and rectification choices");
+    passed &= Check(
+        CountOccurrences(config, "TAA_EXPORT_SELECTIVE=0") == 1u &&
+            CountOccurrences(config, "TAA_SAMPLE_RESURRECTION=0") == 1u &&
+            CountOccurrences(config, "TAA_DEVELOPER_DEBUG=0") == 1u &&
             config.find("TAA_EXPORT_SELECTIVE={") ==
                 std::string::npos &&
             config.find("TAA_DEVELOPER_DEBUG=1") ==

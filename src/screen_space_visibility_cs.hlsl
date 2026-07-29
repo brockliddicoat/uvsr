@@ -32,6 +32,14 @@
 #ifndef FIXED_SAMPLE_COUNT
 #define FIXED_SAMPLE_COUNT 0
 #endif
+#ifndef LOOP_SAMPLE_COUNT
+#define LOOP_SAMPLE_COUNT 0
+#endif
+#ifndef RUNTIME_SAMPLE_PARITY
+// 0 = robust generic count, 1 = CPU-validated even count,
+// 2 = CPU-validated odd count.
+#define RUNTIME_SAMPLE_PARITY 0
+#endif
 #ifndef FIXED_RADIAL_EXPONENT_TWO
 #define FIXED_RADIAL_EXPONENT_TWO 0
 #endif
@@ -43,6 +51,23 @@
 #endif
 #ifndef OUTPUT_PACKED_EDGES
 #define OUTPUT_PACKED_EDGES 0
+#endif
+
+#if LOOP_SAMPLE_COUNT > 0 && FIXED_SAMPLE_COUNT > 0
+#error LOOP_SAMPLE_COUNT and FIXED_SAMPLE_COUNT are mutually exclusive.
+#endif
+#if RUNTIME_SAMPLE_PARITY > 0 && \
+    (LOOP_SAMPLE_COUNT > 0 || FIXED_SAMPLE_COUNT > 0)
+#error Runtime parity is mutually exclusive with fixed sample counts.
+#endif
+#if RUNTIME_SAMPLE_PARITY > 2
+#error RUNTIME_SAMPLE_PARITY must be 0, 1, or 2.
+#endif
+#if LOOP_SAMPLE_COUNT > 64
+#error LOOP_SAMPLE_COUNT cannot exceed the 64-sample visibility budget.
+#endif
+#if LOOP_SAMPLE_COUNT > 0 && ((LOOP_SAMPLE_COUNT & 1) != 0)
+#error LOOP_SAMPLE_COUNT requires an even sample count.
 #endif
 #ifndef PACKED_EDGE_MODE
 // 1 = depth, 2 = depth + normal, 3 = slope-adjusted depth + normal.
@@ -772,8 +797,19 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 
     uint phase = g_Visibility.frameIndex;
 #if FIXED_SAMPLE_COUNT == 0
+#if LOOP_SAMPLE_COUNT > 0
+    // This specialization keeps the compact generic loop while compiling its
+    // runtime sample budget into the shader.
+    static const uint selectedSampleCount = LOOP_SAMPLE_COUNT;
+#elif RUNTIME_SAMPLE_PARITY > 0
+    // The CPU clamps the count and selects a parity-matched shader. Keeping the
+    // number in the cbuffer permits every 1-64 slider value to share one of two
+    // compact loop permutations.
+    uint selectedSampleCount = g_Visibility.maximumSampleCount;
+#else
     uint selectedSampleCount = clamp(
         g_Visibility.maximumSampleCount, 1u, 64u);
+#endif
 #else
     // Curated even-count permutations compile out clamping, budget selection,
     // side division, and the odd-side random dimension. The runtime profile
@@ -874,6 +910,28 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             uint2(0u, 0u), uint2(0u, 0u)
         };
 
+#if LOOP_SAMPLE_COUNT > 0
+        static const uint sideStepCount[2] = {
+            LOOP_SAMPLE_COUNT / 2u,
+            LOOP_SAMPLE_COUNT / 2u
+        };
+#elif RUNTIME_SAMPLE_PARITY == 1
+        uint stepsPerSide = selectedSampleCount >> 1u;
+        uint sideStepCount[2] = {
+            stepsPerSide,
+            stepsPerSide
+        };
+#elif RUNTIME_SAMPLE_PARITY == 2
+        uint stepsPerSide = selectedSampleCount >> 1u;
+        uint oddSampleSide = SchedulerRandom(
+            dispatchPixel,
+            SchedulerDimension_OddSampleSide,
+            phase) < 0.5f ? 0u : 1u;
+        uint sideStepCount[2] = {
+            stepsPerSide + (oddSampleSide == 0u ? 1u : 0u),
+            stepsPerSide + (oddSampleSide == 1u ? 1u : 0u)
+        };
+#else
         uint stepsPerSide = selectedSampleCount >> 1u;
 #if FIXED_SAMPLE_COUNT == 0
         uint oddSampleSide = SchedulerRandom(
@@ -888,6 +946,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         };
 #else
         uint sideStepCount[2] = { stepsPerSide, stepsPerSide };
+#endif
 #endif
 #if PACKED_FAST_NOISE
         float radialSequence[2] = {

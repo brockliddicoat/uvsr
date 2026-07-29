@@ -48,6 +48,7 @@ namespace uvsr
     enum class VisibilitySampleSpecialization : uint8_t
     {
         Unset,
+        Generic,
         Runtime,
         Fixed8,
         Fixed12,
@@ -56,6 +57,13 @@ namespace uvsr
         Fixed24,
         Fixed48,
         Fixed64
+    };
+
+    enum class VisibilityRuntimeSampleContract : uint8_t
+    {
+        Generic,
+        TrustedEven,
+        TrustedOdd
     };
 
     enum class VisibilityNoiseDelivery : uint8_t
@@ -375,6 +383,13 @@ namespace uvsr
         bool requiresExplicitHalfRoundtrip = false;
         uint32_t fixedFirstBounceSampleCount = 0u;
         uint32_t fixedLaterBounceSampleCount = 0u;
+        // Runtime uses one CPU-validated parity contract per bounce. This
+        // compiles out clamping and the even-count odd-side fetch without
+        // creating one shader permutation for every slider value.
+        VisibilityRuntimeSampleContract firstBounceRuntimeSamples =
+            VisibilityRuntimeSampleContract::Generic;
+        VisibilityRuntimeSampleContract laterBounceRuntimeSamples =
+            VisibilityRuntimeSampleContract::Generic;
         uint32_t dispatchCount = 0u;
         // Exact descriptor counts for the simultaneously bound first-trace
         // layout. These are deliberately separate from bindingMask, which is

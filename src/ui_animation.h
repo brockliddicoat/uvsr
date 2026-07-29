@@ -522,6 +522,19 @@ namespace uvsr
             secondsSinceLastRequest >= UiDropdownSelectionSettleSeconds;
     }
 
+    struct UiExpandedMeasurementState
+    {
+        float height = 0.f;
+        bool valid = false;
+    };
+
+    [[nodiscard]] constexpr bool NeedsInitialUiExpandedMeasurement(
+        bool targetOpen,
+        const UiExpandedMeasurementState& state)
+    {
+        return targetOpen && !state.valid;
+    }
+
     // The expanded measurement is authoritative only while the region is both
     // logically open and actually submitted. Closing must retain the last open
     // measurement so a changing child cannot deform the exit envelope. An open
@@ -536,5 +549,22 @@ namespace uvsr
         return targetOpen && bodyVisible
             ? submittedExpandedHeight
             : cachedExpandedHeight;
+    }
+
+    [[nodiscard]] constexpr UiExpandedMeasurementState
+        SubmitUiExpandedMeasurement(
+            UiExpandedMeasurementState state,
+            float submittedExpandedHeight,
+            bool targetOpen,
+            bool bodyVisible)
+    {
+        state.height = ResolveUiExpandedMeasurement(
+            state.height,
+            submittedExpandedHeight,
+            targetOpen,
+            bodyVisible);
+        if (targetOpen && bodyVisible)
+            state.valid = true;
+        return state;
     }
 }

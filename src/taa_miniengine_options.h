@@ -93,6 +93,7 @@ namespace uvsr
         Bilinear = UVSR_TAA_HISTORY_BILINEAR,
         OneSampleBicubic = UVSR_TAA_HISTORY_ONE_SAMPLE_BICUBIC,
         FiveTapCatmullRom = UVSR_TAA_HISTORY_FIVE_TAP_CATMULL_ROM,
+        NineTapCatmullRom = UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM,
         Count = UVSR_TAA_HISTORY_FILTER_COUNT
     };
 
@@ -138,6 +139,7 @@ namespace uvsr
         Bilinear,
         OneSampleBicubic,
         FiveTapCatmullRom,
+        NineTapCatmullRom,
         Count
     };
 
@@ -288,11 +290,11 @@ namespace uvsr
         int32_t morphologyQuality = -1;
         // -1 inherits the selected preset. Non-negative values are explicit
         // prior-frame horizons; the resolver clamps temporal presets to the
-        // normal-menu slider's closed [1, 31] range.
+        // normal-menu slider's closed [1, 32] range.
         int32_t historyFrames = -1;
         // A negative value means that the selected preset owns the strength.
         // Non-negative values are an explicit image-quality override in the
-        // closed [0, 1] interval.
+        // closed [0, 2] interval.
         float historyStrength = -1.f;
 
         [[nodiscard]] constexpr bool IsCustom() const
@@ -433,8 +435,10 @@ namespace uvsr
         // influence the current result. This is intentionally distinct from
         // the shared two-slot physical ping-pong allocation.
         uint32_t historyFrames = 0u;
-        // Normalized strength within MiniEngine TAA's horizon-derived
-        // N/(N+1) maximum.
+        // Accepted-history scale in [0, 2]. The shader applies it before
+        // clamping to the horizon-derived N/(N+1) maximum, so values above
+        // one strengthen valid partial history without exceeding the chosen
+        // frame horizon.
         float historyStrength = 0.f;
         uint32_t rasterSampleCount = 1u;
     };
@@ -631,12 +635,15 @@ namespace uvsr
         case AntiAliasingPreset::TemporalBalanced:
         case AntiAliasingPreset::TemporalQuality:
         case AntiAliasingPreset::TemporalUltra:
-        case AntiAliasingPreset::IntelCmaa2:
-            return MorphologyApplication::ConservativeMorphological;
         case AntiAliasingPreset::Msaa2x:
         case AntiAliasingPreset::Msaa4x:
         case AntiAliasingPreset::Msaa8x:
         case AntiAliasingPreset::Msaa16x:
+            // Temporal and multisample presets are complete AA methods on
+            // their own. CMAA2 is an explicit optional post-process, not a
+            // hidden full-screen pass charged to every preset.
+            return MorphologyApplication::Off;
+        case AntiAliasingPreset::IntelCmaa2:
             return MorphologyApplication::ConservativeMorphological;
         default:
             return MorphologyApplication::Off;
@@ -678,7 +685,7 @@ namespace uvsr
             result.currentReconstruction =
                 MiniEngineTaaCurrentReconstruction::Direct;
             result.historyFilter =
-                MiniEngineTaaHistoryFilter::OneSampleBicubic;
+                MiniEngineTaaHistoryFilter::Bilinear;
             result.rectification =
                 MiniEngineTaaRectification::PairRgb;
             result.interiorWeighting =
@@ -688,15 +695,26 @@ namespace uvsr
             result.motionSource =
                 MiniEngineTaaMotionSource::CenterFirstEdgeDilation;
             result.currentReconstruction =
-                MiniEngineTaaCurrentReconstruction::DeJittered;
+                MiniEngineTaaCurrentReconstruction::Direct;
             result.historyFilter =
-                MiniEngineTaaHistoryFilter::OneSampleBicubic;
+                MiniEngineTaaHistoryFilter::Bilinear;
             result.rectification =
-                MiniEngineTaaRectification::PerPixelYCoCg;
+                MiniEngineTaaRectification::PairRgb;
             result.interiorWeighting =
                 MiniEngineTaaInteriorWeighting::Off;
             break;
         case AntiAliasingPreset::TemporalQuality:
+            result.motionSource =
+                MiniEngineTaaMotionSource::CenterFirstEdgeDilation;
+            result.currentReconstruction =
+                MiniEngineTaaCurrentReconstruction::Direct;
+            result.historyFilter =
+                MiniEngineTaaHistoryFilter::OneSampleBicubic;
+            result.rectification =
+                MiniEngineTaaRectification::VarianceYCoCg;
+            result.interiorWeighting =
+                MiniEngineTaaInteriorWeighting::Off;
+            break;
         case AntiAliasingPreset::TemporalUltra:
             result.motionSource =
                 MiniEngineTaaMotionSource::CenterFirstEdgeDilation;
@@ -752,7 +770,26 @@ namespace uvsr
         return value < 0
             ? preset
             : static_cast<uint32_t>(
-                value < 1 ? 1 : value > 31 ? 31 : value);
+                value < 1 ? 1 : value > 32 ? 32 : value);
+    }
+
+    [[nodiscard]] inline constexpr float ApplyMiniEngineTaaHistoryStrength(
+        float acceptedHistoryWeight,
+        float historyStrength,
+        float maximumHistoryWeight)
+    {
+        const float clampedStrength = historyStrength < 0.f
+            ? 0.f
+            : historyStrength > 2.f
+                ? 2.f
+                : historyStrength;
+        const float amplified =
+            acceptedHistoryWeight * clampedStrength;
+        return amplified < 0.f
+            ? 0.f
+            : amplified > maximumHistoryWeight
+                ? maximumHistoryWeight
+                : amplified;
     }
 
     [[nodiscard]] inline constexpr MiniEngineTaaSampleResurrection
@@ -810,6 +847,8 @@ namespace uvsr
             return MiniEngineTaaHistoryFilter::OneSampleBicubic;
         case MiniEngineTaaHistoryFilterOverride::FiveTapCatmullRom:
             return MiniEngineTaaHistoryFilter::FiveTapCatmullRom;
+        case MiniEngineTaaHistoryFilterOverride::NineTapCatmullRom:
+            return MiniEngineTaaHistoryFilter::NineTapCatmullRom;
         default:
             return preset;
         }
@@ -1014,8 +1053,8 @@ namespace uvsr
                 ? 0.f
                 : requestedHistoryStrength < 0.f
                     ? 0.f
-                    : requestedHistoryStrength > 1.f
-                        ? 1.f
+                    : requestedHistoryStrength > 2.f
+                        ? 2.f
                         : requestedHistoryStrength;
         switch (result.implementation)
         {
@@ -1148,9 +1187,9 @@ namespace uvsr
 
     // Resolve only settings backed by the shader/PSO bundle compiled into the
     // current build. Developer builds retain the complete experiment matrix.
-    // Production builds deliberately discard hidden override state before it
-    // reaches PSO selection, so a stale config or programmatic caller cannot
-    // request an uncompiled permutation and silently bypass anti-aliasing.
+    // Production retains normal image-quality controls backed by the complete
+    // baseline compute permutation matrix. Only resource-topology and
+    // developer execution experiments are discarded.
     [[nodiscard]] inline constexpr AntiAliasingSettings
         GetCompiledAntiAliasingSettings(
             const AntiAliasingSettings& settings)
@@ -1159,17 +1198,8 @@ namespace uvsr
         return settings;
 #else
         AntiAliasingSettings compiled = settings;
-        const int32_t historyFrames =
-            compiled.algorithmOverrides.historyFrames;
-        const float historyStrength =
-            compiled.algorithmOverrides.historyStrength;
-        compiled.algorithmOverrides =
-            MiniEngineTaaAlgorithmOverrides{};
-        // History horizon and strength are ordinary user controls backed by
-        // existing runtime constants. Preserve them in production; the
-        // remaining algorithm fields can request developer-only PSOs.
-        compiled.algorithmOverrides.historyFrames = historyFrames;
-        compiled.algorithmOverrides.historyStrength = historyStrength;
+        compiled.algorithmOverrides.sampleResurrection =
+            MiniEngineTaaSampleResurrectionOverride::FromPreset;
         compiled.performanceOverrides =
             MiniEngineTaaPerformanceOverrides{};
         return compiled;
@@ -1329,9 +1359,11 @@ namespace uvsr
         GetMiniEngineTaaHistoryColorSampleCount(
             MiniEngineTaaHistoryFilter filter)
     {
-        return filter == MiniEngineTaaHistoryFilter::FiveTapCatmullRom
-            ? 5u
-            : 1u;
+        return filter == MiniEngineTaaHistoryFilter::NineTapCatmullRom
+            ? 9u
+            : filter == MiniEngineTaaHistoryFilter::FiveTapCatmullRom
+                ? 5u
+                : 1u;
     }
 
     [[nodiscard]] inline constexpr uint32_t
@@ -1348,11 +1380,13 @@ namespace uvsr
         GetMiniEngineTaaHistoryDepthSampleCount(
             MiniEngineTaaHistoryFilter filter)
     {
-        // Every mode retains the central four-texel Gather. Five-Tap alone
-        // adds one discrete Gather for each of its four outer color taps.
-        return filter == MiniEngineTaaHistoryFilter::FiveTapCatmullRom
-            ? 4u
-            : 0u;
+        // Every mode retains the central four-texel Gather. Wide filters add
+        // one discrete Gather for every outer color tap.
+        return filter == MiniEngineTaaHistoryFilter::NineTapCatmullRom
+            ? 8u
+            : filter == MiniEngineTaaHistoryFilter::FiveTapCatmullRom
+                ? 4u
+                : 0u;
     }
 
     [[nodiscard]] inline constexpr const char* GetMiniEngineTaaMotionSourceLabel(
@@ -1404,6 +1438,8 @@ namespace uvsr
             return "1x Bicubic";
         case MiniEngineTaaHistoryFilter::FiveTapCatmullRom:
             return "5x Bicubic";
+        case MiniEngineTaaHistoryFilter::NineTapCatmullRom:
+            return "9x Bicubic";
         default: return "Unavailable";
         }
     }
@@ -1576,6 +1612,8 @@ namespace uvsr
             return "1x Bicubic";
         case MiniEngineTaaHistoryFilterOverride::FiveTapCatmullRom:
             return "5x Bicubic";
+        case MiniEngineTaaHistoryFilterOverride::NineTapCatmullRom:
+            return "9x Bicubic";
         default:
             return "Unavailable";
         }

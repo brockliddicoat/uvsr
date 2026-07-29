@@ -10,8 +10,10 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace donut;
@@ -76,6 +78,70 @@ namespace
         uint32_t)
     {
         return std::clamp(primarySampleCount, 1u, 64u);
+    }
+
+    bool HaveSameFloatBits(float left, float right)
+    {
+        uint32_t leftBits = 0u;
+        uint32_t rightBits = 0u;
+        static_assert(sizeof(leftBits) == sizeof(left));
+        std::memcpy(&leftBits, &left, sizeof(leftBits));
+        std::memcpy(&rightBits, &right, sizeof(rightBits));
+        return leftBits == rightBits;
+    }
+
+    bool HaveSameVisibilityPerformanceConfiguration(
+        const uvsr::VisibilityPerformanceProfileConfiguration& left,
+        const uvsr::VisibilityPerformanceProfileConfiguration& right)
+    {
+        return left.profile == right.profile &&
+            left.name == right.name &&
+            left.optimizationClass == right.optimizationClass &&
+            left.trace == right.trace &&
+            left.firstBounceSamples == right.firstBounceSamples &&
+            left.laterBounceSamples == right.laterBounceSamples &&
+            left.noise == right.noise &&
+            left.math == right.math &&
+            left.rawAoStorage == right.rawAoStorage &&
+            left.edgeStorage == right.edgeStorage &&
+            left.reconstruction == right.reconstruction &&
+            left.temporal == right.temporal &&
+            left.application == right.application &&
+            left.depth == right.depth &&
+            left.bindings == right.bindings &&
+            left.traversal == right.traversal &&
+            left.consumerRequirement == right.consumerRequirement &&
+            left.estimatorRequirement == right.estimatorRequirement &&
+            left.resolutionRequirement == right.resolutionRequirement &&
+            left.implementationStatus == right.implementationStatus &&
+            left.implementationNote == right.implementationNote &&
+            left.benchmarkOnly == right.benchmarkOnly &&
+            left.explicitHalfRoundtrip == right.explicitHalfRoundtrip &&
+            left.assignmentMask == right.assignmentMask;
+    }
+
+    bool HaveSameVisibilityPerformanceWorkload(
+        const uvsr::VisibilityPerformanceWorkload& left,
+        const uvsr::VisibilityPerformanceWorkload& right)
+    {
+        return left.consumer == right.consumer &&
+            left.estimator == right.estimator &&
+            left.resolution == right.resolution &&
+            left.scheduler == right.scheduler &&
+            left.firstBounceSampleCount == right.firstBounceSampleCount &&
+            left.laterBounceSampleCount == right.laterBounceSampleCount &&
+            left.bounceCount == right.bounceCount &&
+            left.outputWidth == right.outputWidth &&
+            left.outputHeight == right.outputHeight &&
+            HaveSameFloatBits(left.radius, right.radius) &&
+            HaveSameFloatBits(left.thickness, right.thickness) &&
+            HaveSameFloatBits(left.radialExponent, right.radialExponent) &&
+            left.threadGroupSizeX == right.threadGroupSizeX &&
+            left.threadGroupSizeY == right.threadGroupSizeY &&
+            left.temporalEnabled == right.temporalEnabled &&
+            left.spatialEnabled == right.spatialEnabled &&
+            left.depthHierarchyEnabled == right.depthHierarchyEnabled &&
+            left.runtimeConfigurationKey == right.runtimeConfigurationKey;
     }
 
     uint64_t TextureBytes(uint2 size, uint32_t bytesPerPixel)
@@ -333,7 +399,9 @@ namespace uvsr
                 VisibilityBindingStrategy::MinimalConditional;
             configuration.benchmarkOnly = false;
             if (configuration.laterBounceSamples ==
-                VisibilitySampleSpecialization::Runtime)
+                    VisibilitySampleSpecialization::Generic ||
+                configuration.laterBounceSamples ==
+                    VisibilitySampleSpecialization::Runtime)
             {
                 configuration.consumerRequirement =
                     configuration.application ==
@@ -487,6 +555,18 @@ namespace uvsr
         configuration.noise = VisibilityNoiseDelivery::PackedCurrentFast;
         configuration.bindings =
             VisibilityBindingStrategy::MinimalConditional;
+        if (quality == ScreenSpaceVisibilityQuality::High)
+        {
+            // Retain the compact generic loop and specialize only its stable
+            // High-preset constants. The fixed-20 family fully unrolls both
+            // sides and creates much larger driver IR on current hardware.
+            configuration.trace =
+                VisibilityTraceImplementation::LegacyGenericBitmask;
+            configuration.firstBounceSamples =
+                VisibilitySampleSpecialization::Runtime;
+            configuration.laterBounceSamples =
+                VisibilitySampleSpecialization::Runtime;
+        }
         configuration.benchmarkOnly = false;
         configuration.implementationStatus =
             VisibilityImplementationStatus::Implemented;
@@ -529,8 +609,12 @@ namespace uvsr
                 VisibilityResolutionRequirement::Any;
             settings.performance.packedEdgeMode =
                 VisibilityPackedEdgeMode::DepthAndNormal;
+            const bool performanceHigh =
+                quality == ScreenSpaceVisibilityQuality::High;
             ApplyVisibilityBufferPrecisionPreset(
-                settings.performance.bufferPrecision, false, false);
+                settings.performance.bufferPrecision,
+                performanceHigh,
+                performanceHigh);
         }
 
         switch (quality)
@@ -1717,6 +1801,7 @@ namespace uvsr
                 break;
             case Stage::FirstTrace:
                 m_Timings.firstTraceMs = milliseconds;
+                m_Timings.firstTraceFrameId = originatingFrame;
                 m_Timings.samplingMs =
                     m_Timings.firstTraceMs + m_Timings.laterTraceMs;
                 break;
@@ -1751,9 +1836,11 @@ namespace uvsr
                 break;
             case Stage::Composition:
                 m_Timings.compositionMs = milliseconds;
+                m_Timings.compositionFrameId = originatingFrame;
                 break;
             case Stage::EffectEnvelope:
                 m_Timings.effectEnvelopeMs = milliseconds;
+                m_Timings.effectEnvelopeFrameId = originatingFrame;
                 break;
             default:
                 break;
@@ -1921,33 +2008,51 @@ namespace uvsr
             settings.sampling.stepDistributionExponent;
         performanceWorkload.threadGroupSizeX = kThreadGroupSize;
         performanceWorkload.threadGroupSizeY = kThreadGroupSize;
-        m_Timings.activeWorkload = performanceWorkload;
-        m_Timings.hasActiveWorkload = true;
 
-        const VisibilityExecutionPlan selectedPlan =
-            ResolveVisibilityExecutionPlan(
-                selectedConfig, performanceWorkload);
+        const bool executionPlanCacheHit =
+            m_HasExecutionPlanCache &&
+            HaveSameVisibilityPerformanceConfiguration(
+                m_SelectedExecutionPlan.configuration, selectedConfig) &&
+            HaveSameVisibilityPerformanceWorkload(
+                m_SelectedExecutionPlan.workload, performanceWorkload);
+        if (!executionPlanCacheHit)
+        {
+            VisibilityExecutionPlan selectedPlan =
+                ResolveVisibilityExecutionPlan(
+                    selectedConfig, performanceWorkload);
+            VisibilityExecutionPlan executionPlan;
+            if (selectedPlan.valid)
+            {
+                executionPlan = selectedPlan;
+            }
+            else
+            {
+                VisibilityPerformanceWorkload referenceWorkload =
+                    performanceWorkload;
+                referenceWorkload.scheduler = GetPerformanceScheduler(
+                    settings.sampling.scheduler);
+                referenceWorkload.threadGroupSizeX = kThreadGroupSize;
+                referenceWorkload.threadGroupSizeY = kThreadGroupSize;
+                executionPlan = ResolveVisibilityExecutionPlan(
+                    VisibilityPerformanceProfile::Reference,
+                    referenceWorkload);
+                assert(executionPlan.valid);
+            }
+            if (m_ExecutionPlan.valid &&
+                m_ExecutionPlan.historyResetKey !=
+                    executionPlan.historyResetKey)
+            {
+                ResetHistory();
+            }
+            m_SelectedExecutionPlan = std::move(selectedPlan);
+            m_ExecutionPlan = std::move(executionPlan);
+            m_HasExecutionPlanCache = true;
+        }
+
+        const VisibilityExecutionPlan& selectedPlan =
+            m_SelectedExecutionPlan;
+        const VisibilityExecutionPlan& executionPlan = m_ExecutionPlan;
         const bool selectedPlanUsable = selectedPlan.valid;
-        VisibilityExecutionPlan executionPlan = selectedPlan;
-        if (!selectedPlanUsable)
-        {
-            VisibilityPerformanceWorkload referenceWorkload =
-                performanceWorkload;
-            referenceWorkload.scheduler = GetPerformanceScheduler(
-                settings.sampling.scheduler);
-            referenceWorkload.threadGroupSizeX = kThreadGroupSize;
-            referenceWorkload.threadGroupSizeY = kThreadGroupSize;
-            executionPlan = ResolveVisibilityExecutionPlan(
-                VisibilityPerformanceProfile::Reference,
-                referenceWorkload);
-            assert(executionPlan.valid);
-        }
-        if (m_ExecutionPlan.valid &&
-            m_ExecutionPlan.historyResetKey != executionPlan.historyResetKey)
-        {
-            ResetHistory();
-        }
-        m_ExecutionPlan = executionPlan;
 
         const VisibilityPerformanceProfileConfiguration& performanceConfig =
             executionPlan.configuration;
@@ -1997,18 +2102,27 @@ namespace uvsr
             packedFastEnabled,
             packedEdgesEnabled,
             bufferPrecision);
-        m_Timings.profileValid = selectedPlanUsable;
-        m_Timings.profileError = selectedPlan.valid
-            ? std::string() : selectedPlan.errorMessage;
-        m_Timings.activePermutation = selectedPlanUsable
-            ? selectedPlan.permutationName
-            : std::string("Reference Fallback: ") +
-                std::string(selectedConfig.name);
-        m_Timings.activeSrvCount = executionPlan.firstTraceSrvCount;
-        m_Timings.activeUavCount = executionPlan.firstTraceUavCount;
-        m_Timings.peakSrvCount = executionPlan.peakSrvCount;
-        m_Timings.peakUavCount = executionPlan.peakUavCount;
-        m_Timings.activeDispatchCount = executionPlan.dispatchCount;
+        const bool refreshPlanMetadata =
+            !executionPlanCacheHit || !m_Timings.hasActiveWorkload;
+        if (refreshPlanMetadata)
+        {
+            m_Timings.activeWorkload = performanceWorkload;
+            m_Timings.hasActiveWorkload = true;
+            m_Timings.profileValid = selectedPlanUsable;
+            m_Timings.profileError = selectedPlanUsable
+                ? std::string() : selectedPlan.errorMessage;
+            m_Timings.activePermutation = selectedPlanUsable
+                ? selectedPlan.permutationName
+                : std::string("Reference Fallback: ") +
+                    std::string(selectedPlan.configuration.name);
+            m_Timings.activeSrvCount =
+                executionPlan.firstTraceSrvCount;
+            m_Timings.activeUavCount =
+                executionPlan.firstTraceUavCount;
+            m_Timings.peakSrvCount = executionPlan.peakSrvCount;
+            m_Timings.peakUavCount = executionPlan.peakUavCount;
+            m_Timings.activeDispatchCount = executionPlan.dispatchCount;
+        }
         if (m_HistoryEstimatorInitialized &&
             m_HistoryEstimator != settings.estimator)
         {
@@ -2075,15 +2189,22 @@ namespace uvsr
             settings.showIndirectDiffuseOnly ? 1u : 0u;
         constants.packedEdgeMode = static_cast<uint32_t>(
             settings.performance.packedEdgeMode) + 1u;
-        const uint64_t historyConfigurationKey =
-            BuildHistoryConfigurationKey(constants, activeBounceCount);
-        if (m_HistoryConfigurationInitialized &&
-            historyConfigurationKey != m_HistoryConfigurationKey)
+        if (temporalEnabled)
         {
-            ResetHistory();
+            const uint64_t historyConfigurationKey =
+                BuildHistoryConfigurationKey(constants, activeBounceCount);
+            if (m_HistoryConfigurationInitialized &&
+                historyConfigurationKey != m_HistoryConfigurationKey)
+            {
+                ResetHistory();
+            }
+            m_HistoryConfigurationKey = historyConfigurationKey;
+            m_HistoryConfigurationInitialized = true;
         }
-        m_HistoryConfigurationKey = historyConfigurationKey;
-        m_HistoryConfigurationInitialized = true;
+        else
+        {
+            m_HistoryConfigurationInitialized = false;
+        }
         constants.historyValid = temporalEnabled && m_HistoryValid ? 1u : 0u;
         BeginStage(commandList, Stage::EffectEnvelope);
         commandList->writeBuffer(
@@ -2186,6 +2307,9 @@ namespace uvsr
                             FixedInterleavedBitmask
                     ? executionPlan.fixedFirstBounceSampleCount
                     : 0u;
+            const uint32_t runtimeSampleParity =
+                static_cast<uint32_t>(
+                    executionPlan.firstBounceRuntimeSamples);
             advancedFirstMacros = {
                 { "VISIBILITY_ESTIMATOR",
                     std::to_string(estimatorIndex) },
@@ -2198,11 +2322,18 @@ namespace uvsr
                 { "FIXED_SAMPLE_COUNT",
                     std::to_string(fixedSampleCount) },
                 { "FIXED_RADIAL_EXPONENT_TWO",
-                    fixedSampleCount != 0u ? "1" : "0" },
+                    performanceWorkload.radialExponent == 2.f
+                        ? "1" : "0" },
                 { "FIXED_DIRECT_DEPTH", useDepthHierarchy ? "0" : "1" },
                 { "OUTPUT_PACKED_EDGES",
                     packedEdgesEnabled ? "1" : "0" }
             };
+            if (runtimeSampleParity != 0u)
+            {
+                advancedFirstMacros.push_back({
+                    "RUNTIME_SAMPLE_PARITY",
+                    std::to_string(runtimeSampleParity) });
+            }
         }
         else if (packedEdgesEnabled)
         {
@@ -2226,7 +2357,8 @@ namespace uvsr
                 { "FIXED_SAMPLE_COUNT",
                     std::to_string(fixedSampleCount) },
                 { "FIXED_RADIAL_EXPONENT_TWO",
-                    fixedSampleCount != 0u ? "1" : "0" },
+                    performanceWorkload.radialExponent == 2.f
+                        ? "1" : "0" },
                 { "FIXED_DIRECT_DEPTH", useDepthHierarchy ? "0" : "1" },
                 { "SCHEDULER_SPECIALIZATION",
                     std::to_string(schedulerSpecialization) }
@@ -2425,12 +2557,18 @@ namespace uvsr
 
         const uint32_t primaryMaximumSampleCount =
             constants.maximumSampleCount;
-        const float boundedBounceContribution =
-            std::max(settings.indirectDiffuse.minimumBounceContribution, 0.f);
-        const float contributionTerminatedBase =
-            std::max(boundedBounceContribution,
+        const bool hasLaterBounces = activeBounceCount > 1u;
+        float boundedBounceContribution = 0.f;
+        float contributionTerminatedBase = 0.f;
+        if (hasLaterBounces)
+        {
+            boundedBounceContribution = std::max(
+                settings.indirectDiffuse.minimumBounceContribution, 0.f);
+            contributionTerminatedBase = std::max(
+                boundedBounceContribution,
                 MinimumContributionTerminatedThreshold);
-        if (contributionTerminatedBounces && activeBounceCount > 1u)
+        }
+        if (contributionTerminatedBounces && hasLaterBounces)
         {
             nvrhi::DispatchIndirectArguments maximumDispatch;
             maximumDispatch.setGroups3D(
@@ -2443,7 +2581,7 @@ namespace uvsr
                 initialArguments.data(),
                 sizeof(initialArguments));
         }
-        if (activeBounceCount > 1u)
+        if (hasLaterBounces)
             BeginStage(commandList, Stage::LaterTrace);
         else
         {

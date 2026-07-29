@@ -144,8 +144,8 @@ int main(int argc, char** argv)
                 resolved.rasterSampleCount ==
                     expectedSamples[qualityIndex] &&
                 resolved.subpixelMorphology ==
-                    Morphology::ConservativeMorphological,
-            "every MSAA quality must resolve to 2x/4x/8x/16x plus CMAA2");
+                    Morphology::Off,
+            "every MSAA quality must resolve to 2x/4x/8x/16x without a hidden CMAA2 pass");
     }
 
     constexpr std::array<Preset, 4> expectedTemporal = {
@@ -185,6 +185,9 @@ int main(int argc, char** argv)
     const uvsr::MiniEngineTaaOptions qualityOptions =
         uvsr::GetPresetTemporalOptions(
             Preset::TemporalQuality);
+    const uvsr::MiniEngineTaaOptions ultraOptions =
+        uvsr::GetPresetTemporalOptions(
+            Preset::TemporalUltra);
     for (uint32_t presetIndex = 0u;
         presetIndex < static_cast<uint32_t>(Preset::Count);
         ++presetIndex)
@@ -201,30 +204,44 @@ int main(int argc, char** argv)
             performanceOptions.currentReconstruction ==
                 uvsr::MiniEngineTaaCurrentReconstruction::Direct &&
             performanceOptions.historyFilter ==
-                uvsr::MiniEngineTaaHistoryFilter::OneSampleBicubic &&
+                uvsr::MiniEngineTaaHistoryFilter::Bilinear &&
             performanceOptions.rectification ==
                 uvsr::MiniEngineTaaRectification::PairRgb,
-        "Temporal Low must keep the fast validated MiniEngine configuration");
+        "Temporal Low must use direct current and bilinear history reconstruction");
     passed &= Check(
         balancedOptions.motionSource ==
                 uvsr::MiniEngineTaaMotionSource::
                     CenterFirstEdgeDilation &&
             balancedOptions.currentReconstruction ==
-                uvsr::MiniEngineTaaCurrentReconstruction::DeJittered &&
+                uvsr::MiniEngineTaaCurrentReconstruction::Direct &&
+            balancedOptions.historyFilter ==
+                uvsr::MiniEngineTaaHistoryFilter::Bilinear &&
+            balancedOptions.rectification ==
+                uvsr::MiniEngineTaaRectification::PairRgb &&
             balancedOptions.interiorWeighting ==
                 uvsr::MiniEngineTaaInteriorWeighting::Off,
-        "Temporal Medium must keep stable edge ownership and leave Stable Interior off");
+        "Temporal Medium must leave Dejitter off, use bilinear history "
+        "reconstruction, and default to Pair Tristimulus rectification");
     passed &= Check(
         qualityOptions.historyFilter ==
-                uvsr::MiniEngineTaaHistoryFilter::FiveTapCatmullRom &&
+                uvsr::MiniEngineTaaHistoryFilter::OneSampleBicubic &&
+            qualityOptions.currentReconstruction ==
+                uvsr::MiniEngineTaaCurrentReconstruction::Direct &&
             qualityOptions.rectification ==
                 uvsr::MiniEngineTaaRectification::VarianceYCoCg &&
             qualityOptions.interiorWeighting ==
-                uvsr::MiniEngineTaaInteriorWeighting::Off &&
-            uvsr::GetPresetTemporalOptions(
-                Preset::TemporalUltra).interiorWeighting ==
                 uvsr::MiniEngineTaaInteriorWeighting::Off,
-        "Temporal High and Ultra must keep the wider variance-aware configuration with Stable Interior off");
+        "Temporal High must leave Dejitter off and use one-sample bicubic history reconstruction");
+    passed &= Check(
+        ultraOptions.historyFilter ==
+                uvsr::MiniEngineTaaHistoryFilter::FiveTapCatmullRom &&
+            ultraOptions.currentReconstruction ==
+                uvsr::MiniEngineTaaCurrentReconstruction::DeJittered &&
+            ultraOptions.rectification ==
+                uvsr::MiniEngineTaaRectification::VarianceYCoCg &&
+            ultraOptions.interiorWeighting ==
+                uvsr::MiniEngineTaaInteriorWeighting::Off,
+        "Temporal Ultra alone must enable Dejitter and use five-tap bicubic history reconstruction");
 
     uvsr::AntiAliasingSettings temporal;
     temporal.method = Method::TemporalSubpixelMorphological;
@@ -259,7 +276,8 @@ int main(int argc, char** argv)
 
     uvsr::AntiAliasingSettings spatialChange = temporal;
     spatialChange.algorithmOverrides.subpixelMorphology =
-        uvsr::MorphologyApplicationOverride::Off;
+        uvsr::MorphologyApplicationOverride::
+            ConservativeMorphological;
     passed &= Check(
         !uvsr::AntiAliasingSettingsRequireTemporalReset(
             temporal,
@@ -318,25 +336,32 @@ int main(int argc, char** argv)
     const auto clampedResolved =
         uvsr::ResolveAntiAliasingSettings(clampedHistory);
     passed &= Check(
-        clampedResolved.historyFrames == 31u &&
-            clampedResolved.historyStrength == 1.f,
+        clampedResolved.historyFrames == 32u &&
+            clampedResolved.historyStrength == 2.f,
         "history sliders must clamp to their documented ranges");
+    passed &= Check(
+        uvsr::ApplyMiniEngineTaaHistoryStrength(
+            0.f, 2.f, 0.9f) == 0.f &&
+            uvsr::ApplyMiniEngineTaaHistoryStrength(
+                0.25f, 2.f, 0.9f) == 0.5f &&
+            uvsr::ApplyMiniEngineTaaHistoryStrength(
+                0.75f, 2.f, 0.9f) == 0.9f,
+        "200-percent history strength must preserve rejection and respect the horizon cap");
 
     uvsr::AntiAliasingSettings redundantOverrides;
     redundantOverrides.algorithmOverrides.motionSource =
         uvsr::MiniEngineTaaMotionSourceOverride::
             CenterFirstEdgeDilation;
     redundantOverrides.algorithmOverrides.currentReconstruction =
-        uvsr::MiniEngineTaaCurrentReconstructionOverride::DeJittered;
+        uvsr::MiniEngineTaaCurrentReconstructionOverride::Direct;
     redundantOverrides.algorithmOverrides.historyFilter =
-        uvsr::MiniEngineTaaHistoryFilterOverride::OneSampleBicubic;
+        uvsr::MiniEngineTaaHistoryFilterOverride::Bilinear;
     redundantOverrides.algorithmOverrides.rectification =
-        uvsr::MiniEngineTaaRectificationOverride::PerPixelYCoCg;
+        uvsr::MiniEngineTaaRectificationOverride::PairRgb;
     redundantOverrides.algorithmOverrides.sampleResurrection =
         uvsr::MiniEngineTaaSampleResurrectionOverride::Off;
     redundantOverrides.algorithmOverrides.subpixelMorphology =
-        uvsr::MorphologyApplicationOverride::
-            ConservativeMorphological;
+        uvsr::MorphologyApplicationOverride::Off;
     uvsr::NormalizeRedundantAntiAliasingOverrides(
         redundantOverrides);
     passed &= Check(
@@ -360,14 +385,101 @@ int main(int argc, char** argv)
     distinctOverrides.algorithmOverrides.motionSource =
         uvsr::MiniEngineTaaMotionSourceOverride::Center;
     distinctOverrides.algorithmOverrides.subpixelMorphology =
-        uvsr::MorphologyApplicationOverride::Off;
+        uvsr::MorphologyApplicationOverride::
+            ConservativeMorphological;
     uvsr::NormalizeRedundantAntiAliasingOverrides(distinctOverrides);
     passed &= Check(
         distinctOverrides.algorithmOverrides.motionSource ==
                 uvsr::MiniEngineTaaMotionSourceOverride::Center &&
             distinctOverrides.algorithmOverrides.subpixelMorphology ==
-                uvsr::MorphologyApplicationOverride::Off,
+                uvsr::MorphologyApplicationOverride::
+                    ConservativeMorphological,
         "normalization must retain image-changing Aliasing overrides");
+
+#if !UVSR_AA_DEVELOPER_OVERRIDES
+    uvsr::AntiAliasingSettings productionControls;
+    productionControls.algorithmOverrides.motionSource =
+        uvsr::MiniEngineTaaMotionSourceOverride::ClosestCross;
+    productionControls.algorithmOverrides.currentReconstruction =
+        uvsr::MiniEngineTaaCurrentReconstructionOverride::Direct;
+    productionControls.algorithmOverrides.historyFilter =
+        uvsr::MiniEngineTaaHistoryFilterOverride::NineTapCatmullRom;
+    productionControls.algorithmOverrides.rectification =
+        uvsr::MiniEngineTaaRectificationOverride::PerPixelRgb;
+    productionControls.algorithmOverrides.stableInterior =
+        uvsr::MiniEngineTaaStableInteriorOverride::On;
+    productionControls.algorithmOverrides.subpixelMorphology =
+        uvsr::MorphologyApplicationOverride::
+            ConservativeMorphological;
+    productionControls.algorithmOverrides.sampleResurrection =
+        uvsr::MiniEngineTaaSampleResurrectionOverride::TwoOlderFrames;
+    productionControls.performanceOverrides.sharedWorkReuse =
+        uvsr::MiniEngineTaaAutoToggle::On;
+    const auto compiledControls =
+        uvsr::GetCompiledAntiAliasingSettings(productionControls);
+    passed &= Check(
+        compiledControls.algorithmOverrides.motionSource ==
+                productionControls.algorithmOverrides.motionSource &&
+            compiledControls.algorithmOverrides.currentReconstruction ==
+                productionControls.algorithmOverrides.currentReconstruction &&
+            compiledControls.algorithmOverrides.historyFilter ==
+                productionControls.algorithmOverrides.historyFilter &&
+            compiledControls.algorithmOverrides.rectification ==
+                productionControls.algorithmOverrides.rectification &&
+            compiledControls.algorithmOverrides.stableInterior ==
+                productionControls.algorithmOverrides.stableInterior &&
+            compiledControls.algorithmOverrides.subpixelMorphology ==
+                productionControls.algorithmOverrides.subpixelMorphology &&
+            compiledControls.algorithmOverrides.sampleResurrection ==
+                uvsr::MiniEngineTaaSampleResurrectionOverride::FromPreset &&
+            !compiledControls.performanceOverrides.IsCustom(),
+        "production must preserve user image controls while stripping only "
+        "developer resource and execution experiments");
+#endif
+
+    std::array<bool, uvsr::MiniEngineTaaBlendPermutationCount>
+        observedTaaPermutations{};
+    uint32_t observedTaaPermutationCount = 0u;
+    for (uint32_t motion = 0u;
+        motion < uvsr::MiniEngineTaaMotionSourceCount;
+        ++motion)
+    for (uint32_t current = 0u;
+        current < uvsr::MiniEngineTaaCurrentReconstructionCount;
+        ++current)
+    for (uint32_t interior = 0u;
+        interior < uvsr::MiniEngineTaaInteriorWeightingCount;
+        ++interior)
+    for (uint32_t history = 0u;
+        history < uvsr::MiniEngineTaaHistoryFilterCount;
+        ++history)
+    for (uint32_t rectification = 0u;
+        rectification < uvsr::MiniEngineTaaRectificationCount;
+        ++rectification)
+    {
+        uvsr::MiniEngineTaaOptions options;
+        options.motionSource =
+            static_cast<uvsr::MiniEngineTaaMotionSource>(motion);
+        options.currentReconstruction =
+            static_cast<uvsr::MiniEngineTaaCurrentReconstruction>(current);
+        options.interiorWeighting =
+            static_cast<uvsr::MiniEngineTaaInteriorWeighting>(interior);
+        options.historyFilter =
+            static_cast<uvsr::MiniEngineTaaHistoryFilter>(history);
+        options.rectification =
+            static_cast<uvsr::MiniEngineTaaRectification>(rectification);
+        const uint32_t index =
+            uvsr::GetMiniEngineTaaBlendPermutationIndex(options);
+        if (index < observedTaaPermutations.size() &&
+            !observedTaaPermutations[index])
+        {
+            observedTaaPermutations[index] = true;
+            ++observedTaaPermutationCount;
+        }
+    }
+    passed &= Check(
+        observedTaaPermutationCount ==
+            uvsr::MiniEngineTaaBlendPermutationCount,
+        "all 192 normal-user TAA algorithms must have unique PSO indices");
 
     passed &= Check(
         uvsr::GetMiniEngineTaaHistoryColorSampleCount(
@@ -377,8 +489,32 @@ int main(int argc, char** argv)
                     OneSampleBicubic) == 1u &&
             uvsr::GetMiniEngineTaaHistoryColorSampleCount(
                 uvsr::MiniEngineTaaHistoryFilter::
-                    FiveTapCatmullRom) == 5u,
+                    FiveTapCatmullRom) == 5u &&
+            uvsr::GetMiniEngineTaaHistoryColorSampleCount(
+                uvsr::MiniEngineTaaHistoryFilter::
+                    NineTapCatmullRom) == 9u &&
+            uvsr::GetMiniEngineTaaHistoryDepthSampleCount(
+                uvsr::MiniEngineTaaHistoryFilter::
+                    NineTapCatmullRom) == 8u,
         "history-filter labels and real history fetch counts diverged");
+    passed &= Check(
+        std::string(uvsr::GetMiniEngineTaaHistoryFilterLabel(
+            uvsr::MiniEngineTaaHistoryFilter::NineTapCatmullRom)) ==
+                "9x Bicubic" &&
+            std::string(uvsr::GetMiniEngineTaaHistoryFilterOverrideLabel(
+                uvsr::MiniEngineTaaHistoryFilterOverride::
+                    NineTapCatmullRom)) == "9x Bicubic" &&
+            std::string(uvsr::GetMiniEngineTaaCurrentReconstructionLabel(
+                uvsr::MiniEngineTaaCurrentReconstruction::DeJittered)) ==
+                "De-Jittered" &&
+            std::string(uvsr::GetMiniEngineTaaMotionSourceLabel(
+                uvsr::MiniEngineTaaMotionSource::ClosestCross)) ==
+                "Closest Cross" &&
+            std::string(uvsr::GetMiniEngineTaaMotionSourceLabel(
+                uvsr::MiniEngineTaaMotionSource::
+                    CenterFirstEdgeDilation)) == "Edge Dilation",
+        "normal TAA menu labels must expose the requested reconstruction, "
+        "de-jittering, and motion-source choices");
 
     const std::array<float, 4> coherentDepths = {
         0.5f, 0.5001f, 0.4999f, 0.5f

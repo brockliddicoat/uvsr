@@ -127,14 +127,8 @@ namespace uvsr
             2u *
             MiniEngineTaaSampleResurrectionCount *
             2u;
-#if UVSR_AA_DEVELOPER_OVERRIDES
         static constexpr uint32_t c_RuntimeAlgorithmPermutationCount =
             MiniEngineTaaBlendPermutationCount;
-#else
-        // Production packages contain only the four shipping temporal
-        // bundles. Developer packages retain the complete override matrix.
-        static constexpr uint32_t c_RuntimeAlgorithmPermutationCount = 4u;
-#endif
         static constexpr uint32_t c_PerformancePermutationCount =
             c_RuntimeAlgorithmPermutationCount *
             MiniEngineTaaStaticPerformanceCount *

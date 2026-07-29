@@ -30,10 +30,11 @@ selectable; their historical measurements remain in the optimization ledger.
 ## Factory Defaults
 
 - Visibility, AO, and GI are enabled at full resolution.
-- High quality traces 20 fixed samples on one slice per eligible pixel.
+- High quality traces 20 samples through the compact Runtime loop on one slice
+  per eligible pixel.
 - Uniform Solid Angle and Offline Packed Spacetime Noise are selected.
-- Sampling uses one fixed per-pixel count; adaptive sparse sampling has been
-  removed.
+- Sampling uses one per-pixel budget shared by AO and every GI bounce.
+  Adaptive sparse sampling has been removed.
 - AO strength and power are both 1.0. GI intensity is 4.0 with
   **Limit Bounces** enabled at one bounce and a 0.001 contribution cutoff.
   The identity AO Power value selects a compositor with `pow` compiled out.
@@ -51,12 +52,12 @@ The Visibility panel owns the profile selector and normal AO/GI settings.
 Detailed plan, resource, traffic, timing, and benchmark information lives in
 the Statistics drawer rather than occupying the main control surface.
 The panel is a compact scrollable control surface modeled on the existing AA
-panel: full-width dropdowns expose Profile, Estimator, Noise Pattern, Exact
-Sample Count, Reconstruction Method, and Final Application choices. Noise
+panel: full-width dropdowns expose Profile, Estimator, Noise Pattern, Samples,
+Reconstruction Method, and Final Application choices. Noise
 Pattern is directly below Estimator. **Buffers** is a separate sibling drawer
 immediately below the visibility drawer. Its top **Preset** dropdown changes
-only raw, cumulative, final, and depth-hierarchy formats. Low and Medium begin
-with Performance Precision; High and Ultra begin with Default Precision.
+only raw, cumulative, final, and depth-hierarchy formats. Low, Medium, and High
+begin with Performance Precision; Ultra begins with Default Precision.
 Benchmark controls are in the unified Statistics drawer. Output/scene locations are
 opened through folder buttons, so long filesystem paths do not displace the
 settings a person is trying to compare.
@@ -72,7 +73,7 @@ separate:
   preset or individual format change preserves every non-buffer choice and
   changes the product profile label to its originating preset plus **(Custom)**,
   such as **Medium (Custom)**.
-- **Dispatch, Memory & Cache** reports thread-group, fixed specialization,
+- **Dispatch, Memory & Cache** reports thread-group and sample specialization,
   depth mode, minimal bindings, lazy pipeline selection, resource counts, and
   traffic. The fixed shaders compile both direct-depth and hierarchy-aware
   variants; the latter preserves the existing distance-threshold mip mapping
@@ -110,9 +111,13 @@ The internal benchmark profile status is:
 | Exact-Fast AO+GI 16T | Partial Control | Exact fixed-16 trace; offline-computed packed noise exists only for fixed 8 |
 | Exact-Fast Multi-Bounce | Partial Control | Exact fixed-8 first and later traces; no offline-computed packed noise or fused multi-bounce application |
 
-The exact sample-count selector exposes compiled 8/12/16/20/24/48/64 AO, GI,
-and AO+GI traces. The selected total is shared by the first trace and every GI
-bounce; there is no separate later-bounce count. The custom implementation
+The Samples slider controls the total shared by the first trace and every GI
+bounce; there is no separate later-bounce count. Generic and Runtime expose the
+complete 1-64 range. Fixed maps the same slider to compiled
+8/12/16/20/24/48/64 AO, GI, and AO+GI traces. **Sample Count Mode** and
+**Distribution** are in the default-collapsed Visibility **Developer Options**
+panel. Fixed bakes Distribution 2.00 into the shader and disables that slider.
+The custom implementation
 selector additionally exposes exact fused resolve/application;
 **Depth-Guided Reconstruction**, **Depth-Normal Reconstruction**,
 **Slope-Aware Reconstruction**, **Leakage-Limited Reconstruction**, and fused
@@ -130,27 +135,33 @@ being cleared by unrelated edits. Labels explicitly identify the remaining
 The unified **Profile** dropdown beneath **Sampling Resolution** exposes four
 product presets:
 
-| Preset | Resolution | Exact Samples | GI Bounces | Reconstruction |
-| --- | --- | ---: | ---: | --- |
-| Low | Quarter | 8 | 1 | Compact joint-bilateral upsampling |
-| Medium | Half | 8 | 1 | Compact joint-bilateral upsampling |
-| High | Full | 20 | 1 | Unreconstructed full-resolution input |
-| Ultra | Full | 48 | 2 | Unreconstructed full-resolution input |
+| Preset | Resolution | Sample Mode And Count | Precision | GI Bounces | Reconstruction |
+| --- | --- | --- | --- | ---: | --- |
+| Low | Quarter | Fixed 8 | Performance | 1 | Compact joint-bilateral upsampling |
+| Medium | Half | Fixed 8 | Performance | 1 | Compact joint-bilateral upsampling |
+| High | Full | Runtime 20 | Performance | 1 | Unreconstructed full-resolution input |
+| Ultra | Full | Fixed 48 | Default | 2 | Unreconstructed full-resolution input |
 
 High is the factory default and matches the current launch/reference state.
 Low uses Uniform Projected Angle; Medium, High, and Ultra use Uniform Solid
 Angle. All four use Offline Packed Spacetime Noise, radius 3, thickness 0.5,
 radial exponent 2, AO strength/power 1, and GI intensity 4. Low and Medium use
-Performance Precision buffers; High and Ultra use full-precision Default
-Precision buffers. Any later advanced visibility or buffer edit remains active
+Performance Precision buffers; High also uses Performance Precision, while
+Ultra uses full-precision Default Precision buffers. Any later advanced
+visibility or buffer edit remains active
 and changes the profile label to its originating preset plus **(Custom)**. The Profile dropdown
 contains no implementation-profile presets. The remaining `(Mutex GI)`
 constraint belongs only to fused final-application shaders: those shaders
 directly write the AO-modulated lighting target and do not preserve the
 separate GI reconstruction/composition ordering.
-The generic runtime-count Reference path remains internal for benchmarking and
-composable fallback behavior, but it is not exposed as a product preset or
-sample-count choice. No exact selection silently substitutes a nearby count.
+Generic is the fully guarded dynamic loop: it clamps the runtime count and
+handles even and odd counts inside one robust shader. Runtime is not the former
+fully unrolled Fixed shader. It retains a dynamic count from the constant
+buffer but selects a CPU-validated even or odd compact permutation, compiling
+out the redundant clamp and parity branch while retaining every 1-64 slider
+value. The optimized parity contract applies to the supported High-style
+AO+GI workload and safely resolves to Generic elsewhere. No Fixed selection
+silently substitutes a nearby count.
 Ordinary quality, sampling resolution, estimator, AO, GI, denoiser, or buffer-
 format edits preserve compatible composable optimization identities. No
 removed source-port or diagnostic label can be selected.
@@ -420,12 +431,12 @@ instead of hiding a view-distance heuristic in estimator comparisons.
 
 ## Current Sample Distribution
 
-**Exact Sample Count** is the scheduled radial sample budget on one
+**Samples** is the scheduled radial sample budget on one
 stochastic slice, not a budget per radial direction. Full-mask early
 termination, invalid projection, and duplicate screen coordinates can make the
 executed depth-read count lower than the selected budget. The selected total is
 divided between the two near-to-far radial directions. AO and every diffuse GI
-bounce use the same selected exact total. **Limit Bounces** keeps the explicit
+bounce use the same selected total. **Limit Bounces** keeps the explicit
 one-through-eight count active and is on by default. With the limit disabled,
 the renderer records up to 16 possible bounces as a fault guard, raises the
 contribution threshold by four times per bounce, and uses a GPU-written
@@ -440,25 +451,29 @@ while changing phase prevents the same global radius shells from accumulating
 into rings. The rotated set is consumed in ascending physical-stratum order.
 Nesting therefore controls set membership without letting a farther GI sample
 claim a sector before a nearer selected source on the same radial direction. The
-**Distribution Exponent** transforms each normalized stratum by
+**Distribution** transforms each normalized stratum by
 `x^exponent`; the default `x^2` concentrates depth taps near the receiver. This
 means:
 
-- lower the fixed count to measure the trace-cost response;
-- raise the fixed count to give every eligible pixel more evidence;
+- lower the sample count to measure the trace-cost response;
+- raise the sample count to give every eligible pixel more evidence;
 - tune the exponent separately, because it redistributes distance rather than
-  changing tap count; and
-- compare scheduler modes with identical fixed counts.
+  changing tap count when Generic or Runtime is selected; and
+- compare scheduler modes with identical sample counts.
 
-Every eligible pixel receives the selected **Exact Sample Count** on one slice;
-the default is 20. The shader contains no adaptive depth/normal neighborhood
+Every eligible pixel receives the selected **Samples** budget on one slice; the
+default is Runtime 20. Generic uses one robust dynamic shader over the complete
+1-64 range. Runtime uses the same dynamic budget with a CPU-selected even/odd
+compact permutation on the supported High-style AO+GI path and falls back
+safely to Generic elsewhere. Fixed maps the slider to the packaged
+8/12/16/20/24/48/64 fully unrolled shaders and locks Distribution to 2.00.
+The shaders contain no adaptive depth/normal neighborhood
 analysis, adaptive motion/reprojection reads, feedback reads or writes, or
 stochastic budget rounding. The sample scheduler remains independent because
-it determines where fixed samples land, not how many samples a pixel receives.
-
-The former quality dropdown is not exposed because it duplicated the workload
-decision. The single Exact Sample Count dropdown directly exposes
-8/12/16/20/24/48/64, with 20 as the factory default.
+it determines where samples land, not how many samples a pixel receives.
+**Sample Count Mode** and **Distribution** remain deliberately folded under
+Visibility **Developer Options**; the normal Profile and Samples controls are
+the primary product surface.
 
 Activision's
 [Practical Realtime Strategies for Accurate Indirect Occlusion](https://www.activision.com/cdn/research/PracticalRealtimeStrategiesTRfinal.pdf)
@@ -579,7 +594,7 @@ Full, half, and quarter are linear resolution scales, so the nominal sampling
 pixel counts are approximately `1`, `1/4`, and `1/16` of full resolution before
 edge rounding. This is not a predicted end-to-end speedup: the full-resolution
 G-buffer, temporal guides, upsampling/filtering, and composition remain, while
-actual trace cost depends on the fixed sample budget, bounce count, divergence, and
+actual trace cost depends on the sample budget, bounce count, divergence, and
 hardware occupancy.
 
 For AO-only radii of at least eight world units on perspective cameras, UVSR
@@ -666,6 +681,11 @@ not count hypothetical recomputation or bandwidth savings.
 
 ## Benchmark and Command Line
 
+Windows requests `HIGH_PRIORITY_CLASS` at startup. Instrumented
+`UVSR_PERF_*` captures can explicitly request Normal or High priority with
+`UVSR_PERF_PRIORITY`; exported metadata records the live process priority so
+priority-mismatched runs are not treated as equivalent.
+
 **Run Current** locks Benchmark Position 1, resets history, and collects one
 isolated visibility profile. The Statistics drawer retains the latest
 per-stage median and p95 distributions in memory; it does not serialize JSON,
@@ -718,6 +738,21 @@ completed measured frames over the requested total, such as
 zero.
 
 ## Runtime Evidence
+
+### Runtime 20 Versus Fixed 20
+
+The decisive Intel comparison used Benchmark Position 1 with anti-aliasing
+disabled. Fully unrolling Fixed 20 backfired in the Intel driver: its static
+shader IR contained 7,989 instructions, compared with 1,221 for the compact
+Runtime 20 loop. Runtime 20 increased total frame rate by 7.32% and reduced
+visibility trace time by 16.08% in that matched comparison.
+
+Runtime is therefore not a smaller Fixed specialization and is not merely the
+old generic shader under a new label. It keeps the sample count in the constant
+buffer, while the CPU selects an even- or odd-count contract that removes the
+redundant clamp and parity decision without unrolling all 20 iterations. Generic
+retains those robust runtime checks for unsupported compositions. This is why
+High now selects Runtime 20 and Fixed remains an explicit developer comparison.
 
 The earlier pre-source-port Release smoke used the Intel Arc adapter on the
 target Core Ultra 9 185H system, 1920x1080 output, Benchmark Position 1, zero warm-up frames, and

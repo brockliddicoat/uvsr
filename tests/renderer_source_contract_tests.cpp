@@ -1,9 +1,13 @@
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
+
+#include "../src/renderer_statistics.h"
 
 namespace
 {
@@ -12,7 +16,11 @@ namespace
         std::ifstream stream(path, std::ios::binary);
         std::ostringstream contents;
         contents << stream.rdbuf();
-        return contents.str();
+        std::string source = contents.str();
+        source.erase(
+            std::remove(source.begin(), source.end(), '\r'),
+            source.end());
+        return source;
     }
 
     std::string_view ExtractSection(
@@ -115,6 +123,95 @@ int main(int argc, char** argv)
         cmaa,
         "RebuildBindingSet(sourceColor);",
         "CMAA2 source rebinding");
+
+    const std::string_view commandLine = ExtractSection(
+        viewer,
+        "bool ProcessCommandLine(",
+        "std::string FormatExperimentLaunchTime(");
+    passed &= ExpectContains(
+        commandLine,
+        "else if (!strcmp(argv[i], \"--aa-rectification\"))",
+        "AA rectification benchmark option");
+    for (const std::string_view mode : {
+            std::string_view("\"pair-rgb\""),
+            std::string_view("\"per-pixel-rgb\""),
+            std::string_view("\"per-pixel-ycocg\""),
+            std::string_view("\"variance-ycocg\"") })
+    {
+        passed &= ExpectContains(
+            commandLine,
+            mode,
+            "AA rectification benchmark mode");
+    }
+    passed &= ExpectContains(
+        commandLine,
+        "aaBenchmark.settings.algorithmOverrides.rectification",
+        "AA rectification benchmark override routing");
+
+    const std::string_view mouseButtonUpdate = ExtractSection(
+        viewer,
+        "virtual bool MouseButtonUpdate(",
+        "virtual bool MouseScrollUpdate(");
+    passed &= ExpectContains(
+        mouseButtonUpdate,
+        "button == GLFW_MOUSE_BUTTON_MIDDLE",
+        "middle-button material picking");
+    passed &= ExpectAbsent(
+        mouseButtonUpdate,
+        "GLFW_MOUSE_BUTTON_2",
+        "right-button material picking");
+
+    passed &= ExpectContains(
+        viewer,
+        "SubmittedTriangleCountingPass geometryPass(\n"
+        "                *m_GBufferPass);",
+        "deferred submitted-triangle accounting");
+    passed &= ExpectContains(
+        viewer,
+        "SubmittedTriangleCountingPass geometryPass(\n"
+        "                *m_ForwardPass);",
+        "forward submitted-triangle accounting");
+    passed &= ExpectContains(
+        viewer,
+        "m_SubmittedMainViewTriangles =\n"
+        "                geometryPass.GetSubmittedTriangles();",
+        "submitted-triangle publication");
+
+    const auto expectTriangleFormat =
+        [&passed](uint64_t count, const char* expected)
+        {
+            const std::string actual =
+                uvsr::FormatTriangleCount(count);
+            if (actual == expected)
+                return;
+            passed = false;
+            std::cerr << "FAIL: triangle count " << count
+                      << " formatted as '" << actual
+                      << "', expected '" << expected << "'.\n";
+        };
+    expectTriangleFormat(0u, "0 tris");
+    expectTriangleFormat(999u, "999 tris");
+    expectTriangleFormat(1'000u, "1.0k tris");
+    expectTriangleFormat(999'949u, "999.9k tris");
+    expectTriangleFormat(999'950u, "1.0m tris");
+    expectTriangleFormat(1'200'000u, "1.2m tris");
+    expectTriangleFormat(999'949'999u, "999.9m tris");
+    expectTriangleFormat(999'950'000u, "1.0b tris");
+    expectTriangleFormat(
+        999'950'000'000ull,
+        "999.9b+ tris");
+
+    const uint64_t maximumSubmittedTriangles =
+        uvsr::CountSubmittedTriangleListPrimitives(
+            std::numeric_limits<uint32_t>::max(),
+            std::numeric_limits<uint32_t>::max());
+    passed &= maximumSubmittedTriangles ==
+        uint64_t(
+            std::numeric_limits<uint32_t>::max() / 3u) *
+        uint64_t(std::numeric_limits<uint32_t>::max());
+    passed &= uvsr::CountSubmittedTriangleListPrimitives(
+        8u,
+        3u) == 6u;
 
     if (!passed)
         return 1;
