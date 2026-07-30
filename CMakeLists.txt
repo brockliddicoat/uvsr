@@ -329,6 +329,7 @@ function(uvsr_add_shader_bundle
             --compiler "${SHADERMAKE_DXC_PATH}"
             --shaderModel 6_5
             --project "${project_name}"
+            --compactProgress
         COMMAND ${CMAKE_COMMAND} -E touch
             "${shader_compile_stamp}"
         DEPENDS
@@ -722,7 +723,6 @@ target_include_directories(
 add_test(
     NAME uvsr_visibility_sampling_reference
     COMMAND uvsr_visibility_sampling_tests
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise/visibility_filter_adapted_gauss1_ema035_r8.bin"
 )
 
 add_executable(uvsr_visibility_performance_plan_tests
@@ -882,12 +882,8 @@ set(UVSR_APP_SHADERS
     screen_space_visibility_bounce_control_cs
     screen_space_visibility_filter_cs
     screen_space_visibility_filter_packed_edge_cs
-    screen_space_visibility_fixed_cs
     screen_space_visibility_fused_apply_cs
-    screen_space_visibility_packed_fast_cs
     screen_space_visibility_composed_edges_cs
-    screen_space_visibility_composed_packed_fast_cs
-    screen_space_visibility_packed_fast_edges_cs
     screen_space_visibility_cs
     screen_space_visibility_temporal_cs
     sparse_virtual_shadow_map_depth_ps
@@ -1079,10 +1075,10 @@ if (UVSR_BUILD_APPLICATION)
         message(FATAL_ERROR
             "The UVSR runtime shader manifest contains duplicate paths")
     endif()
-    if (NOT UVSR_RUNTIME_SHADER_PATH_COUNT EQUAL 80)
+    if (NOT UVSR_RUNTIME_SHADER_PATH_COUNT EQUAL 76)
         message(FATAL_ERROR
             "The integrated UVSR runtime shader manifest must contain exactly "
-            "80 shaders, but contains ${UVSR_RUNTIME_SHADER_PATH_COUNT}")
+            "76 shaders, but contains ${UVSR_RUNTIME_SHADER_PATH_COUNT}")
     endif()
     string(JOIN "\n" UVSR_RUNTIME_SHADER_PATH_MANIFEST_CONTENT
         ${UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES})
@@ -1290,12 +1286,5 @@ if (UVSR_BUILD_APPLICATION)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${UVSR_UI_HEADER_FONT_SOURCE}"
             "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI-Semibold.ttf"
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "${CMAKE_BINARY_DIR}/media/noise"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise/visibility_filter_adapted_gauss1_ema035_r8.bin"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise/FAST-LICENSE.txt"
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise/README.md"
-            "${CMAKE_BINARY_DIR}/media/noise"
     )
 endif()

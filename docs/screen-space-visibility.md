@@ -89,7 +89,7 @@ fill.
 - Visibility, AO, and GI are enabled at full resolution.
 - High quality traces 20 samples through the compact Runtime loop on one slice
   per eligible pixel.
-- Uniform Solid Angle and Offline Packed Spacetime Noise are selected.
+- Uniform Solid Angle and Toroidal Blue are selected.
 - Sampling uses one per-pixel budget shared by AO and every GI bounce.
   Adaptive sparse sampling has been removed.
 - AO strength and power are both 1.0. GI intensity is 4.0 with
@@ -112,15 +112,17 @@ The Visibility panel owns the profile selector and normal AO/GI settings.
 Detailed plan, resource, traffic, timing, and benchmark information lives in
 the Statistics drawer rather than occupying the main control surface.
 The panel is a compact scrollable control surface modeled on the existing AA
-panel: full-width dropdowns expose Profile, Estimator, Noise Pattern, Samples,
-Reconstruction Method, and Final Application choices. Noise
-Pattern is directly below Estimator. **Buffers** is a separate sibling drawer
-immediately below the visibility drawer. Its top **Preset** dropdown changes
-only raw, cumulative, final, and depth-hierarchy formats. Low, Medium, and High
-begin with Performance Precision; Ultra begins with Default Precision.
-Benchmark controls are in the unified Statistics drawer. Output/scene locations are
-opened through folder buttons, so long filesystem paths do not displace the
-settings a person is trying to compare.
+panel. Full-width dropdowns expose Sampling Resolution and Profile.
+**Shared Visibility Sampling** owns Estimator, Noise Pattern, Samples, Radius,
+Thickness, and Distribution. Noise Pattern contains Independent Hash and
+Toroidal Blue. Samples always means the 1-64 Runtime implementation; there is
+no Sample Count Mode or Visibility Developer Options panel.
+**Buffers** is a separate sibling drawer immediately below the visibility
+drawer. Its top **Preset** dropdown changes only raw, cumulative, final, and
+depth-hierarchy formats. Low, Medium, and High begin with Performance Precision;
+Ultra begins with Default Precision. Benchmark controls are in the unified
+Statistics drawer. Output and scene locations are opened through folder buttons,
+so long filesystem paths do not displace the settings a person is comparing.
 Changing a history-affecting profile value changes the displayed history key
 and resets temporal history. The other advanced controls remain
 separate:
@@ -135,9 +137,10 @@ separate:
   such as **Medium (Custom)**.
 - **Dispatch, Memory & Cache** reports thread-group and sample specialization,
   depth mode, minimal bindings, lazy pipeline selection, resource counts, and
-  traffic. The fixed shaders compile both direct-depth and hierarchy-aware
-  variants; the latter preserves the existing distance-threshold mip mapping
-  when the AO-only radius is at least 8.
+  traffic. Runtime keeps one depth-hierarchy SRV layout and selects direct or
+  hierarchy-aware sampling through a workload-coherent uniform branch. The same
+  shader family also selects Independent Hash or Toroidal Blue and evaluates
+  the runtime Distribution exponent.
 
 The displayed resource and pass masks are authoritative plan identities, while
 the binding mask is a conceptual effect-wide union rather than a literal
@@ -151,32 +154,32 @@ later bounce, temporal, reconstruction, fused application, and composition.
 They do not sum descriptors across passes or enumerate every layout; use DXIL
 reflection or a GPU capture when that whole-effect inventory is required.
 
-Reference is a hard CPU-side lock to the canonical generic shaders, broad
-layouts, resources, dispatches, formats, and composition. Selecting Reference
-creates no candidate PSO, binding, edge texture, offline-computed packed-noise
-texture, or fused pass. Curated candidates are created lazily and cached by a shader-only key;
-workload and history identity remain separate keys so output size or radius do
-not duplicate identical pipelines.
+Reference is a benchmark identity over the guarded Runtime trace and legacy
+separate composition. Runtime uses that same 1-64 implementation and selects
+the even or odd parity specialization only for its narrow validated AO+GI hot
+topology. Neither identity creates an Offline texture or fixed-count shader.
+Curated reconstruction and fusion candidates are created lazily. The shader
+cache key contains only compiled topology; scheduler, radial exponent, direct
+versus hierarchy depth, output size, and radius remain in separate evidence and
+history identities without duplicating a PSO.
 
 The internal benchmark profile status is:
 
 | Benchmark Profile | Status | Exact Scope Or Boundary |
 | --- | --- | --- |
-| Reference AO 8T | Implemented | Canonical generic bitmask reference at the target workload |
-| Exact-Fast AO 8T | Implemented | Fixed-8 bitmask plus offline-computed packed noise; no mixed precision |
+| Reference AO 8T | Implemented | Guarded Runtime bitmask reference at the target workload |
+| Runtime AO 8T | Implemented | Runtime bitmask with the same eight-sample workload |
 | Packed-Edge AO 8T | Implemented | R16F raw AO plus a separate R8_UINT edge-guided resolve |
-| Reference AO+GI 8T | Implemented | Canonical shared AO/GI traversal |
-| Exact-Fast AO+GI 8T | Implemented | Fixed-8 shared traversal with offline-computed packed noise and bounce metadata when required |
-| Exact-Fast AO+GI 12T | Partial Control | Exact fixed-12 trace; offline-computed packed noise exists only for fixed 8 |
-| Exact-Fast AO+GI 16T | Partial Control | Exact fixed-16 trace; offline-computed packed noise exists only for fixed 8 |
-| Exact-Fast Multi-Bounce | Partial Control | Exact fixed-8 first and later traces; no offline-computed packed noise or fused multi-bounce application |
+| Reference AO+GI 8T | Implemented | Guarded shared Runtime AO/GI traversal |
+| Runtime AO+GI 8T | Implemented | Trusted-even first-bounce contract |
+| Runtime AO+GI 12T | Implemented | Trusted-even first-bounce contract |
+| Runtime AO+GI 16T | Implemented | Trusted-even first-bounce contract |
+| Runtime Multi-Bounce | Implemented | Guarded later-bounce Runtime traversal |
 
 The Samples slider controls the total shared by the first trace and every GI
-bounce; there is no separate later-bounce count. Generic and Runtime expose the
-complete 1-64 range. Fixed maps the same slider to compiled
-8/12/16/20/24/48/64 AO, GI, and AO+GI traces. **Sample Count Mode** and
-**Distribution** are in the default-collapsed Visibility **Developer Options**
-panel. Fixed bakes Distribution 2.00 into the shader and disables that slider.
+bounce; there is no separate later-bounce count. Runtime exposes the complete
+1-64 range. Distribution remains a runtime value in **Shared Visibility
+Sampling**, immediately after Thickness.
 The custom implementation
 selector additionally exposes exact fused resolve/application;
 **Depth-Guided Reconstruction**, **Depth-Normal Reconstruction**,
@@ -195,16 +198,16 @@ being cleared by unrelated edits. Labels explicitly identify the remaining
 The unified **Profile** dropdown beneath **Sampling Resolution** exposes four
 product presets:
 
-| Preset | Resolution | Sample Mode And Count | Precision | GI Bounces | Reconstruction |
+| Preset | Resolution | Runtime Samples | Precision | GI Bounces | Reconstruction |
 | --- | --- | --- | --- | ---: | --- |
-| Low | Quarter | Fixed 8 | Performance | 1 | Compact joint-bilateral upsampling |
-| Medium | Half | Fixed 8 | Performance | 1 | Compact joint-bilateral upsampling |
-| High | Full | Runtime 20 | Performance | 1 | Unreconstructed full-resolution input |
-| Ultra | Full | Fixed 48 | Default | 2 | Unreconstructed full-resolution input |
+| Low | Quarter | 8 | Performance | 1 | Compact joint-bilateral upsampling |
+| Medium | Half | 8 | Performance | 1 | Compact joint-bilateral upsampling |
+| High | Full | 20 | Performance | 1 | Unreconstructed full-resolution input |
+| Ultra | Full | 48 | Default | 2 | Unreconstructed full-resolution input |
 
 High is the factory default and matches the current launch/reference state.
 Low uses Uniform Projected Angle; Medium, High, and Ultra use Uniform Solid
-Angle. All four use Offline Packed Spacetime Noise, radius 3, thickness 0.5,
+Angle. All four use Toroidal Blue, radius 3, thickness 0.5,
 radial exponent 2, AO strength/power 1, and GI intensity 4. Low and Medium use
 Performance Precision buffers; High also uses Performance Precision, while
 Ultra uses full-precision Default Precision buffers. Any later advanced
@@ -214,14 +217,12 @@ contains no implementation-profile presets. The remaining `(Mutex GI)`
 constraint belongs only to fused final-application shaders: those shaders
 directly write the AO-modulated lighting target and do not preserve the
 separate GI reconstruction/composition ordering.
-Generic is the fully guarded dynamic loop: it clamps the runtime count and
-handles even and odd counts inside one robust shader. Runtime is not the former
-fully unrolled Fixed shader. It retains a dynamic count from the constant
-buffer but selects a CPU-validated even or odd compact permutation, compiling
-out the redundant clamp and parity branch while retaining every 1-64 slider
-value. The optimized parity contract applies to the supported High-style
-AO+GI workload and safely resolves to Generic elsewhere. No Fixed selection
-silently substitutes a nearby count.
+Runtime retains a dynamic count from the constant buffer. It uses a guarded
+loop for the general topology and CPU-validated even or odd compact
+specializations for the supported High-style AO+GI topology, retaining every
+1-64 slider value. Scheduler, depth-hierarchy selection, and Distribution are
+workload-coherent uniform branches within those shaders. No count-specific
+shader or nearest-count substitution remains.
 Ordinary quality, sampling resolution, estimator, AO, GI, denoiser, or buffer-
 format edits preserve compatible composable optimization identities. No
 removed source-port or diagnostic label can be selected.
@@ -291,10 +292,14 @@ All controlled Intel XeGTAO variants were slower than canonical Reference.
 Consequently, the XeGTAO profiles, shaders, resources, UI, benchmark sequences,
 and fixtures were removed. This section remains only as rejection evidence.
 
-## Expected Performance Impact
+## Historical Performance Evidence
 
-The following values are engineering forecasts, not measurements. They rank
-the implemented candidate families by plausible complete-effect impact and
+This section preserves the forecasts and measurements that informed earlier
+candidate work. Fixed-count and Offline rows are historical evidence, not
+current profiles or restoration recommendations; the continuous shader-path
+retirement postmortem owns the current keep/remove decision. The following
+values were engineering forecasts, not measurements. They ranked the then-
+implemented candidate families by plausible complete-effect impact and
 maximum credible upside before controlled testing
 for the requested 1920x1080, half-resolution, AO-only, fixed-8 workload on
 Intel Xe-LPG. Milliseconds are relative to the user-reported 2.5-2.7 ms
@@ -305,7 +310,7 @@ non-additive, and target retention requires a controlled Core Ultra 9 185H run
 plus image review. The completed RTX 4090 Laptop measurement below does not
 rewrite these Xe-LPG forecasts; it supplies adapter-scoped keep/drop evidence.
 
-### Forecast Finalist Ranking
+### Historical Forecast Finalist Ranking
 
 This short list ranks the largest expected complete-effect deltas among the
 implemented finalists and the new direct comparisons. A positive saving is the
@@ -318,7 +323,7 @@ named baseline minus the candidate; overlapping rows must not be added.
 | 3 | Fused packed-edge 2x2 versus separate compact resolve/composition | 0.12-0.40 ms | 5-15% | Similar traffic win with algorithmic edge weights and a required image-quality gate |
 | 4 | Exact fixed-8 trace versus generic eight-sample trace | 0.04-0.20 ms | 2-8% | Controlled Intel measurements saved 1.9-4.7%; the fused combination remains more conclusive |
 
-### Detailed Bitmask Candidate Ranking
+### Historical Detailed Bitmask Candidate Ranking
 
 | Rank | Implemented Candidate | Forecast Saving | Baseline Share | Why This Range Is Plausible | Quality Classification |
 | ---: | --- | ---: | ---: | --- | --- |
@@ -366,12 +371,13 @@ bitmask product-saving table because they are algorithmic comparison pipelines w
 estimators, not drop-in exact replacements for UVSR's visibility-bitmask product
 path. XeGTAO rejection evidence remains in the optimization ledger.
 
-### Plain-English Production Guidance
+### Current Production Guidance
 
-Keep **Exact Fixed 8 + Fused Resolve & Apply** first and **Exact Fused Resolve &
-Apply** second for manual image validation. On Intel they saved 20.6-22.4% and
-17.7-18.8% across controlled repeats. Keep **Fixed 8** as an optional supporting
-specialization; its 1.9-4.7% standalone range is smaller and less conclusive.
+Keep the fused resolve/application candidates for manual image validation. On
+Intel, fusion saved 17.7-18.8% across controlled repeats. The combined
+Fixed-8-plus-fusion result saved 20.6-22.4%, but the isolated Fixed-8 result was
+small and inconsistent; the count-specific family was therefore retired while
+Runtime kept every 1-64 sample count.
 
 Keep 16-bit storage defaults. Final GI `RGBA16_FLOAT` saved 8.39% versus
 `RGBA32_FLOAT`, and the `R16_FLOAT` depth hierarchy saved 3.88% versus
@@ -518,22 +524,18 @@ means:
 - lower the sample count to measure the trace-cost response;
 - raise the sample count to give every eligible pixel more evidence;
 - tune the exponent separately, because it redistributes distance rather than
-  changing tap count when Generic or Runtime is selected; and
+  changing tap count; and
 - compare scheduler modes with identical sample counts.
 
 Every eligible pixel receives the selected **Samples** budget on one slice; the
-default is Runtime 20. Generic uses one robust dynamic shader over the complete
-1-64 range. Runtime uses the same dynamic budget with a CPU-selected even/odd
-compact permutation on the supported High-style AO+GI path and falls back
-safely to Generic elsewhere. Fixed maps the slider to the packaged
-8/12/16/20/24/48/64 fully unrolled shaders and locks Distribution to 2.00.
-The shaders contain no adaptive depth/normal neighborhood
+default is Runtime 20. Runtime uses one guarded dynamic shader over the complete
+1-64 range, plus CPU-selected even and odd compact variants for the supported
+High-style AO+GI topology. The shaders contain no adaptive depth/normal neighborhood
 analysis, adaptive motion/reprojection reads, feedback reads or writes, or
 stochastic budget rounding. The sample scheduler remains independent because
 it determines where samples land, not how many samples a pixel receives.
-**Sample Count Mode** and **Distribution** remain deliberately folded under
-Visibility **Developer Options**; the normal Profile and Samples controls are
-the primary product surface.
+Distribution is directly available with the other Shared Visibility Sampling
+controls.
 
 Activision's
 [Practical Realtime Strategies for Accurate Indirect Occlusion](https://www.activision.com/cdn/research/PracticalRealtimeStrategiesTRfinal.pdf)
@@ -557,39 +559,23 @@ It is spatiotemporal as a runtime sequence, but its eight 2D layers were not
 jointly optimized as one 3D space-time volume.
 This is the default scheduler.
 
-**Offline Spacetime Noise** uses a 64x64x32 scalar-uniform
-volume generated offline by Electronic Arts' FastNoise optimizer. Its fixed
-objective is a Gaussian spatial filter with sigma 1.0 and exponential temporal
-history with alpha 0.35. R2-separated spatial reads provide different semantic
-random values without adding texture layers, and a coprime 4096-position offset
-advances after each 32-frame volume cycle. This mode is the genuinely 3D,
-jointly optimized offline option. Its objective remains statistically valid when
-reconstruction settings change, but is no longer an exact match for a different
-spatial kernel or temporal response.
-
-**Offline Packed Spacetime Noise** is an exact fixed-8 delivery
-permutation, not a new noise objective. It pre-packs the four stochastic
-dimensions needed by the even-count shader into one RGBA8 texel so the trace
-does not issue separate scalar semantic reads. It is the fourth choice in the
-same **Noise Pattern** dropdown as the other sequences, rather than a separate
-delivery setting. The packed texture is allocated and uploaded only while that
-choice is active. Multi-bounce metadata remains available for the AO+GI fixed-8
-profile.
+The removed unpacked and packed Offline modes no longer have assets, upload
+state, resources, bindings, UI choices, or shader families. They coupled a
+fixed filter objective and, for packed delivery, a fixed-eight topology to the
+sampling implementation. The continuous shader-path retirement postmortem
+preserves the evidence and restoration boundary.
 
 The removed Activision 4x4-by-6 schedule and analytic-horizon attribution
-control no longer have profiles or compiled permutations. The retained scheduler
-choices all drive the standard UVSR bitmask estimator.
+control likewise have no profiles or compiled permutations. Both retained
+schedulers drive the standard UVSR bitmask estimator through a frame-coherent
+uniform branch.
 
 The design follows the rejection-safe and toroidal-sequence guidance in
 NVIDIA's
 [Rendering in Real Time With Spatiotemporal Blue Noise Textures, Part 2](https://developer.nvidia.com/blog/rendering-in-real-time-with-spatiotemporal-blue-noise-textures-part-2/).
-The offline-computed mode directly follows the optimization described by
-[Importance-Sampled Filter-Adapted Spatiotemporal Sampling](https://jcgt.org/published/0014/01/08/paper.pdf),
-using the authors' FastNoise implementation. The toroidal mode remains UVSR's
-procedurally generated alternative; neither mode claims to reproduce NVIDIA's
-precomputed 3D STBN volumes. The two resident rank fields consume exactly 192
-KiB of logical scheduler storage: 64 KiB of `R16_UNORM` toroidal layers and 128
-KiB of `R8_UNORM` offline-computed volume data.
+Toroidal remains UVSR's procedurally generated option and does not claim to
+reproduce NVIDIA's precomputed 3D STBN volumes. Its eight `R16_UNORM` layers
+consume 64 KiB of logical scheduler storage.
 
 The scheduler changes where and when samples appear; it does not change the
 nested radial distribution or the requested sample count. Profile all modes at
@@ -663,16 +649,12 @@ hierarchy and uses coarser depth for distant taps. GI stays on exact depth so a
 coarse geometry sample cannot be paired with unrelated full-resolution source
 radiance.
 
-Fixed 8/12/16/20 shaders have direct-device-depth and hierarchy-aware compile-
-time variants. The hierarchy variant retains the reference distance thresholds
-and receiver-surface contract; it does not convert jittered sample distances
-into an inexact precomputed LOD table. At the requested radius 3 target the
-hierarchy, its bindings, and its preparation dispatch remain absent, so this
-variant has no primary-profile performance effect.
-
-The Activision approximation builds one half-resolution R32_UINT guide containing
-masked FP32 closest-valid-depth bits plus a two-bit source offset; it does not
-reuse the generic radius-triggered hierarchy.
+Runtime declares one hierarchy SRV layout and uses a workload-uniform branch
+between direct device depth and the hierarchy. The hierarchy path retains the
+reference distance thresholds and receiver-surface contract; it does not
+convert jittered sample distances into an inexact precomputed LOD table. At the
+requested radius 3 target, the hierarchy resource and preparation dispatch
+remain absent, so this branch has no primary-profile preparation cost.
 
 Source activity and output allocation are consumer driven. AO-only does not
 allocate GI outputs or the full-resolution source-radiance target; GI-only does
@@ -788,7 +770,7 @@ the run measures the effective implementation profile and 16-entry
 GPU-terminated command stream. The former fixed-count, noise, reconstruction, math, buffer,
 compatibility, new-candidate, and all-profile test-matrix runners and the
 `--benchmark-sequence` option have been removed. The former **Compare
-Reference** action has also been removed; select Legacy or another current
+Reference** action has also been removed; select Reference or another current
 configuration explicitly and use **Run Current** for each isolated measurement.
 
 An independent top-right overlay remains visible while a benchmark is queued,
@@ -809,11 +791,11 @@ Runtime 20 loop. Runtime 20 increased total frame rate by 7.32% and reduced
 visibility trace time by 16.08% in that matched comparison.
 
 Runtime is therefore not a smaller Fixed specialization and is not merely the
-old generic shader under a new label. It keeps the sample count in the constant
+old guarded shader under a new label. It keeps the sample count in the constant
 buffer, while the CPU selects an even- or odd-count contract that removes the
-redundant clamp and parity decision without unrolling all 20 iterations. Generic
-retains those robust runtime checks for unsupported compositions. This is why
-High now selects Runtime 20 and Fixed remains an explicit developer comparison.
+redundant clamp and parity decision without unrolling all 20 iterations. The
+Runtime guarded contract covers other compositions. Fixed and Generic remain
+historical comparison labels only.
 
 The earlier pre-source-port Release smoke used the Intel Arc adapter on the
 target Core Ultra 9 185H system, 1920x1080 output, Benchmark Position 1, zero warm-up frames, and

@@ -1,10 +1,13 @@
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <sstream>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace
@@ -36,6 +39,39 @@ namespace
             offset += needle.size();
         }
         return count;
+    }
+
+    uint64_t CountShaderPermutations(const std::string& config)
+    {
+        std::istringstream lines(config);
+        std::string line;
+        uint64_t total = 0u;
+        while (std::getline(lines, line))
+        {
+            const size_t first = line.find_first_not_of(" \t\r");
+            if (first == std::string::npos || line[first] == '#')
+                continue;
+
+            uint64_t linePermutations = 1u;
+            size_t offset = first;
+            while ((offset = line.find('{', offset)) != std::string::npos)
+            {
+                const size_t end = line.find('}', offset + 1u);
+                if (end == std::string::npos)
+                    return 0u;
+
+                uint64_t values = 1u;
+                for (size_t index = offset + 1u; index < end; ++index)
+                {
+                    if (line[index] == ',')
+                        ++values;
+                }
+                linePermutations *= values;
+                offset = end + 1u;
+            }
+            total += linePermutations;
+        }
+        return total;
     }
 
     std::set<std::string> GetExpectedShaderFiles()
@@ -92,13 +128,9 @@ namespace
             "screen_space_indirect_composite_cs",
             "screen_space_visibility_bounce_control_cs",
             "screen_space_visibility_composed_edges_cs",
-            "screen_space_visibility_composed_packed_fast_cs",
             "screen_space_visibility_filter_cs",
             "screen_space_visibility_filter_packed_edge_cs",
-            "screen_space_visibility_fixed_cs",
             "screen_space_visibility_fused_apply_cs",
-            "screen_space_visibility_packed_fast_cs",
-            "screen_space_visibility_packed_fast_edges_cs",
             "screen_space_visibility_cs",
             "screen_space_visibility_temporal_cs",
             "sparse_virtual_shadow_map_depth_ps",
@@ -193,7 +225,7 @@ int main(int argc, char** argv)
     const std::string visibilitySource = ReadText(visibilitySourcePath);
     const std::string manifest = ReadText(manifestPath);
     constexpr const char* runtimeParityBundle =
-        "screen_space_visibility_composed_packed_fast_cs.hlsl -T cs -E main -D VISIBILITY_ESTIMATOR=1 -D ENABLE_AO=1 -D ENABLE_GI=1 -D ENABLE_BOUNCE_REINJECTION=0 -D INITIALIZE_BOUNCE_CUMULATIVE=0 -D ENABLE_BOUNCE_METADATA=0 -D FIXED_SAMPLE_COUNT=0 -D RUNTIME_SAMPLE_PARITY={1,2} -D FIXED_RADIAL_EXPONENT_TWO=1 -D FIXED_DIRECT_DEPTH=1 -D OUTPUT_PACKED_EDGES=0";
+        "screen_space_visibility_cs.hlsl -T cs -E main -D VISIBILITY_ESTIMATOR=1 -D ENABLE_AO=1 -D ENABLE_GI=1 -D ENABLE_BOUNCE_REINJECTION=0 -D INITIALIZE_BOUNCE_CUMULATIVE=0 -D ENABLE_BOUNCE_METADATA=0 -D RUNTIME_SAMPLE_PARITY={1,2}";
     passed &= Check(
         CountOccurrences(config, runtimeParityBundle) == 1u &&
             CountOccurrences(developerConfig, runtimeParityBundle) == 1u,
@@ -205,10 +237,10 @@ int main(int argc, char** argv)
             visibilitySource.find("#define RUNTIME_SAMPLE_PARITY 0") !=
                 std::string::npos &&
             visibilitySource.find(
-                "#elif RUNTIME_SAMPLE_PARITY > 0") !=
+                "#if RUNTIME_SAMPLE_PARITY > 0") !=
                 std::string::npos &&
             visibilitySource.find(
-                "#elif RUNTIME_SAMPLE_PARITY == 1") !=
+                "#if RUNTIME_SAMPLE_PARITY == 1") !=
                 std::string::npos &&
             visibilitySource.find(
                 "#elif RUNTIME_SAMPLE_PARITY == 2") !=
@@ -220,7 +252,7 @@ int main(int argc, char** argv)
             visibilitySource.find(
                 "SchedulerDimension_OddSampleSide") !=
                 std::string::npos,
-        "Runtime visibility must retain a robust Generic path, omit the "
+        "Runtime visibility must retain a guarded path, omit the "
         "odd-side fetch for trusted-even counts, and keep stochastic "
         "assignment for trusted-odd counts");
     constexpr const char* forbiddenShaders[] = {
@@ -247,21 +279,31 @@ int main(int argc, char** argv)
             "taa_miniengine_blend_cs.hlsl") == 1u,
         "production must describe the complete normal-user temporal matrix once");
     constexpr const char* temporalUserMatrix =
-        "taa_miniengine_blend_cs.hlsl -T cs -E main -D TAA_MOTION_SOURCE={0,1,2} -D TAA_CURRENT_RECONSTRUCTION={0,1} -D TAA_INTERIOR_WEIGHTING={0,1} -D TAA_HISTORY_FILTER={0,1,2,3} -D TAA_RECTIFICATION={0,1,2,3}";
+        "taa_miniengine_blend_cs.hlsl -T cs -E main -D TAA_MOTION_SOURCE={0,1,2} -D TAA_CURRENT_RECONSTRUCTION={0,1} -D TAA_HISTORY_FILTER={0,1,2,3} -D TAA_RECTIFICATION={0,1}";
     passed &= Check(
         CountOccurrences(config, temporalUserMatrix) == 1u,
-        "production TAA must package motion, de-jittering, stable-interior, "
-        "1x/5x/9x reconstruction, and rectification choices");
+        "production TAA must package all three motion sources, de-jittering, "
+        "1x/5x/9x reconstruction, and the two retained rectification choices");
     passed &= Check(
         CountOccurrences(config, "TAA_EXPORT_SELECTIVE=0") == 1u &&
             CountOccurrences(config, "TAA_SAMPLE_RESURRECTION=0") == 1u &&
             CountOccurrences(config, "TAA_DEVELOPER_DEBUG=0") == 1u &&
+            CountOccurrences(config, "TAA_SHARED_WORK_REUSE={0,1}") == 1u &&
             config.find("TAA_EXPORT_SELECTIVE={") ==
                 std::string::npos &&
+            config.find("TAA_INTERIOR_WEIGHTING") == std::string::npos &&
+            config.find("TAA_RECTIFICATION={0,1,2") == std::string::npos &&
             config.find("TAA_DEVELOPER_DEBUG=1") ==
                 std::string::npos &&
             config.find("TAA_PIXEL_SHADER") == std::string::npos,
-        "production TAA bundles must disable removed selective morphology output and omit resurrection, debug, and pixel experiments");
+        "production TAA must retain measured shared reuse while omitting "
+        "retired interior, per-pixel rectification, resurrection, debug, and "
+        "pixel experiments");
+    passed &= Check(
+        CountShaderPermutations(config) == 311u &&
+            CountShaderPermutations(developerConfig) == 2809u,
+        "shader catalogs must remain at 311 production and 2,809 developer "
+        "permutations after the first retirement batch");
     passed &= Check(
         CountOccurrences(config, "cmaa2.hlsl -T cs") == 4u &&
             CountOccurrences(
@@ -308,8 +350,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 80u,
-        "production shader contract must enumerate exactly 80 files");
+        expectedFiles.size() == 76u,
+        "production shader contract must enumerate exactly 76 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

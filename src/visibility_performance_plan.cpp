@@ -21,7 +21,6 @@ namespace uvsr
             VisibilityTraceImplementation trace,
             VisibilitySampleSpecialization firstBounceSamples,
             VisibilitySampleSpecialization laterBounceSamples,
-            VisibilityNoiseDelivery noise,
             VisibilityMathMode math,
             VisibilityRawAoStorage rawAoStorage,
             VisibilityReconstructionMode reconstruction,
@@ -49,7 +48,6 @@ namespace uvsr
             result.trace = trace;
             result.firstBounceSamples = firstBounceSamples;
             result.laterBounceSamples = laterBounceSamples;
-            result.noise = noise;
             result.math = math;
             result.rawAoStorage = rawAoStorage;
             result.edgeStorage = edgeStorage;
@@ -111,33 +109,6 @@ namespace uvsr
                     CosineWeightedSolidAngle;
             default:
                 return false;
-            }
-        }
-
-        uint32_t SpecializedSampleCount(
-            VisibilitySampleSpecialization specialization)
-        {
-            switch (specialization)
-            {
-            case VisibilitySampleSpecialization::Generic:
-            case VisibilitySampleSpecialization::Runtime:
-                return 0u;
-            case VisibilitySampleSpecialization::Fixed8:
-                return 8u;
-            case VisibilitySampleSpecialization::Fixed12:
-                return 12u;
-            case VisibilitySampleSpecialization::Fixed16:
-                return 16u;
-            case VisibilitySampleSpecialization::Fixed20:
-                return 20u;
-            case VisibilitySampleSpecialization::Fixed24:
-                return 24u;
-            case VisibilitySampleSpecialization::Fixed48:
-                return 48u;
-            case VisibilitySampleSpecialization::Fixed64:
-                return 64u;
-            default:
-                return 0u;
             }
         }
 
@@ -239,9 +210,7 @@ namespace uvsr
                 workload.scheduler ==
                     VisibilityPerformanceScheduler::IndependentHash ||
                 workload.scheduler == VisibilityPerformanceScheduler::
-                    ToroidalBlueNoiseRankField ||
-                workload.scheduler == VisibilityPerformanceScheduler::
-                    FilterAdaptedSpatiotemporalRankField;
+                    ToroidalBlueNoiseRankField;
             const bool validCounts =
                 workload.firstBounceSampleCount >= 1u &&
                 workload.firstBounceSampleCount <=
@@ -286,7 +255,6 @@ namespace uvsr
                     reference.firstBounceSamples &&
                 configuration.laterBounceSamples ==
                     reference.laterBounceSamples &&
-                configuration.noise == reference.noise &&
                 configuration.math == reference.math &&
                 configuration.rawAoStorage == reference.rawAoStorage &&
                 configuration.edgeStorage == reference.edgeStorage &&
@@ -325,7 +293,6 @@ namespace uvsr
                     configuration.firstBounceSamples)
                 << "/later-specialization=" << static_cast<uint32_t>(
                     configuration.laterBounceSamples)
-                << "/noise=" << static_cast<uint32_t>(configuration.noise)
                 << "/math=" << static_cast<uint32_t>(configuration.math)
                 << "/raw-ao=" << static_cast<uint32_t>(
                     configuration.rawAoStorage)
@@ -372,7 +339,6 @@ namespace uvsr
             HashEnum(hash, configuration.trace);
             HashEnum(hash, configuration.firstBounceSamples);
             HashEnum(hash, configuration.laterBounceSamples);
-            HashEnum(hash, configuration.noise);
             HashEnum(hash, configuration.math);
             HashEnum(hash, configuration.rawAoStorage);
             HashEnum(hash, configuration.edgeStorage);
@@ -420,7 +386,6 @@ namespace uvsr
             HashEnum(hash, configuration.trace);
             HashEnum(hash, configuration.firstBounceSamples);
             HashEnum(hash, configuration.laterBounceSamples);
-            HashEnum(hash, configuration.noise);
             HashEnum(hash, configuration.math);
             HashEnum(hash, configuration.rawAoStorage);
             HashEnum(hash, configuration.edgeStorage);
@@ -432,24 +397,18 @@ namespace uvsr
             HashEnum(hash, workload.consumer);
             HashEnum(hash, workload.estimator);
             HashEnum(hash, workload.resolution);
-            HashEnum(hash, workload.scheduler);
-            // Composed generic shaders specialize the common quadratic
-            // radial distribution independently of the dynamic sample
-            // count. Keep that compile-time choice in the pipeline identity
-            // so changing the exponent cannot reuse an x^2 pipeline.
-            HashBool(hash, workload.radialExponent == 2.0f);
             HashUint32(hash, workload.bounceCount);
             HashUint32(hash, workload.threadGroupSizeX);
             HashUint32(hash, workload.threadGroupSizeY);
             HashBool(hash, workload.temporalEnabled);
             HashBool(hash, workload.spatialEnabled);
-            HashBool(hash, workload.depthHierarchyEnabled);
             HashUint64(hash, workload.runtimeConfigurationKey);
             HashEnum(hash, plan.firstBounceRuntimeSamples);
             HashEnum(hash, plan.laterBounceRuntimeSamples);
-            HashUint64(hash, plan.resourceMask);
-            HashUint64(hash, plan.bindingMask);
-            HashUint64(hash, plan.passMask);
+            // Whole-effect resource and pass masks remain part of the evidence
+            // key above, but not this PSO cache key. Runtime depth-hierarchy
+            // selection changes those masks while the trace shader keeps one
+            // uniform SRV layout and one compiled implementation.
             return hash;
         }
 
@@ -590,7 +549,6 @@ namespace uvsr
         using Class = VisibilityOptimizationClass;
         using Trace = VisibilityTraceImplementation;
         using Samples = VisibilitySampleSpecialization;
-        using Noise = VisibilityNoiseDelivery;
         using Math = VisibilityMathMode;
         using Storage = VisibilityRawAoStorage;
         using Edge = VisibilityEdgeStorage;
@@ -603,210 +561,106 @@ namespace uvsr
         using Consumer = VisibilityConsumerRequirement;
         using Estimator = VisibilityEstimatorRequirement;
         using Resolution = VisibilityResolutionRequirement;
-        using Status = VisibilityImplementationStatus;
 
         switch (profile)
         {
         case VisibilityPerformanceProfile::Reference:
             return MakeConfiguration(
                 profile, "Reference", Class::Reference,
-                Trace::LegacyGenericBitmask, Samples::Generic,
-                Samples::Generic, Noise::Legacy, Math::ReferenceFp32,
-                Storage::ScalarFloat, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::LegacyBroad,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::Any, Resolution::Any, false, false);
-        case VisibilityPerformanceProfile::ExactFixed8:
-            return MakeConfiguration(
-                profile, "Exact Fixed 8", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Trace::RuntimeBitmask, Samples::Runtime,
+                Samples::Runtime, Math::ReferenceFp32,
                 Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::LegacySeparateComposition,
                 Depth::Legacy, Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::Any, Resolution::Any, false, false);
-        case VisibilityPerformanceProfile::ExactFixed12:
+        case VisibilityPerformanceProfile::Runtime:
             return MakeConfiguration(
-                profile, "Exact Fixed 12", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed12,
-                Samples::Fixed12, Noise::Legacy, Math::ReferenceFp32,
+                profile, "Runtime", Class::Exact,
+                Trace::RuntimeBitmask, Samples::Runtime,
+                Samples::Runtime, Math::ReferenceFp32,
                 Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::LegacySeparateComposition,
                 Depth::Legacy, Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::Any, Resolution::Any, false, false);
-        case VisibilityPerformanceProfile::ExactFixed16:
-            return MakeConfiguration(
-                profile, "Exact Fixed 16", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed16,
-                Samples::Fixed16, Noise::Legacy, Math::ReferenceFp32,
-                Storage::ScalarFloat, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::Any, Resolution::Any, false, false);
-        case VisibilityPerformanceProfile::ExactFixed20:
-            return MakeConfiguration(
-                profile, "Exact Fixed 20", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed20,
-                Samples::Fixed20, Noise::Legacy, Math::ReferenceFp32,
-                Storage::ScalarFloat, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::Any, Resolution::Any, false, false);
-        case VisibilityPerformanceProfile::ExactFixed24:
-            return MakeConfiguration(
-                profile, "Exact Fixed 24", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed24,
-                Samples::Fixed24, Noise::Legacy, Math::ReferenceFp32,
-                Storage::ScalarFloat, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::Any, Resolution::Any, false, false);
-        case VisibilityPerformanceProfile::ExactFixed48:
-            return MakeConfiguration(
-                profile, "Exact Fixed 48", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed48,
-                Samples::Fixed48, Noise::Legacy, Math::ReferenceFp32,
-                Storage::ScalarFloat, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::Any, Resolution::Any, false, false);
-        case VisibilityPerformanceProfile::ExactFixed64:
-            return MakeConfiguration(
-                profile, "Exact Fixed 64", Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed64,
-                Samples::Fixed64, Noise::Legacy, Math::ReferenceFp32,
-                Storage::ScalarFloat, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::Any, Resolution::Any,
-                false, false);
-        case VisibilityPerformanceProfile::ExactPackedCurrentFast:
-            return MakeConfiguration(
-                profile, "Offline Packed Spacetime Noise",
-                Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Fixed8, Noise::PackedCurrentFast,
-                Math::ReferenceFp32, Storage::ScalarFloat,
-                Reconstruction::Legacy, Temporal::Legacy,
-                Application::LegacySeparateComposition, Depth::Legacy,
-                Bindings::MinimalConditional,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::IncludesAmbientOcclusion, Resolution::Any,
-                false, false, Edge::None,
-                Estimator::UniformSolidAngle);
         case VisibilityPerformanceProfile::ExactFusedResolveApply:
             return MakeConfiguration(
                 profile, "Fused Apply", Class::Exact,
-                Trace::LegacyGenericBitmask, Samples::Generic,
-                Samples::Generic, Noise::Legacy, Math::ReferenceFp32,
-                Storage::ScalarFloat, Reconstruction::Legacy,
-                Temporal::Legacy, Application::FusedResolveAndApplyExact,
-                Depth::Legacy, Bindings::LegacyBroad,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::AmbientOcclusionOnly, Resolution::Reduced,
-                false, true);
-        case VisibilityPerformanceProfile::ExactFixed8FusedResolveApply:
-            return MakeConfiguration(
-                profile, "Fixed 8 Fused Apply",
-                Class::Exact,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Trace::RuntimeBitmask, Samples::Runtime,
+                Samples::Runtime, Math::ReferenceFp32,
                 Storage::ScalarFloat, Reconstruction::Legacy,
                 Temporal::Legacy, Application::FusedResolveAndApplyExact,
                 Depth::Legacy, Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::AmbientOcclusionOnly, Resolution::Reduced,
-                false, true, Edge::None,
-                Estimator::UniformSolidAngle);
+                false, true);
         case VisibilityPerformanceProfile::AlgorithmicPackedEdges2x2:
             return MakeConfiguration(
                 profile, "Depth-Guided Reconstruction",
                 Class::Algorithmic,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Trace::RuntimeBitmask, Samples::Runtime,
+                Samples::Runtime, Math::ReferenceFp32,
                 Storage::ScalarFloat,
                 Reconstruction::PackedEdges2x2, Temporal::Legacy,
                 Application::LegacySeparateComposition, Depth::Legacy,
                 Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::Any, Resolution::Reduced,
-                false, false, Edge::R8Uint,
-                Estimator::UniformSolidAngle);
+                false, false, Edge::R8Uint);
         case VisibilityPerformanceProfile::
                 AlgorithmicPackedEdgesDepthNormal2x2:
             return MakeConfiguration(
                 profile, "Depth-Normal Reconstruction",
                 Class::Algorithmic,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Trace::RuntimeBitmask, Samples::Runtime,
+                Samples::Runtime, Math::ReferenceFp32,
                 Storage::ScalarFloat, Reconstruction::PackedEdges2x2,
                 Temporal::Legacy,
                 Application::LegacySeparateComposition, Depth::Legacy,
                 Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::Any, Resolution::Reduced,
-                false, false, Edge::R8Uint,
-                Estimator::UniformSolidAngle);
+                false, false, Edge::R8Uint);
         case VisibilityPerformanceProfile::AlgorithmicPackedEdgesSlope2x2:
             return MakeConfiguration(
                 profile, "Slope-Aware Reconstruction",
                 Class::Algorithmic,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Trace::RuntimeBitmask, Samples::Runtime,
+                Samples::Runtime, Math::ReferenceFp32,
                 Storage::ScalarFloat, Reconstruction::PackedEdges2x2,
                 Temporal::Legacy,
                 Application::LegacySeparateComposition, Depth::Legacy,
                 Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::Any, Resolution::Reduced,
-                false, false, Edge::R8Uint,
-                Estimator::UniformSolidAngle);
+                false, false, Edge::R8Uint);
         case VisibilityPerformanceProfile::AlgorithmicPackedEdgesLeakage2x2:
             return MakeConfiguration(
                 profile, "Leakage-Limited Reconstruction",
                 Class::Algorithmic,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Trace::RuntimeBitmask, Samples::Runtime,
+                Samples::Runtime, Math::ReferenceFp32,
                 Storage::ScalarFloat, Reconstruction::PackedEdges2x2,
                 Temporal::Legacy,
                 Application::LegacySeparateComposition, Depth::Legacy,
                 Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::Any, Resolution::Reduced,
-                false, false, Edge::R8Uint,
-                Estimator::UniformSolidAngle);
+                false, false, Edge::R8Uint);
         case VisibilityPerformanceProfile::AlgorithmicFusedPackedEdges2x2:
             return MakeConfiguration(
                 profile, "Fused Depth-Normal Apply",
                 Class::Algorithmic,
-                Trace::FixedInterleavedBitmask, Samples::Fixed8,
-                Samples::Fixed8, Noise::Legacy, Math::ReferenceFp32,
+                Trace::RuntimeBitmask, Samples::Runtime,
+                Samples::Runtime, Math::ReferenceFp32,
                 Storage::ScalarFloat, Reconstruction::PackedEdges2x2,
                 Temporal::Legacy,
                 Application::FusedResolveAndApplyPackedEdges,
                 Depth::Legacy, Bindings::MinimalConditional,
                 Traversal::InterleavedNegativePositiveNearToFar,
                 Consumer::AmbientOcclusionOnly, Resolution::Reduced,
-                false, false, Edge::R8Uint,
-                Estimator::UniformSolidAngle);
-        case VisibilityPerformanceProfile::GenericFallback:
-            return MakeConfiguration(
-                profile, "Generic Fallback", Class::Exact,
-                Trace::LegacyGenericBitmask, Samples::Generic,
-                Samples::Generic, Noise::Legacy, Math::ReferenceFp32,
-                Storage::ScalarFloat, Reconstruction::Legacy,
-                Temporal::Legacy, Application::LegacySeparateComposition,
-                Depth::Legacy, Bindings::LegacyBroad,
-                Traversal::InterleavedNegativePositiveNearToFar,
-                Consumer::Any, Resolution::Any, false, false);
+                false, false, Edge::R8Uint);
         default:
             return {};
         }
@@ -821,13 +675,11 @@ namespace uvsr
             IsAssignedEnum(configuration.optimizationClass,
                 VisibilityOptimizationClass::Algorithmic) &&
             IsAssignedEnum(configuration.trace,
-                VisibilityTraceImplementation::FixedInterleavedBitmask) &&
+                VisibilityTraceImplementation::RuntimeBitmask) &&
             IsAssignedEnum(configuration.firstBounceSamples,
-                VisibilitySampleSpecialization::Fixed64) &&
+                VisibilitySampleSpecialization::Runtime) &&
             IsAssignedEnum(configuration.laterBounceSamples,
-                VisibilitySampleSpecialization::Fixed64) &&
-            IsAssignedEnum(configuration.noise,
-                VisibilityNoiseDelivery::PackedCurrentFast) &&
+                VisibilitySampleSpecialization::Runtime) &&
             IsAssignedEnum(configuration.math,
                 VisibilityMathMode::ReferenceFp32) &&
             IsAssignedEnum(configuration.rawAoStorage,
@@ -982,40 +834,6 @@ namespace uvsr
                 "Visibility profiles use the retained 8x8 thread-group shape.");
         }
 
-        const uint32_t fixedFirstCount =
-            SpecializedSampleCount(configuration.firstBounceSamples);
-        const uint32_t fixedLaterCount =
-            SpecializedSampleCount(configuration.laterBounceSamples);
-        if (fixedFirstCount != 0u &&
-            workload.firstBounceSampleCount != fixedFirstCount)
-        {
-            return reject(VisibilityPlanError::SampleCountMismatch,
-                "The workload does not match the fixed first-bounce count.");
-        }
-        if (fixedLaterCount != 0u &&
-            workload.laterBounceSampleCount != fixedLaterCount)
-        {
-            return reject(VisibilityPlanError::SampleCountMismatch,
-                "The workload does not match the fixed later-bounce count.");
-        }
-        const bool fixedQuadraticExponent =
-            configuration.trace ==
-                VisibilityTraceImplementation::FixedInterleavedBitmask;
-        if (fixedQuadraticExponent &&
-            (fixedFirstCount != 0u || fixedLaterCount != 0u) &&
-            workload.radialExponent != 2.0f)
-        {
-            return reject(VisibilityPlanError::FixedExponentMismatch,
-                "The fixed shader is compiled for a quadratic radial exponent.");
-        }
-        if (configuration.noise == VisibilityNoiseDelivery::PackedCurrentFast &&
-            workload.scheduler != VisibilityPerformanceScheduler::
-                FilterAdaptedSpatiotemporalRankField)
-        {
-            return reject(VisibilityPlanError::ProfileSchedulerMismatch,
-                "Offline Packed Spacetime Noise requires the matching "
-                "Offline Spacetime Noise schedule.");
-        }
         const bool packedReconstruction =
             configuration.reconstruction ==
                 VisibilityReconstructionMode::PackedEdges2x2;
@@ -1108,25 +926,17 @@ namespace uvsr
 
         plan.selectsLegacyReference = configuration.profile ==
             VisibilityPerformanceProfile::Reference;
-        const bool usesLegacyBroadPipeline =
-            configuration.bindings == VisibilityBindingStrategy::LegacyBroad;
         plan.preservesProductionBitmask =
             configuration.trace ==
-                VisibilityTraceImplementation::LegacyGenericBitmask ||
-            configuration.trace ==
-                VisibilityTraceImplementation::FixedInterleavedBitmask;
+                VisibilityTraceImplementation::RuntimeBitmask;
         plan.benchmarkOnly = configuration.benchmarkOnly;
         plan.requiresExplicitHalfRoundtrip =
             configuration.explicitHalfRoundtrip;
-        plan.fixedFirstBounceSampleCount = fixedFirstCount;
-        plan.fixedLaterBounceSampleCount = fixedLaterCount;
         const bool optimizedRuntimeLoop =
             configuration.trace ==
-                VisibilityTraceImplementation::LegacyGenericBitmask &&
+                VisibilityTraceImplementation::RuntimeBitmask &&
             configuration.firstBounceSamples ==
                 VisibilitySampleSpecialization::Runtime &&
-            configuration.noise ==
-                VisibilityNoiseDelivery::PackedCurrentFast &&
             configuration.bindings ==
                 VisibilityBindingStrategy::MinimalConditional &&
             configuration.edgeStorage == VisibilityEdgeStorage::None &&
@@ -1137,12 +947,7 @@ namespace uvsr
                     AmbientOcclusionAndIndirectDiffuse &&
             workload.estimator ==
                 VisibilityPerformanceEstimator::UniformSolidAngle &&
-            workload.scheduler ==
-                VisibilityPerformanceScheduler::
-                    FilterAdaptedSpatiotemporalRankField &&
-            workload.bounceCount == 1u &&
-            workload.radialExponent == 2.0f &&
-            !workload.depthHierarchyEnabled;
+            workload.bounceCount == 1u;
         if (optimizedRuntimeLoop)
         {
             plan.firstBounceRuntimeSamples =
@@ -1151,37 +956,15 @@ namespace uvsr
                     : VisibilityRuntimeSampleContract::TrustedOdd;
         }
 
-        const bool schedulerTextureBound =
-            configuration.noise ==
-                    VisibilityNoiseDelivery::PackedCurrentFast ||
-                (configuration.noise == VisibilityNoiseDelivery::Legacy &&
-                    (workload.scheduler ==
-                            VisibilityPerformanceScheduler::
-                                ToroidalBlueNoiseRankField ||
-                        workload.scheduler ==
-                            VisibilityPerformanceScheduler::
-                                FilterAdaptedSpatiotemporalRankField));
-
-        if (usesLegacyBroadPipeline)
-        {
-            // The legacy shader layout is intentionally broad for every
-            // consumer permutation, including resources compiled out by a
-            // particular shader.
-            plan.firstTraceSrvCount = 8u;
-            plan.firstTraceUavCount = 3u;
-        }
-        else
-        {
-            plan.firstTraceSrvCount = 2u +
-                (hasIndirectDiffuse ? 1u : 0u) +
-                (usesLegacyDepthPreparation ? 1u : 0u) +
-                (schedulerTextureBound ? 1u : 0u);
-            plan.firstTraceUavCount =
-                (hasAmbientOcclusion ? 1u : 0u) +
-                (hasIndirectDiffuse ? 1u : 0u) +
-                (configuration.edgeStorage != VisibilityEdgeStorage::None
-                    ? 1u : 0u);
-        }
+        // Runtime keeps the depth-hierarchy and Toroidal SRVs in one uniform
+        // layout. Independent Hash simply leaves the Toroidal lookup unused.
+        plan.firstTraceSrvCount = 4u +
+            (hasIndirectDiffuse ? 1u : 0u);
+        plan.firstTraceUavCount =
+            (hasAmbientOcclusion ? 1u : 0u) +
+            (hasIndirectDiffuse ? 1u : 0u) +
+            (configuration.edgeStorage != VisibilityEdgeStorage::None
+                ? 1u : 0u);
 
         if (hasAmbientOcclusion)
         {
@@ -1249,123 +1032,59 @@ namespace uvsr
             plan.resourceMask |=
                 Bit(VisibilityExecutionResource::DepthHierarchy);
         }
-        if (usesLegacyBroadPipeline)
-        {
-            // The legacy pass constructs and binds both assets eagerly.
-            plan.resourceMask |=
-                Bit(VisibilityExecutionResource::LegacyToroidalNoise) |
-                Bit(VisibilityExecutionResource::LegacyCurrentFastNoise);
-        }
-        else if (configuration.noise == VisibilityNoiseDelivery::Legacy)
-        {
-            if (workload.scheduler == VisibilityPerformanceScheduler::
-                ToroidalBlueNoiseRankField)
-            {
-                plan.resourceMask |=
-                    Bit(VisibilityExecutionResource::LegacyToroidalNoise);
-            }
-            else if (workload.scheduler == VisibilityPerformanceScheduler::
-                FilterAdaptedSpatiotemporalRankField)
-            {
-                plan.resourceMask |=
-                    Bit(VisibilityExecutionResource::LegacyCurrentFastNoise);
-            }
-        }
-        else if (configuration.noise ==
-            VisibilityNoiseDelivery::PackedCurrentFast)
-        {
-            plan.resourceMask |=
-                Bit(VisibilityExecutionResource::PackedCurrentFastNoise);
-        }
+        // The single Runtime shader declares the Toroidal SRV so its uniform
+        // scheduler branch can switch without a second shader family.
+        plan.resourceMask |=
+            Bit(VisibilityExecutionResource::ToroidalNoise);
 
-        if (usesLegacyBroadPipeline)
+        plan.bindingMask =
+            Bit(VisibilityExecutionBinding::Depth) |
+            Bit(VisibilityExecutionBinding::Normals) |
+            Bit(VisibilityExecutionBinding::ToroidalNoise);
+        if (workload.temporalEnabled)
         {
-            // Broad layouts bind dummy resources for inactive consumers. This
-            // deliberately models the current contract instead of minimizing it.
-            plan.bindingMask =
-                Bit(VisibilityExecutionBinding::Depth) |
-                Bit(VisibilityExecutionBinding::Normals) |
-                Bit(VisibilityExecutionBinding::MotionVectors) |
+            plan.bindingMask |=
+                Bit(VisibilityExecutionBinding::MotionVectors);
+        }
+        if (hasAmbientOcclusion)
+        {
+            plan.bindingMask |=
+                Bit(VisibilityExecutionBinding::AmbientOutput);
+        }
+        if (hasIndirectDiffuse)
+        {
+            plan.bindingMask |=
                 Bit(VisibilityExecutionBinding::SourceRadiance) |
                 Bit(VisibilityExecutionBinding::GBufferMaterial) |
-                Bit(VisibilityExecutionBinding::BaseLighting) |
-                Bit(VisibilityExecutionBinding::OutputLighting) |
-                Bit(VisibilityExecutionBinding::LegacyToroidalNoise) |
-                Bit(VisibilityExecutionBinding::LegacyCurrentFastNoise) |
-                Bit(VisibilityExecutionBinding::DepthHierarchy) |
-                Bit(VisibilityExecutionBinding::AmbientHistory) |
-                Bit(VisibilityExecutionBinding::IndirectHistory) |
-                Bit(VisibilityExecutionBinding::AmbientOutput) |
                 Bit(VisibilityExecutionBinding::IndirectOutput);
         }
-        else
+        plan.bindingMask |=
+            Bit(VisibilityExecutionBinding::BaseLighting) |
+            Bit(VisibilityExecutionBinding::OutputLighting) |
+            Bit(VisibilityExecutionBinding::GBufferMaterial);
+        if (workload.temporalEnabled)
         {
-            plan.bindingMask =
-                Bit(VisibilityExecutionBinding::Depth) |
-                Bit(VisibilityExecutionBinding::Normals);
-            if (workload.temporalEnabled)
-            {
-                plan.bindingMask |=
-                    Bit(VisibilityExecutionBinding::MotionVectors);
-            }
             if (hasAmbientOcclusion)
             {
                 plan.bindingMask |=
-                    Bit(VisibilityExecutionBinding::AmbientOutput);
+                    Bit(VisibilityExecutionBinding::AmbientHistory);
             }
             if (hasIndirectDiffuse)
             {
                 plan.bindingMask |=
-                    Bit(VisibilityExecutionBinding::SourceRadiance) |
-                    Bit(VisibilityExecutionBinding::GBufferMaterial) |
-                    Bit(VisibilityExecutionBinding::IndirectOutput);
+                    Bit(VisibilityExecutionBinding::IndirectHistory);
             }
+        }
+        if (bindsDepthHierarchy)
+        {
             plan.bindingMask |=
-                Bit(VisibilityExecutionBinding::BaseLighting) |
-                Bit(VisibilityExecutionBinding::OutputLighting) |
-                Bit(VisibilityExecutionBinding::GBufferMaterial);
-            if (workload.temporalEnabled)
-            {
-                if (hasAmbientOcclusion)
-                {
-                    plan.bindingMask |=
-                        Bit(VisibilityExecutionBinding::AmbientHistory);
-                }
-                if (hasIndirectDiffuse)
-                {
-                    plan.bindingMask |=
-                        Bit(VisibilityExecutionBinding::IndirectHistory);
-                }
-            }
-            if (bindsDepthHierarchy)
-            {
-                plan.bindingMask |=
-                    Bit(VisibilityExecutionBinding::DepthHierarchy);
-            }
-            if (HasVisibilityExecutionResource(plan.resourceMask,
-                    VisibilityExecutionResource::LegacyToroidalNoise))
-            {
-                plan.bindingMask |=
-                    Bit(VisibilityExecutionBinding::LegacyToroidalNoise);
-            }
-            if (HasVisibilityExecutionResource(plan.resourceMask,
-                    VisibilityExecutionResource::LegacyCurrentFastNoise))
-            {
-                plan.bindingMask |=
-                    Bit(VisibilityExecutionBinding::LegacyCurrentFastNoise);
-            }
-            if (HasVisibilityExecutionResource(plan.resourceMask,
-                    VisibilityExecutionResource::PackedCurrentFastNoise))
-            {
-                plan.bindingMask |=
-                    Bit(VisibilityExecutionBinding::PackedCurrentFastNoise);
-            }
-            if (HasVisibilityExecutionResource(plan.resourceMask,
-                    VisibilityExecutionResource::PackedEdgesR8Uint))
-            {
-                plan.bindingMask |=
-                    Bit(VisibilityExecutionBinding::PackedEdges);
-            }
+                Bit(VisibilityExecutionBinding::DepthHierarchy);
+        }
+        if (HasVisibilityExecutionResource(plan.resourceMask,
+                VisibilityExecutionResource::PackedEdgesR8Uint))
+        {
+            plan.bindingMask |=
+                Bit(VisibilityExecutionBinding::PackedEdges);
         }
 
         if (usesDepthPreparation)
@@ -1373,30 +1092,11 @@ namespace uvsr
             plan.passMask |=
                 Bit(VisibilityExecutionPass::DepthPreparation);
         }
-        if (usesLegacyBroadPipeline)
-        {
-            plan.passMask |= Bit(VisibilityExecutionPass::LegacyTrace);
-        }
-        else
-        {
-            switch (configuration.trace)
-            {
-            case VisibilityTraceImplementation::LegacyGenericBitmask:
-                plan.passMask |=
-                    Bit(VisibilityExecutionPass::CandidateGenericTrace);
-                break;
-            case VisibilityTraceImplementation::FixedInterleavedBitmask:
-                plan.passMask |= Bit(VisibilityExecutionPass::FixedTrace);
-                break;
-            default:
-                break;
-            }
-        }
+        plan.passMask |= Bit(VisibilityExecutionPass::RuntimeTrace);
         if (hasIndirectDiffuse && workload.bounceCount > 1u)
         {
-            plan.passMask |= fixedLaterCount != 0u
-                ? Bit(VisibilityExecutionPass::FixedLaterBounceTrace)
-                : Bit(VisibilityExecutionPass::LegacyLaterBounceTrace);
+            plan.passMask |=
+                Bit(VisibilityExecutionPass::RuntimeLaterBounceTrace);
         }
         if (workload.temporalEnabled)
         {
@@ -1453,9 +1153,7 @@ namespace uvsr
         }
         if (hasIndirectDiffuse && workload.bounceCount > 1u)
         {
-            includeLayout(fixedLaterCount != 0u
-                    ? 6u + (schedulerTextureBound ? 1u : 0u)
-                    : 11u,
+            includeLayout(8u,
                 workload.bounceCount > c_MaximumExplicitBounceCount
                     ? 3u : 2u);
         }
@@ -1508,7 +1206,6 @@ namespace uvsr
     {
         using Consumer = VisibilityPerformanceConsumer;
         using Implementation = VisibilityPerformanceProfile;
-        using Scheduler = VisibilityPerformanceScheduler;
         using Status = VisibilityImplementationStatus;
 
         VisibilityPerformanceWorkload workload =
@@ -1518,11 +1215,9 @@ namespace uvsr
         case VisibilityVerificationProfile::ReferenceAo8T:
             return MakeVerificationDefinition(profile, "Reference AO 8T",
                 Implementation::Reference, workload, Status::Implemented);
-        case VisibilityVerificationProfile::ExactFastAo8T:
-            workload.scheduler =
-                Scheduler::FilterAdaptedSpatiotemporalRankField;
-            return MakeVerificationDefinition(profile, "Exact-Fast AO 8T",
-                Implementation::ExactPackedCurrentFast, workload,
+        case VisibilityVerificationProfile::RuntimeAo8T:
+            return MakeVerificationDefinition(profile, "Runtime AO 8T",
+                Implementation::Runtime, workload,
                 Status::Implemented);
         case VisibilityVerificationProfile::PackedEdgeAo8T:
             return MakeVerificationDefinition(profile, "Packed-Edge AO 8T",
@@ -1534,48 +1229,39 @@ namespace uvsr
                 Consumer::AmbientOcclusionAndIndirectDiffuse;
             return MakeVerificationDefinition(profile, "Reference AO+GI 8T",
                 Implementation::Reference, workload, Status::Implemented);
-        case VisibilityVerificationProfile::ExactFastAoGi8T:
+        case VisibilityVerificationProfile::RuntimeAoGi8T:
             workload.consumer =
                 Consumer::AmbientOcclusionAndIndirectDiffuse;
-            workload.scheduler =
-                Scheduler::FilterAdaptedSpatiotemporalRankField;
             return MakeVerificationDefinition(
-                profile, "Exact-Fast AO+GI 8T",
-                Implementation::ExactPackedCurrentFast, workload,
+                profile, "Runtime AO+GI 8T",
+                Implementation::Runtime, workload,
                 Status::Implemented);
-        case VisibilityVerificationProfile::ExactFastAoGi12T:
+        case VisibilityVerificationProfile::RuntimeAoGi12T:
             workload.consumer =
                 Consumer::AmbientOcclusionAndIndirectDiffuse;
             workload.firstBounceSampleCount = 12u;
             workload.laterBounceSampleCount = 12u;
             return MakeVerificationDefinition(
-                profile, "Exact-Fast AO+GI 12T",
-                Implementation::ExactFixed12, workload,
-                Status::PartialBenchmarkControl,
-                "The exact fixed-12 trace is compiled; offline-computed "
-                "packed noise is only compiled for the fixed-8 candidate.");
-        case VisibilityVerificationProfile::ExactFastAoGi16T:
+                profile, "Runtime AO+GI 12T",
+                Implementation::Runtime, workload,
+                Status::Implemented);
+        case VisibilityVerificationProfile::RuntimeAoGi16T:
             workload.consumer =
                 Consumer::AmbientOcclusionAndIndirectDiffuse;
             workload.firstBounceSampleCount = 16u;
             workload.laterBounceSampleCount = 16u;
             return MakeVerificationDefinition(
-                profile, "Exact-Fast AO+GI 16T",
-                Implementation::ExactFixed16, workload,
-                Status::PartialBenchmarkControl,
-                "The exact fixed-16 trace is compiled; offline-computed "
-                "packed noise is only compiled for the fixed-8 candidate.");
-        case VisibilityVerificationProfile::ExactFastMultiBounce:
+                profile, "Runtime AO+GI 16T",
+                Implementation::Runtime, workload,
+                Status::Implemented);
+        case VisibilityVerificationProfile::RuntimeMultiBounce:
             workload.consumer =
                 Consumer::AmbientOcclusionAndIndirectDiffuse;
             workload.bounceCount = 2u;
             return MakeVerificationDefinition(
-                profile, "Exact-Fast Multi-Bounce",
-                Implementation::ExactFixed8, workload,
-                Status::PartialBenchmarkControl,
-                "The first and later traces use exact fixed-8 shaders; "
-                "offline-computed packed noise and fused application are not "
-                "compiled for the multi-bounce path.");
+                profile, "Runtime Multi-Bounce",
+                Implementation::Runtime, workload,
+                Status::Implemented);
         default:
             return {};
         }

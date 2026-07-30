@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-07-29.3`.
+UI reference version: `2026-07-29.4`.
 
 ## Purpose
 
@@ -273,11 +273,11 @@ version.
   that control owns and reconcile the profile afterward. Do not attach reset
   icons to adapters, scene destinations, folder buttons, run/cancel commands,
   Screenshot, Restart, or Zoom.
-- Defaults are product behavior. Aliasing presets keep Stable Interior,
-  Sharpness, and Subpixel Morphology off. Dejitter is off for Low, Medium, and
-  High and on for Ultra. Changing morphology changes only the CMAA2 morphology
-  override; Visibility custom labels retain their originating profile. Do not
-  silently redefine a preset while adding its control.
+- Defaults are product behavior. Aliasing presets keep Sharpness and Subpixel
+  Morphology off. Dejitter is off for Low, Medium, and High and on for Ultra.
+  Changing morphology changes only the CMAA2 morphology override; Visibility
+  custom labels retain their originating profile. Do not silently redefine a
+  preset while adding its control.
 - Preserve the factory baseline unless the user explicitly changes it: PBR with
   Deferred shading, enabled Temporal Reconstructive Medium AA, Sharpness off,
   Visibility High, the calibrated Kloppenheim 03 environment background and
@@ -996,16 +996,20 @@ bindings or history are correctness failures.
   exists.
 - Do not restore removed TAA execution-path, kernel, LDS, reuse, early-reject,
   fusion, cache-blocking, Sample Resurrection, or debug dropdowns in production.
-  Do not create a separate developer performance drawer. The default-collapsed
-  Aliasing **Developer Options** panel contains Rectification followed by Stable
-  Interior; Stable Interior remains off in every preset unless new measured
-  evidence and an explicit product decision authorize a change.
+  Do not create a separate developer performance drawer. Rectification belongs
+  in the default-open **Aliasing Algorithm Configuration** drawer and exposes
+  only Pair Tristimulus and Variance YCoCg. Stable Interior and its
+  moment-history layout are retired.
 - Do not append `(Preset)` to inherited Aliasing controls. The default-open
   algorithm configuration exposes concrete Subpixel Morphology, Motion Source,
-  and Reconstruction selections in least-to-most-expensive order. Keep
-  Sharpness disabled by default for every Aliasing preset, but preserve the
-  user's stored strength while the toggle is off. Place Dejitter above
-  Sharpness; it is off for Low, Medium, and High and on for Ultra.
+  Reconstruction, and Rectification selections in least-to-most-expensive
+  order. Keep Sharpness disabled by default for every Aliasing preset, but
+  preserve the user's stored strength while the toggle is off. Place Dejitter
+  above Sharpness; it is off for Low, Medium, and High and on for Ultra.
+- Visibility exposes no sampling-implementation selector or developer drawer.
+  **Shared Visibility Sampling** owns Estimator, Noise Pattern, Samples, Radius,
+  Thickness, and Distribution. Noise Pattern contains only Independent Hash and
+  Toroidal Blue; Samples is always the 1-64 Runtime path.
 - Keep temporal-history sharpening and resolved presentation sharpening as
   separate shader permutations. Temporal history is premultiplied by confidence;
   CMAA2 output is resolved RGB with non-semantic alpha and must never be divided
@@ -1193,8 +1197,8 @@ If a visibility benchmark is active when topology changes, fail that run rather
 than silently mixing configurations. Initial creation, resize, PBR changes,
 visibility resource or source-radiance ownership changes, view-topology changes,
 and shader reload still require complete `CreateRenderPasses`. A change only to
-TAA pass presence or Stable Interior's moment-history layout uses
-`CreateMiniEngineTemporalAAPass` without rebuilding unrelated passes.
+TAA pass presence uses `CreateMiniEngineTemporalAAPass` without rebuilding
+unrelated passes.
 
 ### Remaining Synchronous Work
 
@@ -1398,6 +1402,12 @@ screenshots were checked.
 
 ## Reference Revision History
 
+- `2026-07-29.4`: Removed the Visibility sampling-implementation and developer
+  drawers, made Runtime the sole 1-64 sample path, limited Noise Pattern to
+  Independent Hash and Toroidal Blue, and placed Distribution in Shared
+  Visibility Sampling. Retired Stable Interior and per-pixel rectification;
+  Rectification now belongs to Aliasing Algorithm Configuration and offers Pair
+  Tristimulus and Variance YCoCg.
 - `2026-07-29.3`: Defined the fixed editable requested-settings schema for SVSM
   Developer Options, including prerequisite-aware tooltip copy and animated
   regions for bodies directly owned by on/off toggles. Reaffirmed trailing

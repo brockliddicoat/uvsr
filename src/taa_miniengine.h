@@ -28,7 +28,6 @@ namespace uvsr
         uint64_t historyTextureBytes = 0u;
         uint64_t debugTextureBytes = 0u;
         uint32_t historyColorSamples = 1u;
-        uint32_t historyMomentSamples = 0u;
         uint32_t historyDepthGathers = 1u;
         uint32_t historyDepthSamples = 0u;
         uint32_t accumulationCount = 0u;
@@ -54,8 +53,7 @@ namespace uvsr
                 commonPasses,
             nvrhi::ITexture* sceneColor,
             nvrhi::ITexture* currentDepth,
-            nvrhi::ITexture* motionVectors,
-            bool enableMomentHistory);
+            nvrhi::ITexture* motionVectors);
 
         void ResetHistory();
 
@@ -95,11 +93,6 @@ namespace uvsr
             return m_LastHistoryInputValid;
         }
 
-        [[nodiscard]] bool IsMomentHistoryRequested() const
-        {
-            return m_MomentHistoryEnabled;
-        }
-
     private:
         enum class Stage : uint32_t
         {
@@ -116,7 +109,6 @@ namespace uvsr
         nvrhi::ITexture* m_SceneColor = nullptr;
         donut::math::uint2 m_Size = donut::math::uint2::zero();
         float m_SourceDepthPairQuantizationError = 0.f;
-        bool m_MomentHistoryEnabled = false;
 
         nvrhi::BufferHandle m_BlendConstantBuffer;
         nvrhi::BufferHandle m_OutputConstantBuffer;
@@ -169,7 +161,6 @@ namespace uvsr
 #endif
 
         TemporalHistoryState m_History;
-        std::array<nvrhi::TextureHandle, 2> m_MomentHistory;
 #if UVSR_AA_DEVELOPER_OVERRIDES
         std::array<nvrhi::TextureHandle, 2> m_PersistentColor;
         std::array<nvrhi::TextureHandle, 2> m_PersistentDepth;

@@ -39,8 +39,6 @@ namespace uvsr
     inline constexpr float MiniEngineTaaMinimumSharpness = 0.0f;
     inline constexpr float MiniEngineTaaMaximumSharpness = 1.0f;
     inline constexpr float MiniEngineTaaSharpenThreshold = 0.001f;
-    inline constexpr float MiniEngineTaaStableInteriorFloor =
-        UVSR_TAA_STABLE_INTERIOR_FLOOR;
     struct MiniEngineTaaSharpenWeights
     {
         float center;
@@ -461,15 +459,11 @@ namespace uvsr
     [[nodiscard]] inline constexpr uint64_t
         GetMiniEngineTaaHistoryBytes(
             uint32_t width,
-            uint32_t height,
-            bool includeMomentHistory)
+            uint32_t height)
     {
-        // The shared pair is two RGBA16F confidence/color histories plus two
-        // R32F device-depth histories (24 B/pixel). Stable Interior alone adds
-        // two RG16F luminance-moment histories (8 B/pixel). This is exact
-        // logical texel payload before API alignment.
-        return uint64_t(width) * uint64_t(height) *
-            (includeMomentHistory ? 32u : 24u);
+        // Two RGBA16F confidence/color histories plus two R32F device-depth
+        // histories use 24 bytes per pixel before API alignment.
+        return uint64_t(width) * uint64_t(height) * 24u;
     }
 
     [[nodiscard]] inline constexpr uint64_t
@@ -485,9 +479,9 @@ namespace uvsr
     [[nodiscard]] inline constexpr uint64_t
         GetMiniEngineTaaDebugBytes(uint32_t width, uint32_t height)
     {
-        // RG16F stores stable-interior and resurrection diagnostics without a
-        // runtime selector branch in any shipping algorithm permutation.
-        return uint64_t(width) * uint64_t(height) * 4u;
+        // R16F stores the developer resurrection diagnostic without adding a
+        // runtime selector branch to shipping algorithm permutations.
+        return uint64_t(width) * uint64_t(height) * 2u;
     }
 
     [[nodiscard]] inline constexpr MiniEngineTaaJitterSample
@@ -658,9 +652,9 @@ namespace uvsr
             uint32_t width,
             uint32_t height)
     {
-        // MiniEngine history color, depth, and moments use linear filtering
-        // or Gather, so their requested center must remain between the first
-        // and last real texel centers.
+        // MiniEngine history color and depth use linear filtering or Gather,
+        // so their requested center must remain between the first and last
+        // real texel centers.
         return IsTemporalAaLinearFootprintInBounds(
             pixelPosition,
             width,
@@ -802,16 +796,6 @@ namespace uvsr
         return centerValid ? 0 : -1;
     }
 
-    [[nodiscard]] inline constexpr float MinMiniEngineTaaFour(
-        const std::array<float, 4>& values)
-    {
-        const float firstPair =
-            values[0] < values[1] ? values[0] : values[1];
-        const float secondPair =
-            values[2] < values[3] ? values[2] : values[3];
-        return firstPair < secondPair ? firstPair : secondPair;
-    }
-
     [[nodiscard]] inline constexpr float
         GetMiniEngineTaaCurrentReconstructionSupport(
             const std::array<float, 9>& depthCoherence,
@@ -851,130 +835,6 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr float
-        GetMiniEngineTaaStableInteriorScore(
-            const std::array<float, 4>& depthCoherence,
-            const std::array<float, 4>& velocityCoherence,
-            float lumaCoherence,
-            float temporalLumaCoherence,
-            float historyDepthAgreement)
-    {
-        // An interior must remain coherent in every cardinal direction.
-        // Averaging the cross would assign a high score to a pixel with one
-        // discontinuous neighbor, which is precisely a silhouette.
-        return ClampMiniEngineTaaUnit(
-            ClampMiniEngineTaaUnit(
-                MinMiniEngineTaaFour(depthCoherence)) *
-            ClampMiniEngineTaaUnit(
-                MinMiniEngineTaaFour(velocityCoherence)) *
-            ClampMiniEngineTaaUnit(lumaCoherence) *
-            ClampMiniEngineTaaUnit(temporalLumaCoherence) *
-            ClampMiniEngineTaaUnit(historyDepthAgreement));
-    }
-
-    [[nodiscard]] inline constexpr float
-        GetMiniEngineTaaLocalLumaCoherence(
-            float minimumLuma,
-            float maximumLuma,
-            float reconstructedCurrentLuma)
-    {
-        const float magnitude = reconstructedCurrentLuma < 0.f
-            ? -reconstructedCurrentLuma
-            : reconstructedCurrentLuma;
-        const float scale = magnitude > 0.1f ? magnitude : 0.1f;
-        const float footprintMinimum =
-            minimumLuma < reconstructedCurrentLuma
-                ? minimumLuma
-                : reconstructedCurrentLuma;
-        const float footprintMaximum =
-            maximumLuma > reconstructedCurrentLuma
-                ? maximumLuma
-                : reconstructedCurrentLuma;
-        const float relativeRange =
-            (footprintMaximum - footprintMinimum) / scale;
-        return 1.f - MiniEngineTaaSmoothStep(
-            0.05f,
-            0.5f,
-            relativeRange);
-    }
-
-    [[nodiscard]] inline float GetMiniEngineTaaTemporalLumaCoherence(
-        float currentLuma,
-        float previousMean,
-        float previousSecondMoment)
-    {
-        if (!std::isfinite(currentLuma) ||
-            !std::isfinite(previousMean) ||
-            !std::isfinite(previousSecondMoment))
-        {
-            return 0.f;
-        }
-
-        const float previousVariance = std::max(
-            previousSecondMoment - previousMean * previousMean,
-            0.f);
-        const float currentMagnitude = std::abs(currentLuma);
-        const float previousMagnitude = std::abs(previousMean);
-        const float lumaScale = std::max(
-            std::max(currentMagnitude, previousMagnitude),
-            0.1f);
-        const float tolerance =
-            std::sqrt(previousVariance) + 0.02f * lumaScale + 0.001f;
-        const float normalizedDifference =
-            std::abs(currentLuma - previousMean) / tolerance;
-        return 1.f - MiniEngineTaaSmoothStep(
-            1.f,
-            4.f,
-            normalizedDifference);
-    }
-
-    [[nodiscard]] inline constexpr float
-        GetMiniEngineTaaHistoryDepthFootprintCoherence(
-            float nearestViewDepth,
-            float farthestViewDepth,
-            bool nearestValid,
-            bool farthestValid)
-    {
-        if (!nearestValid || !farthestValid)
-            return 0.f;
-
-        const float scale =
-            nearestViewDepth > 1e-3f ? nearestViewDepth : 1e-3f;
-        const float difference = farthestViewDepth - nearestViewDepth;
-        const float absoluteDifference =
-            difference < 0.f ? -difference : difference;
-        return 1.f - MiniEngineTaaSmoothStep(
-            0.005f,
-            0.05f,
-            absoluteDifference / scale);
-    }
-
-    [[nodiscard]] inline constexpr float
-        GetMiniEngineTaaHistoryTapDepthCoherence(
-            float expectedViewDepth,
-            float tapViewDepth,
-            bool expectedValid,
-            bool tapValid)
-    {
-        if (!expectedValid || !tapValid)
-            return 0.f;
-
-        const float minimumDepth =
-            expectedViewDepth < tapViewDepth
-                ? expectedViewDepth
-                : tapViewDepth;
-        const float scale = minimumDepth > 1e-3f
-            ? minimumDepth
-            : 1e-3f;
-        const float difference = expectedViewDepth - tapViewDepth;
-        const float absoluteDifference =
-            difference < 0.f ? -difference : difference;
-        return 1.f - MiniEngineTaaSmoothStep(
-            0.005f,
-            0.05f,
-            absoluteDifference / scale);
-    }
-
-    [[nodiscard]] inline constexpr float
         SelectMiniEngineTaaFarthestReverseZDeviceDepth(
             const std::array<float, 4>& deviceDepths)
     {
@@ -989,23 +849,6 @@ namespace uvsr
             ? deviceDepths[2]
             : deviceDepths[3];
         return firstPair < secondPair ? firstPair : secondPair;
-    }
-
-    [[nodiscard]] inline constexpr float ReduceMiniEngineTaaHistoryForInterior(
-        float acceptedHistoryWeight,
-        float stableInteriorScore)
-    {
-        const float score = ClampMiniEngineTaaUnit(stableInteriorScore);
-        // Stable Interior is a clarity control, not another edge rejection
-        // gate. Preserve MiniEngine's accepted history at uncertain edges and
-        // reduce it only where all signals identify a stable interior. The
-        // floor is absolute: already-lower accepted history remains unchanged.
-        const float target =
-            acceptedHistoryWeight < MiniEngineTaaStableInteriorFloor
-                ? acceptedHistoryWeight
-                : MiniEngineTaaStableInteriorFloor;
-        return acceptedHistoryWeight +
-            (target - acceptedHistoryWeight) * score;
     }
 
     [[nodiscard]] inline constexpr float

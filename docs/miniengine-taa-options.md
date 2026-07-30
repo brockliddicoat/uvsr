@@ -58,7 +58,7 @@ highest supported sample count rather than creating an invalid resource.
 MiniEngine TAA owns the only anti-aliasing temporal history. History Frames is
 a 1-32 prior-frame horizon. History Strength ranges from 0% to 200% and scales
 only history that already passed invalid-motion, reprojection-bounds,
-reverse-Z depth, disocclusion, rectification, and stable-interior gates.
+reverse-Z depth, disocclusion, and rectification gates.
 Strength above 100% reinforces accepted partial history before the
 horizon-derived cap; it cannot revive a rejected sample.
 
@@ -80,38 +80,39 @@ Multisample quality: choosing Conservative Ultra while Temporal Low is active
 changes only the CMAA2 presentation pass. Changing only presentation morphology
 preserves temporal history.
 
-## Developer Algorithm Configuration
+## Algorithm Configuration
 
 The default-open **Aliasing Algorithm Configuration** drawer shows the concrete
 resolved selection rather than a generic **Preset** row. Cost-ranked dropdown
 choices are ordered from least expensive to most expensive in every state.
 Mutually exclusive entries display **(Mutex)**.
 
-Temporal controls include **Subpixel Morphology**, **Motion Source**, and
-**Reconstruction**. Reconstruction offers **1x Bilinear**, **1x Bicubic**,
-**5x Bicubic**, and **9x Bicubic**. The last option performs the complete
-nine-bilinear-tap Catmull-Rom reconstruction, including all four corners.
+Temporal controls include **Subpixel Morphology**, **Motion Source**,
+**Reconstruction**, and **Rectification**. Reconstruction offers **1x
+Bilinear**, **1x Bicubic**, **5x Bicubic**, and **9x Bicubic**. The last option
+performs the complete nine-bilinear-tap Catmull-Rom reconstruction, including
+all four corners.
 
-## Stable Interior
+## Dejitter and Sharpness
 
 **Dejitter** appears above **Sharpness** in the normal temporal controls. It is
 off for Low, Medium, and High and on for Ultra. Sharpness starts disabled for
 every preset while retaining its stored strength when toggled off.
 
-The default-collapsed **Developer Options** panel contains **Rectification**
-followed by **Stable Interior**. Stable Interior remains off in every preset.
-Execution path, compute kernel, LDS layout, shared-work reuse, early rejection,
-pass fusion, cache blocking, Sample Resurrection, and developer debug
-dropdowns are not exposed in production.
+Stable Interior and its moment-history resource were retired. Execution path,
+compute kernel, LDS layout, shared-work reuse, early rejection, pass fusion,
+cache blocking, Sample Resurrection, and developer debug dropdowns are not
+exposed in production.
 
 ## Rectification
 
 Rectification is primarily a history-quality policy, not a blanket performance
-optimization. Pair Tristimulus uses paired neighborhood bounds; Per-Pixel RGB
-and Per-Pixel YCoCg clamp individual pixels in their respective color spaces;
-Variance YCoCg uses variance-aware bounds. Their relative GPU cost depends on
-the active temporal permutation and adapter, while their visible tradeoff is
-how aggressively valid history is constrained.
+optimization. Pair Tristimulus uses paired neighborhood bounds; Variance YCoCg
+uses variance-aware bounds. The per-pixel RGB and YCoCg variants were retired
+because they duplicated the same policy space while multiplying every other
+TAA compile-time axis. Relative GPU cost still depends on the active temporal
+permutation and adapter, while the visible tradeoff is how aggressively valid
+history is constrained.
 
 ## Presentation Sharpening Contract
 

@@ -10,7 +10,6 @@
 
 #include <array>
 #include <cstdint>
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -75,8 +74,7 @@ namespace uvsr
     enum class VisibilitySampleScheduler : uint32_t
     {
         IndependentHash,
-        ToroidalBlueNoiseRankField,
-        FilterAdaptedSpatiotemporalRankField
+        ToroidalBlueNoiseRankField
     };
 
     enum class VisibilitySpatialFilter : uint32_t
@@ -136,7 +134,7 @@ namespace uvsr
     {
         VisibilityPerformanceProfileConfiguration configuration =
             GetVisibilityPerformanceProfileConfiguration(
-                VisibilityPerformanceProfile::GenericFallback);
+                VisibilityPerformanceProfile::Runtime);
         VisibilityBufferPrecisionSettings bufferPrecision;
         VisibilityPackedEdgeMode packedEdgeMode =
             VisibilityPackedEdgeMode::DepthAndNormal;
@@ -205,10 +203,10 @@ namespace uvsr
         AmbientOcclusionSettings ambientOcclusion;
         IndirectDiffuseSettings indirectDiffuse;
         VisibilityReconstructionSettings reconstruction;
-        // Start with the compiled exact 20-sample path. Every advanced profile
-        // resolves a complete CPU-side pass/resource plan.
+        // Runtime preserves the full 1-64 sample range without count-specific
+        // shader families.
         VisibilityPerformanceProfile performanceProfile =
-            VisibilityPerformanceProfile::ExactFixed20;
+            VisibilityPerformanceProfile::Runtime;
         // Presets remain useful reproducible starting points. Once an
         // individual control changes, this configuration becomes the live
         // composed plan so unrelated controls no longer erase optimizations.
@@ -325,7 +323,6 @@ namespace uvsr
         uint64_t temporalDepthHistoryBytes = 0u;
         uint64_t temporalNormalHistoryBytes = 0u;
         uint64_t depthHierarchyBytes = 0u;
-        uint64_t packedFastNoiseBytes = 0u;
         uint64_t packedEdgeMetadataBytes = 0u;
         uint64_t maskCacheBytes = 0u;
         uint64_t avoidedTextureBytes = 0u;
@@ -371,8 +368,7 @@ namespace uvsr
         ScreenSpaceVisibilityPass(
             nvrhi::IDevice* device,
             const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
-            std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses,
-            const std::filesystem::path& filterAdaptedNoisePath);
+            std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses);
 
         void Render(
             nvrhi::ICommandList* commandList,
@@ -464,13 +460,6 @@ namespace uvsr
         nvrhi::BufferHandle m_BounceIndirectArguments;
         nvrhi::SamplerHandle m_PointClampSampler;
 
-        std::array<std::array<Pipeline,
-            c_ConsumerVariantCount>, ImplementedVisibilityEstimatorCount>
-            m_Sampling;
-        std::array<std::array<Pipeline, 2>,
-            ImplementedVisibilityEstimatorCount> m_MultiBounceFirstSampling;
-        std::array<std::array<Pipeline, 2>,
-            ImplementedVisibilityEstimatorCount> m_IndirectBounceSampling;
         Pipeline m_BounceDispatchControl;
         std::array<Pipeline, c_ConsumerVariantCount> m_Temporal;
         std::array<std::array<Pipeline, c_ConsumerVariantCount>, 2> m_Filter;
@@ -491,7 +480,6 @@ namespace uvsr
         bool m_TemporalResourcesEnabled = false;
         bool m_PostProcessResourcesEnabled = false;
         bool m_DepthHierarchyResourcesEnabled = false;
-        bool m_PackedFastResourcesEnabled = false;
         bool m_PackedEdgeResourcesEnabled = false;
         bool m_FinalAmbientResourcesEnabled = false;
         uint64_t m_BufferPrecisionConfigurationKey = 0u;
@@ -507,8 +495,6 @@ namespace uvsr
         nvrhi::TextureHandle m_FinalIndirectDiffuse;
         nvrhi::TextureHandle m_DepthHierarchyTexture;
         nvrhi::TextureHandle m_BlueNoiseTexture;
-        nvrhi::TextureHandle m_FilterAdaptedNoiseTexture;
-        nvrhi::TextureHandle m_PackedFastNoiseTexture;
         nvrhi::TextureHandle m_PackedEdgesTexture;
 
         nvrhi::TextureHandle m_DummyAmbientVisibility;
@@ -517,17 +503,6 @@ namespace uvsr
         nvrhi::TextureHandle m_DummyAmbientOutput;
         nvrhi::TextureHandle m_DummyIndirectOutput;
 
-        // [estimator][consumer]
-        std::array<std::array<nvrhi::BindingSetHandle,
-            c_ConsumerVariantCount>,
-            ImplementedVisibilityEstimatorCount> m_SamplingBindingSets;
-        // [estimator][AO variant]
-        std::array<std::array<nvrhi::BindingSetHandle, 2>,
-            ImplementedVisibilityEstimatorCount> m_MultiBounceFirstBindingSets;
-        // [estimator][initialize/add][bounce rotation]
-        std::array<std::array<std::array<
-            nvrhi::BindingSetHandle, 3>, 2>,
-            ImplementedVisibilityEstimatorCount> m_IndirectBounceBindingSets;
         nvrhi::BindingSetHandle m_BounceDispatchControlBindingSet;
         // [consumer][single/multiple-bounce source][history write parity]
         std::array<std::array<std::array<nvrhi::BindingSetHandle, 2>, 2>,
@@ -550,10 +525,7 @@ namespace uvsr
         std::array<bool, static_cast<size_t>(Stage::Count)> m_TimerActive{};
 
         std::vector<uint16_t> m_BlueNoiseUpload;
-        std::vector<uint8_t> m_FilterAdaptedNoiseUpload;
-        std::vector<uint8_t> m_PackedFastNoiseUpload;
         bool m_SamplingNoiseUploaded = false;
-        bool m_PackedFastNoiseUploaded = false;
         bool m_HistoryValid = false;
         bool m_HistoryConfigurationInitialized = false;
         uint64_t m_HistoryConfigurationKey = 0u;
@@ -582,7 +554,6 @@ namespace uvsr
             bool postProcessEnabled,
             bool depthHierarchyEnabled,
             bool finalAmbientEnabled,
-            bool packedFastEnabled,
             bool packedEdgesEnabled,
             const VisibilityBufferPrecisionSettings& bufferPrecision);
         void ReleaseResources();
