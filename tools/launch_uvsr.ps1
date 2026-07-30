@@ -17,10 +17,16 @@ param(
 )
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-$executable = Join-Path $repositoryRoot (
-    Join-Path $BuildDirectory 'bin\uvsr.exe')
+if ([System.IO.Path]::IsPathRooted($BuildDirectory)) {
+    $resolvedBuildDirectory = [System.IO.Path]::GetFullPath($BuildDirectory)
+}
+else {
+    $resolvedBuildDirectory = [System.IO.Path]::GetFullPath(
+        (Join-Path $repositoryRoot $BuildDirectory))
+}
+$executable = Join-Path $resolvedBuildDirectory 'bin\uvsr.exe'
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-    throw "UVSR is not built in '$BuildDirectory'."
+    throw "UVSR is not built at '$resolvedBuildDirectory'. Run: cmake --build `"$resolvedBuildDirectory`" --config Release --target uvsr"
 }
 
 # Pass the validated lowercase one-word description through the child

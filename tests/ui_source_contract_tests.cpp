@@ -203,7 +203,7 @@ int main(int argc, char** argv)
         "README line-count verification policy");
     ExpectContains(
         uiReferenceSource,
-        "UI reference version: `2026-07-29.1`.",
+        "UI reference version: `2026-07-29.3`.",
         "current UI reference version");
     ExpectContains(
         uiReferenceSource,
@@ -218,6 +218,11 @@ int main(int argc, char** argv)
         uiReferenceSource,
         "leaving every un-nested dropdown\n  exactly where it was",
         "un-nested dropdown layout preservation guidance");
+    ExpectContains(
+        uiReferenceSource,
+        "SVSM Developer Options use a permanently fixed requested-settings "
+        "schema.",
+        "fixed editable SVSM requested-settings guidance");
     const std::filesystem::path donutAppOverridePath =
         std::filesystem::path(argv[1]) /
         "overrides" / "donut-app.patch";
@@ -875,6 +880,90 @@ int main(int argc, char** argv)
         statistics,
         "StatisticsEffect::AntiAliasing",
         "Anti-Aliasing statistics selector");
+    for (const std::pair<std::string_view, std::string_view>& effect : {
+            std::pair<std::string_view, std::string_view>{
+                "StatisticsEffect::BendShadows",
+                "\"Bend Shadows\""},
+            {
+                "StatisticsEffect::SparseVirtualShadowMaps",
+                "\"Sparse Virtual Shadow Maps\""},
+            {
+                "StatisticsEffect::DiagnosticCascadedShadowMaps",
+                "\"Diagnostic Cascaded Shadow Maps\""},
+            {
+                "StatisticsEffect::EnvironmentBackground",
+                "\"Environment Background\""} })
+    {
+        ExpectContains(
+            statistics,
+            effect.first,
+            "integrated shadow and environment statistics selector");
+        ExpectContains(
+            statistics,
+            effect.second,
+            "integrated shadow and environment statistics label");
+    }
+    ExpectContains(
+        statistics,
+        "m_BendShadowStatLines",
+        "Bend shadow statistics presentation");
+    ExpectContains(
+        statistics,
+        "m_SparseShadowStatLines",
+        "SVSM statistics presentation");
+    ExpectContains(
+        statistics,
+        "m_DiagnosticCsmStatLines",
+        "diagnostic CSM statistics presentation");
+    ExpectContains(
+        statistics,
+        "GetImageBasedLightingSourceAverageLuminance()",
+        "environment source statistics");
+    ExpectContains(
+        statistics,
+        "GetImageBasedLightingRadianceScale()",
+        "environment exposure statistics");
+    ExpectContains(
+        statistics,
+        "m_ui.EnableDiffuseIbl",
+        "diffuse IBL statistics");
+    ExpectContains(
+        statistics,
+        "m_ui.EnableSpecularIbl",
+        "specular IBL statistics");
+    const std::string_view rendererStatisticsTable = ExtractSection(
+        statistics,
+        "if (ImGui::BeginTable(\n"
+        "                        \"##RendererLiveTimings\",",
+        "ImGui::EndTable();",
+        "renderer live statistics table");
+    ExpectContains(
+        rendererStatisticsTable,
+        "\"Current\"",
+        "renderer live statistics value column");
+    for (const std::string_view radianceLabel : {
+            std::string_view("\"Source Mean Radiance\""),
+            std::string_view("\"Exposed Mean Radiance\""),
+            std::string_view("\"Diffuse IBL Mean Radiance\""),
+            std::string_view("\"Specular IBL Mean Radiance\"") })
+    {
+        ExpectContains(
+            rendererStatisticsTable,
+            radianceLabel,
+            "IBL radiance row placement");
+    }
+    ExpectContains(
+        rendererStatisticsTable,
+        "ImGui::TableSetColumnIndex(1);",
+        "IBL radiance current-value placement");
+    ExpectAbsent(
+        statistics,
+        "\"Diffuse %.4f / Specular %.4f\"",
+        "removed combined IBL statistics text");
+    ExpectAbsent(
+        statistics,
+        "\"Procedural Sky\"",
+        "removed procedural-sky statistics label");
     ExpectContains(
         statistics,
         "\"Geometry\"",
@@ -1516,6 +1605,206 @@ int main(int argc, char** argv)
             "removed Visibility benchmark export implementation");
     }
 
+    const std::string_view environment = ExtractSection(
+        source,
+        "const bool skyOpen = DrawCollapsingHeader(",
+        "const auto& lights = m_app->GetScene()->GetSceneGraph()->GetLights();",
+        "Environment drawer");
+    ExpectContains(
+        environment,
+        "ImGui::TextUnformatted(\"Environment\")",
+        "imported environment source label");
+    ExpectContains(
+        environment,
+        "\"##SkyEnvironment\"",
+        "imported environment source selector");
+    ExpectContains(
+        environment,
+        "ImageBasedLightingSource::Kloppenheim03Day",
+        "calibrated default environment source");
+    ExpectContains(
+        environment,
+        "DrawDeferredDropdownOption(",
+        "deferred environment source selection");
+    const std::string_view environmentSourceControl = ExtractSection(
+        environment,
+        "const ImageBasedLightingSourceInfo&\n"
+        "                selectedEnvironmentInfo =",
+        "const float defaultEnvironmentExposure =",
+        "environment source control");
+    ExpectContains(
+        environmentSourceControl,
+        "m_ui.EnvironmentSource = source;",
+        "environment source deferred commit");
+    ExpectContains(
+        environmentSourceControl,
+        "m_ui.EnvironmentExposureStops =\n"
+        "                                selectedInfo.defaultExposureStops;",
+        "source-owned environment exposure");
+    ExpectContains(
+        environmentSourceControl,
+        "m_app->ResetImageBasedLightingHistory(true);",
+        "environment source history reset");
+    const std::string_view environmentSourceReset = ExtractSection(
+        environment,
+        "if (DrawPresetResetIcon(\n"
+        "                    \"Environment Source\",",
+        "const float defaultEnvironmentExposure =",
+        "environment source reset");
+    ExpectContains(
+        environmentSourceReset,
+        "QueueDeferredControlUiAction(",
+        "deferred environment source reset");
+    ExpectContains(
+        environmentSourceReset,
+        "m_ui.EnvironmentSource = DefaultSource;",
+        "default environment source reset");
+    ExpectContains(
+        environmentSourceReset,
+        "GetImageBasedLightingSourceInfo(\n"
+        "                                DefaultSource).defaultExposureStops;",
+        "default environment exposure reset");
+    ExpectOrdered(
+        environmentSourceReset,
+        "QueueDeferredControlUiAction(",
+        "m_ui.EnvironmentSource = DefaultSource;",
+        "deferred environment source reset");
+
+    const std::string_view environmentExposureControl = ExtractSection(
+        environment,
+        "const float defaultEnvironmentExposure =",
+        "if (ImGui::Checkbox(\n"
+        "                    \"Diffuse IBL\",",
+        "environment exposure control");
+    ExpectContains(
+        environmentExposureControl,
+        "\"Exposure##ImageBasedLighting\"",
+        "environment exposure control");
+    ExpectContains(
+        environmentExposureControl,
+        "\"%+.2f EV\"",
+        "environment exposure presentation");
+    ExpectContains(
+        environmentExposureControl,
+        "\"Environment Exposure\"",
+        "environment exposure reset");
+    ExpectContains(
+        environmentExposureControl,
+        "m_ui.EnvironmentExposureStops =\n"
+        "                    defaultEnvironmentExposure;",
+        "source-owned environment exposure reset");
+    ExpectContains(
+        environmentExposureControl,
+        "m_app->ResetImageBasedLightingHistory(true);",
+        "environment exposure history reset");
+
+    const std::string_view diffuseIblControls = ExtractSection(
+        environment,
+        "if (ImGui::Checkbox(\n"
+        "                    \"Diffuse IBL\",",
+        "if (ImGui::Checkbox(\n"
+        "                    \"Specular IBL\",",
+        "diffuse IBL controls");
+    ExpectContains(
+        diffuseIblControls,
+        "&m_ui.EnableDiffuseIbl",
+        "diffuse IBL enable control");
+    ExpectContains(
+        diffuseIblControls,
+        "\"##DiffuseIblControls\"",
+        "animated diffuse IBL controls");
+    ExpectContains(
+        diffuseIblControls,
+        "&m_ui.DiffuseIblStrength",
+        "diffuse IBL strength control");
+    ExpectContains(
+        diffuseIblControls,
+        "\"Diffuse IBL Enabled\"",
+        "diffuse IBL enable reset");
+    ExpectContains(
+        diffuseIblControls,
+        "\"Diffuse IBL Strength\"",
+        "diffuse IBL strength reset");
+    ExpectContains(
+        diffuseIblControls,
+        "m_ui.EnableDiffuseIbl = true;",
+        "default diffuse IBL enable reset");
+    ExpectContains(
+        diffuseIblControls,
+        "m_ui.DiffuseIblStrength = 1.f;",
+        "default diffuse IBL strength reset");
+    ExpectContains(
+        diffuseIblControls,
+        "m_app->ResetImageBasedLightingHistory(true);",
+        "diffuse IBL history reset");
+
+    const std::string_view specularIblControls = ExtractSection(
+        environment,
+        "if (ImGui::Checkbox(\n"
+        "                    \"Specular IBL\",",
+        "if (ImGui::Checkbox(\n"
+        "                    \"Show Environment Background\",",
+        "specular IBL controls");
+    ExpectContains(
+        specularIblControls,
+        "&m_ui.EnableSpecularIbl",
+        "specular IBL enable control");
+    ExpectContains(
+        specularIblControls,
+        "\"##SpecularIblControls\"",
+        "animated specular IBL controls");
+    ExpectContains(
+        specularIblControls,
+        "&m_ui.SpecularIblStrength",
+        "specular IBL strength control");
+    ExpectContains(
+        specularIblControls,
+        "\"Specular IBL Enabled\"",
+        "specular IBL enable reset");
+    ExpectContains(
+        specularIblControls,
+        "\"Specular IBL Strength\"",
+        "specular IBL strength reset");
+    ExpectContains(
+        specularIblControls,
+        "m_ui.EnableSpecularIbl = true;",
+        "default specular IBL enable reset");
+    ExpectContains(
+        specularIblControls,
+        "m_ui.SpecularIblStrength = 1.f;",
+        "default specular IBL strength reset");
+    ExpectContains(
+        specularIblControls,
+        "m_app->ResetImageBasedLightingHistory(false);",
+        "specular IBL history reset");
+
+    const std::string_view environmentBackgroundControls = ExtractSection(
+        environment,
+        "if (ImGui::Checkbox(\n"
+        "                    \"Show Environment Background\",",
+        "EndDrawerBody();",
+        "environment background controls");
+    ExpectContains(
+        environmentBackgroundControls,
+        "&m_ui.ShowEnvironmentBackground",
+        "environment background enable control");
+    ExpectContains(
+        environmentBackgroundControls,
+        "\"Environment Background Enabled\"",
+        "environment background reset");
+    ExpectContains(
+        environmentBackgroundControls,
+        "m_ui.ShowEnvironmentBackground = true;",
+        "default environment background reset");
+    ExpectContains(
+        environmentBackgroundControls,
+        "m_app->ResetImageBasedLightingHistory(false);",
+        "environment background history reset");
+    ExpectAbsent(
+        environment,
+        "\"Sky Brightness\"",
+        "removed procedural Sky Brightness control");
+
     const std::string_view lights = ExtractSection(
         source,
         "const bool lightsOpen = DrawCollapsingHeader(",
@@ -1525,6 +1814,406 @@ int main(int argc, char** argv)
         lights,
         "DrawDeferredDropdownOption(",
         "Lights deferred dropdowns");
+    for (const std::pair<std::string_view, std::string_view>& shadowControl : {
+            std::pair<std::string_view, std::string_view>{
+                "\"Bend Screen-Space Shadows##Lights\"",
+                "m_ui.BendScreenSpaceShadows"},
+            {
+                "\"Sparse Virtual Shadow Maps##Lights\"",
+                "m_ui.SparseVirtualShadowMaps"},
+            {
+                "\"Diagnostic Cascaded Shadow Maps##Lights\"",
+                "m_ui.DiagnosticCascadedShadowMaps"} })
+    {
+        ExpectContains(
+            lights,
+            shadowControl.first,
+            "integrated directional shadow control");
+        ExpectContains(
+            lights,
+            shadowControl.second,
+            "integrated directional shadow settings");
+    }
+    ExpectContains(
+        lights,
+        "\"##BendShadowControls\"",
+        "animated Bend shadow controls");
+    ExpectContains(
+        lights,
+        "\"SVSM Enabled\"",
+        "SVSM default reset");
+    ExpectContains(
+        lights,
+        "DrawSvsmSettingsSurface(",
+        "integrated SVSM settings surface");
+    ExpectContains(
+        lights,
+        "\"##DiagnosticCsmControls\"",
+        "animated diagnostic CSM controls");
+    ExpectContains(
+        lights,
+        "\"Diagnostic CSM Enabled\"",
+        "diagnostic CSM default reset");
+    ExpectContains(
+        lights,
+        "\"Developer Options##DiagnosticCsm\"",
+        "diagnostic CSM developer controls");
+    ExpectAbsent(
+        lights,
+        "ImGui::TreeNodeEx(",
+        "integrated directional shadow animation");
+
+    const std::string_view svsmSettingsSurface = ExtractSection(
+        source,
+        "static bool DrawSvsmSettingsSurface(",
+        "static bool DrawCenteredActionButton(",
+        "SVSM settings surface");
+    ExpectContains(
+        svsmSettingsSurface,
+        "fixed schema editable across Mode and policy changes",
+        "editable requested SVSM settings");
+    for (const std::string_view helper : {
+            std::string_view("const auto drawCheckbox = [&]("),
+            std::string_view("const auto drawCombo = [&]("),
+            std::string_view("const auto drawFloat = [&](") })
+    {
+        ExpectContains(
+            svsmSettingsSurface,
+            helper,
+            "fixed editable requested-settings helper");
+    }
+    ExpectContains(
+        svsmSettingsSurface,
+        "(void)available;",
+        "stored requested-settings availability handling");
+    ExpectAbsent(
+        svsmSettingsSurface,
+        "ImGui::BeginDisabled(",
+        "fixed editable requested-settings surface");
+
+    const std::string_view svsmComboHelper = ExtractSection(
+        svsmSettingsSurface,
+        "const auto drawCombo = [&](",
+        "const auto drawFloat = [&](",
+        "deferred bounded SVSM combo helper");
+    ExpectContains(
+        svsmComboHelper,
+        "currentIndex = std::clamp(",
+        "bounded SVSM combo presentation");
+    ExpectContains(
+        svsmComboHelper,
+        "defaultIndex = std::clamp(",
+        "bounded SVSM combo reset");
+    ExpectContains(
+        svsmComboHelper,
+        "DrawDeferredDropdownOption(",
+        "deferred SVSM combo selection");
+    ExpectContains(
+        svsmComboHelper,
+        "QueueDeferredControlUiAction(",
+        "deferred SVSM combo reset");
+    ExpectContains(
+        svsmComboHelper,
+        "bool nestedResetPlacement",
+        "explicit SVSM dropdown reset placement");
+    ExpectContains(
+        svsmComboHelper,
+        "? DrawNestedDropdownResetIcon(",
+        "nested SVSM dropdown reset placement");
+    ExpectContains(
+        svsmComboHelper,
+        ": DrawPresetResetIcon(",
+        "top-level SVSM dropdown reset placement");
+    const auto expectSvsmComboResetPlacement = [&](
+        std::string_view label,
+        bool nested)
+    {
+        const size_t labelPosition = svsmSettingsSurface.find(label);
+        const size_t applyPosition =
+            labelPosition == std::string_view::npos
+            ? std::string_view::npos
+            : svsmSettingsSurface.find(
+                  "[settings = &shadows]",
+                  labelPosition + label.size());
+        if (labelPosition == std::string_view::npos ||
+            applyPosition == std::string_view::npos)
+        {
+            Fail(
+                "could not locate the SVSM combo placement contract for '" +
+                std::string(label) + "'.");
+            return;
+        }
+        const std::string_view arguments = svsmSettingsSurface.substr(
+            labelPosition,
+            applyPosition - labelPosition);
+        const size_t trailingPosition = arguments.rfind("false,");
+        const size_t nestedPosition = arguments.rfind("true,");
+        const bool resolvesNested =
+            nestedPosition != std::string_view::npos &&
+            (trailingPosition == std::string_view::npos ||
+                nestedPosition > trailingPosition);
+        if (resolvesNested != nested)
+        {
+            Fail(
+                "SVSM combo '" + std::string(label) +
+                "' has the wrong explicit reset placement.");
+        }
+    };
+    for (const std::string_view label : {
+             std::string_view("\"Profile##SparseVirtualShadowMaps\""),
+             std::string_view("\"Filter Kernel\""),
+             std::string_view("\"Filter Taps\""),
+             std::string_view("\"Resolution Bias\"") })
+    {
+        expectSvsmComboResetPlacement(label, false);
+    }
+    for (const std::string_view label : {
+             std::string_view("\"Mode##SparseVirtualShadowMaps\""),
+             std::string_view("\"Page Marking\""),
+             std::string_view("\"Moving-Light Resolution Bias\""),
+             std::string_view("\"Object Invalidation Mode\""),
+             std::string_view("\"Poisson Ordering\""),
+             std::string_view("\"Filtering\""),
+             std::string_view("\"Debug View##SparseVirtualShadowMaps\"") })
+    {
+        expectSvsmComboResetPlacement(label, true);
+    }
+    ExpectContains(
+        svsmSettingsSurface,
+        "shadows.dirtyPageScatterAmplificationGuardEnabled =\n"
+        "                        shadows.dirtyPageScatterRasterEnabled;",
+        "Dirty Page Scatter composite owner mutation");
+    ExpectContains(
+        svsmSettingsSurface,
+        ".dirtyPageScatterAmplificationGuardEnabled !=\n"
+        "                                presetDefaults\n"
+        "                                    "
+        ".dirtyPageScatterAmplificationGuardEnabled",
+        "Dirty Page Scatter composite reset visibility");
+
+    const std::string_view svsmDiagnostics = ExtractSection(
+        svsmSettingsSurface,
+        "if (BeginAnimatedTreeNode(\n"
+        "                \"Diagnostics##SparseVirtualShadowMaps\",",
+        "if (customChanged || resetApplied)",
+        "SVSM diagnostics controls");
+    ExpectContains(
+        svsmDiagnostics,
+        "\"Detailed GPU Stage Timing\"",
+        "SVSM detailed GPU stage timing");
+    ExpectContains(
+        svsmDiagnostics,
+        "\"Debug View##SparseVirtualShadowMaps\"",
+        "SVSM debug view");
+    ExpectContains(
+        svsmDiagnostics,
+        "int(std::size(DebugLabels))",
+        "bounded SVSM debug view");
+    ExpectContains(
+        svsmDiagnostics,
+        "SvsmDebugView(selectedDebugView)",
+        "typed deferred SVSM debug view");
+
+    for (const std::pair<std::string_view, std::string_view>& region : {
+            std::pair<std::string_view, std::string_view>{
+                "\"##SvsmFinitePageRenderBudget\"",
+                "\"Page Render Budget\""},
+            {
+                "\"##SvsmReceiverDistanceClampTuning\"",
+                "\"Distance Clamp Start x Extent\""},
+            {
+                "\"##SvsmStaticDepthHierarchyTuning\"",
+                "\"Static HZB Conservative Bias\""},
+            {
+                "\"##SvsmDirtyPageScatterTuning\"",
+                "\"Scatter Maximum Page Amplification\""},
+            {
+                "\"##SvsmLightDepthGuardBandTuning\"",
+                "\"Light-Depth Guard Fraction\""} })
+    {
+        const size_t regionBegin =
+            svsmSettingsSurface.find(region.first);
+        const size_t regionControl =
+            regionBegin == std::string_view::npos
+                ? std::string_view::npos
+                : svsmSettingsSurface.find(
+                    region.second,
+                    regionBegin + region.first.size());
+        const size_t regionEnd =
+            regionBegin == std::string_view::npos
+                ? std::string_view::npos
+                : svsmSettingsSurface.find(
+                    "EndAnimatedToggleRegion();",
+                    regionBegin + region.first.size());
+        if (regionBegin == std::string_view::npos ||
+            regionControl == std::string_view::npos ||
+            regionEnd == std::string_view::npos ||
+            regionControl >= regionEnd)
+        {
+            Fail(
+                "SVSM conditional tuning must place '" +
+                std::string(region.second) +
+                "' inside the balanced animated region '" +
+                std::string(region.first) + "'.");
+        }
+    }
+
+    const std::string_view bendShadowControls = ExtractSection(
+        lights,
+        "\"Bend Screen-Space Shadows##Lights\"",
+        "\"Sparse Virtual Shadow Maps##Lights\"",
+        "Bend shadow controls");
+    const std::string compactBendShadowControls =
+        RemoveAsciiWhitespace(bendShadowControls);
+    for (const std::string_view resetCall : {
+            std::string_view(
+                "DrawNestedDropdownResetIcon(\"BendShadowProfile\","),
+            std::string_view(
+                "DrawNestedDropdownResetIcon(\"BendShadowLength\","),
+            std::string_view(
+                "DrawNestedDropdownResetIcon(\"BendShadowHardSamples\","),
+            std::string_view(
+                "DrawNestedDropdownResetIcon(\"BendShadowFade-OutSamples\","),
+            std::string_view(
+                "DrawNestedDropdownResetIcon(\"BendShadowDebugView\","),
+            std::string_view(
+                "DrawPresetResetIcon(\"BendShadowsEnabled\","),
+            std::string_view(
+                "DrawPresetResetIcon(\"BendShadowSurfaceThickness\","),
+            std::string_view(
+                "DrawPresetResetIcon(\"BendShadowBilinearThreshold\","),
+            std::string_view(
+                "DrawPresetResetIcon(\"BendShadowContrast\","),
+            std::string_view(
+                "DrawPresetResetIcon(\"BendShadowIgnoreEdgePixels\","),
+            std::string_view(
+                "DrawPresetResetIcon(\"BendShadowPrecisionOffset\","),
+            std::string_view(
+                "DrawPresetResetIcon(\"BendShadowBilinearOffsetMode\","),
+            std::string_view(
+                "DrawPresetResetIcon(\"BendShadowEarlyOut\",") })
+    {
+        ExpectContains(
+            compactBendShadowControls,
+            resetCall,
+            "Bend shadow reset coverage");
+    }
+    for (const std::string_view tooltip : {
+            std::string_view("Trade trace reach and cost"),
+            std::string_view("Select a precompiled SAMPLE_COUNT shadow length."),
+            std::string_view("Set Bend's nonlinear-depth occluder thickness."),
+            std::string_view("Set the relative depth discontinuity"),
+            std::string_view("Set Bend's visibility transition contrast."),
+            std::string_view("fully hard contact"),
+            std::string_view("samples that soften"),
+            std::string_view("Prevent detected depth-edge pixels"),
+            std::string_view("optional depth precision offset"),
+            std::string_view("Offset bilinear samples"),
+            std::string_view("debug view is active."),
+            std::string_view("Show the raw R8 edge") })
+    {
+        ExpectContains(
+            bendShadowControls,
+            tooltip,
+            "Bend shadow tooltip coverage");
+    }
+
+    const std::string_view diagnosticCsmControls = ExtractSection(
+        lights,
+        "\"Diagnostic Cascaded Shadow Maps##Lights\"",
+        "EndDrawerBody();",
+        "diagnostic CSM controls");
+    const std::string compactDiagnosticCsmControls =
+        RemoveAsciiWhitespace(diagnosticCsmControls);
+    for (const std::string_view section : {
+            std::string_view("\"ProjectionandBias##DiagnosticCsm\""),
+            std::string_view("\"CacheUpdatePolicy##DiagnosticCsm\""),
+            std::string_view("\"CullingandRaster##DiagnosticCsm\""),
+            std::string_view("\"Unabstracted##DiagnosticCsm\""),
+            std::string_view("\"Diagnostics##DiagnosticCsm\"") })
+    {
+        ExpectContains(
+            compactDiagnosticCsmControls,
+            section,
+            "full diagnostic CSM section coverage");
+    }
+    for (const std::string_view helper : {
+            std::string_view("constautodrawCsmCheckbox="),
+            std::string_view("constautodrawCsmFloat="),
+            std::string_view("constautodrawCsmUint=") })
+    {
+        ExpectContains(
+            compactDiagnosticCsmControls,
+            helper,
+            "diagnostic CSM tooltip and reset helper");
+    }
+    ExpectContains(
+        diagnosticCsmControls,
+        "ImGui::SetItemTooltip(\"%s\", tooltip);",
+        "diagnostic CSM per-control tooltip");
+    ExpectContains(
+        diagnosticCsmControls,
+        "DrawPresetResetIcon(",
+        "diagnostic CSM per-control reset");
+
+    constexpr const char* diagnosticCsmFieldContracts[] = {
+        "shadows.cascadeCount",
+        "shadows.shadowMapResolution",
+        "shadows.maximumShadowDistance",
+        "shadows.maximumLightDepth",
+        "shadows.cascadeDistributionExponent",
+        "shadows.cascadeTransitionFraction",
+        "shadows.shadowDistanceFadeoutFraction",
+        "shadows.projectionSnapTexelMultiple",
+        "shadows.enforceUeMinimumLightDepth",
+        "shadows.depthBias",
+        "shadows.slopeScaledDepthBias",
+        "shadows.directionalLightShadowBias",
+        "shadows.directionalLightShadowSlopeBias",
+        "shadows.receiverDepthBias",
+        "shadows.filter",
+        "shadows.poissonTapCount",
+        "shadows.filterRadiusTexels",
+        "shadows.use16BitDepthEnabled",
+        "shadows.opaqueDepthStateMergingEnabled",
+        "shadows.positionOnlyOpaqueEnabled",
+        "shadows.translationOnlyCasterTransformEnabled",
+        "shadows.inputAssemblerCasterFetchEnabled",
+        "shadows.precomputedDepthAxisInverseLengthEnabled",
+        "shadows.conservativeSaturatedSlopeEnabled",
+        "shadows.algebraicSlowSlopeEnabled",
+        "shadows.preNormalizedReceiverLightDirectionEnabled",
+        "shadows.precomposedClipToShadowEnabled",
+        "shadows.accurateCasterCullingEnabled",
+        "shadows.ueCasterRadiusThresholdEnabled",
+        "shadows.casterRadiusThreshold",
+        "shadows.singleTraversalCasterClassificationEnabled",
+        "shadows.precomputedReceiverHullAxesEnabled",
+        "shadows.sharedCasterLightProjectionEnabled",
+        "shadows.directCasterSubmissionEnabled",
+        "shadows.cachedShadowDrawListsEnabled",
+        "shadows.batchedFullRedrawClearEnabled",
+        "shadows.receiverRasterScissorEnabled",
+        "shadows.wholeMapReuseEnabled",
+        "shadows.wholeCascadeReuseEnabled",
+        "shadows.dirtyRectanglesEnabled",
+        "shadows.scrollingEnabled",
+        "shadows.minimumScrollOverlap",
+        "shadows.detailedGpuTimingEnabled",
+        "shadows.debugView"
+    };
+    static_assert(
+        sizeof(diagnosticCsmFieldContracts) /
+                sizeof(diagnosticCsmFieldContracts[0]) ==
+            44u,
+        "diagnostic CSM UI contract must cover all 44 timing fields");
+    for (const char* field : diagnosticCsmFieldContracts)
+    {
+        ExpectContains(
+            compactDiagnosticCsmControls,
+            field,
+            "diagnostic CSM 44-field coverage");
+    }
 
     ExpectContains(
         source,
@@ -1658,29 +2347,142 @@ int main(int argc, char** argv)
             "nested gutter placement must remain confined to its rendering "
             "branch and explicit nested-dropdown wrapper.");
     }
-    if (CountOccurrences(
-            source,
-            "DrawNestedDropdownResetIcon(") != 8)
-    {
-        Fail(
-            "nested reset placement must have one helper definition and "
-            "exactly seven allowlisted source call sites.");
-    }
-    constexpr const char* nestedResetCalls[] = {
+    const std::string compactVisibility =
+        RemoveAsciiWhitespace(visibility);
+    const std::string compactAliasing =
+        RemoveAsciiWhitespace(aliasing);
+    const std::string compactSvsmSettingsSurface =
+        RemoveAsciiWhitespace(svsmSettingsSurface);
+    constexpr const char* visibilityNestedResetCalls[] = {
         "DrawNestedDropdownResetIcon(\"VisibilityEstimator\",",
         "DrawNestedDropdownResetIcon(\"VisibilityNoisePattern\",",
         "DrawNestedDropdownResetIcon(\"VisibilitySampleCountMode\",",
         "DrawNestedDropdownResetIcon(\"VisibilityReconstructionMethod\",",
-        "DrawNestedDropdownResetIcon(\"VisibilityFinalApplication\",",
+        "DrawNestedDropdownResetIcon(\"VisibilityFinalApplication\","
+    };
+    for (const char* nestedResetCall : visibilityNestedResetCalls)
+    {
+        ExpectContains(
+            compactVisibility,
+            nestedResetCall,
+            "Visibility nested dropdown reset scope");
+    }
+    constexpr const char* aliasingNestedResetCalls[] = {
         "DrawNestedDropdownResetIcon(\"AliasingSubpixelMorphology\",",
         "DrawNestedDropdownResetIcon(label,"
     };
-    for (const char* nestedResetCall : nestedResetCalls)
+    for (const char* nestedResetCall : aliasingNestedResetCalls)
     {
         ExpectContains(
-            compactSource,
+            compactAliasing,
             nestedResetCall,
-            "nested dropdown reset source allowlist");
+            "Aliasing nested dropdown reset scope");
+    }
+    ExpectContains(
+        compactSvsmSettingsSurface,
+        "DrawNestedDropdownResetIcon(label,",
+        "SVSM nested dropdown reset scope");
+    constexpr const char* bendNestedResetCalls[] = {
+        "DrawNestedDropdownResetIcon(\"BendShadowProfile\",",
+        "DrawNestedDropdownResetIcon(\"BendShadowLength\",",
+        "DrawNestedDropdownResetIcon(\"BendShadowHardSamples\",",
+        "DrawNestedDropdownResetIcon(\"BendShadowFade-OutSamples\",",
+        "DrawNestedDropdownResetIcon(\"BendShadowDebugView\","
+    };
+    for (const char* nestedResetCall : bendNestedResetCalls)
+    {
+        ExpectContains(
+            compactBendShadowControls,
+            nestedResetCall,
+            "Bend shadow nested dropdown reset scope");
+    }
+    constexpr const char* diagnosticCsmNestedResetCalls[] = {
+        "DrawNestedDropdownResetIcon(\"DiagnosticCSMProfile\",",
+        "DrawNestedDropdownResetIcon(\"DiagnosticCSMFilter\",",
+        "DrawNestedDropdownResetIcon(\"DiagnosticCSMFilterTaps\",",
+        "DrawNestedDropdownResetIcon(\"DiagnosticCSMDebugView\","
+    };
+    for (const char* nestedResetCall : diagnosticCsmNestedResetCalls)
+    {
+        ExpectContains(
+            compactDiagnosticCsmControls,
+            nestedResetCall,
+            "diagnostic CSM nested dropdown reset scope");
+    }
+
+    struct NestedResetScope
+    {
+        std::string_view source;
+        size_t expectedOccurrences;
+        const char* contract;
+    };
+    const NestedResetScope nestedResetScopes[] = {
+        {
+            resetPlacementHelpers,
+            1u,
+            "nested dropdown reset helper definition"},
+        {
+            visibility,
+            5u,
+            "Visibility nested dropdown resets"},
+        {
+            aliasing,
+            2u,
+            "Aliasing nested dropdown resets"},
+        {
+            svsmSettingsSurface,
+            1u,
+            "SVSM nested dropdown reset wrapper"},
+        {
+            bendShadowControls,
+            5u,
+            "Bend shadow nested dropdown resets"},
+        {
+            diagnosticCsmControls,
+            4u,
+            "diagnostic CSM nested dropdown resets"}
+    };
+    constexpr std::string_view NestedResetCall =
+        "DrawNestedDropdownResetIcon(";
+    for (const NestedResetScope& scope : nestedResetScopes)
+    {
+        const size_t occurrences =
+            CountOccurrences(scope.source, NestedResetCall);
+        if (occurrences != scope.expectedOccurrences)
+        {
+            Fail(
+                std::string(scope.contract) + " must contain exactly " +
+                std::to_string(scope.expectedOccurrences) +
+                " explicitly allowlisted occurrence(s).");
+        }
+    }
+    size_t nestedResetPosition = 0u;
+    while ((nestedResetPosition =
+                source.find(NestedResetCall, nestedResetPosition)) !=
+        std::string_view::npos)
+    {
+        bool inAllowedScope = false;
+        for (const NestedResetScope& scope : nestedResetScopes)
+        {
+            if (scope.source.empty())
+                continue;
+            const size_t scopeBegin =
+                size_t(scope.source.data() - source.data());
+            const size_t scopeEnd = scopeBegin + scope.source.size();
+            if (nestedResetPosition >= scopeBegin &&
+                nestedResetPosition < scopeEnd)
+            {
+                inAllowedScope = true;
+                break;
+            }
+        }
+        if (!inAllowedScope)
+        {
+            Fail(
+                "nested dropdown reset call appears outside every explicit "
+                "Settings scope.");
+        }
+        nestedResetPosition += NestedResetCall.size();
     }
     constexpr const char* preservedTrailingDropdownResetCalls[] = {
         "DrawPresetResetIcon(\"VisibilitySamplingResolution\",",
@@ -1817,10 +2619,6 @@ int main(int argc, char** argv)
         source,
         "DefaultBenchmarkWarmupFrames",
         "Statistics benchmark defaults");
-    ExpectContains(
-        source,
-        "\"Sky Brightness\"",
-        "Sky per-setting default reset");
     ExpectContains(
         source,
         "struct LightDefaultState",
@@ -2211,7 +3009,7 @@ int main(int argc, char** argv)
     const std::string_view sliderInt = ExtractSection(
         source,
         "static bool DrawSliderInt(",
-        "static bool DrawCenteredActionButton(",
+        "static bool DrawSvsmSettingsSurface(",
         "integer slider helper");
     ExpectAbsent(
         sliderFloat,

@@ -110,6 +110,57 @@ int main(int argc, char** argv)
         viewer,
         "sameNonAaTopology && antiAliasingTopologyChanged",
         "AA-only topology classification");
+    const std::string_view msaaSampleCountResolution = ExtractSection(
+        viewer,
+        "static uint32_t ResolveSupportedMsaaSampleCount(",
+        "class RenderTargets : public GBufferRenderTargets");
+    passed &= ExpectContains(
+        msaaSampleCountResolution,
+        "bool enablePbr",
+        "MSAA allocation-aware PBR format selection");
+    passed &= ExpectContains(
+        msaaSampleCountResolution,
+        "nvrhi::utils::ChooseFormat(",
+        "MSAA exact Donut depth-format selection");
+    for (const std::string_view format : {
+             std::string_view("DXGI_FORMAT_R8G8B8A8_UNORM_SRGB"),
+             std::string_view("DXGI_FORMAT_D24_UNORM_S8_UINT"),
+             std::string_view("DXGI_FORMAT_D32_FLOAT_S8X24_UINT"),
+             std::string_view("DXGI_FORMAT_D32_FLOAT"),
+             std::string_view("DXGI_FORMAT_D16_UNORM") })
+    {
+        passed &= ExpectContains(
+            msaaSampleCountResolution,
+            format,
+            "MSAA exact allocated format");
+    }
+    passed &= ExpectContains(
+        msaaSampleCountResolution,
+        "supportsFormat(selectedDepthDxgiFormat, sampleCount)",
+        "MSAA selected depth-format validation");
+    passed &= ExpectContains(
+        msaaSampleCountResolution,
+        "struct MsaaSampleCountCache",
+        "MSAA per-device query cache");
+    passed &= ExpectContains(
+        msaaSampleCountResolution,
+        "cache.device == nativeDevice &&\n"
+        "        cache.requestedSampleCount == requestedSampleCount &&\n"
+        "        cache.enablePbr == enablePbr",
+        "MSAA query cache topology key");
+    passed &= ExpectContains(
+        msaaSampleCountResolution,
+        "return cache.resolvedSampleCount;",
+        "MSAA cached per-frame resolution");
+    passed &= ExpectAbsent(
+        msaaSampleCountResolution,
+        "std::any_of(",
+        "MSAA any-depth false-positive acceptance");
+    passed &= ExpectContains(
+        viewer,
+        ".rasterSampleCount,\n"
+        "                        m_ui.EnablePbr);",
+        "MSAA PBR topology routing");
     passed &= ExpectContains(
         viewer,
         "RefreshAntiAliasingTargetPasses(\n"

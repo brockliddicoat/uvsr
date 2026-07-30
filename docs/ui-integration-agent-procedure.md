@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-07-29.1`.
+UI reference version: `2026-07-29.3`.
 
 ## Purpose
 
@@ -280,10 +280,11 @@ version.
   silently redefine a preset while adding its control.
 - Preserve the factory baseline unless the user explicitly changes it: PBR with
   Deferred shading, enabled Temporal Reconstructive Medium AA, Sharpness off,
-  Visibility High, procedural sky on, White World off, Freelook camera,
-  Complete Renderer Statistics, zoom off, and 120 warmup plus 240 measured
-  benchmark frames. Footer Reset restores renderer settings but intentionally
-  leaves the current camera and scene unchanged.
+  Visibility High, the calibrated Kloppenheim 03 environment background and
+  both IBL lobes on, White World off, Freelook camera, Complete Renderer
+  Statistics, zoom off, and 120 warmup plus 240 measured benchmark frames.
+  Footer Reset restores renderer settings but intentionally leaves the current
+  camera and scene unchanged.
 
 ### Tables and Statistics
 
@@ -344,7 +345,7 @@ Complete this checklist for every new or materially changed UI control before
 editing. Record the answers in the execution plan or task notes; no item may
 remain unknown when implementation begins.
 
-- [ ] Record UI reference version `2026-07-29.1` for this revision and confirm
+- [ ] Record UI reference version `2026-07-29.3` for this revision and confirm
   that no cached assignment, excerpt, or handoff names an older version.
 
 ### Ownership and State
@@ -914,6 +915,13 @@ Required Checks remains mandatory.
   and benchmark locks. Never use `BeginDisabled` as the resting presentation
   for controls directly gated by an enabled/disabled toggle or a current
   dropdown selection.
+- SVSM Developer Options use a permanently fixed requested-settings schema.
+  Expert values remain editable and retained when the current Mode or another
+  requested policy keeps them renderer-inactive; each tooltip names the
+  condition under which the value becomes effective. These rows are not
+  unavailable and do not use disabled grayscale. A tuning body directly owned
+  by an on/off toggle still uses the shared animated toggle region unless this
+  reference defines and tests an explicit exception.
 - Use `DrawCenteredActionButton` for text action buttons and
   `DrawFolderButton` for folder actions unless an accepted neighboring control
   establishes a more specific pattern.
@@ -1390,6 +1398,16 @@ screenshots were checked.
 
 ## Reference Revision History
 
+- `2026-07-29.3`: Defined the fixed editable requested-settings schema for SVSM
+  Developer Options, including prerequisite-aware tooltip copy and animated
+  regions for bodies directly owned by on/off toggles. Reaffirmed trailing
+  resets for top-level dropdowns and nested-gutter resets only inside animated
+  nested sections.
+- `2026-07-29.2`: Replaced the procedural-sky baseline with the calibrated
+  imported environment background and independent diffuse/specular IBL lobes.
+  Recorded the integrated Bend, diagnostic CSM, SVSM, environment, emissive
+  source, and shadow/IBL Statistics controls under the existing drawer,
+  animation, reset, and deferred-commit contracts.
 - `2026-07-29.1`: Defined the current constant-width settings drawer and status
   line, including the compact visible-triangle count. Recorded exact
   `1920 x 1080` work-area centering, the middle-click material picker, the

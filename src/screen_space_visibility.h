@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lighting_contribution_shared.h"
+#include "screen_space_visibility_defaults.h"
 #include "visibility_benchmark_statistics.h"
 #include "visibility_performance_plan.h"
 
@@ -17,6 +18,7 @@
 
 namespace donut::engine
 {
+    class CommonRenderPasses;
     class ICompositeView;
     class ShaderFactory;
     struct ShaderMacro;
@@ -33,7 +35,6 @@ namespace uvsr
     inline constexpr float MinimumContributionTerminatedThreshold = 0.001f;
     inline constexpr float MaximumBounceContributionCutoff = 0.02f;
     inline constexpr float ContributionTerminatedThresholdGrowth = 4.0f;
-    inline constexpr float VisibilityEmissiveSourceGain = 4.0f;
     inline constexpr uint32_t ImplementedVisibilityEstimatorCount = 3;
 
     inline constexpr uint32_t LightingSource_Direct =
@@ -166,7 +167,15 @@ namespace uvsr
         bool limitBounces = true;
         uint32_t bounceCount = 1;
         float minimumBounceContribution = 0.001f;
-        float intensity = 4.0f;
+        // One is the radiometric reference. Values above one remain available
+        // as an explicit artistic boost. Product quality presets may select a
+        // stronger authored value while the transport contract remains unit
+        // normalized:
+        // the traversal already returns irradiance and the composite applies
+        // the receiving Lambert factor exactly once.
+        float intensity = ScreenSpaceIndirectDiffuseReferenceIntensity;
+        bool includeEmissive = true;
+        float emissiveGain = ScreenSpaceEmissiveReferenceGain;
     };
 
     struct VisibilityReconstructionSettings
@@ -270,6 +279,14 @@ namespace uvsr
         nvrhi::ITexture* gbufferSpecular = nullptr;
         nvrhi::ITexture* gbufferEmissive = nullptr;
         nvrhi::ITexture* materialAmbientOcclusion = nullptr;
+        nvrhi::ITexture* diffuseEnvironment = nullptr;
+        float diffuseEnvironmentScale = 1.f;
+        uint32_t diffuseEnvironmentArrayIndex = 0u;
+        nvrhi::ITexture* specularEnvironment = nullptr;
+        nvrhi::ITexture* environmentBrdf = nullptr;
+        float specularEnvironmentScale = 1.f;
+        float specularEnvironmentMipLevels = 0.f;
+        uint32_t specularEnvironmentArrayIndex = 0u;
         nvrhi::ITexture* baseLighting = nullptr;
         nvrhi::ITexture* output = nullptr;
         uint32_t knownInactiveLightingSources = 0u;
@@ -354,6 +371,7 @@ namespace uvsr
         ScreenSpaceVisibilityPass(
             nvrhi::IDevice* device,
             const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
+            std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses,
             const std::filesystem::path& filterAdaptedNoisePath);
 
         void Render(
@@ -361,8 +379,6 @@ namespace uvsr
             const ScreenSpaceVisibilitySettings& settings,
             const donut::engine::ICompositeView& compositeView,
             const ScreenSpaceVisibilityInputs& inputs,
-            dm::float3 ambientColorTop,
-            dm::float3 ambientColorBottom,
             float exposureScale,
             uint32_t frameIndex);
 
@@ -442,6 +458,7 @@ namespace uvsr
 
         nvrhi::DeviceHandle m_Device;
         std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
+        std::shared_ptr<donut::engine::CommonRenderPasses> m_CommonPasses;
         nvrhi::BufferHandle m_ConstantBuffer;
         nvrhi::BufferHandle m_BounceContinuation;
         nvrhi::BufferHandle m_BounceIndirectArguments;

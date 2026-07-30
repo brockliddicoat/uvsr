@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 56,200 non-blank source lines.
+**First-Party Lines of Code:** 117,816 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,622 non-blank source lines.
 
-**Total Lines of Code:** 443,822 non-blank source lines.
+**Total Lines of Code:** 505,438 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -23,8 +23,11 @@ architecture without either add-on.
 
 ## Renderer Baseline
 
-- Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
-  sky start enabled.
+- Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the matched
+  environment background start enabled. Global image-based lighting defaults
+  to Poly Haven's CC0 **Day - Kloppenheim 03** source at its calibrated
+  `-2.75 EV`; both diffuse and specular lobes start enabled at `1.00`
+  strength.
 - The normal **Aliasing** drawer contains **Enabled**, **Method**, **Quality**,
   **History Frames**, **History Strength**, **Dejitter**, and **Sharpness**.
   The **Statistics** drawer places **Run Current With Motion** directly below
@@ -234,7 +237,7 @@ architecture without either add-on.
 - The collapsed **Statistics** drawer begins with an effect selector for the
   **Complete Renderer**, **Geometry**, **Direct Lighting**,
   **Screen-Space Visibility**, **Anti-Aliasing**, **Material Picking**,
-  **Procedural Sky**, **Tone Mapping**, or **Output Blit**.
+  **Environment Background**, **Tone Mapping**, or **Output Blit**.
   Screen-space visibility expands into its outer effect envelope, named-stage
   total, signed unattributed timer difference, depth preparation, first trace,
   one combined later-bounces row, spatial denoise,
@@ -265,6 +268,99 @@ architecture without either add-on.
   turns visibility and PBR off or on together. The legacy Donut comparison path
   remains implemented for possible future experiments, but its separate control
   is hidden.
+- **Screen-Space Shadows** starts disabled and is available only for deferred
+  UVSR PBR with a primary directional light. A small UVSR adapter consumes the
+  existing single-sample reverse-Z depth buffer while keeping Bend Studio's
+  released CPU and GPU headers byte-for-byte unchanged, as recorded in the
+  [vendored source record](third_party/bend_sss/README.md). The pass writes one
+  full-resolution `R8_UNORM` visibility texture, and deferred lighting applies
+  it only to the pointer-matched primary directional light's direct
+  contribution.
+- The shadow **Profile** menu offers **Performance**, **Balanced**, **Quality**,
+  and **Custom**. Performance restores 60 samples, 4 hard samples,
+  8 fade-out samples, `0.005` surface thickness, `0.02` bilinear threshold,
+  contrast `4`, and every optional mode and diagnostic off without changing
+  **Enabled**. Balanced applies the same reset with a 240-pixel length; Quality
+  applies it with a 960-pixel length. **Length** selects compiled
+  `SAMPLE_COUNT` variants of 60, 120, 240, 480, or 960 pixels. The drawer also
+  exposes **Surface Thickness**, **Bilinear Threshold**, **Shadow Contrast**,
+  compiled **Hard Shadow Samples** and **Fade-Out Samples**, **Ignore Edge
+  Pixels**, **Precision Offset**, **Bilinear Offset Mode**, and **Early Out**.
+  **Debug View** presents Bend's Edge, Thread, or Wave output directly as
+  grayscale R8 visibility.
+- Bend, **Sparse Virtual Shadow Maps**, and **Diagnostic Cascaded Shadow Maps**
+  are independent, initially disabled directional-light visibility producers.
+  Each resolves its own full-resolution linear `R8_UNORM` texture. A
+  producer-neutral three-slot deferred-lighting interface multiplies complete
+  factors only for their exact pointer-identical light, so any producer can be
+  removed or ported alone. Unsupported, missing, invalid, dirty, over-budget,
+  or out-of-range SVSM samples fall back to a valid coarser clipmap and then to
+  white.
+- The SVSM **Profile** menu offers **Performance**, **Balanced**, **Quality**,
+  and **Custom**. Performance uses adaptive page-safe nearest-Poisson filtering
+  with 8 taps, a global `+1` resolution bias, a temporary moving-light `+2`
+  bias, and receiver-distance clamping. Balanced uses page-safe bilinear PCF
+  with 4 taps, no global bias, a temporary moving-light `+1` bias,
+  receiver-distance clamping, and adaptive filtering off. Quality uses
+  page-safe bilinear PCF with 8 taps, no global or moving-light bias, no
+  receiver-distance clamp, and adaptive filtering off. All three use the
+  validated cache, static zero-work, packet culling, batching, sorting, and
+  empty-work skips. **First Clipmap Extent** and **Maximum Light Depth** remain
+  scene controls. **Dense Reference** explicitly backs all six 8192-square
+  atomic-depth clipmaps and can require about 1.5 GiB, so it is intended only
+  for validation.
+- The normal SVSM surface keeps **Profile**, scene extent and light-depth range,
+  filter kernel, tap count and adjacent **Adaptive Filtering**, global
+  resolution bias, and receiver-distance clamping visible. Collapsed
+  **Developer Options** contains four default-collapsed raw subgroups:
+  **Resources And Cache Policy**, **Movement And Invalidation**,
+  **Culling And Raster**, and **Unabstracted**. The last retains low-risk
+  optimization switches that are trending toward always-on behavior while
+  preserving their reference paths for validation. Collapsed **Diagnostics**
+  owns benchmarks, detailed stage timing, debug views, and counters.
+- Custom SVSM controls independently expose per-pixel or conservative tiled
+  marking, 1/4/8/16-tap filtering, resolution policies, static reuse,
+  localized invalidation, GPU-gated and batched packet submission, packet-page
+  culling, guarded dirty scatter, alpha-tested specialization, and page-safe
+  translation reuse. **Mode** is the single cache-policy selector,
+  **Moving-Light Resolution Bias** is the single `Off`/`+1`/`+2` state, and
+  enabling **Dirty Page Scatter Raster** also enables its mandatory
+  amplification guard; duplicate checkboxes no longer create contradictory
+  states. Fine-caster exclusion is not exposed because UVSR cannot yet prove
+  every exclusion condition conservatively. The motion benchmark uses the
+  total-only timing path so inner query resolves do not perturb its result, and
+  it never changes or measures Bend settings.
+- Diagnostic CSM is a conventional UE5-style comparison path, not UVSR's
+  preferred shadow renderer. One shared persistent depth array, opaque and
+  alpha-tested caster path, and full-resolution receiver serve one through four
+  cascades. UE-reference profiles prefer the D3D12 R16-typeless/D16 depth path,
+  nine-Gather4 manual 5-by-5 receiver, dynamic-light split exponent four,
+  quadratic distance fade, inward final-cascade fade, four-texel UE phase
+  snapping, normalized vertex depth/slope bias, and UE receiver bias from the
+  GBuffer shading normal. Effective opaque depth-state merging, a position-only
+  opaque vertex permutation, conservative projected-hull caster culling, and
+  UE's radius threshold and minimum directional subject-depth span are included.
+  View-dependent caster culling is automatically disabled for cached maps so
+  reuse cannot omit off-camera casters. Each optional depth-path optimization
+  remains an independent Custom control; D16 capability failure falls back to
+  sampleable D32. The profiles provide **Single-Map Reference**, **Low-Cost CSM**,
+  **UE5 CSM Reference**, **Cached Single Shadow**, **Optimized Cached Single
+  Shadow**, **Optimized Cached CSM**, and **(Custom)**. Cache controls change
+  only update policy: whole-map reuse, whole-cascade reuse, conservative old and
+  new dirty rectangles, and exact integer-texel scrolling remain independent.
+  The drawer reports paired setup, culling, clear/update, raster, and sampling
+  timings plus an explicit SVSM coverage, resolution, filter, and depth match
+  check. Debug views show visibility, cascade selection, and cache action.
+- The normal CSM surface keeps **Enabled**, **Profile**, **Cascades**,
+  **Resolution Per Cascade**, **Maximum Shadow Distance**, **Maximum Light
+  Depth**, **Filter**, **Filter Taps**, and **Filter Radius** visible. Collapsed
+  **Developer Options** contains four default-collapsed subgroups:
+  **Projection And Bias**, **Cache Update Policy**, **Culling And Raster**, and
+  the further nested **Unabstracted** group. **Unabstracted** retains reversible
+  low-risk implementation paths that are trending toward always-on behavior,
+  preserving their reference paths for exact validation. Collapsed
+  **Diagnostics** owns detailed GPU stage timing, debug views, and live stat
+  lines.
 - The **General** drawer contains **Graphics Adapter**, **Camera Mode**, and
   **Camera Location** for the standardized Sponza scenes. **World Materials**
   contains the White World presentations and the **Indirect Diffuse Response**
@@ -305,13 +401,13 @@ architecture without either add-on.
   reorienting the camera. The preset uses a 60-degree perspective view and a
   1920x1080 reference frame.
 - The first scene light is selected automatically in the **Lights** panel.
-- Authored emissive materials always remain GI sources at the calibrated 4.0
-  source gain. This is an implementation constant rather than a user-facing
-  checkbox or strength control.
+- **Include Emissive Sources** starts enabled. **Emissive Source Gain** starts
+  at the canonical High preset's calibrated 4.0 boost and can be adjusted
+  independently without changing the visible emissive surfaces themselves.
 - **Indirect Diffuse Response** in **World Materials** is the sole retained
   visibility diagnostic. It displays the material-applied screen-space diffuse
-  GI contribution without direct light, sky fallback, fallback specular, or
-  AO-only darkening. Selecting it turns White World off; selecting any White
+  GI contribution without direct light, diffuse environment, or AO-only
+  darkening. Selecting it turns White World off; selecting any White
   World presentation exits the diagnostic. The entry is available only while
   deferred PBR visibility and effective diffuse GI are active; disabling a
   prerequisite returns the dropdown to **White World Off**.
@@ -336,8 +432,10 @@ architecture without either add-on.
 - AO, GI, the GI source-radiance target, temporal history, filtered outputs,
   depth hierarchy, and extra-bounce targets exist only while their consumers
   require them. AO strength zero or GI intensity zero removes that consumer
-  while the other effect can continue independently. The default directional
-  mask remains register-local and consumes zero persistent mask-cache bytes.
+  while the other effect can continue independently. The source-radiance target
+  is also absent when direct light, diffuse IBL, and enabled positive-gain
+  emissive sources are all inactive. The default directional mask remains
+  register-local and consumes zero persistent mask-cache bytes.
 - Proven scene-wide source inactivity terminates the complete higher-bounce
   dispatch chain. The shared CPU/HLSL activity mask is
   extensible to future clustering, probe, cache, visibility, and residency data;
@@ -345,6 +443,27 @@ architecture without either add-on.
 - A shared, future-extensible contribution-gate contract also gives forward and
   deferred direct lighting exact early outs for zero, out-of-influence,
   back-facing, or fully occluded lights before unnecessary shadow/BSDF work.
+- Forward, deferred, and screen-space composition share one persistent global
+  image-based-lighting environment. One selected scene-linear radiance field
+  produces the Lambert-convolved SH9 `E / pi` diffuse cube, the
+  roughness-prefiltered GGX specular cube, and, optionally, the visible
+  background. A source-independent split-sum environment BRDF LUT completes
+  the specular receiver. Common exposure preserves the relationship among its
+  three consumers: diffuse IBL, specular IBL, and the background. Independent
+  `0.00` to `2.00` diffuse and specular strengths apply after exposure without
+  changing the background; diffuse strength also scales the environment
+  contribution that enters SSGI. All environment controls live in the **Sky**
+  drawer.
+- The source menu contains exactly six imported HDR radiance sources: three
+  day/overcast skies, legacy Quadrangle Cloudy, and two dedicated nights:
+  **Night - Kloppenheim 07** and **Starry Night - Qwantani**. There are no
+  procedural selections or lighting fallbacks. Imported sources retain their
+  authored relative energy; selecting one applies its documented calibrated
+  default EV. A missing or invalid asset deactivates environment lighting and
+  background to zero without retaining a stale source or retrying every frame.
+  See the
+  [environment catalog](assets/environments/README.md) for sources, hashes,
+  and default exposures.
 - UVSR uses one fixed neutral AgX display transform to convert scene-linear HDR
   radiance for display. The optional Tonemapper drawer, grading presets, LUT
   loader, and bundled film looks are strategically sunset while scene lighting
@@ -352,6 +471,20 @@ architecture without either add-on.
   The exact implementation and its paired revival contract with bilateral-grid
   local tone mapping are preserved in the
   [postmortem](docs/postmortem/tonemapper-drawer-and-luts-v1.md).
+
+## No-Hidden-Ambient Invariant
+
+Before IBL, UVSR always added the hidden two-color hemispherical term
+`lerp(bottom, top, normal.y * 0.5 + 0.5)`. It illuminated every surface without
+visibility, so fully shadowed regions looked filled even when the renderer had
+computed no indirect light.
+
+IBL integration removed that term. With both IBL lobes disabled or at `0.00`
+strength, UVSR now shows shadowed direct lighting plus actual SSGI, and regions
+with neither can reach deep black. This cleanup did not alter the direct BSDF
+or the fixed neutral AgX tonemapper. This is a future-project invariant for
+UVSR and renderers derived from it: do not restore the hemispherical term, a
+procedural substitute, or any missing-asset ambient fallback.
 
 ## Coming Soon
 
@@ -507,6 +640,22 @@ outside deferred rendering, during another run, or outside PBR Sponza Decorated
 and PBR Sponza Plain. The Sponza restriction remains because those are the only
 scenes with the standardized camera used for comparable results.
 
+### Advisory GPU Clock Normalization
+
+Agents and developers may retain an unofficial clock-normalized trend when the
+same physical GPU runs an identical workload at different graphics clocks.
+Read `docs/performance/gpu-clock-normalization.md` and use
+`tools/normalize_gpu_clock_benchmark.ps1`. Every physical GPU selects its own
+measured reference clock; normalized values must never be compared between
+different GPUs, including separate GPUs with the same model name. Raw clean-run
+GPU time remains the official score. Utilization, memory behavior, power,
+temperature/headroom, limiter state, telemetry age, background load, warmup,
+sample coverage, and before/after controls determine the estimate's quality
+rather than becoming hidden correction factors. The guide also records small
+display and scheduling influences such as monitor refresh rate, VRR, VSync,
+frame caps, compositor state, secondary displays, presentation route, capture
+tools, and periodic spike alignment.
+
 After building, Windows users can also double-click `LaunchUVSR.cmd`. It
 delegates to the same required experiment launcher with a fixed main-build
 label; optional renderer arguments can be appended from a terminal.
@@ -534,14 +683,42 @@ environment variable; omitted descriptions default to `main`.
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the scene-catalog, experiment-title, camera-collision,
-camera-controls, Sponza-camera-preset, PBR, World-Material-view,
-radial-visibility, estimator, visibility-projection, visibility-sampling,
-visibility-performance-plan, and visibility-benchmark-statistics tests
-separately:
+### Component-Only Builds
+
+Bend, SVSM, and diagnostic CSM are separate static-library targets. The full
+UVSR application integrates all three, while a component-only configuration can
+omit the other producers and their reference tests entirely. Each component
+target publishes the include dependencies needed by its public header and
+compiles only its own shader catalog.
+
+Build only SVSM and its deterministic reference test:
 
 ```powershell
-cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests uvsr_visibility_performance_plan_tests uvsr_visibility_benchmark_statistics_tests
+cmake -S . -B build-svsm -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS=OFF -DUVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS=OFF
+cmake --build build-svsm --config Release --target uvsr_sparse_virtual_shadow_maps uvsr_sparse_virtual_shadow_map_tests
+```
+
+Build only Bend screen-space shadows and its deterministic reference test:
+
+```powershell
+cmake -S . -B build-bend -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS=OFF -DUVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS=OFF
+cmake --build build-bend --config Release --target uvsr_bend_screen_space_shadows uvsr_bend_screen_space_shadow_tests
+```
+
+Build only diagnostic CSM and its deterministic reference test:
+
+```powershell
+cmake -S . -B build-csm -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS=OFF -DUVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS=OFF
+cmake --build build-csm --config Release --target uvsr_diagnostic_cascaded_shadow_maps uvsr_diagnostic_cascaded_shadow_map_tests
+```
+
+Build every registered Release target before running the full suite. This
+includes the scene, camera, PBR, AA/UI, screen-space visibility, Bend,
+diagnostic CSM, SVSM, environment, command-line, benchmark, and runtime shader
+bundle contracts:
+
+```powershell
+cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
@@ -617,9 +794,10 @@ The current baseline intentionally omits:
 - Imported scene cameras and translucent rendering
 - Animation playback, ambient-intensity scaling, and material-event
   instrumentation
-- Shadow rendering and shadow-map debugging
-- Light-probe capture, filtering, image-based lighting, probe textures, and
-  probe controls
+- A preferred production shadow-map renderer; the conventional CSM path is a
+  disabled diagnostic for SVSM comparisons
+- Local scene-probe capture, parallax-corrected probe volumes, and probe
+  blending; the implemented IBL path is one infinite global environment
 
 ## Repository Naming
 

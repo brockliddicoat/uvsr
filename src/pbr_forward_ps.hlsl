@@ -21,6 +21,7 @@
 #include <donut/shaders/forward_vertex.hlsli>
 #include <donut/shaders/shadows.hlsli>
 #include <donut/shaders/binding_helpers.hlsli>
+#include "pbr_environment.hlsli"
 #include "pbr_lighting.hlsli"
 
 DECLARE_CBUFFER(ForwardShadingViewConstants, g_ForwardView,
@@ -182,18 +183,75 @@ void main(
         }
     }
 
-    // Material occlusion is kept out of the BSDF and direct-light visibility.
-    // Here it only modulates the renderer's approximate sky indirect diffuse.
-    float hemisphere = sampledMaterial.shadingNormal.y * 0.5f + 0.5f;
-    float3 approximateIndirectIrradiance = lerp(
-        g_ForwardLight.ambientColorBottom.rgb,
-        g_ForwardLight.ambientColorTop.rgb,
-        hemisphere);
-    float3 diffuseReflectance = material.baseColor * (1.0f - material.metalness);
-    float3 indirectDiffuse = approximateIndirectIrradiance * diffuseReflectance * sampledMaterial.occlusion;
-
-    float3 diffuse = directDiffuse + indirectDiffuse;
-    float3 specular = directSpecular;
+    // UVSR supplies one infinite global probe. Its diffuse cube stores E / pi,
+    // while its specular cube and BRDF LUT implement the matching split sum.
+    float3 environmentDiffuseResponse = 0.0f;
+    float3 environmentSpecularResponse = 0.0f;
+    LightProbeConstants environmentProbe =
+        (LightProbeConstants)0;
+    if (g_ForwardLight.numLightProbes > 0u)
+    {
+        environmentProbe = g_ForwardLight.lightProbes[0];
+    }
+    PbrPreparedEnvironment preparedEnvironment =
+        PreparePbrEnvironment(
+            material,
+            surface,
+            environmentProbe.mipLevels);
+    if (g_ForwardLight.numLightProbes > 0u)
+    {
+        if (environmentProbe.diffuseScale > 0.0f)
+        {
+            float3 diffuseResponse =
+                t_DiffuseLightProbe.SampleLevel(
+                    s_LightProbeSampler,
+                    float4(
+                        PbrSafeNormalize(
+                            sampledMaterial.shadingNormal,
+                            sampledMaterial.geometryNormal),
+                        environmentProbe.diffuseArrayIndex),
+                    0.0f).rgb *
+                environmentProbe.diffuseScale;
+            if (any(!isfinite(diffuseResponse)))
+                diffuseResponse = 0.0f;
+            environmentDiffuseResponse =
+                EvaluatePbrEnvironmentDiffuse(
+                    preparedEnvironment,
+                    diffuseResponse,
+                    sampledMaterial.occlusion);
+        }
+        if (environmentProbe.specularScale > 0.0f &&
+            preparedEnvironment.valid > 0.0f)
+        {
+            float3 prefilteredRadiance =
+                t_SpecularLightProbe.SampleLevel(
+                    s_LightProbeSampler,
+                    float4(
+                        preparedEnvironment.reflectionDirection,
+                        environmentProbe.specularArrayIndex),
+                    preparedEnvironment.specularMip).rgb *
+                environmentProbe.specularScale;
+            float2 environmentBrdf =
+                t_EnvironmentBrdf.SampleLevel(
+                    s_BrdfSampler,
+                    float2(
+                        preparedEnvironment.noV,
+                        preparedEnvironment.perceptualRoughness),
+                    0.0f).xy;
+            if (any(!isfinite(prefilteredRadiance)))
+                prefilteredRadiance = 0.0f;
+            if (any(!isfinite(environmentBrdf)))
+                environmentBrdf = 0.0f;
+            environmentSpecularResponse =
+                EvaluatePbrEnvironmentSpecular(
+                    preparedEnvironment,
+                    prefilteredRadiance,
+                    environmentBrdf,
+                    sampledMaterial.occlusion);
+        }
+    }
+    float3 diffuse = directDiffuse + environmentDiffuseResponse;
+    float3 specular = directSpecular + environmentSpecularResponse;
     float3 finalLinearHdr = max(diffuse + specular + material.emissive, 0.0f);
     if (any(isnan(finalLinearHdr)) || any(isinf(finalLinearHdr)))
         finalLinearHdr = 0.0f;

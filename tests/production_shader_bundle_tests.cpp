@@ -55,17 +55,33 @@ namespace
             "forward_vs_buffer_loads",
             "gbuffer_ps",
             "gbuffer_vs_buffer_loads",
+            "light_probe_cubemap_gs",
+            "light_probe_diffuse_probe_ps",
+            "light_probe_environment_brdf_ps",
+            "light_probe_mip_ps",
+            "light_probe_specular_probe_ps",
             "material_id_ps",
             "pixel_readback_cs",
-            "sky_ps"
+            "depth_ps",
+            "depth_vs_buffer_loads"
         };
         constexpr const char* appShaders[] = {
             "agx_tonemapping_ps",
             "backdrop_blur_ps",
+            "bend_screen_space_shadows_cs",
+            "bend_screen_space_shadows_debug_ps",
             "cmaa2_ComputeDispatchArgsCS",
             "cmaa2_DeferredColorApply2x2CS",
             "cmaa2_EdgesColor2x2CS",
             "cmaa2_ProcessCandidatesCS",
+            "diagnostic_cascaded_shadow_map_clear_vs",
+            "diagnostic_cascaded_shadow_map_depth_vs",
+            "diagnostic_cascaded_shadow_map_depth_vs_alpha_tested",
+            "diagnostic_cascaded_shadow_map_depth_vs_alpha_tested_input_assembler",
+            "diagnostic_cascaded_shadow_map_depth_vs_main_input_assembler",
+            "diagnostic_cascaded_shadow_map_scroll_ps",
+            "diagnostic_cascaded_shadow_map_resolve_cs",
+            "image_based_lighting_background_ps",
             "msaa_visibility_resolve_cs",
             "pbr_deferred_lighting_cs",
             "pbr_deferred_lighting_msaa_cs",
@@ -85,6 +101,27 @@ namespace
             "screen_space_visibility_packed_fast_edges_cs",
             "screen_space_visibility_cs",
             "screen_space_visibility_temporal_cs",
+            "sparse_virtual_shadow_map_depth_ps",
+            "sparse_virtual_shadow_map_debug_ps",
+            "sparse_virtual_shadow_map_resolve_cs",
+            "sparse_virtual_shadow_map_sparse_cs_allocate",
+            "sparse_virtual_shadow_map_sparse_cs_buildScheduledPageTileMasks",
+            "sparse_virtual_shadow_map_sparse_cs_buildStaticDepthHierarchy",
+            "sparse_virtual_shadow_map_sparse_cs_clearPages",
+            "sparse_virtual_shadow_map_sparse_cs_fillIndirect",
+            "sparse_virtual_shadow_map_sparse_cs_finalize",
+            "sparse_virtual_shadow_map_sparse_cs_invalidatePages",
+            "sparse_virtual_shadow_map_sparse_cs_mark",
+            "sparse_virtual_shadow_map_sparse_cs_prepare",
+            "sparse_virtual_shadow_map_sparse_cs_recycle",
+            "sparse_virtual_shadow_map_sparse_cs_scheduleFine",
+            "sparse_virtual_shadow_map_sparse_cs_stats",
+            "sparse_virtual_shadow_map_sparse_depth_pixelMain",
+            "sparse_virtual_shadow_map_sparse_depth_vertexMain",
+            "sparse_virtual_shadow_map_sparse_resolve_cs_reference_legacy",
+            "sparse_virtual_shadow_map_sparse_resolve_cs_reference_balanced",
+            "sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_legacy",
+            "sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_balanced",
             "taa_miniengine_blend_cs",
             "taa_miniengine_resolve_cs",
             "taa_miniengine_sharpen_cs"
@@ -270,6 +307,9 @@ int main(int argc, char** argv)
     }
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
+    passed &= Check(
+        expectedFiles.size() == 80u,
+        "production shader contract must enumerate exactly 80 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

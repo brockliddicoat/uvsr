@@ -1465,7 +1465,7 @@ namespace uvsr
         }
         if (fusedApplication)
         {
-            includeLayout(8u, 1u);
+            includeLayout(11u, 1u);
         }
         else
         {
@@ -1476,7 +1476,7 @@ namespace uvsr
                 else
                     includeLayout(4u, 2u);
             }
-            includeLayout(8u, 1u);
+            includeLayout(12u, 1u);
         }
 
         if (plan.selectsLegacyReference &&

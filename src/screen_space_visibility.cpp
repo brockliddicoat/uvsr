@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -21,6 +22,30 @@ using namespace donut::engine;
 using namespace donut::math;
 
 #include "screen_space_visibility_cb.h"
+
+static_assert(
+    offsetof(
+        ScreenSpaceVisibilityConstants,
+        packedEdgeMode) ==
+    offsetof(
+        ScreenSpaceVisibilityConstants,
+        showIndirectDiffuseOnly) +
+        4u);
+static_assert(
+    offsetof(
+        ScreenSpaceVisibilityConstants,
+        specularEnvironmentEnabled) ==
+    offsetof(
+        ScreenSpaceVisibilityConstants,
+        packedEdgeMode) +
+        16u);
+static_assert(
+    offsetof(
+        ScreenSpaceVisibilityConstants,
+        specularEnvironmentEnabled) +
+        16u ==
+    sizeof(ScreenSpaceVisibilityConstants));
+static_assert(sizeof(ScreenSpaceVisibilityConstants) % 16u == 0u);
 
 namespace
 {
@@ -497,6 +522,8 @@ namespace uvsr
         settings.indirectDiffuse.bounceCount = 1u;
         settings.indirectDiffuse.minimumBounceContribution = 0.001f;
         settings.indirectDiffuse.intensity = 4.0f;
+        settings.indirectDiffuse.includeEmissive = true;
+        settings.indirectDiffuse.emissiveGain = 4.0f;
         settings.reconstruction.temporalEnabled = false;
         settings.reconstruction.temporalResponse = 0.35f;
         settings.reconstruction.spatialFilter =
@@ -726,6 +753,10 @@ namespace uvsr
                 preset.indirectDiffuse.minimumBounceContribution &&
             settings.indirectDiffuse.intensity ==
                 preset.indirectDiffuse.intensity &&
+            settings.indirectDiffuse.includeEmissive ==
+                preset.indirectDiffuse.includeEmissive &&
+            settings.indirectDiffuse.emissiveGain ==
+                preset.indirectDiffuse.emissiveGain &&
             settings.reconstruction.temporalEnabled ==
                 preset.reconstruction.temporalEnabled &&
             settings.reconstruction.spatialEnabled ==
@@ -771,9 +802,11 @@ namespace uvsr
     ScreenSpaceVisibilityPass::ScreenSpaceVisibilityPass(
         nvrhi::IDevice* device,
         const std::shared_ptr<ShaderFactory>& shaderFactory,
+        std::shared_ptr<CommonRenderPasses> commonPasses,
         const std::filesystem::path& filterAdaptedNoisePath)
         : m_Device(device)
         , m_ShaderFactory(shaderFactory)
+        , m_CommonPasses(std::move(commonPasses))
     {
         nvrhi::BufferDesc constantBufferDesc;
         constantBufferDesc.byteSize = sizeof(ScreenSpaceVisibilityConstants);
@@ -1142,7 +1175,13 @@ namespace uvsr
                     nvrhi::BindingLayoutItem::Texture_SRV(5),
                     nvrhi::BindingLayoutItem::Texture_SRV(6),
                     nvrhi::BindingLayoutItem::Texture_SRV(7),
-                    nvrhi::BindingLayoutItem::Texture_UAV(0)
+                    nvrhi::BindingLayoutItem::Texture_SRV(8),
+                    nvrhi::BindingLayoutItem::Texture_SRV(9),
+                    nvrhi::BindingLayoutItem::Texture_SRV(10),
+                    nvrhi::BindingLayoutItem::Texture_SRV(11),
+                    nvrhi::BindingLayoutItem::Texture_UAV(0),
+                    nvrhi::BindingLayoutItem::Sampler(0),
+                    nvrhi::BindingLayoutItem::Sampler(1)
                 },
                 &macros);
         }
@@ -1902,8 +1941,6 @@ namespace uvsr
         const ScreenSpaceVisibilitySettings& settings,
         const ICompositeView& compositeView,
         const ScreenSpaceVisibilityInputs& inputs,
-        float3 ambientColorTop,
-        float3 ambientColorBottom,
         float exposureScale,
         uint32_t frameIndex)
     {
@@ -1915,8 +1952,22 @@ namespace uvsr
 
         uint32_t knownInactiveLightingSources =
             inputs.knownInactiveLightingSources & LightingSource_All;
+        if (!settings.indirectDiffuse.includeEmissive ||
+            !std::isfinite(settings.indirectDiffuse.emissiveGain) ||
+            !(settings.indirectDiffuse.emissiveGain > 0.f))
+        {
+            knownInactiveLightingSources |= LightingSource_Emissive;
+        }
+        if (!inputs.diffuseEnvironment ||
+            !std::isfinite(inputs.diffuseEnvironmentScale) ||
+            !(inputs.diffuseEnvironmentScale > 0.f))
+        {
+            knownInactiveLightingSources |= LightingSource_Environment;
+        }
         const uint32_t firstBounceSources =
-            LightingSource_Direct | LightingSource_Emissive;
+            LightingSource_Direct |
+            LightingSource_Emissive |
+            LightingSource_Environment;
         const bool firstBounceSourceIsPotentiallyActive =
             (knownInactiveLightingSources & firstBounceSources) !=
             firstBounceSources;
@@ -1925,7 +1976,8 @@ namespace uvsr
         assert((inputs.sourceRadiance ||
                 !settings.HasActiveIndirectDiffuse() ||
                 !firstBounceSourceIsPotentiallyActive) &&
-            inputs.gbufferDiffuse && inputs.gbufferSpecular &&
+            inputs.gbufferDiffuse &&
+            inputs.gbufferSpecular &&
             inputs.gbufferEmissive);
         assert(inputs.materialAmbientOcclusion && inputs.baseLighting &&
             inputs.output);
@@ -2160,7 +2212,11 @@ namespace uvsr
             settings.ambientOcclusion.strength, 0.f);
         constants.indirectDiffuseIntensity = std::max(
             settings.indirectDiffuse.intensity, 0.f);
-        constants.emissiveGain = VisibilityEmissiveSourceGain;
+        constants.emissiveGain = std::max(
+            std::isfinite(settings.indirectDiffuse.emissiveGain)
+                ? settings.indirectDiffuse.emissiveGain
+                : 0.f,
+            0.f);
         constants.minimumBounceContribution = std::max(
             settings.indirectDiffuse.minimumBounceContribution, 0.f);
         constants.lightingExposureScale = std::max(exposureScale, 0.f);
@@ -2168,8 +2224,6 @@ namespace uvsr
             settings.reconstruction.temporalResponse, 0.f, 1.f);
         constants.spatialRadius = std::clamp(
             settings.reconstruction.spatialRadius, 0.f, 16.f);
-        constants.ambientColorTop = ambientColorTop;
-        constants.ambientColorBottom = ambientColorBottom;
         constants.frameIndex = frameIndex;
         constants.maximumSampleCount = std::clamp(
             settings.sampling.maximumSampleCount, 1u, 64u);
@@ -2177,7 +2231,11 @@ namespace uvsr
             knownInactiveLightingSources;
         constants.enableAmbientOcclusion = ambientEnabled ? 1u : 0u;
         constants.enableIndirectDiffuse = indirectEnabled ? 1u : 0u;
-        constants.includeEmissive = 1u;
+        constants.includeEmissive =
+            settings.indirectDiffuse.includeEmissive &&
+                constants.emissiveGain > 0.f
+                ? 1u
+                : 0u;
         constants.reverseDepth = view->IsReverseDepth() ? 1u : 0u;
         constants.orthographicProjection =
             view->IsOrthographicProjection() ? 1u : 0u;
@@ -2189,6 +2247,44 @@ namespace uvsr
             settings.showIndirectDiffuseOnly ? 1u : 0u;
         constants.packedEdgeMode = static_cast<uint32_t>(
             settings.performance.packedEdgeMode) + 1u;
+        const float diffuseEnvironmentScale = std::max(
+            std::isfinite(inputs.diffuseEnvironmentScale)
+                ? inputs.diffuseEnvironmentScale
+                : 0.f,
+            0.f);
+        constants.diffuseEnvironmentEnabled =
+            inputs.diffuseEnvironment &&
+                diffuseEnvironmentScale > 0.f
+                ? 1u
+                : 0u;
+        constants.diffuseEnvironmentScale =
+            diffuseEnvironmentScale;
+        constants.diffuseEnvironmentArrayIndex =
+            inputs.diffuseEnvironmentArrayIndex;
+        const float specularEnvironmentScale = std::max(
+            std::isfinite(inputs.specularEnvironmentScale)
+                ? inputs.specularEnvironmentScale
+                : 0.f,
+            0.f);
+        const float specularEnvironmentMipLevels = std::max(
+            std::isfinite(inputs.specularEnvironmentMipLevels)
+                ? inputs.specularEnvironmentMipLevels
+                : 0.f,
+            0.f);
+        constants.specularEnvironmentEnabled =
+            inputs.specularEnvironment &&
+                inputs.environmentBrdf &&
+                specularEnvironmentScale > 0.f &&
+                specularEnvironmentMipLevels > 0.f
+                ? 1u
+                : 0u;
+        constants.specularEnvironmentScale =
+            specularEnvironmentScale;
+        constants.specularEnvironmentMipLevels =
+            specularEnvironmentMipLevels;
+        constants.specularEnvironmentArrayIndex =
+            inputs.specularEnvironmentArrayIndex;
+
         if (temporalEnabled)
         {
             const uint64_t historyConfigurationKey =
@@ -2941,7 +3037,12 @@ namespace uvsr
             });
             if (fusedPackedEdges)
                 layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(8));
+            layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(9));
+            layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(10));
+            layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(11));
             layout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(0));
+            layout.push_back(nvrhi::BindingLayoutItem::Sampler(0));
+            layout.push_back(nvrhi::BindingLayoutItem::Sampler(1));
             std::vector<ShaderMacro> macros = {
                 {
                     "FUSED_PACKED_EDGE_RECONSTRUCTION",
@@ -3002,7 +3103,31 @@ namespace uvsr
                             8, m_PackedEdgesTexture));
                 }
                 bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        9,
+                        inputs.diffuseEnvironment
+                            ? inputs.diffuseEnvironment
+                            : m_CommonPasses->m_BlackCubeMapArray.Get()));
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        10,
+                        inputs.specularEnvironment
+                            ? inputs.specularEnvironment
+                            : m_CommonPasses->m_BlackCubeMapArray.Get()));
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        11,
+                        inputs.environmentBrdf
+                            ? inputs.environmentBrdf
+                            : m_CommonPasses->m_BlackTexture.Get()));
+                bindings.bindings.push_back(
                     nvrhi::BindingSetItem::Texture_UAV(0, inputs.output));
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Sampler(
+                        0, m_CommonPasses->m_LinearWrapSampler));
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Sampler(
+                        1, m_CommonPasses->m_LinearClampSampler));
                 bindingSet = m_Device->createBindingSet(
                     bindings, pipeline.bindingLayout);
             }
@@ -3228,7 +3353,28 @@ namespace uvsr
                     nvrhi::BindingSetItem::Texture_SRV(
                         6, inputs.normals),
                     nvrhi::BindingSetItem::Texture_SRV(
-                        7, inputs.gbufferSpecular),
+                        7,
+                        inputs.diffuseEnvironment
+                            ? inputs.diffuseEnvironment
+                            : m_CommonPasses->m_BlackCubeMapArray.Get()),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        8, inputs.gbufferSpecular),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        9, inputs.depth),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        10,
+                        inputs.specularEnvironment
+                            ? inputs.specularEnvironment
+                            : m_CommonPasses->m_BlackCubeMapArray.Get()),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        11,
+                        inputs.environmentBrdf
+                            ? inputs.environmentBrdf
+                            : m_CommonPasses->m_BlackTexture.Get()),
+                    nvrhi::BindingSetItem::Sampler(
+                        0, m_CommonPasses->m_LinearWrapSampler),
+                    nvrhi::BindingSetItem::Sampler(
+                        1, m_CommonPasses->m_LinearClampSampler),
                     nvrhi::BindingSetItem::Texture_UAV(0, inputs.output)
                 };
                 compositeBindingSet = m_Device->createBindingSet(

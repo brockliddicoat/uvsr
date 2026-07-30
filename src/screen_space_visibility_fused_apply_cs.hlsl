@@ -1,6 +1,10 @@
 #pragma pack_matrix(row_major)
 
 #include <donut/shaders/binding_helpers.hlsli>
+#include <donut/shaders/gbuffer.hlsli>
+#include <donut/shaders/utils.hlsli>
+#include "pbr_environment.hlsli"
+#include "pbr_gbuffer.hlsli"
 #include "screen_space_visibility_cb.h"
 
 #ifndef VISIBILITY_GROUP_SIZE_X
@@ -39,6 +43,12 @@ Texture2D<float4> t_GBufferMaterial : register(t7);
 #if FUSED_PACKED_EDGE_RECONSTRUCTION
 Texture2D<uint> t_PackedEdges : register(t8);
 #endif
+TextureCubeArray t_DiffuseEnvironment : register(t9);
+TextureCubeArray t_SpecularEnvironment : register(t10);
+Texture2D t_EnvironmentBrdf : register(t11);
+
+SamplerState s_DiffuseEnvironmentSampler : register(s0);
+SamplerState s_EnvironmentBrdfSampler : register(s1);
 
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Output : register(u0);
 
@@ -321,8 +331,21 @@ void main(uint2 pixel : SV_DispatchThreadID)
     if (any(pixel >= uint2(g_Visibility.fullResolution)))
         return;
 
-    float3 normalWS = SafeNormal(
-        t_Normal[pixel].xyz, float3(0.0f, 1.0f, 0.0f));
+    float4 normalChannels = t_Normal[pixel];
+    if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
+    {
+        u_Output[pixel] = t_BaseLighting[pixel];
+        return;
+    }
+
+    float4 specularChannels = t_GBufferMaterial[pixel];
+    float3 geometricNormal = DecodeOctahedralNormal(
+        specularChannels.rg);
+    float3 normalWS = PbrSafeNormalize(
+        normalChannels.xyz, geometricNormal);
+    if (dot(normalWS, geometricNormal) < 0.0f)
+        normalWS = -normalWS;
+
     float ambientVisibility = saturate(ResolveAmbient(pixel, normalWS));
 #if ENABLE_AO_POWER
     float poweredAmbientVisibility = pow(
@@ -336,31 +359,98 @@ void main(uint2 pixel : SV_DispatchThreadID)
 
     float3 baseColor = max(t_GBufferDiffuse[pixel].rgb, 0.0f);
     float metalness = saturate(t_GBufferEmissive[pixel].a);
-    float3 diffuseReflectance = baseColor * (1.0f - metalness);
-    float4 packedMaterial = t_GBufferMaterial[pixel];
-    float perceptualRoughness = saturate(t_Normal[pixel].w);
-    float ior = lerp(1.0f, 3.0f, saturate(packedMaterial.b));
-    float dielectricF0 = (ior - 1.0f) / max(ior + 1.0f, 1e-4f);
-    dielectricF0 *= dielectricF0;
-    float3 specularF0 = lerp(dielectricF0.xxx, baseColor, metalness);
     float materialAmbientOcclusion = saturate(
         t_MaterialAmbientOcclusion[pixel]);
-    float hemisphere = normalWS.y * 0.5f + 0.5f;
-    float3 approximateAmbientIrradiance = lerp(
-        g_Visibility.ambientColorBottom,
-        g_Visibility.ambientColorTop,
-        hemisphere);
-    float3 approximateFallbackIndirect = approximateAmbientIrradiance *
-        diffuseReflectance * materialAmbientOcclusion *
-        adjustedAmbientVisibility;
-    float roughSpecularEnergy = lerp(
-        1.0f, 0.55f, perceptualRoughness);
-    float3 approximateFallbackSpecular = approximateAmbientIrradiance *
-        specularF0 * roughSpecularEnergy * materialAmbientOcclusion *
-        adjustedAmbientVisibility;
+    float ior = lerp(
+        1.0f, 3.0f, saturate(specularChannels.b));
 
-    float3 finalComposite = t_BaseLighting[pixel].rgb +
-        approximateFallbackIndirect + approximateFallbackSpecular;
+    PbrMaterialParameters material = (PbrMaterialParameters)0;
+    material.baseColor = baseColor;
+    material.metalness = metalness;
+    material.perceptualRoughness =
+        saturate(normalChannels.w);
+    material.dielectricF0 = IorToF0(ior);
+
+    // A perspective view direction depends on the camera ray but not the
+    // surface distance along that ray. Reconstruct a stable reference point
+    // at an arbitrary finite device depth so packed-edge fusion does not need
+    // an otherwise-unused full-resolution depth binding.
+    float3 viewReferencePosition = ReconstructWorldPosition(
+        g_Visibility.view,
+        float2(pixel) + 0.5f,
+        0.5f);
+    float3 viewIncident = GetIncidentVector(
+        g_Visibility.view.cameraDirectionOrPosition,
+        viewReferencePosition);
+    PbrSurfaceInteraction surface;
+    surface.position = viewReferencePosition;
+    surface.shadingNormal = normalWS;
+    surface.geometricNormal = geometricNormal;
+    surface.viewDirection = -viewIncident;
+    PbrPreparedEnvironment preparedEnvironment =
+        PreparePbrEnvironment(
+            material,
+            surface,
+            g_Visibility.specularEnvironmentMipLevels);
+
+    float3 environmentDiffuseResponse = 0.0f;
+    if (g_Visibility.diffuseEnvironmentEnabled != 0u)
+    {
+        environmentDiffuseResponse =
+            t_DiffuseEnvironment.SampleLevel(
+                s_DiffuseEnvironmentSampler,
+                float4(
+                    normalWS,
+                    g_Visibility.diffuseEnvironmentArrayIndex),
+                0.0f).rgb *
+            g_Visibility.diffuseEnvironmentScale;
+        if (any(!isfinite(environmentDiffuseResponse)))
+            environmentDiffuseResponse = 0.0f;
+        environmentDiffuseResponse =
+            max(environmentDiffuseResponse, 0.0f);
+    }
+    float3 environmentDiffuse =
+        EvaluatePbrEnvironmentDiffuse(
+            preparedEnvironment,
+            environmentDiffuseResponse,
+            materialAmbientOcclusion);
+
+    float3 environmentSpecular = 0.0f;
+    if (g_Visibility.specularEnvironmentEnabled != 0u &&
+        preparedEnvironment.valid > 0.0f)
+    {
+        float3 prefilteredRadiance =
+            t_SpecularEnvironment.SampleLevel(
+                s_DiffuseEnvironmentSampler,
+                float4(
+                    preparedEnvironment.reflectionDirection,
+                    g_Visibility.specularEnvironmentArrayIndex),
+                preparedEnvironment.specularMip).rgb *
+            g_Visibility.specularEnvironmentScale;
+        float2 environmentBrdf = t_EnvironmentBrdf.SampleLevel(
+            s_EnvironmentBrdfSampler,
+            float2(
+                preparedEnvironment.noV,
+                preparedEnvironment.perceptualRoughness),
+            0.0f).xy;
+        if (any(!isfinite(prefilteredRadiance)))
+            prefilteredRadiance = 0.0f;
+        if (any(!isfinite(environmentBrdf)))
+            environmentBrdf = 0.0f;
+
+        float combinedAmbientOcclusion = saturate(
+            materialAmbientOcclusion * adjustedAmbientVisibility);
+        environmentSpecular = EvaluatePbrEnvironmentSpecular(
+            preparedEnvironment,
+            prefilteredRadiance,
+            environmentBrdf,
+            combinedAmbientOcclusion);
+    }
+
+    float3 finalComposite =
+        t_BaseLighting[pixel].rgb +
+        environmentSpecular +
+        environmentDiffuse * adjustedAmbientVisibility;
     if (any(!isfinite(finalComposite)))
         finalComposite = 0.0f;
     finalComposite = max(finalComposite, 0.0f);

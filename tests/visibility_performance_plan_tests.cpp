@@ -1334,7 +1334,7 @@ namespace
                 packedFast.resourceMask == expectedFastResources &&
                 packedFast.firstTraceSrvCount == 3u &&
                 packedFast.firstTraceUavCount == 1u &&
-                packedFast.peakSrvCount == 8u &&
+                packedFast.peakSrvCount == 12u &&
                 packedFast.peakUavCount == 2u &&
                 packedFast.optionalResourceMask == ResourceBit(
                     VisibilityExecutionResource::PackedCurrentFastNoise) &&
@@ -1350,7 +1350,7 @@ namespace
             ResolveVisibilityExecutionPlan(
                 VisibilityPerformanceProfile::Reference, temporalWorkload);
         Require(temporalReference.valid &&
-                temporalReference.peakSrvCount == 9u &&
+                temporalReference.peakSrvCount == 12u &&
                 temporalReference.peakUavCount == 4u,
             "Temporal reference reports the exact peak descriptor layouts");
 
@@ -1363,9 +1363,9 @@ namespace
                 VisibilityPerformanceProfile::Reference,
                 laterBounceWorkload);
         Require(laterBounceReference.valid &&
-                laterBounceReference.peakSrvCount == 11u &&
+                laterBounceReference.peakSrvCount == 12u &&
                 laterBounceReference.peakUavCount == 3u,
-            "Legacy later bounce reports eleven SRVs while the broad first trace retains the three-UAV peak");
+            "Environment composition reports twelve SRVs while the broad first trace retains the three-UAV peak");
 
         auto invalidPackedSpatial = GetVisibilityPerformanceProfileConfiguration(
             VisibilityPerformanceProfile::AlgorithmicPackedEdges2x2);
@@ -1444,7 +1444,8 @@ namespace
                 fused.passMask ==
                     (PassBit(VisibilityExecutionPass::LegacyTrace) |
                      PassBit(
-                         VisibilityExecutionPass::FusedResolveAndApply)) &&
+                          VisibilityExecutionPass::FusedResolveAndApply)) &&
+                fused.peakSrvCount == 11u &&
                 fused.dispatchCount == 2u,
             "Exact fusion removes the final AO texture and one dispatch while retaining the broad legacy trace contract");
 
@@ -1469,6 +1470,7 @@ namespace
                         VisibilityExecutionPass::FusedResolveAndApply)) &&
                 fixedFused.firstTraceSrvCount == 3u &&
                 fixedFused.firstTraceUavCount == 1u &&
+                fixedFused.peakSrvCount == 11u &&
                 fixedFused.dispatchCount == 2u &&
                 !HasVisibilityExecutionResource(
                     fixedFused.resourceMask,
@@ -1497,6 +1499,7 @@ namespace
                     VisibilityExecutionPass::FixedTrace) &&
                 HasVisibilityExecutionPass(fusedPacked.passMask,
                     VisibilityExecutionPass::FusedResolveAndApply) &&
+                fusedPacked.peakSrvCount == 11u &&
                 !HasVisibilityExecutionPass(fusedPacked.passMask,
                     VisibilityExecutionPass::Reconstruction) &&
                 !HasVisibilityExecutionResource(

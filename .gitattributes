@@ -1,2 +1,4 @@
 docs/postmortem/archive/*.restore.patch -diff -text
 overrides/*.patch -diff -text
+third_party/bend_sss/upstream/bend_sss_cpu.h -text -whitespace
+third_party/bend_sss/upstream/bend_sss_gpu.h -text -whitespace

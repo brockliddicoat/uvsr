@@ -672,7 +672,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         max(g_Visibility.indirectDiffuseIntensity, 0.0f) * UVSR_INV_PI;
 #else
     const uint firstBounceSources =
-        LightingSource_Direct | LightingSource_Emissive;
+        LightingSource_Direct |
+        LightingSource_Emissive |
+        LightingSource_Environment;
     LightingContributionGate firstBounceContributionGate =
         MakeLightingContributionGate(
             g_Visibility.knownInactiveLightingSources,

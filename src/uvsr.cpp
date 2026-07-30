@@ -34,6 +34,8 @@
 #include <cassert>
 #include <cmath>
 #include <sstream>
+#include <fstream>
+#include <filesystem>
 #include <cfloat>
 #include <cstdio>
 #include <cstring>
@@ -45,7 +47,10 @@
 #include <limits>
 #include <string_view>
 #include <system_error>
+#include <iterator>
+#include <utility>
 #include <Windows.h>
+#include <bcrypt.h>
 #include <dwmapi.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3.h>
@@ -68,7 +73,6 @@
 #include <donut/render/GBufferFillPass.h>
 #include <donut/render/GeometryPasses.h>
 #include <donut/render/PixelReadbackPass.h>
-#include <donut/render/SkyPass.h>
 #include <donut/app/ApplicationBase.h>
 #include <donut/app/UserInterfaceUtils.h>
 #include <donut/app/Camera.h>
@@ -82,10 +86,18 @@
 #include "pbr_material.h"
 #include "pbr_deferred_lighting_pass.h"
 #include "msaa_visibility_resolve.h"
+#include "image_based_lighting_background_pass.h"
+#include "image_based_lighting_environment.h"
+#include "image_based_lighting_shared.h"
+#include "bend_screen_space_shadows.h"
+#include "diagnostic_cascaded_shadow_map.h"
+#include "diagnostic_csm_benchmark.h"
 #include "gpu_performance_monitor.h"
+#include "gpu_crash_diagnostics.h"
 #include "camera_collision.h"
 #include "camera_controllers.h"
 #include "cmaa2.h"
+#include "command_line_options.h"
 #include "experiment_title.h"
 #include "pixel_zoom.h"
 #include "renderer_statistics.h"
@@ -93,6 +105,8 @@
 #include "scene_light_names.h"
 #include "screen_space_visibility.h"
 #include "sponza_camera_preset.h"
+#include "sparse_virtual_shadow_map.h"
+#include "svsm_motion_benchmark.h"
 #include "taa_miniengine.h"
 #include "ui_animation.h"
 #include "visibility_perf_capture.h"
@@ -308,6 +322,68 @@ static AaBenchmarkStatistics CalculateAaBenchmarkStatistics(
         : 0.5f * (ordered[middle - 1u] + ordered[middle]);
     result.worst = ordered.back();
     return result;
+}
+
+static bool HasSvsmCasterRelevantDirtyState(
+    const SceneGraphNode* root,
+    std::vector<const SceneGraphNode*>& scratch)
+{
+    if (!root)
+        return true;
+
+    using DirtyFlags = SceneGraphNode::DirtyFlags;
+    const SceneContentFlags CasterContent =
+        SceneContentFlags::OpaqueMeshes |
+        SceneContentFlags::AlphaTestedMeshes;
+    auto hasDirtyFlag = [](
+        DirtyFlags value,
+        DirtyFlags flag) {
+        return (value & flag) != DirtyFlags::None;
+    };
+
+    scratch.clear();
+    scratch.push_back(root);
+    while (!scratch.empty())
+    {
+        const SceneGraphNode* node = scratch.back();
+        scratch.pop_back();
+        if (!node)
+            return true;
+
+        const DirtyFlags dirty = node->GetDirtyFlags();
+        if (dirty == DirtyFlags::None)
+            continue;
+
+        const bool containsCasterContent =
+            ((node->GetLeafContentFlags() |
+                node->GetSubgraphContentFlags()) &
+                CasterContent) != SceneContentFlags::None;
+        const SvsmCasterDirtyNodeDecision decision =
+            GetSvsmCasterDirtyNodeDecision(
+                hasDirtyFlag(dirty, DirtyFlags::LocalTransform),
+                hasDirtyFlag(dirty, DirtyFlags::Leaf),
+                hasDirtyFlag(dirty, DirtyFlags::SubgraphStructure),
+                hasDirtyFlag(dirty, DirtyFlags::SubgraphTransforms),
+                hasDirtyFlag(dirty, DirtyFlags::SubgraphContentUpdate),
+                containsCasterContent);
+        if (decision.casterStateChanged)
+            return true;
+        if (!decision.inspectChildren)
+            continue;
+
+        for (size_t childIndex = 0u;
+            childIndex < node->GetNumChildren();
+            ++childIndex)
+        {
+            const SceneGraphNode* child =
+                node->GetChild(childIndex);
+            if (!child)
+                return true;
+            if (child->GetDirtyFlags() != DirtyFlags::None)
+                scratch.push_back(child);
+        }
+    }
+    return false;
 }
 
 class PbrGBufferFillPass final : public GBufferFillPass
@@ -546,7 +622,8 @@ static bool RestartCurrentProcess()
 
 static uint32_t ResolveSupportedMsaaSampleCount(
     nvrhi::IDevice* device,
-    uint32_t requestedSampleCount)
+    uint32_t requestedSampleCount,
+    bool enablePbr)
 {
     if (!device || requestedSampleCount <= 1u)
         return 1u;
@@ -557,6 +634,30 @@ static uint32_t ResolveSupportedMsaaSampleCount(
         device->getNativeObject(nvrhi::ObjectTypes::D3D12_Device);
     if (!nativeDevice)
         return 1u;
+
+    struct MsaaSampleCountCache
+    {
+        ID3D12Device* device = nullptr;
+        uint32_t requestedSampleCount = 0u;
+        bool enablePbr = false;
+        uint32_t resolvedSampleCount = 1u;
+    };
+    static MsaaSampleCountCache cache;
+    if (cache.device == nativeDevice &&
+        cache.requestedSampleCount == requestedSampleCount &&
+        cache.enablePbr == enablePbr)
+    {
+        return cache.resolvedSampleCount;
+    }
+    const auto cacheResolution =
+        [&](uint32_t resolvedSampleCount)
+    {
+        cache.device = nativeDevice;
+        cache.requestedSampleCount = requestedSampleCount;
+        cache.enablePbr = enablePbr;
+        cache.resolvedSampleCount = resolvedSampleCount;
+        return resolvedSampleCount;
+    };
 
     const auto supportsFormat = [nativeDevice](
         DXGI_FORMAT format,
@@ -574,38 +675,80 @@ static uint32_t ResolveSupportedMsaaSampleCount(
             query.NumQualityLevels > 0u;
     };
 
+    // Match GBufferRenderTargets::Init exactly: it selects the first depth
+    // format with the required general features before applying sampleCount to
+    // the texture descriptor. Accepting a later format merely because that
+    // format supports MSAA would still leave Donut allocating the earlier,
+    // unsupported selection.
+    constexpr nvrhi::Format depthFormats[] = {
+        nvrhi::Format::D24S8,
+        nvrhi::Format::D32S8,
+        nvrhi::Format::D32,
+        nvrhi::Format::D16
+    };
+    const nvrhi::FormatSupport depthFeatures =
+        nvrhi::FormatSupport::Texture |
+        nvrhi::FormatSupport::DepthStencil |
+        nvrhi::FormatSupport::ShaderLoad;
+    const nvrhi::Format selectedDepthFormat = nvrhi::utils::ChooseFormat(
+        device,
+        depthFeatures,
+        depthFormats,
+        std::size(depthFormats));
+    DXGI_FORMAT selectedDepthDxgiFormat = DXGI_FORMAT_UNKNOWN;
+    switch (selectedDepthFormat)
+    {
+    case nvrhi::Format::D24S8:
+        selectedDepthDxgiFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+        break;
+    case nvrhi::Format::D32S8:
+        selectedDepthDxgiFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+        break;
+    case nvrhi::Format::D32:
+        selectedDepthDxgiFormat = DXGI_FORMAT_D32_FLOAT;
+        break;
+    case nvrhi::Format::D16:
+        selectedDepthDxgiFormat = DXGI_FORMAT_D16_UNORM;
+        break;
+    default:
+        log::warning(
+            "Hardware MSAA is unavailable because Donut found no compatible "
+            "G-buffer depth format; presenting one sample");
+        return cacheResolution(1u);
+    }
+
     const auto supportsAllocatedFormats =
         [&](uint32_t sampleCount)
     {
         // RenderTargets still allocates the deferred attachments while MSAA
         // routes drawing through forward PBR. Check every format that receives
         // the selected sample count rather than only the HDR attachment.
-        constexpr DXGI_FORMAT colorFormats[] = {
-            DXGI_FORMAT_R8G8B8A8_UNORM,
+        constexpr DXGI_FORMAT alwaysAllocatedColorFormats[] = {
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
             DXGI_FORMAT_R16G16B16A16_SNORM,
             DXGI_FORMAT_R16G16B16A16_FLOAT,
-            DXGI_FORMAT_R16G16_FLOAT,
-            DXGI_FORMAT_R8_UNORM
+            DXGI_FORMAT_R16G16_FLOAT
         };
-        for (DXGI_FORMAT format : colorFormats)
+        for (DXGI_FORMAT format : alwaysAllocatedColorFormats)
         {
             if (!supportsFormat(format, sampleCount))
                 return false;
         }
 
-        constexpr DXGI_FORMAT depthFormats[] = {
-            DXGI_FORMAT_D24_UNORM_S8_UINT,
-            DXGI_FORMAT_D32_FLOAT_S8X24_UINT,
-            DXGI_FORMAT_D32_FLOAT,
-            DXGI_FORMAT_D16_UNORM
-        };
-        return std::any_of(
-            std::begin(depthFormats),
-            std::end(depthFormats),
-            [&](DXGI_FORMAT format)
+        if (enablePbr)
+        {
+            constexpr DXGI_FORMAT pbrColorFormats[] = {
+                DXGI_FORMAT_R8G8B8A8_UNORM,
+                DXGI_FORMAT_R8_UNORM
+            };
+            for (DXGI_FORMAT format : pbrColorFormats)
             {
-                return supportsFormat(format, sampleCount);
-            });
+                if (!supportsFormat(format, sampleCount))
+                    return false;
+            }
+        }
+
+        return supportsFormat(selectedDepthDxgiFormat, sampleCount);
     };
 
     for (uint32_t candidate : { 16u, 8u, 4u, 2u })
@@ -621,14 +764,14 @@ static uint32_t ResolveSupportedMsaaSampleCount(
                     requestedSampleCount,
                     candidate);
             }
-            return candidate;
+            return cacheResolution(candidate);
         }
     }
 
     log::warning(
         "Hardware MSAA is unsupported by the active adapter for UVSR's "
         "render-target formats; presenting one sample");
-    return 1u;
+    return cacheResolution(1u);
 }
 
 class RenderTargets : public GBufferRenderTargets
@@ -985,6 +1128,22 @@ enum class WhiteWorldMode
     On,
     PreserveDetail,
     PreserveLighting
+};
+
+enum class PbrLightingDebugView : uint32_t
+{
+    None,
+    ShadingNormal,
+    GeometricNormal,
+    NormalDifference,
+    DiffuseEnvironment,
+    CardinalEnvironment,
+    PrefilteredSpecularEnvironment,
+    EnvironmentBrdf,
+    FinalSpecularEnvironment,
+    CombinedEnvironment,
+    SpecularOcclusion,
+    EnvironmentMip
 };
 
 static void ApplyPbrMaterialParameters(Material& material, float ior = 1.5f)
@@ -1371,6 +1530,8 @@ static void SetCanonicalVisibilityBenchmarkDefaults(
     visibility.indirectDiffuse.bounceCount = 1u;
     visibility.indirectDiffuse.minimumBounceContribution = 0.001f;
     visibility.indirectDiffuse.intensity = 4.f;
+    visibility.indirectDiffuse.includeEmissive = true;
+    visibility.indirectDiffuse.emissiveGain = 4.f;
     visibility.reconstruction.temporalEnabled = false;
     visibility.reconstruction.spatialEnabled = false;
     visibility.reconstruction.temporalResponse = 0.35f;
@@ -1706,11 +1867,24 @@ struct UIData
         MiniEngineTaaDefaultSharpness;
     MiniEngineTaaDebugView              MiniEngineTaaVisualization =
         MiniEngineTaaDebugView::Off;
+    BendScreenSpaceShadowSettings       BendScreenSpaceShadows;
+    SparseVirtualShadowMapSettings      SparseVirtualShadowMaps;
+    DiagnosticCascadedShadowMapSettings DiagnosticCascadedShadowMaps;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
-    SkyParameters                       SkyParams;
     bool                                ShaderReloadRequested = false;
-    bool                                EnableProceduralSky = true;
+    bool                                ShowEnvironmentBackground = true;
+    bool                                EnableDiffuseIbl = true;
+    float                               DiffuseIblStrength = 1.f;
+    bool                                EnableSpecularIbl = true;
+    float                               SpecularIblStrength = 1.f;
     WhiteWorldMode                      WhiteWorld = WhiteWorldMode::Off;
+    ImageBasedLightingSource            EnvironmentSource =
+        ImageBasedLightingSource::Kloppenheim03Day;
+    float                               EnvironmentExposureStops =
+        GetImageBasedLightingSourceInfo(
+            EnvironmentSource).defaultExposureStops;
+    PbrLightingDebugView                LightingDebugView =
+        PbrLightingDebugView::None;
     CameraMode                          Camera = CameraMode::ThirdPerson;
     std::shared_ptr<Material>           SelectedMaterial;
     std::shared_ptr<SceneGraphNode>     SelectedNode;
@@ -1753,6 +1927,20 @@ struct UIData
     {
         // These visibility histories do not yet receive TAA's subpixel jitter delta.
         return ScreenSpaceVisibility.reconstruction.temporalEnabled;
+    }
+
+    [[nodiscard]] bool HasActiveScreenSpaceVisibilityConsumer() const
+    {
+        return HasActiveScreenSpaceLightingConsumer(
+            ScreenSpaceVisibility.enabled,
+            ScreenSpaceVisibility.HasActiveAmbientOcclusion(),
+            ScreenSpaceVisibility.HasActiveIndirectDiffuse(),
+            IsImageBasedLightingLobeActive(
+                EnableDiffuseIbl,
+                DiffuseIblStrength),
+            IsImageBasedLightingLobeActive(
+                EnableSpecularIbl,
+                SpecularIblStrength));
     }
 
     [[nodiscard]] bool IsTemporalAntiAliasingAvailable() const
@@ -1951,6 +2139,16 @@ static std::string FindVisibilityVerificationSettingsMismatch(
             "GI intensity does not match the profile.")).empty())
         return reason;
     if (!(reason = mismatch(
+            observed.indirectDiffuse.includeEmissive !=
+                expected.indirectDiffuse.includeEmissive,
+            "GI emissive-source state does not match the profile.")).empty())
+        return reason;
+    if (!(reason = mismatch(
+            observed.indirectDiffuse.emissiveGain !=
+                expected.indirectDiffuse.emissiveGain,
+            "GI emissive-source gain does not match the profile.")).empty())
+        return reason;
+    if (!(reason = mismatch(
             observed.reconstruction.temporalEnabled !=
                 expected.reconstruction.temporalEnabled,
             "Temporal enabled state does not match the profile.")).empty())
@@ -2057,7 +2255,7 @@ enum class RendererTimingStage : uint32_t
     DirectLighting,
     ScreenSpaceVisibility,
     MaterialPicking,
-    ProceduralSky,
+    EnvironmentBackground,
     ToneMapping,
     OutputBlit,
     Count
@@ -2096,8 +2294,17 @@ private:
     std::unique_ptr<PbrDeferredLightingPass> m_PbrDeferredLightingPass;
     std::unique_ptr<MsaaVisibilityResolvePass>
         m_MsaaVisibilityResolvePass;
-    std::unique_ptr<SkyPass>            m_SkyPass;
+    std::unique_ptr<ImageBasedLightingEnvironment>
+                                        m_ImageBasedLightingEnvironment;
+    std::unique_ptr<ImageBasedLightingBackgroundPass>
+                                        m_ImageBasedLightingBackgroundPass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
+    std::unique_ptr<BendScreenSpaceShadowPass>
+                                        m_BendScreenSpaceShadowPass;
+    std::unique_ptr<SparseVirtualShadowMapPass>
+                                        m_SparseVirtualShadowMapPass;
+    std::unique_ptr<DiagnosticCascadedShadowMapPass>
+                                        m_DiagnosticCascadedShadowMapPass;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
     std::unique_ptr<MiniEngineTemporalAAPass> m_MiniEngineTemporalAAPass;
     std::unique_ptr<Cmaa2Pass>          m_Cmaa2Pass;
@@ -2132,8 +2339,6 @@ private:
     float                               m_CameraVerticalFov = 60.f;
     float                               m_SceneDiagonal = 100.f;
     float                               m_CameraCollisionRadius = 0.1f;
-    float3                              m_AmbientTop = 0.f;
-    float3                              m_AmbientBottom = 0.f;
     uint2                               m_PickPosition = 0u;
     bool                                m_Pick = false;
     bool                                m_BenchmarkCameraRequested = false;
@@ -2182,7 +2387,265 @@ private:
     std::string                         m_VisibilityBenchmarkError;
     std::string                         m_VisibilityBenchmarkPermutation;
     bool                                m_SceneFinishedLoading = false;
+    bool                                m_DiagnosticCsmBenchmarkRequested =
+        false;
+    DiagnosticCascadedShadowMapSettings m_DiagnosticCsmBenchmarkSettings;
+    const Scene*                        m_DiagnosticCsmBenchmarkScene =
+        nullptr;
+    const DirectionalLight*             m_DiagnosticCsmBenchmarkLight =
+        nullptr;
+    double3                             m_DiagnosticCsmBenchmarkLightDirection =
+        0.0;
+    bool                                m_DiagnosticCsmBenchmarkStateArmed =
+        false;
+    static constexpr uint32_t           DiagnosticCsmBenchmarkWarmupFrames =
+        256u;
+    static constexpr double             DiagnosticCsmBenchmarkWarmupSeconds =
+        2.0;
+    static constexpr double
+                                        DiagnosticCsmBenchmarkFreshTelemetryAgeMilliseconds =
+        100.0;
+    static constexpr uint64_t
+                                        DiagnosticCsmBenchmarkFreshTelemetryGenerations =
+        2u;
+    static constexpr uint32_t           DiagnosticCsmBenchmarkMeasurementFrames =
+        1024u;
+    struct DiagnosticCsmBenchmarkSample
+    {
+        uint64_t sourceFrame = 0u;
+        uint64_t applicationFrame = 0u;
+        uint32_t backBufferIndex = 0u;
+        float frameIntervalMilliseconds = 0.f;
+        bool issuedFrameContextAvailable = false;
+        DiagnosticCsmTimings timings;
+        DiagnosticCsmStats stats;
+        GpuPerformanceMetrics gpuMetrics;
+        GpuTimingNormalizationEstimate normalized;
+    };
+    struct DiagnosticCsmIssuedFrameContext
+    {
+        uint64_t sourceFrame = 0u;
+        uint64_t applicationFrame = 0u;
+        uint32_t backBufferIndex = 0u;
+        float frameIntervalMilliseconds = 0.f;
+        GpuPerformanceMetrics gpuMetrics;
+    };
+    bool                                m_DiagnosticCsmRecordRequested =
+        false;
+    bool                                m_DiagnosticCsmRecordStarted =
+        false;
+    bool                                m_DiagnosticCsmRecordFinished =
+        false;
+    std::string                         m_DiagnosticCsmRecordRunId;
+    std::string                         m_DiagnosticCsmExecutableSha256;
+    std::string                         m_DiagnosticCsmTimingConfiguration;
+    std::string                         m_DiagnosticCsmTimingConfigurationId;
+    std::chrono::steady_clock::time_point
+                                        m_DiagnosticCsmRecordStartTime;
+    bool                                m_DiagnosticCsmLastSourceFrameValid =
+        false;
+    uint64_t                            m_DiagnosticCsmLastSourceFrame =
+        0u;
+    uint32_t                            m_DiagnosticCsmRecordWarmupFrames =
+        0u;
+    uint64_t                            m_DiagnosticCsmWarmupInitialTelemetryGeneration =
+        0u;
+    uint64_t                            m_DiagnosticCsmMeasurementStartTelemetryGeneration =
+        0u;
+    double                              m_DiagnosticCsmWarmupElapsedMilliseconds =
+        0.0;
+    bool                                m_DiagnosticCsmRecordWarmupComplete =
+        false;
+    bool                                m_DiagnosticCsmLastSubmissionTimeValid =
+        false;
+    std::chrono::steady_clock::time_point
+                                        m_DiagnosticCsmLastSubmissionTime;
+    std::deque<DiagnosticCsmIssuedFrameContext>
+                                        m_DiagnosticCsmIssuedFrameContexts;
+    std::vector<DiagnosticCsmBenchmarkSample>
+                                        m_DiagnosticCsmBenchmarkSamples;
+    bool                                m_SvsmMotionBenchmarkAutostartPending =
+        false;
+    bool                                m_SvsmMotionBenchmarkWriteResultFile =
+        false;
+    bool                                m_DredDiagnosticsActive = false;
+    bool                                m_SvsmMotionDiagnosticConfiguration =
+        false;
+    std::filesystem::path               m_SvsmMotionMeasurementReadyPath;
+    bool                                m_SvsmMotionMeasurementGateReady =
+        false;
+    bool                                m_SvsmMotionMeasurementGateComplete =
+        false;
+    bool                                m_SvsmMotionMeasurementGateContaminated =
+        false;
+    bool                                m_SvsmMotionMeasurementGateWaitingForCompletion =
+        false;
+    bool                                m_SvsmMotionMeasurementGateStageWritten =
+        false;
+    uint64_t                            m_SvsmMotionMeasurementBenchmarkEndUnixMilliseconds =
+        0u;
+    std::string                         m_SvsmMotionMeasurementReadyContents;
+    std::string                         m_SvsmMotionMeasurementGateStatus =
+        "not configured";
+    std::string                         m_SvsmMotionExecutableSha256;
+    SparseVirtualShadowMapSettings      m_SvsmMotionAutostartTargetSettings;
+    SvsmMotionAutostartStage            m_SvsmMotionAutostartStage =
+        SvsmMotionAutostartStage::Baseline;
+    uint32_t                            m_SvsmMotionAutostartStageFrames = 0u;
+    uint32_t                            m_SvsmMotionAutostartStableFrames = 0u;
+    bool                                m_SvsmMotionAutostartStageWritten =
+        false;
+    bool                                m_SvsmMotionBenchmarkPreviousBenchmarkCameraActive =
+        false;
+    SvsmMotionBenchmarkKind             m_SvsmMotionBenchmarkKind =
+        SvsmMotionBenchmarkKind::Camera;
+    bool                                m_SvsmMotionBenchmarkActive = false;
+    bool                                m_SvsmMotionBenchmarkFramePrepared =
+        false;
+    bool                                m_SvsmMotionBenchmarkStarted = false;
+    bool                                m_SvsmMotionBenchmarkDraining = false;
+    uint64_t                            m_SvsmMotionBenchmarkFrame = 0u;
+    uint64_t                            m_SvsmMotionBenchmarkPreparedFrame = 0u;
+    uint64_t                            m_SvsmMotionBenchmarkCurrentTimingTag =
+        0u;
+    uint32_t                            m_SvsmMotionBenchmarkPreparationFrames =
+        0u;
+    uint32_t                            m_SvsmMotionBenchmarkDrainFrames = 0u;
+    CameraMode                          m_SvsmMotionBenchmarkPreviousCamera =
+        CameraMode::ThirdPerson;
+    SponzaCameraLocation                m_SvsmMotionBenchmarkPreviousLocation =
+        SponzaCameraLocation::Free;
+    float                               m_SvsmMotionBenchmarkPreviousFov = 60.f;
+    float                               m_SvsmMotionBenchmarkPreviousZoom = 10.f;
+    float3                              m_SvsmMotionBenchmarkPreviousPosition =
+        0.f;
+    float3                              m_SvsmMotionBenchmarkPreviousDirection =
+        float3(0.f, 0.f, -1.f);
+    float3                              m_SvsmMotionBenchmarkPreviousUp =
+        float3(0.f, 1.f, 0.f);
+    float3                              m_SvsmMotionBenchmarkPreviousRight =
+        float3(1.f, 0.f, 0.f);
+    int                                 m_SvsmMotionBenchmarkPreviousWidth = 0;
+    int                                 m_SvsmMotionBenchmarkPreviousHeight = 0;
+    SparseVirtualShadowMapSettings      m_SvsmMotionBenchmarkStartSettings;
+    bool                                m_SvsmMotionBenchmarkPreviousTaaEnabled =
+        false;
+    bool                                m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled =
+        false;
+    bool                                m_SvsmMotionBenchmarkPreviousBendEnabled =
+        false;
+    bool                                m_SvsmMotionBenchmarkPreviousCsmEnabled =
+        false;
+    bool                                m_SvsmMotionBenchmarkPreviousScreenSpaceVisibilityEnabled =
+        false;
+    bool                                m_SvsmMotionBenchmarkStartTaaEnabled =
+        false;
+    bool                                m_SvsmMotionBenchmarkStartUsesTaa = false;
+    bool                                m_SvsmMotionBenchmarkStartTaaSharpenEnabled =
+        false;
+    bool                                m_SvsmMotionBenchmarkStartBendEnabled =
+        false;
+    bool                                m_SvsmMotionBenchmarkStartCsmEnabled =
+        false;
+    bool                                m_SvsmMotionBenchmarkStartScreenSpaceVisibilityEnabled =
+        false;
+    WhiteWorldMode                      m_SvsmMotionBenchmarkStartWhiteWorld =
+        WhiteWorldMode::Off;
+    bool                                m_SvsmMotionBenchmarkStartEnvironmentBackgroundEnabled =
+        false;
+    const Scene*                        m_SvsmMotionBenchmarkStartScene =
+        nullptr;
+    const DirectionalLight*             m_SvsmMotionBenchmarkStartLight =
+        nullptr;
+    std::shared_ptr<SceneGraphNode>      m_SvsmMotionBenchmarkStartLightNode;
+    double3                             m_SvsmMotionBenchmarkStartLightDirection =
+        0.0;
+    double3                             m_SvsmMotionBenchmarkExpectedLightDirection =
+        0.0;
+    double3                             m_SvsmMotionBenchmarkSunRotationAxis =
+        double3(1.0, 0.0, 0.0);
+    double3                             m_SvsmMotionBenchmarkStartLightTranslation =
+        0.0;
+    double3                             m_SvsmMotionBenchmarkStartLightScaling =
+        1.0;
+    dquat                               m_SvsmMotionBenchmarkStartLightRotation =
+        dquat::identity();
+    double3                             m_SvsmMotionBenchmarkExpectedLightTranslation =
+        0.0;
+    double3                             m_SvsmMotionBenchmarkExpectedLightScaling =
+        1.0;
+    dquat                               m_SvsmMotionBenchmarkExpectedLightRotation =
+        dquat::identity();
+    SparseVirtualShadowMapPass*         m_SvsmMotionBenchmarkTimingPass =
+        nullptr;
+    std::vector<bool>                   m_SvsmMotionBenchmarkSeenGpuFrames;
+    bool                                m_SvsmMotionBenchmarkDuplicateGpuTag =
+        false;
+    bool                                m_SvsmMotionBenchmarkInvalidGpuTag =
+        false;
+    bool                                m_SvsmMotionBenchmarkInvalidGpuTiming =
+        false;
+    bool                                m_SvsmMotionBenchmarkInvalidCpuTiming =
+        false;
+    bool                                m_SvsmMotionBenchmarkDetailedTimingObserved =
+        false;
+    bool                                m_SvsmMotionBenchmarkBatchedSupported =
+        false;
+    bool                                m_SvsmMotionBenchmarkBatchedActive =
+        false;
+    bool                                m_SvsmMotionBenchmarkPacketSortingActive =
+        false;
+    bool                                m_SvsmMotionBenchmarkLevelSkipActive =
+        false;
+    bool                                m_SvsmMotionBenchmarkPacketCullingActive =
+        false;
+    bool                                m_SvsmMotionBenchmarkHierarchyActive =
+        false;
+    bool                                m_SvsmMotionBenchmarkHierarchyUnavailable =
+        false;
+    bool                                m_SvsmMotionBenchmarkReceiverMaskActive =
+        false;
+    bool                                m_SvsmMotionBenchmarkReceiverMaskUnavailable =
+        false;
+    bool                                m_SvsmMotionBenchmarkScatterRasterActive =
+        false;
+    bool                                m_SvsmMotionBenchmarkPacketCullingUnavailable =
+        false;
+    bool                                m_SvsmMotionBenchmarkRequestedPathInactive =
+        false;
+    SvsmMotionBenchmarkPathObservation  m_SvsmMotionBenchmarkStaticHierarchyObservation;
+    SvsmMotionBenchmarkPathObservation  m_SvsmMotionBenchmarkPairedDepthObservation;
+    SvsmMotionBenchmarkPathObservation  m_SvsmMotionBenchmarkDeferredMergeObservation;
+    struct SvsmMotionBenchmarkCpuTiming
+    {
+        uint64_t sourceTag = 0u;
+        float sceneValidationMilliseconds = 0.f;
+        float clipmapUpdateMilliseconds = 0.f;
+        float packetCullingMilliseconds = 0.f;
+        float totalMilliseconds = 0.f;
+    };
+    std::vector<SparseVirtualShadowMapGpuTiming>
+                                        m_SvsmMotionBenchmarkGpuTimings;
+    std::vector<SvsmMotionBenchmarkCpuTiming>
+                                        m_SvsmMotionBenchmarkCpuTimings;
+    std::vector<float>                  m_SvsmMotionBenchmarkGpuSamples;
+    std::vector<float>                  m_SvsmMotionBenchmarkMarkSamples;
+    std::vector<float>                  m_SvsmMotionBenchmarkAllocationSamples;
+    std::vector<float>                  m_SvsmMotionBenchmarkClearingSamples;
+    std::vector<float>                  m_SvsmMotionBenchmarkPacketGpuSamples;
+    std::vector<float>                  m_SvsmMotionBenchmarkRenderSamples;
+    std::vector<float>                  m_SvsmMotionBenchmarkFilterSamples;
+    std::vector<float>                  m_SvsmMotionBenchmarkSceneValidationCpuSamples;
+    std::vector<float>                  m_SvsmMotionBenchmarkClipmapUpdateCpuSamples;
+    std::vector<float>                  m_SvsmMotionBenchmarkPacketCpuSamples;
+    std::vector<float>                  m_SvsmMotionBenchmarkCpuSamples;
+    std::string                         m_SvsmMotionBenchmarkStatus =
+        "Idle.";
     bool                                m_SponzaCameraLocationsAvailable = false;
+    uint64_t                            m_SvsmSceneStateRevision = 1u;
+    uint64_t                            m_SvsmCasterStateRevision = 1u;
+    bool                                m_SvsmSceneStateRevisionReliable = true;
+    std::vector<const SceneGraphNode*>  m_SvsmDirtyNodeScratch;
     SponzaCameraLocation                m_SponzaCameraLocation =
         SponzaCameraLocation::SimplifiedApproximation;
 
@@ -2216,13 +2679,73 @@ public:
         UIData& ui,
         const std::string& sceneName,
         bool benchmarkCameraRequested,
-        const AaBenchmarkConfig& aaBenchmark)
+        const AaBenchmarkConfig& aaBenchmark,
+        bool diagnosticCsmBenchmarkRequested,
+        bool diagnosticCsmRecordRequested,
+        bool svsmMotionBenchmarkRequested,
+        bool svsmSunMotionBenchmarkRequested,
+        bool dredDiagnosticsActive,
+        bool svsmMotionDiagnosticConfiguration,
+        const std::filesystem::path& svsmMotionMeasurementReadyPath)
         : Super(deviceManager)
         , m_BindingCache(deviceManager->GetDevice())
         , m_BenchmarkCameraRequested(benchmarkCameraRequested)
         , m_AaBenchmark(aaBenchmark)
+        , m_DiagnosticCsmBenchmarkRequested(
+            diagnosticCsmBenchmarkRequested)
+        , m_DiagnosticCsmBenchmarkSettings(
+            ui.DiagnosticCascadedShadowMaps)
+        , m_DiagnosticCsmRecordRequested(
+            diagnosticCsmRecordRequested)
+        , m_SvsmMotionBenchmarkAutostartPending(
+            svsmMotionBenchmarkRequested)
+        , m_SvsmMotionBenchmarkWriteResultFile(
+            svsmMotionBenchmarkRequested)
+        , m_SvsmMotionBenchmarkKind(
+            svsmSunMotionBenchmarkRequested
+                ? SvsmMotionBenchmarkKind::SunSlow
+                : SvsmMotionBenchmarkKind::Camera)
+        , m_DredDiagnosticsActive(dredDiagnosticsActive)
+        , m_SvsmMotionDiagnosticConfiguration(
+            svsmMotionDiagnosticConfiguration)
+        , m_SvsmMotionMeasurementReadyPath(
+            svsmMotionMeasurementReadyPath)
+        , m_SvsmMotionAutostartTargetSettings(
+            ui.SparseVirtualShadowMaps)
         , m_ui(ui)
     {
+        if (m_DiagnosticCsmRecordRequested)
+        {
+            const auto unixMicroseconds =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::system_clock::now().time_since_epoch())
+                    .count();
+            m_DiagnosticCsmRecordRunId =
+                std::to_string(unixMicroseconds) + "-" +
+                std::to_string(GetCurrentProcessId());
+            m_DiagnosticCsmExecutableSha256 =
+                ComputeFileSha256(GetCurrentExecutablePath());
+            m_DiagnosticCsmTimingConfiguration =
+                BuildDiagnosticCsmTimingConfigurationIdentity(
+                    m_DiagnosticCsmBenchmarkSettings);
+            m_DiagnosticCsmTimingConfigurationId =
+                BuildDiagnosticCsmTimingConfigurationId(
+                    m_DiagnosticCsmBenchmarkSettings);
+            m_DiagnosticCsmBenchmarkSamples.reserve(
+                DiagnosticCsmBenchmarkMeasurementFrames);
+        }
+        if (svsmMotionBenchmarkRequested)
+        {
+            m_SvsmMotionExecutableSha256 =
+                ComputeFileSha256(GetCurrentExecutablePath());
+            // Present several complete scene frames before the first SVSM page
+            // pool allocation or dispatch. Pass shaders and pipelines already
+            // exist, while texture/mesh uploads stay out of the page-pool cold
+            // start submission.
+            m_ui.SparseVirtualShadowMaps.enabled = false;
+            m_SvsmMotionBenchmarkStatus =
+                "Staging complete baseline frames before SVSM warmup...";
+        }
         m_RootFs = std::make_shared<RootFileSystem>();
 
         std::filesystem::path mediaDir = app::GetDirectoryWithExecutable().parent_path() / "media";
@@ -2252,6 +2775,12 @@ public:
 
         m_ShaderFactory = std::make_shared<ShaderFactory>(GetDevice(), m_RootFs, "/shaders");
         m_CommonPasses = std::make_shared<CommonRenderPasses>(GetDevice(), m_ShaderFactory);
+        m_ImageBasedLightingEnvironment =
+            std::make_unique<ImageBasedLightingEnvironment>(
+                GetDevice(),
+                m_ShaderFactory,
+                m_CommonPasses,
+                mediaDir / "environments");
 
         m_OpaqueDrawStrategy = std::make_shared<InstancedOpaqueDrawStrategy>();
 
@@ -2330,6 +2859,17 @@ public:
         return m_HasVisibilityBenchmarkSummary
             ? &m_LastVisibilityBenchmarkSummary
             : nullptr;
+    }
+
+    ~UvsrSceneViewer() override
+    {
+        if (m_DiagnosticCsmRecordRequested &&
+            m_DiagnosticCsmRecordStarted &&
+            !m_DiagnosticCsmRecordFinished)
+        {
+            WriteDiagnosticCsmBenchmarkFailure(
+                "application closed before benchmark recording completed");
+        }
     }
 	std::shared_ptr<vfs::IFileSystem> GetRootFs() const
     {
@@ -2526,6 +3066,453 @@ public:
         return m_SponzaCameraLocationsAvailable;
     }
 
+    [[nodiscard]] static const char* GetSvsmMotionBenchmarkKindName(
+        SvsmMotionBenchmarkKind kind)
+    {
+        return kind == SvsmMotionBenchmarkKind::SunSlow
+            ? "sunSlow"
+            : "camera";
+    }
+
+    [[nodiscard]] static const char* GetSvsmMotionBenchmarkPhaseName(
+        SvsmMotionBenchmarkPhase phase)
+    {
+        switch (phase)
+        {
+        case SvsmMotionBenchmarkPhase::Warm: return "warm";
+        case SvsmMotionBenchmarkPhase::Baseline: return "baseline";
+        case SvsmMotionBenchmarkPhase::Forward: return "forward";
+        case SvsmMotionBenchmarkPhase::Recovery: return "recovery";
+        case SvsmMotionBenchmarkPhase::Reverse: return "reverse";
+        case SvsmMotionBenchmarkPhase::FinalRecovery:
+            return "finalRecovery";
+        case SvsmMotionBenchmarkPhase::Complete: return "complete";
+        }
+        return "unknown";
+    }
+
+    [[nodiscard]] static bool IsExactSvsmMotionBenchmarkVector(
+        const double3& left,
+        const double3& right)
+    {
+        return left.x == right.x &&
+            left.y == right.y &&
+            left.z == right.z;
+    }
+
+    [[nodiscard]] static bool IsExactSvsmMotionBenchmarkQuaternion(
+        const dquat& left,
+        const dquat& right)
+    {
+        return left.w == right.w &&
+            left.x == right.x &&
+            left.y == right.y &&
+            left.z == right.z;
+    }
+
+    [[nodiscard]] static bool IsValidSvsmMotionBenchmarkDirection(
+        const double3& direction)
+    {
+        return std::isfinite(direction.x) &&
+            std::isfinite(direction.y) &&
+            std::isfinite(direction.z) &&
+            dot(direction, direction) > 1e-20;
+    }
+
+    [[nodiscard]] bool IsSvsmMotionBenchmarkLightStateExpected() const
+    {
+        if (!m_SunLight ||
+            m_SunLight.get() != m_SvsmMotionBenchmarkStartLight ||
+            !m_SvsmMotionBenchmarkStartLightNode ||
+            m_SunLight->GetNodeSharedPtr() !=
+                m_SvsmMotionBenchmarkStartLightNode)
+        {
+            return false;
+        }
+
+        const SceneGraphNode& node =
+            *m_SvsmMotionBenchmarkStartLightNode;
+        if (!IsExactSvsmMotionBenchmarkVector(
+                node.GetTranslation(),
+                m_SvsmMotionBenchmarkExpectedLightTranslation) ||
+            !IsExactSvsmMotionBenchmarkVector(
+                node.GetScaling(),
+                m_SvsmMotionBenchmarkExpectedLightScaling) ||
+            !IsExactSvsmMotionBenchmarkQuaternion(
+                node.GetRotation(),
+                m_SvsmMotionBenchmarkExpectedLightRotation))
+        {
+            return false;
+        }
+
+        const double3 actual = m_SunLight->GetDirection();
+        const double3 expected =
+            m_SvsmMotionBenchmarkExpectedLightDirection;
+        constexpr double DirectionTolerance = 1e-9;
+        return std::abs(actual.x - expected.x) <= DirectionTolerance &&
+            std::abs(actual.y - expected.y) <= DirectionTolerance &&
+            std::abs(actual.z - expected.z) <= DirectionTolerance;
+    }
+
+    [[nodiscard]] bool CanStartSvsmMotionBenchmark() const
+    {
+        return IsSceneLoaded() &&
+            m_SponzaCameraLocationsAvailable &&
+            m_ui.EnablePbr &&
+            m_ui.UsesDeferredShading() &&
+            m_ui.WhiteWorld == WhiteWorldMode::Off &&
+            m_ui.SparseVirtualShadowMaps.enabled &&
+            m_SparseVirtualShadowMapPass &&
+            m_SunLight &&
+            m_SunLight->GetNode() &&
+            IsValidSvsmMotionBenchmarkDirection(
+                m_SunLight->GetDirection()) &&
+            !m_SvsmMotionBenchmarkActive;
+    }
+
+    [[nodiscard]] bool CanStageSvsmMotionBenchmark() const
+    {
+        return IsSceneLoaded() &&
+            m_SponzaCameraLocationsAvailable &&
+            m_ui.EnablePbr &&
+            m_ui.UsesDeferredShading() &&
+            m_ui.WhiteWorld == WhiteWorldMode::Off &&
+            m_SparseVirtualShadowMapPass &&
+            m_SunLight &&
+            m_SunLight->GetNode() &&
+            IsValidSvsmMotionBenchmarkDirection(
+                m_SunLight->GetDirection()) &&
+            !m_SvsmMotionBenchmarkActive;
+    }
+
+    [[nodiscard]] bool IsSvsmMotionBenchmarkRunning() const
+    {
+        return m_SvsmMotionBenchmarkAutostartPending ||
+            m_SvsmMotionBenchmarkActive;
+    }
+
+    [[nodiscard]] std::string GetSvsmMotionBenchmarkStatus() const
+    {
+        if (!m_SvsmMotionBenchmarkActive)
+            return m_SvsmMotionBenchmarkStatus;
+
+        if (!m_SvsmMotionBenchmarkStarted)
+        {
+            std::ostringstream status;
+            status << m_SvsmMotionBenchmarkStatus << " ("
+                << m_SvsmMotionBenchmarkPreparationFrames << " / "
+                << SvsmMotionBenchmarkPreparationFrameLimit << ")";
+            return status.str();
+        }
+
+        if (m_SvsmMotionBenchmarkDraining)
+        {
+            if (m_SvsmMotionMeasurementGateWaitingForCompletion)
+            {
+                return "External measurement gate: " +
+                    m_SvsmMotionMeasurementGateStatus;
+            }
+            const uint64_t outstanding = m_SvsmMotionBenchmarkTimingPass
+                ? m_SvsmMotionBenchmarkTimingPass->GetTimingAccounting()
+                    .outstanding
+                : 0u;
+            std::ostringstream status;
+            status << "Draining "
+                << (m_SvsmMotionBenchmarkStartSettings.
+                        detailedGpuTimingEnabled
+                    ? "detailed"
+                    : "total-only")
+                << " GPU timings: " << outstanding
+                << " outstanding, frame "
+                << m_SvsmMotionBenchmarkDrainFrames << " / "
+                << SvsmMotionBenchmarkDrainFrameLimit;
+            return status.str();
+        }
+
+        const SvsmMotionBenchmarkPhase phase =
+            GetSvsmMotionBenchmarkPhase(
+                m_SvsmMotionBenchmarkKind,
+                m_SvsmMotionBenchmarkFrame);
+
+        std::ostringstream status;
+        status << GetSvsmMotionBenchmarkPhaseName(phase)
+            << " " << GetSvsmMotionBenchmarkKindName(
+                m_SvsmMotionBenchmarkKind)
+            << ": frame "
+            << m_SvsmMotionBenchmarkFrame << " / "
+            << GetSvsmMotionBenchmarkEndFrame(
+                m_SvsmMotionBenchmarkKind) << ", "
+            << std::fixed << std::setprecision(1)
+            << GetSvsmMotionBenchmarkAngleDegrees(
+                m_SvsmMotionBenchmarkKind,
+                m_SvsmMotionBenchmarkFrame)
+            << " degrees, "
+            << (m_SvsmMotionBenchmarkStartSettings.
+                    detailedGpuTimingEnabled
+                ? "detailed"
+                : "total-only")
+            << " GPU timing";
+        return status.str();
+    }
+
+    bool StartSvsmMotionBenchmark(
+        SvsmMotionBenchmarkKind kind =
+            SvsmMotionBenchmarkKind::Camera)
+    {
+        if (!CanStartSvsmMotionBenchmark())
+            return false;
+
+        // A manual start during a pending automated run owns the single
+        // benchmark lifecycle and must prevent a second autostart afterward.
+        m_SvsmMotionBenchmarkAutostartPending = false;
+        m_SvsmMotionBenchmarkKind = kind;
+        if (m_SvsmMotionExecutableSha256.empty())
+        {
+            m_SvsmMotionExecutableSha256 =
+                ComputeFileSha256(GetCurrentExecutablePath());
+        }
+
+        const SponzaCameraPreset& preset =
+            GetDefaultSponzaCameraPreset();
+        const BaseCamera& previousCamera = GetActiveCamera();
+        m_SvsmMotionBenchmarkPreviousBenchmarkCameraActive =
+            m_BenchmarkCameraActive;
+        m_SvsmMotionBenchmarkPreviousCamera = m_ui.Camera;
+        m_SvsmMotionBenchmarkPreviousLocation =
+            m_SponzaCameraLocation;
+        m_SvsmMotionBenchmarkPreviousFov = m_CameraVerticalFov;
+        m_SvsmMotionBenchmarkPreviousZoom =
+            m_ThirdPersonCamera.GetReferenceZoomDistance();
+        m_SvsmMotionBenchmarkPreviousPosition =
+            previousCamera.GetPosition();
+        m_SvsmMotionBenchmarkPreviousDirection =
+            previousCamera.GetDir();
+        m_SvsmMotionBenchmarkPreviousUp =
+            previousCamera.GetUp();
+        m_SvsmMotionBenchmarkPreviousRight = normalize(cross(
+            m_SvsmMotionBenchmarkPreviousDirection,
+            m_SvsmMotionBenchmarkPreviousUp));
+        m_SvsmMotionBenchmarkPreviousTaaEnabled =
+            m_ui.AntiAliasing.enabled;
+        m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled =
+            m_ui.MiniEngineTaaSharpenEnabled;
+        m_SvsmMotionBenchmarkPreviousBendEnabled =
+            m_ui.BendScreenSpaceShadows.enabled;
+        m_SvsmMotionBenchmarkPreviousCsmEnabled =
+            m_ui.DiagnosticCascadedShadowMaps.enabled;
+        m_SvsmMotionBenchmarkPreviousScreenSpaceVisibilityEnabled =
+            m_ui.ScreenSpaceVisibility.enabled;
+
+        // Keep the benchmark lane independent from other visibility
+        // producers and temporal consumers. The previous values are restored
+        // after either completion or an abort.
+        m_ui.AntiAliasing.enabled = false;
+        m_ui.MiniEngineTaaSharpenEnabled = false;
+        m_ui.BendScreenSpaceShadows.enabled = false;
+        m_ui.DiagnosticCascadedShadowMaps.enabled = false;
+        m_ui.ScreenSpaceVisibility.enabled = false;
+
+        m_SvsmMotionBenchmarkStartSettings =
+            m_ui.SparseVirtualShadowMaps;
+        m_SvsmMotionBenchmarkStartTaaEnabled =
+            m_ui.AntiAliasing.enabled;
+        m_SvsmMotionBenchmarkStartUsesTaa =
+            m_ui.UsesLongTermTemporalAA();
+        m_SvsmMotionBenchmarkStartTaaSharpenEnabled =
+            m_ui.MiniEngineTaaSharpenEnabled;
+        m_SvsmMotionBenchmarkStartBendEnabled =
+            m_ui.BendScreenSpaceShadows.enabled;
+        m_SvsmMotionBenchmarkStartCsmEnabled =
+            m_ui.DiagnosticCascadedShadowMaps.enabled;
+        m_SvsmMotionBenchmarkStartScreenSpaceVisibilityEnabled =
+            m_ui.ScreenSpaceVisibility.enabled;
+        m_SvsmMotionBenchmarkStartWhiteWorld = m_ui.WhiteWorld;
+        m_SvsmMotionBenchmarkStartEnvironmentBackgroundEnabled =
+            m_ui.ShowEnvironmentBackground;
+        m_SvsmMotionBenchmarkStartScene = m_Scene.get();
+        m_SvsmMotionBenchmarkStartLight = m_SunLight.get();
+        m_SvsmMotionBenchmarkStartLightNode =
+            m_SunLight->GetNodeSharedPtr();
+        if (!m_SvsmMotionBenchmarkStartLightNode)
+        {
+            m_ui.AntiAliasing.enabled =
+                m_SvsmMotionBenchmarkPreviousTaaEnabled;
+            m_ui.MiniEngineTaaSharpenEnabled =
+                m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled;
+            m_ui.BendScreenSpaceShadows.enabled =
+                m_SvsmMotionBenchmarkPreviousBendEnabled;
+            m_ui.DiagnosticCascadedShadowMaps.enabled =
+                m_SvsmMotionBenchmarkPreviousCsmEnabled;
+            m_ui.ScreenSpaceVisibility.enabled =
+                m_SvsmMotionBenchmarkPreviousScreenSpaceVisibilityEnabled;
+            return false;
+        }
+        m_SvsmMotionBenchmarkStartLightDirection =
+            normalize(m_SunLight->GetDirection());
+        m_SvsmMotionBenchmarkExpectedLightDirection =
+            m_SvsmMotionBenchmarkStartLightDirection;
+        m_SvsmMotionBenchmarkStartLightTranslation =
+            m_SvsmMotionBenchmarkStartLightNode->GetTranslation();
+        m_SvsmMotionBenchmarkStartLightRotation =
+            m_SvsmMotionBenchmarkStartLightNode->GetRotation();
+        m_SvsmMotionBenchmarkStartLightScaling =
+            m_SvsmMotionBenchmarkStartLightNode->GetScaling();
+        m_SvsmMotionBenchmarkExpectedLightTranslation =
+            m_SvsmMotionBenchmarkStartLightTranslation;
+        m_SvsmMotionBenchmarkExpectedLightRotation =
+            m_SvsmMotionBenchmarkStartLightRotation;
+        m_SvsmMotionBenchmarkExpectedLightScaling =
+            m_SvsmMotionBenchmarkStartLightScaling;
+        const double3 worldUp(0.0, 1.0, 0.0);
+        const double3 fallbackForward(0.0, 0.0, 1.0);
+        const double3 axisReference =
+            std::abs(dot(
+                m_SvsmMotionBenchmarkStartLightDirection,
+                worldUp)) < 0.999
+                ? worldUp
+                : fallbackForward;
+        m_SvsmMotionBenchmarkSunRotationAxis = normalize(cross(
+            m_SvsmMotionBenchmarkStartLightDirection,
+            axisReference));
+        GetDeviceManager()->GetWindowDimensions(
+            m_SvsmMotionBenchmarkPreviousWidth,
+            m_SvsmMotionBenchmarkPreviousHeight);
+        glfwSetWindowSize(
+            GetDeviceManager()->GetWindow(),
+            int(preset.ReferenceWidth),
+            int(preset.ReferenceHeight));
+
+        ApplySponzaCameraPreset(preset);
+        m_SponzaCameraLocation =
+            SponzaCameraLocation::SimplifiedApproximation;
+        m_BenchmarkCameraActive = true;
+        m_ui.Camera = CameraMode::Static;
+        m_SvsmMotionBenchmarkFrame = 0u;
+        m_SvsmMotionBenchmarkPreparedFrame = 0u;
+        m_SvsmMotionBenchmarkCurrentTimingTag = 0u;
+        m_SvsmMotionBenchmarkFramePrepared = false;
+        m_SvsmMotionBenchmarkStarted = false;
+        m_SvsmMotionBenchmarkDraining = false;
+        m_SvsmMotionBenchmarkPreparationFrames = 0u;
+        m_SvsmMotionBenchmarkDrainFrames = 0u;
+        m_SvsmMotionMeasurementGateComplete = false;
+        m_SvsmMotionMeasurementGateContaminated = false;
+        m_SvsmMotionMeasurementGateWaitingForCompletion = false;
+        m_SvsmMotionMeasurementBenchmarkEndUnixMilliseconds = 0u;
+        m_SvsmMotionMeasurementGateStatus =
+            m_SvsmMotionMeasurementGateReady
+                ? "ready"
+                : "not configured";
+        m_SvsmMotionBenchmarkTimingPass = nullptr;
+        const uint32_t measurementFrameCount =
+            GetSvsmMotionBenchmarkMeasurementFrameCount(
+                m_SvsmMotionBenchmarkKind);
+        m_SvsmMotionBenchmarkSeenGpuFrames.assign(
+            measurementFrameCount,
+            false);
+        m_SvsmMotionBenchmarkDuplicateGpuTag = false;
+        m_SvsmMotionBenchmarkInvalidGpuTag = false;
+        m_SvsmMotionBenchmarkInvalidGpuTiming = false;
+        m_SvsmMotionBenchmarkInvalidCpuTiming = false;
+        m_SvsmMotionBenchmarkDetailedTimingObserved = false;
+        m_SvsmMotionBenchmarkBatchedSupported = false;
+        m_SvsmMotionBenchmarkBatchedActive = false;
+        m_SvsmMotionBenchmarkPacketSortingActive = false;
+        m_SvsmMotionBenchmarkLevelSkipActive = false;
+        m_SvsmMotionBenchmarkPacketCullingActive = false;
+        m_SvsmMotionBenchmarkHierarchyActive = false;
+        m_SvsmMotionBenchmarkHierarchyUnavailable = false;
+        m_SvsmMotionBenchmarkReceiverMaskActive = false;
+        m_SvsmMotionBenchmarkReceiverMaskUnavailable = false;
+        m_SvsmMotionBenchmarkScatterRasterActive = false;
+        m_SvsmMotionBenchmarkPacketCullingUnavailable = false;
+        m_SvsmMotionBenchmarkRequestedPathInactive = false;
+        m_SvsmMotionBenchmarkStaticHierarchyObservation = {};
+        m_SvsmMotionBenchmarkPairedDepthObservation = {};
+        m_SvsmMotionBenchmarkDeferredMergeObservation = {};
+        m_SvsmMotionBenchmarkGpuTimings.clear();
+        m_SvsmMotionBenchmarkCpuTimings.clear();
+        m_SvsmMotionBenchmarkGpuSamples.clear();
+        m_SvsmMotionBenchmarkMarkSamples.clear();
+        m_SvsmMotionBenchmarkAllocationSamples.clear();
+        m_SvsmMotionBenchmarkClearingSamples.clear();
+        m_SvsmMotionBenchmarkPacketGpuSamples.clear();
+        m_SvsmMotionBenchmarkRenderSamples.clear();
+        m_SvsmMotionBenchmarkFilterSamples.clear();
+        m_SvsmMotionBenchmarkSceneValidationCpuSamples.clear();
+        m_SvsmMotionBenchmarkClipmapUpdateCpuSamples.clear();
+        m_SvsmMotionBenchmarkPacketCpuSamples.clear();
+        m_SvsmMotionBenchmarkCpuSamples.clear();
+        // Keep evidence collection itself from introducing heap-allocation
+        // spikes into the measured sequence.
+        m_SvsmMotionBenchmarkGpuTimings.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkCpuTimings.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkGpuSamples.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkMarkSamples.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkAllocationSamples.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkClearingSamples.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkPacketGpuSamples.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkRenderSamples.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkFilterSamples.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkSceneValidationCpuSamples.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkClipmapUpdateCpuSamples.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkPacketCpuSamples.reserve(
+            measurementFrameCount);
+        m_SvsmMotionBenchmarkCpuSamples.reserve(
+            measurementFrameCount);
+        // UI- and command-line-started runs share one durable latest-result
+        // artifact so a spike observed interactively has the same evidence as
+        // an automated run.
+        m_SvsmMotionBenchmarkWriteResultFile = true;
+        m_SvsmMotionBenchmarkActive = true;
+        m_SvsmMotionBenchmarkStatus =
+            std::string("Preparing isolated ") +
+            GetSvsmMotionBenchmarkKindName(m_SvsmMotionBenchmarkKind) +
+            " Benchmark Position 1 at 1920 x 1080 with " +
+            (m_SvsmMotionBenchmarkStartSettings.detailedGpuTimingEnabled
+                ? "detailed"
+                : "total-only") +
+            " GPU timing...";
+        WriteSvsmMotionBenchmarkResultFile(
+            "state=running\nstatus=" +
+            m_SvsmMotionBenchmarkStatus + "\n");
+        if (m_SvsmMotionBenchmarkKind ==
+            SvsmMotionBenchmarkKind::SunSlow)
+        {
+            log::info(
+                "SVSM SunSlow benchmark started with %s GPU timing: 120 warm frames, 60 baseline frames, a 45-degree sun sweep at exactly 0.1 degrees per rendered frame, 164 recovery frames, the exact reverse sweep, and 164 final recovery frames",
+                m_SvsmMotionBenchmarkStartSettings.detailedGpuTimingEnabled
+                    ? "detailed"
+                    : "total-only");
+        }
+        else
+        {
+            log::info(
+                "SVSM camera motion benchmark started with %s GPU timing: 180 warm frames, a 45-degree right turn at 0.1 degrees per rendered frame without pacing, a 100-frame hold, and the same return",
+                m_SvsmMotionBenchmarkStartSettings.detailedGpuTimingEnabled
+                    ? "detailed"
+                    : "total-only");
+        }
+        return true;
+    }
+
+    bool StartSvsmSunMotionBenchmark()
+    {
+        return StartSvsmMotionBenchmark(
+            SvsmMotionBenchmarkKind::SunSlow);
+    }
+
     [[nodiscard]] SponzaCameraLocation GetSponzaCameraLocation() const
     {
         return m_SponzaCameraLocation;
@@ -2616,6 +3603,1857 @@ public:
         }
     }
 
+    void RestoreSvsmMotionBenchmarkState()
+    {
+        m_SvsmMotionBenchmarkActive = false;
+        m_SvsmMotionBenchmarkStarted = false;
+        m_SvsmMotionBenchmarkDraining = false;
+        m_SvsmMotionBenchmarkFramePrepared = false;
+        m_SvsmMotionBenchmarkCurrentTimingTag = 0u;
+        m_BenchmarkCameraActive =
+            m_SvsmMotionBenchmarkPreviousBenchmarkCameraActive;
+        if (m_SparseVirtualShadowMapPass)
+            m_SparseVirtualShadowMapPass->ResetTimingAccounting();
+
+        if (m_SvsmMotionBenchmarkStartLightNode)
+        {
+            // The retained node is the object the benchmark actually
+            // modified. Restore it even if the scene or primary-light pointer
+            // was replaced while an abort was being detected.
+            m_SvsmMotionBenchmarkStartLightNode->SetTransform(
+                &m_SvsmMotionBenchmarkStartLightTranslation,
+                &m_SvsmMotionBenchmarkStartLightRotation,
+                &m_SvsmMotionBenchmarkStartLightScaling);
+        }
+        m_ui.AntiAliasing.enabled =
+            m_SvsmMotionBenchmarkPreviousTaaEnabled;
+        m_ui.MiniEngineTaaSharpenEnabled =
+            m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled;
+        m_ui.BendScreenSpaceShadows.enabled =
+            m_SvsmMotionBenchmarkPreviousBendEnabled;
+        m_ui.DiagnosticCascadedShadowMaps.enabled =
+            m_SvsmMotionBenchmarkPreviousCsmEnabled;
+        m_ui.ScreenSpaceVisibility.enabled =
+            m_SvsmMotionBenchmarkPreviousScreenSpaceVisibilityEnabled;
+
+        m_CameraVerticalFov = m_SvsmMotionBenchmarkPreviousFov;
+        m_ThirdPersonCamera.ResetZoomReferenceDistance(
+            m_SvsmMotionBenchmarkPreviousZoom);
+        m_ThirdPersonCamera.SetExactPose(
+            m_SvsmMotionBenchmarkPreviousPosition,
+            m_SvsmMotionBenchmarkPreviousDirection,
+            m_SvsmMotionBenchmarkPreviousUp,
+            m_SvsmMotionBenchmarkPreviousRight);
+        m_FirstPersonCamera.SetExactPose(
+            m_SvsmMotionBenchmarkPreviousPosition,
+            m_SvsmMotionBenchmarkPreviousDirection,
+            m_SvsmMotionBenchmarkPreviousUp,
+            m_SvsmMotionBenchmarkPreviousRight);
+        m_PivotCamera.SetExactPose(
+            m_SvsmMotionBenchmarkPreviousPosition,
+            m_SvsmMotionBenchmarkPreviousDirection,
+            m_SvsmMotionBenchmarkPreviousUp,
+            m_SvsmMotionBenchmarkPreviousRight);
+        m_StaticCamera.SetExactPose(
+            m_SvsmMotionBenchmarkPreviousPosition,
+            m_SvsmMotionBenchmarkPreviousDirection,
+            m_SvsmMotionBenchmarkPreviousUp,
+            m_SvsmMotionBenchmarkPreviousRight);
+        m_ui.Camera = m_SvsmMotionBenchmarkPreviousCamera;
+        m_SponzaCameraLocation =
+            m_SvsmMotionBenchmarkPreviousLocation;
+        m_PreviousView.reset();
+        if (m_ScreenSpaceVisibilityPass)
+            m_ScreenSpaceVisibilityPass->ResetHistory();
+        if (m_MiniEngineTemporalAAPass)
+            m_MiniEngineTemporalAAPass->ResetHistory();
+
+        if (m_SvsmMotionBenchmarkPreviousWidth > 0 &&
+            m_SvsmMotionBenchmarkPreviousHeight > 0)
+        {
+            glfwSetWindowSize(
+                GetDeviceManager()->GetWindow(),
+                m_SvsmMotionBenchmarkPreviousWidth,
+                m_SvsmMotionBenchmarkPreviousHeight);
+        }
+        m_SvsmMotionBenchmarkTimingPass = nullptr;
+        m_SvsmMotionBenchmarkStartLightNode.reset();
+    }
+
+    [[nodiscard]] static uint64_t GetUnixMilliseconds()
+    {
+        return uint64_t(std::chrono::duration_cast<
+            std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count());
+    }
+
+    [[nodiscard]] static std::filesystem::path
+    GetCurrentExecutablePath()
+    {
+        std::array<wchar_t, 32768u> pathBuffer{};
+        const DWORD length = GetModuleFileNameW(
+            nullptr,
+            pathBuffer.data(),
+            DWORD(pathBuffer.size()));
+        if (length == 0u || length >= pathBuffer.size())
+            return {};
+
+        std::error_code error;
+        const std::filesystem::path canonical =
+            std::filesystem::weakly_canonical(
+                std::filesystem::path(
+                    std::wstring(pathBuffer.data(), length)),
+                error);
+        return error ? std::filesystem::path{} : canonical;
+    }
+
+    [[nodiscard]] static std::string ComputeFileSha256(
+        const std::filesystem::path& path)
+    {
+        if (path.empty())
+            return {};
+
+        BCRYPT_ALG_HANDLE algorithm = nullptr;
+        BCRYPT_HASH_HANDLE hash = nullptr;
+        std::vector<UCHAR> hashObject;
+        std::vector<UCHAR> digest;
+        auto cleanup = [&]() {
+            if (hash)
+                BCryptDestroyHash(hash);
+            if (algorithm)
+                BCryptCloseAlgorithmProvider(algorithm, 0u);
+        };
+
+        NTSTATUS status = BCryptOpenAlgorithmProvider(
+            &algorithm,
+            BCRYPT_SHA256_ALGORITHM,
+            nullptr,
+            0u);
+        if (!BCRYPT_SUCCESS(status))
+            return {};
+
+        ULONG objectBytes = 0u;
+        ULONG digestBytes = 0u;
+        ULONG returnedBytes = 0u;
+        status = BCryptGetProperty(
+            algorithm,
+            BCRYPT_OBJECT_LENGTH,
+            reinterpret_cast<PUCHAR>(&objectBytes),
+            sizeof(objectBytes),
+            &returnedBytes,
+            0u);
+        if (!BCRYPT_SUCCESS(status) || objectBytes == 0u)
+        {
+            cleanup();
+            return {};
+        }
+        status = BCryptGetProperty(
+            algorithm,
+            BCRYPT_HASH_LENGTH,
+            reinterpret_cast<PUCHAR>(&digestBytes),
+            sizeof(digestBytes),
+            &returnedBytes,
+            0u);
+        if (!BCRYPT_SUCCESS(status) || digestBytes != 32u)
+        {
+            cleanup();
+            return {};
+        }
+
+        hashObject.resize(objectBytes);
+        digest.resize(digestBytes);
+        status = BCryptCreateHash(
+            algorithm,
+            &hash,
+            hashObject.data(),
+            ULONG(hashObject.size()),
+            nullptr,
+            0u,
+            0u);
+        if (!BCRYPT_SUCCESS(status))
+        {
+            cleanup();
+            return {};
+        }
+
+        std::ifstream input(path, std::ios::binary);
+        if (!input)
+        {
+            cleanup();
+            return {};
+        }
+        std::vector<char> buffer(1024u * 1024u);
+        while (input)
+        {
+            input.read(buffer.data(), std::streamsize(buffer.size()));
+            const std::streamsize bytesRead = input.gcount();
+            if (bytesRead <= 0)
+                break;
+            status = BCryptHashData(
+                hash,
+                reinterpret_cast<PUCHAR>(buffer.data()),
+                ULONG(bytesRead),
+                0u);
+            if (!BCRYPT_SUCCESS(status))
+            {
+                cleanup();
+                return {};
+            }
+        }
+        if (!input.eof() && input.fail())
+        {
+            cleanup();
+            return {};
+        }
+
+        status = BCryptFinishHash(
+            hash,
+            digest.data(),
+            ULONG(digest.size()),
+            0u);
+        if (!BCRYPT_SUCCESS(status))
+        {
+            cleanup();
+            return {};
+        }
+        cleanup();
+
+        constexpr char HexDigits[] = "0123456789ABCDEF";
+        std::string result;
+        result.resize(digest.size() * 2u);
+        for (size_t index = 0u; index < digest.size(); ++index)
+        {
+            result[index * 2u] = HexDigits[digest[index] >> 4u];
+            result[index * 2u + 1u] =
+                HexDigits[digest[index] & 0x0fu];
+        }
+        return result;
+    }
+
+    [[nodiscard]] static bool IsCurrentExecutablePath(
+        std::string_view markerPath)
+    {
+        if (markerPath.empty())
+            return false;
+
+        std::error_code markerError;
+        const std::filesystem::path canonicalMarker =
+            std::filesystem::weakly_canonical(
+                std::filesystem::path(std::string(markerPath)),
+                markerError);
+        const std::filesystem::path canonicalExecutable =
+            GetCurrentExecutablePath();
+        if (markerError || canonicalExecutable.empty())
+            return false;
+        return _wcsicmp(
+            canonicalMarker.native().c_str(),
+            canonicalExecutable.native().c_str()) == 0;
+    }
+
+    [[nodiscard]] bool PollSvsmMotionMeasurementCompletion()
+    {
+        if (m_SvsmMotionMeasurementReadyPath.empty())
+            return true;
+
+        m_SvsmMotionMeasurementGateWaitingForCompletion = true;
+        std::ifstream markerFile(
+            m_SvsmMotionMeasurementReadyPath,
+            std::ios::binary);
+        const std::string markerContents{
+            std::istreambuf_iterator<char>(markerFile),
+            std::istreambuf_iterator<char>()};
+        const SvsmMotionMeasurementMarker ready =
+            ParseSvsmMotionMeasurementMarker(
+                m_SvsmMotionMeasurementReadyContents);
+        const SvsmMotionMeasurementMarker terminal =
+            ParseSvsmMotionMeasurementMarker(markerContents);
+        const uint64_t now = GetUnixMilliseconds();
+        // The monitor's final hardware sample and atomic marker replacement can
+        // take several seconds on systems with slow sensor providers. Keep the
+        // wait bounded while avoiding a false invalid result after a clean
+        // declared measurement window.
+        constexpr uint64_t CompletionGraceMilliseconds = 30000u;
+        const uint64_t completionTimeout =
+            ready.measurementDeadlineUnixMilliseconds <=
+                    std::numeric_limits<uint64_t>::max() -
+                        CompletionGraceMilliseconds
+                ? ready.measurementDeadlineUnixMilliseconds +
+                    CompletionGraceMilliseconds
+                : std::numeric_limits<uint64_t>::max();
+
+        if (terminal.state ==
+            SvsmMotionMeasurementMarkerState::Ready)
+        {
+            if (!IsSameSvsmMotionMeasurementRun(ready, terminal))
+            {
+                m_SvsmMotionMeasurementGateStatus =
+                    "ready marker identity changed";
+                return true;
+            }
+            if (now <= completionTimeout)
+            {
+                m_SvsmMotionMeasurementGateStatus =
+                    "waiting for the external measurement window";
+                return false;
+            }
+            m_SvsmMotionMeasurementGateStatus =
+                "external measurement completion timed out";
+            return true;
+        }
+
+        if (terminal.state ==
+            SvsmMotionMeasurementMarkerState::Complete)
+        {
+            m_SvsmMotionMeasurementGateComplete =
+                IsSvsmMotionMeasurementMarkerCleanCompletion(
+                    ready,
+                    terminal,
+                    m_SvsmMotionMeasurementBenchmarkEndUnixMilliseconds);
+            m_SvsmMotionMeasurementGateStatus =
+                m_SvsmMotionMeasurementGateComplete
+                    ? "complete"
+                    : "complete marker did not cover this benchmark";
+            return true;
+        }
+
+        if (terminal.state ==
+            SvsmMotionMeasurementMarkerState::Contaminated)
+        {
+            m_SvsmMotionMeasurementGateContaminated =
+                terminal.completionTimingValid &&
+                IsSameSvsmMotionMeasurementRun(ready, terminal);
+            m_SvsmMotionMeasurementGateStatus =
+                m_SvsmMotionMeasurementGateContaminated
+                    ? "contaminated"
+                    : "contaminated marker identity was invalid";
+            return true;
+        }
+
+        if (now <= completionTimeout)
+        {
+            m_SvsmMotionMeasurementGateStatus =
+                "waiting for a valid terminal measurement marker";
+            return false;
+        }
+        m_SvsmMotionMeasurementGateStatus =
+            "terminal measurement marker was missing or invalid";
+        return true;
+    }
+
+    void WriteSvsmMotionBenchmarkResultFile(
+        const std::string& contents) const
+    {
+        if (!m_SvsmMotionBenchmarkWriteResultFile)
+            return;
+
+        static constexpr const char* ResultPath =
+            "outputs/svsm-motion-benchmark-latest.txt";
+        if (!WriteBenchmarkArtifactAtomically(ResultPath, contents))
+        {
+            log::warning(
+                "SVSM motion benchmark could not atomically publish '%s'",
+                ResultPath);
+        }
+    }
+
+    void WriteSvsmMotionAutostartStage(const char* stage)
+    {
+        std::ostringstream result;
+        result << "state=staging\n"
+            << "stage=" << stage << "\n"
+            << "benchmarkKind="
+            << GetSvsmMotionBenchmarkKindName(
+                m_SvsmMotionBenchmarkKind) << "\n"
+            << "executableSha256="
+            << (m_SvsmMotionExecutableSha256.empty()
+                    ? "unavailable"
+                    : m_SvsmMotionExecutableSha256) << "\n"
+            << "configurationId="
+            << BuildSvsmMotionBenchmarkConfigurationId(
+                m_SvsmMotionAutostartTargetSettings) << "\n"
+            << "configuration="
+            << BuildSvsmMotionBenchmarkConfigurationIdentity(
+                m_SvsmMotionAutostartTargetSettings) << "\n"
+            << "measurementGateConfigured="
+            << (!m_SvsmMotionMeasurementReadyPath.empty() ? 1u : 0u)
+            << "\n"
+            << "measurementGateReady="
+            << (m_SvsmMotionMeasurementGateReady ? 1u : 0u) << "\n"
+            << "measurementGateComplete="
+            << (m_SvsmMotionMeasurementGateComplete ? 1u : 0u) << "\n"
+            << "measurementGateContaminated="
+            << (m_SvsmMotionMeasurementGateContaminated ? 1u : 0u)
+            << "\n"
+            << "measurementGateStatus="
+            << m_SvsmMotionMeasurementGateStatus << "\n"
+            << "dredDiagnostics="
+            << (m_DredDiagnosticsActive ? 1u : 0u) << "\n"
+            << "diagnosticConfiguration="
+            << (m_SvsmMotionDiagnosticConfiguration ? 1u : 0u) << "\n"
+            << "gpuTimingMode="
+            << (m_SvsmMotionAutostartTargetSettings.
+                    detailedGpuTimingEnabled
+                ? "detailed"
+                : "totalOnly")
+            << "\n"
+            << "taaEnabled="
+            << (m_ui.AntiAliasing.enabled ? 1u : 0u) << "\n"
+            << "bendEnabled="
+            << (m_ui.BendScreenSpaceShadows.enabled ? 1u : 0u)
+            << "\n"
+            << "diagnosticCsmEnabled="
+            << (m_ui.DiagnosticCascadedShadowMaps.enabled ? 1u : 0u)
+            << "\n"
+            << "screenSpaceVisibilityEnabled="
+            << (m_ui.ScreenSpaceVisibility.enabled ? 1u : 0u)
+            << "\n"
+            << "physicalPages="
+            << m_SvsmMotionAutostartTargetSettings.physicalPageCount
+            << "\n"
+            << "pageRenderBudget="
+            << m_SvsmMotionAutostartTargetSettings.pageRenderBudget
+            << "\n"
+            << "deterministicFinePageSelectorConfigured="
+            << (ShouldUseSvsmDeterministicFinePageBudget(
+                    m_SvsmMotionAutostartTargetSettings.pageRenderBudget,
+                    m_SvsmMotionAutostartTargetSettings.physicalPageCount,
+                    m_SvsmMotionAutostartTargetSettings
+                        .coarsestPageRenderBudgetEnabled)
+                    ? 1u
+                    : 0u) << "\n"
+            << "precomposedClipmapTransformsConfigured="
+            << (m_SvsmMotionAutostartTargetSettings
+                    .precomposedClipmapTransformsEnabled
+                    ? 1u
+                    : 0u) << "\n"
+            << "staticDepthHierarchyCullingConfigured="
+            << (m_SvsmMotionAutostartTargetSettings
+                    .staticDepthHierarchyCullingEnabled
+                    ? 1u
+                    : 0u) << "\n"
+            << "staticDepthHierarchyBias="
+            << m_SvsmMotionAutostartTargetSettings
+                .staticDepthHierarchyBias << "\n"
+            << "pairedStaticDynamicDepthConfigured="
+            << (m_SvsmMotionAutostartTargetSettings
+                    .pairedStaticDynamicDepthEnabled
+                    ? 1u
+                    : 0u) << "\n"
+            << "deferredStaticDepthMergeConfigured="
+            << (m_SvsmMotionAutostartTargetSettings
+                    .deferredStaticDepthMergeEnabled
+                    ? 1u
+                    : 0u) << "\n"
+            << "gpuGatedDrawSubmission="
+            << (m_SvsmMotionAutostartTargetSettings.
+                    gpuGatedDrawSubmission ? 1u : 0u) << "\n"
+            << "batchedDrawSubmission="
+            << (m_SvsmMotionAutostartTargetSettings.
+                    batchedDrawSubmissionEnabled ? 1u : 0u) << "\n"
+            << "packetStateSorting="
+            << (m_SvsmMotionAutostartTargetSettings.
+                    packetStateSortingEnabled ? 1u : 0u) << "\n"
+            << "levelEmptyWorkSkip="
+            << (m_SvsmMotionAutostartTargetSettings.
+                    levelEmptyWorkSkipEnabled ? 1u : 0u) << "\n"
+            << "packetPageCulling="
+            << (m_SvsmMotionAutostartTargetSettings.
+                    packetPageCullingEnabled ? 1u : 0u) << "\n"
+            << "hierarchicalScheduledPageMask="
+            << (m_SvsmMotionAutostartTargetSettings.
+                    hierarchicalScheduledPageMaskEnabled
+                    ? 1u
+                    : 0u) << "\n"
+            << "receiverPageMaskCulling="
+            << (m_SvsmMotionAutostartTargetSettings.
+                    receiverPageMaskCullingEnabled
+                    ? 1u
+                    : 0u) << "\n"
+            << "scatterRaster="
+            << (m_SvsmMotionAutostartTargetSettings.
+                    dirtyPageScatterRasterEnabled ? 1u : 0u) << "\n";
+        WriteSvsmMotionBenchmarkResultFile(result.str());
+        log::info("SVSM motion autostart stage: %s", stage);
+    }
+
+    void AbortSvsmMotionBenchmark(const char* reason)
+    {
+        m_SvsmMotionBenchmarkStatus =
+            std::string("Aborted: ") + reason;
+        std::ostringstream result;
+        result << "state=aborted\n"
+            << "evidenceValid=0\n"
+            << "status=" << m_SvsmMotionBenchmarkStatus << "\n"
+            << "configurationId="
+            << BuildSvsmMotionBenchmarkConfigurationId(
+                m_SvsmMotionBenchmarkStartSettings) << "\n"
+            << "configuration="
+            << BuildSvsmMotionBenchmarkConfigurationIdentity(
+                m_SvsmMotionBenchmarkStartSettings) << "\n";
+        WriteSvsmMotionBenchmarkResultFile(result.str());
+        log::warning(
+            "SVSM motion benchmark aborted: %s",
+            reason);
+        RestoreSvsmMotionBenchmarkState();
+    }
+
+    void CollectCompletedSvsmMotionBenchmarkTimings()
+    {
+        if (!m_SvsmMotionBenchmarkTimingPass ||
+            m_SvsmMotionBenchmarkTimingPass !=
+                m_SparseVirtualShadowMapPass.get())
+        {
+            return;
+        }
+
+        SparseVirtualShadowMapGpuTiming timing;
+        while (m_SvsmMotionBenchmarkTimingPass->PopCompletedTiming(timing))
+        {
+            if (!IsSvsmMotionBenchmarkMeasurementFrame(
+                    m_SvsmMotionBenchmarkKind,
+                    timing.sourceTag))
+            {
+                m_SvsmMotionBenchmarkInvalidGpuTag = true;
+                continue;
+            }
+            const size_t index = size_t(
+                timing.sourceTag -
+                GetSvsmMotionBenchmarkWarmFrameCount(
+                    m_SvsmMotionBenchmarkKind));
+            if (index >= m_SvsmMotionBenchmarkSeenGpuFrames.size())
+            {
+                m_SvsmMotionBenchmarkInvalidGpuTag = true;
+                continue;
+            }
+            if (!IsValidSvsmMotionBenchmarkGpuTiming(
+                    timing.pageMarkingMilliseconds,
+                    timing.allocationMilliseconds,
+                    timing.clearingMilliseconds,
+                    timing.packetPageCullingMilliseconds,
+                    timing.pageRenderingMilliseconds,
+                    timing.filteringMilliseconds,
+                    timing.totalMilliseconds,
+                    timing.detailedGpuTimingEnabled,
+                    m_SvsmMotionBenchmarkStartSettings.
+                        detailedGpuTimingEnabled))
+            {
+                m_SvsmMotionBenchmarkInvalidGpuTiming = true;
+                continue;
+            }
+            if (m_SvsmMotionBenchmarkSeenGpuFrames[index])
+            {
+                m_SvsmMotionBenchmarkDuplicateGpuTag = true;
+                continue;
+            }
+            m_SvsmMotionBenchmarkSeenGpuFrames[index] = true;
+            m_SvsmMotionBenchmarkDetailedTimingObserved |=
+                timing.detailedGpuTimingEnabled;
+            m_SvsmMotionBenchmarkGpuTimings.push_back(timing);
+            m_SvsmMotionBenchmarkGpuSamples.push_back(
+                timing.totalMilliseconds);
+            m_SvsmMotionBenchmarkMarkSamples.push_back(
+                timing.pageMarkingMilliseconds);
+            m_SvsmMotionBenchmarkAllocationSamples.push_back(
+                timing.allocationMilliseconds);
+            m_SvsmMotionBenchmarkClearingSamples.push_back(
+                timing.clearingMilliseconds);
+            m_SvsmMotionBenchmarkPacketGpuSamples.push_back(
+                timing.packetPageCullingMilliseconds);
+            m_SvsmMotionBenchmarkRenderSamples.push_back(
+                timing.pageRenderingMilliseconds);
+            m_SvsmMotionBenchmarkFilterSamples.push_back(
+                timing.filteringMilliseconds);
+        }
+    }
+
+    void FinishSvsmMotionBenchmark()
+    {
+        auto summarizePhase = [this](
+                                  SvsmMotionBenchmarkPhase phase) {
+            std::vector<float> values;
+            values.reserve(m_SvsmMotionBenchmarkGpuTimings.size());
+            for (const SparseVirtualShadowMapGpuTiming& timing :
+                m_SvsmMotionBenchmarkGpuTimings)
+            {
+                if (GetSvsmMotionBenchmarkPhase(
+                        m_SvsmMotionBenchmarkKind,
+                        timing.sourceTag) == phase)
+                {
+                    values.push_back(timing.totalMilliseconds);
+                }
+            }
+            return SummarizeSvsmMotionBenchmarkSamples(std::move(values));
+        };
+
+        const SparseVirtualShadowMapTimingAccounting accounting =
+            m_SvsmMotionBenchmarkTimingPass
+            ? m_SvsmMotionBenchmarkTimingPass->GetTimingAccounting()
+            : SparseVirtualShadowMapTimingAccounting{};
+        const bool diagnosticConfiguration =
+            m_SvsmMotionDiagnosticConfiguration ||
+            !IsSvsmMotionBenchmarkAcceptanceConfiguration(
+                m_SvsmMotionBenchmarkStartSettings);
+        const bool detailedGpuTiming =
+            m_SvsmMotionBenchmarkStartSettings.detailedGpuTimingEnabled ||
+            m_SvsmMotionBenchmarkDetailedTimingObserved;
+        const bool environmentValid =
+            IsSvsmMotionBenchmarkEnvironmentValid(
+                m_DredDiagnosticsActive,
+                diagnosticConfiguration);
+        const bool measurementGateValid =
+            !m_SvsmMotionMeasurementReadyPath.empty() &&
+            m_SvsmMotionMeasurementGateReady &&
+            m_SvsmMotionMeasurementGateComplete &&
+            !m_SvsmMotionMeasurementGateContaminated;
+        const bool executableIdentityValid =
+            m_SvsmMotionExecutableSha256.size() == 64u;
+        const bool evidenceValid = executableIdentityValid &&
+            environmentValid &&
+            measurementGateValid &&
+            !m_SvsmMotionBenchmarkDetailedTimingObserved &&
+            IsSvsmMotionBenchmarkEvidenceValidForFrameCount(
+                GetSvsmMotionBenchmarkMeasurementFrameCount(
+                    m_SvsmMotionBenchmarkKind),
+                m_SvsmMotionBenchmarkGpuSamples.size(),
+                m_SvsmMotionBenchmarkCpuSamples.size(),
+                accounting.issued,
+                accounting.dropped,
+                accounting.retired,
+                accounting.outstanding,
+                m_SvsmMotionBenchmarkDuplicateGpuTag,
+                m_SvsmMotionBenchmarkInvalidGpuTag,
+                m_SvsmMotionBenchmarkInvalidGpuTiming,
+                m_SvsmMotionBenchmarkInvalidCpuTiming);
+        const SvsmMotionBenchmarkTimingSummary gpuSummary =
+            SummarizeSvsmMotionBenchmarkSamples(
+                m_SvsmMotionBenchmarkGpuSamples);
+        const SvsmMotionBenchmarkTimingSummary baselineSummary =
+            summarizePhase(SvsmMotionBenchmarkPhase::Baseline);
+        const SvsmMotionBenchmarkTimingSummary forwardSummary =
+            summarizePhase(SvsmMotionBenchmarkPhase::Forward);
+        const SvsmMotionBenchmarkTimingSummary recoverySummary =
+            summarizePhase(SvsmMotionBenchmarkPhase::Recovery);
+        const SvsmMotionBenchmarkTimingSummary reverseSummary =
+            summarizePhase(SvsmMotionBenchmarkPhase::Reverse);
+        const SvsmMotionBenchmarkTimingSummary finalRecoverySummary =
+            summarizePhase(SvsmMotionBenchmarkPhase::FinalRecovery);
+        const float gpuMedian = gpuSummary.median;
+        const float gpuWorst = gpuSummary.maximum;
+        const SvsmMotionBenchmarkTimingSummary markingSummary =
+            SummarizeSvsmMotionBenchmarkSamples(
+                m_SvsmMotionBenchmarkMarkSamples);
+        const SvsmMotionBenchmarkTimingSummary allocationSummary =
+            SummarizeSvsmMotionBenchmarkSamples(
+                m_SvsmMotionBenchmarkAllocationSamples);
+        const SvsmMotionBenchmarkTimingSummary clearingSummary =
+            SummarizeSvsmMotionBenchmarkSamples(
+                m_SvsmMotionBenchmarkClearingSamples);
+        const SvsmMotionBenchmarkTimingSummary packetGpuSummary =
+            SummarizeSvsmMotionBenchmarkSamples(
+                m_SvsmMotionBenchmarkPacketGpuSamples);
+        const SvsmMotionBenchmarkTimingSummary renderingSummary =
+            SummarizeSvsmMotionBenchmarkSamples(
+                m_SvsmMotionBenchmarkRenderSamples);
+        const SvsmMotionBenchmarkTimingSummary filteringSummary =
+            SummarizeSvsmMotionBenchmarkSamples(
+                m_SvsmMotionBenchmarkFilterSamples);
+        const SvsmMotionBenchmarkTimingSummary sceneValidationCpuSummary =
+            SummarizeSvsmMotionBenchmarkSamples(
+                m_SvsmMotionBenchmarkSceneValidationCpuSamples);
+        const SvsmMotionBenchmarkTimingSummary clipmapUpdateCpuSummary =
+            SummarizeSvsmMotionBenchmarkSamples(
+                m_SvsmMotionBenchmarkClipmapUpdateCpuSamples);
+        const SvsmMotionBenchmarkTimingSummary packetCpuSummary =
+            SummarizeSvsmMotionBenchmarkSamples(
+                m_SvsmMotionBenchmarkPacketCpuSamples);
+        const SvsmMotionBenchmarkTimingSummary cpuSummary =
+            SummarizeSvsmMotionBenchmarkSamples(
+                m_SvsmMotionBenchmarkCpuSamples);
+        const float sceneValidationCpuMedian =
+            sceneValidationCpuSummary.median;
+        const float clipmapUpdateCpuMedian =
+            clipmapUpdateCpuSummary.median;
+        const float packetCpuMedian = packetCpuSummary.median;
+        const float cpuMedian = cpuSummary.median;
+        const float cpuWorst = cpuSummary.maximum;
+        const bool batchedDrawRequested =
+            m_SvsmMotionBenchmarkStartSettings.gpuGatedDrawSubmission &&
+            m_SvsmMotionBenchmarkStartSettings
+                .batchedDrawSubmissionEnabled;
+        const bool packetSortingRequested =
+            batchedDrawRequested &&
+            m_SvsmMotionBenchmarkStartSettings
+                .packetStateSortingEnabled;
+        const bool levelSkipRequested =
+            batchedDrawRequested &&
+            m_SvsmMotionBenchmarkStartSettings
+                .levelEmptyWorkSkipEnabled;
+        const bool packetCullingRequested =
+            m_SvsmMotionBenchmarkStartSettings.gpuGatedDrawSubmission &&
+            m_SvsmMotionBenchmarkStartSettings
+                .packetPageCullingEnabled;
+        const bool scatterRasterRequested =
+            packetCullingRequested &&
+            m_SvsmMotionBenchmarkStartSettings
+                .dirtyPageScatterRasterEnabled;
+        const bool hierarchyRequested =
+            IsSvsmMotionBenchmarkHierarchyRequested(
+                packetCullingRequested,
+                m_SvsmMotionBenchmarkStartSettings
+                    .hierarchicalScheduledPageMaskEnabled);
+        const bool requestedPathActive =
+            !m_SvsmMotionBenchmarkRequestedPathInactive &&
+            (!batchedDrawRequested ||
+                m_SvsmMotionBenchmarkBatchedActive) &&
+            (!packetSortingRequested ||
+                m_SvsmMotionBenchmarkPacketSortingActive) &&
+            (!levelSkipRequested ||
+                m_SvsmMotionBenchmarkLevelSkipActive) &&
+            (!packetCullingRequested ||
+                m_SvsmMotionBenchmarkPacketCullingActive) &&
+            (!hierarchyRequested ||
+                m_SvsmMotionBenchmarkHierarchyActive) &&
+            (!scatterRasterRequested ||
+                m_SvsmMotionBenchmarkScatterRasterActive) &&
+            !m_SvsmMotionBenchmarkPacketCullingUnavailable &&
+            !m_SvsmMotionBenchmarkHierarchyUnavailable;
+        const std::size_t framesOverMedianTarget =
+            CountSvsmMotionBenchmarkSamplesAbove(
+                m_SvsmMotionBenchmarkGpuSamples,
+                SvsmMotionBenchmarkMedianTargetMilliseconds);
+        const std::size_t framesOverSpikeCeiling =
+            CountSvsmMotionBenchmarkSamplesAbove(
+                m_SvsmMotionBenchmarkGpuSamples,
+                SvsmMotionBenchmarkSpikeCeilingMilliseconds);
+        const std::size_t framesOverOneMillisecond =
+            CountSvsmMotionBenchmarkSamplesAbove(
+                m_SvsmMotionBenchmarkGpuSamples,
+                1.f);
+        const bool medianTargetMet = evidenceValid &&
+            requestedPathActive &&
+            gpuMedian <= SvsmMotionBenchmarkMedianTargetMilliseconds;
+        const bool spikeTargetMet = evidenceValid &&
+            requestedPathActive &&
+            gpuWorst <= SvsmMotionBenchmarkSpikeCeilingMilliseconds;
+        const bool gpuTargetMet = IsSvsmMotionBenchmarkGpuTargetMet(
+            evidenceValid,
+            requestedPathActive,
+            gpuSummary);
+        const bool configuredScatterSafetyBounded =
+            IsSvsmDirtyPageScatterSafetyBounded(
+                m_SvsmMotionBenchmarkStartSettings
+                    .dirtyPageScatterAmplificationGuardEnabled,
+                m_SvsmMotionBenchmarkStartSettings
+                    .coarsestPageRenderBudgetEnabled,
+                m_SvsmMotionBenchmarkStartSettings.pageRenderBudget,
+                m_SvsmMotionBenchmarkStartSettings
+                    .dirtyPageScatterMaximumAmplification);
+
+        std::vector<SparseVirtualShadowMapGpuTiming> slowestTimings =
+            m_SvsmMotionBenchmarkGpuTimings;
+        std::sort(
+            slowestTimings.begin(),
+            slowestTimings.end(),
+            [](const SparseVirtualShadowMapGpuTiming& left,
+               const SparseVirtualShadowMapGpuTiming& right) {
+                if (left.totalMilliseconds != right.totalMilliseconds)
+                    return left.totalMilliseconds > right.totalMilliseconds;
+                return left.sourceTag < right.sourceTag;
+            });
+        constexpr size_t SlowFrameCount = 10u;
+        if (slowestTimings.size() > SlowFrameCount)
+            slowestTimings.resize(SlowFrameCount);
+
+        std::ostringstream status;
+        status << (evidenceValid
+                ? "Complete: "
+                : "Complete (invalid evidence): ")
+            << m_SvsmMotionBenchmarkGpuSamples.size()
+            << " " << GetSvsmMotionBenchmarkKindName(
+                m_SvsmMotionBenchmarkKind)
+            << " samples, GPU median "
+            << std::fixed << std::setprecision(3)
+            << gpuMedian
+            << " ms / p95 "
+            << gpuSummary.p95
+            << " ms / p99 "
+            << gpuSummary.p99
+            << " ms / worst "
+            << gpuWorst
+            << " ms; "
+            << (detailedGpuTiming ? "detailed" : "total-only")
+            << " GPU timing; CPU stage medians validate "
+            << sceneValidationCpuMedian
+            << " / views "
+            << clipmapUpdateCpuMedian
+            << " / packets "
+            << packetCpuMedian
+            << " / all "
+            << cpuMedian
+            << " ms (all worst "
+            << cpuWorst
+            << " ms); timing "
+            << accounting.issued << " issued / "
+            << accounting.retired << " retired / "
+            << accounting.dropped << " dropped / "
+            << accounting.outstanding << " outstanding; requested path "
+            << (requestedPathActive ? "active; " : "inactive; ")
+            << "0.400 ms median target "
+            << (medianTargetMet ? "met" : "not met")
+            << "; 0.700 ms spike ceiling "
+            << (spikeTargetMet ? "met." : "not met.");
+        m_SvsmMotionBenchmarkStatus = status.str();
+
+        std::ostringstream result;
+        result << "state=complete\n"
+            << "evidenceValid=" << (evidenceValid ? 1 : 0) << "\n"
+            << "environmentValid=" <<
+                (environmentValid ? 1 : 0) << "\n"
+            << "measurementGateConfigured="
+            << (!m_SvsmMotionMeasurementReadyPath.empty() ? 1u : 0u)
+            << "\n"
+            << "measurementGateReady="
+            << (m_SvsmMotionMeasurementGateReady ? 1u : 0u) << "\n"
+            << "measurementGateComplete="
+            << (m_SvsmMotionMeasurementGateComplete ? 1u : 0u) << "\n"
+            << "measurementGateContaminated="
+            << (m_SvsmMotionMeasurementGateContaminated ? 1u : 0u)
+            << "\n"
+            << "measurementGateStatus="
+            << m_SvsmMotionMeasurementGateStatus << "\n"
+            << "measurementGateValid="
+            << (measurementGateValid ? 1u : 0u) << "\n"
+            << "executableIdentityValid="
+            << (executableIdentityValid ? 1u : 0u) << "\n"
+            << "dredDiagnostics=" <<
+                (m_DredDiagnosticsActive ? 1 : 0) << "\n"
+            << "diagnosticConfiguration=" <<
+                (diagnosticConfiguration ? 1 : 0) << "\n"
+            << "requestedPathActive=" <<
+                (requestedPathActive ? 1 : 0) << "\n"
+            << "gpuTimingMode="
+            << (detailedGpuTiming ? "detailed" : "totalOnly") << "\n"
+            << "stageTimingsAvailable="
+            << (m_SvsmMotionBenchmarkDetailedTimingObserved ? 1u : 0u)
+            << "\n"
+            << "detailedGpuTimingObserved=" <<
+                (m_SvsmMotionBenchmarkDetailedTimingObserved ? 1 : 0)
+                << "\n"
+            << "requestedPathInactiveObserved=" <<
+                (m_SvsmMotionBenchmarkRequestedPathInactive ? 1 : 0)
+                << "\n"
+            << "targetMet=" << (gpuTargetMet ? 1 : 0) << "\n"
+            << "medianTargetMet=" << (medianTargetMet ? 1 : 0) << "\n"
+            << "spikeTargetMet=" << (spikeTargetMet ? 1 : 0) << "\n"
+            << "renderer=" << GetDeviceManager()->GetRendererString() << "\n"
+            << "scene=" << m_CurrentSceneName << "\n"
+            << "commit=" << UVSR_GIT_COMMIT << "\n"
+            << "executableSha256="
+            << (m_SvsmMotionExecutableSha256.empty()
+                    ? "unavailable"
+                    : m_SvsmMotionExecutableSha256) << "\n"
+            << "configurationId="
+            << BuildSvsmMotionBenchmarkConfigurationId(
+                m_SvsmMotionBenchmarkStartSettings) << "\n"
+            << "configuration="
+            << BuildSvsmMotionBenchmarkConfigurationIdentity(
+                m_SvsmMotionBenchmarkStartSettings) << "\n"
+            << "invalidGpuTiming="
+            << (m_SvsmMotionBenchmarkInvalidGpuTiming ? 1u : 0u)
+            << "\n"
+            << "invalidCpuTiming="
+            << (m_SvsmMotionBenchmarkInvalidCpuTiming ? 1u : 0u)
+            << "\n"
+            << "width=1920\n"
+            << "height=1080\n"
+            << "benchmarkKind="
+            << GetSvsmMotionBenchmarkKindName(
+                m_SvsmMotionBenchmarkKind) << "\n"
+            << "motionStepTenthDegreeTicks=1\n"
+            << "motionStepDegrees=0.1\n"
+            << "cameraStepDegrees="
+            << (m_SvsmMotionBenchmarkKind ==
+                    SvsmMotionBenchmarkKind::Camera
+                    ? 0.1f
+                    : 0.f) << "\n"
+            << "sunStepDegrees="
+            << (m_SvsmMotionBenchmarkKind ==
+                    SvsmMotionBenchmarkKind::SunSlow
+                    ? 0.1f
+                    : 0.f) << "\n"
+            << "warmFrames="
+            << GetSvsmMotionBenchmarkWarmFrameCount(
+                m_SvsmMotionBenchmarkKind) << "\n"
+            << "measurementFrames="
+            << GetSvsmMotionBenchmarkMeasurementFrameCount(
+                m_SvsmMotionBenchmarkKind) << "\n"
+            << "sampleCount=" << m_SvsmMotionBenchmarkGpuSamples.size()
+            << "\n"
+            << "gpuMedianMs=" << std::fixed << std::setprecision(6)
+            << gpuMedian << "\n"
+            << "gpuP95Ms=" << gpuSummary.p95 << "\n"
+            << "gpuP99Ms=" << gpuSummary.p99 << "\n"
+            << "gpuWorstMs=" << gpuWorst << "\n"
+            << "framesOver0_4Ms=" << framesOverMedianTarget << "\n"
+            << "framesOver0_7Ms=" << framesOverSpikeCeiling << "\n"
+            << "framesOver1_0Ms=" << framesOverOneMillisecond << "\n"
+            << "timingIssued=" << accounting.issued << "\n"
+            << "timingRetired=" << accounting.retired << "\n"
+            << "timingDropped=" << accounting.dropped << "\n"
+            << "timingOutstanding=" << accounting.outstanding << "\n"
+            << "preset=" << uint32_t(
+                m_SvsmMotionBenchmarkStartSettings.preset) << "\n"
+            << "mode=" << uint32_t(
+                m_SvsmMotionBenchmarkStartSettings.mode) << "\n"
+            << "firstClipmapExtent=" <<
+                m_SvsmMotionBenchmarkStartSettings.firstClipmapExtent << "\n"
+            << "maximumLightDepth=" <<
+                m_SvsmMotionBenchmarkStartSettings.maximumLightDepth << "\n"
+            << "physicalPageCount=" <<
+                m_SvsmMotionBenchmarkStartSettings.physicalPageCount << "\n"
+            << "pageRenderBudget=" <<
+                m_SvsmMotionBenchmarkStartSettings.pageRenderBudget << "\n"
+            << "coarsestPageRenderBudget=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .coarsestPageRenderBudgetEnabled ? 1u : 0u) << "\n"
+            << "deterministicFinePageSelectorConfigured=" << (
+                ShouldUseSvsmDeterministicFinePageBudget(
+                    m_SvsmMotionBenchmarkStartSettings.pageRenderBudget,
+                    m_SvsmMotionBenchmarkStartSettings.physicalPageCount,
+                    m_SvsmMotionBenchmarkStartSettings
+                        .coarsestPageRenderBudgetEnabled)
+                        ? 1u
+                        : 0u) << "\n"
+            << "markingMode=" << uint32_t(
+                m_SvsmMotionBenchmarkStartSettings.markingMode) << "\n"
+            << "perPixelMarkingDedupe=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .perPixelMarkingDedupeEnabled ? 1u : 0u) << "\n"
+            << "filterMode=" << uint32_t(
+                m_SvsmMotionBenchmarkStartSettings.filterMode) << "\n"
+            << "filterKernel=" << uint32_t(
+                m_SvsmMotionBenchmarkStartSettings.filterKernel) << "\n"
+            << "poissonOrdering=" << uint32_t(
+                m_SvsmMotionBenchmarkStartSettings.poissonOrdering) << "\n"
+            << "tapCount=" << uint32_t(
+                m_SvsmMotionBenchmarkStartSettings.tapCount) << "\n"
+            << "resolutionBias=" << uint32_t(
+                m_SvsmMotionBenchmarkStartSettings.resolutionBias) << "\n"
+            << "debugView=" << uint32_t(
+                m_SvsmMotionBenchmarkStartSettings.debugView) << "\n"
+            << "precomposedClipmapTransformsConfigured=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .precomposedClipmapTransformsEnabled
+                        ? 1u
+                        : 0u) << "\n"
+            << "caching=" << (
+                m_SvsmMotionBenchmarkStartSettings.cachingEnabled
+                    ? 1u : 0u) << "\n"
+            << "lightDepthOriginGuardBand=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .lightDepthOriginGuardBandEnabled ? 1u : 0u) << "\n"
+            << "lightDepthOriginGuardBandFraction=" <<
+                m_SvsmMotionBenchmarkStartSettings
+                    .lightDepthOriginGuardBandFraction << "\n"
+            << "staticPageRequestReuse=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .staticPageRequestReuseEnabled ? 1u : 0u) << "\n"
+            << "allocationBudgetSaturationEarlyOut=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .allocationBudgetSaturationEarlyOutEnabled
+                        ? 1u : 0u) << "\n"
+            << "allocationBudgetSaturationEarlyOutActive=" << (
+                IsSvsmAllocationBudgetSaturationEarlyOutActive(
+                    m_SvsmMotionBenchmarkStartSettings.mode,
+                    m_SvsmMotionBenchmarkStartSettings
+                        .allocationBudgetSaturationEarlyOutEnabled,
+                    m_SvsmMotionBenchmarkStartSettings
+                        .pageRenderBudget) ? 1u : 0u) << "\n"
+            << "finiteBudgetStaticDrain=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .finiteBudgetStaticDrainEnabled ? 1u : 0u) << "\n"
+            << "staticVisibilityCaching=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .staticVisibilityCachingEnabled ? 1u : 0u) << "\n"
+            << "sceneStateCaching=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .sceneStateCachingEnabled ? 1u : 0u) << "\n"
+            << "casterOnlySceneRevision=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .casterOnlySceneRevisionEnabled ? 1u : 0u) << "\n"
+            << "renderPacketCaching=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .renderPacketCachingEnabled ? 1u : 0u) << "\n"
+            << "persistentCasterSourceCaching=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .persistentCasterSourceCachingEnabled
+                        ? 1u : 0u) << "\n"
+            << "sharedClipmapPacketBuilder=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .sharedClipmapPacketBuilderEnabled
+                        ? 1u : 0u) << "\n"
+            << "opaqueRasterSpecialization=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .opaqueRasterSpecializationEnabled
+                        ? 1u : 0u) << "\n"
+            << "leanAlphaTestedBindings=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .leanAlphaTestedBindingsEnabled
+                        ? 1u : 0u) << "\n"
+            << "staticDepthHierarchyCullingConfigured=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .staticDepthHierarchyCullingEnabled
+                        ? 1u
+                        : 0u) << "\n"
+            << "staticDepthHierarchyBias=" <<
+                m_SvsmMotionBenchmarkStartSettings
+                    .staticDepthHierarchyBias << "\n"
+            << "pairedStaticDynamicDepthConfigured=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .pairedStaticDynamicDepthEnabled
+                        ? 1u : 0u) << "\n"
+            << "pairedStaticDynamicDepth=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .pairedStaticDynamicDepthEnabled
+                        ? 1u : 0u) << "\n"
+            << "deferredStaticDepthMergeConfigured=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .deferredStaticDepthMergeEnabled
+                        ? 1u : 0u) << "\n"
+            << "deferredStaticDepthMerge=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .deferredStaticDepthMergeEnabled
+                        ? 1u : 0u) << "\n"
+            << "movingLightUncachedPolicy=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .movingLightUncachedEnabled
+                        ? 1u : 0u) << "\n"
+            << "retainPhysicalMappingsOnContentInvalidation=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .retainPhysicalMappingsOnContentInvalidationEnabled
+                        ? 1u : 0u) << "\n"
+            << "movingLightLodBias=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .movingLightLodBiasEnabled
+                        ? 1u : 0u) << "\n"
+            << "movingLightResolutionBias=" << uint32_t(
+                m_SvsmMotionBenchmarkStartSettings
+                    .movingLightResolutionBias) << "\n"
+            << "movingLightLodRecoveryFrames=" <<
+                m_SvsmMotionBenchmarkStartSettings
+                    .movingLightLodRecoveryFrames << "\n"
+            << "receiverDistanceMipClamp=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .receiverDistanceMipClampEnabled
+                        ? 1u : 0u) << "\n"
+            << "receiverDistanceMipClampStartScale=" <<
+                m_SvsmMotionBenchmarkStartSettings
+                    .receiverDistanceMipClampStartScale << "\n"
+            << "receiverDistanceMipClampMaximumLevel=" <<
+                m_SvsmMotionBenchmarkStartSettings
+                    .receiverDistanceMipClampMaximumLevel << "\n"
+            << "movingLightContinuousReceiverBias=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .movingLightContinuousReceiverBiasEnabled
+                        ? 1u : 0u) << "\n"
+            << "localizedInvalidation=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .localizedInvalidationEnabled
+                        ? 1u : 0u) << "\n"
+            << "tightLocalizedInvalidationBounds=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .tightLocalizedInvalidationBoundsEnabled
+                        ? 1u : 0u) << "\n"
+            << "adaptiveStaticCasterCache=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .adaptiveCasterCacheClassificationEnabled
+                        ? 1u : 0u) << "\n"
+            << "defaultObjectInvalidationMode=" << uint32_t(
+                m_SvsmMotionBenchmarkStartSettings
+                    .defaultObjectInvalidationMode) << "\n"
+            << "gpuGatedDrawSubmission=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .gpuGatedDrawSubmission ? 1u : 0u) << "\n"
+            << "batchedDrawSubmission=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .batchedDrawSubmissionEnabled ? 1u : 0u) << "\n"
+            << "packetStateSorting=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .packetStateSortingEnabled ? 1u : 0u) << "\n"
+            << "levelEmptyWorkSkip=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .levelEmptyWorkSkipEnabled ? 1u : 0u) << "\n"
+            << "packetPageCulling=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .packetPageCullingEnabled ? 1u : 0u) << "\n"
+            << "hierarchicalScheduledPageMask=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .hierarchicalScheduledPageMaskEnabled
+                    ? 1u
+                    : 0u) << "\n"
+            << "receiverPageMaskCulling=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .receiverPageMaskCullingEnabled
+                    ? 1u
+                    : 0u) << "\n"
+            << "dirtyPageScatterRaster=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .dirtyPageScatterRasterEnabled ? 1u : 0u) << "\n"
+            << "dirtyPageScatterSafetyBounded=" << (
+                configuredScatterSafetyBounded ? 1u : 0u) << "\n"
+            << "scatterAlphaTestEarlyReject=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .scatterAlphaTestEarlyRejectEnabled ? 1u : 0u) << "\n"
+            << "scatterAlphaTestEarlyRejectActive=" << (
+                configuredScatterSafetyBounded &&
+                IsSvsmDirtyPageScatterOptimizationActive(
+                    m_SvsmMotionBenchmarkStartSettings.mode,
+                    m_SvsmMotionBenchmarkStartSettings
+                        .gpuGatedDrawSubmission,
+                    m_SvsmMotionBenchmarkStartSettings
+                        .packetPageCullingEnabled,
+                    m_SvsmMotionBenchmarkStartSettings
+                        .dirtyPageScatterRasterEnabled,
+                    m_SvsmMotionBenchmarkStartSettings
+                        .scatterAlphaTestEarlyRejectEnabled)
+                        ? 1u : 0u) << "\n"
+            << "dirtyPageScatterAmplificationGuard=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .dirtyPageScatterAmplificationGuardEnabled
+                        ? 1u : 0u) << "\n"
+            << "dirtyPageScatterAmplificationGuardActive=" << (
+                configuredScatterSafetyBounded &&
+                IsSvsmDirtyPageScatterOptimizationActive(
+                    m_SvsmMotionBenchmarkStartSettings.mode,
+                    m_SvsmMotionBenchmarkStartSettings
+                        .gpuGatedDrawSubmission,
+                    m_SvsmMotionBenchmarkStartSettings
+                        .packetPageCullingEnabled,
+                    m_SvsmMotionBenchmarkStartSettings
+                        .dirtyPageScatterRasterEnabled,
+                    m_SvsmMotionBenchmarkStartSettings
+                        .dirtyPageScatterAmplificationGuardEnabled)
+                        ? 1u : 0u) << "\n"
+            << "dirtyPageScatterMaximumAmplification=" <<
+                m_SvsmMotionBenchmarkStartSettings
+                    .dirtyPageScatterMaximumAmplification << "\n"
+            << "packetRectangleDirectScan=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .packetRectangleDirectScanEnabled ? 1u : 0u) << "\n"
+            << "recentPageEvictionGrace=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .recentPageEvictionGraceEnabled ? 1u : 0u) << "\n"
+            << "pageTranslationCaching=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .pageTranslationCachingEnabled ? 1u : 0u) << "\n"
+            << "detailedGpuTimingConfigured=" << (
+                m_SvsmMotionBenchmarkStartSettings
+                    .detailedGpuTimingEnabled ? 1u : 0u) << "\n"
+            << "adaptiveFiltering=" << (
+                m_SvsmMotionBenchmarkStartSettings.adaptiveFiltering
+                    ? 1u : 0u) << "\n"
+            << "taaEnabled=" << (
+                m_SvsmMotionBenchmarkStartTaaEnabled ? 1u : 0u) << "\n"
+            << "taaActive=" << (
+                m_SvsmMotionBenchmarkStartUsesTaa ? 1u : 0u) << "\n"
+            << "taaSharpenEnabled=" << (
+                m_SvsmMotionBenchmarkStartTaaSharpenEnabled
+                    ? 1u : 0u) << "\n"
+            << "bendEnabled=" << (
+                m_SvsmMotionBenchmarkStartBendEnabled ? 1u : 0u)
+                << "\n"
+            << "diagnosticCsmEnabled=" << (
+                m_SvsmMotionBenchmarkStartCsmEnabled ? 1u : 0u)
+                << "\n"
+            << "screenSpaceVisibilityEnabled=" << (
+                m_SvsmMotionBenchmarkStartScreenSpaceVisibilityEnabled
+                    ? 1u : 0u) << "\n"
+            << "whiteWorldMode=" << uint32_t(
+                m_SvsmMotionBenchmarkStartWhiteWorld) << "\n"
+            << "environmentBackgroundEnabled=" << (
+                m_SvsmMotionBenchmarkStartEnvironmentBackgroundEnabled
+                    ? 1u : 0u) << "\n"
+            << "startLightDirectionX="
+            << m_SvsmMotionBenchmarkStartLightDirection.x << "\n"
+            << "startLightDirectionY="
+            << m_SvsmMotionBenchmarkStartLightDirection.y << "\n"
+            << "startLightDirectionZ="
+            << m_SvsmMotionBenchmarkStartLightDirection.z << "\n"
+            << "sunRotationAxisX="
+            << m_SvsmMotionBenchmarkSunRotationAxis.x << "\n"
+            << "sunRotationAxisY="
+            << m_SvsmMotionBenchmarkSunRotationAxis.y << "\n"
+            << "sunRotationAxisZ="
+            << m_SvsmMotionBenchmarkSunRotationAxis.z << "\n"
+            << "lightPointerStable=1\n"
+            << "lightNodePointerStable=1\n"
+            << "staticDepthHierarchyCullingRequestedObserved=" << (
+                m_SvsmMotionBenchmarkStaticHierarchyObservation
+                    .requestedObserved ? 1u : 0u) << "\n"
+            << "staticDepthHierarchyCullingActiveObserved=" << (
+                m_SvsmMotionBenchmarkStaticHierarchyObservation
+                    .activeObserved ? 1u : 0u) << "\n"
+            << "staticDepthHierarchyCullingInactiveObserved=" << (
+                m_SvsmMotionBenchmarkStaticHierarchyObservation
+                    .inactiveObserved ? 1u : 0u) << "\n"
+            << "staticDepthHierarchyCullingUnavailableObserved=" << (
+                m_SvsmMotionBenchmarkStaticHierarchyObservation
+                    .unavailableObserved ? 1u : 0u) << "\n"
+            << "pairedStaticDynamicDepthRequestedObserved=" << (
+                m_SvsmMotionBenchmarkPairedDepthObservation
+                    .requestedObserved ? 1u : 0u) << "\n"
+            << "pairedStaticDynamicDepthActiveObserved=" << (
+                m_SvsmMotionBenchmarkPairedDepthObservation
+                    .activeObserved ? 1u : 0u) << "\n"
+            << "pairedStaticDynamicDepthInactiveObserved=" << (
+                m_SvsmMotionBenchmarkPairedDepthObservation
+                    .inactiveObserved ? 1u : 0u) << "\n"
+            << "deferredStaticDepthMergeRequestedObserved=" << (
+                m_SvsmMotionBenchmarkDeferredMergeObservation
+                    .requestedObserved ? 1u : 0u) << "\n"
+            << "deferredStaticDepthMergeActiveObserved=" << (
+                m_SvsmMotionBenchmarkDeferredMergeObservation
+                    .activeObserved ? 1u : 0u) << "\n"
+            << "deferredStaticDepthMergeInactiveObserved=" << (
+                m_SvsmMotionBenchmarkDeferredMergeObservation
+                    .inactiveObserved ? 1u : 0u) << "\n"
+            << "deferredStaticDepthMergeUnavailableObserved=" << (
+                m_SvsmMotionBenchmarkDeferredMergeObservation
+                    .unavailableObserved ? 1u : 0u) << "\n"
+            << "batchedDrawSupported=" << (
+                m_SvsmMotionBenchmarkBatchedSupported ? 1u : 0u) << "\n"
+            << "batchedDrawActive=" << (
+                m_SvsmMotionBenchmarkBatchedActive ? 1u : 0u) << "\n"
+            << "packetStateSortingActive=" << (
+                m_SvsmMotionBenchmarkPacketSortingActive ? 1u : 0u) << "\n"
+            << "levelEmptyWorkSkipActive=" << (
+                m_SvsmMotionBenchmarkLevelSkipActive ? 1u : 0u) << "\n"
+            << "packetPageCullingActive=" << (
+                m_SvsmMotionBenchmarkPacketCullingActive ? 1u : 0u) << "\n"
+            << "hierarchicalScheduledPageMaskActive=" << (
+                m_SvsmMotionBenchmarkHierarchyActive ? 1u : 0u) << "\n"
+            << "hierarchicalScheduledPageMaskUnavailable=" << (
+                m_SvsmMotionBenchmarkHierarchyUnavailable ? 1u : 0u) << "\n"
+            << "receiverPageMaskCullingActive=" << (
+                m_SvsmMotionBenchmarkReceiverMaskActive ? 1u : 0u) << "\n"
+            << "receiverPageMaskCullingUnavailable=" << (
+                m_SvsmMotionBenchmarkReceiverMaskUnavailable ? 1u : 0u)
+                << "\n"
+            << "dirtyPageScatterRasterActive=" << (
+                m_SvsmMotionBenchmarkScatterRasterActive ? 1u : 0u) << "\n"
+            << "packetPageCullingUnavailable=" << (
+                m_SvsmMotionBenchmarkPacketCullingUnavailable ? 1u : 0u) << "\n"
+            << "packetPageMemoryBytes=" << (
+                m_SvsmMotionBenchmarkTimingPass
+                    ? m_SvsmMotionBenchmarkTimingPass->GetTimings()
+                        .packetPageMetadataBytes +
+                        m_SvsmMotionBenchmarkTimingPass->GetTimings()
+                            .packetPageListBytes
+                    : 0u) << "\n"
+            << "receiverPageMaskMemoryBytes=" << (
+                m_SvsmMotionBenchmarkTimingPass
+                    ? m_SvsmMotionBenchmarkTimingPass->GetTimings()
+                        .receiverPageMaskBytes
+                    : 0u) << "\n"
+            << "status=" << m_SvsmMotionBenchmarkStatus << "\n";
+        auto writeTimingSummary = [&result](
+                                      const char* name,
+                                      const SvsmMotionBenchmarkTimingSummary&
+                                          summary) {
+            result << name << "SampleCount=" << summary.sampleCount << "\n"
+                << name << "MedianMs=" << summary.median << "\n"
+                << name << "P95Ms=" << summary.p95 << "\n"
+                << name << "P99Ms=" << summary.p99 << "\n"
+                << name << "WorstMs=" << summary.maximum << "\n";
+        };
+        writeTimingSummary("marking", markingSummary);
+        writeTimingSummary("allocation", allocationSummary);
+        writeTimingSummary("clearing", clearingSummary);
+        writeTimingSummary("packetGpu", packetGpuSummary);
+        writeTimingSummary("rendering", renderingSummary);
+        writeTimingSummary("filtering", filteringSummary);
+        writeTimingSummary("sceneValidationCpu", sceneValidationCpuSummary);
+        writeTimingSummary("clipmapUpdateCpu", clipmapUpdateCpuSummary);
+        writeTimingSummary("packetCpu", packetCpuSummary);
+        writeTimingSummary("cpu", cpuSummary);
+        writeTimingSummary("baseline", baselineSummary);
+        writeTimingSummary("forward", forwardSummary);
+        writeTimingSummary("recovery", recoverySummary);
+        writeTimingSummary("reverse", reverseSummary);
+        writeTimingSummary("finalRecovery", finalRecoverySummary);
+        if (m_SvsmMotionBenchmarkKind ==
+            SvsmMotionBenchmarkKind::Camera)
+        {
+            // Preserve the legacy field names consumed by existing camera
+            // motion-result analysis.
+            writeTimingSummary("turnRight", forwardSummary);
+            writeTimingSummary("holdRight", recoverySummary);
+            writeTimingSummary("turnBack", reverseSummary);
+        }
+        result << "slowFrameCount=" << slowestTimings.size() << "\n";
+        for (size_t index = 0u; index < slowestTimings.size(); ++index)
+        {
+            const SparseVirtualShadowMapGpuTiming& timing =
+                slowestTimings[index];
+            const SvsmMotionBenchmarkPhase phase =
+                GetSvsmMotionBenchmarkPhase(
+                    m_SvsmMotionBenchmarkKind,
+                    timing.sourceTag);
+            const float gpuStageSum = SumSvsmMotionBenchmarkGpuStages(
+                timing.pageMarkingMilliseconds,
+                timing.allocationMilliseconds,
+                timing.clearingMilliseconds,
+                timing.packetPageCullingMilliseconds,
+                timing.pageRenderingMilliseconds,
+                timing.filteringMilliseconds);
+            const auto cpuTiming = std::find_if(
+                m_SvsmMotionBenchmarkCpuTimings.begin(),
+                m_SvsmMotionBenchmarkCpuTimings.end(),
+                [&timing](const SvsmMotionBenchmarkCpuTiming& candidate) {
+                    return candidate.sourceTag == timing.sourceTag;
+                });
+            const bool cpuTimingAvailable =
+                cpuTiming != m_SvsmMotionBenchmarkCpuTimings.end();
+            const SvsmMotionBenchmarkCpuTiming cpuTimingValue =
+                cpuTimingAvailable
+                    ? *cpuTiming
+                    : SvsmMotionBenchmarkCpuTiming{};
+            result << "slowFrame" << index << "Tag=" << timing.sourceTag << "\n"
+                << "slowFrame" << index << "Segment="
+                << GetSvsmMotionBenchmarkPhaseName(phase) << "\n"
+                << "slowFrame" << index << "AngleDegrees="
+                << GetSvsmMotionBenchmarkAngleDegrees(
+                    m_SvsmMotionBenchmarkKind,
+                    timing.sourceTag) << "\n"
+                << "slowFrame" << index << "TotalMs="
+                << timing.totalMilliseconds << "\n"
+                << "slowFrame" << index << "MarkingMs="
+                << timing.pageMarkingMilliseconds << "\n"
+                << "slowFrame" << index << "AllocationMs="
+                << timing.allocationMilliseconds << "\n"
+                << "slowFrame" << index << "ClearingMs="
+                << timing.clearingMilliseconds << "\n"
+                << "slowFrame" << index << "PacketCullingMs="
+                << timing.packetPageCullingMilliseconds << "\n"
+                << "slowFrame" << index << "RenderingMs="
+                << timing.pageRenderingMilliseconds << "\n"
+                << "slowFrame" << index << "FilteringMs="
+                << timing.filteringMilliseconds << "\n"
+                << "slowFrame" << index << "GpuStageSumMs="
+                << gpuStageSum << "\n"
+                << "slowFrame" << index << "GpuUnattributedMs="
+                << timing.totalMilliseconds - gpuStageSum << "\n"
+                << "slowFrame" << index << "CpuTimingAvailable="
+                << (cpuTimingAvailable ? 1u : 0u) << "\n"
+                << "slowFrame" << index << "SceneValidationCpuMs="
+                << cpuTimingValue.sceneValidationMilliseconds << "\n"
+                << "slowFrame" << index << "ClipmapUpdateCpuMs="
+                << cpuTimingValue.clipmapUpdateMilliseconds << "\n"
+                << "slowFrame" << index << "PacketCullingCpuMs="
+                << cpuTimingValue.packetCullingMilliseconds << "\n"
+                << "slowFrame" << index << "TotalCpuMs="
+                << cpuTimingValue.totalMilliseconds << "\n";
+        }
+        WriteSvsmMotionBenchmarkResultFile(result.str());
+        log::info(
+            "SVSM motion benchmark completed after %u motion frames and %u drain frames: %s",
+            GetSvsmMotionBenchmarkEndFrame(
+                m_SvsmMotionBenchmarkKind),
+            m_SvsmMotionBenchmarkDrainFrames,
+            m_SvsmMotionBenchmarkStatus.c_str());
+        RestoreSvsmMotionBenchmarkState();
+    }
+
+    void UpdateSvsmMotionBenchmark()
+    {
+        m_SvsmMotionBenchmarkCurrentTimingTag = 0u;
+        if (m_SvsmMotionBenchmarkAutostartPending &&
+            !m_SvsmMotionBenchmarkActive)
+        {
+            if (!m_SvsmMotionMeasurementReadyPath.empty() &&
+                !m_SvsmMotionMeasurementGateReady)
+            {
+                // A unique marker lets the external thermal monitor establish
+                // its exact renderer identity before any benchmark stage runs.
+                // Keep the measured producer off while the monitor qualifies.
+                m_ui.SparseVirtualShadowMaps.enabled = false;
+                std::ifstream marker(
+                    m_SvsmMotionMeasurementReadyPath,
+                    std::ios::binary);
+                std::string markerContents{
+                    std::istreambuf_iterator<char>(marker),
+                    std::istreambuf_iterator<char>()};
+                const SvsmMotionMeasurementMarker parsedMarker =
+                    ParseSvsmMotionMeasurementMarker(markerContents);
+                const uint64_t now = GetUnixMilliseconds();
+                const bool readyForThisRenderer =
+                    parsedMarker.state ==
+                        SvsmMotionMeasurementMarkerState::Ready &&
+                    parsedMarker.identityValid &&
+                    parsedMarker.timingValid &&
+                    parsedMarker.rendererProcessId ==
+                        uint64_t(GetCurrentProcessId()) &&
+                    IsCurrentExecutablePath(parsedMarker.rendererPath) &&
+                    now >= parsedMarker.measurementStartUnixMilliseconds &&
+                    now <= parsedMarker.measurementDeadlineUnixMilliseconds;
+                if (readyForThisRenderer)
+                {
+                    m_SvsmMotionMeasurementReadyContents =
+                        std::move(markerContents);
+                    m_SvsmMotionMeasurementGateReady = true;
+                    m_SvsmMotionMeasurementGateStatus = "ready";
+                }
+                else if (!markerContents.empty() &&
+                    parsedMarker.state !=
+                        SvsmMotionMeasurementMarkerState::Invalid)
+                {
+                    m_SvsmMotionBenchmarkAutostartPending = false;
+                    m_SvsmMotionMeasurementGateStatus =
+                        "marker did not identify this renderer and time window";
+                    m_SvsmMotionBenchmarkStatus =
+                        "Aborted: the external measurement marker was not valid for this renderer and time window.";
+                    WriteSvsmMotionBenchmarkResultFile(
+                        "state=aborted\nstatus=" +
+                        m_SvsmMotionBenchmarkStatus + "\n");
+                    log::warning(
+                        "%s",
+                        m_SvsmMotionBenchmarkStatus.c_str());
+                    return;
+                }
+                if (!m_SvsmMotionMeasurementGateReady)
+                {
+                    if (!m_SvsmMotionMeasurementGateStageWritten)
+                    {
+                        WriteSvsmMotionAutostartStage(
+                            "measurement-gate-wait");
+                        m_SvsmMotionMeasurementGateStageWritten = true;
+                    }
+                    m_SvsmMotionBenchmarkStatus =
+                        "Waiting for the external thermal measurement gate...";
+                    return;
+                }
+                m_SvsmMotionBenchmarkStatus =
+                    "External thermal gate ready; staging baseline frames...";
+            }
+            if (IsSceneLoaded() && !m_SponzaCameraLocationsAvailable)
+            {
+                m_SvsmMotionBenchmarkAutostartPending = false;
+                m_SvsmMotionBenchmarkStatus =
+                    "Aborted: the requested scene has no standardized Sponza camera.";
+                WriteSvsmMotionBenchmarkResultFile(
+                    "state=aborted\nstatus=" +
+                    m_SvsmMotionBenchmarkStatus + "\n");
+                log::warning("%s", m_SvsmMotionBenchmarkStatus.c_str());
+            }
+            else if (CanStageSvsmMotionBenchmark())
+            {
+                if (m_SvsmMotionAutostartStage ==
+                    SvsmMotionAutostartStage::Baseline)
+                {
+                    // Staging is a locked harness state, not a UI suggestion.
+                    // Keep SVSM disabled for every counted baseline render
+                    // even if an input event attempted to toggle it.
+                    m_ui.SparseVirtualShadowMaps.enabled = false;
+                }
+                if (!m_SvsmMotionAutostartStageWritten)
+                {
+                    WriteSvsmMotionAutostartStage("baseline-off");
+                    m_SvsmMotionAutostartStageWritten = true;
+                }
+
+                const SparseVirtualShadowMapTimings& timings =
+                    m_SparseVirtualShadowMapPass->GetTimings();
+                const SvsmMotionAutostartDecision decision =
+                    AdvanceSvsmMotionAutostart(
+                        m_SvsmMotionAutostartStage,
+                        m_SvsmMotionAutostartStageFrames,
+                        m_SvsmMotionAutostartStableFrames,
+                        timings.active,
+                        timings.staticPageDrainActive);
+                m_SvsmMotionAutostartStage = decision.stage;
+                m_SvsmMotionAutostartStageFrames =
+                    decision.stageFrames;
+                m_SvsmMotionAutostartStableFrames =
+                    decision.stableFrames;
+
+                if (decision.timedOut)
+                {
+                    m_SvsmMotionBenchmarkAutostartPending = false;
+                    m_SvsmMotionBenchmarkStatus =
+                        "Aborted: staged SVSM warmup did not drain.";
+                    WriteSvsmMotionBenchmarkResultFile(
+                        "state=aborted\nstatus=" +
+                        m_SvsmMotionBenchmarkStatus + "\n");
+                    log::warning(
+                        "%s",
+                        m_SvsmMotionBenchmarkStatus.c_str());
+                    return;
+                }
+                if (decision.enableSvsm)
+                {
+                    // Flush the durable stage marker before the first SVSM
+                    // resource allocation or GPU command is recorded.
+                    WriteSvsmMotionAutostartStage("svsm-warmup");
+                    m_ui.SparseVirtualShadowMaps =
+                        m_SvsmMotionAutostartTargetSettings;
+                    m_SvsmMotionBenchmarkStatus =
+                        "Warming SVSM until the static page drain is inactive...";
+                }
+                if (decision.startBenchmark)
+                {
+                    WriteSvsmMotionAutostartStage("measurement-ready");
+                    m_SvsmMotionBenchmarkAutostartPending = false;
+                    StartSvsmMotionBenchmark(
+                        m_SvsmMotionBenchmarkKind);
+                }
+            }
+        }
+        if (!m_SvsmMotionBenchmarkActive)
+            return;
+
+        const SponzaCameraPreset& preset =
+            GetDefaultSponzaCameraPreset();
+
+        if (!IsSceneLoaded() ||
+            m_Scene.get() != m_SvsmMotionBenchmarkStartScene)
+        {
+            AbortSvsmMotionBenchmark("the scene changed or became unavailable");
+            return;
+        }
+        if (!m_ui.EnablePbr || !m_ui.UsesDeferredShading())
+        {
+            AbortSvsmMotionBenchmark("deferred PBR rendering was disabled");
+            return;
+        }
+        if (m_ui.Camera != CameraMode::Static ||
+            m_CameraVerticalFov != preset.VerticalFovDegrees)
+        {
+            AbortSvsmMotionBenchmark("the benchmark camera configuration changed");
+            return;
+        }
+        if (!m_ui.SparseVirtualShadowMaps.enabled ||
+            !IsSameSvsmConfiguration(
+                m_ui.SparseVirtualShadowMaps,
+                m_SvsmMotionBenchmarkStartSettings))
+        {
+            AbortSvsmMotionBenchmark("the SVSM configuration changed");
+            return;
+        }
+        if (m_ui.AntiAliasing.enabled !=
+                m_SvsmMotionBenchmarkStartTaaEnabled ||
+            m_ui.UsesLongTermTemporalAA() !=
+                m_SvsmMotionBenchmarkStartUsesTaa ||
+            m_ui.MiniEngineTaaSharpenEnabled !=
+                m_SvsmMotionBenchmarkStartTaaSharpenEnabled ||
+            m_ui.BendScreenSpaceShadows.enabled !=
+                m_SvsmMotionBenchmarkStartBendEnabled ||
+            m_ui.DiagnosticCascadedShadowMaps.enabled !=
+                m_SvsmMotionBenchmarkStartCsmEnabled ||
+            m_ui.ScreenSpaceVisibility.enabled !=
+                m_SvsmMotionBenchmarkStartScreenSpaceVisibilityEnabled ||
+            m_ui.WhiteWorld !=
+                m_SvsmMotionBenchmarkStartWhiteWorld ||
+            m_ui.ShowEnvironmentBackground !=
+                m_SvsmMotionBenchmarkStartEnvironmentBackgroundEnabled)
+        {
+            AbortSvsmMotionBenchmark(
+                "the locked benchmark isolation state changed");
+            return;
+        }
+        if (!IsSvsmMotionBenchmarkLightStateExpected())
+        {
+            AbortSvsmMotionBenchmark(
+                "the producing directional light or its node transform changed outside the benchmark");
+            return;
+        }
+        if (!m_SparseVirtualShadowMapPass)
+        {
+            AbortSvsmMotionBenchmark("the SVSM pass became unavailable");
+            return;
+        }
+        if (m_SvsmMotionBenchmarkTimingPass &&
+            m_SvsmMotionBenchmarkTimingPass !=
+                m_SparseVirtualShadowMapPass.get())
+        {
+            AbortSvsmMotionBenchmark("SVSM resources were recreated during measurement");
+            return;
+        }
+
+        int width = 0;
+        int height = 0;
+        GetDeviceManager()->GetWindowDimensions(width, height);
+        if (width != int(preset.ReferenceWidth) ||
+            height != int(preset.ReferenceHeight))
+        {
+            if (m_SvsmMotionBenchmarkStarted)
+            {
+                AbortSvsmMotionBenchmark("the benchmark window size changed");
+                return;
+            }
+            ++m_SvsmMotionBenchmarkPreparationFrames;
+            if (m_SvsmMotionBenchmarkPreparationFrames >=
+                SvsmMotionBenchmarkPreparationFrameLimit)
+            {
+                AbortSvsmMotionBenchmark("1920 x 1080 preparation timed out");
+            }
+            return;
+        }
+        m_SvsmMotionBenchmarkStarted = true;
+
+        CollectCompletedSvsmMotionBenchmarkTimings();
+
+        if (m_SvsmMotionBenchmarkFramePrepared)
+        {
+            if (IsSvsmMotionBenchmarkMeasurementFrame(
+                    m_SvsmMotionBenchmarkKind,
+                    m_SvsmMotionBenchmarkPreparedFrame))
+            {
+                const SparseVirtualShadowMapTimings& timings =
+                    m_SparseVirtualShadowMapPass->GetTimings();
+                if (timings.active)
+                {
+                    ObserveSvsmMotionBenchmarkPath(
+                        m_SvsmMotionBenchmarkStaticHierarchyObservation,
+                        timings.staticDepthHierarchyCullingRequested,
+                        timings.staticDepthHierarchyCullingActive,
+                        timings.staticDepthHierarchyCullingUnavailable);
+                    ObserveSvsmMotionBenchmarkPath(
+                        m_SvsmMotionBenchmarkPairedDepthObservation,
+                        m_SvsmMotionBenchmarkStartSettings
+                            .pairedStaticDynamicDepthEnabled,
+                        timings.effectivePairedStaticDynamicDepth,
+                        false);
+                    ObserveSvsmMotionBenchmarkPath(
+                        m_SvsmMotionBenchmarkDeferredMergeObservation,
+                        timings.deferredStaticDepthMergeRequested,
+                        timings.deferredStaticDepthMergeActive,
+                        timings.deferredStaticDepthMergeUnavailable);
+                    const bool batchedDrawRequested =
+                        m_SvsmMotionBenchmarkStartSettings
+                            .gpuGatedDrawSubmission &&
+                        m_SvsmMotionBenchmarkStartSettings
+                            .batchedDrawSubmissionEnabled;
+                    const bool packetSortingRequested =
+                        batchedDrawRequested &&
+                        m_SvsmMotionBenchmarkStartSettings
+                            .packetStateSortingEnabled;
+                    const bool levelSkipRequested =
+                        batchedDrawRequested &&
+                        m_SvsmMotionBenchmarkStartSettings
+                            .levelEmptyWorkSkipEnabled;
+                    const bool packetCullingRequested =
+                        m_SvsmMotionBenchmarkStartSettings
+                            .gpuGatedDrawSubmission &&
+                        m_SvsmMotionBenchmarkStartSettings
+                            .packetPageCullingEnabled;
+                    const bool scatterRasterRequested =
+                        packetCullingRequested &&
+                        m_SvsmMotionBenchmarkStartSettings
+                            .dirtyPageScatterRasterEnabled;
+                    const bool hierarchyRequested =
+                        IsSvsmMotionBenchmarkHierarchyRequested(
+                            packetCullingRequested,
+                            m_SvsmMotionBenchmarkStartSettings
+                                .hierarchicalScheduledPageMaskEnabled);
+                    const bool packetCullingPathSatisfied =
+                        IsSvsmMotionBenchmarkPageMaintenancePathSatisfied(
+                            packetCullingRequested,
+                            timings.packetPageCullingActive,
+                            timings.packetPageCullingUnavailable,
+                            timings.staticPageRequestReuseActive,
+                            timings.staticPageDrainActive);
+                    const bool hierarchyPathSatisfied =
+                        IsSvsmMotionBenchmarkPageMaintenancePathSatisfied(
+                            hierarchyRequested,
+                            timings.hierarchicalScheduledPageMaskActive,
+                            timings.
+                                hierarchicalScheduledPageMaskUnavailable ||
+                                timings.packetPageCullingUnavailable,
+                            timings.staticPageRequestReuseActive,
+                            timings.staticPageDrainActive);
+                    const bool scatterPathSatisfied =
+                        IsSvsmMotionBenchmarkPageMaintenancePathSatisfied(
+                            scatterRasterRequested,
+                            timings.dirtyPageScatterRasterActive,
+                            timings.packetPageCullingUnavailable,
+                            timings.staticPageRequestReuseActive,
+                            timings.staticPageDrainActive);
+                    const bool frameRequestedPathActive =
+                        (!batchedDrawRequested ||
+                            timings.batchedDrawActive) &&
+                        (!packetSortingRequested ||
+                            timings.packetStateSortingActive) &&
+                        (!levelSkipRequested ||
+                            timings.levelEmptyWorkSkipActive) &&
+                        packetCullingPathSatisfied &&
+                        hierarchyPathSatisfied &&
+                        scatterPathSatisfied;
+                    m_SvsmMotionBenchmarkRequestedPathInactive |=
+                        !frameRequestedPathActive;
+                    m_SvsmMotionBenchmarkBatchedSupported |=
+                        timings.batchedDrawSupported;
+                    m_SvsmMotionBenchmarkBatchedActive |=
+                        timings.batchedDrawActive;
+                    m_SvsmMotionBenchmarkPacketSortingActive |=
+                        timings.packetStateSortingActive;
+                    m_SvsmMotionBenchmarkLevelSkipActive |=
+                        timings.levelEmptyWorkSkipActive;
+                    m_SvsmMotionBenchmarkPacketCullingActive |=
+                        timings.packetPageCullingActive;
+                    m_SvsmMotionBenchmarkHierarchyActive |=
+                        timings.hierarchicalScheduledPageMaskActive;
+                    m_SvsmMotionBenchmarkHierarchyUnavailable |=
+                        timings.
+                            hierarchicalScheduledPageMaskUnavailable;
+                    m_SvsmMotionBenchmarkReceiverMaskActive |=
+                        timings.receiverPageMaskCullingActive;
+                    m_SvsmMotionBenchmarkReceiverMaskUnavailable |=
+                        timings.receiverPageMaskCullingUnavailable;
+                    m_SvsmMotionBenchmarkScatterRasterActive |=
+                        timings.dirtyPageScatterRasterActive;
+                    m_SvsmMotionBenchmarkPacketCullingUnavailable |=
+                        timings.packetPageCullingUnavailable;
+                    if (!IsValidSvsmMotionBenchmarkCpuTiming(
+                            timings.sceneValidationCpuMilliseconds,
+                            timings.clipmapUpdateCpuMilliseconds,
+                            timings.cullingCpuMilliseconds,
+                            timings.totalCpuMilliseconds))
+                    {
+                        m_SvsmMotionBenchmarkInvalidCpuTiming = true;
+                    }
+                    else
+                    {
+                        m_SvsmMotionBenchmarkCpuTimings.push_back({
+                            m_SvsmMotionBenchmarkPreparedFrame,
+                            timings.sceneValidationCpuMilliseconds,
+                            timings.clipmapUpdateCpuMilliseconds,
+                            timings.cullingCpuMilliseconds,
+                            timings.totalCpuMilliseconds
+                        });
+                        m_SvsmMotionBenchmarkSceneValidationCpuSamples.
+                            push_back(
+                                timings.sceneValidationCpuMilliseconds);
+                        m_SvsmMotionBenchmarkClipmapUpdateCpuSamples.push_back(
+                            timings.clipmapUpdateCpuMilliseconds);
+                        m_SvsmMotionBenchmarkPacketCpuSamples.push_back(
+                            timings.cullingCpuMilliseconds);
+                        m_SvsmMotionBenchmarkCpuSamples.push_back(
+                            timings.totalCpuMilliseconds);
+                    }
+                }
+            }
+            m_SvsmMotionBenchmarkFramePrepared = false;
+        }
+
+        if (m_SvsmMotionBenchmarkFrame >=
+            GetSvsmMotionBenchmarkEndFrame(
+                m_SvsmMotionBenchmarkKind))
+        {
+            m_SvsmMotionBenchmarkDraining = true;
+            // UpdateSvsmMotionBenchmark clears this at entry already. Keep the
+            // drain invariant explicit so a future control-flow refactor
+            // cannot issue duplicate queries with the final source tag.
+            m_SvsmMotionBenchmarkCurrentTimingTag = 0u;
+            const SparseVirtualShadowMapTimingAccounting& accounting =
+                m_SvsmMotionBenchmarkTimingPass->GetTimingAccounting();
+            if (accounting.outstanding == 0u)
+            {
+                if (m_SvsmMotionMeasurementBenchmarkEndUnixMilliseconds ==
+                    0u)
+                {
+                    m_SvsmMotionMeasurementBenchmarkEndUnixMilliseconds =
+                        GetUnixMilliseconds();
+                }
+                if (PollSvsmMotionMeasurementCompletion())
+                    FinishSvsmMotionBenchmark();
+                return;
+            }
+            ++m_SvsmMotionBenchmarkDrainFrames;
+            if (m_SvsmMotionBenchmarkDrainFrames >=
+                SvsmMotionBenchmarkDrainFrameLimit)
+            {
+                AbortSvsmMotionBenchmark("GPU timing drain timed out");
+                return;
+            }
+            m_StaticCamera.SetExactPose(
+                preset.Position,
+                preset.Direction,
+                preset.Up,
+                preset.Right);
+            return;
+        }
+
+        if (m_SvsmMotionBenchmarkFrame ==
+            GetSvsmMotionBenchmarkWarmFrameCount(
+                m_SvsmMotionBenchmarkKind))
+        {
+            m_SvsmMotionBenchmarkTimingPass =
+                m_SparseVirtualShadowMapPass.get();
+            m_SvsmMotionBenchmarkTimingPass->ResetTimingAccounting();
+        }
+
+        const uint64_t sourceFrame = m_SvsmMotionBenchmarkFrame;
+        const int32_t motionTenthDegreeTicks =
+            GetSvsmMotionBenchmarkTenthDegreeTicks(
+                m_SvsmMotionBenchmarkKind,
+                sourceFrame);
+        const float angleDegrees =
+            float(motionTenthDegreeTicks) * 0.1f;
+        if (m_SvsmMotionBenchmarkKind ==
+            SvsmMotionBenchmarkKind::SunSlow)
+        {
+            m_StaticCamera.SetExactPose(
+                preset.Position,
+                preset.Direction,
+                preset.Up,
+                preset.Right);
+            if (IsSvsmMotionBenchmarkDirectionUpdateFrame(
+                    m_SvsmMotionBenchmarkKind,
+                    sourceFrame))
+            {
+                const daffine3 sunTurn = rotation(
+                    m_SvsmMotionBenchmarkSunRotationAxis,
+                    radians(
+                        double(motionTenthDegreeTicks) * 0.1));
+                const double3 direction = normalize(
+                    sunTurn.transformVector(
+                        m_SvsmMotionBenchmarkStartLightDirection));
+                // Use the original directional-light object and derive every
+                // angle from an integer tenth-degree tick. There is no
+                // cumulative integration or wall-clock dependency.
+                m_SunLight->SetDirection(direction);
+                m_SvsmMotionBenchmarkExpectedLightDirection = direction;
+                m_SvsmMotionBenchmarkExpectedLightTranslation =
+                    m_SvsmMotionBenchmarkStartLightNode->GetTranslation();
+                m_SvsmMotionBenchmarkExpectedLightRotation =
+                    m_SvsmMotionBenchmarkStartLightNode->GetRotation();
+                m_SvsmMotionBenchmarkExpectedLightScaling =
+                    m_SvsmMotionBenchmarkStartLightNode->GetScaling();
+            }
+        }
+        else
+        {
+            const affine3 turn = rotation(
+                preset.Up,
+                -radians(angleDegrees));
+            m_StaticCamera.SetExactPose(
+                preset.Position,
+                normalize(turn.transformVector(preset.Direction)),
+                normalize(turn.transformVector(preset.Up)),
+                normalize(turn.transformVector(preset.Right)));
+        }
+        m_SvsmMotionBenchmarkPreparedFrame = sourceFrame;
+        if (IsSvsmMotionBenchmarkMeasurementFrame(
+                m_SvsmMotionBenchmarkKind,
+                sourceFrame))
+        {
+            m_SvsmMotionBenchmarkCurrentTimingTag = sourceFrame;
+        }
+        m_SvsmMotionBenchmarkFramePrepared = true;
+        ++m_SvsmMotionBenchmarkFrame;
+    }
+
     const std::vector<SceneCatalogEntry>& GetAvailableScenes() const
     {
         return m_SceneCatalog;
@@ -2666,12 +5504,27 @@ public:
         m_ui.MiniEngineTaaSharpenEnabled = false;
         m_ui.MiniEngineTaaSharpness = MiniEngineTaaDefaultSharpness;
         m_ui.MiniEngineTaaVisualization = MiniEngineTaaDebugView::Off;
+        m_ui.BendScreenSpaceShadows =
+            BendScreenSpaceShadowSettings{};
+        m_ui.SparseVirtualShadowMaps =
+            SparseVirtualShadowMapSettings{};
+        m_ui.DiagnosticCascadedShadowMaps =
+            DiagnosticCascadedShadowMapSettings{};
         m_ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
         m_ui.VisibilityVerification =
             VisibilityVerificationProfile::Unset;
         m_ui.PixelZoom = PixelZoomMode::Off;
-        m_ui.SkyParams = SkyParameters{};
-        m_ui.EnableProceduralSky = true;
+        m_ui.ShowEnvironmentBackground = true;
+        m_ui.EnableDiffuseIbl = true;
+        m_ui.DiffuseIblStrength = 1.f;
+        m_ui.EnableSpecularIbl = true;
+        m_ui.SpecularIblStrength = 1.f;
+        m_ui.EnvironmentSource =
+            ImageBasedLightingSource::Kloppenheim03Day;
+        m_ui.EnvironmentExposureStops =
+            GetImageBasedLightingSourceInfo(
+                m_ui.EnvironmentSource).defaultExposureStops;
+        m_ui.LightingDebugView = PbrLightingDebugView::None;
 
         // This also recreates any passes/resources that were absent because PBR,
         // deferred rendering, or white-world permutations had been disabled
@@ -3510,6 +6363,10 @@ public:
         }
         ResetAntiAliasingState();
         if (m_GBufferPass) m_GBufferPass->ResetBindingCache();
+        if (m_DiagnosticCascadedShadowMapPass)
+            m_DiagnosticCascadedShadowMapPass->ResetSceneState();
+        if (m_SparseVirtualShadowMapPass)
+            m_SparseVirtualShadowMapPass->Deactivate();
         m_BindingCache.Clear();
         m_SunLight.reset();
         m_ui.SelectedMaterial = nullptr;
@@ -3665,6 +6522,32 @@ public:
             }
         }
         m_SceneFinishedLoading = true;
+
+        if (m_DiagnosticCsmBenchmarkRequested)
+        {
+            const bool firstAcceptedScene =
+                m_DiagnosticCsmBenchmarkScene == nullptr;
+            const bool validScene =
+                m_BenchmarkCameraActive &&
+                (firstAcceptedScene ||
+                    m_DiagnosticCsmBenchmarkScene == m_Scene.get()) &&
+                m_SunLight;
+            if (!validScene)
+            {
+                log::error(
+                    "Diagnostic CSM benchmark aborted because the standardized scene, camera, or directional light changed");
+                glfwSetWindowShouldClose(
+                    GetDeviceManager()->GetWindow(),
+                    GLFW_TRUE);
+            }
+            else if (firstAcceptedScene)
+            {
+                m_DiagnosticCsmBenchmarkScene = m_Scene.get();
+                m_DiagnosticCsmBenchmarkLight = m_SunLight.get();
+                m_DiagnosticCsmBenchmarkLightDirection =
+                    m_SunLight->GetDirection();
+            }
+        }
 
     }
 
@@ -4073,12 +6956,17 @@ public:
             CreateCmaa2Pass();
         }
 
-        m_SkyPass = std::make_unique<SkyPass>(
-            GetDevice(),
-            m_ShaderFactory,
-            m_CommonPasses,
-            m_RenderTargets->ForwardFramebuffer,
-            *m_View);
+        m_ImageBasedLightingBackgroundPass =
+            m_ImageBasedLightingEnvironment
+                ? std::make_unique<ImageBasedLightingBackgroundPass>(
+                    GetDevice(),
+                    m_ShaderFactory,
+                    m_CommonPasses,
+                    m_RenderTargets->ForwardFramebuffer,
+                    *m_View,
+                    m_ImageBasedLightingEnvironment->
+                        GetRadianceTextureResource())
+                : nullptr;
         m_AgxToneMappingPass =
             std::make_unique<AgxToneMappingPass>(
                 GetDevice(),
@@ -4129,9 +7017,28 @@ public:
                 GetDevice(), m_CommonPasses);
             m_PbrDeferredLightingPass->Init(m_ShaderFactory);
             EnsureMsaaVisibilityResolvePass();
+            m_BendScreenSpaceShadowPass =
+                std::make_unique<BendScreenSpaceShadowPass>(
+                    GetDevice(),
+                    m_ShaderFactory,
+                    m_CommonPasses);
+            m_SparseVirtualShadowMapPass =
+                std::make_unique<SparseVirtualShadowMapPass>(
+                    GetDevice(),
+                    m_ShaderFactory,
+                    m_CommonPasses);
+            if (!m_DiagnosticCascadedShadowMapPass)
+            {
+                m_DiagnosticCascadedShadowMapPass =
+                    std::make_unique<DiagnosticCascadedShadowMapPass>(
+                        GetDevice(),
+                        m_ShaderFactory,
+                        m_CommonPasses);
+            }
             m_ScreenSpaceVisibilityPass = std::make_unique<ScreenSpaceVisibilityPass>(
                 GetDevice(),
                 m_ShaderFactory,
+                m_CommonPasses,
                 app::GetDirectoryWithExecutable().parent_path() /
                     "media/noise/visibility_filter_adapted_gauss1_ema035_r8.bin");
         }
@@ -4139,6 +7046,9 @@ public:
         {
             m_PbrDeferredLightingPass.reset();
             m_MsaaVisibilityResolvePass.reset();
+            m_BendScreenSpaceShadowPass.reset();
+            m_SparseVirtualShadowMapPass.reset();
+            m_DiagnosticCascadedShadowMapPass.reset();
             m_ScreenSpaceVisibilityPass.reset();
             m_DeferredLightingPass = std::make_shared<DeferredLightingPass>(GetDevice(), m_CommonPasses);
             m_DeferredLightingPass->Init(m_ShaderFactory);
@@ -4149,7 +7059,17 @@ public:
         if (m_ui.UsesCmaa2())
             CreateCmaa2Pass();
 
-        m_SkyPass = std::make_unique<SkyPass>(GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->ForwardFramebuffer, *m_View);
+        m_ImageBasedLightingBackgroundPass =
+            m_ImageBasedLightingEnvironment
+                ? std::make_unique<ImageBasedLightingBackgroundPass>(
+                    GetDevice(),
+                    m_ShaderFactory,
+                    m_CommonPasses,
+                    m_RenderTargets->ForwardFramebuffer,
+                    *m_View,
+                    m_ImageBasedLightingEnvironment->
+                        GetRadianceTextureResource())
+                : nullptr;
 
         m_AgxToneMappingPass = std::make_unique<AgxToneMappingPass>(
             GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->LdrFramebuffer);
@@ -4160,9 +7080,1256 @@ public:
     {
         nvrhi::ITexture* framebufferTexture = framebuffer->getDesc().colorAttachments[0].texture;
         m_CommandList->open();
+#ifdef _WIN32
+        NameD3d12CommandList(
+            m_CommandList,
+            L"UVSR Splash Command List");
+        SetD3d12DredMarker(m_CommandList, L"UVSR Splash Start");
+#endif
         m_CommandList->clearTextureFloat(framebufferTexture, nvrhi::AllSubresources, nvrhi::Color(0.f));
         m_CommandList->close();
         GetDevice()->executeCommandList(m_CommandList);
+    }
+
+    static bool IsSameDiagnosticCsmBenchmarkWork(
+        const DiagnosticCsmStats& left,
+        const DiagnosticCsmStats& right)
+    {
+        return HasSameDiagnosticCsmBenchmarkWorkIdentity(left, right);
+    }
+
+    [[nodiscard]] std::filesystem::path
+        GetDiagnosticCsmBenchmarkArtifactPath(
+            const char* extension) const
+    {
+        return app::GetDirectoryWithExecutable()
+            .parent_path()
+            .parent_path() /
+            "outputs" /
+            (std::string("diagnostic-csm-benchmark-latest.") +
+                extension);
+    }
+
+    [[nodiscard]] bool WriteBenchmarkArtifactAtomically(
+        const std::filesystem::path& targetPath,
+        const std::string& contents) const
+    {
+        std::error_code directoryError;
+        std::filesystem::create_directories(
+            targetPath.parent_path(),
+            directoryError);
+        if (directoryError)
+        {
+            log::error(
+                "Benchmark artifact writer could not create '%s' (%s)",
+                targetPath.parent_path().string().c_str(),
+                directoryError.message().c_str());
+            return false;
+        }
+
+        std::filesystem::path temporaryPath = targetPath;
+        temporaryPath += "." +
+            std::to_string(GetCurrentProcessId()) + ".tmp";
+        {
+            std::ofstream output(
+                temporaryPath,
+                std::ios::binary | std::ios::trunc);
+            if (!output)
+            {
+                log::error(
+                    "Benchmark artifact writer could not open temporary artifact '%s'",
+                    temporaryPath.string().c_str());
+                return false;
+            }
+            output.write(
+                contents.data(),
+                std::streamsize(contents.size()));
+            output.flush();
+            if (!output.good())
+            {
+                log::error(
+                    "Benchmark artifact writer could not finish temporary artifact '%s'",
+                    temporaryPath.string().c_str());
+                output.close();
+                std::error_code removeError;
+                std::filesystem::remove(
+                    temporaryPath,
+                    removeError);
+                return false;
+            }
+        }
+
+        if (!MoveFileExW(
+                temporaryPath.c_str(),
+                targetPath.c_str(),
+                MOVEFILE_REPLACE_EXISTING |
+                    MOVEFILE_WRITE_THROUGH))
+        {
+            log::error(
+                "Benchmark artifact writer could not publish '%s' (Windows error %lu)",
+                targetPath.string().c_str(),
+                GetLastError());
+            std::error_code removeError;
+            std::filesystem::remove(temporaryPath, removeError);
+            return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool WriteDiagnosticCsmBenchmarkState(
+        const char* state,
+        const char* reason) const
+    {
+        std::ostringstream result;
+        result << "state=" << state << "\n"
+            << "runId=" << m_DiagnosticCsmRecordRunId << "\n"
+            << "official=0\n"
+            << "rawAuthoritative=0\n"
+            << "evidenceValid=0\n"
+            << "normalizationAdvisory=1\n"
+            << "executableSha256="
+            << (m_DiagnosticCsmExecutableSha256.empty()
+                    ? "unavailable"
+                    : m_DiagnosticCsmExecutableSha256) << "\n"
+            << "timingConfigurationId="
+            << (m_DiagnosticCsmTimingConfigurationId.empty()
+                    ? "unavailable"
+                    : m_DiagnosticCsmTimingConfigurationId) << "\n"
+            << "timingConfiguration="
+            << (m_DiagnosticCsmTimingConfiguration.empty()
+                    ? "unavailable"
+                    : m_DiagnosticCsmTimingConfiguration) << "\n";
+        if (reason && reason[0] != '\0')
+            result << "reason=" << reason << "\n";
+        return WriteBenchmarkArtifactAtomically(
+            GetDiagnosticCsmBenchmarkArtifactPath("txt"),
+            result.str());
+    }
+
+    [[nodiscard]] bool StartDiagnosticCsmBenchmarkRecording()
+    {
+        if (m_DiagnosticCsmRecordStarted)
+            return true;
+
+        m_DiagnosticCsmRecordStarted = true;
+        if (m_DiagnosticCsmExecutableSha256.size() != 64u ||
+            m_DiagnosticCsmTimingConfiguration.empty() ||
+            m_DiagnosticCsmTimingConfigurationId.size() != 16u)
+        {
+            log::error(
+                "Diagnostic CSM benchmark could not establish immutable executable and timing-configuration identity");
+            WriteDiagnosticCsmBenchmarkFailure(
+                "immutable executable or timing-configuration identity was unavailable");
+            return false;
+        }
+        m_DiagnosticCsmRecordStartTime =
+            std::chrono::steady_clock::now();
+        if (WriteDiagnosticCsmBenchmarkState("running", nullptr))
+            return true;
+
+        log::error(
+            "Diagnostic CSM benchmark could not publish its running state");
+        return false;
+    }
+
+    void WriteDiagnosticCsmBenchmarkFailure(const char* reason) const
+    {
+        if (!WriteDiagnosticCsmBenchmarkState("aborted", reason))
+        {
+            log::error(
+                "Diagnostic CSM benchmark could not publish its aborted state: %s",
+                reason);
+        }
+    }
+
+    [[nodiscard]] bool FinishDiagnosticCsmBenchmarkRecording()
+    {
+        std::vector<float> rawGpuSamples;
+        std::vector<float> normalizedGpuSamples;
+        std::vector<float> workIndexSamples;
+        std::vector<float> clockCapacitySamples;
+        std::vector<float> utilizedTFlopsSamples;
+        std::vector<float> utilizationPercentSamples;
+        std::vector<float> memoryBandwidthSamples;
+        std::vector<float> telemetryAgeMillisecondsSamples;
+        std::vector<float> totalCpuSamples;
+        std::vector<float> setupCpuSamples;
+        std::vector<float> cullingCpuSamples;
+        std::vector<float> recordingCpuSamples;
+        std::vector<float> timingAgeSamples;
+        std::vector<float> cullingGpuSamples;
+        std::vector<float> clearUpdateSamples;
+        std::vector<float> rasterSamples;
+        std::vector<float> samplingSamples;
+        const size_t sampleCount =
+            m_DiagnosticCsmBenchmarkSamples.size();
+        if (sampleCount == 0u)
+        {
+            WriteDiagnosticCsmBenchmarkFailure(
+                "no GPU timing samples were recorded");
+            return false;
+        }
+        const bool detailedGpuTimings =
+            m_DiagnosticCsmBenchmarkSamples.front()
+                .timings.detailedGpuTimingEnabled;
+        const char* rendererName =
+            GetDeviceManager()->GetRendererString();
+        const std::string_view rendererNameView =
+            rendererName ? std::string_view(rendererName) :
+                std::string_view();
+        const GpuTimingNormalizationCalibration* calibration =
+            FindGpuTimingNormalizationCalibration(rendererNameView);
+        for (std::vector<float>* samples : {
+                &rawGpuSamples,
+                &normalizedGpuSamples,
+                &workIndexSamples,
+                &clockCapacitySamples,
+                &utilizedTFlopsSamples,
+                &utilizationPercentSamples,
+                &memoryBandwidthSamples,
+                &telemetryAgeMillisecondsSamples,
+                &totalCpuSamples,
+                &setupCpuSamples,
+                &cullingCpuSamples,
+                &recordingCpuSamples,
+                &timingAgeSamples,
+                &cullingGpuSamples,
+                &clearUpdateSamples,
+                &rasterSamples,
+                &samplingSamples })
+        {
+            samples->reserve(sampleCount);
+        }
+
+        std::array<uint32_t, 5u> gradeCounts{};
+        size_t utilizationValidCount = 0u;
+        uint64_t minimumTelemetryGeneration =
+            std::numeric_limits<uint64_t>::max();
+        uint64_t maximumTelemetryGeneration = 0u;
+        for (const DiagnosticCsmBenchmarkSample& sample :
+            m_DiagnosticCsmBenchmarkSamples)
+        {
+            rawGpuSamples.push_back(sample.timings.totalMilliseconds);
+            if (sample.normalized.valid)
+            {
+                normalizedGpuSamples.push_back(float(
+                    sample.normalized.estimatedMilliseconds));
+                workIndexSamples.push_back(float(
+                    sample.normalized.workIndexMillisecondsTFlops));
+                clockCapacitySamples.push_back(float(
+                    sample.normalized.currentClockCapacityTFlops));
+                if (sample.normalized.utilizationValid)
+                {
+                    utilizedTFlopsSamples.push_back(float(
+                        sample.normalized.utilizedTFlops));
+                    utilizationPercentSamples.push_back(float(
+                        sample.gpuMetrics.gpuUtilization * 100.0));
+                    ++utilizationValidCount;
+                }
+                memoryBandwidthSamples.push_back(float(
+                    sample.gpuMetrics.memoryBandwidthGBps));
+                telemetryAgeMillisecondsSamples.push_back(float(
+                    sample.gpuMetrics.telemetryAgeMilliseconds));
+                minimumTelemetryGeneration = std::min(
+                    minimumTelemetryGeneration,
+                    sample.gpuMetrics.telemetryGeneration);
+                maximumTelemetryGeneration = std::max(
+                    maximumTelemetryGeneration,
+                    sample.gpuMetrics.telemetryGeneration);
+
+                const size_t gradeIndex =
+                    size_t(sample.normalized.grade);
+                if (gradeIndex < gradeCounts.size())
+                    ++gradeCounts[gradeIndex];
+            }
+            totalCpuSamples.push_back(
+                sample.timings.totalCpuMilliseconds);
+            setupCpuSamples.push_back(
+                sample.timings.setupCpuMilliseconds);
+            cullingCpuSamples.push_back(
+                sample.timings.cullingCpuMilliseconds);
+            recordingCpuSamples.push_back(
+                sample.timings.recordingCpuMilliseconds);
+            timingAgeSamples.push_back(float(
+                sample.timings.gpuTimingAgeFrames));
+            if (detailedGpuTimings)
+            {
+                cullingGpuSamples.push_back(
+                    sample.timings.cullingGpuMilliseconds);
+                clearUpdateSamples.push_back(
+                    sample.timings.clearUpdateMilliseconds);
+                rasterSamples.push_back(
+                    sample.timings.rasterMilliseconds);
+                samplingSamples.push_back(
+                    sample.timings.samplingMilliseconds);
+            }
+        }
+
+        const SvsmMotionBenchmarkTimingSummary rawGpuSummary =
+            SummarizeSvsmMotionBenchmarkSamples(rawGpuSamples);
+        SvsmMotionBenchmarkTimingSummary normalizedGpuSummary{};
+        SvsmMotionBenchmarkTimingSummary workIndexSummary{};
+        SvsmMotionBenchmarkTimingSummary clockCapacitySummary{};
+        SvsmMotionBenchmarkTimingSummary utilizedTFlopsSummary{};
+        SvsmMotionBenchmarkTimingSummary utilizationSummary{};
+        SvsmMotionBenchmarkTimingSummary memoryBandwidthSummary{};
+        SvsmMotionBenchmarkTimingSummary telemetryAgeMillisecondsSummary{};
+        if (!normalizedGpuSamples.empty())
+        {
+            normalizedGpuSummary =
+                SummarizeSvsmMotionBenchmarkSamples(
+                    normalizedGpuSamples);
+            workIndexSummary =
+                SummarizeSvsmMotionBenchmarkSamples(
+                    workIndexSamples);
+            clockCapacitySummary =
+                SummarizeSvsmMotionBenchmarkSamples(
+                    clockCapacitySamples);
+            if (!utilizedTFlopsSamples.empty())
+            {
+                utilizedTFlopsSummary =
+                    SummarizeSvsmMotionBenchmarkSamples(
+                        utilizedTFlopsSamples);
+                utilizationSummary =
+                    SummarizeSvsmMotionBenchmarkSamples(
+                        utilizationPercentSamples);
+            }
+            memoryBandwidthSummary =
+                SummarizeSvsmMotionBenchmarkSamples(
+                    memoryBandwidthSamples);
+            telemetryAgeMillisecondsSummary =
+                SummarizeSvsmMotionBenchmarkSamples(
+                    telemetryAgeMillisecondsSamples);
+        }
+        const GpuTimingNormalizationRunGrade normalizationRunGrade =
+            SummarizeGpuTimingNormalizationRunGrade(
+                sampleCount,
+                gradeCounts);
+        const bool normalizedSummaryPublishable =
+            normalizationRunGrade.validFraction >= 0.95;
+        const SvsmMotionBenchmarkTimingSummary totalCpuSummary =
+            SummarizeSvsmMotionBenchmarkSamples(totalCpuSamples);
+        const SvsmMotionBenchmarkTimingSummary setupCpuSummary =
+            SummarizeSvsmMotionBenchmarkSamples(setupCpuSamples);
+        const SvsmMotionBenchmarkTimingSummary cullingCpuSummary =
+            SummarizeSvsmMotionBenchmarkSamples(cullingCpuSamples);
+        const SvsmMotionBenchmarkTimingSummary recordingCpuSummary =
+            SummarizeSvsmMotionBenchmarkSamples(recordingCpuSamples);
+        const SvsmMotionBenchmarkTimingSummary timingAgeSummary =
+            SummarizeSvsmMotionBenchmarkSamples(timingAgeSamples);
+        SvsmMotionBenchmarkTimingSummary cullingGpuSummary{};
+        SvsmMotionBenchmarkTimingSummary clearUpdateSummary{};
+        SvsmMotionBenchmarkTimingSummary rasterSummary{};
+        SvsmMotionBenchmarkTimingSummary samplingSummary{};
+        if (detailedGpuTimings)
+        {
+            cullingGpuSummary =
+                SummarizeSvsmMotionBenchmarkSamples(
+                    cullingGpuSamples);
+            clearUpdateSummary =
+                SummarizeSvsmMotionBenchmarkSamples(
+                    clearUpdateSamples);
+            rasterSummary =
+                SummarizeSvsmMotionBenchmarkSamples(rasterSamples);
+            samplingSummary =
+                SummarizeSvsmMotionBenchmarkSamples(samplingSamples);
+        }
+
+        const DiagnosticCsmBenchmarkSample& first =
+            m_DiagnosticCsmBenchmarkSamples.front();
+        const DiagnosticCsmBenchmarkSample& last =
+            m_DiagnosticCsmBenchmarkSamples.back();
+        const DiagnosticCsmStats& stats = first.stats;
+        const bool expectedDetailedGpuTimings =
+            m_DiagnosticCsmBenchmarkSettings.detailedGpuTimingEnabled;
+        bool timingsValid = true;
+        bool detailedGpuTimingModeUniform = true;
+        bool workIdentityStable = true;
+        bool issuedFrameContextsValid = true;
+        uint64_t missingSourceFrames = 0u;
+        uint64_t sourceFrameGapEvents = 0u;
+        uint64_t maximumSourceFrameGap = 0u;
+        const size_t missingIssuedFrameContexts = size_t(std::count_if(
+            m_DiagnosticCsmBenchmarkSamples.begin(),
+            m_DiagnosticCsmBenchmarkSamples.end(),
+            [](const DiagnosticCsmBenchmarkSample& sample) {
+                return !sample.issuedFrameContextAvailable;
+            }));
+        for (const DiagnosticCsmBenchmarkSample& sample :
+            m_DiagnosticCsmBenchmarkSamples)
+        {
+            timingsValid &=
+                IsValidDiagnosticCsmBenchmarkTiming(sample.timings);
+            detailedGpuTimingModeUniform &=
+                sample.timings.detailedGpuTimingEnabled ==
+                    detailedGpuTimings;
+            workIdentityStable &=
+                IsSameDiagnosticCsmBenchmarkWork(stats, sample.stats);
+            issuedFrameContextsValid &=
+                IsValidDiagnosticCsmBenchmarkIssuedFrameContext(
+                    sample.issuedFrameContextAvailable,
+                    sample.frameIntervalMilliseconds);
+        }
+        bool sourceFrameArithmeticValid = true;
+        bool sourceFramesStrictlyConsecutive = true;
+        for (size_t index = 1u; index < sampleCount; ++index)
+        {
+            const uint64_t previousSourceFrame =
+                m_DiagnosticCsmBenchmarkSamples[index - 1u].sourceFrame;
+            const uint64_t currentSourceFrame =
+                m_DiagnosticCsmBenchmarkSamples[index].sourceFrame;
+            if (!AreDiagnosticCsmBenchmarkSourceFramesConsecutive(
+                    previousSourceFrame,
+                    currentSourceFrame))
+            {
+                sourceFramesStrictlyConsecutive = false;
+            }
+            if (currentSourceFrame <= previousSourceFrame)
+            {
+                sourceFrameArithmeticValid = false;
+                ++sourceFrameGapEvents;
+                continue;
+            }
+            const uint64_t gap =
+                currentSourceFrame - previousSourceFrame;
+            maximumSourceFrameGap =
+                std::max(maximumSourceFrameGap, gap);
+            if (gap > 1u)
+            {
+                ++sourceFrameGapEvents;
+                missingSourceFrames += gap - 1u;
+            }
+        }
+        const std::string expectedTimingConfiguration =
+            BuildDiagnosticCsmTimingConfigurationIdentity(
+                m_DiagnosticCsmBenchmarkSettings);
+        const std::string expectedTimingConfigurationId =
+            BuildDiagnosticCsmTimingConfigurationId(
+                m_DiagnosticCsmBenchmarkSettings);
+        DiagnosticCsmBenchmarkEvidence benchmarkEvidence;
+        benchmarkEvidence.expectedSampleCount =
+            DiagnosticCsmBenchmarkMeasurementFrames;
+        benchmarkEvidence.sampleCount = sampleCount;
+        benchmarkEvidence.missingIssuedFrameContexts =
+            missingIssuedFrameContexts;
+        benchmarkEvidence.sourceFrameGapEvents = sourceFrameGapEvents;
+        benchmarkEvidence.missingSourceFrames = missingSourceFrames;
+        benchmarkEvidence.maximumSourceFrameGap = maximumSourceFrameGap;
+        benchmarkEvidence.executableIdentityValid =
+            m_DiagnosticCsmExecutableSha256.size() == 64u;
+        benchmarkEvidence.timingConfigurationIdentityValid =
+            m_DiagnosticCsmTimingConfiguration ==
+                expectedTimingConfiguration &&
+            m_DiagnosticCsmTimingConfigurationId ==
+                expectedTimingConfigurationId;
+        benchmarkEvidence.timingsValid = timingsValid;
+        benchmarkEvidence.detailedGpuTimingModeUniform =
+            detailedGpuTimingModeUniform;
+        benchmarkEvidence.detailedGpuTimingModeMatchesConfiguration =
+            detailedGpuTimings == expectedDetailedGpuTimings;
+        benchmarkEvidence.workIdentityStable = workIdentityStable;
+        benchmarkEvidence.sourceFrameArithmeticValid =
+            sourceFrameArithmeticValid;
+        benchmarkEvidence.sourceFramesStrictlyConsecutive =
+            sourceFramesStrictlyConsecutive;
+        benchmarkEvidence.issuedFrameContextsValid =
+            issuedFrameContextsValid;
+        const bool rawAuthoritative =
+            IsDiagnosticCsmBenchmarkRawAuthoritative(
+                "complete",
+                benchmarkEvidence);
+        if (!rawAuthoritative)
+        {
+            WriteDiagnosticCsmBenchmarkFailure(
+                "raw timing evidence was incomplete or internally inconsistent");
+            return false;
+        }
+
+        std::ostringstream result;
+        result << std::fixed << std::setprecision(6)
+            << "state=complete\n"
+            << "runId=" << m_DiagnosticCsmRecordRunId << "\n"
+            << "official=0\n"
+            << "rawAuthoritative=" << (rawAuthoritative ? 1u : 0u)
+            << "\n"
+            << "evidenceValid=" << (rawAuthoritative ? 1u : 0u)
+            << "\n"
+            << "normalizationAdvisory=1\n"
+            << "sameAdapterOnly=1\n"
+            << "normalizationVersion=calibrated-issue-frame-clock-capacity-v2\n"
+            << "normalizationFormula=rawGpuMs*currentClockCapacityTFlops/42.5\n"
+            << "normalizationCalibrationId="
+            << (calibration ? calibration->id : "unavailable") << "\n"
+            << "normalizationCalibrationAdapter="
+            << (calibration
+                    ? calibration->exactAdapterName
+                    : std::string_view("unavailable")) << "\n"
+            << "normalizationReferenceClockCapacityTFlops="
+            << (calibration
+                    ? calibration->referenceClockCapacityTFlops
+                    : 0.0) << "\n"
+            << "normalizationReferenceMemoryBandwidthGBps="
+            << (calibration
+                    ? calibration->referenceMemoryBandwidthGBps
+                    : 0.0) << "\n"
+            << "normalizationCoveragePercent="
+            << normalizationRunGrade.validFraction * 100.0 << "\n"
+            << "normalizationRunGrade="
+            << GetGpuTimingNormalizationGradeLabel(
+                normalizationRunGrade.grade) << "\n"
+            << "renderer=" << rendererNameView
+            << "\n"
+            << "scene=" << m_CurrentSceneName << "\n"
+            << "commit=" << UVSR_GIT_COMMIT << "\n"
+            << "executableSha256="
+            << m_DiagnosticCsmExecutableSha256 << "\n"
+            << "timingConfigurationId="
+            << m_DiagnosticCsmTimingConfigurationId << "\n"
+            << "timingConfiguration="
+            << m_DiagnosticCsmTimingConfiguration << "\n"
+            << "profile="
+            << uint32_t(m_DiagnosticCsmBenchmarkSettings.profile)
+            << "\n"
+            << "width=" << stats.outputWidth << "\n"
+            << "height=" << stats.outputHeight << "\n"
+            << "sampleCount=" << sampleCount << "\n"
+            << "normalizedSampleCount="
+            << normalizedGpuSamples.size() << "\n"
+            << "warmupSourceFrames="
+            << DiagnosticCsmBenchmarkWarmupFrames << "\n"
+            << "warmupMinimumSeconds="
+            << DiagnosticCsmBenchmarkWarmupSeconds << "\n"
+            << "warmupElapsedMilliseconds="
+            << m_DiagnosticCsmWarmupElapsedMilliseconds << "\n"
+            << "warmupInitialTelemetryGeneration="
+            << m_DiagnosticCsmWarmupInitialTelemetryGeneration << "\n"
+            << "measurementStartTelemetryGeneration="
+            << m_DiagnosticCsmMeasurementStartTelemetryGeneration
+            << "\n"
+            << "firstSourceFrame=" << first.sourceFrame << "\n"
+            << "lastSourceFrame=" << last.sourceFrame << "\n"
+            << "sourceFrameGapEvents=" << sourceFrameGapEvents
+            << "\n"
+            << "missingSourceFrames=" << missingSourceFrames << "\n"
+            << "maximumSourceFrameGap=" << maximumSourceFrameGap
+            << "\n"
+            << "missingIssuedFrameContexts="
+            << missingIssuedFrameContexts << "\n"
+            << "gpuTimingAgeMedianFrames=" << timingAgeSummary.median
+            << "\n"
+            << "gpuTimingAgeMaximumFrames=" << timingAgeSummary.maximum
+            << "\n"
+            << "gpuTelemetrySemantics=issue-frame cached approximately 500 ms and paired by GPU timing source frame\n"
+            << "gpuTimingMode="
+            << (detailedGpuTimings
+                    ? "detailed"
+                    : "totalOnly") << "\n"
+            << "stageTimingsAvailable="
+            << (detailedGpuTimings ? 1u : 0u) << "\n"
+            << "rawGpuMedianMs=" << rawGpuSummary.median << "\n"
+            << "rawGpuP95Ms=" << rawGpuSummary.p95 << "\n"
+            << "rawGpuP99Ms=" << rawGpuSummary.p99 << "\n"
+            << "rawGpuWorstMs=" << rawGpuSummary.maximum << "\n";
+        if (!normalizedGpuSamples.empty())
+        {
+            result
+                << "normalizedValidSubsetMedianMs="
+                << normalizedGpuSummary.median << "\n"
+                << "normalizedValidSubsetP95Ms="
+                << normalizedGpuSummary.p95 << "\n"
+                << "normalizedValidSubsetP99Ms="
+                << normalizedGpuSummary.p99 << "\n"
+                << "telemetryAgeMedianMilliseconds="
+                << telemetryAgeMillisecondsSummary.median << "\n"
+                << "telemetryAgeMaximumMilliseconds="
+                << telemetryAgeMillisecondsSummary.maximum << "\n"
+                << "telemetryGenerationMinimum="
+                << minimumTelemetryGeneration << "\n"
+                << "telemetryGenerationMaximum="
+                << maximumTelemetryGeneration << "\n";
+        }
+        else
+        {
+            result
+                << "normalizedValidSubsetMedianMs=unavailable\n"
+                << "normalizedValidSubsetP95Ms=unavailable\n"
+                << "normalizedValidSubsetP99Ms=unavailable\n"
+                << "telemetryAgeMedianMilliseconds=unavailable\n"
+                << "telemetryAgeMaximumMilliseconds=unavailable\n"
+                << "telemetryGenerationMinimum=unavailable\n"
+                << "telemetryGenerationMaximum=unavailable\n";
+        }
+        if (normalizedSummaryPublishable)
+        {
+            result
+                << "normalizedGpuMedianMs="
+                << normalizedGpuSummary.median << "\n"
+                << "normalizedGpuP95Ms="
+                << normalizedGpuSummary.p95 << "\n"
+                << "normalizedGpuP99Ms="
+                << normalizedGpuSummary.p99 << "\n"
+                << "normalizedGpuWorstMs="
+                << normalizedGpuSummary.maximum << "\n"
+                << "workIndexMedianMsTFlops="
+                << workIndexSummary.median << "\n"
+                << "clockCapacityMedianTFlops="
+                << clockCapacitySummary.median << "\n"
+                << "clockCapacityMinimumTFlops="
+                << *std::min_element(
+                    clockCapacitySamples.begin(),
+                    clockCapacitySamples.end()) << "\n"
+                << "clockCapacityMaximumTFlops="
+                << clockCapacitySummary.maximum << "\n"
+                << "memoryBandwidthMedianGBps="
+                << memoryBandwidthSummary.median << "\n"
+                << "memoryBandwidthMinimumGBps="
+                << *std::min_element(
+                    memoryBandwidthSamples.begin(),
+                    memoryBandwidthSamples.end()) << "\n"
+                << "memoryBandwidthMaximumGBps="
+                << memoryBandwidthSummary.maximum << "\n";
+        }
+        else
+        {
+            result
+                << "normalizedGpuMedianMs=unavailable\n"
+                << "normalizedGpuP95Ms=unavailable\n"
+                << "normalizedGpuP99Ms=unavailable\n"
+                << "normalizedGpuWorstMs=unavailable\n"
+                << "workIndexMedianMsTFlops=unavailable\n"
+                << "clockCapacityMedianTFlops=unavailable\n"
+                << "clockCapacityMinimumTFlops=unavailable\n"
+                << "clockCapacityMaximumTFlops=unavailable\n"
+                << "memoryBandwidthMedianGBps=unavailable\n"
+                << "memoryBandwidthMinimumGBps=unavailable\n"
+                << "memoryBandwidthMaximumGBps=unavailable\n";
+        }
+        result
+            << "gpuUtilizationValidCount="
+            << utilizationValidCount << "\n";
+        if (!utilizationPercentSamples.empty())
+        {
+            result
+                << "utilizedMedianTFlops="
+                << utilizedTFlopsSummary.median << "\n"
+                << "gpuUtilizationMedianPercent="
+                << utilizationSummary.median << "\n";
+        }
+        else
+        {
+            result
+                << "utilizedMedianTFlops=unavailable\n"
+                << "gpuUtilizationMedianPercent=unavailable\n";
+        }
+        result
+            << "gradeACount="
+            << gradeCounts[size_t(GpuTimingNormalizationGrade::A)]
+            << "\n"
+            << "gradeBCount="
+            << gradeCounts[size_t(GpuTimingNormalizationGrade::B)]
+            << "\n"
+            << "gradeCCount="
+            << gradeCounts[size_t(GpuTimingNormalizationGrade::C)]
+            << "\n"
+            << "directionalCount="
+            << gradeCounts[
+                size_t(GpuTimingNormalizationGrade::Directional)]
+            << "\n"
+            << "totalCpuMedianMs=" << totalCpuSummary.median << "\n"
+            << "totalCpuP95Ms=" << totalCpuSummary.p95 << "\n"
+            << "setupCpuMedianMs=" << setupCpuSummary.median << "\n"
+            << "cullingCpuMedianMs=" << cullingCpuSummary.median
+            << "\n"
+            << "recordingCpuMedianMs=" << recordingCpuSummary.median
+            << "\n";
+        if (detailedGpuTimings)
+        {
+            result
+                << "cullingGpuMedianMs=" << cullingGpuSummary.median
+                << "\n"
+                << "clearUpdateMedianMs="
+                << clearUpdateSummary.median << "\n"
+                << "rasterMedianMs=" << rasterSummary.median << "\n"
+                << "samplingMedianMs=" << samplingSummary.median
+                << "\n";
+        }
+        else
+        {
+            result
+                << "cullingGpuMedianMs=unavailable\n"
+                << "clearUpdateMedianMs=unavailable\n"
+                << "rasterMedianMs=unavailable\n"
+                << "samplingMedianMs=unavailable\n";
+        }
+        result
+            << "cascadeCount=" << stats.cascadeCount << "\n"
+            << "shadowMapResolution=" << stats.shadowMapResolution
+            << "\n"
+            << "depthBitsPerTexel=" << stats.depthBitsPerTexel << "\n"
+            << "filterSampleCount=" << stats.filterSampleCount << "\n"
+            << "filterComparisonCount=" << stats.filterComparisonCount
+            << "\n"
+            << "coarseCasterProjectionPairs="
+            << stats.coarseCasterProjectionPairs << "\n"
+            << "radiusCulledCasterProjectionPairs="
+            << stats.radiusCulledCasterProjectionPairs << "\n"
+            << "accuratelyCulledCasterProjectionPairs="
+            << stats.accuratelyCulledCasterProjectionPairs << "\n"
+            << "candidateCasterProjectionPairs="
+            << stats.candidateCasterProjectionPairs << "\n"
+            << "renderedCasterProjectionPairs="
+            << stats.renderedCasterProjectionPairs << "\n"
+            << "manualCasterProjectionPairs="
+            << stats.manualCasterProjectionPairs << "\n"
+            << "inputAssemblerCasterProjectionPairs="
+            << stats.inputAssemblerCasterProjectionPairs << "\n"
+            << "submissionStatsAvailable="
+            << (stats.submissionStatsAvailable ? 1u : 0u) << "\n";
+        if (stats.submissionStatsAvailable)
+        {
+            result
+                << "submittedDrawCalls=" << stats.submittedDrawCalls
+                << "\n"
+                << "submittedTriangles=" << stats.submittedTriangles
+                << "\n"
+                << "submittedTranslationOnlyDrawCalls="
+                << stats.submittedTranslationOnlyDrawCalls << "\n"
+                << "submittedTranslationOnlyTriangles="
+                << stats.submittedTranslationOnlyTriangles << "\n";
+        }
+        else
+        {
+            result
+                << "submittedDrawCalls=unavailable\n"
+                << "submittedTriangles=unavailable\n"
+                << "submittedTranslationOnlyDrawCalls=unavailable\n"
+                << "submittedTranslationOnlyTriangles=unavailable\n";
+        }
+        result
+            << "translationOnlyCasterTransformRequested="
+            << (stats.translationOnlyCasterTransformRequested ? 1u : 0u)
+            << "\n"
+            << "translationOnlyCasterTransformEnabled="
+            << (stats.translationOnlyCasterTransformEnabled ? 1u : 0u)
+            << "\n"
+            << "inputAssemblerCasterFetchRequested="
+            << (stats.inputAssemblerCasterFetchRequested ? 1u : 0u)
+            << "\n"
+            << "inputAssemblerCasterFetchEnabled="
+            << (stats.inputAssemblerCasterFetchEnabled ? 1u : 0u)
+            << "\n"
+            << "opaqueDepthStateMergingEnabled="
+            << (stats.opaqueDepthStateMergingEnabled ? 1u : 0u)
+            << "\n"
+            << "positionOnlyOpaqueEnabled="
+            << (stats.positionOnlyOpaqueEnabled ? 1u : 0u) << "\n"
+            << "cachedShadowDrawListsRequested="
+            << (stats.cachedShadowDrawListsRequested ? 1u : 0u)
+            << "\n"
+            << "cachedShadowDrawListsActive="
+            << (stats.cachedShadowDrawListsActive ? 1u : 0u)
+            << "\n"
+            << "cachedShadowDrawListHits="
+            << stats.cachedShadowDrawListHits << "\n"
+            << "cachedShadowDrawListMisses="
+            << stats.cachedShadowDrawListMisses << "\n"
+            << "cachedShadowDrawListEntries="
+            << stats.cachedShadowDrawListEntries << "\n"
+            << "cachedShadowDrawListCasterProjectionPairs="
+            << stats.cachedShadowDrawListCasterProjectionPairs << "\n"
+            << "batchedFullRedrawClearActive="
+            << (stats.batchedFullRedrawClearActive ? 1u : 0u)
+            << "\n"
+            << "receiverRasterScissorEnabled="
+            << (stats.receiverRasterScissorEnabled ? 1u : 0u)
+            << "\n"
+            << "wholeMapReuseEnabled="
+            << (m_DiagnosticCsmBenchmarkSettings.wholeMapReuseEnabled
+                    ? 1u
+                    : 0u) << "\n"
+            << "wholeCascadeReuseEnabled="
+            << (m_DiagnosticCsmBenchmarkSettings
+                    .wholeCascadeReuseEnabled ? 1u : 0u) << "\n"
+            << "dirtyRectanglesEnabled="
+            << (m_DiagnosticCsmBenchmarkSettings
+                    .dirtyRectanglesEnabled ? 1u : 0u) << "\n"
+            << "scrollingEnabled="
+            << (m_DiagnosticCsmBenchmarkSettings.scrollingEnabled
+                    ? 1u
+                    : 0u) << "\n"
+            << "receiverRasterScissoredCascades="
+            << stats.receiverRasterScissoredCascades << "\n"
+            << "logicalTexels=" << stats.logicalTexels << "\n"
+            << "updatedTexels=" << stats.updatedTexels << "\n"
+            << "clearedTexels=" << stats.clearedTexels << "\n";
+
+        std::ostringstream samples;
+        samples << "runId,executableSha256,timingConfigurationId,"
+            "timingConfiguration,sourceFrame,sourceFrameGap,gpuTimingAgeFrames,"
+            "issuedFrameContextAvailable,applicationFrame,backBufferIndex,"
+            "frameIntervalMs,rawGpuMs,normalizationValid,normalizedGpuMs,"
+            "clockCapacityTFlops,utilizedTFlops,gpuUtilizationValid,"
+            "gpuUtilizationPercent,memoryBandwidthGBps,memoryBandwidthRatio,"
+            "telemetryGeneration,telemetryAgeMs,grade,totalCpuMs,setupCpuMs,cullingCpuMs,"
+            "recordingCpuMs,stageTimingsAvailable,cullingGpuMs,"
+            "clearUpdateMs,rasterMs,samplingMs\n";
+        samples << std::fixed << std::setprecision(6);
+        for (size_t index = 0u; index < sampleCount; ++index)
+        {
+            const DiagnosticCsmBenchmarkSample& sample =
+                m_DiagnosticCsmBenchmarkSamples[index];
+            const uint64_t sourceFrameGap = index == 0u
+                ? 0u
+                : sample.sourceFrame -
+                    m_DiagnosticCsmBenchmarkSamples[index - 1u]
+                        .sourceFrame;
+            samples << m_DiagnosticCsmRecordRunId << ","
+                << m_DiagnosticCsmExecutableSha256 << ","
+                << m_DiagnosticCsmTimingConfigurationId << ","
+                << m_DiagnosticCsmTimingConfiguration << ","
+                << sample.sourceFrame << ","
+                << sourceFrameGap << ","
+                << sample.timings.gpuTimingAgeFrames << ","
+                << (sample.issuedFrameContextAvailable ? 1u : 0u)
+                << ",";
+            if (sample.issuedFrameContextAvailable)
+            {
+                samples << sample.applicationFrame << ","
+                    << sample.backBufferIndex << ","
+                    << sample.frameIntervalMilliseconds << ",";
+            }
+            else
+            {
+                samples << ",,,";
+            }
+            samples
+                << sample.timings.totalMilliseconds << ","
+                << (sample.normalized.valid ? 1u : 0u) << ",";
+            if (sample.normalized.valid)
+                samples << sample.normalized.estimatedMilliseconds;
+            samples << ",";
+            if (sample.gpuMetrics.valid &&
+                std::isfinite(sample.gpuMetrics.gpuGFlops) &&
+                sample.gpuMetrics.gpuGFlops > 0.0)
+            {
+                samples << sample.gpuMetrics.gpuGFlops / 1000.0;
+            }
+            samples << ",";
+            if (sample.normalized.valid &&
+                sample.normalized.utilizationValid)
+            {
+                samples << sample.normalized.utilizedTFlops;
+            }
+            samples << ","
+                << (sample.gpuMetrics.gpuUtilizationValid ? 1u : 0u)
+                << ",";
+            if (sample.gpuMetrics.gpuUtilizationValid &&
+                std::isfinite(sample.gpuMetrics.gpuUtilization))
+            {
+                samples << sample.gpuMetrics.gpuUtilization * 100.0;
+            }
+            samples << ",";
+            if (std::isfinite(sample.gpuMetrics.memoryBandwidthGBps) &&
+                sample.gpuMetrics.memoryBandwidthGBps > 0.0)
+            {
+                samples << sample.gpuMetrics.memoryBandwidthGBps;
+            }
+            samples << ",";
+            if (sample.normalized.valid)
+                samples << sample.normalized.memoryBandwidthRatio;
+            samples << ","
+                << sample.gpuMetrics.telemetryGeneration << ",";
+            if (std::isfinite(
+                    sample.gpuMetrics.telemetryAgeMilliseconds) &&
+                sample.gpuMetrics.telemetryAgeMilliseconds >= 0.0)
+            {
+                samples
+                    << sample.gpuMetrics.telemetryAgeMilliseconds;
+            }
+            samples << ","
+                << GetGpuTimingNormalizationGradeLabel(
+                    sample.normalized.grade) << ",";
+            samples << sample.timings.totalCpuMilliseconds << ","
+                << sample.timings.setupCpuMilliseconds << ","
+                << sample.timings.cullingCpuMilliseconds << ","
+                << sample.timings.recordingCpuMilliseconds << ","
+                << (detailedGpuTimings ? 1u : 0u) << ",";
+            if (detailedGpuTimings)
+            {
+                samples
+                    << sample.timings.cullingGpuMilliseconds << ","
+                    << sample.timings.clearUpdateMilliseconds << ","
+                    << sample.timings.rasterMilliseconds << ","
+                    << sample.timings.samplingMilliseconds << "\n";
+            }
+            else
+            {
+                samples << ",,,\n";
+            }
+        }
+
+        const std::filesystem::path csvPath =
+            GetDiagnosticCsmBenchmarkArtifactPath("csv");
+        const std::filesystem::path textPath =
+            GetDiagnosticCsmBenchmarkArtifactPath("txt");
+        if (!WriteBenchmarkArtifactAtomically(
+                csvPath,
+                samples.str()))
+        {
+            WriteDiagnosticCsmBenchmarkFailure(
+                "could not publish the buffered CSV artifact");
+            return false;
+        }
+        if (!WriteBenchmarkArtifactAtomically(
+                textPath,
+                result.str()))
+        {
+            WriteDiagnosticCsmBenchmarkFailure(
+                "could not publish the buffered text artifact");
+            return false;
+        }
+
+        if (normalizedSummaryPublishable)
+        {
+            log::info(
+                "Diagnostic CSM benchmark recorded %zu unique source frames: raw median %.3f ms, advisory normalized median %.3f ms at %.1f TFLOPS, p95 %.3f ms, p99 %.3f ms, coverage %.1f%%, grade %s",
+                sampleCount,
+                rawGpuSummary.median,
+                normalizedGpuSummary.median,
+                GpuTimingNormalizationReferenceTFlops,
+                normalizedGpuSummary.p95,
+                normalizedGpuSummary.p99,
+                normalizationRunGrade.validFraction * 100.0,
+                GetGpuTimingNormalizationGradeLabel(
+                    normalizationRunGrade.grade));
+        }
+        else
+        {
+            log::info(
+                "Diagnostic CSM benchmark recorded %zu unique source frames: raw median %.3f ms; advisory normalization coverage %.1f%% was insufficient for a run summary",
+                sampleCount,
+                rawGpuSummary.median,
+                normalizationRunGrade.validFraction * 100.0);
+        }
+        return true;
+    }
+
+    void UpdateDiagnosticCsmBenchmarkRecording()
+    {
+        if (!m_DiagnosticCsmRecordRequested ||
+            m_DiagnosticCsmRecordFinished ||
+            !m_DiagnosticCsmBenchmarkStateArmed ||
+            !m_DiagnosticCascadedShadowMapPass)
+        {
+            return;
+        }
+
+        if (m_DiagnosticCsmRecordStarted &&
+            std::chrono::steady_clock::now() -
+                m_DiagnosticCsmRecordStartTime >
+                std::chrono::seconds(90))
+        {
+            m_DiagnosticCsmRecordFinished = true;
+            WriteDiagnosticCsmBenchmarkFailure(
+                "benchmark recording timed out after 90 seconds");
+            glfwSetWindowShouldClose(
+                GetDeviceManager()->GetWindow(),
+                GLFW_TRUE);
+            return;
+        }
+
+        const DiagnosticCsmTimings& timings =
+            m_DiagnosticCascadedShadowMapPass->GetTimings();
+        if (!timings.active)
+        {
+            return;
+        }
+
+        const auto submissionTime = std::chrono::steady_clock::now();
+        const char* rendererName =
+            GetDeviceManager()->GetRendererString();
+        const GpuPerformanceMetrics issueGpuMetrics =
+            QueryGpuPerformanceMetrics(rendererName);
+        const float frameIntervalMilliseconds =
+            m_DiagnosticCsmLastSubmissionTimeValid
+                ? std::chrono::duration<float, std::milli>(
+                    submissionTime -
+                    m_DiagnosticCsmLastSubmissionTime).count()
+                : 0.f;
+        m_DiagnosticCsmLastSubmissionTime = submissionTime;
+        m_DiagnosticCsmLastSubmissionTimeValid = true;
+        if (timings.gpuTimingSource ==
+                DiagnosticCsmGpuTimingSource::TimerQuery &&
+            timings.gpuTimingAgeFrames <=
+                std::numeric_limits<uint64_t>::max() -
+                    timings.gpuTimingSourceFrame)
+        {
+            const uint64_t issuedSourceFrame =
+                timings.gpuTimingSourceFrame +
+                timings.gpuTimingAgeFrames;
+            DiagnosticCsmIssuedFrameContext context;
+            context.sourceFrame = issuedSourceFrame;
+            context.applicationFrame = uint64_t(GetFrameIndex());
+            context.backBufferIndex =
+                GetDeviceManager()->GetCurrentBackBufferIndex();
+            context.frameIntervalMilliseconds =
+                frameIntervalMilliseconds;
+            context.gpuMetrics = issueGpuMetrics;
+            if (m_DiagnosticCsmIssuedFrameContexts.empty() ||
+                m_DiagnosticCsmIssuedFrameContexts.back().sourceFrame <
+                    issuedSourceFrame)
+            {
+                m_DiagnosticCsmIssuedFrameContexts.push_back(context);
+            }
+            else if (
+                m_DiagnosticCsmIssuedFrameContexts.back().sourceFrame ==
+                    issuedSourceFrame)
+            {
+                m_DiagnosticCsmIssuedFrameContexts.back() = context;
+            }
+            while (m_DiagnosticCsmIssuedFrameContexts.size() > 64u)
+                m_DiagnosticCsmIssuedFrameContexts.pop_front();
+        }
+
+        const DiagnosticCsmTimingFrameOrder sourceFrameOrder =
+            ClassifyDiagnosticCsmTimingSourceFrame(
+                m_DiagnosticCsmLastSourceFrame,
+                m_DiagnosticCsmLastSourceFrameValid,
+                timings);
+        if (sourceFrameOrder ==
+                DiagnosticCsmTimingFrameOrder::Unavailable ||
+            sourceFrameOrder ==
+                DiagnosticCsmTimingFrameOrder::Duplicate)
+        {
+            return;
+        }
+        if (sourceFrameOrder ==
+            DiagnosticCsmTimingFrameOrder::OutOfOrder)
+        {
+            m_DiagnosticCsmRecordFinished = true;
+            WriteDiagnosticCsmBenchmarkFailure(
+                "GPU timing source frames moved backward");
+            glfwSetWindowShouldClose(
+                GetDeviceManager()->GetWindow(),
+                GLFW_TRUE);
+            return;
+        }
+        if (!IsValidDiagnosticCsmBenchmarkTiming(timings))
+        {
+            m_DiagnosticCsmRecordFinished = true;
+            WriteDiagnosticCsmBenchmarkFailure(
+                "GPU or CPU benchmark timing was non-finite, non-positive, or unavailable");
+            glfwSetWindowShouldClose(
+                GetDeviceManager()->GetWindow(),
+                GLFW_TRUE);
+            return;
+        }
+        m_DiagnosticCsmLastSourceFrame =
+            timings.gpuTimingSourceFrame;
+        m_DiagnosticCsmLastSourceFrameValid = true;
+
+        if (!m_DiagnosticCsmRecordWarmupComplete)
+        {
+            if (m_DiagnosticCsmRecordWarmupFrames <
+                DiagnosticCsmBenchmarkWarmupFrames)
+            {
+                ++m_DiagnosticCsmRecordWarmupFrames;
+            }
+
+            m_DiagnosticCsmWarmupElapsedMilliseconds =
+                std::chrono::duration<double, std::milli>(
+                    submissionTime -
+                    m_DiagnosticCsmRecordStartTime).count();
+            if (m_DiagnosticCsmWarmupInitialTelemetryGeneration == 0u &&
+                issueGpuMetrics.telemetryGeneration != 0u)
+            {
+                m_DiagnosticCsmWarmupInitialTelemetryGeneration =
+                    issueGpuMetrics.telemetryGeneration;
+            }
+
+            const bool minimumFramesElapsed =
+                m_DiagnosticCsmRecordWarmupFrames >=
+                    DiagnosticCsmBenchmarkWarmupFrames;
+            const bool minimumWallTimeElapsed =
+                m_DiagnosticCsmWarmupElapsedMilliseconds >=
+                    DiagnosticCsmBenchmarkWarmupSeconds * 1000.0;
+            const bool calibratedAdapter =
+                FindGpuTimingNormalizationCalibration(
+                    rendererName ? rendererName : "") !=
+                    nullptr;
+            const bool telemetryGenerationAdvanced =
+                m_DiagnosticCsmWarmupInitialTelemetryGeneration != 0u &&
+                issueGpuMetrics.telemetryGeneration >=
+                    m_DiagnosticCsmWarmupInitialTelemetryGeneration &&
+                issueGpuMetrics.telemetryGeneration -
+                    m_DiagnosticCsmWarmupInitialTelemetryGeneration >=
+                    DiagnosticCsmBenchmarkFreshTelemetryGenerations;
+            const bool freshTelemetry =
+                issueGpuMetrics.valid &&
+                issueGpuMetrics.gpuUtilizationValid &&
+                std::isfinite(
+                    issueGpuMetrics.telemetryAgeMilliseconds) &&
+                issueGpuMetrics.telemetryAgeMilliseconds >= 0.0 &&
+                issueGpuMetrics.telemetryAgeMilliseconds <=
+                    DiagnosticCsmBenchmarkFreshTelemetryAgeMilliseconds &&
+                telemetryGenerationAdvanced;
+            if (!minimumFramesElapsed ||
+                !minimumWallTimeElapsed ||
+                (calibratedAdapter && !freshTelemetry))
+            {
+                return;
+            }
+
+            m_DiagnosticCsmRecordWarmupComplete = true;
+            m_DiagnosticCsmMeasurementStartTelemetryGeneration =
+                issueGpuMetrics.telemetryGeneration;
+            return;
+        }
+
+        DiagnosticCsmBenchmarkSample sample;
+        sample.sourceFrame = timings.gpuTimingSourceFrame;
+        sample.timings = timings;
+        const auto issuedContext = std::find_if(
+            m_DiagnosticCsmIssuedFrameContexts.rbegin(),
+            m_DiagnosticCsmIssuedFrameContexts.rend(),
+            [&sample](const DiagnosticCsmIssuedFrameContext& context) {
+                return context.sourceFrame == sample.sourceFrame;
+            });
+        if (issuedContext !=
+            m_DiagnosticCsmIssuedFrameContexts.rend())
+        {
+            sample.applicationFrame = issuedContext->applicationFrame;
+            sample.backBufferIndex = issuedContext->backBufferIndex;
+            sample.frameIntervalMilliseconds =
+                issuedContext->frameIntervalMilliseconds;
+            sample.gpuMetrics = issuedContext->gpuMetrics;
+            sample.issuedFrameContextAvailable = true;
+        }
+        sample.stats =
+            m_DiagnosticCascadedShadowMapPass->GetStats();
+        sample.normalized = NormalizeGpuTimingMilliseconds(
+            sample.timings.totalMilliseconds,
+            sample.gpuMetrics,
+            rendererName ? rendererName : "");
+        if (!m_DiagnosticCsmBenchmarkSamples.empty() &&
+            !IsSameDiagnosticCsmBenchmarkWork(
+                m_DiagnosticCsmBenchmarkSamples.front().stats,
+                sample.stats))
+        {
+            m_DiagnosticCsmRecordFinished = true;
+            WriteDiagnosticCsmBenchmarkFailure(
+                "CSM work identity changed during measurement");
+            glfwSetWindowShouldClose(
+                GetDeviceManager()->GetWindow(),
+                GLFW_TRUE);
+            return;
+        }
+
+        m_DiagnosticCsmBenchmarkSamples.push_back(std::move(sample));
+        if (m_DiagnosticCsmBenchmarkSamples.size() <
+            DiagnosticCsmBenchmarkMeasurementFrames)
+        {
+            return;
+        }
+
+        const bool artifactsPublished =
+            FinishDiagnosticCsmBenchmarkRecording();
+        m_DiagnosticCsmRecordFinished = true;
+        if (!artifactsPublished)
+        {
+            log::error(
+                "Diagnostic CSM benchmark completed sampling but could not publish a complete result");
+        }
+        glfwSetWindowShouldClose(
+            GetDeviceManager()->GetWindow(),
+            GLFW_TRUE);
+    }
+
+    bool ValidateDiagnosticCsmBenchmarkState(
+        int windowWidth,
+        int windowHeight,
+        bool shadowStateDirty)
+    {
+        if (!m_DiagnosticCsmBenchmarkRequested)
+            return true;
+
+        const SponzaCameraPreset& preset =
+            GetDefaultSponzaCameraPreset();
+        bool valid =
+            m_DiagnosticCsmBenchmarkScene == m_Scene.get() &&
+            m_DiagnosticCsmBenchmarkLight == m_SunLight.get() &&
+            m_BenchmarkCameraActive &&
+            m_ui.Camera == CameraMode::Static &&
+            m_CameraVerticalFov == preset.VerticalFovDegrees &&
+            IsSponzaCameraAtPreset(
+                preset,
+                GetActiveCamera().GetPosition(),
+                GetActiveCamera().GetDir(),
+                GetActiveCamera().GetUp()) &&
+            windowWidth == int(preset.ReferenceWidth) &&
+            windowHeight == int(preset.ReferenceHeight) &&
+            m_ui.EnablePbr &&
+            m_ui.RenderMode == RendererMode::Deferred &&
+            !m_ui.AntiAliasing.enabled &&
+            !m_ui.UsesLongTermTemporalAA() &&
+            !m_ui.BendScreenSpaceShadows.enabled &&
+            !m_ui.SparseVirtualShadowMaps.enabled &&
+            !m_ui.ScreenSpaceVisibility.enabled &&
+            m_ui.WhiteWorld == WhiteWorldMode::Off &&
+            m_ui.DiagnosticCascadedShadowMaps.enabled &&
+            IsSameDiagnosticCsmTimingConfiguration(
+                m_ui.DiagnosticCascadedShadowMaps,
+                m_DiagnosticCsmBenchmarkSettings);
+        if (valid &&
+            m_DiagnosticCsmBenchmarkStateArmed &&
+            shadowStateDirty)
+        {
+            valid = false;
+        }
+        if (valid && m_SunLight)
+        {
+            const double3 lightDirection = m_SunLight->GetDirection();
+            valid =
+                lightDirection.x ==
+                    m_DiagnosticCsmBenchmarkLightDirection.x &&
+                lightDirection.y ==
+                    m_DiagnosticCsmBenchmarkLightDirection.y &&
+                lightDirection.z ==
+                    m_DiagnosticCsmBenchmarkLightDirection.z;
+        }
+        if (valid &&
+            !m_DiagnosticCsmBenchmarkStateArmed &&
+            !shadowStateDirty)
+        {
+            m_DiagnosticCsmBenchmarkStateArmed = true;
+            if (m_DiagnosticCsmRecordRequested &&
+                !StartDiagnosticCsmBenchmarkRecording())
+            {
+                m_DiagnosticCsmRecordFinished = true;
+                valid = false;
+            }
+            else
+            {
+                log::info(
+                    "Diagnostic CSM benchmark state is locked and ready");
+            }
+        }
+        if (valid)
+            return true;
+
+        if (m_DiagnosticCsmRecordRequested &&
+            !m_DiagnosticCsmRecordFinished)
+        {
+            m_DiagnosticCsmRecordFinished = true;
+            WriteDiagnosticCsmBenchmarkFailure(
+                "scene, camera, light, renderer configuration, or shadow state changed");
+        }
+        log::error(
+            "Diagnostic CSM benchmark aborted because its scene, 1920 x 1080 camera, light, or renderer configuration changed");
+        glfwSetWindowShouldClose(
+            GetDeviceManager()->GetWindow(),
+            GLFW_TRUE);
+        return false;
     }
 
     virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override
@@ -4181,6 +8348,8 @@ public:
             log::info(
                 "UVSR_PERF TAA prime complete; AA disabled before capture");
         }
+        UpdateSvsmMotionBenchmark();
+
         int windowWidth, windowHeight;
         GetDeviceManager()->GetWindowDimensions(windowWidth, windowHeight);
         constexpr int visibilityCaptureWidth = 1896;
@@ -4221,7 +8390,86 @@ public:
         nvrhi::Viewport windowViewport = nvrhi::Viewport(float(windowWidth), float(windowHeight));
         nvrhi::Viewport renderViewport = windowViewport;
 
+        const auto& sceneGraph = m_Scene->GetSceneGraph();
+        const auto& sceneRoot = sceneGraph->GetRootNode();
+        const auto& sceneMaterials = sceneGraph->GetMaterials();
+        const bool shadowRelevantMaterialDirty =
+            std::any_of(
+                sceneMaterials.begin(),
+                sceneMaterials.end(),
+                [](const auto& material) {
+                    return material && material->dirty;
+                });
+        using DirtyFlags = SceneGraphNode::DirtyFlags;
+        const DirtyFlags pendingSceneDirtyFlags = sceneRoot
+            ? sceneRoot->GetDirtyFlags()
+            : DirtyFlags::None;
+        const DirtyFlags fullShadowMapInvalidationFlags =
+            DirtyFlags::Leaf |
+            DirtyFlags::SubgraphStructure |
+            DirtyFlags::SubgraphContentUpdate;
+        const bool shadowMapsRequireFullSceneInvalidation =
+            shadowRelevantMaterialDirty ||
+            (pendingSceneDirtyFlags &
+                fullShadowMapInvalidationFlags) != 0u;
+        // CSM retains its existing conservative policy. SVSM can localize
+        // structural add/remove and transform changes through stable
+        // instance/geometry snapshots. Donut does not expose per-object
+        // revisions for same-handle vertex-buffer or texture-content writes,
+        // so those unassignable channels must still fail open to a full
+        // refresh instead of letting one recognized caster event mask another.
+        const bool svsmRequiresFullSceneInvalidation =
+            shadowRelevantMaterialDirty ||
+            (pendingSceneDirtyFlags &
+                DirtyFlags::SubgraphContentUpdate) != 0u;
+        const DirtyFlags shadowDepthBindingRebaseFlags =
+            DirtyFlags::Leaf |
+            DirtyFlags::SubgraphStructure;
+        const bool shadowDepthBindingsRequireReset =
+            (pendingSceneDirtyFlags &
+                shadowDepthBindingRebaseFlags) != 0u;
+        const DirtyFlags shadowRelevantDirtyFlags =
+            DirtyFlags::LocalTransform |
+            DirtyFlags::Leaf |
+            DirtyFlags::SubgraphStructure |
+            DirtyFlags::SubgraphTransforms |
+            DirtyFlags::SubgraphContentUpdate;
+        const bool shadowRelevantSceneDirty =
+            shadowRelevantMaterialDirty ||
+            (pendingSceneDirtyFlags &
+                shadowRelevantDirtyFlags) != 0u;
+        const bool svsmCasterRelevantSceneDirty =
+            shadowRelevantMaterialDirty ||
+            HasSvsmCasterRelevantDirtyState(
+                sceneRoot.get(),
+                m_SvsmDirtyNodeScratch);
+        if (sceneRoot)
+        {
+            if (shadowRelevantSceneDirty)
+            {
+                ++m_SvsmSceneStateRevision;
+            }
+            if (svsmCasterRelevantSceneDirty)
+            {
+                ++m_SvsmCasterStateRevision;
+            }
+        }
+        // UVSR samples transform/content dirty flags and material dirtiness
+        // before RefreshSceneGraph clears them. The second revision walks only
+        // dirty branches and ignores a transform whose branch contains no
+        // opaque or alpha-tested casters. A moving sun therefore does not force
+        // a full caster hash and binding-signature traversal, while structural
+        // changes and uncertain content changes still fail open. Animation
+        // channels use the same setters, so dormant animation data remains free.
+        m_SvsmSceneStateRevisionReliable = sceneRoot != nullptr;
         m_Scene->RefreshSceneGraph(GetFrameIndex());
+        if (!ValidateDiagnosticCsmBenchmarkState(
+                windowWidth,
+                windowHeight,
+                shadowRelevantSceneDirty))
+        {
+            return;
+        }
         const auto& sceneLights =
             m_Scene->GetSceneGraph()->GetLights();
 
@@ -4235,15 +8483,32 @@ public:
                     : ResolveSupportedMsaaSampleCount(
                         GetDevice(),
                         m_ui.GetResolvedAntiAliasingSettings()
-                            .rasterSampleCount);
-            const bool visibilityResourcesRequired = m_ui.EnablePbr &&
+                            .rasterSampleCount,
+                        m_ui.EnablePbr);
+            const bool screenSpaceVisibilityResourcesRequired =
+                m_ui.EnablePbr &&
                 m_ui.IsScreenSpaceVisibilityAvailable() &&
-                m_ui.ScreenSpaceVisibility.HasActiveConsumer();
+                m_ui.HasActiveScreenSpaceVisibilityConsumer();
+            // The directional visibility producers consume a single coherent
+            // closest surface. Keep the resolve targets allocated for every
+            // deferred PBR MSAA topology so toggling Bend, SVSM, or diagnostic
+            // CSM does not force an unrelated render-pass rebuild.
+            const bool msaaClosestSurfaceResolveResourcesRequired =
+                m_ui.EnablePbr &&
+                m_ui.UsesDeferredShading() &&
+                sampleCount > 1u;
+            const bool visibilityResourcesRequired =
+                screenSpaceVisibilityResourcesRequired ||
+                msaaClosestSurfaceResolveResourcesRequired;
             const bool visibilitySourceRadianceRequired =
-                visibilityResourcesRequired &&
+                screenSpaceVisibilityResourcesRequired &&
                 m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
                 (!sceneLights.empty() ||
-                    VisibilityEmissiveSourceGain > 0.f);
+                    IsImageBasedLightingLobeActive(
+                        m_ui.EnableDiffuseIbl,
+                        m_ui.DiffuseIblStrength) ||
+                    (m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive &&
+                        m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain > 0.f));
             const bool temporalAARequired =
                 m_ui.UsesLongTermTemporalAA();
             const bool cmaa2Required = m_ui.UsesCmaa2();
@@ -4314,7 +8579,22 @@ public:
 
             if (m_ui.ShaderReloadRequested)
             {
+                m_DiagnosticCascadedShadowMapPass.reset();
+                // This pass owns shader handles and PSOs independently of the
+                // main pass set. Drop it before clearing the factory cache so
+                // an explicit reload cannot retain the previous MSAA resolve.
+                m_MsaaVisibilityResolvePass.reset();
                 m_ShaderFactory->ClearCache();
+                // Light-probe preprocessing owns shader handles too. Recreate
+                // it only for an explicit shader reload, not for resize or TAA
+                // pass recreation, so static IBL remains zero-work otherwise.
+                m_ImageBasedLightingEnvironment =
+                    std::make_unique<ImageBasedLightingEnvironment>(
+                        GetDevice(),
+                        m_ShaderFactory,
+                        m_CommonPasses,
+                        app::GetDirectoryWithExecutable().parent_path() /
+                            "media/environments");
                 needNewPasses = true;
             }
 
@@ -4355,31 +8635,161 @@ public:
         AdvanceRendererTimers();
         BeginRendererStage(RendererTimingStage::CompleteFrame);
         BeginRendererStage(RendererTimingStage::SceneSetup);
+#ifdef _WIN32
+        NameD3d12CommandList(
+            m_CommandList,
+            L"UVSR Main Render Command List");
+        SetD3d12DredMarker(m_CommandList, L"UVSR Main Frame Start");
+#endif
 
         m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());
 
         nvrhi::ITexture* framebufferTexture = framebuffer->getDesc().colorAttachments[0].texture;
         m_CommandList->clearTextureFloat(framebufferTexture, nvrhi::AllSubresources, nvrhi::Color(0.f));
 
-        m_AmbientTop = m_ui.SkyParams.skyColor * m_ui.SkyParams.brightness;
-        m_AmbientBottom = m_ui.SkyParams.groundColor * m_ui.SkyParams.brightness;
+        constexpr float WhiteWorldIndirectReferenceScale = 4.0f;
+        const bool whiteWorldEnabled =
+            m_ui.WhiteWorld != WhiteWorldMode::Off;
 
-        if (m_ui.WhiteWorld != WhiteWorldMode::Off)
+        if (m_ImageBasedLightingEnvironment)
         {
-            // Keep white-world illumination neutral instead of baking the blue sky
-            // tint into otherwise white reference surfaces.
-            const float topLuma = dot(m_AmbientTop, float3(0.2126f, 0.7152f, 0.0722f));
-            const float bottomLuma = dot(m_AmbientBottom, float3(0.2126f, 0.7152f, 0.0722f));
-            // White World is the paper/reference inspection mode. Keep direct
-            // light untouched, but give the neutral indirect term enough range
-            // for ambient visibility to be legible instead of limiting AO to a
-            // barely visible 3-6% sky contribution.
-            constexpr float WhiteWorldIndirectReferenceScale = 4.0f;
-            m_AmbientTop = float3(topLuma * WhiteWorldIndirectReferenceScale);
-            m_AmbientBottom = float3(bottomLuma * WhiteWorldIndirectReferenceScale);
+            m_ImageBasedLightingEnvironment->Update(
+                m_CommandList,
+                whiteWorldEnabled,
+                whiteWorldEnabled
+                    ? WhiteWorldIndirectReferenceScale
+                    : 1.f,
+                m_ui.EnvironmentExposureStops,
+                m_ui.EnableDiffuseIbl,
+                m_ui.DiffuseIblStrength,
+                m_ui.EnableSpecularIbl,
+                m_ui.SpecularIblStrength,
+                m_ui.EnvironmentSource);
         }
+        const std::vector<std::shared_ptr<LightProbe>> emptyLightProbes;
+        const auto& environmentLightProbes =
+            m_ui.EnablePbr && m_ImageBasedLightingEnvironment
+                ? m_ImageBasedLightingEnvironment->GetLightProbes()
+                : emptyLightProbes;
+        const LightProbe* globalEnvironment =
+            m_ui.EnablePbr && m_ImageBasedLightingEnvironment
+                ? m_ImageBasedLightingEnvironment->GetLightProbe()
+                : nullptr;
+        nvrhi::ITexture* diffuseEnvironment =
+            globalEnvironment
+                ? globalEnvironment->diffuseMap.Get()
+                : nullptr;
+        const float diffuseEnvironmentScale =
+            globalEnvironment
+                ? globalEnvironment->diffuseScale
+                : 0.f;
+        const bool runScreenSpaceVisibility =
+            m_ui.EnablePbr &&
+            m_ui.IsScreenSpaceVisibilityAvailable() &&
+            m_ui.HasActiveScreenSpaceVisibilityConsumer() &&
+            m_ui.LightingDebugView == PbrLightingDebugView::None;
+        uint32_t knownInactiveLightingSources = 0u;
+        if (sceneLights.empty())
+            knownInactiveLightingSources |= LightingSource_Direct;
+        if (!m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive ||
+            !(m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain > 0.f))
+        {
+            knownInactiveLightingSources |= LightingSource_Emissive;
+        }
+        if (!diffuseEnvironment ||
+            !(diffuseEnvironmentScale > 0.f))
+        {
+            knownInactiveLightingSources |= LightingSource_Environment;
+        }
+        constexpr uint32_t firstBounceLightingSources =
+            LightingSource_Direct |
+            LightingSource_Emissive |
+            LightingSource_Environment;
+        const bool allFirstBounceSourcesInactive =
+            (knownInactiveLightingSources &
+                firstBounceLightingSources) ==
+            firstBounceLightingSources;
+        const bool writeSourceRadiance = runScreenSpaceVisibility &&
+            m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
+            !allFirstBounceSourcesInactive;
+        const bool writeBounceMetadata = writeSourceRadiance &&
+            (!m_ui.ScreenSpaceVisibility.indirectDiffuse.limitBounces ||
+                m_ui.ScreenSpaceVisibility.indirectDiffuse.bounceCount >
+                    1u);
 
         m_RenderTargets->Clear(m_CommandList);
+        BendScreenSpaceShadowResult bendShadowResult;
+        SparseVirtualShadowMapResult sparseVirtualShadowMapResult;
+        DiagnosticCascadedShadowMapResult diagnosticCsmResult;
+        DirectionalLightVisibilitySet directionalVisibility{};
+        MsaaVisibilityResolveOutputs closestSurfaceOutputs;
+        bool closestSurfaceResolved = false;
+
+        const auto resolveClosestMsaaSurface = [&]()
+        {
+            if (closestSurfaceResolved ||
+                m_RenderTargets->GetSampleCount() <= 1u ||
+                !m_MsaaVisibilityResolvePass)
+            {
+                return closestSurfaceResolved;
+            }
+
+            MsaaVisibilityResolveInputs resolveInputs;
+            resolveInputs.depth = m_RenderTargets->Depth;
+            resolveInputs.diffuse = m_RenderTargets->GBufferDiffuse;
+            resolveInputs.material = m_RenderTargets->GBufferSpecular;
+            resolveInputs.normals = m_RenderTargets->GBufferNormals;
+            resolveInputs.emissive = m_RenderTargets->GBufferEmissive;
+            resolveInputs.materialAmbientOcclusion =
+                m_RenderTargets->MaterialAmbientOcclusion;
+            resolveInputs.motionVectors =
+                m_RenderTargets->MotionVectors;
+
+            closestSurfaceOutputs.depth =
+                m_RenderTargets->VisibilityDepth;
+            closestSurfaceOutputs.diffuse =
+                m_RenderTargets->VisibilityGBufferDiffuse;
+            closestSurfaceOutputs.material =
+                m_RenderTargets->VisibilityGBufferMaterial;
+            closestSurfaceOutputs.normals =
+                m_RenderTargets->VisibilityGBufferNormals;
+            closestSurfaceOutputs.emissive =
+                m_RenderTargets->VisibilityGBufferEmissive;
+            closestSurfaceOutputs.materialAmbientOcclusion =
+                m_RenderTargets->VisibilityMaterialAmbientOcclusion;
+            closestSurfaceOutputs.motionVectors =
+                m_RenderTargets->VisibilityMotionVectors;
+
+            if (!closestSurfaceOutputs.depth ||
+                !closestSurfaceOutputs.diffuse ||
+                !closestSurfaceOutputs.material ||
+                !closestSurfaceOutputs.normals ||
+                !closestSurfaceOutputs.emissive ||
+                !closestSurfaceOutputs.materialAmbientOcclusion ||
+                !closestSurfaceOutputs.motionVectors)
+            {
+                return false;
+            }
+
+            m_MsaaVisibilityResolvePass->Render(
+                m_CommandList,
+                resolveInputs,
+                closestSurfaceOutputs,
+                m_RenderTargets->GetSampleCount());
+            closestSurfaceResolved = true;
+            return true;
+        };
+
+        if (m_SparseVirtualShadowMapPass &&
+            (!m_ui.UsesDeferredShading() || !m_ui.EnablePbr))
+        {
+            m_SparseVirtualShadowMapPass->Deactivate();
+        }
+        if (m_DiagnosticCascadedShadowMapPass &&
+            (!m_ui.UsesDeferredShading() || !m_ui.EnablePbr))
+        {
+            m_DiagnosticCascadedShadowMapPass->Deactivate();
+        }
 
         ForwardShadingPass::Context forwardContext;
         DeferredLightingPass::Inputs deferredMsaaInputs;
@@ -4388,7 +8798,15 @@ public:
         m_SubmittedMainViewTriangles = 0u;
 
         if (!m_ui.UsesDeferredShading())
-            m_ForwardPass->PrepareLights(forwardContext, m_CommandList, m_Scene->GetSceneGraph()->GetLights(), m_AmbientTop, m_AmbientBottom, {});
+        {
+            m_ForwardPass->PrepareLights(
+                forwardContext,
+                m_CommandList,
+                m_Scene->GetSceneGraph()->GetLights(),
+                float3(0.f),
+                float3(0.f),
+                environmentLightProbes);
+        }
         EndRendererStage(RendererTimingStage::SceneSetup);
 
         if (m_ui.UsesDeferredShading())
@@ -4411,6 +8829,90 @@ public:
                 geometryPass.GetSubmittedTriangles();
             EndRendererStage(RendererTimingStage::Geometry);
 
+            const bool directionalVisibilityProducerEnabled =
+                m_ui.BendScreenSpaceShadows.enabled ||
+                m_ui.SparseVirtualShadowMaps.enabled ||
+                m_ui.DiagnosticCascadedShadowMaps.enabled;
+            if (m_RenderTargets->GetSampleCount() > 1u &&
+                (runScreenSpaceVisibility ||
+                    directionalVisibilityProducerEnabled))
+            {
+                resolveClosestMsaaSurface();
+            }
+            const bool singleSurfaceInputsAvailable =
+                m_RenderTargets->GetSampleCount() == 1u ||
+                closestSurfaceResolved;
+            nvrhi::ITexture* visibilityDepth =
+                closestSurfaceResolved
+                    ? closestSurfaceOutputs.depth
+                    : m_RenderTargets->Depth.Get();
+            nvrhi::ITexture* visibilityNormals =
+                closestSurfaceResolved
+                    ? closestSurfaceOutputs.normals
+                    : m_RenderTargets->GBufferNormals.Get();
+
+            if (m_ui.EnablePbr &&
+                m_BendScreenSpaceShadowPass &&
+                (!m_ui.BendScreenSpaceShadows.enabled ||
+                    singleSurfaceInputsAvailable))
+            {
+                bendShadowResult = m_BendScreenSpaceShadowPass->Render(
+                    m_CommandList,
+                    m_ui.BendScreenSpaceShadows,
+                    *m_View,
+                    visibilityDepth,
+                    m_SunLight.get());
+            }
+
+            if (m_ui.EnablePbr &&
+                m_SparseVirtualShadowMapPass &&
+                (!m_ui.SparseVirtualShadowMaps.enabled ||
+                    singleSurfaceInputsAvailable))
+            {
+                sparseVirtualShadowMapResult =
+                    m_SparseVirtualShadowMapPass->Render(
+                        m_CommandList,
+                        m_ui.SparseVirtualShadowMaps,
+                        *m_View,
+                        visibilityDepth,
+                        m_SunLight.get(),
+                        m_Scene->GetSceneGraph()->GetRootNode(),
+                        m_ui.SparseVirtualShadowMaps.
+                                casterOnlySceneRevisionEnabled
+                            ? m_SvsmCasterStateRevision
+                            : m_SvsmSceneStateRevision,
+                        m_SvsmSceneStateRevisionReliable,
+                        svsmRequiresFullSceneInvalidation,
+                        shadowDepthBindingsRequireReset,
+                        *m_OpaqueDrawStrategy,
+                        m_SvsmMotionBenchmarkCurrentTimingTag,
+                        // Accepted runs stay total-only. An explicit detailed
+                        // diagnostic keeps the independent stage queries so
+                        // the debug control can identify a regression source;
+                        // the result already fails accepted-evidence checks.
+                        m_SvsmMotionBenchmarkActive &&
+                            !m_ui.SparseVirtualShadowMaps.
+                                detailedGpuTimingEnabled);
+            }
+            if (m_ui.EnablePbr &&
+                m_DiagnosticCascadedShadowMapPass &&
+                (!m_ui.DiagnosticCascadedShadowMaps.enabled ||
+                    singleSurfaceInputsAvailable))
+            {
+                diagnosticCsmResult =
+                    m_DiagnosticCascadedShadowMapPass->Render(
+                        m_CommandList,
+                        m_ui.DiagnosticCascadedShadowMaps,
+                        *m_View,
+                        visibilityDepth,
+                        visibilityNormals,
+                        m_SunLight.get(),
+                        m_Scene->GetSceneGraph()->GetRootNode(),
+                        m_SvsmSceneStateRevision,
+                        m_SvsmSceneStateRevisionReliable,
+                        shadowMapsRequireFullSceneInvalidation,
+                        *m_OpaqueDrawStrategy);
+            }
             DeferredLightingPass::Inputs deferredInputs;
             deferredInputs.SetGBuffer(*m_RenderTargets);
             if (m_ui.EnablePbr)
@@ -4419,32 +8921,34 @@ public:
                 // separate authored material ambient-occlusion attachment.
                 deferredInputs.indirectDiffuse = m_RenderTargets->MaterialAmbientOcclusion;
             }
-            deferredInputs.ambientColorTop = m_AmbientTop;
-            deferredInputs.ambientColorBottom = m_AmbientBottom;
             deferredInputs.lights = &sceneLights;
 
-            const bool runScreenSpaceVisibility = m_ui.EnablePbr &&
-                m_ui.IsScreenSpaceVisibilityAvailable() &&
-                m_ui.ScreenSpaceVisibility.HasActiveConsumer();
-            uint32_t knownInactiveLightingSources = 0u;
-            if (sceneLights.empty())
-                knownInactiveLightingSources |= LightingSource_Direct;
-            const bool allFirstBounceSourcesInactive =
-                (knownInactiveLightingSources &
-                    (LightingSource_Direct | LightingSource_Emissive)) ==
-                (LightingSource_Direct | LightingSource_Emissive);
-            const bool writeSourceRadiance = runScreenSpaceVisibility &&
-                m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
-                !allFirstBounceSourcesInactive;
-            const bool writeBounceMetadata = writeSourceRadiance &&
-                (!m_ui.ScreenSpaceVisibility.indirectDiffuse.limitBounces ||
-                    m_ui.ScreenSpaceVisibility.indirectDiffuse.bounceCount >
-                        1u);
+            // Bend, SVSM, and diagnostic CSM remain independent visibility
+            // producers. This frame-local adapter is their only shared
+            // integration point, and
+            // deferred lighting applies a factor only to its pointer-identical
+            // light. Any producer can therefore be removed or ported
+            // without changing the other.
+            directionalVisibility = {{
+                {
+                    bendShadowResult.nearVisibility,
+                    bendShadowResult.light
+                },
+                {
+                    sparseVirtualShadowMapResult.visibility,
+                    sparseVirtualShadowMapResult.light
+                },
+                {
+                    diagnosticCsmResult.visibility,
+                    diagnosticCsmResult.light
+                }
+            }};
+
             deferredInputs.output = runScreenSpaceVisibility
                 ? m_RenderTargets->BaseLighting.Get()
                 : m_RenderTargets->HdrColor.Get();
 
-            if (m_ui.UsesHardwareMsaa())
+            if (m_RenderTargets->GetSampleCount() > 1u)
             {
                 // Preserve every G-buffer sample until after material decode
                 // and nonlinear lighting. The resolved sky is added later as
@@ -4455,69 +8959,24 @@ public:
                 deferredMsaaLightingPending = true;
 
                 if (runScreenSpaceVisibility &&
-                    m_MsaaVisibilityResolvePass &&
+                    closestSurfaceResolved &&
                     m_ScreenSpaceVisibilityPass)
                 {
-                    MsaaVisibilityResolveInputs resolveInputs;
-                    resolveInputs.depth =
-                        m_RenderTargets->Depth;
-                    resolveInputs.diffuse =
-                        m_RenderTargets->GBufferDiffuse;
-                    resolveInputs.material =
-                        m_RenderTargets->GBufferSpecular;
-                    resolveInputs.normals =
-                        m_RenderTargets->GBufferNormals;
-                    resolveInputs.emissive =
-                        m_RenderTargets->GBufferEmissive;
-                    resolveInputs.materialAmbientOcclusion =
-                        m_RenderTargets
-                            ->MaterialAmbientOcclusion;
-                    resolveInputs.motionVectors =
-                        m_RenderTargets->MotionVectors;
-
-                    MsaaVisibilityResolveOutputs
-                        resolveOutputs;
-                    resolveOutputs.depth =
-                        m_RenderTargets->VisibilityDepth;
-                    resolveOutputs.diffuse =
-                        m_RenderTargets
-                            ->VisibilityGBufferDiffuse;
-                    resolveOutputs.material =
-                        m_RenderTargets
-                            ->VisibilityGBufferMaterial;
-                    resolveOutputs.normals =
-                        m_RenderTargets
-                            ->VisibilityGBufferNormals;
-                    resolveOutputs.emissive =
-                        m_RenderTargets
-                            ->VisibilityGBufferEmissive;
-                    resolveOutputs.materialAmbientOcclusion =
-                        m_RenderTargets
-                            ->VisibilityMaterialAmbientOcclusion;
-                    resolveOutputs.motionVectors =
-                        m_RenderTargets
-                            ->VisibilityMotionVectors;
-                    m_MsaaVisibilityResolvePass->Render(
-                        m_CommandList,
-                        resolveInputs,
-                        resolveOutputs,
-                        m_RenderTargets->GetSampleCount());
-
                     DeferredLightingPass::Inputs
                         visibilityDeferredInputs =
                             deferredInputs;
                     visibilityDeferredInputs.depth =
-                        resolveOutputs.depth;
+                        closestSurfaceOutputs.depth;
                     visibilityDeferredInputs.gbufferDiffuse =
-                        resolveOutputs.diffuse;
+                        closestSurfaceOutputs.diffuse;
                     visibilityDeferredInputs.gbufferSpecular =
-                        resolveOutputs.material;
+                        closestSurfaceOutputs.material;
                     visibilityDeferredInputs.gbufferNormals =
-                        resolveOutputs.normals;
+                        closestSurfaceOutputs.normals;
                     visibilityDeferredInputs.gbufferEmissive =
-                        resolveOutputs.emissive;
+                        closestSurfaceOutputs.emissive;
                     visibilityDeferredInputs.indirectDiffuse =
-                        resolveOutputs
+                        closestSurfaceOutputs
                             .materialAmbientOcclusion;
                     visibilityDeferredInputs.output =
                         m_RenderTargets->BaseLighting;
@@ -4525,35 +8984,62 @@ public:
                         m_CommandList,
                         *m_View,
                         visibilityDeferredInputs,
+                        directionalVisibility,
+                        globalEnvironment,
                         m_RenderTargets
                             ->DirectDiffuseRadiance,
                         true,
                         writeSourceRadiance,
                         writeBounceMetadata,
-                        true,
-                        VisibilityEmissiveSourceGain,
+                        m_ui.ScreenSpaceVisibility.indirectDiffuse
+                            .includeEmissive,
+                        m_ui.ScreenSpaceVisibility.indirectDiffuse
+                            .emissiveGain,
+                        uint32_t(m_ui.LightingDebugView),
                         float2(0.f));
 
                     ScreenSpaceVisibilityInputs
                         visibilityInputs;
                     visibilityInputs.depth =
-                        resolveOutputs.depth;
+                        closestSurfaceOutputs.depth;
                     visibilityInputs.normals =
-                        resolveOutputs.normals;
+                        closestSurfaceOutputs.normals;
                     visibilityInputs.motionVectors =
-                        resolveOutputs.motionVectors;
+                        closestSurfaceOutputs.motionVectors;
                     visibilityInputs.sourceRadiance =
                         m_RenderTargets
                             ->DirectDiffuseRadiance;
                     visibilityInputs.gbufferDiffuse =
-                        resolveOutputs.diffuse;
+                        closestSurfaceOutputs.diffuse;
                     visibilityInputs.gbufferSpecular =
-                        resolveOutputs.material;
+                        closestSurfaceOutputs.material;
                     visibilityInputs.gbufferEmissive =
-                        resolveOutputs.emissive;
+                        closestSurfaceOutputs.emissive;
                     visibilityInputs.materialAmbientOcclusion =
-                        resolveOutputs
+                        closestSurfaceOutputs
                             .materialAmbientOcclusion;
+                    visibilityInputs.diffuseEnvironment =
+                        diffuseEnvironment;
+                    visibilityInputs.diffuseEnvironmentScale =
+                        diffuseEnvironmentScale;
+                    if (globalEnvironment)
+                    {
+                        visibilityInputs.diffuseEnvironmentArrayIndex =
+                            globalEnvironment->diffuseArrayIndex;
+                        visibilityInputs.specularEnvironment =
+                            globalEnvironment->specularMap.Get();
+                        visibilityInputs.environmentBrdf =
+                            globalEnvironment->environmentBrdf.Get();
+                        visibilityInputs.specularEnvironmentScale =
+                            globalEnvironment->specularScale;
+                        visibilityInputs.specularEnvironmentMipLevels =
+                            globalEnvironment->specularMap
+                                ? float(globalEnvironment->specularMap->
+                                    getDesc().mipLevels)
+                                : 0.f;
+                        visibilityInputs.specularEnvironmentArrayIndex =
+                            globalEnvironment->specularArrayIndex;
+                    }
                     visibilityInputs.baseLighting =
                         m_RenderTargets->BaseLighting;
                     visibilityInputs.output =
@@ -4562,15 +9048,20 @@ public:
                     visibilityInputs
                         .knownInactiveLightingSources =
                             knownInactiveLightingSources;
+                    BeginRendererStage(
+                        RendererTimingStage::ScreenSpaceVisibility);
                     m_ScreenSpaceVisibilityPass->Render(
                         m_CommandList,
                         m_ui.ScreenSpaceVisibility,
                         *m_View,
                         visibilityInputs,
-                        m_AmbientTop,
-                        m_AmbientBottom,
+                        // The production display path has fixed neutral
+                        // exposure while lighting remains under development.
                         1.f,
                         uint32_t(GetFrameIndex()));
+                    EndRendererStage(
+                        RendererTimingStage::ScreenSpaceVisibility);
+                    UpdateVisibilityBenchmarkAfterRender();
                     deferredMsaaVisibilityPending = true;
                 }
                 else if (m_ScreenSpaceVisibilityPass)
@@ -4585,12 +9076,15 @@ public:
                     m_CommandList,
                     *m_View,
                     deferredInputs,
+                    directionalVisibility,
+                    globalEnvironment,
                     m_RenderTargets->DirectDiffuseRadiance,
                     runScreenSpaceVisibility,
                     writeSourceRadiance,
                     writeBounceMetadata,
-                    true,
-                    VisibilityEmissiveSourceGain,
+                    m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive,
+                    m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain,
+                    uint32_t(m_ui.LightingDebugView),
                     float2(0.f));
                 EndRendererStage(RendererTimingStage::DirectLighting);
 
@@ -4603,10 +9097,33 @@ public:
                         m_RenderTargets->MotionVectors;
                     visibilityInputs.sourceRadiance = m_RenderTargets->DirectDiffuseRadiance;
                     visibilityInputs.gbufferDiffuse = m_RenderTargets->GBufferDiffuse;
-                    visibilityInputs.gbufferSpecular = m_RenderTargets->GBufferSpecular;
+                    visibilityInputs.gbufferSpecular =
+                        m_RenderTargets->GBufferSpecular;
                     visibilityInputs.gbufferEmissive = m_RenderTargets->GBufferEmissive;
                     visibilityInputs.materialAmbientOcclusion =
                         m_RenderTargets->MaterialAmbientOcclusion;
+                    visibilityInputs.diffuseEnvironment =
+                        diffuseEnvironment;
+                    visibilityInputs.diffuseEnvironmentScale =
+                        diffuseEnvironmentScale;
+                    if (globalEnvironment)
+                    {
+                        visibilityInputs.diffuseEnvironmentArrayIndex =
+                            globalEnvironment->diffuseArrayIndex;
+                        visibilityInputs.specularEnvironment =
+                            globalEnvironment->specularMap.Get();
+                        visibilityInputs.environmentBrdf =
+                            globalEnvironment->environmentBrdf.Get();
+                        visibilityInputs.specularEnvironmentScale =
+                            globalEnvironment->specularScale;
+                        visibilityInputs.specularEnvironmentMipLevels =
+                            globalEnvironment->specularMap
+                                ? float(globalEnvironment->specularMap->
+                                    getDesc().mipLevels)
+                                : 0.f;
+                        visibilityInputs.specularEnvironmentArrayIndex =
+                            globalEnvironment->specularArrayIndex;
+                    }
                     visibilityInputs.baseLighting = m_RenderTargets->BaseLighting;
                     visibilityInputs.output = m_RenderTargets->HdrColor;
                     visibilityInputs.knownInactiveLightingSources =
@@ -4618,8 +9135,6 @@ public:
                         m_ui.ScreenSpaceVisibility,
                         *m_View,
                         visibilityInputs,
-                        m_AmbientTop,
-                        m_AmbientBottom,
                         // The production display path has fixed neutral
                         // exposure while lighting remains under development.
                         1.f,
@@ -4702,11 +9217,18 @@ public:
             EndRendererStage(RendererTimingStage::MaterialPicking);
         }
 
-        if (m_ui.EnableProceduralSky)
+        if (m_ui.ShowEnvironmentBackground &&
+            m_ImageBasedLightingBackgroundPass &&
+            m_ImageBasedLightingEnvironment &&
+            m_ImageBasedLightingEnvironment->GetRadianceTexture())
         {
-            BeginRendererStage(RendererTimingStage::ProceduralSky);
-            m_SkyPass->Render(m_CommandList, *m_View, *m_SunLight, m_ui.SkyParams);
-            EndRendererStage(RendererTimingStage::ProceduralSky);
+            BeginRendererStage(RendererTimingStage::EnvironmentBackground);
+            m_ImageBasedLightingBackgroundPass->Render(
+                m_CommandList,
+                *m_View,
+                m_ImageBasedLightingEnvironment->
+                    GetRadianceScale());
+            EndRendererStage(RendererTimingStage::EnvironmentBackground);
         }
 
         nvrhi::ITexture* sceneColor =
@@ -4735,16 +9257,24 @@ public:
             m_RenderTargets->ResolvedHdrColor &&
             m_RenderTargets->DeferredMsaaColor)
         {
+            // Report the final per-sample material decode and PBR evaluation as
+            // the MSAA direct-lighting stage. The earlier closest-surface pass
+            // is visibility preparation and cannot share this single timer
+            // query without also enclosing unrelated intervening work.
+            BeginRendererStage(RendererTimingStage::DirectLighting);
             m_PbrDeferredLightingPass->Render(
                 m_CommandList,
                 *m_View,
                 deferredMsaaInputs,
+                directionalVisibility,
+                globalEnvironment,
                 nullptr,
                 deferredMsaaVisibilityPending,
                 false,
                 false,
                 false,
                 0.f,
+                uint32_t(m_ui.LightingDebugView),
                 float2(0.f),
                 m_RenderTargets->ResolvedHdrColor,
                 m_RenderTargets->GetSampleCount(),
@@ -4755,6 +9285,7 @@ public:
                     ? m_RenderTargets
                           ->VisibilityComposite.Get()
                     : nullptr);
+            EndRendererStage(RendererTimingStage::DirectLighting);
             sceneColor =
                 m_RenderTargets->DeferredMsaaColor;
         }
@@ -4847,7 +9378,10 @@ public:
         EndAntiAliasingTimer(antiAliasingTimerActive);
 
         nvrhi::ITexture* displayTexture = antiAliasedTexture;
-        if (m_ui.UsesTonemapper())
+        if (m_ui.UsesTonemapper() &&
+            !bendShadowResult.showDebug &&
+            !sparseVirtualShadowMapResult.showDebug &&
+            !diagnosticCsmResult.showDebug)
         {
             BeginRendererStage(RendererTimingStage::ToneMapping);
             m_AgxToneMappingPass->Render(
@@ -4863,14 +9397,44 @@ public:
         // the target's representable range, but AgX output conversion and
         // dithering are absent from this path.
         BeginRendererStage(RendererTimingStage::OutputBlit);
-        m_CommonPasses->BlitTexture(
-            m_CommandList, framebuffer, displayTexture, &m_BindingCache);
+        if (diagnosticCsmResult.showDebug &&
+            diagnosticCsmResult.debugVisualization)
+        {
+            m_CommonPasses->BlitTexture(
+                m_CommandList,
+                framebuffer,
+                diagnosticCsmResult.debugVisualization,
+                &m_BindingCache);
+        }
+        else if (sparseVirtualShadowMapResult.showDebug &&
+            m_SparseVirtualShadowMapPass)
+        {
+            m_SparseVirtualShadowMapPass->PresentDebug(
+                m_CommandList,
+                framebuffer);
+        }
+        else if (bendShadowResult.showDebug &&
+            m_BendScreenSpaceShadowPass)
+        {
+            m_BendScreenSpaceShadowPass->PresentDebug(
+                m_CommandList,
+                framebuffer);
+        }
+        else
+        {
+            m_CommonPasses->BlitTexture(
+                m_CommandList,
+                framebuffer,
+                displayTexture,
+                &m_BindingCache);
+        }
         EndRendererStage(RendererTimingStage::OutputBlit);
         EndRendererStage(RendererTimingStage::CompleteFrame);
         CompleteRendererTimerFrame();
 
         m_CommandList->close();
         GetDevice()->executeCommandList(m_CommandList);
+        UpdateDiagnosticCsmBenchmarkRecording();
         if (visibilityPerfReady)
         {
             const ScreenSpaceVisibilityTimings& timings =
@@ -5019,9 +9583,36 @@ public:
         return m_ShaderFactory;
     }
 
+    void ResetImageBasedLightingHistory(
+        bool resetScreenSpaceVisibility)
+    {
+        if (resetScreenSpaceVisibility &&
+            m_ScreenSpaceVisibilityPass)
+        {
+            m_ScreenSpaceVisibilityPass->ResetHistory();
+        }
+        if (m_MiniEngineTemporalAAPass)
+            m_MiniEngineTemporalAAPass->ResetHistory();
+    }
+
     float GetSceneDiagonal() const
     {
         return m_SceneDiagonal;
+    }
+
+    float GetImageBasedLightingSourceAverageLuminance() const
+    {
+        return m_ImageBasedLightingEnvironment
+            ? m_ImageBasedLightingEnvironment->
+                GetSourceAverageLuminance()
+            : 0.f;
+    }
+
+    float GetImageBasedLightingRadianceScale() const
+    {
+        return m_ImageBasedLightingEnvironment
+            ? m_ImageBasedLightingEnvironment->GetRadianceScale()
+            : 0.f;
     }
 
     const ScreenSpaceVisibilityTimings* GetScreenSpaceVisibilityTimings() const
@@ -5029,6 +9620,43 @@ public:
         return m_ScreenSpaceVisibilityPass
             ? &m_ScreenSpaceVisibilityPass->GetTimings()
             : nullptr;
+    }
+
+    const BendScreenSpaceShadowTimings*
+        GetBendScreenSpaceShadowTimings() const
+    {
+        return m_BendScreenSpaceShadowPass
+            ? &m_BendScreenSpaceShadowPass->GetTimings()
+            : nullptr;
+    }
+
+    const SparseVirtualShadowMapTimings*
+        GetSparseVirtualShadowMapTimings() const
+    {
+        return m_SparseVirtualShadowMapPass
+            ? &m_SparseVirtualShadowMapPass->GetTimings()
+            : nullptr;
+    }
+
+    const DiagnosticCsmTimings*
+        GetDiagnosticCascadedShadowMapTimings() const
+    {
+        return m_DiagnosticCascadedShadowMapPass
+            ? &m_DiagnosticCascadedShadowMapPass->GetTimings()
+            : nullptr;
+    }
+
+    const DiagnosticCsmStats*
+        GetDiagnosticCascadedShadowMapStats() const
+    {
+        return m_DiagnosticCascadedShadowMapPass
+            ? &m_DiagnosticCascadedShadowMapPass->GetStats()
+            : nullptr;
+    }
+
+    bool HasPrimaryDirectionalLight() const
+    {
+        return bool(m_SunLight);
     }
 
     const MiniEngineTemporalAATimings* GetMiniEngineTemporalAATimings() const
@@ -5336,6 +9964,14 @@ namespace
                 framebuffer->getDesc().colorAttachments[0].texture;
 
             m_CommandList->open();
+#ifdef _WIN32
+            NameD3d12CommandList(
+                m_CommandList,
+                L"UVSR Backdrop Blur Command List");
+            SetD3d12DredMarker(
+                m_CommandList,
+                L"UVSR Backdrop Blur Start");
+#endif
             m_CommandList->beginMarker("UI Backdrop Blur");
 
             BlitParameters downsampleParameters;
@@ -6252,9 +10888,17 @@ private:
         int height = 0;
         uint64_t submittedTriangles = 0u;
         double frameTimeSeconds = 0.0;
+        std::string rendererName;
         GpuPerformanceMetrics gpuMetrics;
+        BendScreenSpaceShadowTimings bendShadowTimings;
+        SparseVirtualShadowMapTimings sparseShadowTimings;
+        DiagnosticCsmTimings diagnosticCsmTimings;
+        DiagnosticCsmStats diagnosticCsmStats;
         ScreenSpaceVisibilityTimings visibilityTimings;
         MiniEngineTemporalAATimings temporalAATimings;
+        bool hasBendShadowTimings = false;
+        bool hasSparseShadowTimings = false;
+        bool hasDiagnosticCsmTimings = false;
         bool hasVisibilityTimings = false;
         bool hasTemporalAATimings = false;
     };
@@ -6272,11 +10916,17 @@ private:
     double m_StatFrameTimeSum = 0.0;
     uint32_t m_StatFrameTimeCount = 0;
     std::array<std::string, 6> m_PerformanceStatValues;
+    std::array<std::string, 2> m_BendShadowStatLines;
+    std::array<std::string, 17> m_SparseShadowStatLines;
+    std::array<std::string, 11> m_DiagnosticCsmStatLines;
     std::array<std::string, 3> m_VisibilityStatLines;
     std::array<std::string, 2> m_TemporalAAStatLines;
     std::deque<StatSnapshot> m_StatUpdateQueue;
     bool m_HasAppliedStatSnapshot = false;
     bool m_HasGpuStatSnapshot = false;
+    bool m_HasBendShadowStatSnapshot = false;
+    bool m_HasSparseShadowStatSnapshot = false;
+    bool m_HasDiagnosticCsmStatSnapshot = false;
     bool m_HasVisibilityStatSnapshot = false;
     bool m_HasTemporalAAStatSnapshot = false;
     bool m_WasSceneLoading = false;
@@ -7442,7 +12092,8 @@ private:
 
     static bool BeginAnimatedTreeNode(
         const char* label,
-        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None)
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None,
+        const char* tooltip = nullptr)
     {
         // Item-width stacks belong to an ImGui window. Preserve the drawer's
         // standard control width before entering this animated child so
@@ -7462,6 +12113,8 @@ private:
         const bool open = ImGui::TreeNodeEx(
             label,
             flags | ImGuiTreeNodeFlags_NoTreePushOnOpen);
+        if (tooltip != nullptr)
+            ImGui::SetItemTooltip("%s", tooltip);
         TrackSettingsScrollAnchor(
             headerId,
             ImGui::GetItemRectMin().y);
@@ -8341,7 +12994,7 @@ private:
         const char* format,
         Arguments... arguments)
     {
-        char buffer[256];
+        char buffer[512];
         snprintf(
             buffer,
             std::size(buffer),
@@ -8380,11 +13033,35 @@ private:
         snapshot.height = height;
         snapshot.submittedTriangles =
             m_app->GetSubmittedMainViewTriangles();
+        snapshot.rendererName = rendererString ? rendererString : "";
         snapshot.frameTimeSeconds = m_StatFrameTimeCount > 0
             ? m_StatFrameTimeSum / double(m_StatFrameTimeCount)
             : m_DisplayedFrameTime;
         snapshot.gpuMetrics =
             QueryGpuPerformanceMetrics(rendererString);
+        if (const BendScreenSpaceShadowTimings* timings =
+                m_app->GetBendScreenSpaceShadowTimings())
+        {
+            snapshot.bendShadowTimings = *timings;
+            snapshot.hasBendShadowTimings = true;
+        }
+        if (const SparseVirtualShadowMapTimings* timings =
+                m_app->GetSparseVirtualShadowMapTimings())
+        {
+            snapshot.sparseShadowTimings = *timings;
+            snapshot.hasSparseShadowTimings = true;
+        }
+        if (const DiagnosticCsmTimings* timings =
+                m_app->GetDiagnosticCascadedShadowMapTimings())
+        {
+            snapshot.diagnosticCsmTimings = *timings;
+            if (const DiagnosticCsmStats* stats =
+                    m_app->GetDiagnosticCascadedShadowMapStats())
+            {
+                snapshot.diagnosticCsmStats = *stats;
+            }
+            snapshot.hasDiagnosticCsmTimings = true;
+        }
         if (const ScreenSpaceVisibilityTimings* timings =
                 m_app->GetScreenSpaceVisibilityTimings())
         {
@@ -8485,6 +13162,711 @@ private:
             m_PerformanceStatValues[3] = "-- gb/s";
             m_PerformanceStatValues[4] = "-- tflops";
             m_HasGpuStatSnapshot = false;
+        }
+
+        if (snapshot.hasBendShadowTimings)
+        {
+            const BendScreenSpaceShadowTimings& timings =
+                snapshot.bendShadowTimings;
+            FormatStatLine(
+                m_BendShadowStatLines[0],
+                "Trace %.3f ms / %u dispatches / %u groups",
+                timings.traceMilliseconds,
+                timings.dispatchCount,
+                timings.totalGroups);
+            constexpr double BytesPerMib = 1024.0 * 1024.0;
+            FormatStatLine(
+                m_BendShadowStatLines[1],
+                "%u samples / R8 output %.2f mib",
+                timings.sampleCount,
+                double(timings.outputTextureBytes) / BytesPerMib);
+            m_HasBendShadowStatSnapshot = timings.active;
+        }
+        else
+        {
+            m_HasBendShadowStatSnapshot = false;
+        }
+
+        if (snapshot.hasSparseShadowTimings)
+        {
+            const SparseVirtualShadowMapTimings& timings =
+                snapshot.sparseShadowTimings;
+            if (timings.gpuTimingSource ==
+                SvsmGpuTimingSource::Unavailable)
+            {
+                m_SparseShadowStatLines[0] =
+                    "GPU timing unavailable for current configuration";
+                FormatStatLine(
+                    m_SparseShadowStatLines[1],
+                    "Packets CPU %.3f ms / GPU stages unavailable",
+                    timings.cullingCpuMilliseconds);
+            }
+            else
+            {
+                if (timings.gpuTimingSource ==
+                    SvsmGpuTimingSource::KnownZero)
+                {
+                    FormatStatLine(
+                        m_SparseShadowStatLines[0],
+                        "GPU All %.3f / Mark %.3f / Allocate %.3f / Clear %.3f ms / known zero",
+                        timings.totalMilliseconds,
+                        timings.pageMarkingMilliseconds,
+                        timings.allocationMilliseconds,
+                        timings.clearingMilliseconds);
+                    FormatStatLine(
+                        m_SparseShadowStatLines[1],
+                        "Packets CPU %.3f ms / GPU stages known zero",
+                        timings.cullingCpuMilliseconds);
+                }
+                else if (!timings.detailedGpuTimingEnabled)
+                {
+                    FormatStatLine(
+                        m_SparseShadowStatLines[0],
+                        "GPU All %.3f ms / total-only / age %u f",
+                        timings.totalMilliseconds,
+                        timings.gpuTimingAgeFrames);
+                    FormatStatLine(
+                        m_SparseShadowStatLines[1],
+                        "Packets CPU %.3f ms / detailed GPU stages disabled",
+                        timings.cullingCpuMilliseconds);
+                }
+                else
+                {
+                    FormatStatLine(
+                        m_SparseShadowStatLines[0],
+                        "GPU All %.3f / Mark %.3f / Allocate %.3f / Clear %.3f ms / age %u f",
+                        timings.totalMilliseconds,
+                        timings.pageMarkingMilliseconds,
+                        timings.allocationMilliseconds,
+                        timings.clearingMilliseconds,
+                        timings.gpuTimingAgeFrames);
+                    FormatStatLine(
+                        m_SparseShadowStatLines[1],
+                        "Packets CPU %.3f / GPU %.3f / Render %.3f / Filter %.3f ms",
+                        timings.cullingCpuMilliseconds,
+                        timings.packetPageCullingMilliseconds,
+                        timings.pageRenderingMilliseconds,
+                        timings.filteringMilliseconds);
+                }
+            }
+            constexpr double BytesPerMib = 1024.0 * 1024.0;
+            if (timings.debugCountersAvailable)
+            {
+                FormatStatLine(
+                    m_SparseShadowStatLines[2],
+                    "Pages %u required / %u resident / %u cached",
+                    timings.requiredPages,
+                    timings.residentPages,
+                    timings.cachedPages);
+                FormatStatLine(
+                    m_SparseShadowStatLines[3],
+                    "Pages %u dirty / %u rendered / %u over budget",
+                    timings.dirtyPages,
+                    timings.renderedPages,
+                    timings.overBudgetPages);
+                FormatStatLine(
+                    m_SparseShadowStatLines[4],
+                    "Memory depth %.1f / vis %.1f / packets %.1f / receiver %.2f / static HZB %.1f MiB",
+                    double(timings.physicalDepthBytes) / BytesPerMib,
+                    double(timings.visibilityBytes) / BytesPerMib,
+                    double(timings.packetPageMetadataBytes +
+                        timings.packetPageListBytes) / BytesPerMib,
+                    double(timings.receiverPageMaskBytes) /
+                        BytesPerMib,
+                    double(timings.staticDepthHierarchyBytes) /
+                        BytesPerMib);
+                FormatStatLine(
+                    m_SparseShadowStatLines[5],
+                    "Pixels fallback %u / missing %u / out %u / alloc fail %u",
+                    timings.fallbackPixels,
+                    timings.resolveMissingPixels,
+                    timings.outOfRangePixels,
+                    timings.allocationFailures);
+                FormatStatLine(
+                    m_SparseShadowStatLines[6],
+                    "Packet pages %u candidate / %u compact / %u fail open / age %u f",
+                    timings.packetPageCandidatePackets,
+                    timings.packetPageCompactedPackets,
+                    timings.packetPageFailOpenPackets,
+                    timings.debugCounterAgeFrames);
+                FormatStatLine(
+                    m_SparseShadowStatLines[7],
+                    "Tile mask %u queries / %u rejected / %u fail open / %u false positive",
+                    timings.scheduledTileMaskQueries,
+                    timings.scheduledTileMaskEarlyRejects,
+                    timings.scheduledTileMaskFailOpens,
+                    timings.scheduledTileMaskPositiveExactZero);
+                FormatStatLine(
+                    m_SparseShadowStatLines[8],
+                    "Receiver mask req %s / active %s / unavailable %s / static HZB req %s / active %s / unavailable %s",
+                    timings.receiverPageMaskCullingRequested
+                        ? "yes"
+                        : "no",
+                    timings.receiverPageMaskCullingActive
+                        ? "yes"
+                        : "no",
+                    timings.receiverPageMaskCullingUnavailable
+                        ? "yes"
+                        : "no",
+                    timings.staticDepthHierarchyCullingRequested
+                        ? "yes"
+                        : "no",
+                    timings.staticDepthHierarchyCullingActive
+                        ? "yes"
+                        : "no",
+                    timings.staticDepthHierarchyCullingUnavailable
+                        ? "yes"
+                        : "no");
+                FormatStatLine(
+                    m_SparseShadowStatLines[9],
+                    "Receiver mask %u query / %u culled / %u fail open / static HZB %u query / %u culled / %u fail open / %u built",
+                    timings.receiverPageMaskQueries,
+                    timings.receiverPageMaskCulledPages,
+                    timings.receiverPageMaskFailOpens,
+                    timings.staticDepthHierarchyQueries,
+                    timings.staticDepthHierarchyCulledPages,
+                    timings.staticDepthHierarchyFailOpens,
+                    timings.staticDepthHierarchyBuiltPages);
+            }
+            else
+            {
+                m_SparseShadowStatLines[2] =
+                    "Page counters unavailable";
+                m_SparseShadowStatLines[3] =
+                    "Dirty and rendered-page counters unavailable";
+                FormatStatLine(
+                    m_SparseShadowStatLines[4],
+                    "Memory depth %.1f / vis %.1f / packets %.1f / receiver %.2f / static HZB %.1f MiB",
+                    double(timings.physicalDepthBytes) / BytesPerMib,
+                    double(timings.visibilityBytes) / BytesPerMib,
+                    double(timings.packetPageMetadataBytes +
+                        timings.packetPageListBytes) / BytesPerMib,
+                    double(timings.receiverPageMaskBytes) /
+                        BytesPerMib,
+                    double(timings.staticDepthHierarchyBytes) /
+                        BytesPerMib);
+                m_SparseShadowStatLines[5] =
+                    "Pixel and allocation counters unavailable";
+                m_SparseShadowStatLines[6] =
+                    "Packet-page counters unavailable";
+                m_SparseShadowStatLines[7] =
+                    "Scheduled tile-mask counters unavailable";
+                FormatStatLine(
+                    m_SparseShadowStatLines[8],
+                    "Receiver mask req %s / active %s / unavailable %s / static HZB req %s / active %s / unavailable %s",
+                    timings.receiverPageMaskCullingRequested
+                        ? "yes"
+                        : "no",
+                    timings.receiverPageMaskCullingActive
+                        ? "yes"
+                        : "no",
+                    timings.receiverPageMaskCullingUnavailable
+                        ? "yes"
+                        : "no",
+                    timings.staticDepthHierarchyCullingRequested
+                        ? "yes"
+                        : "no",
+                    timings.staticDepthHierarchyCullingActive
+                        ? "yes"
+                        : "no",
+                    timings.staticDepthHierarchyCullingUnavailable
+                        ? "yes"
+                        : "no");
+                m_SparseShadowStatLines[9] =
+                    "Receiver-mask and static-HZB counters unavailable";
+            }
+            const char* staticRejectReason = "none";
+            switch (FirstSvsmStaticPageRequestRejectBit(
+                timings.staticPageRequestReuseRejectMask))
+            {
+            case 0u: staticRejectReason = "toggle off"; break;
+            case 1u: staticRejectReason = "cache mode off"; break;
+            case 2u: staticRejectReason = "pool unsupported"; break;
+            case 3u: staticRejectReason = "budget cannot settle"; break;
+            case 4u: staticRejectReason = "cache warming"; break;
+            case 5u: staticRejectReason = "depth resource changed"; break;
+            case 6u: staticRejectReason = "resolution changed"; break;
+            case 7u: staticRejectReason = "marking mode changed"; break;
+            case 8u: staticRejectReason = "filter mode changed"; break;
+            case 9u: staticRejectReason = "tap count changed"; break;
+            case 10u: staticRejectReason = "resolution bias changed"; break;
+            case 11u: staticRejectReason = "camera changed"; break;
+            case 12u: staticRejectReason = "resources cleared"; break;
+            case 13u: staticRejectReason = "cache invalid"; break;
+            case 14u: staticRejectReason = "light direction changed"; break;
+            case 15u: staticRejectReason = "light depth moved"; break;
+            case 16u: staticRejectReason = "scene changed"; break;
+            case 17u: staticRejectReason = "extent changed"; break;
+            case 18u: staticRejectReason = "depth range changed"; break;
+            case 19u: staticRejectReason = "light changed"; break;
+            case 20u: staticRejectReason = "viewport changed"; break;
+            case 21u: staticRejectReason = "jitter unsupported"; break;
+            case 22u: staticRejectReason = "jitter warming"; break;
+            case 23u: staticRejectReason = "scene revision changed"; break;
+            case 26u: staticRejectReason = "distance clamp changed"; break;
+            default: staticRejectReason = "unknown"; break;
+            }
+            FormatStatLine(
+                m_SparseShadowStatLines[10],
+                "Static request %s / drain %s:%u / visibility %s / reject %s",
+                timings.staticPageRequestReuseActive ? "active" : "inactive",
+                timings.staticPageDrainActive ? "active" : "inactive",
+                timings.staticPageDrainFramesRemaining,
+                timings.staticVisibilityReuseActive ? "active" : "inactive",
+                staticRejectReason);
+            FormatStatLine(
+                m_SparseShadowStatLines[11],
+                "Packet cull %s / tile hierarchy %s%s / scatter %s",
+                timings.packetPageCullingActive ? "active" : "inactive",
+                timings.hierarchicalScheduledPageMaskActive
+                    ? "active"
+                    : "inactive",
+                timings.hierarchicalScheduledPageMaskUnavailable
+                    ? "+unavailable"
+                    : "",
+                timings.dirtyPageScatterRasterActive
+                    ? "active"
+                    : "inactive");
+            FormatStatLine(
+                m_SparseShadowStatLines[12],
+                "Draw lists %s:%s (%u packets) / source %s:%s (%u) / revision %s / batch %s%s / sort %s / level gate %s / packet fallback %s",
+                timings.cachedShadowDrawListsRequested
+                    ? "requested"
+                    : "off",
+                timings.cachedShadowDrawListsRebuilt
+                    ? "rebuilt"
+                    : timings.cachedShadowDrawListsReused
+                        ? "reused"
+                        : timings.cachedShadowDrawListsActive
+                            ? "active"
+                            : "idle",
+                timings.cachedShadowDrawListPacketCount,
+                timings.persistentCasterSourceRequested
+                    ? "requested"
+                    : "off",
+                timings.persistentCasterSourceRebuilt
+                    ? "rebuilt"
+                    : timings.persistentCasterSourceReused
+                        ? "reused"
+                        : timings.persistentCasterSourceActive
+                            ? "active"
+                            : "fallback/idle",
+                timings.persistentCasterSourceRecordCount,
+                timings.casterOnlySceneRevisionActive
+                    ? "caster-only"
+                    : "global",
+                timings.batchedDrawSupported
+                    ? "supported"
+                    : "unsupported",
+                timings.batchedDrawActive ? "+active" : "",
+                timings.packetStateSortingActive
+                    ? "active"
+                    : "inactive",
+                timings.levelEmptyWorkSkipActive
+                    ? "active"
+                    : "inactive",
+                timings.packetPageCullingUnavailable
+                    ? "active"
+                    : "inactive");
+            FormatStatLine(
+                m_SparseShadowStatLines[13],
+                "Light %s%s / paired %s / static merge %s%s / retain %s / Z %s / bias +%u / recover %.2f / distance %s %.1fm:L%u%s",
+                timings.movingLightUncachedActive
+                    ? "uncached"
+                    : "cached",
+                timings.movingLightCacheTransitionActive
+                    ? "+rebuild"
+                    : "",
+                timings.effectivePairedStaticDynamicDepth
+                    ? "on"
+                    : "off",
+                timings.deferredStaticDepthMergeActive
+                    ? "active"
+                    : timings.deferredStaticDepthMergeRequested
+                        ? "idle"
+                        : "off",
+                timings.deferredStaticDepthMergeUnavailable
+                    ? "+unavailable"
+                    : "",
+                timings.physicalMappingRetentionActive
+                    ? "on"
+                    : "off",
+                !timings.lightDepthOriginGuardBandRequested
+                    ? "reference"
+                    : timings.lightDepthOriginGuardBandRetained
+                        ? "retained"
+                        : "rebased",
+                uint32_t(timings.effectiveResolutionBias),
+                timings.movingLightLodRecoveryFactor,
+                timings.receiverDistanceMipClampActive
+                    ? "on"
+                    : "off",
+                timings.effectiveReceiverDistanceMipClampStart,
+                timings.receiverDistanceMipClampMaximumLevel,
+                timings.movingLightContinuousReceiverBiasActive
+                    ? "+continuous"
+                    : "");
+            FormatStatLine(
+                m_SparseShadowStatLines[14],
+                "CPU All %.3f / Validate %.3f / Views %.3f ms",
+                timings.totalCpuMilliseconds,
+                timings.sceneValidationCpuMilliseconds,
+                timings.clipmapUpdateCpuMilliseconds);
+            if (timings.lastCompletedWorkTimingAvailable)
+            {
+                FormatStatLine(
+                    m_SparseShadowStatLines[15],
+                    "Last work GPU %.3f ms @ frame %llu / samples %llu",
+                    timings.lastCompletedWorkTotalMilliseconds,
+                    static_cast<unsigned long long>(
+                        timings.lastCompletedWorkSourceFrame),
+                    static_cast<unsigned long long>(
+                        timings.completedWorkSampleCount));
+            }
+            else
+            {
+                FormatStatLine(
+                    m_SparseShadowStatLines[15],
+                    "Last work GPU unavailable");
+            }
+            FormatStatLine(
+                m_SparseShadowStatLines[16],
+                "GPU work submit serial %llu / zero-work streak %llu / total %llu",
+                static_cast<unsigned long long>(
+                    timings.gpuWorkSubmissionSerial),
+                static_cast<unsigned long long>(
+                    timings.staticZeroWorkFrameStreak),
+                static_cast<unsigned long long>(
+                    timings.staticZeroWorkFrameTotal));
+            m_HasSparseShadowStatSnapshot = timings.active;
+        }
+        else
+        {
+            m_HasSparseShadowStatSnapshot = false;
+        }
+
+        if (snapshot.hasDiagnosticCsmTimings)
+        {
+            const DiagnosticCsmTimings& timings =
+                snapshot.diagnosticCsmTimings;
+            const DiagnosticCsmStats& stats =
+                snapshot.diagnosticCsmStats;
+            if (timings.gpuTimingSource ==
+                DiagnosticCsmGpuTimingSource::Unavailable)
+            {
+                m_DiagnosticCsmStatLines[0] =
+                    "GPU timing unavailable or warming";
+            }
+            else if (!timings.detailedGpuTimingEnabled)
+            {
+                FormatStatLine(
+                    m_DiagnosticCsmStatLines[0],
+                    "GPU All %.3f ms / total-only / age %u f",
+                    timings.totalMilliseconds,
+                    timings.gpuTimingAgeFrames);
+            }
+            else
+            {
+                FormatStatLine(
+                    m_DiagnosticCsmStatLines[0],
+                    "GPU All %.3f / Clear %.3f / Raster %.3f / Sample %.3f ms / age %u f",
+                    timings.totalMilliseconds,
+                    timings.clearUpdateMilliseconds,
+                    timings.rasterMilliseconds,
+                    timings.samplingMilliseconds,
+                    timings.gpuTimingAgeFrames);
+            }
+            FormatStatLine(
+                m_DiagnosticCsmStatLines[1],
+                "CPU All %.3f / Setup %.3f / Cull %.3f / Record %.3f ms / GPU Cull %.3f ms (known zero)",
+                timings.totalCpuMilliseconds,
+                timings.setupCpuMilliseconds,
+                timings.cullingCpuMilliseconds,
+                timings.recordingCpuMilliseconds,
+                timings.cullingGpuMilliseconds);
+            FormatStatLine(
+                m_DiagnosticCsmStatLines[2],
+                    "%u x %u output / %u x %u x %u D%u maps / %.1f distance / %u fetches (%u comparisons)",
+                stats.outputWidth,
+                stats.outputHeight,
+                    stats.shadowMapResolution,
+                    stats.shadowMapResolution,
+                    stats.cascadeCount,
+                    stats.depthBitsPerTexel,
+                    stats.maximumShadowDistance,
+                stats.filterSampleCount,
+                stats.filterComparisonCount);
+            FormatStatLine(
+                m_DiagnosticCsmStatLines[3],
+                "Cascades %u reused / %u scrolled / %u dirty / %u redrawn / %u rects / %u receiver-scissored / draw lists %s %u hit %u miss / %u entries %u pairs",
+                stats.reusedCascades,
+                stats.scrolledCascades,
+                stats.dirtyCascades,
+                stats.redrawnCascades,
+                stats.dirtyRectangleCount,
+                stats.receiverRasterScissoredCascades,
+                stats.cachedShadowDrawListsActive
+                    ? "active"
+                    : stats.cachedShadowDrawListsRequested
+                        ? "warming/idle"
+                        : "off",
+                stats.cachedShadowDrawListHits,
+                stats.cachedShadowDrawListMisses,
+                stats.cachedShadowDrawListEntries,
+                stats.cachedShadowDrawListCasterProjectionPairs);
+            if (stats.submissionStatsAvailable)
+            {
+                FormatStatLine(
+                    m_DiagnosticCsmStatLines[4],
+                    "Casters %u coarse / %u radius-culled / %u hull-culled / %u candidate / %u rendered / %u alpha / route %u manual + %u IA / draws %u (%u alpha) / %.2f m triangles / translated %u draws %.2f m triangles",
+                    stats.coarseCasterProjectionPairs,
+                    stats.radiusCulledCasterProjectionPairs,
+                    stats.accuratelyCulledCasterProjectionPairs,
+                    stats.candidateCasterProjectionPairs,
+                    stats.renderedCasterProjectionPairs,
+                    stats.alphaTestedCasterProjectionPairs,
+                    stats.manualCasterProjectionPairs,
+                    stats.inputAssemblerCasterProjectionPairs,
+                    stats.submittedDrawCalls,
+                    stats.submittedAlphaTestedDrawCalls,
+                    double(stats.submittedTriangles) / 1e6,
+                    stats.submittedTranslationOnlyDrawCalls,
+                    double(stats.submittedTranslationOnlyTriangles) / 1e6);
+            }
+            else
+            {
+                FormatStatLine(
+                    m_DiagnosticCsmStatLines[4],
+                    "Casters %u coarse / %u radius-culled / %u hull-culled / %u candidate / %u rendered / route %u manual + %u IA / submission stats not collected",
+                    stats.coarseCasterProjectionPairs,
+                    stats.radiusCulledCasterProjectionPairs,
+                    stats.accuratelyCulledCasterProjectionPairs,
+                    stats.candidateCasterProjectionPairs,
+                    stats.renderedCasterProjectionPairs,
+                    stats.manualCasterProjectionPairs,
+                    stats.inputAssemblerCasterProjectionPairs);
+            }
+            constexpr double BytesPerMib = 1024.0 * 1024.0;
+            const uint64_t totalPersistentBytes =
+                stats.depthBytes +
+                stats.visibilityBytes +
+                stats.debugVisualizationBytes +
+                stats.scrollingScratchBytes;
+            FormatStatLine(
+                m_DiagnosticCsmStatLines[5],
+                "Texel work issued %.2f m logical / %.2f m updated / %.2f m copied / %.2f m cleared / %.2f m full-redraw scissor bounds (%.2f m excluded)",
+                double(stats.logicalTexels) / 1e6,
+                double(stats.updatedTexels) / 1e6,
+                double(stats.copiedTexels) / 1e6,
+                double(stats.clearedTexels) / 1e6,
+                double(stats.fullRedrawRasterBoundTexels) / 1e6,
+                double(stats.fullRedrawRasterExcludedTexels) / 1e6);
+            FormatStatLine(
+                m_DiagnosticCsmStatLines[6],
+                "Memory %.2f mib total (depth %.2f / visibility+debug %.2f / scroll %.2f) / invalidation 0x%08x",
+                double(totalPersistentBytes) / BytesPerMib,
+                double(stats.depthBytes) / BytesPerMib,
+                double(stats.visibilityBytes +
+                    stats.debugVisualizationBytes) / BytesPerMib,
+                double(stats.scrollingScratchBytes) / BytesPerMib,
+                stats.invalidationMask);
+            FormatStatLine(
+                m_DiagnosticCsmStatLines[7],
+                "Coverage %.3f fine / %.3f coarse; texel %.6f / %.6f; light depth %.3f requested / %.3f actual max",
+                stats.finestCoverageExtent,
+                stats.coarsestCoverageExtent,
+                stats.finestWorldTexelSize,
+                stats.coarsestWorldTexelSize,
+                stats.maximumLightDepth,
+                stats.maximumActualLightDepthSpan);
+            FormatStatLine(
+                m_DiagnosticCsmStatLines[8],
+                "Gather %s / submit %s / caster transform %s%s / full-clear batch %s / %u walks / %u sorts; depth axis %s%s / saturated slope %s%s / algebraic slow %s%s / receiver light %s%s / receiver transform %s%s / hull %s%s / axes %s%s / shared light %s%s / receiver scissor %s%s / UE radius %.3f %s%s / cache-safe gating %s",
+                stats.singleTraversalCasterClassificationEnabled
+                    ? "one-pass active"
+                    : stats.singleTraversalCasterClassificationRequested
+                        ? "one-pass inactive"
+                        : "per-cascade",
+                stats.directCasterSubmissionEnabled
+                    ? "direct"
+                    : stats.directCasterSubmissionRequested
+                        ? "direct inactive"
+                        : "copy",
+                stats.translationOnlyCasterTransformRequested
+                    ? "translation requested"
+                    : "legacy",
+                stats.translationOnlyCasterTransformRequested &&
+                    !stats.translationOnlyCasterTransformEnabled
+                    ? "+inactive"
+                    : "",
+                stats.batchedFullRedrawClearActive
+                    ? "active"
+                    : stats.batchedFullRedrawClearRequested
+                        ? "requested+inactive"
+                        : "off",
+                stats.casterSceneTraversals,
+                stats.casterSorts,
+                stats.precomputedDepthAxisInverseLengthRequested
+                    ? "requested"
+                    : "off",
+                stats.precomputedDepthAxisInverseLengthRequested &&
+                    !stats.precomputedDepthAxisInverseLengthEnabled
+                    ? "+inactive"
+                    : "",
+                stats.conservativeSaturatedSlopeRequested
+                    ? "requested"
+                    : "off",
+                stats.conservativeSaturatedSlopeRequested &&
+                    !stats.conservativeSaturatedSlopeActive
+                    ? "+inactive"
+                    : "",
+                stats.algebraicSlowSlopeRequested
+                    ? "requested"
+                    : "off",
+                stats.algebraicSlowSlopeRequested &&
+                    !stats.algebraicSlowSlopeActive
+                    ? "+inactive"
+                    : "",
+                stats.preNormalizedReceiverLightDirectionRequested
+                    ? "requested"
+                    : "legacy",
+                stats.preNormalizedReceiverLightDirectionRequested &&
+                    !stats.preNormalizedReceiverLightDirectionEnabled
+                    ? "+inactive"
+                    : "",
+                stats.precomposedClipToShadowRequested
+                    ? "precomposed"
+                    : "legacy",
+                stats.precomposedClipToShadowRequested &&
+                    !stats.precomposedClipToShadowEnabled
+                    ? "+inactive"
+                    : "",
+                stats.accurateCasterCullingRequested ? "requested" : "off",
+                stats.accurateCasterCullingRequested &&
+                    !stats.accurateCasterCullingEnabled
+                    ? "+gated"
+                    : "",
+                stats.precomputedReceiverHullAxesRequested
+                    ? "requested"
+                    : "off",
+                stats.precomputedReceiverHullAxesRequested &&
+                    !stats.precomputedReceiverHullAxesEnabled
+                    ? "+inactive"
+                    : "",
+                stats.sharedCasterLightProjectionRequested
+                    ? "requested"
+                    : "off",
+                stats.sharedCasterLightProjectionRequested &&
+                    !stats.sharedCasterLightProjectionEnabled
+                    ? "+inactive"
+                    : "",
+                stats.receiverRasterScissorRequested
+                    ? "requested"
+                    : "off",
+                stats.receiverRasterScissorRequested &&
+                    !stats.receiverRasterScissorEnabled
+                    ? "+gated"
+                    : "",
+                stats.casterRadiusThreshold,
+                stats.ueCasterRadiusThresholdRequested ? "requested" : "off",
+                stats.ueCasterRadiusThresholdRequested &&
+                    !stats.ueCasterRadiusThresholdEnabled
+                    ? "+gated"
+                    : "",
+                (!stats.accurateCasterCullingRequested ||
+                    stats.accurateCasterCullingEnabled) &&
+                    (!stats.receiverRasterScissorRequested ||
+                        stats.receiverRasterScissorEnabled) &&
+                    (!stats.ueCasterRadiusThresholdRequested ||
+                        stats.ueCasterRadiusThresholdEnabled)
+                    ? "inactive"
+                    : "active");
+
+            if (snapshot.hasSparseShadowTimings &&
+                snapshot.sparseShadowTimings.active)
+            {
+                const SparseVirtualShadowMapTimings& sparse =
+                    snapshot.sparseShadowTimings;
+                const auto extentMatches = [](float left,
+                    float right, float leftTexel, float rightTexel) {
+                    const float tolerance = 8.f * std::max(
+                        std::abs(leftTexel), std::abs(rightTexel));
+                    return std::isfinite(left) &&
+                        std::isfinite(right) &&
+                        std::abs(left - right) <= tolerance;
+                };
+                const bool coverageMatched = extentMatches(
+                        stats.finestCoverageExtent,
+                        sparse.comparisonFinestCoverageExtent,
+                        stats.finestWorldTexelSize,
+                        sparse.comparisonFinestWorldTexelSize) &&
+                    extentMatches(
+                        stats.coarsestCoverageExtent,
+                        sparse.comparisonCoarsestCoverageExtent,
+                        stats.coarsestWorldTexelSize,
+                        sparse.comparisonCoarsestWorldTexelSize);
+                const bool resolutionMatched =
+                    stats.shadowMapResolution ==
+                    sparse.comparisonVirtualResolution;
+                const bool filterMatched =
+                    stats.filter == DiagnosticCsmFilter::Poisson &&
+                    stats.filterSampleCount ==
+                        sparse.comparisonFilterSampleCount &&
+                    stats.filterComparisonCount ==
+                        sparse.comparisonFilterComparisonCount &&
+                    std::abs(stats.filterRadiusTexels -
+                        sparse.comparisonFilterRadiusTexels) <= 1e-5f &&
+                    sparse.comparisonFilterMode ==
+                        SvsmFilterMode::ManualPageSafe &&
+                    !sparse.comparisonAdaptiveFiltering;
+                const bool depthMatched =
+                    std::abs(stats.maximumActualLightDepthSpan -
+                        sparse.comparisonMaximumLightDepth) <= 1e-5f;
+                const bool allMatched = coverageMatched &&
+                    resolutionMatched && filterMatched && depthMatched;
+                FormatStatLine(
+                    m_DiagnosticCsmStatLines[9],
+                    "SVSM tuple %s / coverage %s / resolution %s / filter %s / depth %s",
+                    allMatched ? "matched" : "mismatch",
+                    coverageMatched ? "yes" : "no",
+                    resolutionMatched ? "yes" : "no",
+                    filterMatched ? "yes" : "no",
+                    depthMatched ? "yes" : "no");
+            }
+            else
+            {
+                m_DiagnosticCsmStatLines[9] =
+                    "SVSM comparison unavailable; enable SVSM to validate a matched tuple";
+            }
+            const GpuTimingNormalizationEstimate normalizedTiming =
+                NormalizeGpuTimingMilliseconds(
+                    timings.totalMilliseconds,
+                    snapshot.gpuMetrics,
+                    snapshot.rendererName);
+            if (timings.gpuTimingSource !=
+                    DiagnosticCsmGpuTimingSource::Unavailable &&
+                normalizedTiming.valid)
+            {
+                FormatStatLine(
+                    m_DiagnosticCsmStatLines[10],
+                    "Unofficial estimate %.3f ms @ %.1f clock TFLOPS / clock %.1f / utilized %.1f / grade %s / raw above",
+                    normalizedTiming.estimatedMilliseconds,
+                    normalizedTiming.referenceTFlops,
+                    normalizedTiming.currentClockCapacityTFlops,
+                    normalizedTiming.utilizedTFlops,
+                    GetGpuTimingNormalizationGradeLabel(
+                        normalizedTiming.grade));
+            }
+            else
+            {
+                m_DiagnosticCsmStatLines[10] =
+                    "Unofficial clock-normalized estimate unavailable; raw GPU timing remains authoritative";
+            }
+            m_HasDiagnosticCsmStatSnapshot = timings.active;
+        }
+        else
+        {
+            m_HasDiagnosticCsmStatSnapshot = false;
         }
 
         if (snapshot.hasVisibilityTimings)
@@ -8635,9 +14017,1179 @@ private:
         return changed && !freezePresentation;
     }
 
-    static bool DrawCenteredActionButton(
-        const char* label,
-        float width)
+    static bool DrawSvsmSettingsSurface(
+        SparseVirtualShadowMapSettings& shadows,
+        float settingsControlWidth)
+    {
+        bool customChanged = false;
+        bool resetApplied = false;
+        const SparseVirtualShadowMapSettings factoryDefaults{};
+        SparseVirtualShadowMapSettings presetDefaults = shadows;
+        const SvsmPreset resetPreset =
+            shadows.preset == SvsmPreset::Custom
+                ? SvsmPreset::Quality
+                : shadows.preset;
+        ApplySvsmPreset(presetDefaults, resetPreset);
+        static constexpr auto reconcileSvsmPreset =
+            [](SparseVirtualShadowMapSettings& settings)
+            {
+                constexpr SvsmPreset Presets[] = {
+                    SvsmPreset::Performance,
+                    SvsmPreset::Balanced,
+                    SvsmPreset::Quality
+                };
+                SparseVirtualShadowMapSettings current = settings;
+                current.preset = SvsmPreset::Custom;
+                for (const SvsmPreset preset : Presets)
+                {
+                    SparseVirtualShadowMapSettings candidate = settings;
+                    ApplySvsmPreset(candidate, preset);
+                    candidate.preset = SvsmPreset::Custom;
+                    if (IsSameSvsmConfiguration(current, candidate))
+                    {
+                        settings.preset = preset;
+                        return;
+                    }
+                }
+                settings.preset = SvsmPreset::Custom;
+            };
+
+        const auto drawCheckbox = [&](
+            const char* label,
+            bool& value,
+            bool defaultValue,
+            bool available,
+            const char* tooltip)
+        {
+            // SVSM expert values are stored requested configuration. Keep the
+            // fixed schema editable across Mode and policy changes; tooltips
+            // describe when each requested value becomes renderer-effective.
+            (void)available;
+            const bool changed = ImGui::Checkbox(label, &value);
+            if (tooltip != nullptr)
+            {
+                if (available)
+                    ImGui::SetItemTooltip("%s", tooltip);
+                else
+                {
+                    ImGui::SetItemTooltip(
+                        "%s Stored now; becomes effective when its owning "
+                        "SVSM mode and requested policies are active.",
+                        tooltip);
+                }
+            }
+            if (DrawPresetResetIcon(
+                    label,
+                    value != defaultValue))
+            {
+                value = defaultValue;
+                resetApplied = true;
+            }
+            return changed;
+        };
+
+        const auto drawCombo = [&](
+            const char* label,
+            int currentIndex,
+            int defaultIndex,
+            const char* const* labels,
+            int labelCount,
+            bool available,
+            const char* tooltip,
+            bool nestedResetPlacement,
+            std::function<void(int)> apply)
+        {
+            currentIndex = std::clamp(
+                currentIndex,
+                0,
+                labelCount - 1);
+            defaultIndex = std::clamp(
+                defaultIndex,
+                0,
+                labelCount - 1);
+            (void)available;
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            if (BeginRoundedCombo(label, labels[currentIndex]))
+            {
+                for (int index = 0; index < labelCount; ++index)
+                {
+                    const bool selected = index == currentIndex;
+                    DrawDeferredDropdownOption(
+                        labels[index],
+                        labels[index],
+                        selected,
+                        [apply, index]()
+                        {
+                            apply(index);
+                        });
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            if (tooltip != nullptr)
+            {
+                if (available)
+                    ImGui::SetItemTooltip("%s", tooltip);
+                else
+                {
+                    ImGui::SetItemTooltip(
+                        "%s Stored now; becomes effective when its owning "
+                        "SVSM mode and requested policies are active.",
+                        tooltip);
+                }
+            }
+            const bool resetRequested = nestedResetPlacement
+                ? DrawNestedDropdownResetIcon(
+                      label,
+                      currentIndex != defaultIndex)
+                : DrawPresetResetIcon(
+                      label,
+                      currentIndex != defaultIndex);
+            if (resetRequested)
+            {
+                QueueDeferredControlUiAction(
+                    [apply, defaultIndex]()
+                    {
+                        apply(defaultIndex);
+                    });
+            }
+        };
+
+        const auto drawFloat = [&](
+            const char* label,
+            float& value,
+            float defaultValue,
+            float minimum,
+            float maximum,
+            const char* format,
+            bool available,
+            const char* tooltip)
+        {
+            (void)available;
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            const bool changed = DrawSliderFloat(
+                label,
+                &value,
+                minimum,
+                maximum,
+                format);
+            if (tooltip != nullptr)
+            {
+                if (available)
+                    ImGui::SetItemTooltip("%s", tooltip);
+                else
+                {
+                    ImGui::SetItemTooltip(
+                        "%s Stored now; becomes effective when its owning "
+                        "SVSM mode and requested policies are active.",
+                        tooltip);
+                }
+            }
+            if (DrawPresetResetIcon(
+                    label,
+                    value != defaultValue))
+            {
+                value = defaultValue;
+                resetApplied = true;
+            }
+            return changed;
+        };
+
+        const auto sparseMode = [&]()
+        {
+            return shadows.mode != SvsmMode::DenseReference;
+        };
+        const auto cachedSparseMode = [&]()
+        {
+            return shadows.mode == SvsmMode::SparseCached;
+        };
+        const auto cacheReuseAvailable = [&]()
+        {
+            return cachedSparseMode() && shadows.cachingEnabled;
+        };
+        const auto finitePageBudget = [&]()
+        {
+            return shadows.pageRenderBudget !=
+                std::numeric_limits<uint32_t>::max();
+        };
+
+        static const char* presetLabels[] = {
+            "Performance",
+            "Balanced",
+            "Quality",
+            "Custom"
+        };
+        drawCombo(
+            "Profile##SparseVirtualShadowMaps",
+            int(shadows.preset),
+            int(factoryDefaults.preset),
+            presetLabels,
+            int(std::size(presetLabels)),
+            true,
+            "Choose the speed-to-quality balance. Named profiles reset "
+            "Developer and Unabstracted controls while retaining "
+            "the scene extent, light-depth range, pool size, and Enabled state.",
+            false,
+            [settings = &shadows](int selectedPreset)
+            {
+                ApplySvsmPreset(
+                    *settings,
+                    SvsmPreset(selectedPreset));
+            });
+
+        customChanged |= drawFloat(
+            "First Clipmap Extent",
+            shadows.firstClipmapExtent,
+            factoryDefaults.firstClipmapExtent,
+            1.f,
+            500.f,
+            "%.1f",
+            true,
+            "Set the world-space width covered by the finest clipmap.");
+        customChanged |= drawFloat(
+            "Maximum Light Depth",
+            shadows.maximumLightDepth,
+            factoryDefaults.maximumLightDepth,
+            1.f,
+            2000.f,
+            "%.1f",
+            true,
+            "Set the caster depth range centered on each clipmap.");
+
+        static const char* filterKernelLabels[] = {
+            "Nearest Poisson Reference",
+            "Bilinear PCF"
+        };
+        drawCombo(
+            "Filter Kernel",
+            int(shadows.filterKernel),
+            int(presetDefaults.filterKernel),
+            filterKernelLabels,
+            int(std::size(filterKernelLabels)),
+            sparseMode(),
+            sparseMode()
+                ? "Choose the deterministic nearest reference or bilinear "
+                  "page-safe PCF."
+                : "Dense Reference retains its point-load receiver.",
+            false,
+            [settings = &shadows](int selectedKernel)
+            {
+                settings->filterKernel =
+                    SvsmFilterKernel(selectedKernel);
+                reconcileSvsmPreset(*settings);
+            });
+
+        static const char* tapLabels[] = {
+            "1",
+            "4",
+            "8",
+            "16"
+        };
+        static const SvsmTapCount tapValues[] = {
+            SvsmTapCount::One,
+            SvsmTapCount::Four,
+            SvsmTapCount::Eight,
+            SvsmTapCount::Sixteen
+        };
+        int currentTapIndex = 0;
+        int defaultTapIndex = 0;
+        for (int index = 0; index < int(std::size(tapValues)); ++index)
+        {
+            if (tapValues[index] == shadows.tapCount)
+                currentTapIndex = index;
+            if (tapValues[index] == presetDefaults.tapCount)
+                defaultTapIndex = index;
+        }
+        drawCombo(
+            "Filter Taps",
+            currentTapIndex,
+            defaultTapIndex,
+            tapLabels,
+            int(std::size(tapLabels)),
+            true,
+            "Select the page-safe 1, 4, 8, or 16-tap receiver.",
+            false,
+            [settings = &shadows](int selectedTap)
+            {
+                static constexpr SvsmTapCount TapValues[] = {
+                    SvsmTapCount::One,
+                    SvsmTapCount::Four,
+                    SvsmTapCount::Eight,
+                    SvsmTapCount::Sixteen
+                };
+                settings->tapCount = TapValues[selectedTap];
+                reconcileSvsmPreset(*settings);
+            });
+        customChanged |= drawCheckbox(
+            "Adaptive Filtering",
+            shadows.adaptiveFiltering,
+            presetDefaults.adaptiveFiltering,
+            shadows.tapCount != SvsmTapCount::One,
+            "Use a page-safe agreement probe set before the selected full "
+            "filter. One-tap filtering has no adaptive shortcut.");
+
+        static const char* biasLabels[] = {
+            "0",
+            "+1 Mip",
+            "+2 Mips"
+        };
+        drawCombo(
+            "Resolution Bias",
+            int(shadows.resolutionBias),
+            int(presetDefaults.resolutionBias),
+            biasLabels,
+            int(std::size(biasLabels)),
+            true,
+            "Apply the same clipmap bias to marking, allocation, resolve, "
+            "fallback, dense clipmap drawing, and diagnostics.",
+            false,
+            [settings = &shadows](int selectedBias)
+            {
+                settings->resolutionBias =
+                    SvsmResolutionBias(selectedBias);
+                reconcileSvsmPreset(*settings);
+            });
+
+        customChanged |=
+            drawCheckbox("Receiver Distance Mip Clamp",
+                         shadows.receiverDistanceMipClampEnabled,
+                         presetDefaults.receiverDistanceMipClampEnabled,
+                         sparseMode(),
+                         "Prevent distant receivers from requesting unnecessarily fine "
+                         "clipmaps while retaining the complete coarsest fallback.");
+
+        if (BeginAnimatedTreeNode("Developer Options##SparseVirtualShadowMaps"))
+        {
+            const bool movingLightPolicyAvailable =
+                cacheReuseAvailable() && shadows.movingLightUncachedEnabled;
+            const bool movingBiasActive =
+                movingLightPolicyAvailable &&
+                shadows.movingLightLodBiasEnabled &&
+                shadows.movingLightResolutionBias != SvsmResolutionBias::Zero;
+            const bool receiverDistanceClampAvailable =
+                sparseMode() && shadows.receiverDistanceMipClampEnabled;
+            const bool packetCullingAvailable =
+                sparseMode() && shadows.gpuGatedDrawSubmission;
+            const bool packetPageCullingActive =
+                packetCullingAvailable && shadows.packetPageCullingEnabled;
+            const bool dirtyScatterAvailable = packetPageCullingActive;
+
+            if (BeginAnimatedTreeNode(
+                    "Resources and Cache Policy##SparseVirtualShadowMaps",
+                    ImGuiTreeNodeFlags_None,
+                    "Configure sparse pool capacity, scheduling limits, cache "
+                    "mode, paired depth, eviction, and reusable draw lists."))
+            {
+                int physicalPageCount = int(shadows.physicalPageCount);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (DrawSliderInt("Physical Pool Pages",
+                                  &physicalPageCount,
+                                  64,
+                                  int(SvsmPagesPerClipmap)))
+                {
+                    shadows.physicalPageCount = uint32_t(physicalPageCount);
+                    if (finitePageBudget())
+                    {
+                        shadows.pageRenderBudget = std::min(
+                            shadows.pageRenderBudget, shadows.physicalPageCount);
+                    }
+                    customChanged = true;
+                }
+                ImGui::SetItemTooltip(
+                    sparseMode()
+                        ? "Set the logical size of the shared fixed physical "
+                          "page pool."
+                        : "Store the logical size of the shared fixed physical "
+                          "page pool. It becomes effective in Sparse Uncached "
+                          "or Sparse Cached mode.");
+                if (DrawPresetResetIcon(
+                        "SVSM Physical Pool Pages",
+                        shadows.physicalPageCount !=
+                            factoryDefaults.physicalPageCount))
+                {
+                    shadows.physicalPageCount =
+                        factoryDefaults.physicalPageCount;
+                    if (finitePageBudget())
+                    {
+                        shadows.pageRenderBudget = std::min(
+                            shadows.pageRenderBudget,
+                            shadows.physicalPageCount);
+                    }
+                    resetApplied = true;
+                }
+
+                static uint32_t rememberedFinitePageBudget = 256u;
+                if (finitePageBudget())
+                {
+                    rememberedFinitePageBudget =
+                        std::min(shadows.pageRenderBudget, shadows.physicalPageCount);
+                }
+                bool unlimitedBudget = !finitePageBudget();
+                if (ImGui::Checkbox("Unlimited Page Render Budget", &unlimitedBudget))
+                {
+                    if (unlimitedBudget)
+                    {
+                        shadows.pageRenderBudget =
+                            std::numeric_limits<uint32_t>::max();
+                    }
+                    else
+                    {
+                        shadows.pageRenderBudget = std::min(
+                            rememberedFinitePageBudget, shadows.physicalPageCount);
+                    }
+                    customChanged = true;
+                }
+                ImGui::SetItemTooltip(
+                    sparseMode()
+                        ? "Remove the finite dirty-page scheduling limit. "
+                          "Returning to a finite budget restores the last "
+                          "finite value."
+                        : "Store whether sparse rendering removes the finite "
+                          "dirty-page scheduling limit. It becomes effective "
+                          "in Sparse Uncached or Sparse Cached mode.");
+                if (DrawPresetResetIcon(
+                        "SVSM Unlimited Page Render Budget",
+                        finitePageBudget()))
+                {
+                    shadows.pageRenderBudget =
+                        std::numeric_limits<uint32_t>::max();
+                    unlimitedBudget = true;
+                    resetApplied = true;
+                }
+                if (BeginAnimatedToggleRegion(
+                        "##SvsmFinitePageRenderBudget",
+                        !unlimitedBudget))
+                {
+                    int pageBudget = int(std::min(
+                        finitePageBudget()
+                            ? shadows.pageRenderBudget
+                            : rememberedFinitePageBudget,
+                        shadows.physicalPageCount));
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (DrawSliderInt("Page Render Budget",
+                                      &pageBudget,
+                                      0,
+                                      int(shadows.physicalPageCount)))
+                    {
+                        shadows.pageRenderBudget = uint32_t(pageBudget);
+                        rememberedFinitePageBudget = uint32_t(pageBudget);
+                        customChanged = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        sparseMode()
+                            ? "Limit dirty-page scheduling across the fine "
+                              "clipmaps."
+                            : "Store the fine-clipmap dirty-page scheduling "
+                              "limit. It becomes effective in Sparse Uncached "
+                              "or Sparse Cached mode while Unlimited Page "
+                              "Render Budget is off.");
+                    constexpr uint32_t DefaultFinitePageBudget = 256u;
+                    const uint32_t resetPageBudget = std::min(
+                        DefaultFinitePageBudget,
+                        shadows.physicalPageCount);
+                    if (DrawPresetResetIcon(
+                            "SVSM Page Render Budget",
+                            pageBudget != int(resetPageBudget)))
+                    {
+                        shadows.pageRenderBudget = resetPageBudget;
+                        rememberedFinitePageBudget = resetPageBudget;
+                        resetApplied = true;
+                    }
+                    EndAnimatedToggleRegion();
+                }
+
+                customChanged |= drawCheckbox(
+                    "Paired Static/Dynamic Depth",
+                    shadows.pairedStaticDynamicDepthEnabled,
+                    presetDefaults.pairedStaticDynamicDepthEnabled,
+                    cacheReuseAvailable(),
+                    "Use one page identity with persistent static depth and a "
+                    "receiver-visible merged slice. This doubles physical-depth "
+                    "pool memory and therefore requires Sparse Cached mode.");
+
+                ImGui::Separator();
+
+                static const char* modeLabels[] = {
+                    "Dense Reference", "Sparse Uncached", "Sparse Cached"};
+                drawCombo(
+                    "Mode##SparseVirtualShadowMaps",
+                    int(shadows.mode),
+                    int(presetDefaults.mode),
+                    modeLabels,
+                    int(std::size(modeLabels)),
+                    true,
+                    "Select fully backed validation, sparse full redraw, or "
+                    "sparse cached page reuse. Cache state follows this mode.",
+                    true,
+                    [settings = &shadows](int selectedMode)
+                    {
+                        settings->mode = SvsmMode(selectedMode);
+                        settings->cachingEnabled =
+                            settings->mode == SvsmMode::SparseCached;
+                        reconcileSvsmPreset(*settings);
+                    });
+
+                customChanged |= drawCheckbox(
+                    "Include Coarsest in Page Budget",
+                    shadows.coarsestPageRenderBudgetEnabled,
+                    presetDefaults.coarsestPageRenderBudgetEnabled,
+                    sparseMode() && finitePageBudget(),
+                    "Apply the finite shared render reservation to all six "
+                    "clipmaps instead of preserving the complete coarse fallback.");
+
+                static const char* markingLabels[] = {
+                    "Per Pixel", "8 by 8 Tile", "16 by 16 Tile"};
+                drawCombo(
+                    "Page Marking",
+                    int(shadows.markingMode),
+                    int(presetDefaults.markingMode),
+                    markingLabels,
+                    int(std::size(markingLabels)),
+                    sparseMode(),
+                    "Choose exact per-pixel requests or conservative deduplicated "
+                    "tile marking.",
+                    true,
+                    [settings = &shadows](int selectedMarking)
+                    {
+                        settings->markingMode =
+                            SvsmMarkingMode(selectedMarking);
+                        reconcileSvsmPreset(*settings);
+                    });
+
+                customChanged |=
+                    drawCheckbox("Recent Page Eviction Grace",
+                                 shadows.recentPageEvictionGraceEnabled,
+                                 presetDefaults.recentPageEvictionGraceEnabled,
+                                 cacheReuseAvailable(),
+                                 "Protect recently used pages from immediate fixed-pool "
+                                 "eviction.");
+                customChanged |=
+                    drawCheckbox("Cached Shadow Draw Lists",
+                                 shadows.renderPacketCachingEnabled,
+                                 presetDefaults.renderPacketCachingEnabled,
+                                 sparseMode(),
+                                 "Reuse compatible conservative per-clipmap caster "
+                                 "packet lists.");
+
+                EndAnimatedTreeNode();
+            }
+
+            if (BeginAnimatedTreeNode(
+                    "Movement and Invalidation##SparseVirtualShadowMaps",
+                    ImGuiTreeNodeFlags_None,
+                    "Tune moving-light recovery, receiver-distance clamping, "
+                    "and localized caster invalidation policy."))
+            {
+                static const char* movingBiasLabels[] = {"Off", "+1 Mip", "+2 Mips"};
+                const int effectiveMovingBias =
+                    shadows.movingLightLodBiasEnabled
+                        ? int(shadows.movingLightResolutionBias)
+                        : 0;
+                const int defaultMovingBias =
+                    presetDefaults.movingLightLodBiasEnabled
+                        ? int(presetDefaults.movingLightResolutionBias)
+                        : 0;
+                drawCombo(
+                    "Moving-Light Resolution Bias",
+                    effectiveMovingBias,
+                    defaultMovingBias,
+                    movingBiasLabels,
+                    int(std::size(movingBiasLabels)),
+                    movingLightPolicyAvailable,
+                    "Temporarily coarsen moving-light work, then recover. Off is "
+                    "the exact no-bias path.",
+                    true,
+                    [settings = &shadows](int selectedMovingBias)
+                    {
+                        settings->movingLightResolutionBias =
+                            SvsmResolutionBias(selectedMovingBias);
+                        settings->movingLightLodBiasEnabled =
+                            selectedMovingBias != 0;
+                        reconcileSvsmPreset(*settings);
+                    });
+
+                int movingLightRecoveryFrames = int(shadows.movingLightLodRecoveryFrames);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (DrawSliderInt("Moving-Light Recovery Frames",
+                                  &movingLightRecoveryFrames,
+                                  0,
+                                  60))
+                {
+                    shadows.movingLightLodRecoveryFrames =
+                        uint32_t(movingLightRecoveryFrames);
+                    customChanged = true;
+                }
+                ImGui::SetItemTooltip(
+                    movingBiasActive
+                        ? "Hold the selected moving-light bias, then recover "
+                          "after this many successful sparse frames."
+                        : "Store the recovery duration used when moving-light "
+                          "resolution bias becomes active.");
+                if (DrawPresetResetIcon(
+                        "SVSM Moving-Light Recovery Frames",
+                        shadows.movingLightLodRecoveryFrames !=
+                            presetDefaults.movingLightLodRecoveryFrames))
+                {
+                    shadows.movingLightLodRecoveryFrames =
+                        presetDefaults.movingLightLodRecoveryFrames;
+                    resetApplied = true;
+                }
+
+                if (BeginAnimatedToggleRegion(
+                        "##SvsmReceiverDistanceClampTuning",
+                        shadows.receiverDistanceMipClampEnabled))
+                {
+                    if (DrawSliderFloat(
+                            "Distance Clamp Start x Extent",
+                            &shadows.receiverDistanceMipClampStartScale,
+                            0.25f,
+                            8.f,
+                            "%.2f"))
+                    {
+                        customChanged = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        receiverDistanceClampAvailable
+                            ? "Scale the first receiver-distance threshold by "
+                              "the current clipmap extent."
+                            : "Store the first receiver-distance threshold "
+                              "scale. It becomes effective in Sparse Uncached "
+                              "or Sparse Cached mode while Receiver Distance "
+                              "Mip Clamp is enabled.");
+                    if (DrawPresetResetIcon(
+                            "SVSM Distance Clamp Start",
+                            shadows.receiverDistanceMipClampStartScale !=
+                                presetDefaults
+                                    .receiverDistanceMipClampStartScale))
+                    {
+                        shadows.receiverDistanceMipClampStartScale =
+                            presetDefaults
+                                .receiverDistanceMipClampStartScale;
+                        resetApplied = true;
+                    }
+                    int receiverDistanceMaximumLevel =
+                        int(shadows.receiverDistanceMipClampMaximumLevel);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (DrawSliderInt(
+                            "Maximum Distance Clamp Level",
+                            &receiverDistanceMaximumLevel,
+                            0,
+                            int(
+                                SvsmMaximumReceiverDistanceMipClampLevel)))
+                    {
+                        shadows.receiverDistanceMipClampMaximumLevel =
+                            uint32_t(receiverDistanceMaximumLevel);
+                        customChanged = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        receiverDistanceClampAvailable
+                            ? "Set the coarsest fine clipmap that "
+                              "receiver-distance clamping may select."
+                            : "Store the maximum fine-clipmap clamp level. It "
+                              "becomes effective in Sparse Uncached or Sparse "
+                              "Cached mode while Receiver Distance Mip Clamp "
+                              "is enabled.");
+                    if (DrawPresetResetIcon(
+                            "SVSM Maximum Distance Clamp Level",
+                            shadows.receiverDistanceMipClampMaximumLevel !=
+                                presetDefaults
+                                    .receiverDistanceMipClampMaximumLevel))
+                    {
+                        shadows.receiverDistanceMipClampMaximumLevel =
+                            presetDefaults
+                                .receiverDistanceMipClampMaximumLevel;
+                        resetApplied = true;
+                    }
+                    EndAnimatedToggleRegion();
+                }
+
+                const bool adaptiveCasterClassificationAvailable =
+                    cacheReuseAvailable() && shadows.localizedInvalidationEnabled &&
+                    shadows.pairedStaticDynamicDepthEnabled;
+                customChanged |= drawCheckbox(
+                    "Adaptive Static Caster Cache",
+                    shadows.adaptiveCasterCacheClassificationEnabled,
+                    presetDefaults.adaptiveCasterCacheClassificationEnabled,
+                    adaptiveCasterClassificationAvailable,
+                    "Demote changed rigid opaque casters immediately and promote "
+                    "them back to persistent static depth after stabilization.");
+
+                static const char* invalidationModeLabels[] = {
+                    "Auto", "Always", "Rigid", "Static"};
+                drawCombo(
+                    "Object Invalidation Mode",
+                    int(shadows.defaultObjectInvalidationMode),
+                    int(presetDefaults.defaultObjectInvalidationMode),
+                    invalidationModeLabels,
+                    int(std::size(invalidationModeLabels)),
+                    cacheReuseAvailable() && shadows.localizedInvalidationEnabled,
+                    "Choose the default per-object transform and deformation "
+                    "invalidation policy.",
+                    true,
+                    [settings = &shadows](int selectedInvalidationMode)
+                    {
+                        settings->defaultObjectInvalidationMode =
+                            SvsmObjectInvalidationMode(
+                                selectedInvalidationMode);
+                        reconcileSvsmPreset(*settings);
+                    });
+
+                EndAnimatedTreeNode();
+            }
+
+            if (BeginAnimatedTreeNode(
+                    "Culling and Raster##SparseVirtualShadowMaps",
+                    ImGuiTreeNodeFlags_None,
+                    "Tune packet rejection, scheduled-page masks, static-depth "
+                    "occlusion, and dirty-page raster."))
+            {
+                customChanged |= drawCheckbox(
+                    "Packet State Sorting",
+                    shadows.packetStateSortingEnabled,
+                    presetDefaults.packetStateSortingEnabled,
+                    sparseMode() &&
+                        shadows.gpuGatedDrawSubmission &&
+                        shadows.batchedDrawSubmissionEnabled,
+                    "Group compatible packet state before indirect submission.");
+                customChanged |= drawCheckbox("Packet Page Culling",
+                                              shadows.packetPageCullingEnabled,
+                                              presetDefaults.packetPageCullingEnabled,
+                                              packetCullingAvailable,
+                                              "Intersect each cached caster packet "
+                                              "with scheduled dirty work.");
+                customChanged |= drawCheckbox(
+                    "Hierarchical Scheduled-Page Mask",
+                    shadows.hierarchicalScheduledPageMaskEnabled,
+                    presetDefaults.hierarchicalScheduledPageMaskEnabled,
+                    packetPageCullingActive,
+                    "Reject packet rectangles against an exact-validated coarse "
+                    "scheduled-page hierarchy.");
+                customChanged |= drawCheckbox(
+                    "Receiver Subpage Mask Culling",
+                    shadows.receiverPageMaskCullingEnabled,
+                    presetDefaults.receiverPageMaskCullingEnabled,
+                    packetPageCullingActive,
+                    "Cull caster/page work outside the current receiver subpage "
+                    "mask.");
+
+                const bool staticDepthHierarchyAvailable =
+                    packetPageCullingActive && cacheReuseAvailable() &&
+                    shadows.pairedStaticDynamicDepthEnabled &&
+                    !shadows.dirtyPageScatterRasterEnabled;
+                customChanged |= drawCheckbox(
+                    "Static-Depth Page HZB Culling",
+                    shadows.staticDepthHierarchyCullingEnabled,
+                    presetDefaults.staticDepthHierarchyCullingEnabled,
+                    staticDepthHierarchyAvailable,
+                    "Reject only fully occluded dynamic caster/page pairs against "
+                    "the complete persistent static page hierarchy.");
+                if (BeginAnimatedToggleRegion(
+                        "##SvsmStaticDepthHierarchyTuning",
+                        shadows.staticDepthHierarchyCullingEnabled))
+                {
+                    customChanged |=
+                        drawFloat("Static HZB Conservative Bias",
+                                  shadows.staticDepthHierarchyBias,
+                                  presetDefaults.staticDepthHierarchyBias,
+                                  0.f,
+                                  0.01f,
+                                  "%.6f",
+                                  true,
+                                  staticDepthHierarchyAvailable
+                                      ? "Increase the reverse-Z fail-open "
+                                        "guard used by static HZB culling."
+                                      : "Store the reverse-Z fail-open guard "
+                                        "used when static HZB culling becomes "
+                                        "effective.");
+                    EndAnimatedToggleRegion();
+                }
+
+                const bool dirtyScatterRasterChanged = ImGui::Checkbox(
+                    "Dirty Page Scatter Raster",
+                    &shadows.dirtyPageScatterRasterEnabled);
+                ImGui::SetItemTooltip(
+                    dirtyScatterAvailable
+                        ? "Request one virtual-space draw per intersecting "
+                          "packet. The amplification guard is intrinsic and "
+                          "falls back to the exact page list when a rectangle "
+                          "covers too many holes."
+                        : "Store the requested scatter-raster policy. It "
+                          "becomes effective in Sparse Uncached or Sparse "
+                          "Cached mode when GPU-Gated Draw Submission and "
+                          "Packet Page Culling are enabled.");
+                if (dirtyScatterRasterChanged)
+                {
+                    shadows.dirtyPageScatterAmplificationGuardEnabled =
+                        shadows.dirtyPageScatterRasterEnabled;
+                    customChanged = true;
+                }
+                if (DrawPresetResetIcon(
+                        "SVSM Dirty Page Scatter Raster",
+                        shadows.dirtyPageScatterRasterEnabled !=
+                                presetDefaults.dirtyPageScatterRasterEnabled ||
+                            shadows
+                                    .dirtyPageScatterAmplificationGuardEnabled !=
+                                presetDefaults
+                                    .dirtyPageScatterAmplificationGuardEnabled))
+                {
+                    shadows.dirtyPageScatterRasterEnabled =
+                        presetDefaults.dirtyPageScatterRasterEnabled;
+                    shadows.dirtyPageScatterAmplificationGuardEnabled =
+                        presetDefaults
+                            .dirtyPageScatterAmplificationGuardEnabled;
+                    resetApplied = true;
+                }
+                if (BeginAnimatedToggleRegion(
+                        "##SvsmDirtyPageScatterTuning",
+                        shadows.dirtyPageScatterRasterEnabled))
+                {
+                    int scatterMaximumAmplification =
+                        int(shadows.dirtyPageScatterMaximumAmplification);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (DrawSliderInt(
+                            "Scatter Maximum Page Amplification",
+                            &scatterMaximumAmplification,
+                            1,
+                            int(
+                                SvsmMaximumDirtyPageScatterAmplification)))
+                    {
+                        shadows.dirtyPageScatterMaximumAmplification =
+                            uint32_t(scatterMaximumAmplification);
+                        customChanged = true;
+                    }
+                    ImGui::SetItemTooltip(
+                        dirtyScatterAvailable
+                            ? "Fall back to the exact per-page packet list "
+                              "above this rectangle-to-exact-page "
+                              "amplification ratio."
+                            : "Store the rectangle-to-exact-page "
+                              "amplification limit. It becomes effective in "
+                              "Sparse Uncached or Sparse Cached mode when "
+                              "GPU-Gated Draw Submission, Packet Page "
+                              "Culling, and Dirty Page Scatter Raster are "
+                              "enabled.");
+                    if (DrawPresetResetIcon(
+                            "SVSM Scatter Maximum Page Amplification",
+                            shadows
+                                    .dirtyPageScatterMaximumAmplification !=
+                                presetDefaults
+                                    .dirtyPageScatterMaximumAmplification))
+                    {
+                        shadows.dirtyPageScatterMaximumAmplification =
+                            presetDefaults
+                                .dirtyPageScatterMaximumAmplification;
+                        resetApplied = true;
+                    }
+                    EndAnimatedToggleRegion();
+                }
+
+                EndAnimatedTreeNode();
+            }
+
+            if (BeginAnimatedTreeNode(
+                    "Unabstracted##SparseVirtualShadowMaps",
+                    ImGuiTreeNodeFlags_None,
+                    "Raw independently toggleable optimizations that are proven "
+                    "enough to trend toward an abstracted always-on policy, but "
+                    "retain their reference paths during validation."))
+            {
+                customChanged |=
+                    drawCheckbox("Allocation Budget Saturation Early-Out",
+                                 shadows.allocationBudgetSaturationEarlyOutEnabled,
+                                 presetDefaults.allocationBudgetSaturationEarlyOutEnabled,
+                                 sparseMode() && finitePageBudget(),
+                                 "Bypass redundant reservation atomics after the shared "
+                                 "finite budget is saturated.");
+                customChanged |= drawCheckbox(
+                    "Deduplicate Per-Pixel Requests",
+                    shadows.perPixelMarkingDedupeEnabled,
+                    presetDefaults.perPixelMarkingDedupeEnabled,
+                    sparseMode() && shadows.markingMode == SvsmMarkingMode::PerPixel,
+                    "Deduplicate each 8-by-8 group's page requests through a "
+                    "bounded shared hash that fails open on collisions.");
+
+                static const char* poissonOrderingLabels[] = {"Legacy Stride Reference",
+                                                              "Balanced Progressive"};
+                drawCombo(
+                    "Poisson Ordering",
+                    int(shadows.poissonOrdering),
+                    int(presetDefaults.poissonOrdering),
+                    poissonOrderingLabels,
+                    int(std::size(poissonOrderingLabels)),
+                    sparseMode(),
+                    "Choose the legacy stride or balanced progressive tap prefix.",
+                    true,
+                    [settings = &shadows](int selectedPoissonOrdering)
+                    {
+                        settings->poissonOrdering =
+                            SvsmPoissonOrdering(
+                                selectedPoissonOrdering);
+                        reconcileSvsmPreset(*settings);
+                    });
+
+                static const char* filteringLabels[] = {"Manual Page Safe", "Hybrid"};
+                drawCombo(
+                    "Filtering",
+                    int(shadows.filterMode),
+                    int(presetDefaults.filterMode),
+                    filteringLabels,
+                    int(std::size(filteringLabels)),
+                    sparseMode(),
+                    "Hybrid filtering reuses one translation only when the "
+                    "complete footprint stays in one valid page.",
+                    true,
+                    [settings = &shadows](int selectedFiltering)
+                    {
+                        settings->filterMode =
+                            SvsmFilterMode(selectedFiltering);
+                        reconcileSvsmPreset(*settings);
+                    });
+
+                customChanged |=
+                    drawCheckbox("Precomposed Clipmap Transforms",
+                                 shadows.precomposedClipmapTransformsEnabled,
+                                 presetDefaults.precomposedClipmapTransformsEnabled,
+                                 sparseMode(),
+                                 "Transform camera-clip positions directly into each "
+                                 "clipmap in marking and resolve.");
+                customChanged |=
+                    drawCheckbox("Page Translation Cache",
+                                 shadows.pageTranslationCachingEnabled,
+                                 presetDefaults.pageTranslationCachingEnabled,
+                                 sparseMode(),
+                                 "Reuse exact page-table translations within one pixel's "
+                                 "validated filter footprint.");
+
+                customChanged |= drawCheckbox(
+                    "Light-Depth Origin Guard Band",
+                    shadows.lightDepthOriginGuardBandEnabled,
+                    presetDefaults.lightDepthOriginGuardBandEnabled,
+                    cacheReuseAvailable(),
+                    "Keep the light-depth origin stable until the configured "
+                    "scene-depth guard band is exceeded.");
+                if (BeginAnimatedToggleRegion(
+                        "##SvsmLightDepthGuardBandTuning",
+                        shadows.lightDepthOriginGuardBandEnabled))
+                {
+                    customChanged |= drawFloat(
+                        "Light-Depth Guard Fraction",
+                        shadows.lightDepthOriginGuardBandFraction,
+                        presetDefaults.lightDepthOriginGuardBandFraction,
+                        0.1f,
+                        1.f,
+                        "%.2f",
+                        cacheReuseAvailable(),
+                        cacheReuseAvailable()
+                            ? "Set the usable fraction of the cached "
+                              "light-depth range."
+                            : "Store the usable light-depth guard fraction. "
+                              "It becomes effective in Sparse Cached mode "
+                              "while Light-Depth Origin Guard Band is "
+                              "enabled.");
+                    EndAnimatedToggleRegion();
+                }
+                customChanged |=
+                    drawCheckbox("Finite-Budget Static Drain",
+                                 shadows.finiteBudgetStaticDrainEnabled,
+                                 presetDefaults.finiteBudgetStaticDrainEnabled,
+                                 cacheReuseAvailable() && finitePageBudget(),
+                                 "Drain persistent static-dirty work without starving "
+                                 "dynamic fine pages under a finite budget.");
+                customChanged |= drawCheckbox(
+                    "Static Page Request Reuse",
+                    shadows.staticPageRequestReuseEnabled,
+                    presetDefaults.staticPageRequestReuseEnabled,
+                    cacheReuseAvailable(),
+                    "Reuse validated static page requests while camera, light, "
+                    "and scene mapping remain compatible.");
+                customChanged |=
+                    drawCheckbox("Static Visibility Cache",
+                                 shadows.staticVisibilityCachingEnabled,
+                                 presetDefaults.staticVisibilityCachingEnabled,
+                                 cacheReuseAvailable(),
+                                 "Reuse the full-resolution visibility result when all "
+                                 "receiver and shadow inputs remain compatible.");
+                customChanged |=
+                    drawCheckbox("Scene State Caching",
+                                 shadows.sceneStateCachingEnabled,
+                                 presetDefaults.sceneStateCachingEnabled,
+                                 true,
+                                 "Reuse validated scene revisions until UVSR reports a "
+                                 "shadow-relevant scene change.");
+                customChanged |=
+                    drawCheckbox("Caster-Only Scene Revision",
+                                 shadows.casterOnlySceneRevisionEnabled,
+                                 presetDefaults.casterOnlySceneRevisionEnabled,
+                                 shadows.sceneStateCachingEnabled,
+                                 "Distinguish caster changes from light-only transforms "
+                                 "using Donut's dirty scene branches.");
+                customChanged |= drawCheckbox(
+                    "Shared Six-Clipmap Packet Builder",
+                    shadows.sharedClipmapPacketBuilderEnabled,
+                    presetDefaults.sharedClipmapPacketBuilderEnabled,
+                    sparseMode(),
+                    "Traverse compatible casters once and classify the shared "
+                    "metadata across all six clipmaps.");
+                customChanged |= drawCheckbox(
+                    "Persistent Caster Source Cache",
+                    shadows.persistentCasterSourceCachingEnabled,
+                    presetDefaults.persistentCasterSourceCachingEnabled,
+                    sparseMode() && shadows.sharedClipmapPacketBuilderEnabled,
+                    "Reuse validated caster source references, transforms, "
+                    "bounds, topology, materials, and draw arguments.");
+                customChanged |= drawCheckbox(
+                    "Opaque Raster Specialization",
+                    shadows.opaqueRasterSpecializationEnabled,
+                    presetDefaults.opaqueRasterSpecializationEnabled,
+                    sparseMode(),
+                    "Use the position-only, material-free opaque depth path.");
+                customChanged |=
+                    drawCheckbox("Lean Alpha-Tested Bindings",
+                                 shadows.leanAlphaTestedBindingsEnabled,
+                                 presetDefaults.leanAlphaTestedBindingsEnabled,
+                                 sparseMode(),
+                                 "Bind only shadow-relevant alpha material resources.");
+                customChanged |= drawCheckbox(
+                    "Deferred Static-Depth Merge",
+                    shadows.deferredStaticDepthMergeEnabled,
+                    presetDefaults.deferredStaticDepthMergeEnabled,
+                    cacheReuseAvailable() && shadows.pairedStaticDynamicDepthEnabled,
+                    "Merge scheduled static-dirty pages after static raster "
+                    "instead of issuing duplicate static depth atomics.");
+                customChanged |=
+                    drawCheckbox("Moving-Light Uncached Policy",
+                                 shadows.movingLightUncachedEnabled,
+                                 presetDefaults.movingLightUncachedEnabled,
+                                 cachedSparseMode(),
+                                 "Use the receiver-visible merged slice while the light "
+                                 "moves, then rebuild and resume compatible caching.");
+                customChanged |= drawCheckbox(
+                    "Preserve Page Mappings on Content Invalidation",
+                    shadows.retainPhysicalMappingsOnContentInvalidationEnabled,
+                    presetDefaults.retainPhysicalMappingsOnContentInvalidationEnabled,
+                    sparseMode(),
+                    "Retain validated physical ownership across logical content "
+                    "invalidation; resource recreation remains destructive.");
+                customChanged |= drawCheckbox(
+                    "Continuous Moving-Light Distance Bias",
+                    shadows.movingLightContinuousReceiverBiasEnabled,
+                    presetDefaults.movingLightContinuousReceiverBiasEnabled,
+                    receiverDistanceClampAvailable && movingBiasActive,
+                    "Shift distance thresholds continuously during moving-light "
+                    "recovery instead of globally dropping a clipmap.");
+                customChanged |= drawCheckbox(
+                    "Localized Caster Invalidation",
+                    shadows.localizedInvalidationEnabled,
+                    presetDefaults.localizedInvalidationEnabled,
+                    cacheReuseAvailable(),
+                    "Dirty only conservative old-plus-new virtual coverage for "
+                    "reliable stable caster identities.");
+                customChanged |= drawCheckbox(
+                    "Tight Localized Bounds",
+                    shadows.tightLocalizedInvalidationBoundsEnabled,
+                    presetDefaults.tightLocalizedInvalidationBoundsEnabled,
+                    cacheReuseAvailable() && shadows.localizedInvalidationEnabled,
+                    "Project original object-space bounds directly and fail "
+                    "open when identity or bounds are unreliable.");
+                customChanged |=
+                    drawCheckbox("GPU-Gated Draw Submission",
+                                 shadows.gpuGatedDrawSubmission,
+                                 presetDefaults.gpuGatedDrawSubmission,
+                                 sparseMode(),
+                                 "Let compact GPU work determine which prepared caster "
+                                 "packets reach raster.");
+                customChanged |= drawCheckbox(
+                    "Batched Draw Submission",
+                    shadows.batchedDrawSubmissionEnabled,
+                    presetDefaults.batchedDrawSubmissionEnabled,
+                    sparseMode() && shadows.gpuGatedDrawSubmission,
+                    "Reuse compatible state and submit compact indirect draw "
+                    "batches.");
+                customChanged |=
+                    drawCheckbox("Per-Level Empty-Work Skip",
+                                 shadows.levelEmptyWorkSkipEnabled,
+                                 presetDefaults.levelEmptyWorkSkipEnabled,
+                                 sparseMode() && shadows.gpuGatedDrawSubmission &&
+                                     shadows.batchedDrawSubmissionEnabled,
+                                 "Skip parsing indirect commands for clipmap levels with "
+                                 "zero dirty work.");
+                customChanged |= drawCheckbox(
+                    "Packet Rectangle Direct Scan",
+                    shadows.packetRectangleDirectScanEnabled,
+                    presetDefaults.packetRectangleDirectScanEnabled,
+                    packetPageCullingActive,
+                    "Probe small wrapped packet rectangles directly instead of "
+                    "scanning the full compact dirty-page list.");
+                customChanged |= drawCheckbox(
+                    "Scatter Alpha-Test Early Reject",
+                    shadows.scatterAlphaTestEarlyRejectEnabled,
+                    presetDefaults.scatterAlphaTestEarlyRejectEnabled,
+                    dirtyScatterAvailable && shadows.dirtyPageScatterRasterEnabled,
+                    "Reject unscheduled scatter holes before sampling opacity.");
+
+                EndAnimatedTreeNode();
+            }
+
+            EndAnimatedTreeNode();
+        }
+
+        if (BeginAnimatedTreeNode(
+                "Diagnostics##SparseVirtualShadowMaps",
+                ImGuiTreeNodeFlags_None,
+                "Inspect SVSM timing detail and full-screen page-state "
+                "diagnostics."))
+        {
+            customChanged |= drawCheckbox(
+                "Detailed GPU Stage Timing",
+                shadows.detailedGpuTimingEnabled,
+                presetDefaults.detailedGpuTimingEnabled,
+                true,
+                "Measure Mark, Allocate, Clear, Packet, Render, and Filter "
+                "separately. Disable for the lowest-overhead total-only "
+                "timing path.");
+
+            static constexpr const char* DebugLabels[] = {
+                "Off",
+                "Clipmap Selection",
+                "Required Pages",
+                "Resident Pages",
+                "Cached Pages",
+                "Dirty Pages",
+                "Rendered Pages",
+                "Physical Pool",
+                "Fallback Level",
+                "Missing Pages",
+                "Tap Count",
+                "Visibility"
+            };
+            drawCombo(
+                "Debug View##SparseVirtualShadowMaps",
+                int(shadows.debugView),
+                int(presetDefaults.debugView),
+                DebugLabels,
+                int(std::size(DebugLabels)),
+                true,
+                "Present the selected full-screen diagnostic. Debug views "
+                "enable asynchronous page-counter readback and can disable "
+                "otherwise reusable visibility work.",
+                true,
+                [settings = &shadows](int selectedDebugView)
+                {
+                    settings->debugView =
+                        SvsmDebugView(selectedDebugView);
+                    reconcileSvsmPreset(*settings);
+                });
+
+            EndAnimatedTreeNode();
+        }
+
+        if (customChanged || resetApplied)
+            reconcileSvsmPreset(shadows);
+        return customChanged || resetApplied;
+    }
+
+    static bool DrawCenteredActionButton(const char* label, float width)
     {
         const ImGuiStyle& style = ImGui::GetStyle();
         const ImVec2 size(width, ImGui::GetFrameHeight());
@@ -8650,17 +15202,10 @@ private:
 
         const ImVec2 textSize = ImGui::CalcTextSize(label);
         const ImVec2 textPosition(
-            std::floor(
-                buttonMin.x +
-                (buttonMax.x - buttonMin.x - textSize.x) * 0.5f),
-            std::floor(
-                buttonMin.y +
-                (buttonMax.y - buttonMin.y - textSize.y) * 0.5f +
-                1.f));
-        drawList->AddText(
-            textPosition,
-            ImGui::GetColorU32(ImGuiCol_Text),
-            label);
+            std::floor(buttonMin.x + (buttonMax.x - buttonMin.x - textSize.x) * 0.5f),
+            std::floor(buttonMin.y + (buttonMax.y - buttonMin.y - textSize.y) * 0.5f +
+                       1.f));
+        drawList->AddText(textPosition, ImGui::GetColorU32(ImGuiCol_Text), label);
         return pressed;
     }
 
@@ -8741,9 +15286,7 @@ public:
         , m_ui(ui)
     {
         m_Font = CreateFontFromFile(
-            *(app->GetRootFs()),
-            "/media/fonts/System/CodexUI-Semibold.ttf",
-            16.f);
+            *(app->GetRootFs()), "/media/fonts/System/CodexUI-Semibold.ttf", 16.f);
 
         ImGui::GetIO().IniFilename = nullptr;
     }
@@ -9117,12 +15660,21 @@ protected:
                 m_StatUpdateQueue.clear();
                 for (std::string& value : m_PerformanceStatValues)
                     value.clear();
+                for (std::string& value : m_BendShadowStatLines)
+                    value.clear();
+                for (std::string& value : m_SparseShadowStatLines)
+                    value.clear();
+                for (std::string& value : m_DiagnosticCsmStatLines)
+                    value.clear();
                 for (std::string& value : m_VisibilityStatLines)
                     value.clear();
                 for (std::string& value : m_TemporalAAStatLines)
                     value.clear();
                 m_HasAppliedStatSnapshot = false;
                 m_HasGpuStatSnapshot = false;
+                m_HasBendShadowStatSnapshot = false;
+                m_HasSparseShadowStatSnapshot = false;
+                m_HasDiagnosticCsmStatSnapshot = false;
                 m_HasVisibilityStatSnapshot = false;
                 m_HasTemporalAAStatSnapshot = false;
                 m_SettingsAppearance = 0.f;
@@ -10688,6 +17240,45 @@ protected:
                             visibilityPreset.indirectDiffuse.intensity;
                         finishVisibilityPresetReset();
                     }
+                    giChanged |= ImGui::Checkbox(
+                        "Include Emissive Sources",
+                        &gi.includeEmissive);
+                    ImGui::SetItemTooltip(
+                        "Let visible emissive surfaces light the scene.");
+                    if (DrawPresetResetIcon(
+                            "Visibility Include Emissive Sources",
+                            gi.includeEmissive !=
+                                visibilityPreset.indirectDiffuse
+                                    .includeEmissive))
+                    {
+                        gi.includeEmissive =
+                            visibilityPreset.indirectDiffuse.includeEmissive;
+                        finishVisibilityPresetReset();
+                    }
+                    if (BeginAnimatedToggleRegion(
+                            "##EmissiveSourceControls",
+                            gi.includeEmissive))
+                    {
+                        giChanged |= DrawSliderFloat(
+                            "Emissive Source Gain",
+                            &gi.emissiveGain,
+                            0.0f,
+                            10.0f,
+                            "%.2f");
+                        ImGui::SetItemTooltip(
+                            "Set emissive surfaces' GI strength.");
+                        if (DrawPresetResetIcon(
+                                "Visibility Emissive Source Gain",
+                                gi.emissiveGain !=
+                                    visibilityPreset.indirectDiffuse
+                                        .emissiveGain))
+                        {
+                            gi.emissiveGain =
+                                visibilityPreset.indirectDiffuse.emissiveGain;
+                            finishVisibilityPresetReset();
+                        }
+                        EndAnimatedToggleRegion();
+                    }
                     EndAnimatedToggleRegion();
                 }
                 if (giChanged)
@@ -11450,8 +18041,11 @@ protected:
                 DirectLighting,
                 ScreenSpaceVisibility,
                 AntiAliasing,
+                BendShadows,
+                SparseVirtualShadowMaps,
+                DiagnosticCascadedShadowMaps,
                 MaterialPicking,
-                ProceduralSky,
+                EnvironmentBackground,
                 ToneMapping,
                 OutputBlit,
                 Count
@@ -11470,8 +18064,11 @@ protected:
                 "Direct Lighting",
                 "Screen-Space Visibility",
                 "Anti-Aliasing",
+                "Bend Shadows",
+                "Sparse Virtual Shadow Maps",
+                "Diagnostic Cascaded Shadow Maps",
                 "Material Picking",
-                "Procedural Sky",
+                "Environment Background",
                 "Tone Mapping",
                 "Output Blit"
             };
@@ -11738,6 +18335,176 @@ protected:
                     EndAnimatedToggleRegion();
                 }
             }
+            else if (statisticsEffect == static_cast<int>(
+                    StatisticsEffect::BendShadows) ||
+                statisticsEffect == static_cast<int>(
+                    StatisticsEffect::SparseVirtualShadowMaps) ||
+                statisticsEffect == static_cast<int>(
+                    StatisticsEffect::DiagnosticCascadedShadowMaps))
+            {
+                static constexpr const char* BendShadowStatLabels[] = {
+                    "Trace Work",
+                    "Sampling and Output"
+                };
+                static constexpr const char* SparseShadowStatLabels[] = {
+                    "GPU Timing",
+                    "Packet Timing",
+                    "Page Residency",
+                    "Page Rendering",
+                    "Resource Memory",
+                    "Fallback Pixels",
+                    "Packet Pages",
+                    "Scheduled Tile Mask",
+                    "Culling Availability",
+                    "Culling Counters",
+                    "Static Reuse",
+                    "Packet Culling",
+                    "Draw Submission",
+                    "Light and Cache State",
+                    "CPU Timing",
+                    "Last GPU Work",
+                    "GPU Work History"
+                };
+                static constexpr const char* DiagnosticCsmStatLabels[] = {
+                    "GPU Timing",
+                    "CPU Timing",
+                    "Output and Maps",
+                    "Cascade Work",
+                    "Caster Work",
+                    "Texel Work",
+                    "Resource Memory",
+                    "Coverage",
+                    "Optimization State",
+                    "SVSM Comparison",
+                    "Normalized Estimate"
+                };
+                const auto drawStatLines = [](
+                    const char* tableId,
+                    const auto& labels,
+                    const auto& lines,
+                    bool available)
+                {
+                    if (ImGui::BeginTable(
+                            tableId,
+                            2,
+                            ImGuiTableFlags_BordersInnerH |
+                                ImGuiTableFlags_RowBg |
+                                ImGuiTableFlags_SizingStretchProp))
+                    {
+                        ImGui::TableSetupColumn(
+                            "Metric",
+                            ImGuiTableColumnFlags_WidthStretch,
+                            3.f);
+                        ImGui::TableSetupColumn(
+                            "Current",
+                            ImGuiTableColumnFlags_WidthStretch,
+                            1.f);
+                        ImGui::TableHeadersRow();
+                        if (!available)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted("Status");
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::TextDisabled("Inactive");
+                        }
+                        else
+                        {
+                            using LabelArray = std::remove_cv_t<
+                                std::remove_reference_t<decltype(labels)>>;
+                            using LineArray = std::remove_cv_t<
+                                std::remove_reference_t<decltype(lines)>>;
+                            static_assert(
+                                std::extent_v<LabelArray> ==
+                                std::tuple_size_v<LineArray>);
+                            for (size_t index = 0;
+                                index < std::size(lines);
+                                ++index)
+                            {
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::TextUnformatted(labels[index]);
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::TextWrapped(
+                                    "%s",
+                                    lines[index].c_str());
+                            }
+                        }
+                        ImGui::EndTable();
+                    }
+                };
+
+                if (statisticsEffect == static_cast<int>(
+                        StatisticsEffect::BendShadows))
+                {
+                    drawStatLines(
+                        "##BendShadowStatistics",
+                        BendShadowStatLabels,
+                        m_BendShadowStatLines,
+                        m_HasBendShadowStatSnapshot);
+                }
+                else if (statisticsEffect == static_cast<int>(
+                        StatisticsEffect::SparseVirtualShadowMaps))
+                {
+                    drawStatLines(
+                        "##SparseVirtualShadowMapStatistics",
+                        SparseShadowStatLabels,
+                        m_SparseShadowStatLines,
+                        m_HasSparseShadowStatSnapshot);
+
+                    const bool motionTestRunning =
+                        m_app->IsSvsmMotionBenchmarkRunning();
+                    if (!motionTestRunning)
+                    {
+                        const bool canStart =
+                            m_app->CanStartSvsmMotionBenchmark();
+                        if (!canStart)
+                            ImGui::BeginDisabled();
+                        if (DrawCenteredActionButton(
+                                "Run Camera Motion Test",
+                                settingsControlWidth))
+                        {
+                            m_app->StartSvsmMotionBenchmark();
+                        }
+                        ImGui::SetItemTooltip(
+                            "Run the fixed 45-degree Position 1 motion test.");
+                        if (DrawCenteredActionButton(
+                                "Run Sun Motion Test",
+                                settingsControlWidth))
+                        {
+                            m_app->StartSvsmSunMotionBenchmark();
+                        }
+                        ImGui::SetItemTooltip(
+                            "Run the fixed slow-sun cache-recovery test.");
+                        if (!canStart)
+                            ImGui::EndDisabled();
+                    }
+                    if (BeginAnimatedToggleRegion(
+                            "##SvsmBenchmarkCancel",
+                            motionTestRunning))
+                    {
+                        if (DrawCenteredActionButton(
+                                "Cancel Motion Test",
+                                settingsControlWidth))
+                        {
+                            m_app->AbortSvsmMotionBenchmark(
+                                "cancelled from Statistics");
+                        }
+                        ImGui::TextWrapped(
+                            "%s",
+                            m_app->GetSvsmMotionBenchmarkStatus().c_str());
+                        EndAnimatedToggleRegion();
+                    }
+                }
+                else
+                {
+                    drawStatLines(
+                        "##DiagnosticCascadedShadowMapStatistics",
+                        DiagnosticCsmStatLabels,
+                        m_DiagnosticCsmStatLines,
+                        m_HasDiagnosticCsmStatSnapshot);
+                }
+            }
             else if (statisticsEffect != static_cast<int>(
                     StatisticsEffect::ScreenSpaceVisibility))
             {
@@ -11758,8 +18525,8 @@ protected:
                         case RendererTimingStage::MaterialPicking:
                             return m_ui.SelectedMaterial != nullptr ||
                                 m_ui.SelectedNode != nullptr;
-                        case RendererTimingStage::ProceduralSky:
-                            return m_ui.EnableProceduralSky;
+                        case RendererTimingStage::EnvironmentBackground:
+                            return m_ui.ShowEnvironmentBackground;
                         case RendererTimingStage::ToneMapping:
                             return m_ui.UsesTonemapper();
                         default:
@@ -11794,8 +18561,13 @@ protected:
                             ImGuiTableFlags_RowBg |
                             ImGuiTableFlags_SizingStretchProp))
                 {
+                    const bool environmentStatistics =
+                        statisticsEffect == static_cast<int>(
+                            StatisticsEffect::EnvironmentBackground);
                     ImGui::TableSetupColumn(
-                        "GPU Stage",
+                        environmentStatistics
+                            ? "Metric"
+                            : "GPU Stage",
                         ImGuiTableColumnFlags_WidthStretch,
                         3.f);
                     ImGui::TableSetupColumn(
@@ -11826,8 +18598,8 @@ protected:
                             "Material Picking",
                             RendererTimingStage::MaterialPicking);
                         drawRendererTimingRow(
-                            "Procedural Sky",
-                            RendererTimingStage::ProceduralSky);
+                            "Environment Background",
+                            RendererTimingStage::EnvironmentBackground);
                         drawRendererTimingRow(
                             "Tone Mapping",
                             RendererTimingStage::ToneMapping);
@@ -11844,8 +18616,11 @@ protected:
                                 RendererTimingStage::DirectLighting,
                                 RendererTimingStage::ScreenSpaceVisibility,
                                 RendererTimingStage::CompleteFrame,
+                                RendererTimingStage::CompleteFrame,
+                                RendererTimingStage::CompleteFrame,
+                                RendererTimingStage::CompleteFrame,
                                 RendererTimingStage::MaterialPicking,
-                                RendererTimingStage::ProceduralSky,
+                                RendererTimingStage::EnvironmentBackground,
                                 RendererTimingStage::ToneMapping,
                                 RendererTimingStage::OutputBlit
                             };
@@ -11857,6 +18632,51 @@ protected:
                         drawRendererTimingRow(
                             "Complete Renderer Frame",
                             RendererTimingStage::CompleteFrame);
+                    }
+                    if (environmentStatistics)
+                    {
+                        const float sourceMean =
+                            m_app->
+                                GetImageBasedLightingSourceAverageLuminance();
+                        const float commonMean =
+                            sourceMean *
+                            m_app->GetImageBasedLightingRadianceScale();
+                        const float diffuseMean =
+                            IsImageBasedLightingLobeActive(
+                                m_ui.EnableDiffuseIbl,
+                                m_ui.DiffuseIblStrength)
+                                ? commonMean * m_ui.DiffuseIblStrength
+                                : 0.f;
+                        const float specularMean =
+                            IsImageBasedLightingLobeActive(
+                                m_ui.EnableSpecularIbl,
+                                m_ui.SpecularIblStrength)
+                                ? commonMean * m_ui.SpecularIblStrength
+                                : 0.f;
+                        const auto drawRadianceRow =
+                            [](const char* label, float value)
+                            {
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::TextUnformatted(label);
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::Text("%.4f", value);
+                            };
+                        drawRadianceRow(
+                            "Source Mean Radiance",
+                            sourceMean);
+                        drawRadianceRow(
+                            "Exposed Mean Radiance",
+                            commonMean);
+                        drawRadianceRow(
+                            "Diffuse IBL Mean Radiance",
+                            diffuseMean);
+                        drawRadianceRow(
+                            "Specular IBL Mean Radiance",
+                            specularMean);
+                        ImGui::SetItemTooltip(
+                            "Scene-linear mean radiance after exposure and "
+                            "each lobe strength.");
                     }
                     ImGui::EndTable();
                 }
@@ -12093,7 +18913,7 @@ protected:
                         drawMibRow(
                             "Working Texture Total (Logical)",
                             timings->workingTextureBytes);
-                        drawSectionRow("Shared And History Textures");
+                        drawSectionRow("Shared and History Textures");
                         drawAllocatedMibRow(
                             "  Scheduler Noise Tables",
                             timings->schedulerResourceBytes);
@@ -13406,85 +20226,253 @@ protected:
             BeginDrawerBody(
                 "##SkyBody",
                 settingsControlWidth);
-            const SkyParameters defaultSkyParameters;
-            ImGui::Checkbox("Enable Procedural Sky", &m_ui.EnableProceduralSky);
-            ImGui::SetItemTooltip("Show the procedural sky.");
-            if (DrawPresetResetIcon(
-                    "Procedural Sky Enabled",
-                    !m_ui.EnableProceduralSky))
+            ImGui::TextUnformatted("Environment");
+            const ImageBasedLightingSourceInfo&
+                selectedEnvironmentInfo =
+                    GetImageBasedLightingSourceInfo(
+                        m_ui.EnvironmentSource);
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            if (BeginRoundedCombo(
+                    "##SkyEnvironment",
+                    selectedEnvironmentInfo.displayName))
             {
-                m_ui.EnableProceduralSky = true;
+                for (uint32_t index = 0u;
+                    index < uint32_t(ImageBasedLightingSource::Count);
+                    ++index)
+                {
+                    const ImageBasedLightingSource source =
+                        ImageBasedLightingSource(index);
+                    const ImageBasedLightingSourceInfo& info =
+                        GetImageBasedLightingSourceInfo(source);
+                    const bool selected =
+                        source == m_ui.EnvironmentSource;
+                    DrawDeferredDropdownOption(
+                        info.displayName,
+                        info.displayName,
+                        selected,
+                        [this, source]()
+                        {
+                            const ImageBasedLightingSourceInfo& selectedInfo =
+                                GetImageBasedLightingSourceInfo(source);
+                            const bool presentationChanged =
+                                m_ui.EnvironmentSource != source ||
+                                m_ui.EnvironmentExposureStops !=
+                                    selectedInfo.defaultExposureStops;
+                            m_ui.EnvironmentSource = source;
+                            m_ui.EnvironmentExposureStops =
+                                selectedInfo.defaultExposureStops;
+                            if (presentationChanged)
+                            {
+                                m_app->ResetImageBasedLightingHistory(true);
+                            }
+                        });
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip(
+                "Choose the imported radiance source used by IBL and the "
+                "optional matching background.");
+            constexpr ImageBasedLightingSource DefaultEnvironmentSource =
+                ImageBasedLightingSource::Kloppenheim03Day;
+            if (DrawPresetResetIcon(
+                    "Environment Source",
+                    m_ui.EnvironmentSource != DefaultEnvironmentSource))
+            {
+                QueueDeferredControlUiAction(
+                    [this]()
+                    {
+                        constexpr ImageBasedLightingSource
+                            DefaultSource =
+                                ImageBasedLightingSource::Kloppenheim03Day;
+                        m_ui.EnvironmentSource = DefaultSource;
+                        m_ui.EnvironmentExposureStops =
+                            GetImageBasedLightingSourceInfo(
+                                DefaultSource).defaultExposureStops;
+                        m_app->ResetImageBasedLightingHistory(true);
+                    });
+            }
+
+            const float defaultEnvironmentExposure =
+                GetImageBasedLightingSourceInfo(
+                    m_ui.EnvironmentSource).defaultExposureStops;
+            if (DrawSliderFloat(
+                    "Exposure##ImageBasedLighting",
+                    &m_ui.EnvironmentExposureStops,
+                    -8.f,
+                    8.f,
+                    "%+.2f EV"))
+            {
+                m_app->ResetImageBasedLightingHistory(true);
+            }
+            ImGui::SetItemTooltip(
+                "Scale lighting and the matching background together.");
+            if (DrawPresetResetIcon(
+                    "Environment Exposure",
+                    m_ui.EnvironmentExposureStops !=
+                        defaultEnvironmentExposure))
+            {
+                m_ui.EnvironmentExposureStops =
+                    defaultEnvironmentExposure;
+                m_app->ResetImageBasedLightingHistory(true);
+            }
+
+            if (ImGui::Checkbox(
+                    "Diffuse IBL",
+                    &m_ui.EnableDiffuseIbl))
+            {
+                m_app->ResetImageBasedLightingHistory(true);
+            }
+            ImGui::SetItemTooltip(
+                "Use the selected environment for diffuse lighting.");
+            if (DrawPresetResetIcon(
+                    "Diffuse IBL Enabled",
+                    !m_ui.EnableDiffuseIbl))
+            {
+                m_ui.EnableDiffuseIbl = true;
+                m_app->ResetImageBasedLightingHistory(true);
             }
             if (BeginAnimatedToggleRegion(
-                    "##ProceduralSkyControls",
-                    m_ui.EnableProceduralSky))
+                    "##DiffuseIblControls",
+                    m_ui.EnableDiffuseIbl))
             {
-                DrawSliderFloat(
-                    "Brightness", &m_ui.SkyParams.brightness, 0.f, 1.f);
+                if (DrawSliderFloat(
+                        "Diffuse Strength##ImageBasedLighting",
+                        &m_ui.DiffuseIblStrength,
+                        0.f,
+                        4.f,
+                        "%.2f"))
+                {
+                    m_app->ResetImageBasedLightingHistory(true);
+                }
                 ImGui::SetItemTooltip(
-                    "Set sky and ambient light brightness.");
+                    "Scale diffuse environment lighting after exposure.");
                 if (DrawPresetResetIcon(
-                        "Sky Brightness",
-                        m_ui.SkyParams.brightness !=
-                            defaultSkyParameters.brightness))
+                        "Diffuse IBL Strength",
+                        m_ui.DiffuseIblStrength != 1.f))
                 {
-                    m_ui.SkyParams.brightness =
-                        defaultSkyParameters.brightness;
-                }
-                DrawSliderFloat(
-                    "Glow Size", &m_ui.SkyParams.glowSize, 0.f, 90.f);
-                ImGui::SetItemTooltip("Set the sun glow's size.");
-                if (DrawPresetResetIcon(
-                        "Sky Glow Size",
-                        m_ui.SkyParams.glowSize !=
-                            defaultSkyParameters.glowSize))
-                {
-                    m_ui.SkyParams.glowSize =
-                        defaultSkyParameters.glowSize;
-                }
-                DrawSliderFloat(
-                    "Glow Sharpness",
-                    &m_ui.SkyParams.glowSharpness,
-                    1.f,
-                    10.f);
-                ImGui::SetItemTooltip("Set how quickly the sun glow fades.");
-                if (DrawPresetResetIcon(
-                        "Sky Glow Sharpness",
-                        m_ui.SkyParams.glowSharpness !=
-                            defaultSkyParameters.glowSharpness))
-                {
-                    m_ui.SkyParams.glowSharpness =
-                        defaultSkyParameters.glowSharpness;
-                }
-                DrawSliderFloat(
-                    "Glow Intensity",
-                    &m_ui.SkyParams.glowIntensity,
-                    0.f,
-                    1.f);
-                ImGui::SetItemTooltip("Set the sun glow's brightness.");
-                if (DrawPresetResetIcon(
-                        "Sky Glow Intensity",
-                        m_ui.SkyParams.glowIntensity !=
-                            defaultSkyParameters.glowIntensity))
-                {
-                    m_ui.SkyParams.glowIntensity =
-                        defaultSkyParameters.glowIntensity;
-                }
-                DrawSliderFloat(
-                    "Horizon Size",
-                    &m_ui.SkyParams.horizonSize,
-                    0.f,
-                    90.f);
-                ImGui::SetItemTooltip("Set the horizon blend width.");
-                if (DrawPresetResetIcon(
-                        "Sky Horizon Size",
-                        m_ui.SkyParams.horizonSize !=
-                            defaultSkyParameters.horizonSize))
-                {
-                    m_ui.SkyParams.horizonSize =
-                        defaultSkyParameters.horizonSize;
+                    m_ui.DiffuseIblStrength = 1.f;
+                    m_app->ResetImageBasedLightingHistory(true);
                 }
                 EndAnimatedToggleRegion();
+            }
+
+            if (ImGui::Checkbox(
+                    "Specular IBL",
+                    &m_ui.EnableSpecularIbl))
+            {
+                m_app->ResetImageBasedLightingHistory(false);
+            }
+            ImGui::SetItemTooltip(
+                "Use the selected environment for specular reflections.");
+            if (DrawPresetResetIcon(
+                    "Specular IBL Enabled",
+                    !m_ui.EnableSpecularIbl))
+            {
+                m_ui.EnableSpecularIbl = true;
+                m_app->ResetImageBasedLightingHistory(false);
+            }
+            if (BeginAnimatedToggleRegion(
+                    "##SpecularIblControls",
+                    m_ui.EnableSpecularIbl))
+            {
+                if (DrawSliderFloat(
+                        "Specular Strength##ImageBasedLighting",
+                        &m_ui.SpecularIblStrength,
+                        0.f,
+                        4.f,
+                        "%.2f"))
+                {
+                    m_app->ResetImageBasedLightingHistory(false);
+                }
+                ImGui::SetItemTooltip(
+                    "Scale specular environment lighting after exposure.");
+                if (DrawPresetResetIcon(
+                        "Specular IBL Strength",
+                        m_ui.SpecularIblStrength != 1.f))
+                {
+                    m_ui.SpecularIblStrength = 1.f;
+                    m_app->ResetImageBasedLightingHistory(false);
+                }
+                EndAnimatedToggleRegion();
+            }
+
+            if (ImGui::Checkbox(
+                    "Show Environment Background",
+                    &m_ui.ShowEnvironmentBackground))
+            {
+                m_app->ResetImageBasedLightingHistory(false);
+            }
+            ImGui::SetItemTooltip(
+                "Show the same environment used for lighting.");
+            if (DrawPresetResetIcon(
+                    "Environment Background Enabled",
+                    !m_ui.ShowEnvironmentBackground))
+            {
+                m_ui.ShowEnvironmentBackground = true;
+                m_app->ResetImageBasedLightingHistory(false);
+            }
+
+            static constexpr const char* PbrLightingDebugLabels[] = {
+                "Off",
+                "Shading Normal",
+                "Geometric Normal",
+                "Normal Difference",
+                "Diffuse Environment",
+                "Cardinal Environment Test",
+                "Prefiltered Specular",
+                "Environment BRDF",
+                "Final Specular IBL",
+                "Combined IBL",
+                "Specular Occlusion",
+                "Environment Mip"
+            };
+            constexpr uint32_t DefaultLightingDebugView =
+                uint32_t(PbrLightingDebugView::None);
+            const uint32_t lightingDebugIndex = std::min(
+                uint32_t(m_ui.LightingDebugView),
+                uint32_t(std::size(PbrLightingDebugLabels) - 1u));
+            ImGui::TextUnformatted("PBR Lighting Debug");
+            ImGui::SetNextItemWidth(settingsControlWidth);
+            if (BeginRoundedCombo(
+                    "##PbrLightingDebug",
+                    PbrLightingDebugLabels[lightingDebugIndex]))
+            {
+                for (uint32_t index = 0u;
+                    index < std::size(PbrLightingDebugLabels);
+                    ++index)
+                {
+                    const PbrLightingDebugView view =
+                        PbrLightingDebugView(index);
+                    const bool selected =
+                        view == m_ui.LightingDebugView;
+                    DrawDeferredDropdownOption(
+                        PbrLightingDebugLabels[index],
+                        PbrLightingDebugLabels[index],
+                        selected,
+                        [this, view]()
+                        {
+                            m_ui.LightingDebugView = view;
+                            m_app->ResetImageBasedLightingHistory(true);
+                        });
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip(
+                "Inspect decoded normals, diffuse and specular IBL stages, the "
+                "split-sum LUT response, occlusion, and roughness-selected mip.");
+            if (DrawPresetResetIcon(
+                    "PBR Lighting Debug",
+                    lightingDebugIndex != DefaultLightingDebugView))
+            {
+                QueueDeferredControlUiAction(
+                    [this]()
+                    {
+                        m_ui.LightingDebugView =
+                            PbrLightingDebugView::None;
+                        m_app->ResetImageBasedLightingHistory(true);
+                    });
             }
             EndDrawerBody();
         }
@@ -13842,6 +20830,1374 @@ protected:
                         break;
                     }
                 }
+            }
+
+            const bool directionalVisibilityAvailable =
+                m_ui.EnablePbr &&
+                m_ui.UsesDeferredShading() &&
+                m_app->HasPrimaryDirectionalLight();
+
+            if (BeginAnimatedTreeNode(
+                    "Bend Screen-Space Shadows##Lights"))
+            {
+                BendScreenSpaceShadowSettings& shadows =
+                    m_ui.BendScreenSpaceShadows;
+                const BendScreenSpaceShadowSettings bendDefaults{};
+                static constexpr auto isSameBendConfiguration =
+                    [](const BendScreenSpaceShadowSettings& left,
+                        const BendScreenSpaceShadowSettings& right)
+                    {
+                        return left.length == right.length &&
+                            left.surfaceThickness ==
+                                right.surfaceThickness &&
+                            left.bilinearThreshold ==
+                                right.bilinearThreshold &&
+                            left.shadowContrast ==
+                                right.shadowContrast &&
+                            left.hardShadowSamples ==
+                                right.hardShadowSamples &&
+                            left.fadeOutSamples ==
+                                right.fadeOutSamples &&
+                            left.ignoreEdgePixels ==
+                                right.ignoreEdgePixels &&
+                            left.usePrecisionOffset ==
+                                right.usePrecisionOffset &&
+                            left.bilinearSamplingOffsetMode ==
+                                right.bilinearSamplingOffsetMode &&
+                            left.useEarlyOut == right.useEarlyOut &&
+                            left.debugView == right.debugView;
+                    };
+                static constexpr auto reconcileBendPreset =
+                    [](BendScreenSpaceShadowSettings& settings)
+                    {
+                        constexpr BendShadowPreset Presets[] = {
+                            BendShadowPreset::BendExact,
+                            BendShadowPreset::Long,
+                            BendShadowPreset::MaximumValidation
+                        };
+                        for (const BendShadowPreset preset : Presets)
+                        {
+                            BendScreenSpaceShadowSettings presetSettings =
+                                settings;
+                            ApplyBendShadowPreset(
+                                presetSettings,
+                                preset);
+                            if (isSameBendConfiguration(
+                                    settings,
+                                    presetSettings))
+                            {
+                                settings.preset = preset;
+                                return;
+                            }
+                        }
+                        settings.preset = BendShadowPreset::Custom;
+                    };
+                if (!directionalVisibilityAvailable)
+                    ImGui::BeginDisabled();
+                ImGui::Checkbox("Enabled##BendShadows", &shadows.enabled);
+                ImGui::SetItemTooltip(
+                    "Trace the existing depth buffer for the primary "
+                    "directional light.");
+                if (DrawPresetResetIcon(
+                        "Bend Shadows Enabled",
+                        shadows.enabled))
+                {
+                    shadows.enabled = false;
+                }
+                if (BeginAnimatedToggleRegion(
+                        "##BendShadowControls",
+                        shadows.enabled))
+                {
+                    bool bendCustomChanged = false;
+                    bool bendResetApplied = false;
+                    static constexpr const char* PresetLabels[] = {
+                        "Bend Exact",
+                        "Long",
+                        "Maximum Validation",
+                        "Custom"
+                    };
+                    const int presetIndex = std::clamp(
+                        int(shadows.preset),
+                        0,
+                        int(std::size(PresetLabels)) - 1);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            "Profile##BendShadows",
+                            PresetLabels[presetIndex]))
+                    {
+                        for (int index = 0;
+                            index < int(std::size(PresetLabels));
+                            ++index)
+                        {
+                            const BendShadowPreset preset =
+                                BendShadowPreset(index);
+                            DrawDeferredDropdownOption(
+                                PresetLabels[index],
+                                PresetLabels[index],
+                                shadows.preset == preset,
+                                [settings = &shadows, preset]()
+                                {
+                                    ApplyBendShadowPreset(
+                                        *settings,
+                                        preset);
+                                });
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Trade trace reach and cost: 60 pixels for Bend "
+                        "Exact, 240 for Long, or 960 for Maximum Validation.");
+                    BendScreenSpaceShadowSettings bendExactSettings =
+                        shadows;
+                    ApplyBendShadowPreset(
+                        bendExactSettings,
+                        BendShadowPreset::BendExact);
+                    if (DrawNestedDropdownResetIcon(
+                            "Bend Shadow Profile",
+                            shadows.preset !=
+                                    BendShadowPreset::BendExact ||
+                                !isSameBendConfiguration(
+                                    shadows,
+                                    bendExactSettings),
+                            "Reset every Bend shadow setting to Bend Exact."))
+                    {
+                        QueueDeferredControlUiAction(
+                            [settings = &shadows]()
+                            {
+                                ApplyBendShadowPreset(
+                                    *settings,
+                                    BendShadowPreset::BendExact);
+                            });
+                    }
+
+                    static constexpr const char* LengthLabels[] = {
+                        "60 px", "120 px", "240 px", "480 px", "960 px"
+                    };
+                    int lengthIndex = FindBendShadowCompiledValue(
+                        BendShadowSampleCounts,
+                        GetBendShadowSampleCount(shadows.length));
+                    lengthIndex = std::clamp(
+                        lengthIndex,
+                        0,
+                        int(std::size(LengthLabels)) - 1);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            "Length##BendShadows",
+                            LengthLabels[lengthIndex]))
+                    {
+                        for (int index = 0;
+                            index < int(std::size(LengthLabels));
+                            ++index)
+                        {
+                            const BendShadowLength length =
+                                BendShadowLength(
+                                    BendShadowSampleCounts[size_t(index)]);
+                            DrawDeferredDropdownOption(
+                                LengthLabels[index],
+                                LengthLabels[index],
+                                shadows.length == length,
+                                [settings = &shadows, length]()
+                                {
+                                    settings->length = length;
+                                    settings->preset =
+                                        BendShadowPreset::Custom;
+                                });
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Select a precompiled SAMPLE_COUNT shadow length.");
+                    if (DrawNestedDropdownResetIcon(
+                            "Bend Shadow Length",
+                            shadows.length != bendDefaults.length))
+                    {
+                        const BendShadowLength defaultLength =
+                            bendDefaults.length;
+                        QueueDeferredControlUiAction(
+                            [settings = &shadows, defaultLength]()
+                            {
+                                settings->length = defaultLength;
+                                reconcileBendPreset(*settings);
+                            });
+                    }
+
+                    bendCustomChanged |= DrawSliderFloat(
+                        "Surface Thickness##BendShadows",
+                        &shadows.surfaceThickness,
+                        0.f,
+                        0.05f,
+                        "%.4f");
+                    ImGui::SetItemTooltip(
+                        "Set Bend's nonlinear-depth occluder thickness.");
+                    if (DrawPresetResetIcon(
+                            "Bend Shadow Surface Thickness",
+                            shadows.surfaceThickness !=
+                                bendDefaults.surfaceThickness))
+                    {
+                        shadows.surfaceThickness =
+                            bendDefaults.surfaceThickness;
+                        bendResetApplied = true;
+                    }
+                    bendCustomChanged |= DrawSliderFloat(
+                        "Bilinear Threshold##BendShadows",
+                        &shadows.bilinearThreshold,
+                        0.f,
+                        0.1f,
+                        "%.3f");
+                    ImGui::SetItemTooltip(
+                        "Set the relative depth discontinuity that disables "
+                        "interpolation.");
+                    if (DrawPresetResetIcon(
+                            "Bend Shadow Bilinear Threshold",
+                            shadows.bilinearThreshold !=
+                                bendDefaults.bilinearThreshold))
+                    {
+                        shadows.bilinearThreshold =
+                            bendDefaults.bilinearThreshold;
+                        bendResetApplied = true;
+                    }
+                    bendCustomChanged |= DrawSliderFloat(
+                        "Shadow Contrast##BendShadows",
+                        &shadows.shadowContrast,
+                        1.f,
+                        16.f,
+                        "%.1f");
+                    ImGui::SetItemTooltip(
+                        "Set Bend's visibility transition contrast.");
+                    if (DrawPresetResetIcon(
+                            "Bend Shadow Contrast",
+                            shadows.shadowContrast !=
+                                bendDefaults.shadowContrast))
+                    {
+                        shadows.shadowContrast =
+                            bendDefaults.shadowContrast;
+                        bendResetApplied = true;
+                    }
+
+                    static constexpr const char* HardSampleLabels[] = {
+                        "0", "4", "8"
+                    };
+                    const int selectedHard =
+                        FindBendShadowCompiledValue(
+                            BendShadowHardSampleCounts,
+                            shadows.hardShadowSamples);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            "Hard Shadow Samples##BendShadows",
+                            selectedHard >= 0
+                                ? HardSampleLabels[selectedHard]
+                                : "Unsupported"))
+                    {
+                        for (int index = 0;
+                            index < int(std::size(HardSampleLabels));
+                            ++index)
+                        {
+                            const uint32_t value =
+                                BendShadowHardSampleCounts[size_t(index)];
+                            DrawDeferredDropdownOption(
+                                HardSampleLabels[index],
+                                HardSampleLabels[index],
+                                shadows.hardShadowSamples == value,
+                                [settings = &shadows, value]()
+                                {
+                                    settings->hardShadowSamples = value;
+                                    settings->preset =
+                                        BendShadowPreset::Custom;
+                                });
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Select the compiled count of fully hard contact "
+                        "samples.");
+                    if (DrawNestedDropdownResetIcon(
+                            "Bend Shadow Hard Samples",
+                            shadows.hardShadowSamples !=
+                                bendDefaults.hardShadowSamples))
+                    {
+                        const uint32_t defaultHardShadowSamples =
+                            bendDefaults.hardShadowSamples;
+                        QueueDeferredControlUiAction(
+                            [settings = &shadows,
+                                defaultHardShadowSamples]()
+                            {
+                                settings->hardShadowSamples =
+                                    defaultHardShadowSamples;
+                                reconcileBendPreset(*settings);
+                            });
+                    }
+
+                    static constexpr const char* FadeSampleLabels[] = {
+                        "0", "8", "16"
+                    };
+                    const int selectedFade =
+                        FindBendShadowCompiledValue(
+                            BendShadowFadeSampleCounts,
+                            shadows.fadeOutSamples);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            "Fade-Out Samples##BendShadows",
+                            selectedFade >= 0
+                                ? FadeSampleLabels[selectedFade]
+                                : "Unsupported"))
+                    {
+                        for (int index = 0;
+                            index < int(std::size(FadeSampleLabels));
+                            ++index)
+                        {
+                            const uint32_t value =
+                                BendShadowFadeSampleCounts[size_t(index)];
+                            DrawDeferredDropdownOption(
+                                FadeSampleLabels[index],
+                                FadeSampleLabels[index],
+                                shadows.fadeOutSamples == value,
+                                [settings = &shadows, value]()
+                                {
+                                    settings->fadeOutSamples = value;
+                                    settings->preset =
+                                        BendShadowPreset::Custom;
+                                });
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Select the compiled count of samples that soften "
+                        "the trace endpoint.");
+                    if (DrawNestedDropdownResetIcon(
+                            "Bend Shadow Fade-Out Samples",
+                            shadows.fadeOutSamples !=
+                                bendDefaults.fadeOutSamples))
+                    {
+                        const uint32_t defaultFadeOutSamples =
+                            bendDefaults.fadeOutSamples;
+                        QueueDeferredControlUiAction(
+                            [settings = &shadows,
+                                defaultFadeOutSamples]()
+                            {
+                                settings->fadeOutSamples =
+                                    defaultFadeOutSamples;
+                                reconcileBendPreset(*settings);
+                            });
+                    }
+
+                    bendCustomChanged |= ImGui::Checkbox(
+                        "Ignore Edge Pixels##BendShadows",
+                        &shadows.ignoreEdgePixels);
+                    ImGui::SetItemTooltip(
+                        "Prevent detected depth-edge pixels from casting "
+                        "shadows.");
+                    if (DrawPresetResetIcon(
+                            "Bend Shadow Ignore Edge Pixels",
+                            shadows.ignoreEdgePixels !=
+                                bendDefaults.ignoreEdgePixels))
+                    {
+                        shadows.ignoreEdgePixels =
+                            bendDefaults.ignoreEdgePixels;
+                        bendResetApplied = true;
+                    }
+                    bendCustomChanged |= ImGui::Checkbox(
+                        "Precision Offset##BendShadows",
+                        &shadows.usePrecisionOffset);
+                    ImGui::SetItemTooltip(
+                        "Apply Bend's optional depth precision offset.");
+                    if (DrawPresetResetIcon(
+                            "Bend Shadow Precision Offset",
+                            shadows.usePrecisionOffset !=
+                                bendDefaults.usePrecisionOffset))
+                    {
+                        shadows.usePrecisionOffset =
+                            bendDefaults.usePrecisionOffset;
+                        bendResetApplied = true;
+                    }
+                    bendCustomChanged |= ImGui::Checkbox(
+                        "Bilinear Offset Mode##BendShadows",
+                        &shadows.bilinearSamplingOffsetMode);
+                    ImGui::SetItemTooltip(
+                        "Offset bilinear samples onto the shared wavefront "
+                        "ray.");
+                    if (DrawPresetResetIcon(
+                            "Bend Shadow Bilinear Offset Mode",
+                            shadows.bilinearSamplingOffsetMode !=
+                                bendDefaults.bilinearSamplingOffsetMode))
+                    {
+                        shadows.bilinearSamplingOffsetMode =
+                            bendDefaults.bilinearSamplingOffsetMode;
+                        bendResetApplied = true;
+                    }
+                    bendCustomChanged |= ImGui::Checkbox(
+                        "Early Out##BendShadows",
+                        &shadows.useEarlyOut);
+                    ImGui::SetItemTooltip(
+                        shadows.debugView == BendShadowDebugView::None
+                            ? "Skip pixels outside Bend's directional depth "
+                                "bounds."
+                            : "Bend suppresses effective early-out while a "
+                                "debug view is active.");
+                    if (DrawPresetResetIcon(
+                            "Bend Shadow Early Out",
+                            shadows.useEarlyOut !=
+                                bendDefaults.useEarlyOut))
+                    {
+                        shadows.useEarlyOut =
+                            bendDefaults.useEarlyOut;
+                        bendResetApplied = true;
+                    }
+
+                    static constexpr const char* DebugLabels[] = {
+                        "Off", "Edge", "Thread", "Wave"
+                    };
+                    const int debugIndex = std::clamp(
+                        int(shadows.debugView),
+                        0,
+                        int(std::size(DebugLabels)) - 1);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            "Debug View##BendShadows",
+                            DebugLabels[debugIndex]))
+                    {
+                        for (int index = 0;
+                            index < int(std::size(DebugLabels));
+                            ++index)
+                        {
+                            const BendShadowDebugView view =
+                                BendShadowDebugView(index);
+                            DrawDeferredDropdownOption(
+                                DebugLabels[index],
+                                DebugLabels[index],
+                                shadows.debugView == view,
+                                [settings = &shadows, view]()
+                                {
+                                    settings->debugView = view;
+                                    settings->preset =
+                                        BendShadowPreset::Custom;
+                                });
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Show the raw R8 edge, thread, or wave diagnostic "
+                        "output.");
+                    if (DrawNestedDropdownResetIcon(
+                            "Bend Shadow Debug View",
+                            shadows.debugView != bendDefaults.debugView))
+                    {
+                        const BendShadowDebugView defaultDebugView =
+                            bendDefaults.debugView;
+                        QueueDeferredControlUiAction(
+                            [settings = &shadows, defaultDebugView]()
+                            {
+                                settings->debugView = defaultDebugView;
+                                reconcileBendPreset(*settings);
+                            });
+                    }
+                    if (bendCustomChanged)
+                        shadows.preset = BendShadowPreset::Custom;
+                    else if (bendResetApplied)
+                        reconcileBendPreset(shadows);
+                    EndAnimatedToggleRegion();
+                }
+                if (!directionalVisibilityAvailable)
+                {
+                    ImGui::EndDisabled();
+                    ImGui::TextDisabled(
+                        "Requires deferred PBR and a directional light.");
+                }
+                EndAnimatedTreeNode();
+            }
+
+            if (BeginAnimatedTreeNode(
+                    "Sparse Virtual Shadow Maps##Lights"))
+            {
+                SparseVirtualShadowMapSettings& shadows =
+                    m_ui.SparseVirtualShadowMaps;
+                const bool motionTestRunning =
+                    m_app->IsSvsmMotionBenchmarkRunning();
+                if (!directionalVisibilityAvailable ||
+                    motionTestRunning)
+                {
+                    ImGui::BeginDisabled();
+                }
+                ImGui::Checkbox("Enabled##Svsm", &shadows.enabled);
+                ImGui::SetItemTooltip(
+                    "Resolve cached virtual shadow-map visibility for the "
+                    "primary directional light.");
+                if (DrawPresetResetIcon(
+                        "SVSM Enabled",
+                        shadows.enabled))
+                {
+                    shadows.enabled = false;
+                }
+                if (BeginAnimatedToggleRegion(
+                        "##SvsmControls",
+                        shadows.enabled))
+                {
+                    DrawSvsmSettingsSurface(
+                        shadows,
+                        settingsControlWidth);
+                    EndAnimatedToggleRegion();
+                }
+                if (!directionalVisibilityAvailable ||
+                    motionTestRunning)
+                {
+                    ImGui::EndDisabled();
+                }
+                if (!directionalVisibilityAvailable)
+                {
+                    ImGui::TextDisabled(
+                        "Requires deferred PBR and a directional light.");
+                }
+                EndAnimatedTreeNode();
+            }
+
+            if (BeginAnimatedTreeNode(
+                    "Diagnostic Cascaded Shadow Maps##Lights"))
+            {
+                DiagnosticCascadedShadowMapSettings& shadows =
+                    m_ui.DiagnosticCascadedShadowMaps;
+                const DiagnosticCascadedShadowMapSettings csmDefaults{};
+                static constexpr auto reconcileCsmProfile =
+                    [](DiagnosticCascadedShadowMapSettings& settings)
+                    {
+                        constexpr DiagnosticCsmProfile Profiles[] = {
+                            DiagnosticCsmProfile::SingleMapReference,
+                            DiagnosticCsmProfile::LowCostCsm,
+                            DiagnosticCsmProfile::Ue5CsmReference,
+                            DiagnosticCsmProfile::CachedSingleShadow,
+                            DiagnosticCsmProfile::
+                                OptimizedCachedSingleShadow,
+                            DiagnosticCsmProfile::OptimizedCachedCsm
+                        };
+                        for (const DiagnosticCsmProfile profile : Profiles)
+                        {
+                            const DiagnosticCascadedShadowMapSettings
+                                profileSettings =
+                                    ApplyDiagnosticCsmProfile(
+                                        settings,
+                                        profile);
+                            if (IsSameDiagnosticCsmTimingConfiguration(
+                                    settings,
+                                    profileSettings))
+                            {
+                                settings.profile = profile;
+                                return;
+                            }
+                        }
+                        settings.profile = DiagnosticCsmProfile::Custom;
+                    };
+                if (!directionalVisibilityAvailable)
+                    ImGui::BeginDisabled();
+                ImGui::Checkbox(
+                    "Enabled##DiagnosticCsm",
+                    &shadows.enabled);
+                ImGui::SetItemTooltip(
+                    "Resolve the independent cascaded-shadow diagnostic.");
+                if (DrawPresetResetIcon(
+                        "Diagnostic CSM Enabled",
+                        shadows.enabled))
+                {
+                    shadows.enabled = false;
+                }
+                if (BeginAnimatedToggleRegion(
+                        "##DiagnosticCsmControls",
+                        shadows.enabled))
+                {
+                    bool csmCustomChanged = false;
+                    bool csmResetApplied = false;
+                    const auto drawCsmCheckbox =
+                        [&csmCustomChanged, &csmResetApplied](
+                            const char* label,
+                            const char* resetId,
+                            bool& value,
+                            bool defaultValue,
+                            const char* tooltip,
+                            bool available)
+                        {
+                            if (!available)
+                                ImGui::BeginDisabled();
+                            const bool changed =
+                                ImGui::Checkbox(label, &value);
+                            ImGui::SetItemTooltip("%s", tooltip);
+                            if (!available)
+                                ImGui::EndDisabled();
+                            if (DrawPresetResetIcon(
+                                    resetId,
+                                    value != defaultValue))
+                            {
+                                value = defaultValue;
+                                csmResetApplied = true;
+                            }
+                            csmCustomChanged |= changed;
+                        };
+                    const auto drawCsmFloat =
+                        [&csmCustomChanged, &csmResetApplied](
+                            const char* label,
+                            const char* resetId,
+                            float& value,
+                            float defaultValue,
+                            float minimum,
+                            float maximum,
+                            const char* format,
+                            const char* tooltip,
+                            bool available)
+                        {
+                            if (!available)
+                                ImGui::BeginDisabled();
+                            const bool changed = DrawSliderFloat(
+                                label,
+                                &value,
+                                minimum,
+                                maximum,
+                                format);
+                            ImGui::SetItemTooltip("%s", tooltip);
+                            if (!available)
+                                ImGui::EndDisabled();
+                            if (DrawPresetResetIcon(
+                                    resetId,
+                                    value != defaultValue))
+                            {
+                                value = defaultValue;
+                                csmResetApplied = true;
+                            }
+                            csmCustomChanged |= changed;
+                        };
+                    const auto drawCsmUint =
+                        [&csmCustomChanged, &csmResetApplied](
+                            const char* label,
+                            const char* resetId,
+                            uint32_t& value,
+                            uint32_t defaultValue,
+                            int minimum,
+                            int maximum,
+                            ImGuiSliderFlags flags,
+                            const char* tooltip)
+                        {
+                            int sliderValue = int(std::clamp(
+                                value,
+                                uint32_t(minimum),
+                                uint32_t(maximum)));
+                            if (DrawSliderInt(
+                                    label,
+                                    &sliderValue,
+                                    minimum,
+                                    maximum,
+                                    "%d",
+                                    flags))
+                            {
+                                value = uint32_t(sliderValue);
+                                csmCustomChanged = true;
+                            }
+                            ImGui::SetItemTooltip("%s", tooltip);
+                            if (DrawPresetResetIcon(
+                                    resetId,
+                                    value != defaultValue))
+                            {
+                                value = defaultValue;
+                                csmResetApplied = true;
+                            }
+                        };
+
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            "Profile##DiagnosticCsm",
+                            GetDiagnosticCsmProfileLabel(
+                                shadows.profile)))
+                    {
+                        for (uint32_t index = 0u;
+                            index < uint32_t(
+                                DiagnosticCsmProfile::Count);
+                            ++index)
+                        {
+                            const DiagnosticCsmProfile profile =
+                                DiagnosticCsmProfile(index);
+                            const char* label =
+                                GetDiagnosticCsmProfileLabel(profile);
+                            DrawDeferredDropdownOption(
+                                label,
+                                label,
+                                shadows.profile == profile,
+                                [settings = &shadows, profile]()
+                                {
+                                    if (profile ==
+                                        DiagnosticCsmProfile::Custom)
+                                    {
+                                        settings->profile = profile;
+                                    }
+                                    else
+                                    {
+                                        *settings =
+                                            ApplyDiagnosticCsmProfile(
+                                                *settings,
+                                                profile);
+                                    }
+                                });
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Select a reference or cache-policy diagnostic. "
+                        "Custom retains every edited value.");
+                    const DiagnosticCascadedShadowMapSettings
+                        csmUe5Profile =
+                            ApplyDiagnosticCsmProfile(
+                                shadows,
+                                DiagnosticCsmProfile::Ue5CsmReference);
+                    if (DrawNestedDropdownResetIcon(
+                            "Diagnostic CSM Profile",
+                            shadows.profile !=
+                                    DiagnosticCsmProfile::
+                                        Ue5CsmReference ||
+                                !IsSameDiagnosticCsmTimingConfiguration(
+                                    shadows,
+                                    csmUe5Profile),
+                            "Reset profile-owned CSM settings to UE5 CSM "
+                            "Reference."))
+                    {
+                        QueueDeferredControlUiAction(
+                            [settings = &shadows]()
+                            {
+                                *settings =
+                                    ApplyDiagnosticCsmProfile(
+                                        *settings,
+                                        DiagnosticCsmProfile::
+                                            Ue5CsmReference);
+                            });
+                    }
+
+                    drawCsmUint(
+                        "Cascades##DiagnosticCsm",
+                        "Diagnostic CSM Cascades",
+                        shadows.cascadeCount,
+                        csmDefaults.cascadeCount,
+                        1,
+                        int(DiagnosticCsmMaximumCascades),
+                        ImGuiSliderFlags_None,
+                        "Use one to four directional cascades.");
+                    drawCsmUint(
+                        "Resolution per Cascade##DiagnosticCsm",
+                        "Diagnostic CSM Resolution per Cascade",
+                        shadows.shadowMapResolution,
+                        csmDefaults.shadowMapResolution,
+                        128,
+                        8192,
+                        ImGuiSliderFlags_Logarithmic |
+                            ImGuiSliderFlags_AlwaysClamp,
+                        "Set the persistent square resolution of every "
+                        "cascade. Prefer D16 and fall back to sampleable D32 "
+                        "when D16 is unavailable.");
+                    drawCsmFloat(
+                        "Maximum Shadow Distance##DiagnosticCsm",
+                        "Diagnostic CSM Maximum Shadow Distance",
+                        shadows.maximumShadowDistance,
+                        csmDefaults.maximumShadowDistance,
+                        1.f,
+                        5000.f,
+                        "%.1f",
+                        "Set the camera-space range covered by all cascades.",
+                        true);
+                    drawCsmFloat(
+                        "Maximum Light Depth##DiagnosticCsm",
+                        "Diagnostic CSM Maximum Light Depth",
+                        shadows.maximumLightDepth,
+                        csmDefaults.maximumLightDepth,
+                        1.f,
+                        10000.f,
+                        "%.1f",
+                        "Set the saved conservative caster depth range. UE "
+                        "Minimum Light Depth raises the effective range to at "
+                        "least 10,000 units.",
+                        true);
+
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            "Filter##DiagnosticCsm",
+                            GetDiagnosticCsmFilterLabel(
+                                shadows.filter)))
+                    {
+                        for (uint32_t index = 0u;
+                            index < uint32_t(
+                                DiagnosticCsmFilter::Count);
+                            ++index)
+                        {
+                            const DiagnosticCsmFilter filter =
+                                DiagnosticCsmFilter(index);
+                            const char* label =
+                                GetDiagnosticCsmFilterLabel(filter);
+                            DrawDeferredDropdownOption(
+                                label,
+                                label,
+                                shadows.filter == filter,
+                                [settings = &shadows, filter]()
+                                {
+                                    settings->filter = filter;
+                                    settings->profile =
+                                        DiagnosticCsmProfile::Custom;
+                                });
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Use UE's manual 5x5 PCF or the SVSM-matched fixed "
+                        "point-load Poisson footprint.");
+                    if (DrawNestedDropdownResetIcon(
+                            "Diagnostic CSM Filter",
+                            shadows.filter != csmDefaults.filter))
+                    {
+                        QueueDeferredControlUiAction(
+                            [settings = &shadows]()
+                            {
+                                settings->filter =
+                                    DiagnosticCsmFilter::Ue5Pcf5x5;
+                                reconcileCsmProfile(*settings);
+                            });
+                    }
+
+                    const bool poissonFilterActive =
+                        shadows.filter == DiagnosticCsmFilter::Poisson;
+                    if (!poissonFilterActive)
+                        ImGui::BeginDisabled();
+                    constexpr uint32_t PoissonTapCounts[] = {
+                        1u, 4u, 8u, 16u
+                    };
+                    const uint32_t normalizedTapCount =
+                        NormalizeDiagnosticCsmTapCount(
+                            shadows.poissonTapCount);
+                    char tapPreview[16];
+                    snprintf(
+                        tapPreview,
+                        std::size(tapPreview),
+                        "%u taps",
+                        normalizedTapCount);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            "Filter Taps##DiagnosticCsm",
+                            tapPreview))
+                    {
+                        for (const uint32_t tapCount : PoissonTapCounts)
+                        {
+                            char label[16];
+                            snprintf(
+                                label,
+                                std::size(label),
+                                "%u taps",
+                                tapCount);
+                            DrawDeferredDropdownOption(
+                                label,
+                                label,
+                                normalizedTapCount == tapCount,
+                                [settings = &shadows, tapCount]()
+                                {
+                                    settings->poissonTapCount = tapCount;
+                                    settings->profile =
+                                        DiagnosticCsmProfile::Custom;
+                                });
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Select the matched 1, 4, 8, or 16-tap Poisson "
+                        "receiver.");
+                    if (!poissonFilterActive)
+                        ImGui::EndDisabled();
+                    if (DrawNestedDropdownResetIcon(
+                            "Diagnostic CSM Filter Taps",
+                            shadows.poissonTapCount !=
+                                csmDefaults.poissonTapCount))
+                    {
+                        QueueDeferredControlUiAction(
+                            [settings = &shadows]()
+                            {
+                                settings->poissonTapCount = 16u;
+                                reconcileCsmProfile(*settings);
+                            });
+                    }
+                    drawCsmFloat(
+                        "Filter Radius##DiagnosticCsm",
+                        "Diagnostic CSM Filter Radius",
+                        shadows.filterRadiusTexels,
+                        csmDefaults.filterRadiusTexels,
+                        0.f,
+                        float(DiagnosticCsmMaximumFilterRadiusTexels),
+                        "%.2f texels",
+                        poissonFilterActive
+                            ? "Set the fixed point-load Poisson footprint and "
+                                "dirty-rectangle safety halo in shadow texels."
+                            : "UE's manual PCF retains its fixed 5x5 "
+                                "footprint; this saved Poisson radius is "
+                                "retained.",
+                        poissonFilterActive);
+
+                    if (BeginAnimatedTreeNode(
+                            "Developer Options##DiagnosticCsm"))
+                    {
+                        if (BeginAnimatedTreeNode(
+                                "Projection and Bias##DiagnosticCsm"))
+                        {
+                            drawCsmCheckbox(
+                                "UE Minimum Light Depth##DiagnosticCsm",
+                                "Diagnostic CSM UE Minimum Light Depth",
+                                shadows.enforceUeMinimumLightDepth,
+                                csmDefaults.enforceUeMinimumLightDepth,
+                                "Enforce UE's conventional 10,000-unit "
+                                "minimum directional-shadow subject depth "
+                                "span.",
+                                true);
+                            drawCsmFloat(
+                                "Split Distribution Exponent##DiagnosticCsm",
+                                "Diagnostic CSM Split Distribution Exponent",
+                                shadows.cascadeDistributionExponent,
+                                csmDefaults.cascadeDistributionExponent,
+                                1.f,
+                                8.f,
+                                "%.2f",
+                                "Set UE-style geometric cascade split "
+                                "weighting.",
+                                true);
+                            drawCsmFloat(
+                                "Cascade Transition Fraction##DiagnosticCsm",
+                                "Diagnostic CSM Cascade Transition Fraction",
+                                shadows.cascadeTransitionFraction,
+                                csmDefaults.cascadeTransitionFraction,
+                                0.f,
+                                0.5f,
+                                "%.3f",
+                                "Extend and cross-fade adjacent cascades over "
+                                "this fraction of each split.",
+                                true);
+                            drawCsmFloat(
+                                "Shadow Distance Fade Fraction##DiagnosticCsm",
+                                "Diagnostic CSM Shadow Distance Fade Fraction",
+                                shadows.shadowDistanceFadeoutFraction,
+                                csmDefaults.shadowDistanceFadeoutFraction,
+                                0.f,
+                                0.5f,
+                                "%.3f",
+                                "Fade the last cascade to unshadowed "
+                                "visibility at the maximum distance.",
+                                true);
+                            drawCsmUint(
+                                "Projection Snap Multiple##DiagnosticCsm",
+                                "Diagnostic CSM Projection Snap Multiple",
+                                shadows.projectionSnapTexelMultiple,
+                                csmDefaults.projectionSnapTexelMultiple,
+                                1,
+                                16,
+                                ImGuiSliderFlags_None,
+                                "Snap stable cascade centers in this many "
+                                "shadow texels.");
+                            drawCsmFloat(
+                                "Depth Bias##DiagnosticCsm",
+                                "Diagnostic CSM Depth Bias",
+                                shadows.depthBias,
+                                csmDefaults.depthBias,
+                                0.f,
+                                100.f,
+                                "%.2f",
+                                "Set UE's CSM depth-bias base value.",
+                                true);
+                            drawCsmFloat(
+                                "Slope-Scaled Depth Bias##DiagnosticCsm",
+                                "Diagnostic CSM Slope-Scaled Depth Bias",
+                                shadows.slopeScaledDepthBias,
+                                csmDefaults.slopeScaledDepthBias,
+                                0.f,
+                                10.f,
+                                "%.2f",
+                                "Set UE's CSM slope-scaled depth-bias base "
+                                "value.",
+                                true);
+                            drawCsmFloat(
+                                "Directional-Light Shadow Bias##DiagnosticCsm",
+                                "Diagnostic CSM Directional-Light Shadow Bias",
+                                shadows.directionalLightShadowBias,
+                                csmDefaults.directionalLightShadowBias,
+                                0.f,
+                                1.f,
+                                "%.2f",
+                                "Match the directional-light Shadow Bias "
+                                "multiplier.",
+                                true);
+                            drawCsmFloat(
+                                "Directional-Light Slope Bias##DiagnosticCsm",
+                                "Diagnostic CSM Directional-Light Slope Bias",
+                                shadows.directionalLightShadowSlopeBias,
+                                csmDefaults.directionalLightShadowSlopeBias,
+                                0.f,
+                                1.f,
+                                "%.2f",
+                                "Match the directional-light Shadow Slope "
+                                "Bias multiplier.",
+                                true);
+                            drawCsmFloat(
+                                "Receiver Depth Bias##DiagnosticCsm",
+                                "Diagnostic CSM Receiver Depth Bias",
+                                shadows.receiverDepthBias,
+                                csmDefaults.receiverDepthBias,
+                                0.f,
+                                1.f,
+                                "%.3f",
+                                "Widen the soft comparison transition at "
+                                "grazing receiver angles.",
+                                true);
+                            EndAnimatedTreeNode();
+                        }
+
+                        if (BeginAnimatedTreeNode(
+                                "Cache Update Policy##DiagnosticCsm"))
+                        {
+                            const bool cachePolicyActive =
+                                HasAnyDiagnosticCsmCachePolicy(shadows);
+                            drawCsmCheckbox(
+                                "Cached Shadow Draw Lists##DiagnosticCsm",
+                                "Diagnostic CSM Cached Shadow Draw Lists",
+                                shadows.cachedShadowDrawListsEnabled,
+                                csmDefaults.cachedShadowDrawListsEnabled,
+                                "Reuse exact final sorted caster lists for "
+                                "repeating full-redraw configurations.",
+                                !cachePolicyActive);
+                            drawCsmCheckbox(
+                                "Whole-Map Reuse##DiagnosticCsm",
+                                "Diagnostic CSM Whole-Map Reuse",
+                                shadows.wholeMapReuseEnabled,
+                                csmDefaults.wholeMapReuseEnabled,
+                                "Reuse all cascades when every projection and "
+                                "the scene revision are unchanged.",
+                                true);
+                            drawCsmCheckbox(
+                                "Whole-Cascade Reuse##DiagnosticCsm",
+                                "Diagnostic CSM Whole-Cascade Reuse",
+                                shadows.wholeCascadeReuseEnabled,
+                                csmDefaults.wholeCascadeReuseEnabled,
+                                "Classify and reuse each cascade "
+                                "independently.",
+                                true);
+                            const bool cascadeReuseActive =
+                                shadows.wholeCascadeReuseEnabled;
+                            drawCsmCheckbox(
+                                "Dirty Rectangles##DiagnosticCsm",
+                                "Diagnostic CSM Dirty Rectangles",
+                                shadows.dirtyRectanglesEnabled,
+                                csmDefaults.dirtyRectanglesEnabled,
+                                "Clear old and new changed bounds and rerender "
+                                "every overlapping caster.",
+                                cascadeReuseActive);
+                            drawCsmCheckbox(
+                                "Scrolling##DiagnosticCsm",
+                                "Diagnostic CSM Scrolling",
+                                shadows.scrollingEnabled,
+                                csmDefaults.scrollingEnabled,
+                                "Reuse exactly compatible integer-shifted "
+                                "texels, then update exposed regions.",
+                                cascadeReuseActive);
+                            drawCsmFloat(
+                                "Minimum Scroll Overlap##DiagnosticCsm",
+                                "Diagnostic CSM Minimum Scroll Overlap",
+                                shadows.minimumScrollOverlap,
+                                csmDefaults.minimumScrollOverlap,
+                                0.5f,
+                                1.f,
+                                "%.2f",
+                                "Require at least this compatible texel "
+                                "overlap before accepting a scroll update.",
+                                cascadeReuseActive &&
+                                    shadows.scrollingEnabled);
+                            EndAnimatedTreeNode();
+                        }
+
+                        if (BeginAnimatedTreeNode(
+                                "Culling and Raster##DiagnosticCsm"))
+                        {
+                            const bool viewDependentCullingAvailable =
+                                CanUseDiagnosticCsmViewDependentCasterCulling(
+                                    shadows);
+                            drawCsmCheckbox(
+                                "Input-Assembler Caster Fetch##DiagnosticCsm",
+                                "Diagnostic CSM Input-Assembler Caster Fetch",
+                                shadows.inputAssemblerCasterFetchEnabled,
+                                csmDefaults.
+                                    inputAssemblerCasterFetchEnabled,
+                                "Route eligible non-deforming casters "
+                                "through the CSM-local input-assembler path.",
+                                true);
+                            drawCsmCheckbox(
+                                "Receiver Raster Scissor##DiagnosticCsm",
+                                "Diagnostic CSM Receiver Raster Scissor",
+                                shadows.receiverRasterScissorEnabled,
+                                csmDefaults.receiverRasterScissorEnabled,
+                                "Conservatively scissor uncached full-redraw "
+                                "raster to the snapped receiver footprint.",
+                                viewDependentCullingAvailable);
+                            drawCsmCheckbox(
+                                "Accurate Caster Hull Culling##DiagnosticCsm",
+                                "Diagnostic CSM Accurate Caster Hull Culling",
+                                shadows.accurateCasterCullingEnabled,
+                                csmDefaults.accurateCasterCullingEnabled,
+                                "Reject reliable bounds outside the "
+                                "light-extruded receiver hull during full "
+                                "redraws.",
+                                viewDependentCullingAvailable);
+                            drawCsmCheckbox(
+                                "UE Caster Radius Threshold##DiagnosticCsm",
+                                "Diagnostic CSM UE Caster Radius Threshold",
+                                shadows.ueCasterRadiusThresholdEnabled,
+                                csmDefaults.
+                                    ueCasterRadiusThresholdEnabled,
+                                "Apply UE's camera-projected caster-size "
+                                "rejection when no map-cache policy is active.",
+                                viewDependentCullingAvailable);
+                            drawCsmFloat(
+                                "Caster Radius Threshold##DiagnosticCsm",
+                                "Diagnostic CSM Caster Radius Threshold",
+                                shadows.casterRadiusThreshold,
+                                csmDefaults.casterRadiusThreshold,
+                                0.f,
+                                0.05f,
+                                "%.3f",
+                                "Cull reliable casters below this "
+                                "camera-distance-relative radius.",
+                                viewDependentCullingAvailable &&
+                                    shadows.
+                                        ueCasterRadiusThresholdEnabled);
+                            EndAnimatedTreeNode();
+                        }
+
+                        if (BeginAnimatedTreeNode(
+                                "Unabstracted##DiagnosticCsm"))
+                        {
+                            drawCsmCheckbox(
+                                "16-Bit Shadow Depth##DiagnosticCsm",
+                                "Diagnostic CSM 16-Bit Shadow Depth",
+                                shadows.use16BitDepthEnabled,
+                                csmDefaults.use16BitDepthEnabled,
+                                "Prefer D16 shadow depth and fall back to "
+                                "sampleable D32 when D16 is unsupported.",
+                                true);
+                            drawCsmCheckbox(
+                                "Opaque Depth State Merging##DiagnosticCsm",
+                                "Diagnostic CSM Opaque Depth State Merging",
+                                shadows.opaqueDepthStateMergingEnabled,
+                                csmDefaults.
+                                    opaqueDepthStateMergingEnabled,
+                                "Canonicalize eligible opaque depth-only "
+                                "materials while retaining distinct "
+                                "alpha-tested states.",
+                                true);
+                            drawCsmCheckbox(
+                                "Position-Only Opaque Casters##DiagnosticCsm",
+                                "Diagnostic CSM Position-Only Opaque Casters",
+                                shadows.positionOnlyOpaqueEnabled,
+                                csmDefaults.positionOnlyOpaqueEnabled,
+                                "Use the CSM-local position-only permutation "
+                                "for eligible opaque casters.",
+                                true);
+                            drawCsmCheckbox(
+                                "Translation-Only Caster Transforms"
+                                "##DiagnosticCsm",
+                                "Diagnostic CSM Translation-Only Caster "
+                                "Transforms",
+                                shadows.
+                                    translationOnlyCasterTransformEnabled,
+                                csmDefaults.
+                                    translationOnlyCasterTransformEnabled,
+                                "Use finite translation-only constants for "
+                                "eligible single-instance casters.",
+                                true);
+                            drawCsmCheckbox(
+                                "Precomputed Depth-Axis Normalization"
+                                "##DiagnosticCsm",
+                                "Diagnostic CSM Precomputed Depth-Axis "
+                                "Normalization",
+                                shadows.
+                                    precomputedDepthAxisInverseLengthEnabled,
+                                csmDefaults.
+                                    precomputedDepthAxisInverseLengthEnabled,
+                                "Normalize the directional depth axis once "
+                                "per cascade.",
+                                true);
+                            const bool depthAxisPrecomputed =
+                                shadows.
+                                    precomputedDepthAxisInverseLengthEnabled;
+                            drawCsmCheckbox(
+                                "Conservative Saturated-Slope Shortcut"
+                                "##DiagnosticCsm",
+                                "Diagnostic CSM Conservative Saturated-Slope "
+                                "Shortcut",
+                                shadows.conservativeSaturatedSlopeEnabled,
+                                csmDefaults.
+                                    conservativeSaturatedSlopeEnabled,
+                                "Use the conservative shortcut at UE's "
+                                "clamped slope boundary.",
+                                depthAxisPrecomputed);
+                            drawCsmCheckbox(
+                                "Algebraic Slow-Slope Reduction"
+                                "##DiagnosticCsm",
+                                "Diagnostic CSM Algebraic Slow-Slope "
+                                "Reduction",
+                                shadows.algebraicSlowSlopeEnabled,
+                                csmDefaults.algebraicSlowSlopeEnabled,
+                                "Evaluate the unsaturated UE slope with the "
+                                "equivalent algebraic reduction.",
+                                depthAxisPrecomputed);
+                            drawCsmCheckbox(
+                                "Pre-Normalized Receiver Light Direction"
+                                "##DiagnosticCsm",
+                                "Diagnostic CSM Pre-Normalized Receiver "
+                                "Light Direction",
+                                shadows.
+                                    preNormalizedReceiverLightDirectionEnabled,
+                                csmDefaults.
+                                    preNormalizedReceiverLightDirectionEnabled,
+                                "Reuse the finite CPU-normalized directional "
+                                "light vector in the receiver.",
+                                true);
+                            drawCsmCheckbox(
+                                "Precomposed Clip-to-Shadow Transform"
+                                "##DiagnosticCsm",
+                                "Diagnostic CSM Precomposed Clip-to-Shadow "
+                                "Transform",
+                                shadows.precomposedClipToShadowEnabled,
+                                csmDefaults.precomposedClipToShadowEnabled,
+                                "Precompose each cascade's clip-to-shadow "
+                                "transform on the CPU.",
+                                true);
+                            drawCsmCheckbox(
+                                "One-Pass Cascade Classification"
+                                "##DiagnosticCsm",
+                                "Diagnostic CSM One-Pass Cascade "
+                                "Classification",
+                                shadows.
+                                    singleTraversalCasterClassificationEnabled,
+                                csmDefaults.
+                                    singleTraversalCasterClassificationEnabled,
+                                "Traverse the scene once and classify each "
+                                "caster across redrawn cascades.",
+                                true);
+                            const bool receiverHullAxesAvailable =
+                                CanUseDiagnosticCsmViewDependentCasterCulling(
+                                    shadows) &&
+                                shadows.accurateCasterCullingEnabled;
+                            drawCsmCheckbox(
+                                "Precomputed Receiver Hull Axes"
+                                "##DiagnosticCsm",
+                                "Diagnostic CSM Precomputed Receiver Hull "
+                                "Axes",
+                                shadows.precomputedReceiverHullAxesEnabled,
+                                csmDefaults.
+                                    precomputedReceiverHullAxesEnabled,
+                                "Precompute normalized receiver-hull axes and "
+                                "intervals once per cascade.",
+                                receiverHullAxesAvailable);
+                            drawCsmCheckbox(
+                                "Shared Caster Light Projection"
+                                "##DiagnosticCsm",
+                                "Diagnostic CSM Shared Caster Light "
+                                "Projection",
+                                shadows.sharedCasterLightProjectionEnabled,
+                                csmDefaults.
+                                    sharedCasterLightProjectionEnabled,
+                                "Project reliable caster bounds once into a "
+                                "shared directional-light basis.",
+                                true);
+                            drawCsmCheckbox(
+                                "Direct Caster Submission##DiagnosticCsm",
+                                "Diagnostic CSM Direct Caster Submission",
+                                shadows.directCasterSubmissionEnabled,
+                                csmDefaults.directCasterSubmissionEnabled,
+                                "Submit sorted caster records directly "
+                                "without rebuilding a scratch vector.",
+                                true);
+                            drawCsmCheckbox(
+                                "Batched Full-Redraw Clear##DiagnosticCsm",
+                                "Diagnostic CSM Batched Full-Redraw Clear",
+                                shadows.batchedFullRedrawClearEnabled,
+                                csmDefaults.
+                                    batchedFullRedrawClearEnabled,
+                                "Clear contiguous full-redraw cascade slices "
+                                "with one depth clear.",
+                                true);
+                            EndAnimatedTreeNode();
+                        }
+                        EndAnimatedTreeNode();
+                    }
+
+                    if (BeginAnimatedTreeNode(
+                            "Diagnostics##DiagnosticCsm"))
+                    {
+                        drawCsmCheckbox(
+                            "Detailed GPU Stage Timing##DiagnosticCsm",
+                            "Diagnostic CSM Detailed GPU Stage Timing",
+                            shadows.detailedGpuTimingEnabled,
+                            csmDefaults.detailedGpuTimingEnabled,
+                            "Measure clear/update, raster, and "
+                            "full-resolution sampling separately.",
+                            true);
+
+                        ImGui::SetNextItemWidth(settingsControlWidth);
+                        if (BeginRoundedCombo(
+                                "Debug View##DiagnosticCsm",
+                                GetDiagnosticCsmDebugViewLabel(
+                                    shadows.debugView)))
+                        {
+                            for (uint32_t index = 0u;
+                                index < uint32_t(
+                                    DiagnosticCsmDebugView::Count);
+                                ++index)
+                            {
+                                const DiagnosticCsmDebugView view =
+                                    DiagnosticCsmDebugView(index);
+                                const char* label =
+                                    GetDiagnosticCsmDebugViewLabel(view);
+                                DrawDeferredDropdownOption(
+                                    label,
+                                    label,
+                                    shadows.debugView == view,
+                                    [settings = &shadows, view]()
+                                    {
+                                        settings->debugView = view;
+                                        settings->profile =
+                                            DiagnosticCsmProfile::Custom;
+                                    });
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SetItemTooltip(
+                            "Present CSM visibility, cascade selection, or "
+                            "cache action without changing the lighting "
+                            "input.");
+                        if (DrawNestedDropdownResetIcon(
+                                "Diagnostic CSM Debug View",
+                                shadows.debugView !=
+                                    csmDefaults.debugView))
+                        {
+                            QueueDeferredControlUiAction(
+                                [settings = &shadows]()
+                                {
+                                    settings->debugView =
+                                        DiagnosticCsmDebugView::None;
+                                    reconcileCsmProfile(*settings);
+                                });
+                        }
+                        EndAnimatedTreeNode();
+                    }
+
+                    if (csmCustomChanged)
+                    {
+                        shadows.profile =
+                            DiagnosticCsmProfile::Custom;
+                    }
+                    else if (csmResetApplied)
+                    {
+                        reconcileCsmProfile(shadows);
+                    }
+                    EndAnimatedToggleRegion();
+                }
+                if (!directionalVisibilityAvailable)
+                    ImGui::EndDisabled();
+                if (!directionalVisibilityAvailable)
+                {
+                    ImGui::TextDisabled(
+                        "Requires deferred PBR and a directional light.");
+                }
+                EndAnimatedTreeNode();
             }
             EndDrawerBody();
         }
@@ -14201,7 +22557,26 @@ bool ProcessCommandLine(
     std::string& experimentDescription,
     bool& benchmarkCameraRequested,
     AaBenchmarkConfig& aaBenchmark,
-    VisibilityBenchmarkLaunchOptions& visibilityBenchmark)
+    VisibilityBenchmarkLaunchOptions& visibilityBenchmark,
+    bool& diagnosticCsmBenchmarkRequested,
+    bool& diagnosticCsmRecordRequested,
+    bool& diagnosticCsmTranslationBaselineRequested,
+    bool& diagnosticCsmInputAssemblerRequested,
+    bool& diagnosticCsmDetailedTimingRequested,
+    bool& svsmMotionBenchmarkRequested,
+    bool& svsmSunMotionBenchmarkRequested,
+    bool& svsmMotionDetailedTimingRequested,
+    bool& svsmMotionScatterRequested,
+    bool& svsmMotionIsolationRequested,
+    bool& svsmMotionUnbatchedRequested,
+    bool& svsmMotionBatchOnlyRequested,
+    bool& svsmMotionBatchSortRequested,
+    bool& svsmMotionBatchLevelSkipRequested,
+    uint32_t& svsmMotionPoolPageCount,
+    bool& svsmMotionPoolOverrideRequested,
+    uint32_t& svsmMotionPageRenderBudget,
+    bool& svsmMotionBudgetOverrideRequested,
+    bool& dredDiagnosticsRequested)
 {
     const auto invalidValue = [](
         const char* option,
@@ -14243,13 +22618,37 @@ bool ProcessCommandLine(
             return false;
         }
 #endif
-        if (!strcmp(argv[i], "-width") && i + 1 < argc)
+        if (!strcmp(argv[i], "-width"))
         {
-            deviceParams.backBufferWidth = std::stoi(argv[++i]);
+            int value = 0;
+            if (i + 1 >= argc ||
+                !ParseCommandLineInt(
+                    argv[i + 1],
+                    1,
+                    std::numeric_limits<int>::max(),
+                    value))
+            {
+                log::error("-width requires an exact positive integer value");
+                return false;
+            }
+            deviceParams.backBufferWidth = value;
+            ++i;
         }
-        else if (!strcmp(argv[i], "-height") && i + 1 < argc)
+        else if (!strcmp(argv[i], "-height"))
         {
-            deviceParams.backBufferHeight = std::stoi(argv[++i]);
+            int value = 0;
+            if (i + 1 >= argc ||
+                !ParseCommandLineInt(
+                    argv[i + 1],
+                    1,
+                    std::numeric_limits<int>::max(),
+                    value))
+            {
+                log::error("-height requires an exact positive integer value");
+                return false;
+            }
+            deviceParams.backBufferHeight = value;
+            ++i;
         }
         else if (!strcmp(argv[i], "-fullscreen"))
         {
@@ -14260,9 +22659,21 @@ bool ProcessCommandLine(
             deviceParams.enableDebugRuntime = true;
             deviceParams.enableNvrhiValidationLayer = true;
         }
-        else if (!strcmp(argv[i], "-adapter") && i + 1 < argc)
+        else if (!strcmp(argv[i], "-adapter"))
         {
-            deviceParams.adapterIndex = std::stoi(argv[++i]);
+            int value = 0;
+            if (i + 1 >= argc ||
+                !ParseCommandLineInt(
+                    argv[i + 1],
+                    0,
+                    std::numeric_limits<int>::max(),
+                    value))
+            {
+                log::error("-adapter requires an exact nonnegative integer value");
+                return false;
+            }
+            deviceParams.adapterIndex = value;
+            ++i;
         }
         else if ((!strcmp(argv[i], "--experiment") || !strcmp(argv[i], "-experiment"))
             && i + 1 < argc)
@@ -14626,9 +23037,134 @@ bool ProcessCommandLine(
         {
             visibilityBenchmark.autoClose = true;
         }
+        else if (!strcmp(argv[i], "--diagnostic-csm-benchmark"))
+        {
+            diagnosticCsmBenchmarkRequested = true;
+        }
+        else if (!strcmp(argv[i], "--diagnostic-csm-record"))
+        {
+            diagnosticCsmRecordRequested = true;
+        }
+        else if (!strcmp(
+                     argv[i],
+                     "--diagnostic-csm-translation-baseline"))
+        {
+            diagnosticCsmTranslationBaselineRequested = true;
+        }
+        else if (!strcmp(
+                     argv[i],
+                     "--diagnostic-csm-input-assembler"))
+        {
+            diagnosticCsmInputAssemblerRequested = true;
+        }
+        else if (!strcmp(argv[i], "--diagnostic-csm-detailed"))
+        {
+            diagnosticCsmDetailedTimingRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-test"))
+        {
+            svsmMotionBenchmarkRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-sun-motion-test"))
+        {
+            svsmMotionBenchmarkRequested = true;
+            svsmSunMotionBenchmarkRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-detailed"))
+        {
+            svsmMotionDetailedTimingRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-scatter"))
+        {
+            svsmMotionScatterRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-isolate"))
+        {
+            svsmMotionIsolationRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-unbatched"))
+        {
+            svsmMotionUnbatchedRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-batch-only"))
+        {
+            svsmMotionBatchOnlyRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-batch-sort"))
+        {
+            svsmMotionBatchSortRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-batch-level-skip"))
+        {
+            svsmMotionBatchLevelSkipRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-pool") &&
+            i + 1 < argc)
+        {
+            if (!ParseCommandLineUint32(
+                    argv[++i],
+                    svsmMotionPoolPageCount))
+            {
+                log::error(
+                    "--svsm-motion-pool requires an exact unsigned integer value");
+                return false;
+            }
+            svsmMotionPoolOverrideRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-pool"))
+        {
+            log::error("--svsm-motion-pool requires a value");
+            return false;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-budget") &&
+            i + 1 < argc)
+        {
+            if (!ParseCommandLineUint32(
+                    argv[++i],
+                    svsmMotionPageRenderBudget))
+            {
+                log::error(
+                    "--svsm-motion-budget requires an exact unsigned integer value");
+                return false;
+            }
+            svsmMotionBudgetOverrideRequested = true;
+        }
+        else if (!strcmp(argv[i], "--svsm-motion-budget"))
+        {
+            log::error("--svsm-motion-budget requires a value");
+            return false;
+        }
+        else if (!strcmp(argv[i], "--dred"))
+        {
+            dredDiagnosticsRequested = true;
+        }
+        else if (IsDonutGraphicsApiOption(argv[i]))
+        {
+            // Donut consumes this token when it creates the device manager.
+        }
+        else if (!std::strncmp(
+                     argv[i],
+                     "--diagnostic-csm-",
+                     17u))
+        {
+            log::error(
+                "Unknown diagnostic CSM option '%s'",
+                argv[i]);
+            return false;
+        }
+        else if (!std::strncmp(argv[i], "--svsm-motion-", 14u))
+        {
+            log::error("Unknown SVSM motion option '%s'", argv[i]);
+            return false;
+        }
         else if (argv[i][0] != '-')
         {
             sceneName = argv[i];
+        }
+        else
+        {
+            log::error("Unknown command-line option '%s'", argv[i]);
+            return false;
         }
     }
     }
@@ -14877,6 +23413,26 @@ int main(int __argc, const char* const* __argv)
     bool benchmarkCameraRequested = false;
     AaBenchmarkConfig aaBenchmark;
     VisibilityBenchmarkLaunchOptions visibilityBenchmark;
+    bool diagnosticCsmBenchmarkRequested = false;
+    bool diagnosticCsmRecordRequested = false;
+    bool diagnosticCsmTranslationBaselineRequested = false;
+    bool diagnosticCsmInputAssemblerRequested = false;
+    bool diagnosticCsmDetailedTimingRequested = false;
+    bool svsmMotionBenchmarkRequested = false;
+    bool svsmSunMotionBenchmarkRequested = false;
+    bool svsmMotionDetailedTimingRequested = false;
+    bool svsmMotionScatterRequested = false;
+    bool svsmMotionIsolationRequested = false;
+    bool svsmMotionUnbatchedRequested = false;
+    bool svsmMotionBatchOnlyRequested = false;
+    bool svsmMotionBatchSortRequested = false;
+    bool svsmMotionBatchLevelSkipRequested = false;
+    uint32_t svsmMotionPoolPageCount = 4096u;
+    bool svsmMotionPoolOverrideRequested = false;
+    uint32_t svsmMotionPageRenderBudget = 4u;
+    bool svsmMotionBudgetOverrideRequested = false;
+    bool dredDiagnosticsRequested = false;
+    std::filesystem::path svsmMotionMeasurementReadyPath;
     if (!ProcessCommandLine(
             __argc,
             __argv,
@@ -14885,8 +23441,40 @@ int main(int __argc, const char* const* __argv)
             experimentDescription,
             benchmarkCameraRequested,
             aaBenchmark,
-            visibilityBenchmark))
+            visibilityBenchmark,
+            diagnosticCsmBenchmarkRequested,
+            diagnosticCsmRecordRequested,
+            diagnosticCsmTranslationBaselineRequested,
+            diagnosticCsmInputAssemblerRequested,
+            diagnosticCsmDetailedTimingRequested,
+            svsmMotionBenchmarkRequested,
+            svsmSunMotionBenchmarkRequested,
+            svsmMotionDetailedTimingRequested,
+            svsmMotionScatterRequested,
+            svsmMotionIsolationRequested,
+            svsmMotionUnbatchedRequested,
+            svsmMotionBatchOnlyRequested,
+            svsmMotionBatchSortRequested,
+            svsmMotionBatchLevelSkipRequested,
+            svsmMotionPoolPageCount,
+            svsmMotionPoolOverrideRequested,
+            svsmMotionPageRenderBudget,
+            svsmMotionBudgetOverrideRequested,
+            dredDiagnosticsRequested))
     {
+        return 1;
+    }
+    const uint32_t benchmarkFamilyCount =
+        uint32_t(aaBenchmark.enabled) +
+        uint32_t(visibilityBenchmark.benchmarkRequested) +
+        uint32_t(g_VisibilityPerfCapture.Enabled()) +
+        uint32_t(diagnosticCsmBenchmarkRequested) +
+        uint32_t(svsmMotionBenchmarkRequested);
+    if (benchmarkFamilyCount > 1u)
+    {
+        ReportCommandLineError(
+            "Select only one AA, visibility, diagnostic CSM, or SVSM "
+            "benchmark mode per launch.");
         return 1;
     }
     if (g_VisibilityPerfCapture.Enabled())
@@ -14944,6 +23532,197 @@ int main(int __argc, const char* const* __argv)
             return 1;
         }
     }
+    if (diagnosticCsmBenchmarkRequested && !benchmarkCameraRequested)
+    {
+        log::error(
+            "--diagnostic-csm-benchmark requires --benchmark-camera so every run uses the standardized 1920 x 1080 camera");
+        return 1;
+    }
+    if (diagnosticCsmTranslationBaselineRequested &&
+        !diagnosticCsmBenchmarkRequested)
+    {
+        log::error(
+            "--diagnostic-csm-translation-baseline requires --diagnostic-csm-benchmark");
+        return 1;
+    }
+    if (diagnosticCsmInputAssemblerRequested &&
+        !diagnosticCsmBenchmarkRequested)
+    {
+        log::error(
+            "--diagnostic-csm-input-assembler requires --diagnostic-csm-benchmark");
+        return 1;
+    }
+    if (diagnosticCsmRecordRequested &&
+        !diagnosticCsmBenchmarkRequested)
+    {
+        log::error(
+            "--diagnostic-csm-record requires --diagnostic-csm-benchmark");
+        return 1;
+    }
+    if (diagnosticCsmDetailedTimingRequested &&
+        !diagnosticCsmBenchmarkRequested)
+    {
+        log::error(
+            "--diagnostic-csm-detailed requires --diagnostic-csm-benchmark");
+        return 1;
+    }
+    if (diagnosticCsmBenchmarkRequested &&
+        svsmMotionBenchmarkRequested)
+    {
+        log::error(
+            "Diagnostic CSM and SVSM benchmark modes cannot run together");
+        return 1;
+    }
+    if (diagnosticCsmBenchmarkRequested &&
+        (deviceParams.enableDebugRuntime ||
+            deviceParams.enableNvrhiValidationLayer ||
+            dredDiagnosticsRequested))
+    {
+        log::error(
+            "Diagnostic CSM benchmark mode does not allow debug, validation, or DRED instrumentation");
+        return 1;
+    }
+    if (svsmMotionBenchmarkRequested && !benchmarkCameraRequested)
+    {
+        log::error(
+            "--svsm-motion-test requires --benchmark-camera so every run uses the standardized 1920 x 1080 camera");
+        return 1;
+    }
+    if (svsmMotionDetailedTimingRequested &&
+        !svsmMotionBenchmarkRequested)
+    {
+        log::error(
+            "--svsm-motion-detailed requires --svsm-motion-test");
+        return 1;
+    }
+    if (svsmMotionScatterRequested && !svsmMotionBenchmarkRequested)
+    {
+        log::error(
+            "--svsm-motion-scatter requires --svsm-motion-test");
+        return 1;
+    }
+    if (svsmMotionIsolationRequested && !svsmMotionBenchmarkRequested)
+    {
+        log::error(
+            "--svsm-motion-isolate requires --svsm-motion-test");
+        return 1;
+    }
+    if (svsmMotionUnbatchedRequested && !svsmMotionBenchmarkRequested)
+    {
+        log::error(
+            "--svsm-motion-unbatched requires --svsm-motion-test");
+        return 1;
+    }
+    if (svsmMotionBudgetOverrideRequested &&
+        !svsmMotionBenchmarkRequested)
+    {
+        log::error(
+            "--svsm-motion-budget requires --svsm-motion-test");
+        return 1;
+    }
+    const uint32_t svsmMotionBatchedDiagnosticCount =
+        uint32_t(svsmMotionBatchOnlyRequested) +
+        uint32_t(svsmMotionBatchSortRequested) +
+        uint32_t(svsmMotionBatchLevelSkipRequested);
+    const bool svsmMotionBatchedDiagnosticRequested =
+        svsmMotionBatchedDiagnosticCount != 0u;
+    if (svsmMotionBatchedDiagnosticRequested &&
+        !svsmMotionBenchmarkRequested)
+    {
+        log::error(
+            "SVSM batched diagnostics require --svsm-motion-test");
+        return 1;
+    }
+    if (svsmMotionBatchedDiagnosticCount > 1u)
+    {
+        log::error(
+            "Select only one SVSM batched diagnostic path");
+        return 1;
+    }
+    if (svsmMotionIsolationRequested && svsmMotionScatterRequested)
+    {
+        log::error(
+            "--svsm-motion-isolate cannot be combined with --svsm-motion-scatter");
+        return 1;
+    }
+    if (svsmMotionUnbatchedRequested &&
+        (svsmMotionIsolationRequested || svsmMotionScatterRequested ||
+            svsmMotionBatchedDiagnosticRequested))
+    {
+        log::error(
+            "--svsm-motion-unbatched cannot be combined with the isolate or scatter diagnostic paths");
+        return 1;
+    }
+    if (svsmMotionBatchedDiagnosticRequested &&
+        (svsmMotionIsolationRequested || svsmMotionScatterRequested))
+    {
+        log::error(
+            "SVSM batched diagnostics cannot be combined with the isolate or scatter diagnostic paths");
+        return 1;
+    }
+    if (svsmMotionBatchedDiagnosticRequested &&
+        (!svsmMotionPoolOverrideRequested ||
+            svsmMotionPoolPageCount != 64u))
+    {
+        log::error(
+            "SVSM batched diagnostics require --svsm-motion-pool 64");
+        return 1;
+    }
+    if (svsmMotionPoolOverrideRequested &&
+        !svsmMotionBenchmarkRequested)
+    {
+        log::error(
+            "--svsm-motion-pool requires --svsm-motion-test");
+        return 1;
+    }
+    if (!IsSvsmMotionDiagnosticPoolPageCount(
+            svsmMotionPoolPageCount))
+    {
+        log::error(
+            "--svsm-motion-pool must be 64, 256, 1024, or 4096 pages");
+        return 1;
+    }
+    if (svsmMotionPageRenderBudget == 0u ||
+        svsmMotionPageRenderBudget > svsmMotionPoolPageCount)
+    {
+        log::error(
+            "--svsm-motion-budget must be between 1 and the selected physical pool page count");
+        return 1;
+    }
+    if (const char* readyPath =
+            std::getenv("UVSR_SVSM_MOTION_READY_PATH");
+        readyPath && readyPath[0] != '\0')
+    {
+        if (!svsmMotionBenchmarkRequested)
+        {
+            log::error(
+                "UVSR_SVSM_MOTION_READY_PATH requires --svsm-motion-test");
+            return 1;
+        }
+        std::error_code pathError;
+        svsmMotionMeasurementReadyPath =
+            std::filesystem::absolute(readyPath, pathError);
+        if (pathError || svsmMotionMeasurementReadyPath.empty())
+        {
+            log::error(
+                "UVSR_SVSM_MOTION_READY_PATH could not be resolved");
+            return 1;
+        }
+        if (std::filesystem::exists(
+                svsmMotionMeasurementReadyPath, pathError) || pathError)
+        {
+            log::error(
+                "UVSR_SVSM_MOTION_READY_PATH must name a new marker file");
+            return 1;
+        }
+    }
+#ifdef _WIN32
+    if (dredDiagnosticsRequested && api == nvrhi::GraphicsAPI::D3D12)
+    {
+        if (!EnableD3d12DredDiagnostics())
+            return 1;
+    }
+#endif
     if (benchmarkCameraRequested)
     {
         const SponzaCameraPreset& preset = GetDefaultSponzaCameraPreset();
@@ -14996,7 +23775,17 @@ int main(int __argc, const char* const* __argv)
 		log::error("Cannot initialize a %s graphics device with the requested parameters", apiString);
 		return 1;
 	}
-    if (!deviceParams.startFullscreen &&
+#ifdef _WIN32
+    NameD3d12GraphicsQueue(deviceManager->GetDevice());
+#endif
+    if (diagnosticCsmBenchmarkRequested)
+    {
+        // Keep the requested client area exact. Fitting a decorated window to
+        // the desktop work area changes 1920 x 1080 into 1902 x 1069 on this
+        // machine and biases the receiver comparison by nearly two percent.
+        glfwSetWindowPos(deviceManager->GetWindow(), 0, 0);
+    }
+    else if (!deviceParams.startFullscreen &&
         !deviceParams.startMaximized &&
         !benchmarkCameraRequested)
     {
@@ -15123,7 +23912,11 @@ int main(int __argc, const char* const* __argv)
                 log::info("UVSR_PERF applied variant token: factory");
             }
             if (perf.isolateVisibility)
-                uiData.EnableProceduralSky = false;
+            {
+                uiData.ShowEnvironmentBackground = false;
+                uiData.EnableDiffuseIbl = false;
+                uiData.EnableSpecularIbl = false;
+            }
         }
         if (visibilityBenchmark.implementationProfileSpecified)
         {
@@ -15172,13 +23965,185 @@ int main(int __argc, const char* const* __argv)
         }
         if (visibilityBenchmark.benchmarkRequested)
             uiData.ShowUI = false;
+        if (diagnosticCsmBenchmarkRequested)
+        {
+            // Apply the complete matched CSM comparison state before the first
+            // rendered frame. This avoids spending the laptop's short thermal
+            // window configuring unrelated renderer features through the UI.
+            uiData.EnablePbr = true;
+            uiData.RenderMode = RendererMode::Deferred;
+            uiData.AntiAliasing.enabled = false;
+            uiData.MiniEngineTaaSharpenEnabled = false;
+            uiData.BendScreenSpaceShadows.enabled = false;
+            uiData.SparseVirtualShadowMaps.enabled = false;
+            uiData.ScreenSpaceVisibility.enabled = false;
+            uiData.DiagnosticCascadedShadowMaps =
+                ApplyDiagnosticCsmProfile(
+                    uiData.DiagnosticCascadedShadowMaps,
+                    DiagnosticCsmProfile::Ue5CsmReference);
+            uiData.DiagnosticCascadedShadowMaps.enabled = true;
+            uiData.DiagnosticCascadedShadowMaps.detailedGpuTimingEnabled =
+                diagnosticCsmDetailedTimingRequested;
+            if (diagnosticCsmTranslationBaselineRequested)
+            {
+                uiData.DiagnosticCascadedShadowMaps.
+                    translationOnlyCasterTransformEnabled = false;
+                uiData.DiagnosticCascadedShadowMaps.profile =
+                    DiagnosticCsmProfile::Custom;
+            }
+            if (diagnosticCsmInputAssemblerRequested)
+            {
+                uiData.DiagnosticCascadedShadowMaps.
+                    inputAssemblerCasterFetchEnabled = true;
+                uiData.DiagnosticCascadedShadowMaps.profile =
+                    DiagnosticCsmProfile::Custom;
+            }
+        }
+        if (svsmMotionBenchmarkRequested)
+        {
+            uiData.EnablePbr = true;
+            uiData.RenderMode = RendererMode::Deferred;
+            uiData.AntiAliasing.enabled = false;
+            uiData.MiniEngineTaaSharpenEnabled = false;
+            uiData.BendScreenSpaceShadows.enabled = false;
+            uiData.DiagnosticCascadedShadowMaps.enabled = false;
+            uiData.ScreenSpaceVisibility.enabled = false;
+            uiData.SparseVirtualShadowMaps =
+                BuildSvsmMotionBenchmarkAcceptanceSettings();
+            uiData.SparseVirtualShadowMaps.physicalPageCount =
+                svsmMotionPoolPageCount;
+            ApplySvsmFinePageRenderBudget(
+                uiData.SparseVirtualShadowMaps,
+                svsmMotionPageRenderBudget);
+            uiData.SparseVirtualShadowMaps.
+                dirtyPageScatterRasterEnabled =
+                    svsmMotionScatterRequested;
+
+            if (svsmMotionIsolationRequested)
+            {
+                // A deliberately minimal diagnostic path used only to locate
+                // device-removal boundaries. It is never accepted as timing
+                // evidence and does not change any interactive reference path.
+                SparseVirtualShadowMapSettings& shadows =
+                    uiData.SparseVirtualShadowMaps;
+                shadows.mode = SvsmMode::SparseUncached;
+                shadows.markingMode = SvsmMarkingMode::PerPixel;
+                shadows.filterMode = SvsmFilterMode::ManualPageSafe;
+                shadows.filterKernel = SvsmFilterKernel::NearestPoisson;
+                shadows.poissonOrdering =
+                    SvsmPoissonOrdering::LegacyStride;
+                shadows.tapCount = SvsmTapCount::One;
+                shadows.resolutionBias = SvsmResolutionBias::Zero;
+                shadows.adaptiveFiltering = false;
+                shadows.cachingEnabled = false;
+                shadows.staticPageRequestReuseEnabled = false;
+                shadows.staticVisibilityCachingEnabled = false;
+                shadows.sceneStateCachingEnabled = false;
+                shadows.casterOnlySceneRevisionEnabled = false;
+                shadows.precomposedClipmapTransformsEnabled = false;
+                shadows.pageTranslationCachingEnabled = false;
+                shadows.detailedGpuTimingEnabled = false;
+                shadows.renderPacketCachingEnabled = false;
+                shadows.sharedClipmapPacketBuilderEnabled = false;
+                shadows.persistentCasterSourceCachingEnabled = false;
+                shadows.opaqueRasterSpecializationEnabled = false;
+                shadows.leanAlphaTestedBindingsEnabled = false;
+                shadows.pairedStaticDynamicDepthEnabled = false;
+                shadows.deferredStaticDepthMergeEnabled = false;
+                shadows.movingLightUncachedEnabled = false;
+                shadows.retainPhysicalMappingsOnContentInvalidationEnabled =
+                    false;
+                shadows.movingLightLodBiasEnabled = false;
+                shadows.movingLightResolutionBias =
+                    SvsmResolutionBias::Zero;
+                shadows.receiverDistanceMipClampEnabled = false;
+                shadows.movingLightContinuousReceiverBiasEnabled = false;
+                shadows.gpuGatedDrawSubmission = false;
+                shadows.batchedDrawSubmissionEnabled = false;
+                shadows.packetStateSortingEnabled = false;
+                shadows.levelEmptyWorkSkipEnabled = false;
+                shadows.packetPageCullingEnabled = false;
+                shadows.hierarchicalScheduledPageMaskEnabled = false;
+                shadows.receiverPageMaskCullingEnabled = false;
+                shadows.staticDepthHierarchyCullingEnabled = false;
+                shadows.dirtyPageScatterRasterEnabled = false;
+                shadows.scatterAlphaTestEarlyRejectEnabled = false;
+                shadows.dirtyPageScatterAmplificationGuardEnabled = false;
+                shadows.packetRectangleDirectScanEnabled = false;
+                shadows.recentPageEvictionGraceEnabled = false;
+                shadows.perPixelMarkingDedupeEnabled = false;
+            }
+            else if (svsmMotionUnbatchedRequested)
+            {
+                SparseVirtualShadowMapSettings& shadows =
+                    uiData.SparseVirtualShadowMaps;
+                shadows.tapCount = SvsmTapCount::One;
+                shadows.resolutionBias = SvsmResolutionBias::PlusTwo;
+                shadows.adaptiveFiltering = false;
+                shadows.pageTranslationCachingEnabled = false;
+                shadows.detailedGpuTimingEnabled = false;
+                shadows.renderPacketCachingEnabled = true;
+                shadows.gpuGatedDrawSubmission = true;
+                shadows.batchedDrawSubmissionEnabled = false;
+                shadows.packetStateSortingEnabled = false;
+                shadows.levelEmptyWorkSkipEnabled = false;
+                shadows.packetPageCullingEnabled = true;
+                shadows.dirtyPageScatterRasterEnabled = false;
+                shadows.packetRectangleDirectScanEnabled = false;
+            }
+            else if (svsmMotionBatchedDiagnosticRequested)
+            {
+                // Exercise exactly one batched-submission rung while retaining
+                // the same small-pool, exact-list diagnostic baseline.
+                SparseVirtualShadowMapSettings& shadows =
+                    uiData.SparseVirtualShadowMaps;
+                shadows.tapCount = SvsmTapCount::One;
+                shadows.resolutionBias = SvsmResolutionBias::PlusTwo;
+                shadows.adaptiveFiltering = false;
+                shadows.pageTranslationCachingEnabled = false;
+                shadows.detailedGpuTimingEnabled = false;
+                shadows.renderPacketCachingEnabled = true;
+                shadows.gpuGatedDrawSubmission = true;
+                shadows.batchedDrawSubmissionEnabled = true;
+                shadows.packetStateSortingEnabled =
+                    svsmMotionBatchSortRequested;
+                shadows.levelEmptyWorkSkipEnabled =
+                    svsmMotionBatchLevelSkipRequested;
+                shadows.packetPageCullingEnabled = true;
+                shadows.dirtyPageScatterRasterEnabled = false;
+                shadows.scatterAlphaTestEarlyRejectEnabled = false;
+                shadows.dirtyPageScatterAmplificationGuardEnabled = false;
+                shadows.packetRectangleDirectScanEnabled = false;
+            }
+
+            uiData.SparseVirtualShadowMaps.detailedGpuTimingEnabled =
+                svsmMotionDetailedTimingRequested;
+        }
+
+        const bool svsmMotionDiagnosticConfiguration =
+            svsmMotionDetailedTimingRequested ||
+            svsmMotionIsolationRequested ||
+            svsmMotionUnbatchedRequested ||
+            svsmMotionBatchedDiagnosticRequested ||
+            svsmMotionScatterRequested ||
+            svsmMotionBudgetOverrideRequested ||
+            deviceParams.enableDebugRuntime ||
+            deviceParams.enableNvrhiValidationLayer ||
+            svsmMotionPoolPageCount != 4096u;
 
         std::shared_ptr<UvsrSceneViewer> demo = std::make_shared<UvsrSceneViewer>(
             deviceManager,
             uiData,
             sceneName,
             benchmarkCameraRequested,
-            aaBenchmark);
+            aaBenchmark,
+            diagnosticCsmBenchmarkRequested,
+            diagnosticCsmRecordRequested,
+            svsmMotionBenchmarkRequested,
+            svsmSunMotionBenchmarkRequested,
+            dredDiagnosticsRequested,
+            svsmMotionDiagnosticConfiguration,
+            svsmMotionMeasurementReadyPath);
         std::shared_ptr<UIRenderer> gui = std::make_shared<UIRenderer>(
             deviceManager,
             demo,
@@ -15209,6 +24174,14 @@ int main(int __argc, const char* const* __argv)
 
         if (runMessageLoop)
             deviceManager->RunMessageLoop();
+#ifdef _WIN32
+        if (dredDiagnosticsRequested)
+        {
+            (void)WriteD3d12DredReport(
+                deviceManager->GetDevice(),
+                "outputs/dred-latest.txt");
+        }
+#endif
     }
 
     deviceManager->Shutdown();

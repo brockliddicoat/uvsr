@@ -1,5 +1,7 @@
 #pragma once
 
+#include "directional_light_visibility.h"
+
 #include <donut/core/math/math.h>
 #include <donut/engine/BindingCache.h>
 #include <donut/render/DeferredLightingPass.h>
@@ -13,6 +15,8 @@ namespace donut::engine
 {
     class CommonRenderPasses;
     class ICompositeView;
+    class Light;
+    class LightProbe;
     class ShaderFactory;
 }
 
@@ -34,7 +38,7 @@ private:
     nvrhi::BufferHandle m_DeferredLightingCB;
     // No source UAV, compact one-bounce source, and packed multi-bounce source.
     std::array<Pipeline, 3> m_Pipelines;
-    // Static 2x, 4x, and 8x per-sample deferred pipelines, each compiled
+    // Static 2x, 4x, 8x, and 16x per-sample deferred pipelines, each compiled
     // without and with the single-surface visibility correction.
     std::array<std::array<Pipeline, 4>, 2> m_MsaaPipelines;
     donut::engine::BindingCache m_BindingSets;
@@ -51,12 +55,16 @@ public:
         nvrhi::ICommandList* commandList,
         const donut::engine::ICompositeView& compositeView,
         const donut::render::DeferredLightingPass::Inputs& inputs,
+        const uvsr::DirectionalLightVisibilitySet&
+            directionalLightVisibility,
+        const donut::engine::LightProbe* environment,
         nvrhi::ITexture* sourceRadianceOutput,
         bool separateIndirect,
         bool writeSourceRadiance,
         bool writeBounceMetadata,
         bool includeEmissiveSource,
         float emissiveSourceGain,
+        uint32_t lightingDebugView,
         donut::math::float2 randomOffset = donut::math::float2::zero(),
         nvrhi::ITexture* resolvedBackground = nullptr,
         uint32_t msaaSampleCount = 1u,
