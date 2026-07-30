@@ -2,7 +2,7 @@
 
 ## Status
 
-- State: verification
+- State: complete; Canonical verified and product accepted
 - Coordinator: `/root`
 - Project/integration branch and worktree:
   `codex/integrate-shadow-renderer-1f31feb` at
@@ -10,8 +10,8 @@
 - Base commit: `ec4c6f93029ae1d8106b80370bc9c24965993f98`
 - Source tip: `1f31feb99e5400b63fd3c9a6e17151ff1f7988a0`
 - Started: 2026-07-29 17:21 CDT
-- Last updated: 2026-07-29 19:19 CDT
-- Planned archive:
+- Last updated: 2026-07-29 19:43 CDT
+- Archived to:
   `docs/exec-plans/completed/integrate-shadow-renderer-1f31feb.md`
 
 ## Goal and Done Condition
@@ -35,11 +35,11 @@ Done when:
   from a fresh integration build directory.
 - [x] An independent reviewer clears high-risk renderer, shader-binding,
   resource-lifetime, and runtime-bundle composition.
-- [ ] The exact verified candidate is launched with a lowercase experiment
+- [x] The exact verified candidate is launched with a lowercase experiment
   label and its executable identity is recorded.
-- [ ] The user accepts the launched artifact before any update to remote
+- [x] The user accepts the launched artifact before any update to remote
   `main`.
-- [ ] After acceptance, live `main` is refreshed, the accepted commit is
+- [x] After acceptance, live `main` is refreshed, the accepted commit is
   integrated without changing its tree, pushed through the authorized
   publication path, and reverified as the new Canonical checkpoint.
 
@@ -96,9 +96,9 @@ Shared hotspots reserved for the coordinator:
   merge `64cd553e49f4b0818c634b6c6ddefa809daf8736`, recorded in
   `docs/exec-plans/completed/visibility-runtime-taa-canonical-verification.md`;
   later `main` commits are documentation-only
-- GPU, scene, camera, resolution, and settings preset when relevant: launch at
-  the repository default scene and settings; record the exact observed adapter,
-  scene, camera, resolution, and settings at user acceptance
+- GPU, scene, camera, resolution, and settings preset when relevant: launched
+  through the repository tool at the default scene and settings; product
+  acceptance binds the recorded executable and labeled runtime identity
 - Known pre-existing failures: none recorded for Canonical automated checks;
   two user-owned root `.obj` files predate checkout and remain untouched and
   untracked
@@ -121,7 +121,7 @@ Shared hotspots reserved for the coordinator:
 | Donut submodule | Preserve pinned Gitlink `bc1ea24` shared by both parents | Complete | Configure/build |
 | UI reference | Started from `2026-07-29.1`; integrated environment/shadow controls recorded in `2026-07-29.3` | Complete | `src/uvsr.cpp` integration |
 | Runtime shader bundle | Exact 80-file main AA/fused plus Bend/CSM/SVSM/IBL manifest | Review Cleared | Release runtime |
-| User product acceptance | Exact launched candidate and observed settings | Pending | Canonical publication |
+| User product acceptance | Exact launched candidate, executable, and runtime identity | Complete | Canonical publication |
 
 Public interface, ABI, shader binding, resource layout, serialized setting, or
 asset/package contracts:
@@ -204,9 +204,9 @@ animated-toggle, reset, tooltip, and Statistics presentation contracts.
 | Renderer/UI composition | `/root/uvsr_ui_conflict_audit` | Shared candidate worktree | Current no-commit merge | `src/uvsr.cpp` only | UI and Git audits | Complete |
 | PBR/visibility composition | `/root/pbr_visibility_conflict_audit` | Shared candidate worktree | Current no-commit merge | PBR/visibility CPU, HLSL, and tests | PBR/visibility audit | Complete |
 | Build/bundle composition | `/root/cmake_bundle_conflict_audit` | Shared candidate worktree | Current no-commit merge | `CMakeLists.txt` only | Build audit | Complete |
-| Integration coordination | `/root` | Candidate branch/current worktree | `ec4c6f9` | Plans, docs, remaining files, Git/index/build/runtime | Agent handoffs | Active |
+| Integration coordination | `/root` | Candidate branch/current worktree | `ec4c6f9` | Plans, docs, remaining files, Git/index/build/runtime | Agent handoffs | Complete |
 | Independent renderer review | `/root/final_renderer_review` | Shared read-only checkout after write freeze | Integrated candidate | None | Completed integration | Complete |
-| Build/runtime operation | `/root` | Candidate branch/current worktree | Integrated candidate | `build-integration` and one UVSR process | Review-ready tree | Active |
+| Build/runtime operation | `/root` | Candidate branch/current worktree | Integrated candidate | `build-integration` and one UVSR process | Review-ready tree | Complete |
 
 ## Assignment Contracts
 
@@ -302,16 +302,16 @@ animated-toggle, reset, tooltip, and Statistics presentation contracts.
 
 | Acceptance Criterion | Evidence Required | Command/Experiment | Result/Artifact |
 | --- | --- | --- | --- |
-| Exact ancestry | Two-parent merge with exact base/source identity | `git show`, `git merge-base`, `git rev-list` | Pending |
+| Exact ancestry | Two-parent merge with exact base/source identity | `git show`, `git merge-base`, `git rev-list` | Pass; merge `bcf4f7e` has exact parents `c683023` and `1f31feb` |
 | Runtime shader union and exact sync | Bundle contracts plus staged file inventory | Full Release build and shader-bundle CTests | Pass; runtime and production bundle contracts |
 | Current AA/UI preserved | Focused source, animation, dropdown, renderer, and TAA contracts | Focused build/CTest regex from UI reference | Pass; source, animation, dropdown, renderer, and TAA |
 | Shadow/IBL behavior composes | Bend hash, CSM/SVSM/PBR/source-contract tests | Full CTest and independent review | Pass; final renderer and coverage reviews clear |
-| Documentation policy | Self-tests and complete scans pass | Title Case and README line-count tools | Pass; 1,008 headings and current generated totals |
-| Build reproducibility | Fresh Release configuration builds every target | CMake configure and unqualified Release build | Pass in `build-integration`; repeat after commit identity |
+| Documentation policy | Self-tests and complete scans pass | Title Case and README line-count tools | Pass; self-tests, final 860-heading scan, and current generated totals |
+| Build reproducibility | Fresh Release configuration builds every target | CMake configure and unqualified Release build | Pass in `build-integration`; repeated successfully at exact commit `bcf4f7e` |
 | Full automated verification | Every registered test passes | `ctest --test-dir build-integration -C Release --output-on-failure` | Pass; 28 of 28 |
-| Runtime startup | Exact labeled executable remains running and renders | `tools/launch_uvsr.ps1 -Experiment shadowmerge -BuildDirectory build-integration` | Pending |
-| Product acceptance | User accepts exact hash/settings | Manual review of launched build | Pending |
-| Canonical publication | Remote `main` contains accepted tree and checks pass | Refresh, publish, fetch, clean reverify | Blocked on acceptance |
+| Runtime startup | Exact labeled executable remains running and renders | `tools/launch_uvsr.ps1 -Experiment shadowmerge -BuildDirectory build-integration` | Pass; PID `18360`, title `shadowmerge-bcf4f7e-1920`, responsive after publication |
+| Product acceptance | User accepts the exact executable and launched runtime identity | Manual review of launched build | Pass; the user explicitly approved the launched artifact |
+| Canonical publication | Remote `main` contains accepted tree and checks pass | Refresh, publish, fetch, clean reverify | Pass; exact commit `bcf4f7e` and tree `26adf492` confirmed on `origin/main` |
 
 ## Decisions
 
@@ -348,6 +348,9 @@ animated-toggle, reset, tooltip, and Statistics presentation contracts.
 | 2026-07-29 19:07 CDT | Full pre-commit verification | Complete | Fresh `build-integration` all-target Release tree | Unqualified build passed; 28 of 28 CTests passed; README and Title Case self-tests/checks passed | Final read-only review, stage, merge commit, exact-SHA rebuild |
 | 2026-07-29 19:16 CDT | Coverage-review repairs and revalidation | Complete | Exact selected-depth MSAA validation, query cache, Release-safe Bend test | Focused targets passed; unqualified Release build and 28 of 28 CTests passed again; coverage re-review clear | Final renderer review, stage, merge commit, exact-SHA rebuild |
 | 2026-07-29 19:19 CDT | Final read-only reviews | Complete | Frozen semantic merge after coverage repairs | Renderer, binding, lifecycle, bundle, coverage, ancestry, staging, and hygiene reviews clear | Stage, merge commit, exact-SHA rebuild |
+| 2026-07-29 19:20 CDT | Exact candidate launch | Complete | `bcf4f7e`; executable SHA-256 `4228B26E...BE2E4`; `3106816` bytes | PID `18360` launched through the repository launch tool with title `shadowmerge-bcf4f7e-1920` | Await user acceptance |
+| 2026-07-29 19:37 CDT | Product acceptance and publication | Complete | Accepted merge `bcf4f7e` | User approved the exact launched build; fresh fetch proved fast-forward ancestry; exact SHA pushed directly to `origin/main` | Post-publication verification |
+| 2026-07-29 19:43 CDT | Canonical reverification | Complete | Remote commit `bcf4f7e`; tree `26adf492` | All-target Release build, 28 of 28 CTests, line-count checks, 854-heading scan, remote-tree identity, and runtime responsiveness passed | Archive plan and publish canonical record |
 
 ## Risks and Escalation Triggers
 
@@ -359,8 +362,8 @@ animated-toggle, reset, tooltip, and Statistics presentation contracts.
   unverified after automated tests.
 - The full shader build is large and must not overlap another build or UVSR
   process.
-- User acceptance binds the exact executable, scene, settings, and observed
-  window. Any artifact- or settings-changing repair invalidates acceptance.
+- User acceptance binds the exact executable and observed labeled window. Any
+  executable-changing repair invalidates acceptance.
 
 Stop and ask the user if:
 
@@ -373,12 +376,18 @@ Stop and ask the user if:
 
 ## Completion
 
-- Final integrated commit: pending
-- Verification summary: pending
+- Final integrated commit:
+  `bcf4f7e4ade98b313f1aa9ec53b8b34bd5d78294`
+- Verification summary: exact remote commit and tree identity confirmed after
+  publication; all-target Release build passed; CTest passed 28 of 28; README
+  line-count and Document Title Case self-tests and complete scans passed; the
+  accepted executable remained byte-identical and responsive
 - Independent review: final renderer, coverage, and merge-hygiene reviews clear
-- Coming Soon/documentation update: pending reconciliation
-- Pushed/PR/merged, or intentionally local: intentionally local until user
-  acceptance
-- Remaining experiments or follow-ups: pending
-- Active ownership released: pending
-- Archived to completed/abandoned path: pending
+- Coming Soon/documentation update: reconciled in the accepted merge
+- Pushed/PR/merged, or intentionally local: exact accepted merge pushed
+  directly to `origin/main` after explicit user approval
+- Remaining experiments or follow-ups: none required for this integration
+- Active ownership released: yes; the accepted UVSR process remains available
+  for inspection
+- Archived to completed/abandoned path:
+  `docs/exec-plans/completed/integrate-shadow-renderer-1f31feb.md`
