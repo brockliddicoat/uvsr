@@ -22,12 +22,11 @@ static const uint PbrFeature_ThinFilmIridescence = 1u << 5;
 static const uint PbrFeature_Absorption = 1u << 6;
 static const uint PbrFeature_DoubleSided = 1u << 7;
 
-// Packed into the FP16 alpha of UVSR's GI source/frontier textures. Integer
-// values through seven are exact in half precision, so the metadata survives
+// Packed into the FP16 alpha of UVSR's GI source/frontier textures. These
+// integer values are exact in half precision, so the metadata survives
 // every bounce without another full-resolution G-buffer feature read.
-static const uint PbrGiMetadata_OutgoingDoubleSided = 1u << 0;
-static const uint PbrGiMetadata_SurfaceDoubleSided = 1u << 1;
-static const uint PbrGiMetadata_DiffuseActive = 1u << 2;
+static const uint PbrGiMetadata_SurfaceDoubleSided = 1u << 0;
+static const uint PbrGiMetadata_DiffuseActive = 1u << 1;
 
 struct PbrMaterialParameters
 {

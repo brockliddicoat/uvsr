@@ -75,7 +75,84 @@ int main(int argc, char** argv)
     const std::filesystem::path root = argv[1];
     const std::string viewer = ReadFile(root / "src/uvsr.cpp");
     const std::string cmaa = ReadFile(root / "src/cmaa2.cpp");
+    const std::string deferredLighting = ReadFile(
+        root / "src/pbr_deferred_lighting_cs.hlsl");
+    const std::string deferredConstants = ReadFile(
+        root / "src/pbr_deferred_lighting_cb.h");
+    const std::string visibilityConstants = ReadFile(
+        root / "src/screen_space_visibility_cb.h");
+    const std::string lightingSources = ReadFile(
+        root / "src/lighting_contribution_shared.h");
     bool passed = true;
+
+    for (const std::string_view retiredEmissiveSourceSurface : {
+            std::string_view("includeEmissive"),
+            std::string_view("emissiveSourceGain"),
+            std::string_view("sourceEmissive"),
+            std::string_view("UVSR_LIGHTING_SOURCE_EMISSIVE") })
+    {
+        passed &= ExpectAbsent(
+            viewer,
+            retiredEmissiveSourceSurface,
+            "retired emissive GI source renderer state");
+        passed &= ExpectAbsent(
+            deferredLighting,
+            retiredEmissiveSourceSurface,
+            "retired emissive GI source shader");
+        passed &= ExpectAbsent(
+            deferredConstants,
+            retiredEmissiveSourceSurface,
+            "retired emissive GI source constants");
+        passed &= ExpectAbsent(
+            visibilityConstants,
+            retiredEmissiveSourceSurface,
+            "retired emissive GI source visibility constants");
+        passed &= ExpectAbsent(
+            lightingSources,
+            retiredEmissiveSourceSurface,
+            "retired emissive GI source classification");
+    }
+    passed &= ExpectContains(
+        deferredLighting,
+        "finalLinearHdr = max(diffuse + specular + "
+            "gbuffer.material.emissive, 0.0f);",
+        "visible authored emissive retention");
+
+    const std::string_view factoryExperimentTopology = ExtractSection(
+        viewer,
+        "static void ApplyFactoryExperimentShaderTopology(UIData& ui)",
+        "static std::string FindVisibilityVerificationSettingsMismatch(");
+    for (const std::string_view factorySetting : {
+            std::string_view("ui.EnablePbr = true;"),
+            std::string_view("ui.RenderMode = RendererMode::Deferred;"),
+            std::string_view("ui.AntiAliasing = AntiAliasingSettings{};"),
+            std::string_view(
+                "ui.BendScreenSpaceShadows = "
+                "BendScreenSpaceShadowSettings{};"),
+            std::string_view(
+                "ui.SparseVirtualShadowMaps = "
+                "SparseVirtualShadowMapSettings{};"),
+            std::string_view(
+                "ui.ScreenSpaceVisibility = "
+                "ScreenSpaceVisibilitySettings{};"),
+            std::string_view(
+                "ui.WhiteWorld = WhiteWorldMode::Off;") })
+    {
+        passed &= ExpectContains(
+            factoryExperimentTopology,
+            factorySetting,
+            "factory experiment topology lock");
+    }
+    passed &= ExpectContains(
+        viewer,
+        "virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override\n"
+        "    {\n"
+        "        ApplyFactoryExperimentShaderTopology(m_ui);",
+        "factory experiment per-frame topology lock");
+    passed &= ExpectContains(
+        viewer,
+        "This factory-settings experiment build supports only the ",
+        "factory experiment command-line topology rejection");
 
     const std::string_view refresh = ExtractSection(
         viewer,
@@ -101,6 +178,27 @@ int main(int argc, char** argv)
         refresh,
         "std::make_unique<ScreenSpaceVisibilityPass>",
         "AA-only target refresh");
+
+    const std::string_view createPasses = ExtractSection(
+        viewer,
+        "void CreateRenderPasses()",
+        "virtual void RenderSplashScreen(");
+    passed &= ExpectContains(
+        createPasses,
+        "#if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS",
+        "factory experiment pass construction guard");
+    passed &= ExpectContains(
+        createPasses,
+        "m_BendScreenSpaceShadowPass.reset();",
+        "factory experiment Bend omission");
+    passed &= ExpectContains(
+        createPasses,
+        "m_SparseVirtualShadowMapPass.reset();",
+        "factory experiment SVSM omission");
+    passed &= ExpectContains(
+        createPasses,
+        "m_DiagnosticCascadedShadowMapPass.reset();",
+        "factory experiment diagnostic CSM omission");
     passed &= ExpectAbsent(
         refresh,
         "std::make_unique<PbrDeferredLightingPass>",
@@ -200,6 +298,35 @@ int main(int argc, char** argv)
         commandLine,
         "aaBenchmark.settings.algorithmOverrides.rectification",
         "AA rectification benchmark override routing");
+
+    const std::string_view aaMotionBenchmark = ExtractSection(
+        viewer,
+        "void UpdateAntiAliasingBenchmark()",
+        "virtual void Animate(float fElapsedTimeSeconds) override");
+    passed &= ExpectContains(
+        aaMotionBenchmark,
+        "float(turnStep) /",
+        "AA motion benchmark fixed per-frame turn");
+    passed &= ExpectContains(
+        aaMotionBenchmark,
+        "float(AaBenchmarkTurnFrames);",
+        "AA motion benchmark fixed per-frame turn");
+    passed &= ExpectContains(
+        viewer,
+        "\"wall_clock_pacing_enabled\\\": false",
+        "AA motion benchmark uncapped report");
+    passed &= ExpectAbsent(
+        viewer,
+        "sleep_until",
+        "AA motion benchmark wall-clock pacing");
+    passed &= ExpectAbsent(
+        viewer,
+        "AaBenchmarkTargetFramesPerSecond",
+        "AA motion benchmark frame-rate target");
+    passed &= ExpectContains(
+        viewer,
+        "deviceParams.vsyncEnabled = false;",
+        "uncapped renderer presentation");
 
     const std::string_view mouseButtonUpdate = ExtractSection(
         viewer,

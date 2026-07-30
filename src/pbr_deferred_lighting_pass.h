@@ -21,8 +21,8 @@ namespace donut::engine
 }
 
 // UVSR-owned deferred lighting pass. In addition to the regular HDR target,
-// it emits material-weighted direct diffuse plus emissive radiance for
-// screen-space indirect-light sampling.
+// it emits material-weighted direct diffuse and diffuse-environment radiance
+// for screen-space indirect-light sampling.
 class PbrDeferredLightingPass final
 {
 private:
@@ -62,8 +62,6 @@ public:
         bool separateIndirect,
         bool writeSourceRadiance,
         bool writeBounceMetadata,
-        bool includeEmissiveSource,
-        float emissiveSourceGain,
         uint32_t lightingDebugView,
         donut::math::float2 randomOffset = donut::math::float2::zero(),
         nvrhi::ITexture* resolvedBackground = nullptr,

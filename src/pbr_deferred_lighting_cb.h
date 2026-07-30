@@ -8,16 +8,11 @@ struct PbrDeferredLightingConstants
     DeferredLightingConstants deferred;
 
     int separateIndirect;
-    int writeSourceRadiance;
-    int includeEmissiveSource;
-    float emissiveSourceGain;
-
-    int4 directionalVisibilityLightIndices;
-
     uint lightingDebugView;
     uint paddingDebug0;
     uint paddingDebug1;
-    uint paddingDebug2;
+
+    int4 directionalVisibilityLightIndices;
 };
 
 #endif // UVSR_PBR_DEFERRED_LIGHTING_CB_H

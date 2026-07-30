@@ -41,7 +41,6 @@
 #include <cstring>
 #include <cstdlib>
 #include <functional>
-#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <limits>
@@ -111,6 +110,10 @@
 #include "ui_animation.h"
 #include "visibility_perf_capture.h"
 #include "world_material_view.h"
+
+#ifndef UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
+#define UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS 0
+#endif
 
 using namespace donut;
 using namespace donut::math;
@@ -241,9 +244,6 @@ enum class AaBenchmarkSegment : uint32_t
 static constexpr uint32_t AaBenchmarkWarmFrames = 180u;
 static constexpr uint32_t AaBenchmarkTurnFrames = 120u;
 static constexpr uint32_t AaBenchmarkHoldFrames = 16u;
-static constexpr uint32_t AaBenchmarkTargetFramesPerSecond = 40u;
-static constexpr float AaBenchmarkTurnDegreesPerSecond =
-    0.375f * float(AaBenchmarkTargetFramesPerSecond);
 static constexpr uint32_t AaBenchmarkMotionEndFrame =
     AaBenchmarkWarmFrames +
     AaBenchmarkTurnFrames +
@@ -1530,8 +1530,6 @@ static void SetCanonicalVisibilityBenchmarkDefaults(
     visibility.indirectDiffuse.bounceCount = 1u;
     visibility.indirectDiffuse.minimumBounceContribution = 0.001f;
     visibility.indirectDiffuse.intensity = 4.f;
-    visibility.indirectDiffuse.includeEmissive = true;
-    visibility.indirectDiffuse.emissiveGain = 4.f;
     visibility.reconstruction.temporalEnabled = false;
     visibility.reconstruction.spatialEnabled = false;
     visibility.reconstruction.temporalResponse = 0.35f;
@@ -1936,6 +1934,28 @@ struct UIData
     }
 };
 
+static void ApplyFactoryExperimentShaderTopology(UIData& ui)
+{
+#if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
+    ui.EnablePbr = true;
+    ui.RenderMode = RendererMode::Deferred;
+    ui.AntiAliasing = AntiAliasingSettings{};
+    ui.MiniEngineTaaSharpenEnabled = false;
+    ui.MiniEngineTaaSharpness = MiniEngineTaaDefaultSharpness;
+    ui.MiniEngineTaaVisualization = MiniEngineTaaDebugView::Off;
+    ui.BendScreenSpaceShadows = BendScreenSpaceShadowSettings{};
+    ui.SparseVirtualShadowMaps = SparseVirtualShadowMapSettings{};
+    ui.DiagnosticCascadedShadowMaps =
+        DiagnosticCascadedShadowMapSettings{};
+    ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
+    ui.WhiteWorld = WhiteWorldMode::Off;
+    ui.LightingDebugView = PbrLightingDebugView::None;
+    ui.VisibilityVerification = VisibilityVerificationProfile::Unset;
+#else
+    (void)ui;
+#endif
+}
+
 
 
 static std::string FindVisibilityVerificationSettingsMismatch(
@@ -2028,16 +2048,6 @@ static std::string FindVisibilityVerificationSettingsMismatch(
             observed.indirectDiffuse.intensity !=
                 expected.indirectDiffuse.intensity,
             "GI intensity does not match the profile.")).empty())
-        return reason;
-    if (!(reason = mismatch(
-            observed.indirectDiffuse.includeEmissive !=
-                expected.indirectDiffuse.includeEmissive,
-            "GI emissive-source state does not match the profile.")).empty())
-        return reason;
-    if (!(reason = mismatch(
-            observed.indirectDiffuse.emissiveGain !=
-                expected.indirectDiffuse.emissiveGain,
-            "GI emissive-source gain does not match the profile.")).empty())
         return reason;
     if (!(reason = mismatch(
             observed.reconstruction.temporalEnabled !=
@@ -2246,9 +2256,6 @@ private:
     uint32_t                            m_AaBenchmarkDroppedSamples = 0u;
     uint32_t                            m_AaBenchmarkOutstandingSamples = 0u;
     bool                                m_AaBenchmarkStarted = false;
-    bool                                m_AaBenchmarkPacingActive = false;
-    std::chrono::steady_clock::time_point
-                                        m_AaBenchmarkNextFrameDeadline;
     bool                                m_InteractiveAaMotionTest = false;
     int                                 m_AaMotionTestPreviousWidth = 0;
     int                                 m_AaMotionTestPreviousHeight = 0;
@@ -2897,7 +2904,6 @@ public:
         m_AaBenchmark.settings = m_ui.AntiAliasing;
         m_AaBenchmark.sharpness = m_ui.MiniEngineTaaSharpness;
         m_AaBenchmarkStarted = false;
-        m_AaBenchmarkPacingActive = false;
         m_AaBenchmarkCurrentTag = AaBenchmarkTimerTag{};
         m_InteractiveAaMotionTest = true;
         m_AaMotionTestStatus =
@@ -2932,7 +2938,6 @@ public:
         m_AaMotionTestStatus = "Canceled.";
         m_AaBenchmark.enabled = false;
         m_AaBenchmarkStarted = false;
-        m_AaBenchmarkPacingActive = false;
         m_AaBenchmarkCurrentTag = AaBenchmarkTimerTag{};
         m_InteractiveAaMotionTest = false;
         m_BenchmarkCameraActive = false;
@@ -5895,10 +5900,7 @@ public:
             << ",\n"
             << "  \"turn_degrees\": 45.000000,\n"
             << "  \"turn_degrees_per_frame\": 0.375000,\n"
-            << "  \"target_frames_per_second\": "
-            << AaBenchmarkTargetFramesPerSecond << ",\n"
-            << "  \"turn_degrees_per_second\": "
-            << AaBenchmarkTurnDegreesPerSecond << ",\n"
+            << "  \"wall_clock_pacing_enabled\": false,\n"
             << "  \"expected_sample_count\": 256,\n"
             << "  \"issued_sample_count\": "
             << m_AaBenchmarkIssuedSamples << ",\n"
@@ -6010,7 +6012,6 @@ public:
 
         m_AaBenchmark.enabled = false;
         m_AaBenchmarkStarted = false;
-        m_AaBenchmarkPacingActive = false;
         m_AaBenchmarkCurrentTag = AaBenchmarkTimerTag{};
         m_InteractiveAaMotionTest = false;
         m_BenchmarkCameraActive = false;
@@ -6058,41 +6059,6 @@ public:
             }
         }
 
-        // The camera sequence is defined in rendered frames because temporal
-        // image behavior depends on a fixed 0.375-degree inter-frame motion.
-        // Pace those frames at 40 Hz so the same sample sequence also has a
-        // stable wall-clock rate on both a fast discrete GPU and the Intel
-        // benchmark adapter. GPU timer queries remain scoped only to the AA
-        // command block; the CPU wait is outside the measured interval.
-        using BenchmarkClock = std::chrono::steady_clock;
-        constexpr auto BenchmarkFrameInterval =
-            std::chrono::nanoseconds(
-                1000000000ull /
-                AaBenchmarkTargetFramesPerSecond);
-        const BenchmarkClock::time_point now = BenchmarkClock::now();
-        if (!m_AaBenchmarkPacingActive)
-        {
-            m_AaBenchmarkPacingActive = true;
-            m_AaBenchmarkNextFrameDeadline = now;
-        }
-        else
-        {
-            m_AaBenchmarkNextFrameDeadline +=
-                BenchmarkFrameInterval;
-            if (m_AaBenchmarkNextFrameDeadline > now)
-            {
-                std::this_thread::sleep_until(
-                    m_AaBenchmarkNextFrameDeadline);
-            }
-            else if (now - m_AaBenchmarkNextFrameDeadline >
-                BenchmarkFrameInterval * 4)
-            {
-                // A breakpoint, resize, or slow scene load must not cause a
-                // burst of catch-up frames with a visibly faster sweep.
-                m_AaBenchmarkNextFrameDeadline = now;
-            }
-        }
-
         if (!m_AaBenchmarkStarted)
         {
             m_AaBenchmarkStarted = true;
@@ -6103,7 +6069,7 @@ public:
             m_AaBenchmarkOutstandingSamples = 0u;
             ResetAntiAliasingState();
             log::info(
-                "AA benchmark started: 180 warm frames, 45-degree right turn at 0.375 degrees/frame and a 40 Hz target, then return");
+                "AA benchmark started without wall-clock pacing: 180 warm frames, 45-degree right turn at 0.375 degrees per rendered frame, then return");
         }
 
         float angleDegrees = 0.f;
@@ -6898,6 +6864,11 @@ public:
                 GetDevice(), m_CommonPasses);
             m_PbrDeferredLightingPass->Init(m_ShaderFactory);
             EnsureMsaaVisibilityResolvePass();
+#if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
+            m_BendScreenSpaceShadowPass.reset();
+            m_SparseVirtualShadowMapPass.reset();
+            m_DiagnosticCascadedShadowMapPass.reset();
+#else
             m_BendScreenSpaceShadowPass =
                 std::make_unique<BendScreenSpaceShadowPass>(
                     GetDevice(),
@@ -6916,6 +6887,7 @@ public:
                         m_ShaderFactory,
                         m_CommonPasses);
             }
+#endif
             m_ScreenSpaceVisibilityPass =
                 std::make_unique<ScreenSpaceVisibilityPass>(
                     GetDevice(),
@@ -8214,6 +8186,7 @@ public:
 
     virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override
     {
+        ApplyFactoryExperimentShaderTopology(m_ui);
         if (g_VisibilityTaaPrimeFramesRemaining != 0u &&
             --g_VisibilityTaaPrimeFramesRemaining == 0u)
         {
@@ -8379,9 +8352,7 @@ public:
                 (!sceneLights.empty() ||
                     IsImageBasedLightingLobeActive(
                         m_ui.EnableDiffuseIbl,
-                        m_ui.DiffuseIblStrength) ||
-                    (m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive &&
-                        m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain > 0.f));
+                        m_ui.DiffuseIblStrength));
             const bool temporalAARequired =
                 m_ui.UsesLongTermTemporalAA();
             const bool cmaa2Required = m_ui.UsesCmaa2();
@@ -8556,11 +8527,6 @@ public:
         uint32_t knownInactiveLightingSources = 0u;
         if (sceneLights.empty())
             knownInactiveLightingSources |= LightingSource_Direct;
-        if (!m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive ||
-            !(m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain > 0.f))
-        {
-            knownInactiveLightingSources |= LightingSource_Emissive;
-        }
         if (!diffuseEnvironment ||
             !(diffuseEnvironmentScale > 0.f))
         {
@@ -8568,7 +8534,6 @@ public:
         }
         constexpr uint32_t firstBounceLightingSources =
             LightingSource_Direct |
-            LightingSource_Emissive |
             LightingSource_Environment;
         const bool allFirstBounceSourcesInactive =
             (knownInactiveLightingSources &
@@ -8856,10 +8821,6 @@ public:
                         true,
                         writeSourceRadiance,
                         writeBounceMetadata,
-                        m_ui.ScreenSpaceVisibility.indirectDiffuse
-                            .includeEmissive,
-                        m_ui.ScreenSpaceVisibility.indirectDiffuse
-                            .emissiveGain,
                         uint32_t(m_ui.LightingDebugView),
                         float2(0.f));
 
@@ -8947,8 +8908,6 @@ public:
                     runScreenSpaceVisibility,
                     writeSourceRadiance,
                     writeBounceMetadata,
-                    m_ui.ScreenSpaceVisibility.indirectDiffuse.includeEmissive,
-                    m_ui.ScreenSpaceVisibility.indirectDiffuse.emissiveGain,
                     uint32_t(m_ui.LightingDebugView),
                     float2(0.f));
                 EndRendererStage(RendererTimingStage::DirectLighting);
@@ -9137,8 +9096,6 @@ public:
                 deferredMsaaVisibilityPending,
                 false,
                 false,
-                false,
-                0.f,
                 uint32_t(m_ui.LightingDebugView),
                 float2(0.f),
                 m_RenderTargets->ResolvedHdrColor,
@@ -9505,6 +9462,11 @@ public:
     bool HasPrimaryDirectionalLight() const
     {
         return bool(m_SunLight);
+    }
+
+    std::shared_ptr<Light> GetPrimaryDirectionalLight() const
+    {
+        return m_SunLight;
     }
 
     const MiniEngineTemporalAATimings* GetMiniEngineTemporalAATimings() const
@@ -15693,6 +15655,15 @@ protected:
         TrackSettingsAppearanceDrawList(settingsBodyDrawList);
         BeginSettingsScrollStability();
 
+#if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
+        ImGui::TextDisabled("Factory Shader Topology Locked");
+        ImGui::TextWrapped(
+            "This experiment build renders only the settings selected by a "
+            "fresh UVSR launch. Use a production or developer build to "
+            "change renderer topology.");
+        ImGui::Separator();
+#endif
+
         // Keep the panel visually unchanged while a selection waits for its
         // stable commit frame. BeginDisabled blocks another mutation but, in
         // contrast to NoInputs, the hovered ImGui window continues capturing
@@ -15704,6 +15675,10 @@ protected:
             ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);
             ImGui::BeginDisabled();
         }
+
+#if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
+        ImGui::BeginDisabled();
+#endif
 
         const bool generalOpen = DrawCollapsingHeader(
             "General",
@@ -16742,45 +16717,6 @@ protected:
                         gi.intensity =
                             visibilityPreset.indirectDiffuse.intensity;
                         finishVisibilityPresetReset();
-                    }
-                    giChanged |= ImGui::Checkbox(
-                        "Include Emissive Sources",
-                        &gi.includeEmissive);
-                    ImGui::SetItemTooltip(
-                        "Let visible emissive surfaces light the scene.");
-                    if (DrawPresetResetIcon(
-                            "Visibility Include Emissive Sources",
-                            gi.includeEmissive !=
-                                visibilityPreset.indirectDiffuse
-                                    .includeEmissive))
-                    {
-                        gi.includeEmissive =
-                            visibilityPreset.indirectDiffuse.includeEmissive;
-                        finishVisibilityPresetReset();
-                    }
-                    if (BeginAnimatedToggleRegion(
-                            "##EmissiveSourceControls",
-                            gi.includeEmissive))
-                    {
-                        giChanged |= DrawSliderFloat(
-                            "Emissive Source Gain",
-                            &gi.emissiveGain,
-                            0.0f,
-                            10.0f,
-                            "%.2f");
-                        ImGui::SetItemTooltip(
-                            "Set emissive surfaces' GI strength.");
-                        if (DrawPresetResetIcon(
-                                "Visibility Emissive Source Gain",
-                                gi.emissiveGain !=
-                                    visibilityPreset.indirectDiffuse
-                                        .emissiveGain))
-                        {
-                            gi.emissiveGain =
-                                visibilityPreset.indirectDiffuse.emissiveGain;
-                            finishVisibilityPresetReset();
-                        }
-                        EndAnimatedToggleRegion();
                     }
                     EndAnimatedToggleRegion();
                 }
@@ -18586,13 +18522,15 @@ protected:
             }
             ImGui::SetItemTooltip(
                 motionTestRunning
-                    ? "The exact 40 Hz Benchmark Position 1 warm, turn, hold, "
-                        "and return sequence is running."
+                    ? "The uncapped Benchmark Position 1 warm, turn, hold, "
+                        "and return sequence is running without wall-clock "
+                        "pacing."
                     : (m_app->HasSponzaCameraLocations()
                         ? "Run the current AA configuration through the exact "
                             "Benchmark Position 1 test: 180 warm frames, 45 "
-                            "degrees right at 0.375 degrees per frame with a "
-                            "40 Hz target, a 16-frame hold, and the same return."
+                            "degrees right at 0.375 degrees per rendered frame, "
+                            "a 16-frame hold, and the same return without "
+                            "wall-clock pacing."
                         : "The motion test requires a standardized PBR Sponza "
                             "scene."));
             if (!canRunWithMotion)
@@ -19864,13 +19802,24 @@ protected:
         ImGui::Spacing();
 
         const auto& lights = m_app->GetScene()->GetSceneGraph()->GetLights();
+        std::shared_ptr<Light> defaultSelectedLight =
+            m_app->GetPrimaryDirectionalLight();
+        if (!defaultSelectedLight ||
+            std::find(
+                lights.begin(),
+                lights.end(),
+                defaultSelectedLight) == lights.end())
+        {
+            defaultSelectedLight =
+                lights.empty() ? nullptr : lights.front();
+        }
         if (lights.empty())
         {
             m_SelectedLight.reset();
         }
         else if (std::find(lights.begin(), lights.end(), m_SelectedLight) == lights.end())
         {
-            m_SelectedLight = lights.front();
+            m_SelectedLight = defaultSelectedLight;
         }
 
         const bool lightsOpen = DrawCollapsingHeader(
@@ -19908,10 +19857,10 @@ protected:
                 }
                 if (DrawPresetResetIcon(
                         "Selected Light",
-                        m_SelectedLight != lights.front(),
-                        "Select the scene's first light."))
+                        m_SelectedLight != defaultSelectedLight,
+                        "Select the scene's primary directional light."))
                 {
-                    m_SelectedLight = lights.front();
+                    m_SelectedLight = defaultSelectedLight;
                 }
 
                 if (m_SelectedLight)
@@ -20223,7 +20172,8 @@ protected:
                 m_app->HasPrimaryDirectionalLight();
 
             if (BeginAnimatedTreeNode(
-                    "Bend Screen-Space Shadows##Lights"))
+                    "Bend Screen-Space Shadows##Lights",
+                    ImGuiTreeNodeFlags_DefaultOpen))
             {
                 BendScreenSpaceShadowSettings& shadows =
                     m_ui.BendScreenSpaceShadows;
@@ -20691,7 +20641,8 @@ protected:
             }
 
             if (BeginAnimatedTreeNode(
-                    "Sparse Virtual Shadow Maps##Lights"))
+                    "Sparse Virtual Shadow Maps##Lights",
+                    ImGuiTreeNodeFlags_DefaultOpen))
             {
                 SparseVirtualShadowMapSettings& shadows =
                     m_ui.SparseVirtualShadowMaps;
@@ -20735,7 +20686,8 @@ protected:
             }
 
             if (BeginAnimatedTreeNode(
-                    "Diagnostic Cascaded Shadow Maps##Lights"))
+                    "Diagnostic Cascaded Shadow Maps##Lights",
+                    ImGuiTreeNodeFlags_DefaultOpen))
             {
                 DiagnosticCascadedShadowMapSettings& shadows =
                     m_ui.DiagnosticCascadedShadowMaps;
@@ -21586,6 +21538,9 @@ protected:
             }
             EndDrawerBody();
         }
+#if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
+        ImGui::EndDisabled();
+#endif
         ImGui::Spacing();
 
         TrackSettingsScrollAnchor(
@@ -22836,6 +22791,28 @@ int main(int __argc, const char* const* __argv)
     {
         return 1;
     }
+#if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
+    const bool factoryExperimentTopologyOverrideRequested =
+        aaBenchmark.enabled ||
+        visibilityBenchmark.benchmarkRequested ||
+        visibilityBenchmark.profileSpecified ||
+        visibilityBenchmark.implementationProfileSpecified ||
+        visibilityBenchmark.contributionTerminatedBounces ||
+        g_VisibilityPerfCapture.Enabled() ||
+        diagnosticCsmBenchmarkRequested ||
+        diagnosticCsmRecordRequested ||
+        svsmMotionBenchmarkRequested ||
+        svsmSunMotionBenchmarkRequested;
+    if (factoryExperimentTopologyOverrideRequested)
+    {
+        ReportCommandLineError(
+            "This factory-settings experiment build supports only the "
+            "startup shader topology. Use a production or developer build "
+            "for AA, visibility, diagnostic CSM, or SVSM command-line "
+            "experiments.");
+        return 1;
+    }
+#endif
     const uint32_t benchmarkFamilyCount =
         uint32_t(aaBenchmark.enabled) +
         uint32_t(visibilityBenchmark.benchmarkRequested) +
@@ -23457,6 +23434,7 @@ int main(int __argc, const char* const* __argv)
                 svsmMotionDetailedTimingRequested;
         }
 
+        ApplyFactoryExperimentShaderTopology(uiData);
         const bool svsmMotionDiagnosticConfiguration =
             svsmMotionDetailedTimingRequested ||
             svsmMotionIsolationRequested ||

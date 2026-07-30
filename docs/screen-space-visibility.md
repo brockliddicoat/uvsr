@@ -12,8 +12,9 @@ The frame order is:
 1. Fill the PBR G-buffer, including motion when temporal visibility requires
    it.
 2. Shade direct light and, when GI can consume it, write shadowed direct
-   diffuse, directly reflected environment diffuse, emission, and compact
-   diffuse-transport metadata.
+   diffuse, directly reflected environment diffuse, and compact
+   diffuse-transport metadata. Authored emission remains visible in final
+   lighting but is not a transported GI source.
 3. Resolve the CPU-side Reference or curated performance profile, allocate only
    its resources, and trace visibility at full, half, or quarter linear
    resolution.
@@ -96,8 +97,9 @@ fill.
   **Limit Bounces** enabled at one bounce and a 0.001 contribution cutoff.
   The identity AO Power value selects a compositor with `pow` compiled out.
   The limited one-bounce path dispatches no continuation-control work.
-  **Include Emissive Sources** is enabled and **Emissive Source Gain** is 4.0.
-  Both remain explicit controls; the unit radiometric reference is 1.0.
+  First-bounce source radiance contains shadowed direct diffuse and directly
+  reflected diffuse environment lighting. Authored emissive radiance remains
+  visible but has no visibility control, gain, or screen-space transport path.
 - Global diffuse and specular IBL start enabled with **Day - Kloppenheim 03**
   at its calibrated `-2.75 EV` and `1.00` strength. The matching visible
   background also starts enabled.
@@ -519,7 +521,10 @@ Nesting therefore controls set membership without letting a farther GI sample
 claim a sector before a nearer selected source on the same radial direction. The
 **Distribution** transforms each normalized stratum by
 `x^exponent`; the default `x^2` concentrates depth taps near the receiver. This
-means:
+default began at `1.0` and changed intentionally to `2.0` in
+`a5a75d50565a`; no repository revision used `3.0` as the product default.
+Values of `3.0` appear only in runtime-uniform contract tests or manual
+settings. Distribution is not a shader-permutation axis. This means:
 
 - lower the sample count to measure the trace-cost response;
 - raise the sample count to give every eligible pixel more evidence;
@@ -661,8 +666,8 @@ allocate GI outputs or the full-resolution source-radiance target; GI-only does
 not allocate AO outputs. AO strength zero and GI intensity zero make their
 respective effects inactive consumers rather than dispatching mathematically
 zero paths. Active GI retains its source-radiance target only while direct-light,
-diffuse-environment, or enabled positive-gain authored emissive sources are
-active. Temporal history, full-resolution filtered outputs, higher-bounce
+or diffuse-environment sources are active. Temporal history, full-resolution
+filtered outputs, higher-bounce
 frontiers, and the depth hierarchy exist only while their consumers require
 them. Proven
 scene-wide first-bounce inactivity terminates the complete higher-bounce

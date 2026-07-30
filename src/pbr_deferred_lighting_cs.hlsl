@@ -407,39 +407,25 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         indirectSpecular = t_IndirectSpecular[pixelPosition].rgb * g_Deferred.indirectSpecularScale;
 
 #if WRITE_SOURCE_RADIANCE
-    // Build the configured GI source only in the specialization that has an
-    // actual downstream source consumer.
-    float3 sourceEmissive = g_PbrDeferred.includeEmissiveSource != 0
-        ? max(gbuffer.material.emissive, 0.0f) * g_PbrDeferred.emissiveSourceGain
-        : 0.0f;
     // Environment diffuse is direct lighting from the global radiance field
     // at the source surface. Carry it into the diffuse GI source so the next
     // bounce sees the same sky illumination as the visible surface. Specular
     // IBL remains excluded from this diffuse transport path.
-    float3 sourceRadiance =
-        max(directDiffuse + environmentDiffuse, 0.0f) +
-        sourceEmissive;
+    float3 sourceRadiance = max(
+        directDiffuse + environmentDiffuse, 0.0f);
     if (any(isnan(sourceRadiance)) || any(isinf(sourceRadiance)))
         sourceRadiance = 0.0f;
-    bool doubleSidedEmissive = any(sourceEmissive > 0.0f) &&
-        (gbuffer.material.featureMask & PbrFeature_DoubleSided) != 0u;
+    uint sourceMetadata = 0u;
 #if WRITE_BOUNCE_METADATA
     float3 diffuseTransport = max(gbuffer.material.baseColor, 0.0f) *
         (1.0f - saturate(gbuffer.material.metalness)) *
         saturate(gbuffer.ambientOcclusion);
     bool diffuseActive = all(isfinite(diffuseTransport)) &&
         any(diffuseTransport > 0.0f);
-    uint sourceMetadata = 0u;
-    if (doubleSidedEmissive)
-        sourceMetadata |= PbrGiMetadata_OutgoingDoubleSided;
     if ((gbuffer.material.featureMask & PbrFeature_DoubleSided) != 0u)
         sourceMetadata |= PbrGiMetadata_SurfaceDoubleSided;
     if (diffuseActive)
         sourceMetadata |= PbrGiMetadata_DiffuseActive;
-#else
-    uint sourceMetadata = doubleSidedEmissive
-        ? PbrGiMetadata_OutgoingDoubleSided
-        : 0u;
 #endif
 #endif
 

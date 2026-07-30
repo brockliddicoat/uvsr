@@ -50,8 +50,8 @@ static_assert(offsetof(PbrDeferredLightingConstants, separateIndirect) ==
     sizeof(DeferredLightingConstants),
     "The UVSR extension must follow Donut's deferred constants without padding drift.");
 static_assert(sizeof(PbrDeferredLightingConstants) ==
-    sizeof(DeferredLightingConstants) + 48,
-    "The UVSR deferred extension must occupy three constant-buffer registers.");
+    sizeof(DeferredLightingConstants) + 32,
+    "The UVSR deferred extension must occupy two constant-buffer registers.");
 static_assert(offsetof(
         PbrDeferredLightingConstants,
         directionalVisibilityLightIndices) ==
@@ -414,8 +414,6 @@ void PbrDeferredLightingPass::Render(
     bool separateIndirect,
     bool writeSourceRadiance,
     bool writeBounceMetadata,
-    bool includeEmissiveSource,
-    float emissiveSourceGain,
     uint32_t lightingDebugView,
     float2 randomOffset,
     nvrhi::ITexture* resolvedBackground,
@@ -487,9 +485,6 @@ void PbrDeferredLightingPass::Render(
     PbrDeferredLightingConstants constants = {};
     DeferredLightingConstants& deferredConstants = constants.deferred;
     constants.separateIndirect = separateIndirect ? 1 : 0;
-    constants.writeSourceRadiance = writeSourceRadiance ? 1 : 0;
-    constants.includeEmissiveSource = includeEmissiveSource ? 1 : 0;
-    constants.emissiveSourceGain = std::max(emissiveSourceGain, 0.f);
     constants.lightingDebugView = lightingDebugView;
     constants.directionalVisibilityLightIndices = int4(-1);
     deferredConstants.randomOffset = randomOffset;

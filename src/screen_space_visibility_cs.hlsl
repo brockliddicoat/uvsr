@@ -544,7 +544,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #else
     const uint firstBounceSources =
         LightingSource_Direct |
-        LightingSource_Emissive |
         LightingSource_Environment;
     LightingContributionGate firstBounceContributionGate =
         MakeLightingContributionGate(
@@ -955,9 +954,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 newSectorCount = countbits(newlyCoveredBits);
 #endif
 
-                // Geometry reads above are shared by AO and GI. Source normal,
-                // radiance, and emissive are fetched only for newly claimed
-                // sectors and only when the GI consumer is active.
+                // Geometry reads above are shared by AO and GI. Source normal
+                // and radiance are fetched only for newly claimed sectors and
+                // only when the GI consumer is active.
 #if ENABLE_GI
                 if (newSectorCount == 0u)
                     continue;
@@ -1021,10 +1020,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 if (!IsFiniteFloat3(sourceRadiance) ||
                     !any(sourceRadiance > 0.0f))
                     continue;
-                uint sourceMetadata = (uint)round(max(sourceSample.a, 0.0f));
-                bool sourceIsDoubleSided =
-                    (sourceMetadata &
-                        PbrGiMetadata_OutgoingDoubleSided) != 0u;
 #endif
 
                 float3 sampleNormalWS = t_Normals[samplePixel].xyz;
@@ -1032,9 +1027,13 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     g_Visibility.view.matWorldToView).xyz;
                 sampleNormalVS = SafeNormalize(sampleNormalVS, 0.0f);
                 float signedSourceCosine = dot(sampleNormalVS, -directionToSample);
+#if ENABLE_BOUNCE_REINJECTION
                 float sourceCosine = sourceIsDoubleSided
                     ? abs(signedSourceCosine)
                     : saturate(signedSourceCosine);
+#else
+                float sourceCosine = saturate(signedSourceCosine);
+#endif
                 float3 weightedSource = sourceRadiance * sourceCosine;
                 if (!any(weightedSource > 0.0f))
                     continue;

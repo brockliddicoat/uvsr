@@ -38,8 +38,6 @@ namespace uvsr
 
     inline constexpr uint32_t LightingSource_Direct =
         UVSR_LIGHTING_SOURCE_DIRECT;
-    inline constexpr uint32_t LightingSource_Emissive =
-        UVSR_LIGHTING_SOURCE_EMISSIVE;
     inline constexpr uint32_t LightingSource_Environment =
         UVSR_LIGHTING_SOURCE_ENVIRONMENT;
     inline constexpr uint32_t LightingSource_IndirectDiffuse =
@@ -172,8 +170,6 @@ namespace uvsr
         // the traversal already returns irradiance and the composite applies
         // the receiving Lambert factor exactly once.
         float intensity = ScreenSpaceIndirectDiffuseReferenceIntensity;
-        bool includeEmissive = true;
-        float emissiveGain = ScreenSpaceEmissiveReferenceGain;
     };
 
     struct VisibilityReconstructionSettings

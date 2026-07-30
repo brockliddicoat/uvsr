@@ -203,7 +203,7 @@ int main(int argc, char** argv)
         "README line-count verification policy");
     ExpectContains(
         uiReferenceSource,
-        "UI reference version: `2026-07-29.4`.",
+        "UI reference version: `2026-07-30.1`.",
         "current UI reference version");
     ExpectContains(
         uiReferenceSource,
@@ -422,6 +422,14 @@ int main(int argc, char** argv)
         source,
         "ImGui::SetNextWindowCollapsed(false, ImGuiCond_Once)",
         "Settings launch state");
+    ExpectContains(
+        source,
+        "ImGui::TextDisabled(\"Factory Shader Topology Locked\")",
+        "factory experiment topology notice");
+    ExpectContains(
+        source,
+        "This experiment build renders only the settings selected by a ",
+        "factory experiment topology notice");
     const std::string_view generalHeader = ExtractSection(
         source,
         "const bool generalOpen = DrawCollapsingHeader(",
@@ -742,6 +750,14 @@ int main(int argc, char** argv)
         visibility,
         "\"Radial Distribution Exponent\"",
         "Visibility distribution label");
+    ExpectAbsent(
+        visibility,
+        "\"Include Emissive Sources\"",
+        "retired emissive GI source control");
+    ExpectAbsent(
+        visibility,
+        "\"Emissive Source Gain\"",
+        "retired emissive GI source gain");
     for (const std::string_view attribution : {
             std::string_view("(Bespoke)"),
             std::string_view("(Therrien)"),
@@ -799,6 +815,18 @@ int main(int argc, char** argv)
         statistics,
         "StartAntiAliasingMotionTest()",
         "Statistics drawer");
+    ExpectContains(
+        statistics,
+        "running without wall-clock ",
+        "uncapped AA motion benchmark tooltip");
+    ExpectContains(
+        statistics,
+        "\"pacing.\"",
+        "uncapped AA motion benchmark tooltip");
+    ExpectAbsent(
+        statistics,
+        "40 Hz",
+        "retired AA motion benchmark pacing");
     ExpectContains(
         statistics,
         "PushID(\"StatisticsControls\")",
@@ -1721,6 +1749,15 @@ int main(int argc, char** argv)
         lights,
         "DrawDeferredDropdownOption(",
         "Lights deferred dropdowns");
+    ExpectContains(
+        source,
+        "m_app->GetPrimaryDirectionalLight()",
+        "primary sun selection");
+    ExpectContains(
+        lights,
+        "m_SelectedLight != defaultSelectedLight",
+        "primary sun reset");
+    const std::string compactLights = RemoveAsciiWhitespace(lights);
     for (const std::pair<std::string_view, std::string_view>& shadowControl : {
             std::pair<std::string_view, std::string_view>{
                 "\"Bend Screen-Space Shadows##Lights\"",
@@ -1740,6 +1777,14 @@ int main(int argc, char** argv)
             lights,
             shadowControl.second,
             "integrated directional shadow settings");
+        const std::string defaultOpenCall =
+            "BeginAnimatedTreeNode(" +
+            std::string(shadowControl.first) +
+            ",ImGuiTreeNodeFlags_DefaultOpen)";
+        ExpectContains(
+            compactLights,
+            RemoveAsciiWhitespace(defaultOpenCall),
+            "default-open directional shadow section");
     }
     ExpectContains(
         lights,
