@@ -316,6 +316,13 @@ Agent policy version: `2026-07-22.1`.
 - Concurrent writers use separate worktrees and build directories. Never run
   two builds against the same build tree; serialize configure, build, shader
   packaging, and test operations when isolation is unavailable.
+- Default to a reused, isolated
+  `UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS=ON` build for development
+  iterations when the factory startup shader topology covers the change. Move
+  to the production or developer shader catalog as soon as an experiment
+  changes an excluded shader path, permutation axis, or runtime-selectable
+  topology, and always run the task-appropriate full-catalog build and tests
+  before claiming final technical verification.
 - Only one designated agent controls a UVSR window or GPU benchmark at a time.
   Do not fight user input. Close or restart only the process that belongs to the
   current experiment, and account for Windows executable/object-file locks.

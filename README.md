@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 114,432 non-blank source lines.
+**First-Party Lines of Code:** 114,859 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,622 non-blank source lines.
 
-**Total Lines of Code:** 502,054 non-blank source lines.
+**Total Lines of Code:** 502,481 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -67,10 +67,10 @@ architecture without either add-on.
   motion/jitter, reverse-Z validation, and early-rejection infrastructure.
   The motion-test button runs the exact Benchmark Position 1 warm,
   right-45-degree, hold, and return sequence used by the CLI benchmark. Both
-  paths target 40 rendered frames per second, producing a fixed 15 degrees per
-  second sweep so GPU speed cannot accelerate the camera. The button writes a
-  self-validating 256-sample report, keeps
-  the app open, and returns the camera to Piloted.
+  paths are uncapped and advance the turn by exactly `0.375` degrees per
+  rendered frame. GPU speed changes elapsed wall-clock time, not the rendered
+  path or the 256 measured samples. The button writes a self-validating report,
+  keeps the app open, and returns the camera to Piloted.
   Effective temporal image or history-layout changes reset state exactly once;
   presentation-only CMAA2, Sharpness, and image-equivalent execution changes do
   not. Post-CMAA2 sharpening uses the resolved-RGB shader permutation rather
@@ -368,7 +368,8 @@ architecture without either add-on.
 - **White World Off** is the default. **White World On**, **White World Preserve
   Normals**, and **White World Preserve Emissives** override material color
   without modifying source assets. The last mode keeps authored emissive color
-  alongside the scene's colored direct lights so GI sources remain easy to read.
+  alongside the scene's colored direct lights so authored emission remains easy
+  to read.
 - **Camera Mode** offers **Freelook** and **Locked**. Freelook is
   collision-enabled: mouse and arrow keys rotate the view, A/D strafe left and
   right, the wheel applies a small damped dolly, and W/S dolly at up to 16% of
@@ -397,10 +398,16 @@ architecture without either add-on.
   Piloted. Choosing Piloted also detaches the location name without moving or
   reorienting the camera. The preset uses a 60-degree perspective view and a
   1920x1080 reference frame.
-- The first scene light is selected automatically in the **Lights** panel.
-- **Include Emissive Sources** starts enabled. **Emissive Source Gain** starts
-  at the canonical High preset's calibrated 4.0 boost and can be adjusted
-  independently without changing the visible emissive surfaces themselves.
+- The primary directional sun, `sun_1`, is selected automatically in the
+  **Lights** panel. When Lights is opened, **Bend Screen-Space Shadows**,
+  **Sparse Virtual Shadow Maps**, and **Diagnostic Cascaded Shadow Maps** start
+  expanded with their **Enabled** toggles off. Lights itself remains closed at
+  launch, preserving the first-Escape General-only view.
+- Authored emissive radiance remains visible in forward, deferred, MSAA, and
+  G-buffer rendering, but it is no longer classified, boosted, or transported
+  as a screen-space GI source. First-bounce diffuse transport now comes only
+  from shadowed direct diffuse and directly reflected diffuse environment
+  lighting.
 - **Indirect Diffuse Response** in **World Materials** is the sole retained
   visibility diagnostic. It displays the material-applied screen-space diffuse
   GI contribution without direct light, diffuse environment, or AO-only
@@ -430,8 +437,8 @@ architecture without either add-on.
   depth hierarchy, and extra-bounce targets exist only while their consumers
   require them. AO strength zero or GI intensity zero removes that consumer
   while the other effect can continue independently. The source-radiance target
-  is also absent when direct light, diffuse IBL, and enabled positive-gain
-  emissive sources are all inactive. The default directional mask remains
+  is also absent when direct light and diffuse IBL are both inactive. The
+  default directional mask remains
   register-local and consumes zero persistent mask-cache bytes.
 - Proven scene-wide source inactivity terminates the complete higher-bounce
   dispatch chain. The shared CPU/HLSL activity mask is
@@ -490,11 +497,14 @@ active work that has not merged into `main`. It is not a mutex or a live task
 ledger. An entry is not shipped on `main`, and experimental entries are not
 promises that the work will merge.
 
-- **Shader Path Retirement — Local Candidate**
+- **Shader Path Retirement — Local Follow-on Candidate**
   (`codex/prune-shader-paths`). Consolidate visibility on the Runtime sampler,
   remove both Offline-noise deliveries and low-value TAA policies, simplify the
   affected Settings controls, and record a reusable shader-bloat decision
-  framework. This work is local, uncommitted, and depends on semantic
+  framework. The first retirement batch is committed on the branch. The local
+  follow-on removes emissive GI-source state, uncaps the AA motion benchmark,
+  establishes the requested Lights defaults, and adds an opt-in
+  factory-settings experiment catalog. It still depends on semantic
   reconciliation with the two visibility pull requests below.
 
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
@@ -560,6 +570,25 @@ cmake -S . -B build
 cmake --build build --config Release --target uvsr
 .\tools\launch_uvsr.ps1 -Experiment naming
 ```
+
+For repeated code experiments that use only the shader topology selected by a
+fresh launch, configure a separate opt-in build:
+
+```powershell
+cmake -S . -B build-experiment `
+  -DUVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS=ON
+cmake --build build-experiment --config Release --target uvsr
+.\tools\launch_uvsr.ps1 -Experiment naming `
+  -BuildDirectory build-experiment
+```
+
+This profile compiles 51 UVSR permutations and stages 37 runtime shader blobs,
+versus 516 first-party compile tasks and 76 blobs in the complete production
+build. It locks renderer-topology drawers to factory settings and omits Bend,
+SVSM, diagnostic CSM, CMAA2, non-default visibility, and developer shader
+families. A fresh build tree still compiles Donut's pinned 76-task framework
+catalog once. Use this profile to shorten repeated UVSR edits, not for release,
+full-settings, diagnostic, or benchmark-matrix verification.
 
 The launcher requires one lowercase ASCII word matching `\A[a-z]+\z`; uppercase
 letters, digits, spaces, hyphens, underscores, and punctuation are rejected:
@@ -630,9 +659,11 @@ and **Cancel**. Run Current measures the effective visibility configuration
 being rendered, even when it no longer matches the selected preset label, and
 keeps its latest stage medians and p95 values in memory for the Statistics
 drawer. Run Current With Motion exercises the current AA configuration through
-the controlled 45-degree path. Both actions lock Benchmark Position 1 as
-required; the visibility run resizes to 1920x1080, waits for the matching
-rendered workload, and restores the previous interactive window size afterward.
+the controlled 45-degree path without wall-clock pacing. Its turn advances
+`0.375` degrees per rendered frame, so faster rendering finishes sooner without
+changing the camera samples. Both actions lock Benchmark Position 1 as required;
+the visibility run resizes to 1920x1080, waits for the matching rendered
+workload, and restores the previous interactive window size afterward.
 The former comparison, test-matrix runners, result export, benchmark-folder UI,
 `--benchmark-output`, and `--benchmark-sequence` have been removed. A live
 `Benchmarking... (completed/total)` overlay continues animating while Settings

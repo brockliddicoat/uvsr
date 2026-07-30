@@ -42,15 +42,19 @@ static_assert(
 static_assert(
     offsetof(
         ScreenSpaceVisibilityConstants,
-        specularEnvironmentEnabled) +
+        specularEnvironmentMipLevels) +
         16u ==
     sizeof(ScreenSpaceVisibilityConstants));
+static_assert(
+    sizeof(ScreenSpaceVisibilityConstants) ==
+        sizeof(PlanarViewConstants) + 144u,
+    "Visibility constants must occupy nine registers after the view.");
 static_assert(sizeof(ScreenSpaceVisibilityConstants) % 16u == 0u);
 
 namespace
 {
     constexpr uint32_t kThreadGroupSize = 8u;
-    constexpr uint32_t kHistoryContractVersion = 2u;
+    constexpr uint32_t kHistoryContractVersion = 3u;
 
     constexpr bool IsFullTextureViewport(
         float originX,
@@ -288,8 +292,6 @@ namespace
         appendUint(constants.packedEdgeMode);
         if (constants.enableIndirectDiffuse != 0u)
         {
-            appendFloat(constants.emissiveGain);
-            appendUint(constants.includeEmissive);
             appendUint(constants.knownInactiveLightingSources);
             appendUint(activeBounceCount);
             if (activeBounceCount > 1u)
@@ -493,8 +495,6 @@ namespace uvsr
         settings.indirectDiffuse.bounceCount = 1u;
         settings.indirectDiffuse.minimumBounceContribution = 0.001f;
         settings.indirectDiffuse.intensity = 4.0f;
-        settings.indirectDiffuse.includeEmissive = true;
-        settings.indirectDiffuse.emissiveGain = 4.0f;
         settings.reconstruction.temporalEnabled = false;
         settings.reconstruction.temporalResponse = 0.35f;
         settings.reconstruction.spatialFilter =
@@ -702,10 +702,6 @@ namespace uvsr
                 preset.indirectDiffuse.minimumBounceContribution &&
             settings.indirectDiffuse.intensity ==
                 preset.indirectDiffuse.intensity &&
-            settings.indirectDiffuse.includeEmissive ==
-                preset.indirectDiffuse.includeEmissive &&
-            settings.indirectDiffuse.emissiveGain ==
-                preset.indirectDiffuse.emissiveGain &&
             settings.reconstruction.temporalEnabled ==
                 preset.reconstruction.temporalEnabled &&
             settings.reconstruction.spatialEnabled ==
@@ -1657,12 +1653,6 @@ namespace uvsr
 
         uint32_t knownInactiveLightingSources =
             inputs.knownInactiveLightingSources & LightingSource_All;
-        if (!settings.indirectDiffuse.includeEmissive ||
-            !std::isfinite(settings.indirectDiffuse.emissiveGain) ||
-            !(settings.indirectDiffuse.emissiveGain > 0.f))
-        {
-            knownInactiveLightingSources |= LightingSource_Emissive;
-        }
         if (!inputs.diffuseEnvironment ||
             !std::isfinite(inputs.diffuseEnvironmentScale) ||
             !(inputs.diffuseEnvironmentScale > 0.f))
@@ -1671,7 +1661,6 @@ namespace uvsr
         }
         const uint32_t firstBounceSources =
             LightingSource_Direct |
-            LightingSource_Emissive |
             LightingSource_Environment;
         const bool firstBounceSourceIsPotentiallyActive =
             (knownInactiveLightingSources & firstBounceSources) !=
@@ -1896,11 +1885,6 @@ namespace uvsr
             settings.ambientOcclusion.strength, 0.f);
         constants.indirectDiffuseIntensity = std::max(
             settings.indirectDiffuse.intensity, 0.f);
-        constants.emissiveGain = std::max(
-            std::isfinite(settings.indirectDiffuse.emissiveGain)
-                ? settings.indirectDiffuse.emissiveGain
-                : 0.f,
-            0.f);
         constants.minimumBounceContribution = std::max(
             settings.indirectDiffuse.minimumBounceContribution, 0.f);
         constants.lightingExposureScale = std::max(exposureScale, 0.f);
@@ -1915,11 +1899,6 @@ namespace uvsr
             knownInactiveLightingSources;
         constants.enableAmbientOcclusion = ambientEnabled ? 1u : 0u;
         constants.enableIndirectDiffuse = indirectEnabled ? 1u : 0u;
-        constants.includeEmissive =
-            settings.indirectDiffuse.includeEmissive &&
-                constants.emissiveGain > 0.f
-                ? 1u
-                : 0u;
         constants.reverseDepth = view->IsReverseDepth() ? 1u : 0u;
         constants.orthographicProjection =
             view->IsOrthographicProjection() ? 1u : 0u;

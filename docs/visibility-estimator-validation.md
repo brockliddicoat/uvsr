@@ -90,8 +90,8 @@ coherent sector phases per fixture. It covers:
 5. Wide-FOV off-axis receiver.
 6. Near-plane-crossing geometry.
 7. Orthographic projection.
-8. Small bright emissive source.
-9. Double-sided emissive card.
+8. Small bright transported source.
+9. Double-sided transported source card.
 10. High-frequency normal-map tilt, including out-of-plane normals.
 11. Fully metallic and black diffuse receivers.
 12. Diffuse-furnace finite multibounce energy.

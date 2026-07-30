@@ -21,7 +21,6 @@ namespace
     constexpr float Pi = 3.14159265358979323846f;
     constexpr float MinAlpha = 0.002f;
     constexpr std::uint32_t DirectSource = UVSR_LIGHTING_SOURCE_DIRECT;
-    constexpr std::uint32_t EmissiveSource = UVSR_LIGHTING_SOURCE_EMISSIVE;
     constexpr std::uint32_t EnvironmentSource =
         UVSR_LIGHTING_SOURCE_ENVIRONMENT;
     constexpr std::uint32_t IndirectDiffuseSource =
@@ -311,8 +310,6 @@ int main()
 
     Require(uvsr::ScreenSpaceIndirectDiffuseReferenceIntensity == 1.f,
         "screen-space GI defaults to reference energy");
-    Require(uvsr::ScreenSpaceEmissiveReferenceGain == 1.f,
-        "emissive GI source defaults to reference energy");
 
     const uvsr::ImageBasedLightingScales referenceIblScales =
         uvsr::ResolveImageBasedLightingScales(
@@ -759,9 +756,8 @@ int main()
     // Source-state composition is deliberately conservative: unknown scene
     // data stays active, every relevant source must be known inactive before a
     // scope can be skipped.
-    constexpr std::array<std::uint32_t, 5> sourceMasks = {
+    constexpr std::array<std::uint32_t, 4> sourceMasks = {
         DirectSource,
-        EmissiveSource,
         EnvironmentSource,
         IndirectDiffuseSource,
         IndirectSpecularSource
@@ -798,9 +794,9 @@ int main()
     Require(!HasPotentialSource(0u, 0u),
         "an empty relevant-source set has no work");
     constexpr std::uint32_t FirstBounceSources =
-        DirectSource | EmissiveSource | EnvironmentSource;
+        DirectSource | EnvironmentSource;
     Require(HasPotentialSource(
-            DirectSource | EmissiveSource,
+            DirectSource,
             FirstBounceSources),
         "environment-only source radiance keeps first-bounce GI active");
     Require(!HasPotentialSource(

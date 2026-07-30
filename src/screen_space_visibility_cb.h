@@ -20,43 +20,38 @@ struct ScreenSpaceVisibilityConstants
 
     float ambientStrength;
     float indirectDiffuseIntensity;
-    float emissiveGain;
     float minimumBounceContribution;
-
     float lightingExposureScale;
+
     float temporalResponse;
     float spatialRadius;
-    float padding0;
-
     uint frameIndex;
     uint maximumSampleCount;
-    uint paddingSampleCount0;
-    uint paddingSampleCount1;
 
     uint knownInactiveLightingSources;
     uint enableAmbientOcclusion;
     uint enableIndirectDiffuse;
-    uint includeEmissive;
-
     uint reverseDepth;
+
     uint orthographicProjection;
     uint useDepthHierarchy;
     uint resolutionScale;
-
     uint sampleScheduler;
-    uint historyValid;
-    uint paddingHistory;
 
+    uint historyValid;
     uint showIndirectDiffuseOnly;
     uint packedEdgeMode;
     uint diffuseEnvironmentEnabled;
+
     float diffuseEnvironmentScale;
     uint diffuseEnvironmentArrayIndex;
-
     uint specularEnvironmentEnabled;
     float specularEnvironmentScale;
+
     float specularEnvironmentMipLevels;
     uint specularEnvironmentArrayIndex;
+    uint padding0;
+    uint padding1;
 };
 
 #endif // UVSR_SCREEN_SPACE_VISIBILITY_CB_H

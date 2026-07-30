@@ -250,13 +250,15 @@ the specular-occlusion function, keeping a covered interior from reflecting
 an unobstructed full sky. Screen-space GI continues to use material diffuse
 throughput and authored material AO, but not screen-space ambient visibility.
 Its first-bounce source radiance includes directly reflected environment
-diffuse alongside shadowed direct diffuse and emission, so sky-lit surfaces
-can supply the next diffuse bounce. Specular IBL remains outside this diffuse
-transport path. An environment-only scene therefore remains a valid GI source.
-Diffuse strength scales that environment source at the same point it scales the
-visible diffuse IBL, preventing SSGI from rebroadcasting a different-gain copy.
-This is an occlusion heuristic rather than a bent-normal or traced glossy
-visibility solution.
+diffuse alongside shadowed direct diffuse, so sky-lit surfaces can supply the
+next diffuse bounce. Authored emissive radiance remains visible in forward,
+deferred, and MSAA lighting but is not classified, boosted, or transported as a
+screen-space GI source. Specular IBL remains outside this diffuse transport
+path. An environment-only scene therefore remains a valid GI source. Diffuse
+strength scales that environment source at the same point it scales the visible
+diffuse IBL, preventing SSGI from rebroadcasting a different-gain copy. This is
+an occlusion heuristic rather than a bent-normal or traced glossy visibility
+solution.
 
 AO has no active lighting consumer when both environment lobes and diffuse GI
 are disabled. UVSR skips the screen-space pipeline and its resources in that
@@ -266,15 +268,16 @@ state instead of dispatching a no-op composite.
 
 `src/lighting_contribution.hlsli` supplies a common early-out vocabulary to the
 forward, deferred, and screen-space lighting shaders. Its source-activity mask
-has independent direct, emissive, environment, indirect-diffuse, and
-indirect-specular bits. Systems may add a bit to `knownInactiveSources` only
-when they have proved that source class inactive for the current scope. A scope
-can be skipped only when every relevant source is known inactive, so unknown
-scene data remains conservatively active. The contract is intentionally open to later scene,
+has independent direct, environment, indirect-diffuse, and indirect-specular
+bits. Systems may add a bit to `knownInactiveSources` only when they have proved
+that source class inactive for the current scope. A scope can be skipped only
+when every relevant source is known inactive, so unknown scene data remains
+conservatively active. The contract is intentionally open to later scene,
 material, light-cluster, visibility, residency, probe, and radiance-cache data.
 The shared bit definitions are compiled by C++, HLSL, and tests from
 `src/lighting_contribution_shared.h`; screen-space inputs already expose a CPU
-scene-activity mask, while unintegrated systems naturally leave their bits clear.
+scene-activity mask, while unintegrated systems naturally leave their bits
+clear.
 
 Hard rejection reasons are local facts rather than global availability: zero or
 non-finite signal, below-threshold signal, a back-facing surface, zero

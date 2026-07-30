@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-07-29.4`.
+UI reference version: `2026-07-30.1`.
 
 ## Purpose
 
@@ -1021,6 +1021,22 @@ bindings or history are correctness failures.
   selector must never write the main Temporal or Multisample quality; selecting
   the inherited strength normalizes the morphology override back to the preset.
 
+### Lights Defaults and Factory Experiment Builds
+
+- The outer **Lights** drawer remains closed at launch, so first Escape still
+  exposes only General. When Lights is opened, select the scene's primary
+  directional sun and default-open **Bend Screen-Space Shadows**, **Sparse
+  Virtual Shadow Maps**, and **Diagnostic Cascaded Shadow Maps**. Their Enabled
+  toggles remain off.
+- Do not expose **Include Emissive Sources** or **Emissive Source Gain**.
+  Authored emission remains visible, but screen-space visibility no longer
+  owns an emissive source policy, gain, reset, or Statistics control.
+- An opt-in factory-settings experiment build places a disabled explanatory
+  notice above General and disables every renderer settings drawer while
+  leaving the footer actions available. The normal production and developer
+  builds retain the complete settings surface. Never use the experiment lock
+  to redefine normal launch defaults or first-Escape disclosure.
+
 ### Build Override Requirements
 
 - When an override changes `imgui.h` or `imgui_internal.h`, stage and replace
@@ -1402,6 +1418,11 @@ screenshots were checked.
 
 ## Reference Revision History
 
+- `2026-07-30.1`: Removed the emissive GI-source toggle and gain, made the
+  primary directional sun the Lights selection default, and default-opened the
+  three disabled directional-shadow sections without opening the outer Lights
+  drawer. Defined the disabled Settings presentation for the opt-in
+  factory-topology experiment build.
 - `2026-07-29.4`: Removed the Visibility sampling-implementation and developer
   drawers, made Runtime the sole 1-64 sample path, limited Noise Pattern to
   Independent Hash and Toroidal Blue, and placed Distribution in Shared

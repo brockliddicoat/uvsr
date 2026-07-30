@@ -35,7 +35,7 @@ executed by the GPU.
 | `58813cb94054` | 2026-07-20 | 98 | 16,220 | TAA developer experiments created a large Cartesian product before entering production. |
 | `553e60491018` | 2026-07-20 | 2,214 | Not Recorded | Fixed visibility specialization moved the production catalog above 2,000. |
 | `bcf4f7e4ade9` | 2026-07-29 | 3,120 | 13,107 | Baseline immediately before the first retirement batch. |
-| Runtime-Only Candidate | 2026-07-29 | 311 | 2,809 | First retirement batch; local and uncommitted when recorded. |
+| `b63cda9639de` | 2026-07-30 | 311 | 2,809 | First retirement batch committed on `codex/prune-shader-paths`. |
 
 The first batch removes 2,809 production permutations, a 90.03% reduction, and
 10,298 developer permutations, a 78.57% reduction.
@@ -102,6 +102,86 @@ job fails but its exact direct compile passes, rerun the complete catalog once;
 a repeatable diagnostic remains a code failure, while a clean rerun is evidence
 of a transient build worker failure.
 
+## Batch Two: Emissive Transport and Factory Experiment Profile
+
+### Result
+
+The normal production and developer core catalogs remain 311 and 2,809
+permutations. Removing emissive transport saves zero static permutations
+because its toggle and gain were runtime constant-buffer fields, not manifest
+axes. It still removes a shader branch and multiply, two UI/settings fields,
+preset and history-key state, one source-activity bit, one metadata bit, and
+their CPU/HLSL API surface. The PBR deferred extension shrinks from three
+constant-buffer registers to two, and the visibility constants shrink by one
+register to nine registers after the view.
+
+Authored emission remains visible in forward, deferred, MSAA, and G-buffer
+rendering. G-buffer emissive alpha still carries metalness. Only shadowed direct
+diffuse and directly reflected diffuse environment lighting enter first-bounce
+screen-space transport. This is an intentional secondary-lighting change, not
+an attempt to preserve the old gain-four image.
+
+The new factory-settings experiment profile is an opt-in build workflow, not a
+replacement production catalog:
+
+| Integrated Build Surface | Complete Production | Complete Developer | Factory Experiment |
+| --- | ---: | ---: | ---: |
+| UVSR core tasks | 311 | 2,809 | 51 |
+| Bend tasks | 46 | 46 | 0 |
+| SVSM tasks | 105 | 105 | 0 |
+| Diagnostic CSM tasks | 54 | 54 | 0 |
+| Total first-party tasks | 516 | 3,014 | 51 |
+| Staged runtime blobs | 76 | 76 | 37 |
+
+The experiment profile removes 465 of 516 production compile tasks, or 90.12%,
+and 2,963 of 3,014 developer tasks, or 98.31%. It still compiles Donut's pinned
+76-task framework catalog once in a fresh build tree. Runtime guards reset
+shader-selecting state to factory defaults, omit the three shadow pass
+constructors, reject incompatible command-line profiles, and disable the
+Settings drawers with a visible explanation. Production and developer builds
+retain their complete settings and diagnostic surfaces.
+
+One local ShaderMake verification reported 2.70 seconds for the 51-task
+experiment core, 15.86 seconds for the 311-task production core, and 115.13
+seconds for the 2,809-task developer core. These are illustrative local build
+observations, not a controlled performance benchmark; the task and blob counts
+are the durable contract.
+
+### Distribution History
+
+Distribution is a runtime-uniform exponent, not a permutation axis. The shipped
+default began at `1.0`; `a5a75d50565a` changed it to `2.0` when progressive
+radial strata adopted the `x^2` near-receiver concentration. It has remained
+`2.0`. No reachable or historical repository revision used `3.0` as the product
+default; `3.0` appears only in runtime-uniform tests and manual values.
+
+### Removal Takeaways
+
+- A feature can add no permutations and still bloat shader ABI, constant
+  buffers, metadata, source masks, resource planning, UI, presets, history
+  identity, tests, and documentation. Count both catalog growth and end-to-end
+  ownership.
+- Do not keep a runtime toggle solely because it is cheaper than a static axis.
+  A default-on policy with no retained diagnostic or experiment still creates
+  two behavioral contracts and a restoration burden.
+- Preserve visible material emission independently from diffuse transport.
+  Deleting transport must not erase authored appearance or repurpose G-buffer
+  channels that still carry unrelated material data.
+- A minimal experiment catalog must fail closed. An abbreviated manifest
+  without runtime topology locks merely turns UI choices into missing-shader
+  crashes.
+- Keep fast experiment profiles opt-in and isolated. Their counts are workflow
+  evidence, not permission to weaken production or release verification.
+
+### Restoration Bar
+
+Restoring emissive transport requires a current product need, an energy and
+exposure contract, image evidence against the retained direct/environment
+sources, and a decision on whether one fixed policy can replace the removed
+toggle/gain surface. Restoring any omitted experiment-profile shader requires
+either making it part of factory startup topology or defining a separate
+explicit profile with its own exact manifest and runtime lock.
+
 ## Branchless Shader Finding
 
 Branchless code is not a permutation-reduction mechanism by itself. Replacing
@@ -156,7 +236,7 @@ Before adding a compile-time option, answer these questions:
 The warning pattern is a default-off option with no preset consumer that
 changes resource topology and multiplies four or more unrelated axes.
 
-## Ranked Candidates for Batch Two
+## Ranked Candidates for Batch Three
 
 Savings in this table are individual and non-additive. Removing two axes from
 the same Cartesian product saves less than the sum of their isolated rows.

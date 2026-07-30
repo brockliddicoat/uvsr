@@ -22,6 +22,12 @@ The **Statistics** drawer places **Run Current With Motion** immediately below
 CMAA2, and MSAA statistic lines; the Aliasing drawer does not duplicate them.
 The Cancel control animates into the drawer only while a test is active.
 
+Run Current With Motion is intentionally uncapped. It renders 180 warm-up
+frames, turns 45 degrees right over 120 frames at `0.375` degrees per rendered
+frame, holds for 16 frames, and returns over 120 frames. The 256 turn, hold, and
+return samples are therefore identical at any renderer speed; only elapsed
+wall-clock time changes. No 40 Hz sleep or target frame rate remains.
+
 The available methods are:
 
 - **Temporal Reconstructive**: long-term MiniEngine TAA with optional
@@ -151,6 +157,7 @@ enter TAA, CMAA2, or MSAA history.
 ## Benchmark
 
 The in-app motion-test button and benchmark CLI use Benchmark Position 1,
-turn right 45 degrees at 15 degrees per second, hold, and return at the same
-rate. Reports include warm median and worst-case GPU time. Retired morphology
+turn right 45 degrees at `0.375` degrees per rendered frame, hold for 16
+frames, and return at the same per-frame step. Reports include warm median and
+worst-case GPU time plus `wall_clock_pacing_enabled: false`. Retired morphology
 stage telemetry is not emitted.

@@ -9,7 +9,6 @@
 // active, while future scene, material, visibility, clustering, or residency
 // systems can contribute tighter known-inactive masks without coupling passes.
 static const uint LightingSource_Direct = UVSR_LIGHTING_SOURCE_DIRECT;
-static const uint LightingSource_Emissive = UVSR_LIGHTING_SOURCE_EMISSIVE;
 static const uint LightingSource_Environment = UVSR_LIGHTING_SOURCE_ENVIRONMENT;
 static const uint LightingSource_IndirectDiffuse =
     UVSR_LIGHTING_SOURCE_INDIRECT_DIFFUSE;
