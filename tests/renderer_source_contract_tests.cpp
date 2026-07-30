@@ -185,8 +185,6 @@ int main(int argc, char** argv)
         "AA rectification benchmark option");
     for (const std::string_view mode : {
             std::string_view("\"pair-rgb\""),
-            std::string_view("\"per-pixel-rgb\""),
-            std::string_view("\"per-pixel-ycocg\""),
             std::string_view("\"variance-ycocg\"") })
     {
         passed &= ExpectContains(
@@ -194,6 +192,10 @@ int main(int argc, char** argv)
             mode,
             "AA rectification benchmark mode");
     }
+    passed &= ExpectAbsent(
+        commandLine,
+        "per-pixel",
+        "retired AA per-pixel rectification benchmark modes");
     passed &= ExpectContains(
         commandLine,
         "aaBenchmark.settings.algorithmOverrides.rectification",

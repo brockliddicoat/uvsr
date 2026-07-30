@@ -106,8 +106,7 @@ namespace uvsr
         const std::shared_ptr<CommonRenderPasses>& commonPasses,
         nvrhi::ITexture* sceneColor,
         nvrhi::ITexture* currentDepth,
-        nvrhi::ITexture* motionVectors,
-        bool enableMomentHistory)
+        nvrhi::ITexture* motionVectors)
         : m_Device(device)
         , m_ShaderFactory(shaderFactory)
         , m_SceneColor(sceneColor)
@@ -116,22 +115,13 @@ namespace uvsr
                 ? GetTemporalAaSourceDepthPairQuantizationError(
                     currentDepth->getDesc().format)
                 : 0.f)
-        , m_MomentHistoryEnabled(enableMomentHistory)
     {
         const nvrhi::TextureDesc& sceneColorDesc = sceneColor->getDesc();
         m_Size = uint2(sceneColorDesc.width, sceneColorDesc.height);
-        // Developer pixel-path framebuffers expose the same seven MRTs as the
-        // compute ABI. D3D12 requires every attachment to have identical
-        // dimensions, so the otherwise inert moment pair must remain full
-        // size in developer builds even when Stable Interior is off.
-        const bool allocateFullSizeMoments =
-            m_MomentHistoryEnabled ||
-            UVSR_AA_DEVELOPER_OVERRIDES != 0;
         m_Timings.historyTextureBytes =
             GetMiniEngineTaaHistoryBytes(
                 m_Size.x,
-                m_Size.y,
-                allocateFullSizeMoments);
+                m_Size.y);
 #if UVSR_AA_DEVELOPER_OVERRIDES
         m_Timings.historyTextureBytes +=
             GetMiniEngineTaaPersistentHistoryBytes(
@@ -165,19 +155,6 @@ namespace uvsr
 #endif
         historyDesc.initialState = nvrhi::ResourceStates::ShaderResource;
         historyDesc.keepInitialState = true;
-        // The shared binding layout retains t5/u2 in every static permutation.
-        // Release compute-only presets can bind two inert 1x1 texels while
-        // Stable Interior is inactive. Developer builds keep full dimensions
-        // for the image-equivalent fullscreen-pixel MRT topology above.
-        historyDesc.width = allocateFullSizeMoments ? m_Size.x : 1u;
-        historyDesc.height = allocateFullSizeMoments ? m_Size.y : 1u;
-        historyDesc.format = nvrhi::Format::RG16_FLOAT;
-        historyDesc.debugName = "MiniEngineTAA/MomentHistory0";
-        m_MomentHistory[0] = device->createTexture(historyDesc);
-        historyDesc.debugName = "MiniEngineTAA/MomentHistory1";
-        m_MomentHistory[1] = device->createTexture(historyDesc);
-        historyDesc.width = m_Size.x;
-        historyDesc.height = m_Size.y;
 
 #if UVSR_AA_DEVELOPER_OVERRIDES
         historyDesc.format = nvrhi::Format::RGBA16_FLOAT;
@@ -193,7 +170,7 @@ namespace uvsr
 #endif
 
 #if UVSR_AA_DEVELOPER_OVERRIDES
-        historyDesc.format = nvrhi::Format::RG16_FLOAT;
+        historyDesc.format = nvrhi::Format::R16_FLOAT;
         historyDesc.debugName = "MiniEngineTAA/DebugValues";
         m_DebugValues = device->createTexture(historyDesc);
 #endif
@@ -244,14 +221,12 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(6),
             nvrhi::BindingLayoutItem::Texture_SRV(7),
             nvrhi::BindingLayoutItem::Texture_SRV(8),
-            nvrhi::BindingLayoutItem::Texture_SRV(9),
             nvrhi::BindingLayoutItem::Texture_UAV(0),
             nvrhi::BindingLayoutItem::Texture_UAV(1),
             nvrhi::BindingLayoutItem::Texture_UAV(2),
             nvrhi::BindingLayoutItem::Texture_UAV(3),
             nvrhi::BindingLayoutItem::Texture_UAV(4),
-            nvrhi::BindingLayoutItem::Texture_UAV(5),
-            nvrhi::BindingLayoutItem::Texture_UAV(6)
+            nvrhi::BindingLayoutItem::Texture_UAV(5)
         };
         m_BlendBindingLayout = device->createBindingLayout(blendLayoutDesc);
 
@@ -337,8 +312,7 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(1),
             nvrhi::BindingLayoutItem::Texture_SRV(2),
             nvrhi::BindingLayoutItem::Texture_SRV(3),
-            nvrhi::BindingLayoutItem::Texture_SRV(4),
-            nvrhi::BindingLayoutItem::Texture_SRV(5)
+            nvrhi::BindingLayoutItem::Texture_SRV(4)
         };
         m_PixelBlendBindingLayout =
             device->createBindingLayout(pixelBlendLayout);
@@ -353,8 +327,6 @@ namespace uvsr
                             m_History.Color(destination))
                         .addColorAttachment(
                             m_History.Depth(destination))
-                        .addColorAttachment(
-                            m_MomentHistory[destination])
                         .addColorAttachment(m_DebugValues)
                         .addColorAttachment(m_SelectiveCurrent)
                         .addColorAttachment(m_SelectiveRejection)
@@ -434,45 +406,41 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(3, currentDepth),
                 nvrhi::BindingSetItem::Texture_SRV(
                     4, m_History.Depth(source)),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    5, m_MomentHistory[source]),
 #if UVSR_AA_DEVELOPER_OVERRIDES
                 nvrhi::BindingSetItem::Texture_SRV(
-                    6, m_PersistentColor[0]),
+                    5, m_PersistentColor[0]),
                 nvrhi::BindingSetItem::Texture_SRV(
-                    7, m_PersistentDepth[0]),
+                    6, m_PersistentDepth[0]),
                 nvrhi::BindingSetItem::Texture_SRV(
-                    8, m_PersistentColor[1]),
+                    7, m_PersistentColor[1]),
                 nvrhi::BindingSetItem::Texture_SRV(
-                    9, m_PersistentDepth[1]),
+                    8, m_PersistentDepth[1]),
 #else
                 // Production compiles resurrection out and aliases these
                 // otherwise-unused binding slots instead of allocating its
                 // developer-only history layout.
                 nvrhi::BindingSetItem::Texture_SRV(
-                    6, m_History.Color(source)),
+                    5, m_History.Color(source)),
                 nvrhi::BindingSetItem::Texture_SRV(
-                    7, m_History.Depth(source)),
+                    6, m_History.Depth(source)),
                 nvrhi::BindingSetItem::Texture_SRV(
-                    8, m_History.Color(source)),
+                    7, m_History.Color(source)),
                 nvrhi::BindingSetItem::Texture_SRV(
-                    9, m_History.Depth(source)),
+                    8, m_History.Depth(source)),
 #endif
                 nvrhi::BindingSetItem::Texture_UAV(
                     0, m_History.Color(destination)),
                 nvrhi::BindingSetItem::Texture_UAV(
                     1, m_History.Depth(destination)),
                 nvrhi::BindingSetItem::Texture_UAV(
-                    2, m_MomentHistory[destination]),
+                    2, m_DebugValues),
                 nvrhi::BindingSetItem::Texture_UAV(
-                    3, m_DebugValues),
+                    3, m_SelectiveCurrent),
                 nvrhi::BindingSetItem::Texture_UAV(
-                    4, m_SelectiveCurrent),
-                nvrhi::BindingSetItem::Texture_UAV(
-                    5, m_SelectiveRejection)
+                    4, m_SelectiveRejection)
                 ,
                 nvrhi::BindingSetItem::Texture_UAV(
-                    6, m_FusedOutput)
+                    5, m_FusedOutput)
             };
             m_BlendBindingSets[source] = device->createBindingSet(
                 blendBindings, m_BlendBindingLayout);
@@ -493,9 +461,7 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(
                     3, currentDepth),
                 nvrhi::BindingSetItem::Texture_SRV(
-                    4, m_History.Depth(source)),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    5, m_MomentHistory[source])
+                    4, m_History.Depth(source))
             };
             m_PixelBlendBindingSets[source] =
                 device->createBindingSet(
@@ -540,9 +506,6 @@ namespace uvsr
             { "TAA_CURRENT_RECONSTRUCTION",
                 std::to_string(static_cast<uint32_t>(
                     options.currentReconstruction)) },
-            { "TAA_INTERIOR_WEIGHTING",
-                std::to_string(static_cast<uint32_t>(
-                    options.interiorWeighting)) },
             { "TAA_HISTORY_FILTER",
                 std::to_string(
                     static_cast<uint32_t>(options.historyFilter)) },
@@ -645,9 +608,6 @@ namespace uvsr
             { "TAA_CURRENT_RECONSTRUCTION",
                 std::to_string(static_cast<uint32_t>(
                     options.currentReconstruction)) },
-            { "TAA_INTERIOR_WEIGHTING",
-                std::to_string(static_cast<uint32_t>(
-                    options.interiorWeighting)) },
             { "TAA_HISTORY_FILTER",
                 std::to_string(
                     static_cast<uint32_t>(options.historyFilter)) },
@@ -830,15 +790,11 @@ namespace uvsr
         if (m_History.PrepareForFirstUse(commandList))
         {
             // The shared core clears both base color/depth pairs exactly once.
-            // Clear MiniEngine-only attachments in the same first-use
-            // transaction so no stale moment or resurrection payload survives.
+            // Clear developer-only resurrection state and diagnostics in the
+            // same first-use transaction.
+#if UVSR_AA_DEVELOPER_OVERRIDES
             for (uint32_t index = 0u; index < 2u; ++index)
             {
-                commandList->clearTextureFloat(
-                    m_MomentHistory[index],
-                    nvrhi::AllSubresources,
-                    nvrhi::Color(0.f));
-#if UVSR_AA_DEVELOPER_OVERRIDES
                 commandList->clearTextureFloat(
                     m_PersistentColor[index],
                     nvrhi::AllSubresources,
@@ -847,8 +803,8 @@ namespace uvsr
                     m_PersistentDepth[index],
                     nvrhi::AllSubresources,
                     nvrhi::Color(0.f));
-#endif
             }
+#endif
             commandList->clearTextureFloat(
                 m_DebugValues,
                 nvrhi::AllSubresources,
@@ -1112,9 +1068,6 @@ namespace uvsr
                         MiniEngineTaaSampleResurrection::OneOlderFrame
                     ? 1u
                     : 0u);
-        m_Timings.historyMomentSamples =
-            GetMiniEngineTaaHistoryMomentSampleCount(
-                options.interiorWeighting);
         m_Timings.historyDepthGathers = 1u;
         m_Timings.historyDepthSamples =
             GetMiniEngineTaaHistoryDepthSampleCount(

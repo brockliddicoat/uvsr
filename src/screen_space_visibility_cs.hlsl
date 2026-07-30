@@ -29,54 +29,19 @@
 #ifndef ENABLE_BOUNCE_CONTINUATION
 #define ENABLE_BOUNCE_CONTINUATION 0
 #endif
-#ifndef FIXED_SAMPLE_COUNT
-#define FIXED_SAMPLE_COUNT 0
-#endif
-#ifndef LOOP_SAMPLE_COUNT
-#define LOOP_SAMPLE_COUNT 0
-#endif
 #ifndef RUNTIME_SAMPLE_PARITY
-// 0 = robust generic count, 1 = CPU-validated even count,
-// 2 = CPU-validated odd count.
 #define RUNTIME_SAMPLE_PARITY 0
-#endif
-#ifndef FIXED_RADIAL_EXPONENT_TWO
-#define FIXED_RADIAL_EXPONENT_TWO 0
-#endif
-#ifndef FIXED_DIRECT_DEPTH
-#define FIXED_DIRECT_DEPTH 0
-#endif
-#ifndef PACKED_FAST_NOISE
-#define PACKED_FAST_NOISE 0
 #endif
 #ifndef OUTPUT_PACKED_EDGES
 #define OUTPUT_PACKED_EDGES 0
 #endif
 
-#if LOOP_SAMPLE_COUNT > 0 && FIXED_SAMPLE_COUNT > 0
-#error LOOP_SAMPLE_COUNT and FIXED_SAMPLE_COUNT are mutually exclusive.
-#endif
-#if RUNTIME_SAMPLE_PARITY > 0 && \
-    (LOOP_SAMPLE_COUNT > 0 || FIXED_SAMPLE_COUNT > 0)
-#error Runtime parity is mutually exclusive with fixed sample counts.
-#endif
 #if RUNTIME_SAMPLE_PARITY > 2
-#error RUNTIME_SAMPLE_PARITY must be 0, 1, or 2.
-#endif
-#if LOOP_SAMPLE_COUNT > 64
-#error LOOP_SAMPLE_COUNT cannot exceed the 64-sample visibility budget.
-#endif
-#if LOOP_SAMPLE_COUNT > 0 && ((LOOP_SAMPLE_COUNT & 1) != 0)
-#error LOOP_SAMPLE_COUNT requires an even sample count.
+#error RUNTIME_SAMPLE_PARITY must be 0 (guarded), 1 (even), or 2 (odd).
 #endif
 #ifndef PACKED_EDGE_MODE
 // 1 = depth, 2 = depth + normal, 3 = slope-adjusted depth + normal.
 #define PACKED_EDGE_MODE 2
-#endif
-#ifndef SCHEDULER_SPECIALIZATION
-// 0 = runtime, 1 = independent hash, 2 = toroidal blue noise,
-// 3 = scalar FAST.
-#define SCHEDULER_SPECIALIZATION 0
 #endif
 #ifndef VISIBILITY_GROUP_SIZE_X
 #define VISIBILITY_GROUP_SIZE_X 8
@@ -126,11 +91,6 @@ Texture2D<float4> t_GBufferDiffuse : register(t4);
 Texture2D<float4> t_Emissive : register(t5);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t6);
 Texture2DArray<float> t_BlueNoise : register(t8);
-#if PACKED_FAST_NOISE
-Texture2DArray<float4> t_FilterAdaptedNoise : register(t9);
-#else
-Texture2DArray<float> t_FilterAdaptedNoise : register(t9);
-#endif
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_BounceFrontier : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 #if ENABLE_BOUNCE_CONTINUATION
@@ -140,11 +100,6 @@ globallycoherent RWByteAddressBuffer u_BounceContinuation : register(u2);
 Texture2D<float4> t_SourceRadiance : register(t2);
 Texture2D<float> t_DepthHierarchy : register(t3);
 Texture2DArray<float> t_BlueNoise : register(t5);
-#if PACKED_FAST_NOISE
-Texture2DArray<float4> t_FilterAdaptedNoise : register(t6);
-#else
-Texture2DArray<float> t_FilterAdaptedNoise : register(t6);
-#endif
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 #endif
@@ -184,16 +139,6 @@ static const uint2 BlueNoiseTemporalSteps[8] = {
     uint2(17u, 27u), uint2(23u, 19u),
     uint2(7u, 25u), uint2(29u, 15u),
     uint2(21u, 31u), uint2(11u, 23u)
-};
-
-// The FAST design recommends R2-separated spatial reads when several random
-// values are needed in one frame. These integer offsets are the first eight R2
-// points quantized to the 64x64 rank-field torus.
-static const uint2 FilterAdaptedSemanticOffsets[8] = {
-    uint2(0u, 0u), uint2(48u, 36u),
-    uint2(32u, 8u), uint2(16u, 45u),
-    uint2(1u, 17u), uint2(49u, 54u),
-    uint2(33u, 26u), uint2(18u, 63u)
 };
 
 uint VisibilityHash(uint value)
@@ -279,31 +224,12 @@ float VisibilityRadialPower(float value, float exponent)
 
 float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
 {
-#if SCHEDULER_SPECIALIZATION == 1
-    return VisibilityRandom(samplingPixel, dimension, phase);
-#elif SCHEDULER_SPECIALIZATION == 3
-    {
-        // The 64x64x32 scalar-uniform volume was optimized offline for a
-        // Gaussian spatial filter and alpha=0.35 EMA temporal filter. Every
-        // 32-frame cycle receives a global low-discrepancy permutation offset;
-        // 2531 is the odd integer nearest 4096 / phi and is coprime to 4096.
-        uint frameInVolume = phase & 31u;
-        uint cycle = phase >> 5u;
-        uint shuffledOffset = (1741u + 2531u * cycle) & 4095u;
-        uint2 cycleOffset = uint2(
-            shuffledOffset & 63u,
-            shuffledOffset >> 6u);
-        uint2 coordinate = (samplingPixel + cycleOffset +
-            FilterAdaptedSemanticOffsets[dimension & 7u]) & 63u;
-#if PACKED_FAST_NOISE
-        return t_FilterAdaptedNoise.Load(
-            int4(coordinate, frameInVolume, 0)).x;
-#else
-        return t_FilterAdaptedNoise.Load(
-            int4(coordinate, frameInVolume, 0));
-#endif
-    }
-#elif SCHEDULER_SPECIALIZATION == 2
+    // Scheduler selection is uniform for the dispatch. Keeping this small
+    // runtime branch avoids multiplying every estimator/consumer/parity
+    // shader by the two retained noise choices.
+    if (g_Visibility.sampleScheduler == 0u)
+        return VisibilityRandom(samplingPixel, dimension, phase);
+
     // Each semantic random dimension owns an independently optimized rank
     // layer. Moving the layer toroidally preserves its spatial spectrum;
     // changing the cycle offset prevents an exact 64-frame repetition.
@@ -318,62 +244,7 @@ float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
     uint2 coordinate = (samplingPixel + cycleOffset +
         BlueNoiseTemporalSteps[layer] * frameInCycle) & 63u;
     return t_BlueNoise.Load(int4(coordinate, layer, 0));
-#else
-    if (g_Visibility.sampleScheduler == 0u)
-        return VisibilityRandom(samplingPixel, dimension, phase);
-
-    if (g_Visibility.sampleScheduler == 2u)
-    {
-        // Runtime-selectable legacy path. Specialized candidates compile the
-        // equivalent branch above and therefore do not retain both textures.
-        uint frameInVolume = phase & 31u;
-        uint cycle = phase >> 5u;
-        uint shuffledOffset = (1741u + 2531u * cycle) & 4095u;
-        uint2 cycleOffset = uint2(
-            shuffledOffset & 63u,
-            shuffledOffset >> 6u);
-        uint2 coordinate = (samplingPixel + cycleOffset +
-            FilterAdaptedSemanticOffsets[dimension & 7u]) & 63u;
-#if PACKED_FAST_NOISE
-        return t_FilterAdaptedNoise.Load(
-            int4(coordinate, frameInVolume, 0)).x;
-#else
-        return t_FilterAdaptedNoise.Load(
-            int4(coordinate, frameInVolume, 0));
-#endif
-    }
-
-    uint layer = dimension & 7u;
-    uint frameInCycle = phase & 63u;
-    uint cycle = phase >> 6u;
-    uint cycleHashX = VisibilityHash(
-        cycle ^ (dimension * 0x9e3779b9u) ^ 0x68bc21ebu);
-    uint cycleHashY = VisibilityHash(
-        cycle ^ (dimension * 0x85ebca6bu) ^ 0x02e5be93u);
-    uint2 cycleOffset = uint2(cycleHashX, cycleHashY) & 63u;
-    uint2 coordinate = (samplingPixel + cycleOffset +
-        BlueNoiseTemporalSteps[layer] * frameInCycle) & 63u;
-    return t_BlueNoise.Load(int4(coordinate, layer, 0));
-#endif
 }
-
-#if PACKED_FAST_NOISE
-float4 SchedulerPackedFastRandom(uint2 samplingPixel, uint phase)
-{
-    // The upload packs the existing scalar FAST values for semantic
-    // dimensions {slice, sector, radial-, radial+}. The global cycle offset is
-    // intentionally identical to the scalar path, so this changes delivery,
-    // not the stochastic sequence.
-    uint frameInVolume = phase & 31u;
-    uint cycle = phase >> 5u;
-    uint shuffledOffset = (1741u + 2531u * cycle) & 4095u;
-    uint2 cycleOffset = uint2(
-        shuffledOffset & 63u,
-        shuffledOffset >> 6u);
-    uint2 coordinate = (samplingPixel + cycleOffset) & 63u;
-    return t_FilterAdaptedNoise.Load(int4(coordinate, frameInVolume, 0));
-}
-#endif
 
 uint2 SamplingToFullPixel(uint2 samplingPixel)
 {
@@ -798,35 +669,20 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     }
 
     uint phase = g_Visibility.frameIndex;
-#if FIXED_SAMPLE_COUNT == 0
-#if LOOP_SAMPLE_COUNT > 0
-    // This specialization keeps the compact generic loop while compiling its
-    // runtime sample budget into the shader.
-    static const uint selectedSampleCount = LOOP_SAMPLE_COUNT;
-#elif RUNTIME_SAMPLE_PARITY > 0
+#if RUNTIME_SAMPLE_PARITY > 0
     // The CPU clamps the count and selects a parity-matched shader. Keeping the
     // number in the cbuffer permits every 1-64 slider value to share one of two
     // compact loop permutations.
     uint selectedSampleCount = g_Visibility.maximumSampleCount;
 #else
+    // Non-default estimator/consumer/topology combinations retain one guarded
+    // Runtime shader instead of multiplying every axis by parity.
     uint selectedSampleCount = clamp(
         g_Visibility.maximumSampleCount, 1u, 64u);
 #endif
-#else
-    // Curated even-count permutations compile out clamping, budget selection,
-    // side division, and the odd-side random dimension. The runtime profile
-    // validator requires the requested count to match this shader key.
-    static const uint selectedSampleCount = FIXED_SAMPLE_COUNT;
-#endif
 
-#if PACKED_FAST_NOISE
-    float4 packedFastRandom = SchedulerPackedFastRandom(
-        dispatchPixel, phase);
-    float sliceRotation = packedFastRandom.x;
-#else
     float sliceRotation = SchedulerRandom(
         dispatchPixel, SchedulerDimension_SliceRotation, phase);
-#endif
     float ambientVisibility = 1.0f;
     float3 indirectDiffuse = 0.0f;
     // A slice traces both negative and positive sides, so azimuth is sampled
@@ -843,12 +699,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         float3(0.0f, 1.0f, 0.0f));
     float3 sliceTangent = SafeNormalize(
         cross(viewDirection, slicePlaneNormal), screenSliceDirection);
-#if PACKED_FAST_NOISE
-    float sectorPhase = packedFastRandom.y;
-#else
     float sectorPhase = SchedulerRandom(
         dispatchPixel, SchedulerDimension_SectorPhase, phase);
-#endif
 
 #if VISIBILITY_ESTIMATOR != VisibilityEstimator_UniformProjectedAngle
         SliceMeasure sliceMeasure = BuildSliceMeasure(
@@ -912,12 +764,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             uint2(0u, 0u), uint2(0u, 0u)
         };
 
-#if LOOP_SAMPLE_COUNT > 0
-        static const uint sideStepCount[2] = {
-            LOOP_SAMPLE_COUNT / 2u,
-            LOOP_SAMPLE_COUNT / 2u
-        };
-#elif RUNTIME_SAMPLE_PARITY == 1
+#if RUNTIME_SAMPLE_PARITY == 1
         uint stepsPerSide = selectedSampleCount >> 1u;
         uint sideStepCount[2] = {
             stepsPerSide,
@@ -935,7 +782,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         };
 #else
         uint stepsPerSide = selectedSampleCount >> 1u;
-#if FIXED_SAMPLE_COUNT == 0
         uint oddSampleSide = SchedulerRandom(
             dispatchPixel,
             SchedulerDimension_OddSampleSide,
@@ -946,15 +792,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             stepsPerSide + (((selectedSampleCount & 1u) != 0u &&
                 oddSampleSide == 1u) ? 1u : 0u)
         };
-#else
-        uint sideStepCount[2] = { stepsPerSide, stepsPerSide };
 #endif
-#endif
-#if PACKED_FAST_NOISE
-        float radialSequence[2] = {
-            packedFastRandom.z, packedFastRandom.w
-        };
-#else
         float radialSequence[2] = {
             SchedulerRandom(
                 dispatchPixel,
@@ -965,7 +803,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 SchedulerDimension_RadialPositive,
                 phase)
         };
-#endif
         uint radialShift[2] = {
             min(uint(radialSequence[0] * 32.0f), 31u),
             min(uint(radialSequence[1] * 32.0f), 31u)
@@ -989,15 +826,8 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 : 0u
         };
 
-#if FIXED_SAMPLE_COUNT > 0
-        [unroll]
-        for (uint fixedStepIndex = 0u;
-            fixedStepIndex < FIXED_SAMPLE_COUNT / 2u;
-            ++fixedStepIndex)
-#else
         [loop]
         while ((remainingRadialStrata[0] | remainingRadialStrata[1]) != 0u)
-#endif
         {
             [unroll]
             for (uint sideIndex = 0u; sideIndex < 2u; ++sideIndex)
@@ -1017,13 +847,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 float normalizedStep = ProgressiveRadialSample(
                     radialStratum, radialRotation[sideIndex]);
                 float distributedStep = saturate(normalizedStep);
-#if FIXED_RADIAL_EXPONENT_TWO
-                distributedStep *= distributedStep;
-#else
                 distributedStep = VisibilityRadialPower(
                     distributedStep,
                     g_Visibility.stepDistributionExponent);
-#endif
                 float sampleDistance = distributedStep * sideProjectedRadius[sideIndex];
                 sampleDistance = max(sampleDistance, 0.5f);
                 float2 samplePixelFloat = receiverPixelCenter +
@@ -1047,7 +873,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 hasPreviousSample[sideIndex] = true;
                 float3 samplePositionVS;
                 bool reconstructed = false;
-#if !FIXED_DIRECT_DEPTH
                 if (g_Visibility.useDepthHierarchy != 0u &&
                     g_Visibility.orthographicProjection == 0u)
                 {
@@ -1063,10 +888,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                         reconstructed = ReconstructViewPositionFromLinearDepth(
                             float2(samplePixel) + 0.5f,
                             sampleViewDepth,
-                            samplePositionVS);
+                        samplePositionVS);
                     }
                 }
-#endif
                 if (!reconstructed)
                 {
                     float sampleDepth = t_Depth[sampleRepresentativePixel];

@@ -81,13 +81,6 @@ namespace uvsr
         Count = UVSR_TAA_CURRENT_RECONSTRUCTION_COUNT
     };
 
-    enum class MiniEngineTaaInteriorWeighting : uint32_t
-    {
-        Off = UVSR_TAA_INTERIOR_OFF,
-        StableInterior = UVSR_TAA_INTERIOR_STABLE,
-        Count = UVSR_TAA_INTERIOR_WEIGHTING_COUNT
-    };
-
     enum class MiniEngineTaaHistoryFilter : uint32_t
     {
         Bilinear = UVSR_TAA_HISTORY_BILINEAR,
@@ -100,8 +93,6 @@ namespace uvsr
     enum class MiniEngineTaaRectification : uint32_t
     {
         PairRgb = UVSR_TAA_RECTIFICATION_PAIR_RGB,
-        PerPixelRgb = UVSR_TAA_RECTIFICATION_PER_PIXEL_RGB,
-        PerPixelYCoCg = UVSR_TAA_RECTIFICATION_PER_PIXEL_YCOCG,
         VarianceYCoCg = UVSR_TAA_RECTIFICATION_VARIANCE_YCOCG,
         Count = UVSR_TAA_RECTIFICATION_COUNT
     };
@@ -147,17 +138,7 @@ namespace uvsr
     {
         FromPreset,
         PairRgb,
-        PerPixelRgb,
-        PerPixelYCoCg,
         VarianceYCoCg,
-        Count
-    };
-
-    enum class MiniEngineTaaStableInteriorOverride : uint32_t
-    {
-        FromPreset,
-        Off,
-        On,
         Count
     };
 
@@ -232,7 +213,6 @@ namespace uvsr
     enum class MiniEngineTaaDebugView : uint32_t
     {
         Off = UVSR_TAA_DEBUG_OFF,
-        StableInterior = UVSR_TAA_DEBUG_STABLE_INTERIOR,
         FinalHistoryWeight = UVSR_TAA_DEBUG_FINAL_HISTORY_WEIGHT,
         SampleResurrection = UVSR_TAA_DEBUG_SAMPLE_RESURRECTION,
         Count = UVSR_TAA_DEBUG_VIEW_COUNT
@@ -244,8 +224,6 @@ namespace uvsr
             MiniEngineTaaMotionSource::Center;
         MiniEngineTaaCurrentReconstruction currentReconstruction =
             MiniEngineTaaCurrentReconstruction::Direct;
-        MiniEngineTaaInteriorWeighting interiorWeighting =
-            MiniEngineTaaInteriorWeighting::Off;
         MiniEngineTaaHistoryFilter historyFilter =
             MiniEngineTaaHistoryFilter::Bilinear;
         MiniEngineTaaRectification rectification =
@@ -256,7 +234,6 @@ namespace uvsr
         {
             return motionSource == other.motionSource &&
                    currentReconstruction == other.currentReconstruction &&
-                   interiorWeighting == other.interiorWeighting &&
                    historyFilter == other.historyFilter &&
                    rectification == other.rectification;
         }
@@ -278,8 +255,6 @@ namespace uvsr
             MiniEngineTaaHistoryFilterOverride::FromPreset;
         MiniEngineTaaRectificationOverride rectification =
             MiniEngineTaaRectificationOverride::FromPreset;
-        MiniEngineTaaStableInteriorOverride stableInterior =
-            MiniEngineTaaStableInteriorOverride::FromPreset;
         MiniEngineTaaSampleResurrectionOverride sampleResurrection =
             MiniEngineTaaSampleResurrectionOverride::FromPreset;
         MorphologyApplicationOverride subpixelMorphology =
@@ -307,8 +282,6 @@ namespace uvsr
                     MiniEngineTaaHistoryFilterOverride::FromPreset ||
                 rectification !=
                     MiniEngineTaaRectificationOverride::FromPreset ||
-                stableInterior !=
-                    MiniEngineTaaStableInteriorOverride::FromPreset ||
                 sampleResurrection !=
                     MiniEngineTaaSampleResurrectionOverride::FromPreset ||
                 subpixelMorphology !=
@@ -326,7 +299,6 @@ namespace uvsr
                     other.currentReconstruction &&
                 historyFilter == other.historyFilter &&
                 rectification == other.rectification &&
-                stableInterior == other.stableInterior &&
                 sampleResurrection == other.sampleResurrection &&
                 subpixelMorphology == other.subpixelMorphology &&
                 morphologyQuality == other.morphologyQuality &&
@@ -502,8 +474,6 @@ namespace uvsr
         UVSR_TAA_MOTION_SOURCE_COUNT;
     inline constexpr uint32_t MiniEngineTaaCurrentReconstructionCount =
         UVSR_TAA_CURRENT_RECONSTRUCTION_COUNT;
-    inline constexpr uint32_t MiniEngineTaaInteriorWeightingCount =
-        UVSR_TAA_INTERIOR_WEIGHTING_COUNT;
     inline constexpr uint32_t MiniEngineTaaHistoryFilterCount =
         UVSR_TAA_HISTORY_FILTER_COUNT;
     inline constexpr uint32_t MiniEngineTaaRectificationCount =
@@ -520,7 +490,6 @@ namespace uvsr
     static_assert(
         MiniEngineTaaMotionSourceCount *
             MiniEngineTaaCurrentReconstructionCount *
-            MiniEngineTaaInteriorWeightingCount *
             MiniEngineTaaHistoryFilterCount *
             MiniEngineTaaRectificationCount ==
         MiniEngineTaaBlendPermutationCount);
@@ -532,8 +501,6 @@ namespace uvsr
         uint32_t index = static_cast<uint32_t>(options.motionSource);
         index = index * MiniEngineTaaCurrentReconstructionCount +
             static_cast<uint32_t>(options.currentReconstruction);
-        index = index * MiniEngineTaaInteriorWeightingCount +
-            static_cast<uint32_t>(options.interiorWeighting);
         index = index * MiniEngineTaaHistoryFilterCount +
             static_cast<uint32_t>(options.historyFilter);
         index = index * MiniEngineTaaRectificationCount +
@@ -688,8 +655,6 @@ namespace uvsr
                 MiniEngineTaaHistoryFilter::Bilinear;
             result.rectification =
                 MiniEngineTaaRectification::PairRgb;
-            result.interiorWeighting =
-                MiniEngineTaaInteriorWeighting::Off;
             break;
         case AntiAliasingPreset::TemporalBalanced:
             result.motionSource =
@@ -700,8 +665,6 @@ namespace uvsr
                 MiniEngineTaaHistoryFilter::Bilinear;
             result.rectification =
                 MiniEngineTaaRectification::PairRgb;
-            result.interiorWeighting =
-                MiniEngineTaaInteriorWeighting::Off;
             break;
         case AntiAliasingPreset::TemporalQuality:
             result.motionSource =
@@ -712,8 +675,6 @@ namespace uvsr
                 MiniEngineTaaHistoryFilter::OneSampleBicubic;
             result.rectification =
                 MiniEngineTaaRectification::VarianceYCoCg;
-            result.interiorWeighting =
-                MiniEngineTaaInteriorWeighting::Off;
             break;
         case AntiAliasingPreset::TemporalUltra:
             result.motionSource =
@@ -724,8 +685,6 @@ namespace uvsr
                 MiniEngineTaaHistoryFilter::FiveTapCatmullRom;
             result.rectification =
                 MiniEngineTaaRectification::VarianceYCoCg;
-            result.interiorWeighting =
-                MiniEngineTaaInteriorWeighting::Off;
             break;
         default:
             break;
@@ -863,28 +822,8 @@ namespace uvsr
         {
         case MiniEngineTaaRectificationOverride::PairRgb:
             return MiniEngineTaaRectification::PairRgb;
-        case MiniEngineTaaRectificationOverride::PerPixelRgb:
-            return MiniEngineTaaRectification::PerPixelRgb;
-        case MiniEngineTaaRectificationOverride::PerPixelYCoCg:
-            return MiniEngineTaaRectification::PerPixelYCoCg;
         case MiniEngineTaaRectificationOverride::VarianceYCoCg:
             return MiniEngineTaaRectification::VarianceYCoCg;
-        default:
-            return preset;
-        }
-    }
-
-    [[nodiscard]] inline constexpr MiniEngineTaaInteriorWeighting
-        ResolveStableInteriorOverride(
-            MiniEngineTaaInteriorWeighting preset,
-            MiniEngineTaaStableInteriorOverride overrideValue)
-    {
-        switch (overrideValue)
-        {
-        case MiniEngineTaaStableInteriorOverride::Off:
-            return MiniEngineTaaInteriorWeighting::Off;
-        case MiniEngineTaaStableInteriorOverride::On:
-            return MiniEngineTaaInteriorWeighting::StableInterior;
         default:
             return preset;
         }
@@ -1088,10 +1027,6 @@ namespace uvsr
         result.temporal.rectification = ResolveRectificationOverride(
             result.temporal.rectification,
             settings.algorithmOverrides.rectification);
-        result.temporal.interiorWeighting =
-            ResolveStableInteriorOverride(
-                result.temporal.interiorWeighting,
-                settings.algorithmOverrides.stableInterior);
 
         // Standalone CMAA2 is a complete method, not a presentation mode.
         // An override left over from a combined Temporal or MSAA
@@ -1367,16 +1302,6 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr uint32_t
-        GetMiniEngineTaaHistoryMomentSampleCount(
-            MiniEngineTaaInteriorWeighting weighting)
-    {
-        return weighting ==
-                MiniEngineTaaInteriorWeighting::StableInterior
-            ? 1u
-            : 0u;
-    }
-
-    [[nodiscard]] inline constexpr uint32_t
         GetMiniEngineTaaHistoryDepthSampleCount(
             MiniEngineTaaHistoryFilter filter)
     {
@@ -1415,19 +1340,6 @@ namespace uvsr
         }
     }
 
-    [[nodiscard]] inline constexpr const char*
-        GetMiniEngineTaaInteriorWeightingLabel(
-            MiniEngineTaaInteriorWeighting value)
-    {
-        switch (value)
-        {
-        case MiniEngineTaaInteriorWeighting::Off: return "Off";
-        case MiniEngineTaaInteriorWeighting::StableInterior:
-            return "Stable Interior";
-        default: return "Unavailable";
-        }
-    }
-
     [[nodiscard]] inline constexpr const char* GetMiniEngineTaaHistoryFilterLabel(
         MiniEngineTaaHistoryFilter value)
     {
@@ -1451,10 +1363,6 @@ namespace uvsr
         {
         case MiniEngineTaaRectification::PairRgb:
             return "Pair Tristimulus";
-        case MiniEngineTaaRectification::PerPixelRgb:
-            return "Per-Pixel Tristimulus";
-        case MiniEngineTaaRectification::PerPixelYCoCg:
-            return "Per-Pixel Chroma";
         case MiniEngineTaaRectification::VarianceYCoCg:
             return "Variance Chroma";
         default: return "Unavailable";
@@ -1629,10 +1537,6 @@ namespace uvsr
             return "Preset";
         case MiniEngineTaaRectificationOverride::PairRgb:
             return "Pair Tristimulus";
-        case MiniEngineTaaRectificationOverride::PerPixelRgb:
-            return "Per-Pixel Tristimulus";
-        case MiniEngineTaaRectificationOverride::PerPixelYCoCg:
-            return "Per-Pixel Chroma";
         case MiniEngineTaaRectificationOverride::VarianceYCoCg:
             return "Variance Chroma";
         default:
@@ -1787,8 +1691,6 @@ namespace uvsr
         switch (value)
         {
         case MiniEngineTaaDebugView::Off: return "Off";
-        case MiniEngineTaaDebugView::StableInterior:
-            return "Stable-Interior Score";
         case MiniEngineTaaDebugView::FinalHistoryWeight:
             return "Final History Weight";
         case MiniEngineTaaDebugView::SampleResurrection:

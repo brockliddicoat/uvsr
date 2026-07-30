@@ -27,6 +27,15 @@ requested measured frame with zero incomplete frames. Older NVIDIA measurements
 remain historical cross-adapter evidence and are labeled as such. No timing
 cited from another product or GPU is a UVSR result.
 
+The 2026-07-29 Runtime-only retirement supersedes every later row that describes
+Fixed, Generic, unpacked Offline, or packed Offline sampling as retained or
+current. Those rows remain historical measurement evidence. The current build
+uses one 1-64 Runtime implementation, Independent Hash or Toroidal Blue, and no
+Offline asset or delivery path. The continuous
+[shader path retirement postmortem](postmortem/shader-path-retirements.md)
+records the current count, decision rationale, restoration bars, and next
+candidates.
+
 ## Removed Feature Disposition
 
 These decisions override older inventory rows that say an experiment was

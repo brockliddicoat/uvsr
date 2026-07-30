@@ -1541,99 +1541,6 @@ static void SetCanonicalVisibilityBenchmarkDefaults(
     visibility.showIndirectDiffuseOnly = false;
 }
 
-static uint32_t GetVisibilityFixedSampleCount(
-    VisibilitySampleSpecialization specialization)
-{
-    switch (specialization)
-    {
-    case VisibilitySampleSpecialization::Fixed8: return 8u;
-    case VisibilitySampleSpecialization::Fixed12: return 12u;
-    case VisibilitySampleSpecialization::Fixed16: return 16u;
-    case VisibilitySampleSpecialization::Fixed20: return 20u;
-    case VisibilitySampleSpecialization::Fixed24: return 24u;
-    case VisibilitySampleSpecialization::Fixed48: return 48u;
-    case VisibilitySampleSpecialization::Fixed64: return 64u;
-    default: return 0u;
-    }
-}
-
-static constexpr std::array<std::pair<
-    uint32_t,
-    VisibilitySampleSpecialization>, 7>
-    VisibilityFixedSampleSpecializations = {{
-        { 8u, VisibilitySampleSpecialization::Fixed8 },
-        { 12u, VisibilitySampleSpecialization::Fixed12 },
-        { 16u, VisibilitySampleSpecialization::Fixed16 },
-        { 20u, VisibilitySampleSpecialization::Fixed20 },
-        { 24u, VisibilitySampleSpecialization::Fixed24 },
-        { 48u, VisibilitySampleSpecialization::Fixed48 },
-        { 64u, VisibilitySampleSpecialization::Fixed64 }
-    }};
-
-static VisibilitySampleSpecialization
-    GetNearestVisibilityFixedSampleSpecialization(uint32_t requestedCount)
-{
-    auto nearest = VisibilityFixedSampleSpecializations.front();
-    uint32_t nearestDistance =
-        requestedCount > nearest.first
-            ? requestedCount - nearest.first
-            : nearest.first - requestedCount;
-    for (const auto& candidate : VisibilityFixedSampleSpecializations)
-    {
-        const uint32_t distance =
-            requestedCount > candidate.first
-                ? requestedCount - candidate.first
-                : candidate.first - requestedCount;
-        if (distance < nearestDistance)
-        {
-            nearest = candidate;
-            nearestDistance = distance;
-        }
-    }
-    return nearest.second;
-}
-
-static int GetVisibilityFixedSampleSpecializationIndex(
-    VisibilitySampleSpecialization specialization)
-{
-    for (size_t index = 0u;
-        index < VisibilityFixedSampleSpecializations.size();
-        ++index)
-    {
-        if (VisibilityFixedSampleSpecializations[index].second ==
-            specialization)
-        {
-            return int(index);
-        }
-    }
-    return 0;
-}
-
-static bool CanonicalizeFixedVisibilitySampling(
-    ScreenSpaceVisibilitySettings& visibility)
-{
-    const VisibilityPerformanceProfileConfiguration configuration =
-        GetEffectiveVisibilityPerformanceConfiguration(visibility);
-    const bool usesFixedDistribution =
-        configuration.trace ==
-            VisibilityTraceImplementation::FixedInterleavedBitmask &&
-        (GetVisibilityFixedSampleCount(
-                configuration.firstBounceSamples) != 0u ||
-            GetVisibilityFixedSampleCount(
-                configuration.laterBounceSamples) != 0u);
-    if (!usesFixedDistribution ||
-        visibility.sampling.stepDistributionExponent == 2.f)
-    {
-        return false;
-    }
-
-    // Fixed traversal bakes the quadratic radial distribution into the shader.
-    // Repair stale/custom state instead of letting plan selection reject the
-    // fixed shader and silently run the generic fallback.
-    visibility.sampling.stepDistributionExponent = 2.f;
-    return true;
-}
-
 static bool ApplyVisibilityVerificationProfileDefaults(
     ScreenSpaceVisibilitySettings& visibility,
     VisibilityVerificationProfile profile)
@@ -1668,14 +1575,7 @@ static bool ApplyVisibilityVerificationProfileDefaults(
         visibility.sampling.scheduler =
             VisibilitySampleScheduler::ToroidalBlueNoiseRankField;
         break;
-    case VisibilityPerformanceScheduler::
-            FilterAdaptedSpatiotemporalRankField:
-        visibility.sampling.scheduler = VisibilitySampleScheduler::
-            FilterAdaptedSpatiotemporalRankField;
-        break;
     default:
-        // Advanced schedulers are selected by their implementation profile
-        // and have no generic user-facing scheduler enum.
         visibility.sampling.scheduler =
             VisibilitySampleScheduler::IndependentHash;
         break;
@@ -1713,11 +1613,7 @@ static bool ApplyVisibilityPerformanceProfileDefaults(
     visibility.performanceProfile = profile;
     ResetVisibilityComposableSettings(visibility, profile);
 
-    uint32_t firstBounceSampleCount = GetVisibilityFixedSampleCount(
-        configuration.firstBounceSamples);
-    if (firstBounceSampleCount == 0u)
-        firstBounceSampleCount = 8u;
-    visibility.sampling.maximumSampleCount = firstBounceSampleCount;
+    visibility.sampling.maximumSampleCount = 8u;
 
     switch (configuration.consumerRequirement)
     {
@@ -1759,11 +1655,6 @@ static bool ApplyVisibilityPerformanceProfileDefaults(
         visibility.resolution = VisibilityResolution::Half;
     }
 
-    if (configuration.noise == VisibilityNoiseDelivery::PackedCurrentFast)
-    {
-        visibility.sampling.scheduler = VisibilitySampleScheduler::
-            FilterAdaptedSpatiotemporalRankField;
-    }
     visibility.reconstruction.temporalEnabled = false;
     visibility.reconstruction.spatialEnabled = false;
     return true;
@@ -2198,10 +2089,6 @@ static std::string FindVisibilityVerificationSettingsMismatch(
                 expectedConfiguration.laterBounceSamples,
             "Trace or sample specialization does not match the profile."
             )).empty())
-        return reason;
-    if (!(reason = mismatch(
-            observedConfiguration.noise != expectedConfiguration.noise,
-            "Noise delivery does not match the profile.")).empty())
         return reason;
     if (!(reason = mismatch(
             observedConfiguration.math != expectedConfiguration.math,
@@ -5998,9 +5885,6 @@ public:
             << "  \"rectification\": "
             << std::quoted(GetMiniEngineTaaRectificationLabel(
                 resolved.temporal.rectification)) << ",\n"
-            << "  \"stable_interior\": "
-            << std::quoted(GetMiniEngineTaaInteriorWeightingLabel(
-                resolved.temporal.interiorWeighting)) << ",\n"
             << "  \"sample_resurrection\": "
             << std::quoted(GetMiniEngineTaaSampleResurrectionLabel(
                 resolved.sampleResurrection)) << ",\n"
@@ -6841,10 +6725,7 @@ public:
                 m_CommonPasses,
                 m_RenderTargets->HdrColor,
                 m_RenderTargets->Depth,
-                m_RenderTargets->MotionVectors,
-                m_ui.GetResolvedAntiAliasingSettings()
-                        .temporal.interiorWeighting ==
-                    MiniEngineTaaInteriorWeighting::StableInterior);
+                m_RenderTargets->MotionVectors);
     }
 
     void EnsureMsaaVisibilityResolvePass()
@@ -7035,12 +6916,11 @@ public:
                         m_ShaderFactory,
                         m_CommonPasses);
             }
-            m_ScreenSpaceVisibilityPass = std::make_unique<ScreenSpaceVisibilityPass>(
-                GetDevice(),
-                m_ShaderFactory,
-                m_CommonPasses,
-                app::GetDirectoryWithExecutable().parent_path() /
-                    "media/noise/visibility_filter_adapted_gauss1_ema035_r8.bin");
+            m_ScreenSpaceVisibilityPass =
+                std::make_unique<ScreenSpaceVisibilityPass>(
+                    GetDevice(),
+                    m_ShaderFactory,
+                    m_CommonPasses);
         }
         else
         {
@@ -8334,13 +8214,6 @@ public:
 
     virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override
     {
-        if (CanonicalizeFixedVisibilitySampling(
-                m_ui.ScreenSpaceVisibility))
-        {
-            log::warning(
-                "Fixed visibility sampling restored its required 2.00 "
-                "distribution exponent");
-        }
         if (g_VisibilityTaaPrimeFramesRemaining != 0u &&
             --g_VisibilityTaaPrimeFramesRemaining == 0u)
         {
@@ -8561,16 +8434,8 @@ public:
                 needNewPasses = !refreshAntiAliasingTargetPasses;
             }
 
-            const bool temporalPassMomentLayoutChanged =
-                m_MiniEngineTemporalAAPass &&
-                m_MiniEngineTemporalAAPass
-                        ->IsMomentHistoryRequested() !=
-                    (m_ui.GetResolvedAntiAliasingSettings()
-                            .temporal.interiorWeighting ==
-                        MiniEngineTaaInteriorWeighting::StableInterior);
             const bool refreshTemporalPass =
-                temporalAARequired != bool(m_MiniEngineTemporalAAPass) ||
-                temporalPassMomentLayoutChanged;
+                temporalAARequired != bool(m_MiniEngineTemporalAAPass);
             if (SetupView())
             {
                 needNewPasses = true;
@@ -8609,9 +8474,9 @@ public:
             }
             else if (refreshTemporalPass)
             {
-                // A method/Stable Interior transition does not invalidate
-                // forward, G-buffer, lighting, visibility, sky, or output
-                // passes while the render-target topology stays unchanged.
+                // A method transition does not invalidate forward, G-buffer,
+                // lighting, visibility, sky, or output passes while the
+                // render-target topology stays unchanged.
                 CreateMiniEngineTemporalAAPass();
             }
 
@@ -9441,9 +9306,6 @@ public:
                 m_ScreenSpaceVisibilityPass->GetTimings();
             const VisibilityBufferPrecisionSettings& precision =
                 m_ui.ScreenSpaceVisibility.performance.bufferPrecision;
-            const VisibilityPerformanceProfileConfiguration configuration =
-                GetEffectiveVisibilityPerformanceConfiguration(
-                    m_ui.ScreenSpaceVisibility);
             std::ostringstream settings;
             settings
                 << "resolution=full;samples=20;"
@@ -9455,22 +9317,8 @@ public:
                             VisibilitySampleScheduler::
                                 ToroidalBlueNoiseRankField
                         ? "toroidal"
-                        : m_ui.ScreenSpaceVisibility.sampling.scheduler ==
-                                VisibilitySampleScheduler::
-                                    FilterAdaptedSpatiotemporalRankField
-                            ? "filter-adapted"
-                            : m_ui.ScreenSpaceVisibility.sampling.scheduler ==
-                                    VisibilitySampleScheduler::IndependentHash
-                                ? "independent-hash"
-                                : "offline-unpacked")
-                << ";noise="
-                << (configuration.noise ==
-                        VisibilityNoiseDelivery::PackedCurrentFast
-                    ? "packed-current-fast" : "legacy")
-                << ";trace="
-                << (configuration.trace ==
-                        VisibilityTraceImplementation::LegacyGenericBitmask
-                    ? "generic-runtime" : "fixed20")
+                        : "independent-hash")
+                << ";trace=runtime"
                 << ";ao_precision="
                 << (precision.rawAmbient ==
                         VisibilityScalarBufferPrecision::Float16
@@ -11345,26 +11193,10 @@ private:
         {
         case VisibilityPerformanceProfile::Reference:
             return "Standard";
-        case VisibilityPerformanceProfile::ExactFixed8:
-            return "Fixed 8";
-        case VisibilityPerformanceProfile::ExactFixed12:
-            return "Fixed 12";
-        case VisibilityPerformanceProfile::ExactFixed16:
-            return "Fixed 16";
-        case VisibilityPerformanceProfile::ExactFixed20:
-            return "Fixed 20";
-        case VisibilityPerformanceProfile::ExactFixed24:
-            return "Fixed 24";
-        case VisibilityPerformanceProfile::ExactFixed48:
-            return "Fixed 48";
-        case VisibilityPerformanceProfile::ExactFixed64:
-            return "Fixed 64";
-        case VisibilityPerformanceProfile::ExactPackedCurrentFast:
-            return "Packed Spacetime";
+        case VisibilityPerformanceProfile::Runtime:
+            return "Custom";
         case VisibilityPerformanceProfile::ExactFusedResolveApply:
             return "Fused";
-        case VisibilityPerformanceProfile::ExactFixed8FusedResolveApply:
-            return "Fixed 8 Fused";
         case VisibilityPerformanceProfile::AlgorithmicPackedEdges2x2:
             return "Depth Guided";
         case VisibilityPerformanceProfile::
@@ -11376,8 +11208,6 @@ private:
             return "Leakage Limited";
         case VisibilityPerformanceProfile::AlgorithmicFusedPackedEdges2x2:
             return "Fused Depth Normal";
-        case VisibilityPerformanceProfile::GenericFallback:
-            return "Custom";
         default:
             return {};
         }
@@ -11431,72 +11261,6 @@ private:
             return "Half";
         case VisibilityPerformanceResolution::Quarter:
             return "Quarter";
-        default:
-            return "Unknown";
-        }
-    }
-
-    static const char* GetSchedulerLabel(
-        VisibilityPerformanceScheduler scheduler)
-    {
-        switch (scheduler)
-        {
-        case VisibilityPerformanceScheduler::IndependentHash:
-            return "Independent Hash";
-        case VisibilityPerformanceScheduler::ToroidalBlueNoiseRankField:
-            return "Toroidal Blue";
-        case VisibilityPerformanceScheduler::
-                FilterAdaptedSpatiotemporalRankField:
-            return "Unpacked Offline";
-        default:
-            return "Unknown";
-        }
-    }
-
-    static const char* GetTraceLabel(
-        VisibilityTraceImplementation trace)
-    {
-        switch (trace)
-        {
-        case VisibilityTraceImplementation::LegacyGenericBitmask:
-            return "Generic Bitmask";
-        case VisibilityTraceImplementation::FixedInterleavedBitmask:
-            return "Fixed Bitmask";
-        default:
-            return "Unknown";
-        }
-    }
-
-    static const char* GetSampleSpecializationLabel(
-        VisibilitySampleSpecialization specialization)
-    {
-        switch (specialization)
-        {
-        case VisibilitySampleSpecialization::Generic:
-            return "Generic";
-        case VisibilitySampleSpecialization::Runtime:
-            return "Runtime";
-        case VisibilitySampleSpecialization::Fixed8:
-        case VisibilitySampleSpecialization::Fixed12:
-        case VisibilitySampleSpecialization::Fixed16:
-        case VisibilitySampleSpecialization::Fixed20:
-        case VisibilitySampleSpecialization::Fixed24:
-        case VisibilitySampleSpecialization::Fixed48:
-        case VisibilitySampleSpecialization::Fixed64:
-            return "Fixed";
-        default:
-            return "Unknown";
-        }
-    }
-
-    static const char* GetNoiseDeliveryLabel(VisibilityNoiseDelivery noise)
-    {
-        switch (noise)
-        {
-        case VisibilityNoiseDelivery::Legacy:
-            return "Scheduler";
-        case VisibilityNoiseDelivery::PackedCurrentFast:
-            return "Packed Offline";
         default:
             return "Unknown";
         }
@@ -11654,8 +11418,6 @@ private:
     {
         switch (bindings)
         {
-        case VisibilityBindingStrategy::LegacyBroad:
-            return "Broad";
         case VisibilityBindingStrategy::MinimalConditional:
             return "Minimal";
         default:
@@ -15748,7 +15510,7 @@ protected:
         const ImGuiStyle& style = ImGui::GetStyle();
         const float settingsControlWidth =
             ImGui::CalcTextSize(
-                "Filter-Adapted Spatiotemporal Noise").x +
+                "Cosine-Weighted Solid Angle").x +
             style.FramePadding.x * 2.f;
 
         const char* rendererString = GetDeviceManager()->GetRendererString();
@@ -16282,7 +16044,6 @@ protected:
                 "##VisibilityBody",
                 settingsControlWidth);
             ScreenSpaceVisibilitySettings& visibility = m_ui.ScreenSpaceVisibility;
-            CanonicalizeFixedVisibilitySampling(visibility);
             const bool visibilityAvailable =
                 m_ui.IsScreenSpaceVisibilityAvailable();
             if (!visibilityAvailable)
@@ -16290,14 +16051,6 @@ protected:
             if (visibilityBenchmarkBusy)
                 ImGui::BeginDisabled();
 
-            const ScreenSpaceVisibilityTimings* visibilityTimings =
-                m_app->GetScreenSpaceVisibilityTimings();
-            const VisibilityPerformanceWorkload observedWorkload =
-                GetRenderedVisibilityPerformanceWorkload(
-                    visibility,
-                    uint32_t(std::max(width, 0)),
-                    uint32_t(std::max(height, 0)),
-                    visibilityTimings);
             const VisibilityPerformanceProfileConfiguration
                 activeConfiguration =
                     GetEffectiveVisibilityPerformanceConfiguration(
@@ -16351,24 +16104,6 @@ protected:
                 {
                     switchVisibilityToCustom();
                     return visibilityPointer->performance.configuration;
-                };
-            auto applyNoiseCategory =
-                [editableConfiguration, visibilityPointer](
-                    VisibilityPerformanceProfile profile)
-                {
-                    const auto source =
-                        GetVisibilityPerformanceProfileConfiguration(profile);
-                    auto& target = editableConfiguration();
-                    target.noise = source.noise;
-                    target.bindings = VisibilityBindingStrategy::
-                        MinimalConditional;
-                    if (source.noise ==
-                        VisibilityNoiseDelivery::PackedCurrentFast)
-                    {
-                        visibilityPointer->sampling.scheduler =
-                            VisibilitySampleScheduler::
-                                FilterAdaptedSpatiotemporalRankField;
-                    }
                 };
             auto applyReconstructionCategory =
                 [editableConfiguration, visibilityPointer](
@@ -16532,18 +16267,18 @@ protected:
                 "Low", "Medium", "High", "Ultra"
             };
             static const char* qualityPresetDescriptions[] = {
-                "Quarter resolution, Uniform Projected Angle, exact 8 "
-                    "samples, Offline Packed Spacetime Noise, compact "
+                "Quarter resolution, Uniform Projected Angle, 8 samples, "
+                    "Toroidal Blue noise, compact "
                     "depth-normal joint-bilateral upsampling, and one GI "
                     "bounce.",
-                "Half resolution, exact 8 samples, Offline Packed Spacetime "
+                "Half resolution, 8 samples, Toroidal Blue "
                     "Noise, compact depth-normal joint-bilateral upsampling, "
                     "and one GI bounce.",
-                "Factory default: full resolution, exact 20 samples, "
-                    "Offline Packed Spacetime Noise, Performance Precision "
+                "Factory default: full resolution, 20 samples, Toroidal Blue "
+                    "noise, Performance Precision "
                     "buffers, and one GI bounce.",
-                "Full resolution, exact 48 samples, Offline Packed "
-                    "Spacetime Noise, Default Precision buffers, and two "
+                "Full resolution, 48 samples, Toroidal Blue "
+                    "noise, Default Precision buffers, and two "
                     "GI bounces."
             };
             const bool qualityPresetSelected =
@@ -16600,141 +16335,6 @@ protected:
                     ScreenSpaceVisibilityQuality::High);
             }
 
-            const auto drawSampleCountModeControl = [&]()
-                {
-                    SharedSamplingSettings& sampling = visibility.sampling;
-                    const auto setSampleCountMode =
-                        [editableConfiguration, visibilityPointer](
-                            VisibilitySampleSpecialization mode)
-                        {
-                            auto& target = editableConfiguration();
-                            target.bindings =
-                                VisibilityBindingStrategy::MinimalConditional;
-                            target.estimatorRequirement =
-                                VisibilityEstimatorRequirement::Any;
-                            target.consumerRequirement =
-                                VisibilityConsumerRequirement::Any;
-                            target.benchmarkOnly = false;
-                            if (GetVisibilityFixedSampleCount(mode) != 0u)
-                            {
-                                const VisibilitySampleSpecialization fixedMode =
-                                    GetNearestVisibilityFixedSampleSpecialization(
-                                        visibilityPointer->sampling
-                                            .maximumSampleCount);
-                                target.trace = VisibilityTraceImplementation::
-                                    FixedInterleavedBitmask;
-                                target.firstBounceSamples = fixedMode;
-                                target.laterBounceSamples = fixedMode;
-                                visibilityPointer->sampling.maximumSampleCount =
-                                    GetVisibilityFixedSampleCount(fixedMode);
-                                visibilityPointer->sampling
-                                    .stepDistributionExponent = 2.f;
-                            }
-                            else
-                            {
-                                target.trace = VisibilityTraceImplementation::
-                                    LegacyGenericBitmask;
-                                target.firstBounceSamples = mode;
-                                target.laterBounceSamples = mode;
-                            }
-                        };
-                    ImGui::SetNextItemWidth(settingsControlWidth);
-                    if (BeginRoundedCombo(
-                            "Sample Count Mode",
-                            GetSampleSpecializationLabel(
-                                activeConfiguration.firstBounceSamples)))
-                    {
-                        struct SampleModeOption
-                        {
-                            const char* label;
-                            VisibilitySampleSpecialization specialization;
-                        };
-                        // Intel validation established Runtime as the compact
-                        // path and Fixed as the most expensive path.
-                        constexpr SampleModeOption sampleModes[] = {
-                            { "Runtime",
-                                VisibilitySampleSpecialization::Runtime },
-                            { "Generic",
-                                VisibilitySampleSpecialization::Generic },
-                            { "Fixed",
-                                VisibilitySampleSpecialization::Fixed20 }
-                        };
-                        for (const SampleModeOption& option : sampleModes)
-                        {
-                            const uint32_t firstFixedCount =
-                                GetVisibilityFixedSampleCount(
-                                    activeConfiguration.firstBounceSamples);
-                            const bool selected =
-                                GetVisibilityFixedSampleCount(
-                                    option.specialization) != 0u
-                                    ? firstFixedCount != 0u &&
-                                        activeConfiguration
-                                                .firstBounceSamples ==
-                                            activeConfiguration
-                                                .laterBounceSamples
-                                    : activeConfiguration
-                                                .firstBounceSamples ==
-                                            option.specialization &&
-                                        activeConfiguration
-                                                .laterBounceSamples ==
-                                            option.specialization;
-                            std::string optionId = option.label;
-                            // Keep the visible option text in the ImGui ID. A
-                            // triple-hash would give every row the same ID.
-                            optionId += "##VisibilitySampleCountMode";
-                            DrawDeferredDropdownOption(
-                                optionId.c_str(),
-                                option.label,
-                                selected,
-                                [setSampleCountMode, option]()
-                                {
-                                    setSampleCountMode(
-                                        option.specialization);
-                                });
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::SetItemTooltip(
-                        "Fixed fully unrolls one of seven packaged counts. "
-                        "Generic uses the robust dynamic loop. Runtime selects "
-                        "a compact CPU-validated even or odd loop while "
-                        "retaining the full 1-64 range.");
-                    if (DrawNestedDropdownResetIcon(
-                            "Visibility Sample Count Mode",
-                            activeConfiguration.trace !=
-                                    visibilityPresetConfiguration.trace ||
-                                activeConfiguration.firstBounceSamples !=
-                                    visibilityPresetConfiguration
-                                        .firstBounceSamples ||
-                                activeConfiguration.laterBounceSamples !=
-                                    visibilityPresetConfiguration
-                                        .laterBounceSamples ||
-                                sampling.maximumSampleCount !=
-                                    visibilityPreset.sampling
-                                        .maximumSampleCount))
-                    {
-                        auto& target = editableConfiguration();
-                        target.trace = visibilityPresetConfiguration.trace;
-                        target.firstBounceSamples =
-                            visibilityPresetConfiguration.firstBounceSamples;
-                        target.laterBounceSamples =
-                            visibilityPresetConfiguration.laterBounceSamples;
-                        target.bindings =
-                            visibilityPresetConfiguration.bindings;
-                        target.estimatorRequirement =
-                            visibilityPresetConfiguration
-                                .estimatorRequirement;
-                        target.consumerRequirement =
-                            visibilityPresetConfiguration
-                                .consumerRequirement;
-                        target.benchmarkOnly =
-                            visibilityPresetConfiguration.benchmarkOnly;
-                        sampling.maximumSampleCount =
-                            visibilityPreset.sampling.maximumSampleCount;
-                        finishVisibilityPresetReset();
-                    }
-                };
-
             if (BeginAnimatedTreeNode(
                     "Shared Visibility Sampling",
                     ImGuiTreeNodeFlags_DefaultOpen))
@@ -16783,18 +16383,12 @@ protected:
                 }
                 static const char* schedulerLabels[] = {
                     "Independent Hash",
-                    "Toroidal Blue",
-                    "Unpacked Offline"
+                    "Toroidal Blue"
                 };
-                const char* noisePatternLabel =
-                    activeConfiguration.noise ==
-                            VisibilityNoiseDelivery::PackedCurrentFast
-                        ? GetNoiseDeliveryLabel(activeConfiguration.noise)
-                        : GetSchedulerLabel(observedWorkload.scheduler);
                 ImGui::SetNextItemWidth(settingsControlWidth);
                 if (BeginRoundedCombo(
                         "Noise Pattern",
-                        noisePatternLabel))
+                        schedulerLabels[int(sampling.scheduler)]))
                 {
                     for (int index = 0;
                         index < int(std::size(schedulerLabels));
@@ -16802,79 +16396,37 @@ protected:
                     {
                         const auto scheduler =
                             VisibilitySampleScheduler(index);
-                        const bool selected =
-                            activeConfiguration.noise ==
-                                VisibilityNoiseDelivery::Legacy &&
-                            sampling.scheduler == scheduler;
+                        const bool selected = sampling.scheduler == scheduler;
                         DrawDeferredDropdownOption(
                             schedulerLabels[index],
                             schedulerLabels[index],
                             selected,
-                            [applyNoiseCategory,
+                            [switchVisibilityToCustom,
                                 visibilityPointer,
                                 scheduler]()
                             {
-                                applyNoiseCategory(
-                                    VisibilityPerformanceProfile::
-                                        GenericFallback);
                                 visibilityPointer->sampling.scheduler =
                                     scheduler;
+                                switchVisibilityToCustom();
                             });
                         if (selected)
                             ImGui::SetItemDefaultFocus();
                     }
-                    ImGui::Separator();
-                    constexpr VisibilityPerformanceProfile packedNoiseProfile =
-                        VisibilityPerformanceProfile::ExactPackedCurrentFast;
-                    const auto packedNoiseConfiguration =
-                        GetVisibilityPerformanceProfileConfiguration(
-                            packedNoiseProfile);
-                    const bool packedNoiseSelected =
-                        activeConfiguration.noise ==
-                            packedNoiseConfiguration.noise;
-                    const char* packedNoiseLabel =
-                        GetNoiseDeliveryLabel(
-                            packedNoiseConfiguration.noise);
-                    DrawDeferredDropdownOption(
-                        packedNoiseLabel,
-                        packedNoiseLabel,
-                        packedNoiseSelected,
-                        [applyNoiseCategory, packedNoiseProfile]()
-                        {
-                            applyNoiseCategory(packedNoiseProfile);
-                        });
-                    ImGui::SetItemTooltip(
-                        "Use the same offline-computed values as the scalar "
-                        "option, prepacked into one RGBA8 lookup. This is an "
-                        "exact delivery change for every selectable exact "
-                        "sample count.");
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip(
-                    "Choose both the sample sequence and its delivery. The "
-                    "packed option is computed offline and fetched as one "
-                    "four-channel value.");
+                    "Choose independent hashing or the tiled Toroidal Blue "
+                    "rank field used by the quality presets.");
                 if (DrawNestedDropdownResetIcon(
                         "Visibility Noise Pattern",
-                        activeConfiguration.noise !=
-                                visibilityPresetConfiguration.noise ||
-                            sampling.scheduler !=
+                        sampling.scheduler !=
                                 visibilityPreset.sampling.scheduler))
                 {
-                    auto& target = editableConfiguration();
-                    target.noise = visibilityPresetConfiguration.noise;
-                    target.bindings =
-                        visibilityPresetConfiguration.bindings;
                     sampling.scheduler =
                         visibilityPreset.sampling.scheduler;
                     finishVisibilityPresetReset();
                 }
 
-                const bool fixedSampleCount =
-                    GetVisibilityFixedSampleCount(
-                        activeConfiguration.firstBounceSamples) != 0u &&
-                    activeConfiguration.firstBounceSamples ==
-                        activeConfiguration.laterBounceSamples;
                 const ImGuiID sampleSliderId =
                     ImGui::GetID("Samples##VisibilitySamples");
                 ImGuiStorage* sampleSliderStorage =
@@ -16883,14 +16435,8 @@ protected:
                     sampleSliderId ^ ImGuiID(0x65D1A903u);
                 const ImGuiID samplePendingKey =
                     sampleSliderId ^ ImGuiID(0x49BC2E17u);
-                const int committedSliderValue =
-                    fixedSampleCount
-                        ? GetVisibilityFixedSampleSpecializationIndex(
-                            activeConfiguration.firstBounceSamples)
-                        : int(std::clamp(
-                            sampling.maximumSampleCount,
-                            1u,
-                            64u));
+                const int committedSliderValue = int(std::clamp(
+                    sampling.maximumSampleCount, 1u, 64u));
                 if (!sampleSliderStorage->GetBool(
                         samplePendingKey, false))
                 {
@@ -16904,26 +16450,14 @@ protected:
                         committedSliderValue);
                 sampleSliderValue = std::clamp(
                     sampleSliderValue,
-                    0,
-                    fixedSampleCount
-                        ? int(VisibilityFixedSampleSpecializations.size()) - 1
-                        : 64);
-                const std::string fixedSampleFormat =
-                    fixedSampleCount
-                        ? std::to_string(
-                            VisibilityFixedSampleSpecializations[
-                                size_t(sampleSliderValue)].first)
-                        : std::string("%d");
+                    1,
+                    64);
                 const bool sampleSliderChanged = DrawSliderInt(
                         "Samples##VisibilitySamples",
                         &sampleSliderValue,
-                        fixedSampleCount ? 0 : 1,
-                        fixedSampleCount
-                            ? int(
-                                VisibilityFixedSampleSpecializations.size()) -
-                                1
-                            : 64,
-                        fixedSampleFormat.c_str(),
+                        1,
+                        64,
+                        "%d",
                         ImGuiSliderFlags_AlwaysClamp);
                 if (sampleSliderChanged)
                 {
@@ -16944,49 +16478,17 @@ protected:
                         sampleSliderStorage->GetInt(
                             samplePreviewKey,
                             committedSliderValue);
-                    if (fixedSampleCount)
-                    {
-                        const VisibilitySampleSpecialization fixedMode =
-                            VisibilityFixedSampleSpecializations[
-                                size_t(std::clamp(
-                                    committedPreview,
-                                    0,
-                                    int(
-                                        VisibilityFixedSampleSpecializations
-                                            .size()) - 1))].second;
-                        auto& target = editableConfiguration();
-                        target.trace = VisibilityTraceImplementation::
-                            FixedInterleavedBitmask;
-                        target.firstBounceSamples = fixedMode;
-                        target.laterBounceSamples = fixedMode;
-                        sampling.maximumSampleCount =
-                            GetVisibilityFixedSampleCount(fixedMode);
-                        sampling.stepDistributionExponent = 2.f;
-                    }
-                    else
-                    {
-                        sampling.maximumSampleCount =
-                            uint32_t(std::clamp(
-                                committedPreview,
-                                1,
-                                64));
-                    }
+                    sampling.maximumSampleCount =
+                        uint32_t(std::clamp(committedPreview, 1, 64));
                     sampleSliderStorage->SetBool(
                         samplePendingKey,
                         false);
                     samplingChanged = true;
                 }
                 ImGui::SetItemTooltip(
-                    fixedSampleCount
-                        ? "Choose a packaged fully unrolled count. The seven "
-                            "slider positions are 8, 12, 16, 20, 24, 48, and "
-                            "64, avoiding a "
-                            "roughly 900 MiB all-count shader archive."
-                        : "Set the radial-sample budget used by AO and every "
-                            "GI bounce. Generic is always robust; Runtime "
-                            "selects a compact parity shader for the supported "
-                            "High-style AO+GI path and otherwise falls back "
-                            "safely to Generic.");
+                    "Set the 1-64 radial-sample budget used by AO and every "
+                    "GI bounce. Runtime validates the count and selects a "
+                    "compact even, odd, or guarded loop.");
                 if (DrawPresetResetIcon(
                         "Visibility Samples",
                         sampling.maximumSampleCount !=
@@ -16995,26 +16497,8 @@ protected:
                     sampleSliderStorage->SetBool(
                         samplePendingKey,
                         false);
-                    if (fixedSampleCount)
-                    {
-                        const VisibilitySampleSpecialization fixedMode =
-                            GetNearestVisibilityFixedSampleSpecialization(
-                                visibilityPreset.sampling
-                                    .maximumSampleCount);
-                        auto& target = editableConfiguration();
-                        target.trace = VisibilityTraceImplementation::
-                            FixedInterleavedBitmask;
-                        target.firstBounceSamples = fixedMode;
-                        target.laterBounceSamples = fixedMode;
-                        sampling.maximumSampleCount =
-                            GetVisibilityFixedSampleCount(fixedMode);
-                        sampling.stepDistributionExponent = 2.f;
-                    }
-                    else
-                    {
-                        sampling.maximumSampleCount =
-                            visibilityPreset.sampling.maximumSampleCount;
-                    }
+                    sampling.maximumSampleCount =
+                        visibilityPreset.sampling.maximumSampleCount;
                     finishVisibilityPresetReset();
                 }
 
@@ -17038,6 +16522,25 @@ protected:
                 {
                     sampling.thickness =
                         visibilityPreset.sampling.thickness;
+                    finishVisibilityPresetReset();
+                }
+                samplingChanged |= DrawSliderFloat(
+                    "Distribution",
+                    &sampling.stepDistributionExponent,
+                    0.5f,
+                    4.0f,
+                    "%.2f");
+                ImGui::SetItemTooltip(
+                    "Increase to place more visibility samples nearby.");
+                if (DrawPresetResetIcon(
+                        "Visibility Distribution Exponent",
+                        sampling.stepDistributionExponent !=
+                            visibilityPreset.sampling
+                                .stepDistributionExponent))
+                {
+                    sampling.stepDistributionExponent =
+                        visibilityPreset.sampling
+                            .stepDistributionExponent;
                     finishVisibilityPresetReset();
                 }
 
@@ -17345,10 +16848,10 @@ protected:
                         {
                             applyReconstructionCategory(
                                 VisibilityPerformanceProfile::
-                                    GenericFallback);
+                                    Runtime);
                             applyApplicationCategory(
                                 VisibilityPerformanceProfile::
-                                    GenericFallback);
+                                    Runtime);
                             visibilityPointer->resolution =
                                 VisibilityResolution::Full;
                             reconstructionPointer->spatialEnabled = false;
@@ -17368,10 +16871,10 @@ protected:
                         {
                             applyReconstructionCategory(
                                 VisibilityPerformanceProfile::
-                                    GenericFallback);
+                                    Runtime);
                             applyApplicationCategory(
                                 VisibilityPerformanceProfile::
-                                    GenericFallback);
+                                    Runtime);
                             if (visibilityPointer->resolution ==
                                 VisibilityResolution::Full)
                             {
@@ -17399,10 +16902,10 @@ protected:
                         {
                             applyReconstructionCategory(
                                 VisibilityPerformanceProfile::
-                                    GenericFallback);
+                                    Runtime);
                             applyApplicationCategory(
                                 VisibilityPerformanceProfile::
-                                    GenericFallback);
+                                    Runtime);
                             reconstructionPointer->spatialEnabled = true;
                             reconstructionPointer->spatialFilter =
                                 VisibilitySpatialFilter::JointBilateral;
@@ -17426,10 +16929,10 @@ protected:
                         {
                             applyReconstructionCategory(
                                 VisibilityPerformanceProfile::
-                                    GenericFallback);
+                                    Runtime);
                             applyApplicationCategory(
                                 VisibilityPerformanceProfile::
-                                    GenericFallback);
+                                    Runtime);
                             reconstructionPointer->spatialEnabled = true;
                             reconstructionPointer->spatialFilter =
                                 VisibilitySpatialFilter::
@@ -17484,7 +16987,7 @@ protected:
                                     applyReconstructionCategory(profile);
                                     applyApplicationCategory(
                                         VisibilityPerformanceProfile::
-                                            GenericFallback);
+                                            Runtime);
                                     if (visibilityPointer->resolution ==
                                         VisibilityResolution::Full)
                                     {
@@ -17584,7 +17087,7 @@ protected:
                         {
                             applyApplicationCategory(
                                 VisibilityPerformanceProfile::
-                                    GenericFallback);
+                                    Runtime);
                         });
                     struct ApplicationOption
                     {
@@ -17654,52 +17157,6 @@ protected:
                         visibilityPresetConfiguration
                             .resolutionRequirement;
                     finishVisibilityPresetReset();
-                }
-                EndAnimatedTreeNode();
-            }
-
-            if (BeginAnimatedTreeNode(
-                    "Developer Options##VisibilityDeveloperOptions"))
-            {
-                drawSampleCountModeControl();
-                SharedSamplingSettings& sampling = visibility.sampling;
-                const bool fixedSampleCount =
-                    GetVisibilityFixedSampleCount(
-                        activeConfiguration.firstBounceSamples) != 0u &&
-                    activeConfiguration.firstBounceSamples ==
-                        activeConfiguration.laterBounceSamples;
-                ImGui::BeginDisabled(fixedSampleCount);
-                const bool distributionExponentChanged = DrawSliderFloat(
-                    "Distribution",
-                    &sampling.stepDistributionExponent,
-                    0.5f,
-                    4.0f,
-                    "%.2f");
-                ImGui::SetItemTooltip(
-                    fixedSampleCount
-                        ? "Fixed sample shaders bake a quadratic (2.00) "
-                            "distribution. Choose Generic or Runtime to edit "
-                            "this value."
-                        : "Higher values place more samples nearby.");
-                if (DrawPresetResetIcon(
-                        "Visibility Distribution Exponent",
-                        sampling.stepDistributionExponent !=
-                            visibilityPreset.sampling
-                                .stepDistributionExponent))
-                {
-                    sampling.stepDistributionExponent =
-                        visibilityPreset.sampling
-                            .stepDistributionExponent;
-                    finishVisibilityPresetReset();
-                }
-                ImGui::EndDisabled();
-
-                if (distributionExponentChanged)
-                {
-                    MarkScreenSpaceVisibilityQualityCustom(visibility);
-                    MakeVisibilityPerformanceComposable(visibility);
-                    m_ui.VisibilityVerification =
-                        VisibilityVerificationProfile::Unset;
                 }
                 EndAnimatedTreeNode();
             }
@@ -18250,11 +17707,6 @@ protected:
                                 ImGui::Text("%u", temporalTimings->historyColorSamples);
                             else drawPendingTemporalValue();
                             beginAntiAliasingStatisticsRow(
-                                "History Moment Samples");
-                            if (temporalTimings)
-                                ImGui::Text("%u", temporalTimings->historyMomentSamples);
-                            else drawPendingTemporalValue();
-                            beginAntiAliasingStatisticsRow(
                                 "History Depth Access");
                             if (temporalTimings)
                             {
@@ -18744,12 +18196,9 @@ protected:
                 const bool firstTraceActive = statsPlan.valid &&
                     statsVisibility.HasActiveConsumer();
                 const bool laterTraceActive = statsPlan.valid &&
-                    (HasVisibilityExecutionPass(
+                    HasVisibilityExecutionPass(
                         statsPlan.passMask,
-                        VisibilityExecutionPass::LegacyLaterBounceTrace) ||
-                     HasVisibilityExecutionPass(
-                        statsPlan.passMask,
-                        VisibilityExecutionPass::FixedLaterBounceTrace));
+                        VisibilityExecutionPass::RuntimeLaterBounceTrace);
                 const bool reconstructionActive = statsPlan.valid &&
                     HasVisibilityExecutionPass(
                         statsPlan.passMask,
@@ -18936,9 +18385,6 @@ protected:
                             "Optional Candidate Total",
                             timings->optionalTextureBytes);
                         drawSectionRow("Candidate Textures");
-                        drawAllocatedMibRow(
-                            "  Offline Packed Noise",
-                            timings->packedFastNoiseBytes);
                         drawAllocatedMibRow(
                             "  Packed Edge Metadata",
                             timings->packedEdgeMetadataBytes);
@@ -19756,8 +19202,8 @@ protected:
                 ImGui::SetItemTooltip(
                     "%s",
                     "Scale accepted history after motion, bounds, reverse-Z "
-                    "depth, disocclusion, rectification, and stable-interior "
-                    "gates. Values above 100% strengthen only accepted "
+                    "depth, disocclusion, and rectification gates. Values "
+                    "above 100% strengthen only accepted "
                     "history, remain capped by the selected frame horizon, "
                     "and cannot revive a rejected sample.");
                 if (DrawPresetResetIcon(
@@ -19824,58 +19270,6 @@ protected:
                     }
                 };
 
-            const auto drawStableInteriorControl = [&]()
-                {
-                    MiniEngineTaaAlgorithmOverrides& algorithmOverrides =
-                        settings.algorithmOverrides;
-                    AntiAliasingSettings stableInteriorPresetSettings =
-                        settings;
-                    stableInteriorPresetSettings.algorithmOverrides =
-                        MiniEngineTaaAlgorithmOverrides{};
-                    const bool presetStableInterior =
-                        m_ui.GetResolvedAntiAliasingSettings(
-                                stableInteriorPresetSettings)
-                                .temporal.interiorWeighting ==
-                            MiniEngineTaaInteriorWeighting::StableInterior;
-                    const bool inherited =
-                        algorithmOverrides.stableInterior ==
-                        MiniEngineTaaStableInteriorOverride::FromPreset;
-                    bool stableInterior = inherited
-                        ? presetStableInterior
-                        : algorithmOverrides.stableInterior ==
-                            MiniEngineTaaStableInteriorOverride::On;
-                    std::string stableInteriorLabel = "Stable Interior";
-                    stableInteriorLabel += "##Stable Interior";
-                    if (ImGui::Checkbox(
-                            stableInteriorLabel.c_str(),
-                            &stableInterior))
-                    {
-                        if (stableInterior == presetStableInterior)
-                        {
-                            algorithmOverrides.stableInterior =
-                                MiniEngineTaaStableInteriorOverride::
-                                    FromPreset;
-                        }
-                        else
-                        {
-                            algorithmOverrides.stableInterior =
-                                stableInterior
-                                ? MiniEngineTaaStableInteriorOverride::On
-                                : MiniEngineTaaStableInteriorOverride::Off;
-                        }
-                    }
-                    ImGui::SetItemTooltip(
-                        "Reduce coherent interior history toward the clarity "
-                        "floor. Every preset leaves this off.");
-                    if (DrawPresetResetIcon(
-                            "Aliasing Stable Interior",
-                            !inherited))
-                    {
-                        algorithmOverrides.stableInterior =
-                            MiniEngineTaaStableInteriorOverride::FromPreset;
-                    }
-                };
-
             const auto drawRectificationControl = [&]()
                 {
                     MiniEngineTaaAlgorithmOverrides& algorithmOverrides =
@@ -19888,11 +19282,9 @@ protected:
                         m_ui.GetResolvedAntiAliasingSettings(
                             rectificationPresetSettings);
                     static constexpr std::array<
-                        MiniEngineTaaRectificationOverride, 4>
+                        MiniEngineTaaRectificationOverride, 2>
                         rectificationOrder = {
                             MiniEngineTaaRectificationOverride::PairRgb,
-                            MiniEngineTaaRectificationOverride::PerPixelRgb,
-                            MiniEngineTaaRectificationOverride::PerPixelYCoCg,
                             MiniEngineTaaRectificationOverride::VarianceYCoCg
                         };
                     drawEnumOption(
@@ -19900,7 +19292,7 @@ protected:
                         algorithmOverrides.rectification,
                         rectificationOrder,
                         GetMiniEngineTaaRectificationOverrideLabel,
-                        "Override pair, per-pixel, or variance-aware history "
+                        "Choose pair-clamp RGB or variance-aware YCoCg history "
                         "rectification.",
                         GetMiniEngineTaaRectificationLabel(
                             resolvedForLabels.temporal.rectification));
@@ -20177,6 +19569,7 @@ protected:
                         "including the full nine-tap Catmull-Rom option.",
                         GetMiniEngineTaaHistoryFilterLabel(
                             resolvedForLabels.temporal.historyFilter));
+                    drawRectificationControl();
                 }
                 else
                 {
@@ -20199,14 +19592,6 @@ protected:
                 }
 #endif
 
-                EndAnimatedTreeNode();
-            }
-            if (longTermTemporalControlsAvailable &&
-                BeginAnimatedTreeNode(
-                    "Developer Options##AliasingDeveloperOptions"))
-            {
-                drawRectificationControl();
-                drawStableInteriorControl();
                 EndAnimatedTreeNode();
             }
             EndAnimatedToggleRegion();
@@ -22769,18 +22154,6 @@ bool ProcessCommandLine(
                 aaBenchmark.settings.algorithmOverrides.rectification =
                     MiniEngineTaaRectificationOverride::PairRgb;
             }
-            else if (value == "pixel-rgb" ||
-                value == "per-pixel-rgb")
-            {
-                aaBenchmark.settings.algorithmOverrides.rectification =
-                    MiniEngineTaaRectificationOverride::PerPixelRgb;
-            }
-            else if (value == "pixel-ycocg" ||
-                value == "per-pixel-ycocg")
-            {
-                aaBenchmark.settings.algorithmOverrides.rectification =
-                    MiniEngineTaaRectificationOverride::PerPixelYCoCg;
-            }
             else if (value == "variance" ||
                 value == "variance-ycocg")
             {
@@ -22792,8 +22165,7 @@ bool ProcessCommandLine(
                 return invalidValue(
                     "--aa-rectification",
                     value,
-                    "preset|pair-rgb|per-pixel-rgb|"
-                    "per-pixel-ycocg|variance-ycocg");
+                    "preset|pair-rgb|variance-ycocg");
             }
         }
         else if (!strcmp(argv[i], "--aa-execution"))
@@ -23862,46 +23234,11 @@ int main(int __argc, const char* const* __argv)
                 log::info(
                     "UVSR_PERF applied variant token: performance32");
             }
-            if (perf.HasVariant("legacynoise"))
-            {
-                visibility.performance.configuration.noise =
-                    VisibilityNoiseDelivery::Legacy;
-                log::info(
-                    "UVSR_PERF applied variant token: legacynoise");
-            }
             if (perf.HasVariant("toroidal"))
             {
                 visibility.sampling.scheduler =
                     VisibilitySampleScheduler::ToroidalBlueNoiseRankField;
-                visibility.performance.configuration.noise =
-                    VisibilityNoiseDelivery::Legacy;
                 log::info("UVSR_PERF applied variant token: toroidal");
-            }
-            if (perf.HasVariant("generic20"))
-            {
-                VisibilityPerformanceProfileConfiguration& configuration =
-                    visibility.performance.configuration;
-                configuration.trace =
-                    VisibilityTraceImplementation::LegacyGenericBitmask;
-                configuration.firstBounceSamples =
-                    VisibilitySampleSpecialization::Runtime;
-                configuration.laterBounceSamples =
-                    VisibilitySampleSpecialization::Runtime;
-                configuration.name = "UVSR PERF Generic Runtime 20";
-                log::info("UVSR_PERF applied variant token: generic20");
-            }
-            if (perf.HasVariant("fixed20"))
-            {
-                VisibilityPerformanceProfileConfiguration& configuration =
-                    visibility.performance.configuration;
-                configuration.trace =
-                    VisibilityTraceImplementation::FixedInterleavedBitmask;
-                configuration.firstBounceSamples =
-                    VisibilitySampleSpecialization::Fixed20;
-                configuration.laterBounceSamples =
-                    VisibilitySampleSpecialization::Fixed20;
-                configuration.name = "UVSR PERF Fixed 20";
-                log::info("UVSR_PERF applied variant token: fixed20");
             }
             if (perf.HasVariant("timersoff"))
             {

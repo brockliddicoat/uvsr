@@ -23,7 +23,7 @@
 #endif
 
 Texture2D<float4> TemporalColor : register(t0);
-Texture2D<float2> DebugValues : register(t1);
+Texture2D<float> DebugValues : register(t1);
 RWTexture2D<float4> OutColor : register(u0);
 
 cbuffer InlineConstants : register(b0)
@@ -38,23 +38,10 @@ void main(uint3 DTid : SV_DispatchThreadID)
     if (any(DTid.xy >= BufferDim))
         return;
 
-#if TAA_DEBUG_VIEW == UVSR_TAA_DEBUG_STABLE_INTERIOR
-    float value = DebugValues[DTid.xy].x;
-    OutColor[DTid.xy] = float4(
-        MiniEngineTaaDebugHeatmap(value),
-        1.0);
-#elif TAA_DEBUG_VIEW == UVSR_TAA_DEBUG_FINAL_HISTORY_WEIGHT
+#if TAA_DEBUG_VIEW == UVSR_TAA_DEBUG_FINAL_HISTORY_WEIGHT
     float storedConfidence = TemporalColor[DTid.xy].w;
-    float baseHistoryWeight = saturate(
+    float value = saturate(
         2.0 - rcp(max(storedConfidence, 1e-6)));
-    float stableInteriorScore = DebugValues[DTid.xy].x;
-    float reductionTarget = min(
-        baseHistoryWeight,
-        UVSR_TAA_STABLE_INTERIOR_FLOOR);
-    float value = lerp(
-        baseHistoryWeight,
-        reductionTarget,
-        stableInteriorScore);
     OutColor[DTid.xy] = float4(
         MiniEngineTaaDebugHeatmap(value),
         1.0);
@@ -64,7 +51,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     //   0.25        eligible, no candidate accepted
     //   0.50..0.70  first older frame, contribution in the offset
     //   0.75..0.95  second older frame, contribution in the offset
-    float value = DebugValues[DTid.xy].y;
+    float value = DebugValues[DTid.xy];
     float3 debugColor = 0.0;
     if (value > 0.0 && value < 0.5)
     {

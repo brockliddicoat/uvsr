@@ -203,7 +203,7 @@ int main(int argc, char** argv)
         "README line-count verification policy");
     ExpectContains(
         uiReferenceSource,
-        "UI reference version: `2026-07-29.3`.",
+        "UI reference version: `2026-07-29.4`.",
         "current UI reference version");
     ExpectContains(
         uiReferenceSource,
@@ -649,35 +649,22 @@ int main(int argc, char** argv)
         "VisibilityResolution::Half",
         "VisibilityResolution::Full",
         "Visibility sampling-resolution expense order");
-    ExpectContains(
+    ExpectAbsent(
         visibility,
         "\"Sample Count Mode\"",
-        "Visibility sample-count mode");
-    ExpectContains(
-        visibility,
-        "{ \"Fixed\",\n"
-        "                                VisibilitySampleSpecialization::Fixed20 }",
-        "Visibility fixed sample-count option");
-    ExpectContains(
-        visibility,
-        "{ \"Generic\",\n"
-        "                                VisibilitySampleSpecialization::Generic },",
-        "Visibility generic sample-count option");
-    ExpectContains(
-        visibility,
-        "{ \"Runtime\",\n"
-        "                                VisibilitySampleSpecialization::Runtime },",
-        "Visibility optimized runtime sample-count option");
-    ExpectOrdered(
-        visibility,
-        "{ \"Runtime\",",
-        "{ \"Generic\",",
-        "Visibility sample-count mode cost order");
-    ExpectOrdered(
-        visibility,
-        "{ \"Generic\",",
-        "{ \"Fixed\",",
-        "Visibility sample-count mode cost order");
+        "retired Visibility sample-count mode");
+    ExpectAbsent(
+        source,
+        "Filter-Adapted Spatiotemporal Noise",
+        "retired Visibility offline-noise UI label");
+    ExpectAbsent(
+        source,
+        "VisibilitySampleSpecialization::Fixed",
+        "retired Visibility fixed-count specialization");
+    ExpectAbsent(
+        source,
+        "VisibilitySampleSpecialization::Generic",
+        "retired Visibility generic specialization");
     ExpectContains(
         visibility,
         "DrawSliderInt(",
@@ -688,49 +675,7 @@ int main(int argc, char** argv)
         "Visibility shared sample-count slider");
     ExpectContains(
         visibility,
-        "GetNearestVisibilityFixedSampleSpecialization(",
-        "Visibility fixed sample-count snapping");
-    ExpectContains(
-        visibility,
-        "\"slider positions are 8, 12, 16, 20, 24, 48, and \"",
-        "Visibility fixed sample-count archive contract");
-    ExpectContains(
-        source,
-        "static bool CanonicalizeFixedVisibilitySampling(",
-        "Visibility fixed-mode state canonicalization");
-    const std::string_view fixedSamplingCanonicalization = ExtractSection(
-        source,
-        "static bool CanonicalizeFixedVisibilitySampling(",
-        "static bool ApplyVisibilityVerificationProfileDefaults(",
-        "Visibility fixed-mode state canonicalization");
-    ExpectContains(
-        fixedSamplingCanonicalization,
-        "VisibilityTraceImplementation::FixedInterleavedBitmask",
-        "Visibility fixed-mode trace identification");
-    ExpectContains(
-        fixedSamplingCanonicalization,
-        "visibility.sampling.stepDistributionExponent = 2.f;",
-        "Visibility fixed-mode quadratic state repair");
-    ExpectContains(
-        source,
-        "CanonicalizeFixedVisibilitySampling(\n"
-        "                m_ui.ScreenSpaceVisibility)",
-        "Visibility fixed-mode pre-render canonicalization");
-    ExpectContains(
-        visibility,
-        "CanonicalizeFixedVisibilitySampling(visibility);",
-        "Visibility fixed-mode pre-UI canonicalization");
-    ExpectContains(
-        visibility,
-        "ImGui::BeginDisabled(fixedSampleCount);",
-        "Visibility fixed-mode exponent lock");
-    ExpectContains(
-        visibility,
-        "\"Fixed sample shaders bake a quadratic (2.00) \"",
-        "Visibility fixed-mode exponent explanation");
-    ExpectContains(
-        visibility,
-        "\"Offline Packed Spacetime Noise, Performance Precision \"",
+        "\"Factory default: full resolution, 20 samples, Toroidal Blue \"",
         "High visibility profile precision description");
     ExpectContains(
         source,
@@ -747,7 +692,7 @@ int main(int argc, char** argv)
     ExpectAbsent(
         visibility,
         "\"Runtime Samples##VisibilityRuntimeSamples\"",
-        "removed runtime-only sample slider");
+        "duplicate Runtime-only sample slider");
     ExpectContains(
         visibility,
         "BeginAnimatedToggleRegion(",
@@ -776,7 +721,7 @@ int main(int argc, char** argv)
         "\"Shared Visibility Sampling\"",
         "\"Ambient Occlusion\"",
         "Shared Visibility Sampling panel");
-    ExpectAbsent(
+    ExpectContains(
         sharedVisibilitySampling,
         "\"Distribution\"",
         "Shared Visibility Sampling production controls");
@@ -784,33 +729,15 @@ int main(int argc, char** argv)
         sharedVisibilitySampling,
         "\"Sample Count Mode\"",
         "Shared Visibility Sampling developer sample-count mode");
-    ExpectContains(
-        visibility,
-        "if (BeginAnimatedTreeNode(\n"
-        "                    \"Developer Options##VisibilityDeveloperOptions\"))",
-        "default-collapsed Visibility Developer Options panel");
     ExpectOrdered(
-        visibility,
-        "\"Reconstruction##VisibilityReconstruction\"",
-        "\"Developer Options##VisibilityDeveloperOptions\"",
-        "Visibility Developer Options panel position");
-    const std::string_view visibilityDeveloperOptions = ExtractSection(
-        visibility,
-        "\"Developer Options##VisibilityDeveloperOptions\"",
-        "EndAnimatedToggleRegion();",
-        "Visibility Developer Options panel");
-    ExpectContains(
-        visibilityDeveloperOptions,
-        "drawSampleCountModeControl();",
-        "Sample Count Mode Developer Options placement");
-    ExpectContains(
-        visibilityDeveloperOptions,
+        sharedVisibilitySampling,
+        "\"Thickness\"",
         "\"Distribution\"",
-        "Visibility Developer Options panel");
+        "Visibility Distribution placement");
     ExpectAbsent(
-        visibilityDeveloperOptions,
-        "BeginAnimatedTreeNode(",
-        "Visibility controls after Developer Options");
+        visibility,
+        "\"Developer Options##VisibilityDeveloperOptions\"",
+        "retired Visibility Developer Options panel");
     ExpectAbsent(
         visibility,
         "\"Radial Distribution Exponent\"",
@@ -1387,18 +1314,12 @@ int main(int argc, char** argv)
     ExpectOrdered(
         rectificationOrder,
         "PairRgb",
-        "PerPixelRgb",
-        "TAA Rectification expense order");
-    ExpectOrdered(
-        rectificationOrder,
-        "PerPixelRgb",
-        "PerPixelYCoCg",
-        "TAA Rectification expense order");
-    ExpectOrdered(
-        rectificationOrder,
-        "PerPixelYCoCg",
         "VarianceYCoCg",
         "TAA Rectification expense order");
+    ExpectAbsent(
+        rectificationOrder,
+        "PerPixel",
+        "retired TAA per-pixel rectification choices");
     const std::string_view reconstructionOrder = ExtractSection(
         aliasing,
         "reconstructionOrder = {",
@@ -1480,17 +1401,14 @@ int main(int argc, char** argv)
             std::string_view("\"Early History Rejection\""),
             std::string_view("\"Pass Fusion\""),
             std::string_view("\"Cache Blocking\""),
-            std::string_view("\"Debug View\"") })
+            std::string_view("\"Debug View\""),
+            std::string_view("\"Stable Interior\"") })
     {
         ExpectAbsent(
             aliasing,
             removedPerformanceControl,
             "removed Aliasing developer dropdown");
     }
-    ExpectContains(
-        aliasing,
-        "\"Stable Interior\"",
-        "retained Stable Interior control");
     ExpectAbsent(
         aliasing,
         "\"Developer Performance Overrides\"",
@@ -1500,35 +1418,24 @@ int main(int argc, char** argv)
         "drawDejitterControl();",
         "\"Sharpness###Sharpness\"",
         "Dejitter control order");
-    ExpectContains(
+    ExpectAbsent(
         aliasing,
-        "if (longTermTemporalControlsAvailable &&\n"
-        "                BeginAnimatedTreeNode(\n"
-        "                    \"Developer Options##AliasingDeveloperOptions\"))",
-        "default-collapsed Aliasing Developer Options panel");
-    ExpectOrdered(
+        "\"Developer Options##AliasingDeveloperOptions\"",
+        "removed Aliasing Developer Options panel");
+    const std::string_view aliasingAlgorithmConfiguration = ExtractSection(
         aliasing,
         "\"Aliasing Algorithm Configuration\"",
-        "\"Developer Options##AliasingDeveloperOptions\"",
-        "Aliasing Developer Options panel position");
-    const std::string_view aliasingDeveloperOptions = ExtractSection(
-        aliasing,
-        "\"Developer Options##AliasingDeveloperOptions\"",
-        "EndAnimatedToggleRegion();",
-        "Aliasing Developer Options panel");
+        "// Resurrection remains last",
+        "Aliasing Algorithm Configuration panel");
     ExpectContains(
-        aliasingDeveloperOptions,
+        aliasingAlgorithmConfiguration,
         "drawRectificationControl();",
-        "Rectification Developer Options placement");
-    ExpectContains(
-        aliasingDeveloperOptions,
-        "drawStableInteriorControl();",
-        "Stable Interior Developer Options placement");
+        "Rectification Algorithm Configuration placement");
     ExpectOrdered(
-        aliasingDeveloperOptions,
+        aliasingAlgorithmConfiguration,
+        "\"Reconstruction\"",
         "drawRectificationControl();",
-        "drawStableInteriorControl();",
-        "Aliasing Developer Options control order");
+        "Aliasing Algorithm Configuration control order");
     ExpectAbsent(
         aliasing,
         "(Preset)",
@@ -2356,7 +2263,6 @@ int main(int argc, char** argv)
     constexpr const char* visibilityNestedResetCalls[] = {
         "DrawNestedDropdownResetIcon(\"VisibilityEstimator\",",
         "DrawNestedDropdownResetIcon(\"VisibilityNoisePattern\",",
-        "DrawNestedDropdownResetIcon(\"VisibilitySampleCountMode\",",
         "DrawNestedDropdownResetIcon(\"VisibilityReconstructionMethod\",",
         "DrawNestedDropdownResetIcon(\"VisibilityFinalApplication\","
     };
@@ -2423,7 +2329,7 @@ int main(int argc, char** argv)
             "nested dropdown reset helper definition"},
         {
             visibility,
-            5u,
+            4u,
             "Visibility nested dropdown resets"},
         {
             aliasing,
@@ -2722,14 +2628,14 @@ int main(int argc, char** argv)
         source,
         "FormatTriangleCount(snapshot.submittedTriangles)",
         "compact submitted-triangle status");
-    ExpectContains(
+    ExpectAbsent(
         source,
         "return \"Unpacked Offline\"",
-        "unpacked offline noise label");
-    ExpectContains(
+        "retired unpacked Offline noise label");
+    ExpectAbsent(
         source,
         "return \"Packed Offline\"",
-        "packed offline noise label");
+        "retired packed Offline noise label");
     ExpectAbsent(
         source,
         "return \"Spacetime Noise\"",

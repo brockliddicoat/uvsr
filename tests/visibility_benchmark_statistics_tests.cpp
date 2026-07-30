@@ -52,9 +52,9 @@ namespace
     void TestDelayedOutOfOrderCorrelationAndMetadata()
     {
         VisibilityBenchmarkRunConfiguration configuration;
-        configuration.metadata.profileName = "Exact Fixed 8";
+        configuration.metadata.profileName = "Runtime AO 8T";
         configuration.metadata.permutationKey =
-            "AO/Fixed8/UniformSolidAngle/ExactMath";
+            "AO/Runtime8/UniformSolidAngle/ExactMath";
         configuration.metadata.adapterName = "Intel(R) Arc(TM) Graphics";
         configuration.metadata.clockState = "stable, telemetry available";
         configuration.firstFrameId = 100u;

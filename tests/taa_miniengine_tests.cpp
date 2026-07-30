@@ -188,16 +188,6 @@ int main(int argc, char** argv)
     const uvsr::MiniEngineTaaOptions ultraOptions =
         uvsr::GetPresetTemporalOptions(
             Preset::TemporalUltra);
-    for (uint32_t presetIndex = 0u;
-        presetIndex < static_cast<uint32_t>(Preset::Count);
-        ++presetIndex)
-    {
-        passed &= Check(
-            uvsr::GetPresetTemporalOptions(
-                static_cast<Preset>(presetIndex)).interiorWeighting ==
-                uvsr::MiniEngineTaaInteriorWeighting::Off,
-            "every anti-aliasing preset must leave Stable Interior off");
-    }
     passed &= Check(
         performanceOptions.motionSource ==
                 uvsr::MiniEngineTaaMotionSource::Center &&
@@ -217,9 +207,7 @@ int main(int argc, char** argv)
             balancedOptions.historyFilter ==
                 uvsr::MiniEngineTaaHistoryFilter::Bilinear &&
             balancedOptions.rectification ==
-                uvsr::MiniEngineTaaRectification::PairRgb &&
-            balancedOptions.interiorWeighting ==
-                uvsr::MiniEngineTaaInteriorWeighting::Off,
+                uvsr::MiniEngineTaaRectification::PairRgb,
         "Temporal Medium must leave Dejitter off, use bilinear history "
         "reconstruction, and default to Pair Tristimulus rectification");
     passed &= Check(
@@ -228,9 +216,7 @@ int main(int argc, char** argv)
             qualityOptions.currentReconstruction ==
                 uvsr::MiniEngineTaaCurrentReconstruction::Direct &&
             qualityOptions.rectification ==
-                uvsr::MiniEngineTaaRectification::VarianceYCoCg &&
-            qualityOptions.interiorWeighting ==
-                uvsr::MiniEngineTaaInteriorWeighting::Off,
+                uvsr::MiniEngineTaaRectification::VarianceYCoCg,
         "Temporal High must leave Dejitter off and use one-sample bicubic history reconstruction");
     passed &= Check(
         ultraOptions.historyFilter ==
@@ -238,9 +224,7 @@ int main(int argc, char** argv)
             ultraOptions.currentReconstruction ==
                 uvsr::MiniEngineTaaCurrentReconstruction::DeJittered &&
             ultraOptions.rectification ==
-                uvsr::MiniEngineTaaRectification::VarianceYCoCg &&
-            ultraOptions.interiorWeighting ==
-                uvsr::MiniEngineTaaInteriorWeighting::Off,
+                uvsr::MiniEngineTaaRectification::VarianceYCoCg,
         "Temporal Ultra alone must enable Dejitter and use five-tap bicubic history reconstruction");
 
     uvsr::AntiAliasingSettings temporal;
@@ -405,9 +389,7 @@ int main(int argc, char** argv)
     productionControls.algorithmOverrides.historyFilter =
         uvsr::MiniEngineTaaHistoryFilterOverride::NineTapCatmullRom;
     productionControls.algorithmOverrides.rectification =
-        uvsr::MiniEngineTaaRectificationOverride::PerPixelRgb;
-    productionControls.algorithmOverrides.stableInterior =
-        uvsr::MiniEngineTaaStableInteriorOverride::On;
+        uvsr::MiniEngineTaaRectificationOverride::VarianceYCoCg;
     productionControls.algorithmOverrides.subpixelMorphology =
         uvsr::MorphologyApplicationOverride::
             ConservativeMorphological;
@@ -426,8 +408,6 @@ int main(int argc, char** argv)
                 productionControls.algorithmOverrides.historyFilter &&
             compiledControls.algorithmOverrides.rectification ==
                 productionControls.algorithmOverrides.rectification &&
-            compiledControls.algorithmOverrides.stableInterior ==
-                productionControls.algorithmOverrides.stableInterior &&
             compiledControls.algorithmOverrides.subpixelMorphology ==
                 productionControls.algorithmOverrides.subpixelMorphology &&
             compiledControls.algorithmOverrides.sampleResurrection ==
@@ -446,9 +426,6 @@ int main(int argc, char** argv)
     for (uint32_t current = 0u;
         current < uvsr::MiniEngineTaaCurrentReconstructionCount;
         ++current)
-    for (uint32_t interior = 0u;
-        interior < uvsr::MiniEngineTaaInteriorWeightingCount;
-        ++interior)
     for (uint32_t history = 0u;
         history < uvsr::MiniEngineTaaHistoryFilterCount;
         ++history)
@@ -461,8 +438,6 @@ int main(int argc, char** argv)
             static_cast<uvsr::MiniEngineTaaMotionSource>(motion);
         options.currentReconstruction =
             static_cast<uvsr::MiniEngineTaaCurrentReconstruction>(current);
-        options.interiorWeighting =
-            static_cast<uvsr::MiniEngineTaaInteriorWeighting>(interior);
         options.historyFilter =
             static_cast<uvsr::MiniEngineTaaHistoryFilter>(history);
         options.rectification =
@@ -479,7 +454,28 @@ int main(int argc, char** argv)
     passed &= Check(
         observedTaaPermutationCount ==
             uvsr::MiniEngineTaaBlendPermutationCount,
-        "all 192 normal-user TAA algorithms must have unique PSO indices");
+        "all 48 retained TAA algorithms must have unique PSO indices");
+    passed &= Check(
+        static_cast<uint32_t>(
+            uvsr::MiniEngineTaaRectification::PairRgb) == 0u &&
+            static_cast<uint32_t>(
+                uvsr::MiniEngineTaaRectification::VarianceYCoCg) == 1u &&
+            uvsr::MiniEngineTaaRectificationCount == 2u,
+        "retained rectification modes must use the compact Pair/Variance ABI");
+    passed &= Check(
+        static_cast<uint32_t>(uvsr::MiniEngineTaaDebugView::Off) == 0u &&
+            static_cast<uint32_t>(
+                uvsr::MiniEngineTaaDebugView::FinalHistoryWeight) == 1u &&
+            static_cast<uint32_t>(
+                uvsr::MiniEngineTaaDebugView::SampleResurrection) == 2u &&
+            uvsr::MiniEngineTaaResolveDebugViewCount == 3u,
+        "retained TAA debug views must use compact contiguous IDs");
+    passed &= Check(
+        uvsr::GetMiniEngineTaaHistoryBytes(1920u, 1080u) ==
+                uint64_t(1920u) * 1080u * 24u &&
+            uvsr::GetMiniEngineTaaDebugBytes(1920u, 1080u) ==
+                uint64_t(1920u) * 1080u * 2u,
+        "retired moment history and debug channel must not remain allocated");
 
     passed &= Check(
         uvsr::GetMiniEngineTaaHistoryColorSampleCount(

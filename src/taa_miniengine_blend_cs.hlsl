@@ -24,9 +24,6 @@
 #ifndef TAA_CURRENT_RECONSTRUCTION
 #error TAA_CURRENT_RECONSTRUCTION must be a compile-time shader define
 #endif
-#ifndef TAA_INTERIOR_WEIGHTING
-#error TAA_INTERIOR_WEIGHTING must be a compile-time shader define
-#endif
 #ifndef TAA_HISTORY_FILTER
 #error TAA_HISTORY_FILTER must be a compile-time shader define
 #endif
@@ -77,8 +74,7 @@ static const uint kColorBorder = 1;
 #endif
 
 #if TAA_MOTION_SOURCE == UVSR_TAA_MOTION_CLOSEST_CROSS || \
-    TAA_MOTION_SOURCE == UVSR_TAA_MOTION_CENTER_FIRST_EDGE_DILATION || \
-    TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
+    TAA_MOTION_SOURCE == UVSR_TAA_MOTION_CENTER_FIRST_EDGE_DILATION
 #define TAA_NEEDS_LDS_MOTION 1
 #else
 #define TAA_NEEDS_LDS_MOTION 0
@@ -116,31 +112,24 @@ static const uint kCorePixelCount =
 #endif
 static const float kFarViewDepth = 65504.0;
 static const float kFiniteHdrLimit = 65504.0;
-// Stable Interior is a clarity adjustment, not a second rejection path.
-// Seven-eighths history is a conservative absolute floor: enough current
-// signal to reduce interior blur without exposing the eight jitter phases.
-static const float kStableInteriorFloor =
-    UVSR_TAA_STABLE_INTERIOR_FLOOR;
 
 #if TAA_PIXEL_SHADER
 static float4 PixelOutTemporal;
 static float PixelOutDepth;
-static float2 PixelOutMoments;
-static float2 PixelOutDebug;
+static float PixelOutDebug;
 static float4 PixelOutMorphologyCurrent;
 static float PixelOutMorphologyRejection;
 static float4 PixelOutFusedScene;
 #else
 RWTexture2D<float4> OutTemporal : register(u0);
 RWTexture2D<float> OutDepth : register(u1);
-RWTexture2D<float2> OutMoments : register(u2);
 #if TAA_DEVELOPER_DEBUG
-RWTexture2D<float2> OutDebug : register(u3);
+RWTexture2D<float> OutDebug : register(u2);
 #endif
-RWTexture2D<float4> OutMorphologyCurrent : register(u4);
-RWTexture2D<float> OutMorphologyRejection : register(u5);
+RWTexture2D<float4> OutMorphologyCurrent : register(u3);
+RWTexture2D<float> OutMorphologyRejection : register(u4);
 #if TAA_FUSED_OUTPUT
-RWTexture2D<float4> OutFusedScene : register(u6);
+RWTexture2D<float4> OutFusedScene : register(u5);
 #endif
 #endif
 
@@ -149,12 +138,11 @@ Texture2D<float3> InColor : register(t1);
 Texture2D<float4> InTemporal : register(t2);
 Texture2D<float> CurDepth : register(t3);
 Texture2D<float> PreDepth : register(t4);
-Texture2D<float2> InMoments : register(t5);
 #if TAA_SAMPLE_RESURRECTION
-Texture2D<float4> PersistentColor0 : register(t6);
-Texture2D<float> PersistentDepth0 : register(t7);
-Texture2D<float4> PersistentColor1 : register(t8);
-Texture2D<float> PersistentDepth1 : register(t9);
+Texture2D<float4> PersistentColor0 : register(t5);
+Texture2D<float> PersistentDepth0 : register(t6);
+Texture2D<float4> PersistentColor1 : register(t7);
+Texture2D<float> PersistentDepth1 : register(t8);
 #endif
 
 SamplerState LinearSampler : register(s0);
@@ -170,11 +158,6 @@ groupshared float3 ldsReconstructedCurrent[
     kOutputTileWidth * kOutputTileHeight];
 #endif
 #if TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_16X8_ONE_PIXEL && \
-    TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-groupshared float2 ldsLocalLumaRange[
-    kOutputTileWidth * kOutputTileHeight];
-#endif
-#if TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_16X8_ONE_PIXEL && \
     !TAA_EFFECTIVE_EARLY_HISTORY_REJECTION
 groupshared float3 ldsReusedBoxMin[
     kOutputTileWidth * kOutputTileHeight];
@@ -185,9 +168,6 @@ groupshared float3 ldsReusedBoxMax[
 groupshared float ldsR[kColorPixelCount];
 groupshared float ldsG[kColorPixelCount];
 groupshared float ldsB[kColorPixelCount];
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-groupshared float ldsLuma[kCorePixelCount];
-#endif
 #if TAA_NEEDS_LDS_MOTION
 #if TAA_LDS_LAYOUT == UVSR_TAA_LDS_SPLIT_PACKED
 groupshared uint2 ldsPackedMotion[kCorePixelCount];
@@ -322,8 +302,7 @@ float3 YCoCgToRgb(float3 ycocg)
 
 float3 RgbToWorking(float3 rgb)
 {
-#if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_PER_PIXEL_YCOCG || \
-    TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_VARIANCE_YCOCG
+#if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_VARIANCE_YCOCG
     return RgbToYCoCg(rgb);
 #else
     return rgb;
@@ -332,8 +311,7 @@ float3 RgbToWorking(float3 rgb)
 
 float3 WorkingToRgb(float3 working)
 {
-#if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_PER_PIXEL_YCOCG || \
-    TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_VARIANCE_YCOCG
+#if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_VARIANCE_YCOCG
     return SanitizeHdr(YCoCgToRgb(working));
 #else
     return SanitizeHdr(working);
@@ -371,19 +349,7 @@ void StoreWorkingColor(
     ldsR[colorIdx] = working.x;
     ldsG[colorIdx] = working.y;
     ldsB[colorIdx] = working.z;
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-#endif
 }
-
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-void StoreLuma(uint coreIdx, float3 rgb)
-{
-    // Stable Interior evaluates overlapping 3x3 neighborhoods for both
-    // horizontally paired outputs. Cache luma once per core-tile sample and
-    // use the same Rec.709 signal in every color-space specialization.
-    ldsLuma[coreIdx] = RGBToLuminance(SanitizeHdr(rgb));
-}
-#endif
 #endif
 
 float3 LoadWorkingColor(uint colorIdx)
@@ -483,9 +449,9 @@ float2 STtoUV(float2 ST)
 
 float HistoryPositionInBounds(float2 ST)
 {
-    // MiniEngine history color, depth, and moments all use linear sampling or
-    // Gather. Require their real footprint instead of accepting a clamped
-    // half-pixel excursion beyond the viewport.
+    // MiniEngine history color and depth use linear sampling or Gather. Require
+    // their real footprint instead of accepting a clamped half-pixel excursion
+    // beyond the viewport.
     return UvsrTemporalLinearFootprintInBounds(ST, BufferDim);
 }
 
@@ -1086,200 +1052,6 @@ float GetCurrentReconstructionDepthSupport(
         diagonalSupport,
         xActive * yActive);
     return min(min(xSupport, ySupport), diagonalSupport);
-}
-
-float VelocityCoherence(float4 center, uint neighborIdx)
-{
-#if TAA_NEEDS_LDS_MOTION
-    float4 neighbor = LoadMotion(neighborIdx);
-    // StoreMotion already made invalid vectors finite and normalized W to
-    // zero or one, so coherence needs no repeated finite-value tests.
-    float valid = center.w * neighbor.w;
-    float divergence = length(center.xy - neighbor.xy);
-    return valid * (1.0 - smoothstep(0.25, 2.0, divergence));
-#else
-    return 1.0;
-#endif
-}
-
-#if TAA_SHARED_WORK_REUSE && !TAA_PIXEL_SHADER && \
-    TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-void GetLocalLumaRangesForAdjacent(
-    uint leftIdx,
-    out float2 leftRange,
-    out float2 rightRange)
-{
-    // The two 3x3 luma neighborhoods share one 4x3 core footprint. Luma was
-    // already transformed and sanitized during tile loading, so this performs
-    // twelve scalar LDS reads rather than eighteen repeated color transforms.
-    uint leftCoreIdx = ColorIndexToCoreIndex(leftIdx);
-    float footprint[12];
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
-    {
-        [unroll]
-        for (int x = -1; x <= 2; ++x)
-        {
-            footprint[(y + 1) * 4 + x + 1] =
-                ldsLuma[uint(
-                    int(leftCoreIdx) + x +
-                    y * int(kCorePitch))];
-        }
-    }
-
-    leftRange = float2(kFiniteHdrLimit, -kFiniteHdrLimit);
-    rightRange = leftRange;
-    [unroll]
-    for (uint y = 0u; y < 3u; ++y)
-    {
-        [unroll]
-        for (uint x = 0u; x < 3u; ++x)
-        {
-            float leftLuma = footprint[y * 4u + x];
-            float rightLuma = footprint[y * 4u + x + 1u];
-            leftRange.x = min(leftRange.x, leftLuma);
-            leftRange.y = max(leftRange.y, leftLuma);
-            rightRange.x = min(rightRange.x, rightLuma);
-            rightRange.y = max(rightRange.y, rightLuma);
-        }
-    }
-}
-#endif
-
-float LocalLumaCoherence(
-    uint ldsIdx,
-    float currentLuma,
-    float2 reusedLumaRange)
-{
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-    // Include the actual current reconstruction in the range. Direct is an
-    // exact identity. De-Jittered can differ from the raw LDS center, and
-    // omitting it made confidence describe one footprint while blending
-    // another.
-    float minimumLuma = currentLuma;
-    float maximumLuma = currentLuma;
-#if TAA_SHARED_WORK_REUSE && !TAA_PIXEL_SHADER
-    minimumLuma = min(minimumLuma, reusedLumaRange.x);
-    maximumLuma = max(maximumLuma, reusedLumaRange.y);
-#else
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
-    {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
-        {
-#if TAA_PIXEL_SHADER
-            float luma = RGBToLuminance(WorkingToRgb(
-                LoadWorkingColor(uint(
-                    int(ldsIdx) + x +
-                    y * int(kColorPitch)))));
-#else
-            uint coreIdx = ColorIndexToCoreIndex(ldsIdx);
-            float luma = ldsLuma[
-                uint(int(coreIdx) + x + y * int(kCorePitch))];
-#endif
-            minimumLuma = min(minimumLuma, luma);
-            maximumLuma = max(maximumLuma, luma);
-        }
-    }
-#endif
-    float relativeRange =
-        (maximumLuma - minimumLuma) / max(abs(currentLuma), 0.1);
-    return 1.0 - smoothstep(0.05, 0.5, relativeRange);
-#else
-    return 1.0;
-#endif
-}
-
-float TemporalLumaCoherence(float currentLuma, float2 previousMoments)
-{
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-    if (!all(isfinite(previousMoments)))
-        return 0.0;
-
-    float previousMean = clamp(
-        previousMoments.x,
-        -kFiniteHdrLimit,
-        kFiniteHdrLimit);
-    float previousSecondMoment = clamp(
-        previousMoments.y,
-        0.0,
-        kFiniteHdrLimit);
-    float previousVariance = max(
-        previousSecondMoment - previousMean * previousMean,
-        0.0);
-    float lumaScale = max(
-        max(abs(currentLuma), abs(previousMean)),
-        0.1);
-    float tolerance =
-        sqrt(previousVariance) + 0.02 * lumaScale + 0.001;
-    float normalizedDifference =
-        abs(currentLuma - previousMean) / tolerance;
-
-    // Phase-varying specular energy must preserve MiniEngine's baseline
-    // history instead of repeatedly turning the clarity adjustment on and off.
-    return 1.0 - smoothstep(1.0, 4.0, normalizedDifference);
-#else
-    return 1.0;
-#endif
-}
-
-float StableInteriorScore(
-    uint ldsIdx,
-    float currentLuma,
-    float2 previousMoments,
-    float expectedPreviousDepth,
-    float temporalDepth,
-    float4 depthSupport,
-    float2 reusedLumaRange)
-{
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-    // Stable means coherent in every cardinal direction. An average can
-    // remain high with one discontinuous neighbor, which mislabels a straight
-    // silhouette as an interior and reintroduces phase-dependent edge weight.
-    float depthCoherence = min(
-        min(depthSupport.x, depthSupport.y),
-        min(depthSupport.z, depthSupport.w));
-
-    // Reuse the center motion for all four divergence comparisons.
-    float4 centerMotion = LoadMotion(ldsIdx);
-    float velocityCoherence = min(
-        min(
-            VelocityCoherence(centerMotion, ldsIdx - 1),
-            VelocityCoherence(centerMotion, ldsIdx + 1)),
-        min(
-            VelocityCoherence(
-                centerMotion,
-                ldsIdx - kColorPitch),
-            VelocityCoherence(
-                centerMotion,
-                ldsIdx + kColorPitch)));
-
-    float lumaCoherence =
-        LocalLumaCoherence(
-            ldsIdx,
-            currentLuma,
-            reusedLumaRange) *
-        TemporalLumaCoherence(currentLuma, previousMoments);
-    float depthAgreementError =
-        abs(expectedPreviousDepth - temporalDepth) /
-        max(expectedPreviousDepth, 1e-3);
-    float historyDepthAgreement =
-        1.0 - smoothstep(0.002, 0.05, depthAgreementError);
-
-    // Product is continuous, remains in [0, 1], and requires all four requested
-    // coherence categories to agree. The local-luma term also contains the
-    // temporal-moment guard, so phase-varying HDR edges cannot be mistaken for
-    // a stable interior. Low confidence does not reject edge history; it
-    // leaves MiniEngine's accepted weight unchanged.
-    return saturate(
-        depthCoherence *
-        velocityCoherence *
-        lumaCoherence *
-        historyDepthAgreement);
-#else
-    return 1.0;
-#endif
 }
 
 float HistoryDepthFootprintCoherence(
@@ -1907,16 +1679,7 @@ void WriteDepthOutput(uint2 ST, float value)
 #endif
 }
 
-void WriteMomentOutput(uint2 ST, float2 value)
-{
-#if TAA_PIXEL_SHADER
-    PixelOutMoments = value;
-#else
-    OutMoments[ST] = value;
-#endif
-}
-
-void WriteDebugOutput(uint2 ST, float2 value)
+void WriteDebugOutput(uint2 ST, float value)
 {
 #if TAA_DEVELOPER_DEBUG
 #if TAA_PIXEL_SHADER
@@ -1969,17 +1732,11 @@ void WriteRejectedCurrent(
     uint2 ST,
     uint ldsIdx,
     float3 currentRgb,
-    float currentLuma,
     float3 reusedDeJittered)
 {
     WriteTemporalColor(ST, currentRgb, 0.5);
     WriteDepthOutput(ST, CurDepth[ST]);
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-    WriteMomentOutput(ST, float2(
-        currentLuma,
-        min(currentLuma * currentLuma, kFiniteHdrLimit)));
-#endif
-    WriteDebugOutput(ST, float2(0.0, 0.0));
+    WriteDebugOutput(ST, 0.0);
 #if TAA_EXPORT_SELECTIVE
     WriteSelectiveMorphology(
         ST,
@@ -1997,8 +1754,7 @@ void ApplyTemporalBlend(
     float3 boxMax,
     uint pairFillIdx,
     uint pairHoleIdx,
-    float3 reusedDeJittered,
-    float2 reusedLumaRange)
+    float3 reusedDeJittered)
 {
     if (any(ST >= BufferDim))
         return;
@@ -2006,10 +1762,9 @@ void ApplyTemporalBlend(
 #if TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
     TAA_EXPORT_SELECTIVE || \
     TAA_SAMPLE_RESURRECTION || \
-    TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE || \
     TAA_HISTORY_FILTER != UVSR_TAA_HISTORY_BILINEAR
-    // Compute the LDS-only silhouette support once. De-Jittered, Stable
-    // Interior, and the wider history filters share it.
+    // Compute the LDS-only silhouette support once. De-Jittered current,
+    // resurrection, and the wider history filters share it.
     float centerViewDepth;
     float centerDepthValid;
     float4 depthSupport = GetCrossDepthSupport(
@@ -2042,15 +1797,11 @@ void ApplyTemporalBlend(
         reconstructionSupport);
 #endif
     float3 currentRgb = WorkingToRgb(currentWorking);
-    float currentLuma = clamp(
-        RGBToLuminance(currentRgb),
-        -kFiniteHdrLimit,
-        kFiniteHdrLimit);
 
     // History validity is uniform for the dispatch. On camera cuts and
     // globally invalid history, return current before any history depth,
-    // color, or moment texture access. This is a data-state branch, not an
-    // algorithm-option branch; every shipping option remains a static PSO.
+    // or color access. This is a data-state branch, not an algorithm-option
+    // branch; every shipping option remains a static PSO.
     [branch]
     if (HistoryValid == 0u)
     {
@@ -2058,7 +1809,6 @@ void ApplyTemporalBlend(
             ST,
             ldsIdx,
             currentRgb,
-            currentLuma,
             reusedDeJittered);
         return;
     }
@@ -2107,7 +1857,6 @@ void ApplyTemporalBlend(
             ST,
             ldsIdx,
             currentRgb,
-            currentLuma,
             reusedDeJittered);
         return;
     }
@@ -2121,11 +1870,6 @@ void ApplyTemporalBlend(
     UvsrTemporalReverseZFootprint historyDepthFootprint =
         UvsrTemporalReduceReverseZFootprint(
             historyDeviceDepths);
-    float temporalDeviceDepth =
-        historyDepthFootprint.farthestValidDeviceDepth;
-    float expectedPreviousDepth =
-        LinearViewDepth(expectedPreviousDeviceDepth);
-    float rawTemporalDepth = LinearViewDepth(temporalDeviceDepth);
 #if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_FIVE_TAP_CATMULL_ROM || \
     TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
     float historyDepthSupport = HistoryDepthFootprintCoherence(
@@ -2152,8 +1896,8 @@ void ApplyTemporalBlend(
 #if TAA_EFFECTIVE_EARLY_HISTORY_REJECTION
     // Motion validity, viewport bounds, the central history-depth footprint,
     // and speed rejection are all known before history color, outer five-tap
-    // depth, moments, or rectification work. Only the exact-zero case exits;
-    // partial confidence keeps the identical continuous path.
+    // depth, or rectification work. Only the exact-zero case exits; partial
+    // confidence keeps the identical continuous path.
     [branch]
     if (hardAcceptance == 0.0)
     {
@@ -2161,7 +1905,6 @@ void ApplyTemporalBlend(
             ST,
             ldsIdx,
             currentRgb,
-            currentLuma,
             reusedDeJittered);
         return;
     }
@@ -2339,8 +2082,7 @@ void ApplyTemporalBlend(
     boxMin = min(boxMin, currentWorking);
     boxMax = max(boxMax, currentWorking);
 
-#if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_PER_PIXEL_YCOCG || \
-    TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_VARIANCE_YCOCG
+#if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_VARIANCE_YCOCG
     // Expand the plain-YCoCg range before line clipping. This controls
     // chroma anti-ringing without the hue shifts of component clamping.
     float3 boxRange = boxMax - boxMin;
@@ -2355,41 +2097,12 @@ void ApplyTemporalBlend(
         lerp(1.0, 4.0, speedFactor * speedFactor));
     float3 temporalRgb = WorkingToRgb(temporalWorking);
 
-    float finalHistoryWeight = baseHistoryWeight;
-
-    float2 previousMoments = 0.0;
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-    // Stable consumes the moment read that was previously dead shipping work.
-    // Other compile-time permutations neither sample nor write moment history;
-    // selecting Stable resets it before first use.
-    previousMoments = InMoments.SampleLevel(
-        LinearSampler,
-        STtoUV(historyColorPixel),
-        0);
-#endif
-    float stableInteriorScore = StableInteriorScore(
-        ldsIdx,
-        currentLuma,
-        previousMoments,
-        expectedPreviousDepth,
-        rawTemporalDepth,
-        depthSupport,
-        reusedLumaRange);
-    stableInteriorScore *= historyPositionValid;
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-    float reductionTarget =
-        min(baseHistoryWeight, kStableInteriorFloor);
-    finalHistoryWeight = lerp(
-        baseHistoryWeight,
-        reductionTarget,
-        stableInteriorScore);
-#endif
-    // Strength is applied only after every ownership, bounds, reverse-Z,
-    // disocclusion, and clarity gate. Values above 100% can reinforce accepted
+    // Strength is applied only after every ownership, bounds, reverse-Z, and
+    // disocclusion gate. Values above 100% can reinforce accepted
     // history but cannot resurrect a rejected sample or exceed the logical
     // frame-horizon cap.
-    finalHistoryWeight = min(
-        finalHistoryWeight * clamp(TemporalBlendFactor, 0.0, 2.0),
+    float finalHistoryWeight = min(
+        baseHistoryWeight * clamp(TemporalBlendFactor, 0.0, 2.0),
         MaximumHistoryWeight);
 
     float3 temporalColor = ITM(lerp(
@@ -2397,20 +2110,8 @@ void ApplyTemporalBlend(
         TM(temporalRgb),
         finalHistoryWeight));
 
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-    float2 currentMoments = float2(
-        currentLuma,
-        min(currentLuma * currentLuma, kFiniteHdrLimit));
-    float2 outputMoments = lerp(
-        currentMoments,
-        previousMoments,
-        finalHistoryWeight);
-    WriteMomentOutput(ST, outputMoments);
-#endif
-
-    // Optional clarity weighting must not feed back into MiniEngine's stored
-    // confidence. Encoding finalHistoryWeight here caused a recursive collapse
-    // to ~13% history even for a perfectly stable pixel.
+    // Presentation strength must not feed back into MiniEngine's stored
+    // confidence; only accepted history advances the recurrence.
     float storedWeight =
         saturate(rcp(2.0 - baseHistoryWeight));
     storedWeight = min(storedWeight, MaximumHistoryWeight);
@@ -2418,17 +2119,7 @@ void ApplyTemporalBlend(
 
     WriteTemporalColor(ST, temporalColor, storedWeight);
     WriteDepthOutput(ST, CurDepth[ST]);
-    // Developer diagnostics share one RG16 target: stable-interior score in X
-    // and compact resurrection status/source/contribution in Y.
-    WriteDebugOutput(
-        ST,
-        float2(
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-            stableInteriorScore,
-#else
-            0.0,
-#endif
-            resurrectionDebugValue));
+    WriteDebugOutput(ST, resurrectionDebugValue);
 #if TAA_EXPORT_SELECTIVE
     // Selective morphology consumes de-jittered current only as a presentation
     // source. It is deliberately separate from OutTemporal and can never be
@@ -2492,39 +2183,6 @@ void main(
         StoreWorkingColor(
             topLeftIdx + 1 + kColorPitch,
             float3(r4.y, g4.y, b4.y));
-
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-        [unroll]
-        for (uint localY = 0; localY < 2; ++localY)
-        {
-            [unroll]
-            for (uint localX = 0; localX < 2; ++localX)
-            {
-                int relativeX =
-                    int(x + localX) - int(kColorBorder);
-                int relativeY =
-                    int(y + localY) - int(kColorBorder);
-                if (relativeX >= -int(kCoreBorder) &&
-                    relativeY >= -int(kCoreBorder) &&
-                    relativeX <
-                        int(kOutputTileWidth + kCoreBorder) &&
-                    relativeY <
-                        int(kOutputTileHeight + kCoreBorder))
-                {
-                    uint colorIdx =
-                        topLeftIdx + localX +
-                        localY * kColorPitch;
-                    uint coreIdx =
-                        uint(relativeX + int(kCoreBorder)) +
-                        uint(relativeY + int(kCoreBorder)) *
-                            kCorePitch;
-                    StoreLuma(
-                        coreIdx,
-                        WorkingToRgb(LoadWorkingColor(colorIdx)));
-                }
-            }
-        }
-#endif
     }
 
     // Split layouts load the one-pixel depth/motion core independently from
@@ -2604,8 +2262,6 @@ void main(
     uint2 st1 = st0 + uint2(1, 0);
     float3 reusedDeJittered0 = 0.0;
     float3 reusedDeJittered1 = 0.0;
-    float2 reusedLumaRange0 = 0.0;
-    float2 reusedLumaRange1 = 0.0;
 #if TAA_SHARED_WORK_REUSE && \
     (TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
         TAA_EXPORT_SELECTIVE)
@@ -2613,13 +2269,6 @@ void main(
         idx0,
         reusedDeJittered0,
         reusedDeJittered1);
-#endif
-#if TAA_SHARED_WORK_REUSE && \
-    TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-    GetLocalLumaRangesForAdjacent(
-        idx0,
-        reusedLumaRange0,
-        reusedLumaRange1);
 #endif
 #if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_PAIR_RGB
     float3 pairMin;
@@ -2637,8 +2286,7 @@ void main(
         pairMax,
         idx0,
         idx1,
-        reusedDeJittered0,
-        reusedLumaRange0);
+        reusedDeJittered0);
     ApplyTemporalBlend(
         st1,
         idx1,
@@ -2646,8 +2294,7 @@ void main(
         pairMax,
         idx0,
         idx1,
-        reusedDeJittered1,
-        reusedLumaRange1);
+        reusedDeJittered1);
 #else
     float3 boxMin0;
     float3 boxMax0;
@@ -2683,8 +2330,7 @@ void main(
         boxMax0,
         idx0,
         idx1,
-        reusedDeJittered0,
-        reusedLumaRange0);
+        reusedDeJittered0);
     ApplyTemporalBlend(
         st1,
         idx1,
@@ -2692,8 +2338,7 @@ void main(
         boxMax1,
         idx0,
         idx1,
-        reusedDeJittered1,
-        reusedLumaRange1);
+        reusedDeJittered1);
 #endif
 #else
     uint idx =
@@ -2703,11 +2348,9 @@ void main(
         kColorBorder;
     uint2 st = uint2(groupOrigin) + GTid.xy;
     float3 reusedDeJittered = 0.0;
-    float2 reusedLumaRange = 0.0;
 #if TAA_SHARED_WORK_REUSE && \
     (TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
         TAA_EXPORT_SELECTIVE || \
-        TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE || \
         !TAA_EFFECTIVE_EARLY_HISTORY_REJECTION)
     if ((GTid.x & 1u) == 0u)
     {
@@ -2730,20 +2373,6 @@ void main(
             leftReconstruction;
         ldsReconstructedCurrent[pairOutputIndex + 1u] =
             rightReconstruction;
-#endif
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-        float2 leftLumaRange;
-        float2 rightLumaRange;
-        GetLocalLumaRangesForAdjacent(
-            pairIdx,
-            leftLumaRange,
-            rightLumaRange);
-        uint pairLumaIndex =
-            GTid.y * kOutputTileWidth + GTid.x;
-        ldsLocalLumaRange[pairLumaIndex] =
-            leftLumaRange;
-        ldsLocalLumaRange[pairLumaIndex + 1u] =
-            rightLumaRange;
 #endif
 #if !TAA_EFFECTIVE_EARLY_HISTORY_REJECTION
         float3 leftBoxMin;
@@ -2782,9 +2411,6 @@ void main(
     reusedDeJittered =
         ldsReconstructedCurrent[outputIndex];
 #endif
-#if TAA_INTERIOR_WEIGHTING == UVSR_TAA_INTERIOR_STABLE
-    reusedLumaRange = ldsLocalLumaRange[outputIndex];
-#endif
 #endif
 #if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_PAIR_RGB
     uint pairOffset = GTid.x & ~1u;
@@ -2817,8 +2443,7 @@ void main(
         pairMax,
         pairIdx0,
         pairIdx0 + 1,
-        reusedDeJittered,
-        reusedLumaRange);
+        reusedDeJittered);
 #else
     float3 boxMin;
     float3 boxMax;
@@ -2840,8 +2465,7 @@ void main(
         boxMax,
         idx,
         idx,
-        reusedDeJittered,
-        reusedLumaRange);
+        reusedDeJittered);
 #endif
 #endif
 }
@@ -2850,11 +2474,10 @@ struct TaaPixelOutputs
 {
     float4 temporal : SV_Target0;
     float depth : SV_Target1;
-    float2 moments : SV_Target2;
-    float2 debugValue : SV_Target3;
-    float4 selectiveCurrent : SV_Target4;
-    float selectiveRejection : SV_Target5;
-    float4 fusedScene : SV_Target6;
+    float debugValue : SV_Target2;
+    float4 selectiveCurrent : SV_Target3;
+    float selectiveRejection : SV_Target4;
+    float4 fusedScene : SV_Target5;
 };
 
 TaaPixelOutputs main(float4 position : SV_Position)
@@ -2862,7 +2485,6 @@ TaaPixelOutputs main(float4 position : SV_Position)
     uint2 ST = uint2(position.xy);
     PixelOutTemporal = 0.0;
     PixelOutDepth = 0.0;
-    PixelOutMoments = 0.0;
     PixelOutDebug = 0.0;
     PixelOutMorphologyCurrent = 0.0;
     PixelOutMorphologyRejection = 0.0;
@@ -2893,7 +2515,6 @@ TaaPixelOutputs main(float4 position : SV_Position)
         boxMax,
         pairFillIdx,
         pairHoleIdx,
-        0.0,
         0.0);
 #else
     float3 boxMin = 0.0;
@@ -2908,14 +2529,12 @@ TaaPixelOutputs main(float4 position : SV_Position)
         boxMax,
         ldsIdx,
         ldsIdx,
-        0.0,
         0.0);
 #endif
 
     TaaPixelOutputs output;
     output.temporal = PixelOutTemporal;
     output.depth = PixelOutDepth;
-    output.moments = PixelOutMoments;
     output.debugValue = PixelOutDebug;
     output.selectiveCurrent = PixelOutMorphologyCurrent;
     output.selectiveRejection = PixelOutMorphologyRejection;

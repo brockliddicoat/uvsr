@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 117,816 non-blank source lines.
+**First-Party Lines of Code:** 114,432 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,622 non-blank source lines.
 
-**Total Lines of Code:** 505,438 non-blank source lines.
+**Total Lines of Code:** 502,054 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -52,17 +52,17 @@ architecture without either add-on.
   prior-frame slider for long-term temporal methods. Its inherited values are
   3/6/9/12. History Strength ranges from 0% to 200%. Values above 100% reinforce
   only history that already passed motion, bounds, reverse-Z depth,
-  disocclusion, rectification, and stable-interior gates, and remain capped by
-  the selected frame horizon; they do not resurrect rejected history.
+  disocclusion, and rectification gates, and remain capped by the selected frame
+  horizon; they do not resurrect rejected history.
   Low and Medium use **1x Bilinear** reconstruction and Pair Tristimulus
   rectification. High uses **1x Bicubic**, and Ultra uses **5x Bicubic** with
   Dejitter enabled. The Reconstruction dropdown also exposes **9x Bicubic**,
   the complete nine-bilinear-tap Catmull-Rom reconstruction.
   **Aliasing Algorithm Configuration** exposes concrete Subpixel Morphology,
-  Motion Source, and Reconstruction selections in least-to-most-expensive
-  order. The folded **Developer Options** section contains Rectification and
-  **Stable Interior**. Sharpness and Stable Interior are disabled by default
-  for every quality.
+  Motion Source, Reconstruction, and Rectification selections in
+  least-to-most-expensive order. Rectification retains Pair Tristimulus and
+  Variance YCoCg. Sharpness is disabled by default for every quality. Stable
+  Interior and the two per-pixel rectification modes are retired.
   MiniEngine TAA owns the temporal history, validity, reset, bounds,
   motion/jitter, reverse-Z validation, and early-rejection infrastructure.
   The motion-test button runs the exact Benchmark Position 1 warm,
@@ -93,13 +93,11 @@ architecture without either add-on.
   unfiltered current output without a spatial dispatch or filter target.
 - Screen-space visibility uses one exact sample budget shared by AO and every
   GI bounce. The factory High preset traces 20 samples through the compact
-  Runtime loop. Generic retains the fully guarded dynamic loop, while Fixed
-  fully unrolls one of the packaged 8, 12, 16, 20, 24, 48, or 64 counts.
-  Generic and Runtime use a 1-64 Samples slider; Fixed uses the same slider to
-  select one packaged count. **Sample Count Mode** and **Distribution** live in
-  the folded Visibility **Developer Options** section. Adaptive sparse
-  sampling, its feedback resources, and the separate later-bounce count
-  selector remain removed.
+  Runtime loop. **Samples** directly exposes the complete 1-64 range; there is
+  no sampling-mode dropdown or Fixed/Generic shader family. **Distribution**
+  stays with Estimator, Noise Pattern, Samples, Radius, and Thickness in
+  **Shared Visibility Sampling**. Adaptive sparse sampling, its feedback
+  resources, and the separate later-bounce count selector remain removed.
 - The **Estimator** control exposes **Uniform Projected Angle**, **Uniform Solid
   Angle**, and **Cosine-Weighted Solid Angle**. Uniform Solid Angle is the
   default. The cosine path is fully compiled and uses the complete joint-cosine
@@ -195,18 +193,17 @@ architecture without either add-on.
 - Tree-row hover states, popup selections, and keyboard selection highlights
   use the same 4 px radius as other controls. The material editor continuously
   auto-fits its selected material, including immediately after a new surface is
-  picked. The visibility developer slider is labeled **Distribution**. Every
-  text tooltip uses one compact fixed width and height at every nesting depth,
-  with wrapped copy and a consistent inner safety margin.
+  picked. Every text tooltip uses one compact fixed width and height at every
+  nesting depth, with wrapped copy and a consistent inner safety margin.
 - Press **M** to open or close the material editor. Selecting a scene material
   does not open the editor automatically.
 - The four footer actions use explicitly centered labels to compensate for the
   system font's visual baseline.
-- The single **Noise Pattern** dropdown compares **Independent Hash**,
-  first-party **Toroidal Blue**, **Unpacked Offline**, and **Packed Offline**.
-  The packed choice delivers the same
-  offline-computed values through one RGBA8 lookup instead of a separate
-  second control. Noise Pattern appears immediately below Estimator.
+- The single **Noise Pattern** dropdown compares **Independent Hash** and the
+  first-party **Toroidal Blue** rank field. Both are selected by a
+  frame-coherent runtime-uniform branch in the shared Runtime shader. The
+  unpacked and packed Offline assets, upload paths, bindings, and shader
+  families are retired. Noise Pattern appears immediately below Estimator.
 - The **Profile** dropdown directly beneath **Sampling Resolution** begins with
   exactly four product presets. **Low** uses Uniform Projected Angle, quarter
   resolution, 8 exact samples, and compact joint-bilateral upsampling;
@@ -214,8 +211,8 @@ architecture without either add-on.
   and the same upsampler. Factory-default **High** uses full resolution and
   20 samples; **Ultra** uses full resolution, 48 samples, and two GI bounces.
   High and Ultra use unreconstructed full-resolution input. Every preset uses
-  Offline Packed Spacetime Noise. Low, Medium, and High select Performance
-  Precision buffers; Ultra selects Default Precision buffers. Failed
+  Toroidal Blue. Low, Medium, and High select Performance Precision buffers;
+  Ultra selects Default Precision buffers. Failed
   experiments, diagnostic floors, and implementation-profile presets are not
   packaged or selectable, while the retained controls remain independently
   editable.
@@ -493,6 +490,13 @@ active work that has not merged into `main`. It is not a mutex or a live task
 ledger. An entry is not shipped on `main`, and experimental entries are not
 promises that the work will merge.
 
+- **Shader Path Retirement — Local Candidate**
+  (`codex/prune-shader-paths`). Consolidate visibility on the Runtime sampler,
+  remove both Offline-noise deliveries and low-value TAA policies, simplify the
+  affected Settings controls, and record a reusable shader-bloat decision
+  framework. This work is local, uncommitted, and depends on semantic
+  reconciliation with the two visibility pull requests below.
+
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate shared
   depth, pixel-coordinate, and safe-normal helpers used by the visibility
@@ -583,8 +587,8 @@ separate `scene` field identifies which scene was measured.
 
 Production builds accept `--aa-enabled`, `--aa-method`, `--aa-quality`
 (`--aa-preset` alias), `--aa-sharpness`, `--aa-rectification`
-(`preset`, `pair-rgb`, `per-pixel-rgb`, `per-pixel-ycocg`, or
-`variance-ycocg`), and `--aa-benchmark-output`. Experimental execution-path
+(`preset`, `pair-rgb`, or `variance-ycocg`), and
+`--aa-benchmark-output`. Experimental execution-path
 overrides require a developer build:
 
 The same motion path is available interactively from **Statistics > Run Current
@@ -608,7 +612,7 @@ summary completes with:
 
 ```powershell
 .\tools\launch_uvsr.ps1 benchmark --benchmark-camera `
-  --visibility-profile exact-fast-ao-8t --visibility-benchmark `
+  --visibility-profile runtime-ao-8t --visibility-benchmark `
   --benchmark-warmup 120 --benchmark-frames 240 --benchmark-auto-close
 ```
 
@@ -618,7 +622,7 @@ one-click name or a hyphenated form is accepted. `--benchmark-warmup` accepts
 Add `--visibility-contribution-terminated-bounces` to a GI-capable profile to
 turn **Limit Bounces** off before an automated run. This deliberately clears
 the one-click verification label because the effective 16-entry,
-GPU-terminated workload is no longer that preset's fixed-bounce contract.
+GPU-terminated workload is no longer that preset's declared bounce contract.
 Unknown or unavailable profiles and invalid frame counts report to standard
 error and return a nonzero process exit code; they do not open modal dialogs.
 The **Statistics** drawer provides **Run Current**, **Run Current With Motion**,
@@ -758,6 +762,11 @@ Reference, candidate, diagnostic, reconstruction, and fusion permutations.
 Diagnostic entries describe the investigation and are no longer packaged. It does not
 substitute static IR counts for target-GPU timings or physical Intel register,
 spill, SIMD-width, and occupancy data.
+
+The continuous [shader path retirement postmortem](docs/postmortem/shader-path-retirements.md)
+records each removed shader family, the multiplication mechanism that caused
+its bloat, the evidence and restoration boundary, and the ranked candidates for
+the next retirement batch.
 
 The [visibility estimator validation](docs/visibility-estimator-validation.md)
 records the shared C++/HLSL measure contracts, deterministic reference fixtures,

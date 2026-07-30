@@ -19,58 +19,33 @@ namespace uvsr
     {
         Unset,
         Reference,
-        ExactFixed8,
-        ExactFixed12,
-        ExactFixed16,
-        ExactFixed20,
-        ExactFixed24,
-        ExactFixed48,
-        ExactFixed64,
-        ExactPackedCurrentFast,
+        Runtime,
         ExactFusedResolveApply,
-        ExactFixed8FusedResolveApply,
         AlgorithmicPackedEdges2x2,
         AlgorithmicPackedEdgesDepthNormal2x2,
         AlgorithmicPackedEdgesSlope2x2,
         AlgorithmicPackedEdgesLeakage2x2,
         AlgorithmicFusedPackedEdges2x2,
-        GenericFallback,
         Count
     };
 
     enum class VisibilityTraceImplementation : uint8_t
     {
         Unset,
-        LegacyGenericBitmask,
-        FixedInterleavedBitmask
+        RuntimeBitmask
     };
 
     enum class VisibilitySampleSpecialization : uint8_t
     {
         Unset,
-        Generic,
-        Runtime,
-        Fixed8,
-        Fixed12,
-        Fixed16,
-        Fixed20,
-        Fixed24,
-        Fixed48,
-        Fixed64
+        Runtime
     };
 
     enum class VisibilityRuntimeSampleContract : uint8_t
     {
-        Generic,
+        Guarded,
         TrustedEven,
         TrustedOdd
-    };
-
-    enum class VisibilityNoiseDelivery : uint8_t
-    {
-        Unset,
-        Legacy,
-        PackedCurrentFast
     };
 
     enum class VisibilityMathMode : uint8_t
@@ -122,7 +97,6 @@ namespace uvsr
     enum class VisibilityBindingStrategy : uint8_t
     {
         Unset,
-        LegacyBroad,
         MinimalConditional
     };
 
@@ -184,8 +158,7 @@ namespace uvsr
     enum class VisibilityPerformanceScheduler : uint8_t
     {
         IndependentHash,
-        ToroidalBlueNoiseRankField,
-        FilterAdaptedSpatiotemporalRankField
+        ToroidalBlueNoiseRankField
     };
 
     enum class VisibilityImplementationStatus : uint8_t
@@ -197,7 +170,7 @@ namespace uvsr
     };
 
     inline constexpr uint64_t VisibilityProfileAllAssignments =
-        (uint64_t{ 1 } << 23u) - 1u;
+        (uint64_t{ 1 } << 22u) - 1u;
 
     struct VisibilityPerformanceProfileConfiguration
     {
@@ -212,7 +185,6 @@ namespace uvsr
             VisibilitySampleSpecialization::Unset;
         VisibilitySampleSpecialization laterBounceSamples =
             VisibilitySampleSpecialization::Unset;
-        VisibilityNoiseDelivery noise = VisibilityNoiseDelivery::Unset;
         VisibilityMathMode math = VisibilityMathMode::Unset;
         VisibilityRawAoStorage rawAoStorage = VisibilityRawAoStorage::Unset;
         VisibilityEdgeStorage edgeStorage = VisibilityEdgeStorage::Unset;
@@ -276,12 +248,9 @@ namespace uvsr
         InvalidWorkload,
         ProfileImplementationUnavailable,
         ReferenceContractViolation,
-        SampleCountMismatch,
-        FixedExponentMismatch,
         ProfileConsumerMismatch,
         ProfileEstimatorMismatch,
         ProfileResolutionMismatch,
-        ProfileSchedulerMismatch,
         ProfileThreadGroupMismatch,
         InvalidPackedReconstruction,
         PackedReconstructionDoesNotSupportSpatialFilter,
@@ -308,9 +277,7 @@ namespace uvsr
         TemporalDepth = uint64_t{ 1 } << 11u,
         TemporalNormalRgba8 = uint64_t{ 1 } << 12u,
         DepthHierarchy = uint64_t{ 1 } << 13u,
-        LegacyToroidalNoise = uint64_t{ 1 } << 14u,
-        LegacyCurrentFastNoise = uint64_t{ 1 } << 15u,
-        PackedCurrentFastNoise = uint64_t{ 1 } << 16u,
+        ToroidalNoise = uint64_t{ 1 } << 14u,
         PackedEdgesR8Uint = uint64_t{ 1 } << 17u
     };
 
@@ -323,9 +290,7 @@ namespace uvsr
         GBufferMaterial = uint64_t{ 1 } << 4u,
         BaseLighting = uint64_t{ 1 } << 5u,
         OutputLighting = uint64_t{ 1 } << 6u,
-        LegacyToroidalNoise = uint64_t{ 1 } << 7u,
-        LegacyCurrentFastNoise = uint64_t{ 1 } << 8u,
-        PackedCurrentFastNoise = uint64_t{ 1 } << 9u,
+        ToroidalNoise = uint64_t{ 1 } << 7u,
         DepthHierarchy = uint64_t{ 1 } << 10u,
         AmbientHistory = uint64_t{ 1 } << 11u,
         IndirectHistory = uint64_t{ 1 } << 12u,
@@ -337,11 +302,8 @@ namespace uvsr
     enum class VisibilityExecutionPass : uint64_t
     {
         DepthPreparation = uint64_t{ 1 } << 0u,
-        LegacyTrace = uint64_t{ 1 } << 1u,
-        CandidateGenericTrace = uint64_t{ 1 } << 2u,
-        FixedTrace = uint64_t{ 1 } << 3u,
-        LegacyLaterBounceTrace = uint64_t{ 1 } << 7u,
-        FixedLaterBounceTrace = uint64_t{ 1 } << 8u,
+        RuntimeTrace = uint64_t{ 1 } << 1u,
+        RuntimeLaterBounceTrace = uint64_t{ 1 } << 7u,
         Temporal = uint64_t{ 1 } << 9u,
         Reconstruction = uint64_t{ 1 } << 10u,
         Composition = uint64_t{ 1 } << 11u,
@@ -351,21 +313,12 @@ namespace uvsr
 
     inline constexpr uint64_t VisibilityOptionalResourceMask =
         static_cast<uint64_t>(
-            VisibilityExecutionResource::PackedCurrentFastNoise) |
-        static_cast<uint64_t>(
             VisibilityExecutionResource::PackedEdgesR8Uint);
 
     inline constexpr uint64_t VisibilityCandidateBindingMask =
-        static_cast<uint64_t>(
-            VisibilityExecutionBinding::PackedCurrentFastNoise) |
         static_cast<uint64_t>(VisibilityExecutionBinding::PackedEdges);
 
     inline constexpr uint64_t VisibilityCandidatePassMask =
-        static_cast<uint64_t>(
-            VisibilityExecutionPass::CandidateGenericTrace) |
-        static_cast<uint64_t>(VisibilityExecutionPass::FixedTrace) |
-        static_cast<uint64_t>(
-            VisibilityExecutionPass::FixedLaterBounceTrace) |
         static_cast<uint64_t>(
             VisibilityExecutionPass::FusedResolveAndApply) |
         static_cast<uint64_t>(VisibilityExecutionPass::SpatialDenoise);
@@ -381,15 +334,13 @@ namespace uvsr
         bool preservesProductionBitmask = false;
         bool benchmarkOnly = false;
         bool requiresExplicitHalfRoundtrip = false;
-        uint32_t fixedFirstBounceSampleCount = 0u;
-        uint32_t fixedLaterBounceSampleCount = 0u;
         // Runtime uses one CPU-validated parity contract per bounce. This
         // compiles out clamping and the even-count odd-side fetch without
         // creating one shader permutation for every slider value.
         VisibilityRuntimeSampleContract firstBounceRuntimeSamples =
-            VisibilityRuntimeSampleContract::Generic;
+            VisibilityRuntimeSampleContract::Guarded;
         VisibilityRuntimeSampleContract laterBounceRuntimeSamples =
-            VisibilityRuntimeSampleContract::Generic;
+            VisibilityRuntimeSampleContract::Guarded;
         uint32_t dispatchCount = 0u;
         // Exact descriptor counts for the simultaneously bound first-trace
         // layout. These are deliberately separate from bindingMask, which is
@@ -420,13 +371,13 @@ namespace uvsr
     {
         Unset,
         ReferenceAo8T,
-        ExactFastAo8T,
+        RuntimeAo8T,
         PackedEdgeAo8T,
         ReferenceAoGi8T,
-        ExactFastAoGi8T,
-        ExactFastAoGi12T,
-        ExactFastAoGi16T,
-        ExactFastMultiBounce,
+        RuntimeAoGi8T,
+        RuntimeAoGi12T,
+        RuntimeAoGi16T,
+        RuntimeMultiBounce,
         Count
     };
 
@@ -546,52 +497,4 @@ namespace uvsr
             (6u - 2u * static_cast<uint8_t>(edge))) & 0x3u);
     }
 
-    enum class VisibilitySampleSide : uint8_t
-    {
-        Negative,
-        Positive
-    };
-
-    struct VisibilityFixedSampleVisit
-    {
-        bool valid = false;
-        uint32_t visitIndex = 0u;
-        uint32_t pairIndex = 0u;
-        uint32_t sideStepIndex = 0u;
-        VisibilitySampleSide side = VisibilitySampleSide::Negative;
-    };
-
-    [[nodiscard]] constexpr bool IsSupportedFixedVisibilitySampleCount(
-        uint32_t sampleCount) noexcept
-    {
-        return sampleCount == 8u || sampleCount == 12u ||
-            sampleCount == 16u || sampleCount == 20u ||
-            sampleCount == 24u || sampleCount == 48u ||
-            sampleCount == 64u;
-    }
-
-    // Mirrors the generic trace's outer near-to-far iteration and inner
-    // sideIndex loop: negative first, then positive, for every radial pair.
-    [[nodiscard]] constexpr VisibilityFixedSampleVisit
-        GetFixedInterleavedVisibilitySampleVisit(
-            uint32_t sampleCount,
-            uint32_t visitIndex) noexcept
-    {
-        if (!IsSupportedFixedVisibilitySampleCount(sampleCount) ||
-            visitIndex >= sampleCount)
-        {
-            return {};
-        }
-
-        const uint32_t pairIndex = visitIndex >> 1u;
-        return {
-            true,
-            visitIndex,
-            pairIndex,
-            pairIndex,
-            (visitIndex & 1u) == 0u
-                ? VisibilitySampleSide::Negative
-                : VisibilitySampleSide::Positive
-        };
-    }
 }
