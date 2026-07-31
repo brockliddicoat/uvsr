@@ -83,6 +83,7 @@ OVERRIDE_GROUPS = (
         (
             ROOT / "overrides" / "imgui-ui.patch",
             ROOT / "overrides" / "imgui-dropdown-roll.patch",
+            ROOT / "overrides" / "imgui-runtime-policy.patch",
         ),
     ),
 )

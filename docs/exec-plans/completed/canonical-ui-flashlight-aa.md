@@ -61,12 +61,14 @@ Out of Scope:
 | Factory Tests | `ctest --test-dir build-canonical-factory -C Release --output-on-failure` | Passed, 33/33 |
 | Source Hygiene | `git diff --check` and scan for legacy Bend/MiniEngine runtime references | Passed; only CRLF normalization warnings |
 | Document Hygiene | `tools\check_document_title_case.cmd` | Passed, 0 violations across 948 headings and bold lead-ins |
+| README Line Counts | `tools\update_readme_line_counts.py --self-test` and `--check` after updating the ImGui override inventory | Passed |
 | Independent Review | Read-only final review of the promotion diff | No blocker found |
 
 ## Review and Publication Notes
 
 - The independent reviewer confirmed the DirectX 12-only build, AA and shadow manifests, default/reset semantics, flashlight submission, Ambient Fill behavior, and UI command/skin contracts. The reviewer did not rerun builds or visual runtime review; fresh 33/33 evidence covers the deterministic checks.
 - The GitHub app connector could not create the pull request because its integration lacked repository write permission. The authenticated GitHub CLI successfully created #27 after the branch push.
+- #27's initial README Line Counts check found that `imgui-runtime-policy.patch` was omitted from the tool's explicit override inventory. The focused documentation-tool repair added that inventory entry and regenerated README's tracked counts; local self-test and check both passed.
 - Any source or settings-changing repair after this record requires fresh technical verification and renewed product acceptance before merge.
 
 ## Completion
