@@ -1,6 +1,6 @@
 #pragma once
 
-#include "taa_miniengine_options.h"
+#include "temporal_aa_options.h"
 
 #include <donut/core/math/math.h>
 #include <nvrhi/nvrhi.h>

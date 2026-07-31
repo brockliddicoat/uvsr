@@ -134,6 +134,83 @@ int main()
         Near(ResolveUiScrollAnchorDelta(anchoring, true), 48.f),
         "bottom preservation follows the complete displayed-height change");
 
+    const UiScrollAnchorCorrection fastWheelBottom =
+        ResolveUiScrollAnchorCorrection(
+            900.f,
+            80.f,
+            980.f,
+            false);
+    passed &= Check(
+        fastWheelBottom.apply &&
+            Near(fastWheelBottom.scrollY, 980.f),
+        "a consumed fast-wheel target composes once with bottom growth");
+
+    const UiScrollAnchorCorrection upperClamp =
+        ResolveUiScrollAnchorCorrection(
+            970.f,
+            80.f,
+            1000.f,
+            false);
+    passed &= Check(
+        upperClamp.apply &&
+            Near(upperClamp.scrollY, 1000.f),
+        "anchor growth clamps at the current-frame scroll maximum");
+
+    const UiScrollAnchorCorrection shrinkingMaximum =
+        ResolveUiScrollAnchorCorrection(
+            980.f,
+            -60.f,
+            920.f,
+            false);
+    passed &= Check(
+        shrinkingMaximum.apply &&
+            Near(shrinkingMaximum.scrollY, 920.f),
+        "content shrink clamps a formerly valid bottom position");
+
+    const UiScrollAnchorCorrection ordinaryAnchor =
+        ResolveUiScrollAnchorCorrection(
+            400.f,
+            35.f,
+            1000.f,
+            false);
+    passed &= Check(
+        ordinaryAnchor.apply &&
+            Near(ordinaryAnchor.scrollY, 435.f),
+        "ordinary expansion preserves its visible anchor");
+
+    const UiScrollAnchorCorrection collapsingAnchor =
+        ResolveUiScrollAnchorCorrection(
+            400.f,
+            -35.f,
+            1000.f,
+            false);
+    passed &= Check(
+        collapsingAnchor.apply &&
+            Near(collapsingAnchor.scrollY, 365.f),
+        "ordinary collapse preserves its visible anchor");
+
+    const UiScrollAnchorCorrection pendingTarget =
+        ResolveUiScrollAnchorCorrection(
+            400.f,
+            35.f,
+            1000.f,
+            true);
+    passed &= Check(
+        !pendingTarget.apply &&
+            Near(pendingTarget.scrollY, 400.f),
+        "an independently pending ImGui target owns the frame");
+
+    const UiScrollAnchorCorrection settledFrame =
+        ResolveUiScrollAnchorCorrection(
+            fastWheelBottom.scrollY,
+            0.f,
+            980.f,
+            false);
+    passed &= Check(
+        !settledFrame.apply &&
+            Near(settledFrame.scrollY, 980.f),
+        "a consumed anchor delta is not applied twice");
+
     passed &= Check(
         !ShouldRetainUiViewportHeight(false, false, false),
         "layout animation alone does not pin the Settings viewport");

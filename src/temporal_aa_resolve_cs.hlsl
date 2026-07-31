@@ -6,17 +6,15 @@
 // IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR
 // PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.
 //
-// Developed by Minigraph
-//
 // Author:  James Stanard
 //
-// Adapted only for UVSR's RGBA16F scene target and arbitrary output
-// dimensions from Microsoft/DirectX-Graphics-Samples commit
-// 357ade6ec6ff0d9dcadc48f35c7a28e37c0cdf7a.
+// Adapted from Microsoft DirectX Graphics Samples for UVSR's RGBA16F scene
+// target and arbitrary output dimensions. Distributed under
+// third_party/microsoft_directx_graphics_samples/LICENSE.txt.
 //
 
-#include "taa_miniengine_options_shared.h"
-#include "taa_miniengine_debug.hlsli"
+#include "temporal_aa_options_shared.h"
+#include "temporal_aa_debug.hlsli"
 
 #ifndef TAA_DEBUG_VIEW
 #error TAA_DEBUG_VIEW must be a compile-time shader define
@@ -43,7 +41,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
     float value = saturate(
         2.0 - rcp(max(storedConfidence, 1e-6)));
     OutColor[DTid.xy] = float4(
-        MiniEngineTaaDebugHeatmap(value),
+        TemporalAaDebugHeatmap(value),
         1.0);
 #elif TAA_DEBUG_VIEW == UVSR_TAA_DEBUG_SAMPLE_RESURRECTION
     // Packed developer diagnostic:

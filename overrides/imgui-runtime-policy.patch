@@ -1,0 +1,529 @@
+diff --git a/imgui.cpp b/imgui.cpp
+index 544aad9..1906af7 100644
+--- a/imgui.cpp
++++ b/imgui.cpp
+@@ -3412,5 +3412,6 @@ static void ApplyDisabledGrayscale(ImVec4& color)
+ {
+     ImGuiContext& g = *GImGui;
+-    if ((g.CurrentItemFlags & ImGuiItemFlags_Disabled) == 0)
++    if (g.UvsrStockWidgetRendering ||
++        (g.CurrentItemFlags & ImGuiItemFlags_Disabled) == 0)
+         return;
+ 
+@@ -3870,2 +3870,5 @@ static void RenderGradientFrameOutline(
+ {
++    if (GImGui != NULL && GImGui->UvsrStockWidgetRendering)
++        return;
++
+     const float thickness = 1.0f;
+@@ -4148,2 +4151,4 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+     NextSettingsWindowCollapsedHeight = 0.0f;
++    UvsrUiMotionEnabled = true;
++    UvsrStockWidgetRendering = false;
+     Font = NULL;
+@@ -5117,2 +5122,21 @@ const char* ImGui::GetVersion()
+ 
++void ImGui::SetUvsrUiBehavior(
++    bool motion_enabled,
++    bool stock_widget_rendering)
++{
++    ImGuiContext& g = *GImGui;
++    g.UvsrUiMotionEnabled = motion_enabled;
++    g.UvsrStockWidgetRendering = stock_widget_rendering;
++}
++
++bool ImGui::IsUvsrUiMotionEnabled()
++{
++    return GImGui != NULL && GImGui->UvsrUiMotionEnabled;
++}
++
++bool ImGui::IsUvsrStockWidgetRenderingEnabled()
++{
++    return GImGui != NULL && GImGui->UvsrStockWidgetRendering;
++}
++
+ ImGuiIO& ImGui::GetIO()
+@@ -7082,2 +7106,3 @@ static void ImGui::RenderWindowOuterBorders(ImGuiWindow* window)
+     const bool is_stacked_panel_window =
++        !g.UvsrStockWidgetRendering &&
+         (strcmp(window->Name, "Settings") == 0 || strcmp(window->Name, "Materials") == 0);
+@@ -7152,2 +7178,3 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
+         const bool is_settings_window =
++            !g.UvsrStockWidgetRendering &&
+             strcmp(window->Name, "Settings") == 0;
+@@ -7216,2 +7243,3 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
+         const bool is_stacked_panel_window =
++            !g.UvsrStockWidgetRendering &&
+             (strcmp(window->Name, "Settings") == 0 || strcmp(window->Name, "Materials") == 0);
+@@ -7771,2 +7799,3 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+             const bool is_settings_window =
++                !g.UvsrStockWidgetRendering &&
+                 strcmp(window->Name, "Settings") == 0;
+@@ -7783,2 +7812,2 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+-                if (g.IO.MouseClickedCount[0] == 2 && GetKeyOwner(ImGuiKey_MouseLeft) == ImGuiKeyOwner_NoOwner)
++                if (strcmp(window->Name, "Materials") != 0 && g.IO.MouseClickedCount[0] == 2 && GetKeyOwner(ImGuiKey_MouseLeft) == ImGuiKeyOwner_NoOwner)
+                     window->WantCollapseToggle = true;
+@@ -10570,2 +10599,3 @@ void ImGui::UpdateMouseWheel()
+                 const bool is_settings_body =
++                    !g.UvsrStockWidgetRendering &&
+                     strstr(window->Name, "##SettingsBody") != NULL;
+@@ -12293,2 +12323,11 @@ void ImGui::SetTooltipV(const char* fmt, va_list args)
+ {
++    if (GImGui->UvsrStockWidgetRendering)
++    {
++        if (!BeginTooltipEx(ImGuiTooltipFlags_OverridePrevious, ImGuiWindowFlags_None))
++            return;
++        TextV(fmt, args);
++        EndTooltip();
++        return;
++    }
++
+     const char* text;
+diff --git a/imgui.h b/imgui.h
+index 0bfc474..6f5e891 100644
+--- a/imgui.h
++++ b/imgui.h
+@@ -413,2 +413,5 @@ namespace ImGui
+     IMGUI_API void          StyleColorsClassic(ImGuiStyle* dst = NULL); // classic imgui style
++    IMGUI_API void          SetUvsrUiBehavior(bool motion_enabled, bool stock_widget_rendering); // UVSR extension: select animation and stock-widget policy at runtime.
++    IMGUI_API bool          IsUvsrUiMotionEnabled();                    // UVSR extension: query the active presentation policy.
++    IMGUI_API bool          IsUvsrStockWidgetRenderingEnabled();        // UVSR extension: query whether upstream widget rendering is active.
+ 
+diff --git a/imgui_draw.cpp b/imgui_draw.cpp
+index ffddc22..0a788fd 100644
+--- a/imgui_draw.cpp
++++ b/imgui_draw.cpp
+@@ -1728,3 +1728,5 @@ void ImDrawList::AddText(ImFont* font, float font_size, const ImVec2& pos, ImU32
+         255.0f;
+-    if (luminance >= 0.68f && alpha > 0u)
++    if (luminance >= 0.68f &&
++        alpha > 0u &&
++        (GImGui == NULL || !GImGui->UvsrStockWidgetRendering))
+     {
+@@ -5867,4 +5869,13 @@ void ImGui::RenderArrow(ImDrawList* draw_list, ImVec2 pos, ImU32 col, ImGuiDir d
+         break;
+     }
++    if (GImGui != NULL && GImGui->UvsrStockWidgetRendering)
++    {
++        draw_list->AddTriangleFilled(
++            center + a,
++            center + b,
++            center + c,
++            col);
++        return;
++    }
+     const ImVec2 points[3] = {
+         center + a,
+@@ -5924,4 +5935,6 @@ void ImGui::RenderCheckMark(ImDrawList* draw_list, ImVec2 pos, ImU32 col, float
+     draw_list->PathLineTo(end);
+     draw_list->PathStroke(col, 0, thickness);
++    if (GImGui != NULL && GImGui->UvsrStockWidgetRendering)
++        return;
+     const float cap_radius = thickness * 0.5f;
+     draw_list->AddCircleFilled(start, cap_radius, col, 8);
+diff --git a/imgui_internal.h b/imgui_internal.h
+index 070722f..6a403ac 100644
+--- a/imgui_internal.h
++++ b/imgui_internal.h
+@@ -2146,2 +2146,4 @@ struct ImGuiContext
+     float                   NextSettingsWindowCollapsedHeight;  // One-shot retained height for UVSR's Settings status block.
++    bool                    UvsrUiMotionEnabled;                 // Runtime policy for UVSR-authored widget and popup motion.
++    bool                    UvsrStockWidgetRendering;            // Runtime policy for upstream Dear ImGui widget presentation.
+     ImVector<ImFontAtlas*>  FontAtlases;                        // List of font atlases used by the context (generally only contains g.IO.Fonts aka the main font atlas)
+diff --git a/imgui_widgets.cpp b/imgui_widgets.cpp
+index fc9870c..8f8a207 100644
+--- a/imgui_widgets.cpp
++++ b/imgui_widgets.cpp
+@@ -773,2 +773,5 @@ static float GetAnimatedHighlightAmount(
+ {
++    if (!g.UvsrUiMotionEnabled)
++        return highlighted ? 1.0f : 0.0f;
++
+     ImGuiStorage& storage = window->StateStorage;
+@@ -1123,2 +1126,3 @@ bool ImGui::ScrollbarEx(const ImRect& bb_frame, ImGuiID id, ImGuiAxis axis, ImS6
+     const bool settings_body_scrollbar =
++        !g.UvsrStockWidgetRendering &&
+         axis == ImGuiAxis_Y &&
+@@ -1456,3 +1460,4 @@ static void ApplyComboPopupRollClip(ImGuiWindow* window)
+ {
+-    if (!IsComboPopupWindow(window))
++    if (!GImGui->UvsrUiMotionEnabled ||
++        !IsComboPopupWindow(window))
+         return;
+@@ -1492,3 +1497,4 @@ bool ImGui::IsComboPopupTransitionActive(ImGuiID combo_id)
+ {
+-    if (combo_id == 0)
++    if (combo_id == 0 ||
++        !GImGui->UvsrUiMotionEnabled)
+         return false;
+@@ -1550,2 +1556,156 @@ bool ImGui::Checkbox(const char* label, bool* v)
+ 
++    if (g.UvsrStockWidgetRendering)
++    {
++        ImGuiStorage& stock_storage = window->StateStorage;
++        const ImGuiID pending_value_key = ImHashStr(
++            "##TogglePendingValue",
++            0,
++            id);
++        const int pending_value =
++            stock_storage.GetInt(pending_value_key, -1);
++        bool completed_pending_value = false;
++        if (pending_value >= 0)
++        {
++            const bool resolved_value = pending_value != 0;
++            if (*v != resolved_value)
++            {
++                *v = resolved_value;
++                completed_pending_value = true;
++                MarkItemEdited(id);
++            }
++            stock_storage.SetInt(pending_value_key, -1);
++        }
++
++        const float square_sz = GetFrameHeight();
++        const ImVec2 pos = window->DC.CursorPos;
++        const ImRect total_bb(
++            pos,
++            pos + ImVec2(
++                square_sz +
++                    (label_size.x > 0.0f
++                        ? style.ItemInnerSpacing.x + label_size.x
++                        : 0.0f),
++                label_size.y + style.FramePadding.y * 2.0f));
++        ItemSize(total_bb, style.FramePadding.y);
++        const bool is_visible = ItemAdd(total_bb, id);
++        const bool is_multi_select =
++            (g.LastItemData.ItemFlags &
++                ImGuiItemFlags_IsMultiSelect) != 0;
++        if (!is_visible)
++        {
++            if (!is_multi_select ||
++                !g.BoxSelectState.UnclipMode ||
++                !g.BoxSelectState.UnclipRect.Overlaps(total_bb))
++            {
++                IMGUI_TEST_ENGINE_ITEM_INFO(
++                    id,
++                    label,
++                    g.LastItemData.StatusFlags |
++                        ImGuiItemStatusFlags_Checkable |
++                        (*v ? ImGuiItemStatusFlags_Checked : 0));
++                return false;
++            }
++        }
++
++        bool checked = *v;
++        if (is_multi_select)
++            MultiSelectItemHeader(id, &checked, NULL);
++
++        bool hovered, held;
++        bool interaction_pressed =
++            ButtonBehavior(total_bb, id, &hovered, &held);
++        bool pressed =
++            interaction_pressed || completed_pending_value;
++        if (is_multi_select)
++        {
++            MultiSelectItemFooter(
++                id,
++                &checked,
++                &interaction_pressed);
++            pressed =
++                interaction_pressed || completed_pending_value;
++        }
++        else if (interaction_pressed)
++            checked = !checked;
++
++        if (*v != checked)
++        {
++            *v = checked;
++            pressed = true;
++            MarkItemEdited(id);
++        }
++
++        const ImRect check_bb(
++            pos,
++            pos + ImVec2(square_sz, square_sz));
++        const bool mixed_value =
++            (g.LastItemData.ItemFlags &
++                ImGuiItemFlags_MixedValue) != 0;
++        if (is_visible)
++        {
++            RenderNavCursor(total_bb, id);
++            RenderFrame(
++                check_bb.Min,
++                check_bb.Max,
++                GetColorU32(
++                    (held && hovered)
++                        ? ImGuiCol_FrameBgActive
++                        : hovered
++                            ? ImGuiCol_FrameBgHovered
++                            : ImGuiCol_FrameBg),
++                true,
++                style.FrameRounding);
++            const ImU32 check_col =
++                GetColorU32(ImGuiCol_CheckMark);
++            if (mixed_value)
++            {
++                const ImVec2 pad(
++                    ImMax(
++                        1.0f,
++                        IM_TRUNC(square_sz / 3.6f)),
++                    ImMax(
++                        1.0f,
++                        IM_TRUNC(square_sz / 3.6f)));
++                window->DrawList->AddRectFilled(
++                    check_bb.Min + pad,
++                    check_bb.Max - pad,
++                    check_col,
++                    style.FrameRounding);
++            }
++            else if (*v)
++            {
++                const float pad =
++                    ImMax(
++                        1.0f,
++                        IM_TRUNC(square_sz / 6.0f));
++                RenderCheckMark(
++                    window->DrawList,
++                    check_bb.Min + ImVec2(pad, pad),
++                    check_col,
++                    square_sz - pad * 2.0f);
++            }
++        }
++        const ImVec2 label_pos(
++            check_bb.Max.x + style.ItemInnerSpacing.x,
++            check_bb.Min.y + style.FramePadding.y);
++        if (g.LogEnabled)
++        {
++            LogRenderedText(
++                &label_pos,
++                mixed_value
++                    ? "[~]"
++                    : *v ? "[x]" : "[ ]");
++        }
++        if (is_visible && label_size.x > 0.0f)
++            RenderText(label_pos, label);
++
++        IMGUI_TEST_ENGINE_ITEM_INFO(
++            id,
++            label,
++            g.LastItemData.StatusFlags |
++                ImGuiItemStatusFlags_Checkable |
++                (*v ? ImGuiItemStatusFlags_Checked : 0));
++        return pressed;
++    }
++
+     const float row_height = GetFrameHeight();
+@@ -2422,13 +2582,18 @@ bool ImGui::BeginCombo(const char* label, const char* preview_value, ImGuiComboF
+ 
+     // Render shape
+-    const float highlight_amount = GetAnimatedHighlightAmount(
+-        window,
+-        g,
+-        id,
+-        hovered || popup_open);
+-    const ImU32 frame_col = GetColorU32(LerpWidgetColor(
+-        style.Colors[ImGuiCol_FrameBg],
+-        style.Colors[ImGuiCol_FrameBgHovered],
+-        highlight_amount));
++    const float highlight_amount = g.UvsrStockWidgetRendering
++        ? hovered ? 1.0f : 0.0f
++        : GetAnimatedHighlightAmount(
++            window,
++            g,
++            id,
++            hovered || popup_open);
++    const ImU32 frame_col = g.UvsrStockWidgetRendering
++        ? GetColorU32(
++            hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg)
++        : GetColorU32(LerpWidgetColor(
++            style.Colors[ImGuiCol_FrameBg],
++            style.Colors[ImGuiCol_FrameBgHovered],
++            highlight_amount));
+     const float value_x2 = ImMax(bb.Min.x, bb.Max.x - arrow_size);
+     RenderNavCursor(bb, id);
+@@ -2437,11 +2602,16 @@ bool ImGui::BeginCombo(const char* label, const char* preview_value, ImGuiComboF
+     if (!(flags & ImGuiComboFlags_NoArrowButton))
+     {
+-        ImU32 bg_col = GetColorU32(LerpWidgetColor(
+-            style.Colors[ImGuiCol_Button],
+-            style.Colors[
+-                popup_open
+-                    ? ImGuiCol_ButtonActive
+-                    : ImGuiCol_ButtonHovered],
+-            highlight_amount));
++        ImU32 bg_col = g.UvsrStockWidgetRendering
++            ? GetColorU32(
++                (popup_open || hovered)
++                    ? ImGuiCol_ButtonHovered
++                    : ImGuiCol_Button)
++            : GetColorU32(LerpWidgetColor(
++                style.Colors[ImGuiCol_Button],
++                style.Colors[
++                    popup_open
++                        ? ImGuiCol_ButtonActive
++                        : ImGuiCol_ButtonHovered],
++                highlight_amount));
+         ImU32 text_col = GetColorU32(ImGuiCol_Text);
+         window->DrawList->AddRectFilled(ImVec2(value_x2, bb.Min.y), bb.Max, bg_col, style.FrameRounding, (w <= arrow_size) ? ImDrawFlags_RoundCornersAll : ImDrawFlags_RoundCornersRight);
+@@ -2466,5 +2636,6 @@ bool ImGui::BeginCombo(const char* label, const char* preview_value, ImGuiComboF
+         const float text_shadow_alpha_scale_backup =
+             g.TextShadowAlphaScale;
+-        g.TextShadowAlphaScale *= 0.55f;
++        if (!g.UvsrStockWidgetRendering)
++            g.TextShadowAlphaScale *= 0.55f;
+         RenderTextClipped(bb.Min + style.FramePadding, ImVec2(value_x2, bb.Max.y), preview_value, NULL, NULL);
+         g.TextShadowAlphaScale = text_shadow_alpha_scale_backup;
+@@ -2556,2 +2716,8 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
+             : -1;
++    if (!g.UvsrUiMotionEnabled && popup_closing)
++    {
++        ClosePopupToLevel(g.BeginPopupStack.Size, true);
++        g.NextWindowData.ClearFlags();
++        return false;
++    }
+     if (popup_closing &&
+@@ -2580,3 +2746,11 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
+     bool popup_interaction_ready = false;
+-    if (popup_closing)
++    if (!g.UvsrUiMotionEnabled)
++    {
++        popup_open_elapsed = UvsrComboPopupRollDuration;
++        popup_close_elapsed = 0.0f;
++        next_popup_close_ready_frame = -1;
++        popup_roll_amount = 1.0f;
++        popup_interaction_ready = true;
++    }
++    else if (popup_closing)
+     {
+@@ -2657,2 +2831,14 @@ bool ImGui::BeginComboPopup(ImGuiID popup_id, const ImRect& bb, ImGuiComboFlags
+     }
++    else if (!g.UvsrUiMotionEnabled)
++    {
++        g.CurrentWindow->StateStorage.SetInt(
++            popup_closing_key,
++            0);
++        g.CurrentWindow->StateStorage.SetFloat(
++            popup_close_elapsed_key,
++            0.0f);
++        g.CurrentWindow->StateStorage.SetInt(
++            popup_close_ready_frame_key,
++            -1);
++    }
+     else if (popup_closing)
+@@ -3915,2 +4101,4 @@ static void AnimateSliderGrab(
+         return;
++    if (!g.UvsrUiMotionEnabled)
++        return;
+ 
+@@ -7573,3 +7761,67 @@ bool ImGui::TreeNodeBehavior(ImGuiID id, ImGuiTreeNodeFlags flags, const char* l
+             nav_render_cursor_flags |= ImGuiNavRenderCursorFlags_AlwaysDraw; // Always show the nav rectangle
+-        if (display_frame)
++        if (g.UvsrStockWidgetRendering)
++        {
++            if (display_frame)
++            {
++                const ImU32 bg_col = GetColorU32(
++                    (held && hovered)
++                        ? ImGuiCol_HeaderActive
++                        : hovered
++                            ? ImGuiCol_HeaderHovered
++                            : ImGuiCol_Header);
++                RenderFrame(
++                    frame_bb.Min,
++                    frame_bb.Max,
++                    bg_col,
++                    true,
++                    style.FrameRounding);
++                RenderNavCursor(
++                    frame_bb,
++                    id,
++                    nav_render_cursor_flags);
++                if (span_all_columns && !span_all_columns_label)
++                    TablePopBackgroundChannel();
++                if (flags & ImGuiTreeNodeFlags_Bullet)
++                    RenderBullet(window->DrawList, ImVec2(text_pos.x - text_offset_x * 0.60f, text_pos.y + g.FontSize * 0.5f), text_col);
++                else if (!is_leaf)
++                    RenderArrow(window->DrawList, ImVec2(text_pos.x - text_offset_x + padding.x, text_pos.y), text_col, is_open ? ((flags & ImGuiTreeNodeFlags_UpsideDownArrow) ? ImGuiDir_Up : ImGuiDir_Down) : ImGuiDir_Right, 1.0f);
++                else
++                    text_pos.x -= text_offset_x - padding.x;
++                if (flags & ImGuiTreeNodeFlags_ClipLabelForTrailingButton)
++                    frame_bb.Max.x -=
++                        g.FontSize + style.FramePadding.x;
++                if (g.LogEnabled)
++                    LogSetNextTextDecoration("###", "###");
++            }
++            else
++            {
++                if (hovered || selected)
++                {
++                    const ImU32 bg_col = GetColorU32(
++                        (held && hovered)
++                            ? ImGuiCol_HeaderActive
++                            : hovered
++                                ? ImGuiCol_HeaderHovered
++                                : ImGuiCol_Header);
++                    RenderFrame(
++                        frame_bb.Min,
++                        frame_bb.Max,
++                        bg_col,
++                        false);
++                }
++                RenderNavCursor(
++                    frame_bb,
++                    id,
++                    nav_render_cursor_flags);
++                if (span_all_columns && !span_all_columns_label)
++                    TablePopBackgroundChannel();
++                if (flags & ImGuiTreeNodeFlags_Bullet)
++                    RenderBullet(window->DrawList, ImVec2(text_pos.x - text_offset_x * 0.5f, text_pos.y + g.FontSize * 0.5f), text_col);
++                else if (!is_leaf)
++                    RenderArrow(window->DrawList, ImVec2(text_pos.x - text_offset_x + padding.x, text_pos.y + g.FontSize * 0.15f), text_col, is_open ? ((flags & ImGuiTreeNodeFlags_UpsideDownArrow) ? ImGuiDir_Up : ImGuiDir_Down) : ImGuiDir_Right, 0.70f);
++                if (g.LogEnabled)
++                    LogSetNextTextDecoration(">", NULL);
++            }
++        }
++        else if (display_frame)
+         {
+@@ -7944,2 +8196,3 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+     const bool combo_popup_interaction_blocked =
++        g.UvsrUiMotionEnabled &&
+         combo_popup &&
+@@ -8083,3 +8336,21 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+ 
+-        if (combo_popup)
++        if (g.UvsrStockWidgetRendering)
++        {
++            if (highlighted || selected)
++            {
++                const ImU32 color = GetColorU32(
++                    (held && highlighted)
++                        ? ImGuiCol_HeaderActive
++                        : highlighted
++                            ? ImGuiCol_HeaderHovered
++                            : ImGuiCol_Header);
++                RenderFrame(
++                    bb.Min,
++                    bb.Max,
++                    color,
++                    false,
++                    0.0f);
++            }
++        }
++        else if (combo_popup && g.UvsrUiMotionEnabled)
+         {
+@@ -8115,3 +8386,4 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+                     -2);
+-                if (last_frame < g.FrameCount - 1)
++                if (!g.UvsrUiMotionEnabled ||
++                    last_frame < g.FrameCount - 1)
+                 {
+@@ -8229,3 +8501,3 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+             g.TextShadowAlphaScale;
+-        if (combo_popup)
++        if (combo_popup && !g.UvsrStockWidgetRendering)
+             g.TextShadowAlphaScale *= 0.55f;
+@@ -8238,3 +8510,3 @@ bool ImGui::Selectable(const char* label, bool selected, ImGuiSelectableFlags fl
+     {
+-        if (combo_popup)
++        if (combo_popup && g.UvsrUiMotionEnabled)
+         {

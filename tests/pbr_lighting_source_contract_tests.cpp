@@ -92,6 +92,12 @@ int main(int argc, char** argv)
         sourceDirectory / "src/pbr_deferred_lighting_msaa_cs.hlsl"));
     const std::string deferredPass = Canonicalize(ReadSource(
         sourceDirectory / "src/pbr_deferred_lighting_pass.cpp"));
+    const std::string pbrLighting = Canonicalize(ReadSource(
+        sourceDirectory / "src/pbr_lighting.hlsli"));
+    const std::string flashlightShared = Canonicalize(ReadSource(
+        sourceDirectory / "src/flashlight_shared.h"));
+    const std::string forwardShader = Canonicalize(ReadSource(
+        sourceDirectory / "src/pbr_forward_ps.hlsl"));
     const std::string compositeShader = Canonicalize(ReadSource(
         sourceDirectory / "src/screen_space_indirect_composite_cs.hlsl"));
     const std::string fusedShader = Canonicalize(ReadSource(
@@ -183,7 +189,103 @@ int main(int argc, char** argv)
             "floatgetscreenshadowvisibility(",
             "each deferred variant must preserve the inherited screen-shadow "
             "adapter");
+        RequireContains(
+            *shader,
+            "evaluateshadowpoisson(",
+            "each deferred variant must evaluate attached local-light shadow "
+            "maps");
     }
+    RequireContains(
+        forwardShader,
+        "evaluateshadowgather16(",
+        "forward PBR must evaluate attached local-light shadow maps");
+    RequireContains(
+        pbrLighting,
+        "light.lighttype==lighttype_spot",
+        "PBR lighting must retain spotlight evaluation");
+    RequireContains(
+        pbrLighting,
+        "floatinverserangesquared=light.angularsizeor"
+            "invrange*light.angularsizeor"
+            "invrange;",
+        "spotlights must retain finite-range attenuation");
+    RequireContains(
+        pbrLighting,
+        "spotweight*=spotweight*(3.0f-2.0f*spotweight);",
+        "spotlights must retain a smooth cone edge");
+    RequireContains(
+        pbrLighting,
+        "#include\"flashlight_shared.h\"",
+        "PBR lighting must consume the shared flashlight transport constants");
+    RequireContains(
+        flashlightShared,
+        "#defineuvsr_flashlight_shape_radius_tag1024.0f",
+        "the flashlight shape transport must retain its remote radius tag");
+    RequireContains(
+        flashlightShared,
+        "#defineuvsr_flashlight_min_shape_exponent2.0f",
+        "the flashlight circle endpoint must remain exponent two");
+    RequireContains(
+        flashlightShared,
+        "#defineuvsr_flashlight_max_shape_exponent16.0f",
+        "the flashlight rounded-square endpoint must remain bounded");
+    RequireContains(
+        pbrLighting,
+        "floatcostheta=dot(-sample.directiontolight,"
+            "lightdirection);",
+        "ordinary spotlights and the exact-circle endpoint must retain the "
+        "original cosine path");
+    RequireContains(
+        pbrLighting,
+        "shapeexponent>uvsr_flashlight_min_shape_exponent+1e-4f",
+        "only noncircular flashlight beams may enter shaped evaluation");
+    RequireContains(
+        pbrLighting,
+        "float3(light.shadowchannel.yzw)/"
+            "uvsr_flashlight_axis_quantization",
+        "the shaped flashlight must decode its packed camera-right axis");
+    RequireContains(
+        pbrLighting,
+        "beamright-=lightdirection*dot(beamright,lightdirection);",
+        "the shaped flashlight must orthogonalize its transported basis");
+    RequireContains(
+        pbrLighting,
+        "float2poweredslope=pow(abs(beamslope),"
+            "float2(shapeexponent,shapeexponent));",
+        "the shaped flashlight must evaluate its bounded superellipse");
+    RequireContains(
+        pbrLighting,
+        "costheta=rsqrt(1.0f+shapedslope*shapedslope);",
+        "the superellipse distance must feed the existing cone falloff");
+    for (const std::string* shader :
+        { &forwardShader, &deferredShader, &deferredMsaaShader })
+    {
+        RequireContains(
+            *shader,
+            "samplepbrlight(",
+            "every production PBR lighting path must share flashlight shape "
+            "evaluation");
+    }
+    for (const std::string* shader :
+        { &deferredShader, &deferredMsaaShader })
+    {
+        RequireContains(
+            *shader,
+            "light.shadowchannel.x",
+            "deferred local-shadow selection must retain shadowChannel.x");
+    }
+    RequireContains(
+        rendererSource,
+        "lightconstants.shadowchannel[1]=",
+        "flashlight shape transport must start after shadowChannel.x");
+    RequireContains(
+        rendererSource,
+        "lightconstants.shadowchannel[3]=",
+        "flashlight shape transport must fill only the unused axis lanes");
+    Require(
+        rendererSource.find("lightconstants.shadowchannel[0]=") ==
+            std::string::npos,
+        "flashlight shape transport must not overwrite shadowChannel.x");
     for (uint32_t slot = 0u; slot < 3u; ++slot)
     {
         Require(
@@ -286,7 +388,8 @@ int main(int argc, char** argv)
         "the renderer must retain exactly one shared directional-visibility "
         "adapter initializer");
     constexpr std::array<std::string_view, 3u> ProducerPairs = {
-        "{bendshadowresult.nearvisibility,bendshadowresult.light}",
+        "{screenspaceshadowresult.nearvisibility,"
+            "screenspaceshadowresult.light}",
         "{sparsevirtualshadowmapresult.visibility,"
             "sparsevirtualshadowmapresult.light}",
         "{diagnosticcsmresult.visibility,diagnosticcsmresult.light}"
@@ -298,6 +401,19 @@ int main(int argc, char** argv)
             "each directional-visibility texture must remain paired exactly "
             "once with the pointer-identical light that produced it");
     }
+    RequireContains(
+        rendererSource,
+        "conststd::shared_ptr<ishadowmap>activeshadowmap="
+            "settings.castshadows?m_flashlightshadowmap:nullptr;",
+        "flashlight shadow association must honor the shadow setting");
+    RequireContains(
+        rendererSource,
+        "m_flashlight->shadowmap=activeshadowmap;",
+        "flashlight spill must submit its exact gated shadow map");
+    RequireContains(
+        rendererSource,
+        "m_flashlighthotspot->shadowmap=activeshadowmap;",
+        "flashlight hotspot must share the exact gated shadow map");
 
     // Every production lighting variant must retain the same environment
     // contract; imported variants belong in this explicit list.

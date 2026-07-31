@@ -14,6 +14,9 @@ struct PixelZoomConstants
     float shadowBlur;
     float shadowOpacity;
 
+    float shadowOffsetY;
+    float3 padding;
+
     float4 outlineTopColor;
     float4 outlineBottomColor;
 };
@@ -66,7 +69,8 @@ void main(
     {
         // The shadow is an analytic layer outside the cutout. Its softness
         // never touches or resamples the magnified image.
-        const float2 shadowOffset = float2(0.0, 3.0);
+        const float2 shadowOffset =
+            float2(0.0, g_PixelZoom.shadowOffsetY);
         const float shadowDistance = RoundedRectangleSignedDistance(
             pixelCenter - shadowOffset,
             float2(g_PixelZoom.panelSize),

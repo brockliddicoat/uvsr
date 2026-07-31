@@ -11,10 +11,35 @@ launches.
 
 ## General, Scenes, and Camera
 
-The **General** drawer contains **Graphics Adapter**, **Camera Mode**, and
-**Camera Location**. **World Materials** contains the White World presentations
-and the **Indirect Diffuse Response** diagnostic. **World Scenes** owns the
-scene picker.
+The **General** drawer contains **Interface Skin**, **Graphics Adapter**,
+**Camera Mode**, and **Camera Location**. **World Materials** contains the White
+World presentations and the **Indirect Diffuse Response** diagnostic.
+**World Scenes** owns the scene picker.
+
+**Interface Skin** is a session-only presentation choice:
+
+- **Amp** preserves UVSR's established animated translucent appearance and is
+  the launch default. Its expanded Settings surface and collapsed status block
+  use the same neutral `(0.018, 0.018, 0.018, 0.92)` surface as the slash
+  command interface and Materials panel. Their shared blur preserves scene
+  light and detail after removing chromatic spill, so the panels remain
+  monotone over differently colored scene regions. The Settings title matches
+  the resting blue drawer headers in color, 4 px corner radius, and one-pixel
+  gradient outline. The command surface grows and fades in and out with the
+  same presentation curve as the other floating windows and uses their shared
+  backdrop blur and analytic outside-only shadow pipeline.
+- The **OG** skin uses ImGui's stock dark style, default font, native widgets, and
+  immediate interaction, with square scrollbars and two pinned performance
+  rows. Pixel zoom is square, while Settings and the command surface retain the
+  same outside-only shadow as pixel zoom, and its Settings title matches its
+  stock resting drawer's color, square frame, and native outline policy. OG
+  disables presentation motion for drawers, sections, toggles, popups,
+  Settings, zoom, highlights, backdrop blur, and widgets so agents can
+  configure experiments without waiting.
+
+Skin selection does not alter renderer output or persist across launches.
+Footer **Reset** and `/reset all` preserve the selected skin; use its inline
+reset or `/reset ui.skin` to return to **Amp**.
 
 At startup, UVSR selects the DirectX 12-capable adapter with the most dedicated
 video memory. Selecting another compatible adapter restarts the renderer on that
@@ -30,15 +55,24 @@ detaches the preset name without changing the view.
 **Camera Mode** provides:
 
 - **Freelook:** Mouse and arrow keys rotate; A/D strafe; W/S dolly; Space moves
-  upward; either Shift key moves downward; X/C roll; V levels roll; and the
-  wheel applies a small damped dolly. The camera uses collision and smooth
-  acceleration and deceleration.
+  upward; either Shift key moves downward; X/C roll; V smoothly levels roll;
+  and the wheel applies a small damped dolly. The V-key motion preserves
+  position and view direction, follows a frame-rate-independent exponential
+  curve, deliberately passes level by about 15 percent, and then readjusts to
+  exact level. A new V press restarts from the current roll, while other camera
+  input cancels it. The camera uses collision and smooth acceleration and
+  deceleration.
 - **Locked:** Freezes the current view. Automated benchmark launches select
   this mode.
 
-Right-click remains camera input. Middle-click performs material picking, and
-**M** opens or closes the material editor. Selecting a material does not open
-the editor automatically.
+Right-click remains camera input, and middle-click retains cursor-directed
+material picking. With the material editor closed, **M** requests a fresh exact
+material-ID pick at the framebuffer center. The editor opens only when that
+readback resolves to an editable material in the current scene; a miss, a scene
+change, or a controlled experiment leaves it closed instead of exposing a
+previous selection. **M** closes an open editor or cancels its pending pick. It
+never moves the camera. The center crosshair remains visible while the editor
+is open.
 
 **White World Off** is the default. **White World On**, **White World Preserve
 Normals**, and **White World Preserve Emissives** override material color
@@ -142,14 +176,14 @@ temporal stability in the current build.
 
 ## Anti-Aliasing
 
-The **Aliasing** drawer exposes **Enabled**, **Method**, **Quality**, **History
-Frames**, **History Strength**, **Dejitter**, and **Sharpness**.
+The **Aliasing** drawer exposes **Enabled**, **Method**, **Quality**, and
+**Temporal Cost**. Temporal Reconstructive opens its default-open **Developer
+Options** surface for retained controls and the resolved policy overrides.
 
 ### Methods and Quality
 
-- **Temporal Reconstructive** uses MiniEngine temporal history, motion and
-  jitter conventions, reverse-Z validation, disocclusion rejection, and
-  rectification.
+- **Temporal Reconstructive** uses UVSR's temporal history, motion and jitter
+  conventions, reverse-Z validation, disocclusion rejection, and rectification.
 - **Conservative Morphological** uses CMAA2 as a spatial presentation method.
 - **Multisample Reference** provides Low 2x, Medium 4x, High 8x, and Ultra 16x
   deferred MSAA.
@@ -172,49 +206,76 @@ Temporal quality bundles progress as follows:
 | High | 1x Bicubic | 9 | Higher-quality reconstruction |
 | Ultra | 5x Bicubic | 12 | Dejitter enabled |
 
-**9x Bicubic** is also available as the complete nine-bilinear-tap Catmull-Rom
-reconstruction. **History Frames** accepts 1 through 32 prior frames for
-long-term temporal methods and reports no history for spatial methods.
-**History Strength** accepts 0% through 200%; values above 100% reinforce only
-history that has already passed every validity gate.
+**9x Bicubic** is the complete nine-bilinear-tap Catmull-Rom reconstruction.
+**History Frames** accepts 1 through 32 prior frames for long-term temporal
+methods, while **History Strength** accepts 0% through 200% of already-valid
+history.
 
-**Aliasing Algorithm Configuration** exposes Subpixel Morphology, Motion Source,
-Reconstruction, and Rectification. Rectification retains Pair Tristimulus and
-Variance YCoCg. Sharpness is disabled by default for every quality. Stable
-Interior and both per-pixel rectification modes are retired.
+### Temporal Cost and Developer Options
 
-Effective temporal image or history-layout changes reset history once.
-Presentation-only CMAA2, Sharpness, and image-equivalent execution changes do
-not. Forward and legacy shading leave temporal AA unavailable because they do
-not produce the required motion contract. Visibility Temporal Reconstruction
-remains mutually exclusive until both histories share one jitter convention.
+**Temporal Cost** selects a visible default policy rather than hiding its
+controls:
+
+| Cost | History Layout | Intended Tradeoff |
+| --- | --- | --- |
+| **Full Quality** | Robust RGBA16F color and R32 depth | Maximum robustness and the full feature set |
+| **Reduced** | Robust RGBA16F color and R32 depth | Default lower-compute profile with Stationary Bypass |
+| **Minimum** | Compact history when supported | Explicit lowest-cost image-quality tradeoff |
+
+UVSR starts in **Medium** Temporal Reconstructive with **Reduced** cost.
+Reduced retains robust history while using **Stationary Bypass** for
+Previous-Depth Validation.
+
+Developer Options retains **Dejitter**, **Sharpness**, **History Frames**,
+**History Strength**, **Morphology**, **Motion Source**, **Reconstruction**,
+and **Rectification**, plus the policy rows **History Storage**,
+**Previous-Depth Validation**, **History Weight**, **Motion Trust**,
+**Rectification Clip**, **Blend Domain**, and **Sharpness Policy**. Resetting a
+policy row restores its selected Temporal Cost default. **Sample Resurrection**
+is available only at Full Quality; changing to Reduced or Minimum retains its
+stored Full Quality value without applying it.
+
+Effective image-policy or history-layout transitions reset temporal history
+once. Presentation-only CMAA2 and image-equivalent sharpening changes do not.
+Forward and legacy shading leave Temporal Reconstructive unavailable because
+they do not provide its motion contract.
+
+The slash interface exposes the same policies through
+`anti-aliasing.temporal-cost`, `anti-aliasing.history.storage`,
+`anti-aliasing.previous-depth-validation`, `anti-aliasing.history.weight`,
+`anti-aliasing.motion-trust`, `anti-aliasing.rectification-clip`,
+`anti-aliasing.blend-domain`, `anti-aliasing.sharpen.policy`, and
+`anti-aliasing.sample-resurrection`.
 
 The complete coordinate, reset, quality, and motion-test contract is in
-[Anti-Aliasing Options](miniengine-taa-options.md).
+[Temporal Anti-Aliasing Options](temporal-aa-options.md).
 
 ## Shadow Visibility Producers
 
-Bend screen-space shadows, Sparse Virtual Shadow Maps, and Diagnostic Cascaded
-Shadow Maps are independent, initially disabled directional-light visibility
-producers. Each resolves a full-resolution linear `R8_UNORM` texture. Deferred
-lighting multiplies complete visibility factors only for the exact
-pointer-identical light.
+Screen-Space Directional Shadows, Sparse Virtual Shadow Maps, and Diagnostic
+Cascaded Shadow Maps are independent, initially disabled directional-light
+visibility producers. Each resolves a full-resolution linear `R8_UNORM`
+texture. Deferred lighting multiplies complete visibility factors only for the
+exact pointer-identical light.
 
 The primary directional sun, `sun_1`, is selected automatically. When
-**Lights** is opened, all three producer drawers start expanded with their
-**Enabled** toggles off. **Lights** itself remains closed at launch.
+**Shadows** is opened, all three producer sections start expanded with their
+**Enabled** toggles off. **Shadows** is a top-level sibling immediately after
+**Lights**, and both drawers remain closed at launch. The selected flashlight's
+**Cast Shadows** control remains in **Lights** because it governs only the
+flashlight's local planar shadow map.
 
-### Bend Screen-Space Shadows
+### Screen-Space Directional Shadows
 
-Bend shadows require deferred UVSR PBR and a primary directional light. UVSR's
-adapter consumes the existing single-sample reverse-Z depth buffer while
-keeping Bend Studio's released CPU and GPU headers byte-for-byte unchanged.
+Screen-Space Directional Shadows require deferred UVSR PBR and a primary
+directional light. The first-party path consumes the existing single-sample
+reverse-Z depth buffer and produces full-resolution directional visibility.
 
 | Profile | Length | Shared Defaults |
 | --- | ---: | --- |
-| Performance | 60 pixels | 4 hard samples, 8 fade-out samples |
-| Balanced | 240 pixels | 4 hard samples, 8 fade-out samples |
-| Quality | 960 pixels | 4 hard samples, 8 fade-out samples |
+| Default | 60 pixels | 4 hard samples, 8 fade-out samples |
+| Long | 240 pixels | 4 hard samples, 8 fade-out samples |
+| Maximum Validation | 960 pixels | 4 hard samples, 8 fade-out samples |
 
 All three restore `0.005` surface thickness, `0.02` bilinear threshold,
 contrast `4`, and optional modes and diagnostics off without changing
@@ -224,11 +285,8 @@ contrast `4`, and optional modes and diagnostics off without changing
 Custom settings include **Surface Thickness**, **Bilinear Threshold**, **Shadow
 Contrast**, compiled **Hard Shadow Samples** and **Fade-Out Samples**, **Ignore
 Edge Pixels**, **Precision Offset**, **Bilinear Offset Mode**, and **Early
-Out**. **Debug View** presents Bend's Edge, Thread, or Wave output as grayscale
-visibility.
-
-The vendored integration boundary is recorded in
-[Bend Screen-Space Shadows](../third_party/bend_sss/README.md).
+Out**. **Debug View** presents Occlusion, Trace Progress, or Ray Bounds as
+grayscale visibility.
 
 ### Sparse Virtual Shadow Maps
 
@@ -284,6 +342,33 @@ Per Cascade**, **Maximum Shadow Distance**, **Maximum Light Depth**, **Filter**,
 **Diagnostics** owns paired setup, culling, update, raster, and sampling timing,
 SVSM match checks, debug views, and live statistics.
 
+## Lights and Camera Flashlight
+
+The **Lights** drawer includes editable scene lights and the camera-mounted
+`flashlight_1`; its internal lens hotspot is deliberately not selectable. Press
+**F** only when the command bar is closed and ImGui is not capturing text to
+toggle the same **Enabled (F)** setting shown in the drawer. UVSR submits the
+flashlight and hotspot before ordinary scene lights, with exact-zero output
+while disabled.
+
+When `flashlight_1` is selected, controls remain in this order: **Enabled (F)**,
+**Cast Shadows**, **Realistic Flashlight**, its animated **Hotspot Size**,
+**Hotspot Strength**, **Sway**, and **Aim Correction** region, then
+**Brightness**, **Beam Size**, **Beam Roundness**, **Edge Softness**, **Range**,
+**Color**, and **Camera Offset**. **Cast Shadows** controls the flashlight's
+local planar shadow map and is independent of the directional techniques in
+**Shadows**. The 0 to 40 cm Camera Offset moves the emitter sideways while its
+beam converges on the camera aim at 6 m, exposing useful shadow parallax.
+The default camera-light profile is enabled with **Cast Shadows** and
+**Realistic Flashlight**: 600 cd, a 25 degree beam, 0.70 roundness, 0.60 edge
+softness, 30 m range, 20 cm camera offset, and `(1.00, 0.80, 0.65)` color. Its
+hotspot defaults are 0.40 size, 0.70 strength, 0.20 degree sway, and 0.05 s aim
+correction.
+
+The slash interface uses `light.selected` to choose `flashlight_1`. Its
+dedicated `light.selected.flashlight.*` commands use the same bounds and reject
+generic selected-light properties while the flashlight is selected.
+
 ## Sky and Image-Based Lighting
 
 Forward, deferred, and screen-space composition share one persistent global
@@ -297,6 +382,11 @@ calibrated `-2.75 EV`, with diffuse and specular IBL enabled at `1.00`
 strength. Common exposure preserves the relationship among diffuse IBL,
 specular IBL, and background. Independent strengths apply after exposure;
 diffuse strength also scales the environment contribution entering SSGI.
+
+**Ambient Fill** is the master gate for diffuse and specular IBL. Turning it
+off preserves the sky background and the retained per-lobe settings, but removes
+their beauty-image contribution and resets IBL history. The slash equivalent is
+`sky.ambient-fill.enabled`.
 
 The source menu contains six imported HDR radiance fields: three day or
 overcast skies, Quadrangle Cloudy, and two night sources. Selecting a source
@@ -315,21 +405,131 @@ Postmortem](postmortem/tonemapper-drawer-and-luts-v1.md).
 ## Settings Interface and Inspection
 
 Settings launch hidden. The first Escape press opens **General** while
-Visibility, Buffers, Statistics, Aliasing, Sky, and Lights remain collapsed.
-The renderer summary and first performance line remain pinned above the
-independently scrolling settings body.
+Visibility, Buffers, Statistics, Aliasing, Sky, Lights, and Shadows remain
+collapsed.
+The renderer summary and performance metrics remain pinned above the
+independently scrolling settings body. Amp keeps the six metrics on one row.
+OG splits them after bandwidth so compute, frame time, and FPS remain visible
+on a second row at the narrower stock-font width.
 
 The performance line reports resolution, submitted triangles, current-clock
 memory bandwidth, utilization-adjusted current-clock FP32 throughput, frame
 time, and FPS. One synchronized snapshot updates renderer, visibility, and
 temporal-AA statistics 24 times per second.
 
+Settings layout changes preserve the visible reading anchor with one direct,
+current-frame correction to `Scroll.y`, clamped against the live scroll range.
+The already-submitted Settings content receives the same visual translation in
+that frame, so the state correction cannot leave a one-frame snap behind.
+A still-finite ImGui navigation or programmatic scroll target owns its frame and
+remains untouched; UVSR does not replace it or carry the same anchor correction
+into a later frame.
+
+### Materials
+
+The Materials panel is an independent floating surface and remains composited
+when Settings are hidden. It keeps pixel zoom's full resting width and right
+edge even while the zoom surface grows, shrinks, or pulses between levels. With
+zoom off, it rests one consistent margin from the top edge; with zoom visible,
+its top follows the zoom surface's animated lower edge at one consistent
+margin. Amp moves the panel down before zoom opens, holds it below zoom until
+zoom has completely closed, and applies the same 86-to-100-percent zoom and
+fade curve when the panel itself opens or closes. OG resolves every endpoint
+immediately.
+
+The title and body use the same two stacked rounded blocks as Settings. Amp
+reuses the Settings and command-interface neutral blurred surface, blue
+drawer-header title, and outside-only shadow. A translucent light drawer plate
+is stacked over the dark body behind the editable controls below **Material
+Domain**, matching a Settings drawer body. Texture filenames use a full-opacity
+match of the exact authored drawer-header blue instead of green, and **Material
+Domain** occupies the same control column width as the material sliders. The
+title has no X button. Its triangle closes the complete panel through Amp's
+retained zoom-out and fade or OG's immediate endpoint; **M** remains the
+full-window toggle.
+
+The panel always represents the fresh current-scene material selected by
+**M**. It never opens on a miss or reuses a stale cursor selection, never moves
+the camera, and keeps the exact framebuffer-center crosshair visible while it
+is open. Controlled experiments suppress new material-inspector picks.
+
+### Slash Command Interface
+
+Press **/** to open or close a focused command bar near the bottom of the renderer. It
+always spans the complete margin-to-margin work width, regardless of whether
+Settings are expanded, collapsed, or hidden. UVSR permanently reserves its
+fixed three-line bottom lane and caps Settings one consistent margin above it,
+so same-frame command output cannot resize either surface into the other. Long
+results scroll inside the command surface. Amp grows and fades the bar through
+the shared 180 ms presentation curve while preserving its full horizontal
+extent, keeping keyboard focus live, and using the same neutral,
+chroma-suppressed backdrop blur and analytic outside-only shadow pipeline as
+Settings and Materials. Its closing surface is noninteractive and releases
+shortcut ownership immediately. OG opens
+and closes at exact immediate endpoints, retains the outside-only shadow, and
+does not blur its backdrop. The bar remains available while a scene is loading.
+At a physically impossible resize with no usable Settings region, UVSR
+withholds the bar until enough space returns instead of drawing either window
+over the other.
+Enter parses and queues the command, Tab completes the current verb, path,
+action, or value, and Up/Down recalls up to 32 earlier commands. Escape cancels
+the active ImGui edit without closing the bar; press **/** again to close it.
+While it is open, keyboard input is captured before application shortcuts,
+including Alt+Enter, so commands containing V, Z, M, or F cannot move the
+camera, toggle another feature, or change fullscreen state.
+
+The grammar is:
+
+```text
+/help
+/list [path-prefix]
+/get <path>
+/set <path> <value>
+/toggle <boolean-path>
+/reset <path|all>
+/run <action>
+```
+
+Aliases make common operations shorter: `/skin [value]`,
+`/ui [show|hide|toggle]`, `/scene [value]`, `/camera [freelook|locked]`,
+`/camera-location [piloted|position-1]`, and `/reload-shaders`. Values containing
+spaces can be quoted. For example:
+
+```text
+/skin og
+/list
+/get ui.skin
+/set sky.diffuse-ibl-strength 1.25
+/toggle visibility.enabled
+/run screenshot
+```
+
+`/list` discovers the complete live catalog. Every user-adjustable Settings
+value has one stable lowercase path with `get` and validated `set`; Boolean
+values also support `toggle`. A path supports `reset` whenever its visible
+control or product contract defines a reset. Every Settings command or button
+needed for agent setup is discoverable as a `/run` action. Completion discovers
+enum domains, dynamic scene, light, and material choices, and actions without
+requiring the corresponding drawer to open.
+
+Commands use the same defaults, numeric ranges, validation, resource and history
+side effects, deferred mutation barrier, and availability locks as their visible
+controls. Renderer, scene, and camera mutations are rejected while loading or
+during a controlled experiment; screenshots are also rejected because their
+readback and clipboard work can contaminate a measurement. UI visibility and
+skin selection remain available. Accepted commands execute after the complete
+ImGui frame. Submission first fast-forwards and commits any older deferred UI
+selection at that safe barrier, then applies the newer command, so a stale popup
+choice cannot later overwrite it. The immediate OG skin removes presentation
+delays without allowing unsafe mutation from inside an active widget or popup.
+
 The footer provides **Reset**, **Screenshot**, **Zoom**, and **Restart**.
 Pressing **Z** or **Zoom** cycles off, 2x, 3x, 4x, and 5x. Pixel zoom copies the
 untouched scene before UI composition and uses integer source-texel loads, so
 the inspected texel becomes an exact 2x2, 3x3, 4x4, or 5x5 destination group.
-Benchmark runs suspend the feature, and disabled zoom submits no capture or
-composite work.
+Amp uses the authored rounded zoom silhouette; OG uses square corners. Both
+share the same analytic outside-only shadow. Benchmark runs suspend the
+feature, and disabled zoom submits no capture or composite work.
 
 The complete UI hierarchy, animation, input-transaction, copy, and verification
 contract is in the [UI Design and Integration
@@ -338,8 +538,9 @@ Reference](ui-integration-agent-procedure.md).
 ## Statistics and Benchmarks
 
 The **Statistics** drawer can isolate the Complete Renderer, Geometry, Direct
-Lighting, Screen-Space Visibility, Anti-Aliasing, Material Picking, Environment
-Background, Tone Mapping, or Output Blit.
+Lighting, Screen-Space Visibility, Anti-Aliasing, Screen-Space Directional Shadows,
+Sparse Virtual Shadow Maps, Diagnostic Cascaded Shadow Maps, Material Picking,
+Environment Background, Tone Mapping, or Output Blit.
 
 Visibility expands into its outer effect envelope, named-stage total, signed
 unattributed difference, depth preparation, first trace, later bounces,
@@ -408,50 +609,84 @@ static PSO is absent.
 ## Factory-Settings Experiment Build
 
 Repeated code experiments that use only the shader topology selected by a fresh
-factory-default launch can use a separate opt-in build:
+factory-default launch can reuse a separate opt-in build. Give every concurrent
+task its own build directory and replace `<task>` with that task's stable slug:
 
 ```powershell
-cmake -S . -B build-experiment `
+cmake -S . -B build-experiment-<task> `
   -DUVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS=ON
-cmake --build build-experiment --config Release --target uvsr
+cmake --build build-experiment-<task> --config Release --target uvsr
 .\tools\launch_uvsr.ps1 -Experiment testing `
-  -BuildDirectory build-experiment
+  -BuildDirectory build-experiment-<task>
 ```
 
-This configuration compiles 51 UVSR permutations and stages 37 runtime shader
-blobs, compared with 516 first-party compile tasks and 76 blobs in the complete
-production build. It locks renderer-topology drawers to factory settings and
-omits Bend, SVSM, diagnostic CSM, CMAA2, non-default visibility, and developer
-shader families. A fresh tree still compiles Donut's pinned 76-task framework
-catalog once.
+Re-run the configure command after HEAD changes so the source revision embedded
+in the executable title is current. The `-Experiment` value must be one
+lowercase ASCII letters-only token; `testing` is valid, while uppercase, digits,
+spaces, hyphens, underscores, and punctuation are not.
+
+As soon as the renderer opens, use the slash interface instead of waiting for
+Settings animation:
+
+```text
+/skin og
+/list
+```
+
+Keep using slash paths and actions for setup whenever that is faster than the
+menu. OG is session-only, affects presentation rather than renderer output, and
+does not change Amp as the normal launch default.
+
+This configuration stages 40 runtime shader blobs, compared with 77 blobs in
+the complete production build. It locks renderer-topology drawers to factory
+settings and omits Screen-Space Directional Shadows, SVSM, diagnostic CSM,
+CMAA2, non-default visibility, and developer shader families. A fresh tree
+still compiles Donut's pinned framework catalog once.
+
+The reduced bundle is valid only while the required runtime configuration is
+exactly the factory startup shader topology. Discovery and reads remain
+available, but commands that would require an excluded shader, permutation,
+pass, resource topology, runtime-selectable topology, or factory-locked setting
+fail before mutation. They must never report success for state that the next
+factory-topology lock would silently overwrite. Switch immediately to the
+production catalog, or the developer catalog for developer AA axes, when one of
+those limits applies.
 
 Use this mode to shorten repeated UVSR edits, not for release, full-settings,
-diagnostic, or benchmark-matrix verification.
+diagnostic, or benchmark-matrix verification. Final technical verification
+uses a full production configuration, every registered Release target, and the
+complete suite:
+
+```powershell
+cmake -S . -B build
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+```
 
 ## Component-Only Builds
 
-Bend, SVSM, and diagnostic CSM are separate static-library targets. A
-component-only configuration can omit the application, other producers, and
-their reference tests.
+Screen-Space Directional Shadows, SVSM, and diagnostic CSM are separate
+static-library targets. A component-only configuration can omit the
+application, other producers, and their reference tests.
 
 Build only SVSM and its deterministic reference test:
 
 ```powershell
-cmake -S . -B build-svsm -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS=OFF -DUVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS=OFF
+cmake -S . -B build-svsm -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS=OFF -DUVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS=OFF
 cmake --build build-svsm --config Release --target uvsr_sparse_virtual_shadow_maps uvsr_sparse_virtual_shadow_map_tests
 ```
 
-Build only Bend screen-space shadows and its deterministic reference test:
+Build only Screen-Space Directional Shadows and its deterministic reference test:
 
 ```powershell
-cmake -S . -B build-bend -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS=OFF -DUVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS=OFF
-cmake --build build-bend --config Release --target uvsr_bend_screen_space_shadows uvsr_bend_screen_space_shadow_tests
+cmake -S . -B build-screen-space-directional -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS=OFF -DUVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS=OFF
+cmake --build build-screen-space-directional --config Release --target uvsr_screen_space_directional_shadows uvsr_screen_space_directional_shadow_tests
 ```
 
 Build only diagnostic CSM and its deterministic reference test:
 
 ```powershell
-cmake -S . -B build-csm -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS=OFF -DUVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS=OFF
+cmake -S . -B build-csm -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS=OFF -DUVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS=OFF
 cmake --build build-csm --config Release --target uvsr_diagnostic_cascaded_shadow_maps uvsr_diagnostic_cascaded_shadow_map_tests
 ```
 

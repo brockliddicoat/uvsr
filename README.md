@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 114,859 non-blank source lines.
+**First-Party Lines of Code:** 136,697 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,622 non-blank source lines.
 
-**Total Lines of Code:** 502,481 non-blank source lines.
+**Total Lines of Code:** 524,319 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -37,18 +37,17 @@ visibility, anti-aliasing, and shadow-rendering systems.
   SH9 diffuse IBL, roughness-prefiltered GGX specular IBL, and a split-sum
   environment BRDF. A fixed neutral AgX transform converts scene-linear HDR
   radiance for display.
-- **No Hidden Ambient Fill.** The legacy hemispherical ambient term is removed.
-  With IBL disabled, shadowed regions contain only computed direct light and
-  screen-space GI, so regions with neither can reach deep black rather than
-  being cosmetically lifted.
-- **Three Shadow-Rendering Research Paths.** Bend Studio screen-space shadows,
-  UVSR sparse virtual shadow maps, and a conventional cascaded-shadow-map
+- **Explicit Ambient Fill Gate.** The legacy hemispherical ambient term is
+  removed. The Sky drawer's Ambient Fill setting explicitly gates diffuse and
+  specular IBL while preserving the selected environment background.
+- **Three Shadow-Rendering Research Paths.** UVSR Screen-Space Directional
+  Shadows, sparse virtual shadow maps, and a conventional cascaded-shadow-map
   diagnostic each resolve an independent full-resolution visibility texture
   through a producer-neutral deferred-lighting interface. The SVSM path includes
   sparse residency, validated caching, localized invalidation, packet-page
   culling, page-safe filtering, and coarser-clipmap fallback.
-- **Sample-Correct Anti-Aliasing Comparisons.** MiniEngine temporal
-  reconstruction, CMAA2 morphology, and 2x through 16x deferred MSAA share one
+- **Sample-Correct Anti-Aliasing Comparisons.** UVSR temporal reconstruction,
+  CMAA2 morphology, and 2x through 16x deferred MSAA share one
   settings and benchmark surface. MSAA preserves every G-buffer sample through
   material decode and lighting before resolving final HDR radiance.
 - **Built-In Measurement and Inspection.** GPU timings are separated by effect
@@ -78,7 +77,6 @@ This section summarizes stable work that is active but not yet merged into
   (`devin/1784102780-visibility-test-coverage`, PR #11). Adds reference coverage
   for degenerate clipping, radial-mask edge cases, and blue-noise rank fields
   without changing runtime rendering.
-
 ## Build and Run
 
 ### Requirements
@@ -125,12 +123,41 @@ Graphics Adapter**, which restarts the renderer on that device.
 ### Useful Controls
 
 - Press **Escape** to open or close Settings.
-- Press **M** to open or close the material editor; middle-click picks a scene
-  material.
+- Press **/** to open or close the command interface. Enter applies, Tab
+  completes, Up/Down recalls history, and Escape cancels the active edit without
+  closing the bar.
+- Press **M** to inspect the editable material at the exact screen center or
+  close the material editor.
+- Press **F** to toggle the selected camera flashlight when the command bar is
+  closed and text input is not active.
 - Press **Z** or use **Zoom** to cycle through off, 2x, 3x, 4x, and 5x
   pixel inspection.
+- Press **V** to level camera roll with an exponential overshoot-and-settle
+  motion while preserving camera position and view direction.
 - Use **General > Camera Location > Benchmark Position 1** for the standardized
   1920x1080 Sponza view.
+
+**General > Interface Skin** selects **Amp** or **OG**. Amp is UVSR's authored animated
+presentation and gives expanded Settings and its collapsed status block the
+same neutral dark surface color and transparency as the command bar and
+Materials panel. Their blurred backdrop retains scene light and detail but
+removes scene color spill. The command bar uses the same zoom-and-fade language
+as the other floating windows. OG uses stock ImGui widgets, square scrollbars
+and zoom corners, a two-row performance summary, zoom-matched Settings and
+command shadows, and no UI motion so automated experiments can configure UVSR
+without waiting for presentation animations.
+The Settings title uses the same resting blue, corner radius, and outline path
+as its drawer headers. The slash interface always fills the complete
+margin-to-margin width at the bottom.
+The Materials panel uses the same stacked blue title and neutral blurred body,
+with a translucent light drawer plate behind its editable controls. It keeps
+the pixel-zoom panel's full resting width and follows only its animated lower
+edge. Amp zooms and fades the panel itself; OG reaches each endpoint
+immediately. Its title has no X button; **M** toggles the complete panel, and
+the title triangle closes it through the same skin-specific presentation.
+Settings stop one consistent margin above that permanently reserved command
+lane, so opening, collapsing, or hiding either surface never makes them overlap
+or changes the command width.
 
 Settings always begin at factory defaults and are not persisted between
 launches. The [advanced settings and developer workflows
@@ -147,7 +174,8 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-This includes the scene, camera, PBR, AA/UI, screen-space visibility, Bend,
+This includes the scene, camera, PBR, AA/UI, screen-space visibility,
+Screen-Space Directional Shadows,
 diagnostic CSM, SVSM, environment, command-line, benchmark, and runtime shader
 bundle contracts.
 
@@ -162,7 +190,7 @@ bundle contracts.
 - [Screen-Space Visibility](docs/screen-space-visibility.md) documents the
   shared AO/GI traversal, estimators, reconstruction, memory contracts,
   performance profiles, and runtime evidence.
-- [Anti-Aliasing Options](docs/miniengine-taa-options.md) defines temporal,
+- [Temporal Anti-Aliasing Options](docs/temporal-aa-options.md) defines temporal,
   morphological, and multisample quality bundles, history behavior, coordinate
   conventions, and motion benchmarks.
 - [AO Optimization Ledger](docs/ao-optimization-ledger.md) records implemented

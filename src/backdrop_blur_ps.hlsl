@@ -122,6 +122,12 @@ void main(
     const float2 sourceUv =
         windowPosition * g_BackdropBlur.reciprocalWindowSize;
     outputColor = SampleGaussianBlur(sourceUv);
+    // Amp surfaces should retain local light and detail without inheriting
+    // colored scene spill. The ImGui layer supplies the authored panel color.
+    const float neutralLuminance = dot(
+        outputColor.rgb,
+        float3(0.2126, 0.7152, 0.0722));
+    outputColor.rgb = neutralLuminance.xxx;
     outputColor.a =
         RoundedRectangleMask(
             windowPosition - g_BackdropBlur.panelMin,

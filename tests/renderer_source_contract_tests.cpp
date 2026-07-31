@@ -62,6 +62,25 @@ namespace
                   << forbidden << "'.\n";
         return false;
     }
+
+    bool ExpectOrdered(
+        std::string_view source,
+        std::string_view first,
+        std::string_view second,
+        const char* contract)
+    {
+        const size_t firstPosition = source.find(first);
+        const size_t secondPosition = source.find(second);
+        if (firstPosition != std::string_view::npos &&
+            secondPosition != std::string_view::npos &&
+            firstPosition < secondPosition)
+        {
+            return true;
+        }
+        std::cerr << "FAIL: " << contract << " must place '"
+                  << first << "' before '" << second << "'.\n";
+        return false;
+    }
 }
 
 int main(int argc, char** argv)
@@ -84,6 +103,35 @@ int main(int argc, char** argv)
     const std::string lightingSources = ReadFile(
         root / "src/lighting_contribution_shared.h");
     bool passed = true;
+
+    const std::string_view flashlightLightClass = ExtractSection(
+        viewer,
+        "class FlashlightSpotLight final : public SpotLight",
+        "static bool g_RestartRequested");
+    passed &= ExpectContains(
+        flashlightLightClass,
+        "SpotLight::FillLightConstants(lightConstants);",
+        "first-party flashlight light-constant base fill");
+    passed &= ExpectContains(
+        flashlightLightClass,
+        "EncodeFlashlightBeamShapeRadius(beamRoundness)",
+        "flashlight beam-shape transport");
+    passed &= ExpectContains(
+        flashlightLightClass,
+        "lightConstants.shadowChannel[1]",
+        "flashlight right-axis X transport");
+    passed &= ExpectContains(
+        flashlightLightClass,
+        "lightConstants.shadowChannel[2]",
+        "flashlight right-axis Y transport");
+    passed &= ExpectContains(
+        flashlightLightClass,
+        "lightConstants.shadowChannel[3]",
+        "flashlight right-axis Z transport");
+    passed &= ExpectAbsent(
+        flashlightLightClass,
+        "lightConstants.shadowChannel[0]",
+        "existing shadow-channel ownership");
 
     for (const std::string_view retiredEmissiveSourceSurface : {
             std::string_view("includeEmissive"),
@@ -127,8 +175,8 @@ int main(int argc, char** argv)
             std::string_view("ui.RenderMode = RendererMode::Deferred;"),
             std::string_view("ui.AntiAliasing = AntiAliasingSettings{};"),
             std::string_view(
-                "ui.BendScreenSpaceShadows = "
-                "BendScreenSpaceShadowSettings{};"),
+                "ui.ScreenSpaceDirectionalShadows = "
+                "ScreenSpaceDirectionalShadowSettings{};"),
             std::string_view(
                 "ui.SparseVirtualShadowMaps = "
                 "SparseVirtualShadowMapSettings{};"),
@@ -189,8 +237,8 @@ int main(int argc, char** argv)
         "factory experiment pass construction guard");
     passed &= ExpectContains(
         createPasses,
-        "m_BendScreenSpaceShadowPass.reset();",
-        "factory experiment Bend omission");
+        "m_ScreenSpaceDirectionalShadowPass.reset();",
+        "factory experiment screen-space shadow omission");
     passed &= ExpectContains(
         createPasses,
         "m_SparseVirtualShadowMapPass.reset();",
@@ -203,6 +251,293 @@ int main(int argc, char** argv)
         refresh,
         "std::make_unique<PbrDeferredLightingPass>",
         "AA-only target refresh");
+
+    const std::string_view flashlightShadowResources = ExtractSection(
+        viewer,
+        "void CreateFlashlightShadowResources()",
+        "void RenderFlashlightShadow()");
+    passed &= ExpectContains(
+        flashlightShadowResources,
+        "std::make_shared<PlanarShadowMap>(",
+        "flashlight geometry shadow map");
+    passed &= ExpectContains(
+        flashlightShadowResources,
+        "std::make_unique<DepthPass>(",
+        "flashlight opaque and alpha-tested depth pass");
+    const std::string_view flashlightPresentation = ExtractSection(
+        viewer,
+        "void ApplyFlashlightPresentation()",
+        "void UpdateFlashlightAnimation(float elapsedSeconds)");
+    passed &= ExpectContains(
+        flashlightPresentation,
+        "m_Flashlight->shadowMap = activeShadowMap;",
+        "flashlight spill-to-shadow association");
+    passed &= ExpectContains(
+        flashlightPresentation,
+        "m_FlashlightHotspot->shadowMap = activeShadowMap;",
+        "flashlight hotspot-to-shadow association");
+    passed &= ExpectContains(
+        flashlightPresentation,
+        "ResolveFlashlightLobeSettings(settings)",
+        "flashlight lobe settings resolution");
+    passed &= ExpectContains(
+        flashlightPresentation,
+        "m_FlashlightHotspot->range = settings.rangeMeters;",
+        "flashlight shared lobe range");
+    passed &= ExpectContains(
+        flashlightPresentation,
+        "m_Flashlight->beamRoundness =\n"
+            "            settings.beamRoundness;",
+        "flashlight spill beam footprint");
+    passed &= ExpectContains(
+        flashlightPresentation,
+        "m_FlashlightHotspot->beamRoundness =\n"
+            "                settings.beamRoundness;",
+        "flashlight hotspot beam footprint");
+
+    const std::string_view flashlightAnimation = ExtractSection(
+        viewer,
+        "void UpdateFlashlightAnimation(float elapsedSeconds)",
+        "static float3 ClampFlashlightAimLag(");
+    passed &= ExpectContains(
+        flashlightAnimation,
+        "!m_ui.EnablePbr",
+        "legacy-lighting flashlight animation exclusion");
+    passed &= ExpectContains(
+        flashlightAnimation,
+        "m_FlashlightTransition = 0.f;",
+        "legacy-lighting flashlight exact-zero endpoint");
+
+    const std::string_view flashlightMotion = ExtractSection(
+        viewer,
+        "void UpdateFlashlightMotion(float elapsedSeconds)",
+        "void UpdateFlashlightTransform()");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "if (!settings.realisticLens)",
+        "simple flashlight camera-lock path");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "ResolveFlashlightMountPose(\n"
+            "                settings.cameraLateralOffsetMeters);",
+        "flashlight configurable tested mount-pose resolution");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "cameraRight *\n"
+            "                mount.positionRightMeters +",
+        "flashlight off-axis horizontal mount");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "cameraUp *\n"
+            "                mount.positionUpMeters;",
+        "flashlight off-axis vertical mount");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "mount.directionForward +",
+        "flashlight converged forward aim");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "mount.directionRight +",
+        "flashlight converged horizontal aim");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "mount.directionUp);",
+        "flashlight converged vertical aim");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "m_FlashlightResolvedPosition = flashlightPosition;",
+        "flashlight shared off-axis position");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "m_FlashlightResolvedDirection = mountedDirection;",
+        "simple flashlight converged camera aim");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "m_FlashlightResolvedRight = mountedRight;",
+        "simple flashlight projected camera roll");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "GetFlashlightAimCorrectionBlend(",
+        "realistic flashlight correction");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "InterpolateFlashlightAim(",
+        "realistic flashlight spherical aim interpolation");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "ClampFlashlightAimLag(",
+        "realistic flashlight bounded lag");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "ResolveFlashlightSwayOffset(",
+        "realistic flashlight bounded sway");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "beamRight -=\n"
+            "            m_FlashlightResolvedDirection *",
+        "realistic flashlight final-basis reprojection");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "m_FlashlightResolvedRight =",
+        "realistic flashlight resolved beam basis");
+
+    const std::string_view flashlightTransform = ExtractSection(
+        viewer,
+        "void UpdateFlashlightTransform()",
+        "void AttachFlashlightToScene()");
+    passed &= ExpectContains(
+        flashlightTransform,
+        "m_FlashlightResolvedPosition",
+        "flashlight shared resolved position");
+    passed &= ExpectContains(
+        flashlightTransform,
+        "m_FlashlightHotspot->SetPosition(",
+        "flashlight hotspot position synchronization");
+    passed &= ExpectContains(
+        flashlightTransform,
+        "SetFlashlightDirectionAndRoll(\n"
+            "                m_FlashlightHotspot,",
+        "flashlight hotspot direction-and-roll synchronization");
+    passed &= ExpectContains(
+        flashlightTransform,
+        "m_Flashlight->beamRight =\n"
+            "            m_FlashlightResolvedRight;",
+        "flashlight spill shape-basis publication");
+    passed &= ExpectContains(
+        flashlightTransform,
+        "m_FlashlightHotspot->beamRight =\n"
+            "                m_FlashlightResolvedRight;",
+        "flashlight hotspot shape-basis publication");
+
+    const std::string_view flashlightAttachment = ExtractSection(
+        viewer,
+        "void AttachFlashlightToScene()",
+        "void CreateFlashlightShadowResources()");
+    passed &= ExpectContains(
+        flashlightAttachment,
+        "std::make_shared<FlashlightSpotLight>()",
+        "first-party flashlight light construction");
+    passed &= ExpectContains(
+        flashlightAttachment,
+        "m_Flashlight->SetName(FlashlightPublicName);",
+        "public flashlight light identifier");
+    passed &= ExpectContains(
+        flashlightAttachment,
+        "m_FlashlightNode->SetName(FlashlightPublicName);",
+        "public flashlight node identifier");
+    passed &= ExpectContains(
+        flashlightAttachment,
+        "\"flashlight_lens_hotspot\"",
+        "hidden internal lens-lobe identifier");
+
+    const std::string_view flashlightShadowRender = ExtractSection(
+        viewer,
+        "void RenderFlashlightShadow()",
+        "virtual void Animate(float fElapsedTimeSeconds) override");
+    passed &= ExpectContains(
+        flashlightShadowRender,
+        "if (!m_ui.EnablePbr ||",
+        "legacy-lighting flashlight shadow exclusion");
+    passed &= ExpectContains(
+        flashlightShadowRender,
+        "!ShouldRenderFlashlightShadow(",
+        "settled-off flashlight shadow work gate");
+    passed &= ExpectContains(
+        flashlightShadowRender,
+        "m_ui.Flashlight.castShadows",
+        "flashlight shadow setting gate");
+    passed &= ExpectContains(
+        flashlightShadowRender,
+        "FlashlightShadowCollisionNearScale",
+        "flashlight camera-collision near-plane margin");
+    passed &= ExpectContains(
+        flashlightShadowRender,
+        "m_CommandList->clearDepthStencilTexture(",
+        "flashlight depth-stencil clear");
+    passed &= ExpectAbsent(
+        flashlightShadowRender,
+        "m_FlashlightShadowMap->Clear(",
+        "unsafe generic flashlight clear");
+    passed &= ExpectContains(
+        flashlightShadowRender,
+        "\"FlashlightShadow\"",
+        "flashlight geometry shadow submission");
+
+    const std::string_view renderScene = ExtractSection(
+        viewer,
+        "virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override",
+        "std::shared_ptr<ShaderFactory> GetShaderFactory()");
+    passed &= ExpectOrdered(
+        renderScene,
+        "UpdateFlashlightTransform();",
+        "m_Scene->RefreshSceneGraph(GetFrameIndex());",
+        "flashlight transform publication");
+    passed &= ExpectOrdered(
+        renderScene,
+        "lightingLights.push_back(m_Flashlight);",
+        "lightingLights.push_back(m_FlashlightHotspot);",
+        "realistic flashlight lobe priority");
+    passed &= ExpectOrdered(
+        renderScene,
+        "lightingLights.push_back(m_FlashlightHotspot);",
+        "for (const auto& light : sceneLights)",
+        "flashlight light-limit priority");
+    passed &= ExpectOrdered(
+        renderScene,
+        "RenderFlashlightShadow();",
+        "m_ForwardPass->PrepareLights(",
+        "forward flashlight shadow-before-lighting order");
+    passed &= ExpectOrdered(
+        renderScene,
+        "RenderFlashlightShadow();",
+        "deferredInputs.lights = submittedLights;",
+        "deferred flashlight shadow-before-lighting order");
+    passed &= ExpectContains(
+        renderScene,
+        "const auto& sceneLights =\n"
+            "            m_SceneLightsWithoutFlashlight;",
+        "settled-off flashlight exclusion");
+    passed &= ExpectContains(
+        renderScene,
+        "const std::vector<std::shared_ptr<Light>>* submittedLights =\n"
+            "            &sceneLights;",
+        "settled-off zero-copy scene-light path");
+    passed &= ExpectContains(
+        renderScene,
+        "submittedLights = &lightingLights;",
+        "active flashlight-prioritized light path");
+    passed &= ExpectContains(
+        renderScene,
+        "if (m_ui.EnablePbr &&\n"
+            "            ShouldSubmitFlashlight(",
+        "legacy-lighting flashlight submission exclusion");
+    passed &= ExpectContains(
+        renderScene,
+        "m_ui.Flashlight.realisticLens",
+        "realistic flashlight hotspot submission gate");
+    const std::string_view sceneLoaded = ExtractSection(
+        viewer,
+        "virtual void SceneLoaded() override",
+        "void SetWhiteWorldMode(WhiteWorldMode mode)");
+    passed &= ExpectContains(
+        sceneLoaded,
+        "m_EditableLights.push_back(m_Flashlight);",
+        "selectable flashlight editor entry");
+    passed &= ExpectContains(
+        sceneLoaded,
+        "light != m_Flashlight &&\n"
+            "                light != m_FlashlightHotspot",
+        "scene-light list flashlight-lobe exclusion");
+    passed &= ExpectContains(
+        renderScene,
+        "m_ui.EnableAmbientFill &&\n"
+            "                    m_ui.EnableDiffuseIbl",
+        "ambient fill diffuse renderer gate");
+    passed &= ExpectContains(
+        renderScene,
+        "m_ui.EnableAmbientFill &&\n"
+            "                    m_ui.EnableSpecularIbl",
+        "ambient fill specular renderer gate");
 
     passed &= ExpectContains(
         viewer,

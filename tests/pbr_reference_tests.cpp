@@ -382,6 +382,12 @@ int main()
             !uvsr::IsImageBasedLightingLobeActive(
                 true, std::numeric_limits<float>::infinity()),
         "disabled, nonpositive, and nonfinite IBL lobes are inactive");
+    Require(
+        uvsr::IsAmbientFillLobeActive(true, true, 1.f) &&
+            !uvsr::IsAmbientFillLobeActive(false, true, 1.f) &&
+            !uvsr::IsAmbientFillLobeActive(true, false, 1.f) &&
+            !uvsr::IsAmbientFillLobeActive(true, true, 0.f),
+        "ambient fill master-gates IBL lobes without changing lobe settings");
 
     // The diffuse environment stores unit-albedo outgoing diffuse response.
     // Projecting a constant scene-linear lat-long source must therefore

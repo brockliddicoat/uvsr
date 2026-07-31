@@ -1,4 +1,4 @@
-#include "taa_miniengine.h"
+#include "temporal_aa.h"
 
 #include <donut/engine/CommonRenderPasses.h>
 #include <donut/engine/ShaderFactory.h>
@@ -18,15 +18,15 @@ using namespace donut::math;
 
 namespace
 {
-    // MiniEngine source:
-    // Microsoft/DirectX-Graphics-Samples
-    // commit 357ade6ec6ff0d9dcadc48f35c7a28e37c0cdf7a
+    // Portions of the quality path are adapted from Microsoft DirectX Graphics
+    // Samples and are distributed under
+    // third_party/microsoft_directx_graphics_samples/LICENSE.txt.
     //
     // The scalar defaults remain verbatim: maximum temporal lerp 1.0, speed
     // limit 64 pixels, and sharpness 0.5. The projection is an integration-only
-    // addition that lets the shader express MiniEngine's forward-linear-depth
+    // addition that lets the shader express Temporal AA's forward-linear-depth
     // disocclusion inequality over UVSR's infinite reverse-Z device depth.
-    struct alignas(16) MiniEngineTaaBlendConstants
+    struct alignas(16) TemporalAaBlendConstants
     {
         float4x4 projection;
         float2 reciprocalBufferDimensions;
@@ -39,9 +39,9 @@ namespace
         uint32_t dispatchGroupYOffset;
         float sourceDepthPairQuantizationError;
         float maximumHistoryWeight;
-        uint32_t depthQuantizationPadding1;
-        uint32_t depthQuantizationPadding2;
-#if UVSR_AA_DEVELOPER_OVERRIDES
+        uint32_t behaviorFlags;
+        uint32_t behaviorPadding;
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
         PlanarViewConstants currentView;
         PlanarViewConstants immediateHistoryView;
         PlanarViewConstants persistentHistoryView0;
@@ -53,27 +53,42 @@ namespace
 #endif
     };
 
-    struct alignas(16) MiniEngineTaaOutputConstants
+    struct alignas(16) TemporalAaOutputConstants
     {
         float centerWeight;
         float lateralWeight;
         uint2 bufferDimensions;
     };
 
-#if UVSR_AA_DEVELOPER_OVERRIDES
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
     static_assert(
-        sizeof(MiniEngineTaaBlendConstants) ==
+        sizeof(TemporalAaBlendConstants) ==
         128u + 4u * sizeof(PlanarViewConstants) + 16u);
 #else
-    static_assert(sizeof(MiniEngineTaaBlendConstants) == 128u);
+    static_assert(sizeof(TemporalAaBlendConstants) == 128u);
 #endif
     static_assert(
         offsetof(
-            MiniEngineTaaBlendConstants,
+            TemporalAaBlendConstants,
             sourceDepthPairQuantizationError) == 112u);
-    static_assert(sizeof(MiniEngineTaaOutputConstants) == 16u);
+    static_assert(
+        offsetof(TemporalAaBlendConstants, behaviorFlags) == 120u);
+    static_assert(sizeof(TemporalAaOutputConstants) == 16u);
 
-#if UVSR_AA_DEVELOPER_OVERRIDES
+    bool SupportsMinimumHistoryFormat(
+        nvrhi::IDevice* device,
+        nvrhi::Format format)
+    {
+        const nvrhi::FormatSupport required =
+            nvrhi::FormatSupport::Texture |
+            nvrhi::FormatSupport::ShaderLoad |
+            nvrhi::FormatSupport::ShaderSample |
+            nvrhi::FormatSupport::ShaderUavStore;
+        return (device->queryFormatSupport(format) & required) ==
+            required;
+    }
+
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
     std::shared_ptr<PlanarView> CapturePlanarView(
         const IView& source)
     {
@@ -100,7 +115,7 @@ namespace
 
 namespace uvsr
 {
-    MiniEngineTemporalAAPass::MiniEngineTemporalAAPass(
+    TemporalAAPass::TemporalAAPass(
         nvrhi::IDevice* device,
         const std::shared_ptr<ShaderFactory>& shaderFactory,
         const std::shared_ptr<CommonRenderPasses>& commonPasses,
@@ -118,23 +133,27 @@ namespace uvsr
     {
         const nvrhi::TextureDesc& sceneColorDesc = sceneColor->getDesc();
         m_Size = uint2(sceneColorDesc.width, sceneColorDesc.height);
-        m_Timings.historyTextureBytes =
-            GetMiniEngineTaaHistoryBytes(
+        m_Timings.robustHistoryTextureBytes =
+            GetTemporalAaHistoryBytes(
                 m_Size.x,
                 m_Size.y);
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        m_Timings.historyTextureBytes +=
-            GetMiniEngineTaaPersistentHistoryBytes(
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
+        m_Timings.persistentHistoryTextureBytes =
+            GetTemporalAaPersistentHistoryBytes(
                 m_Size.x,
                 m_Size.y);
-        m_Timings.debugTextureBytes =
-            GetMiniEngineTaaDebugBytes(m_Size.x, m_Size.y);
 #endif
+#if UVSR_AA_DEVELOPER_OVERRIDES
+        m_Timings.debugTextureBytes =
+            GetTemporalAaDebugBytes(m_Size.x, m_Size.y);
+#endif
+        m_Timings.activeHistoryTextureBytes =
+            m_Timings.robustHistoryTextureBytes;
 
         TemporalHistoryDesc temporalHistoryDesc;
         temporalHistoryDesc.size = m_Size;
         temporalHistoryDesc.debugName =
-            "MiniEngineTAA/TemporalHistory";
+            "TemporalAA/QualityHistory";
         temporalHistoryDesc.colorUnorderedAccess = true;
         temporalHistoryDesc.depthUnorderedAccess = true;
 #if UVSR_AA_DEVELOPER_OVERRIDES
@@ -156,32 +175,85 @@ namespace uvsr
         historyDesc.initialState = nvrhi::ResourceStates::ShaderResource;
         historyDesc.keepInitialState = true;
 
+        const nvrhi::Format minimumColorFormat =
+            SupportsMinimumHistoryFormat(
+                device,
+                nvrhi::Format::R11G11B10_FLOAT)
+                ? nvrhi::Format::R11G11B10_FLOAT
+                : nvrhi::Format::RGBA16_FLOAT;
+        const nvrhi::Format minimumDepthFormat =
+            SupportsMinimumHistoryFormat(
+                device,
+                nvrhi::Format::R16_FLOAT)
+                ? nvrhi::Format::R16_FLOAT
+                : nvrhi::Format::R32_FLOAT;
+        m_Timings.minimumColorIsR11G11B10 =
+            minimumColorFormat ==
+            nvrhi::Format::R11G11B10_FLOAT;
+        m_Timings.minimumDepthIsR16 =
+            minimumDepthFormat == nvrhi::Format::R16_FLOAT;
+        m_Timings.minimumHistoryTextureBytes =
+            GetTemporalAaMinimumHistoryBytes(
+                m_Size.x,
+                m_Size.y,
+                m_Timings.minimumColorIsR11G11B10 ? 4u : 8u,
+                m_Timings.minimumDepthIsR16 ? 2u : 4u);
+        m_Timings.residentHistoryTextureBytes =
+            GetTemporalAaResidentHistoryBytes(
+                m_Size.x,
+                m_Size.y,
+                m_Timings.minimumColorIsR11G11B10 ? 4u : 8u,
+                m_Timings.minimumDepthIsR16 ? 2u : 4u,
+                m_Timings.persistentHistoryTextureBytes != 0u);
+
 #if UVSR_AA_DEVELOPER_OVERRIDES
+        historyDesc.isRenderTarget = false;
+#endif
+        for (uint32_t slot = 0u; slot < 2u; ++slot)
+        {
+            historyDesc.format = minimumColorFormat;
+            historyDesc.debugName =
+                "TemporalAA/MinimumColor" +
+                std::to_string(slot);
+            m_MinimumColor[slot] =
+                device->createTexture(historyDesc);
+            historyDesc.format = minimumDepthFormat;
+            historyDesc.debugName =
+                "TemporalAA/MinimumDepth" +
+                std::to_string(slot);
+            m_MinimumDepth[slot] =
+                device->createTexture(historyDesc);
+        }
+#if UVSR_AA_DEVELOPER_OVERRIDES
+        historyDesc.isRenderTarget = true;
+#endif
+
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
         historyDesc.format = nvrhi::Format::RGBA16_FLOAT;
-        historyDesc.debugName = "MiniEngineTAA/PersistentColor0";
+        historyDesc.debugName = "TemporalAA/PersistentColor0";
         m_PersistentColor[0] = device->createTexture(historyDesc);
-        historyDesc.debugName = "MiniEngineTAA/PersistentColor1";
+        historyDesc.debugName = "TemporalAA/PersistentColor1";
         m_PersistentColor[1] = device->createTexture(historyDesc);
         historyDesc.format = nvrhi::Format::R32_FLOAT;
-        historyDesc.debugName = "MiniEngineTAA/PersistentDepth0";
+        historyDesc.debugName = "TemporalAA/PersistentDepth0";
         m_PersistentDepth[0] = device->createTexture(historyDesc);
-        historyDesc.debugName = "MiniEngineTAA/PersistentDepth1";
+        historyDesc.debugName = "TemporalAA/PersistentDepth1";
         m_PersistentDepth[1] = device->createTexture(historyDesc);
 #endif
 
 #if UVSR_AA_DEVELOPER_OVERRIDES
         historyDesc.format = nvrhi::Format::R16_FLOAT;
-        historyDesc.debugName = "MiniEngineTAA/DebugValues";
+        historyDesc.debugName = "TemporalAA/DebugValues";
         m_DebugValues = device->createTexture(historyDesc);
 #endif
         historyDesc.format = sceneColorDesc.format;
-        historyDesc.debugName = "MiniEngineTAA/FusedOutput";
+        historyDesc.debugName = "TemporalAA/FusedOutput";
         m_FusedOutput = device->createTexture(historyDesc);
         historyDesc.format = sceneColorDesc.format;
-        historyDesc.debugName = "MiniEngineTAA/SelectiveMorphologyCurrent";
+        historyDesc.debugName = "TemporalAA/SelectiveMorphologyCurrent";
         m_SelectiveCurrent = device->createTexture(historyDesc);
         historyDesc.format = nvrhi::Format::R16_FLOAT;
-        historyDesc.debugName = "MiniEngineTAA/SelectiveMorphologyRejection";
+        historyDesc.debugName = "TemporalAA/SelectiveMorphologyRejection";
         m_SelectiveRejection = device->createTexture(historyDesc);
 #if !UVSR_AA_DEVELOPER_OVERRIDES
         // Shipping blend shaders compile debug output away. Reuse the
@@ -191,19 +263,19 @@ namespace uvsr
 #endif
 
         nvrhi::BufferDesc constantBufferDesc;
-        constantBufferDesc.byteSize = sizeof(MiniEngineTaaBlendConstants);
-        constantBufferDesc.debugName = "MiniEngineTAA/BlendConstants";
+        constantBufferDesc.byteSize = sizeof(TemporalAaBlendConstants);
+        constantBufferDesc.debugName = "TemporalAA/BlendConstants";
         constantBufferDesc.isConstantBuffer = true;
         constantBufferDesc.isVolatile = true;
         constantBufferDesc.maxVersions =
             engine::c_MaxRenderPassConstantBufferVersions;
         m_BlendConstantBuffer = device->createBuffer(constantBufferDesc);
 
-        constantBufferDesc.byteSize = sizeof(MiniEngineTaaOutputConstants);
-        constantBufferDesc.debugName = "MiniEngineTAA/OutputConstants";
+        constantBufferDesc.byteSize = sizeof(TemporalAaOutputConstants);
+        constantBufferDesc.debugName = "TemporalAA/OutputConstants";
         m_OutputConstantBuffer = device->createBuffer(constantBufferDesc);
 
-        // NVRHI's default sampler is MiniEngine's s0 contract: min/mag/mip
+        // NVRHI's default sampler is Temporal AA's s0 contract: min/mag/mip
         // linear with clamp addressing.
         m_LinearClampSampler = commonPasses->m_LinearClampSampler;
 
@@ -230,11 +302,58 @@ namespace uvsr
         };
         m_BlendBindingLayout = device->createBindingLayout(blendLayoutDesc);
 
+        nvrhi::BindingLayoutDesc minimumLayoutDesc;
+        minimumLayoutDesc.visibility = nvrhi::ShaderType::Compute;
+        minimumLayoutDesc.bindings = {
+            nvrhi::BindingLayoutItem::VolatileConstantBuffer(1),
+            nvrhi::BindingLayoutItem::Sampler(0),
+            nvrhi::BindingLayoutItem::Texture_SRV(0),
+            nvrhi::BindingLayoutItem::Texture_SRV(1),
+            nvrhi::BindingLayoutItem::Texture_SRV(2),
+            nvrhi::BindingLayoutItem::Texture_SRV(3),
+            nvrhi::BindingLayoutItem::Texture_SRV(4),
+            nvrhi::BindingLayoutItem::Texture_UAV(0),
+            nvrhi::BindingLayoutItem::Texture_UAV(1)
+        };
+        m_MinimumBindingLayout =
+            device->createBindingLayout(minimumLayoutDesc);
+        for (uint32_t runtimeBehavior = 0u;
+            runtimeBehavior < m_MinimumShaders.size();
+            ++runtimeBehavior)
+        {
+            const std::vector<ShaderMacro> macros = {
+                { "TAA_RUNTIME_BEHAVIOR",
+                    std::to_string(runtimeBehavior) }
+            };
+            m_MinimumShaders[runtimeBehavior] =
+                shaderFactory->CreateShader(
+                    "uvsr/temporal_aa_minimum_cs.hlsl",
+                    "main",
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            if (m_MinimumShaders[runtimeBehavior] &&
+                m_MinimumColor[0] &&
+                m_MinimumColor[1] &&
+                m_MinimumDepth[0] &&
+                m_MinimumDepth[1])
+            {
+                nvrhi::ComputePipelineDesc minimumPipelineDesc;
+                minimumPipelineDesc.CS =
+                    m_MinimumShaders[runtimeBehavior];
+                minimumPipelineDesc.bindingLayouts = {
+                    m_MinimumBindingLayout
+                };
+                m_MinimumPipelines[runtimeBehavior] =
+                    device->createComputePipeline(
+                        minimumPipelineDesc);
+            }
+        }
+
         auto createBlendPermutation =
-            [&](const MiniEngineTaaOptions& options,
+            [&](const TemporalAaOptions& options,
                 uint32_t exportSelective,
                 uint32_t sampleResurrection,
-                const MiniEngineTaaStaticPerformanceOptions&
+                const TemporalAaStaticPerformanceOptions&
                     performance,
                 nvrhi::ShaderHandle& shader,
                 nvrhi::ComputePipelineHandle& pipeline)
@@ -254,7 +373,7 @@ namespace uvsr
         // complete matrix stalls startup for more than a minute and consumes
         // over a gigabyte before the first frame.
 #else
-        const MiniEngineTaaStaticPerformanceOptions
+        const TemporalAaStaticPerformanceOptions
             baselinePerformance{};
         constexpr std::array<AntiAliasingPreset, 4>
             productionPresets = {
@@ -265,7 +384,7 @@ namespace uvsr
             };
         for (AntiAliasingPreset preset : productionPresets)
         {
-            const MiniEngineTaaOptions options =
+            const TemporalAaOptions options =
                 GetPresetTemporalOptions(preset);
             // Selective morphology is no longer part of the shipping path.
             constexpr uint32_t exportSelective = 0u;
@@ -273,17 +392,17 @@ namespace uvsr
                 fused < 2u;
                 ++fused)
             {
-                MiniEngineTaaStaticPerformanceOptions performance =
+                TemporalAaStaticPerformanceOptions performance =
                     baselinePerformance;
                 performance.fusedOutput = fused != 0u;
                 const uint32_t permutation =
-                    GetMiniEngineTaaBlendPermutationIndex(
+                    GetTemporalAaBlendPermutationIndex(
                         options) *
                         (2u *
-                            MiniEngineTaaSampleResurrectionCount *
+                            TemporalAaSampleResurrectionCount *
                             2u) +
                     exportSelective *
-                        (MiniEngineTaaSampleResurrectionCount *
+                        (TemporalAaSampleResurrectionCount *
                             2u) +
                     fused;
                 createBlendPermutation(
@@ -350,7 +469,7 @@ namespace uvsr
         outputPipelineDesc.bindingLayouts = { m_OutputBindingLayout };
 #if UVSR_AA_DEVELOPER_OVERRIDES
         constexpr uint32_t compiledDebugViewCount =
-            MiniEngineTaaResolveDebugViewCount;
+            TemporalAaResolveDebugViewCount;
 #else
         constexpr uint32_t compiledDebugViewCount = 1u;
 #endif
@@ -362,7 +481,7 @@ namespace uvsr
                 { "TAA_DEBUG_VIEW", std::to_string(debugView) }
             };
             m_ResolveShaders[debugView] = shaderFactory->CreateShader(
-                "uvsr/taa_miniengine_resolve_cs.hlsl",
+                "uvsr/temporal_aa_resolve_cs.hlsl",
                 "main",
                 &macros,
                 nvrhi::ShaderType::Compute);
@@ -378,7 +497,7 @@ namespace uvsr
                     premultipliedInput ? "1" : "0" }
             };
             return shaderFactory->CreateShader(
-                "uvsr/taa_miniengine_sharpen_cs.hlsl",
+                "uvsr/temporal_aa_sharpen_cs.hlsl",
                 "main",
                 &macros,
                 nvrhi::ShaderType::Compute);
@@ -406,7 +525,7 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(3, currentDepth),
                 nvrhi::BindingSetItem::Texture_SRV(
                     4, m_History.Depth(source)),
-#if UVSR_AA_DEVELOPER_OVERRIDES
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
                 nvrhi::BindingSetItem::Texture_SRV(
                     5, m_PersistentColor[0]),
                 nvrhi::BindingSetItem::Texture_SRV(
@@ -416,9 +535,8 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(
                     8, m_PersistentDepth[1]),
 #else
-                // Production compiles resurrection out and aliases these
-                // otherwise-unused binding slots instead of allocating its
-                // developer-only history layout.
+                // The factory-startup shader experiment compiles resurrection
+                // out and aliases its otherwise-unused binding slots.
                 nvrhi::BindingSetItem::Texture_SRV(
                     5, m_History.Color(source)),
                 nvrhi::BindingSetItem::Texture_SRV(
@@ -444,6 +562,36 @@ namespace uvsr
             };
             m_BlendBindingSets[source] = device->createBindingSet(
                 blendBindings, m_BlendBindingLayout);
+
+            if (m_MinimumPipelines[0] &&
+                m_MinimumPipelines[1])
+            {
+                nvrhi::BindingSetDesc minimumBindings;
+                minimumBindings.bindings = {
+                    nvrhi::BindingSetItem::ConstantBuffer(
+                        1, m_BlendConstantBuffer),
+                    nvrhi::BindingSetItem::Sampler(
+                        0, m_LinearClampSampler),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        0, motionVectors),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        1, sceneColor),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        2, m_MinimumColor[source]),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        3, currentDepth),
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        4, m_MinimumDepth[source]),
+                    nvrhi::BindingSetItem::Texture_UAV(
+                        0, m_MinimumColor[destination]),
+                    nvrhi::BindingSetItem::Texture_UAV(
+                        1, m_MinimumDepth[destination])
+                };
+                m_MinimumBindingSets[source] =
+                    device->createBindingSet(
+                        minimumBindings,
+                        m_MinimumBindingLayout);
+            }
 
 #if UVSR_AA_DEVELOPER_OVERRIDES
             nvrhi::BindingSetDesc pixelBlendBindings;
@@ -482,17 +630,22 @@ namespace uvsr
             m_OutputBindingSets[source] = device->createBindingSet(
                 outputBindings, m_OutputBindingLayout);
         }
+        m_Timings.minimumPathSupported =
+            bool(m_MinimumPipelines[0]) &&
+            bool(m_MinimumPipelines[1]) &&
+            bool(m_MinimumBindingSets[0]) &&
+            bool(m_MinimumBindingSets[1]);
 
         for (auto& stageQueries : m_TimerQueries)
             for (nvrhi::TimerQueryHandle& query : stageQueries)
                 query = device->createTimerQuery();
     }
 
-    bool MiniEngineTemporalAAPass::CreateBlendComputePermutation(
-        const MiniEngineTaaOptions& options,
+    bool TemporalAAPass::CreateBlendComputePermutation(
+        const TemporalAaOptions& options,
         uint32_t exportSelective,
         uint32_t sampleResurrection,
-        const MiniEngineTaaStaticPerformanceOptions& performance,
+        const TemporalAaStaticPerformanceOptions& performance,
         nvrhi::ShaderHandle& shader,
         nvrhi::ComputePipelineHandle& pipeline)
     {
@@ -518,16 +671,16 @@ namespace uvsr
                 std::to_string(sampleResurrection) },
             { "TAA_COMPUTE_KERNEL",
                 performance.computeKernel ==
-                        MiniEngineTaaComputeKernel::Threads16x8OnePixel
+                        TemporalAaComputeKernel::Threads16x8OnePixel
                     ? "1"
                     : "0" },
             { "TAA_LDS_LAYOUT",
                 std::to_string(
                     performance.ldsLayout ==
-                            MiniEngineTaaLdsLayout::SplitAndPacked
+                            TemporalAaLdsLayout::SplitAndPacked
                         ? UVSR_TAA_LDS_SPLIT_PACKED
                         : performance.ldsLayout ==
-                                MiniEngineTaaLdsLayout::Split
+                                TemporalAaLdsLayout::Split
                             ? UVSR_TAA_LDS_SPLIT
                             : UVSR_TAA_LDS_LEGACY) },
             { "TAA_SHARED_WORK_REUSE",
@@ -543,7 +696,7 @@ namespace uvsr
 #endif
         };
         shader = m_ShaderFactory->CreateShader(
-            "uvsr/taa_miniengine_blend_cs.hlsl",
+            "uvsr/temporal_aa_blend_cs.hlsl",
             "main",
             &macros,
             nvrhi::ShaderType::Compute);
@@ -552,12 +705,12 @@ namespace uvsr
             if (!m_ReportedMissingComputePermutation)
             {
                 log::error(
-                    "Missing precompiled MiniEngine TAA compute permutation "
+                    "Missing precompiled Temporal AA compute permutation "
                     "(algorithm=%u, performance=%u, selective=%u, "
                     "resurrection=%u). TAA will bypass instead of creating "
                     "an invalid pipeline.",
-                    GetMiniEngineTaaBlendPermutationIndex(options),
-                    GetMiniEngineTaaStaticPerformanceIndex(performance),
+                    GetTemporalAaBlendPermutationIndex(options),
+                    GetTemporalAaStaticPerformanceIndex(performance),
                     exportSelective,
                     sampleResurrection);
                 m_ReportedMissingComputePermutation = true;
@@ -574,11 +727,11 @@ namespace uvsr
             if (!m_ReportedMissingComputePermutation)
             {
                 log::error(
-                    "Failed to create MiniEngine TAA compute pipeline "
+                    "Failed to create Temporal AA compute pipeline "
                     "(algorithm=%u, performance=%u, selective=%u, "
                     "resurrection=%u). TAA will bypass.",
-                    GetMiniEngineTaaBlendPermutationIndex(options),
-                    GetMiniEngineTaaStaticPerformanceIndex(performance),
+                    GetTemporalAaBlendPermutationIndex(options),
+                    GetTemporalAaStaticPerformanceIndex(performance),
                     exportSelective,
                     sampleResurrection);
                 m_ReportedMissingComputePermutation = true;
@@ -589,8 +742,8 @@ namespace uvsr
     }
 
 #if UVSR_AA_DEVELOPER_OVERRIDES
-    bool MiniEngineTemporalAAPass::CreateBlendPixelPermutation(
-        const MiniEngineTaaOptions& options,
+    bool TemporalAAPass::CreateBlendPixelPermutation(
+        const TemporalAaOptions& options,
         uint32_t exportSelective,
         bool earlyHistoryRejection,
         bool fusedOutput,
@@ -626,7 +779,7 @@ namespace uvsr
             { "TAA_DEVELOPER_DEBUG", "1" }
         };
         shader = m_ShaderFactory->CreateShader(
-            "uvsr/taa_miniengine_blend_cs.hlsl",
+            "uvsr/temporal_aa_blend_cs.hlsl",
             "main",
             &macros,
             nvrhi::ShaderType::Pixel);
@@ -635,11 +788,11 @@ namespace uvsr
             if (!m_ReportedMissingPixelPermutation)
             {
                 log::error(
-                    "Missing precompiled MiniEngine TAA fullscreen-pixel "
+                    "Missing precompiled Temporal AA fullscreen-pixel "
                     "permutation (algorithm=%u, selective=%u, early=%u, "
                     "fused=%u). TAA will bypass instead of creating an "
                     "invalid pipeline.",
-                    GetMiniEngineTaaBlendPermutationIndex(options),
+                    GetTemporalAaBlendPermutationIndex(options),
                     exportSelective,
                     uint32_t(earlyHistoryRejection),
                     uint32_t(fusedOutput));
@@ -669,10 +822,10 @@ namespace uvsr
             if (!m_ReportedMissingPixelPermutation)
             {
                 log::error(
-                    "Failed to create MiniEngine TAA fullscreen-pixel "
+                    "Failed to create Temporal AA fullscreen-pixel "
                     "pipeline (algorithm=%u, selective=%u, early=%u, "
                     "fused=%u). TAA will bypass.",
-                    GetMiniEngineTaaBlendPermutationIndex(options),
+                    GetTemporalAaBlendPermutationIndex(options),
                     exportSelective,
                     uint32_t(earlyHistoryRejection),
                     uint32_t(fusedOutput));
@@ -684,15 +837,30 @@ namespace uvsr
     }
 #endif
 
-    void MiniEngineTemporalAAPass::ResetHistory()
+    void TemporalAAPass::ResetHistory()
     {
         (void)m_History.Invalidate();
+        const bool minimumChanged =
+            m_MinimumValid[0] ||
+            m_MinimumValid[1] ||
+            m_MinimumAccumulationCount != 0u ||
+            m_MinimumHasCommittedSequence;
+        m_MinimumValid = {};
+        m_MinimumCommittedSequence = {};
+        m_MinimumLastCommittedSequence = 0u;
+        m_MinimumAccumulationCount = 0u;
+        m_MinimumHasCommittedSequence = false;
+        if (minimumChanged)
+            ++m_MinimumResetCount;
         m_LastHistoryInputValid = false;
+        m_LastRenderUsedMinimum = false;
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
         m_PersistentValid = {};
         m_PersistentViews = {};
+#endif
     }
 
-    void MiniEngineTemporalAAPass::AdvanceTimers()
+    void TemporalAAPass::AdvanceTimers()
     {
         const uint32_t slot = m_TimerFrame % c_TimerLatency;
         for (uint32_t stageIndex = 0u;
@@ -730,7 +898,7 @@ namespace uvsr
         }
     }
 
-    void MiniEngineTemporalAAPass::BeginStage(
+    void TemporalAAPass::BeginStage(
         nvrhi::ICommandList* commandList,
         Stage stage)
     {
@@ -743,7 +911,7 @@ namespace uvsr
         m_TimerActive[stageIndex] = true;
     }
 
-    void MiniEngineTemporalAAPass::EndStage(
+    void TemporalAAPass::EndStage(
         nvrhi::ICommandList* commandList,
         Stage stage)
     {
@@ -757,61 +925,180 @@ namespace uvsr
         m_TimerActive[stageIndex] = false;
     }
 
-    nvrhi::ITexture* MiniEngineTemporalAAPass::Render(
+    nvrhi::ITexture* TemporalAAPass::Render(
         nvrhi::ICommandList* commandList,
         const IView& currentView,
         const IView* previousView,
         uint64_t frameIndex,
         const ResolvedAntiAliasingSettings& settings,
-        MiniEngineTaaDebugView debugView,
+        TemporalAaDebugView debugView,
         bool exportSelectiveMorphology,
         bool enableSharpen,
         bool deferSharpenToPresentation,
         float sharpness)
     {
-        const MiniEngineTaaOptions& options = settings.temporal;
-        const MiniEngineTaaSampleResurrection sampleResurrection =
+        const TemporalAaOptions& options = settings.temporal;
+        const TemporalAaSampleResurrection sampleResurrection =
             settings.sampleResurrection;
         const bool usesSampleResurrection =
             UsesSampleResurrection(sampleResurrection);
+        const bool compactHistoryRequested =
+            settings.historyStorage ==
+            TemporalAaHistoryStorage::Compact;
+        const uint32_t behaviorFlags = GetTemporalAaBehaviorFlags(
+            settings.depthValidation,
+            settings.historyWeight,
+            settings.motionTrust,
+            settings.rectificationClip,
+            settings.blendDomain);
+        constexpr uint32_t minimumDefaultBehaviorFlags =
+            UVSR_TAA_BEHAVIOR_MOVING_POINT_DEPTH |
+            UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT |
+            UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST |
+            UVSR_TAA_BEHAVIOR_TIGHT_RECTIFICATION |
+            UVSR_TAA_BEHAVIOR_LINEAR_BLEND_DOMAIN;
+        const uint32_t minimumBehaviorIndex =
+            behaviorFlags == minimumDefaultBehaviorFlags ? 0u : 1u;
+        const bool effectiveDeferredSharpen =
+            deferSharpenToPresentation;
         AdvanceTimers();
-        if (!deferSharpenToPresentation)
+        if (!effectiveDeferredSharpen)
             m_Timings.presentationSharpenMilliseconds = 0.f;
 
-        const uint32_t source = uint32_t(frameIndex & 1u);
-        if (!previousView)
-            (void)m_History.Invalidate();
-        m_LastHistoryInputValid =
-            m_History.CanRead(
-                source,
-                previousView != nullptr,
-                frameIndex);
-
-        if (m_History.PrepareForFirstUse(commandList))
-        {
-            // The shared core clears both base color/depth pairs exactly once.
-            // Clear developer-only resurrection state and diagnostics in the
-            // same first-use transaction.
+        const float clampedSharpness =
+            ClampTemporalAaSharpness(sharpness);
+        const bool useSharpen =
+            !effectiveDeferredSharpen &&
+            ShouldSharpenTemporalAa(enableSharpen, clampedSharpness);
+        const TemporalAaSharpenWeights sharpenWeights =
+            GetTemporalAaSharpenWeights(clampedSharpness);
 #if UVSR_AA_DEVELOPER_OVERRIDES
-            for (uint32_t index = 0u; index < 2u; ++index)
-            {
-                commandList->clearTextureFloat(
-                    m_PersistentColor[index],
-                    nvrhi::AllSubresources,
-                    nvrhi::Color(0.f));
-                commandList->clearTextureFloat(
-                    m_PersistentDepth[index],
-                    nvrhi::AllSubresources,
-                    nvrhi::Color(0.f));
-            }
+        const uint32_t requestedDebugIndex =
+            static_cast<uint32_t>(debugView);
+        const uint32_t debugIndex =
+            requestedDebugIndex < TemporalAaResolveDebugViewCount
+                ? requestedDebugIndex
+                : UVSR_TAA_DEBUG_OFF;
+#else
+        // Production packages only the Off resolve permutation.
+        (void)debugView;
+        constexpr uint32_t debugIndex = UVSR_TAA_DEBUG_OFF;
 #endif
-            commandList->clearTextureFloat(
-                m_DebugValues,
-                nvrhi::AllSubresources,
-                nvrhi::Color(0.f));
+        const bool showDebug =
+            debugIndex != UVSR_TAA_DEBUG_OFF;
+        const bool minimumPresentationCompatible =
+            settings.subpixelMorphology ==
+                MorphologyApplication::Off ||
+            !m_Timings.minimumColorIsR11G11B10;
+        const bool minimumAlgorithmCompatible =
+            IsTemporalAaCompactHistoryCompatible(settings);
+        const bool useMinimum =
+            compactHistoryRequested &&
+            m_MinimumPipelines[minimumBehaviorIndex] &&
+            m_MinimumBindingSets[0] &&
+            m_MinimumBindingSets[1] &&
+            minimumAlgorithmCompatible &&
+            !usesSampleResurrection &&
+            !exportSelectiveMorphology &&
+            minimumPresentationCompatible &&
+            !showDebug;
+        m_Timings.effectiveCostMode = useMinimum
+            ? TemporalAaCostMode::Minimum
+            : settings.temporalCostMode ==
+                    TemporalAaCostMode::Minimum
+                ? TemporalAaCostMode::Reduced
+                : settings.temporalCostMode;
+        m_Timings.activeHistoryTextureBytes = useMinimum
+            ? m_Timings.minimumHistoryTextureBytes
+            : m_Timings.robustHistoryTextureBytes +
+                (usesSampleResurrection
+                    ? m_Timings.persistentHistoryTextureBytes
+                    : 0u);
+        m_Timings.dispatchCount = 0u;
+
+        if (compactHistoryRequested && !useMinimum &&
+            !m_ReportedMinimumFallback)
+        {
+            log::warning(
+                "Temporal AA compact history fell back to the robust path because its algorithm, history weight, format support, presentation morphology, diagnostics, or selective output is incompatible with this frame.");
+            m_ReportedMinimumFallback = true;
+        }
+        else if (!compactHistoryRequested || useMinimum)
+        {
+            m_ReportedMinimumFallback = false;
         }
 
-        MiniEngineTaaBlendConstants blendConstants{};
+        const auto invalidateMinimumHistory = [&]()
+        {
+            const bool changed =
+                m_MinimumValid[0] ||
+                m_MinimumValid[1] ||
+                m_MinimumAccumulationCount != 0u ||
+                m_MinimumHasCommittedSequence;
+            m_MinimumValid = {};
+            m_MinimumCommittedSequence = {};
+            m_MinimumLastCommittedSequence = 0u;
+            m_MinimumAccumulationCount = 0u;
+            m_MinimumHasCommittedSequence = false;
+            if (changed)
+                ++m_MinimumResetCount;
+        };
+
+        if (useMinimum != m_LastRenderUsedMinimum)
+        {
+            (void)m_History.Invalidate();
+            invalidateMinimumHistory();
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
+            m_PersistentValid = {};
+            m_PersistentViews = {};
+#endif
+        }
+        m_LastRenderUsedMinimum = useMinimum;
+
+        const uint32_t source = uint32_t(frameIndex & 1u);
+        if (useMinimum)
+        {
+            if (!previousView)
+                invalidateMinimumHistory();
+            m_LastHistoryInputValid =
+                source < m_MinimumValid.size() &&
+                previousView != nullptr &&
+                m_MinimumValid[source] &&
+                m_MinimumAccumulationCount > 0u &&
+                m_MinimumHasCommittedSequence &&
+                frameIndex > 0u &&
+                m_MinimumLastCommittedSequence ==
+                    frameIndex - 1u &&
+                m_MinimumCommittedSequence[source] ==
+                    frameIndex - 1u;
+        }
+        else
+        {
+            if (!previousView)
+                (void)m_History.Invalidate();
+            m_LastHistoryInputValid =
+                m_History.CanRead(
+                    source,
+                    previousView != nullptr,
+                    frameIndex);
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
+            // A pass-global history break also invalidates every older
+            // snapshot. Resurrection may repair a locally rejected sample,
+            // but it must never bridge a cut, skipped frame, or missing view.
+            if (!m_LastHistoryInputValid)
+            {
+                m_PersistentValid = {};
+                m_PersistentViews = {};
+            }
+#endif
+
+            // Validity is authoritative and every in-bounds destination texel
+            // is overwritten. Avoid reset-time color, depth, snapshot, and
+            // diagnostic clears for both robust and compact histories.
+            (void)m_History.PrepareForFirstWrite();
+        }
+
+        TemporalAaBlendConstants blendConstants{};
         // Donut vector default constructors deliberately leave their scalar
         // lanes uninitialized. A cut has no previous view, so the
         // current-to-previous jitter delta must be assigned explicitly
@@ -823,8 +1110,8 @@ namespace uvsr
         blendConstants.maximumHistoryWeight =
             float(settings.historyFrames) /
             float(settings.historyFrames + 1u);
-        blendConstants.depthQuantizationPadding1 = 0u;
-        blendConstants.depthQuantizationPadding2 = 0u;
+        blendConstants.behaviorFlags = behaviorFlags;
+        blendConstants.behaviorPadding = 0u;
         blendConstants.projection =
             currentView.GetProjectionMatrix(false);
         blendConstants.reciprocalBufferDimensions =
@@ -838,8 +1125,8 @@ namespace uvsr
         {
             const float2 currentJitter = currentView.GetPixelOffset();
             const float2 previousJitter = previousView->GetPixelOffset();
-            const MiniEngineTaaJitterSample jitterDelta =
-                GetMiniEngineTaaCurrentToPreviousJitter(
+            const TemporalAaJitterSample jitterDelta =
+                GetTemporalAaCurrentToPreviousJitter(
                     { currentJitter.x, currentJitter.y },
                     { previousJitter.x, previousJitter.y });
             blendConstants.currentToPreviousJitter =
@@ -850,51 +1137,53 @@ namespace uvsr
             m_LastHistoryInputValid
                 ? 1u
                 : 0u;
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        currentView.FillPlanarViewConstants(
-            blendConstants.currentView);
-        const IView& immediateHistoryView =
-            previousView ? *previousView : currentView;
-        immediateHistoryView.FillPlanarViewConstants(
-            blendConstants.immediateHistoryView);
-        if (m_PersistentValid[0] &&
-            m_PersistentViews[0])
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
+        blendConstants.persistentValidMask = 0u;
+        blendConstants.persistentPadding0 = 0u;
+        blendConstants.persistentPadding1 = 0u;
+        blendConstants.persistentPadding2 = 0u;
+        if (usesSampleResurrection)
         {
-            m_PersistentViews[0]->FillPlanarViewConstants(
-                blendConstants.persistentHistoryView0);
+            currentView.FillPlanarViewConstants(
+                blendConstants.currentView);
+            const IView& immediateHistoryView =
+                previousView ? *previousView : currentView;
+            immediateHistoryView.FillPlanarViewConstants(
+                blendConstants.immediateHistoryView);
+            if (m_PersistentValid[0] &&
+                m_PersistentViews[0])
+            {
+                m_PersistentViews[0]->FillPlanarViewConstants(
+                    blendConstants.persistentHistoryView0);
+            }
+            else
+            {
+                blendConstants.persistentHistoryView0 =
+                    blendConstants.immediateHistoryView;
+            }
+            if (m_PersistentValid[1] &&
+                m_PersistentViews[1])
+            {
+                m_PersistentViews[1]->FillPlanarViewConstants(
+                    blendConstants.persistentHistoryView1);
+            }
+            else
+            {
+                blendConstants.persistentHistoryView1 =
+                    blendConstants.persistentHistoryView0;
+            }
+            blendConstants.persistentValidMask =
+                (m_PersistentValid[0] ? 1u : 0u) |
+                (sampleResurrection ==
+                            TemporalAaSampleResurrection::
+                                TwoOlderFrames &&
+                        m_PersistentValid[1]
+                    ? 2u
+                    : 0u);
         }
-        else
-        {
-            blendConstants.persistentHistoryView0 =
-                blendConstants.immediateHistoryView;
-        }
-        if (m_PersistentValid[1] &&
-            m_PersistentViews[1])
-        {
-            m_PersistentViews[1]->FillPlanarViewConstants(
-                blendConstants.persistentHistoryView1);
-        }
-        else
-        {
-            blendConstants.persistentHistoryView1 =
-                blendConstants.persistentHistoryView0;
-        }
-        blendConstants.persistentValidMask =
-            (m_PersistentValid[0] ? 1u : 0u) |
-            (sampleResurrection ==
-                        MiniEngineTaaSampleResurrection::
-                            TwoOlderFrames &&
-                    m_PersistentValid[1]
-                ? 2u
-                : 0u);
 #endif
-        const float clampedSharpness =
-            ClampMiniEngineTaaSharpness(sharpness);
-        const bool useSharpen =
-            ShouldSharpenMiniEngineTaa(enableSharpen, clampedSharpness);
-        const MiniEngineTaaSharpenWeights sharpenWeights =
-            GetMiniEngineTaaSharpenWeights(clampedSharpness);
-        MiniEngineTaaOutputConstants outputConstants{};
+
+        TemporalAaOutputConstants outputConstants{};
         outputConstants.centerWeight = sharpenWeights.center;
         outputConstants.lateralWeight = sharpenWeights.lateral;
         outputConstants.bufferDimensions = m_Size;
@@ -903,33 +1192,84 @@ namespace uvsr
             &outputConstants,
             sizeof(outputConstants));
 
+        if (useMinimum)
+        {
+            const uint32_t destination = source ^ 1u;
+            commandList->beginMarker(
+                "Temporal AA Minimum One-Dispatch Resolve");
+            BeginStage(commandList, Stage::Blend);
+            commandList->writeBuffer(
+                m_BlendConstantBuffer,
+                &blendConstants,
+                sizeof(blendConstants));
+            nvrhi::ComputeState minimumState;
+            minimumState.pipeline =
+                m_MinimumPipelines[minimumBehaviorIndex];
+            minimumState.bindings = {
+                m_MinimumBindingSets[source]
+            };
+            commandList->setComputeState(minimumState);
+            commandList->dispatch(
+                (m_Size.x + 15u) / 16u,
+                (m_Size.y + 7u) / 8u,
+                1u);
+            EndStage(commandList, Stage::Blend);
+            commandList->endMarker();
+
+            const bool sequenceIsContinuous =
+                m_MinimumHasCommittedSequence &&
+                frameIndex > 0u &&
+                m_MinimumLastCommittedSequence ==
+                    frameIndex - 1u;
+            if (!sequenceIsContinuous)
+            {
+                m_MinimumValid = {};
+                m_MinimumCommittedSequence = {};
+                m_MinimumAccumulationCount = 0u;
+            }
+            m_MinimumValid[destination] = true;
+            m_MinimumCommittedSequence[destination] = frameIndex;
+            m_MinimumAccumulationCount = std::min(
+                m_MinimumAccumulationCount + 1u,
+                std::max(settings.historyFrames, 1u));
+            m_MinimumLastCommittedSequence = frameIndex;
+            m_MinimumHasCommittedSequence = true;
+
+            m_Timings.outputMilliseconds = 0.f;
+            m_Timings.outputWasSharpened = false;
+            m_Timings.historyColorSamples =
+                m_LastHistoryInputValid ? 1u : 0u;
+            m_Timings.historyDepthGathers =
+                settings.depthValidation ==
+                        TemporalAaDepthValidation::FourTexelFootprint
+                    ? 1u
+                    : 0u;
+            m_Timings.historyDepthSamples =
+                m_LastHistoryInputValid &&
+                    settings.depthValidation ==
+                        TemporalAaDepthValidation::MovingPoint
+                    ? 1u
+                    : 0u;
+            m_Timings.dispatchCount = 1u;
+            m_Timings.historyValid = true;
+            m_Timings.accumulationCount =
+                m_MinimumAccumulationCount;
+            m_Timings.historyResetCount =
+                m_MinimumResetCount;
+            ++m_TimerFrame;
+            return m_MinimumColor[destination].Get();
+        }
+
         nvrhi::ComputeState outputState;
-        // The temporal resolve accepts only its own compact diagnostic range.
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        const uint32_t requestedDebugIndex =
-            static_cast<uint32_t>(debugView);
-        const uint32_t debugIndex =
-            requestedDebugIndex <
-                    MiniEngineTaaResolveDebugViewCount
-                ? requestedDebugIndex
-                : UVSR_TAA_DEBUG_OFF;
-#else
-        // Production packages only the Off resolve permutation. Treat any
-        // hostile or stale programmatic value as Off before indexing PSOs.
-        (void)debugView;
-        constexpr uint32_t debugIndex = UVSR_TAA_DEBUG_OFF;
-#endif
-        const bool showDebug =
-            debugIndex != UVSR_TAA_DEBUG_OFF;
         const bool useFusedOutput =
             (settings.passFusion ==
-                    MiniEngineTaaPassFusion::Fused ||
-                deferSharpenToPresentation) &&
+                    TemporalAaPassFusion::Fused ||
+                effectiveDeferredSharpen) &&
             !useSharpen &&
             !showDebug;
 
-        MiniEngineTaaStaticPerformanceOptions performance =
-            GetMiniEngineTaaStaticPerformanceOptions(
+        TemporalAaStaticPerformanceOptions performance =
+            GetTemporalAaStaticPerformanceOptions(
                 settings,
                 useFusedOutput);
         if (usesSampleResurrection)
@@ -938,15 +1278,15 @@ namespace uvsr
             // until each image-equivalent optimization is separately proven.
             // This prevents the old Intel Auto path from compiling the option
             // out while continuing to pay snapshot-copy traffic.
-            performance = MiniEngineTaaStaticPerformanceOptions{};
+            performance = TemporalAaStaticPerformanceOptions{};
             performance.fusedOutput = useFusedOutput;
         }
         const bool baselinePerformance =
             performance.computeKernel ==
-                    MiniEngineTaaComputeKernel::
+                    TemporalAaComputeKernel::
                         Threads8x8TwoPixels &&
                 performance.ldsLayout ==
-                    MiniEngineTaaLdsLayout::Legacy &&
+                    TemporalAaLdsLayout::Legacy &&
                 !performance.sharedWorkReuse &&
                 !performance.earlyHistoryRejection;
 
@@ -954,7 +1294,7 @@ namespace uvsr
 #if UVSR_AA_DEVELOPER_OVERRIDES
         usePixelPath =
             settings.executionPath ==
-                MiniEngineTaaExecutionPath::FullscreenPixelShader &&
+                TemporalAaExecutionPath::FullscreenPixelShader &&
             !usesSampleResurrection;
 #endif
         const auto bypassMissingPermutation = [&]()
@@ -986,12 +1326,12 @@ namespace uvsr
         if (!usePixelPath && baselinePerformance)
         {
             const uint32_t blendPermutation =
-                GetMiniEngineTaaBlendPermutationIndex(options) *
+                GetTemporalAaBlendPermutationIndex(options) *
                     (2u *
-                        MiniEngineTaaSampleResurrectionCount *
+                        TemporalAaSampleResurrectionCount *
                         2u) +
                 uint32_t(exportSelectiveMorphology) *
-                    (MiniEngineTaaSampleResurrectionCount *
+                    (TemporalAaSampleResurrectionCount *
                         2u) +
                 static_cast<uint32_t>(sampleResurrection) * 2u +
                 uint32_t(useFusedOutput);
@@ -1011,13 +1351,13 @@ namespace uvsr
         else if (!usePixelPath)
         {
             const uint32_t algorithmIndex =
-                GetMiniEngineTaaBlendPermutationIndex(options);
+                GetTemporalAaBlendPermutationIndex(options);
             const uint32_t performanceIndex =
-                GetMiniEngineTaaStaticPerformanceIndex(
+                GetTemporalAaStaticPerformanceIndex(
                     performance);
             const uint32_t permutation =
                 algorithmIndex *
-                    MiniEngineTaaStaticPerformanceCount * 2u +
+                    TemporalAaStaticPerformanceCount * 2u +
                 performanceIndex * 2u +
                 uint32_t(exportSelectiveMorphology);
             if (!CreateBlendComputePermutation(
@@ -1042,7 +1382,7 @@ namespace uvsr
         if (usePixelPath)
         {
             pixelPermutation =
-                GetMiniEngineTaaBlendPermutationIndex(options) * 8u +
+                GetTemporalAaBlendPermutationIndex(options) * 8u +
                 uint32_t(settings.earlyHistoryRejection) * 4u +
                 uint32_t(exportSelectiveMorphology) * 2u +
                 uint32_t(useFusedOutput);
@@ -1059,34 +1399,40 @@ namespace uvsr
         }
 #endif
         m_Timings.historyColorSamples =
-            GetMiniEngineTaaHistoryColorSampleCount(
+            GetTemporalAaHistoryColorSampleCount(
                 options.historyFilter) +
             (sampleResurrection ==
-                    MiniEngineTaaSampleResurrection::TwoOlderFrames
+                    TemporalAaSampleResurrection::TwoOlderFrames
                 ? 2u
                 : sampleResurrection ==
-                        MiniEngineTaaSampleResurrection::OneOlderFrame
+                        TemporalAaSampleResurrection::OneOlderFrame
                     ? 1u
                     : 0u);
-        m_Timings.historyDepthGathers = 1u;
+        const bool movingPointDepthValidation =
+            settings.depthValidation ==
+            TemporalAaDepthValidation::MovingPoint;
+        m_Timings.historyDepthGathers =
+            movingPointDepthValidation ? 0u : 1u;
         m_Timings.historyDepthSamples =
-            GetMiniEngineTaaHistoryDepthSampleCount(
-                options.historyFilter) +
+            (movingPointDepthValidation
+                ? 1u
+                : GetTemporalAaHistoryDepthSampleCount(
+                    options.historyFilter)) +
             (sampleResurrection ==
-                    MiniEngineTaaSampleResurrection::TwoOlderFrames
+                    TemporalAaSampleResurrection::TwoOlderFrames
                 ? 2u
                 : sampleResurrection ==
-                        MiniEngineTaaSampleResurrection::OneOlderFrame
+                        TemporalAaSampleResurrection::OneOlderFrame
                     ? 1u
                     : 0u);
 
         commandList->beginMarker(usePixelPath
             ? useFusedOutput
-                ? "MiniEngine TAA Fullscreen Pixel + Fused Output"
-                : "MiniEngine TAA Fullscreen Pixel"
+                ? "Temporal AA Fullscreen Pixel + Fused Output"
+                : "Temporal AA Fullscreen Pixel"
             : useFusedOutput
-                ? "MiniEngine TAA Temporal Blend + Fused Output"
-                : "MiniEngine TAA Temporal Blend");
+                ? "Temporal AA Blend + Fused Output"
+                : "Temporal AA Blend");
         BeginStage(commandList, Stage::Blend);
 #if UVSR_AA_DEVELOPER_OVERRIDES
         if (usePixelPath)
@@ -1113,6 +1459,7 @@ namespace uvsr
             arguments.instanceCount = 1u;
             arguments.vertexCount = 4u;
             commandList->draw(arguments);
+            ++m_Timings.dispatchCount;
         }
         else
 #endif
@@ -1122,13 +1469,13 @@ namespace uvsr
             // band boundaries normally, so image results are unchanged.
             const uint32_t bandCount =
                 settings.cacheBlocking ==
-                        MiniEngineTaaCacheBlocking::Bands2
+                        TemporalAaCacheBlocking::Bands2
                     ? 2u
                     : settings.cacheBlocking ==
-                            MiniEngineTaaCacheBlocking::Bands3
+                            TemporalAaCacheBlocking::Bands3
                         ? 3u
                         : settings.cacheBlocking ==
-                                MiniEngineTaaCacheBlocking::Bands4
+                                TemporalAaCacheBlocking::Bands4
                             ? 4u
                             : 1u;
             const uint32_t tileRows =
@@ -1155,6 +1502,7 @@ namespace uvsr
                     (m_Size.x + 15u) / 16u,
                     lastRow - firstRow,
                     1u);
+                ++m_Timings.dispatchCount;
             }
         }
         EndStage(commandList, Stage::Blend);
@@ -1172,16 +1520,17 @@ namespace uvsr
         if (!useFusedOutput)
         {
             commandList->beginMarker(showDebug
-                ? "MiniEngine TAA Developer Visualization"
+                ? "Temporal AA Developer Visualization"
                 : useSharpen
-                    ? "MiniEngine TAA Sharpen"
-                    : "MiniEngine TAA Resolve");
+                    ? "Temporal AA Sharpen"
+                    : "Temporal AA Resolve");
             BeginStage(commandList, Stage::Output);
             commandList->setComputeState(outputState);
             commandList->dispatch(
                 (m_Size.x + 7u) / 8u,
                 (m_Size.y + 7u) / 8u,
                 1u);
+            ++m_Timings.dispatchCount;
             EndStage(commandList, Stage::Output);
             commandList->endMarker();
         }
@@ -1192,7 +1541,7 @@ namespace uvsr
 
         const uint32_t destination = source ^ 1u;
         m_History.Commit(destination, frameIndex);
-#if UVSR_AA_DEVELOPER_OVERRIDES
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
         // Preserve exact v1-style ages at interval one. At the end of frame N,
         // the source ping-pong texture is frame N-1. On frame N+1, slot zero is
         // therefore age two and slot one is age three. This avoids both an
@@ -1202,7 +1551,7 @@ namespace uvsr
             previousView)
         {
             if (sampleResurrection ==
-                    MiniEngineTaaSampleResurrection::TwoOlderFrames &&
+                    TemporalAaSampleResurrection::TwoOlderFrames &&
                 m_PersistentValid[0])
             {
                 commandList->copyTexture(
@@ -1239,8 +1588,6 @@ namespace uvsr
             m_PersistentValid[0] =
                 m_PersistentViews[0] != nullptr;
         }
-#else
-        (void)usesSampleResurrection;
 #endif
         m_Timings.historyValid =
             m_History.ValidSlotCount() > 0u;
@@ -1255,7 +1602,7 @@ namespace uvsr
     }
 
     nvrhi::ITexture*
-        MiniEngineTemporalAAPass::SharpenPresentation(
+        TemporalAAPass::SharpenPresentation(
             nvrhi::ICommandList* commandList,
             nvrhi::ITexture* sourceTexture)
     {
@@ -1289,7 +1636,7 @@ namespace uvsr
         state.pipeline = m_PresentationSharpenPipeline;
         state.bindings = { m_PresentationSharpenBindingSet };
         commandList->beginMarker(
-            "MiniEngine TAA Presentation Sharpen");
+            "Temporal AA Presentation Sharpen");
         BeginStage(commandList, Stage::PresentationSharpen);
         commandList->setComputeState(state);
         commandList->dispatch(

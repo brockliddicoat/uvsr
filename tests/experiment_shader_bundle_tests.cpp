@@ -72,6 +72,8 @@ namespace
         };
         constexpr const char* passShaders[] = {
             "deferred_lighting_cs",
+            "depth_ps",
+            "depth_vs_buffer_loads",
             "forward_ps",
             "forward_vs_buffer_loads",
             "gbuffer_ps",
@@ -100,9 +102,10 @@ namespace
             "screen_space_visibility_cs",
             "screen_space_visibility_filter_cs",
             "screen_space_visibility_temporal_cs",
-            "taa_miniengine_blend_cs",
-            "taa_miniengine_resolve_cs",
-            "taa_miniengine_sharpen_cs"
+            "temporal_aa_blend_cs",
+            "temporal_aa_minimum_cs",
+            "temporal_aa_resolve_cs",
+            "temporal_aa_sharpen_cs"
         };
 
         std::set<std::string> expected;
@@ -153,8 +156,8 @@ int main(int argc, char** argv)
     const std::string config = ReadText(configPath);
     const std::string manifest = ReadText(manifestPath);
     passed &= Check(
-        CountShaderPermutations(config) == 51u,
-        "factory experiment catalog must contain exactly 51 permutations");
+        CountShaderPermutations(config) == 61u,
+        "factory experiment catalog must contain exactly 61 permutations");
     passed &= Check(
         manifest.find("src/shaders_experiment_defaults.cfg") !=
             std::string::npos,
@@ -173,9 +176,27 @@ int main(int argc, char** argv)
             "-D TAA_FUSED_OUTPUT=0 -D TAA_DEVELOPER_DEBUG=0") !=
             std::string::npos,
         "factory catalog must retain the validated Intel Auto alternate");
+    passed &= Check(
+        config.find(
+            "TAA_LDS_LAYOUT=2 -D TAA_SHARED_WORK_REUSE=1 "
+            "-D TAA_EARLY_HISTORY_REJECTION=1 "
+            "-D TAA_FUSED_OUTPUT={0,1}") !=
+            std::string::npos,
+        "factory catalog must retain fused and separate Reduced outputs");
+    passed &= Check(
+            config.find(
+                "temporal_aa_minimum_cs.hlsl -T cs -E main "
+                "-D TAA_RUNTIME_BEHAVIOR={0,1}") !=
+                std::string::npos &&
+            config.find(
+                "temporal_aa_minimum_cs.hlsl -T cs -E main") ==
+                config.rfind(
+                    "temporal_aa_minimum_cs.hlsl -T cs -E main"),
+        "factory catalog must package static-default and configurable compact "
+        "temporal paths");
 
     constexpr const char* forbiddenTokens[] = {
-        "bend_screen_space_shadows",
+        "screen_space_directional_shadows",
         "sparse_virtual_shadow_map",
         "diagnostic_cascaded_shadow_map",
         "cmaa2",
@@ -214,8 +235,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 37u,
-        "factory experiment contract must enumerate exactly 37 files");
+        expectedFiles.size() == 40u,
+        "factory experiment contract must enumerate exactly 40 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

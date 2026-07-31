@@ -216,12 +216,12 @@ index 2861714..c6a586d 100644
      ImGuiContext& g = *GImGui;
      const float border_size = window->WindowBorderSize;
      const ImU32 border_col = GetColorU32(ImGuiCol_Border);
-+    const bool is_settings_window =
-+        strcmp(window->Name, "Settings") == 0;
++    const bool is_stacked_panel_window =
++        (strcmp(window->Name, "Settings") == 0 || strcmp(window->Name, "Materials") == 0);
      if (border_size > 0.0f && (window->Flags & ImGuiWindowFlags_NoBackground) == 0)
 -        window->DrawList->AddRect(window->Pos, window->Pos + window->Size, border_col, window->WindowRounding, 0, window->WindowBorderSize);
 +    {
-+        if (!is_settings_window)
++        if (!is_stacked_panel_window)
 +            window->DrawList->AddRect(window->Pos, window->Pos + window->Size, border_col, window->WindowRounding, 0, window->WindowBorderSize);
 +    }
      else if (border_size > 0.0f)
@@ -232,7 +232,7 @@ index 2861714..c6a586d 100644
              RenderWindowOuterSingleBorder(window, 3, border_col, border_size);
      }
 +    if (!window->Collapsed &&
-+        !is_settings_window &&
++        !is_stacked_panel_window &&
 +        (window->Flags & ImGuiWindowFlags_ChildWindow) == 0 &&
 +        (window->Flags & ImGuiWindowFlags_NoBackground) == 0)
 +    {
@@ -250,7 +250,7 @@ index 2861714..c6a586d 100644
 -    if (g.Style.FrameBorderSize > 0 && !(window->Flags & ImGuiWindowFlags_NoTitleBar))
 +    if (g.Style.FrameBorderSize > 0 &&
 +        !(window->Flags & ImGuiWindowFlags_NoTitleBar) &&
-+        strcmp(window->Name, "Settings") != 0)
++        !is_stacked_panel_window)
      {
          float y = window->Pos.y + window->TitleBarHeight - 1;
 -        window->DrawList->AddLine(ImVec2(window->Pos.x + border_size * 0.5f, y), ImVec2(window->Pos.x + window->Size.x - border_size * 0.5f, y), border_col, g.Style.FrameBorderSize);
@@ -267,7 +267,7 @@ index 2861714..c6a586d 100644
      }
  }
  
-@@ -6979,15 +7146,69 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
+@@ -6979,15 +7146,90 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
      const float window_border_size = window->WindowBorderSize;
      if (window->Collapsed)
      {
@@ -275,6 +275,8 @@ index 2861714..c6a586d 100644
 +        // UVSR retains the Settings status block below its collapsed title.
 +        // Paint that retained area with the same WindowBg surface used while
 +        // expanded instead of leaving only the backdrop blur visible.
++        const bool is_stacked_panel_title =
++            (strcmp(window->Name, "Settings") == 0 || strcmp(window->Name, "Materials") == 0);
 +        const bool is_settings_window =
 +            strcmp(window->Name, "Settings") == 0;
 +        bool has_retained_status_surface = false;
@@ -285,8 +287,17 @@ index 2861714..c6a586d 100644
 +            window->Size.y > window->TitleBarHeight &&
 +            !(flags & ImGuiWindowFlags_NoBackground))
 +        {
-+            const ImU32 bg_col =
++            ImU32 bg_col =
 +                GetColorU32(GetWindowBgColorIdx(window));
++            if (g.NextWindowData.HasFlags &
++                ImGuiNextWindowDataFlags_HasBgAlpha)
++            {
++                bg_col =
++                    (bg_col & ~IM_COL32_A_MASK) |
++                    (IM_F32_TO_INT8_SAT(
++                        g.NextWindowData.BgAlphaVal) <<
++                        IM_COL32_A_SHIFT);
++            }
 +            const ImVec2 retained_min =
 +                window->Pos +
 +                ImVec2(0.5f, window->TitleBarHeight - 1.0f);
@@ -323,46 +334,57 @@ index 2861714..c6a586d 100644
 +        }
 +        // Title bar only for ordinary collapsed windows.
          const float backup_border_size = style.FrameBorderSize;
-         g.Style.FrameBorderSize = window->WindowBorderSize;
+-        g.Style.FrameBorderSize = window->WindowBorderSize;
++        if (!is_stacked_panel_title)
++            g.Style.FrameBorderSize = window->WindowBorderSize;
          ImU32 title_bar_col = GetColorU32((title_bar_is_highlight && g.NavCursorVisible) ? ImGuiCol_TitleBgActive : ImGuiCol_TitleBgCollapsed);
 -        RenderFrame(title_bar_rect.Min, title_bar_rect.Max, title_bar_col, true, window_rounding);
-+        RenderFrame(collapsed_title_rect.Min, collapsed_title_rect.Max, title_bar_col, true, window_rounding);
++        RenderFrame(
++            collapsed_title_rect.Min,
++            collapsed_title_rect.Max,
++            title_bar_col,
++            !is_stacked_panel_title,
++            is_stacked_panel_title
++                ? style.FrameRounding
++                : window_rounding);
          g.Style.FrameBorderSize = backup_border_size;
      }
      else
      {
-+        const bool is_settings_window =
-+            strcmp(window->Name, "Settings") == 0;
-+        bool has_expanded_settings_body = false;
-+        ImRect expanded_settings_body_rect;
++        const bool is_stacked_panel_title =
++            (strcmp(window->Name, "Settings") == 0 || strcmp(window->Name, "Materials") == 0);
++        const bool is_stacked_panel_window =
++            (strcmp(window->Name, "Settings") == 0 || strcmp(window->Name, "Materials") == 0);
++        bool has_expanded_stacked_panel_body = false;
++        ImRect expanded_stacked_panel_body_rect;
 +
          // Window background
          if (!(flags & ImGuiWindowFlags_NoBackground))
          {
-@@ -7001,14 +7221,69 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
+@@ -7001,14 +7243,72 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
              }
              if (override_alpha)
                  bg_col = (bg_col & ~IM_COL32_A_MASK) | (IM_F32_TO_INT8_SAT(alpha) << IM_COL32_A_SHIFT);
 -            window->DrawList->AddRectFilled(window->Pos + ImVec2(0, window->TitleBarHeight), window->Pos + window->Size, bg_col, window_rounding, (flags & ImGuiWindowFlags_NoTitleBar) ? 0 : ImDrawFlags_RoundCornersBottom);
-+            if (is_settings_window &&
++            if (is_stacked_panel_window &&
 +                !(flags & ImGuiWindowFlags_NoTitleBar))
 +            {
-+                // The expanded title and renderer/settings body are two
++                // The expanded title and panel body are two
 +                // touching rounded surfaces, matching the collapsed state.
 +                // Their one-pixel overlap keeps the shared outline continuous
 +                // while preserving both upper body arcs.
-+                expanded_settings_body_rect = ImRect(
++                expanded_stacked_panel_body_rect = ImRect(
 +                    window->Pos +
 +                        ImVec2(0.5f, window->TitleBarHeight - 1.0f),
 +                    window->Pos + window->Size -
 +                        ImVec2(0.5f, 0.5f));
 +                window->DrawList->AddRectFilled(
-+                    expanded_settings_body_rect.Min,
-+                    expanded_settings_body_rect.Max,
++                    expanded_stacked_panel_body_rect.Min,
++                    expanded_stacked_panel_body_rect.Max,
 +                    bg_col,
 +                    window_rounding,
 +                    ImDrawFlags_RoundCornersAll);
-+                has_expanded_settings_body = true;
++                has_expanded_stacked_panel_body = true;
 +            }
 +            else
 +            {
@@ -375,43 +397,46 @@ index 2861714..c6a586d 100644
          {
              ImU32 title_bar_col = GetColorU32(title_bar_is_highlight ? ImGuiCol_TitleBgActive : ImGuiCol_TitleBg);
 -            window->DrawList->AddRectFilled(title_bar_rect.Min, title_bar_rect.Max, title_bar_col, window_rounding, ImDrawFlags_RoundCornersTop);
-+            const ImDrawFlags title_rounding_flags =
-+                is_settings_window
-+                    ? ImDrawFlags_RoundCornersAll
-+                    : ImDrawFlags_RoundCornersTop;
 +            ImRect title_fill_rect = title_bar_rect;
-+            if (is_settings_window)
++            if (is_stacked_panel_window)
 +            {
 +                // Keep both anti-aliased side arcs inside the window clip.
 +                title_fill_rect.Min += ImVec2(0.5f, 0.5f);
 +                title_fill_rect.Max -= ImVec2(0.5f, 0.5f);
 +            }
-+            window->DrawList->AddRectFilled(
-+                title_fill_rect.Min,
-+                title_fill_rect.Max,
-+                title_bar_col,
-+                window_rounding,
-+                title_rounding_flags);
-+            if (is_settings_window)
++            if (is_stacked_panel_title)
 +            {
-+                RenderGradientFrameOutline(
-+                    window->DrawList,
-+                    title_fill_rect,
-+                    window_rounding);
++                // Use the same frame radius and outline path as a resting
++                // top-level drawer header.
++                RenderFrame(
++                    title_fill_rect.Min,
++                    title_fill_rect.Max,
++                    title_bar_col,
++                    !is_stacked_panel_window,
++                    style.FrameRounding);
++            }
++            else
++            {
++                window->DrawList->AddRectFilled(
++                    title_fill_rect.Min,
++                    title_fill_rect.Max,
++                    title_bar_col,
++                    window_rounding,
++                    ImDrawFlags_RoundCornersTop);
 +            }
 +        }
-+        if (has_expanded_settings_body)
++        if (has_expanded_stacked_panel_body)
 +        {
 +            // Draw after the title so the two marked upper corners and the
 +            // shared one-pixel boundary cannot be overpainted.
 +            RenderGradientFrameOutline(
 +                window->DrawList,
-+                expanded_settings_body_rect,
++                expanded_stacked_panel_body_rect,
 +                window_rounding);
          }
  
          // Menu bar
-@@ -7467,6 +7742,11 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+@@ -7467,6 +7766,11 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
              use_current_size_for_scrollbar_x = true;
          if (window_size_y_set_by_api && window->ContentSizeExplicit.y != 0.0f) // #7252
              use_current_size_for_scrollbar_y = true;
@@ -423,7 +448,7 @@ index 2861714..c6a586d 100644
  
          // Collapse window by double-clicking on title bar
          // At this point we don't have a clipping rectangle setup yet, so we can use the title bar area for hit detection and drawing
-@@ -7478,7 +7758,95 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+@@ -7478,7 +7782,95 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
              if (g.HoveredWindow == window && g.HoveredId == 0 && g.HoveredIdPreviousFrame == 0 && g.ActiveId == 0 && IsMouseHoveringRect(title_bar_rect.Min, title_bar_rect.Max))
                  if (g.IO.MouseClickedCount[0] == 2 && GetKeyOwner(ImGuiKey_MouseLeft) == ImGuiKeyOwner_NoOwner)
                      window->WantCollapseToggle = true;
@@ -520,7 +545,7 @@ index 2861714..c6a586d 100644
              {
                  window->Collapsed = !window->Collapsed;
                  if (!window->Collapsed)
-@@ -7539,7 +7907,23 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
+@@ -7539,7 +7931,23 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
  
          // Apply minimum/maximum window size constraints and final size
          window->SizeFull = CalcWindowSizeAfterConstraint(window, window->SizeFull);
@@ -545,7 +570,7 @@ index 2861714..c6a586d 100644
  
          // POSITION
  
-@@ -8469,6 +8853,13 @@ void ImGui::SetNextWindowCollapsed(bool collapsed, ImGuiCond cond)
+@@ -8469,6 +8877,13 @@ void ImGui::SetNextWindowCollapsed(bool collapsed, ImGuiCond cond)
      g.NextWindowData.CollapsedCond = cond ? cond : ImGuiCond_Always;
  }
  
@@ -559,7 +584,7 @@ index 2861714..c6a586d 100644
  void ImGui::SetNextWindowBgAlpha(float alpha)
  {
      ImGuiContext& g = *GImGui;
-@@ -10166,8 +10557,21 @@ void ImGui::UpdateMouseWheel()
+@@ -10166,8 +10581,21 @@ void ImGui::UpdateMouseWheel()
              {
                  LockWheelingWindow(window, wheel.y);
                  float max_step = window->InnerRect.GetHeight() * 0.67f;
@@ -583,7 +608,7 @@ index 2861714..c6a586d 100644
                  g.WheelingWindowScrolledFrame = g.FrameCount;
              }
          }
-@@ -11856,9 +12260,34 @@ void ImGui::SetTooltip(const char* fmt, ...)
+@@ -11856,9 +12284,34 @@ void ImGui::SetTooltip(const char* fmt, ...)
  
  void ImGui::SetTooltipV(const char* fmt, va_list args)
  {

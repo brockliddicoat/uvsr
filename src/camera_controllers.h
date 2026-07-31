@@ -40,12 +40,22 @@ namespace uvsr
             SetMoveSpeed(6.f);
         }
 
+        void LookTo(
+            donut::math::float3 position,
+            donut::math::float3 direction,
+            donut::math::float3 up = donut::math::float3(0.f, 1.f, 0.f))
+        {
+            CancelRollLeveling();
+            FirstPersonCamera::LookTo(position, direction, up);
+        }
+
         void SetExactPose(
             donut::math::float3 position,
             donut::math::float3 direction,
             donut::math::float3 up,
             donut::math::float3 right)
         {
+            CancelRollLeveling();
             // Clear Donut's private movement accumulators through its public
             // setter, then restore the captured float32 basis verbatim.
             FirstPersonCamera::LookTo(position, direction, up);
@@ -59,6 +69,29 @@ namespace uvsr
         void KeyboardUpdate(int key, int scancode, int action, int mods) override
         {
             const bool pressed = action == GLFW_PRESS || action == GLFW_REPEAT;
+
+            if (key == GLFW_KEY_V)
+            {
+                // GLFW repeats are consumed so the OS repeat cadence cannot
+                // turn an elapsed-time trajectory into a frame/input-rate
+                // dependent series of restarts. Release is intentionally a
+                // no-op; a new physical press is the only restart edge.
+                if (action == GLFW_PRESS)
+                {
+                    // Clear either held Donut roll latch before capturing the
+                    // current basis. The captured pose itself is untouched.
+                    FirstPersonCamera::KeyboardUpdate(
+                        GLFW_KEY_Z, 0, GLFW_RELEASE, 0);
+                    FirstPersonCamera::KeyboardUpdate(
+                        GLFW_KEY_C, 0, GLFW_RELEASE, 0);
+                    ResetRoll();
+                }
+                return;
+            }
+
+            if (pressed && IsCameraAffectingKey(key))
+                CancelRollLeveling();
+
             switch (key)
             {
             case GLFW_KEY_LEFT: m_LookLeft = pressed; break;
@@ -66,17 +99,6 @@ namespace uvsr
             case GLFW_KEY_UP: m_LookUp = pressed; break;
             case GLFW_KEY_DOWN: m_LookDown = pressed; break;
             default: break;
-            }
-
-            if (key == GLFW_KEY_V && pressed)
-            {
-                // Clear either held roll latch before leveling the camera.
-                FirstPersonCamera::KeyboardUpdate(
-                    GLFW_KEY_Z, 0, GLFW_RELEASE, 0);
-                FirstPersonCamera::KeyboardUpdate(
-                    GLFW_KEY_C, 0, GLFW_RELEASE, 0);
-                ResetRoll();
-                return;
             }
 
             int forwardedAction = action;
@@ -107,19 +129,83 @@ namespace uvsr
                 mods);
         }
 
+        void MouseButtonUpdate(int button, int action, int mods) override
+        {
+            if (button == GLFW_MOUSE_BUTTON_LEFT)
+            {
+                m_MouseLookActive = action != GLFW_RELEASE;
+                if (m_MouseLookActive)
+                    CancelRollLeveling();
+            }
+            FirstPersonCamera::MouseButtonUpdate(button, action, mods);
+        }
+
+        void MousePosUpdate(double xpos, double ypos) override
+        {
+            if (m_MouseLookActive)
+                CancelRollLeveling();
+            FirstPersonCamera::MousePosUpdate(xpos, ypos);
+        }
+
         void ResetRoll()
         {
-            const donut::math::float3 worldUp(0.f, 1.f, 0.f);
-            const donut::math::float3 fallbackUp(0.f, 0.f, 1.f);
-            const donut::math::float3 referenceUp =
-                std::abs(donut::math::dot(m_CameraDir, worldUp)) < 0.999f
-                    ? worldUp
-                    : fallbackUp;
-            m_CameraRight = donut::math::normalize(
-                donut::math::cross(m_CameraDir, referenceUp));
-            m_CameraUp = donut::math::normalize(
-                donut::math::cross(m_CameraRight, m_CameraDir));
-            UpdateWorldToView();
+            donut::math::float3 levelRight;
+            donut::math::float3 levelUp;
+            donut::math::float3 directionAxis;
+            if (!BuildLevelBasis(
+                    m_CameraDir, levelRight, levelUp, directionAxis))
+            {
+                CancelRollLeveling();
+                return;
+            }
+
+            donut::math::float3 projectedUp = m_CameraUp -
+                directionAxis * donut::math::dot(
+                    m_CameraUp, directionAxis);
+            const float projectedUpLengthSquared =
+                donut::math::lengthSquared(projectedUp);
+            if (!std::isfinite(projectedUpLengthSquared) ||
+                projectedUpLengthSquared <= 1e-12f)
+            {
+                // A degenerate imported basis has no meaningful roll. Repair
+                // it to the same deterministic finite level frame used by the
+                // normal trajectory.
+                m_CameraRight = levelRight;
+                m_CameraUp = levelUp;
+                CancelRollLeveling();
+                UpdateWorldToView();
+                return;
+            }
+
+            projectedUp *= 1.f / std::sqrt(projectedUpLengthSquared);
+            const float initialAngle = std::atan2(
+                donut::math::dot(projectedUp, levelRight),
+                donut::math::dot(projectedUp, levelUp));
+            if (!std::isfinite(initialAngle))
+            {
+                CancelRollLeveling();
+                return;
+            }
+
+            m_RollLevelTargetRight = levelRight;
+            m_RollLevelTargetUp = levelUp;
+            m_RollLevelStartPosition = m_CameraPos;
+            m_RollLevelStartDirection = m_CameraDir;
+            m_RollLevelInitialAngle = initialAngle;
+            m_RollLevelElapsedSeconds = 0.0;
+
+            constexpr float ExactLevelThreshold =
+                0.05f * donut::math::PI_f / 180.f;
+            if (std::abs(initialAngle) <= ExactLevelThreshold)
+            {
+                m_CameraRight = levelRight;
+                m_CameraUp = levelUp;
+                CancelRollLeveling();
+                UpdateWorldToView();
+                return;
+            }
+
+            m_RollLevelingActive = true;
         }
 
         void Animate(float deltaT) override
@@ -128,29 +214,101 @@ namespace uvsr
 
             const float yawInput = float(m_LookLeft) - float(m_LookRight);
             const float pitchInput = float(m_LookUp) - float(m_LookDown);
-            if ((yawInput == 0.f && pitchInput == 0.f) || deltaT <= 0.f)
-                return;
+            if ((yawInput != 0.f || pitchInput != 0.f) && deltaT > 0.f)
+            {
+                constexpr float KeyboardLookSpeed =
+                    donut::math::PI_f * 0.5f;
+                donut::math::affine3 cameraRotation = donut::math::rotation(
+                    donut::math::float3(0.f, 1.f, 0.f),
+                    yawInput * KeyboardLookSpeed * deltaT);
+                cameraRotation = donut::math::rotation(
+                    m_CameraRight,
+                    pitchInput * KeyboardLookSpeed * deltaT) * cameraRotation;
 
-            constexpr float KeyboardLookSpeed = donut::math::PI_f * 0.5f;
-            donut::math::affine3 cameraRotation = donut::math::rotation(
-                donut::math::float3(0.f, 1.f, 0.f),
-                yawInput * KeyboardLookSpeed * deltaT);
-            cameraRotation = donut::math::rotation(
-                m_CameraRight,
-                pitchInput * KeyboardLookSpeed * deltaT) * cameraRotation;
+                m_CameraDir = donut::math::normalize(
+                    cameraRotation.transformVector(m_CameraDir));
+                m_CameraUp = donut::math::normalize(
+                    cameraRotation.transformVector(m_CameraUp));
+                m_CameraRight = donut::math::normalize(
+                    donut::math::cross(m_CameraDir, m_CameraUp));
+                m_CameraUp = donut::math::normalize(
+                    donut::math::cross(m_CameraRight, m_CameraDir));
+                UpdateWorldToView();
+            }
 
-            m_CameraDir = donut::math::normalize(
-                cameraRotation.transformVector(m_CameraDir));
-            m_CameraUp = donut::math::normalize(
-                cameraRotation.transformVector(m_CameraUp));
-            m_CameraRight = donut::math::normalize(
-                donut::math::cross(m_CameraDir, m_CameraUp));
-            m_CameraUp = donut::math::normalize(
-                donut::math::cross(m_CameraRight, m_CameraDir));
-            UpdateWorldToView();
+            AdvanceRollLeveling(deltaT);
+        }
+
+    protected:
+        void CancelRollLeveling()
+        {
+            m_RollLevelingActive = false;
+            m_RollLevelElapsedSeconds = 0.0;
         }
 
     private:
+        static bool IsFinite(donut::math::float3 value)
+        {
+            return std::isfinite(value.x) &&
+                std::isfinite(value.y) &&
+                std::isfinite(value.z);
+        }
+
+        static bool BuildLevelBasis(
+            donut::math::float3 direction,
+            donut::math::float3& levelRight,
+            donut::math::float3& levelUp,
+            donut::math::float3& directionAxis)
+        {
+            const float directionLengthSquared =
+                donut::math::lengthSquared(direction);
+            if (!std::isfinite(directionLengthSquared) ||
+                directionLengthSquared <= 1e-12f)
+            {
+                return false;
+            }
+
+            directionAxis =
+                direction * (1.f / std::sqrt(directionLengthSquared));
+            const donut::math::float3 worldUp(0.f, 1.f, 0.f);
+            const donut::math::float3 fallbackUp(0.f, 0.f, 1.f);
+            const donut::math::float3 referenceUp =
+                std::abs(donut::math::dot(directionAxis, worldUp)) < 0.999f
+                    ? worldUp
+                    : fallbackUp;
+
+            levelRight = donut::math::cross(
+                directionAxis, referenceUp);
+            const float rightLengthSquared =
+                donut::math::lengthSquared(levelRight);
+            if (!std::isfinite(rightLengthSquared) ||
+                rightLengthSquared <= 1e-12f)
+            {
+                return false;
+            }
+
+            levelRight *= 1.f / std::sqrt(rightLengthSquared);
+            levelUp = donut::math::normalize(
+                donut::math::cross(levelRight, directionAxis));
+            return IsFinite(levelRight) && IsFinite(levelUp);
+        }
+
+        static bool IsCameraAffectingKey(int key)
+        {
+            switch (key)
+            {
+            case GLFW_KEY_LEFT:
+            case GLFW_KEY_RIGHT:
+            case GLFW_KEY_UP:
+            case GLFW_KEY_DOWN:
+            case GLFW_KEY_X:
+            case GLFW_KEY_C:
+                return true;
+            default:
+                return IsTranslationKey(key);
+            }
+        }
+
         static bool IsTranslationKey(int key)
         {
             switch (key)
@@ -172,11 +330,118 @@ namespace uvsr
             }
         }
 
+        void AdvanceRollLeveling(float deltaT)
+        {
+            if (!m_RollLevelingActive || deltaT <= 0.f)
+                return;
+
+            // A held key or mouse gesture can alter the pose inside Donut's
+            // Animate without producing a fresh event this frame. Cancel
+            // instead of fighting that input or restoring an obsolete pose.
+            if (!donut::math::all(
+                    m_CameraPos == m_RollLevelStartPosition) ||
+                !donut::math::all(
+                    m_CameraDir == m_RollLevelStartDirection))
+            {
+                CancelRollLeveling();
+                return;
+            }
+
+            if (!std::isfinite(deltaT))
+            {
+                FinishRollLeveling();
+                return;
+            }
+
+            constexpr double Damping = 5.75;
+            constexpr double AngularFrequency = 9.5;
+            constexpr double SettleRate = 12.0;
+            constexpr double Pi = 3.14159265358979323846;
+            constexpr double OvershootPeakTime = Pi / AngularFrequency;
+            constexpr double MaximumDuration = 1.2;
+            constexpr double ExactLevelThreshold =
+                0.05 * Pi / 180.0;
+
+            m_RollLevelElapsedSeconds += double(deltaT);
+            const double elapsed = m_RollLevelElapsedSeconds;
+            if (elapsed >= MaximumDuration)
+            {
+                FinishRollLeveling();
+                return;
+            }
+
+            double angle = 0.0;
+            if (elapsed <= OvershootPeakTime)
+            {
+                // Zero initial velocity, one zero crossing, and a stationary
+                // opposite-signed peak of exp(-d*pi/w) = 14.94 percent.
+                angle = double(m_RollLevelInitialAngle) *
+                    std::exp(-Damping * elapsed) *
+                    (std::cos(AngularFrequency * elapsed) +
+                        (Damping / AngularFrequency) *
+                        std::sin(AngularFrequency * elapsed));
+            }
+            else
+            {
+                // This critically shaped tail begins at the same value and
+                // zero derivative as phase one, then approaches level from
+                // the overshoot side without a second crossing.
+                const double peakAngle =
+                    -double(m_RollLevelInitialAngle) *
+                    std::exp(-Damping * OvershootPeakTime);
+                const double tailTime = elapsed - OvershootPeakTime;
+                angle = peakAngle *
+                    (1.0 + SettleRate * tailTime) *
+                    std::exp(-SettleRate * tailTime);
+                if (std::abs(angle) <= ExactLevelThreshold)
+                {
+                    FinishRollLeveling();
+                    return;
+                }
+            }
+
+            if (!std::isfinite(angle))
+            {
+                FinishRollLeveling();
+                return;
+            }
+
+            const float cosine = float(std::cos(angle));
+            const float sine = float(std::sin(angle));
+            m_CameraUp =
+                m_RollLevelTargetUp * cosine +
+                m_RollLevelTargetRight * sine;
+            m_CameraRight =
+                m_RollLevelTargetRight * cosine -
+                m_RollLevelTargetUp * sine;
+            UpdateWorldToView();
+        }
+
+        void FinishRollLeveling()
+        {
+            m_CameraRight = m_RollLevelTargetRight;
+            m_CameraUp = m_RollLevelTargetUp;
+            CancelRollLeveling();
+            UpdateWorldToView();
+        }
+
         bool m_TranslationEnabled = true;
         bool m_LookLeft = false;
         bool m_LookRight = false;
         bool m_LookUp = false;
         bool m_LookDown = false;
+        bool m_MouseLookActive = false;
+        bool m_RollLevelingActive = false;
+        double m_RollLevelElapsedSeconds = 0.0;
+        float m_RollLevelInitialAngle = 0.f;
+        donut::math::float3 m_RollLevelTargetRight =
+            donut::math::float3(0.f);
+        donut::math::float3 m_RollLevelTargetUp =
+            donut::math::float3(0.f);
+        donut::math::float3 m_RollLevelStartPosition =
+            donut::math::float3(0.f);
+        donut::math::float3 m_RollLevelStartDirection =
+            donut::math::float3(0.f);
     };
 
     class UvsrThirdPersonCamera : public UvsrFirstPersonCamera
@@ -289,6 +554,8 @@ namespace uvsr
             if (yoffset == 0.0)
                 return;
 
+            CancelRollLeveling();
+
             // Change sensitivity by a small linear amount per notch. The old
             // multiplicative scale compounded inward until motion became an
             // unusably small fraction of its starting speed.
@@ -315,6 +582,8 @@ namespace uvsr
 
         void Animate(float deltaT) override
         {
+            if (HasPendingTranslation())
+                CancelRollLeveling();
             UvsrFirstPersonCamera::Animate(deltaT);
             const float clampedDeltaT = donut::math::clamp(deltaT, 0.f, 0.1f);
             if (clampedDeltaT <= 0.f)
@@ -413,11 +682,26 @@ namespace uvsr
         // frame, so the corrected position becomes the next zoom origin.
         void ApplyCollisionPosition(donut::math::float3 position)
         {
+            CancelRollLeveling();
             m_CameraPos = position;
             UpdateWorldToView();
         }
 
     private:
+        bool HasPendingTranslation() const
+        {
+            return m_RemainingWheelDistance != 0.f ||
+                m_KeyboardDollyVelocity != 0.f ||
+                m_KeyboardStrafeVelocity != 0.f ||
+                m_KeyboardVerticalVelocity != 0.f ||
+                m_DollyForward ||
+                m_DollyBackward ||
+                m_StrafeLeft ||
+                m_StrafeRight ||
+                m_MoveUp ||
+                m_MoveDown;
+        }
+
         float m_ReferenceZoomDistance = 10.f;
         float m_BaseWheelStepDistance = 0.15f;
         float m_BaseKeyboardDollySpeed = 1.6f;

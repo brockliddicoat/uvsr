@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-07-30.1`.
+UI reference version: `2026-07-31.5`.
 
 ## Purpose
 
@@ -56,8 +56,8 @@ version.
 - [Visual and Content System](#visual-and-content-system) defines what the UI
   looks like, how it is worded, and how information is organized.
 - [Mandatory New-Element Intake Checklist](#mandatory-new-element-intake-checklist)
-  classifies ownership, state, consumers, animation, and renderer cost before
-  implementation.
+  classifies ownership, state, slash-command coverage, consumers, animation,
+  and renderer cost before implementation.
 - [Required Composition](#required-composition) defines the accepted helpers,
   lifetimes, layout, scrolling, controls, loading screen, and magnifier.
 - [Reference Incident: Aliasing Method Dropdown Stutter](#reference-incident-aliasing-method-dropdown-stutter)
@@ -95,13 +95,48 @@ version.
   when it helps the user make the decision. Preserve necessary implementation
   provenance in code and technical documentation, not in visible UI copy.
 
+### Interface Skin Profiles
+
+General begins with one session-only **Interface Skin** selector. Amp remains the
+launch default. Renderer reset preserves the selected skin; the control's
+own reset and `/reset ui.skin` restore Amp. A skin may change only
+presentation policy, font choice, layout tokens, and ImGui behavior. It must not
+change renderer output, scene state, camera state, or persisted settings.
+
+- **Amp** is the canonical animated presentation and the launch default. Its
+  authored radii, drawer rounding, outline, shadow dimensions, semibold face,
+  expanded word spacing, and shared panel surface fill remain fixed after
+  display scaling, matching the reference that predates skin selection.
+  The expanded Settings body, collapsed status surface, Materials panel, and
+  command interface all resolve to `(0.018, 0.018, 0.018, 0.92)` before their
+  luminance-only scene backdrop is composited. The command interface uses the
+  same backdrop blur and analytic outside-only shadow pipeline as the other Amp
+  floating surfaces.
+- The **OG** skin is the deliberate agent-automation exception. It starts from upstream
+  `StyleColorsDark`, uses Donut's default ImGui font and stock widgets, disables
+  UVSR outlines, text shadows, backdrop blur, scroll fades, and all presentation
+  motion, uses square scrollbar and pixel-zoom corners, and splits the pinned
+  performance summary after bandwidth. Settings and the command interface keep
+  the same 10 px, 0.34-opacity, 3 px-offset analytic outside-only shadow as
+  pixel zoom without enabling the backdrop blur. OG snaps Settings, drawers,
+  nested sections, toggles, highlights, popup lifecycles, loading and benchmark
+  dots, and pixel zoom to stable endpoints. Removing motion never permits
+  mutation from inside an active window, widget, or popup.
+
+`ApplyUiSkin` rebuilds the complete active style and visual-token set every
+frame because the host may restore ImGui defaults after a display-scale change.
+Capture the selected skin once at the start of composition and use that same
+snapshot for style, font, word spacing, auxiliary windows, backdrop policy, and
+post-ImGui rendering through the complete frame. A selection accepted during
+that frame becomes visible only on the next frame.
+
 ### Typography and Capitalization
 
-- Use the packaged 16 px semibold UI face at every Settings nesting depth. On
-  Windows it follows the accepted Segoe UI Semibold presentation and expanded
-  word spacing; the packaged Geist fallback preserves the same hierarchy on
-  other platforms. Do not introduce a second font, size hierarchy, or local
-  spacing override for a new control.
+- Amp uses the packaged 16 px semibold UI face and expanded word spacing at
+  every Settings nesting depth. OG uses Donut's scaled default font. The
+  packaged Geist fallback preserves Amp's hierarchy on non-Windows platforms.
+  Do not introduce another size hierarchy or local spacing override for a new
+  control.
 - Write every visible window title, drawer title, nested-section title, control
   label, action label, table heading, and dropdown option in conventional
   English Title Case. Keep short articles, conjunctions, and prepositions
@@ -145,10 +180,12 @@ version.
   `PushID` or hidden suffix.
 - Format numbers with one stable precision and a compact unit: `%`, `ms`, `fps`,
   `MiB`, `gb/s`, `tflops`, or `x` as established by the neighboring values.
-  Keep the performance line ordered as resolution, submitted triangles,
-  bandwidth, compute, frame time, then frame rate. Use compact triangle labels
-  such as `1.2m tris`. Do not report a timer that is stale, frozen, or not
-  derived from the work it claims to measure.
+  Keep the performance metrics ordered as resolution, submitted triangles,
+  bandwidth, compute, frame time, then frame rate. Amp keeps that sequence on
+  one row; OG splits after bandwidth and continues the same sequence on its
+  second row. Use compact triangle labels such as `1.2m tris`. Do not report a
+  timer that is stale, frozen, or not derived from the work it claims to
+  measure.
 - Distinguish a magnification factor from its pixel-area descriptor: the control
   cycles 2x through 5x, while the overlay reports `4x`, `9x`, `16x`, or `25x`.
   Preserve those literal forms rather than substituting a multiplication glyph
@@ -187,7 +224,30 @@ version.
 
 - Derive the Settings edge margin from 60 percent of the current UI font size,
   rounded to a whole pixel and clamped to at least one pixel. Use that same
-  physical margin for Settings and the top-right magnifier.
+  physical margin for Settings, the command interface, and the top-right
+  magnifier. This shared value is the consistent margin.
+- Reserve one fixed-height command lane near the bottom with exactly one
+  consistent margin on its left, right, and bottom edges. The command interface
+  always spans the complete margin-to-margin work width, independent of
+  Settings visibility, collapse, animation, skin, or output length. Size the
+  lane for its input row, shortcut legend, and one result line; scroll longer
+  results inside it instead of changing its outer rectangle.
+- Cap the Settings root and scrolling body one consistent margin above the
+  reserved command lane, even while the command interface is closed. The cap,
+  not presented Settings geometry, guarantees that the two surfaces never
+  overlap during opening, closing, resize, skin changes, or same-frame output.
+  Treat ImGui's active minimum root width and the worst-case collapsed Settings
+  envelope as hard fit requirements; withhold the command surface when a resize
+  cannot preserve both instead of accepting a positive but unusable sliver.
+- In Amp, animate the complete command surface through the shared 180 ms
+  smoothstep fade and 0.86-to-1 vertical scale. Keep its full horizontal extent
+  unchanged and pivot the vertical transform on the bottom edge so every
+  consistent margin remains fixed.
+  Keyboard focus becomes usable on the first visible opening frame while mouse
+  input remains disabled until the full-size endpoint. Closing presentation is
+  noninteractive and releases keyboard, character, and fullscreen-shortcut
+  ownership as soon as the logical command state closes. OG snaps both visual
+  endpoints and input ownership immediately.
 - Derive Settings width from the widest renderer/status line and the widest
   complete control-plus-label row, including padding, scrollbar, footer, and a
   small readability allowance. Clamp it to the renderer width minus both edge
@@ -218,40 +278,67 @@ version.
 
 ### Surfaces, Blur, Outlines, and Shadows
 
-- Reapply `ApplyReferenceStyle` because the host can restore ImGui defaults
-  after display-scale changes. The accepted radii are 8 px for windows, child
-  surfaces, popups, and scrollbars; 5 px for drawer bodies; and 4 px for frames,
-  grabs, tabs, title disclosure hover, and row highlights.
-- The main panel uses neutral tinted black `(0.018, 0.016, 0.020)` at 0.60
-  opacity. Fields, buttons, dropdown arrow buttons, and slider tracks use the
-  same RGB at 0.72 opacity with opacity-led hover and active states. Drawer
+- Reapply `ApplyUiSkin` because the host can restore ImGui defaults after
+  display-scale changes. For Amp, the accepted fixed authored radii are
+  8 px for windows, child surfaces, popups, and scrollbars; 5 px for drawer
+  bodies; and 4 px for frames, grabs, tabs, title disclosure hover, and row
+  highlights.
+- In Amp, the base window color is neutral black `(0.018, 0.018, 0.018)` at
+  0.60 opacity. Settings, Materials, and the command interface each push the
+  exact shared `(0.018, 0.018, 0.018, 0.92)` full-RGBA panel-body token rather
+  than independently overriding alpha. Fields, buttons, dropdown arrow buttons,
+  and slider tracks use the same neutral RGB at 0.72 opacity with opacity-led
+  hover and active states. Drawer
   bodies and footer buttons use transparent graphite
   `(0.66, 0.67, 0.69, 0.13)`, rising to `(0.74, 0.75, 0.77, 0.20)` on hover and
-  `(0.80, 0.81, 0.83, 0.26)` while active. The Settings title surface remains
-  the distinct `(0.146, 0.146, 0.154, 0.652)`. Top-level headers use the accepted
+  `(0.80, 0.81, 0.83, 0.26)` while active. Top-level headers use the accepted
   blue `(0.26, 0.59, 0.98)` at 0.31, 0.48, and 0.65 alpha for normal, hover, and
-  active states. Popup background is `(0.04, 0.04, 0.045, 0.92)`; standard text
-  is `(0.94, 0.95, 0.98, 1.0)` and disabled text is
+  active states. The Settings title uses the normal drawer-header blue,
+  frame rounding, and frame-outline path in every focus and collapse state,
+  compositing that blue over the effective Settings body surface. In Amp this
+  means the same 4 px radius and one-pixel gradient outline as a resting
+  top-level drawer header; OG uses its stock square header frame and native
+  border policy. Popup background is `(0.04, 0.04, 0.04, 0.92)`; standard text is
+  `(0.94, 0.95, 0.98, 1.0)` and disabled text is
   `(0.58, 0.59, 0.61, 1.0)` under the shared 0.38 disabled alpha. Reuse these
   tokens through helpers; do not create a nearly matching local palette.
-- Expanded Settings consists of separate rounded title and body surfaces;
+- In Amp, expanded Settings consists of separate
+  rounded title and body surfaces;
   collapsed Settings consists of separate rounded title and status surfaces.
-  Submit one 4 px backdrop-blur mask for each real surface. Never blur the
-  rectangular union or the empty wedges between rounded surfaces.
-- Draw exactly one one-pixel translucent vertical-gradient outline per visible
-  edge, inset by half a pixel. The gradient rises from roughly 0.10 to 0.30
-  alpha while its RGB rises from `(0.88, 0.90, 0.94)` to
-  `(0.96, 0.97, 1.00)`. Suppress ImGui's ordinary border wherever the custom
-  outline owns the edge; compact and expanded states must have the same apparent
-  weight. Preserve the drawer body's 2 px clipped top gap so its outline does
-  not double the header seam.
-- Draw the analytic shadow before the translucent panel, with 10 px softness,
+  Submit one backdrop-blur mask for each real surface using the exact
+  half-pixel-inset fill bounds, the title's 4 px frame radius, and the lower
+  surface's own radius. Preserve the one-pixel title-to-lower-surface overlap.
+  Never blur the rectangular union or the empty wedges between rounded
+  surfaces.
+- In Amp, register the command interface as exactly one animated backdrop
+  surface and composite it through the same blur and analytic outside-only
+  shadow pipeline as the floating menus. Transform only its vertical mask
+  bounds around the fixed bottom edge; its left and right consistent margins
+  remain exact throughout motion. Convert the blurred scene sample to Rec. 709
+  luminance before the ImGui panel tint so colored scene regions cannot shift
+  the perceived panel hue. This same Amp blur policy applies to Settings and
+  Materials. Do not submit a second shadow path. OG uses the final unscaled
+  command rectangle immediately, keeps the shared outside-only shadow, and
+  leaves backdrop blur disabled.
+- In Amp, draw exactly one one-pixel translucent vertical-gradient
+  outline per visible edge, inset by half a pixel. The gradient rises from
+  roughly 0.10 to 0.30 alpha while its RGB rises from
+  `(0.88, 0.90, 0.94)` to `(0.96, 0.97, 1.00)`. OG uses its native border.
+  Suppress
+  ImGui's ordinary border wherever the custom outline owns the edge; compact and
+  expanded states must have the same apparent weight. Preserve the drawer
+  body's 2 px clipped top gap so its outline does not double the header seam.
+- In Amp, draw the analytic shadow before the translucent panel, with
+  10 px softness,
   0.34 opacity, and a 3 px downward offset. Cut the shadow away from the panel
-  interior. Settings and magnifier use the same shadow and outline vocabulary.
-- Clip and transform background blur, outlines, shadows, child vertices, and
-  draw-command clip rectangles with the parent appearance animation. A child or
-  effect that remains full-size during a parent transition violates the surface
-  contract.
+  interior. OG retains the same outside-only shadow on Settings, the command
+  interface, and pixel zoom while omitting backdrop blur. Settings and
+  magnifier use the same profile vocabulary.
+- In Amp, clip and transform background blur, outlines, shadows,
+  child vertices, and draw-command clip rectangles with the parent appearance
+  animation. A child or effect that remains full-size during a parent
+  transition violates the surface contract. OG submits only the
+  final untransformed endpoint.
 
 ### Controls, Defaults, and Reset Feedback
 
@@ -259,19 +346,21 @@ version.
   icons, folder actions, centered actions, tables, and animated regions. A raw
   ImGui primitive is acceptable only when no helper owns that semantic and the
   exception is documented and tested.
-- Use animated two-state toggles. Collapse toggle-owned controls into nothing
-  after the renderer consumes a disable, and reverse the motion after enable.
-  Grayscale is reserved for genuine external unavailability or benchmark locks,
-  not ordinary gating. Aliasing Enabled is a tested exception because it
-  bypasses execution while preserving editable Method, Quality, and override
-  state.
+- Amp uses animated two-state toggles. Collapse toggle-owned
+  controls into nothing after the renderer consumes a disable, and reverse the
+  motion after enable. OG uses the upstream immediate checkbox and
+  snaps its owned region to the requested endpoint. Grayscale is reserved for
+  genuine external unavailability or benchmark locks, not ordinary gating.
+  Aliasing Enabled is a tested exception because it bypasses execution while
+  preserving editable Method, Quality, and override state.
 - Make the complete clickable area use the accepted hover, active, focus, and
   disabled treatments. Reset recycled popup highlight state so one dropdown's
   cursor animation cannot appear in another.
-- Show the small animated reset icon only when a safely resettable value differs
-  from its owner-defined preset or factory/scene default. Reset only the state
-  that control owns and reconcile the profile afterward. Do not attach reset
-  icons to adapters, scene destinations, folder buttons, run/cancel commands,
+- Show the small reset icon only when a safely resettable value differs from its
+  owner-defined preset or factory/scene default. Its highlight is animated in
+  Amp and immediate in OG. Reset only the state that
+  control owns and reconcile the profile afterward. Do not attach reset icons
+  to adapters, scene destinations, folder buttons, run/cancel commands,
   Screenshot, Restart, or Zoom.
 - Defaults are product behavior. Aliasing presets keep Sharpness and Subpixel
   Morphology off. Dejitter is off for Low, Medium, and High and on for Ultra.
@@ -284,7 +373,7 @@ version.
   both IBL lobes on, White World off, Freelook camera, Complete Renderer
   Statistics, zoom off, and 120 warmup plus 240 measured benchmark frames.
   Footer Reset restores renderer settings but intentionally leaves the current
-  camera and scene unchanged.
+  camera, scene, and UI skin unchanged.
 
 ### Tables and Statistics
 
@@ -308,10 +397,50 @@ version.
 
 ### Input, Focus, and Accessibility
 
-- Escape owns Settings visibility; Z and the footer Zoom action share one zoom
-  cycle. Preserve X/C horizontal camera rotation, Space/Shift vertical motion,
-  and V rotation reset. A new shortcut must not shadow text input, popup
-  navigation, or an existing renderer command.
+- With the slash command interface closed, Escape owns Settings visibility; Z
+  and the footer Zoom action share one zoom cycle. Preserve X/C camera roll,
+  Space/Shift vertical motion, and V's exponential overshoot-and-settle roll
+  leveling.
+- After command and text-input capture gates, plain M closes an open Material
+  Editor or cancels its pending pick. Otherwise it requests a fresh exact
+  material-ID readback at the framebuffer center. Open the editor only when the
+  result resolves to an editable material in the same current scene. A miss,
+  stale-scene completion, scene loading, or controlled experiment fails closed.
+  This path must not route through the middle-click camera-focus behavior or
+  otherwise move the camera.
+- Plain `/` opens the topmost command interface unless another text input owns
+  the keyboard, and the same plain key closes it while it owns input. Suppress
+  the paired slash character in both directions so it never reaches the command
+  buffer or another text field. While open, the interface captures all key and
+  character input before renderer shortcuts and reserves Alt+Enter before Donut
+  can toggle fullscreen. Escape retains native ImGui edit cancellation but
+  never closes the command interface; Enter queues the command, Tab completes,
+  and Up/Down traverses history. This capture prevents V, Z, M, F, and future
+  application shortcuts from leaking out of command text. Execute a queued
+  command only after `ImGui::Render`. At that barrier, first fast-forward and
+  drain every older deferred dropdown action in queue order, then execute the
+  newer command so stale UI input cannot overwrite it later. Retain the frame's
+  composed-skin snapshot through backdrop and auxiliary pass submission.
+- Treat the slash catalog as a complete programmatic mirror of Settings. Every
+  user-adjustable value has one stable lowercase path with `get`, validated
+  `set`, and `reset` whenever the visible control or product contract defines a
+  reset; Boolean values also have `toggle`. Every Settings command or action
+  needed for setup has one discoverable `/run` action. Dynamic scene, light,
+  material, and other owner-provided choices must be discoverable through
+  listing or completion without opening their drawer.
+- Share one mutation contract between the visible control and its slash path or
+  action: identical value domain, default, reset behavior, validation, side
+  effects, deferred commit ordering, loading state, availability, factory
+  topology, and controlled-experiment locks. Never implement a command-only
+  shortcut around renderer safety. Factory experiment builds keep discovery and
+  reads available but reject incompatible mutations before writing state.
+- For agent-driven iteration whose required renderer configuration is exactly
+  the factory startup shader topology, follow the isolated fast-build procedure
+  in [Advanced Settings and Developer
+  Workflows](advanced-settings.md#factory-settings-experiment-build). Open `/`,
+  submit `/skin og` and `/list` immediately, and prefer slash setup to animated
+  Settings when it is faster. Final verification still uses the complete
+  production or task-required developer shader catalog.
 - Block input while Settings geometry is scaled, clipped, structurally staged,
   or waiting to commit, but keep its visual alpha unchanged. The window must
   continue capturing the pointer so clicks cannot leak into camera control.
@@ -345,7 +474,7 @@ Complete this checklist for every new or materially changed UI control before
 editing. Record the answers in the execution plan or task notes; no item may
 remain unknown when implementation begins.
 
-- [ ] Record UI reference version `2026-07-29.3` for this revision and confirm
+- [ ] Record UI reference version `2026-07-31.5` for this revision and confirm
   that no cached assignment, excerpt, or handoff names an older version.
 
 ### Ownership and State
@@ -387,6 +516,32 @@ expensive. UI deferral can relocate a synchronous pause; it cannot eliminate
 one. The Aliasing Method failure reached `RenderTargets::Init`, broad
 `CreateRenderPasses`, and first-use `CreateCmaa2Pass`. The final repair also
 needed renderer-side ownership changes.
+
+### Slash Command Coverage
+
+- [ ] Assign every user-adjustable value one stable lowercase slash path.
+  Record its supported verbs: `get`, validated `set`, `toggle` for a Boolean,
+  and `reset` whenever the visible control or product contract defines a reset.
+  Record a deliberate read-only or no-reset exception only when the visible UI
+  has the same limitation.
+- [ ] Assign every UI command, destination, footer action, benchmark action, or
+  other agent-usable button one discoverable `/run` action. Record why any
+  visible action is intentionally unavailable to slash control.
+- [ ] Record the complete value domain, units, numeric range, enum spellings,
+  default, reset result, dynamic owner, and completion or listing source.
+  Dynamic scene, light, material, and similar choices must be discoverable
+  without opening their drawer.
+- [ ] Reuse the visible control's validation, side effects, resource and history
+  invalidation, deferred-commit ordering, availability checks, loading lock,
+  factory-topology policy, and controlled-experiment lock. A slash path may not
+  approximate or bypass those behaviors.
+- [ ] In a factory-settings experiment build, keep path and value discovery plus
+  reads available. Classify each mutation as factory-safe or incompatible, and
+  reject an incompatible mutation before any state write. Never report success
+  for state that `ApplyFactoryExperimentShaderTopology` will overwrite.
+- [ ] Add deterministic command coverage for path uniqueness, supported verbs,
+  parsing and range rejection, defaults and resets, side effects and locks,
+  dynamic discovery, and failure without mutation.
 
 ### Consumer Inventory
 
@@ -467,6 +622,12 @@ treating deferred commit timing as a substitute for renderer-side optimization.
 
 ## Required Composition
 
+Unless a rule explicitly says otherwise, motion, blur, and shadow paragraphs in
+this section describe Amp. OG uses the same ownership and safe mutation
+boundaries, snaps presentation to its endpoint, uses the upstream title and
+widget paths, and omits backdrop blur while retaining the outside-only shadows
+explicitly assigned to Settings, the command interface, and pixel zoom.
+
 ### Main Settings Window
 
 - Launch with Settings hidden. The first Escape press opens the outer Settings
@@ -527,25 +688,72 @@ treating deferred commit timing as a substitute for renderer-side optimization.
   count. This overlay reports activity only; detailed stage results and Cancel
   remain in Statistics.
 
-### Material Editor
+### Materials
 
-- M opens and closes the one `Material Editor` window. Selecting a surface must
-  never open it automatically. Place it at the top-right using the shared
-  font-derived edge margin, auto-size it, and capture one 8 px rounded backdrop
-  blur surface through the common style.
-- Show `Material <id>: <name>` for the selected material. With no selection,
-  show the sentence-case empty state `Click a scene surface to select a
-  material.` without inventing a placeholder material.
+- Compose the one `Materials` window independently from Settings so it
+  remains visible and receives its own backdrop surface when Settings are
+  hidden, collapsed, opening, or closing. Selecting a surface through another
+  path must never open it automatically.
+- Opening begins with a fresh exact framebuffer-center material-ID pick. Clear
+  the previous material and node before submitting the readback, bind the
+  request to the current scene, and open only after the result resolves to an
+  editable material in that same scene. A miss or stale completion closes the
+  editor rather than revealing prior material data. Closing while the pick is
+  pending cancels that request. Neither opening nor closing may alter camera
+  position, orientation, or controller state.
+- Derive the editor's width and right edge from the exact resting pixel-zoom
+  panel geometry and keep both fixed while zoom grows, shrinks, or pulses
+  between levels. With zoom off, place its top one consistent margin from the
+  framebuffer top; with zoom presented, follow the zoom panel's animated lower
+  edge at one consistent margin. Its maximum height ends one consistent margin
+  above the framebuffer bottom.
+- In Amp, move a visible editor completely to the below-zoom position before
+  allowing zoom to fade in. When zoom closes, hold the editor below it until the
+  zoom presentation reaches zero, then move the editor smoothly to the
+  top-margin position. Independently retain the editor while it closes and apply
+  the shared 86-to-100-percent zoom and eased opacity curve to both its ImGui
+  pixels and two backdrop masks. Disable input whenever transformed pixels and
+  hit rectangles do not coincide. Never allow the two surfaces to overlap or
+  cross. OG resolves the requested endpoint immediately with no delayed zoom
+  opening.
+- Render the title and body as the same two one-pixel-overlapped rounded blocks
+  used by Settings. Reuse the shared drawer-blue title token for resting,
+  active, and collapsed states, the exact full-RGBA panel-body token, the
+  neutral Amp backdrop blur, and the shared outside-only shadow. Register
+  separate half-pixel-inset title and body backdrop masks so blur never fills
+  the rounded body wedges. Preserve OG's stock-widget and no-blur policy.
+- Include editor visibility in the crosshair predicate so the exact
+  framebuffer-center aim point remains visible at full opacity while the editor
+  is open and follows the editor's eased opacity while it closes. Closing
+  restores the independent zoom-owned crosshair policy; do not mutate a
+  persistent crosshair setting.
+- Show `Material <id>: <name>` for the freshly selected material. If that
+  material becomes invalid, close the editor instead of inventing an empty or
+  placeholder selection.
 - Route the Material Domain selector through `BeginRoundedCombo`,
   `DrawDeferredDropdownOption`, and the shared commit barrier. Capture the
   material and scene by durable shared ownership, mark the material dirty, and
   invalidate the scene graph only at commit. The embedded Donut material editor
   is the accepted external-control exception; do not use that exception to add
-  raw UVSR-owned controls elsewhere.
-- Block Material Editor input during a visibility benchmark and while any
-  deferred dropdown is pending. Preserve full visual alpha during the pending
-  lock so the window does not flash gray, and keep its begin/end and disabled
-  scopes balanced even when the native close button is used.
+  raw UVSR-owned controls elsewhere. Match the domain selector to the exact
+  default slider column width and render every texture filename at full opacity
+  with the exact authored drawer-header blue RGB rather than Donut's inherited
+  green. Put only the embedded editable controls below Material Domain inside
+  an auto-height child using the exact drawer background, frame colors, body
+  padding, and 5 px drawer rounding. Apply the panel's retained zoom-and-fade
+  transform to that child draw list as well as the parent so the light plate
+  cannot flash at full size during motion.
+- Suppress every new inspector pick during scene loading, visibility benchmarks,
+  AA motion tests, SVSM motion benchmarks, and other controlled experiments.
+  An already-open editor may still close. Block editor input while a controlled
+  experiment or deferred dropdown is pending, preserve full visual alpha during
+  that lock so the window does not flash gray, and keep its begin/end and
+  disabled scopes balanced throughout retained opening and closing
+  presentation. Do not add a native title-bar X. Consume the native title
+  triangle's deferred collapse request in the click frame, keep the full body
+  submitted, and route it to the same full-window close target as **M**. Suppress
+  native Materials title double-click collapse so no path can bypass the
+  retained Amp close presentation.
 
 ### Top-Level Drawers
 
@@ -631,14 +839,25 @@ Construct and finish the SettingsBody in this order:
    `EndSettingsScrollStability` after the footer controls but before scroll-edge
    fades and `EndChild`.
 
-The scroll correction compares current anchors with the previous frame, selects
-the first surviving anchor at or below the old viewport top, and adds that
-anchor's content-space movement to the requested scroll position. Compose this
-correction with ImGui's pending `ScrollTarget.y` when one exists; replacing that
-target discards wheel input already queued in the same frame. If no stable
-anchor survives, use only the conservative top-level height delta from bodies
-wholly above the viewport. A view already pinned to the bottom follows the total
-content-height delta.
+The scroll correction compares current anchors with the previous frame and
+selects the first surviving anchor at or below the old viewport top. After
+ImGui has consumed a wheel target into the current scroll position, apply that
+anchor's nonzero content-space movement exactly once by assigning
+`clamp(Scroll.y + delta, 0, currentFrameScrollMaxY)` directly to `Scroll.y` in
+the current frame. Because that delta is known only after the Settings body has
+submitted, translate the affected root-content vertices and nested child
+draw-list vertices and clips by the same applied delta before `EndChild`.
+Leave the fixed body background, viewport clip, edge fades, and scrollbar
+untranslated. Keep body widgets non-dimming but noninteractive on continuation
+and finalization frames of layout motion, when their submitted hit rectangles
+would otherwise precede that visual translation. Do not create, replace, or
+defer a `ScrollTarget.y` for this correction. If `ScrollTarget.y` is still
+finite, an independent navigation or programmatic target owns the frame: leave
+both the target and direct scroll position untouched. If no stable anchor
+survives, use only the conservative top-level height delta from bodies wholly
+above the viewport. A view already pinned to the bottom follows the total
+content-height delta. Consume every delta with the current anchor snapshot so
+the same content-size change cannot be corrected again on the next frame.
 
 Keep logical expanded height separate from displayed clip height. Measure
 complete submitted content directly every open frame, use
@@ -685,18 +904,24 @@ history presentation deliberately resolves an enabled copy so its 3, 6, 9, or
 
 #### Dropdown Popup Motion
 
-Every Settings combo uses one bounded 180 ms, full-alpha geometric roll. On
-open, submit the popup immediately at its complete measured size and final
-position, keep every row, scrollbar, navigation target, and internal cursor at
-that final layout, and reveal only its draw-command clip rectangles with the
-shared smoothstep clock. Reveal from the combo edge toward the popup's free edge:
-top to bottom when the popup is below the field and bottom to top when it is
-above. Never animate popup window size, row height, content scale, alpha, or
-layout; those alternatives move targets, remeasure Settings, or make text appear
-to stretch. Choose that reveal edge once when the popup lifecycle begins and
-retain it through roll-down and roll-up. Never recompute direction while its
-owner scrolls or moves because crossing the placement threshold would reverse
-the clip in mid-transition.
+Every Settings combo in Amp uses one bounded 180 ms, full-alpha
+geometric roll. On open, submit the popup immediately at its complete measured
+size and final position, keep every row, scrollbar, navigation target, and
+internal cursor at that final layout, and reveal only its draw-command clip
+rectangles with the shared smoothstep clock. Reveal from the combo edge toward
+the popup's free edge: top to bottom when the popup is below the field and bottom
+to top when it is above. Never animate popup window size, row height, content
+scale, alpha, or layout; those alternatives move targets, remeasure Settings, or
+make text appear to stretch. Choose that reveal edge once when the popup
+lifecycle begins and retain it through roll-down and roll-up. Never recompute
+direction while its owner scrolls or moves because crossing the placement
+threshold would reverse the clip in mid-transition.
+
+OG routes the same `BeginRoundedCombo` call through the upstream
+`BeginCombo` presentation. Opening, interaction, ordinary dismissal, and
+selected dismissal are immediate; UVSR highlight interpolation, rounded
+arrow/check primitives, disabled-color grayscale, text shadow, and popup roll
+must not leak into this branch.
 
 Block popup selection until roll-down reaches its fully visible endpoint. A
 pointer or navigation activation received while blocked is discarded. Do not
@@ -758,6 +983,13 @@ participate and must never starve a queued choice. Repeated requests for one
 combo replace its older action; different combo IDs retain their order. When a
 scene-load transition begins, finish the originating combo transition and cancel
 both the queue and staged presentation.
+
+OG keeps the same queue and end-of-composition drain point after
+every UI window has ended, but `TryApplyDeferredDropdownUiActions` may skip
+presentation-only settle time, popup motion, and invisible structural phases.
+This is OG's only immediate-profile exception: it never applies from inside the
+active control callback. Slash commands use the later post-`ImGui::Render`
+barrier and immediately drain older queued dropdown work before dispatch.
 
 #### Structural Dropdown State Machine
 
@@ -864,8 +1096,9 @@ Required Checks remains mandatory.
   transition.
 - Use `DrawSliderFloat` and `DrawSliderInt` for sliders so panel track styling
   stays consistent.
-- Show the shared animated reset icon beside every safely resettable Settings
-  value only while its effective value differs from its owner-defined default.
+- Show the shared reset icon beside every safely resettable Settings value only
+  while its effective value differs from its owner-defined default. Its
+  highlight animates in Amp and changes immediately in OG.
   Aliasing, Visibility, and Buffer controls use their selected preset for
   individual values; non-preset drawers such as Statistics, Sky, General, and
   Lights use factory or scene-loaded defaults. Reset only that control and all
@@ -877,17 +1110,19 @@ Required Checks remains mandatory.
   Graphics Adapter, World Scenes, folder buttons, benchmark actions, Cancel,
   Screenshot, Restart, and the footer Zoom action are not ordinary values and
   remain icon-free.
-- Use the repository-patched `ImGui::Checkbox` for two-state controls; it owns
-  the accepted endpoint animation. Every interactive control still needs a
-  concise tooltip.
+- Use the repository-patched `ImGui::Checkbox` for two-state controls. It owns
+  the accepted endpoint animation in Amp and delegates to the upstream immediate
+  rendering path in OG. Every interactive
+  control still needs a concise tooltip.
 - Put controls whose availability is directly owned by a toggle inside
   `BeginAnimatedToggleRegion` and `EndAnimatedToggleRegion`. Submit the toggle
-  itself outside the region. Preserve the old visibility endpoint for the
-  complete UI frame in which the value changes, start the 180 ms collapse or
-  expansion on the next rendered UI frame after the renderer has consumed the
-  setting, and block interaction during motion without applying the grayscale
-  disabled alpha. Nested gated controls require unique hidden IDs and balanced
-  regions at every visible animation frame.
+  itself outside the region. In Amp, preserve the old visibility
+  endpoint for the complete UI frame in which the value changes, start the
+  180 ms collapse or expansion on the next rendered UI frame after the renderer
+  has consumed the setting, and block interaction during motion without
+  applying the grayscale disabled alpha. OG snaps the same region
+  to the requested endpoint. Nested gated controls require unique hidden IDs
+  and balanced regions at every visible animation frame.
 - Freeze a slider's presentation value at its last enabled endpoint throughout
   a toggle-owned exit animation. Apply the renderer-facing disabled state
   normally, but do not derive the retained slider label or grab position from a
@@ -994,18 +1229,19 @@ bindings or history are correctness failures.
 - Keep benchmark controls together in Statistics. Idle state contains the run
   actions only; running status and Cancel appear only while their run state
   exists.
-- Do not restore removed TAA execution-path, kernel, LDS, reuse, early-reject,
-  fusion, cache-blocking, Sample Resurrection, or debug dropdowns in production.
-  Do not create a separate developer performance drawer. Rectification belongs
-  in the default-open **Aliasing Algorithm Configuration** drawer and exposes
-  only Pair Tristimulus and Variance YCoCg. Stable Interior and its
-  moment-history layout are retired.
-- Do not append `(Preset)` to inherited Aliasing controls. The default-open
-  algorithm configuration exposes concrete Subpixel Morphology, Motion Source,
-  Reconstruction, and Rectification selections in least-to-most-expensive
-  order. Keep Sharpness disabled by default for every Aliasing preset, but
-  preserve the user's stored strength while the toggle is off. Place Dejitter
-  above Sharpness; it is off for Low, Medium, and High and on for Ultra.
+- Do not restore individual TAA execution-path, kernel, LDS, reuse,
+  early-reject, fusion, cache-blocking, or debug dropdowns in production. The
+  default-open **Developer Options** surface owns user-facing image and
+  stability policies. **Sample Resurrection** is available only at Full
+  Quality; it stays stored but inactive under Reduced and Minimum.
+- Do not append `(Preset)` to inherited Aliasing controls. Developer Options
+  exposes concrete Morphology, Motion Source, Reconstruction, Rectification,
+  History Storage, Previous-Depth Validation, History Weight, Motion Trust,
+  Rectification Clip, Blend Domain, and Sharpness Policy choices in
+  least-to-most-expensive order. Keep Sharpness disabled by default for every
+  Aliasing preset, but preserve the user's stored strength while the toggle is
+  off. Place Dejitter above Sharpness; it is off for Low, Medium, and High and
+  on for Ultra.
 - Visibility exposes no sampling-implementation selector or developer drawer.
   **Shared Visibility Sampling** owns Estimator, Noise Pattern, Samples, Radius,
   Thickness, and Distribution. Noise Pattern contains only Independent Hash and
@@ -1024,10 +1260,16 @@ bindings or history are correctness failures.
 ### Lights Defaults and Factory Experiment Builds
 
 - The outer **Lights** drawer remains closed at launch, so first Escape still
-  exposes only General. When Lights is opened, select the scene's primary
-  directional sun and default-open **Bend Screen-Space Shadows**, **Sparse
-  Virtual Shadow Maps**, and **Diagnostic Cascaded Shadow Maps**. Their Enabled
-  toggles remain off.
+  exposes only General. It selects the primary directional sun by default and
+  contains the selected-light controls, including `flashlight_1` without its
+  hidden hotspot. Preserve the flashlight order: **Enabled (F)**, **Cast
+  Shadows**, **Realistic Flashlight**, its animated hotspot and motion rows,
+  then brightness, beam, color, and camera-offset rows.
+- **Shadows** is a top-level sibling immediately after **Lights** and remains
+  closed at launch. It default-opens **Screen-Space Directional Shadows**,
+  **Sparse Virtual Shadow Maps**, and **Diagnostic Cascaded Shadow Maps**;
+  their Enabled toggles remain off. Do not move the flashlight's local **Cast
+  Shadows** control into this directional producer drawer.
 - Do not expose **Include Emissive Sources** or **Emissive Source Gain**.
   Authored emission remains visible, but screen-space visibility no longer
   owns an emissive source policy, gain, reset, or Statistics control.
@@ -1072,10 +1314,11 @@ bindings or history are correctness failures.
 - Derive the panel width from 28 percent of the current renderer width. Derive
   its height from that width and the renderer aspect ratio, then use the same
   edge margin calculation as Settings at the required corner.
-- Cut the 8 px rounded silhouette away from the magnified image. Apply only the
-  full-weight one-pixel translucent vertical-gradient outline after the exact
-  texel load; do not filter or soften the magnified interior. The zoom shader's
-  1.5 px signed-distance coverage is the calibrated implementation that matches
+- Cut the active skin silhouette away from the magnified image: 8 px rounding
+  in Amp and square corners in OG. Apply only the full-weight one-pixel
+  translucent vertical-gradient outline after the exact texel load; do not
+  filter or soften the magnified interior. The zoom shader's 1.5 px
+  signed-distance coverage is the calibrated implementation that matches
   Settings' perceived one-pixel outline; do not replace it with an uncalibrated
   literal band.
 - Fade and scale the complete zoom surface and its analytic outside-only drop
@@ -1096,6 +1339,14 @@ bindings or history are correctness failures.
   A normal Off transition may render only until its fade reaches zero.
   Controlled benchmark runs must bypass the transition and submit no zoom GPU
   work.
+- Share pixel zoom's resolved width, right edge, top margin, and presented
+  bottom edge with the Materials layout. When both are requested in Amp,
+  finish the editor's downward shift before starting zoom's opening fade; on
+  close, finish zoom's fade before moving the editor upward. OG resolves both
+  positions immediately. At no intermediate state may their rectangles overlap.
+- Keep the center crosshair visible whenever either zoom presentation or
+  Materials requires it. The panel uses full opacity and does not submit
+  a zoom capture or composite merely to obtain the crosshair.
 
 ## Reference Incident: Aliasing Method Dropdown Stutter
 
@@ -1198,7 +1449,7 @@ The AA-only refresh uses this ownership boundary:
 | Resource or Pass | AA-Only Action | Reason |
 | --- | --- | --- |
 | `RenderTargets` | Recreate | Sample count or motion-vector attachments changed |
-| MiniEngine TAA | Recreate when required | Owns target-bound color, depth, motion, and history resources |
+| Temporal AA | Recreate when required | Owns target-bound color, depth, motion, and history resources |
 | G-buffer pass | Recreate | Its topology names the motion-vector attachment |
 | Forward pass | Recreate only when sample count changes | Its framebuffer/sample topology changed |
 | Pixel readback | Recreate | It owns the replacement Material ID target binding |
@@ -1213,7 +1464,7 @@ If a visibility benchmark is active when topology changes, fail that run rather
 than silently mixing configurations. Initial creation, resize, PBR changes,
 visibility resource or source-radiance ownership changes, view-topology changes,
 and shader reload still require complete `CreateRenderPasses`. A change only to
-TAA pass presence uses `CreateMiniEngineTemporalAAPass` without rebuilding
+TAA pass presence uses `CreateTemporalAAPass` without rebuilding
 unrelated passes.
 
 ### Remaining Synchronous Work
@@ -1247,7 +1498,7 @@ do not add another delay or weaken cache/history invalidation.
 - `uvsr_renderer_source_contract` protects the narrow refresh preconditions,
   resource recreation/retention boundary, binding invalidation, visibility
   history reset, and full-rebuild fallbacks.
-- `uvsr_taa_miniengine_reference` protects TAA history and moment-layout
+- `uvsr_temporal_aa_reference` protects temporal history and cost-policy
   behavior.
 - Live verification keeps Aliasing and Statistics open, switches every Method
   cold and warmed in both directions, confirms roll-up completes before the
@@ -1279,8 +1530,9 @@ After composing incoming behavior:
 6. Verify that toggle-owned dependent controls use delayed animated regions,
    never a resting gray disabled scope. Exercise nested toggle regions and
    confirm their renderer-facing value changes one frame before their motion.
-7. Verify that every Settings combo opens through one 180 ms full-alpha
-   geometric roll with a fixed popup size, location, row layout, and scrollbar.
+7. In Amp, verify that each Settings combo opens through one
+   180 ms full-alpha geometric roll with a fixed popup size, location, row
+   layout, and scrollbar.
    Confirm an activation during roll-down is discarded and never reappears as a
    delayed selection. A valid selection must show its pending label immediately,
    roll the selected popup completely to its zero-clip close endpoint, and defer
@@ -1297,7 +1549,10 @@ After composing incoming behavior:
    before renderer commit. Confirm renderer state stays unchanged throughout
    every phase, the commit causes no second reflow, hidden Settings can bypass
    invisible structural motion without stranding the action, popup alpha never
-   fades, and there is no resting mutex row.
+   fades, and there is no resting mutex row. In OG, verify that the same combos
+   open, accept input, and close immediately with upstream colors and
+   arrow/check primitives and no presentation transition state. Renderer
+   mutation must still wait for the shared end-of-composition safety barrier.
 8. For every renderer-affecting dropdown, trace the target setting through
    render-target allocation, pass construction, bindings, history, timers, and
    first-use PSOs. Verify that a narrow refresh has explicit topology
@@ -1308,21 +1563,33 @@ After composing incoming behavior:
 9. Verify that every ImGui translation unit is compiled beside the same patched
    public and internal headers.
 10. Verify that pixel inspection tools use integer source loads, exact group
-   mapping, aspect-matched 28-percent bounds, exact-factor midpoint switching,
-   conditional GPU submission, benchmark suspension, matched border weight,
-   outside-only shadows, and balanced appearance/disappearance and level
-   transitions.
+    mapping, aspect-matched 28-percent bounds, exact-factor midpoint switching,
+    conditional GPU submission, benchmark suspension, matched border weight,
+    outside-only shadows, and balanced appearance/disappearance and level
+    transitions. Verify that M uses a fresh exact framebuffer-center material-ID
+    result from the current scene, never routes through camera focus, and opens
+    no editor on a miss, stale completion, or controlled experiment. Confirm the
+    independently composed editor matches zoom width and right edge, preserves
+    one consistent margin, owns the crosshair while open, and follows the
+    skin-specific no-overlap sequencing around zoom.
 11. Review the semantic diff against both lineages. Do not replace
-   `src/uvsr.cpp` wholesale and do not remove controls or renderer behavior to
-   simplify presentation repair.
+    `src/uvsr.cpp` wholesale and do not remove controls or renderer behavior to
+    simplify presentation repair.
+12. Compare every user-adjustable Settings value and agent-usable action with
+    the slash catalog. Verify one stable path or action, all applicable verbs,
+    the complete value domain, default and reset behavior, dynamic discovery,
+    side effects, deferred ordering, and every loading, availability,
+    factory-topology, and controlled-experiment lock. A missing entry or a
+    command-only mutation path is an integration failure.
 
 ## Required Checks
 
-1. Build and run the focused UI, renderer, animation, and TAA contracts:
+1. Build and run the focused UI, skin, command, renderer, animation, and TAA
+   contracts:
 
    ```powershell
-   cmake --build build --config Release --target uvsr_ui_source_contract_tests uvsr_renderer_source_contract_tests uvsr_ui_animation_tests uvsr_imgui_dropdown_roll_tests uvsr_taa_miniengine_tests
-   ctest --test-dir build -C Release -R "uvsr_ui_(source_contract|animation_reference)|uvsr_imgui_dropdown_roll_lifecycle|uvsr_renderer_source_contract|uvsr_taa_miniengine_reference" --output-on-failure
+   cmake --build build --config Release --target uvsr_ui_source_contract_tests uvsr_ui_skin_tests uvsr_ui_commands_tests uvsr_ui_command_layout_tests uvsr_ui_settings_command_catalog_tests uvsr_renderer_source_contract_tests uvsr_ui_animation_tests uvsr_imgui_dropdown_roll_tests uvsr_temporal_aa_tests
+   ctest --test-dir build -C Release -R "uvsr_ui_(source_contract|skin_reference|commands_reference|command_layout_reference|settings_command_catalog_reference|animation_reference)|uvsr_imgui_dropdown_roll_lifecycle|uvsr_renderer_source_contract|uvsr_temporal_aa_reference" --output-on-failure
    ```
 
 2. Rebuild shaders and the Release renderer, then run the full CTest suite.
@@ -1361,7 +1628,11 @@ After composing incoming behavior:
    partly clipped and fully offscreen. Confirm the visible content anchor does
    not jump, the Settings viewport does not compact beneath the pointer, the
    scrollbar range updates immediately, and the user can always return to the
-   section and the top of the drawer.
+   section and the top of the drawer. At both scroll limits, queue rapid wheel
+   input while layout changes and confirm each anchor delta corrects the
+   current-frame clamped `Scroll.y` at most once. A finite navigation or
+   programmatic target must remain intact and own its frame; no delayed target
+   may cause a later lurch, reversal, or overshoot.
    Collapse every nonzero AA slider through its owning toggle or dropdown and
    confirm its label and grab retain the last enabled value until clipping
    removes the row; neither may travel toward zero during the exit animation.
@@ -1378,6 +1649,62 @@ After composing incoming behavior:
    inspect benchmark controls, confirm idle state has no readiness sentence or
    Cancel button, then verify Cancel animates in only while a test runs and the
    process remains responsive.
+   Select both interface skins and verify that the complete Settings hierarchy,
+   command interface, Materials, tables, auxiliary benchmark window,
+   errors, and pixel-zoom label follow one coherent profile. At a non-100-percent
+   display scale, compare Amp with the pre-skin reference and confirm
+   its authored radii, drawer rounding, and shadow dimensions remain unchanged.
+   In OG, confirm Settings, drawers, nested sections, toggles,
+   dropdowns, highlights, dots, command interface, and pixel zoom reach
+   endpoints immediately. Verify square scrollbar and zoom corners, and confirm
+   that Settings and the command surface keep the magnifier-matched shadow
+   without backdrop blur.
+   Open `/`, exercise help topics, list/get/set/toggle/reset/run, completion,
+   history, quoted values, invalid input, deferred-action ordering, screenshot
+   experiment locks, and mutation locks. Type V, Z, M, and F while the bar is
+   open and confirm none leaks to an application shortcut. Press Alt+Enter and
+   confirm fullscreen state does not change until the command bar is closed.
+   Press Escape during an edit and confirm the edit cancels while the command
+   interface remains open and Settings do not toggle. Press `/` again and
+   confirm the interface closes without inserting a trailing slash; reopen it
+   and confirm the opening slash is likewise absent.
+   In Amp, reverse the command animation during both entry and exit, confirm
+   early typing remains live, and verify that only its vertical geometry scales:
+   both horizontal edges and the bottom edge remain at their exact consistent
+   margins. With Settings expanded, collapsed, hidden, opening, and closing,
+   confirm the command surface always spans the complete margin-to-margin width
+   and Settings stop one consistent margin above its permanently reserved lane.
+   Produce a multiline result and confirm it scrolls inside the fixed surface
+   without overlap. Confirm the Settings title matches a resting drawer
+   header's color, corner radius, and outline path in both skins and does not
+   change with focus or collapse. Compare CLI,
+   expanded Settings, and the collapsed status block over the same scene and
+   confirm their authored surface RGB and alpha are identical. In Amp, verify
+   Settings and CLI both use the shared backdrop blur and outside-only shadow
+   pipeline. In OG, verify both remain unblurred and immediate while retaining
+   their outside-only shadows.
+   With Settings hidden, press M over a known material and verify that a fresh
+   exact center hit opens the independently composited Materials panel without
+   moving the camera. Confirm its title and body match Settings' stacked
+   rounding, outline, blue header, dark surface, blur, and shadow; texture paths
+   exactly match the authored drawer-header blue; no title-bar close button is
+   present; the title triangle zooms and fades the complete editor away rather
+   than collapsing its body; and Material Domain matches the slider column
+   width. Confirm the
+   crosshair remains visible, the editor width and right edge stay at zoom's
+   full resting geometry throughout every zoom open, close, and level pulse,
+   its top gap is one consistent margin with zoom off, and its zoom-on gap tracks
+   the animated zoom lower edge by one consistent margin. In Amp, verify the
+   editor zooms and fades when opened or closed, moves down before zoom opens,
+   and stays down until zoom fully closes; confirm its blur, shadow, content, and
+   crosshair share the same eased opacity. In OG, verify immediate endpoints.
+   Repeat over empty space, across a scene change, and during each controlled
+   experiment and confirm no stale or new editor opens.
+   Compare the complete Settings inventory with `/list`; exercise every changed
+   path or action and verify its domain, reset, side effects, and locks. In a
+   factory experiment build, confirm incompatible mutations fail without a
+   transient write while discovery, reads, `/skin og`, and UI commands remain
+   available.
 6. Observe at least two launch-dot states and confirm that no loading bar or
    launch timer is visible.
 7. Capture a Settings screenshot at the task's relevant resolution and verify
@@ -1389,8 +1716,8 @@ After composing incoming behavior:
    states, and the outside-only magnifier-matched shadow.
 8. When zoom changes, cycle Z and the button through every state, resize the
    renderer, verify crosshair gating, and inspect the grow/shrink motion, both
-   fade endpoints, the rounded cutout, full-weight outline, and outside-only
-   shadow at native pixels.
+   fade endpoints, the Amp rounded cutout, OG square cutout, full-weight
+   outline, and outside-only shadow at native pixels.
 9. Run the documentation checker self-test and full scan, then run
    `git diff --check`.
 
@@ -1404,8 +1731,26 @@ The handoff must identify:
 - the exact source revision and labeled executable;
 - the completed new-element classification, owner/default/reset decisions, and
   cross-consumer inventory;
+- the stable slash path or `/run` action for every changed Settings operation,
+  its supported verbs and value domain, default and reset behavior, dynamic
+  discovery source, side effects, deferred ordering, and loading,
+  factory-topology, availability, and controlled-experiment locks;
 - the drawers and controls exercised;
+- both skins exercised, including the Amp DPI comparison and OG stock/no-motion
+  evidence;
+- slash-command discovery, input capture, dispatch-barrier, success, error, and
+  mutation-lock evidence;
+- whether the isolated factory-settings iteration workflow was applicable; when
+  it was, the exact build directory, configure/build/launch commands, embedded
+  source revision, immediate `/skin og` and `/list` setup, and the full-catalog
+  final verification that superseded reduced-bundle evidence;
 - the observed animation, spacing, loading-dot, and Statistics results;
+- the fast-scroll limit stress result, including direct current-frame clamping,
+  single-consumption anchor correction, and preservation of finite ImGui scroll
+  targets;
+- the fresh center-material hit, miss, stale-scene, camera-invariance,
+  crosshair, independent-composition, zoom-alignment, skin sequencing, and
+  controlled-experiment evidence;
 - renderer work caused by each disruptive choice, the resource-ownership
   boundary used, and any remaining synchronous work;
 - focused and full test outcomes;
@@ -1418,6 +1763,63 @@ screenshots were checked.
 
 ## Reference Revision History
 
+- `2026-07-31.5`: Integrated the expanded Temporal AA policy surface and
+  flashlight/ambient-fill controls without changing the Amp or OG skins or the
+  slash-command transaction barrier. Moved Screen-Space Directional Shadows,
+  SVSM, and diagnostic CSM into the new sibling **Shadows** drawer immediately
+  after **Lights**; retained the flashlight's local shadow control in Lights.
+- `2026-07-31.4`: Renamed the visible material surface to **Materials**, moved
+  Settings, Materials, and the command interface onto one neutral full-RGBA
+  Amp body token, removed scene chroma from their blurred backdrops, and added
+  the Settings drawer-style light plate behind the embedded material controls.
+- `2026-07-31.3`: Converted the Material Editor title triangle from native
+  collapse into the complete retained close target. Amp now keeps the full body
+  submitted while the editor zooms out and fades; OG closes immediately, and
+  title double-click cannot enter a collapsed state.
+- `2026-07-31.2`: Removed the Material Editor title-bar X while retaining its
+  triangle as the body collapse/expand control, kept **M** as the full-window
+  toggle, and changed texture annotations from cyan to the exact authored
+  drawer-header blue RGB at full text opacity.
+- `2026-07-31.1`: Matched the Material Editor to Settings' two-block blue-title
+  and dark blurred-body composition, replaced green texture annotations with
+  authored cyan, aligned Material Domain to the slider column, retained the
+  editor through Amp zoom-and-fade closure, fixed its zoom-relative width while
+  following the animated lower edge, and made plain `/` the command-interface
+  open/close toggle while Escape remains an edit-cancel key.
+- `2026-07-30.8`: Moved Settings anchor compensation to one direct,
+  current-frame clamped `Scroll.y` correction while preserving finite ImGui
+  scroll targets; brought Amp's command interface into the shared floating-menu
+  blur and outside-only shadow pipeline without changing OG; and defined the
+  exact center-hit, camera-invariant, crosshair, independent composition,
+  zoom-aligned placement, no-overlap motion, and experiment-lock contracts for
+  the Material Editor.
+- `2026-07-30.7`: Matched the Settings title to the top-level drawer-header
+  frame geometry in both skins, including Amp's 4 px radius and single gradient
+  outline, and aligned expanded and collapsed title backdrop masks to the exact
+  half-pixel-inset rendered surfaces.
+- `2026-07-30.6`: Reserved one fixed full-width bottom command lane in every
+  Settings state, capped Settings one consistent margin above it, constrained
+  Amp command motion to the vertical axis, enforced ImGui's minimum window
+  envelopes at tiny resizes, reset command result scrolling in the same frame,
+  and matched the Settings title to the resting drawer-header blue in both
+  skins.
+- `2026-07-30.5`: Made OG pixel zoom square while retaining the zoom-matched
+  analytic shadow on OG Settings and the command interface, added Amp command
+  grow/fade presentation with immediate logical input release, expanded the
+  command surface through the right consistent margin in every layout, and
+  corrected collapsed Amp status transparency to exactly match expanded
+  Settings and the command interface.
+- `2026-07-30.4`: Split OG's pinned performance summary into two ordered rows,
+  made OG scrollbars square, and matched Amp's main Settings surface fill to
+  the command bar without changing OG's stock window background.
+- `2026-07-30.3`: Reduced the skin model to Amp and OG, made Amp the authored
+  animated default, and retained OG as the stock, zero-motion agent path. Defined
+  the bottom consistent-margin command layout, complete stable slash-path and
+  action coverage, factory-topology fail-closed behavior, slash-first fast
+  experiment setup, and full-catalog final verification.
+- `2026-07-30.2`: Introduced the composed-skin and slash-command framework,
+  including the stock zero-motion exception, immutable per-frame skin snapshot,
+  font and DPI policy, input and dispatch barriers, and verification contracts.
 - `2026-07-30.1`: Removed the emissive GI-source toggle and gain, made the
   primary directional sun the Lights selection default, and default-opened the
   three disabled directional-shadow sections without opening the outer Lights

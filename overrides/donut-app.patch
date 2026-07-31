@@ -19,6 +19,36 @@ index e9bfeb6..32d3f24 100644
          bool m_AllTexturesFinalized;
  
      protected:
+diff --git a/include/donut/app/DeviceManager.h b/include/donut/app/DeviceManager.h
+index 67fc1f6..0f0670e 100644
+--- a/include/donut/app/DeviceManager.h
++++ b/include/donut/app/DeviceManager.h
+@@ -463,6 +463,7 @@ namespace donut::app
+         // all of these pass in GLFW constants as arguments
+         // see http://www.glfw.org/docs/latest/input.html
+         // return value is true if the event was consumed by this render pass, false if it should be passed on
++        virtual bool ShouldSuppressFullscreenShortcut() const { return false; }
+         virtual bool KeyboardUpdate(int key, int scancode, int action, int mods) { return false; }
+         virtual bool KeyboardCharInput(unsigned int unicode, int mods) { return false; }
+         virtual bool MousePosUpdate(double xpos, double ypos) { return false; }
+diff --git a/src/app/DeviceManager.cpp b/src/app/DeviceManager.cpp
+index 7a680ef..0a0dfda 100644
+--- a/src/app/DeviceManager.cpp
++++ b/src/app/DeviceManager.cpp
+@@ -887,6 +887,13 @@ void DeviceManager::KeyboardUpdate(int key, int scancode, int action, int mods)
+ 
+     if (key == GLFW_KEY_ENTER && action == GLFW_PRESS && (mods & GLFW_MOD_ALT))
+     {
++        // Give topmost product UI a chance to reserve the system shortcut
++        // without changing ordinary render-pass keyboard dispatch.
++        for (auto it = m_vRenderPasses.crbegin(); it != m_vRenderPasses.crend(); it++)
++        {
++            if ((*it)->ShouldSuppressFullscreenShortcut())
++                return;
++        }
+         ToggleFullscreen();
+         return;
+     }
 diff --git a/include/donut/app/UserInterfaceUtils.h b/include/donut/app/UserInterfaceUtils.h
 index 76e27c0..002e865 100644
 --- a/include/donut/app/UserInterfaceUtils.h
@@ -75,3 +105,11 @@ index 1808e0c..9b62daf 100644
      {
          ImGui::Text("Material Domain: %s", MaterialDomainToString(material->domain));
      }
+@@ -190,6 +200,6 @@ bool donut::app::MaterialEditor(engine::Material* material, bool allowMaterialD
+     {
+         return std::filesystem::path(fullPath).filename().generic_string();
+     };
+ 
+-    const ImVec4 filenameColor = ImVec4(0.474f, 0.722f, 0.176f, 1.0f);
++    const ImVec4 filenameColor = ImVec4(0.26f, 0.59f, 0.98f, 1.0f);
+ 

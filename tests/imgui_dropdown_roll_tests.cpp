@@ -39,6 +39,13 @@ namespace
         int rollFromBottom = -1;
     };
 
+    struct TooltipObservation
+    {
+        bool submitted = false;
+        ImVec2 windowSize;
+        ImVec2 contentSize;
+    };
+
     bool Check(bool condition, const char* message)
     {
         if (!condition)
@@ -65,6 +72,50 @@ namespace
             (rect.Min.y + rect.Max.y) * 0.5f);
     }
 
+    TooltipObservation SubmitTooltipFrame(
+        bool stockWidgetRendering)
+    {
+        static constexpr const char* TooltipText =
+            "UVSR tooltip policy regression text stays on one upstream "
+            "line but wraps across several lines in the Amp presentation";
+
+        ImGui::SetUvsrUiBehavior(
+            !stockWidgetRendering,
+            stockWidgetRendering);
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(
+            ImVec2(30.0f, 210.0f),
+            ImGuiCond_Always);
+        ImGui::SetNextWindowSize(
+            ImVec2(240.0f, 60.0f),
+            ImGuiCond_Always);
+        ImGui::Begin(
+            "Tooltip Policy Test Owner",
+            nullptr,
+            ImGuiWindowFlags_NoResize |
+                ImGuiWindowFlags_NoMove |
+                ImGuiWindowFlags_NoSavedSettings |
+                ImGuiWindowFlags_NoScrollbar);
+        ImGui::SetTooltip("%s", TooltipText);
+
+        TooltipObservation observation;
+        ImGuiWindow* tooltipWindow = GImGui->TooltipPreviousWindow;
+        if (tooltipWindow != nullptr)
+        {
+            observation.submitted = true;
+            observation.windowSize = tooltipWindow->SizeFull;
+            observation.contentSize = ImVec2(
+                tooltipWindow->DC.CursorMaxPos.x -
+                    tooltipWindow->DC.CursorStartPos.x,
+                tooltipWindow->DC.CursorMaxPos.y -
+                    tooltipWindow->DC.CursorStartPos.y);
+        }
+
+        ImGui::End();
+        ImGui::Render();
+        return observation;
+    }
+
     FrameObservation SubmitComboFrame(
         ComboHarness& harness,
         float ownerY,
@@ -79,6 +130,9 @@ namespace
             ImGuiCond_Always);
         ImGui::SetNextWindowSize(
             ImVec2(240.0f, 60.0f),
+            ImGuiCond_Always);
+        ImGui::SetNextWindowCollapsed(
+            false,
             ImGuiCond_Always);
         const ImGuiWindowFlags ownerFlags =
             ImGuiWindowFlags_NoResize |
@@ -527,6 +581,321 @@ int main()
     ImGui::End();
     ImGui::Render();
 
+    ImGui::SetUvsrUiBehavior(false, true);
+    passed &= Check(
+        !ImGui::IsUvsrUiMotionEnabled() &&
+            ImGui::IsUvsrStockWidgetRenderingEnabled(),
+        "the public runtime policy selects motion-free stock widgets");
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(320.0f, 30.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(220.0f, 120.0f), ImGuiCond_Always);
+    ImGui::Begin(
+        "Stock Primitive Test",
+        nullptr,
+        ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove);
+    ImGui::BeginDisabled();
+    const ImU32 stockDisabledColor =
+        ImGui::GetColorU32(ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
+    ImGui::SetUvsrUiBehavior(true, false);
+    const ImU32 customDisabledColor =
+        ImGui::GetColorU32(ImVec4(1.0f, 0.0f, 0.0f, 1.0f));
+    ImGui::SetUvsrUiBehavior(false, true);
+    ImGui::EndDisabled();
+    const auto colorChannel =
+        [](ImU32 color, int shift)
+        {
+            return int((color >> shift) & 0xffu);
+        };
+    passed &= Check(
+        colorChannel(stockDisabledColor, IM_COL32_R_SHIFT) >
+                colorChannel(stockDisabledColor, IM_COL32_G_SHIFT) &&
+            colorChannel(customDisabledColor, IM_COL32_R_SHIFT) ==
+                colorChannel(customDisabledColor, IM_COL32_G_SHIFT) &&
+            colorChannel(customDisabledColor, IM_COL32_G_SHIFT) ==
+                colorChannel(customDisabledColor, IM_COL32_B_SHIFT),
+        "stock policy preserves upstream disabled colors while custom policy "
+        "uses UVSR grayscale");
+
+    ImDrawList* primitiveDrawList = ImGui::GetWindowDrawList();
+    const int stockArrowVertexStart = primitiveDrawList->VtxBuffer.Size;
+    ImGui::RenderArrow(
+        primitiveDrawList,
+        ImVec2(340.0f, 65.0f),
+        IM_COL32_WHITE,
+        ImGuiDir_Down);
+    const int stockArrowVertices =
+        primitiveDrawList->VtxBuffer.Size - stockArrowVertexStart;
+    ImGui::SetUvsrUiBehavior(true, false);
+    const int customArrowVertexStart = primitiveDrawList->VtxBuffer.Size;
+    ImGui::RenderArrow(
+        primitiveDrawList,
+        ImVec2(370.0f, 65.0f),
+        IM_COL32_WHITE,
+        ImGuiDir_Down);
+    const int customArrowVertices =
+        primitiveDrawList->VtxBuffer.Size - customArrowVertexStart;
+    ImGui::SetUvsrUiBehavior(false, true);
+    passed &= Check(
+        stockArrowVertices > 0 &&
+            customArrowVertices > stockArrowVertices,
+        "stock policy restores the upstream triangle arrow primitive");
+
+    const int stockCheckVertexStart = primitiveDrawList->VtxBuffer.Size;
+    ImGui::RenderCheckMark(
+        primitiveDrawList,
+        ImVec2(400.0f, 65.0f),
+        IM_COL32_WHITE,
+        16.0f);
+    const int stockCheckVertices =
+        primitiveDrawList->VtxBuffer.Size - stockCheckVertexStart;
+    ImGui::SetUvsrUiBehavior(true, false);
+    const int customCheckVertexStart = primitiveDrawList->VtxBuffer.Size;
+    ImGui::RenderCheckMark(
+        primitiveDrawList,
+        ImVec2(430.0f, 65.0f),
+        IM_COL32_WHITE,
+        16.0f);
+    const int customCheckVertices =
+        primitiveDrawList->VtxBuffer.Size - customCheckVertexStart;
+    ImGui::SetUvsrUiBehavior(false, true);
+    passed &= Check(
+        customCheckVertices > stockCheckVertices,
+        "stock policy removes UVSR's rounded check-mark caps");
+    ImGui::End();
+    ImGui::Render();
+
+    const TooltipObservation ampTooltip =
+        SubmitTooltipFrame(false);
+    SubmitTooltipFrame(true);
+    const TooltipObservation stockTooltip =
+        SubmitTooltipFrame(true);
+    passed &= Check(
+        ampTooltip.submitted &&
+            stockTooltip.submitted &&
+            stockTooltip.windowSize.x >
+                ampTooltip.windowSize.x + GImGui->FontSize &&
+            stockTooltip.contentSize.x >
+                ampTooltip.contentSize.x + GImGui->FontSize &&
+            ampTooltip.contentSize.y >
+                stockTooltip.contentSize.y + GImGui->FontSize,
+        "stock policy restores upstream auto-sized unwrapped tooltips while "
+        "custom policy retains UVSR's fixed wrapped tooltip");
+
+    ComboHarness immediateHarness;
+    QueueMouse(outside, false);
+    FrameObservation immediateOpening = SubmitComboFrame(
+        immediateHarness,
+        30.0f,
+        true);
+    if (!(immediateOpening.popupBegan &&
+        immediateOpening.popupOpen &&
+        !immediateOpening.transitionActive &&
+        immediateOpening.interactionReady == 1 &&
+        Near(immediateOpening.rollAmount, 1.0f)))
+    {
+        std::cerr
+            << "immediate opening: began="
+            << immediateOpening.popupBegan
+            << " open=" << immediateOpening.popupOpen
+            << " active=" << immediateOpening.transitionActive
+            << " ready=" << immediateOpening.interactionReady
+            << " roll=" << immediateOpening.rollAmount
+            << '\n';
+    }
+    passed &= Check(
+        immediateOpening.popupBegan &&
+            immediateOpening.popupOpen &&
+            !immediateOpening.transitionActive &&
+            immediateOpening.interactionReady == 1 &&
+            Near(immediateOpening.rollAmount, 1.0f),
+        "motion-free combo opening is immediately visible and interactive");
+
+    QueueMouse(outside, false);
+    FrameObservation immediateSettled = SubmitComboFrame(
+        immediateHarness,
+        30.0f,
+        false);
+    passed &= Check(
+        immediateSettled.popupBegan &&
+            immediateSettled.popupOpen &&
+            !immediateSettled.transitionActive &&
+            immediateSettled.interactionReady == 1,
+        "motion-free popup remains immediately ready after placement settles");
+
+    const ImVec2 immediateOptionCenter =
+        Center(immediateSettled.optionRect);
+    QueueMouse(immediateOptionCenter, true);
+    FrameObservation immediateDown = SubmitComboFrame(
+        immediateHarness,
+        30.0f,
+        false);
+    passed &= Check(
+        immediateDown.activeId == immediateDown.optionId &&
+            !immediateDown.transitionActive,
+        "motion-free selectable input acquires ownership without a roll wait");
+
+    QueueMouse(immediateOptionCenter, false);
+    FrameObservation immediateSelection = SubmitComboFrame(
+        immediateHarness,
+        30.0f,
+        false);
+    if (!(immediateSelection.optionPressed &&
+        immediateHarness.optionPressCount == 1 &&
+        immediateHarness.selectedItem == 0 &&
+        !immediateSelection.transitionActive))
+    {
+        std::cerr
+            << "immediate selection: pressed="
+            << immediateSelection.optionPressed
+            << " count=" << immediateHarness.optionPressCount
+            << " selected=" << immediateHarness.selectedItem
+            << " active=" << immediateSelection.transitionActive
+            << " ready=" << immediateSelection.interactionReady
+            << " closing=" << immediateSelection.closing
+            << " popupOpen=" << immediateSelection.popupOpen
+            << '\n';
+    }
+    passed &= Check(
+        immediateSelection.optionPressed &&
+            immediateHarness.optionPressCount == 1 &&
+            immediateHarness.selectedItem == 0 &&
+            !immediateSelection.transitionActive,
+        "motion-free combo selection commits on the ordinary click release");
+
+    QueueMouse(outside, false);
+    FrameObservation immediateClosed = SubmitComboFrame(
+        immediateHarness,
+        30.0f,
+        false);
+    passed &= Check(
+        !immediateClosed.popupBegan &&
+            !immediateClosed.popupOpen &&
+            !immediateClosed.transitionActive,
+        "motion-free combo closing removes the popup on the next UI frame");
+
+    const ImVec4 retainedStatusBaseColor(
+        0.12f,
+        0.24f,
+        0.36f,
+        0.21f);
+    constexpr float RetainedStatusOverrideAlpha = 0.73f;
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.Colors[ImGuiCol_WindowBg] = retainedStatusBaseColor;
+    style.Colors[ImGuiCol_TitleBgCollapsed] =
+        ImVec4(0.48f, 0.12f, 0.08f, 0.91f);
+    style.WindowRounding = 8.0f;
+    ImGui::SetUvsrUiBehavior(true, false);
+    QueueMouse(outside, false);
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(
+        ImVec2(30.0f, 30.0f),
+        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(
+        ImVec2(240.0f, 120.0f),
+        ImGuiCond_Always);
+    ImGui::SetNextSettingsWindowCollapsedHeight(90.0f);
+    ImGui::SetNextWindowCollapsed(true, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(RetainedStatusOverrideAlpha);
+    ImGui::Begin(
+        "Settings",
+        nullptr,
+        ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove);
+    ImGui::End();
+    ImGui::Render();
+
+    ImGuiWindow* settingsWindow =
+        ImGui::FindWindowByName("Settings");
+    int settingsCollapseFrames = 0;
+    while (settingsWindow &&
+        !settingsWindow->Collapsed &&
+        settingsCollapseFrames < MaximumTransitionFrames)
+    {
+        QueueMouse(outside, false);
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(
+            ImVec2(30.0f, 30.0f),
+            ImGuiCond_Always);
+        ImGui::SetNextWindowSize(
+            ImVec2(240.0f, 120.0f),
+            ImGuiCond_Always);
+        ImGui::SetNextSettingsWindowCollapsedHeight(90.0f);
+        ImGui::SetNextWindowBgAlpha(RetainedStatusOverrideAlpha);
+        ImGui::Begin(
+            "Settings",
+            nullptr,
+            ImGuiWindowFlags_NoSavedSettings |
+                ImGuiWindowFlags_NoResize |
+                ImGuiWindowFlags_NoMove);
+        ImGui::End();
+        ImGui::Render();
+        settingsWindow =
+            ImGui::FindWindowByName("Settings");
+        ++settingsCollapseFrames;
+    }
+
+    const ImU32 expectedRetainedStatusColor =
+        ImGui::ColorConvertFloat4ToU32(
+            ImVec4(
+                retainedStatusBaseColor.x,
+                retainedStatusBaseColor.y,
+                retainedStatusBaseColor.z,
+                RetainedStatusOverrideAlpha));
+    const ImU32 staleRetainedStatusColor =
+        ImGui::ColorConvertFloat4ToU32(retainedStatusBaseColor);
+    bool foundExpectedRetainedStatusColor = false;
+    bool foundStaleRetainedStatusColor = false;
+    bool renderedCollapsedRetainedStatus = false;
+    if (settingsWindow)
+    {
+        renderedCollapsedRetainedStatus =
+            settingsWindow->Collapsed &&
+            settingsWindow->Size.y > settingsWindow->TitleBarHeight;
+        const float retainedStatusMinY =
+            settingsWindow->Pos.y + settingsWindow->TitleBarHeight;
+        for (const ImDrawVert& vertex :
+            settingsWindow->DrawList->VtxBuffer)
+        {
+            if (vertex.pos.y < retainedStatusMinY)
+                continue;
+            foundExpectedRetainedStatusColor |=
+                vertex.col == expectedRetainedStatusColor;
+            foundStaleRetainedStatusColor |=
+                vertex.col == staleRetainedStatusColor;
+        }
+    }
+    const bool retainedStatusSurfaceMatches =
+        settingsWindow != nullptr &&
+        renderedCollapsedRetainedStatus &&
+        foundExpectedRetainedStatusColor &&
+        !foundStaleRetainedStatusColor;
+    if (!retainedStatusSurfaceMatches)
+    {
+        std::cerr
+            << "retained status state: window="
+            << (settingsWindow != nullptr)
+            << " collapsed="
+            << (settingsWindow && settingsWindow->Collapsed)
+            << " height="
+            << (settingsWindow ? settingsWindow->Size.y : 0.0f)
+            << " title="
+            << (settingsWindow ? settingsWindow->TitleBarHeight : 0.0f)
+            << " expected-color="
+            << foundExpectedRetainedStatusColor
+            << " stale-color="
+            << foundStaleRetainedStatusColor
+            << '\n';
+    }
+    passed &= Check(
+        retainedStatusSurfaceMatches,
+        "collapsed Settings retained status honors the same explicit "
+        "background alpha as expanded Settings");
+
+    ImGui::SetUvsrUiBehavior(true, false);
     ImGui::DestroyContext();
     if (!passed)
         return 1;
