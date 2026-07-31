@@ -478,6 +478,44 @@ namespace uvsr
             : deltas.aboveViewport;
     }
 
+    struct UiScrollAnchorCorrection
+    {
+        bool apply = false;
+        float scrollY = 0.f;
+    };
+
+    // ImGui consumes wheel targets when the child begins. Apply the resulting
+    // layout correction directly to that settled scroll position so the next
+    // wheel event cannot overwrite a second, delayed target. An independently
+    // pending navigation/programmatic target owns the frame and is left intact.
+    [[nodiscard]] constexpr UiScrollAnchorCorrection
+        ResolveUiScrollAnchorCorrection(
+            float currentScrollY,
+            float scrollDelta,
+            float currentFrameScrollMaxY,
+            bool hasPendingScrollTarget)
+    {
+        if (hasPendingScrollTarget ||
+            (scrollDelta >= -0.01f && scrollDelta <= 0.01f))
+        {
+            return { false, currentScrollY };
+        }
+
+        const float maximumScrollY =
+            currentFrameScrollMaxY > 0.f
+                ? currentFrameScrollMaxY
+                : 0.f;
+        const float requestedScrollY = currentScrollY + scrollDelta;
+        return {
+            true,
+            requestedScrollY < 0.f
+                ? 0.f
+                : requestedScrollY > maximumScrollY
+                    ? maximumScrollY
+                    : requestedScrollY
+        };
+    }
+
     // Retain the Settings viewport only when scroll state needs protection.
     // Layout animation by itself must not pin the old height: at the top of the
     // panel, AutoResizeY should follow the already-animated drawer envelopes so

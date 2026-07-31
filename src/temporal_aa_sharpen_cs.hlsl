@@ -6,13 +6,11 @@
 // IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR
 // PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.
 //
-// Developed by Minigraph
-//
 // Author:  James Stanard
 //
-// Adapted only for UVSR's RGBA16F scene target and arbitrary output
-// dimensions from Microsoft/DirectX-Graphics-Samples commit
-// 357ade6ec6ff0d9dcadc48f35c7a28e37c0cdf7a.
+// Adapted from Microsoft DirectX Graphics Samples for UVSR's RGBA16F scene
+// target and arbitrary output dimensions. Distributed under
+// third_party/microsoft_directx_graphics_samples/LICENSE.txt.
 //
 
 #ifndef TAA_SHARPEN_INPUT_PREMULTIPLIED
@@ -70,7 +68,7 @@ void main(
 #else
         float3 normalizedColor = Color.rgb;
 #endif
-        // MiniEngine assumes nonnegative radiance. Experimental rectification
+        // Temporal AA assumes nonnegative radiance. Experimental rectification
         // modes intentionally tolerate signed HDR, so clamp only the invalid
         // log domain while preserving the reference path for nonnegative
         // values. The output is also bounded to finite RGBA16F range.

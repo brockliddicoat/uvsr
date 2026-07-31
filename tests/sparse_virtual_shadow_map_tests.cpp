@@ -1,6 +1,6 @@
 #include "sparse_virtual_shadow_map.h"
 #include "svsm_motion_benchmark.h"
-#include "taa_miniengine_reference.h"
+#include "temporal_aa_reference.h"
 
 #include <algorithm>
 #include <array>
@@ -5101,11 +5101,11 @@ namespace
 
         bool previousJitterActive = false;
         for (uint64_t phase = 0u;
-            phase < MiniEngineTaaHalton23.size();
+            phase < TemporalAaHalton23.size();
             ++phase)
         {
-            const MiniEngineTaaJitterSample offset =
-                GetMiniEngineTaaJitter(phase);
+            const TemporalAaJitterSample offset =
+                GetTemporalAaJitter(phase);
             assert(IsSvsmStaticJitterActive(offset.x, offset.y));
             assert(ShouldResetSvsmStaticJitterCache(
                 true,

@@ -1,4 +1,4 @@
-﻿/*
+/*
 * Copyright (c) 2014-2021, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
@@ -25,8 +25,11 @@
 #include <array>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <chrono>
+#include <cerrno>
 #include <charconv>
+#include <cctype>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -66,12 +69,14 @@
 #include <donut/engine/TextureCache.h>
 #include <donut/engine/View.h>
 #include <donut/render/DeferredLightingPass.h>
+#include <donut/render/DepthPass.h>
 #include <donut/render/DrawStrategy.h>
 #include <donut/render/ForwardShadingPass.h>
 #include <donut/render/GBuffer.h>
 #include <donut/render/GBufferFillPass.h>
 #include <donut/render/GeometryPasses.h>
 #include <donut/render/PixelReadbackPass.h>
+#include <donut/render/PlanarShadowMap.h>
 #include <donut/app/ApplicationBase.h>
 #include <donut/app/UserInterfaceUtils.h>
 #include <donut/app/Camera.h>
@@ -88,7 +93,7 @@
 #include "image_based_lighting_background_pass.h"
 #include "image_based_lighting_environment.h"
 #include "image_based_lighting_shared.h"
-#include "bend_screen_space_shadows.h"
+#include "screen_space_directional_shadows.h"
 #include "diagnostic_cascaded_shadow_map.h"
 #include "diagnostic_csm_benchmark.h"
 #include "gpu_performance_monitor.h"
@@ -98,6 +103,7 @@
 #include "cmaa2.h"
 #include "command_line_options.h"
 #include "experiment_title.h"
+#include "flashlight.h"
 #include "pixel_zoom.h"
 #include "renderer_statistics.h"
 #include "scene_catalog.h"
@@ -106,8 +112,12 @@
 #include "sponza_camera_preset.h"
 #include "sparse_virtual_shadow_map.h"
 #include "svsm_motion_benchmark.h"
-#include "taa_miniengine.h"
+#include "temporal_aa.h"
 #include "ui_animation.h"
+#include "ui_command_layout.h"
+#include "ui_commands.h"
+#include "ui_settings_command_catalog.h"
+#include "ui_skin.h"
 #include "visibility_perf_capture.h"
 #include "world_material_view.h"
 
@@ -122,6 +132,31 @@ using namespace donut::vfs;
 using namespace donut::engine;
 using namespace donut::render;
 using namespace uvsr;
+
+#include <donut/shaders/light_cb.h>
+
+class FlashlightSpotLight final : public SpotLight
+{
+public:
+    float beamRoundness =
+        DefaultFlashlightSettings.beamRoundness;
+    float3 beamRight = float3(1.f, 0.f, 0.f);
+
+    void FillLightConstants(
+        LightConstants& lightConstants) const override
+    {
+        SpotLight::FillLightConstants(lightConstants);
+
+        lightConstants.radius =
+            EncodeFlashlightBeamShapeRadius(beamRoundness);
+        lightConstants.shadowChannel[1] =
+            EncodeFlashlightBeamAxisComponent(beamRight.x);
+        lightConstants.shadowChannel[2] =
+            EncodeFlashlightBeamAxisComponent(beamRight.y);
+        lightConstants.shadowChannel[3] =
+            EncodeFlashlightBeamAxisComponent(beamRight.z);
+    }
+};
 
 static bool g_RestartRequested = false;
 static int g_RestartAdapterIndex = -1;
@@ -209,6 +244,13 @@ struct GpuAdapterChoice
 };
 
 constexpr float UiBackgroundBlurPixels = 4.f;
+constexpr float UiPanelShadowBlurPixels = 10.f;
+constexpr float UiPanelShadowOpacity = 0.34f;
+constexpr float UiPanelShadowOffsetYPixels = 3.f;
+constexpr size_t UiBackdropRectCount = 5u;
+constexpr size_t UiMaterialTitleBackdropIndex = 2u;
+constexpr size_t UiMaterialBodyBackdropIndex = 3u;
+constexpr size_t UiCommandBackdropIndex = 4u;
 
 struct UiBackdropRect
 {
@@ -1265,171 +1307,6 @@ public:
     }
 };
 
-#if 0
-// The visibility branch forked before the canonical tonemapper/LUT sunset.
-// Keep its stale helper block out of the composed product; the destination's
-// fixed AgX path and newest UI remain authoritative.
-static bool LoadCubeLut(
-    nvrhi::IDevice* device,
-    const std::filesystem::path& path,
-    KodakLut& result)
-{
-    std::ifstream file(path);
-    if (!file)
-    {
-        log::error("Cannot open Kodak LUT '%s'", path.generic_string().c_str());
-        return false;
-    }
-
-    uint32_t size = 0;
-    std::string title;
-    float3 domainMin = 0.f;
-    float3 domainMax = 1.f;
-    std::vector<float4> values;
-    std::string line;
-
-    while (std::getline(file, line))
-    {
-        const size_t comment = line.find('#');
-        if (comment != std::string::npos)
-            line.erase(comment);
-
-        std::istringstream tokens(line);
-        std::string keyword;
-        if (!(tokens >> keyword))
-            continue;
-
-        if (keyword == "TITLE")
-        {
-            std::getline(tokens >> std::ws, title);
-            if (title.size() >= 2 && title.front() == '"' && title.back() == '"')
-                title = title.substr(1, title.size() - 2);
-        }
-        else if (keyword == "LUT_3D_SIZE")
-        {
-            tokens >> size;
-            if (size < 2 || size > 128)
-            {
-                log::error("Kodak LUT '%s' has unsupported size %u (expected 2-128)",
-                    path.generic_string().c_str(), size);
-                return false;
-            }
-        }
-        else if (keyword == "LUT_1D_SIZE")
-        {
-            log::error("Kodak LUT '%s' contains an unsupported 1D table",
-                path.generic_string().c_str());
-            return false;
-        }
-        else if (keyword == "DOMAIN_MIN")
-        {
-            tokens >> domainMin.x >> domainMin.y >> domainMin.z;
-        }
-        else if (keyword == "DOMAIN_MAX")
-        {
-            tokens >> domainMax.x >> domainMax.y >> domainMax.z;
-        }
-        else
-        {
-            std::istringstream sample(line);
-            float r, g, b;
-            if (sample >> r >> g >> b)
-                values.emplace_back(r, g, b, 1.f);
-        }
-    }
-
-    const uint64_t expectedValueCount = uint64_t(size) * size * size;
-    if (size == 0 || values.size() != expectedValueCount)
-    {
-        log::error("Kodak LUT '%s' has %zu values; expected %llu",
-            path.generic_string().c_str(), values.size(), expectedValueCount);
-        return false;
-    }
-
-    nvrhi::TextureDesc textureDesc;
-    textureDesc.width = size;
-    textureDesc.height = size;
-    textureDesc.depth = size;
-    textureDesc.dimension = nvrhi::TextureDimension::Texture3D;
-    textureDesc.format = nvrhi::Format::RGBA32_FLOAT;
-    textureDesc.initialState = nvrhi::ResourceStates::Common;
-    textureDesc.debugName = path.stem().string();
-
-    nvrhi::TextureHandle texture = device->createTexture(textureDesc);
-    if (!texture)
-    {
-        log::error("Cannot create GPU texture for Kodak LUT '%s'",
-            path.generic_string().c_str());
-        return false;
-    }
-
-    nvrhi::CommandListHandle commandList = device->createCommandList();
-    commandList->open();
-    commandList->beginTrackingTextureState(
-        texture, nvrhi::AllSubresources, nvrhi::ResourceStates::Common);
-    commandList->writeTexture(
-        texture, 0, 0, values.data(),
-        size_t(size) * sizeof(float4),
-        size_t(size) * size * sizeof(float4));
-    commandList->setPermanentTextureState(
-        texture, nvrhi::ResourceStates::ShaderResource);
-    commandList->commitBarriers();
-    commandList->close();
-    device->executeCommandList(commandList);
-
-    result.Name = title.empty() ? path.stem().string() : title;
-    result.Path = path;
-    result.Texture = texture;
-    result.Size = size;
-    result.DomainMin = domainMin;
-    result.DomainMax = domainMax;
-    return true;
-}
-
-static AgxToneMappingParameters GetAgxPresetParameters(AgxPreset preset)
-{
-    AgxToneMappingParameters params;
-
-    switch (preset)
-    {
-    case AgxPreset::Base:
-        break;
-
-    case AgxPreset::Punchy:
-        params.Exposure = 0.45f;
-        params.Contrast = 1.04f;
-        params.Saturation = 1.20f;
-        params.Power = 0.98f;
-        break;
-
-    case AgxPreset::Golden:
-        params.Exposure = 0.40f;
-        params.Contrast = 0.98f;
-        params.Saturation = 1.14f;
-        params.Warmth = 0.18f;
-        params.Tint = 0.03f;
-        params.Slope = 1.01f;
-        params.Power = 0.97f;
-        break;
-
-    case AgxPreset::Mix:
-        params.Exposure = 0.40f;
-        params.Contrast = 1.00f;
-        params.Saturation = 1.16f;
-        params.Warmth = 0.08f;
-        params.Tint = 0.01f;
-        params.Power = 0.98f;
-        break;
-
-    case AgxPreset::Custom:
-        break;
-    }
-
-    return params;
-}
-
-#endif
-
 static uint32_t GetVisibilityLaterBounceSampleCount(
     uint32_t firstBounceSampleCount)
 {
@@ -1743,7 +1620,9 @@ struct VisibilityBenchmarkLaunchOptions
 struct UIData
 {
     bool                                ShowUI = false;
-    std::array<UiBackdropRect, 3>        BackdropRects;
+    UiSkin                              Skin = DefaultUiSkin;
+    std::array<UiBackdropRect, UiBackdropRectCount>
+                                        BackdropRects;
     PixelZoomMode                       PixelZoom =
         PixelZoomMode::Off;
     std::vector<GpuAdapterChoice>       GpuAdapterChoices;
@@ -1751,17 +1630,22 @@ struct UIData
     bool                                EnablePbr = true;
     RendererMode                        RenderMode = RendererMode::Deferred;
     AntiAliasingSettings                AntiAliasing;
-    bool                                MiniEngineTaaSharpenEnabled = false;
-    float                               MiniEngineTaaSharpness =
-        MiniEngineTaaDefaultSharpness;
-    MiniEngineTaaDebugView              MiniEngineTaaVisualization =
-        MiniEngineTaaDebugView::Off;
-    BendScreenSpaceShadowSettings       BendScreenSpaceShadows;
+    bool                                TemporalAaSharpenEnabled = false;
+    float                               TemporalAaSharpness =
+        TemporalAaDefaultSharpness;
+    TemporalAaDebugView              TemporalAaVisualization =
+        TemporalAaDebugView::Off;
+    ScreenSpaceDirectionalShadowSettings       ScreenSpaceDirectionalShadows;
     SparseVirtualShadowMapSettings      SparseVirtualShadowMaps;
     DiagnosticCascadedShadowMapSettings DiagnosticCascadedShadowMaps;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
     bool                                ShaderReloadRequested = false;
+    bool                                FlashlightEnabled =
+        DefaultFlashlightEnabled;
+    FlashlightSettings                  Flashlight =
+        DefaultFlashlightSettings;
     bool                                ShowEnvironmentBackground = true;
+    bool                                EnableAmbientFill = true;
     bool                                EnableDiffuseIbl = true;
     float                               DiffuseIblStrength = 1.f;
     bool                                EnableSpecularIbl = true;
@@ -1812,7 +1696,7 @@ struct UIData
         return UsesDeferredShading();
     }
 
-    [[nodiscard]] bool HasMiniEngineTaaVisibilityConflict() const
+    [[nodiscard]] bool HasTemporalAaVisibilityConflict() const
     {
         // These visibility histories do not yet receive TAA's subpixel jitter delta.
         return ScreenSpaceVisibility.reconstruction.temporalEnabled;
@@ -1824,17 +1708,35 @@ struct UIData
             ScreenSpaceVisibility.enabled,
             ScreenSpaceVisibility.HasActiveAmbientOcclusion(),
             ScreenSpaceVisibility.HasActiveIndirectDiffuse(),
-            IsImageBasedLightingLobeActive(
+            IsAmbientFillLobeActive(
+                EnableAmbientFill,
                 EnableDiffuseIbl,
                 DiffuseIblStrength),
-            IsImageBasedLightingLobeActive(
+            IsAmbientFillLobeActive(
+                EnableAmbientFill,
                 EnableSpecularIbl,
                 SpecularIblStrength));
     }
 
+    [[nodiscard]] bool IsDiffuseAmbientFillActive() const
+    {
+        return IsAmbientFillLobeActive(
+            EnableAmbientFill,
+            EnableDiffuseIbl,
+            DiffuseIblStrength);
+    }
+
+    [[nodiscard]] bool IsSpecularAmbientFillActive() const
+    {
+        return IsAmbientFillLobeActive(
+            EnableAmbientFill,
+            EnableSpecularIbl,
+            SpecularIblStrength);
+    }
+
     [[nodiscard]] bool IsTemporalAntiAliasingAvailable() const
     {
-        return IsMiniEngineTaaAvailable(
+        return IsTemporalAaAvailable(
             true,
             EnablePbr,
             RenderMode == RendererMode::Deferred,
@@ -1861,14 +1763,14 @@ struct UIData
         // added after paired warm-camera measurements preserve the image and
         // improve both the normal path and the camera-turn path. The Intel
         // Core Ultra 9 185H Arc iGPU (8086:7D55) consistently benefits from
-        // sharing adjacent MiniEngine pixels' overlapping neighborhoods.
-        // Split/packed LDS, MiniEngine fusion, early rejection, and cache
+        // sharing adjacent Temporal AA pixels' overlapping neighborhoods.
+        // Split/packed LDS, Temporal AA fusion, early rejection, and cache
         // blocking remain explicit experiments because their measured gains
         // were not repeatable.
 #if UVSR_AA_DEVELOPER_OVERRIDES
         const bool sharedReuseAutoRequested =
             settings.performanceOverrides.sharedWorkReuse ==
-                MiniEngineTaaAutoToggle::Auto;
+                TemporalAaAutoToggle::Auto;
 #else
         // Hidden override state is sanitized from production. The validated
         // adapter table therefore remains authoritative there.
@@ -1940,10 +1842,10 @@ static void ApplyFactoryExperimentShaderTopology(UIData& ui)
     ui.EnablePbr = true;
     ui.RenderMode = RendererMode::Deferred;
     ui.AntiAliasing = AntiAliasingSettings{};
-    ui.MiniEngineTaaSharpenEnabled = false;
-    ui.MiniEngineTaaSharpness = MiniEngineTaaDefaultSharpness;
-    ui.MiniEngineTaaVisualization = MiniEngineTaaDebugView::Off;
-    ui.BendScreenSpaceShadows = BendScreenSpaceShadowSettings{};
+    ui.TemporalAaSharpenEnabled = false;
+    ui.TemporalAaSharpness = TemporalAaDefaultSharpness;
+    ui.TemporalAaVisualization = TemporalAaDebugView::Off;
+    ui.ScreenSpaceDirectionalShadows = ScreenSpaceDirectionalShadowSettings{};
     ui.SparseVirtualShadowMaps = SparseVirtualShadowMapSettings{};
     ui.DiagnosticCascadedShadowMaps =
         DiagnosticCascadedShadowMapSettings{};
@@ -2174,6 +2076,13 @@ class UvsrSceneViewer : public ApplicationBase
 private:
     typedef ApplicationBase Super;
 
+    enum class MaterialPickPurpose
+    {
+        None,
+        FocusCameraAtCursor,
+        OpenCenterMaterialInspector
+    };
+
     std::shared_ptr<RootFileSystem>     m_RootFs;
     std::shared_ptr<NativeFileSystem>   m_NativeFs;
     std::vector<SceneCatalogEntry>      m_SceneCatalog;
@@ -2181,8 +2090,28 @@ private:
     std::filesystem::path               m_SceneDir;
     std::shared_ptr<Scene>				m_Scene;
 	std::vector<std::pair<std::shared_ptr<Material>, Material>> m_OriginalMaterials;
-	std::shared_ptr<ShaderFactory>      m_ShaderFactory;
+    std::shared_ptr<ShaderFactory>      m_ShaderFactory;
     std::shared_ptr<DirectionalLight>   m_SunLight;
+    std::shared_ptr<FlashlightSpotLight> m_Flashlight;
+    std::shared_ptr<SceneGraphNode>     m_FlashlightNode;
+    std::shared_ptr<FlashlightSpotLight> m_FlashlightHotspot;
+    std::shared_ptr<SceneGraphNode>     m_FlashlightHotspotNode;
+    std::shared_ptr<PlanarShadowMap>    m_FlashlightShadowMap;
+    std::shared_ptr<FramebufferFactory> m_FlashlightShadowFramebuffer;
+    std::unique_ptr<DepthPass>          m_FlashlightDepthPass;
+    float                               m_FlashlightTransition = 0.f;
+    float                               m_FlashlightSwayTime = 0.f;
+    float3                              m_FlashlightAimDirection =
+                                            float3(0.f, 0.f, -1.f);
+    float3                              m_FlashlightResolvedPosition = 0.f;
+    float3                              m_FlashlightResolvedDirection =
+                                            float3(0.f, 0.f, -1.f);
+    float3                              m_FlashlightResolvedRight =
+                                            float3(1.f, 0.f, 0.f);
+    bool                                m_FlashlightAimInitialized = false;
+    bool                                m_FlashlightPoseValid = false;
+    std::vector<std::shared_ptr<Light>> m_SceneLightsWithoutFlashlight;
+    std::vector<std::shared_ptr<Light>> m_EditableLights;
     std::shared_ptr<InstancedOpaqueDrawStrategy> m_OpaqueDrawStrategy;
     std::unique_ptr<RenderTargets>      m_RenderTargets;
     std::shared_ptr<ForwardShadingPass>  m_ForwardPass;
@@ -2196,14 +2125,14 @@ private:
     std::unique_ptr<ImageBasedLightingBackgroundPass>
                                         m_ImageBasedLightingBackgroundPass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
-    std::unique_ptr<BendScreenSpaceShadowPass>
-                                        m_BendScreenSpaceShadowPass;
+    std::unique_ptr<ScreenSpaceDirectionalShadowPass>
+                                        m_ScreenSpaceDirectionalShadowPass;
     std::unique_ptr<SparseVirtualShadowMapPass>
                                         m_SparseVirtualShadowMapPass;
     std::unique_ptr<DiagnosticCascadedShadowMapPass>
                                         m_DiagnosticCascadedShadowMapPass;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
-    std::unique_ptr<MiniEngineTemporalAAPass> m_MiniEngineTemporalAAPass;
+    std::unique_ptr<TemporalAAPass> m_TemporalAAPass;
     std::unique_ptr<Cmaa2Pass>          m_Cmaa2Pass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
     std::unique_ptr<PixelReadbackPass>  m_PixelReadbackPass;
@@ -2237,7 +2166,9 @@ private:
     float                               m_SceneDiagonal = 100.f;
     float                               m_CameraCollisionRadius = 0.1f;
     uint2                               m_PickPosition = 0u;
-    bool                                m_Pick = false;
+    MaterialPickPurpose                 m_MaterialPickPurpose =
+        MaterialPickPurpose::None;
+    const Scene*                        m_MaterialPickScene = nullptr;
     bool                                m_BenchmarkCameraRequested = false;
     bool                                m_BenchmarkCameraActive = false;
     AaBenchmarkConfig                   m_AaBenchmark;
@@ -2426,7 +2357,7 @@ private:
         false;
     bool                                m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled =
         false;
-    bool                                m_SvsmMotionBenchmarkPreviousBendEnabled =
+    bool                                m_SvsmMotionBenchmarkPreviousScreenSpaceShadowEnabled =
         false;
     bool                                m_SvsmMotionBenchmarkPreviousCsmEnabled =
         false;
@@ -2437,7 +2368,7 @@ private:
     bool                                m_SvsmMotionBenchmarkStartUsesTaa = false;
     bool                                m_SvsmMotionBenchmarkStartTaaSharpenEnabled =
         false;
-    bool                                m_SvsmMotionBenchmarkStartBendEnabled =
+    bool                                m_SvsmMotionBenchmarkStartScreenSpaceShadowEnabled =
         false;
     bool                                m_SvsmMotionBenchmarkStartCsmEnabled =
         false;
@@ -2826,6 +2757,35 @@ public:
         return m_BenchmarkCameraActive;
     }
 
+    [[nodiscard]] bool IsControlledBenchmarkActive() const
+    {
+        return m_VisibilityBenchmarkQueued ||
+            IsVisibilityBenchmarkActive() ||
+            m_AaBenchmark.enabled ||
+            m_DiagnosticCsmBenchmarkRequested ||
+            m_DiagnosticCsmRecordRequested ||
+            IsSvsmMotionBenchmarkRunning() ||
+            g_VisibilityPerfCapture.Enabled();
+    }
+
+    bool ToggleFlashlight()
+    {
+        if (IsControlledBenchmarkActive())
+            return false;
+        if (!m_ui.EnablePbr)
+        {
+            log::info(
+                "Flashlight unavailable while PBR rendering is disabled");
+            return false;
+        }
+
+        m_ui.FlashlightEnabled = !m_ui.FlashlightEnabled;
+        log::info(
+            "Flashlight %s",
+            m_ui.FlashlightEnabled ? "on" : "off");
+        return true;
+    }
+
     [[nodiscard]] bool CanStartAntiAliasingMotionTest() const
     {
         return IsSceneLoaded() &&
@@ -2902,7 +2862,7 @@ public:
             app::GetDirectoryWithExecutable() /
             "aa-motion-test-latest.json";
         m_AaBenchmark.settings = m_ui.AntiAliasing;
-        m_AaBenchmark.sharpness = m_ui.MiniEngineTaaSharpness;
+        m_AaBenchmark.sharpness = m_ui.TemporalAaSharpness;
         m_AaBenchmarkStarted = false;
         m_AaBenchmarkCurrentTag = AaBenchmarkTimerTag{};
         m_InteractiveAaMotionTest = true;
@@ -3187,9 +3147,9 @@ public:
         m_SvsmMotionBenchmarkPreviousTaaEnabled =
             m_ui.AntiAliasing.enabled;
         m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled =
-            m_ui.MiniEngineTaaSharpenEnabled;
-        m_SvsmMotionBenchmarkPreviousBendEnabled =
-            m_ui.BendScreenSpaceShadows.enabled;
+            m_ui.TemporalAaSharpenEnabled;
+        m_SvsmMotionBenchmarkPreviousScreenSpaceShadowEnabled =
+            m_ui.ScreenSpaceDirectionalShadows.enabled;
         m_SvsmMotionBenchmarkPreviousCsmEnabled =
             m_ui.DiagnosticCascadedShadowMaps.enabled;
         m_SvsmMotionBenchmarkPreviousScreenSpaceVisibilityEnabled =
@@ -3199,8 +3159,8 @@ public:
         // producers and temporal consumers. The previous values are restored
         // after either completion or an abort.
         m_ui.AntiAliasing.enabled = false;
-        m_ui.MiniEngineTaaSharpenEnabled = false;
-        m_ui.BendScreenSpaceShadows.enabled = false;
+        m_ui.TemporalAaSharpenEnabled = false;
+        m_ui.ScreenSpaceDirectionalShadows.enabled = false;
         m_ui.DiagnosticCascadedShadowMaps.enabled = false;
         m_ui.ScreenSpaceVisibility.enabled = false;
 
@@ -3211,9 +3171,9 @@ public:
         m_SvsmMotionBenchmarkStartUsesTaa =
             m_ui.UsesLongTermTemporalAA();
         m_SvsmMotionBenchmarkStartTaaSharpenEnabled =
-            m_ui.MiniEngineTaaSharpenEnabled;
-        m_SvsmMotionBenchmarkStartBendEnabled =
-            m_ui.BendScreenSpaceShadows.enabled;
+            m_ui.TemporalAaSharpenEnabled;
+        m_SvsmMotionBenchmarkStartScreenSpaceShadowEnabled =
+            m_ui.ScreenSpaceDirectionalShadows.enabled;
         m_SvsmMotionBenchmarkStartCsmEnabled =
             m_ui.DiagnosticCascadedShadowMaps.enabled;
         m_SvsmMotionBenchmarkStartScreenSpaceVisibilityEnabled =
@@ -3229,10 +3189,10 @@ public:
         {
             m_ui.AntiAliasing.enabled =
                 m_SvsmMotionBenchmarkPreviousTaaEnabled;
-            m_ui.MiniEngineTaaSharpenEnabled =
+            m_ui.TemporalAaSharpenEnabled =
                 m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled;
-            m_ui.BendScreenSpaceShadows.enabled =
-                m_SvsmMotionBenchmarkPreviousBendEnabled;
+            m_ui.ScreenSpaceDirectionalShadows.enabled =
+                m_SvsmMotionBenchmarkPreviousScreenSpaceShadowEnabled;
             m_ui.DiagnosticCascadedShadowMaps.enabled =
                 m_SvsmMotionBenchmarkPreviousCsmEnabled;
             m_ui.ScreenSpaceVisibility.enabled =
@@ -3412,8 +3372,8 @@ public:
 
     void ResetAntiAliasingState()
     {
-        if (m_MiniEngineTemporalAAPass)
-            m_MiniEngineTemporalAAPass->ResetHistory();
+        if (m_TemporalAAPass)
+            m_TemporalAAPass->ResetHistory();
         m_AntiAliasingPhase = 0u;
     }
 
@@ -3519,10 +3479,10 @@ public:
         }
         m_ui.AntiAliasing.enabled =
             m_SvsmMotionBenchmarkPreviousTaaEnabled;
-        m_ui.MiniEngineTaaSharpenEnabled =
+        m_ui.TemporalAaSharpenEnabled =
             m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled;
-        m_ui.BendScreenSpaceShadows.enabled =
-            m_SvsmMotionBenchmarkPreviousBendEnabled;
+        m_ui.ScreenSpaceDirectionalShadows.enabled =
+            m_SvsmMotionBenchmarkPreviousScreenSpaceShadowEnabled;
         m_ui.DiagnosticCascadedShadowMaps.enabled =
             m_SvsmMotionBenchmarkPreviousCsmEnabled;
         m_ui.ScreenSpaceVisibility.enabled =
@@ -3557,8 +3517,8 @@ public:
         m_PreviousView.reset();
         if (m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetHistory();
-        if (m_MiniEngineTemporalAAPass)
-            m_MiniEngineTemporalAAPass->ResetHistory();
+        if (m_TemporalAAPass)
+            m_TemporalAAPass->ResetHistory();
 
         if (m_SvsmMotionBenchmarkPreviousWidth > 0 &&
             m_SvsmMotionBenchmarkPreviousHeight > 0)
@@ -3891,8 +3851,8 @@ public:
             << "\n"
             << "taaEnabled="
             << (m_ui.AntiAliasing.enabled ? 1u : 0u) << "\n"
-            << "bendEnabled="
-            << (m_ui.BendScreenSpaceShadows.enabled ? 1u : 0u)
+            << "screenSpaceShadowEnabled="
+            << (m_ui.ScreenSpaceDirectionalShadows.enabled ? 1u : 0u)
             << "\n"
             << "diagnosticCsmEnabled="
             << (m_ui.DiagnosticCascadedShadowMaps.enabled ? 1u : 0u)
@@ -4652,8 +4612,8 @@ public:
             << "taaSharpenEnabled=" << (
                 m_SvsmMotionBenchmarkStartTaaSharpenEnabled
                     ? 1u : 0u) << "\n"
-            << "bendEnabled=" << (
-                m_SvsmMotionBenchmarkStartBendEnabled ? 1u : 0u)
+            << "screenSpaceShadowEnabled=" << (
+                m_SvsmMotionBenchmarkStartScreenSpaceShadowEnabled ? 1u : 0u)
                 << "\n"
             << "diagnosticCsmEnabled=" << (
                 m_SvsmMotionBenchmarkStartCsmEnabled ? 1u : 0u)
@@ -5036,10 +4996,10 @@ public:
                 m_SvsmMotionBenchmarkStartTaaEnabled ||
             m_ui.UsesLongTermTemporalAA() !=
                 m_SvsmMotionBenchmarkStartUsesTaa ||
-            m_ui.MiniEngineTaaSharpenEnabled !=
+            m_ui.TemporalAaSharpenEnabled !=
                 m_SvsmMotionBenchmarkStartTaaSharpenEnabled ||
-            m_ui.BendScreenSpaceShadows.enabled !=
-                m_SvsmMotionBenchmarkStartBendEnabled ||
+            m_ui.ScreenSpaceDirectionalShadows.enabled !=
+                m_SvsmMotionBenchmarkStartScreenSpaceShadowEnabled ||
             m_ui.DiagnosticCascadedShadowMaps.enabled !=
                 m_SvsmMotionBenchmarkStartCsmEnabled ||
             m_ui.ScreenSpaceVisibility.enabled !=
@@ -5393,11 +5353,11 @@ public:
         m_ui.EnablePbr = true;
         m_ui.RenderMode = RendererMode::Deferred;
         m_ui.AntiAliasing = AntiAliasingSettings{};
-        m_ui.MiniEngineTaaSharpenEnabled = false;
-        m_ui.MiniEngineTaaSharpness = MiniEngineTaaDefaultSharpness;
-        m_ui.MiniEngineTaaVisualization = MiniEngineTaaDebugView::Off;
-        m_ui.BendScreenSpaceShadows =
-            BendScreenSpaceShadowSettings{};
+        m_ui.TemporalAaSharpenEnabled = false;
+        m_ui.TemporalAaSharpness = TemporalAaDefaultSharpness;
+        m_ui.TemporalAaVisualization = TemporalAaDebugView::Off;
+        m_ui.ScreenSpaceDirectionalShadows =
+            ScreenSpaceDirectionalShadowSettings{};
         m_ui.SparseVirtualShadowMaps =
             SparseVirtualShadowMapSettings{};
         m_ui.DiagnosticCascadedShadowMaps =
@@ -5406,7 +5366,16 @@ public:
         m_ui.VisibilityVerification =
             VisibilityVerificationProfile::Unset;
         m_ui.PixelZoom = PixelZoomMode::Off;
+        m_ui.FlashlightEnabled = DefaultFlashlightEnabled;
+        m_ui.Flashlight = DefaultFlashlightSettings;
+        m_FlashlightTransition = 0.f;
+        if (m_Flashlight)
+            m_Flashlight->intensity = 0.f;
+        if (m_FlashlightHotspot)
+            m_FlashlightHotspot->intensity = 0.f;
+        ResetFlashlightMotion();
         m_ui.ShowEnvironmentBackground = true;
+        m_ui.EnableAmbientFill = true;
         m_ui.EnableDiffuseIbl = true;
         m_ui.DiffuseIblStrength = 1.f;
         m_ui.EnableSpecularIbl = true;
@@ -5625,7 +5594,11 @@ public:
         m_ThirdPersonCamera.MousePosUpdate(xpos, ypos);
         m_PivotCamera.MousePosUpdate(xpos, ypos);
 
-        m_PickPosition = uint2(static_cast<uint>(xpos), static_cast<uint>(ypos));
+        if (m_MaterialPickPurpose == MaterialPickPurpose::None)
+        {
+            m_PickPosition =
+                uint2(static_cast<uint>(xpos), static_cast<uint>(ypos));
+        }
 
         return true;
     }
@@ -5637,7 +5610,11 @@ public:
         if (action == GLFW_PRESS &&
             button == GLFW_MOUSE_BUTTON_MIDDLE)
         {
-            m_Pick = true;
+            // Snapshot the cursor coordinate at the press. Subsequent camera
+            // motion cannot slide the pending material-ID readback elsewhere.
+            m_MaterialPickPurpose =
+                MaterialPickPurpose::FocusCameraAtCursor;
+            m_MaterialPickScene = m_Scene.get();
         }
 
         return true;
@@ -5779,6 +5756,8 @@ public:
             segmentStatistics(AaBenchmarkSegment::TurnBack);
         const ResolvedAntiAliasingSettings resolved =
             m_ui.GetResolvedAntiAliasingSettings();
+        const TemporalAATimings* temporalTimings =
+            GetTemporalAATimings();
         const bool benchmarkEvidenceValid =
             complete.count == 256u &&
             m_AaBenchmarkIssuedSamples == 256u &&
@@ -5850,17 +5829,45 @@ public:
             << std::quoted(GetAntiAliasingPresetLabel(
                 resolved.implementation))
             << ",\n"
+            << "  \"requested_temporal_cost_mode\": "
+            << std::quoted(GetTemporalAaCostModeLabel(
+                resolved.temporalCostMode))
+            << ",\n"
+            << "  \"effective_temporal_cost_mode\": "
+            << std::quoted(GetTemporalAaCostModeLabel(
+                temporalTimings
+                    ? temporalTimings->effectiveCostMode
+                    : resolved.temporalCostMode))
+            << ",\n"
             << "  \"developer_overrides_compiled\": "
             << (UVSR_AA_DEVELOPER_OVERRIDES ? "true" : "false")
             << ",\n"
+            << "  \"history_storage\": "
+            << std::quoted(GetTemporalAaHistoryStorageLabel(
+                resolved.historyStorage)) << ",\n"
+            << "  \"previous_depth_validation\": "
+            << std::quoted(GetTemporalAaDepthValidationLabel(
+                resolved.depthValidation)) << ",\n"
+            << "  \"history_weight_policy\": "
+            << std::quoted(GetTemporalAaHistoryWeightPolicyLabel(
+                resolved.historyWeight)) << ",\n"
+            << "  \"motion_trust\": "
+            << std::quoted(GetTemporalAaMotionTrustLabel(
+                resolved.motionTrust)) << ",\n"
+            << "  \"rectification_clip\": "
+            << std::quoted(GetTemporalAaRectificationClipLabel(
+                resolved.rectificationClip)) << ",\n"
+            << "  \"blend_domain\": "
+            << std::quoted(GetTemporalAaBlendDomainLabel(
+                resolved.blendDomain)) << ",\n"
             << "  \"execution_path\": "
-            << std::quoted(GetMiniEngineTaaExecutionPathLabel(
+            << std::quoted(GetTemporalAaExecutionPathLabel(
                 resolved.executionPath)) << ",\n"
             << "  \"compute_kernel\": "
-            << std::quoted(GetMiniEngineTaaComputeKernelLabel(
+            << std::quoted(GetTemporalAaComputeKernelLabel(
                 resolved.computeKernel)) << ",\n"
             << "  \"lds_layout\": "
-            << std::quoted(GetMiniEngineTaaLdsLayoutLabel(
+            << std::quoted(GetTemporalAaLdsLayoutLabel(
                 resolved.ldsLayout)) << ",\n"
             << "  \"shared_work_reuse\": "
             << (resolved.sharedWorkReuse ? "true" : "false") << ",\n"
@@ -5868,35 +5875,41 @@ public:
             << (resolved.earlyHistoryRejection ? "true" : "false")
             << ",\n"
             << "  \"pass_fusion\": "
-            << std::quoted(GetMiniEngineTaaPassFusionLabel(
+            << std::quoted(GetTemporalAaPassFusionLabel(
                 resolved.passFusion)) << ",\n"
             << "  \"cache_blocking\": "
-            << std::quoted(GetMiniEngineTaaCacheBlockingLabel(
+            << std::quoted(GetTemporalAaCacheBlockingLabel(
                 resolved.cacheBlocking)) << ",\n"
             << "  \"subpixel_morphology\": "
             << std::quoted(GetMorphologyApplicationLabel(
                 resolved.subpixelMorphology)) << ",\n"
             << "  \"motion_source\": "
-            << std::quoted(GetMiniEngineTaaMotionSourceLabel(
+            << std::quoted(GetTemporalAaMotionSourceLabel(
                 resolved.temporal.motionSource)) << ",\n"
             << "  \"current_reconstruction\": "
             << std::quoted(
-                GetMiniEngineTaaCurrentReconstructionLabel(
+                GetTemporalAaCurrentReconstructionLabel(
                     resolved.temporal.currentReconstruction))
             << ",\n"
             << "  \"history_filter\": "
-            << std::quoted(GetMiniEngineTaaHistoryFilterLabel(
+            << std::quoted(GetTemporalAaHistoryFilterLabel(
                 resolved.temporal.historyFilter)) << ",\n"
             << "  \"rectification\": "
-            << std::quoted(GetMiniEngineTaaRectificationLabel(
+            << std::quoted(GetTemporalAaRectificationLabel(
                 resolved.temporal.rectification)) << ",\n"
             << "  \"sample_resurrection\": "
-            << std::quoted(GetMiniEngineTaaSampleResurrectionLabel(
+            << std::quoted(GetTemporalAaSampleResurrectionLabel(
                 resolved.sampleResurrection)) << ",\n"
             << "  \"sharpness_enabled\": "
-            << (m_ui.MiniEngineTaaSharpenEnabled ? "true" : "false")
+            << (resolved.sharpeningAllowed &&
+                    m_ui.TemporalAaSharpenEnabled
+                ? "true"
+                : "false")
             << ",\n"
-            << "  \"sharpness\": " << m_ui.MiniEngineTaaSharpness
+            << "  \"sharpness_allowed\": "
+            << (resolved.sharpeningAllowed ? "true" : "false")
+            << ",\n"
+            << "  \"sharpness\": " << m_ui.TemporalAaSharpness
             << ",\n"
             << "  \"turn_degrees\": 45.000000,\n"
             << "  \"turn_degrees_per_frame\": 0.375000,\n"
@@ -6145,6 +6158,534 @@ public:
         }
     }
 
+    void ResetFlashlightMotion()
+    {
+        m_FlashlightSwayTime = 0.f;
+        m_FlashlightAimDirection = float3(0.f, 0.f, -1.f);
+        m_FlashlightResolvedPosition = 0.f;
+        m_FlashlightResolvedDirection =
+            float3(0.f, 0.f, -1.f);
+        m_FlashlightResolvedRight =
+            float3(1.f, 0.f, 0.f);
+        m_FlashlightAimInitialized = false;
+        m_FlashlightPoseValid = false;
+    }
+
+    void ApplyFlashlightPresentation()
+    {
+        if (!m_Flashlight)
+            return;
+
+        const FlashlightSettings settings =
+            SanitizeFlashlightSettings(m_ui.Flashlight);
+        m_ui.Flashlight = settings;
+        const FlashlightLobeSettings lobes =
+            ResolveFlashlightLobeSettings(settings);
+        const float emissionScale =
+            GetFlashlightEmissionScale(m_FlashlightTransition);
+        const float3 color(
+            settings.colorLinearRed,
+            settings.colorLinearGreen,
+            settings.colorLinearBlue);
+        const std::shared_ptr<IShadowMap> activeShadowMap =
+            settings.castShadows
+                ? m_FlashlightShadowMap
+                : nullptr;
+
+        m_Flashlight->color = color;
+        m_Flashlight->intensity =
+            lobes.spillIntensityCandela * emissionScale;
+        m_Flashlight->radius = FlashlightEmitterRadiusMeters;
+        m_Flashlight->beamRoundness =
+            settings.beamRoundness;
+        m_Flashlight->range = settings.rangeMeters;
+        m_Flashlight->innerAngle =
+            lobes.spillInnerConeDegrees;
+        m_Flashlight->outerAngle =
+            lobes.spillOuterConeDegrees;
+        m_Flashlight->shadowMap = activeShadowMap;
+
+        if (m_FlashlightHotspot)
+        {
+            m_FlashlightHotspot->color = color;
+            m_FlashlightHotspot->intensity =
+                lobes.hotspotIntensityCandela * emissionScale;
+            m_FlashlightHotspot->radius =
+                FlashlightEmitterRadiusMeters;
+            m_FlashlightHotspot->beamRoundness =
+                settings.beamRoundness;
+            m_FlashlightHotspot->range = settings.rangeMeters;
+            m_FlashlightHotspot->innerAngle = std::max(
+                lobes.hotspotInnerConeDegrees,
+                0.5f);
+            m_FlashlightHotspot->outerAngle = std::max(
+                lobes.hotspotOuterConeDegrees,
+                1.f);
+            m_FlashlightHotspot->shadowMap = activeShadowMap;
+        }
+    }
+
+    void UpdateFlashlightAnimation(float elapsedSeconds)
+    {
+        if (IsControlledBenchmarkActive() ||
+            !m_ui.EnablePbr)
+        {
+            // Controlled measurements and the legacy Donut lighting paths
+            // must never inherit flashlight light or shadow work. Legacy spot
+            // shaders use a different cone-angle convention from UVSR PBR.
+            m_FlashlightTransition = 0.f;
+        }
+        else
+        {
+            m_FlashlightTransition = AdvanceFlashlightTransition(
+                m_FlashlightTransition,
+                m_ui.FlashlightEnabled,
+                elapsedSeconds);
+        }
+
+        ApplyFlashlightPresentation();
+        if (!ShouldSubmitFlashlight(m_FlashlightTransition))
+            ResetFlashlightMotion();
+    }
+
+    static float3 ClampFlashlightAimLag(
+        float3 candidate,
+        float3 target)
+    {
+        candidate = normalize(candidate);
+        target = normalize(target);
+        const float maximumLagRadians =
+            radians(FlashlightMaximumAimLagDegrees);
+        const float maximumLagCosine =
+            std::cos(maximumLagRadians);
+        const float alignment = std::clamp(
+            dot(candidate, target),
+            -1.f,
+            1.f);
+        if (alignment >= maximumLagCosine)
+            return candidate;
+
+        const float3 tangent =
+            candidate - target * alignment;
+        const float tangentLengthSquared =
+            lengthSquared(tangent);
+        if (!(tangentLengthSquared > 1e-12f))
+            return target;
+        return normalize(
+            target * maximumLagCosine +
+            tangent * (
+                std::sin(maximumLagRadians) /
+                std::sqrt(tangentLengthSquared)));
+    }
+
+    static float3 InterpolateFlashlightAim(
+        float3 current,
+        float3 target,
+        float blend)
+    {
+        current = normalize(current);
+        target = normalize(target);
+        blend = std::clamp(blend, 0.f, 1.f);
+        const float alignment = std::clamp(
+            dot(current, target),
+            -1.f,
+            1.f);
+        if (alignment > 0.9995f)
+            return normalize(
+                current * (1.f - blend) +
+                target * blend);
+        if (alignment < -0.9995f)
+            return target;
+
+        const float angle = std::acos(alignment);
+        const float inverseSine = 1.f / std::sin(angle);
+        return normalize(
+            current *
+                (std::sin((1.f - blend) * angle) * inverseSine) +
+            target *
+                (std::sin(blend * angle) * inverseSine));
+    }
+
+    void UpdateFlashlightMotion(float elapsedSeconds)
+    {
+        if (!ShouldSubmitFlashlight(m_FlashlightTransition))
+        {
+            ResetFlashlightMotion();
+            return;
+        }
+
+        const FlashlightSettings settings =
+            SanitizeFlashlightSettings(m_ui.Flashlight);
+        const BaseCamera& camera = GetActiveCamera();
+        const float3 cameraDirection =
+            normalize(camera.GetDir());
+        const float3 cameraUp = normalize(camera.GetUp());
+        float3 cameraRight = cross(cameraDirection, cameraUp);
+        if (!(lengthSquared(cameraRight) > 1e-12f))
+            cameraRight = float3(1.f, 0.f, 0.f);
+        else
+            cameraRight = normalize(cameraRight);
+
+        const FlashlightMountPose mount =
+            ResolveFlashlightMountPose(
+                settings.cameraLateralOffsetMeters);
+        const float3 flashlightPosition =
+            camera.GetPosition() +
+            cameraDirection *
+                mount.positionForwardMeters +
+            cameraRight *
+                mount.positionRightMeters +
+            cameraUp *
+                mount.positionUpMeters;
+        const float3 mountedDirection = normalize(
+            cameraDirection *
+                mount.directionForward +
+            cameraRight *
+                mount.directionRight +
+            cameraUp *
+                mount.directionUp);
+        float3 mountedRight =
+            cameraRight -
+            mountedDirection *
+                dot(cameraRight, mountedDirection);
+        if (!(lengthSquared(mountedRight) > 1e-12f))
+            mountedRight = cross(mountedDirection, cameraUp);
+        if (!(lengthSquared(mountedRight) > 1e-12f))
+            mountedRight = cameraRight;
+        else
+            mountedRight = normalize(mountedRight);
+        m_FlashlightResolvedPosition = flashlightPosition;
+
+        if (!settings.realisticLens)
+        {
+            m_FlashlightSwayTime = 0.f;
+            m_FlashlightAimDirection = mountedDirection;
+            m_FlashlightAimInitialized = true;
+            m_FlashlightResolvedDirection = mountedDirection;
+            m_FlashlightResolvedRight = mountedRight;
+            m_FlashlightPoseValid = true;
+            return;
+        }
+
+        if (!m_FlashlightAimInitialized)
+        {
+            m_FlashlightAimDirection = mountedDirection;
+            m_FlashlightAimInitialized = true;
+        }
+        else
+        {
+            const float blend = GetFlashlightAimCorrectionBlend(
+                elapsedSeconds,
+                settings.aimCorrectionSeconds);
+            m_FlashlightAimDirection = InterpolateFlashlightAim(
+                m_FlashlightAimDirection,
+                mountedDirection,
+                blend);
+            m_FlashlightAimDirection = ClampFlashlightAimLag(
+                m_FlashlightAimDirection,
+                mountedDirection);
+        }
+
+        m_FlashlightSwayTime = AdvanceFlashlightSwayTime(
+            m_FlashlightSwayTime,
+            elapsedSeconds);
+        const FlashlightSwayOffset sway =
+            ResolveFlashlightSwayOffset(
+                m_FlashlightSwayTime,
+                settings.swayDegrees *
+                    GetFlashlightEmissionScale(
+                        m_FlashlightTransition));
+        float3 beamRight =
+            cross(m_FlashlightAimDirection, cameraUp);
+        if (!(lengthSquared(beamRight) > 1e-12f))
+            beamRight = mountedRight;
+        else
+            beamRight = normalize(beamRight);
+        const float3 beamUp = normalize(
+            cross(beamRight, m_FlashlightAimDirection));
+        m_FlashlightResolvedDirection = normalize(
+            m_FlashlightAimDirection +
+            beamRight * std::tan(radians(sway.yawDegrees)) +
+            beamUp * std::tan(radians(sway.pitchDegrees)));
+        beamRight -=
+            m_FlashlightResolvedDirection *
+                dot(beamRight, m_FlashlightResolvedDirection);
+        if (!(lengthSquared(beamRight) > 1e-12f))
+        {
+            beamRight =
+                mountedRight -
+                m_FlashlightResolvedDirection *
+                    dot(
+                        mountedRight,
+                        m_FlashlightResolvedDirection);
+        }
+        m_FlashlightResolvedRight =
+            lengthSquared(beamRight) > 1e-12f
+                ? normalize(beamRight)
+                : float3(1.f, 0.f, 0.f);
+        m_FlashlightPoseValid = true;
+    }
+
+    static void SetFlashlightDirectionAndRoll(
+        const std::shared_ptr<FlashlightSpotLight>& light,
+        const float3& direction,
+        const float3& right)
+    {
+        if (!light || !light->GetNode())
+            return;
+
+        const double3 directionD =
+            normalize(double3(direction));
+        double3 rightD = double3(right);
+        rightD -= directionD * dot(rightD, directionD);
+        if (!(lengthSquared(rightD) > 1e-20))
+            rightD = normalize(orthogonal(directionD));
+        else
+            rightD = normalize(rightD);
+        const double3 upD =
+            normalize(cross(rightD, directionD));
+
+        SceneGraphNode* node = light->GetNode();
+        SceneGraphNode* parent = node->GetParent();
+        daffine3 parentToWorld = daffine3::identity();
+        if (parent)
+            parentToWorld =
+                daffine3(parent->GetLocalToWorldTransform());
+
+        const daffine3 worldToLocal =
+            lookatZ(directionD, upD);
+        const daffine3 localToParent =
+            inverse(worldToLocal * parentToWorld);
+        dquat rotation;
+        double3 scaling;
+        decomposeAffine<double>(
+            localToParent,
+            nullptr,
+            &rotation,
+            &scaling);
+        node->SetTransform(nullptr, &rotation, &scaling);
+    }
+
+    void UpdateFlashlightTransform()
+    {
+        if (!m_FlashlightPoseValid ||
+            !ShouldSubmitFlashlight(m_FlashlightTransition) ||
+            !m_Flashlight ||
+            !m_FlashlightNode)
+            return;
+
+        const double3 positionDelta =
+            double3(m_FlashlightResolvedPosition) -
+            m_Flashlight->GetPosition();
+        if (dot(positionDelta, positionDelta) > 1e-20)
+            m_Flashlight->SetPosition(
+                double3(m_FlashlightResolvedPosition));
+
+        const double3 directionDelta =
+            double3(m_FlashlightResolvedDirection) -
+            m_Flashlight->GetDirection();
+        const float3 rightDelta =
+            m_FlashlightResolvedRight -
+            m_Flashlight->beamRight;
+        if (dot(directionDelta, directionDelta) > 1e-20 ||
+            lengthSquared(rightDelta) > 1e-12f)
+        {
+            SetFlashlightDirectionAndRoll(
+                m_Flashlight,
+                m_FlashlightResolvedDirection,
+                m_FlashlightResolvedRight);
+            SetFlashlightDirectionAndRoll(
+                m_FlashlightHotspot,
+                m_FlashlightResolvedDirection,
+                m_FlashlightResolvedRight);
+        }
+        m_Flashlight->beamRight =
+            m_FlashlightResolvedRight;
+
+        if (m_FlashlightHotspot)
+        {
+            const double3 hotspotPositionDelta =
+                double3(m_FlashlightResolvedPosition) -
+                m_FlashlightHotspot->GetPosition();
+            if (dot(
+                    hotspotPositionDelta,
+                    hotspotPositionDelta) > 1e-20)
+            {
+                m_FlashlightHotspot->SetPosition(
+                    double3(m_FlashlightResolvedPosition));
+            }
+            m_FlashlightHotspot->beamRight =
+                m_FlashlightResolvedRight;
+        }
+    }
+
+    void AttachFlashlightToScene()
+    {
+        if (!m_Scene ||
+            !m_Scene->GetSceneGraph() ||
+            !m_Scene->GetSceneGraph()->GetRootNode())
+        {
+            return;
+        }
+
+        m_Flashlight =
+            std::make_shared<FlashlightSpotLight>();
+        m_Flashlight->SetName(FlashlightPublicName);
+        m_FlashlightHotspot =
+            std::make_shared<FlashlightSpotLight>();
+        m_FlashlightHotspot->SetName(
+            "flashlight_lens_hotspot");
+
+        m_FlashlightNode = std::make_shared<SceneGraphNode>();
+        m_FlashlightNode->SetName(FlashlightPublicName);
+        m_FlashlightNode->SetLeaf(m_Flashlight);
+        m_Scene->GetSceneGraph()->Attach(
+            m_Scene->GetSceneGraph()->GetRootNode(),
+            m_FlashlightNode);
+
+        m_FlashlightHotspotNode =
+            std::make_shared<SceneGraphNode>();
+        m_FlashlightHotspotNode->SetName(
+            "flashlight_lens_hotspot");
+        m_FlashlightHotspotNode->SetLeaf(
+            m_FlashlightHotspot);
+        m_Scene->GetSceneGraph()->Attach(
+            m_Scene->GetSceneGraph()->GetRootNode(),
+            m_FlashlightHotspotNode);
+
+        ApplyFlashlightPresentation();
+        UpdateFlashlightTransform();
+    }
+
+    void CreateFlashlightShadowResources()
+    {
+        if (!m_FlashlightShadowMap)
+        {
+            constexpr nvrhi::Format depthFormats[] = {
+                nvrhi::Format::D32,
+                nvrhi::Format::D16
+            };
+            const nvrhi::FormatSupport required =
+                nvrhi::FormatSupport::Texture |
+                nvrhi::FormatSupport::DepthStencil |
+                nvrhi::FormatSupport::ShaderLoad |
+                nvrhi::FormatSupport::ShaderSample;
+            const nvrhi::Format depthFormat =
+                nvrhi::utils::ChooseFormat(
+                    GetDevice(),
+                    required,
+                    depthFormats,
+                    std::size(depthFormats));
+            if (depthFormat == nvrhi::Format::UNKNOWN)
+            {
+                log::error(
+                    "Flashlight shadows are unavailable because the device "
+                    "supports no sampled depth format.");
+                m_FlashlightDepthPass.reset();
+                return;
+            }
+
+            m_FlashlightShadowMap =
+                std::make_shared<PlanarShadowMap>(
+                    GetDevice(),
+                    FlashlightShadowMapResolution,
+                    depthFormat);
+            m_FlashlightShadowMap->SetLitOutOfBounds(true);
+            m_FlashlightShadowMap->SetFalloffDistance(0.f);
+            m_FlashlightShadowFramebuffer =
+                std::make_shared<FramebufferFactory>(GetDevice());
+            m_FlashlightShadowFramebuffer->DepthTarget =
+                m_FlashlightShadowMap->GetTexture();
+        }
+
+        m_FlashlightDepthPass =
+            std::make_unique<DepthPass>(
+                GetDevice(),
+                m_CommonPasses);
+        DepthPass::CreateParameters parameters;
+        parameters.depthBias = FlashlightShadowDepthBias;
+        parameters.slopeScaledDepthBias =
+            FlashlightShadowSlopeScaledDepthBias;
+        parameters.trackLiveness = false;
+        m_FlashlightDepthPass->Init(
+            *m_ShaderFactory,
+            parameters);
+
+        ApplyFlashlightPresentation();
+    }
+
+    void RenderFlashlightShadow()
+    {
+        if (!m_ui.EnablePbr ||
+            !ShouldRenderFlashlightShadow(
+                m_FlashlightTransition,
+                m_ui.Flashlight.castShadows) ||
+            !m_Flashlight ||
+            !m_FlashlightNode ||
+            !m_FlashlightShadowMap ||
+            !m_FlashlightShadowFramebuffer ||
+            !m_FlashlightDepthPass ||
+            !m_Scene ||
+            !m_OpaqueDrawStrategy)
+        {
+            return;
+        }
+
+        const float nearPlane = std::max(
+            FlashlightShadowNearPlaneMeters,
+            m_CameraCollisionRadius *
+                FlashlightShadowCollisionNearScale);
+        const float farPlane = std::max(
+            m_Flashlight->range,
+            nearPlane + 0.01f);
+        const float verticalFov = radians(std::clamp(
+            m_Flashlight->outerAngle +
+                FlashlightShadowFovPaddingDegrees,
+            1.f,
+            179.f));
+
+        daffine3 viewToWorld =
+            m_FlashlightNode->GetLocalToWorldTransform();
+        viewToWorld =
+            scaling(double3(1.0, 1.0, -1.0)) *
+            viewToWorld;
+        const affine3 worldToView =
+            affine3(inverse(viewToWorld));
+        const float4x4 projection = perspProjD3DStyle(
+            verticalFov,
+            1.f,
+            nearPlane,
+            farPlane);
+        const std::shared_ptr<PlanarView> shadowView =
+            m_FlashlightShadowMap->GetPlanarView();
+        shadowView->SetMatrices(worldToView, projection);
+        shadowView->UpdateCache();
+
+        const nvrhi::ITexture* shadowTexture =
+            m_FlashlightShadowMap->GetTexture();
+        const nvrhi::FormatInfo& shadowDepthInfo =
+            nvrhi::getFormatInfo(shadowTexture->getDesc().format);
+        m_CommandList->clearDepthStencilTexture(
+            m_FlashlightShadowMap->GetTexture(),
+            nvrhi::AllSubresources,
+            true,
+            1.f,
+            shadowDepthInfo.hasStencil,
+            0u);
+        DepthPass::Context context;
+        RenderCompositeView(
+            m_CommandList,
+            shadowView.get(),
+            shadowView.get(),
+            *m_FlashlightShadowFramebuffer,
+            m_Scene->GetSceneGraph()->GetRootNode(),
+            *m_OpaqueDrawStrategy,
+            *m_FlashlightDepthPass,
+            context,
+            "FlashlightShadow",
+            false);
+    }
+
     virtual void Animate(float fElapsedTimeSeconds) override
     {
         UpdateAntiAliasingBenchmark();
@@ -6197,6 +6738,9 @@ public:
             break;
         }
         }
+
+        UpdateFlashlightAnimation(fElapsedTimeSeconds);
+        UpdateFlashlightMotion(fElapsedTimeSeconds);
     }
 
 
@@ -6213,14 +6757,26 @@ public:
         }
         ResetAntiAliasingState();
         if (m_GBufferPass) m_GBufferPass->ResetBindingCache();
+        if (m_FlashlightDepthPass)
+            m_FlashlightDepthPass->ResetBindingCache();
         if (m_DiagnosticCascadedShadowMapPass)
             m_DiagnosticCascadedShadowMapPass->ResetSceneState();
         if (m_SparseVirtualShadowMapPass)
             m_SparseVirtualShadowMapPass->Deactivate();
         m_BindingCache.Clear();
+        m_Flashlight.reset();
+        m_FlashlightNode.reset();
+        m_FlashlightHotspot.reset();
+        m_FlashlightHotspotNode.reset();
+        m_SceneLightsWithoutFlashlight.clear();
+        m_EditableLights.clear();
+        ResetFlashlightMotion();
         m_SunLight.reset();
         m_ui.SelectedMaterial = nullptr;
         m_ui.SelectedNode = nullptr;
+        m_ui.ShowMaterialEditor = false;
+        m_MaterialPickPurpose = MaterialPickPurpose::None;
+        m_MaterialPickScene = nullptr;
         m_OriginalMaterials.clear();
         m_PreviousView.reset();
         m_CameraCollisionWorld.Clear();
@@ -6298,6 +6854,24 @@ public:
             m_SunLight->SetDirection(dm::double3(0.1, -0.9, 0.1));
             m_SunLight->SetName("sun_1");
             m_Scene->GetSceneGraph()->Attach(m_Scene->GetSceneGraph()->GetRootNode(), node);
+        }
+
+        AttachFlashlightToScene();
+        m_Scene->RefreshSceneGraph(GetFrameIndex());
+        m_SceneLightsWithoutFlashlight.clear();
+        m_EditableLights.clear();
+        if (m_Flashlight)
+            m_EditableLights.push_back(m_Flashlight);
+        for (const auto& light :
+            m_Scene->GetSceneGraph()->GetLights())
+        {
+            if (light &&
+                light != m_Flashlight &&
+                light != m_FlashlightHotspot)
+            {
+                m_SceneLightsWithoutFlashlight.push_back(light);
+                m_EditableLights.push_back(light);
+            }
         }
 
         const SponzaCameraPreset* sceneDefaultCamera = FindStandardSponzaCameraPreset(
@@ -6555,6 +7129,71 @@ public:
         return m_Scene;
     }
 
+    void ToggleCenterMaterialInspector()
+    {
+        const bool centerPickPending =
+            m_MaterialPickPurpose ==
+                MaterialPickPurpose::OpenCenterMaterialInspector;
+        if (m_ui.ShowMaterialEditor || centerPickPending)
+        {
+            m_ui.ShowMaterialEditor = false;
+            if (centerPickPending)
+            {
+                m_MaterialPickPurpose = MaterialPickPurpose::None;
+                m_MaterialPickScene = nullptr;
+            }
+            return;
+        }
+
+        const bool controlledExperimentActive =
+            IsSceneLoading() ||
+            IsVisibilityBenchmarkQueued() ||
+            IsVisibilityBenchmarkActive() ||
+            IsAntiAliasingMotionTestRunning() ||
+            IsSvsmMotionBenchmarkRunning();
+        if (!m_Scene || controlledExperimentActive)
+            return;
+
+        // Never reveal the previous click selection while a fresh center sample
+        // is pending. A miss therefore fails closed instead of reopening stale
+        // material data.
+        m_ui.ShowMaterialEditor = false;
+        m_ui.SelectedMaterial = nullptr;
+        m_ui.SelectedNode = nullptr;
+        m_MaterialPickPurpose =
+            MaterialPickPurpose::OpenCenterMaterialInspector;
+        m_MaterialPickScene = m_Scene.get();
+    }
+
+    const Material* GetOriginalMaterial(
+        const std::shared_ptr<Material>& material) const
+    {
+        const auto original = std::find_if(
+            m_OriginalMaterials.begin(),
+            m_OriginalMaterials.end(),
+            [&material](const auto& entry)
+            {
+                return entry.first == material;
+            });
+        return original != m_OriginalMaterials.end()
+            ? &original->second
+            : nullptr;
+    }
+
+    void NotifyMaterialCommandChanged(
+        const std::shared_ptr<Material>& material)
+    {
+        if (!material)
+            return;
+        material->dirty = true;
+        if (m_Scene && m_Scene->GetSceneGraph() &&
+            m_Scene->GetSceneGraph()->GetRootNode())
+        {
+            m_Scene->GetSceneGraph()->GetRootNode()->
+                InvalidateContent();
+        }
+    }
+
     void SynchronizeAntiAliasingSettings()
     {
         const AntiAliasingSettings& applied =
@@ -6565,8 +7204,12 @@ public:
             applied.enabled == requested.enabled &&
             applied.method == requested.method &&
             applied.quality == requested.quality &&
+            applied.temporalCostMode ==
+                requested.temporalCostMode &&
             applied.algorithmOverrides ==
                 requested.algorithmOverrides &&
+            applied.behaviorOverrides ==
+                requested.behaviorOverrides &&
             applied.performanceOverrides ==
                 requested.performanceOverrides)
         {
@@ -6620,10 +7263,10 @@ public:
         planarView->SetViewport(nvrhi::Viewport(
             renderTargetSize.x,
             renderTargetSize.y));
-        MiniEngineTaaJitterSample jitter{ 0.f, 0.f };
+        TemporalAaJitterSample jitter{ 0.f, 0.f };
         if (m_ui.UsesLongTermTemporalAA())
         {
-            jitter = GetMiniEngineTaaJitter(
+            jitter = GetTemporalAaJitter(
                 m_AntiAliasingPhase);
         }
         planarView->SetPixelOffset(float2(jitter.x, jitter.y));
@@ -6678,14 +7321,14 @@ public:
         }
     }
 
-    void CreateMiniEngineTemporalAAPass()
+    void CreateTemporalAAPass()
     {
-        m_MiniEngineTemporalAAPass.reset();
+        m_TemporalAAPass.reset();
         if (!m_ui.UsesLongTermTemporalAA())
             return;
 
-        m_MiniEngineTemporalAAPass =
-            std::make_unique<MiniEngineTemporalAAPass>(
+        m_TemporalAAPass =
+            std::make_unique<TemporalAAPass>(
                 GetDevice(),
                 m_ShaderFactory,
                 m_CommonPasses,
@@ -6728,7 +7371,7 @@ public:
                 "the visibility run.");
         }
 
-        m_MiniEngineTemporalAAPass.reset();
+        m_TemporalAAPass.reset();
 
         if (sampleCountChanged)
         {
@@ -6788,7 +7431,7 @@ public:
         }
         EnsureMsaaVisibilityResolvePass();
 
-        CreateMiniEngineTemporalAAPass();
+        CreateTemporalAAPass();
         if (m_Cmaa2Pass)
         {
             // CMAA2 owns only same-sized single-sample intermediates and can
@@ -6824,7 +7467,7 @@ public:
 
     void CreateRenderPasses()
     {
-        m_MiniEngineTemporalAAPass.reset();
+        m_TemporalAAPass.reset();
         m_Cmaa2Pass.reset();
         if (m_ScreenSpaceVisibilityPass &&
             m_ScreenSpaceVisibilityPass->IsBenchmarkActive())
@@ -6856,6 +7499,7 @@ public:
         m_MaterialIDPass->Init(*m_ShaderFactory, GBufferParams);
 
         m_PixelReadbackPass = std::make_unique<PixelReadbackPass>(GetDevice(), m_ShaderFactory, m_RenderTargets->MaterialIDs, nvrhi::Format::RGBA32_UINT);
+        CreateFlashlightShadowResources();
 
         if (m_ui.EnablePbr)
         {
@@ -6865,12 +7509,12 @@ public:
             m_PbrDeferredLightingPass->Init(m_ShaderFactory);
             EnsureMsaaVisibilityResolvePass();
 #if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
-            m_BendScreenSpaceShadowPass.reset();
+            m_ScreenSpaceDirectionalShadowPass.reset();
             m_SparseVirtualShadowMapPass.reset();
             m_DiagnosticCascadedShadowMapPass.reset();
 #else
-            m_BendScreenSpaceShadowPass =
-                std::make_unique<BendScreenSpaceShadowPass>(
+            m_ScreenSpaceDirectionalShadowPass =
+                std::make_unique<ScreenSpaceDirectionalShadowPass>(
                     GetDevice(),
                     m_ShaderFactory,
                     m_CommonPasses);
@@ -6898,7 +7542,7 @@ public:
         {
             m_PbrDeferredLightingPass.reset();
             m_MsaaVisibilityResolvePass.reset();
-            m_BendScreenSpaceShadowPass.reset();
+            m_ScreenSpaceDirectionalShadowPass.reset();
             m_SparseVirtualShadowMapPass.reset();
             m_DiagnosticCascadedShadowMapPass.reset();
             m_ScreenSpaceVisibilityPass.reset();
@@ -6906,7 +7550,7 @@ public:
             m_DeferredLightingPass->Init(m_ShaderFactory);
         }
 
-        CreateMiniEngineTemporalAAPass();
+        CreateTemporalAAPass();
 
         if (m_ui.UsesCmaa2())
             CreateCmaa2Pass();
@@ -8124,7 +8768,7 @@ public:
             m_ui.RenderMode == RendererMode::Deferred &&
             !m_ui.AntiAliasing.enabled &&
             !m_ui.UsesLongTermTemporalAA() &&
-            !m_ui.BendScreenSpaceShadows.enabled &&
+            !m_ui.ScreenSpaceDirectionalShadows.enabled &&
             !m_ui.SparseVirtualShadowMaps.enabled &&
             !m_ui.ScreenSpaceVisibility.enabled &&
             m_ui.WhiteWorld == WhiteWorldMode::Off &&
@@ -8308,6 +8952,11 @@ public:
         // changes and uncertain content changes still fail open. Animation
         // channels use the same setters, so dormant animation data remains free.
         m_SvsmSceneStateRevisionReliable = sceneRoot != nullptr;
+        // The camera-mounted light is updated after the cached directional
+        // shadow producers sample scene dirtiness. Its empty light node cannot
+        // be a caster, and RefreshSceneGraph below still publishes the current
+        // transform to this frame's light constants.
+        UpdateFlashlightTransform();
         m_Scene->RefreshSceneGraph(GetFrameIndex());
         if (!ValidateDiagnosticCsmBenchmarkState(
                 windowWidth,
@@ -8317,7 +8966,31 @@ public:
             return;
         }
         const auto& sceneLights =
-            m_Scene->GetSceneGraph()->GetLights();
+            m_SceneLightsWithoutFlashlight;
+        std::vector<std::shared_ptr<Light>> lightingLights;
+        const std::vector<std::shared_ptr<Light>>* submittedLights =
+            &sceneLights;
+        if (m_ui.EnablePbr &&
+            ShouldSubmitFlashlight(m_FlashlightTransition) &&
+            m_Flashlight)
+        {
+            // Local-light limits are deterministic: the user-controlled
+            // flashlight is never silently dropped by a light-heavy scene.
+            lightingLights.reserve(sceneLights.size() + 2u);
+            lightingLights.push_back(m_Flashlight);
+            if (m_ui.Flashlight.realisticLens &&
+                m_FlashlightHotspot &&
+                m_FlashlightHotspot->intensity > 0.f)
+            {
+                lightingLights.push_back(m_FlashlightHotspot);
+            }
+            for (const auto& light : sceneLights)
+            {
+                if (light)
+                    lightingLights.push_back(light);
+            }
+            submittedLights = &lightingLights;
+        }
 
         {
             uint width = windowWidth;
@@ -8337,7 +9010,8 @@ public:
                 m_ui.HasActiveScreenSpaceVisibilityConsumer();
             // The directional visibility producers consume a single coherent
             // closest surface. Keep the resolve targets allocated for every
-            // deferred PBR MSAA topology so toggling Bend, SVSM, or diagnostic
+            // deferred PBR MSAA topology so toggling screen-space shadows,
+            // SVSM, or diagnostic
             // CSM does not force an unrelated render-pass rebuild.
             const bool msaaClosestSurfaceResolveResourcesRequired =
                 m_ui.EnablePbr &&
@@ -8349,8 +9023,9 @@ public:
             const bool visibilitySourceRadianceRequired =
                 screenSpaceVisibilityResourcesRequired &&
                 m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
-                (!sceneLights.empty() ||
-                    IsImageBasedLightingLobeActive(
+                (!submittedLights->empty() ||
+                    IsAmbientFillLobeActive(
+                        m_ui.EnableAmbientFill,
                         m_ui.EnableDiffuseIbl,
                         m_ui.DiffuseIblStrength));
             const bool temporalAARequired =
@@ -8406,7 +9081,7 @@ public:
             }
 
             const bool refreshTemporalPass =
-                temporalAARequired != bool(m_MiniEngineTemporalAAPass);
+                temporalAARequired != bool(m_TemporalAAPass);
             if (SetupView())
             {
                 needNewPasses = true;
@@ -8416,6 +9091,7 @@ public:
             if (m_ui.ShaderReloadRequested)
             {
                 m_DiagnosticCascadedShadowMapPass.reset();
+                m_FlashlightDepthPass.reset();
                 // This pass owns shader handles and PSOs independently of the
                 // main pass set. Drop it before clearing the factory cache so
                 // an explicit reload cannot retain the previous MSAA resolve.
@@ -8448,7 +9124,7 @@ public:
                 // A method transition does not invalidate forward, G-buffer,
                 // lighting, visibility, sky, or output passes while the
                 // render-target topology stays unchanged.
-                CreateMiniEngineTemporalAAPass();
+                CreateTemporalAAPass();
             }
 
             // CMAA2 is a presentation-only spatial filter when Temporal is
@@ -8496,9 +9172,11 @@ public:
                     ? WhiteWorldIndirectReferenceScale
                     : 1.f,
                 m_ui.EnvironmentExposureStops,
-                m_ui.EnableDiffuseIbl,
+                m_ui.EnableAmbientFill &&
+                    m_ui.EnableDiffuseIbl,
                 m_ui.DiffuseIblStrength,
-                m_ui.EnableSpecularIbl,
+                m_ui.EnableAmbientFill &&
+                    m_ui.EnableSpecularIbl,
                 m_ui.SpecularIblStrength,
                 m_ui.EnvironmentSource);
         }
@@ -8525,7 +9203,7 @@ public:
             m_ui.HasActiveScreenSpaceVisibilityConsumer() &&
             m_ui.LightingDebugView == PbrLightingDebugView::None;
         uint32_t knownInactiveLightingSources = 0u;
-        if (sceneLights.empty())
+        if (submittedLights->empty())
             knownInactiveLightingSources |= LightingSource_Direct;
         if (!diffuseEnvironment ||
             !(diffuseEnvironmentScale > 0.f))
@@ -8548,7 +9226,7 @@ public:
                     1u);
 
         m_RenderTargets->Clear(m_CommandList);
-        BendScreenSpaceShadowResult bendShadowResult;
+        ScreenSpaceDirectionalShadowResult screenSpaceShadowResult;
         SparseVirtualShadowMapResult sparseVirtualShadowMapResult;
         DiagnosticCascadedShadowMapResult diagnosticCsmResult;
         DirectionalLightVisibilitySet directionalVisibility{};
@@ -8626,13 +9304,14 @@ public:
         bool deferredMsaaLightingPending = false;
         bool deferredMsaaVisibilityPending = false;
         m_SubmittedMainViewTriangles = 0u;
+        RenderFlashlightShadow();
 
         if (!m_ui.UsesDeferredShading())
         {
             m_ForwardPass->PrepareLights(
                 forwardContext,
                 m_CommandList,
-                m_Scene->GetSceneGraph()->GetLights(),
+                *submittedLights,
                 float3(0.f),
                 float3(0.f),
                 environmentLightProbes);
@@ -8660,7 +9339,7 @@ public:
             EndRendererStage(RendererTimingStage::Geometry);
 
             const bool directionalVisibilityProducerEnabled =
-                m_ui.BendScreenSpaceShadows.enabled ||
+                m_ui.ScreenSpaceDirectionalShadows.enabled ||
                 m_ui.SparseVirtualShadowMaps.enabled ||
                 m_ui.DiagnosticCascadedShadowMaps.enabled;
             if (m_RenderTargets->GetSampleCount() > 1u &&
@@ -8682,13 +9361,13 @@ public:
                     : m_RenderTargets->GBufferNormals.Get();
 
             if (m_ui.EnablePbr &&
-                m_BendScreenSpaceShadowPass &&
-                (!m_ui.BendScreenSpaceShadows.enabled ||
+                m_ScreenSpaceDirectionalShadowPass &&
+                (!m_ui.ScreenSpaceDirectionalShadows.enabled ||
                     singleSurfaceInputsAvailable))
             {
-                bendShadowResult = m_BendScreenSpaceShadowPass->Render(
+                screenSpaceShadowResult = m_ScreenSpaceDirectionalShadowPass->Render(
                     m_CommandList,
-                    m_ui.BendScreenSpaceShadows,
+                    m_ui.ScreenSpaceDirectionalShadows,
                     *m_View,
                     visibilityDepth,
                     m_SunLight.get());
@@ -8751,9 +9430,10 @@ public:
                 // separate authored material ambient-occlusion attachment.
                 deferredInputs.indirectDiffuse = m_RenderTargets->MaterialAmbientOcclusion;
             }
-            deferredInputs.lights = &sceneLights;
+            deferredInputs.lights = submittedLights;
 
-            // Bend, SVSM, and diagnostic CSM remain independent visibility
+            // Screen-space shadows, SVSM, and diagnostic CSM remain independent
+            // visibility
             // producers. This frame-local adapter is their only shared
             // integration point, and
             // deferred lighting applies a factor only to its pointer-identical
@@ -8761,8 +9441,8 @@ public:
             // without changing the other.
             directionalVisibility = {{
                 {
-                    bendShadowResult.nearVisibility,
-                    bendShadowResult.light
+                    screenSpaceShadowResult.nearVisibility,
+                    screenSpaceShadowResult.light
                 },
                 {
                     sparseVirtualShadowMapResult.visibility,
@@ -9005,7 +9685,34 @@ public:
             EndRendererStage(RendererTimingStage::Geometry);
         }
 
-        if(m_Pick)
+        if (m_MaterialPickPurpose != MaterialPickPurpose::None &&
+            m_MaterialPickScene != m_Scene.get())
+        {
+            m_MaterialPickPurpose = MaterialPickPurpose::None;
+            m_MaterialPickScene = nullptr;
+            m_ui.ShowMaterialEditor = false;
+        }
+        if (m_MaterialPickPurpose ==
+            MaterialPickPurpose::OpenCenterMaterialInspector)
+        {
+            const nvrhi::TextureDesc& materialIdDesc =
+                m_RenderTargets->MaterialIDs->getDesc();
+            const CenterMaterialPick centerPick =
+                ResolveCenterMaterialPick(
+                    materialIdDesc.width,
+                    materialIdDesc.height);
+            if (centerPick.valid)
+            {
+                m_PickPosition =
+                    uint2(centerPick.x, centerPick.y);
+            }
+            else
+            {
+                m_MaterialPickPurpose = MaterialPickPurpose::None;
+                m_MaterialPickScene = nullptr;
+            }
+        }
+        if (m_MaterialPickPurpose != MaterialPickPurpose::None)
         {
             BeginRendererStage(RendererTimingStage::MaterialPicking);
             m_CommandList->clearTextureUInt(
@@ -9121,42 +9828,44 @@ public:
             const ResolvedAntiAliasingSettings antiAliasing =
                 m_ui.GetResolvedAntiAliasingSettings();
 #if UVSR_AA_DEVELOPER_OVERRIDES
-            const MiniEngineTaaDebugView activeAaVisualization =
-                m_ui.MiniEngineTaaVisualization;
+            const TemporalAaDebugView activeAaVisualization =
+                m_ui.TemporalAaVisualization;
 #else
             // Debug shaders and routing are absent from production. Ignore
             // stale or hostile programmatic state before it can alter the
             // shipping render graph.
-            constexpr MiniEngineTaaDebugView activeAaVisualization =
-                MiniEngineTaaDebugView::Off;
+            constexpr TemporalAaDebugView activeAaVisualization =
+                TemporalAaDebugView::Off;
 #endif
-            const bool miniEngineDebugVisualizationActive =
-                m_MiniEngineTemporalAAPass &&
+            const bool temporalDebugVisualizationActive =
+                m_TemporalAAPass &&
                 IsLongTermTemporalPreset(
                     antiAliasing.implementation) &&
-                IsMiniEngineTaaDebugVisualization(
+                IsTemporalAaDebugVisualization(
                     activeAaVisualization);
             const bool temporalSharpenEnabled =
-                ShouldSharpenMiniEngineTaa(
-                    m_ui.MiniEngineTaaSharpenEnabled,
-                    m_ui.MiniEngineTaaSharpness);
+                antiAliasing.sharpeningAllowed &&
+                ShouldSharpenTemporalAa(
+                    m_ui.TemporalAaSharpenEnabled,
+                    m_ui.TemporalAaSharpness);
             const bool deferTemporalSharpenToPresentation =
-                m_MiniEngineTemporalAAPass &&
-                m_Cmaa2Pass &&
+                m_TemporalAAPass &&
                 IsLongTermTemporalPreset(
                     antiAliasing.implementation) &&
-                antiAliasing.subpixelMorphology !=
-                    MorphologyApplication::Off &&
-                !miniEngineDebugVisualizationActive &&
-                temporalSharpenEnabled;
-            if (m_MiniEngineTemporalAAPass)
+                !temporalDebugVisualizationActive &&
+                temporalSharpenEnabled &&
+                (antiAliasing.subpixelMorphology !=
+                        MorphologyApplication::Off ||
+                    antiAliasing.historyStorage ==
+                        TemporalAaHistoryStorage::Compact);
+            if (m_TemporalAAPass)
             {
                 // Resolve scene-linear radiance before any display transform.
                 // The pass intentionally has no exposure, grading, LUT, or
                 // transfer dependency, so removing or replacing the display
                 // stage does not change its contract.
                 antiAliasedTexture =
-                    m_MiniEngineTemporalAAPass->Render(
+                    m_TemporalAAPass->Render(
                     m_CommandList,
                     *m_View,
                     m_PreviousView.get(),
@@ -9167,7 +9876,7 @@ public:
                     temporalSharpenEnabled &&
                         !deferTemporalSharpenToPresentation,
                     deferTemporalSharpenToPresentation,
-                    m_ui.MiniEngineTaaSharpness);
+                    m_ui.TemporalAaSharpness);
             }
 
             bool cmaa2RenderedThisFrame = false;
@@ -9191,7 +9900,7 @@ public:
                 // spatial current made a changing selective rejection mask
                 // modulate edge detail.
                 antiAliasedTexture =
-                    m_MiniEngineTemporalAAPass
+                    m_TemporalAAPass
                         ->SharpenPresentation(
                             m_CommandList,
                             antiAliasedTexture);
@@ -9201,7 +9910,7 @@ public:
 
         nvrhi::ITexture* displayTexture = antiAliasedTexture;
         if (m_ui.UsesTonemapper() &&
-            !bendShadowResult.showDebug &&
+            !screenSpaceShadowResult.showDebug &&
             !sparseVirtualShadowMapResult.showDebug &&
             !diagnosticCsmResult.showDebug)
         {
@@ -9235,10 +9944,10 @@ public:
                 m_CommandList,
                 framebuffer);
         }
-        else if (bendShadowResult.showDebug &&
-            m_BendScreenSpaceShadowPass)
+        else if (screenSpaceShadowResult.showDebug &&
+            m_ScreenSpaceDirectionalShadowPass)
         {
-            m_BendScreenSpaceShadowPass->PresentDebug(
+            m_ScreenSpaceDirectionalShadowPass->PresentDebug(
                 m_CommandList,
                 framebuffer);
         }
@@ -9345,39 +10054,72 @@ public:
             m_ui.CopyScreenshotToClipboard = false;
         }
 
-        if (m_Pick)
+        if (m_MaterialPickPurpose != MaterialPickPurpose::None)
         {
-            m_Pick = false;
+            const MaterialPickPurpose completedPurpose =
+                m_MaterialPickPurpose;
+            const Scene* completedScene = m_MaterialPickScene;
+            m_MaterialPickPurpose = MaterialPickPurpose::None;
+            m_MaterialPickScene = nullptr;
             uint4 pixelValue = m_PixelReadbackPass->ReadUInts();
             m_ui.SelectedMaterial = nullptr;
             m_ui.SelectedNode = nullptr;
 
-            for (const auto& material : m_Scene->GetSceneGraph()->GetMaterials())
+            const bool completedForCurrentScene =
+                completedScene == m_Scene.get();
+            if (completedForCurrentScene)
             {
-                if (material->materialID == int(pixelValue.x))
+                for (const auto& material :
+                    m_Scene->GetSceneGraph()->GetMaterials())
                 {
-                    m_ui.SelectedMaterial = material;
-                    break;
+                    if (material->materialID == int(pixelValue.x))
+                    {
+                        m_ui.SelectedMaterial = material;
+                        break;
+                    }
+                }
+
+                for (const auto& instance :
+                    m_Scene->GetSceneGraph()->GetMeshInstances())
+                {
+                    if (instance->GetInstanceIndex() == int(pixelValue.y))
+                    {
+                        m_ui.SelectedNode =
+                            instance->GetNodeSharedPtr();
+                        break;
+                    }
                 }
             }
 
-            for (const auto& instance : m_Scene->GetSceneGraph()->GetMeshInstances())
+            if (completedPurpose ==
+                MaterialPickPurpose::OpenCenterMaterialInspector)
             {
-                if (instance->GetInstanceIndex() == int(pixelValue.y))
+                m_ui.ShowMaterialEditor =
+                    m_ui.SelectedMaterial != nullptr;
+                if (m_ui.SelectedMaterial)
                 {
-                    m_ui.SelectedNode = instance->GetNodeSharedPtr();
-                    break;
+                    log::info(
+                        "Center material: %s",
+                        m_ui.SelectedMaterial->name.c_str());
                 }
             }
-
-            if (m_ui.SelectedNode)
+            else if (completedForCurrentScene &&
+                completedPurpose ==
+                    MaterialPickPurpose::FocusCameraAtCursor)
             {
-                log::info("Picked node: %s", m_ui.SelectedNode->GetPath().generic_string().c_str());
-                PointThirdPersonCameraAt(m_ui.SelectedNode);
-            }
-            else
-            {
-                PointThirdPersonCameraAt(m_Scene->GetSceneGraph()->GetRootNode());
+                if (m_ui.SelectedNode)
+                {
+                    log::info(
+                        "Picked node: %s",
+                        m_ui.SelectedNode->GetPath()
+                            .generic_string().c_str());
+                    PointThirdPersonCameraAt(m_ui.SelectedNode);
+                }
+                else
+                {
+                    PointThirdPersonCameraAt(
+                        m_Scene->GetSceneGraph()->GetRootNode());
+                }
             }
         }
 
@@ -9396,8 +10138,8 @@ public:
         {
             m_ScreenSpaceVisibilityPass->ResetHistory();
         }
-        if (m_MiniEngineTemporalAAPass)
-            m_MiniEngineTemporalAAPass->ResetHistory();
+        if (m_TemporalAAPass)
+            m_TemporalAAPass->ResetHistory();
     }
 
     float GetSceneDiagonal() const
@@ -9427,11 +10169,11 @@ public:
             : nullptr;
     }
 
-    const BendScreenSpaceShadowTimings*
-        GetBendScreenSpaceShadowTimings() const
+    const ScreenSpaceDirectionalShadowTimings*
+        GetScreenSpaceDirectionalShadowTimings() const
     {
-        return m_BendScreenSpaceShadowPass
-            ? &m_BendScreenSpaceShadowPass->GetTimings()
+        return m_ScreenSpaceDirectionalShadowPass
+            ? &m_ScreenSpaceDirectionalShadowPass->GetTimings()
             : nullptr;
     }
 
@@ -9469,10 +10211,20 @@ public:
         return m_SunLight;
     }
 
-    const MiniEngineTemporalAATimings* GetMiniEngineTemporalAATimings() const
+    const std::vector<std::shared_ptr<Light>>& GetEditableLights() const
     {
-        return m_MiniEngineTemporalAAPass
-            ? &m_MiniEngineTemporalAAPass->GetTimings()
+        return m_EditableLights;
+    }
+
+    bool IsFlashlight(const std::shared_ptr<Light>& light) const
+    {
+        return light && light == m_Flashlight;
+    }
+
+    const TemporalAATimings* GetTemporalAATimings() const
+    {
+        return m_TemporalAAPass
+            ? &m_TemporalAAPass->GetTimings()
             : nullptr;
     }
 
@@ -9750,12 +10502,14 @@ namespace
         void Render(
             nvrhi::IFramebuffer* framebuffer,
             float blurPixels,
-            const std::array<UiBackdropRect, 3>& backdropRects)
+            const std::array<
+                UiBackdropRect,
+                UiBackdropRectCount>& backdropRects)
         {
             const float clampedBlurPixels =
                 std::clamp(blurPixels, 0.f, 24.f);
-            if (clampedBlurPixels <= 0.f)
-                return;
+            const bool renderBackdrop =
+                clampedBlurPixels > 0.f;
 
             const bool hasVisibleBackdrop = std::any_of(
                 backdropRects.begin(),
@@ -9767,11 +10521,25 @@ namespace
                         rect.maxX > rect.minX &&
                         rect.maxY > rect.minY;
                 });
-            if (!hasVisibleBackdrop || !EnsureResources(framebuffer))
+            const bool hasVisibleShadow = std::any_of(
+                backdropRects.begin(),
+                backdropRects.end(),
+                [](const UiBackdropRect& rect)
+                {
+                    return
+                        rect.visible &&
+                        rect.maxX > rect.minX &&
+                        rect.maxY > rect.minY &&
+                        rect.shadowBlur > 0.f &&
+                        rect.shadowOpacity > 0.f &&
+                        rect.opacity > 0.f;
+                });
+            if (!hasVisibleBackdrop ||
+                (!renderBackdrop && !hasVisibleShadow) ||
+                !EnsureResources(framebuffer))
+            {
                 return;
-
-            nvrhi::ITexture* framebufferTexture =
-                framebuffer->getDesc().colorAttachments[0].texture;
+            }
 
             m_CommandList->open();
 #ifdef _WIN32
@@ -9784,17 +10552,10 @@ namespace
 #endif
             m_CommandList->beginMarker("UI Backdrop Blur");
 
-            BlitParameters downsampleParameters;
-            downsampleParameters.targetFramebuffer =
-                m_DownsampleFramebuffer;
-            downsampleParameters.sourceTexture = framebufferTexture;
-            m_CommonPasses->BlitTexture(
-                m_CommandList,
-                downsampleParameters,
-                &m_BindingCache);
-
             const float blurRadius =
-                std::max(0.5f, clampedBlurPixels * 0.5f);
+                renderBackdrop
+                    ? std::max(0.5f, clampedBlurPixels * 0.5f)
+                    : 0.f;
             BackdropBlurConstants constants{};
             constants.reciprocalSourceSize = float2(
                 1.f / float(m_BlurWidth),
@@ -9805,29 +10566,44 @@ namespace
             constants.reciprocalWindowSize = float2(
                 1.f / float(m_WindowWidth),
                 1.f / float(m_WindowHeight));
-            m_CommandList->writeBuffer(
-                m_ConstantBuffer,
-                &constants,
-                sizeof(constants));
-
-            nvrhi::GraphicsState horizontalState;
-            horizontalState.pipeline = m_HorizontalPipeline;
-            horizontalState.framebuffer = m_HorizontalBlurFramebuffer;
-            horizontalState.bindings = { m_HorizontalBindingSet };
-            horizontalState.viewport.addViewport(
-                nvrhi::Viewport(
-                    float(m_BlurWidth),
-                    float(m_BlurHeight)));
-            horizontalState.viewport.addScissorRect(
-                nvrhi::Rect(
-                    int(m_BlurWidth),
-                    int(m_BlurHeight)));
-            m_CommandList->setGraphicsState(horizontalState);
 
             nvrhi::DrawArguments drawArguments;
             drawArguments.instanceCount = 1;
             drawArguments.vertexCount = 4;
-            m_CommandList->draw(drawArguments);
+            if (renderBackdrop)
+            {
+                nvrhi::ITexture* framebufferTexture =
+                    framebuffer->getDesc().colorAttachments[0].texture;
+                BlitParameters downsampleParameters;
+                downsampleParameters.targetFramebuffer =
+                    m_DownsampleFramebuffer;
+                downsampleParameters.sourceTexture = framebufferTexture;
+                m_CommonPasses->BlitTexture(
+                    m_CommandList,
+                    downsampleParameters,
+                    &m_BindingCache);
+
+                m_CommandList->writeBuffer(
+                    m_ConstantBuffer,
+                    &constants,
+                    sizeof(constants));
+
+                nvrhi::GraphicsState horizontalState;
+                horizontalState.pipeline = m_HorizontalPipeline;
+                horizontalState.framebuffer =
+                    m_HorizontalBlurFramebuffer;
+                horizontalState.bindings = { m_HorizontalBindingSet };
+                horizontalState.viewport.addViewport(
+                    nvrhi::Viewport(
+                        float(m_BlurWidth),
+                        float(m_BlurHeight)));
+                horizontalState.viewport.addScissorRect(
+                    nvrhi::Rect(
+                        int(m_BlurWidth),
+                        int(m_BlurHeight)));
+                m_CommandList->setGraphicsState(horizontalState);
+                m_CommandList->draw(drawArguments);
+            }
 
             for (const UiBackdropRect& backdropRect : backdropRects)
             {
@@ -9889,61 +10665,64 @@ namespace
                 m_CommandList->draw(drawArguments);
             }
 
-            for (const UiBackdropRect& backdropRect : backdropRects)
+            if (renderBackdrop)
             {
-                if (!backdropRect.visible)
-                    continue;
+                for (const UiBackdropRect& backdropRect : backdropRects)
+                {
+                    if (!backdropRect.visible)
+                        continue;
 
-                const float minX = std::clamp(
-                    backdropRect.minX,
-                    0.f,
-                    float(m_WindowWidth));
-                const float minY = std::clamp(
-                    backdropRect.minY,
-                    0.f,
-                    float(m_WindowHeight));
-                const float maxX = std::clamp(
-                    backdropRect.maxX,
-                    minX,
-                    float(m_WindowWidth));
-                const float maxY = std::clamp(
-                    backdropRect.maxY,
-                    minY,
-                    float(m_WindowHeight));
-                if (maxX <= minX || maxY <= minY)
-                    continue;
+                    const float minX = std::clamp(
+                        backdropRect.minX,
+                        0.f,
+                        float(m_WindowWidth));
+                    const float minY = std::clamp(
+                        backdropRect.minY,
+                        0.f,
+                        float(m_WindowHeight));
+                    const float maxX = std::clamp(
+                        backdropRect.maxX,
+                        minX,
+                        float(m_WindowWidth));
+                    const float maxY = std::clamp(
+                        backdropRect.maxY,
+                        minY,
+                        float(m_WindowHeight));
+                    if (maxX <= minX || maxY <= minY)
+                        continue;
 
-                constants.sampleDirection = float2(0.f, 1.f);
-                constants.panelMin = float2(minX, minY);
-                constants.panelSize = float2(
-                    maxX - minX,
-                    maxY - minY);
-                constants.cornerRadius = backdropRect.rounding;
-                constants.opacity = backdropRect.opacity;
-                constants.shadowBlur = 0.f;
-                constants.shadowOpacity = 0.f;
-                constants.shadowOffsetY = 0.f;
-                m_CommandList->writeBuffer(
-                    m_ConstantBuffer,
-                    &constants,
-                    sizeof(constants));
+                    constants.sampleDirection = float2(0.f, 1.f);
+                    constants.panelMin = float2(minX, minY);
+                    constants.panelSize = float2(
+                        maxX - minX,
+                        maxY - minY);
+                    constants.cornerRadius = backdropRect.rounding;
+                    constants.opacity = backdropRect.opacity;
+                    constants.shadowBlur = 0.f;
+                    constants.shadowOpacity = 0.f;
+                    constants.shadowOffsetY = 0.f;
+                    m_CommandList->writeBuffer(
+                        m_ConstantBuffer,
+                        &constants,
+                        sizeof(constants));
 
-                const nvrhi::Viewport panelViewport(
-                    minX,
-                    maxX,
-                    minY,
-                    maxY,
-                    0.f,
-                    1.f);
-                nvrhi::GraphicsState compositeState;
-                compositeState.pipeline = m_CompositePipeline;
-                compositeState.framebuffer = framebuffer;
-                compositeState.bindings = { m_CompositeBindingSet };
-                compositeState.viewport.addViewport(panelViewport);
-                compositeState.viewport.addScissorRect(
-                    nvrhi::Rect(panelViewport));
-                m_CommandList->setGraphicsState(compositeState);
-                m_CommandList->draw(drawArguments);
+                    const nvrhi::Viewport panelViewport(
+                        minX,
+                        maxX,
+                        minY,
+                        maxY,
+                        0.f,
+                        1.f);
+                    nvrhi::GraphicsState compositeState;
+                    compositeState.pipeline = m_CompositePipeline;
+                    compositeState.framebuffer = framebuffer;
+                    compositeState.bindings = { m_CompositeBindingSet };
+                    compositeState.viewport.addViewport(panelViewport);
+                    compositeState.viewport.addScissorRect(
+                        nvrhi::Rect(panelViewport));
+                    m_CommandList->setGraphicsState(compositeState);
+                    m_CommandList->draw(drawArguments);
+                }
             }
 
             m_CommandList->endMarker();
@@ -9963,14 +10742,17 @@ namespace
 
         float opacity = 0.f;
         float outlineWidth = 1.5f;
-        float shadowBlur = 10.f;
-        float shadowOpacity = 0.34f;
+        float shadowBlur = UiPanelShadowBlurPixels;
+        float shadowOpacity = UiPanelShadowOpacity;
+
+        float shadowOffsetY = UiPanelShadowOffsetYPixels;
+        float3 padding;
 
         float4 outlineTopColor;
         float4 outlineBottomColor;
     };
 
-    static_assert(sizeof(PixelZoomConstants) == 80u);
+    static_assert(sizeof(PixelZoomConstants) == 96u);
 
     class PixelZoomPass
     {
@@ -10189,16 +10971,18 @@ namespace
             // The 1.5-pixel signed-distance band reproduces that visual weight
             // without filtering the magnified interior.
             constants.outlineWidth = 1.5f;
-            constants.shadowBlur = 10.f;
-            constants.shadowOpacity = 0.34f;
+            constants.shadowBlur = UiPanelShadowBlurPixels;
+            constants.shadowOpacity = UiPanelShadowOpacity;
+            constants.shadowOffsetY = UiPanelShadowOffsetYPixels;
             constants.outlineTopColor =
                 float4(0.88f, 0.90f, 0.94f, 0.10f);
             constants.outlineBottomColor =
                 float4(0.96f, 0.97f, 1.00f, 0.30f);
 
-            constexpr float ShadowOffsetY = 3.f;
             const float shadowExtent =
-                std::ceil(constants.shadowBlur + ShadowOffsetY);
+                std::ceil(
+                    constants.shadowBlur +
+                    constants.shadowOffsetY);
             const float minX = std::max(
                 0.f,
                 float(layout.panelMinX) - shadowExtent);
@@ -10692,6 +11476,33 @@ void UvsrSceneViewer::UpdateVisibilityBenchmarkAfterRender()
 class UIRenderer : public ImGui_Renderer
 {
 private:
+    struct UiVisualTokens
+    {
+        ImVec4 drawerHeader;
+        ImVec4 drawerHeaderHovered;
+        ImVec4 drawerHeaderActive;
+        ImVec4 drawerBackground;
+        ImVec4 drawerFrame;
+        ImVec4 drawerFrameHovered;
+        ImVec4 drawerFrameActive;
+        ImVec4 outlineTop;
+        ImVec4 outlineBottom;
+        ImVec4 folderOutline;
+        ImVec4 panelBodySurface;
+        ImVec4 settingsTitleSurface;
+        ImVec4 actionButton;
+        ImVec4 actionButtonHovered;
+        ImVec4 actionButtonActive;
+        float drawerRounding = 5.f;
+        float backdropShadowBlur = UiPanelShadowBlurPixels;
+        float backdropShadowOpacity = UiPanelShadowOpacity;
+        float backdropShadowOffsetY = UiPanelShadowOffsetYPixels;
+        float floatingPanelOpacity = 0.82f;
+        ImVec4 errorText = ImVec4(1.f, 0.35f, 0.30f, 1.f);
+        bool drawControlOutlines = true;
+        bool drawScrollEdgeFades = true;
+    };
+
     struct StatSnapshot
     {
         int width = 0;
@@ -10700,13 +11511,13 @@ private:
         double frameTimeSeconds = 0.0;
         std::string rendererName;
         GpuPerformanceMetrics gpuMetrics;
-        BendScreenSpaceShadowTimings bendShadowTimings;
+        ScreenSpaceDirectionalShadowTimings screenSpaceShadowTimings;
         SparseVirtualShadowMapTimings sparseShadowTimings;
         DiagnosticCsmTimings diagnosticCsmTimings;
         DiagnosticCsmStats diagnosticCsmStats;
         ScreenSpaceVisibilityTimings visibilityTimings;
-        MiniEngineTemporalAATimings temporalAATimings;
-        bool hasBendShadowTimings = false;
+        TemporalAATimings temporalAATimings;
+        bool hasScreenSpaceShadowTimings = false;
         bool hasSparseShadowTimings = false;
         bool hasDiagnosticCsmTimings = false;
         bool hasVisibilityTimings = false;
@@ -10726,7 +11537,7 @@ private:
     double m_StatFrameTimeSum = 0.0;
     uint32_t m_StatFrameTimeCount = 0;
     std::array<std::string, 6> m_PerformanceStatValues;
-    std::array<std::string, 2> m_BendShadowStatLines;
+    std::array<std::string, 2> m_ScreenSpaceShadowStatLines;
     std::array<std::string, 17> m_SparseShadowStatLines;
     std::array<std::string, 11> m_DiagnosticCsmStatLines;
     std::array<std::string, 3> m_VisibilityStatLines;
@@ -10734,7 +11545,7 @@ private:
     std::deque<StatSnapshot> m_StatUpdateQueue;
     bool m_HasAppliedStatSnapshot = false;
     bool m_HasGpuStatSnapshot = false;
-    bool m_HasBendShadowStatSnapshot = false;
+    bool m_HasScreenSpaceShadowStatSnapshot = false;
     bool m_HasSparseShadowStatSnapshot = false;
     bool m_HasDiagnosticCsmStatSnapshot = false;
     bool m_HasVisibilityStatSnapshot = false;
@@ -10743,16 +11554,56 @@ private:
     std::unique_ptr<BackdropBlurPass> m_BackdropBlurPass;
     std::unique_ptr<PixelZoomPass> m_PixelZoomPass;
     uint32_t m_SettingsPanelMarginPixels = 10u;
+    float m_UiDisplayScale = 1.f;
     float m_SettingsAppearance = 0.f;
     PixelZoomMode m_RenderedPixelZoom = PixelZoomMode::Off;
     PixelZoomMode m_PendingPixelZoom = PixelZoomMode::Off;
     float m_PixelZoomVisibility = 0.f;
     float m_PixelZoomLevelTransition = 1.f;
+    float m_MaterialInspectorZoomPlacement = 0.f;
+    float m_MaterialInspectorAppearance = 0.f;
+    UiSkin m_ComposedUiSkin = DefaultUiSkin;
+    bool m_CommandOpen = false;
+    float m_CommandAppearance = 0.f;
+    bool m_CommandFocusRequested = false;
+    bool m_CommandScrollToTopRequested = false;
+    bool m_SuppressCommandShortcutSlashCharacter = false;
+    std::array<char, 512> m_CommandBuffer = {};
+    std::deque<std::string> m_CommandHistory;
+    int m_CommandHistoryIndex = -1;
+    std::string m_CommandResult;
+    bool m_CommandResultIsError = false;
+    std::optional<UiCommand> m_PendingCommand;
+    CommandInterfaceLayout m_CommandLayout;
+    bool m_SettingsCollapsed = false;
+    std::optional<bool> m_SettingsCollapsedRequest;
+    int m_StatisticsEffect = 0;
+    int m_BenchmarkWarmupFrames = 120;
+    int m_BenchmarkMeasuredFrames = 240;
+    uint32_t m_CommandRememberedSvsmPageBudget = 256u;
+
+    struct LightDefaultState
+    {
+        int type = LightType_None;
+        double3 direction = double3(0.0, -1.0, 0.0);
+        float3 color = float3(1.f);
+        float irradiance = 1.f;
+        float angularSize = 0.f;
+        float radius = 0.f;
+        float intensity = 1.f;
+        float innerAngle = 180.f;
+        float outerAngle = 180.f;
+    };
+
+    std::unordered_map<
+        std::string,
+        LightDefaultState> m_LightDefaults;
 
 	UIData& m_ui;
 
     inline static std::vector<ImDrawList*>
         g_SettingsAppearanceDrawLists;
+    inline static UiVisualTokens g_UiVisualTokens;
 
     static void TrackSettingsAppearanceDrawList(ImDrawList* drawList)
     {
@@ -10784,7 +11635,7 @@ private:
 
     static void ApplyWindowAppearance(
         ImDrawList* drawList,
-        const ImVec2& center,
+        const ImVec2& pivot,
         float scale,
         float opacity)
     {
@@ -10799,8 +11650,8 @@ private:
         for (ImDrawVert& vertex : drawList->VtxBuffer)
         {
             vertex.pos = ImVec2(
-                center.x + (vertex.pos.x - center.x) * clampedScale,
-                center.y + (vertex.pos.y - center.y) * clampedScale);
+                pivot.x + (vertex.pos.x - pivot.x) * clampedScale,
+                pivot.y + (vertex.pos.y - pivot.y) * clampedScale);
             const uint32_t alpha = (vertex.col >> 24u) & 0xffu;
             const uint32_t fadedAlpha = static_cast<uint32_t>(
                 std::round(float(alpha) * clampedOpacity));
@@ -10811,84 +11662,300 @@ private:
         for (ImDrawCmd& command : drawList->CmdBuffer)
         {
             command.ClipRect = ImVec4(
-                center.x +
-                    (command.ClipRect.x - center.x) * clampedScale,
-                center.y +
-                    (command.ClipRect.y - center.y) * clampedScale,
-                center.x +
-                    (command.ClipRect.z - center.x) * clampedScale,
-                center.y +
-                    (command.ClipRect.w - center.y) * clampedScale);
+                pivot.x +
+                    (command.ClipRect.x - pivot.x) * clampedScale,
+                pivot.y +
+                    (command.ClipRect.y - pivot.y) * clampedScale,
+                pivot.x +
+                    (command.ClipRect.z - pivot.x) * clampedScale,
+                pivot.y +
+                    (command.ClipRect.w - pivot.y) * clampedScale);
         }
+    }
+
+    static void ApplyCommandWindowAppearance(
+        ImDrawList* drawList,
+        float bottom,
+        float verticalScale,
+        float opacity)
+    {
+        if (!drawList)
+            return;
+
+        const float clampedScale =
+            std::clamp(verticalScale, 0.f, 1.f);
+        const float clampedOpacity =
+            std::clamp(opacity, 0.f, 1.f);
+        if (clampedScale >= 1.f && clampedOpacity >= 1.f)
+            return;
+
+        for (ImDrawVert& vertex : drawList->VtxBuffer)
+        {
+            vertex.pos.y =
+                bottom + (vertex.pos.y - bottom) * clampedScale;
+            const uint32_t alpha = (vertex.col >> 24u) & 0xffu;
+            const uint32_t fadedAlpha = static_cast<uint32_t>(
+                std::round(float(alpha) * clampedOpacity));
+            vertex.col =
+                (vertex.col & 0x00ffffffu) |
+                (fadedAlpha << 24u);
+        }
+        for (ImDrawCmd& command : drawList->CmdBuffer)
+        {
+            command.ClipRect.y =
+                bottom +
+                (command.ClipRect.y - bottom) * clampedScale;
+            command.ClipRect.w =
+                bottom +
+                (command.ClipRect.w - bottom) * clampedScale;
+        }
+    }
+
+    static void ApplyCommandBackdropAppearance(
+        UiBackdropRect& backdropRect,
+        float bottom,
+        float verticalScale,
+        float opacity)
+    {
+        const float clampedScale =
+            std::clamp(verticalScale, 0.f, 1.f);
+        backdropRect.minY =
+            bottom + (backdropRect.minY - bottom) * clampedScale;
+        backdropRect.maxY =
+            bottom + (backdropRect.maxY - bottom) * clampedScale;
+        backdropRect.opacity = std::clamp(opacity, 0.f, 1.f);
     }
 
     static void ApplyBackdropAppearance(
         UiBackdropRect& backdropRect,
-        const ImVec2& center,
+        const ImVec2& pivot,
         float scale,
         float opacity)
     {
         const float clampedScale = std::clamp(scale, 0.f, 1.f);
         backdropRect.minX =
-            center.x + (backdropRect.minX - center.x) * clampedScale;
+            pivot.x + (backdropRect.minX - pivot.x) * clampedScale;
         backdropRect.minY =
-            center.y + (backdropRect.minY - center.y) * clampedScale;
+            pivot.y + (backdropRect.minY - pivot.y) * clampedScale;
         backdropRect.maxX =
-            center.x + (backdropRect.maxX - center.x) * clampedScale;
+            pivot.x + (backdropRect.maxX - pivot.x) * clampedScale;
         backdropRect.maxY =
-            center.y + (backdropRect.maxY - center.y) * clampedScale;
+            pivot.y + (backdropRect.maxY - pivot.y) * clampedScale;
         backdropRect.opacity = std::clamp(opacity, 0.f, 1.f);
     }
 
-    static void ApplyReferenceStyle()
+    static ImVec4 CompositeUiColorOver(
+        const ImVec4& foreground,
+        const ImVec4& background)
     {
-        ImGuiStyle& style = ImGui::GetStyle();
+        const float foregroundAlpha =
+            std::clamp(foreground.w, 0.f, 1.f);
+        const float backgroundAlpha =
+            std::clamp(background.w, 0.f, 1.f);
+        const float outputAlpha =
+            foregroundAlpha +
+            backgroundAlpha * (1.f - foregroundAlpha);
+        if (outputAlpha <= 0.f)
+            return ImVec4(0.f, 0.f, 0.f, 0.f);
 
-        // Reapply the experiment's authored values every frame because Donut
-        // restores ImGui's default style whenever the display scale changes.
-        // The outer window owns the translucent surface; the transparent child
-        // lets the pinned status area and scrolling settings read as one panel.
-        style.WindowRounding = 8.f;
-        style.ChildRounding = 8.f;
-        style.PopupRounding = 8.f;
-        style.FrameRounding = 4.f;
-        style.GrabRounding = 4.f;
-        style.ScrollbarRounding = 8.f;
-        style.TabRounding = 4.f;
-        style.WindowBorderSize = 1.f;
-        style.DisabledAlpha = 0.38f;
-
-        ImVec4* colors = style.Colors;
-        colors[ImGuiCol_Text] = ImVec4(0.94f, 0.95f, 0.98f, 1.f);
-        colors[ImGuiCol_TextDisabled] = ImVec4(0.58f, 0.59f, 0.61f, 1.f);
-        colors[ImGuiCol_WindowBg] = ImVec4(0.018f, 0.016f, 0.020f, 0.60f);
-        colors[ImGuiCol_ChildBg] = ImVec4(0.f, 0.f, 0.f, 0.f);
-        colors[ImGuiCol_PopupBg] = ImVec4(0.04f, 0.04f, 0.045f, 0.92f);
-        colors[ImGuiCol_Border] = ImVec4(0.15f, 0.15f, 0.17f, 0.92f);
-        colors[ImGuiCol_FrameBg] = ImVec4(0.018f, 0.016f, 0.020f, 0.72f);
-        colors[ImGuiCol_FrameBgHovered] = ImVec4(0.13f, 0.13f, 0.14f, 0.76f);
-        colors[ImGuiCol_FrameBgActive] = ImVec4(0.18f, 0.18f, 0.19f, 0.82f);
-        colors[ImGuiCol_TitleBg] = ImVec4(0.035f, 0.035f, 0.040f, 0.82f);
-        colors[ImGuiCol_TitleBgActive] = ImVec4(0.045f, 0.045f, 0.050f, 0.90f);
-        colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.035f, 0.035f, 0.040f, 0.74f);
-        colors[ImGuiCol_ScrollbarBg] = ImVec4(0.018f, 0.016f, 0.020f, 0.36f);
-        colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.66f, 0.67f, 0.69f, 0.13f);
-        colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.74f, 0.75f, 0.77f, 0.20f);
-        colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.80f, 0.81f, 0.83f, 0.26f);
-        colors[ImGuiCol_CheckMark] = ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
-        colors[ImGuiCol_SliderGrab] = ImVec4(0.26f, 0.59f, 0.98f, 0.31f);
-        colors[ImGuiCol_SliderGrabActive] = ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
-        colors[ImGuiCol_Button] = ImVec4(0.018f, 0.016f, 0.020f, 0.72f);
-        colors[ImGuiCol_ButtonHovered] = ImVec4(0.13f, 0.13f, 0.14f, 0.76f);
-        colors[ImGuiCol_ButtonActive] = ImVec4(0.18f, 0.18f, 0.19f, 0.82f);
-        colors[ImGuiCol_Header] = ImVec4(0.30f, 0.31f, 0.33f, 0.92f);
-        colors[ImGuiCol_HeaderHovered] = ImVec4(0.38f, 0.39f, 0.41f, 0.97f);
-        colors[ImGuiCol_HeaderActive] = ImVec4(0.45f, 0.46f, 0.48f, 1.f);
-        colors[ImGuiCol_ResizeGrip] = ImVec4(0.48f, 0.49f, 0.51f, 0.28f);
-        colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.60f, 0.61f, 0.63f, 0.62f);
-        colors[ImGuiCol_ResizeGripActive] = ImVec4(0.75f, 0.76f, 0.78f, 0.90f);
+        const float backgroundContribution =
+            backgroundAlpha * (1.f - foregroundAlpha);
+        return ImVec4(
+            (foreground.x * foregroundAlpha +
+                background.x * backgroundContribution) /
+                outputAlpha,
+            (foreground.y * foregroundAlpha +
+                background.y * backgroundContribution) /
+                outputAlpha,
+            (foreground.z * foregroundAlpha +
+                background.z * backgroundContribution) /
+                outputAlpha,
+            outputAlpha);
     }
 
+    static void ApplyUiSkin(
+        UiSkin skin,
+        float displayScale)
+    {
+        const UiSkin resolvedSkin =
+            skin == UiSkin::Og ? UiSkin::Og : UiSkin::Amp;
+        ImGuiStyle style;
+        ImGui::StyleColorsDark(&style);
+        ImVec4* colors = style.Colors;
+        UiVisualTokens tokens;
+
+        if (resolvedSkin == UiSkin::Og)
+        {
+            style.ScrollbarRounding = 0.f;
+            tokens.drawerHeader = colors[ImGuiCol_Header];
+            tokens.drawerHeaderHovered =
+                colors[ImGuiCol_HeaderHovered];
+            tokens.drawerHeaderActive =
+                colors[ImGuiCol_HeaderActive];
+            tokens.drawerBackground = colors[ImGuiCol_ChildBg];
+            tokens.drawerFrame = colors[ImGuiCol_FrameBg];
+            tokens.drawerFrameHovered =
+                colors[ImGuiCol_FrameBgHovered];
+            tokens.drawerFrameActive =
+                colors[ImGuiCol_FrameBgActive];
+            tokens.outlineTop = colors[ImGuiCol_Border];
+            tokens.outlineBottom = colors[ImGuiCol_Border];
+            tokens.folderOutline = colors[ImGuiCol_Border];
+            tokens.actionButton = colors[ImGuiCol_Button];
+            tokens.actionButtonHovered =
+                colors[ImGuiCol_ButtonHovered];
+            tokens.actionButtonActive =
+                colors[ImGuiCol_ButtonActive];
+            tokens.drawerRounding = style.ChildRounding;
+            tokens.drawControlOutlines = false;
+            tokens.drawScrollEdgeFades = false;
+            tokens.floatingPanelOpacity =
+                colors[ImGuiCol_WindowBg].w;
+            tokens.errorText = ImVec4(1.f, 0.40f, 0.40f, 1.f);
+        }
+        else
+        {
+            style.WindowRounding = 8.f;
+            style.ChildRounding = 8.f;
+            style.PopupRounding = 8.f;
+            style.FrameRounding = 4.f;
+            style.GrabRounding = 4.f;
+            style.ScrollbarRounding = 8.f;
+            style.TabRounding = 4.f;
+            style.WindowBorderSize = 1.f;
+            style.DisabledAlpha = 0.38f;
+            colors[ImGuiCol_Text] =
+                ImVec4(0.94f, 0.95f, 0.98f, 1.f);
+            colors[ImGuiCol_TextDisabled] =
+                ImVec4(0.58f, 0.59f, 0.61f, 1.f);
+            colors[ImGuiCol_WindowBg] =
+                ImVec4(0.018f, 0.018f, 0.018f, 0.60f);
+            colors[ImGuiCol_ChildBg] =
+                ImVec4(0.f, 0.f, 0.f, 0.f);
+            colors[ImGuiCol_PopupBg] =
+                ImVec4(0.04f, 0.04f, 0.04f, 0.92f);
+            colors[ImGuiCol_Border] =
+                ImVec4(0.15f, 0.15f, 0.15f, 0.92f);
+            colors[ImGuiCol_FrameBg] =
+                ImVec4(0.018f, 0.018f, 0.018f, 0.72f);
+            colors[ImGuiCol_FrameBgHovered] =
+                ImVec4(0.13f, 0.13f, 0.14f, 0.76f);
+            colors[ImGuiCol_FrameBgActive] =
+                ImVec4(0.18f, 0.18f, 0.19f, 0.82f);
+            colors[ImGuiCol_TitleBg] =
+                ImVec4(0.035f, 0.035f, 0.035f, 0.82f);
+            colors[ImGuiCol_TitleBgActive] =
+                ImVec4(0.045f, 0.045f, 0.045f, 0.90f);
+            colors[ImGuiCol_TitleBgCollapsed] =
+                ImVec4(0.035f, 0.035f, 0.035f, 0.74f);
+            colors[ImGuiCol_ScrollbarBg] =
+                ImVec4(0.018f, 0.018f, 0.018f, 0.36f);
+            colors[ImGuiCol_ScrollbarGrab] =
+                ImVec4(0.66f, 0.67f, 0.69f, 0.13f);
+            colors[ImGuiCol_ScrollbarGrabHovered] =
+                ImVec4(0.74f, 0.75f, 0.77f, 0.20f);
+            colors[ImGuiCol_ScrollbarGrabActive] =
+                ImVec4(0.80f, 0.81f, 0.83f, 0.26f);
+            colors[ImGuiCol_CheckMark] =
+                ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
+            colors[ImGuiCol_SliderGrab] =
+                ImVec4(0.26f, 0.59f, 0.98f, 0.31f);
+            colors[ImGuiCol_SliderGrabActive] =
+                ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
+            colors[ImGuiCol_Button] =
+                ImVec4(0.018f, 0.018f, 0.018f, 0.72f);
+            colors[ImGuiCol_ButtonHovered] =
+                ImVec4(0.13f, 0.13f, 0.14f, 0.76f);
+            colors[ImGuiCol_ButtonActive] =
+                ImVec4(0.18f, 0.18f, 0.19f, 0.82f);
+            colors[ImGuiCol_Header] =
+                ImVec4(0.30f, 0.31f, 0.33f, 0.92f);
+            colors[ImGuiCol_HeaderHovered] =
+                ImVec4(0.38f, 0.39f, 0.41f, 0.97f);
+            colors[ImGuiCol_HeaderActive] =
+                ImVec4(0.45f, 0.46f, 0.48f, 1.f);
+            colors[ImGuiCol_ResizeGrip] =
+                ImVec4(0.48f, 0.49f, 0.51f, 0.28f);
+            colors[ImGuiCol_ResizeGripHovered] =
+                ImVec4(0.60f, 0.61f, 0.63f, 0.62f);
+            colors[ImGuiCol_ResizeGripActive] =
+                ImVec4(0.75f, 0.76f, 0.78f, 0.90f);
+            tokens.drawerHeader =
+                ImVec4(0.26f, 0.59f, 0.98f, 0.31f);
+            tokens.drawerHeaderHovered =
+                ImVec4(0.26f, 0.59f, 0.98f, 0.48f);
+            tokens.drawerHeaderActive =
+                ImVec4(0.26f, 0.59f, 0.98f, 0.65f);
+            tokens.drawerBackground =
+                ImVec4(0.66f, 0.67f, 0.69f, 0.13f);
+            tokens.drawerFrame = colors[ImGuiCol_FrameBg];
+            tokens.drawerFrameHovered =
+                colors[ImGuiCol_FrameBgHovered];
+            tokens.drawerFrameActive =
+                colors[ImGuiCol_FrameBgActive];
+            tokens.outlineTop =
+                ImVec4(0.88f, 0.90f, 0.94f, 0.10f);
+            tokens.outlineBottom =
+                ImVec4(0.96f, 0.97f, 1.f, 0.30f);
+            tokens.folderOutline =
+                ImVec4(0.90f, 0.92f, 0.96f, 0.10f);
+            tokens.actionButton =
+                ImVec4(0.66f, 0.67f, 0.69f, 0.13f);
+            tokens.actionButtonHovered =
+                ImVec4(0.74f, 0.75f, 0.77f, 0.20f);
+            tokens.actionButtonActive =
+                ImVec4(0.80f, 0.81f, 0.83f, 0.26f);
+        }
+
+        tokens.panelBodySurface =
+            colors[ImGuiCol_WindowBg];
+        if (resolvedSkin == UiSkin::Amp)
+        {
+            tokens.panelBodySurface.w =
+                colors[ImGuiCol_PopupBg].w;
+        }
+        // ImGui does not paint WindowBg underneath a title bar. Precomposing
+        // the resting drawer blue over the effective Settings body surface
+        // makes the standalone title pixels match a resting drawer exactly.
+        tokens.settingsTitleSurface = CompositeUiColorOver(
+            tokens.drawerHeader,
+            tokens.panelBodySurface);
+
+        const UiSkinBehavior behavior =
+            GetUiSkinBehavior(resolvedSkin);
+        ImGui::SetUvsrUiBehavior(
+            behavior.motionEnabled,
+            behavior.stockImGuiWidgets);
+        const float safeDisplayScale =
+            std::clamp(displayScale, 0.5f, 4.f);
+        style.ScaleAllSizes(safeDisplayScale);
+        if (resolvedSkin == UiSkin::Amp)
+        {
+            // Preserve the authored Amp rounding and border pixels exactly,
+            // matching the renderer's established UI at every DPI scale.
+            style.WindowRounding = 8.f;
+            style.ChildRounding = 8.f;
+            style.PopupRounding = 8.f;
+            style.FrameRounding = 4.f;
+            style.GrabRounding = 4.f;
+            style.ScrollbarRounding = 8.f;
+            style.TabRounding = 4.f;
+            style.WindowBorderSize = 1.f;
+        }
+        else
+        {
+            tokens.drawerRounding *= safeDisplayScale;
+        }
+        g_UiVisualTokens = tokens;
+        ImGui::GetStyle() = style;
+    }
+
+    static void PushPanelBodySurface()
+    {
+        ImGui::PushStyleColor(
+            ImGuiCol_WindowBg,
+            g_UiVisualTokens.panelBodySurface);
+    }
     inline static constexpr float
         UiLayoutAnimationDurationSeconds = 0.18f;
 
@@ -10903,10 +11970,54 @@ private:
                 UiLayoutAnimationDurationSeconds);
     }
 
+    static float GetCommandInterfaceMinimumHeight()
+    {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        return std::ceil(
+            style.WindowPadding.y * 2.f +
+            ImGui::GetFrameHeight() +
+            style.ItemSpacing.y +
+            ImGui::GetTextLineHeight());
+    }
+
+    static float GetCommandInterfaceReservedHeight()
+    {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        return std::ceil(
+            GetCommandInterfaceMinimumHeight() +
+            style.ItemSpacing.y +
+            ImGui::GetTextLineHeight());
+    }
+
+    static constexpr float SettingsStatusLineSpacing = 2.f;
+
+    static float GetSettingsCollapsedWindowHeight(
+        const ImGuiStyle& style,
+        float fontSize,
+        bool hasPerformanceStatus,
+        bool splitOgPerformanceStatus)
+    {
+        return
+            fontSize + style.FramePadding.y * 2.f +
+            style.WindowPadding.y +
+            fontSize +
+            style.ItemSpacing.y +
+            1.f +
+            (hasPerformanceStatus
+                ? SettingsStatusLineSpacing + fontSize
+                    + (splitOgPerformanceStatus
+                        ? SettingsStatusLineSpacing + fontSize
+                        : 0.f)
+                : 0.f);
+    }
+
     static float AdvanceUiLayoutAnimation(
         float amount,
         bool targetVisible)
     {
+        if (!ImGui::IsUvsrUiMotionEnabled())
+            return targetVisible ? 1.f : 0.f;
+
         const float step = GetUiLayoutAnimationStep();
         return targetVisible
             ? std::min(1.f, amount + step)
@@ -10935,6 +12046,8 @@ private:
         float viewportTopScreenY = 0.f;
         float retainedViewportHeight = 0.f;
         float lastScrollY = 0.f;
+        ImDrawList* rootDrawList = nullptr;
+        int rootDrawVertexStart = 0;
         UiDrawerHeightDeltas drawerHeightDeltas;
         std::vector<SettingsScrollAnchorPosition> previousAnchors;
         std::vector<SettingsScrollAnchorPosition> currentAnchors;
@@ -11015,6 +12128,11 @@ private:
         context.layoutAnimatingThisFrame = false;
         context.drawerHeightDeltas = {};
         context.currentAnchors.clear();
+        context.rootDrawList = ImGui::GetWindowDrawList();
+        context.rootDrawVertexStart =
+            context.rootDrawList
+                ? context.rootDrawList->VtxBuffer.Size
+                : 0;
         context.lastFrame = frame;
     }
 
@@ -11113,16 +12231,70 @@ private:
                 context.preserveBottom);
         }
 
-        if (std::abs(scrollDelta) > 0.01f)
+        ImGuiWindow* window = ImGui::GetCurrentWindow();
+        const float currentFrameContentHeight =
+            window->ContentSizeExplicit.y != 0.f
+                ? window->ContentSizeExplicit.y
+                : std::trunc(
+                    window->DC.CursorMaxPos.y -
+                    window->DC.CursorStartPos.y);
+        const float currentFrameScrollMaxY = std::max(
+            0.f,
+            currentFrameContentHeight +
+                window->WindowPadding.y * 2.f -
+                window->InnerRect.GetHeight());
+        const UiScrollAnchorCorrection correction =
+            ResolveUiScrollAnchorCorrection(
+                window->Scroll.y,
+                scrollDelta,
+                currentFrameScrollMaxY,
+                window->ScrollTarget.y < FLT_MAX);
+        if (correction.apply)
         {
-            ImGuiWindow* window = ImGui::GetCurrentWindow();
-            const float requestedScroll =
-                window->ScrollTarget.y < FLT_MAX
-                    ? window->ScrollTarget.y
-                    : window->Scroll.y;
-            ImGui::SetScrollY(
-                window,
-                std::max(0.f, requestedScroll + scrollDelta));
+            const float visualScrollDelta =
+                correction.scrollY - window->Scroll.y;
+            window->Scroll.y = correction.scrollY;
+            if (std::abs(visualScrollDelta) > 0.01f)
+            {
+                for (ImDrawList* drawList :
+                    g_SettingsAppearanceDrawLists)
+                {
+                    if (!drawList)
+                        continue;
+                    const int vertexStart =
+                        drawList == context.rootDrawList
+                            ? std::clamp(
+                                context.rootDrawVertexStart,
+                                0,
+                                drawList->VtxBuffer.Size)
+                            : 0;
+                    for (int vertexIndex = vertexStart;
+                        vertexIndex < drawList->VtxBuffer.Size;
+                        ++vertexIndex)
+                    {
+                        drawList->VtxBuffer[vertexIndex].pos.y -=
+                            visualScrollDelta;
+                    }
+
+                    if (drawList == context.rootDrawList)
+                        continue;
+                    for (ImDrawCmd& command :
+                        drawList->CmdBuffer)
+                    {
+                        command.ClipRect.y = std::max(
+                            window->InnerClipRect.Min.y,
+                            command.ClipRect.y -
+                                visualScrollDelta);
+                        command.ClipRect.w = std::min(
+                            window->InnerClipRect.Max.y,
+                            command.ClipRect.w -
+                                visualScrollDelta);
+                        command.ClipRect.w = std::max(
+                            command.ClipRect.y,
+                            command.ClipRect.w);
+                    }
+                }
+            }
         }
 
         context.previousAnchors =
@@ -11419,13 +12591,13 @@ private:
             headerId ^ ImGuiID(0x82E4C76Bu);
         ImGui::PushStyleColor(
             ImGuiCol_Header,
-            ImVec4(0.26f, 0.59f, 0.98f, 0.31f));
+            g_UiVisualTokens.drawerHeader);
         ImGui::PushStyleColor(
             ImGuiCol_HeaderHovered,
-            ImVec4(0.26f, 0.59f, 0.98f, 0.48f));
+            g_UiVisualTokens.drawerHeaderHovered);
         ImGui::PushStyleColor(
             ImGuiCol_HeaderActive,
-            ImVec4(0.26f, 0.59f, 0.98f, 0.65f));
+            g_UiVisualTokens.drawerHeaderActive);
         ImGui::PushStyleVar(
             ImGuiStyleVar_FrameRounding,
             ImGui::GetStyle().FrameRounding);
@@ -11452,6 +12624,7 @@ private:
         };
         const float measuredHeight = measurement.height;
         const bool needsInitialMeasurement =
+            ImGui::IsUvsrUiMotionEnabled() &&
             NeedsInitialUiExpandedMeasurement(open, measurement);
         if (lastFrame < frame - 1)
         {
@@ -11512,30 +12685,38 @@ private:
                     measuredHeightKey,
                     0.f)
                 : 0.f;
-        const float easedAmount = SmoothUiLayoutAnimation(
-            g_DrawerAnimationContext.openAmount);
+        const bool motionEnabled =
+            ImGui::IsUvsrUiMotionEnabled();
+        const float easedAmount = motionEnabled
+            ? SmoothUiLayoutAnimation(
+                g_DrawerAnimationContext.openAmount)
+            : g_DrawerAnimationContext.targetOpen ? 1.f : 0.f;
         const float animatedHeight =
-            g_DrawerAnimationContext.needsInitialMeasurement
+            !motionEnabled
+                ? 0.f
+                : g_DrawerAnimationContext.needsInitialMeasurement
                 ? 0.001f
                 : std::max(
                     measuredHeight * easedAmount,
                     0.001f);
         ImGui::PushStyleColor(
             ImGuiCol_ChildBg,
-            ImVec4(0.66f, 0.67f, 0.69f, 0.13f));
+            g_UiVisualTokens.drawerBackground);
         ImGui::PushStyleColor(
             ImGuiCol_FrameBg,
-            ImVec4(0.018f, 0.016f, 0.020f, 0.72f));
+            g_UiVisualTokens.drawerFrame);
         ImGui::PushStyleColor(
             ImGuiCol_FrameBgHovered,
-            ImVec4(0.13f, 0.13f, 0.14f, 0.76f));
+            g_UiVisualTokens.drawerFrameHovered);
         ImGui::PushStyleColor(
             ImGuiCol_FrameBgActive,
-            ImVec4(0.18f, 0.18f, 0.19f, 0.82f));
+            g_UiVisualTokens.drawerFrameActive);
         ImGui::PushStyleVar(
             ImGuiStyleVar_WindowPadding,
             ImVec2(style.FramePadding.x, style.ItemSpacing.y));
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 5.f);
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_ChildRounding,
+            g_UiVisualTokens.drawerRounding);
         ImGui::PushStyleVar(
             ImGuiStyleVar_Alpha,
             style.Alpha *
@@ -11545,12 +12726,19 @@ private:
         ImGuiChildFlags childFlags =
             ImGuiChildFlags_AlwaysUseWindowPadding |
             ImGuiChildFlags_AllowZeroSize;
+        if (!motionEnabled)
+        {
+            childFlags |=
+                ImGuiChildFlags_AutoResizeY |
+                ImGuiChildFlags_AlwaysAutoResize;
+        }
         ImGuiWindowFlags childWindowFlags =
             ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoScrollWithMouse;
-        if (g_DrawerAnimationContext.needsInitialMeasurement ||
+        if (motionEnabled &&
+            (g_DrawerAnimationContext.needsInitialMeasurement ||
             !g_DrawerAnimationContext.targetOpen ||
-            g_DrawerAnimationContext.openAmount < 1.f)
+            g_DrawerAnimationContext.openAmount < 1.f))
         {
             childWindowFlags |= ImGuiWindowFlags_NoInputs;
         }
@@ -11567,11 +12755,26 @@ private:
         ImGui::PushItemWidth(controlWidth);
     }
 
+    static ImVec4 LerpUiColor(
+        const ImVec4& normal,
+        const ImVec4& interaction,
+        float amount)
+    {
+        return ImVec4(
+            normal.x + (interaction.x - normal.x) * amount,
+            normal.y + (interaction.y - normal.y) * amount,
+            normal.z + (interaction.z - normal.z) * amount,
+            normal.w + (interaction.w - normal.w) * amount);
+    }
+
     static void DrawDrawerBodyOutline(
         const ImVec2& minimum,
         const ImVec2& maximum,
         float rounding)
     {
+        if (!g_UiVisualTokens.drawControlOutlines)
+            return;
+
         constexpr float Thickness = 1.f;
         constexpr float Inset = Thickness * 0.5f;
         constexpr float TopGap = 2.f;
@@ -11617,11 +12820,10 @@ private:
                 (vertex.pos.y - outlineMinimum.y) / gradientExtent,
                 0.f,
                 1.f);
-            vertex.col = ImGui::GetColorU32(ImVec4(
-                0.88f + 0.08f * gradientPosition,
-                0.90f + 0.07f * gradientPosition,
-                0.94f + 0.06f * gradientPosition,
-                0.10f + 0.20f * gradientPosition));
+            vertex.col = ImGui::GetColorU32(LerpUiColor(
+                g_UiVisualTokens.outlineTop,
+                g_UiVisualTokens.outlineBottom,
+                gradientPosition));
         }
     }
 
@@ -11631,6 +12833,9 @@ private:
         const ImVec2& maximum,
         float rounding)
     {
+        if (!g_UiVisualTokens.drawControlOutlines)
+            return;
+
         constexpr float Thickness = 1.f;
         constexpr float Inset = Thickness * 0.5f;
         const ImVec2 outlineMinimum(
@@ -11668,16 +12873,18 @@ private:
                     gradientExtent,
                 0.f,
                 1.f);
-            vertex.col = ImGui::GetColorU32(ImVec4(
-                0.88f + 0.08f * gradientPosition,
-                0.90f + 0.07f * gradientPosition,
-                0.94f + 0.06f * gradientPosition,
-                0.10f + 0.20f * gradientPosition));
+            vertex.col = ImGui::GetColorU32(LerpUiColor(
+                g_UiVisualTokens.outlineTop,
+                g_UiVisualTokens.outlineBottom,
+                gradientPosition));
         }
     }
 
     static void DrawSettingsScrollEdgeFades()
     {
+        if (!g_UiVisualTokens.drawScrollEdgeFades)
+            return;
+
         const float scrollY = ImGui::GetScrollY();
         const float scrollMaxY = ImGui::GetScrollMaxY();
         if (scrollMaxY <= 0.5f)
@@ -11850,7 +13057,10 @@ private:
             storage->GetBool(measurementValidKey, false)
         };
         const float measuredHeight = measurement.height;
+        const bool motionEnabled =
+            ImGui::IsUvsrUiMotionEnabled();
         const bool needsInitialMeasurement =
+            motionEnabled &&
             NeedsInitialUiExpandedMeasurement(open, measurement);
         float openAmount = storage->GetFloat(
             amountKey,
@@ -11884,7 +13094,9 @@ private:
         const float easedAmount =
             SmoothUiLayoutAnimation(openAmount);
         const float animatedHeight =
-            needsInitialMeasurement
+            !motionEnabled
+                ? 0.f
+                : needsInitialMeasurement
                 ? 0.001f
                 : std::max(
                     measuredHeight * easedAmount,
@@ -11908,16 +13120,25 @@ private:
         ImGuiWindowFlags childWindowFlags =
             ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoScrollWithMouse;
-        if (needsInitialMeasurement ||
+        if (motionEnabled &&
+            (needsInitialMeasurement ||
             !open ||
-            openAmount < 1.f)
+            openAmount < 1.f))
         {
             childWindowFlags |= ImGuiWindowFlags_NoInputs;
+        }
+        ImGuiChildFlags childFlags =
+            ImGuiChildFlags_AllowZeroSize;
+        if (!motionEnabled)
+        {
+            childFlags |=
+                ImGuiChildFlags_AutoResizeY |
+                ImGuiChildFlags_AlwaysAutoResize;
         }
         bool bodyVisible = ImGui::BeginChild(
             headerId ^ ImGuiID(0xE60792B5u),
             ImVec2(0.f, animatedHeight),
-            ImGuiChildFlags_AllowZeroSize,
+            childFlags,
             childWindowFlags);
         EnsureAnimatedChildLayoutSubmission(bodyVisible);
         TrackSettingsAppearanceDrawList(
@@ -12053,7 +13274,19 @@ private:
             targetChangedThisFrame = true;
         }
 
+        const bool motionEnabled =
+            ImGui::IsUvsrUiMotionEnabled();
+        if (!motionEnabled)
+        {
+            state.targetVisible = visible;
+            state.linearAmount = visible ? 1.f : 0.f;
+            state.transitionFrame = frame;
+            state.advancedFrame = frame;
+            targetChangedThisFrame = false;
+        }
+
         const bool needsInitialMeasurement =
+            motionEnabled &&
             NeedsInitialUiExpandedMeasurement(
                 state.targetVisible,
                 state.measurement);
@@ -12090,7 +13323,9 @@ private:
         const float easedAmount =
             SmoothUiLayoutAnimation(state.linearAmount);
         const float animatedHeight =
-            needsInitialMeasurement
+            !motionEnabled
+                ? 0.f
+                : needsInitialMeasurement
                 ? 0.001f
                 : std::max(
                     state.measurement.height * easedAmount,
@@ -12117,18 +13352,27 @@ private:
         ImGuiWindowFlags childWindowFlags =
             ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoScrollWithMouse;
-        if (needsInitialMeasurement ||
+        if (motionEnabled &&
+            (needsInitialMeasurement ||
             !state.targetVisible ||
-            state.linearAmount < 1.f)
+            state.linearAmount < 1.f))
         {
             childWindowFlags |=
                 ImGuiWindowFlags_NoNavInputs |
                 ImGuiWindowFlags_NoNavFocus;
         }
+        ImGuiChildFlags childFlags =
+            ImGuiChildFlags_AllowZeroSize;
+        if (!motionEnabled)
+        {
+            childFlags |=
+                ImGuiChildFlags_AutoResizeY |
+                ImGuiChildFlags_AlwaysAutoResize;
+        }
         bool bodyVisible = ImGui::BeginChild(
             regionId ^ ImGuiID(0x6C3E91B7u),
             ImVec2(0.f, animatedHeight),
-            ImGuiChildFlags_AllowZeroSize,
+            childFlags,
             childWindowFlags);
         EnsureAnimatedChildLayoutSubmission(bodyVisible);
         TrackSettingsAppearanceDrawList(
@@ -12251,6 +13495,13 @@ private:
         const ImGuiID amountKey = id ^ ImGuiID(0xA53C9E21u);
         const ImGuiID frameKey = id ^ ImGuiID(0x6D27F4B3u);
         const float target = highlighted ? 1.f : 0.f;
+        if (!ImGui::IsUvsrUiMotionEnabled())
+        {
+            storage->SetFloat(amountKey, target);
+            storage->SetInt(frameKey, ImGui::GetFrameCount());
+            return target;
+        }
+
         float amount = storage->GetFloat(amountKey, 0.f);
         const int frame = ImGui::GetFrameCount();
         const int lastFrame = storage->GetInt(frameKey, -2);
@@ -12535,25 +13786,35 @@ private:
     }
 
     static bool TryApplyDeferredDropdownUiActions(
-        bool compositionIdle)
+        bool compositionIdle,
+        bool immediate = false)
     {
         DeferredDropdownUiState& state =
             g_DeferredDropdownUiState;
         if (state.actions.Empty())
             return false;
 
-        const int frame = ImGui::GetFrameCount();
-        state.idleStartFrame = UpdateUiDropdownIdleStartFrame(
-            state.idleStartFrame,
-            frame,
-            compositionIdle);
-        if (!ShouldCommitDeferredDropdownActions(
-                frame,
-                state.requestFrame,
-                state.idleStartFrame,
-                ImGui::GetTime() - state.lastRequestTime))
+        if (!immediate)
         {
-            return false;
+            const int frame = ImGui::GetFrameCount();
+            state.idleStartFrame = UpdateUiDropdownIdleStartFrame(
+                state.idleStartFrame,
+                frame,
+                compositionIdle);
+            if (!ShouldCommitDeferredDropdownActions(
+                    frame,
+                    state.requestFrame,
+                    state.idleStartFrame,
+                    ImGui::GetTime() - state.lastRequestTime))
+            {
+                return false;
+            }
+        }
+        else
+        {
+            FinishDeferredDropdownPopupTransition();
+            g_DeferredAliasingUiPresentation.SkipInvisibleAnimation(
+                ImGui::GetFrameCount());
         }
 
         DeferredUiActionQueue<ImGuiID, DeferredDropdownUiPayload> actions =
@@ -12565,18 +13826,6 @@ private:
                 if (action.apply)
                     action.apply();
             });
-    }
-
-    static ImVec4 LerpUiColor(
-        const ImVec4& normal,
-        const ImVec4& interaction,
-        float amount)
-    {
-        return ImVec4(
-            normal.x + (interaction.x - normal.x) * amount,
-            normal.y + (interaction.y - normal.y) * amount,
-            normal.z + (interaction.z - normal.z) * amount,
-            normal.w + (interaction.w - normal.w) * amount);
     }
 
     static bool BeginRoundedCombo(
@@ -12596,10 +13845,28 @@ private:
         const ImGuiID comboId = ImGui::GetID(label);
         const char* deferredPreview =
             GetDeferredDropdownPreview(comboId);
+        const char* visiblePreview =
+            deferredPreview ? deferredPreview : previewValue;
+
+        if (ImGui::IsUvsrStockWidgetRenderingEnabled())
+        {
+            const bool open =
+                ImGui::BeginCombo(label, visiblePreview, flags);
+            DeferredDropdownUiState& deferredState =
+                g_DeferredDropdownUiState;
+            if (open &&
+                deferredState.transitionComboId == comboId)
+            {
+                deferredState.transitionComboLastSubmittedFrame =
+                    ImGui::GetFrameCount();
+            }
+            g_ActiveRoundedComboId = open ? comboId : 0;
+            return open;
+        }
 
         const bool open = ImGui::BeginCombo(
             label,
-            deferredPreview ? deferredPreview : previewValue,
+            visiblePreview,
             flags | ImGuiComboFlags_NoArrowButton);
         DeferredDropdownUiState& deferredState =
             g_DeferredDropdownUiState;
@@ -12660,9 +13927,10 @@ private:
         return true;
     }
 
-    static void ApplyExpandedWordSpacing(
+    static void ApplyWordSpacing(
         ImGuiID& adjustedFontBakedId,
-        float& baseSpaceAdvance)
+        float& baseSpaceAdvance,
+        bool expanded)
     {
         ImFontBaked* baked = ImGui::GetFontBaked();
         if (!baked)
@@ -12680,14 +13948,7050 @@ private:
         }
 
         constexpr float WordSpaceScale = 1.65f;
-        const float expandedSpaceAdvance =
-            baseSpaceAdvance * WordSpaceScale;
-        spaceGlyph->AdvanceX = expandedSpaceAdvance;
+        const float spaceAdvance = expanded
+            ? baseSpaceAdvance * WordSpaceScale
+            : baseSpaceAdvance;
+        spaceGlyph->AdvanceX = spaceAdvance;
         if (baked->IndexAdvanceX.Size > int(ImWchar(' ')))
         {
             baked->IndexAdvanceX[int(ImWchar(' '))] =
-                expandedSpaceAdvance;
+                spaceAdvance;
         }
+    }
+
+    ImFont* GetActiveUiFont()
+    {
+        if (ImGui::IsUvsrStockWidgetRenderingEnabled())
+        {
+            const std::shared_ptr<app::RegisteredFont> defaultFont =
+                GetDefaultFont();
+            if (defaultFont && defaultFont->GetScaledFont())
+                return defaultFont->GetScaledFont();
+        }
+        return m_Font && m_Font->GetScaledFont()
+            ? m_Font->GetScaledFont()
+            : ImGui::GetFont();
+    }
+
+    void ApplyActiveUiWordSpacing()
+    {
+        ApplyWordSpacing(
+            m_AdjustedSpaceFontBakedId,
+            m_BaseSpaceAdvance,
+            GetUiSkinBehavior(m_ComposedUiSkin).expandedWordSpacing);
+    }
+
+    void RestoreActiveUiWordSpacing()
+    {
+        ApplyWordSpacing(
+            m_AdjustedSpaceFontBakedId,
+            m_BaseSpaceAdvance,
+            false);
+    }
+
+    enum class CommandValueOperation
+    {
+        Get,
+        Set,
+        Toggle,
+        Reset
+    };
+
+    struct UiSettingsCommandBinding
+    {
+        std::string_view name;
+        UiSettingsCommandSection section;
+        UiSettingsCommandKind kind;
+    };
+
+    inline static constexpr auto UiSettingsCommandBindings = []()
+    {
+        std::array<
+            UiSettingsCommandBinding,
+            UiSettingsCommandCatalog.size()> bindings{};
+        for (size_t index = 0u;
+            index < UiSettingsCommandCatalog.size();
+            ++index)
+        {
+            bindings[index] = {
+                UiSettingsCommandCatalog[index].name,
+                UiSettingsCommandCatalog[index].section,
+                UiSettingsCommandCatalog[index].kind
+            };
+        }
+        return bindings;
+    }();
+    static_assert(
+        UiSettingsCommandBindings.size() ==
+        UiSettingsCommandCatalog.size());
+    static_assert(UiSettingsCommandBindings.size() == 245u);
+
+    static std::string NormalizeCommandAscii(
+        std::string_view value,
+        bool collapseSeparators = false)
+    {
+        std::string normalized;
+        normalized.reserve(value.size());
+        for (const unsigned char character : value)
+        {
+            if (character >= static_cast<unsigned char>('A') &&
+                character <= static_cast<unsigned char>('Z'))
+            {
+                normalized.push_back(static_cast<char>(
+                    character - static_cast<unsigned char>('A') +
+                    static_cast<unsigned char>('a')));
+            }
+            else if (collapseSeparators &&
+                (character == static_cast<unsigned char>(' ') ||
+                 character == static_cast<unsigned char>('-') ||
+                 character == static_cast<unsigned char>('_') ||
+                 character == static_cast<unsigned char>('+')))
+            {
+                continue;
+            }
+            else
+            {
+                normalized.push_back(static_cast<char>(character));
+            }
+        }
+        return normalized;
+    }
+
+    static bool StartsWithCommandPrefix(
+        std::string_view value,
+        std::string_view prefix)
+    {
+        return value.size() >= prefix.size() &&
+            value.compare(0u, prefix.size(), prefix) == 0;
+    }
+
+    static std::string JoinCommandArguments(
+        const std::vector<std::string>& arguments)
+    {
+        std::string result;
+        for (const std::string& argument : arguments)
+        {
+            if (!result.empty())
+                result.push_back(' ');
+            result += argument;
+        }
+        return result;
+    }
+
+    static bool TryParseCommandBool(
+        std::string_view value,
+        bool& parsed)
+    {
+        const std::string normalized =
+            NormalizeCommandAscii(value, true);
+        if (normalized == "on" ||
+            normalized == "true" ||
+            normalized == "yes" ||
+            normalized == "show" ||
+            normalized == "shown" ||
+            normalized == "enabled" ||
+            normalized == "1")
+        {
+            parsed = true;
+            return true;
+        }
+        if (normalized == "off" ||
+            normalized == "false" ||
+            normalized == "no" ||
+            normalized == "hide" ||
+            normalized == "hidden" ||
+            normalized == "disabled" ||
+            normalized == "0")
+        {
+            parsed = false;
+            return true;
+        }
+        return false;
+    }
+
+    static bool TryParseCommandFloat(
+        std::string_view value,
+        float& parsed)
+    {
+        if (value.empty())
+            return false;
+        std::string owned(value);
+        char* end = nullptr;
+        const float candidate = std::strtof(owned.c_str(), &end);
+        if (!end ||
+            end != owned.c_str() + owned.size() ||
+            !std::isfinite(candidate))
+        {
+            return false;
+        }
+        parsed = candidate;
+        return true;
+    }
+
+    static bool TryParseCommandInteger(
+        std::string_view value,
+        int64_t& parsed)
+    {
+        if (value.empty())
+            return false;
+        std::string owned(value);
+        char* end = nullptr;
+        errno = 0;
+        const long long candidate =
+            std::strtoll(owned.c_str(), &end, 10);
+        if (errno == ERANGE ||
+            !end ||
+            end != owned.c_str() + owned.size())
+        {
+            return false;
+        }
+        parsed = static_cast<int64_t>(candidate);
+        return true;
+    }
+
+    static std::string FormatCommandFloat(float value)
+    {
+        char buffer[64];
+        snprintf(buffer, std::size(buffer), "%.3f", value);
+        return buffer;
+    }
+
+    static std::string FormatCommandFloat3(const float3& value)
+    {
+        return FormatCommandFloat(value.x) + " " +
+            FormatCommandFloat(value.y) + " " +
+            FormatCommandFloat(value.z);
+    }
+
+    static bool RejectUnchangedCommandMutation(
+        std::string_view path,
+        std::string& error)
+    {
+        error = "No change: " + std::string(path) +
+            " already has the requested value.";
+        return false;
+    }
+
+    static bool ApplyCommandFloat3(
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string_view path,
+        float3& current,
+        const float3& defaultValue,
+        float minimum,
+        float maximum,
+        std::string& value,
+        std::string& error)
+    {
+        float3 candidate = current;
+        if (operation == CommandValueOperation::Set)
+        {
+            if (arguments.size() != 3u ||
+                !TryParseCommandFloat(arguments[0], candidate.x) ||
+                !TryParseCommandFloat(arguments[1], candidate.y) ||
+                !TryParseCommandFloat(arguments[2], candidate.z) ||
+                candidate.x < minimum || candidate.x > maximum ||
+                candidate.y < minimum || candidate.y > maximum ||
+                candidate.z < minimum || candidate.z > maximum)
+            {
+                error = std::string(path) +
+                    " expects three finite numbers from " +
+                    FormatCommandFloat(minimum) + " through " +
+                    FormatCommandFloat(maximum) + ".";
+                return false;
+            }
+        }
+        else if (operation == CommandValueOperation::Reset)
+        {
+            candidate = defaultValue;
+        }
+        else if (operation == CommandValueOperation::Toggle)
+        {
+            error = std::string(path) + " is not boolean.";
+            return false;
+        }
+        if (operation != CommandValueOperation::Get &&
+            candidate.x == current.x &&
+            candidate.y == current.y &&
+            candidate.z == current.z)
+        {
+            return RejectUnchangedCommandMutation(path, error);
+        }
+        current = candidate;
+        value = FormatCommandFloat3(current);
+        return true;
+    }
+
+    static const UiSettingsCommandDefinition*
+        FindSettingsCommandDefinition(std::string_view rawName)
+    {
+        const std::string name = NormalizeCommandAscii(rawName);
+        const auto definition = std::find_if(
+            UiSettingsCommandCatalog.begin(),
+            UiSettingsCommandCatalog.end(),
+            [&name](const UiSettingsCommandDefinition& candidate)
+            {
+                return candidate.name == name;
+            });
+        return definition != UiSettingsCommandCatalog.end()
+            ? &*definition
+            : nullptr;
+    }
+
+    static UiSettingsCommandVerb GetSettingsCommandVerb(
+        CommandValueOperation operation)
+    {
+        switch (operation)
+        {
+        case CommandValueOperation::Get:
+            return UiSettingsCommandVerb::Get;
+        case CommandValueOperation::Set:
+            return UiSettingsCommandVerb::Set;
+        case CommandValueOperation::Toggle:
+            return UiSettingsCommandVerb::Toggle;
+        case CommandValueOperation::Reset:
+            return UiSettingsCommandVerb::Reset;
+        }
+        return UiSettingsCommandVerb::Get;
+    }
+
+    static std::string GetSettingsCommandVerbList(
+        const UiSettingsCommandDefinition& definition)
+    {
+        std::string result;
+        const auto append = [&](UiSettingsCommandVerb verb,
+            std::string_view label)
+        {
+            if (!definition.Supports(verb))
+                return;
+            if (!result.empty())
+                result += "|";
+            result += label;
+        };
+        append(UiSettingsCommandVerb::Get, "get");
+        append(UiSettingsCommandVerb::Set, "set");
+        append(UiSettingsCommandVerb::Toggle, "toggle");
+        append(UiSettingsCommandVerb::Reset, "reset");
+        append(UiSettingsCommandVerb::Run, "run");
+        return result;
+    }
+
+    void SetCommandResult(
+        std::string result,
+        bool error = false)
+    {
+        m_CommandResult = std::move(result);
+        m_CommandResultIsError = error;
+        m_CommandScrollToTopRequested = true;
+    }
+
+    bool IsCommandRuntimeMutationLocked(
+        const UiSettingsCommandDefinition& definition) const
+    {
+        if (definition.kind == UiSettingsCommandKind::Action &&
+            (definition.name == "cancel-benchmark" ||
+             definition.name == "cancel-svsm-motion-test"))
+        {
+            return false;
+        }
+        if (definition.factoryMutationPolicy ==
+                UiSettingsFactoryMutationPolicy::UiSafe &&
+            definition.section != UiSettingsCommandSection::General)
+        {
+            return false;
+        }
+        return m_app->IsSceneLoading() ||
+            m_app->IsVisibilityBenchmarkQueued() ||
+            m_app->IsVisibilityBenchmarkActive() ||
+            m_app->IsAntiAliasingMotionTestRunning() ||
+            m_app->IsSvsmMotionBenchmarkRunning();
+    }
+
+    bool CheckCommandMutationAllowed(
+        const UiSettingsCommandDefinition& definition,
+        std::string& error) const
+    {
+#if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
+        if (definition.factoryMutationPolicy !=
+            UiSettingsFactoryMutationPolicy::UiSafe)
+        {
+            error =
+                "Factory shader topology is locked. This build allows only "
+                "presentation, camera, and statistics selection changes; "
+                "use a production or developer build for renderer mutations.";
+            return false;
+        }
+#endif
+        if (IsCommandRuntimeMutationLocked(definition))
+        {
+            error =
+                "This setting cannot change while loading or a controlled "
+                "experiment is active.";
+            return false;
+        }
+        return true;
+    }
+
+    static bool ApplyCommandBool(
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string_view path,
+        bool& current,
+        bool defaultValue,
+        std::string& value,
+        std::string& error)
+    {
+        bool candidate = current;
+        switch (operation)
+        {
+        case CommandValueOperation::Get:
+            break;
+        case CommandValueOperation::Set:
+            if (arguments.size() != 1u ||
+                !TryParseCommandBool(arguments.front(), candidate))
+            {
+                error = std::string(path) + " expects on or off.";
+                return false;
+            }
+            break;
+        case CommandValueOperation::Toggle:
+            candidate = !candidate;
+            break;
+        case CommandValueOperation::Reset:
+            candidate = defaultValue;
+            break;
+        }
+        if (operation != CommandValueOperation::Get &&
+            candidate == current)
+        {
+            return RejectUnchangedCommandMutation(path, error);
+        }
+        current = candidate;
+        value = current ? "on" : "off";
+        return true;
+    }
+
+    static bool ApplyCommandInteger(
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string_view path,
+        int& current,
+        int defaultValue,
+        int minimum,
+        int maximum,
+        std::string& value,
+        std::string& error)
+    {
+        int candidate = current;
+        if (operation == CommandValueOperation::Set)
+        {
+            int64_t parsed = 0;
+            if (arguments.size() != 1u ||
+                !TryParseCommandInteger(arguments.front(), parsed) ||
+                parsed < minimum ||
+                parsed > maximum)
+            {
+                error = std::string(path) + " expects an integer from " +
+                    std::to_string(minimum) + " through " +
+                    std::to_string(maximum) + ".";
+                return false;
+            }
+            candidate = static_cast<int>(parsed);
+        }
+        else if (operation == CommandValueOperation::Reset)
+        {
+            candidate = defaultValue;
+        }
+        else if (operation == CommandValueOperation::Toggle)
+        {
+            error = std::string(path) + " is not boolean.";
+            return false;
+        }
+        if (operation != CommandValueOperation::Get &&
+            candidate == current)
+        {
+            return RejectUnchangedCommandMutation(path, error);
+        }
+        current = candidate;
+        value = std::to_string(current);
+        return true;
+    }
+
+    static bool ApplyCommandUnsigned(
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string_view path,
+        uint32_t& current,
+        uint32_t defaultValue,
+        uint32_t minimum,
+        uint32_t maximum,
+        std::string& value,
+        std::string& error)
+    {
+        uint32_t candidate = current;
+        if (operation == CommandValueOperation::Set)
+        {
+            int64_t parsed = 0;
+            if (arguments.size() != 1u ||
+                !TryParseCommandInteger(arguments.front(), parsed) ||
+                parsed < static_cast<int64_t>(minimum) ||
+                parsed > static_cast<int64_t>(maximum))
+            {
+                error = std::string(path) + " expects an integer from " +
+                    std::to_string(minimum) + " through " +
+                    std::to_string(maximum) + ".";
+                return false;
+            }
+            candidate = static_cast<uint32_t>(parsed);
+        }
+        else if (operation == CommandValueOperation::Reset)
+        {
+            candidate = defaultValue;
+        }
+        else if (operation == CommandValueOperation::Toggle)
+        {
+            error = std::string(path) + " is not boolean.";
+            return false;
+        }
+        if (operation != CommandValueOperation::Get &&
+            candidate == current)
+        {
+            return RejectUnchangedCommandMutation(path, error);
+        }
+        current = candidate;
+        value = std::to_string(current);
+        return true;
+    }
+
+    static bool ApplyCommandFloat(
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string_view path,
+        float& current,
+        float defaultValue,
+        float minimum,
+        float maximum,
+        std::string& value,
+        std::string& error)
+    {
+        float candidate = current;
+        if (operation == CommandValueOperation::Set)
+        {
+            if (arguments.size() != 1u ||
+                !TryParseCommandFloat(arguments.front(), candidate) ||
+                candidate < minimum ||
+                candidate > maximum)
+            {
+                error = std::string(path) +
+                    " expects a finite number from " +
+                    FormatCommandFloat(minimum) + " through " +
+                    FormatCommandFloat(maximum) + ".";
+                return false;
+            }
+        }
+        else if (operation == CommandValueOperation::Reset)
+        {
+            candidate = defaultValue;
+        }
+        else if (operation == CommandValueOperation::Toggle)
+        {
+            error = std::string(path) + " is not boolean.";
+            return false;
+        }
+        if (operation != CommandValueOperation::Get &&
+            candidate == current)
+        {
+            return RejectUnchangedCommandMutation(path, error);
+        }
+        current = candidate;
+        value = FormatCommandFloat(current);
+        return true;
+    }
+
+    template <typename Enum, size_t Count>
+    static bool ApplyCommandEnum(
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string_view path,
+        Enum& current,
+        Enum defaultValue,
+        const std::array<std::pair<std::string_view, Enum>, Count>& options,
+        std::string& value,
+        std::string& error)
+    {
+        Enum candidate = current;
+        if (operation == CommandValueOperation::Set)
+        {
+            if (arguments.empty())
+            {
+                error = std::string(path) + " expects one value.";
+                return false;
+            }
+            const std::string requested = NormalizeCommandAscii(
+                JoinCommandArguments(arguments), true);
+            const auto match = std::find_if(
+                options.begin(),
+                options.end(),
+                [&requested](const auto& option)
+                {
+                    return NormalizeCommandAscii(
+                        option.first, true) == requested;
+                });
+            if (match == options.end())
+            {
+                error = std::string(path) + " expects ";
+                for (size_t index = 0u; index < options.size(); ++index)
+                {
+                    if (index > 0u)
+                    {
+                        error += index + 1u == options.size()
+                            ? ", or "
+                            : ", ";
+                    }
+                    error += options[index].first;
+                }
+                error += ".";
+                return false;
+            }
+            candidate = match->second;
+        }
+        else if (operation == CommandValueOperation::Reset)
+        {
+            candidate = defaultValue;
+        }
+        else if (operation == CommandValueOperation::Toggle)
+        {
+            error = std::string(path) + " is not boolean.";
+            return false;
+        }
+
+        if (operation != CommandValueOperation::Get &&
+            candidate == current)
+        {
+            return RejectUnchangedCommandMutation(path, error);
+        }
+        current = candidate;
+        const auto selected = std::find_if(
+            options.begin(),
+            options.end(),
+            [&current](const auto& option)
+            {
+                return option.second == current;
+            });
+        value = selected != options.end()
+            ? std::string(selected->first)
+            : "unknown";
+        return true;
+    }
+
+    bool DispatchUiCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        if (path == "ui.skin")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, UiSkin>, 2> Options = {{
+                { "amp", UiSkin::Amp },
+                { "og", UiSkin::Og }
+            }};
+            return ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                m_ui.Skin,
+                DefaultUiSkin,
+                Options,
+                value,
+                error);
+        }
+        if (path == "ui.visible")
+        {
+            return ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                m_ui.ShowUI,
+                false,
+                value,
+                error);
+        }
+        if (path == "ui.settings-collapsed")
+        {
+            bool collapsed = m_SettingsCollapsedRequest.value_or(
+                m_SettingsCollapsed);
+            if (!ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    collapsed,
+                    false,
+                    value,
+                    error))
+            {
+                return false;
+            }
+            if (operation != CommandValueOperation::Get)
+            {
+                m_SettingsCollapsedRequest = collapsed;
+                m_SettingsCollapsed = collapsed;
+            }
+            return true;
+        }
+        if (path == "ui.zoom")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, PixelZoomMode>, 5> Options = {{
+                { "off", PixelZoomMode::Off },
+                { "2x", PixelZoomMode::Zoom2x },
+                { "3x", PixelZoomMode::Zoom3x },
+                { "4x", PixelZoomMode::Zoom4x },
+                { "5x", PixelZoomMode::Zoom5x }
+            }};
+            return ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                m_ui.PixelZoom,
+                PixelZoomMode::Off,
+                Options,
+                value,
+                error);
+        }
+        if (path == "material-editor.visible")
+        {
+            return ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                m_ui.ShowMaterialEditor,
+                false,
+                value,
+                error);
+        }
+        error = "Internal UI command binding is missing for '" +
+            std::string(path) + "'.";
+        return false;
+    }
+
+    bool DispatchGeneralCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        if (path == "gpu.adapter")
+        {
+            const auto active = std::find_if(
+                m_ui.GpuAdapterChoices.begin(),
+                m_ui.GpuAdapterChoices.end(),
+                [this](const GpuAdapterChoice& adapter)
+                {
+                    return adapter.adapterIndex ==
+                        m_ui.ActiveGpuAdapterIndex;
+                });
+            if (operation == CommandValueOperation::Get)
+            {
+                value = active != m_ui.GpuAdapterChoices.end()
+                    ? active->name
+                    : "unknown";
+                return true;
+            }
+            if (operation != CommandValueOperation::Set)
+            {
+                error = "gpu.adapter supports get and set only.";
+                return false;
+            }
+
+            const std::string requested = JoinCommandArguments(arguments);
+            if (requested.empty())
+            {
+                error =
+                    "gpu.adapter expects an adapter index or unique name.";
+                return false;
+            }
+            int64_t requestedIndex = -1;
+            const bool numeric =
+                TryParseCommandInteger(requested, requestedIndex);
+            const std::string normalized =
+                NormalizeCommandAscii(requested, true);
+            const GpuAdapterChoice* match = nullptr;
+            for (const GpuAdapterChoice& adapter :
+                m_ui.GpuAdapterChoices)
+            {
+                const bool matches =
+                    (numeric &&
+                        adapter.adapterIndex == requestedIndex) ||
+                    NormalizeCommandAscii(adapter.name, true) ==
+                        normalized;
+                if (!matches)
+                    continue;
+                if (match && match->adapterIndex != adapter.adapterIndex)
+                {
+                    error =
+                        "gpu.adapter name is ambiguous; use its numeric "
+                        "adapter index.";
+                    return false;
+                }
+                match = &adapter;
+            }
+            if (!match)
+            {
+                error =
+                    "Unknown graphics adapter. Use '/list gpu.adapter'.";
+                return false;
+            }
+            if (match->adapterIndex == m_ui.ActiveGpuAdapterIndex)
+                return RejectUnchangedCommandMutation(path, error);
+            value = match->name;
+            g_RestartAdapterIndex = match->adapterIndex;
+            g_RestartRequested = true;
+            glfwSetWindowShouldClose(
+                GetDeviceManager()->GetWindow(),
+                GLFW_TRUE);
+            return true;
+        }
+        if (path == "camera.mode")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, CameraMode>, 2> Options = {{
+                { "freelook", CameraMode::ThirdPerson },
+                { "locked", CameraMode::Static }
+            }};
+            CameraMode candidate = m_ui.Camera;
+            if (!ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate,
+                    CameraMode::ThirdPerson,
+                    Options,
+                    value,
+                    error))
+            {
+                return false;
+            }
+            if (operation != CommandValueOperation::Get)
+            {
+                if (m_app->IsBenchmarkCameraActive() &&
+                    candidate != CameraMode::Static)
+                {
+                    error = "The benchmark camera is locked.";
+                    return false;
+                }
+                m_app->SetCameraMode(candidate);
+            }
+            return true;
+        }
+        if (path == "camera.location")
+        {
+            if (!m_app->HasSponzaCameraLocations())
+            {
+                error =
+                    "The current scene does not provide stored camera "
+                    "locations.";
+                return false;
+            }
+            static constexpr std::array<
+                std::pair<std::string_view, SponzaCameraLocation>, 2>
+                Options = {{
+                    { "piloted", SponzaCameraLocation::Free },
+                    {
+                        "position-1",
+                        SponzaCameraLocation::SimplifiedApproximation
+                    }
+                }};
+            SponzaCameraLocation candidate =
+                m_app->GetSponzaCameraLocation();
+            if (!ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate,
+                    SponzaCameraLocation::SimplifiedApproximation,
+                    Options,
+                    value,
+                    error))
+            {
+                return false;
+            }
+            if (operation != CommandValueOperation::Get)
+            {
+                if (m_app->IsBenchmarkCameraActive())
+                {
+                    error = "The benchmark camera is locked.";
+                    return false;
+                }
+                m_app->SetSponzaCameraLocation(candidate);
+            }
+            return true;
+        }
+        if (path == "world-materials")
+        {
+            const WorldMaterialViewAvailability availability = {
+                m_ui.EnablePbr,
+                m_ui.UsesDeferredShading(),
+                m_ui.ScreenSpaceVisibility.enabled,
+                m_ui.ScreenSpaceVisibility.indirectDiffuse.enabled &&
+                    m_ui.ScreenSpaceVisibility.indirectDiffuse.intensity >
+                        0.f
+            };
+            WorldMaterialView current = ResolveWorldMaterialView(
+                {
+                    uint32_t(m_ui.WhiteWorld),
+                    m_ui.ScreenSpaceVisibility.showIndirectDiffuseOnly
+                },
+                availability);
+            static constexpr std::array<
+                std::pair<std::string_view, WorldMaterialView>, 5>
+                Options = {{
+                    {
+                        "white-world-off",
+                        WorldMaterialView::WhiteWorldOff
+                    },
+                    {
+                        "white-world-on",
+                        WorldMaterialView::WhiteWorldOn
+                    },
+                    {
+                        "preserve-detail",
+                        WorldMaterialView::WhiteWorldPreserveNormals
+                    },
+                    {
+                        "preserve-lighting",
+                        WorldMaterialView::WhiteWorldPreserveEmissives
+                    },
+                    {
+                        "indirect-diffuse",
+                        WorldMaterialView::IndirectDiffuseResponse
+                    }
+                }};
+            if (!ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    current,
+                    WorldMaterialView::WhiteWorldOff,
+                    Options,
+                    value,
+                    error))
+            {
+                return false;
+            }
+            if (operation != CommandValueOperation::Get)
+            {
+                if (!IsWorldMaterialViewAvailable(current, availability))
+                {
+                    error =
+                        "Indirect diffuse inspection requires deferred PBR, "
+                        "visibility, and an active GI consumer.";
+                    return false;
+                }
+                const WorldMaterialViewState state =
+                    MakeWorldMaterialViewState(current);
+                m_ui.ScreenSpaceVisibility.showIndirectDiffuseOnly = false;
+                m_app->SetWhiteWorldMode(
+                    WhiteWorldMode(state.whiteWorldMode));
+                m_ui.ScreenSpaceVisibility.showIndirectDiffuseOnly =
+                    state.showIndirectDiffuseOnly;
+            }
+            return true;
+        }
+        if (path == "scene.current")
+        {
+            if (operation == CommandValueOperation::Get)
+            {
+                value = m_app->GetCurrentSceneDisplayName();
+                return true;
+            }
+            if (operation != CommandValueOperation::Set)
+            {
+                error = "scene.current supports get and set only.";
+                return false;
+            }
+            const std::string requested = JoinCommandArguments(arguments);
+            const std::string normalized =
+                NormalizeCommandAscii(requested, true);
+            const SceneCatalogEntry* match = nullptr;
+            for (const SceneCatalogEntry& scene :
+                m_app->GetAvailableScenes())
+            {
+                const bool matches =
+                    NormalizeCommandAscii(scene.FileName, true) ==
+                        normalized ||
+                    NormalizeCommandAscii(scene.DisplayName, true) ==
+                        normalized;
+                if (!matches)
+                    continue;
+                if (match && match->FileName != scene.FileName)
+                {
+                    error =
+                        "Scene name is ambiguous; use its exact filename.";
+                    return false;
+                }
+                match = &scene;
+            }
+            if (!match)
+            {
+                error = "Unknown scene. Use '/list scene.current'.";
+                return false;
+            }
+            if (match->FileName == m_app->GetCurrentSceneName())
+                return RejectUnchangedCommandMutation(path, error);
+            m_app->SetCurrentSceneName(match->FileName);
+            value = match->DisplayName;
+            return true;
+        }
+        error = "Internal General command binding is missing for '" +
+            std::string(path) + "'.";
+        return false;
+    }
+
+    ScreenSpaceVisibilitySettings GetVisibilityCommandDefaults() const
+    {
+        const ScreenSpaceVisibilitySettings& current =
+            m_ui.ScreenSpaceVisibility;
+        const ScreenSpaceVisibilityQuality origin =
+            current.quality == ScreenSpaceVisibilityQuality::Custom
+                ? current.qualityPresetOrigin
+                : current.quality;
+        ScreenSpaceVisibilitySettings defaults;
+        ApplyScreenSpaceVisibilityQualityPreset(defaults, origin);
+        return defaults;
+    }
+
+    static void MakeVisibilityApplicationSeparate(
+        ScreenSpaceVisibilitySettings& visibility)
+    {
+        MakeVisibilityPerformanceComposable(visibility);
+        auto& configuration = visibility.performance.configuration;
+        configuration.application =
+            VisibilityApplicationMode::LegacySeparateComposition;
+        configuration.explicitHalfRoundtrip = false;
+        configuration.consumerRequirement =
+            VisibilityConsumerRequirement::Any;
+        configuration.resolutionRequirement =
+            configuration.reconstruction ==
+                    VisibilityReconstructionMode::PackedEdges2x2
+                ? VisibilityResolutionRequirement::Reduced
+                : VisibilityResolutionRequirement::Any;
+    }
+
+    bool DispatchVisibilityCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        if (operation != CommandValueOperation::Get &&
+            path != "visibility.enabled" &&
+            !m_ui.IsScreenSpaceVisibilityAvailable())
+        {
+            error =
+                "Visibility settings require deferred UVSR PBR rendering.";
+            return false;
+        }
+
+        ScreenSpaceVisibilitySettings candidate =
+            m_ui.ScreenSpaceVisibility;
+        const ScreenSpaceVisibilitySettings defaults =
+            GetVisibilityCommandDefaults();
+        bool handled = true;
+
+        if (path == "visibility.enabled")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enabled,
+                defaults.enabled,
+                value,
+                error);
+        }
+        else if (path == "visibility.resolution")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, VisibilityResolution>, 3>
+                Options = {{
+                    { "full", VisibilityResolution::Full },
+                    { "half", VisibilityResolution::Half },
+                    { "quarter", VisibilityResolution::Quarter }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.resolution,
+                defaults.resolution,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "visibility.profile")
+        {
+            static constexpr std::array<
+                std::pair<
+                    std::string_view,
+                    ScreenSpaceVisibilityQuality>, 4> Options = {{
+                        { "low", ScreenSpaceVisibilityQuality::Low },
+                        { "medium", ScreenSpaceVisibilityQuality::Medium },
+                        { "high", ScreenSpaceVisibilityQuality::High },
+                        { "ultra", ScreenSpaceVisibilityQuality::Ultra }
+                    }};
+            ScreenSpaceVisibilityQuality quality =
+                operation == CommandValueOperation::Get &&
+                    candidate.quality ==
+                        ScreenSpaceVisibilityQuality::Custom
+                    ? candidate.qualityPresetOrigin
+                    : candidate.quality;
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                quality,
+                ScreenSpaceVisibilityQuality::High,
+                Options,
+                value,
+                error);
+            if (handled && operation != CommandValueOperation::Get)
+                ApplyScreenSpaceVisibilityQualityPreset(candidate, quality);
+        }
+        else if (path == "visibility.sampling.estimator")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, VisibilityEstimator>, 3>
+                Options = {{
+                    {
+                        "projected-angle",
+                        VisibilityEstimator::UniformProjectedAngle
+                    },
+                    {
+                        "solid-angle",
+                        VisibilityEstimator::UniformSolidAngle
+                    },
+                    {
+                        "cosine-weighted",
+                        VisibilityEstimator::CosineWeightedSolidAngle
+                    }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.estimator,
+                defaults.estimator,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "visibility.sampling.noise-pattern")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, VisibilitySampleScheduler>, 2>
+                Options = {{
+                    {
+                        "independent-hash",
+                        VisibilitySampleScheduler::IndependentHash
+                    },
+                    {
+                        "toroidal-blue",
+                        VisibilitySampleScheduler::
+                            ToroidalBlueNoiseRankField
+                    }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.sampling.scheduler,
+                defaults.sampling.scheduler,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "visibility.sampling.samples")
+        {
+            handled = ApplyCommandUnsigned(
+                operation,
+                arguments,
+                path,
+                candidate.sampling.maximumSampleCount,
+                defaults.sampling.maximumSampleCount,
+                1u,
+                64u,
+                value,
+                error);
+        }
+        else if (path == "visibility.sampling.radius")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.sampling.radius,
+                defaults.sampling.radius,
+                0.01f,
+                std::max(m_app->GetSceneDiagonal() * 0.1f, 1.f),
+                value,
+                error);
+        }
+        else if (path == "visibility.sampling.thickness")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.sampling.thickness,
+                defaults.sampling.thickness,
+                0.f,
+                std::max(m_app->GetSceneDiagonal() * 0.02f, 0.5f),
+                value,
+                error);
+        }
+        else if (path == "visibility.sampling.distribution")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.sampling.stepDistributionExponent,
+                defaults.sampling.stepDistributionExponent,
+                0.5f,
+                4.f,
+                value,
+                error);
+        }
+        else if (path == "visibility.ao.enabled")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.ambientOcclusion.enabled,
+                defaults.ambientOcclusion.enabled,
+                value,
+                error);
+        }
+        else if (path == "visibility.ao.strength")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.ambientOcclusion.strength,
+                defaults.ambientOcclusion.strength,
+                0.f,
+                2.f,
+                value,
+                error);
+        }
+        else if (path == "visibility.ao.power")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.ambientOcclusion.power,
+                defaults.ambientOcclusion.power,
+                0.1f,
+                4.f,
+                value,
+                error);
+        }
+        else if (path == "visibility.gi.enabled")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.indirectDiffuse.enabled,
+                defaults.indirectDiffuse.enabled,
+                value,
+                error);
+        }
+        else if (path == "visibility.gi.limit-bounces")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.indirectDiffuse.limitBounces,
+                defaults.indirectDiffuse.limitBounces,
+                value,
+                error);
+        }
+        else if (path == "visibility.gi.bounces")
+        {
+            handled = ApplyCommandUnsigned(
+                operation,
+                arguments,
+                path,
+                candidate.indirectDiffuse.bounceCount,
+                defaults.indirectDiffuse.bounceCount,
+                1u,
+                MaxIndirectDiffuseBounceCount,
+                value,
+                error);
+        }
+        else if (path == "visibility.gi.contribution-cutoff")
+        {
+            const float minimum =
+                candidate.indirectDiffuse.limitBounces
+                    ? 0.f
+                    : MinimumContributionTerminatedThreshold;
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.indirectDiffuse.minimumBounceContribution,
+                defaults.indirectDiffuse.minimumBounceContribution,
+                minimum,
+                MaximumBounceContributionCutoff,
+                value,
+                error);
+        }
+        else if (path == "visibility.gi.intensity")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.indirectDiffuse.intensity,
+                defaults.indirectDiffuse.intensity,
+                0.f,
+                10.f,
+                value,
+                error);
+        }
+        else if (path == "visibility.reconstruction.filter-radius")
+        {
+            if (operation != CommandValueOperation::Get &&
+                (!candidate.reconstruction.spatialEnabled ||
+                 candidate.reconstruction.spatialFilter !=
+                    VisibilitySpatialFilter::GaussianJointBilateral))
+            {
+                error =
+                    "visibility.reconstruction.filter-radius is available "
+                    "only for gaussian-bilateral reconstruction.";
+                return false;
+            }
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.reconstruction.spatialRadius,
+                defaults.reconstruction.spatialRadius,
+                1.f,
+                12.f,
+                value,
+                error);
+        }
+        else if (path == "visibility.reconstruction.method")
+        {
+            const auto getMethod = [](const ScreenSpaceVisibilitySettings& v)
+                -> std::string
+                {
+                    const auto configuration =
+                        GetEffectiveVisibilityPerformanceConfiguration(v);
+                    if (configuration.reconstruction ==
+                        VisibilityReconstructionMode::PackedEdges2x2)
+                    {
+                        switch (v.performance.packedEdgeMode)
+                        {
+                        case VisibilityPackedEdgeMode::Depth:
+                            return "depth-guided";
+                        case VisibilityPackedEdgeMode::DepthAndNormal:
+                            return "depth-normal";
+                        case VisibilityPackedEdgeMode::
+                                SlopeAdjustedDepthAndNormal:
+                            return "slope-aware";
+                        case VisibilityPackedEdgeMode::ControlledLeakage:
+                            return "leakage-limited";
+                        }
+                    }
+                    if (v.reconstruction.spatialEnabled)
+                    {
+                        return v.reconstruction.spatialFilter ==
+                                VisibilitySpatialFilter::JointBilateral
+                            ? "joint-bilateral"
+                            : "gaussian-bilateral";
+                    }
+                    return v.resolution == VisibilityResolution::Full
+                        ? "full-resolution"
+                        : "guide-aware-upsampling";
+                };
+            const std::string currentMethod = getMethod(candidate);
+            if (operation == CommandValueOperation::Get)
+            {
+                value = currentMethod;
+                return true;
+            }
+            if (operation == CommandValueOperation::Toggle)
+            {
+                error = std::string(path) + " is not boolean.";
+                return false;
+            }
+            if (operation == CommandValueOperation::Reset)
+            {
+                candidate.reconstruction = defaults.reconstruction;
+                candidate.performance.configuration.reconstruction =
+                    defaults.performance.configuration.reconstruction;
+                candidate.performance.configuration.edgeStorage =
+                    defaults.performance.configuration.edgeStorage;
+                candidate.performance.packedEdgeMode =
+                    defaults.performance.packedEdgeMode;
+                value = getMethod(candidate);
+            }
+            else
+            {
+                const std::string requested = NormalizeCommandAscii(
+                    JoinCommandArguments(arguments), true);
+                MakeVisibilityPerformanceComposable(candidate);
+                auto& configuration =
+                    candidate.performance.configuration;
+                if (requested == "fullresolution")
+                {
+                    candidate.resolution = VisibilityResolution::Full;
+                    candidate.reconstruction.spatialEnabled = false;
+                    configuration.reconstruction =
+                        VisibilityReconstructionMode::Legacy;
+                    configuration.edgeStorage = VisibilityEdgeStorage::None;
+                }
+                else if (requested == "guideawareupsampling")
+                {
+                    if (candidate.resolution == VisibilityResolution::Full)
+                        candidate.resolution = VisibilityResolution::Half;
+                    candidate.reconstruction.spatialEnabled = false;
+                    configuration.reconstruction =
+                        VisibilityReconstructionMode::Legacy;
+                    configuration.edgeStorage = VisibilityEdgeStorage::None;
+                }
+                else if (requested == "jointbilateral" ||
+                    requested == "gaussianbilateral")
+                {
+                    if (candidate.resolution == VisibilityResolution::Full)
+                        candidate.resolution = VisibilityResolution::Half;
+                    candidate.reconstruction.spatialEnabled = true;
+                    candidate.reconstruction.spatialFilter =
+                        requested == "jointbilateral"
+                            ? VisibilitySpatialFilter::JointBilateral
+                            : VisibilitySpatialFilter::
+                                GaussianJointBilateral;
+                    configuration.reconstruction =
+                        VisibilityReconstructionMode::Legacy;
+                    configuration.edgeStorage = VisibilityEdgeStorage::None;
+                }
+                else
+                {
+                    VisibilityPerformanceProfile profile =
+                        VisibilityPerformanceProfile::Unset;
+                    if (requested == "depthguided")
+                    {
+                        profile = VisibilityPerformanceProfile::
+                            AlgorithmicPackedEdges2x2;
+                    }
+                    else if (requested == "depthnormal")
+                    {
+                        profile = VisibilityPerformanceProfile::
+                            AlgorithmicPackedEdgesDepthNormal2x2;
+                    }
+                    else if (requested == "slopeaware")
+                    {
+                        profile = VisibilityPerformanceProfile::
+                            AlgorithmicPackedEdgesSlope2x2;
+                    }
+                    else if (requested == "leakagelimited")
+                    {
+                        profile = VisibilityPerformanceProfile::
+                            AlgorithmicPackedEdgesLeakage2x2;
+                    }
+                    if (profile == VisibilityPerformanceProfile::Unset)
+                    {
+                        error =
+                            "visibility.reconstruction.method expects "
+                            "full-resolution, guide-aware-upsampling, "
+                            "joint-bilateral, gaussian-bilateral, "
+                            "depth-guided, depth-normal, slope-aware, or "
+                            "leakage-limited.";
+                        return false;
+                    }
+                    const auto source =
+                        GetVisibilityPerformanceProfileConfiguration(profile);
+                    if (candidate.resolution == VisibilityResolution::Full)
+                        candidate.resolution = VisibilityResolution::Half;
+                    candidate.reconstruction.spatialEnabled = false;
+                    configuration.reconstruction = source.reconstruction;
+                    configuration.edgeStorage = source.edgeStorage;
+                    candidate.performance.packedEdgeMode =
+                        GetPackedEdgeMode(profile);
+                }
+                value = getMethod(candidate);
+            }
+            if (value == currentMethod)
+                return RejectUnchangedCommandMutation(path, error);
+        }
+        else if (path == "visibility.application")
+        {
+            const auto getApplication =
+                [](const ScreenSpaceVisibilitySettings& visibility)
+                {
+                    const auto configuration =
+                        GetEffectiveVisibilityPerformanceConfiguration(
+                            visibility);
+                    switch (configuration.application)
+                    {
+                    case VisibilityApplicationMode::
+                            FusedResolveAndApplyExact:
+                        return std::string("fused");
+                    case VisibilityApplicationMode::
+                            FusedResolveAndApplyPackedEdges:
+                        return std::string("fused-edge");
+                    default:
+                        return std::string("separate");
+                    }
+                };
+            const std::string currentApplication =
+                getApplication(candidate);
+            if (operation == CommandValueOperation::Get)
+            {
+                value = currentApplication;
+                return true;
+            }
+            if (operation == CommandValueOperation::Toggle)
+            {
+                error = std::string(path) + " is not boolean.";
+                return false;
+            }
+            std::string requested;
+            if (operation == CommandValueOperation::Reset)
+            {
+                const auto configuration =
+                    GetEffectiveVisibilityPerformanceConfiguration(
+                        defaults);
+                requested =
+                    configuration.application ==
+                        VisibilityApplicationMode::
+                            FusedResolveAndApplyExact
+                    ? "fused"
+                    : configuration.application ==
+                        VisibilityApplicationMode::
+                            FusedResolveAndApplyPackedEdges
+                        ? "fusededge"
+                        : "separate";
+            }
+            else
+            {
+                requested = NormalizeCommandAscii(
+                    JoinCommandArguments(arguments), true);
+            }
+            MakeVisibilityPerformanceComposable(candidate);
+            auto& configuration = candidate.performance.configuration;
+            if (requested == "separate")
+            {
+                MakeVisibilityApplicationSeparate(candidate);
+            }
+            else if (requested == "fused" ||
+                requested == "fusededge")
+            {
+                if (candidate.resolution == VisibilityResolution::Full)
+                    candidate.resolution = VisibilityResolution::Half;
+                candidate.indirectDiffuse.enabled = false;
+                candidate.reconstruction.spatialEnabled = false;
+                const auto source =
+                    GetVisibilityPerformanceProfileConfiguration(
+                        requested == "fused"
+                            ? VisibilityPerformanceProfile::
+                                ExactFusedResolveApply
+                            : VisibilityPerformanceProfile::
+                                AlgorithmicFusedPackedEdges2x2);
+                configuration.application = source.application;
+                configuration.explicitHalfRoundtrip =
+                    source.explicitHalfRoundtrip;
+                configuration.consumerRequirement =
+                    VisibilityConsumerRequirement::AmbientOcclusionOnly;
+                configuration.resolutionRequirement =
+                    VisibilityResolutionRequirement::Reduced;
+                if (requested == "fusededge")
+                {
+                    configuration.reconstruction =
+                        source.reconstruction;
+                    configuration.edgeStorage = source.edgeStorage;
+                    candidate.performance.packedEdgeMode =
+                        VisibilityPackedEdgeMode::DepthAndNormal;
+                }
+            }
+            else
+            {
+                error =
+                    "visibility.application expects separate, fused, or "
+                    "fused-edge.";
+                return false;
+            }
+            value = getApplication(candidate);
+            if (value == currentApplication)
+                return RejectUnchangedCommandMutation(path, error);
+        }
+        else
+        {
+            handled = false;
+            error = "Internal Visibility command binding is missing for '" +
+                std::string(path) + "'.";
+        }
+
+        if (!handled)
+            return false;
+        if (operation == CommandValueOperation::Get)
+            return true;
+
+        if (path != "visibility.profile")
+        {
+            MakeVisibilityPerformanceComposable(candidate);
+            if (operation == CommandValueOperation::Set ||
+                operation == CommandValueOperation::Toggle)
+            {
+                MarkScreenSpaceVisibilityQualityCustom(candidate);
+            }
+            else
+            {
+                ReconcileScreenSpaceVisibilityQualityPreset(candidate);
+            }
+        }
+
+        if (candidate.indirectDiffuse.enabled)
+        {
+            const auto configuration =
+                GetEffectiveVisibilityPerformanceConfiguration(candidate);
+            if (configuration.application ==
+                    VisibilityApplicationMode::
+                        FusedResolveAndApplyExact ||
+                configuration.application ==
+                    VisibilityApplicationMode::
+                        FusedResolveAndApplyPackedEdges)
+            {
+                MakeVisibilityApplicationSeparate(candidate);
+            }
+        }
+
+        m_ui.ScreenSpaceVisibility = candidate;
+        m_ui.VisibilityVerification =
+            VisibilityVerificationProfile::Unset;
+        if (path == "visibility.enabled")
+        {
+            m_ui.EnablePbr = candidate.enabled;
+            if (!candidate.enabled &&
+                m_ui.WhiteWorld != WhiteWorldMode::Off)
+            {
+                m_app->SetWhiteWorldMode(WhiteWorldMode::Off);
+            }
+        }
+        return true;
+    }
+
+    bool DispatchBufferCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        ScreenSpaceVisibilitySettings candidate =
+            m_ui.ScreenSpaceVisibility;
+        const ScreenSpaceVisibilitySettings defaults =
+            GetVisibilityCommandDefaults();
+        auto& buffers = candidate.performance.bufferPrecision;
+        const auto& defaultBuffers =
+            defaults.performance.bufferPrecision;
+        using Scalar = VisibilityScalarBufferPrecision;
+        using Vector = VisibilityVectorBufferPrecision;
+
+        const auto getPreset =
+            [](const VisibilityBufferPrecisionSettings& settings)
+            {
+                const bool ao16 =
+                    settings.rawAmbient == Scalar::Float16 &&
+                    settings.temporalAmbient == Scalar::Float16 &&
+                    settings.finalAmbient == Scalar::Float16 &&
+                    settings.depthHierarchy == Scalar::Float16;
+                const bool ao32 =
+                    settings.rawAmbient == Scalar::Float32 &&
+                    settings.temporalAmbient == Scalar::Float32 &&
+                    settings.finalAmbient == Scalar::Float32 &&
+                    settings.depthHierarchy == Scalar::Float32;
+                const bool gi16 =
+                    settings.rawIndirect == Vector::Rgba16Float &&
+                    settings.cumulativeIndirect == Vector::Rgba16Float &&
+                    settings.temporalIndirect == Vector::Rgba16Float &&
+                    settings.finalIndirect == Vector::Rgba16Float;
+                const bool gi32 =
+                    settings.rawIndirect == Vector::Rgba32Float &&
+                    settings.cumulativeIndirect == Vector::Rgba32Float &&
+                    settings.temporalIndirect == Vector::Rgba32Float &&
+                    settings.finalIndirect == Vector::Rgba32Float;
+                if (ao16 && gi16)
+                    return std::string("performance-precision");
+                if (ao32 && gi32)
+                    return std::string("default-precision");
+                if (ao16 && gi32)
+                    return std::string("compact-ao");
+                if (ao32 && gi16)
+                    return std::string("compact-gi");
+                return std::string("custom");
+            };
+
+        bool handled = true;
+        if (path == "visibility.buffers.preset")
+        {
+            const std::string currentPreset = getPreset(buffers);
+            if (operation == CommandValueOperation::Get)
+            {
+                value = currentPreset;
+                return true;
+            }
+            if (operation == CommandValueOperation::Toggle)
+            {
+                error = std::string(path) + " is not boolean.";
+                return false;
+            }
+            std::string requested =
+                operation == CommandValueOperation::Reset
+                    ? getPreset(defaultBuffers)
+                    : NormalizeCommandAscii(
+                        JoinCommandArguments(arguments), true);
+            if (requested == "performanceprecision")
+                ApplyVisibilityBufferPrecisionPreset(buffers, true, true);
+            else if (requested == "defaultprecision")
+                ApplyVisibilityBufferPrecisionPreset(buffers, false, false);
+            else if (requested == "compactao")
+                ApplyVisibilityBufferPrecisionPreset(buffers, true, false);
+            else if (requested == "compactgi")
+                ApplyVisibilityBufferPrecisionPreset(buffers, false, true);
+            else
+            {
+                error =
+                    "visibility.buffers.preset expects "
+                    "performance-precision, default-precision, compact-ao, "
+                    "or compact-gi.";
+                return false;
+            }
+            value = getPreset(buffers);
+            if (value == currentPreset)
+                return RejectUnchangedCommandMutation(path, error);
+        }
+        else
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, Scalar>, 2> ScalarOptions = {{
+                    { "half", Scalar::Float16 },
+                    { "full", Scalar::Float32 }
+                }};
+            static constexpr std::array<
+                std::pair<std::string_view, Vector>, 2> VectorOptions = {{
+                    { "half-rgba", Vector::Rgba16Float },
+                    { "full-rgba", Vector::Rgba32Float }
+                }};
+            if (path == "visibility.buffers.trace-ao")
+            {
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    buffers.rawAmbient,
+                    defaultBuffers.rawAmbient,
+                    ScalarOptions,
+                    value,
+                    error);
+            }
+            else if (path == "visibility.buffers.current-gi")
+            {
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    buffers.rawIndirect,
+                    defaultBuffers.rawIndirect,
+                    VectorOptions,
+                    value,
+                    error);
+            }
+            else if (path == "visibility.buffers.accumulated-gi")
+            {
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    buffers.cumulativeIndirect,
+                    defaultBuffers.cumulativeIndirect,
+                    VectorOptions,
+                    value,
+                    error);
+            }
+            else if (path == "visibility.buffers.output-ao")
+            {
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    buffers.finalAmbient,
+                    defaultBuffers.finalAmbient,
+                    ScalarOptions,
+                    value,
+                    error);
+            }
+            else if (path == "visibility.buffers.output-gi")
+            {
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    buffers.finalIndirect,
+                    defaultBuffers.finalIndirect,
+                    VectorOptions,
+                    value,
+                    error);
+            }
+            else if (path == "visibility.buffers.long-range-depth")
+            {
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    buffers.depthHierarchy,
+                    defaultBuffers.depthHierarchy,
+                    ScalarOptions,
+                    value,
+                    error);
+            }
+            else
+            {
+                handled = false;
+                error = "Internal Buffer command binding is missing for '" +
+                    std::string(path) + "'.";
+            }
+        }
+
+        if (!handled)
+            return false;
+        if (operation != CommandValueOperation::Get)
+        {
+            if (operation == CommandValueOperation::Reset)
+                ReconcileScreenSpaceVisibilityQualityPreset(candidate);
+            else
+                MarkScreenSpaceVisibilityQualityCustom(candidate);
+            m_ui.ScreenSpaceVisibility = candidate;
+            m_ui.VisibilityVerification =
+                VisibilityVerificationProfile::Unset;
+        }
+        return true;
+    }
+
+    bool DispatchStatisticsCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        if (path == "statistics.effect")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, int>, 12> Options = {{
+                    { "complete-renderer", 0 },
+                    { "geometry", 1 },
+                    { "direct-lighting", 2 },
+                    { "screen-space-visibility", 3 },
+                    { "anti-aliasing", 4 },
+                    { "screen-space-directional-shadows", 5 },
+                    { "sparse-virtual-shadow-maps", 6 },
+                    { "diagnostic-cascaded-shadow-maps", 7 },
+                    { "material-picking", 8 },
+                    { "environment-background", 9 },
+                    { "tone-mapping", 10 },
+                    { "output-blit", 11 }
+                }};
+            return ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                m_StatisticsEffect,
+                0,
+                Options,
+                value,
+                error);
+        }
+        if (path == "benchmark.visibility.warmup-frames")
+        {
+            return ApplyCommandInteger(
+                operation,
+                arguments,
+                path,
+                m_BenchmarkWarmupFrames,
+                120,
+                0,
+                600,
+                value,
+                error);
+        }
+        if (path == "benchmark.visibility.measured-frames")
+        {
+            return ApplyCommandInteger(
+                operation,
+                arguments,
+                path,
+                m_BenchmarkMeasuredFrames,
+                240,
+                1,
+                2000,
+                value,
+                error);
+        }
+        error = "Internal Statistics command binding is missing for '" +
+            std::string(path) + "'.";
+        return false;
+    }
+
+    bool DispatchAliasingCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        AntiAliasingSettings candidate = m_ui.AntiAliasing;
+        const AntiAliasingSettings defaults;
+        bool handled = true;
+
+        if (path == "anti-aliasing.enabled")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enabled,
+                defaults.enabled,
+                value,
+                error);
+        }
+        else if (path == "anti-aliasing.method")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, AntiAliasingMethod>, 3>
+                Options = {{
+                    {
+                        "conservative-morphological",
+                        AntiAliasingMethod::IntelCmaa2
+                    },
+                    {
+                        "temporal-reconstructive",
+                        AntiAliasingMethod::
+                            TemporalSubpixelMorphological
+                    },
+                    {
+                        "multisample-reference",
+                        AntiAliasingMethod::Msaa
+                    }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.method,
+                defaults.method,
+                Options,
+                value,
+                error);
+            if (handled &&
+                operation != CommandValueOperation::Get &&
+                candidate.method ==
+                    AntiAliasingMethod::TemporalSubpixelMorphological &&
+                !m_ui.IsTemporalAntiAliasingAvailable())
+            {
+                error =
+                    "Temporal reconstructive anti-aliasing is unavailable "
+                    "for the current renderer and visibility configuration.";
+                return false;
+            }
+        }
+        else if (path == "anti-aliasing.quality")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, AntiAliasingQuality>, 4>
+                Options = {{
+                    { "low", AntiAliasingQuality::Low },
+                    { "medium", AntiAliasingQuality::Medium },
+                    { "high", AntiAliasingQuality::High },
+                    { "ultra", AntiAliasingQuality::Ultra }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.quality,
+                defaults.quality,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "anti-aliasing.temporal-cost" ||
+            path == "anti-aliasing.history.storage" ||
+            path == "anti-aliasing.previous-depth-validation" ||
+            path == "anti-aliasing.history.weight" ||
+            path == "anti-aliasing.motion-trust" ||
+            path == "anti-aliasing.rectification-clip" ||
+            path == "anti-aliasing.blend-domain" ||
+            path == "anti-aliasing.sharpen.policy" ||
+            path == "anti-aliasing.sample-resurrection")
+        {
+            if (operation != CommandValueOperation::Get &&
+                (candidate.method !=
+                        AntiAliasingMethod::TemporalSubpixelMorphological ||
+                    !m_ui.IsTemporalAntiAliasingAvailable()))
+            {
+                error = std::string(path) +
+                    " requires available temporal reconstructive anti-aliasing.";
+                return false;
+            }
+
+            TemporalAaBehaviorOverrides& behaviorOverrides =
+                candidate.behaviorOverrides;
+            const TemporalAaBehaviorOverrides& defaultBehaviorOverrides =
+                defaults.behaviorOverrides;
+            TemporalAaAlgorithmOverrides& algorithmOverrides =
+                candidate.algorithmOverrides;
+            const TemporalAaAlgorithmOverrides& defaultAlgorithmOverrides =
+                defaults.algorithmOverrides;
+
+            if (path == "anti-aliasing.temporal-cost")
+            {
+                static constexpr std::array<
+                    std::pair<std::string_view, TemporalAaCostMode>, 3>
+                    Options = {{
+                        { "minimum", TemporalAaCostMode::Minimum },
+                        { "reduced", TemporalAaCostMode::Reduced },
+                        { "full-quality", TemporalAaCostMode::FullQuality }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.temporalCostMode,
+                    defaults.temporalCostMode,
+                    Options,
+                    value,
+                    error);
+            }
+            else if (path == "anti-aliasing.history.storage")
+            {
+                static constexpr std::array<
+                    std::pair<std::string_view,
+                        TemporalAaHistoryStorageOverride>, 3>
+                    Options = {{
+                        { "temporal-cost", TemporalAaHistoryStorageOverride::FromTemporalCost },
+                        { "robust", TemporalAaHistoryStorageOverride::Robust },
+                        { "compact", TemporalAaHistoryStorageOverride::Compact }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path, behaviorOverrides.historyStorage,
+                    defaultBehaviorOverrides.historyStorage, Options, value, error);
+            }
+            else if (path == "anti-aliasing.previous-depth-validation")
+            {
+                static constexpr std::array<
+                    std::pair<std::string_view,
+                        TemporalAaDepthValidationOverride>, 3>
+                    Options = {{
+                        { "temporal-cost", TemporalAaDepthValidationOverride::FromTemporalCost },
+                        { "four-texel-footprint", TemporalAaDepthValidationOverride::FourTexelFootprint },
+                        { "stationary-bypass", TemporalAaDepthValidationOverride::MovingPoint }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path, behaviorOverrides.depthValidation,
+                    defaultBehaviorOverrides.depthValidation, Options, value, error);
+            }
+            else if (path == "anti-aliasing.history.weight")
+            {
+                static constexpr std::array<
+                    std::pair<std::string_view,
+                        TemporalAaHistoryWeightPolicyOverride>, 3>
+                    Options = {{
+                        { "temporal-cost", TemporalAaHistoryWeightPolicyOverride::FromTemporalCost },
+                        { "confidence-recurrence", TemporalAaHistoryWeightPolicyOverride::ConfidenceRecurrence },
+                        { "immediate-horizon", TemporalAaHistoryWeightPolicyOverride::ImmediateHorizon }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path, behaviorOverrides.historyWeight,
+                    defaultBehaviorOverrides.historyWeight, Options, value, error);
+            }
+            else if (path == "anti-aliasing.motion-trust")
+            {
+                static constexpr std::array<
+                    std::pair<std::string_view, TemporalAaMotionTrustOverride>, 3>
+                    Options = {{
+                        { "temporal-cost", TemporalAaMotionTrustOverride::FromTemporalCost },
+                        { "linear-speed", TemporalAaMotionTrustOverride::LinearSpeed },
+                        { "squared-speed", TemporalAaMotionTrustOverride::SquaredSpeed }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path, behaviorOverrides.motionTrust,
+                    defaultBehaviorOverrides.motionTrust, Options, value, error);
+            }
+            else if (path == "anti-aliasing.rectification-clip")
+            {
+                static constexpr std::array<
+                    std::pair<std::string_view,
+                        TemporalAaRectificationClipOverride>, 3>
+                    Options = {{
+                        { "temporal-cost", TemporalAaRectificationClipOverride::FromTemporalCost },
+                        { "velocity-dilated-line", TemporalAaRectificationClipOverride::VelocityDilatedLine },
+                        { "tight-component", TemporalAaRectificationClipOverride::TightComponent }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path, behaviorOverrides.rectificationClip,
+                    defaultBehaviorOverrides.rectificationClip, Options, value, error);
+            }
+            else if (path == "anti-aliasing.blend-domain")
+            {
+                static constexpr std::array<
+                    std::pair<std::string_view, TemporalAaBlendDomainOverride>, 3>
+                    Options = {{
+                        { "temporal-cost", TemporalAaBlendDomainOverride::FromTemporalCost },
+                        { "luminance-compressed", TemporalAaBlendDomainOverride::LuminanceCompressed },
+                        { "linear-rgb", TemporalAaBlendDomainOverride::LinearRgb }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path, behaviorOverrides.blendDomain,
+                    defaultBehaviorOverrides.blendDomain, Options, value, error);
+            }
+            else if (path == "anti-aliasing.sharpen.policy")
+            {
+                static constexpr std::array<
+                    std::pair<std::string_view, TemporalAaAutoToggle>, 3>
+                    Options = {{
+                        { "temporal-cost", TemporalAaAutoToggle::Auto },
+                        { "off", TemporalAaAutoToggle::Off },
+                        { "on", TemporalAaAutoToggle::On }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path, behaviorOverrides.sharpening,
+                    defaultBehaviorOverrides.sharpening, Options, value, error);
+            }
+            else
+            {
+#if !UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
+                error =
+                    "Sample resurrection is unavailable in the factory shader bundle.";
+                return false;
+#else
+                if (operation != CommandValueOperation::Get &&
+                    SanitizeTemporalAaCostMode(candidate.temporalCostMode) !=
+                        TemporalAaCostMode::FullQuality)
+                {
+                    error =
+                        "Sample resurrection requires the Full Quality temporal cost mode.";
+                    return false;
+                }
+                static constexpr std::array<
+                    std::pair<std::string_view,
+                        TemporalAaSampleResurrectionOverride>, 4>
+                    Options = {{
+                        {
+                            "preset",
+                            TemporalAaSampleResurrectionOverride::FromPreset
+                        },
+                        { "off", TemporalAaSampleResurrectionOverride::Off },
+                        { "one-older-frame", TemporalAaSampleResurrectionOverride::OneOlderFrame },
+                        { "two-older-frames", TemporalAaSampleResurrectionOverride::TwoOlderFrames }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path,
+                    algorithmOverrides.sampleResurrection,
+                    defaultAlgorithmOverrides.sampleResurrection,
+                    Options, value, error);
+#endif
+            }
+        }
+        else if (path == "anti-aliasing.sharpen.enabled")
+        {
+            if (operation != CommandValueOperation::Get &&
+                !m_ui.UsesLongTermTemporalAA())
+            {
+                error =
+                    "Temporal sharpening requires active long-term temporal "
+                    "anti-aliasing.";
+                return false;
+            }
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                m_ui.TemporalAaSharpenEnabled,
+                false,
+                value,
+                error);
+            if (handled &&
+                operation != CommandValueOperation::Get)
+            {
+                m_app->ResetAntiAliasingState();
+            }
+            return handled;
+        }
+        else if (path == "anti-aliasing.sharpen.strength")
+        {
+            if (operation != CommandValueOperation::Get &&
+                !m_ui.UsesLongTermTemporalAA())
+            {
+                error =
+                    "Temporal sharpening requires active long-term temporal "
+                    "anti-aliasing.";
+                return false;
+            }
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                m_ui.TemporalAaSharpness,
+                TemporalAaDefaultSharpness,
+                0.f,
+                1.f,
+                value,
+                error);
+            if (handled &&
+                operation != CommandValueOperation::Get)
+            {
+                m_app->ResetAntiAliasingState();
+            }
+            return handled;
+        }
+        else
+        {
+            const bool temporalControl =
+                path == "anti-aliasing.history.frames" ||
+                path == "anti-aliasing.history.strength" ||
+                path == "anti-aliasing.dejitter" ||
+                path == "anti-aliasing.motion-source" ||
+                path == "anti-aliasing.reconstruction" ||
+                path == "anti-aliasing.rectification";
+            if (operation != CommandValueOperation::Get &&
+                temporalControl &&
+                (candidate.method !=
+                    AntiAliasingMethod::
+                        TemporalSubpixelMorphological ||
+                 !m_ui.IsTemporalAntiAliasingAvailable()))
+            {
+                error =
+                    std::string(path) +
+                    " requires available temporal reconstructive "
+                    "anti-aliasing.";
+                return false;
+            }
+
+            auto& overrides = candidate.algorithmOverrides;
+            const auto& defaultOverrides =
+                defaults.algorithmOverrides;
+            if (path == "anti-aliasing.history.frames")
+            {
+                const int32_t currentFrames = overrides.historyFrames;
+                if (operation == CommandValueOperation::Get)
+                {
+                    value = overrides.historyFrames < 0
+                        ? "preset"
+                        : std::to_string(overrides.historyFrames);
+                    return true;
+                }
+                if (operation == CommandValueOperation::Toggle)
+                {
+                    error = std::string(path) + " is not boolean.";
+                    return false;
+                }
+                if (operation == CommandValueOperation::Reset ||
+                    (arguments.size() == 1u &&
+                     NormalizeCommandAscii(arguments.front(), true) ==
+                        "preset"))
+                {
+                    overrides.historyFrames = -1;
+                    value = "preset";
+                }
+                else
+                {
+                    int64_t parsed = 0;
+                    if (arguments.size() != 1u ||
+                        !TryParseCommandInteger(
+                            arguments.front(), parsed) ||
+                        parsed < 1 ||
+                        parsed > 32)
+                    {
+                        error =
+                            "anti-aliasing.history.frames expects preset or "
+                            "an integer from 1 through 32.";
+                        return false;
+                    }
+                    overrides.historyFrames =
+                        static_cast<int32_t>(parsed);
+                    value = std::to_string(parsed);
+                }
+                if (overrides.historyFrames == currentFrames)
+                    return RejectUnchangedCommandMutation(path, error);
+            }
+            else if (path == "anti-aliasing.history.strength")
+            {
+                const float currentStrength =
+                    overrides.historyStrength;
+                if (operation == CommandValueOperation::Get)
+                {
+                    value = overrides.historyStrength < 0.f
+                        ? "preset"
+                        : FormatCommandFloat(
+                            overrides.historyStrength * 100.f);
+                    return true;
+                }
+                if (operation == CommandValueOperation::Toggle)
+                {
+                    error = std::string(path) + " is not boolean.";
+                    return false;
+                }
+                if (operation == CommandValueOperation::Reset ||
+                    (arguments.size() == 1u &&
+                     NormalizeCommandAscii(arguments.front(), true) ==
+                        "preset"))
+                {
+                    overrides.historyStrength = -1.f;
+                    value = "preset";
+                }
+                else
+                {
+                    float parsed = 0.f;
+                    if (arguments.size() != 1u ||
+                        !TryParseCommandFloat(arguments.front(), parsed) ||
+                        parsed < 0.f ||
+                        parsed > 200.f)
+                    {
+                        error =
+                            "anti-aliasing.history.strength expects preset "
+                            "or a percentage from 0 through 200.";
+                        return false;
+                    }
+                    overrides.historyStrength = parsed / 100.f;
+                    value = FormatCommandFloat(parsed);
+                }
+                if (overrides.historyStrength == currentStrength)
+                    return RejectUnchangedCommandMutation(path, error);
+            }
+            else if (path == "anti-aliasing.dejitter")
+            {
+                static constexpr std::array<std::pair<
+                    std::string_view,
+                    TemporalAaCurrentReconstructionOverride>, 3>
+                    Options = {{
+                        {
+                            "preset",
+                            TemporalAaCurrentReconstructionOverride::
+                                FromPreset
+                        },
+                        {
+                            "on",
+                            TemporalAaCurrentReconstructionOverride::
+                                DeJittered
+                        },
+                        {
+                            "off",
+                            TemporalAaCurrentReconstructionOverride::
+                                Direct
+                        }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    overrides.currentReconstruction,
+                    defaultOverrides.currentReconstruction,
+                    Options,
+                    value,
+                    error);
+            }
+            else if (path == "anti-aliasing.subpixel-morphology")
+            {
+                const auto getMorphology = [](const AntiAliasingSettings& s)
+                    {
+                        const auto& selected = s.algorithmOverrides;
+                        if (selected.subpixelMorphology ==
+                            MorphologyApplicationOverride::FromPreset)
+                        {
+                            return std::string("preset");
+                        }
+                        if (selected.subpixelMorphology ==
+                            MorphologyApplicationOverride::Off)
+                        {
+                            return std::string("off");
+                        }
+                        const int quality = selected.morphologyQuality >= 0
+                            ? selected.morphologyQuality
+                            : int(s.quality);
+                        static constexpr const char* Labels[] = {
+                            "conservative-low",
+                            "conservative-medium",
+                            "conservative-high",
+                            "conservative-ultra"
+                        };
+                        return std::string(Labels[
+                            std::clamp(quality, 0, 3)]);
+                    };
+                const std::string currentMorphology =
+                    getMorphology(candidate);
+                if (operation == CommandValueOperation::Get)
+                {
+                    value = currentMorphology;
+                    return true;
+                }
+                if (operation == CommandValueOperation::Toggle)
+                {
+                    error = std::string(path) + " is not boolean.";
+                    return false;
+                }
+                const std::string requested =
+                    operation == CommandValueOperation::Reset
+                        ? "preset"
+                        : NormalizeCommandAscii(
+                            JoinCommandArguments(arguments), true);
+                if (requested == "preset")
+                {
+                    overrides.subpixelMorphology =
+                        MorphologyApplicationOverride::FromPreset;
+                    overrides.morphologyQuality = -1;
+                }
+                else if (requested == "off")
+                {
+                    overrides.subpixelMorphology =
+                        MorphologyApplicationOverride::Off;
+                    overrides.morphologyQuality = -1;
+                }
+                else
+                {
+                    static constexpr std::array<std::string_view, 4>
+                        Labels = {
+                            "conservativelow",
+                            "conservativemedium",
+                            "conservativehigh",
+                            "conservativeultra"
+                        };
+                    const auto found = std::find(
+                        Labels.begin(), Labels.end(), requested);
+                    if (found == Labels.end())
+                    {
+                        error =
+                            "anti-aliasing.subpixel-morphology expects "
+                            "preset, off, conservative-low, "
+                            "conservative-medium, conservative-high, or "
+                            "conservative-ultra.";
+                        return false;
+                    }
+                    overrides.subpixelMorphology =
+                        MorphologyApplicationOverride::
+                            ConservativeMorphological;
+                    overrides.morphologyQuality =
+                        static_cast<int32_t>(
+                            std::distance(Labels.begin(), found));
+                }
+                value = getMorphology(candidate);
+                if (value == currentMorphology)
+                    return RejectUnchangedCommandMutation(path, error);
+            }
+            else if (path == "anti-aliasing.motion-source")
+            {
+                static constexpr std::array<std::pair<
+                    std::string_view,
+                    TemporalAaMotionSourceOverride>, 4> Options = {{
+                        {
+                            "preset",
+                            TemporalAaMotionSourceOverride::FromPreset
+                        },
+                        {
+                            "center",
+                            TemporalAaMotionSourceOverride::Center
+                        },
+                        {
+                            "closest-cross",
+                            TemporalAaMotionSourceOverride::ClosestCross
+                        },
+                        {
+                            "center-first-edge-dilation",
+                            TemporalAaMotionSourceOverride::
+                                CenterFirstEdgeDilation
+                        }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    overrides.motionSource,
+                    defaultOverrides.motionSource,
+                    Options,
+                    value,
+                    error);
+            }
+            else if (path == "anti-aliasing.reconstruction")
+            {
+                static constexpr std::array<std::pair<
+                    std::string_view,
+                    TemporalAaHistoryFilterOverride>, 5> Options = {{
+                        {
+                            "preset",
+                            TemporalAaHistoryFilterOverride::FromPreset
+                        },
+                        {
+                            "bilinear",
+                            TemporalAaHistoryFilterOverride::Bilinear
+                        },
+                        {
+                            "one-sample-bicubic",
+                            TemporalAaHistoryFilterOverride::
+                                OneSampleBicubic
+                        },
+                        {
+                            "five-tap-catmull-rom",
+                            TemporalAaHistoryFilterOverride::
+                                FiveTapCatmullRom
+                        },
+                        {
+                            "nine-tap-catmull-rom",
+                            TemporalAaHistoryFilterOverride::
+                                NineTapCatmullRom
+                        }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    overrides.historyFilter,
+                    defaultOverrides.historyFilter,
+                    Options,
+                    value,
+                    error);
+            }
+            else if (path == "anti-aliasing.rectification")
+            {
+                static constexpr std::array<std::pair<
+                    std::string_view,
+                    TemporalAaRectificationOverride>, 3> Options = {{
+                        {
+                            "preset",
+                            TemporalAaRectificationOverride::FromPreset
+                        },
+                        {
+                            "pair-rgb",
+                            TemporalAaRectificationOverride::PairRgb
+                        },
+                        {
+                            "variance-ycocg",
+                            TemporalAaRectificationOverride::
+                                VarianceYCoCg
+                        }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    overrides.rectification,
+                    defaultOverrides.rectification,
+                    Options,
+                    value,
+                    error);
+            }
+            else
+            {
+                handled = false;
+                error =
+                    "Internal Aliasing command binding is missing for '" +
+                    std::string(path) + "'.";
+            }
+        }
+
+        if (!handled)
+            return false;
+        if (operation != CommandValueOperation::Get)
+        {
+            NormalizeRedundantAntiAliasingOverrides(candidate);
+            m_ui.AntiAliasing = candidate;
+            m_ui.TemporalAaVisualization =
+                TemporalAaDebugView::Off;
+            m_app->ResetAntiAliasingState();
+        }
+        return true;
+    }
+
+    bool DispatchSkyCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        if (path == "sky.environment")
+        {
+            const ImageBasedLightingSource current =
+                m_ui.EnvironmentSource;
+            ImageBasedLightingSource candidate = current;
+            if (operation == CommandValueOperation::Set)
+            {
+                const std::string requested =
+                    NormalizeCommandAscii(
+                        JoinCommandArguments(arguments), true);
+                int64_t requestedIndex = -1;
+                const bool numeric = TryParseCommandInteger(
+                    JoinCommandArguments(arguments), requestedIndex);
+                bool found = false;
+                for (uint32_t index = 0u;
+                    index < uint32_t(ImageBasedLightingSource::Count);
+                    ++index)
+                {
+                    const auto source =
+                        ImageBasedLightingSource(index);
+                    if ((numeric &&
+                            requestedIndex ==
+                                static_cast<int64_t>(index)) ||
+                        NormalizeCommandAscii(
+                            GetImageBasedLightingSourceInfo(source)
+                                .displayName,
+                            true) == requested)
+                    {
+                        candidate = source;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    error =
+                        "Unknown environment. Use '/list sky.environment'.";
+                    return false;
+                }
+            }
+            else if (operation == CommandValueOperation::Reset)
+            {
+                candidate =
+                    ImageBasedLightingSource::Kloppenheim03Day;
+            }
+            else if (operation == CommandValueOperation::Toggle)
+            {
+                error = std::string(path) + " is not boolean.";
+                return false;
+            }
+            if (operation != CommandValueOperation::Get &&
+                candidate == current)
+            {
+                return RejectUnchangedCommandMutation(path, error);
+            }
+            value =
+                GetImageBasedLightingSourceInfo(candidate).displayName;
+            if (operation != CommandValueOperation::Get)
+            {
+                m_ui.EnvironmentSource = candidate;
+                m_ui.EnvironmentExposureStops =
+                    GetImageBasedLightingSourceInfo(candidate)
+                        .defaultExposureStops;
+                m_app->ResetImageBasedLightingHistory(true);
+            }
+            return true;
+        }
+
+        bool handled = true;
+        bool resetVisibilityHistory = false;
+        bool resetTemporalHistory = false;
+        if (path == "sky.exposure")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                m_ui.EnvironmentExposureStops,
+                GetImageBasedLightingSourceInfo(
+                    m_ui.EnvironmentSource).defaultExposureStops,
+                -8.f,
+                8.f,
+                value,
+                error);
+            resetVisibilityHistory = true;
+        }
+        else if (path == "sky.diffuse-ibl")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                m_ui.EnableDiffuseIbl,
+                true,
+                value,
+                error);
+            resetVisibilityHistory = true;
+        }
+        else if (path == "sky.diffuse-ibl-strength")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                m_ui.DiffuseIblStrength,
+                1.f,
+                0.f,
+                4.f,
+                value,
+                error);
+            resetVisibilityHistory = true;
+        }
+        else if (path == "sky.specular-ibl")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                m_ui.EnableSpecularIbl,
+                true,
+                value,
+                error);
+            resetTemporalHistory = true;
+        }
+        else if (path == "sky.specular-ibl-strength")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                m_ui.SpecularIblStrength,
+                1.f,
+                0.f,
+                4.f,
+                value,
+                error);
+            resetTemporalHistory = true;
+        }
+        else if (path == "sky.environment-background")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                m_ui.ShowEnvironmentBackground,
+                true,
+                value,
+                error);
+            resetTemporalHistory = true;
+        }
+        else if (path == "sky.ambient-fill.enabled")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                m_ui.EnableAmbientFill,
+                true,
+                value,
+                error);
+            resetVisibilityHistory = true;
+        }
+        else if (path == "sky.debug-view")
+        {
+            static constexpr std::array<std::pair<
+                std::string_view, PbrLightingDebugView>, 12> Options = {{
+                    { "off", PbrLightingDebugView::None },
+                    {
+                        "shading-normal",
+                        PbrLightingDebugView::ShadingNormal
+                    },
+                    {
+                        "geometric-normal",
+                        PbrLightingDebugView::GeometricNormal
+                    },
+                    {
+                        "normal-difference",
+                        PbrLightingDebugView::NormalDifference
+                    },
+                    {
+                        "diffuse-environment",
+                        PbrLightingDebugView::DiffuseEnvironment
+                    },
+                    {
+                        "cardinal-environment-test",
+                        PbrLightingDebugView::CardinalEnvironment
+                    },
+                    {
+                        "prefiltered-specular",
+                        PbrLightingDebugView::
+                            PrefilteredSpecularEnvironment
+                    },
+                    {
+                        "environment-brdf",
+                        PbrLightingDebugView::EnvironmentBrdf
+                    },
+                    {
+                        "final-specular-ibl",
+                        PbrLightingDebugView::
+                            FinalSpecularEnvironment
+                    },
+                    {
+                        "combined-ibl",
+                        PbrLightingDebugView::CombinedEnvironment
+                    },
+                    {
+                        "specular-occlusion",
+                        PbrLightingDebugView::SpecularOcclusion
+                    },
+                    {
+                        "environment-mip",
+                        PbrLightingDebugView::EnvironmentMip
+                    }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                m_ui.LightingDebugView,
+                PbrLightingDebugView::None,
+                Options,
+                value,
+                error);
+            resetVisibilityHistory = true;
+        }
+        else
+        {
+            handled = false;
+            error = "Internal Sky command binding is missing for '" +
+                std::string(path) + "'.";
+        }
+
+        if (handled &&
+            operation != CommandValueOperation::Get)
+        {
+            if (resetVisibilityHistory)
+                m_app->ResetImageBasedLightingHistory(true);
+            else if (resetTemporalHistory)
+                m_app->ResetImageBasedLightingHistory(false);
+        }
+        return handled;
+    }
+
+    std::shared_ptr<Light> GetDefaultCommandLight() const
+    {
+        const auto& lights = m_app->GetEditableLights();
+        std::shared_ptr<Light> selected =
+            m_app->GetPrimaryDirectionalLight();
+        if (!selected ||
+            std::find(lights.begin(), lights.end(), selected) ==
+                lights.end())
+        {
+            selected = lights.empty() ? nullptr : lights.front();
+        }
+        return selected;
+    }
+
+    std::shared_ptr<Light> EnsureCommandSelectedLight()
+    {
+        const auto& lights = m_app->GetEditableLights();
+        if (lights.empty())
+        {
+            m_SelectedLight.reset();
+            return nullptr;
+        }
+        if (std::find(
+                lights.begin(), lights.end(), m_SelectedLight) ==
+            lights.end())
+        {
+            m_SelectedLight = GetDefaultCommandLight();
+        }
+        return m_SelectedLight;
+    }
+
+    const LightDefaultState& GetCommandLightDefaults(
+        const std::shared_ptr<Light>& light)
+    {
+        const auto& lights = m_app->GetEditableLights();
+        const auto selected = std::find(
+            lights.begin(), lights.end(), light);
+        const size_t index =
+            static_cast<size_t>(std::distance(lights.begin(), selected));
+        const std::string key =
+            m_app->GetCurrentSceneName() + "\n" +
+            std::to_string(index) + "\n" +
+            light->GetName();
+        const auto capture = [](const Light& source)
+        {
+            LightDefaultState result;
+            result.type = source.GetLightType();
+            result.direction = source.GetDirection();
+            result.color = source.color;
+            switch (result.type)
+            {
+            case LightType_Directional:
+            {
+                const auto& directional =
+                    static_cast<const DirectionalLight&>(source);
+                result.irradiance = directional.irradiance;
+                result.angularSize = directional.angularSize;
+                break;
+            }
+            case LightType_Point:
+            {
+                const auto& point =
+                    static_cast<const PointLight&>(source);
+                result.radius = point.radius;
+                result.intensity = point.intensity;
+                break;
+            }
+            case LightType_Spot:
+            {
+                const auto& spot =
+                    static_cast<const SpotLight&>(source);
+                result.radius = spot.radius;
+                result.intensity = spot.intensity;
+                result.innerAngle = spot.innerAngle;
+                result.outerAngle = spot.outerAngle;
+                break;
+            }
+            default:
+                break;
+            }
+            return result;
+        };
+        return m_LightDefaults.try_emplace(
+            key,
+            capture(*light)).first->second;
+    }
+
+    static std::pair<float, float> GetCommandLightAngles(
+        const double3& storedDirection,
+        bool directional)
+    {
+        double3 direction = normalize(storedDirection);
+        if (directional)
+            direction = -direction;
+        const float azimuth = degrees(float(
+            std::atan2(direction.z, direction.x)));
+        const float elevation = degrees(float(std::asin(
+            std::clamp(direction.y, -1.0, 1.0))));
+        return { azimuth, elevation };
+    }
+
+    static double3 MakeCommandLightDirection(
+        float azimuthDegrees,
+        float elevationDegrees,
+        bool directional)
+    {
+        const double azimuth = radians(double(azimuthDegrees));
+        const double elevation = radians(double(elevationDegrees));
+        const double horizontal = std::cos(elevation);
+        double3 direction(
+            std::cos(azimuth) * horizontal,
+            std::sin(elevation),
+            std::sin(azimuth) * horizontal);
+        if (directional)
+            direction = -direction;
+        return normalize(direction);
+    }
+
+    struct FlashlightFloatCommandBinding
+    {
+        std::string_view path;
+        float FlashlightSettings::* member = nullptr;
+        float minimum = 0.f;
+        float maximum = 1.f;
+    };
+
+    inline static constexpr std::array<
+        FlashlightFloatCommandBinding, 10> FlashlightFloatCommandBindings = {{
+            {
+                "light.selected.flashlight.hotspot-size",
+                &FlashlightSettings::hotspotSize,
+                FlashlightMinimumHotspotSize,
+                FlashlightMaximumHotspotSize
+            },
+            {
+                "light.selected.flashlight.hotspot-strength",
+                &FlashlightSettings::hotspotStrength,
+                0.f,
+                FlashlightMaximumHotspotStrength
+            },
+            {
+                "light.selected.flashlight.sway",
+                &FlashlightSettings::swayDegrees,
+                0.f,
+                FlashlightMaximumSwayDegrees
+            },
+            {
+                "light.selected.flashlight.aim-correction",
+                &FlashlightSettings::aimCorrectionSeconds,
+                FlashlightMinimumAimCorrectionSeconds,
+                FlashlightMaximumAimCorrectionSeconds
+            },
+            {
+                "light.selected.flashlight.brightness",
+                &FlashlightSettings::peakIntensityCandela,
+                FlashlightMinimumIntensityCandela,
+                FlashlightMaximumIntensityCandela
+            },
+            {
+                "light.selected.flashlight.beam-size",
+                &FlashlightSettings::beamSizeDegrees,
+                FlashlightMinimumBeamSizeDegrees,
+                FlashlightMaximumBeamSizeDegrees
+            },
+            {
+                "light.selected.flashlight.beam-roundness",
+                &FlashlightSettings::beamRoundness,
+                0.f,
+                1.f
+            },
+            {
+                "light.selected.flashlight.edge-softness",
+                &FlashlightSettings::edgeSoftness,
+                0.f,
+                1.f
+            },
+            {
+                "light.selected.flashlight.range",
+                &FlashlightSettings::rangeMeters,
+                FlashlightMinimumRangeMeters,
+                FlashlightMaximumRangeMeters
+            },
+            {
+                "light.selected.flashlight.camera-offset",
+                &FlashlightSettings::cameraLateralOffsetMeters,
+                FlashlightMinimumCameraLateralOffsetMeters,
+                FlashlightMaximumCameraLateralOffsetMeters
+            }
+        }};
+
+    bool DispatchFlashlightCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        if (path == "light.selected.flashlight.enabled")
+        {
+            if (operation != CommandValueOperation::Get && !m_ui.EnablePbr)
+            {
+                error = "Flashlight enabling requires PBR rendering.";
+                return false;
+            }
+            return ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                m_ui.FlashlightEnabled,
+                DefaultFlashlightEnabled,
+                value,
+                error);
+        }
+
+        FlashlightSettings candidate = m_ui.Flashlight;
+        const FlashlightSettings defaults = DefaultFlashlightSettings;
+        bool handled = true;
+        if (path == "light.selected.color")
+        {
+            float3 color(
+                candidate.colorLinearRed,
+                candidate.colorLinearGreen,
+                candidate.colorLinearBlue);
+            const float3 defaultColor(
+                defaults.colorLinearRed,
+                defaults.colorLinearGreen,
+                defaults.colorLinearBlue);
+            handled = ApplyCommandFloat3(
+                operation,
+                arguments,
+                path,
+                color,
+                defaultColor,
+                0.f,
+                1.f,
+                value,
+                error);
+            candidate.colorLinearRed = color.x;
+            candidate.colorLinearGreen = color.y;
+            candidate.colorLinearBlue = color.z;
+        }
+        else if (path == "light.selected.flashlight.cast-shadows")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.castShadows,
+                defaults.castShadows,
+                value,
+                error);
+        }
+        else if (path == "light.selected.flashlight.realistic")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.realisticLens,
+                defaults.realisticLens,
+                value,
+                error);
+        }
+        else
+        {
+            handled = false;
+            for (const FlashlightFloatCommandBinding& binding :
+                FlashlightFloatCommandBindings)
+            {
+                if (path != binding.path)
+                    continue;
+                handled = ApplyCommandFloat(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.*(binding.member),
+                    defaults.*(binding.member),
+                    binding.minimum,
+                    binding.maximum,
+                    value,
+                    error);
+                break;
+            }
+        }
+
+        if (!handled)
+        {
+            error = "Internal flashlight command binding is missing for '" +
+                std::string(path) + "'.";
+            return false;
+        }
+        if (operation != CommandValueOperation::Get)
+            m_ui.Flashlight = SanitizeFlashlightSettings(candidate);
+        return true;
+    }
+
+    bool DispatchLightCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        const std::shared_ptr<Scene> scene = m_app->GetScene();
+        if (!scene || !scene->GetSceneGraph())
+        {
+            error = "No loaded scene provides light controls.";
+            return false;
+        }
+        const auto& lights = m_app->GetEditableLights();
+        if (path == "light.selected")
+        {
+            std::shared_ptr<Light> currentSelected = m_SelectedLight;
+            if (std::find(
+                    lights.begin(), lights.end(), currentSelected) ==
+                lights.end())
+            {
+                currentSelected = GetDefaultCommandLight();
+            }
+            std::shared_ptr<Light> selected = currentSelected;
+            if (operation == CommandValueOperation::Get)
+            {
+                if (!selected)
+                {
+                    error = "The current scene has no lights.";
+                    return false;
+                }
+                value = selected->GetName();
+                return true;
+            }
+            if (operation == CommandValueOperation::Toggle)
+            {
+                error = std::string(path) + " is not boolean.";
+                return false;
+            }
+            if (operation == CommandValueOperation::Reset)
+            {
+                selected = GetDefaultCommandLight();
+            }
+            else
+            {
+                const std::string requested =
+                    JoinCommandArguments(arguments);
+                int64_t requestedIndex = -1;
+                const bool numeric =
+                    TryParseCommandInteger(requested, requestedIndex);
+                const std::string normalized =
+                    NormalizeCommandAscii(requested, true);
+                selected.reset();
+                for (size_t index = 0u; index < lights.size(); ++index)
+                {
+                    const auto& light = lights[index];
+                    const bool matches =
+                        (numeric &&
+                            requestedIndex ==
+                                static_cast<int64_t>(index)) ||
+                        NormalizeCommandAscii(
+                            light->GetName(), true) == normalized;
+                    if (!matches)
+                        continue;
+                    if (selected && selected != light)
+                    {
+                        error =
+                            "Light name is ambiguous; use its zero-based "
+                            "editable-light index.";
+                        return false;
+                    }
+                    selected = light;
+                }
+            }
+            if (!selected)
+            {
+                error = "Unknown light. Use '/list light.selected'.";
+                return false;
+            }
+            if (selected == currentSelected)
+                return RejectUnchangedCommandMutation(path, error);
+            m_SelectedLight = selected;
+            GetCommandLightDefaults(selected);
+            value = selected->GetName();
+            return true;
+        }
+
+        const std::shared_ptr<Light> selected =
+            EnsureCommandSelectedLight();
+        if (!selected)
+        {
+            error = "The current scene has no selected light.";
+            return false;
+        }
+        const bool flashlightSelected = m_app->IsFlashlight(selected);
+        const bool flashlightPath =
+            path.find("light.selected.flashlight.") == 0u;
+        if (flashlightSelected)
+        {
+            if (path == "light.selected.color" || flashlightPath)
+            {
+                return DispatchFlashlightCommandValue(
+                    definition,
+                    operation,
+                    arguments,
+                    value,
+                    error);
+            }
+            error = std::string(path) +
+                " is not an editable generic flashlight property.";
+            return false;
+        }
+        if (flashlightPath)
+        {
+            error = std::string(path) +
+                " requires selecting flashlight_1 first.";
+            return false;
+        }
+        const LightDefaultState& defaults =
+            GetCommandLightDefaults(selected);
+        const int type = selected->GetLightType();
+        const bool directional = type == LightType_Directional;
+        const bool spot = type == LightType_Spot;
+        const bool pointOrSpot =
+            type == LightType_Point || spot;
+
+        if (path == "light.selected.azimuth" ||
+            path == "light.selected.elevation")
+        {
+            if (!directional && !spot)
+            {
+                error =
+                    std::string(path) +
+                    " requires a directional or spot light.";
+                return false;
+            }
+            auto [azimuth, elevation] = GetCommandLightAngles(
+                selected->GetDirection(), directional);
+            const auto [defaultAzimuth, defaultElevation] =
+                GetCommandLightAngles(
+                    defaults.direction, directional);
+            float& current = path == "light.selected.azimuth"
+                ? azimuth
+                : elevation;
+            const float defaultValue =
+                path == "light.selected.azimuth"
+                    ? defaultAzimuth
+                    : defaultElevation;
+            if (!ApplyCommandFloat(
+                    operation,
+                    arguments,
+                    path,
+                    current,
+                    defaultValue,
+                    path == "light.selected.azimuth" ? -180.f : -90.f,
+                    path == "light.selected.azimuth" ? 180.f : 90.f,
+                    value,
+                    error))
+            {
+                return false;
+            }
+            if (operation != CommandValueOperation::Get)
+            {
+                selected->SetDirection(MakeCommandLightDirection(
+                    azimuth,
+                    elevation,
+                    directional));
+            }
+            return true;
+        }
+        if (path == "light.selected.color")
+        {
+            return ApplyCommandFloat3(
+                operation,
+                arguments,
+                path,
+                selected->color,
+                defaults.color,
+                0.f,
+                1.f,
+                value,
+                error);
+        }
+
+        if (path == "light.selected.irradiance")
+        {
+            if (!directional)
+            {
+                error =
+                    "light.selected.irradiance requires a directional light.";
+                return false;
+            }
+            auto& light = static_cast<DirectionalLight&>(*selected);
+            return ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                light.irradiance,
+                defaults.irradiance,
+                0.f,
+                100.f,
+                value,
+                error);
+        }
+        if (path == "light.selected.angular-size")
+        {
+            if (!directional)
+            {
+                error =
+                    "light.selected.angular-size requires a directional "
+                    "light.";
+                return false;
+            }
+            auto& light = static_cast<DirectionalLight&>(*selected);
+            return ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                light.angularSize,
+                defaults.angularSize,
+                0.1f,
+                20.f,
+                value,
+                error);
+        }
+        if (path == "light.selected.radius" ||
+            path == "light.selected.intensity")
+        {
+            if (!pointOrSpot)
+            {
+                error =
+                    std::string(path) +
+                    " requires a point or spot light.";
+                return false;
+            }
+            float* current = nullptr;
+            const float* defaultValue = nullptr;
+            if (type == LightType_Point)
+            {
+                auto& light = static_cast<PointLight&>(*selected);
+                current = path == "light.selected.radius"
+                    ? &light.radius
+                    : &light.intensity;
+            }
+            else
+            {
+                auto& light = static_cast<SpotLight&>(*selected);
+                current = path == "light.selected.radius"
+                    ? &light.radius
+                    : &light.intensity;
+            }
+            defaultValue = path == "light.selected.radius"
+                ? &defaults.radius
+                : &defaults.intensity;
+            return ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                *current,
+                *defaultValue,
+                path == "light.selected.radius" ? 0.01f : 0.f,
+                path == "light.selected.radius" ? 1.f : 100.f,
+                value,
+                error);
+        }
+        if (path == "light.selected.inner-angle" ||
+            path == "light.selected.outer-angle")
+        {
+            if (!spot)
+            {
+                error =
+                    std::string(path) + " requires a spot light.";
+                return false;
+            }
+            auto& light = static_cast<SpotLight&>(*selected);
+            float candidate = path == "light.selected.inner-angle"
+                ? light.innerAngle
+                : light.outerAngle;
+            if (!ApplyCommandFloat(
+                    operation,
+                    arguments,
+                    path,
+                    candidate,
+                    path == "light.selected.inner-angle"
+                        ? defaults.innerAngle
+                        : defaults.outerAngle,
+                    0.f,
+                    180.f,
+                    value,
+                    error))
+            {
+                return false;
+            }
+            if (operation != CommandValueOperation::Get)
+            {
+                if (path == "light.selected.inner-angle" &&
+                    candidate > light.outerAngle)
+                {
+                    error =
+                        "The inner spot angle cannot exceed the outer angle.";
+                    return false;
+                }
+                if (path == "light.selected.outer-angle" &&
+                    candidate < light.innerAngle)
+                {
+                    error =
+                        "The outer spot angle cannot be below the inner angle.";
+                    return false;
+                }
+                if (path == "light.selected.inner-angle")
+                    light.innerAngle = candidate;
+                else
+                    light.outerAngle = candidate;
+            }
+            return true;
+        }
+
+        error = "Internal Light command binding is missing for '" +
+            std::string(path) + "'.";
+        return false;
+    }
+
+    static bool IsSameCommandScreenSpaceShadowConfiguration(
+        const ScreenSpaceDirectionalShadowSettings& left,
+        const ScreenSpaceDirectionalShadowSettings& right)
+    {
+        return left.length == right.length &&
+            left.surfaceThickness == right.surfaceThickness &&
+            left.bilinearThreshold == right.bilinearThreshold &&
+            left.shadowContrast == right.shadowContrast &&
+            left.hardShadowSamples == right.hardShadowSamples &&
+            left.fadeOutSamples == right.fadeOutSamples &&
+            left.ignoreEdgePixels == right.ignoreEdgePixels &&
+            left.usePrecisionOffset == right.usePrecisionOffset &&
+            left.bilinearSamplingOffsetMode ==
+                right.bilinearSamplingOffsetMode &&
+            left.useEarlyOut == right.useEarlyOut &&
+            left.debugView == right.debugView;
+    }
+
+    static void ReconcileCommandScreenSpaceShadowPreset(
+        ScreenSpaceDirectionalShadowSettings& settings)
+    {
+        static constexpr ScreenSpaceShadowPreset Presets[] = {
+            ScreenSpaceShadowPreset::Default,
+            ScreenSpaceShadowPreset::Long,
+            ScreenSpaceShadowPreset::MaximumValidation
+        };
+        for (const ScreenSpaceShadowPreset preset : Presets)
+        {
+            ScreenSpaceDirectionalShadowSettings profileSettings = settings;
+            ApplyScreenSpaceShadowPreset(profileSettings, preset);
+            if (IsSameCommandScreenSpaceShadowConfiguration(
+                    settings, profileSettings))
+            {
+                settings.preset = preset;
+                return;
+            }
+        }
+        settings.preset = ScreenSpaceShadowPreset::Custom;
+    }
+
+    bool DispatchScreenSpaceShadowCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        if (operation != CommandValueOperation::Get &&
+            !(m_ui.EnablePbr &&
+              m_ui.UsesDeferredShading() &&
+              m_app->HasPrimaryDirectionalLight()))
+        {
+            error =
+                "Screen-space directional shadow settings require deferred PBR and a primary "
+                "directional light.";
+            return false;
+        }
+        ScreenSpaceDirectionalShadowSettings candidate =
+            m_ui.ScreenSpaceDirectionalShadows;
+        const ScreenSpaceDirectionalShadowSettings factoryDefaults;
+        bool handled = true;
+
+        if (path == "shadows.screen-space-directional.enabled")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enabled,
+                factoryDefaults.enabled,
+                value,
+                error);
+        }
+        else if (path == "shadows.screen-space-directional.profile")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, ScreenSpaceShadowPreset>, 4>
+                Options = {{
+                    { "default", ScreenSpaceShadowPreset::Default },
+                    { "long", ScreenSpaceShadowPreset::Long },
+                    {
+                        "maximum-validation",
+                        ScreenSpaceShadowPreset::MaximumValidation
+                    },
+                    { "custom", ScreenSpaceShadowPreset::Custom }
+                }};
+            ScreenSpaceShadowPreset selected = candidate.preset;
+            if (operation != CommandValueOperation::Get &&
+                selected != ScreenSpaceShadowPreset::Custom)
+            {
+                ScreenSpaceDirectionalShadowSettings profileSettings =
+                    candidate;
+                ApplyScreenSpaceShadowPreset(profileSettings, selected);
+                if (!IsSameCommandScreenSpaceShadowConfiguration(
+                        candidate, profileSettings))
+                {
+                    selected = ScreenSpaceShadowPreset::Custom;
+                }
+            }
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                selected,
+                ScreenSpaceShadowPreset::Default,
+                Options,
+                value,
+                error);
+            if (handled && operation != CommandValueOperation::Get)
+                ApplyScreenSpaceShadowPreset(candidate, selected);
+        }
+        else if (path == "shadows.screen-space-directional.length")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, ScreenSpaceShadowLength>, 5>
+                Options = {{
+                    { "60", ScreenSpaceShadowLength::Pixels60 },
+                    { "120", ScreenSpaceShadowLength::Pixels120 },
+                    { "240", ScreenSpaceShadowLength::Pixels240 },
+                    { "480", ScreenSpaceShadowLength::Pixels480 },
+                    { "960", ScreenSpaceShadowLength::Pixels960 }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.length,
+                factoryDefaults.length,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.screen-space-directional.surface-thickness")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.surfaceThickness,
+                factoryDefaults.surfaceThickness,
+                0.f,
+                0.05f,
+                value,
+                error);
+        }
+        else if (path == "shadows.screen-space-directional.bilinear-threshold")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.bilinearThreshold,
+                factoryDefaults.bilinearThreshold,
+                0.f,
+                0.1f,
+                value,
+                error);
+        }
+        else if (path == "shadows.screen-space-directional.contrast")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.shadowContrast,
+                factoryDefaults.shadowContrast,
+                1.f,
+                16.f,
+                value,
+                error);
+        }
+        else if (path == "shadows.screen-space-directional.hard-samples")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, uint32_t>, 3> Options = {{
+                    { "0", 0u },
+                    { "4", 4u },
+                    { "8", 8u }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.hardShadowSamples,
+                factoryDefaults.hardShadowSamples,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.screen-space-directional.fade-samples")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, uint32_t>, 3> Options = {{
+                    { "0", 0u },
+                    { "8", 8u },
+                    { "16", 16u }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.fadeOutSamples,
+                factoryDefaults.fadeOutSamples,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.screen-space-directional.ignore-edge-pixels")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.ignoreEdgePixels,
+                factoryDefaults.ignoreEdgePixels,
+                value,
+                error);
+        }
+        else if (path == "shadows.screen-space-directional.precision-offset")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.usePrecisionOffset,
+                factoryDefaults.usePrecisionOffset,
+                value,
+                error);
+        }
+        else if (path == "shadows.screen-space-directional.bilinear-offset-mode")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.bilinearSamplingOffsetMode,
+                factoryDefaults.bilinearSamplingOffsetMode,
+                value,
+                error);
+        }
+        else if (path == "shadows.screen-space-directional.early-out")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.useEarlyOut,
+                factoryDefaults.useEarlyOut,
+                value,
+                error);
+        }
+        else if (path == "shadows.screen-space-directional.debug-view")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, ScreenSpaceShadowDebugView>, 4>
+                Options = {{
+                    { "off", ScreenSpaceShadowDebugView::None },
+                    { "occlusion", ScreenSpaceShadowDebugView::Occlusion },
+                    { "trace-progress", ScreenSpaceShadowDebugView::TraceProgress },
+                    { "ray-bounds", ScreenSpaceShadowDebugView::RayBounds }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.debugView,
+                factoryDefaults.debugView,
+                Options,
+                value,
+                error);
+        }
+        else
+        {
+            handled = false;
+            error =
+                "Internal screen-space directional shadow command binding is missing for '" +
+                std::string(path) + "'.";
+        }
+
+        if (!handled)
+            return false;
+        if (operation != CommandValueOperation::Get)
+        {
+            if (!IsScreenSpaceShadowConfigurationSupported(candidate))
+            {
+                error =
+                    "The requested screen-space directional shadow sample tuple is not supported "
+                    "or hard plus fade samples exceed the selected length.";
+                return false;
+            }
+            if (path != "shadows.screen-space-directional.profile" &&
+                operation == CommandValueOperation::Reset)
+            {
+                ReconcileCommandScreenSpaceShadowPreset(candidate);
+            }
+            else if (path != "shadows.screen-space-directional.profile")
+            {
+                candidate.preset = ScreenSpaceShadowPreset::Custom;
+            }
+            m_ui.ScreenSpaceDirectionalShadows = candidate;
+        }
+        return true;
+    }
+
+    struct SvsmBoolCommandBinding
+    {
+        std::string_view path;
+        bool SparseVirtualShadowMapSettings::* member = nullptr;
+    };
+
+    inline static constexpr std::array<
+        SvsmBoolCommandBinding, 39> SvsmBoolCommandBindings = {{
+            {
+                "shadows.svsm.adaptive-filtering",
+                &SparseVirtualShadowMapSettings::adaptiveFiltering
+            },
+            {
+                "shadows.svsm.receiver-distance-mip-clamp",
+                &SparseVirtualShadowMapSettings::
+                    receiverDistanceMipClampEnabled
+            },
+            {
+                "shadows.svsm.paired-static-dynamic-depth",
+                &SparseVirtualShadowMapSettings::
+                    pairedStaticDynamicDepthEnabled
+            },
+            {
+                "shadows.svsm.include-coarsest-in-page-budget",
+                &SparseVirtualShadowMapSettings::
+                    coarsestPageRenderBudgetEnabled
+            },
+            {
+                "shadows.svsm.recent-page-eviction-grace",
+                &SparseVirtualShadowMapSettings::
+                    recentPageEvictionGraceEnabled
+            },
+            {
+                "shadows.svsm.cached-shadow-draw-lists",
+                &SparseVirtualShadowMapSettings::
+                    renderPacketCachingEnabled
+            },
+            {
+                "shadows.svsm.adaptive-static-caster-cache",
+                &SparseVirtualShadowMapSettings::
+                    adaptiveCasterCacheClassificationEnabled
+            },
+            {
+                "shadows.svsm.packet-state-sorting",
+                &SparseVirtualShadowMapSettings::
+                    packetStateSortingEnabled
+            },
+            {
+                "shadows.svsm.packet-page-culling",
+                &SparseVirtualShadowMapSettings::
+                    packetPageCullingEnabled
+            },
+            {
+                "shadows.svsm.hierarchical-scheduled-page-mask",
+                &SparseVirtualShadowMapSettings::
+                    hierarchicalScheduledPageMaskEnabled
+            },
+            {
+                "shadows.svsm.receiver-subpage-mask-culling",
+                &SparseVirtualShadowMapSettings::
+                    receiverPageMaskCullingEnabled
+            },
+            {
+                "shadows.svsm.static-depth-page-hzb-culling",
+                &SparseVirtualShadowMapSettings::
+                    staticDepthHierarchyCullingEnabled
+            },
+            {
+                "shadows.svsm.dirty-page-scatter-raster",
+                &SparseVirtualShadowMapSettings::
+                    dirtyPageScatterRasterEnabled
+            },
+            {
+                "shadows.svsm.allocation-budget-saturation-early-out",
+                &SparseVirtualShadowMapSettings::
+                    allocationBudgetSaturationEarlyOutEnabled
+            },
+            {
+                "shadows.svsm.deduplicate-per-pixel-requests",
+                &SparseVirtualShadowMapSettings::
+                    perPixelMarkingDedupeEnabled
+            },
+            {
+                "shadows.svsm.precomposed-clipmap-transforms",
+                &SparseVirtualShadowMapSettings::
+                    precomposedClipmapTransformsEnabled
+            },
+            {
+                "shadows.svsm.page-translation-cache",
+                &SparseVirtualShadowMapSettings::
+                    pageTranslationCachingEnabled
+            },
+            {
+                "shadows.svsm.light-depth-origin-guard-band",
+                &SparseVirtualShadowMapSettings::
+                    lightDepthOriginGuardBandEnabled
+            },
+            {
+                "shadows.svsm.finite-budget-static-drain",
+                &SparseVirtualShadowMapSettings::
+                    finiteBudgetStaticDrainEnabled
+            },
+            {
+                "shadows.svsm.static-page-request-reuse",
+                &SparseVirtualShadowMapSettings::
+                    staticPageRequestReuseEnabled
+            },
+            {
+                "shadows.svsm.static-visibility-cache",
+                &SparseVirtualShadowMapSettings::
+                    staticVisibilityCachingEnabled
+            },
+            {
+                "shadows.svsm.scene-state-caching",
+                &SparseVirtualShadowMapSettings::
+                    sceneStateCachingEnabled
+            },
+            {
+                "shadows.svsm.caster-only-scene-revision",
+                &SparseVirtualShadowMapSettings::
+                    casterOnlySceneRevisionEnabled
+            },
+            {
+                "shadows.svsm.shared-six-clipmap-packet-builder",
+                &SparseVirtualShadowMapSettings::
+                    sharedClipmapPacketBuilderEnabled
+            },
+            {
+                "shadows.svsm.persistent-caster-source-cache",
+                &SparseVirtualShadowMapSettings::
+                    persistentCasterSourceCachingEnabled
+            },
+            {
+                "shadows.svsm.opaque-raster-specialization",
+                &SparseVirtualShadowMapSettings::
+                    opaqueRasterSpecializationEnabled
+            },
+            {
+                "shadows.svsm.lean-alpha-tested-bindings",
+                &SparseVirtualShadowMapSettings::
+                    leanAlphaTestedBindingsEnabled
+            },
+            {
+                "shadows.svsm.deferred-static-depth-merge",
+                &SparseVirtualShadowMapSettings::
+                    deferredStaticDepthMergeEnabled
+            },
+            {
+                "shadows.svsm.moving-light-uncached-policy",
+                &SparseVirtualShadowMapSettings::
+                    movingLightUncachedEnabled
+            },
+            {
+                "shadows.svsm.preserve-page-mappings-on-content-invalidation",
+                &SparseVirtualShadowMapSettings::
+                    retainPhysicalMappingsOnContentInvalidationEnabled
+            },
+            {
+                "shadows.svsm.continuous-moving-light-distance-bias",
+                &SparseVirtualShadowMapSettings::
+                    movingLightContinuousReceiverBiasEnabled
+            },
+            {
+                "shadows.svsm.localized-caster-invalidation",
+                &SparseVirtualShadowMapSettings::
+                    localizedInvalidationEnabled
+            },
+            {
+                "shadows.svsm.tight-localized-bounds",
+                &SparseVirtualShadowMapSettings::
+                    tightLocalizedInvalidationBoundsEnabled
+            },
+            {
+                "shadows.svsm.gpu-gated-draw-submission",
+                &SparseVirtualShadowMapSettings::
+                    gpuGatedDrawSubmission
+            },
+            {
+                "shadows.svsm.batched-draw-submission",
+                &SparseVirtualShadowMapSettings::
+                    batchedDrawSubmissionEnabled
+            },
+            {
+                "shadows.svsm.per-level-empty-work-skip",
+                &SparseVirtualShadowMapSettings::
+                    levelEmptyWorkSkipEnabled
+            },
+            {
+                "shadows.svsm.packet-rectangle-direct-scan",
+                &SparseVirtualShadowMapSettings::
+                    packetRectangleDirectScanEnabled
+            },
+            {
+                "shadows.svsm.scatter-alpha-test-early-reject",
+                &SparseVirtualShadowMapSettings::
+                    scatterAlphaTestEarlyRejectEnabled
+            },
+            {
+                "shadows.svsm.detailed-gpu-stage-timing",
+                &SparseVirtualShadowMapSettings::
+                    detailedGpuTimingEnabled
+            }
+        }};
+
+    bool DispatchSvsmCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        if (operation != CommandValueOperation::Get &&
+            !(m_ui.EnablePbr &&
+              m_ui.UsesDeferredShading() &&
+              m_app->HasPrimaryDirectionalLight()))
+        {
+            error =
+                "SVSM settings require deferred PBR and a primary "
+                "directional light.";
+            return false;
+        }
+        SparseVirtualShadowMapSettings candidate =
+            m_ui.SparseVirtualShadowMaps;
+        uint32_t rememberedPageBudget =
+            m_CommandRememberedSvsmPageBudget;
+        const SparseVirtualShadowMapSettings factoryDefaults;
+        SparseVirtualShadowMapSettings defaults = candidate;
+        ApplySvsmPreset(
+            defaults,
+            candidate.preset == SvsmPreset::Custom
+                ? SvsmPreset::Quality
+                : candidate.preset);
+        bool handled = true;
+
+        if (path == "shadows.svsm.enabled")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enabled,
+                factoryDefaults.enabled,
+                value,
+                error);
+        }
+        else if (path == "shadows.svsm.profile")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, SvsmPreset>, 4> Options = {{
+                    { "performance", SvsmPreset::Performance },
+                    { "balanced", SvsmPreset::Balanced },
+                    { "quality", SvsmPreset::Quality },
+                    { "custom", SvsmPreset::Custom }
+                }};
+            SvsmPreset selected = candidate.preset;
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                selected,
+                factoryDefaults.preset,
+                Options,
+                value,
+                error);
+            if (handled && operation != CommandValueOperation::Get)
+                ApplySvsmPreset(candidate, selected);
+        }
+        else if (path == "shadows.svsm.mode")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, SvsmMode>, 3> Options = {{
+                    { "dense-reference", SvsmMode::DenseReference },
+                    { "sparse-uncached", SvsmMode::SparseUncached },
+                    { "sparse-cached", SvsmMode::SparseCached }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.mode,
+                defaults.mode,
+                Options,
+                value,
+                error);
+            if (handled && operation != CommandValueOperation::Get)
+            {
+                candidate.cachingEnabled =
+                    candidate.mode == SvsmMode::SparseCached;
+            }
+        }
+        else if (path == "shadows.svsm.filter-kernel")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, SvsmFilterKernel>, 2>
+                Options = {{
+                    {
+                        "nearest-poisson-reference",
+                        SvsmFilterKernel::NearestPoisson
+                    },
+                    {
+                        "bilinear-pcf",
+                        SvsmFilterKernel::BilinearPcf
+                    }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.filterKernel,
+                defaults.filterKernel,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.svsm.filter-taps")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, SvsmTapCount>, 4> Options = {{
+                    { "1", SvsmTapCount::One },
+                    { "4", SvsmTapCount::Four },
+                    { "8", SvsmTapCount::Eight },
+                    { "16", SvsmTapCount::Sixteen }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.tapCount,
+                defaults.tapCount,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.svsm.resolution-bias")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, SvsmResolutionBias>, 3>
+                Options = {{
+                    { "0", SvsmResolutionBias::Zero },
+                    { "+1-mip", SvsmResolutionBias::PlusOne },
+                    { "+2-mips", SvsmResolutionBias::PlusTwo }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.resolutionBias,
+                defaults.resolutionBias,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.svsm.page-marking")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, SvsmMarkingMode>, 3>
+                Options = {{
+                    { "per-pixel", SvsmMarkingMode::PerPixel },
+                    { "8x8-tile", SvsmMarkingMode::Tile8 },
+                    { "16x16-tile", SvsmMarkingMode::Tile16 }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.markingMode,
+                defaults.markingMode,
+                Options,
+                value,
+                error);
+        }
+        else if (path ==
+            "shadows.svsm.moving-light-resolution-bias")
+        {
+            const auto getMovingBias =
+                [](const SparseVirtualShadowMapSettings& settings)
+                {
+                    if (!settings.movingLightLodBiasEnabled)
+                        return std::string("off");
+                    return settings.movingLightResolutionBias ==
+                            SvsmResolutionBias::PlusTwo
+                        ? std::string("+2-mips")
+                        : std::string("+1-mip");
+                };
+            const std::string currentMovingBias =
+                getMovingBias(candidate);
+            if (operation == CommandValueOperation::Get)
+            {
+                value = currentMovingBias;
+                return true;
+            }
+            if (operation == CommandValueOperation::Toggle)
+            {
+                error = std::string(path) + " is not boolean.";
+                return false;
+            }
+            std::string requested;
+            if (operation == CommandValueOperation::Reset)
+            {
+                requested = getMovingBias(defaults);
+                requested = NormalizeCommandAscii(requested, true);
+            }
+            else
+            {
+                requested = NormalizeCommandAscii(
+                    JoinCommandArguments(arguments), true);
+            }
+            if (requested == "off")
+            {
+                candidate.movingLightLodBiasEnabled = false;
+                candidate.movingLightResolutionBias =
+                    SvsmResolutionBias::Zero;
+            }
+            else if (requested == "1mip")
+            {
+                candidate.movingLightLodBiasEnabled = true;
+                candidate.movingLightResolutionBias =
+                    SvsmResolutionBias::PlusOne;
+            }
+            else if (requested == "2mips")
+            {
+                candidate.movingLightLodBiasEnabled = true;
+                candidate.movingLightResolutionBias =
+                    SvsmResolutionBias::PlusTwo;
+            }
+            else
+            {
+                error =
+                    "shadows.svsm.moving-light-resolution-bias expects "
+                    "off, +1-mip, or +2-mips.";
+                return false;
+            }
+            value = getMovingBias(candidate);
+            if (value == currentMovingBias)
+                return RejectUnchangedCommandMutation(path, error);
+        }
+        else if (path == "shadows.svsm.object-invalidation-mode")
+        {
+            static constexpr std::array<std::pair<
+                std::string_view, SvsmObjectInvalidationMode>, 4>
+                Options = {{
+                    { "auto", SvsmObjectInvalidationMode::Auto },
+                    { "always", SvsmObjectInvalidationMode::Always },
+                    { "rigid", SvsmObjectInvalidationMode::Rigid },
+                    { "static", SvsmObjectInvalidationMode::Static }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.defaultObjectInvalidationMode,
+                defaults.defaultObjectInvalidationMode,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.svsm.poisson-ordering")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, SvsmPoissonOrdering>, 2>
+                Options = {{
+                    {
+                        "legacy-stride",
+                        SvsmPoissonOrdering::LegacyStride
+                    },
+                    {
+                        "balanced-progressive",
+                        SvsmPoissonOrdering::BalancedProgressive
+                    }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.poissonOrdering,
+                defaults.poissonOrdering,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.svsm.filtering")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, SvsmFilterMode>, 2>
+                Options = {{
+                    {
+                        "manual-page-safe",
+                        SvsmFilterMode::ManualPageSafe
+                    },
+                    { "hybrid", SvsmFilterMode::Hybrid }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.filterMode,
+                defaults.filterMode,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.svsm.debug-view")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, SvsmDebugView>, 12>
+                Options = {{
+                    { "off", SvsmDebugView::None },
+                    {
+                        "clipmap-level",
+                        SvsmDebugView::ClipmapSelection
+                    },
+                    { "required-pages", SvsmDebugView::RequiredPages },
+                    { "resident-pages", SvsmDebugView::ResidentPages },
+                    { "cached-pages", SvsmDebugView::CachedPages },
+                    { "dirty-pages", SvsmDebugView::DirtyPages },
+                    { "rendered-pages", SvsmDebugView::RenderedPages },
+                    { "physical-pages", SvsmDebugView::PhysicalPool },
+                    { "fallback-level", SvsmDebugView::FallbackLevel },
+                    { "missing-pages", SvsmDebugView::MissingPages },
+                    { "tap-count", SvsmDebugView::TapCount },
+                    { "visibility", SvsmDebugView::Visibility }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.debugView,
+                defaults.debugView,
+                Options,
+                value,
+                error);
+        }
+        else
+        {
+            handled = false;
+        }
+
+        if (!handled &&
+            path == "shadows.svsm.unlimited-page-render-budget")
+        {
+            bool unlimited = candidate.pageRenderBudget ==
+                std::numeric_limits<uint32_t>::max();
+            const bool defaultUnlimited =
+                defaults.pageRenderBudget ==
+                    std::numeric_limits<uint32_t>::max();
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                unlimited,
+                defaultUnlimited,
+                value,
+                error);
+            if (handled && operation != CommandValueOperation::Get)
+            {
+                if (unlimited)
+                {
+                    if (candidate.pageRenderBudget !=
+                        std::numeric_limits<uint32_t>::max())
+                    {
+                        rememberedPageBudget =
+                            candidate.pageRenderBudget;
+                    }
+                    candidate.pageRenderBudget =
+                        std::numeric_limits<uint32_t>::max();
+                }
+                else
+                {
+                    candidate.pageRenderBudget = std::min(
+                        rememberedPageBudget,
+                        candidate.physicalPageCount);
+                }
+            }
+        }
+        if (!handled && path == "shadows.svsm.page-render-budget")
+        {
+            handled = true;
+            if (operation == CommandValueOperation::Get)
+            {
+                value = candidate.pageRenderBudget ==
+                        std::numeric_limits<uint32_t>::max()
+                    ? "unlimited"
+                    : std::to_string(candidate.pageRenderBudget);
+            }
+            else if (operation == CommandValueOperation::Toggle)
+            {
+                error = std::string(path) + " is not boolean.";
+                return false;
+            }
+            else if (operation == CommandValueOperation::Reset)
+            {
+                const uint32_t resetBudget = std::min(
+                    256u,
+                    candidate.physicalPageCount);
+                if (candidate.pageRenderBudget == resetBudget &&
+                    rememberedPageBudget == resetBudget)
+                {
+                    return RejectUnchangedCommandMutation(path, error);
+                }
+                candidate.pageRenderBudget = resetBudget;
+                rememberedPageBudget = resetBudget;
+                value = std::to_string(resetBudget);
+            }
+            else
+            {
+                uint32_t budget = candidate.pageRenderBudget ==
+                        std::numeric_limits<uint32_t>::max()
+                    ? candidate.physicalPageCount + 1u
+                    : candidate.pageRenderBudget;
+                if (!ApplyCommandUnsigned(
+                        operation,
+                        arguments,
+                        path,
+                        budget,
+                        budget,
+                        0u,
+                        candidate.physicalPageCount,
+                        value,
+                        error))
+                {
+                    return false;
+                }
+                candidate.pageRenderBudget = budget;
+                rememberedPageBudget = budget;
+            }
+        }
+
+        if (!handled)
+        {
+            struct FloatBinding
+            {
+                std::string_view path;
+                float SparseVirtualShadowMapSettings::* member;
+                float minimum;
+                float maximum;
+                bool factoryDefault;
+            };
+            static constexpr std::array<FloatBinding, 5>
+                FloatBindings = {{
+                    {
+                        "shadows.svsm.first-clipmap-extent",
+                        &SparseVirtualShadowMapSettings::
+                            firstClipmapExtent,
+                        1.f,
+                        500.f,
+                        true
+                    },
+                    {
+                        "shadows.svsm.maximum-light-depth",
+                        &SparseVirtualShadowMapSettings::
+                            maximumLightDepth,
+                        1.f,
+                        2000.f,
+                        true
+                    },
+                    {
+                        "shadows.svsm.distance-clamp-start-scale",
+                        &SparseVirtualShadowMapSettings::
+                            receiverDistanceMipClampStartScale,
+                        0.25f,
+                        8.f,
+                        false
+                    },
+                    {
+                        "shadows.svsm.static-hzb-conservative-bias",
+                        &SparseVirtualShadowMapSettings::
+                            staticDepthHierarchyBias,
+                        0.f,
+                        0.01f,
+                        false
+                    },
+                    {
+                        "shadows.svsm.light-depth-guard-fraction",
+                        &SparseVirtualShadowMapSettings::
+                            lightDepthOriginGuardBandFraction,
+                        0.1f,
+                        1.f,
+                        false
+                    }
+                }};
+            const auto match = std::find_if(
+                FloatBindings.begin(),
+                FloatBindings.end(),
+                [path](const FloatBinding& binding)
+                {
+                    return binding.path == path;
+                });
+            if (match != FloatBindings.end())
+            {
+                handled = ApplyCommandFloat(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.*(match->member),
+                    (match->factoryDefault
+                        ? factoryDefaults
+                        : defaults).*(match->member),
+                    match->minimum,
+                    match->maximum,
+                    value,
+                    error);
+            }
+        }
+
+        if (!handled)
+        {
+            struct UnsignedBinding
+            {
+                std::string_view path;
+                uint32_t SparseVirtualShadowMapSettings::* member;
+                uint32_t minimum;
+                uint32_t maximum;
+                bool factoryDefault;
+            };
+            static constexpr std::array<UnsignedBinding, 4>
+                UnsignedBindings = {{
+                    {
+                        "shadows.svsm.physical-pool-pages",
+                        &SparseVirtualShadowMapSettings::
+                            physicalPageCount,
+                        64u,
+                        SvsmPagesPerClipmap,
+                        true
+                    },
+                    {
+                        "shadows.svsm.moving-light-recovery-frames",
+                        &SparseVirtualShadowMapSettings::
+                            movingLightLodRecoveryFrames,
+                        0u,
+                        60u,
+                        false
+                    },
+                    {
+                        "shadows.svsm.maximum-distance-clamp-level",
+                        &SparseVirtualShadowMapSettings::
+                            receiverDistanceMipClampMaximumLevel,
+                        0u,
+                        SvsmMaximumReceiverDistanceMipClampLevel,
+                        false
+                    },
+                    {
+                        "shadows.svsm.scatter-maximum-page-amplification",
+                        &SparseVirtualShadowMapSettings::
+                            dirtyPageScatterMaximumAmplification,
+                        1u,
+                        SvsmMaximumDirtyPageScatterAmplification,
+                        false
+                    }
+                }};
+            const auto match = std::find_if(
+                UnsignedBindings.begin(),
+                UnsignedBindings.end(),
+                [path](const UnsignedBinding& binding)
+                {
+                    return binding.path == path;
+                });
+            if (match != UnsignedBindings.end())
+            {
+                handled = ApplyCommandUnsigned(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.*(match->member),
+                    (match->factoryDefault
+                        ? factoryDefaults
+                        : defaults).*(match->member),
+                    match->minimum,
+                    match->maximum,
+                    value,
+                    error);
+                if (handled &&
+                    operation != CommandValueOperation::Get &&
+                    path == "shadows.svsm.physical-pool-pages")
+                {
+                    if (candidate.pageRenderBudget !=
+                        std::numeric_limits<uint32_t>::max())
+                    {
+                        candidate.pageRenderBudget = std::min(
+                            candidate.pageRenderBudget,
+                            candidate.physicalPageCount);
+                    }
+                    if (rememberedPageBudget !=
+                        std::numeric_limits<uint32_t>::max())
+                    {
+                        rememberedPageBudget = std::min(
+                            rememberedPageBudget,
+                            candidate.physicalPageCount);
+                    }
+                }
+            }
+        }
+
+        if (!handled)
+        {
+            const auto match = std::find_if(
+                SvsmBoolCommandBindings.begin(),
+                SvsmBoolCommandBindings.end(),
+                [path](const SvsmBoolCommandBinding& binding)
+                {
+                    return binding.path == path;
+                });
+            if (match != SvsmBoolCommandBindings.end())
+            {
+                handled = ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.*(match->member),
+                    defaults.*(match->member),
+                    value,
+                    error);
+                if (handled &&
+                    operation != CommandValueOperation::Get &&
+                    path ==
+                        "shadows.svsm.dirty-page-scatter-raster")
+                {
+                    candidate
+                        .dirtyPageScatterAmplificationGuardEnabled =
+                        candidate.dirtyPageScatterRasterEnabled;
+                }
+            }
+        }
+
+        if (!handled)
+        {
+            if (error.empty())
+            {
+                error = "Internal SVSM command binding is missing for '" +
+                    std::string(path) + "'.";
+            }
+            return false;
+        }
+        if (operation == CommandValueOperation::Get)
+            return true;
+        if (candidate.pageRenderBudget !=
+                std::numeric_limits<uint32_t>::max() &&
+            candidate.pageRenderBudget > candidate.physicalPageCount)
+        {
+            error =
+                "The finite SVSM page-render budget cannot exceed the "
+                "physical pool page count.";
+            return false;
+        }
+        if (!ValidateSvsmSettings(candidate))
+        {
+            error =
+                "The requested SVSM value is incompatible with the complete "
+                "SVSM settings tuple.";
+            return false;
+        }
+        if (path != "shadows.svsm.profile" &&
+            operation != CommandValueOperation::Reset)
+        {
+            candidate.preset = SvsmPreset::Custom;
+        }
+        m_ui.SparseVirtualShadowMaps = candidate;
+        m_CommandRememberedSvsmPageBudget =
+            rememberedPageBudget;
+        return true;
+    }
+
+    struct CsmBoolCommandBinding
+    {
+        std::string_view path;
+        bool DiagnosticCascadedShadowMapSettings::* member = nullptr;
+    };
+
+    inline static constexpr std::array<
+        CsmBoolCommandBinding, 25> CsmBoolCommandBindings = {{
+            {
+                "shadows.csm.ue-minimum-light-depth",
+                &DiagnosticCascadedShadowMapSettings::
+                    enforceUeMinimumLightDepth
+            },
+            {
+                "shadows.csm.cached-shadow-draw-lists",
+                &DiagnosticCascadedShadowMapSettings::
+                    cachedShadowDrawListsEnabled
+            },
+            {
+                "shadows.csm.whole-map-reuse",
+                &DiagnosticCascadedShadowMapSettings::
+                    wholeMapReuseEnabled
+            },
+            {
+                "shadows.csm.whole-cascade-reuse",
+                &DiagnosticCascadedShadowMapSettings::
+                    wholeCascadeReuseEnabled
+            },
+            {
+                "shadows.csm.dirty-rectangles",
+                &DiagnosticCascadedShadowMapSettings::
+                    dirtyRectanglesEnabled
+            },
+            {
+                "shadows.csm.scrolling",
+                &DiagnosticCascadedShadowMapSettings::scrollingEnabled
+            },
+            {
+                "shadows.csm.input-assembler-caster-fetch",
+                &DiagnosticCascadedShadowMapSettings::
+                    inputAssemblerCasterFetchEnabled
+            },
+            {
+                "shadows.csm.receiver-raster-scissor",
+                &DiagnosticCascadedShadowMapSettings::
+                    receiverRasterScissorEnabled
+            },
+            {
+                "shadows.csm.accurate-caster-hull-culling",
+                &DiagnosticCascadedShadowMapSettings::
+                    accurateCasterCullingEnabled
+            },
+            {
+                "shadows.csm.ue-caster-radius-threshold",
+                &DiagnosticCascadedShadowMapSettings::
+                    ueCasterRadiusThresholdEnabled
+            },
+            {
+                "shadows.csm.use-16-bit-depth",
+                &DiagnosticCascadedShadowMapSettings::
+                    use16BitDepthEnabled
+            },
+            {
+                "shadows.csm.opaque-depth-state-merging",
+                &DiagnosticCascadedShadowMapSettings::
+                    opaqueDepthStateMergingEnabled
+            },
+            {
+                "shadows.csm.position-only-opaque-casters",
+                &DiagnosticCascadedShadowMapSettings::
+                    positionOnlyOpaqueEnabled
+            },
+            {
+                "shadows.csm.translation-only-caster-transforms",
+                &DiagnosticCascadedShadowMapSettings::
+                    translationOnlyCasterTransformEnabled
+            },
+            {
+                "shadows.csm.precomputed-depth-axis-normalization",
+                &DiagnosticCascadedShadowMapSettings::
+                    precomputedDepthAxisInverseLengthEnabled
+            },
+            {
+                "shadows.csm.conservative-saturated-slope-shortcut",
+                &DiagnosticCascadedShadowMapSettings::
+                    conservativeSaturatedSlopeEnabled
+            },
+            {
+                "shadows.csm.algebraic-slow-slope-reduction",
+                &DiagnosticCascadedShadowMapSettings::
+                    algebraicSlowSlopeEnabled
+            },
+            {
+                "shadows.csm.pre-normalized-receiver-light-direction",
+                &DiagnosticCascadedShadowMapSettings::
+                    preNormalizedReceiverLightDirectionEnabled
+            },
+            {
+                "shadows.csm.precomposed-clip-to-shadow-transform",
+                &DiagnosticCascadedShadowMapSettings::
+                    precomposedClipToShadowEnabled
+            },
+            {
+                "shadows.csm.one-pass-cascade-classification",
+                &DiagnosticCascadedShadowMapSettings::
+                    singleTraversalCasterClassificationEnabled
+            },
+            {
+                "shadows.csm.precomputed-receiver-hull-axes",
+                &DiagnosticCascadedShadowMapSettings::
+                    precomputedReceiverHullAxesEnabled
+            },
+            {
+                "shadows.csm.shared-caster-light-projection",
+                &DiagnosticCascadedShadowMapSettings::
+                    sharedCasterLightProjectionEnabled
+            },
+            {
+                "shadows.csm.direct-caster-submission",
+                &DiagnosticCascadedShadowMapSettings::
+                    directCasterSubmissionEnabled
+            },
+            {
+                "shadows.csm.batched-full-redraw-clear",
+                &DiagnosticCascadedShadowMapSettings::
+                    batchedFullRedrawClearEnabled
+            },
+            {
+                "shadows.csm.detailed-gpu-stage-timing",
+                &DiagnosticCascadedShadowMapSettings::
+                    detailedGpuTimingEnabled
+            }
+        }};
+
+    static void ReconcileCommandCsmProfile(
+        DiagnosticCascadedShadowMapSettings& settings)
+    {
+        static constexpr DiagnosticCsmProfile Profiles[] = {
+            DiagnosticCsmProfile::SingleMapReference,
+            DiagnosticCsmProfile::LowCostCsm,
+            DiagnosticCsmProfile::Ue5CsmReference,
+            DiagnosticCsmProfile::CachedSingleShadow,
+            DiagnosticCsmProfile::OptimizedCachedSingleShadow,
+            DiagnosticCsmProfile::OptimizedCachedCsm
+        };
+        for (const DiagnosticCsmProfile profile : Profiles)
+        {
+            const DiagnosticCascadedShadowMapSettings profileSettings =
+                ApplyDiagnosticCsmProfile(settings, profile);
+            if (IsSameDiagnosticCsmTimingConfiguration(
+                    settings, profileSettings))
+            {
+                settings.profile = profile;
+                return;
+            }
+        }
+        settings.profile = DiagnosticCsmProfile::Custom;
+    }
+
+    bool DispatchCsmCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        if (operation != CommandValueOperation::Get &&
+            !(m_ui.EnablePbr &&
+              m_ui.UsesDeferredShading() &&
+              m_app->HasPrimaryDirectionalLight()))
+        {
+            error =
+                "Diagnostic CSM settings require deferred PBR and a "
+                "primary directional light.";
+            return false;
+        }
+        DiagnosticCascadedShadowMapSettings candidate =
+            m_ui.DiagnosticCascadedShadowMaps;
+        const DiagnosticCascadedShadowMapSettings factoryDefaults;
+
+        if (operation == CommandValueOperation::Set ||
+            operation == CommandValueOperation::Toggle)
+        {
+            const bool cachePolicyActive =
+                HasAnyDiagnosticCsmCachePolicy(candidate);
+            const bool viewDependentCullingAvailable =
+                CanUseDiagnosticCsmViewDependentCasterCulling(
+                    candidate);
+            bool available = true;
+            if (path == "shadows.csm.filter-taps" ||
+                path == "shadows.csm.filter-radius")
+            {
+                available =
+                    candidate.filter == DiagnosticCsmFilter::Poisson;
+            }
+            else if (path ==
+                "shadows.csm.cached-shadow-draw-lists")
+            {
+                available = !cachePolicyActive;
+            }
+            else if (path == "shadows.csm.dirty-rectangles" ||
+                path == "shadows.csm.scrolling")
+            {
+                available = candidate.wholeCascadeReuseEnabled;
+            }
+            else if (path == "shadows.csm.minimum-scroll-overlap")
+            {
+                available =
+                    candidate.wholeCascadeReuseEnabled &&
+                    candidate.scrollingEnabled;
+            }
+            else if (path ==
+                    "shadows.csm.receiver-raster-scissor" ||
+                path ==
+                    "shadows.csm.accurate-caster-hull-culling" ||
+                path ==
+                    "shadows.csm.ue-caster-radius-threshold")
+            {
+                available = viewDependentCullingAvailable;
+            }
+            else if (path ==
+                "shadows.csm.caster-radius-threshold")
+            {
+                available =
+                    viewDependentCullingAvailable &&
+                    candidate.ueCasterRadiusThresholdEnabled;
+            }
+            else if (path ==
+                    "shadows.csm.conservative-saturated-slope-shortcut" ||
+                path ==
+                    "shadows.csm.algebraic-slow-slope-reduction")
+            {
+                available =
+                    candidate.precomputedDepthAxisInverseLengthEnabled;
+            }
+            else if (path ==
+                "shadows.csm.precomputed-receiver-hull-axes")
+            {
+                available =
+                    viewDependentCullingAvailable &&
+                    candidate.accurateCasterCullingEnabled;
+            }
+            if (!available)
+            {
+                error = std::string(path) +
+                    " is unavailable for the current Diagnostic CSM "
+                    "configuration; reset remains available.";
+                return false;
+            }
+        }
+        bool handled = true;
+
+        if (path == "shadows.csm.enabled")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enabled,
+                factoryDefaults.enabled,
+                value,
+                error);
+        }
+        else if (path == "shadows.csm.profile")
+        {
+            static constexpr std::array<std::pair<
+                std::string_view, DiagnosticCsmProfile>, 7> Options = {{
+                    {
+                        "single-map-reference",
+                        DiagnosticCsmProfile::SingleMapReference
+                    },
+                    {
+                        "low-cost-csm",
+                        DiagnosticCsmProfile::LowCostCsm
+                    },
+                    {
+                        "ue5-csm-reference",
+                        DiagnosticCsmProfile::Ue5CsmReference
+                    },
+                    {
+                        "cached-single-shadow",
+                        DiagnosticCsmProfile::CachedSingleShadow
+                    },
+                    {
+                        "optimized-cached-single-shadow",
+                        DiagnosticCsmProfile::
+                            OptimizedCachedSingleShadow
+                    },
+                    {
+                        "optimized-cached-csm",
+                        DiagnosticCsmProfile::OptimizedCachedCsm
+                    },
+                    { "custom", DiagnosticCsmProfile::Custom }
+                }};
+            DiagnosticCsmProfile selected = candidate.profile;
+            if (operation != CommandValueOperation::Get &&
+                selected != DiagnosticCsmProfile::Custom)
+            {
+                const DiagnosticCascadedShadowMapSettings
+                    profileSettings =
+                        ApplyDiagnosticCsmProfile(candidate, selected);
+                if (!IsSameDiagnosticCsmTimingConfiguration(
+                        candidate, profileSettings))
+                {
+                    selected = DiagnosticCsmProfile::Custom;
+                }
+            }
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                selected,
+                DiagnosticCsmProfile::Ue5CsmReference,
+                Options,
+                value,
+                error);
+            if (handled &&
+                operation != CommandValueOperation::Get &&
+                selected != DiagnosticCsmProfile::Custom)
+            {
+                candidate =
+                    ApplyDiagnosticCsmProfile(candidate, selected);
+            }
+            else if (handled &&
+                operation != CommandValueOperation::Get)
+            {
+                candidate.profile = DiagnosticCsmProfile::Custom;
+            }
+        }
+        else if (path == "shadows.csm.filter")
+        {
+            static constexpr std::array<std::pair<
+                std::string_view, DiagnosticCsmFilter>, 2> Options = {{
+                    {
+                        "ue5-manual-5x5-pcf",
+                        DiagnosticCsmFilter::Ue5Pcf5x5
+                    },
+                    {
+                        "svsm-matched-point-poisson",
+                        DiagnosticCsmFilter::Poisson
+                    }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.filter,
+                factoryDefaults.filter,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.csm.filter-taps")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, uint32_t>, 4> Options = {{
+                    { "1", 1u },
+                    { "4", 4u },
+                    { "8", 8u },
+                    { "16", 16u }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.poissonTapCount,
+                factoryDefaults.poissonTapCount,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.csm.debug-view")
+        {
+            static constexpr std::array<std::pair<
+                std::string_view, DiagnosticCsmDebugView>, 4> Options = {{
+                    { "none", DiagnosticCsmDebugView::None },
+                    {
+                        "visibility",
+                        DiagnosticCsmDebugView::Visibility
+                    },
+                    {
+                        "cascade-selection",
+                        DiagnosticCsmDebugView::Cascade
+                    },
+                    {
+                        "cache-action",
+                        DiagnosticCsmDebugView::CacheAction
+                    }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.debugView,
+                factoryDefaults.debugView,
+                Options,
+                value,
+                error);
+        }
+        else
+        {
+            handled = false;
+        }
+
+        if (!handled)
+        {
+            struct UnsignedBinding
+            {
+                std::string_view path;
+                uint32_t DiagnosticCascadedShadowMapSettings::* member;
+                uint32_t minimum;
+                uint32_t maximum;
+            };
+            static constexpr std::array<UnsignedBinding, 3>
+                UnsignedBindings = {{
+                    {
+                        "shadows.csm.cascade-count",
+                        &DiagnosticCascadedShadowMapSettings::cascadeCount,
+                        1u,
+                        DiagnosticCsmMaximumCascades
+                    },
+                    {
+                        "shadows.csm.resolution-per-cascade",
+                        &DiagnosticCascadedShadowMapSettings::
+                            shadowMapResolution,
+                        128u,
+                        8192u
+                    },
+                    {
+                        "shadows.csm.projection-snap-multiple",
+                        &DiagnosticCascadedShadowMapSettings::
+                            projectionSnapTexelMultiple,
+                        1u,
+                        16u
+                    }
+                }};
+            const auto match = std::find_if(
+                UnsignedBindings.begin(),
+                UnsignedBindings.end(),
+                [path](const UnsignedBinding& binding)
+                {
+                    return binding.path == path;
+                });
+            if (match != UnsignedBindings.end())
+            {
+                handled = ApplyCommandUnsigned(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.*(match->member),
+                    factoryDefaults.*(match->member),
+                    match->minimum,
+                    match->maximum,
+                    value,
+                    error);
+            }
+        }
+
+        if (!handled)
+        {
+            struct FloatBinding
+            {
+                std::string_view path;
+                float DiagnosticCascadedShadowMapSettings::* member;
+                float minimum;
+                float maximum;
+            };
+            static constexpr std::array<FloatBinding, 13>
+                FloatBindings = {{
+                    {
+                        "shadows.csm.maximum-shadow-distance",
+                        &DiagnosticCascadedShadowMapSettings::
+                            maximumShadowDistance,
+                        1.f,
+                        5000.f
+                    },
+                    {
+                        "shadows.csm.maximum-light-depth",
+                        &DiagnosticCascadedShadowMapSettings::
+                            maximumLightDepth,
+                        1.f,
+                        10000.f
+                    },
+                    {
+                        "shadows.csm.filter-radius",
+                        &DiagnosticCascadedShadowMapSettings::
+                            filterRadiusTexels,
+                        0.f,
+                        8.f
+                    },
+                    {
+                        "shadows.csm.split-distribution-exponent",
+                        &DiagnosticCascadedShadowMapSettings::
+                            cascadeDistributionExponent,
+                        1.f,
+                        8.f
+                    },
+                    {
+                        "shadows.csm.cascade-transition-fraction",
+                        &DiagnosticCascadedShadowMapSettings::
+                            cascadeTransitionFraction,
+                        0.f,
+                        0.5f
+                    },
+                    {
+                        "shadows.csm.shadow-distance-fade-fraction",
+                        &DiagnosticCascadedShadowMapSettings::
+                            shadowDistanceFadeoutFraction,
+                        0.f,
+                        0.5f
+                    },
+                    {
+                        "shadows.csm.depth-bias",
+                        &DiagnosticCascadedShadowMapSettings::depthBias,
+                        0.f,
+                        100.f
+                    },
+                    {
+                        "shadows.csm.slope-scaled-depth-bias",
+                        &DiagnosticCascadedShadowMapSettings::
+                            slopeScaledDepthBias,
+                        0.f,
+                        10.f
+                    },
+                    {
+                        "shadows.csm.directional-light-shadow-bias",
+                        &DiagnosticCascadedShadowMapSettings::
+                            directionalLightShadowBias,
+                        0.f,
+                        1.f
+                    },
+                    {
+                        "shadows.csm.directional-light-slope-bias",
+                        &DiagnosticCascadedShadowMapSettings::
+                            directionalLightShadowSlopeBias,
+                        0.f,
+                        1.f
+                    },
+                    {
+                        "shadows.csm.receiver-depth-bias",
+                        &DiagnosticCascadedShadowMapSettings::
+                            receiverDepthBias,
+                        0.f,
+                        1.f
+                    },
+                    {
+                        "shadows.csm.minimum-scroll-overlap",
+                        &DiagnosticCascadedShadowMapSettings::
+                            minimumScrollOverlap,
+                        0.5f,
+                        1.f
+                    },
+                    {
+                        "shadows.csm.caster-radius-threshold",
+                        &DiagnosticCascadedShadowMapSettings::
+                            casterRadiusThreshold,
+                        0.f,
+                        0.05f
+                    }
+                }};
+            const auto match = std::find_if(
+                FloatBindings.begin(),
+                FloatBindings.end(),
+                [path](const FloatBinding& binding)
+                {
+                    return binding.path == path;
+                });
+            if (match != FloatBindings.end())
+            {
+                handled = ApplyCommandFloat(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.*(match->member),
+                    factoryDefaults.*(match->member),
+                    match->minimum,
+                    match->maximum,
+                    value,
+                    error);
+            }
+        }
+
+        if (!handled)
+        {
+            const auto match = std::find_if(
+                CsmBoolCommandBindings.begin(),
+                CsmBoolCommandBindings.end(),
+                [path](const CsmBoolCommandBinding& binding)
+                {
+                    return binding.path == path;
+                });
+            if (match != CsmBoolCommandBindings.end())
+            {
+                handled = ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.*(match->member),
+                    factoryDefaults.*(match->member),
+                    value,
+                    error);
+            }
+        }
+
+        if (!handled)
+        {
+            if (error.empty())
+            {
+                error = "Internal CSM command binding is missing for '" +
+                    std::string(path) + "'.";
+            }
+            return false;
+        }
+        if (operation == CommandValueOperation::Get)
+            return true;
+        if (!IsDiagnosticCsmCascadeCountValid(candidate.cascadeCount) ||
+            candidate.shadowMapResolution < 128u ||
+            candidate.shadowMapResolution > 8192u ||
+            (candidate.shadowMapResolution &
+                (candidate.shadowMapResolution - 1u)) != 0u)
+        {
+            error =
+                "The requested CSM tuple is invalid; resolution per cascade "
+                "must be a power of two from 128 through 8192.";
+            return false;
+        }
+        if (path != "shadows.csm.profile" &&
+            operation == CommandValueOperation::Reset)
+        {
+            ReconcileCommandCsmProfile(candidate);
+        }
+        else if (path != "shadows.csm.profile")
+        {
+            candidate.profile = DiagnosticCsmProfile::Custom;
+        }
+        m_ui.DiagnosticCascadedShadowMaps = candidate;
+        return true;
+    }
+
+    static bool IsCommandMaterialTransmissive(MaterialDomain domain)
+    {
+        return domain == MaterialDomain::Transmissive ||
+            domain == MaterialDomain::TransmissiveAlphaTested ||
+            domain == MaterialDomain::TransmissiveAlphaBlended;
+    }
+
+    static bool IsCommandMaterialAlphaTested(MaterialDomain domain)
+    {
+        return domain == MaterialDomain::AlphaTested ||
+            domain == MaterialDomain::TransmissiveAlphaTested;
+    }
+
+    static bool IsCommandMaterialAlphaBlended(MaterialDomain domain)
+    {
+        return domain == MaterialDomain::AlphaBlended ||
+            domain == MaterialDomain::TransmissiveAlphaBlended;
+    }
+
+    bool DispatchMaterialCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        const std::shared_ptr<Scene> scene = m_app->GetScene();
+        if (!scene || !scene->GetSceneGraph())
+        {
+            error = "No loaded scene provides material controls.";
+            return false;
+        }
+        const auto& materials =
+            scene->GetSceneGraph()->GetMaterials();
+
+        if (path == "material.selected")
+        {
+            if (operation == CommandValueOperation::Get)
+            {
+                if (!m_ui.SelectedMaterial)
+                {
+                    value = "none";
+                    return true;
+                }
+                value = std::to_string(
+                    m_ui.SelectedMaterial->materialID) +
+                    " " + m_ui.SelectedMaterial->name;
+                return true;
+            }
+            if (operation != CommandValueOperation::Set)
+            {
+                error =
+                    "material.selected supports get and set only.";
+                return false;
+            }
+
+            const std::string requested =
+                JoinCommandArguments(arguments);
+            if (requested.empty())
+            {
+                error =
+                    "material.selected expects a material id or unique "
+                    "name.";
+                return false;
+            }
+            int64_t requestedId = -1;
+            const bool numeric =
+                TryParseCommandInteger(requested, requestedId);
+            const std::string normalized =
+                NormalizeCommandAscii(requested, true);
+            std::shared_ptr<Material> match;
+            for (const std::shared_ptr<Material>& material : materials)
+            {
+                if (!material)
+                    continue;
+                const bool matches =
+                    (numeric &&
+                        requestedId ==
+                            static_cast<int64_t>(
+                                material->materialID)) ||
+                    NormalizeCommandAscii(
+                        material->name, true) == normalized;
+                if (!matches)
+                    continue;
+                if (match && match != material)
+                {
+                    error =
+                        "Material selection is ambiguous; use a unique "
+                        "runtime material id.";
+                    return false;
+                }
+                match = material;
+            }
+            if (!match)
+            {
+                error =
+                    "Unknown material. Use '/list material.selected'.";
+                return false;
+            }
+            if (match == m_ui.SelectedMaterial)
+                return RejectUnchangedCommandMutation(path, error);
+            m_ui.SelectedMaterial = match;
+            value = std::to_string(match->materialID) +
+                " " + match->name;
+            return true;
+        }
+
+        const std::shared_ptr<Material> material =
+            m_ui.SelectedMaterial;
+        bool materialStillOwnedByScene = false;
+        if (material)
+        {
+            for (const std::shared_ptr<Material>& sceneMaterial : materials)
+            {
+                if (sceneMaterial == material)
+                {
+                    materialStillOwnedByScene = true;
+                    break;
+                }
+            }
+        }
+        if (!materialStillOwnedByScene)
+        {
+            error =
+                "No scene material is selected. Use "
+                "'/list material.selected' and "
+                "'/set material.selected <id-or-name>'.";
+            return false;
+        }
+
+        Material candidate = *material;
+        bool handled = true;
+        if (path == "material.selected.domain")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, MaterialDomain>, 6>
+                Options = {{
+                    { "opaque", MaterialDomain::Opaque },
+                    { "alpha-tested", MaterialDomain::AlphaTested },
+                    { "alpha-blended", MaterialDomain::AlphaBlended },
+                    { "transmissive", MaterialDomain::Transmissive },
+                    {
+                        "transmissive-alpha-tested",
+                        MaterialDomain::TransmissiveAlphaTested
+                    },
+                    {
+                        "transmissive-alpha-blended",
+                        MaterialDomain::TransmissiveAlphaBlended
+                    }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.domain,
+                candidate.domain,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "material.selected.double-sided")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.doubleSided,
+                candidate.doubleSided,
+                value,
+                error);
+        }
+        else if (path ==
+            "material.selected.base-texture-enabled")
+        {
+            if (operation != CommandValueOperation::Get &&
+                !candidate.baseOrDiffuseTexture)
+            {
+                error =
+                    "The selected material has no base or diffuse "
+                    "texture.";
+                return false;
+            }
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enableBaseOrDiffuseTexture,
+                candidate.enableBaseOrDiffuseTexture,
+                value,
+                error);
+        }
+        else if (path == "material.selected.base-color")
+        {
+            handled = ApplyCommandFloat3(
+                operation,
+                arguments,
+                path,
+                candidate.baseOrDiffuseColor,
+                candidate.baseOrDiffuseColor,
+                0.f,
+                1.f,
+                value,
+                error);
+        }
+        else if (path ==
+            "material.selected.metal-specular-texture-enabled")
+        {
+            if (operation != CommandValueOperation::Get &&
+                !candidate.metalRoughOrSpecularTexture)
+            {
+                error =
+                    "The selected material has no metal-rough or "
+                    "specular texture.";
+                return false;
+            }
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enableMetalRoughOrSpecularTexture,
+                candidate.enableMetalRoughOrSpecularTexture,
+                value,
+                error);
+        }
+        else if (path == "material.selected.specular-color")
+        {
+            if (operation != CommandValueOperation::Get &&
+                !candidate.useSpecularGlossModel)
+            {
+                error =
+                    "Specular color requires a specular-gloss material.";
+                return false;
+            }
+            handled = ApplyCommandFloat3(
+                operation,
+                arguments,
+                path,
+                candidate.specularColor,
+                candidate.specularColor,
+                0.f,
+                1.f,
+                value,
+                error);
+        }
+        else if (path == "material.selected.metalness")
+        {
+            if (operation != CommandValueOperation::Get &&
+                candidate.useSpecularGlossModel)
+            {
+                error =
+                    "Metalness requires a metal-rough material.";
+                return false;
+            }
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.metalness,
+                candidate.metalness,
+                0.f,
+                1.f,
+                value,
+                error);
+        }
+        else if (path == "material.selected.roughness")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.roughness,
+                candidate.roughness,
+                0.f,
+                1.f,
+                value,
+                error);
+        }
+        else if (path == "material.selected.opacity")
+        {
+            if (operation != CommandValueOperation::Get &&
+                !IsCommandMaterialAlphaBlended(candidate.domain))
+            {
+                error =
+                    "Opacity is available only for alpha-blended "
+                    "materials.";
+                return false;
+            }
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.opacity,
+                candidate.opacity,
+                0.f,
+                candidate.baseOrDiffuseTexture ? 2.f : 1.f,
+                value,
+                error);
+        }
+        else if (path == "material.selected.alpha-cutoff")
+        {
+            if (operation != CommandValueOperation::Get &&
+                (!IsCommandMaterialAlphaTested(candidate.domain) ||
+                 !candidate.baseOrDiffuseTexture))
+            {
+                error =
+                    "Alpha cutoff requires an alpha-tested material "
+                    "with a base or diffuse texture.";
+                return false;
+            }
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.alphaCutoff,
+                candidate.alphaCutoff,
+                0.f,
+                1.f,
+                value,
+                error);
+        }
+        else if (path ==
+            "material.selected.normal-texture-enabled")
+        {
+            if (operation != CommandValueOperation::Get &&
+                !candidate.normalTexture)
+            {
+                error =
+                    "The selected material has no normal texture.";
+                return false;
+            }
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enableNormalTexture,
+                candidate.enableNormalTexture,
+                value,
+                error);
+        }
+        else if (path == "material.selected.normal-scale")
+        {
+            const Material* original =
+                m_app->GetOriginalMaterial(material);
+            const float defaultScale =
+                original
+                    ? original->normalTextureScale
+                    : 1.f;
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.normalTextureScale,
+                defaultScale,
+                -2.f,
+                2.f,
+                value,
+                error);
+        }
+        else if (path ==
+            "material.selected.occlusion-texture-enabled")
+        {
+            if (operation != CommandValueOperation::Get &&
+                !candidate.occlusionTexture)
+            {
+                error =
+                    "The selected material has no occlusion texture.";
+                return false;
+            }
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enableOcclusionTexture,
+                candidate.enableOcclusionTexture,
+                value,
+                error);
+        }
+        else if (path ==
+            "material.selected.occlusion-strength")
+        {
+            if (operation != CommandValueOperation::Get &&
+                (!candidate.occlusionTexture ||
+                 !candidate.enableOcclusionTexture))
+            {
+                error =
+                    "Occlusion strength requires an enabled occlusion "
+                    "texture.";
+                return false;
+            }
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.occlusionStrength,
+                candidate.occlusionStrength,
+                0.f,
+                1.f,
+                value,
+                error);
+        }
+        else if (path ==
+            "material.selected.emissive-texture-enabled")
+        {
+            if (operation != CommandValueOperation::Get &&
+                !candidate.emissiveTexture)
+            {
+                error =
+                    "The selected material has no emissive texture.";
+                return false;
+            }
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enableEmissiveTexture,
+                candidate.enableEmissiveTexture,
+                value,
+                error);
+        }
+        else if (path == "material.selected.emissive-color")
+        {
+            handled = ApplyCommandFloat3(
+                operation,
+                arguments,
+                path,
+                candidate.emissiveColor,
+                candidate.emissiveColor,
+                0.f,
+                1.f,
+                value,
+                error);
+        }
+        else if (path ==
+            "material.selected.emissive-intensity")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.emissiveIntensity,
+                candidate.emissiveIntensity,
+                0.f,
+                1000.f,
+                value,
+                error);
+        }
+        else if (path ==
+            "material.selected.transmission-texture-enabled")
+        {
+            if (operation != CommandValueOperation::Get &&
+                (!IsCommandMaterialTransmissive(candidate.domain) ||
+                 !candidate.transmissionTexture))
+            {
+                error =
+                    "Transmission texture control requires a "
+                    "transmissive material with a transmission texture.";
+                return false;
+            }
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enableTransmissionTexture,
+                candidate.enableTransmissionTexture,
+                value,
+                error);
+        }
+        else if (path ==
+            "material.selected.transmission-factor")
+        {
+            if (operation != CommandValueOperation::Get &&
+                !IsCommandMaterialTransmissive(candidate.domain))
+            {
+                error =
+                    "Transmission factor requires a transmissive "
+                    "material.";
+                return false;
+            }
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.transmissionFactor,
+                candidate.transmissionFactor,
+                0.f,
+                1.f,
+                value,
+                error);
+        }
+        else if (path ==
+            "material.selected.alpha-mask-texture-enabled")
+        {
+            if (operation != CommandValueOperation::Get &&
+                !candidate.opacityTexture)
+            {
+                error =
+                    "The selected material has no opacity texture.";
+                return false;
+            }
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.enableOpacityTexture,
+                candidate.enableOpacityTexture,
+                value,
+                error);
+        }
+        else
+        {
+            handled = false;
+        }
+
+        if (!handled)
+        {
+            if (error.empty())
+            {
+                error =
+                    "Internal Material command binding is missing for '" +
+                    std::string(path) + "'.";
+            }
+            return false;
+        }
+        if (operation == CommandValueOperation::Get)
+            return true;
+
+        *material = candidate;
+        m_app->NotifyMaterialCommandChanged(material);
+        return true;
+    }
+
+    bool DispatchCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        switch (definition.section)
+        {
+        case UiSettingsCommandSection::Ui:
+            return DispatchUiCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::General:
+            return DispatchGeneralCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::Visibility:
+            return DispatchVisibilityCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::Buffers:
+            return DispatchBufferCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::Statistics:
+            return DispatchStatisticsCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::Aliasing:
+            return DispatchAliasingCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::Sky:
+            return DispatchSkyCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::Lights:
+            return DispatchLightCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::ScreenSpaceDirectionalShadows:
+            return DispatchScreenSpaceShadowCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::SparseVirtualShadowMaps:
+            return DispatchSvsmCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::DiagnosticCascadedShadowMaps:
+            return DispatchCsmCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::Materials:
+            return DispatchMaterialCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::Footer:
+        case UiSettingsCommandSection::Count:
+            break;
+        }
+        error = "Internal value-command section dispatch is missing for '" +
+            std::string(definition.name) + "'.";
+        return false;
+    }
+
+    bool DispatchCommandAction(
+        const UiSettingsCommandDefinition& definition,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        if (!arguments.empty())
+        {
+            error = std::string(definition.name) +
+                " does not accept arguments.";
+            return false;
+        }
+
+        const std::string_view action = definition.name;
+        if (action == "open-scene-folder")
+        {
+            const std::filesystem::path sceneFolder =
+                m_app->GetSceneDir();
+            const HINSTANCE result = ShellExecuteW(
+                nullptr,
+                L"open",
+                sceneFolder.c_str(),
+                nullptr,
+                nullptr,
+                SW_SHOWNORMAL);
+            if (reinterpret_cast<INT_PTR>(result) <= 32)
+            {
+                error = "Windows could not open the scene folder.";
+                return false;
+            }
+            value = "opened";
+            return true;
+        }
+        if (action == "visibility-benchmark")
+        {
+            if (!m_app->QueueVisibilityBenchmark(
+                    uint32_t(std::max(m_BenchmarkWarmupFrames, 0)),
+                    uint32_t(std::max(m_BenchmarkMeasuredFrames, 1)),
+                    false))
+            {
+                error = m_app->GetVisibilityBenchmarkError();
+                if (error.empty())
+                    error = "The visibility benchmark could not start.";
+                return false;
+            }
+            value = "started";
+            return true;
+        }
+        if (action == "aa-motion-test")
+        {
+            if (!m_app->CanStartAntiAliasingMotionTest() ||
+                !m_app->StartAntiAliasingMotionTest())
+            {
+                error =
+                    "The anti-aliasing motion test requires a loaded "
+                    "standardized Sponza scene and an idle benchmark.";
+                return false;
+            }
+            value = "started";
+            return true;
+        }
+        if (action == "cancel-benchmark")
+        {
+            if (m_app->IsAntiAliasingMotionTestRunning())
+                m_app->CancelAntiAliasingMotionTest();
+            else if (m_app->IsVisibilityBenchmarkQueued() ||
+                m_app->IsVisibilityBenchmarkActive())
+            {
+                m_app->CancelVisibilityBenchmark();
+            }
+            else
+            {
+                error =
+                    "No visibility or anti-aliasing benchmark is active.";
+                return false;
+            }
+            value = "cancelled";
+            return true;
+        }
+        if (action == "svsm-camera-motion-test")
+        {
+            if (!m_app->CanStartSvsmMotionBenchmark() ||
+                !m_app->StartSvsmMotionBenchmark())
+            {
+                error =
+                    "The SVSM camera-motion test requires an idle loaded "
+                    "Sponza scene with deferred PBR and SVSM enabled.";
+                return false;
+            }
+            value = "started";
+            return true;
+        }
+        if (action == "svsm-sun-motion-test")
+        {
+            if (!m_app->CanStartSvsmMotionBenchmark() ||
+                !m_app->StartSvsmSunMotionBenchmark())
+            {
+                error =
+                    "The SVSM sun-motion test requires an idle loaded "
+                    "Sponza scene with deferred PBR and SVSM enabled.";
+                return false;
+            }
+            value = "started";
+            return true;
+        }
+        if (action == "cancel-svsm-motion-test")
+        {
+            if (!m_app->IsSvsmMotionBenchmarkRunning())
+            {
+                error = "No SVSM motion test is active.";
+                return false;
+            }
+            m_app->AbortSvsmMotionBenchmark(
+                "cancelled from command interface");
+            value = "cancelled";
+            return true;
+        }
+        if (action == "reset-settings")
+        {
+            m_app->ResetAllRendererSettings();
+            value = "restored";
+            return true;
+        }
+        if (action == "screenshot")
+        {
+            m_ui.CopyScreenshotToClipboard = true;
+            value = "queued";
+            return true;
+        }
+        if (action == "restart")
+        {
+            g_RestartRequested = true;
+            glfwSetWindowShouldClose(
+                GetDeviceManager()->GetWindow(),
+                GLFW_TRUE);
+            value = "requested";
+            return true;
+        }
+
+        error = "Internal action binding is missing for '" +
+            std::string(action) + "'.";
+        return false;
+    }
+
+    void AppendDynamicCommandValues(
+        std::string_view path,
+        std::vector<std::string>& values) const
+    {
+        if (path == "gpu.adapter")
+        {
+            for (const GpuAdapterChoice& adapter :
+                m_ui.GpuAdapterChoices)
+            {
+                values.push_back(std::to_string(adapter.adapterIndex));
+                values.push_back(adapter.name);
+            }
+        }
+        else if (path == "scene.current")
+        {
+            for (const SceneCatalogEntry& scene :
+                m_app->GetAvailableScenes())
+            {
+                values.push_back(scene.FileName);
+                values.push_back(scene.DisplayName);
+            }
+        }
+        else if (path == "sky.environment")
+        {
+            for (uint32_t index = 0u;
+                index < uint32_t(ImageBasedLightingSource::Count);
+                ++index)
+            {
+                values.push_back(std::to_string(index));
+                values.push_back(
+                    GetImageBasedLightingSourceInfo(
+                        ImageBasedLightingSource(index)).displayName);
+            }
+        }
+        else if (path == "light.selected")
+        {
+            const auto& lights = m_app->GetEditableLights();
+            for (size_t index = 0u;
+                index < lights.size();
+                ++index)
+            {
+                values.push_back(std::to_string(index));
+                if (lights[index])
+                    values.push_back(lights[index]->GetName());
+            }
+        }
+        else if (path == "material.selected")
+        {
+            const std::shared_ptr<Scene> scene = m_app->GetScene();
+            if (scene && scene->GetSceneGraph())
+            {
+                for (const std::shared_ptr<Material>& material :
+                    scene->GetSceneGraph()->GetMaterials())
+                {
+                    if (!material)
+                        continue;
+                    values.push_back(
+                        std::to_string(material->materialID));
+                    values.push_back(material->name);
+                }
+            }
+        }
+    }
+
+    std::vector<std::string> GetCommandCompletionCandidates(
+        const UiCommandCompletionToken& completion) const
+    {
+        std::vector<std::string> candidates;
+        const auto appendCandidate =
+            [&candidates, &completion](std::string_view candidate)
+        {
+            if (candidate.empty() ||
+                !UiCommandCompletionMatches(
+                    candidate, completion.prefix))
+            {
+                return;
+            }
+            candidates.emplace_back(candidate);
+        };
+
+        switch (completion.target)
+        {
+        case UiCommandCompletionTarget::Verb:
+            for (const std::string_view candidate :
+                UiCommandVerbCompletionCandidates)
+            {
+                appendCandidate(candidate);
+            }
+            break;
+        case UiCommandCompletionTarget::HelpTopic:
+            for (const std::string_view candidate :
+                { "commands", "settings", "skins", "experiments" })
+            {
+                appendCandidate(candidate);
+            }
+            break;
+        case UiCommandCompletionTarget::ListPrefix:
+        case UiCommandCompletionTarget::Path:
+            for (const UiSettingsCommandBinding& binding :
+                UiSettingsCommandBindings)
+            {
+                if (completion.target ==
+                        UiCommandCompletionTarget::Path &&
+                    binding.kind == UiSettingsCommandKind::Action)
+                {
+                    continue;
+                }
+                appendCandidate(binding.name);
+            }
+            break;
+        case UiCommandCompletionTarget::Action:
+            for (const UiSettingsCommandBinding& binding :
+                UiSettingsCommandBindings)
+            {
+                if (binding.kind ==
+                    UiSettingsCommandKind::Action)
+                {
+                    appendCandidate(binding.name);
+                }
+            }
+            appendCandidate(UiReloadShadersCommandAction);
+            break;
+        case UiCommandCompletionTarget::Value:
+        {
+            const UiSettingsCommandDefinition* definition =
+                FindSettingsCommandDefinition(completion.valuePath);
+            if (!definition ||
+                definition->kind == UiSettingsCommandKind::Action)
+            {
+                break;
+            }
+
+            std::string_view remaining = definition->domain;
+            while (!remaining.empty())
+            {
+                const size_t separator = remaining.find('|');
+                const std::string_view candidate =
+                    remaining.substr(0u, separator);
+                if (candidate.find(' ') == std::string_view::npos &&
+                    candidate.find(';') == std::string_view::npos)
+                {
+                    appendCandidate(candidate);
+                }
+                if (separator == std::string_view::npos)
+                    break;
+                remaining.remove_prefix(separator + 1u);
+            }
+            if (definition->dynamic ||
+                definition->name == "sky.environment")
+            {
+                std::vector<std::string> dynamicValues;
+                AppendDynamicCommandValues(
+                    definition->name, dynamicValues);
+                for (const std::string& candidate : dynamicValues)
+                    appendCandidate(candidate);
+            }
+            break;
+        }
+        case UiCommandCompletionTarget::Argument:
+            break;
+        }
+
+        std::sort(candidates.begin(), candidates.end());
+        candidates.erase(
+            std::unique(candidates.begin(), candidates.end()),
+            candidates.end());
+        return candidates;
+    }
+
+    void ExecuteUiCommand(const UiCommand& command)
+    {
+        if (command.verb == UiCommandVerb::Help)
+        {
+            const std::string topic = command.arguments.empty()
+                ? "commands"
+                : NormalizeCommandAscii(
+                    command.arguments.front(), true);
+            if (topic == "skins")
+            {
+                SetCommandResult(
+                    "Skins: Amp is the animated UVSR interface; OG is "
+                    "stock ImGui with UI animations disabled. "
+                    "Use /skin [amp|og].");
+            }
+            else if (topic == "experiments")
+            {
+                SetCommandResult(
+                    "Experiment actions: run visibility-benchmark, "
+                    "aa-motion-test, svsm-camera-motion-test, or "
+                    "svsm-sun-motion-test. Use the matching cancel "
+                    "action to stop a run.");
+            }
+            else if (topic == "settings")
+            {
+                SetCommandResult(
+                    "Use 'list [prefix]' to discover settings and "
+                    "supported verbs, then get, set, toggle, reset, or "
+                    "run the listed path. Tab completes.");
+            }
+            else
+            {
+                SetCommandResult(
+                    "Commands: help [topic], list [prefix], get <path>, "
+                    "set <path> <value>, toggle <path>, reset <path|all>, "
+                    "run <action>. Shortcuts: skin, ui, scene, camera, "
+                    "camera-location, reload-shaders.");
+            }
+            return;
+        }
+
+        if (command.verb == UiCommandVerb::List)
+        {
+            const std::string prefix = command.arguments.empty()
+                ? std::string{}
+                : NormalizeCommandAscii(
+                    command.arguments.front());
+            std::string listing;
+            for (const UiSettingsCommandDefinition& definition :
+                UiSettingsCommandCatalog)
+            {
+                if (!StartsWithCommandPrefix(
+                        definition.name, prefix))
+                {
+                    continue;
+                }
+                if (!listing.empty())
+                    listing += "\n";
+                listing += definition.name;
+                listing += " [";
+                listing += GetSettingsCommandVerbList(definition);
+                listing += "] - ";
+                listing += definition.domain;
+
+                std::vector<std::string> dynamicValues;
+                AppendDynamicCommandValues(
+                    definition.name, dynamicValues);
+                if (!dynamicValues.empty())
+                {
+                    std::sort(
+                        dynamicValues.begin(), dynamicValues.end());
+                    dynamicValues.erase(
+                        std::unique(
+                            dynamicValues.begin(),
+                            dynamicValues.end()),
+                        dynamicValues.end());
+                    listing += "\n  values: ";
+                    for (size_t index = 0u;
+                        index < dynamicValues.size();
+                        ++index)
+                    {
+                        if (index > 0u)
+                            listing += " | ";
+                        listing += dynamicValues[index];
+                    }
+                }
+            }
+            if (listing.empty())
+            {
+                SetCommandResult(
+                    "No Settings command matches '" + prefix + "'.",
+                    true);
+            }
+            else
+            {
+                SetCommandResult(std::move(listing));
+            }
+            return;
+        }
+
+        if (command.verb == UiCommandVerb::Run &&
+            NormalizeCommandAscii(command.action) ==
+                UiReloadShadersCommandAction)
+        {
+            if (!command.arguments.empty())
+            {
+                SetCommandResult(
+                    "reload-shaders does not accept arguments.",
+                    true);
+                return;
+            }
+#if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
+            SetCommandResult(
+                "Factory shader topology is locked; launch a production "
+                "or developer build to reload shaders.",
+                true);
+            return;
+#else
+            if (m_app->IsSceneLoading() ||
+                m_app->IsVisibilityBenchmarkQueued() ||
+                m_app->IsVisibilityBenchmarkActive() ||
+                m_app->IsAntiAliasingMotionTestRunning() ||
+                m_app->IsSvsmMotionBenchmarkRunning())
+            {
+                SetCommandResult(
+                    "Shaders cannot reload while loading or a controlled "
+                    "experiment is active.",
+                    true);
+                return;
+            }
+            m_ui.ShaderReloadRequested = true;
+            SetCommandResult("reload-shaders = requested");
+            return;
+#endif
+        }
+
+        if (command.verb == UiCommandVerb::Run)
+        {
+            const UiSettingsCommandDefinition* definition =
+                FindSettingsCommandDefinition(command.action);
+            if (!definition ||
+                definition->kind != UiSettingsCommandKind::Action)
+            {
+                SetCommandResult(
+                    "Unknown Settings action '" + command.action +
+                    "'. Use '/list'.",
+                    true);
+                return;
+            }
+            if (!definition->Supports(UiSettingsCommandVerb::Run))
+            {
+                SetCommandResult(
+                    std::string(definition->name) + " supports [" +
+                    GetSettingsCommandVerbList(*definition) + "].",
+                    true);
+                return;
+            }
+            std::string error;
+            if (!CheckCommandMutationAllowed(*definition, error))
+            {
+                SetCommandResult(std::move(error), true);
+                return;
+            }
+            std::string value;
+            if (!DispatchCommandAction(
+                    *definition,
+                    command.arguments,
+                    value,
+                    error))
+            {
+                SetCommandResult(std::move(error), true);
+                return;
+            }
+            SetCommandResult(
+                std::string(definition->name) + " = " + value);
+            return;
+        }
+
+        if (command.verb == UiCommandVerb::Reset &&
+            NormalizeCommandAscii(command.path) == "all")
+        {
+            const UiSettingsCommandDefinition* definition =
+                FindSettingsCommandDefinition("reset-settings");
+            std::string error;
+            if (!definition ||
+                !CheckCommandMutationAllowed(*definition, error))
+            {
+                SetCommandResult(
+                    error.empty()
+                        ? "The Settings reset action is unavailable."
+                        : std::move(error),
+                    true);
+                return;
+            }
+            std::string value;
+            if (!DispatchCommandAction(
+                    *definition, {}, value, error))
+            {
+                SetCommandResult(std::move(error), true);
+                return;
+            }
+            SetCommandResult("all = " + value);
+            return;
+        }
+
+        const UiSettingsCommandDefinition* definition =
+            FindSettingsCommandDefinition(command.path);
+        if (!definition ||
+            definition->kind == UiSettingsCommandKind::Action)
+        {
+            SetCommandResult(
+                "Unknown Settings path '" + command.path +
+                "'. Use '/list'.",
+                true);
+            return;
+        }
+
+        CommandValueOperation operation =
+            CommandValueOperation::Get;
+        switch (command.verb)
+        {
+        case UiCommandVerb::Get:
+            operation = CommandValueOperation::Get;
+            break;
+        case UiCommandVerb::Set:
+            operation = CommandValueOperation::Set;
+            break;
+        case UiCommandVerb::Toggle:
+            operation = CommandValueOperation::Toggle;
+            break;
+        case UiCommandVerb::Reset:
+            operation = CommandValueOperation::Reset;
+            break;
+        default:
+            SetCommandResult("Expected a Settings value command.", true);
+            return;
+        }
+
+        const UiSettingsCommandVerb settingsVerb =
+            GetSettingsCommandVerb(operation);
+        if (!definition->Supports(settingsVerb))
+        {
+            SetCommandResult(
+                std::string(definition->name) + " supports [" +
+                GetSettingsCommandVerbList(*definition) + "].",
+                true);
+            return;
+        }
+        std::string error;
+        if (operation != CommandValueOperation::Get &&
+            !CheckCommandMutationAllowed(*definition, error))
+        {
+            SetCommandResult(std::move(error), true);
+            return;
+        }
+
+        std::string value;
+        if (!DispatchCommandValue(
+                *definition,
+                operation,
+                command.arguments,
+                value,
+                error))
+        {
+            SetCommandResult(std::move(error), true);
+            return;
+        }
+        SetCommandResult(
+            std::string(definition->name) + " = " + value);
+    }
+
+    void CompleteCommandInput(ImGuiInputTextCallbackData* data)
+    {
+        const std::string_view input(
+            data->Buf,
+            static_cast<size_t>(data->BufTextLen));
+        const UiCommandCompletionToken completion =
+            GetUiCommandCompletionToken(
+                input,
+                static_cast<size_t>(data->CursorPos));
+        std::vector<std::string> candidates =
+            GetCommandCompletionCandidates(completion);
+        if (candidates.empty())
+        {
+            SetCommandResult("No completion matches.", true);
+            return;
+        }
+
+        std::string replacement = candidates.front();
+        if (candidates.size() > 1u)
+        {
+            size_t commonLength = replacement.size();
+            for (size_t candidateIndex = 1u;
+                candidateIndex < candidates.size();
+                ++candidateIndex)
+            {
+                const std::string& candidate =
+                    candidates[candidateIndex];
+                commonLength = std::min(
+                    commonLength,
+                    candidate.size());
+                size_t index = 0u;
+                while (index < commonLength &&
+                    std::tolower(static_cast<unsigned char>(
+                        replacement[index])) ==
+                    std::tolower(static_cast<unsigned char>(
+                        candidate[index])))
+                {
+                    ++index;
+                }
+                commonLength = index;
+            }
+            replacement.resize(commonLength);
+
+            std::string matches = "Matches: ";
+            for (size_t index = 0u;
+                index < candidates.size();
+                ++index)
+            {
+                if (index > 0u)
+                    matches += ", ";
+                matches += candidates[index];
+                if (matches.size() > 240u)
+                {
+                    matches += ", ...";
+                    break;
+                }
+            }
+            SetCommandResult(std::move(matches));
+        }
+
+        if (replacement.size() < completion.prefix.size())
+            return;
+        data->DeleteChars(
+            static_cast<int>(completion.replaceBegin),
+            static_cast<int>(
+                completion.replaceEnd -
+                completion.replaceBegin));
+        data->InsertChars(
+            static_cast<int>(completion.replaceBegin),
+            replacement.c_str());
+        if (candidates.size() == 1u &&
+            completion.target != UiCommandCompletionTarget::Argument &&
+            completion.target != UiCommandCompletionTarget::Value)
+        {
+            data->InsertChars(data->CursorPos, " ");
+        }
+    }
+
+    void RecallCommandHistory(
+        ImGuiInputTextCallbackData* data,
+        bool previous)
+    {
+        if (m_CommandHistory.empty())
+            return;
+        if (previous)
+        {
+            if (m_CommandHistoryIndex < 0)
+            {
+                m_CommandHistoryIndex =
+                    static_cast<int>(m_CommandHistory.size()) - 1;
+            }
+            else if (m_CommandHistoryIndex > 0)
+            {
+                --m_CommandHistoryIndex;
+            }
+        }
+        else
+        {
+            if (m_CommandHistoryIndex >= 0 &&
+                m_CommandHistoryIndex <
+                    static_cast<int>(m_CommandHistory.size()) - 1)
+            {
+                ++m_CommandHistoryIndex;
+            }
+            else
+            {
+                m_CommandHistoryIndex = -1;
+            }
+        }
+
+        data->DeleteChars(0, data->BufTextLen);
+        if (m_CommandHistoryIndex >= 0)
+        {
+            data->InsertChars(
+                0,
+                m_CommandHistory[
+                    static_cast<size_t>(m_CommandHistoryIndex)]
+                    .c_str());
+        }
+    }
+
+    static int CommandInputCallback(
+        ImGuiInputTextCallbackData* data)
+    {
+        UIRenderer* renderer =
+            static_cast<UIRenderer*>(data->UserData);
+        if (data->EventFlag ==
+            ImGuiInputTextFlags_CallbackCompletion)
+        {
+            renderer->CompleteCommandInput(data);
+        }
+        else if (data->EventFlag ==
+            ImGuiInputTextFlags_CallbackHistory)
+        {
+            renderer->RecallCommandHistory(
+                data,
+                data->EventKey == ImGuiKey_UpArrow);
+        }
+        return 0;
+    }
+
+    void SubmitCommandInput()
+    {
+        const std::string input(m_CommandBuffer.data());
+        if (!input.empty())
+        {
+            if (m_CommandHistory.empty() ||
+                m_CommandHistory.back() != input)
+            {
+                m_CommandHistory.push_back(input);
+                if (m_CommandHistory.size() > 32u)
+                    m_CommandHistory.pop_front();
+            }
+        }
+        m_CommandHistoryIndex = -1;
+        m_CommandBuffer.fill('\0');
+
+        const UiCommandParseResult parsed =
+            ParseUiCommand(input);
+        if (!parsed)
+        {
+            SetCommandResult(parsed.message, true);
+            return;
+        }
+        m_PendingCommand = parsed.command;
+        SetCommandResult("Applying...");
+    }
+
+    void DrawCommandInterface()
+    {
+        const bool commandMotionEnabled =
+            ImGui::IsUvsrUiMotionEnabled();
+        m_CommandAppearance = commandMotionEnabled
+            ? AdvancePixelZoomVisibility(
+                m_CommandAppearance,
+                m_CommandOpen,
+                ImGui::GetIO().DeltaTime)
+            : m_CommandOpen ? 1.f : 0.f;
+        if (!m_CommandOpen && m_CommandAppearance <= 0.f)
+            return;
+        const float commandAppearanceOpacity =
+            commandMotionEnabled
+                ? SmoothPixelZoomVisibility(m_CommandAppearance)
+                : m_CommandAppearance;
+        const float commandAppearanceScale =
+            PixelZoomMinimumWindowScale +
+            (1.f - PixelZoomMinimumWindowScale) *
+                commandAppearanceOpacity;
+
+        const CommandInterfaceLayout& commandLayout =
+            m_CommandLayout;
+        if (!commandLayout.fits)
+        {
+            if (m_CommandOpen)
+                m_CommandFocusRequested = true;
+            return;
+        }
+
+        ImGui::SetNextWindowPos(
+            ImVec2(
+                commandLayout.left,
+                commandLayout.bottom),
+            ImGuiCond_Always,
+            ImVec2(0.f, 1.f));
+        ImGui::SetNextWindowSize(
+            ImVec2(
+                commandLayout.width,
+                commandLayout.height),
+            ImGuiCond_Always);
+        if (m_CommandScrollToTopRequested)
+            ImGui::SetNextWindowScroll(ImVec2(-1.f, 0.f));
+        ImGuiWindowFlags commandWindowFlags =
+            ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoSavedSettings;
+        if (!m_CommandOpen)
+            commandWindowFlags |= ImGuiWindowFlags_NoInputs;
+        else if (commandMotionEnabled &&
+            m_CommandAppearance < 1.f)
+        {
+            commandWindowFlags |= ImGuiWindowFlags_NoMouseInputs;
+        }
+
+        ImGui::PushFont(GetActiveUiFont());
+        ApplyActiveUiWordSpacing();
+        PushPanelBodySurface();
+        ImGui::Begin(
+            "##UvsrCommandInterface",
+            nullptr,
+            commandWindowFlags);
+        if (m_CommandScrollToTopRequested)
+            m_CommandScrollToTopRequested = false;
+        ImDrawList* commandWindowDrawList =
+            ImGui::GetWindowDrawList();
+        ImGui::TextUnformatted("/");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (m_CommandFocusRequested)
+        {
+            ImGui::SetKeyboardFocusHere();
+            m_CommandFocusRequested = false;
+        }
+        const ImGuiInputTextFlags inputFlags =
+            ImGuiInputTextFlags_EnterReturnsTrue |
+            ImGuiInputTextFlags_CallbackCompletion |
+            ImGuiInputTextFlags_CallbackHistory;
+        if (ImGui::InputTextWithHint(
+                "##UvsrCommand",
+                "help, skin og, get ui.skin...",
+                m_CommandBuffer.data(),
+                m_CommandBuffer.size(),
+                inputFlags,
+                CommandInputCallback,
+                this))
+        {
+            SubmitCommandInput();
+            m_CommandFocusRequested = true;
+        }
+        ImGui::TextDisabled(
+            "Enter applies | Tab completes | Up/Down history | / closes | Esc cancels edit");
+        if (!m_CommandResult.empty())
+        {
+            if (m_CommandResultIsError)
+            {
+                ImGui::PushStyleColor(
+                    ImGuiCol_Text,
+                    g_UiVisualTokens.errorText);
+            }
+            ImGui::PushTextWrapPos(
+                ImGui::GetCursorPosX() +
+                ImGui::GetContentRegionAvail().x);
+            ImGui::TextWrapped("%s", m_CommandResult.c_str());
+            ImGui::PopTextWrapPos();
+            if (m_CommandResultIsError)
+                ImGui::PopStyleColor();
+        }
+        const ImVec2 commandWindowPosition =
+            ImGui::GetWindowPos();
+        const ImVec2 commandWindowSize =
+            ImGui::GetWindowSize();
+        const float commandWindowBottom =
+            commandWindowPosition.y + commandWindowSize.y;
+        UiBackdropRect& commandBackdrop =
+            m_ui.BackdropRects[UiCommandBackdropIndex];
+        CaptureCurrentWindowBackdrop(
+            commandBackdrop,
+            ImGui::GetStyle().WindowRounding);
+        ApplyCommandBackdropAppearance(
+            commandBackdrop,
+            commandWindowBottom,
+            commandAppearanceScale,
+            commandAppearanceOpacity);
+        commandBackdrop.shadowBlur =
+            g_UiVisualTokens.backdropShadowBlur;
+        commandBackdrop.shadowOpacity =
+            g_UiVisualTokens.backdropShadowOpacity;
+        commandBackdrop.shadowOffsetY =
+            g_UiVisualTokens.backdropShadowOffsetY;
+        ImGui::End();
+        ImGui::PopStyleColor();
+        RestoreActiveUiWordSpacing();
+        ImGui::PopFont();
+        ApplyCommandWindowAppearance(
+            commandWindowDrawList,
+            commandWindowBottom,
+            commandAppearanceScale,
+            commandAppearanceOpacity);
+    }
+
+    void DrawMaterialInspector(
+        int width,
+        int height,
+        bool uiMotionEnabled,
+        bool controlledExperimentActive,
+        const ImGuiStyle& style)
+    {
+        if (!IsMaterialInspectorPresentationActive(
+                m_ui.ShowMaterialEditor,
+                m_MaterialInspectorAppearance))
+        {
+            return;
+        }
+
+        const bool zoomPresentationActive =
+            IsPixelZoomEnabled(m_RenderedPixelZoom) &&
+            m_PixelZoomVisibility > 0.f;
+        const float zoomPresentationOpacity =
+            uiMotionEnabled
+                ? SmoothPixelZoomVisibility(
+                    m_PixelZoomVisibility)
+                : m_PixelZoomVisibility;
+        const float zoomLevelTransitionScale =
+            uiMotionEnabled
+                ? ResolvePixelZoomLevelTransitionScale(
+                    m_PixelZoomLevelTransition)
+                : 1.f;
+        const float materialAppearanceOpacity =
+            uiMotionEnabled
+                ? SmoothPixelZoomVisibility(
+                    m_MaterialInspectorAppearance)
+                : m_MaterialInspectorAppearance;
+        const float materialAppearanceScale =
+            PixelZoomMinimumWindowScale +
+            (1.f - PixelZoomMinimumWindowScale) *
+                materialAppearanceOpacity;
+
+        const MaterialInspectorLayout layout =
+            ResolveMaterialInspectorLayout(
+                uint32_t(std::max(0, width)),
+                uint32_t(std::max(0, height)),
+                m_SettingsPanelMarginPixels,
+                m_MaterialInspectorZoomPlacement,
+                zoomPresentationActive,
+                zoomPresentationOpacity,
+                zoomLevelTransitionScale);
+        if (layout.panelWidth < style.WindowMinSize.x ||
+            layout.panelMaxHeight < style.WindowMinSize.y)
+        {
+            m_ui.ShowMaterialEditor = false;
+            m_MaterialInspectorAppearance = 0.f;
+            return;
+        }
+
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(
+            ImVec2(
+                viewport->Pos.x + layout.panelMinX,
+                viewport->Pos.y + layout.panelMinY),
+            ImGuiCond_Always);
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(layout.panelWidth, 0.f),
+            ImVec2(layout.panelWidth, layout.panelMaxHeight));
+        PushPanelBodySurface();
+        ImGui::PushStyleColor(
+            ImGuiCol_TitleBg,
+            g_UiVisualTokens.settingsTitleSurface);
+        ImGui::PushStyleColor(
+            ImGuiCol_TitleBgActive,
+            g_UiVisualTokens.settingsTitleSurface);
+        ImGui::PushStyleColor(
+            ImGuiCol_TitleBgCollapsed,
+            g_UiVisualTokens.settingsTitleSurface);
+        ImGuiWindowFlags materialWindowFlags =
+            ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings;
+        if (!m_ui.ShowMaterialEditor ||
+            m_MaterialInspectorAppearance < 1.f)
+        {
+            materialWindowFlags |= ImGuiWindowFlags_NoInputs;
+        }
+        const bool materialEditorVisible = ImGui::Begin(
+            "Materials",
+            nullptr,
+            materialWindowFlags);
+        ImGuiWindow* materialEditorWindow =
+            ImGui::GetCurrentWindow();
+        if (materialEditorWindow->WantCollapseToggle)
+        {
+            // The title triangle is the Materials panel close control. Consume
+            // ImGui's deferred native collapse request in the click frame so
+            // the complete body remains submitted while Amp's retained
+            // zoom-and-fade close presentation begins.
+            materialEditorWindow->WantCollapseToggle = false;
+            materialEditorWindow->Collapsed = false;
+            m_ui.ShowMaterialEditor = false;
+        }
+        ImDrawList* materialWindowDrawList =
+            ImGui::GetWindowDrawList();
+        if (controlledExperimentActive)
+            ImGui::BeginDisabled();
+        const bool deferredMaterialInputBlocked =
+            HasDeferredDropdownUiActions();
+        if (deferredMaterialInputBlocked)
+        {
+            ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);
+            ImGui::BeginDisabled();
+        }
+        ImDrawList* materialControlsDrawList = nullptr;
+
+        if (materialEditorVisible)
+        {
+            auto material = m_ui.SelectedMaterial;
+            if (material)
+            {
+                ImGui::Text(
+                    "Material %d: %s",
+                    material->materialID,
+                    material->name.c_str());
+
+                static constexpr const char* MaterialDomainLabels[] = {
+                    "Opaque",
+                    "Alpha-tested",
+                    "Alpha-blended",
+                    "Transmissive",
+                    "Transmissive alpha-tested",
+                    "Transmissive alpha-blended"
+                };
+                static_assert(
+                    std::size(MaterialDomainLabels) ==
+                    size_t(MaterialDomain::Count));
+                const int materialDomainIndex = std::clamp(
+                    int(material->domain),
+                    0,
+                    int(MaterialDomain::Count) - 1);
+                const float materialControlWidth =
+                    ImGui::CalcItemWidth();
+                ImGui::SetNextItemWidth(materialControlWidth);
+                ImGui::PushID(material->materialID);
+                if (BeginRoundedCombo(
+                        "Material Domain",
+                        MaterialDomainLabels[materialDomainIndex]))
+                {
+                    for (int index = 0;
+                        index < int(MaterialDomain::Count);
+                        ++index)
+                    {
+                        const MaterialDomain candidate =
+                            MaterialDomain(index);
+                        const std::shared_ptr<Scene> scene =
+                            m_app->GetScene();
+                        DrawDeferredDropdownOption(
+                            MaterialDomainLabels[index],
+                            MaterialDomainLabels[index],
+                            material->domain == candidate,
+                            [material, scene, candidate]()
+                            {
+                                material->domain = candidate;
+                                material->dirty = true;
+                                if (scene)
+                                {
+                                    scene->GetSceneGraph()
+                                        ->GetRootNode()
+                                        ->InvalidateContent();
+                                }
+                            });
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Choose how the selected surface is rendered.");
+                ImGui::PopID();
+
+                ImGui::PushStyleColor(
+                    ImGuiCol_ChildBg,
+                    g_UiVisualTokens.drawerBackground);
+                ImGui::PushStyleColor(
+                    ImGuiCol_FrameBg,
+                    g_UiVisualTokens.drawerFrame);
+                ImGui::PushStyleColor(
+                    ImGuiCol_FrameBgHovered,
+                    g_UiVisualTokens.drawerFrameHovered);
+                ImGui::PushStyleColor(
+                    ImGuiCol_FrameBgActive,
+                    g_UiVisualTokens.drawerFrameActive);
+                ImGui::PushStyleVar(
+                    ImGuiStyleVar_WindowPadding,
+                    ImVec2(style.FramePadding.x, style.ItemSpacing.y));
+                ImGui::PushStyleVar(
+                    ImGuiStyleVar_ChildRounding,
+                    g_UiVisualTokens.drawerRounding);
+                const bool materialControlsVisible =
+                    ImGui::BeginChild(
+                        "##MaterialControlsBody",
+                        ImVec2(0.f, 0.f),
+                        ImGuiChildFlags_AlwaysUseWindowPadding |
+                            ImGuiChildFlags_AutoResizeY |
+                            ImGuiChildFlags_AlwaysAutoResize,
+                        ImGuiWindowFlags_NoScrollbar |
+                            ImGuiWindowFlags_NoScrollWithMouse);
+                materialControlsDrawList =
+                    ImGui::GetWindowDrawList();
+                if (materialControlsVisible)
+                {
+                    ImGui::PushItemWidth(materialControlWidth);
+                    material->dirty |=
+                        donut::app::MaterialEditor(
+                            material.get(),
+                            false,
+                            false);
+                    ImGui::PopItemWidth();
+                }
+                ImGui::EndChild();
+                ImGui::PopStyleVar(2);
+                ImGui::PopStyleColor(4);
+            }
+            else
+            {
+                ImGui::TextDisabled(
+                    "Aim the center crosshair at an editable surface and press M.");
+            }
+        }
+
+        if (deferredMaterialInputBlocked)
+        {
+            ImGui::EndDisabled();
+            ImGui::PopStyleVar();
+        }
+        if (controlledExperimentActive)
+            ImGui::EndDisabled();
+
+        const ImVec2 materialWindowPosition =
+            ImGui::GetWindowPos();
+        const ImVec2 materialWindowSize =
+            ImGui::GetWindowSize();
+        const ImVec2 materialWindowCenter(
+            materialWindowPosition.x + materialWindowSize.x * 0.5f,
+            materialWindowPosition.y + materialWindowSize.y * 0.5f);
+        const float materialTitleHeight =
+            ImGui::GetFontSize() + style.FramePadding.y * 2.f;
+        UiBackdropRect& materialTitleBackdrop =
+            m_ui.BackdropRects[UiMaterialTitleBackdropIndex];
+        materialTitleBackdrop.minX =
+            materialWindowPosition.x + 0.5f;
+        materialTitleBackdrop.minY =
+            materialWindowPosition.y + 0.5f;
+        materialTitleBackdrop.maxX =
+            materialWindowPosition.x + materialWindowSize.x - 0.5f;
+        materialTitleBackdrop.maxY =
+            materialWindowPosition.y + materialTitleHeight - 0.5f;
+        materialTitleBackdrop.rounding = style.FrameRounding;
+        materialTitleBackdrop.visible =
+            materialTitleBackdrop.maxX > materialTitleBackdrop.minX &&
+            materialTitleBackdrop.maxY > materialTitleBackdrop.minY;
+
+        UiBackdropRect& materialBodyBackdrop =
+            m_ui.BackdropRects[UiMaterialBodyBackdropIndex];
+        materialBodyBackdrop.minX =
+            materialWindowPosition.x + 0.5f;
+        materialBodyBackdrop.minY =
+            materialWindowPosition.y + materialTitleHeight - 1.f;
+        materialBodyBackdrop.maxX =
+            materialWindowPosition.x + materialWindowSize.x - 0.5f;
+        materialBodyBackdrop.maxY =
+            materialWindowPosition.y + materialWindowSize.y - 0.5f;
+        materialBodyBackdrop.rounding = style.WindowRounding;
+        materialBodyBackdrop.visible =
+            !ImGui::IsWindowCollapsed() &&
+            materialBodyBackdrop.maxX > materialBodyBackdrop.minX &&
+            materialBodyBackdrop.maxY > materialBodyBackdrop.minY;
+        for (size_t backdropIndex :
+            { UiMaterialTitleBackdropIndex,
+                UiMaterialBodyBackdropIndex })
+        {
+            UiBackdropRect& backdrop =
+                m_ui.BackdropRects[backdropIndex];
+            ApplyBackdropAppearance(
+                backdrop,
+                materialWindowCenter,
+                materialAppearanceScale,
+                materialAppearanceOpacity);
+            backdrop.shadowBlur =
+                g_UiVisualTokens.backdropShadowBlur;
+            backdrop.shadowOpacity =
+                g_UiVisualTokens.backdropShadowOpacity;
+            backdrop.shadowOffsetY =
+                g_UiVisualTokens.backdropShadowOffsetY;
+        }
+        ImGui::End();
+        ApplyWindowAppearance(
+            materialWindowDrawList,
+            materialWindowCenter,
+            materialAppearanceScale,
+            materialAppearanceOpacity);
+        if (materialControlsDrawList &&
+            materialControlsDrawList != materialWindowDrawList)
+        {
+            ApplyWindowAppearance(
+                materialControlsDrawList,
+                materialWindowCenter,
+                materialAppearanceScale,
+                materialAppearanceOpacity);
+        }
+        ImGui::PopStyleColor(4);
     }
 
     static std::string BuildPerformanceLine(
@@ -12699,6 +21003,19 @@ private:
             values[4] + " / " +
             values[1] + " / " +
             values[2];
+    }
+
+    static std::array<std::string, 2> BuildOgPerformanceLines(
+        const std::array<std::string, 6>& values)
+    {
+        return {{
+            values[0] + " / " +
+                values[5] + " / " +
+                values[3],
+            values[4] + " / " +
+                values[1] + " / " +
+                values[2]
+        }};
     }
 
     static double StepTowardByTenth(
@@ -12763,11 +21080,11 @@ private:
             : m_DisplayedFrameTime;
         snapshot.gpuMetrics =
             QueryGpuPerformanceMetrics(rendererString);
-        if (const BendScreenSpaceShadowTimings* timings =
-                m_app->GetBendScreenSpaceShadowTimings())
+        if (const ScreenSpaceDirectionalShadowTimings* timings =
+                m_app->GetScreenSpaceDirectionalShadowTimings())
         {
-            snapshot.bendShadowTimings = *timings;
-            snapshot.hasBendShadowTimings = true;
+            snapshot.screenSpaceShadowTimings = *timings;
+            snapshot.hasScreenSpaceShadowTimings = true;
         }
         if (const SparseVirtualShadowMapTimings* timings =
                 m_app->GetSparseVirtualShadowMapTimings())
@@ -12792,8 +21109,8 @@ private:
             snapshot.visibilityTimings = *timings;
             snapshot.hasVisibilityTimings = true;
         }
-        if (const MiniEngineTemporalAATimings* timings =
-                m_app->GetMiniEngineTemporalAATimings())
+        if (const TemporalAATimings* timings =
+                m_app->GetTemporalAATimings())
         {
             snapshot.temporalAATimings = *timings;
             snapshot.hasTemporalAATimings = true;
@@ -12888,27 +21205,27 @@ private:
             m_HasGpuStatSnapshot = false;
         }
 
-        if (snapshot.hasBendShadowTimings)
+        if (snapshot.hasScreenSpaceShadowTimings)
         {
-            const BendScreenSpaceShadowTimings& timings =
-                snapshot.bendShadowTimings;
+            const ScreenSpaceDirectionalShadowTimings& timings =
+                snapshot.screenSpaceShadowTimings;
             FormatStatLine(
-                m_BendShadowStatLines[0],
+                m_ScreenSpaceShadowStatLines[0],
                 "Trace %.3f ms / %u dispatches / %u groups",
                 timings.traceMilliseconds,
                 timings.dispatchCount,
                 timings.totalGroups);
             constexpr double BytesPerMib = 1024.0 * 1024.0;
             FormatStatLine(
-                m_BendShadowStatLines[1],
+                m_ScreenSpaceShadowStatLines[1],
                 "%u samples / R8 output %.2f mib",
                 timings.sampleCount,
                 double(timings.outputTextureBytes) / BytesPerMib);
-            m_HasBendShadowStatSnapshot = timings.active;
+            m_HasScreenSpaceShadowStatSnapshot = timings.active;
         }
         else
         {
-            m_HasBendShadowStatSnapshot = false;
+            m_HasScreenSpaceShadowStatSnapshot = false;
         }
 
         if (snapshot.hasSparseShadowTimings)
@@ -13636,7 +21953,7 @@ private:
 
         if (snapshot.hasTemporalAATimings)
         {
-            const MiniEngineTemporalAATimings* timings =
+            const TemporalAATimings* timings =
                 &snapshot.temporalAATimings;
             FormatStatLine(
                 m_TemporalAAStatLines[0],
@@ -13648,8 +21965,14 @@ private:
             constexpr double BytesPerMib = 1024.0 * 1024.0;
             FormatStatLine(
                 m_TemporalAAStatLines[1],
-                "History %.1f mib",
-                double(timings->historyTextureBytes) / BytesPerMib);
+                "%s / Active %.1f / Resident %.1f MiB / %u dispatches",
+                GetTemporalAaCostModeLabel(
+                    timings->effectiveCostMode),
+                double(timings->activeHistoryTextureBytes) /
+                    BytesPerMib,
+                double(timings->residentHistoryTextureBytes) /
+                    BytesPerMib,
+                timings->dispatchCount);
             m_HasTemporalAAStatSnapshot = true;
         }
         else
@@ -13662,13 +21985,13 @@ private:
     {
         ImGui::PushStyleColor(
             ImGuiCol_FrameBg,
-            ImVec4(0.018f, 0.016f, 0.020f, 0.72f));
+            g_UiVisualTokens.drawerFrame);
         ImGui::PushStyleColor(
             ImGuiCol_FrameBgHovered,
-            ImVec4(0.13f, 0.13f, 0.14f, 0.76f));
+            g_UiVisualTokens.drawerFrameHovered);
         ImGui::PushStyleColor(
             ImGuiCol_FrameBgActive,
-            ImVec4(0.18f, 0.18f, 0.19f, 0.82f));
+            g_UiVisualTokens.drawerFrameActive);
     }
 
     static bool DrawSliderFloat(
@@ -15015,6 +23338,11 @@ public:
         ImGui::GetIO().IniFilename = nullptr;
     }
 
+    bool ShouldSuppressFullscreenShortcut() const override
+    {
+        return m_CommandOpen;
+    }
+
     bool Init(std::shared_ptr<ShaderFactory> shaderFactory)
     {
         if (!ImGui_Renderer::Init(shaderFactory))
@@ -15036,15 +23364,47 @@ public:
         if (!imgui_nvrhi)
             return;
 
-        buildUI();
         const bool controlledBenchmarkActive =
             m_app->IsVisibilityBenchmarkQueued() ||
             m_app->IsVisibilityBenchmarkActive() ||
-            m_app->IsAntiAliasingMotionTestRunning();
-        const bool pixelZoomRequested =
+            m_app->IsAntiAliasingMotionTestRunning() ||
+            m_app->IsSvsmMotionBenchmarkRunning();
+        const float deltaTime = ImGui::GetIO().DeltaTime;
+        const bool uiMotionEnabled =
+            GetUiSkinBehavior(m_ui.Skin).motionEnabled;
+        const bool pixelZoomRequestedByUi =
             IsPixelZoomEnabled(m_ui.PixelZoom) &&
             !controlledBenchmarkActive;
-        const float deltaTime = ImGui::GetIO().DeltaTime;
+        const bool zoomPresentationActiveBeforeUpdate =
+            IsPixelZoomEnabled(m_RenderedPixelZoom) &&
+            m_PixelZoomVisibility > 0.f;
+        m_MaterialInspectorAppearance =
+            AdvanceMaterialInspectorAppearance(
+                m_MaterialInspectorAppearance,
+                m_ui.ShowMaterialEditor,
+                uiMotionEnabled,
+                deltaTime);
+        const bool materialInspectorPresentationActive =
+            IsMaterialInspectorPresentationActive(
+                m_ui.ShowMaterialEditor,
+                m_MaterialInspectorAppearance);
+        m_MaterialInspectorZoomPlacement =
+            AdvanceMaterialInspectorZoomPlacement(
+                m_MaterialInspectorZoomPlacement,
+                materialInspectorPresentationActive,
+                pixelZoomRequestedByUi,
+                zoomPresentationActiveBeforeUpdate,
+                uiMotionEnabled,
+                deltaTime);
+        const bool pixelZoomOpeningDelayed =
+            ShouldDelayPixelZoomForMaterialInspector(
+                materialInspectorPresentationActive,
+                pixelZoomRequestedByUi,
+                uiMotionEnabled,
+                m_MaterialInspectorZoomPlacement);
+        const bool pixelZoomRequested =
+            pixelZoomRequestedByUi &&
+            !pixelZoomOpeningDelayed;
         if (controlledBenchmarkActive)
         {
             // Controlled runs bypass the visual transition so zoom submits no
@@ -15052,6 +23412,15 @@ public:
             m_PixelZoomVisibility = 0.f;
             m_RenderedPixelZoom = PixelZoomMode::Off;
             m_PendingPixelZoom = PixelZoomMode::Off;
+            m_PixelZoomLevelTransition = 1.f;
+        }
+        else if (!uiMotionEnabled)
+        {
+            m_PixelZoomVisibility = pixelZoomRequested ? 1.f : 0.f;
+            m_RenderedPixelZoom = pixelZoomRequested
+                ? m_ui.PixelZoom
+                : PixelZoomMode::Off;
+            m_PendingPixelZoom = m_RenderedPixelZoom;
             m_PixelZoomLevelTransition = 1.f;
         }
         else
@@ -15110,15 +23479,29 @@ public:
                 m_PendingPixelZoom = PixelZoomMode::Off;
             }
         }
+        buildUI();
+        DrawCommandInterface();
         const float pixelZoomOpacity =
-            SmoothPixelZoomVisibility(m_PixelZoomVisibility);
+            uiMotionEnabled
+                ? SmoothPixelZoomVisibility(m_PixelZoomVisibility)
+                : m_PixelZoomVisibility;
         const float pixelZoomLevelTransitionScale =
-            ResolvePixelZoomLevelTransitionScale(
-                m_PixelZoomLevelTransition);
+            uiMotionEnabled
+                ? ResolvePixelZoomLevelTransitionScale(
+                    m_PixelZoomLevelTransition)
+                : 1.f;
         const bool pixelZoomPassActive =
             IsPixelZoomEnabled(m_RenderedPixelZoom) &&
             pixelZoomOpacity > 0.f;
-        if (pixelZoomRequested && pixelZoomOpacity > 0.f)
+        const float materialInspectorOpacity =
+            uiMotionEnabled
+                ? SmoothPixelZoomVisibility(
+                    m_MaterialInspectorAppearance)
+                : m_MaterialInspectorAppearance;
+        const float crosshairOpacity = std::max(
+            pixelZoomRequested ? pixelZoomOpacity : 0.f,
+            materialInspectorOpacity);
+        if (crosshairOpacity > 0.f)
         {
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
             const ImVec2 crosshairCenter(
@@ -15131,7 +23514,7 @@ public:
                     255,
                     255,
                     255,
-                    int(std::round(128.f * pixelZoomOpacity))),
+                    int(std::round(128.f * crosshairOpacity))),
                 12);
         }
         if (pixelZoomPassActive)
@@ -15149,9 +23532,7 @@ public:
                     pixelZoomLevelTransitionScale);
             const char* zoomAreaLabel =
                 GetPixelZoomAreaLabel(m_RenderedPixelZoom);
-            ImFont* zoomLabelFont = m_Font
-                ? m_Font->GetScaledFont()
-                : ImGui::GetFont();
+            ImFont* zoomLabelFont = GetActiveUiFont();
             ImGui::PushFont(zoomLabelFont);
             const ImVec2 zoomAreaLabelSize =
                 ImGui::CalcTextSize(zoomAreaLabel);
@@ -15199,13 +23580,25 @@ public:
                 zoomAreaLabel);
         }
         ImGui::Render();
+        if (m_PendingCommand)
+        {
+            // A slash command is the newest input. Fast-forward and commit
+            // older deferred UI choices at the same safe composition barrier
+            // so they cannot resurface later and overwrite the command.
+            TryApplyDeferredDropdownUiActions(true, true);
+            UiCommand command = std::move(*m_PendingCommand);
+            m_PendingCommand.reset();
+            ExecuteUiCommand(command);
+        }
         if (pixelZoomPassActive && m_PixelZoomPass)
             m_PixelZoomPass->Capture(framebuffer);
         if (m_BackdropBlurPass)
         {
+            const bool backdropEnabled =
+                GetUiSkinBehavior(m_ComposedUiSkin).backdropEnabled;
             m_BackdropBlurPass->Render(
                 framebuffer,
-                UiBackgroundBlurPixels,
+                backdropEnabled ? UiBackgroundBlurPixels : 0.f,
                 m_ui.BackdropRects);
         }
         if (pixelZoomPassActive && m_PixelZoomPass)
@@ -15214,7 +23607,7 @@ public:
                 framebuffer,
                 m_RenderedPixelZoom,
                 m_SettingsPanelMarginPixels,
-                8.f,
+                ImGui::GetStyle().WindowRounding,
                 pixelZoomOpacity,
                 pixelZoomLevelTransitionScale);
         }
@@ -15231,6 +23624,14 @@ public:
         ImGui_Renderer::BackBufferResizing();
     }
 
+    virtual void DisplayScaleChanged(
+        float scaleX,
+        float scaleY) override
+    {
+        ImGui_Renderer::DisplayScaleChanged(scaleX, scaleY);
+        m_UiDisplayScale = std::clamp(scaleX, 0.5f, 4.f);
+    }
+
 protected:
     virtual bool KeyboardUpdate(
         int key,
@@ -15240,11 +23641,53 @@ protected:
     {
         const bool captured = ImGui_Renderer::KeyboardUpdate(
             key, scancode, action, mods);
+        const bool plainCommandShortcut =
+            (mods & (GLFW_MOD_CONTROL |
+                GLFW_MOD_ALT |
+                GLFW_MOD_SUPER |
+                GLFW_MOD_SHIFT)) == 0;
+        if (m_CommandOpen)
+        {
+            if (key == GLFW_KEY_SLASH &&
+                action == GLFW_PRESS &&
+                plainCommandShortcut)
+            {
+                m_CommandOpen = false;
+                m_CommandFocusRequested = false;
+                m_SuppressCommandShortcutSlashCharacter = true;
+                ImGui::ClearActiveID();
+            }
+            return true;
+        }
+
+        if (key == GLFW_KEY_SLASH &&
+            action == GLFW_PRESS &&
+            plainCommandShortcut &&
+            !ImGui::GetIO().WantTextInput)
+        {
+            m_CommandOpen = true;
+            m_CommandFocusRequested = true;
+            m_CommandScrollToTopRequested = true;
+            m_SuppressCommandShortcutSlashCharacter = true;
+            return true;
+        }
+
         if (key == GLFW_KEY_ESCAPE &&
             action == GLFW_PRESS &&
             !ImGui::GetIO().WantTextInput)
         {
             m_ui.ShowUI = !m_ui.ShowUI;
+            return true;
+        }
+        const bool plainFlashlightShortcut =
+            (mods & (GLFW_MOD_CONTROL | GLFW_MOD_ALT | GLFW_MOD_SUPER)) == 0;
+        if (key == GLFW_KEY_F &&
+            action == GLFW_PRESS &&
+            plainFlashlightShortcut &&
+            !captured &&
+            !ImGui::GetIO().WantTextInput)
+        {
+            m_app->ToggleFlashlight();
             return true;
         }
         const bool plainZoomShortcut =
@@ -15272,11 +23715,29 @@ protected:
             plainMaterialEditorShortcut &&
             !ImGui::GetIO().WantTextInput)
         {
-            m_ui.ShowMaterialEditor = !m_ui.ShowMaterialEditor;
+            m_app->ToggleCenterMaterialInspector();
             return true;
         }
 
         return captured;
+    }
+
+    virtual bool KeyboardCharInput(
+        unsigned int unicode,
+        int mods) override
+    {
+        if (m_SuppressCommandShortcutSlashCharacter)
+        {
+            m_SuppressCommandShortcutSlashCharacter = false;
+            if (unicode == static_cast<unsigned int>('/'))
+                return true;
+        }
+        if (m_CommandOpen)
+        {
+            ImGui_Renderer::KeyboardCharInput(unicode, mods);
+            return true;
+        }
+        return ImGui_Renderer::KeyboardCharInput(unicode, mods);
     }
 
     virtual void buildUI(void) override
@@ -15305,12 +23766,14 @@ protected:
                 worldMaterialState,
                 worldMaterialAvailability);
 
-        ApplyReferenceStyle();
+        m_ComposedUiSkin = m_ui.Skin;
+        ApplyUiSkin(m_ComposedUiSkin, m_UiDisplayScale);
+        const bool uiMotionEnabled =
+            ImGui::IsUvsrUiMotionEnabled();
         int width, height;
         GetDeviceManager()->GetWindowDimensions(width, height);
-        const ImFont* scaledUiFont = m_Font
-            ? m_Font->GetScaledFont()
-            : nullptr;
+        ImFont* activeUiFont = GetActiveUiFont();
+        const ImFont* scaledUiFont = activeUiFont;
         const float panelReferenceFontSize = scaledUiFont
             ? scaledUiFont->LegacySize
             : ImGui::GetFontSize();
@@ -15318,9 +23781,52 @@ protected:
             std::max(
                 1.f,
                 std::round(panelReferenceFontSize * 0.6f)));
+        const ImGuiViewport* mainViewport =
+            ImGui::GetMainViewport();
+        const UiCommandLayoutRect workRectangle = {
+            mainViewport->WorkPos.x,
+            mainViewport->WorkPos.y,
+            mainViewport->WorkPos.x + mainViewport->WorkSize.x,
+            mainViewport->WorkPos.y + mainViewport->WorkSize.y
+        };
+        ImGui::PushFont(activeUiFont);
+        const float minimumCommandHeight =
+            std::max(
+                GetCommandInterfaceMinimumHeight(),
+                ImGui::GetStyle().WindowMinSize.y);
+        const float reservedCommandHeight =
+            GetCommandInterfaceReservedHeight();
+        const float minimumCommandWidth =
+            ImGui::GetStyle().WindowMinSize.x;
+        const float minimumSettingsHeight =
+            std::max(
+                GetSettingsCollapsedWindowHeight(
+                    ImGui::GetStyle(),
+                    ImGui::GetFontSize(),
+                    true,
+                    true),
+                ImGui::GetStyle().WindowMinSize.y);
+        ImGui::PopFont();
+        m_CommandLayout = ResolveCommandInterfaceLayout(
+            workRectangle,
+            float(m_SettingsPanelMarginPixels),
+            260.f * m_UiDisplayScale,
+            minimumCommandWidth,
+            reservedCommandHeight,
+            minimumCommandHeight,
+            minimumSettingsHeight);
+        const float settingsMaximumBottom =
+            m_CommandLayout.fits
+                ? m_CommandLayout.settingsMaximumBottom
+                : workRectangle.maxY -
+                    float(m_SettingsPanelMarginPixels);
         const bool visibilityBenchmarkBusy =
             m_app->IsVisibilityBenchmarkQueued() ||
             m_app->IsVisibilityBenchmarkActive();
+        const bool controlledExperimentActive =
+            visibilityBenchmarkBusy ||
+            m_app->IsAntiAliasingMotionTestRunning() ||
+            m_app->IsSvsmMotionBenchmarkRunning();
 
         if (visibilityBenchmarkBusy)
         {
@@ -15330,7 +23836,10 @@ protected:
                 "..."
             };
             const int benchmarkDotIndex =
-                int(ImGui::GetTime() * 2.0) % int(std::size(benchmarkDots));
+                uiMotionEnabled
+                    ? int(ImGui::GetTime() * 2.0) %
+                        int(std::size(benchmarkDots))
+                    : int(std::size(benchmarkDots)) - 1;
             const uint32_t benchmarkRequestedFrames =
                 m_app->GetVisibilityBenchmarkRequestedFrameCount();
             const uint32_t benchmarkCompletedFrames = std::min(
@@ -15349,8 +23858,9 @@ protected:
                 ImVec2(float(width) - 12.f, 12.f),
                 ImGuiCond_Always,
                 ImVec2(1.f, 0.f));
-            ImGui::SetNextWindowBgAlpha(0.82f);
-            ImGui::PushFont(m_Font->GetScaledFont());
+            ImGui::SetNextWindowBgAlpha(
+                g_UiVisualTokens.floatingPanelOpacity);
+            ImGui::PushFont(activeUiFont);
             ImGui::Begin(
                 "##VisibilityBenchmarkActivity",
                 nullptr,
@@ -15384,7 +23894,7 @@ protected:
                 m_StatUpdateQueue.clear();
                 for (std::string& value : m_PerformanceStatValues)
                     value.clear();
-                for (std::string& value : m_BendShadowStatLines)
+                for (std::string& value : m_ScreenSpaceShadowStatLines)
                     value.clear();
                 for (std::string& value : m_SparseShadowStatLines)
                     value.clear();
@@ -15396,7 +23906,7 @@ protected:
                     value.clear();
                 m_HasAppliedStatSnapshot = false;
                 m_HasGpuStatSnapshot = false;
-                m_HasBendShadowStatSnapshot = false;
+                m_HasScreenSpaceShadowStatSnapshot = false;
                 m_HasSparseShadowStatSnapshot = false;
                 m_HasDiagnosticCsmStatSnapshot = false;
                 m_HasVisibilityStatSnapshot = false;
@@ -15405,10 +23915,8 @@ protected:
             }
 
             BeginFullScreenWindow();
-            ImGui::PushFont(m_Font->GetScaledFont());
-            ApplyExpandedWordSpacing(
-                m_AdjustedSpaceFontBakedId,
-                m_BaseSpaceAdvance);
+            ImGui::PushFont(activeUiFont);
+            ApplyActiveUiWordSpacing();
 
             const auto& stats = Scene::GetLoadingStats();
             const uint32_t objectsLoaded = stats.ObjectsLoaded.load();
@@ -15433,7 +23941,10 @@ protected:
                 "..."
             };
             const size_t loadingDotIndex =
-                size_t(ImGui::GetTime() * 2.0) % std::size(LoadingDots);
+                uiMotionEnabled
+                    ? size_t(ImGui::GetTime() * 2.0) %
+                        std::size(LoadingDots)
+                    : std::size(LoadingDots) - 1u;
 
             char messageBuffer[512];
             const std::string sceneDisplayName =
@@ -15456,6 +23967,7 @@ protected:
                 texturesTotal);
             DrawScreenCenteredText(messageBuffer);
 
+            RestoreActiveUiWordSpacing();
             ImGui::PopFont();
             EndFullScreenWindow();
 
@@ -15463,10 +23975,8 @@ protected:
         }
         m_WasSceneLoading = false;
 
-        ImGui::PushFont(m_Font->GetScaledFont());
-        ApplyExpandedWordSpacing(
-            m_AdjustedSpaceFontBakedId,
-            m_BaseSpaceAdvance);
+        ImGui::PushFont(activeUiFont);
+        ApplyActiveUiWordSpacing();
 
         float const fontSize = ImGui::GetFontSize();
         const ImGuiStyle& style = ImGui::GetStyle();
@@ -15485,10 +23995,12 @@ protected:
 
         QueueStatSnapshot(width, height, rendererString);
         ApplyQueuedStatSnapshot();
-        m_SettingsAppearance = AdvancePixelZoomVisibility(
-            m_SettingsAppearance,
-            m_ui.ShowUI,
-            ImGui::GetIO().DeltaTime);
+        m_SettingsAppearance = uiMotionEnabled
+            ? AdvancePixelZoomVisibility(
+                m_SettingsAppearance,
+                m_ui.ShowUI,
+                ImGui::GetIO().DeltaTime)
+            : m_ui.ShowUI ? 1.f : 0.f;
         const auto deferredDropdownCompositionIdle =
             [&](bool settingsLayoutIdle, bool settingsScrollIdle)
             {
@@ -15502,6 +24014,13 @@ protected:
                         m_PendingPixelZoom,
                         m_PixelZoomVisibility,
                         m_PixelZoomLevelTransition);
+                const bool materialInspectorPlacementIdle =
+                    m_MaterialInspectorZoomPlacement <= 0.f ||
+                    m_MaterialInspectorZoomPlacement >= 1.f;
+                const bool materialInspectorAppearanceIdle =
+                    IsMaterialInspectorAppearanceIdle(
+                        m_ui.ShowMaterialEditor,
+                        m_MaterialInspectorAppearance);
                 const bool interactionIdle =
                     !ImGui::IsAnyItemActive() &&
                     std::abs(ImGui::GetIO().MouseWheel) <= 0.001f &&
@@ -15513,16 +24032,23 @@ protected:
                     settingsScrollIdle &&
                     settingsAppearanceIdle &&
                     pixelZoomAppearanceIdle &&
+                    materialInspectorPlacementIdle &&
+                    materialInspectorAppearanceIdle &&
                     g_DeferredAliasingUiPresentation.ReadyForCommit() &&
                     dropdownPopupIdle &&
                     interactionIdle;
             };
         if (!m_ui.ShowUI && m_SettingsAppearance <= 0.f)
         {
-            // A hidden owner cannot submit the popup frames needed to finish
-            // its roll-up. Close that exact popup before evaluating the same
-            // deferred commit barrier used by the visible path.
-            FinishDeferredDropdownPopupTransition();
+            DrawMaterialInspector(
+                width,
+                height,
+                uiMotionEnabled,
+                controlledExperimentActive,
+                style);
+            // Settings is hidden, but the independently composed material
+            // inspector may still own the active dropdown this frame.
+            FinishUnsubmittedDeferredDropdownPopupTransition();
             g_DeferredAliasingUiPresentation.SkipInvisibleAnimation(
                 ImGui::GetFrameCount());
             const SettingsScrollStabilityContext& scrollContext =
@@ -15533,7 +24059,9 @@ protected:
             TryApplyDeferredDropdownUiActions(
                 deferredDropdownCompositionIdle(
                     !recentLayoutAnimation,
-                    true));
+                    true),
+                !uiMotionEnabled);
+            RestoreActiveUiWordSpacing();
             ImGui::PopFont();
             return;
         }
@@ -15545,6 +24073,8 @@ protected:
                 settingsAppearanceOpacity;
         const std::string performanceLine =
             BuildPerformanceLine(m_PerformanceStatValues);
+        const std::array<std::string, 2> ogPerformanceLines =
+            BuildOgPerformanceLines(m_PerformanceStatValues);
 
         // Keep Settings independent of live status digits. At the current
         // 20-pixel UI font, 29.3 font heights place the visible right border
@@ -15556,46 +24086,67 @@ protected:
         const float availableWindowWidth =
             std::max(
                 1.f,
-                float(width) - settingsPanelMarginPixels * 2.f);
+                workRectangle.maxX -
+                    workRectangle.minX -
+                    settingsPanelMarginPixels * 2.f);
         const float settingsWindowWidth = std::min(
             fontSize * SettingsWindowWidthInFontHeights,
             availableWindowWidth);
+        const float settingsWindowTop =
+            workRectangle.minY + settingsPanelMarginPixels;
+        const float settingsMaximumWindowHeight =
+            std::max(
+                1.f,
+                settingsMaximumBottom - settingsWindowTop);
         ImGui::SetNextWindowPos(
             ImVec2(
-                settingsPanelMarginPixels,
-                settingsPanelMarginPixels),
+                workRectangle.minX + settingsPanelMarginPixels,
+                settingsWindowTop),
             ImGuiCond_Always);
         ImGui::SetNextWindowSize(
             ImVec2(settingsWindowWidth, 0.f),
             ImGuiCond_Always);
-        constexpr float StatusLineSpacing = 2.f;
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(settingsWindowWidth, 0.f),
+            ImVec2(
+                settingsWindowWidth,
+                settingsMaximumWindowHeight));
         const bool hasPerformanceStatus =
             !m_PerformanceStatValues[1].empty();
+        const bool splitOgPerformanceStatus =
+            hasPerformanceStatus &&
+            m_ComposedUiSkin == UiSkin::Og;
         const float settingsCollapsedHeight =
-            fontSize + style.FramePadding.y * 2.f +
-            style.WindowPadding.y +
-            fontSize +
-            style.ItemSpacing.y +
-            1.f +
-            (hasPerformanceStatus
-                ? StatusLineSpacing + fontSize
-                : 0.f);
+            GetSettingsCollapsedWindowHeight(
+                style,
+                fontSize,
+                hasPerformanceStatus,
+                splitOgPerformanceStatus);
         ImGui::SetNextSettingsWindowCollapsedHeight(
             settingsCollapsedHeight);
-        ImGui::SetNextWindowCollapsed(false, ImGuiCond_Once);
-        // This is the footer button surface composited over WindowBg, so the
-        // Settings title and the three action buttons resolve to one tone.
-        const ImVec4 titleAndFooterSurface(
-            0.146f, 0.146f, 0.154f, 0.652f);
+        if (m_SettingsCollapsedRequest)
+        {
+            ImGui::SetNextWindowCollapsed(
+                *m_SettingsCollapsedRequest,
+                ImGuiCond_Always);
+            m_SettingsCollapsedRequest.reset();
+        }
+        else
+        {
+            ImGui::SetNextWindowCollapsed(false, ImGuiCond_Once);
+        }
+        // WindowBg is absent beneath title bars. This precomposed Settings-only
+        // token reproduces the resting drawer blue over the body surface.
+        PushPanelBodySurface();
         ImGui::PushStyleColor(
             ImGuiCol_TitleBg,
-            titleAndFooterSurface);
+            g_UiVisualTokens.settingsTitleSurface);
         ImGui::PushStyleColor(
             ImGuiCol_TitleBgActive,
-            titleAndFooterSurface);
+            g_UiVisualTokens.settingsTitleSurface);
         ImGui::PushStyleColor(
             ImGuiCol_TitleBgCollapsed,
-            titleAndFooterSurface);
+            g_UiVisualTokens.settingsTitleSurface);
         ImGuiWindowFlags settingsWindowFlags =
             ImGuiWindowFlags_AlwaysAutoResize |
             ImGuiWindowFlags_NoScrollbar |
@@ -15617,14 +24168,30 @@ protected:
         {
             ImGui::SetCursorPosY(
                 ImGui::GetCursorPosY() - style.ItemSpacing.y +
-                    StatusLineSpacing);
-            ImGui::TextUnformatted(performanceLine.c_str());
-            ImGui::SetItemTooltip(
+                    SettingsStatusLineSpacing);
+            const char* performanceTooltip =
                 "tris counts frustum-culled triangle instances submitted by "
                 "the main geometry pass; occluded, back-facing, and "
                 "alpha-discarded triangles can still be included. "
                 "Bandwidth is the current theoretical limit. "
-                "tflops is current-clock FP32 peak scaled by GPU utilization.");
+                "tflops is current-clock FP32 peak scaled by GPU utilization.";
+            if (splitOgPerformanceStatus)
+            {
+                ImGui::TextUnformatted(
+                    ogPerformanceLines[0].c_str());
+                ImGui::SetItemTooltip("%s", performanceTooltip);
+                ImGui::SetCursorPosY(
+                    ImGui::GetCursorPosY() - style.ItemSpacing.y +
+                        SettingsStatusLineSpacing);
+                ImGui::TextUnformatted(
+                    ogPerformanceLines[1].c_str());
+                ImGui::SetItemTooltip("%s", performanceTooltip);
+            }
+            else
+            {
+                ImGui::TextUnformatted(performanceLine.c_str());
+                ImGui::SetItemTooltip("%s", performanceTooltip);
+            }
         }
         if (visibilityBenchmarkBusy)
         {
@@ -15636,7 +24203,7 @@ protected:
 
         const float settingsBodyMaxHeight = std::max(
             1.f,
-            float(height) - settingsPanelMarginPixels -
+            settingsMaximumBottom -
                 ImGui::GetCursorScreenPos().y - style.WindowPadding.y);
         PrepareSettingsScrollStability();
         const float settingsBodyMinimumHeight =
@@ -15675,6 +24242,18 @@ protected:
             ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);
             ImGui::BeginDisabled();
         }
+        // A same-frame anchor correction translates submitted vertices after
+        // item hit rectangles have been resolved. Keep widgets noninteractive
+        // on every continuation/finalization frame of that motion so rendered
+        // controls and hit testing can never disagree.
+        const bool settingsScrollInputBlocked =
+            uiMotionEnabled &&
+            g_SettingsScrollStabilityContext.layoutAnimatingLastFrame;
+        if (settingsScrollInputBlocked)
+        {
+            ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);
+            ImGui::BeginDisabled();
+        }
 
 #if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
         ImGui::BeginDisabled();
@@ -15689,6 +24268,43 @@ protected:
             BeginDrawerBody(
                 "##GeneralBody",
                 settingsControlWidth);
+
+            ImGui::TextUnformatted("Interface Skin");
+            if (DrawPresetResetIcon(
+                    "Interface Skin",
+                    m_ui.Skin != DefaultUiSkin))
+            {
+                QueueDeferredControlUiAction(
+                    [this]()
+                    {
+                        m_ui.Skin = DefaultUiSkin;
+                    });
+            }
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (BeginRoundedCombo(
+                    "##UiSkin",
+                    UiSkinLabel(m_ui.Skin).data()))
+            {
+                for (const UiSkin candidate : UiSkinValues)
+                {
+                    const bool selected = candidate == m_ui.Skin;
+                    DrawDeferredDropdownOption(
+                        UiSkinLabel(candidate).data(),
+                        UiSkinLabel(candidate).data(),
+                        selected,
+                        [this, candidate]()
+                        {
+                            m_ui.Skin = candidate;
+                        });
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip(
+                "Choose the complete UI appearance. OG uses stock ImGui "
+                "widgets and disables UI motion for fast agent experiments.");
+
             if (visibilityBenchmarkBusy)
                 ImGui::BeginDisabled();
 
@@ -15955,17 +24571,23 @@ protected:
                 folderHighlightFade)),
             style.FrameRounding,
             ImDrawFlags_RoundCornersAll);
-        folderDrawList->AddRect(
-            ImVec2(iconMin.x + 0.5f, iconMin.y + 0.5f),
-            ImVec2(iconMax.x - 0.5f, iconMax.y - 0.5f),
-            ImGui::GetColorU32(ImVec4(
-                0.90f,
-                0.92f,
-                0.96f,
-                0.10f + 0.08f * folderHighlightFade)),
-            std::max(0.f, style.FrameRounding - 0.5f),
-            ImDrawFlags_RoundCornersAll,
+        ImVec4 folderOutlineColor =
+            g_UiVisualTokens.folderOutline;
+        folderOutlineColor.w = std::clamp(
+            folderOutlineColor.w *
+                (1.f + 0.8f * folderHighlightFade),
+            0.f,
             1.f);
+        if (g_UiVisualTokens.drawControlOutlines)
+        {
+            folderDrawList->AddRect(
+                ImVec2(iconMin.x + 0.5f, iconMin.y + 0.5f),
+                ImVec2(iconMax.x - 0.5f, iconMax.y - 0.5f),
+                ImGui::GetColorU32(folderOutlineColor),
+                std::max(0.f, style.FrameRounding - 0.5f),
+                ImDrawFlags_RoundCornersAll,
+                1.f);
+        }
         if (openSceneFolderPressed)
         {
             const std::filesystem::path sceneFolder = m_app->GetSceneDir();
@@ -17434,7 +26056,7 @@ protected:
                 DirectLighting,
                 ScreenSpaceVisibility,
                 AntiAliasing,
-                BendShadows,
+                ScreenSpaceShadows,
                 SparseVirtualShadowMaps,
                 DiagnosticCascadedShadowMaps,
                 MaterialPicking,
@@ -17445,10 +26067,8 @@ protected:
             };
             static constexpr int DefaultStatisticsEffect =
                 static_cast<int>(StatisticsEffect::CompleteRenderer);
-            static int statisticsEffect =
-                DefaultStatisticsEffect;
-            statisticsEffect = std::clamp(
-                statisticsEffect,
+            m_StatisticsEffect = std::clamp(
+                m_StatisticsEffect,
                 0,
                 static_cast<int>(StatisticsEffect::Count) - 1);
             static constexpr const char* StatisticsEffectLabels[] = {
@@ -17457,7 +26077,7 @@ protected:
                 "Direct Lighting",
                 "Screen-Space Visibility",
                 "Anti-Aliasing",
-                "Bend Shadows",
+                "Screen-Space Shadows",
                 "Sparse Virtual Shadow Maps",
                 "Diagnostic Cascaded Shadow Maps",
                 "Material Picking",
@@ -17468,26 +26088,26 @@ protected:
             ImGui::TextUnformatted("Effect");
             if (DrawPresetResetIcon(
                     "Statistics Effect",
-                    statisticsEffect != DefaultStatisticsEffect))
+                    m_StatisticsEffect != DefaultStatisticsEffect))
             {
-                statisticsEffect = DefaultStatisticsEffect;
+                m_StatisticsEffect = DefaultStatisticsEffect;
             }
             ImGui::SetNextItemWidth(-FLT_MIN);
             if (BeginRoundedCombo(
                     "##StatisticsEffect",
-                    StatisticsEffectLabels[statisticsEffect]))
+                    StatisticsEffectLabels[m_StatisticsEffect]))
             {
                 for (int effectIndex = 0;
                     effectIndex < static_cast<int>(StatisticsEffect::Count);
                     ++effectIndex)
                 {
                     const bool selected =
-                        effectIndex == statisticsEffect;
+                        effectIndex == m_StatisticsEffect;
                     DrawDeferredDropdownOption(
                         StatisticsEffectLabels[effectIndex],
                         StatisticsEffectLabels[effectIndex],
                         selected,
-                        [statisticsEffectPointer = &statisticsEffect,
+                        [statisticsEffectPointer = &m_StatisticsEffect,
                             effectIndex]()
                         {
                             *statisticsEffectPointer = effectIndex;
@@ -17500,7 +26120,7 @@ protected:
             ImGui::SetItemTooltip(
                 "Choose the renderer effect whose GPU cost is shown below.");
 
-            if (statisticsEffect == static_cast<int>(
+            if (m_StatisticsEffect == static_cast<int>(
                     StatisticsEffect::AntiAliasing))
             {
                 const AntiAliasingSettings& statisticsAliasing =
@@ -17562,10 +26182,10 @@ protected:
                             };
 
                         bool hasAntiAliasingStatistics = false;
-                        const MiniEngineTemporalAATimings* temporalTimings =
+                        const TemporalAATimings* temporalTimings =
                             statisticsRendererReady &&
                                 temporalStatisticsActive
-                                ? m_app->GetMiniEngineTemporalAATimings()
+                                ? m_app->GetTemporalAATimings()
                                 : nullptr;
                         if (temporalStatisticsActive)
                         {
@@ -17600,13 +26220,61 @@ protected:
                             if (temporalTimings)
                                 ImGui::Text("%.3f ms", temporalTimings->presentationSharpenMilliseconds);
                             else drawPendingTemporalValue();
-                            beginAntiAliasingStatisticsRow("History Memory");
+                            beginAntiAliasingStatisticsRow(
+                                "Active History Memory");
                             if (temporalTimings)
                             {
                                 ImGui::Text(
                                     "%.1f MiB",
-                                    double(temporalTimings->historyTextureBytes) /
+                                    double(temporalTimings->
+                                        activeHistoryTextureBytes) /
                                         BytesPerMiB);
+                            }
+                            else drawPendingTemporalValue();
+                            beginAntiAliasingStatisticsRow(
+                                "Resident History Memory");
+                            if (temporalTimings)
+                            {
+                                ImGui::Text(
+                                    "%.1f MiB",
+                                    double(temporalTimings->
+                                        residentHistoryTextureBytes) /
+                                        BytesPerMiB);
+                            }
+                            else drawPendingTemporalValue();
+                            beginAntiAliasingStatisticsRow(
+                                "Effective Temporal Cost");
+                            if (temporalTimings)
+                            {
+                                ImGui::TextUnformatted(
+                                    GetTemporalAaCostModeLabel(
+                                        temporalTimings->
+                                            effectiveCostMode));
+                            }
+                            else drawPendingTemporalValue();
+                            beginAntiAliasingStatisticsRow(
+                                "Temporal Dispatches");
+                            if (temporalTimings)
+                            {
+                                ImGui::Text(
+                                    "%u",
+                                    temporalTimings->dispatchCount);
+                            }
+                            else drawPendingTemporalValue();
+                            beginAntiAliasingStatisticsRow(
+                                "Minimum History Formats");
+                            if (temporalTimings)
+                            {
+                                ImGui::Text(
+                                    "%s + %s",
+                                    temporalTimings->
+                                            minimumColorIsR11G11B10
+                                        ? "R11G11B10"
+                                        : "RGBA16F",
+                                    temporalTimings->
+                                            minimumDepthIsR16
+                                        ? "R16F"
+                                        : "R32F");
                             }
                             else drawPendingTemporalValue();
                             beginAntiAliasingStatisticsRow("History Status");
@@ -17630,11 +26298,20 @@ protected:
                                 "Shader Permutation");
                             if (temporalTimings)
                             {
-                                ImGui::Text(
-                                    "%u / %u",
-                                    GetMiniEngineTaaBlendPermutationIndex(
-                                        statisticsResolved.temporal) + 1u,
-                                    MiniEngineTaaBlendPermutationCount);
+                                if (temporalTimings->effectiveCostMode ==
+                                    TemporalAaCostMode::Minimum)
+                                {
+                                    ImGui::TextUnformatted(
+                                        "Minimum Dedicated");
+                                }
+                                else
+                                {
+                                    ImGui::Text(
+                                        "%u / %u",
+                                        GetTemporalAaBlendPermutationIndex(
+                                            statisticsResolved.temporal) + 1u,
+                                        TemporalAaBlendPermutationCount);
+                                }
                             }
                             else drawPendingTemporalValue();
                             beginAntiAliasingStatisticsRow(
@@ -17723,14 +26400,14 @@ protected:
                     EndAnimatedToggleRegion();
                 }
             }
-            else if (statisticsEffect == static_cast<int>(
-                    StatisticsEffect::BendShadows) ||
-                statisticsEffect == static_cast<int>(
+            else if (m_StatisticsEffect == static_cast<int>(
+                    StatisticsEffect::ScreenSpaceShadows) ||
+                m_StatisticsEffect == static_cast<int>(
                     StatisticsEffect::SparseVirtualShadowMaps) ||
-                statisticsEffect == static_cast<int>(
+                m_StatisticsEffect == static_cast<int>(
                     StatisticsEffect::DiagnosticCascadedShadowMaps))
             {
-                static constexpr const char* BendShadowStatLabels[] = {
+                static constexpr const char* ScreenSpaceShadowStatLabels[] = {
                     "Trace Work",
                     "Sampling and Output"
                 };
@@ -17822,16 +26499,16 @@ protected:
                     }
                 };
 
-                if (statisticsEffect == static_cast<int>(
-                        StatisticsEffect::BendShadows))
+                if (m_StatisticsEffect == static_cast<int>(
+                        StatisticsEffect::ScreenSpaceShadows))
                 {
                     drawStatLines(
-                        "##BendShadowStatistics",
-                        BendShadowStatLabels,
-                        m_BendShadowStatLines,
-                        m_HasBendShadowStatSnapshot);
+                        "##ScreenSpaceShadowStatistics",
+                        ScreenSpaceShadowStatLabels,
+                        m_ScreenSpaceShadowStatLines,
+                        m_HasScreenSpaceShadowStatSnapshot);
                 }
-                else if (statisticsEffect == static_cast<int>(
+                else if (m_StatisticsEffect == static_cast<int>(
                         StatisticsEffect::SparseVirtualShadowMaps))
                 {
                     drawStatLines(
@@ -17893,7 +26570,7 @@ protected:
                         m_HasDiagnosticCsmStatSnapshot);
                 }
             }
-            else if (statisticsEffect != static_cast<int>(
+            else if (m_StatisticsEffect != static_cast<int>(
                     StatisticsEffect::ScreenSpaceVisibility))
             {
                 const RendererTimings& rendererTimings =
@@ -17950,7 +26627,7 @@ protected:
                             ImGuiTableFlags_SizingStretchProp))
                 {
                     const bool environmentStatistics =
-                        statisticsEffect == static_cast<int>(
+                        m_StatisticsEffect == static_cast<int>(
                             StatisticsEffect::EnvironmentBackground);
                     ImGui::TableSetupColumn(
                         environmentStatistics
@@ -17963,7 +26640,7 @@ protected:
                         ImGuiTableColumnFlags_WidthStretch,
                         1.f);
                     ImGui::TableHeadersRow();
-                    if (statisticsEffect == static_cast<int>(
+                    if (m_StatisticsEffect == static_cast<int>(
                             StatisticsEffect::CompleteRenderer))
                     {
                         drawRendererTimingRow(
@@ -18013,9 +26690,9 @@ protected:
                                 RendererTimingStage::OutputBlit
                             };
                         const RendererTimingStage selectedStage =
-                            StatisticsStages[statisticsEffect];
+                            StatisticsStages[m_StatisticsEffect];
                         drawRendererTimingRow(
-                            StatisticsEffectLabels[statisticsEffect],
+                            StatisticsEffectLabels[m_StatisticsEffect],
                             selectedStage);
                         drawRendererTimingRow(
                             "Complete Renderer Frame",
@@ -18030,15 +26707,11 @@ protected:
                             sourceMean *
                             m_app->GetImageBasedLightingRadianceScale();
                         const float diffuseMean =
-                            IsImageBasedLightingLobeActive(
-                                m_ui.EnableDiffuseIbl,
-                                m_ui.DiffuseIblStrength)
+                            m_ui.IsDiffuseAmbientFillActive()
                                 ? commonMean * m_ui.DiffuseIblStrength
                                 : 0.f;
                         const float specularMean =
-                            IsImageBasedLightingLobeActive(
-                                m_ui.EnableSpecularIbl,
-                                m_ui.SpecularIblStrength)
+                            m_ui.IsSpecularAmbientFillActive()
                                 ? commonMean * m_ui.SpecularIblStrength
                                 : 0.f;
                         const auto drawRadianceRow =
@@ -18361,10 +27034,6 @@ protected:
             ImGui::SeparatorText("Benchmarking");
             static constexpr int DefaultBenchmarkWarmupFrames = 120;
             static constexpr int DefaultBenchmarkMeasuredFrames = 240;
-            static int benchmarkWarmupFrames =
-                DefaultBenchmarkWarmupFrames;
-            static int benchmarkMeasuredFrames =
-                DefaultBenchmarkMeasuredFrames;
             static std::string benchmarkUiError;
             const bool motionTestRunning =
                 m_app->IsAntiAliasingMotionTestRunning();
@@ -18450,7 +27119,7 @@ protected:
 
             DrawSliderInt(
                 "Warmup Frames",
-                &benchmarkWarmupFrames,
+                &m_BenchmarkWarmupFrames,
                 0,
                 600,
                 "%d",
@@ -18459,15 +27128,15 @@ protected:
                 "Frames discarded after history reset before measurement.");
             if (DrawPresetResetIcon(
                     "Benchmark Warmup Frames",
-                    benchmarkWarmupFrames !=
+                    m_BenchmarkWarmupFrames !=
                         DefaultBenchmarkWarmupFrames))
             {
-                benchmarkWarmupFrames =
+                m_BenchmarkWarmupFrames =
                     DefaultBenchmarkWarmupFrames;
             }
             DrawSliderInt(
                 "Measured Frames",
-                &benchmarkMeasuredFrames,
+                &m_BenchmarkMeasuredFrames,
                 1,
                 2000,
                 "%d",
@@ -18476,10 +27145,10 @@ protected:
                 "Complete, frame-correlated GPU samples retained per run.");
             if (DrawPresetResetIcon(
                     "Benchmark Measured Frames",
-                    benchmarkMeasuredFrames !=
+                    m_BenchmarkMeasuredFrames !=
                         DefaultBenchmarkMeasuredFrames))
             {
-                benchmarkMeasuredFrames =
+                m_BenchmarkMeasuredFrames =
                     DefaultBenchmarkMeasuredFrames;
             }
 
@@ -18492,8 +27161,8 @@ protected:
             {
                 benchmarkUiError.clear();
                 if (!m_app->QueueVisibilityBenchmark(
-                        uint32_t(std::max(benchmarkWarmupFrames, 0)),
-                        uint32_t(std::max(benchmarkMeasuredFrames, 1)),
+                        uint32_t(std::max(m_BenchmarkWarmupFrames, 0)),
+                        uint32_t(std::max(m_BenchmarkMeasuredFrames, 1)),
                         false))
                 {
                     benchmarkUiError =
@@ -18598,14 +27267,14 @@ protected:
             if (!benchmarkError.empty())
             {
                 ImGui::TextColored(
-                    ImVec4(1.f, 0.35f, 0.30f, 1.f),
+                    g_UiVisualTokens.errorText,
                     "%s",
                     benchmarkError.c_str());
             }
             if (!benchmarkUiError.empty())
             {
                 ImGui::TextColored(
-                    ImVec4(1.f, 0.35f, 0.30f, 1.f),
+                    g_UiVisualTokens.errorText,
                     "%s",
                     benchmarkUiError.c_str());
             }
@@ -18725,8 +27394,8 @@ protected:
                     if (g_DeferredAliasingUiPresentation.CommitTo(
                             m_ui.AntiAliasing))
                     {
-                        m_ui.MiniEngineTaaVisualization =
-                            MiniEngineTaaDebugView::Off;
+                        m_ui.TemporalAaVisualization =
+                            TemporalAaDebugView::Off;
                     }
                 };
             const AntiAliasingSettings defaultAliasingSettings;
@@ -19023,6 +27692,83 @@ protected:
                     });
             }
 
+            if (temporalMethodSelected)
+            {
+                const TemporalAaCostMode selectedCostMode =
+                    SanitizeTemporalAaCostMode(
+                        selectorSettings.temporalCostMode);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (BeginRoundedCombo(
+                        "Temporal Cost",
+                        GetTemporalAaCostModeLabel(
+                            selectedCostMode)))
+                {
+                    static constexpr std::array<
+                        TemporalAaCostMode, 3> costModeOrder = {
+                            TemporalAaCostMode::Minimum,
+                            TemporalAaCostMode::Reduced,
+                            TemporalAaCostMode::FullQuality
+                        };
+                    for (const TemporalAaCostMode candidate :
+                        costModeOrder)
+                    {
+                        const bool selected =
+                            candidate == selectedCostMode;
+                        if (DrawDeferredDropdownOption(
+                                GetTemporalAaCostModeLabel(candidate),
+                                GetTemporalAaCostModeLabel(candidate),
+                                selected,
+                                commitDeferredAliasingPresentation))
+                        {
+                            g_DeferredAliasingUiPresentation.Stage(
+                                m_ui.AntiAliasing,
+                                false,
+                                ImGui::GetFrameCount(),
+                                [candidate](
+                                    AntiAliasingSettings& staged)
+                                {
+                                    staged.temporalCostMode =
+                                        candidate;
+                                });
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Full Quality preserves the robust confidence/depth path. "
+                    "Reduced enables packed shared memory, adjacent-work reuse, "
+                    "early rejection, one-pass output, and Stationary Bypass. "
+                    "Minimum uses compact "
+                    "history and one compute dispatch, defaults to its low-cost "
+                    "stability policies with sharpening off, and targets the cost class "
+                    "of the Wicked Engine TAA reference. Presentation "
+                    "morphology falls back to Reduced when compact color is "
+                    "not format-compatible. Developer Options can override "
+                    "each image policy; incompatible compact combinations "
+                    "fall back visibly to robust history.");
+                const TemporalAaCostMode defaultCostMode =
+                    SanitizeTemporalAaCostMode(
+                        defaultAliasingSettings.temporalCostMode);
+                if (DrawPresetResetIcon(
+                        "Temporal Cost",
+                        selectedCostMode != defaultCostMode))
+                {
+                    QueueDeferredControlUiAction(
+                        commitDeferredAliasingPresentation);
+                    g_DeferredAliasingUiPresentation.Stage(
+                        m_ui.AntiAliasing,
+                        false,
+                        ImGui::GetFrameCount(),
+                        [defaultCostMode](AntiAliasingSettings& staged)
+                        {
+                            staged.temporalCostMode =
+                                defaultCostMode;
+                        });
+                }
+            }
+
             AntiAliasingSettings& settings =
                 g_DeferredAliasingUiPresentation.
                     PresentStructuralBody(m_ui.AntiAliasing);
@@ -19051,128 +27797,34 @@ protected:
             if (effectiveTemporalSelectionUnavailable)
             {
                 DrawDisabledTextWrapped(
-                    m_ui.HasMiniEngineTaaVisibilityConflict()
+                    m_ui.HasTemporalAaVisibilityConflict()
                         ? "Temporal anti-aliasing is paused until visibility\n"
                             "Temporal Reconstruction is disabled."
                         : "Temporal anti-aliasing requires deferred UVSR PBR\n"
                             "motion and depth.");
             }
 
-            MiniEngineTaaAlgorithmOverrides& historyOverrides =
-                settings.algorithmOverrides;
-            AntiAliasingSettings historyPresetSettings = settings;
-            // The enabled toggle controls execution, not the retained preset
-            // presentation. Resolve inherited history from the active method
-            // while its controls collapse so 6 / 100% never flashes to 0.
-            historyPresetSettings.enabled = true;
-            historyPresetSettings.algorithmOverrides.historyFrames =
-                -1;
-            historyPresetSettings.algorithmOverrides.historyStrength =
-                -1.f;
-            const ResolvedAntiAliasingSettings historyPreset =
-                m_ui.GetResolvedAntiAliasingSettings(
-                    historyPresetSettings);
-            const bool usesConfigurableHistory =
-                longTermTemporalControlsAvailable;
-            if (usesConfigurableHistory)
-            {
-                int historyFrames =
-                    historyOverrides.historyFrames >= 0
-                        ? historyOverrides.historyFrames
-                        : static_cast<int>(
-                            historyPreset.historyFrames);
-                std::string historyFramesLabel =
-                    "History Frames";
-                historyFramesLabel +=
-                    "##ResolvedHistoryFrames";
-                ImGui::SetNextItemWidth(settingsControlWidth);
-                if (DrawSliderInt(
-                        historyFramesLabel.c_str(),
-                        &historyFrames,
-                        1,
-                        32,
-                        "%d"))
-                {
-                    historyOverrides.historyFrames =
-                        historyFrames ==
-                            static_cast<int>(
-                                historyPreset.historyFrames)
-                            ? -1
-                            : historyFrames;
-                }
-                ImGui::SetItemTooltip(
-                    "Cap the logical number of prior frames that can influence temporal AA. The physical allocation remains two ping-pong textures.");
-                if (DrawPresetResetIcon(
-                        "Aliasing History Frames",
-                        historyOverrides.historyFrames >= 0))
-                {
-                    historyOverrides.historyFrames = -1;
-                }
-                float historyStrength =
-                    100.f *
-                    (historyOverrides.historyStrength >= 0.f
-                        ? historyOverrides.historyStrength
-                        : historyPreset.historyStrength);
-                std::string historyStrengthLabel =
-                    "History Strength";
-                historyStrengthLabel +=
-                    "##ResolvedHistoryStrength";
-                ImGui::SetNextItemWidth(settingsControlWidth);
-                if (DrawSliderFloat(
-                        historyStrengthLabel.c_str(),
-                        &historyStrength,
-                        0.f,
-                        200.f,
-                        "%.0f%%"))
-                {
-                    historyOverrides.historyStrength =
-                        std::clamp(
-                            historyStrength * 0.01f,
-                            0.f,
-                            2.f);
-                    if (std::abs(
-                            historyOverrides.historyStrength -
-                            historyPreset.historyStrength) < 1e-4f)
-                    {
-                        historyOverrides.historyStrength = -1.f;
-                    }
-                }
-                ImGui::SetItemTooltip(
-                    "%s",
-                    "Scale accepted history after motion, bounds, reverse-Z "
-                    "depth, disocclusion, and rectification gates. Values "
-                    "above 100% strengthen only accepted "
-                    "history, remain capped by the selected frame horizon, "
-                    "and cannot revive a rejected sample.");
-                if (DrawPresetResetIcon(
-                        "Aliasing History Strength",
-                        historyOverrides.historyStrength >= 0.f))
-                {
-                    historyOverrides.historyStrength = -1.f;
-                }
-            }
-
             const auto drawDejitterControl = [&]()
                 {
-                    MiniEngineTaaAlgorithmOverrides& algorithmOverrides =
+                    TemporalAaAlgorithmOverrides& algorithmOverrides =
                         settings.algorithmOverrides;
                     AntiAliasingSettings dejitterPresetSettings =
                         settings;
                     dejitterPresetSettings.algorithmOverrides =
-                        MiniEngineTaaAlgorithmOverrides{};
+                        TemporalAaAlgorithmOverrides{};
                     const bool presetDejitter =
                         m_ui.GetResolvedAntiAliasingSettings(
                                 dejitterPresetSettings)
                                 .temporal.currentReconstruction ==
-                            MiniEngineTaaCurrentReconstruction::DeJittered;
+                            TemporalAaCurrentReconstruction::DeJittered;
                     const bool inherited =
                         algorithmOverrides.currentReconstruction ==
-                        MiniEngineTaaCurrentReconstructionOverride::
+                        TemporalAaCurrentReconstructionOverride::
                             FromPreset;
                     bool dejitter = inherited
                         ? presetDejitter
                         : algorithmOverrides.currentReconstruction ==
-                            MiniEngineTaaCurrentReconstructionOverride::
+                            TemporalAaCurrentReconstructionOverride::
                                 DeJittered;
                     if (ImGui::Checkbox(
                             "Dejitter##AliasingDejitter",
@@ -19181,16 +27833,16 @@ protected:
                         if (dejitter == presetDejitter)
                         {
                             algorithmOverrides.currentReconstruction =
-                                MiniEngineTaaCurrentReconstructionOverride::
+                                TemporalAaCurrentReconstructionOverride::
                                     FromPreset;
                         }
                         else
                         {
                             algorithmOverrides.currentReconstruction =
                                 dejitter
-                                ? MiniEngineTaaCurrentReconstructionOverride::
+                                ? TemporalAaCurrentReconstructionOverride::
                                     DeJittered
-                                : MiniEngineTaaCurrentReconstructionOverride::
+                                : TemporalAaCurrentReconstructionOverride::
                                     Direct;
                         }
                     }
@@ -19203,79 +27855,38 @@ protected:
                             !inherited))
                     {
                         algorithmOverrides.currentReconstruction =
-                            MiniEngineTaaCurrentReconstructionOverride::
+                            TemporalAaCurrentReconstructionOverride::
                                 FromPreset;
                     }
                 };
 
             const auto drawRectificationControl = [&]()
                 {
-                    MiniEngineTaaAlgorithmOverrides& algorithmOverrides =
+                    TemporalAaAlgorithmOverrides& algorithmOverrides =
                         settings.algorithmOverrides;
                     AntiAliasingSettings rectificationPresetSettings =
                         settings;
                     rectificationPresetSettings.algorithmOverrides =
-                        MiniEngineTaaAlgorithmOverrides{};
+                        TemporalAaAlgorithmOverrides{};
                     const ResolvedAntiAliasingSettings resolvedForLabels =
                         m_ui.GetResolvedAntiAliasingSettings(
                             rectificationPresetSettings);
                     static constexpr std::array<
-                        MiniEngineTaaRectificationOverride, 2>
+                        TemporalAaRectificationOverride, 2>
                         rectificationOrder = {
-                            MiniEngineTaaRectificationOverride::PairRgb,
-                            MiniEngineTaaRectificationOverride::VarianceYCoCg
+                            TemporalAaRectificationOverride::PairRgb,
+                            TemporalAaRectificationOverride::VarianceYCoCg
                         };
                     drawEnumOption(
                         "Rectification",
                         algorithmOverrides.rectification,
                         rectificationOrder,
-                        GetMiniEngineTaaRectificationOverrideLabel,
+                        GetTemporalAaRectificationOverrideLabel,
                         "Choose pair-clamp RGB or variance-aware YCoCg history "
                         "rectification.",
-                        GetMiniEngineTaaRectificationLabel(
+                        GetTemporalAaRectificationLabel(
                             resolvedForLabels.temporal.rectification));
                 };
-
-            if (longTermTemporalControlsAvailable)
-            {
-                drawDejitterControl();
-                ImGui::Checkbox(
-                    "Sharpness###Sharpness",
-                    &m_ui.MiniEngineTaaSharpenEnabled);
-                ImGui::SetItemTooltip(
-                    "Enable or bypass temporal output sharpening while retaining the selected strength.");
-                if (DrawPresetResetIcon(
-                        "Aliasing Sharpness Enabled",
-                        m_ui.MiniEngineTaaSharpenEnabled))
-                {
-                    m_ui.MiniEngineTaaSharpenEnabled = false;
-                }
-                if (BeginAnimatedToggleRegion(
-                        "##SharpnessStrengthControls",
-                        m_ui.MiniEngineTaaSharpenEnabled))
-                {
-                    ImGui::SetNextItemWidth(settingsControlWidth);
-                    DrawSliderFloat(
-                        "Sharpness Strength",
-                        &m_ui.MiniEngineTaaSharpness,
-                        MiniEngineTaaMinimumSharpness,
-                        MiniEngineTaaMaximumSharpness,
-                        "%.2f");
-                    ImGui::SetItemTooltip(
-                        "Set temporal output sharpness. The stored value is "
-                        "retained while sharpening is disabled.");
-                    if (DrawPresetResetIcon(
-                            "Aliasing Sharpness Strength",
-                            std::abs(
-                                m_ui.MiniEngineTaaSharpness -
-                                MiniEngineTaaDefaultSharpness) > 1e-4f))
-                    {
-                        m_ui.MiniEngineTaaSharpness =
-                            MiniEngineTaaDefaultSharpness;
-                    }
-                    EndAnimatedToggleRegion();
-                }
-            }
 
             const bool algorithmConfigurationAvailable =
                 longTermTemporalControlsAvailable ||
@@ -19284,22 +27895,38 @@ protected:
                 selectedImplementation == AntiAliasingPreset::Msaa4x ||
                 selectedImplementation == AntiAliasingPreset::Msaa8x ||
                 selectedImplementation == AntiAliasingPreset::Msaa16x;
+            const char* algorithmConfigurationLabel =
+                longTermTemporalControlsAvailable
+                    ? "Developer Options##AliasingDeveloperOptions"
+                    : "Aliasing Algorithm Configuration";
             if (algorithmConfigurationAvailable &&
                 BeginAnimatedTreeNode(
-                    "Aliasing Algorithm Configuration",
+                    algorithmConfigurationLabel,
                     ImGuiTreeNodeFlags_DefaultOpen))
             {
-                MiniEngineTaaAlgorithmOverrides& overrides =
+                TemporalAaAlgorithmOverrides& overrides =
                     settings.algorithmOverrides;
                 AntiAliasingSettings presetLabelSettings =
                     settings;
+                // Enabled controls execution, not the retained Developer
+                // Options state. Keep the requested cost and its inherited
+                // rows stable while the Aliasing toggle collapses.
+                presetLabelSettings.enabled = true;
                 presetLabelSettings.algorithmOverrides =
-                    MiniEngineTaaAlgorithmOverrides{};
+                    TemporalAaAlgorithmOverrides{};
+                presetLabelSettings.behaviorOverrides =
+                    TemporalAaBehaviorOverrides{};
+                presetLabelSettings.performanceOverrides =
+                    TemporalAaPerformanceOverrides{};
                 const ResolvedAntiAliasingSettings resolvedForLabels =
                     m_ui.GetResolvedAntiAliasingSettings(
                         presetLabelSettings);
+                AntiAliasingSettings currentLabelSettings =
+                    settings;
+                currentLabelSettings.enabled = true;
                 const ResolvedAntiAliasingSettings resolvedCurrent =
-                    m_ui.GetResolvedAntiAliasingSettings(settings);
+                    m_ui.GetResolvedAntiAliasingSettings(
+                        currentLabelSettings);
 
                 const auto drawMorphologyOption = [&]()
                 {
@@ -19311,7 +27938,7 @@ protected:
                             GetAntiAliasingQualityLabel(
                                 resolvedForLabels.morphologyQuality);
                         drawFixedOption(
-                            "Subpixel Morphology##Developer",
+                            "Morphology##Developer",
                             fixedLabel.c_str(),
                             "The Conservative Morphological method uses the "
                             "strength selected by Quality.");
@@ -19345,7 +27972,7 @@ protected:
                         ImGui::SetNextItemWidth(settingsControlWidth);
                         const bool morphologyComboOpen =
                             BeginRoundedCombo(
-                                "Subpixel Morphology##Developer",
+                                "Morphology##Developer",
                                 morphologyPreview.c_str());
                         if (morphologyComboOpen)
                         {
@@ -19363,7 +27990,7 @@ protected:
                                     AntiAliasingQuality::High,
                                     AntiAliasingQuality::Ultra
                                 };
-                            MiniEngineTaaAlgorithmOverrides*
+                            TemporalAaAlgorithmOverrides*
                                 overridesPointer = &overrides;
                             const bool offRepresentsInherited =
                                 morphologyInherited && morphologyOff;
@@ -19381,8 +28008,8 @@ protected:
                                             FromPreset
                                         : MorphologyApplicationOverride::Off;
                                     overridesPointer->morphologyQuality = -1;
-                                    m_ui.MiniEngineTaaVisualization =
-                                        MiniEngineTaaDebugView::Off;
+                                    m_ui.TemporalAaVisualization =
+                                        TemporalAaDebugView::Off;
                                 });
                             for (const AntiAliasingQuality candidateQuality :
                                 morphologyQualityOrder)
@@ -19399,7 +28026,7 @@ protected:
                                 std::string candidateLabel =
                                     morphologyLabels[index];
                                 candidateLabel += "##MorphologyCandidate";
-                                MiniEngineTaaAlgorithmOverrides*
+                                TemporalAaAlgorithmOverrides*
                                     overridesPointer = &overrides;
                                 DrawDeferredDropdownOption(
                                     candidateLabel.c_str(),
@@ -19421,8 +28048,8 @@ protected:
                                             candidateRepresentsInherited
                                             ? -1
                                             : int32_t(candidateQuality);
-                                        m_ui.MiniEngineTaaVisualization =
-                                            MiniEngineTaaDebugView::Off;
+                                        m_ui.TemporalAaVisualization =
+                                            TemporalAaDebugView::Off;
                                     });
                                 if (selected)
                                     ImGui::SetItemDefaultFocus();
@@ -19432,15 +28059,18 @@ protected:
                         }
                         ImGui::SetItemTooltip(
                             "Choose the CMAA2 strength applied after the "
-                            "resolved Temporal or Multisample image.");
+                            "resolved Temporal or Multisample image. With "
+                            "Minimum, compact R11G11B10 color reports an "
+                            "effective Reduced fallback so CMAA2 receives "
+                            "RGBA16F input.");
                         if (DrawNestedDropdownResetIcon(
-                                "Aliasing Subpixel Morphology",
+                                "Aliasing Morphology",
                                 overrides.subpixelMorphology !=
                                     MorphologyApplicationOverride::
                                         FromPreset ||
                                     overrides.morphologyQuality >= 0))
                         {
-                            MiniEngineTaaAlgorithmOverrides*
+                            TemporalAaAlgorithmOverrides*
                                 overridesPointer = &overrides;
                             QueueDeferredControlUiAction(
                                 [this, overridesPointer]()
@@ -19449,86 +28079,354 @@ protected:
                                         MorphologyApplicationOverride::
                                             FromPreset;
                                     overridesPointer->morphologyQuality = -1;
-                                    m_ui.MiniEngineTaaVisualization =
-                                        MiniEngineTaaDebugView::Off;
+                                    m_ui.TemporalAaVisualization =
+                                        TemporalAaDebugView::Off;
                                 });
                         }
                     }
                 };
 
                 static constexpr std::array<
-                    MiniEngineTaaMotionSourceOverride, 3>
+                    TemporalAaMotionSourceOverride, 3>
                     motionSourceOrder = {
-                        MiniEngineTaaMotionSourceOverride::Center,
-                        MiniEngineTaaMotionSourceOverride::ClosestCross,
-                        MiniEngineTaaMotionSourceOverride::
+                        TemporalAaMotionSourceOverride::Center,
+                        TemporalAaMotionSourceOverride::ClosestCross,
+                        TemporalAaMotionSourceOverride::
                             CenterFirstEdgeDilation
                     };
                 static constexpr std::array<
-                    MiniEngineTaaHistoryFilterOverride, 4>
+                    TemporalAaHistoryFilterOverride, 4>
                     reconstructionOrder = {
-                        MiniEngineTaaHistoryFilterOverride::Bilinear,
-                        MiniEngineTaaHistoryFilterOverride::
+                        TemporalAaHistoryFilterOverride::Bilinear,
+                        TemporalAaHistoryFilterOverride::
                             OneSampleBicubic,
-                        MiniEngineTaaHistoryFilterOverride::
+                        TemporalAaHistoryFilterOverride::
                             FiveTapCatmullRom,
-                        MiniEngineTaaHistoryFilterOverride::
+                        TemporalAaHistoryFilterOverride::
                             NineTapCatmullRom
                     };
-#if UVSR_AA_DEVELOPER_OVERRIDES
                 static constexpr std::array<
-                    MiniEngineTaaSampleResurrectionOverride, 3>
+                    TemporalAaHistoryStorageOverride, 2>
+                    historyStorageOrder = {
+                        TemporalAaHistoryStorageOverride::Robust,
+                        TemporalAaHistoryStorageOverride::Compact
+                    };
+                static constexpr std::array<
+                    TemporalAaDepthValidationOverride, 2>
+                    depthValidationOrder = {
+                        TemporalAaDepthValidationOverride::
+                            FourTexelFootprint,
+                        TemporalAaDepthValidationOverride::MovingPoint
+                    };
+                static constexpr std::array<
+                    TemporalAaHistoryWeightPolicyOverride, 2>
+                    historyWeightOrder = {
+                        TemporalAaHistoryWeightPolicyOverride::
+                            ConfidenceRecurrence,
+                        TemporalAaHistoryWeightPolicyOverride::
+                            ImmediateHorizon
+                    };
+                static constexpr std::array<
+                    TemporalAaMotionTrustOverride, 2>
+                    motionTrustOrder = {
+                        TemporalAaMotionTrustOverride::LinearSpeed,
+                        TemporalAaMotionTrustOverride::SquaredSpeed
+                    };
+                static constexpr std::array<
+                    TemporalAaRectificationClipOverride, 2>
+                    rectificationClipOrder = {
+                        TemporalAaRectificationClipOverride::
+                            VelocityDilatedLine,
+                        TemporalAaRectificationClipOverride::
+                            TightComponent
+                    };
+                static constexpr std::array<
+                    TemporalAaBlendDomainOverride, 2>
+                    blendDomainOrder = {
+                        TemporalAaBlendDomainOverride::
+                            LuminanceCompressed,
+                        TemporalAaBlendDomainOverride::LinearRgb
+                    };
+                static constexpr std::array<
+                    TemporalAaAutoToggle, 2>
+                    toggleOrder = {
+                        TemporalAaAutoToggle::Off,
+                        TemporalAaAutoToggle::On
+                    };
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
+                static constexpr std::array<
+                    TemporalAaSampleResurrectionOverride, 3>
                     sampleResurrectionOrder = {
-                        MiniEngineTaaSampleResurrectionOverride::Off,
-                        MiniEngineTaaSampleResurrectionOverride::
+                        TemporalAaSampleResurrectionOverride::Off,
+                        TemporalAaSampleResurrectionOverride::
                             OneOlderFrame,
-                        MiniEngineTaaSampleResurrectionOverride::
+                        TemporalAaSampleResurrectionOverride::
                             TwoOlderFrames
                     };
 #endif
 
                 if (longTermTemporalControlsAvailable)
                 {
+                    TemporalAaBehaviorOverrides& behaviorOverrides =
+                        settings.behaviorOverrides;
+
+                    drawDejitterControl();
+                    if (BeginAnimatedToggleRegion(
+                            "##TemporalSharpnessAvailability",
+                            resolvedCurrent.sharpeningAllowed))
+                    {
+                        ImGui::Checkbox(
+                            "Sharpness###Sharpness",
+                            &m_ui.TemporalAaSharpenEnabled);
+                        ImGui::SetItemTooltip(
+                            "Enable or bypass temporal output sharpening "
+                            "while retaining the selected strength.");
+                        if (DrawPresetResetIcon(
+                                "Aliasing Sharpness Enabled",
+                                m_ui.TemporalAaSharpenEnabled))
+                        {
+                            m_ui.TemporalAaSharpenEnabled = false;
+                        }
+                        if (BeginAnimatedToggleRegion(
+                                "##SharpnessStrengthControls",
+                                m_ui.TemporalAaSharpenEnabled))
+                        {
+                            ImGui::SetNextItemWidth(settingsControlWidth);
+                            DrawSliderFloat(
+                                "Sharpness Strength",
+                                &m_ui.TemporalAaSharpness,
+                                TemporalAaMinimumSharpness,
+                                TemporalAaMaximumSharpness,
+                                "%.2f");
+                            ImGui::SetItemTooltip(
+                                "Set temporal output sharpness. The stored "
+                                "value is retained while sharpening is "
+                                "disabled.");
+                            if (DrawPresetResetIcon(
+                                    "Aliasing Sharpness Strength",
+                                    std::abs(
+                                        m_ui.TemporalAaSharpness -
+                                        TemporalAaDefaultSharpness) > 1e-4f))
+                            {
+                                m_ui.TemporalAaSharpness =
+                                    TemporalAaDefaultSharpness;
+                            }
+                            EndAnimatedToggleRegion();
+                        }
+                        EndAnimatedToggleRegion();
+                    }
+
+                    AntiAliasingSettings historyPresetSettings = settings;
+                    // The enabled toggle controls execution, not the retained
+                    // preset presentation. Resolve inherited history from the
+                    // active method while its controls collapse so 6 / 100%
+                    // never flashes to 0.
+                    historyPresetSettings.enabled = true;
+                    historyPresetSettings.algorithmOverrides.historyFrames =
+                        -1;
+                    historyPresetSettings.algorithmOverrides.historyStrength =
+                        -1.f;
+                    const ResolvedAntiAliasingSettings historyPreset =
+                        m_ui.GetResolvedAntiAliasingSettings(
+                            historyPresetSettings);
+                    int historyFrames =
+                        overrides.historyFrames >= 0
+                            ? overrides.historyFrames
+                            : static_cast<int>(
+                                historyPreset.historyFrames);
+                    std::string historyFramesLabel =
+                        "History Frames";
+                    historyFramesLabel +=
+                        "##ResolvedHistoryFrames";
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (DrawSliderInt(
+                            historyFramesLabel.c_str(),
+                            &historyFrames,
+                            1,
+                            32,
+                            "%d"))
+                    {
+                        overrides.historyFrames =
+                            historyFrames ==
+                                static_cast<int>(
+                                    historyPreset.historyFrames)
+                                ? -1
+                                : historyFrames;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Cap the logical number of prior frames that can "
+                        "influence temporal AA. The physical allocation "
+                        "remains two ping-pong textures.");
+                    if (DrawPresetResetIcon(
+                            "Aliasing History Frames",
+                            overrides.historyFrames >= 0))
+                    {
+                        overrides.historyFrames = -1;
+                    }
+                    float historyStrength =
+                        100.f *
+                        (overrides.historyStrength >= 0.f
+                            ? overrides.historyStrength
+                            : historyPreset.historyStrength);
+                    std::string historyStrengthLabel =
+                        "History Strength";
+                    historyStrengthLabel +=
+                        "##ResolvedHistoryStrength";
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (DrawSliderFloat(
+                            historyStrengthLabel.c_str(),
+                            &historyStrength,
+                            0.f,
+                            200.f,
+                            "%.0f%%"))
+                    {
+                        overrides.historyStrength =
+                            std::clamp(
+                                historyStrength * 0.01f,
+                                0.f,
+                                2.f);
+                        if (std::abs(
+                                overrides.historyStrength -
+                                historyPreset.historyStrength) < 1e-4f)
+                        {
+                            overrides.historyStrength = -1.f;
+                        }
+                    }
+                    ImGui::SetItemTooltip(
+                        "%s",
+                        "Scale accepted history after motion, bounds, "
+                        "reverse-Z depth, disocclusion, and rectification "
+                        "gates. Values above 100% strengthen only accepted "
+                        "history, remain capped by the selected frame horizon, "
+                        "and cannot revive a rejected sample.");
+                    if (DrawPresetResetIcon(
+                            "Aliasing History Strength",
+                            overrides.historyStrength >= 0.f))
+                    {
+                        overrides.historyStrength = -1.f;
+                    }
+
                     drawMorphologyOption();
                     drawEnumOption(
                         "Motion Source",
                         overrides.motionSource,
                         motionSourceOrder,
-                        GetMiniEngineTaaMotionSourceOverrideLabel,
-                        "Override motion ownership. Changing it resets all temporal state.",
-                        GetMiniEngineTaaMotionSourceLabel(
+                        GetTemporalAaMotionSourceOverrideLabel,
+                        "Choose motion ownership. Center is the strongest "
+                        "existing-setting explanation for Minimum's calmer "
+                        "thin edges because it avoids phase-varying borrowed "
+                        "foreground motion. Changing it resets temporal state.",
+                        GetTemporalAaMotionSourceLabel(
                             resolvedForLabels.temporal.motionSource));
                     drawEnumOption(
                         "Reconstruction",
                         overrides.historyFilter,
                         reconstructionOrder,
-                        GetMiniEngineTaaHistoryFilterOverrideLabel,
-                        "Choose the real history reconstruction filter, "
-                        "including the full nine-tap Catmull-Rom option.",
-                        GetMiniEngineTaaHistoryFilterLabel(
+                        GetTemporalAaHistoryFilterOverrideLabel,
+                        "Choose the history reconstruction filter, including "
+                        "the full nine-tap Catmull-Rom option.",
+                        GetTemporalAaHistoryFilterLabel(
                             resolvedForLabels.temporal.historyFilter));
                     drawRectificationControl();
+
+                    drawEnumOption(
+                        "History Storage",
+                        behaviorOverrides.historyStorage,
+                        historyStorageOrder,
+                        GetTemporalAaHistoryStorageOverrideLabel,
+                        "Choose robust RGBA16/R32 history or the compact "
+                        "Minimum history. Compact storage uses the dedicated "
+                        "one-dispatch path only when the selected algorithms "
+                        "are compatible; otherwise runtime retains robust "
+                        "history. Statistics reports the effective cost.",
+                        GetTemporalAaHistoryStorageLabel(
+                            resolvedForLabels.historyStorage));
+                    drawEnumOption(
+                        "Previous-Depth Validation",
+                        behaviorOverrides.depthValidation,
+                        depthValidationOrder,
+                        GetTemporalAaDepthValidationOverrideLabel,
+                        "Four-Texel Footprint validates the full jittered "
+                        "bilinear footprint. Stationary Bypass uses a point "
+                        "depth sample while moving and lets otherwise-valid "
+                        "stationary history pass the depth gate.",
+                        GetTemporalAaDepthValidationLabel(
+                            resolvedForLabels.depthValidation));
+                    drawEnumOption(
+                        "History Weight",
+                        behaviorOverrides.historyWeight,
+                        historyWeightOrder,
+                        GetTemporalAaHistoryWeightPolicyOverrideLabel,
+                        "Confidence Recurrence ramps per-pixel trust through "
+                        "history alpha. Immediate Horizon uses the selected "
+                        "frame horizon on the first accepted prior sample. "
+                        "Compact history requires Immediate Horizon.",
+                        GetTemporalAaHistoryWeightPolicyLabel(
+                            resolvedForLabels.historyWeight));
+                    drawEnumOption(
+                        "Motion Trust",
+                        behaviorOverrides.motionTrust,
+                        motionTrustOrder,
+                        GetTemporalAaMotionTrustOverrideLabel,
+                        "Choose the robust linear-speed confidence curve or "
+                        "Minimum's cheaper squared-speed response.",
+                        GetTemporalAaMotionTrustLabel(
+                            resolvedForLabels.motionTrust));
+                    drawEnumOption(
+                        "Rectification Clip",
+                        behaviorOverrides.rectificationClip,
+                        rectificationClipOrder,
+                        GetTemporalAaRectificationClipOverrideLabel,
+                        "Velocity-Dilated Line preserves more history along "
+                        "the current-to-history line. Tight Component clamps "
+                        "each channel to Minimum's exact pair bounds.",
+                        GetTemporalAaRectificationClipLabel(
+                            resolvedForLabels.rectificationClip));
+                    drawEnumOption(
+                        "Blend Domain",
+                        behaviorOverrides.blendDomain,
+                        blendDomainOrder,
+                        GetTemporalAaBlendDomainOverrideLabel,
+                        "Choose the robust luminance-compressed blend or "
+                        "Minimum's direct linear-RGB blend.",
+                        GetTemporalAaBlendDomainLabel(
+                            resolvedForLabels.blendDomain));
+                    drawEnumOption(
+                        "Sharpness Policy",
+                        behaviorOverrides.sharpening,
+                        toggleOrder,
+                        GetTemporalAaAutoToggleLabel,
+                        "Temporal Cost disables sharpening in Minimum by "
+                        "default. Override that policy here; compact history "
+                        "adds one presentation-sharpen dispatch when enabled.",
+                        resolvedForLabels.sharpeningAllowed
+                            ? "On"
+                            : "Off");
+
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
+                    if (BeginAnimatedToggleRegion(
+                            "##SampleResurrectionAvailability",
+                            resolvedCurrent.temporalCostMode ==
+                                TemporalAaCostMode::FullQuality))
+                    {
+                        drawEnumOption(
+                            "Sample Resurrection",
+                            overrides.sampleResurrection,
+                            sampleResurrectionOrder,
+                            GetTemporalAaSampleResurrectionOverrideLabel,
+                            "Reuse one or two older validated samples when "
+                            "immediate history is unreliable.",
+                            GetTemporalAaSampleResurrectionLabel(
+                                resolvedForLabels.sampleResurrection));
+                        EndAnimatedToggleRegion();
+                    }
+#endif
+
                 }
                 else
                 {
                     drawMorphologyOption();
                 }
-
-                // Resurrection remains last because it is a recovery policy
-                // applied after the primary spatial and temporal choices.
-#if UVSR_AA_DEVELOPER_OVERRIDES
-                if (longTermTemporalControlsAvailable)
-                {
-                    drawEnumOption(
-                        "Sample Resurrection",
-                        overrides.sampleResurrection,
-                        sampleResurrectionOrder,
-                        GetMiniEngineTaaSampleResurrectionOverrideLabel,
-                        "Reuse one or two older validated samples when immediate history is unreliable.",
-                        GetMiniEngineTaaSampleResurrectionLabel(
-                            resolvedForLabels.sampleResurrection));
-                }
-#endif
 
                 EndAnimatedTreeNode();
             }
@@ -19640,82 +28538,107 @@ protected:
             }
 
             if (ImGui::Checkbox(
-                    "Diffuse IBL",
-                    &m_ui.EnableDiffuseIbl))
+                    "Ambient Fill",
+                    &m_ui.EnableAmbientFill))
             {
                 m_app->ResetImageBasedLightingHistory(true);
             }
             ImGui::SetItemTooltip(
-                "Use the selected environment for diffuse lighting.");
+                "Enable physical diffuse and specular environment fill. "
+                "Disable it to isolate direct lights. Ambient-occlusion "
+                "settings are preserved, but AO needs indirect light to "
+                "affect the beauty image.");
             if (DrawPresetResetIcon(
-                    "Diffuse IBL Enabled",
-                    !m_ui.EnableDiffuseIbl))
+                    "Ambient Fill Enabled",
+                    !m_ui.EnableAmbientFill))
             {
-                m_ui.EnableDiffuseIbl = true;
+                m_ui.EnableAmbientFill = true;
                 m_app->ResetImageBasedLightingHistory(true);
             }
             if (BeginAnimatedToggleRegion(
-                    "##DiffuseIblControls",
-                    m_ui.EnableDiffuseIbl))
+                    "##AmbientFillControls",
+                    m_ui.EnableAmbientFill))
             {
-                if (DrawSliderFloat(
-                        "Diffuse Strength##ImageBasedLighting",
-                        &m_ui.DiffuseIblStrength,
-                        0.f,
-                        4.f,
-                        "%.2f"))
+                if (ImGui::Checkbox(
+                        "Diffuse IBL",
+                        &m_ui.EnableDiffuseIbl))
                 {
                     m_app->ResetImageBasedLightingHistory(true);
                 }
                 ImGui::SetItemTooltip(
-                    "Scale diffuse environment lighting after exposure.");
+                    "Use the selected environment for diffuse lighting.");
                 if (DrawPresetResetIcon(
-                        "Diffuse IBL Strength",
-                        m_ui.DiffuseIblStrength != 1.f))
+                        "Diffuse IBL Enabled",
+                        !m_ui.EnableDiffuseIbl))
                 {
-                    m_ui.DiffuseIblStrength = 1.f;
+                    m_ui.EnableDiffuseIbl = true;
                     m_app->ResetImageBasedLightingHistory(true);
                 }
-                EndAnimatedToggleRegion();
-            }
+                if (BeginAnimatedToggleRegion(
+                        "##DiffuseIblControls",
+                        m_ui.EnableDiffuseIbl))
+                {
+                    if (DrawSliderFloat(
+                            "Diffuse Strength##ImageBasedLighting",
+                            &m_ui.DiffuseIblStrength,
+                            0.f,
+                            4.f,
+                            "%.2f"))
+                    {
+                        m_app->ResetImageBasedLightingHistory(true);
+                    }
+                    ImGui::SetItemTooltip(
+                        "Scale diffuse environment lighting after exposure.");
+                    if (DrawPresetResetIcon(
+                            "Diffuse IBL Strength",
+                            m_ui.DiffuseIblStrength != 1.f))
+                    {
+                        m_ui.DiffuseIblStrength = 1.f;
+                        m_app->ResetImageBasedLightingHistory(true);
+                    }
+                    EndAnimatedToggleRegion();
+                }
 
-            if (ImGui::Checkbox(
-                    "Specular IBL",
-                    &m_ui.EnableSpecularIbl))
-            {
-                m_app->ResetImageBasedLightingHistory(false);
-            }
-            ImGui::SetItemTooltip(
-                "Use the selected environment for specular reflections.");
-            if (DrawPresetResetIcon(
-                    "Specular IBL Enabled",
-                    !m_ui.EnableSpecularIbl))
-            {
-                m_ui.EnableSpecularIbl = true;
-                m_app->ResetImageBasedLightingHistory(false);
-            }
-            if (BeginAnimatedToggleRegion(
-                    "##SpecularIblControls",
-                    m_ui.EnableSpecularIbl))
-            {
-                if (DrawSliderFloat(
-                        "Specular Strength##ImageBasedLighting",
-                        &m_ui.SpecularIblStrength,
-                        0.f,
-                        4.f,
-                        "%.2f"))
+                if (ImGui::Checkbox(
+                        "Specular IBL",
+                        &m_ui.EnableSpecularIbl))
                 {
                     m_app->ResetImageBasedLightingHistory(false);
                 }
                 ImGui::SetItemTooltip(
-                    "Scale specular environment lighting after exposure.");
+                    "Use the selected environment for specular reflections.");
                 if (DrawPresetResetIcon(
-                        "Specular IBL Strength",
-                        m_ui.SpecularIblStrength != 1.f))
+                        "Specular IBL Enabled",
+                        !m_ui.EnableSpecularIbl))
                 {
-                    m_ui.SpecularIblStrength = 1.f;
+                    m_ui.EnableSpecularIbl = true;
                     m_app->ResetImageBasedLightingHistory(false);
                 }
+                if (BeginAnimatedToggleRegion(
+                        "##SpecularIblControls",
+                        m_ui.EnableSpecularIbl))
+                {
+                    if (DrawSliderFloat(
+                            "Specular Strength##ImageBasedLighting",
+                            &m_ui.SpecularIblStrength,
+                            0.f,
+                            4.f,
+                            "%.2f"))
+                    {
+                        m_app->ResetImageBasedLightingHistory(false);
+                    }
+                    ImGui::SetItemTooltip(
+                        "Scale specular environment lighting after exposure.");
+                    if (DrawPresetResetIcon(
+                            "Specular IBL Strength",
+                            m_ui.SpecularIblStrength != 1.f))
+                    {
+                        m_ui.SpecularIblStrength = 1.f;
+                        m_app->ResetImageBasedLightingHistory(false);
+                    }
+                    EndAnimatedToggleRegion();
+                }
+
                 EndAnimatedToggleRegion();
             }
 
@@ -19801,7 +28724,7 @@ protected:
         }
         ImGui::Spacing();
 
-        const auto& lights = m_app->GetScene()->GetSceneGraph()->GetLights();
+        const auto& lights = m_app->GetEditableLights();
         std::shared_ptr<Light> defaultSelectedLight =
             m_app->GetPrimaryDirectionalLight();
         if (!defaultSelectedLight ||
@@ -19865,21 +28788,328 @@ protected:
 
                 if (m_SelectedLight)
                 {
-                    struct LightDefaultState
+                    if (m_app->IsFlashlight(m_SelectedLight))
                     {
-                        int type = LightType_None;
-                        double3 direction = double3(0.0, -1.0, 0.0);
-                        float3 color = float3(1.f);
-                        float irradiance = 1.f;
-                        float angularSize = 0.f;
-                        float radius = 0.f;
-                        float intensity = 1.f;
-                        float innerAngle = 180.f;
-                        float outerAngle = 180.f;
-                    };
-                    static std::unordered_map<
-                        std::string,
-                        LightDefaultState> lightDefaults;
+                        FlashlightSettings& flashlight =
+                            m_ui.Flashlight;
+                        const FlashlightSettings defaults =
+                            DefaultFlashlightSettings;
+                        const auto floatChanged =
+                            [](float left, float right)
+                            {
+                                return std::abs(left - right) > 1e-5f;
+                            };
+
+                        if (!m_ui.EnablePbr)
+                        {
+                            ImGui::TextDisabled(
+                                "Enable PBR to use the flashlight.");
+                            ImGui::SetItemTooltip(
+                                "UVSR keeps the flashlight exact-zero in "
+                                "legacy lighting modes because they use a "
+                                "different spotlight cone convention.");
+                            ImGui::BeginDisabled();
+                        }
+                        ImGui::Checkbox(
+                            "Enabled (F)",
+                            &m_ui.FlashlightEnabled);
+                        ImGui::SetItemTooltip(
+                            "Turn the camera flashlight on or off. Plain F "
+                            "uses the same setting.");
+                        if (DrawPresetResetIcon(
+                                "Flashlight Enabled",
+                                m_ui.FlashlightEnabled !=
+                                    DefaultFlashlightEnabled))
+                        {
+                            m_ui.FlashlightEnabled =
+                                DefaultFlashlightEnabled;
+                        }
+                        if (!m_ui.EnablePbr)
+                            ImGui::EndDisabled();
+
+                        ImGui::Checkbox(
+                            "Cast Shadows",
+                            &flashlight.castShadows);
+                        ImGui::SetItemTooltip(
+                            "Render geometry visibility for both flashlight "
+                            "beam lobes.");
+                        if (DrawPresetResetIcon(
+                                "Flashlight Cast Shadows",
+                                flashlight.castShadows !=
+                                    defaults.castShadows))
+                        {
+                            flashlight.castShadows =
+                                defaults.castShadows;
+                        }
+
+                        ImGui::Checkbox(
+                            "Realistic Flashlight",
+                            &flashlight.realisticLens);
+                        ImGui::SetItemTooltip(
+                            "Add a lens hotspot, bounded sway, and aim "
+                            "correction. This uses one extra local light, plus "
+                            "one extra shadow sample when Cast Shadows is "
+                            "enabled.");
+                        if (DrawPresetResetIcon(
+                                "Realistic Flashlight",
+                                flashlight.realisticLens !=
+                                    defaults.realisticLens))
+                        {
+                            flashlight.realisticLens =
+                                defaults.realisticLens;
+                        }
+
+                        if (BeginAnimatedToggleRegion(
+                                "##RealisticFlashlightControls",
+                                flashlight.realisticLens))
+                        {
+                            DrawSliderFloat(
+                                "Hotspot Size",
+                                &flashlight.hotspotSize,
+                                FlashlightMinimumHotspotSize,
+                                FlashlightMaximumHotspotSize,
+                                "%.2f");
+                            ImGui::SetItemTooltip(
+                                "Set the focused lens hotspot width relative "
+                                "to the complete beam.");
+                            if (DrawPresetResetIcon(
+                                    "Flashlight Hotspot Size",
+                                    floatChanged(
+                                        flashlight.hotspotSize,
+                                        defaults.hotspotSize)))
+                            {
+                                flashlight.hotspotSize =
+                                    defaults.hotspotSize;
+                            }
+
+                            DrawSliderFloat(
+                                "Hotspot Strength",
+                                &flashlight.hotspotStrength,
+                                0.f,
+                                FlashlightMaximumHotspotStrength,
+                                "%.2f");
+                            ImGui::SetItemTooltip(
+                                "Move peak candela from the broad spill into "
+                                "the focused lens hotspot.");
+                            if (DrawPresetResetIcon(
+                                    "Flashlight Hotspot Strength",
+                                    floatChanged(
+                                        flashlight.hotspotStrength,
+                                        defaults.hotspotStrength)))
+                            {
+                                flashlight.hotspotStrength =
+                                    defaults.hotspotStrength;
+                            }
+
+                            DrawSliderFloat(
+                                "Sway",
+                                &flashlight.swayDegrees,
+                                0.f,
+                                FlashlightMaximumSwayDegrees,
+                                "%.2f deg");
+                            ImGui::SetItemTooltip(
+                                "Set the maximum subtle handheld aim motion. "
+                                "Zero keeps the corrected beam perfectly still.");
+                            if (DrawPresetResetIcon(
+                                    "Flashlight Sway",
+                                    floatChanged(
+                                        flashlight.swayDegrees,
+                                        defaults.swayDegrees)))
+                            {
+                                flashlight.swayDegrees =
+                                    defaults.swayDegrees;
+                            }
+
+                            DrawSliderFloat(
+                                "Aim Correction",
+                                &flashlight.aimCorrectionSeconds,
+                                FlashlightMinimumAimCorrectionSeconds,
+                                FlashlightMaximumAimCorrectionSeconds,
+                                "%.2f s");
+                            ImGui::SetItemTooltip(
+                                "Set the half-life for the beam to catch up "
+                                "after the camera turns.");
+                            if (DrawPresetResetIcon(
+                                    "Flashlight Aim Correction",
+                                    floatChanged(
+                                        flashlight.aimCorrectionSeconds,
+                                        defaults.aimCorrectionSeconds)))
+                            {
+                                flashlight.aimCorrectionSeconds =
+                                    defaults.aimCorrectionSeconds;
+                            }
+
+                            EndAnimatedToggleRegion();
+                        }
+
+                        DrawSliderFloat(
+                            "Brightness",
+                            &flashlight.peakIntensityCandela,
+                            FlashlightMinimumIntensityCandela,
+                            FlashlightMaximumIntensityCandela,
+                            "%.0f cd",
+                            ImGuiSliderFlags_Logarithmic);
+                        ImGui::SetItemTooltip(
+                            "Set the peak on-axis luminous intensity.");
+                        if (DrawPresetResetIcon(
+                                "Flashlight Brightness",
+                                floatChanged(
+                                    flashlight.peakIntensityCandela,
+                                    defaults.peakIntensityCandela)))
+                        {
+                            flashlight.peakIntensityCandela =
+                                defaults.peakIntensityCandela;
+                        }
+
+                        DrawSliderFloat(
+                            "Beam Size",
+                            &flashlight.beamSizeDegrees,
+                            FlashlightMinimumBeamSizeDegrees,
+                            FlashlightMaximumBeamSizeDegrees,
+                            "%.1f deg");
+                        ImGui::SetItemTooltip(
+                            "Set the full horizontal and vertical outer beam "
+                            "width.");
+                        if (DrawPresetResetIcon(
+                                "Flashlight Beam Size",
+                                floatChanged(
+                                    flashlight.beamSizeDegrees,
+                                    defaults.beamSizeDegrees)))
+                        {
+                            flashlight.beamSizeDegrees =
+                                defaults.beamSizeDegrees;
+                        }
+
+                        DrawSliderFloat(
+                            "Beam Roundness",
+                            &flashlight.beamRoundness,
+                            0.f,
+                            1.f,
+                            "%.2f");
+                        ImGui::SetItemTooltip(
+                            "Morph the beam footprint from a softly rounded "
+                            "square to an exact circle.");
+                        if (DrawPresetResetIcon(
+                                "Flashlight Beam Roundness",
+                                floatChanged(
+                                    flashlight.beamRoundness,
+                                    defaults.beamRoundness)))
+                        {
+                            flashlight.beamRoundness =
+                                defaults.beamRoundness;
+                        }
+
+                        DrawSliderFloat(
+                            "Edge Softness",
+                            &flashlight.edgeSoftness,
+                            0.f,
+                            1.f,
+                            "%.2f");
+                        ImGui::SetItemTooltip(
+                            "Set the falloff width without changing the "
+                            "projected beam shape.");
+                        if (DrawPresetResetIcon(
+                                "Flashlight Edge Softness",
+                                floatChanged(
+                                    flashlight.edgeSoftness,
+                                    defaults.edgeSoftness)))
+                        {
+                            flashlight.edgeSoftness =
+                                defaults.edgeSoftness;
+                        }
+
+                        DrawSliderFloat(
+                            "Range",
+                            &flashlight.rangeMeters,
+                            FlashlightMinimumRangeMeters,
+                            FlashlightMaximumRangeMeters,
+                            "%.1f m",
+                            ImGuiSliderFlags_Logarithmic);
+                        ImGui::SetItemTooltip(
+                            "Set the finite distance where the beam fades out.");
+                        if (DrawPresetResetIcon(
+                                "Flashlight Range",
+                                floatChanged(
+                                    flashlight.rangeMeters,
+                                    defaults.rangeMeters)))
+                        {
+                            flashlight.rangeMeters =
+                                defaults.rangeMeters;
+                        }
+
+                        float flashlightColor[] = {
+                            flashlight.colorLinearRed,
+                            flashlight.colorLinearGreen,
+                            flashlight.colorLinearBlue
+                        };
+                        if (ImGui::ColorEdit3(
+                                "Color",
+                                flashlightColor,
+                                ImGuiColorEditFlags_Float |
+                                    ImGuiColorEditFlags_DisplayRGB))
+                        {
+                            flashlight.colorLinearRed =
+                                flashlightColor[0];
+                            flashlight.colorLinearGreen =
+                                flashlightColor[1];
+                            flashlight.colorLinearBlue =
+                                flashlightColor[2];
+                        }
+                        ImGui::SetItemTooltip(
+                            "Set the flashlight's scene-linear RGB color.");
+                        if (DrawPresetResetIcon(
+                                "Flashlight Color",
+                                floatChanged(
+                                    flashlight.colorLinearRed,
+                                    defaults.colorLinearRed) ||
+                                floatChanged(
+                                    flashlight.colorLinearGreen,
+                                    defaults.colorLinearGreen) ||
+                                floatChanged(
+                                    flashlight.colorLinearBlue,
+                                    defaults.colorLinearBlue)))
+                        {
+                            flashlight.colorLinearRed =
+                                defaults.colorLinearRed;
+                            flashlight.colorLinearGreen =
+                                defaults.colorLinearGreen;
+                            flashlight.colorLinearBlue =
+                                defaults.colorLinearBlue;
+                        }
+
+                        float cameraOffsetCentimeters =
+                            flashlight.cameraLateralOffsetMeters * 100.f;
+                        if (DrawSliderFloat(
+                                "Camera Offset",
+                                &cameraOffsetCentimeters,
+                                FlashlightMinimumCameraLateralOffsetMeters *
+                                    100.f,
+                                FlashlightMaximumCameraLateralOffsetMeters *
+                                    100.f,
+                                "%.1f cm"))
+                        {
+                            flashlight.cameraLateralOffsetMeters =
+                                cameraOffsetCentimeters * 0.01f;
+                        }
+                        ImGui::SetItemTooltip(
+                            "Move the flashlight sideways from the camera. "
+                            "Larger offsets separate projected shadows farther "
+                            "from their casters; zero centers the emitter. The "
+                            "beam still converges on the camera aim at 6 m. "
+                            "Large offsets can intersect nearby geometry.");
+                        if (DrawPresetResetIcon(
+                                "Flashlight Camera Offset",
+                                floatChanged(
+                                    flashlight.cameraLateralOffsetMeters,
+                                    defaults.cameraLateralOffsetMeters)))
+                        {
+                            flashlight.cameraLateralOffsetMeters =
+                                defaults.cameraLateralOffsetMeters;
+                        }
+
+                    }
+                    else
+                    {
                     const auto selectedLightIterator = std::find(
                         lights.begin(), lights.end(), m_SelectedLight);
                     const size_t selectedLightIndex = size_t(std::distance(
@@ -19932,7 +29162,7 @@ protected:
                             return result;
                         };
                     const auto [defaultLightIterator, inserted] =
-                        lightDefaults.try_emplace(
+                        m_LightDefaults.try_emplace(
                             defaultLightKey,
                             captureLightDefaults(*m_SelectedLight));
                     (void)inserted;
@@ -20163,8 +29393,21 @@ protected:
                             "This light type has no editable settings.");
                         break;
                     }
+                    }
                 }
             }
+
+            EndDrawerBody();
+        }
+        ImGui::Spacing();
+
+        const bool shadowsOpen = DrawCollapsingHeader(
+            "Shadows", "Show directional shadow technique controls.");
+        if (shadowsOpen)
+        {
+            BeginDrawerBody(
+                "##ShadowsBody",
+                settingsControlWidth);
 
             const bool directionalVisibilityAvailable =
                 m_ui.EnablePbr &&
@@ -20172,15 +29415,15 @@ protected:
                 m_app->HasPrimaryDirectionalLight();
 
             if (BeginAnimatedTreeNode(
-                    "Bend Screen-Space Shadows##Lights",
+                    "Screen-Space Directional Shadows##Shadows",
                     ImGuiTreeNodeFlags_DefaultOpen))
             {
-                BendScreenSpaceShadowSettings& shadows =
-                    m_ui.BendScreenSpaceShadows;
-                const BendScreenSpaceShadowSettings bendDefaults{};
-                static constexpr auto isSameBendConfiguration =
-                    [](const BendScreenSpaceShadowSettings& left,
-                        const BendScreenSpaceShadowSettings& right)
+                ScreenSpaceDirectionalShadowSettings& shadows =
+                    m_ui.ScreenSpaceDirectionalShadows;
+                const ScreenSpaceDirectionalShadowSettings shadowDefaults{};
+                static constexpr auto isSameShadowConfiguration =
+                    [](const ScreenSpaceDirectionalShadowSettings& left,
+                        const ScreenSpaceDirectionalShadowSettings& right)
                     {
                         return left.length == right.length &&
                             left.surfaceThickness ==
@@ -20202,22 +29445,22 @@ protected:
                             left.useEarlyOut == right.useEarlyOut &&
                             left.debugView == right.debugView;
                     };
-                static constexpr auto reconcileBendPreset =
-                    [](BendScreenSpaceShadowSettings& settings)
+                static constexpr auto reconcileShadowPreset =
+                    [](ScreenSpaceDirectionalShadowSettings& settings)
                     {
-                        constexpr BendShadowPreset Presets[] = {
-                            BendShadowPreset::BendExact,
-                            BendShadowPreset::Long,
-                            BendShadowPreset::MaximumValidation
+                        constexpr ScreenSpaceShadowPreset Presets[] = {
+                            ScreenSpaceShadowPreset::Default,
+                            ScreenSpaceShadowPreset::Long,
+                            ScreenSpaceShadowPreset::MaximumValidation
                         };
-                        for (const BendShadowPreset preset : Presets)
+                        for (const ScreenSpaceShadowPreset preset : Presets)
                         {
-                            BendScreenSpaceShadowSettings presetSettings =
+                            ScreenSpaceDirectionalShadowSettings presetSettings =
                                 settings;
-                            ApplyBendShadowPreset(
+                            ApplyScreenSpaceShadowPreset(
                                 presetSettings,
                                 preset);
-                            if (isSameBendConfiguration(
+                            if (isSameShadowConfiguration(
                                     settings,
                                     presetSettings))
                             {
@@ -20225,28 +29468,28 @@ protected:
                                 return;
                             }
                         }
-                        settings.preset = BendShadowPreset::Custom;
+                        settings.preset = ScreenSpaceShadowPreset::Custom;
                     };
                 if (!directionalVisibilityAvailable)
                     ImGui::BeginDisabled();
-                ImGui::Checkbox("Enabled##BendShadows", &shadows.enabled);
+                ImGui::Checkbox("Enabled##ScreenSpaceShadows", &shadows.enabled);
                 ImGui::SetItemTooltip(
                     "Trace the existing depth buffer for the primary "
                     "directional light.");
                 if (DrawPresetResetIcon(
-                        "Bend Shadows Enabled",
+                        "ScreenSpaceShadowsEnabled",
                         shadows.enabled))
                 {
                     shadows.enabled = false;
                 }
                 if (BeginAnimatedToggleRegion(
-                        "##BendShadowControls",
+                        "##ScreenSpaceShadowControls",
                         shadows.enabled))
                 {
-                    bool bendCustomChanged = false;
-                    bool bendResetApplied = false;
+                    bool shadowCustomChanged = false;
+                    bool shadowResetApplied = false;
                     static constexpr const char* PresetLabels[] = {
-                        "Bend Exact",
+                        "Default",
                         "Long",
                         "Maximum Validation",
                         "Custom"
@@ -20257,22 +29500,22 @@ protected:
                         int(std::size(PresetLabels)) - 1);
                     ImGui::SetNextItemWidth(settingsControlWidth);
                     if (BeginRoundedCombo(
-                            "Profile##BendShadows",
+                            "Profile##ScreenSpaceShadows",
                             PresetLabels[presetIndex]))
                     {
                         for (int index = 0;
                             index < int(std::size(PresetLabels));
                             ++index)
                         {
-                            const BendShadowPreset preset =
-                                BendShadowPreset(index);
+                            const ScreenSpaceShadowPreset preset =
+                                ScreenSpaceShadowPreset(index);
                             DrawDeferredDropdownOption(
                                 PresetLabels[index],
                                 PresetLabels[index],
                                 shadows.preset == preset,
                                 [settings = &shadows, preset]()
                                 {
-                                    ApplyBendShadowPreset(
+                                    ApplyScreenSpaceShadowPreset(
                                         *settings,
                                         preset);
                                 });
@@ -20280,53 +29523,53 @@ protected:
                         ImGui::EndCombo();
                     }
                     ImGui::SetItemTooltip(
-                        "Trade trace reach and cost: 60 pixels for Bend "
-                        "Exact, 240 for Long, or 960 for Maximum Validation.");
-                    BendScreenSpaceShadowSettings bendExactSettings =
+                        "Trade trace reach and cost: 60 pixels for Default, "
+                        "240 for Long, or 960 for Maximum Validation.");
+                    ScreenSpaceDirectionalShadowSettings defaultSettings =
                         shadows;
-                    ApplyBendShadowPreset(
-                        bendExactSettings,
-                        BendShadowPreset::BendExact);
+                    ApplyScreenSpaceShadowPreset(
+                        defaultSettings,
+                        ScreenSpaceShadowPreset::Default);
                     if (DrawNestedDropdownResetIcon(
-                            "Bend Shadow Profile",
+                            "ScreenSpaceShadowProfile",
                             shadows.preset !=
-                                    BendShadowPreset::BendExact ||
-                                !isSameBendConfiguration(
+                                    ScreenSpaceShadowPreset::Default ||
+                                !isSameShadowConfiguration(
                                     shadows,
-                                    bendExactSettings),
-                            "Reset every Bend shadow setting to Bend Exact."))
+                                    defaultSettings),
+                            "Reset every screen-space shadow setting to Default."))
                     {
                         QueueDeferredControlUiAction(
                             [settings = &shadows]()
                             {
-                                ApplyBendShadowPreset(
+                                ApplyScreenSpaceShadowPreset(
                                     *settings,
-                                    BendShadowPreset::BendExact);
+                                    ScreenSpaceShadowPreset::Default);
                             });
                     }
 
                     static constexpr const char* LengthLabels[] = {
                         "60 px", "120 px", "240 px", "480 px", "960 px"
                     };
-                    int lengthIndex = FindBendShadowCompiledValue(
-                        BendShadowSampleCounts,
-                        GetBendShadowSampleCount(shadows.length));
+                    int lengthIndex = FindScreenSpaceShadowSupportedValue(
+                        ScreenSpaceShadowTraceReaches,
+                        GetScreenSpaceShadowTraceReach(shadows.length));
                     lengthIndex = std::clamp(
                         lengthIndex,
                         0,
                         int(std::size(LengthLabels)) - 1);
                     ImGui::SetNextItemWidth(settingsControlWidth);
                     if (BeginRoundedCombo(
-                            "Length##BendShadows",
+                            "Length##ScreenSpaceShadows",
                             LengthLabels[lengthIndex]))
                     {
                         for (int index = 0;
                             index < int(std::size(LengthLabels));
                             ++index)
                         {
-                            const BendShadowLength length =
-                                BendShadowLength(
-                                    BendShadowSampleCounts[size_t(index)]);
+                            const ScreenSpaceShadowLength length =
+                                ScreenSpaceShadowLength(
+                                    ScreenSpaceShadowTraceReaches[size_t(index)]);
                             DrawDeferredDropdownOption(
                                 LengthLabels[index],
                                 LengthLabels[index],
@@ -20335,46 +29578,46 @@ protected:
                                 {
                                     settings->length = length;
                                     settings->preset =
-                                        BendShadowPreset::Custom;
+                                        ScreenSpaceShadowPreset::Custom;
                                 });
                         }
                         ImGui::EndCombo();
                     }
                     ImGui::SetItemTooltip(
-                        "Select a precompiled SAMPLE_COUNT shadow length.");
+                        "Set the runtime screen-space trace reach.");
                     if (DrawNestedDropdownResetIcon(
-                            "Bend Shadow Length",
-                            shadows.length != bendDefaults.length))
+                            "ScreenSpaceShadowLength",
+                            shadows.length != shadowDefaults.length))
                     {
-                        const BendShadowLength defaultLength =
-                            bendDefaults.length;
+                        const ScreenSpaceShadowLength defaultLength =
+                            shadowDefaults.length;
                         QueueDeferredControlUiAction(
                             [settings = &shadows, defaultLength]()
                             {
                                 settings->length = defaultLength;
-                                reconcileBendPreset(*settings);
+                                reconcileShadowPreset(*settings);
                             });
                     }
 
-                    bendCustomChanged |= DrawSliderFloat(
-                        "Surface Thickness##BendShadows",
+                    shadowCustomChanged |= DrawSliderFloat(
+                        "Surface Thickness##ScreenSpaceShadows",
                         &shadows.surfaceThickness,
                         0.f,
                         0.05f,
                         "%.4f");
                     ImGui::SetItemTooltip(
-                        "Set Bend's nonlinear-depth occluder thickness.");
+                        "Set nonlinear-depth occluder thickness.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Surface Thickness",
+                            "ScreenSpaceShadowSurfaceThickness",
                             shadows.surfaceThickness !=
-                                bendDefaults.surfaceThickness))
+                                shadowDefaults.surfaceThickness))
                     {
                         shadows.surfaceThickness =
-                            bendDefaults.surfaceThickness;
-                        bendResetApplied = true;
+                            shadowDefaults.surfaceThickness;
+                        shadowResetApplied = true;
                     }
-                    bendCustomChanged |= DrawSliderFloat(
-                        "Bilinear Threshold##BendShadows",
+                    shadowCustomChanged |= DrawSliderFloat(
+                        "Bilinear Threshold##ScreenSpaceShadows",
                         &shadows.bilinearThreshold,
                         0.f,
                         0.1f,
@@ -20383,42 +29626,42 @@ protected:
                         "Set the relative depth discontinuity that disables "
                         "interpolation.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Bilinear Threshold",
+                            "ScreenSpaceShadowBilinearThreshold",
                             shadows.bilinearThreshold !=
-                                bendDefaults.bilinearThreshold))
+                                shadowDefaults.bilinearThreshold))
                     {
                         shadows.bilinearThreshold =
-                            bendDefaults.bilinearThreshold;
-                        bendResetApplied = true;
+                            shadowDefaults.bilinearThreshold;
+                        shadowResetApplied = true;
                     }
-                    bendCustomChanged |= DrawSliderFloat(
-                        "Shadow Contrast##BendShadows",
+                    shadowCustomChanged |= DrawSliderFloat(
+                        "Shadow Contrast##ScreenSpaceShadows",
                         &shadows.shadowContrast,
                         1.f,
                         16.f,
                         "%.1f");
                     ImGui::SetItemTooltip(
-                        "Set Bend's visibility transition contrast.");
+                        "Set visibility transition contrast.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Contrast",
+                            "ScreenSpaceShadowContrast",
                             shadows.shadowContrast !=
-                                bendDefaults.shadowContrast))
+                                shadowDefaults.shadowContrast))
                     {
                         shadows.shadowContrast =
-                            bendDefaults.shadowContrast;
-                        bendResetApplied = true;
+                            shadowDefaults.shadowContrast;
+                        shadowResetApplied = true;
                     }
 
                     static constexpr const char* HardSampleLabels[] = {
                         "0", "4", "8"
                     };
                     const int selectedHard =
-                        FindBendShadowCompiledValue(
-                            BendShadowHardSampleCounts,
+                        FindScreenSpaceShadowSupportedValue(
+                            ScreenSpaceShadowHardSampleCounts,
                             shadows.hardShadowSamples);
                     ImGui::SetNextItemWidth(settingsControlWidth);
                     if (BeginRoundedCombo(
-                            "Hard Shadow Samples##BendShadows",
+                            "Hard Shadow Samples##ScreenSpaceShadows",
                             selectedHard >= 0
                                 ? HardSampleLabels[selectedHard]
                                 : "Unsupported"))
@@ -20428,7 +29671,7 @@ protected:
                             ++index)
                         {
                             const uint32_t value =
-                                BendShadowHardSampleCounts[size_t(index)];
+                                ScreenSpaceShadowHardSampleCounts[size_t(index)];
                             DrawDeferredDropdownOption(
                                 HardSampleLabels[index],
                                 HardSampleLabels[index],
@@ -20437,28 +29680,28 @@ protected:
                                 {
                                     settings->hardShadowSamples = value;
                                     settings->preset =
-                                        BendShadowPreset::Custom;
+                                        ScreenSpaceShadowPreset::Custom;
                                 });
                         }
                         ImGui::EndCombo();
                     }
                     ImGui::SetItemTooltip(
-                        "Select the compiled count of fully hard contact "
+                        "Set the runtime count of fully hard contact "
                         "samples.");
                     if (DrawNestedDropdownResetIcon(
-                            "Bend Shadow Hard Samples",
+                            "ScreenSpaceShadowHardSamples",
                             shadows.hardShadowSamples !=
-                                bendDefaults.hardShadowSamples))
+                                shadowDefaults.hardShadowSamples))
                     {
                         const uint32_t defaultHardShadowSamples =
-                            bendDefaults.hardShadowSamples;
+                            shadowDefaults.hardShadowSamples;
                         QueueDeferredControlUiAction(
                             [settings = &shadows,
                                 defaultHardShadowSamples]()
                             {
                                 settings->hardShadowSamples =
                                     defaultHardShadowSamples;
-                                reconcileBendPreset(*settings);
+                                reconcileShadowPreset(*settings);
                             });
                     }
 
@@ -20466,12 +29709,12 @@ protected:
                         "0", "8", "16"
                     };
                     const int selectedFade =
-                        FindBendShadowCompiledValue(
-                            BendShadowFadeSampleCounts,
+                        FindScreenSpaceShadowSupportedValue(
+                            ScreenSpaceShadowFadeSampleCounts,
                             shadows.fadeOutSamples);
                     ImGui::SetNextItemWidth(settingsControlWidth);
                     if (BeginRoundedCombo(
-                            "Fade-Out Samples##BendShadows",
+                            "Fade-Out Samples##ScreenSpaceShadows",
                             selectedFade >= 0
                                 ? FadeSampleLabels[selectedFade]
                                 : "Unsupported"))
@@ -20481,7 +29724,7 @@ protected:
                             ++index)
                         {
                             const uint32_t value =
-                                BendShadowFadeSampleCounts[size_t(index)];
+                                ScreenSpaceShadowFadeSampleCounts[size_t(index)];
                             DrawDeferredDropdownOption(
                                 FadeSampleLabels[index],
                                 FadeSampleLabels[index],
@@ -20490,96 +29733,96 @@ protected:
                                 {
                                     settings->fadeOutSamples = value;
                                     settings->preset =
-                                        BendShadowPreset::Custom;
+                                        ScreenSpaceShadowPreset::Custom;
                                 });
                         }
                         ImGui::EndCombo();
                     }
                     ImGui::SetItemTooltip(
-                        "Select the compiled count of samples that soften "
+                        "Set the runtime count of samples that soften "
                         "the trace endpoint.");
                     if (DrawNestedDropdownResetIcon(
-                            "Bend Shadow Fade-Out Samples",
+                            "ScreenSpaceShadowFade-OutSamples",
                             shadows.fadeOutSamples !=
-                                bendDefaults.fadeOutSamples))
+                                shadowDefaults.fadeOutSamples))
                     {
                         const uint32_t defaultFadeOutSamples =
-                            bendDefaults.fadeOutSamples;
+                            shadowDefaults.fadeOutSamples;
                         QueueDeferredControlUiAction(
                             [settings = &shadows,
                                 defaultFadeOutSamples]()
                             {
                                 settings->fadeOutSamples =
                                     defaultFadeOutSamples;
-                                reconcileBendPreset(*settings);
+                                reconcileShadowPreset(*settings);
                             });
                     }
 
-                    bendCustomChanged |= ImGui::Checkbox(
-                        "Ignore Edge Pixels##BendShadows",
+                    shadowCustomChanged |= ImGui::Checkbox(
+                        "Ignore Edge Pixels##ScreenSpaceShadows",
                         &shadows.ignoreEdgePixels);
                     ImGui::SetItemTooltip(
                         "Prevent detected depth-edge pixels from casting "
                         "shadows.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Ignore Edge Pixels",
+                            "ScreenSpaceShadowIgnoreEdgePixels",
                             shadows.ignoreEdgePixels !=
-                                bendDefaults.ignoreEdgePixels))
+                                shadowDefaults.ignoreEdgePixels))
                     {
                         shadows.ignoreEdgePixels =
-                            bendDefaults.ignoreEdgePixels;
-                        bendResetApplied = true;
+                            shadowDefaults.ignoreEdgePixels;
+                        shadowResetApplied = true;
                     }
-                    bendCustomChanged |= ImGui::Checkbox(
-                        "Precision Offset##BendShadows",
+                    shadowCustomChanged |= ImGui::Checkbox(
+                        "Precision Offset##ScreenSpaceShadows",
                         &shadows.usePrecisionOffset);
                     ImGui::SetItemTooltip(
-                        "Apply Bend's optional depth precision offset.");
+                        "Bias the ray origin slightly toward the near plane "
+                        "to compensate for depth quantization.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Precision Offset",
+                            "ScreenSpaceShadowPrecisionOffset",
                             shadows.usePrecisionOffset !=
-                                bendDefaults.usePrecisionOffset))
+                                shadowDefaults.usePrecisionOffset))
                     {
                         shadows.usePrecisionOffset =
-                            bendDefaults.usePrecisionOffset;
-                        bendResetApplied = true;
+                            shadowDefaults.usePrecisionOffset;
+                        shadowResetApplied = true;
                     }
-                    bendCustomChanged |= ImGui::Checkbox(
-                        "Bilinear Offset Mode##BendShadows",
+                    shadowCustomChanged |= ImGui::Checkbox(
+                        "Bilinear Offset Mode##ScreenSpaceShadows",
                         &shadows.bilinearSamplingOffsetMode);
                     ImGui::SetItemTooltip(
-                        "Offset bilinear samples onto the shared wavefront "
-                        "ray.");
+                        "Add a second depth candidate one pixel farther "
+                        "along the trace, allowing neighbor-only crossings.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Bilinear Offset Mode",
+                            "ScreenSpaceShadowBilinearOffsetMode",
                             shadows.bilinearSamplingOffsetMode !=
-                                bendDefaults.bilinearSamplingOffsetMode))
+                                shadowDefaults.bilinearSamplingOffsetMode))
                     {
                         shadows.bilinearSamplingOffsetMode =
-                            bendDefaults.bilinearSamplingOffsetMode;
-                        bendResetApplied = true;
+                            shadowDefaults.bilinearSamplingOffsetMode;
+                        shadowResetApplied = true;
                     }
-                    bendCustomChanged |= ImGui::Checkbox(
-                        "Early Out##BendShadows",
+                    shadowCustomChanged |= ImGui::Checkbox(
+                        "Early Out##ScreenSpaceShadows",
                         &shadows.useEarlyOut);
                     ImGui::SetItemTooltip(
-                        shadows.debugView == BendShadowDebugView::None
-                            ? "Skip pixels outside Bend's directional depth "
-                                "bounds."
-                            : "Bend suppresses effective early-out while a "
-                                "debug view is active.");
+                        shadows.debugView == ScreenSpaceShadowDebugView::None
+                            ? "Stop tracing after confirmed hard occlusion."
+                            : "Keep tracing to preserve complete debug "
+                                "diagnostics.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Early Out",
+                            "ScreenSpaceShadowEarlyOut",
                             shadows.useEarlyOut !=
-                                bendDefaults.useEarlyOut))
+                                shadowDefaults.useEarlyOut))
                     {
                         shadows.useEarlyOut =
-                            bendDefaults.useEarlyOut;
-                        bendResetApplied = true;
+                            shadowDefaults.useEarlyOut;
+                        shadowResetApplied = true;
                     }
 
                     static constexpr const char* DebugLabels[] = {
-                        "Off", "Edge", "Thread", "Wave"
+                        "Off", "Occlusion", "Trace Progress", "Ray Bounds"
                     };
                     const int debugIndex = std::clamp(
                         int(shadows.debugView),
@@ -20587,15 +29830,15 @@ protected:
                         int(std::size(DebugLabels)) - 1);
                     ImGui::SetNextItemWidth(settingsControlWidth);
                     if (BeginRoundedCombo(
-                            "Debug View##BendShadows",
+                            "Debug View##ScreenSpaceShadows",
                             DebugLabels[debugIndex]))
                     {
                         for (int index = 0;
                             index < int(std::size(DebugLabels));
                             ++index)
                         {
-                            const BendShadowDebugView view =
-                                BendShadowDebugView(index);
+                            const ScreenSpaceShadowDebugView view =
+                                ScreenSpaceShadowDebugView(index);
                             DrawDeferredDropdownOption(
                                 DebugLabels[index],
                                 DebugLabels[index],
@@ -20604,31 +29847,31 @@ protected:
                                 {
                                     settings->debugView = view;
                                     settings->preset =
-                                        BendShadowPreset::Custom;
+                                        ScreenSpaceShadowPreset::Custom;
                                 });
                         }
                         ImGui::EndCombo();
                     }
                     ImGui::SetItemTooltip(
-                        "Show the raw R8 edge, thread, or wave diagnostic "
-                        "output.");
+                        "Show raw occlusion, trace-progress, or ray-bounds "
+                        "diagnostics.");
                     if (DrawNestedDropdownResetIcon(
-                            "Bend Shadow Debug View",
-                            shadows.debugView != bendDefaults.debugView))
+                            "ScreenSpaceShadowDebugView",
+                            shadows.debugView != shadowDefaults.debugView))
                     {
-                        const BendShadowDebugView defaultDebugView =
-                            bendDefaults.debugView;
+                        const ScreenSpaceShadowDebugView defaultDebugView =
+                            shadowDefaults.debugView;
                         QueueDeferredControlUiAction(
                             [settings = &shadows, defaultDebugView]()
                             {
                                 settings->debugView = defaultDebugView;
-                                reconcileBendPreset(*settings);
+                                reconcileShadowPreset(*settings);
                             });
                     }
-                    if (bendCustomChanged)
-                        shadows.preset = BendShadowPreset::Custom;
-                    else if (bendResetApplied)
-                        reconcileBendPreset(shadows);
+                    if (shadowCustomChanged)
+                        shadows.preset = ScreenSpaceShadowPreset::Custom;
+                    else if (shadowResetApplied)
+                        reconcileShadowPreset(shadows);
                     EndAnimatedToggleRegion();
                 }
                 if (!directionalVisibilityAvailable)
@@ -20641,7 +29884,7 @@ protected:
             }
 
             if (BeginAnimatedTreeNode(
-                    "Sparse Virtual Shadow Maps##Lights",
+                    "Sparse Virtual Shadow Maps##Shadows",
                     ImGuiTreeNodeFlags_DefaultOpen))
             {
                 SparseVirtualShadowMapSettings& shadows =
@@ -20686,7 +29929,7 @@ protected:
             }
 
             if (BeginAnimatedTreeNode(
-                    "Diagnostic Cascaded Shadow Maps##Lights",
+                    "Diagnostic Cascaded Shadow Maps##Shadows",
                     ImGuiTreeNodeFlags_DefaultOpen))
             {
                 DiagnosticCascadedShadowMapSettings& shadows =
@@ -21553,12 +30796,12 @@ protected:
                 style.ItemSpacing.x * (ActionButtonCount - 1.f)) /
                 ActionButtonCount);
 
-        const ImVec4 drawerBackgroundColor(
-            0.66f, 0.67f, 0.69f, 0.13f);
-        const ImVec4 drawerBackgroundHoveredColor(
-            0.74f, 0.75f, 0.77f, 0.20f);
-        const ImVec4 drawerBackgroundActiveColor(
-            0.80f, 0.81f, 0.83f, 0.26f);
+        const ImVec4 drawerBackgroundColor =
+            g_UiVisualTokens.actionButton;
+        const ImVec4 drawerBackgroundHoveredColor =
+            g_UiVisualTokens.actionButtonHovered;
+        const ImVec4 drawerBackgroundActiveColor =
+            g_UiVisualTokens.actionButtonActive;
         ImGui::PushStyleColor(
             ImGuiCol_Button,
             drawerBackgroundColor);
@@ -21611,6 +30854,11 @@ protected:
         if (visibilityBenchmarkBusy)
             ImGui::EndDisabled();
 
+        if (settingsScrollInputBlocked)
+        {
+            ImGui::EndDisabled();
+            ImGui::PopStyleVar();
+        }
         if (deferredDropdownInputBlocked)
         {
             ImGui::EndDisabled();
@@ -21643,37 +30891,41 @@ protected:
             settingsWindowPosition.y + settingsWindowSize.y * 0.5f);
         const bool settingsCollapsed =
             ImGui::IsWindowCollapsed();
+        m_SettingsCollapsed = settingsCollapsed;
         const float settingsTitleHeight =
             fontSize + style.FramePadding.y * 2.f;
         if (settingsCollapsed)
         {
             UiBackdropRect& titleBackdrop =
                 m_ui.BackdropRects[0];
-            titleBackdrop.minX = settingsWindowPosition.x;
-            titleBackdrop.minY = settingsWindowPosition.y;
+            titleBackdrop.minX = settingsWindowPosition.x + 0.5f;
+            titleBackdrop.minY = settingsWindowPosition.y + 0.5f;
             titleBackdrop.maxX =
-                settingsWindowPosition.x + settingsWindowSize.x;
+                settingsWindowPosition.x + settingsWindowSize.x - 0.5f;
             titleBackdrop.maxY =
-                settingsWindowPosition.y + settingsTitleHeight;
-            titleBackdrop.rounding = style.WindowRounding;
-            titleBackdrop.visible = true;
+                settingsWindowPosition.y + settingsTitleHeight - 0.5f;
+            titleBackdrop.rounding = style.FrameRounding;
+            titleBackdrop.visible =
+                titleBackdrop.maxX > titleBackdrop.minX &&
+                titleBackdrop.maxY > titleBackdrop.minY;
 
             UiBackdropRect& statusBackdrop =
                 m_ui.BackdropRects[1];
-            statusBackdrop.minX = settingsWindowPosition.x;
+            statusBackdrop.minX = settingsWindowPosition.x + 0.5f;
             statusBackdrop.minY =
                 settingsWindowPosition.y + settingsTitleHeight - 1.f;
             statusBackdrop.maxX =
-                settingsWindowPosition.x + settingsWindowSize.x;
+                settingsWindowPosition.x + settingsWindowSize.x - 0.5f;
             statusBackdrop.maxY =
-                settingsWindowPosition.y + settingsWindowSize.y;
+                settingsWindowPosition.y + settingsWindowSize.y - 0.5f;
             statusBackdrop.rounding = std::min(
                 style.WindowRounding,
                 std::max(
                     0.f,
-                    (statusBackdrop.maxY -
-                        statusBackdrop.minY) * 0.15f));
+                    (settingsWindowSize.y -
+                        settingsTitleHeight + 1.f) * 0.15f));
             statusBackdrop.visible =
+                statusBackdrop.maxX > statusBackdrop.minX &&
                 statusBackdrop.maxY > statusBackdrop.minY;
         }
         else
@@ -21689,7 +30941,7 @@ protected:
                 settingsWindowPosition.x + settingsWindowSize.x - 0.5f;
             titleBackdrop.maxY =
                 settingsWindowPosition.y + settingsTitleHeight - 0.5f;
-            titleBackdrop.rounding = style.WindowRounding;
+            titleBackdrop.rounding = style.FrameRounding;
             titleBackdrop.visible =
                 titleBackdrop.maxX > titleBackdrop.minX &&
                 titleBackdrop.maxY > titleBackdrop.minY;
@@ -21720,9 +30972,12 @@ protected:
                 settingsWindowCenter,
                 settingsAppearanceScale,
                 settingsAppearanceOpacity);
-            backdrop.shadowBlur = 10.f;
-            backdrop.shadowOpacity = 0.34f;
-            backdrop.shadowOffsetY = 3.f;
+            backdrop.shadowBlur =
+                g_UiVisualTokens.backdropShadowBlur;
+            backdrop.shadowOpacity =
+                g_UiVisualTokens.backdropShadowOpacity;
+            backdrop.shadowOffsetY =
+                g_UiVisualTokens.backdropShadowOffsetY;
         }
         ImGui::End();
         ApplyWindowAppearance(
@@ -21739,112 +30994,14 @@ protected:
                 settingsAppearanceScale,
                 settingsAppearanceOpacity);
         }
-        ImGui::PopStyleColor(3);
+        ImGui::PopStyleColor(4);
 
-        if (m_ui.ShowMaterialEditor)
-        {
-            ImGui::SetNextWindowPos(ImVec2(float(width) - fontSize * 0.6f, fontSize * 0.6f), 0, ImVec2(1.f, 0.f));
-            const bool materialEditorVisible = ImGui::Begin(
-                "Material Editor",
-                &m_ui.ShowMaterialEditor,
-                ImGuiWindowFlags_AlwaysAutoResize);
-            CaptureCurrentWindowBackdrop(
-                m_ui.BackdropRects[2],
-                style.WindowRounding);
-            if (visibilityBenchmarkBusy)
-                ImGui::BeginDisabled();
-            const bool deferredMaterialInputBlocked =
-                HasDeferredDropdownUiActions();
-            if (deferredMaterialInputBlocked)
-            {
-                ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);
-                ImGui::BeginDisabled();
-            }
-
-            if (materialEditorVisible)
-            {
-                auto material = m_ui.SelectedMaterial;
-                if (material)
-                {
-                    ImGui::Text(
-                        "Material %d: %s",
-                        material->materialID,
-                        material->name.c_str());
-
-                    static constexpr const char* MaterialDomainLabels[] = {
-                        "Opaque",
-                        "Alpha-tested",
-                        "Alpha-blended",
-                        "Transmissive",
-                        "Transmissive alpha-tested",
-                        "Transmissive alpha-blended"
-                    };
-                    static_assert(
-                        std::size(MaterialDomainLabels) ==
-                        size_t(MaterialDomain::Count));
-                    const int materialDomainIndex = std::clamp(
-                        int(material->domain),
-                        0,
-                        int(MaterialDomain::Count) - 1);
-                    ImGui::SetNextItemWidth(-FLT_MIN);
-                    ImGui::PushID(material->materialID);
-                    if (BeginRoundedCombo(
-                            "Material Domain",
-                            MaterialDomainLabels[materialDomainIndex]))
-                    {
-                        for (int index = 0;
-                            index < int(MaterialDomain::Count);
-                            ++index)
-                        {
-                            const MaterialDomain candidate =
-                                MaterialDomain(index);
-                            const std::shared_ptr<Scene> scene =
-                                m_app->GetScene();
-                            DrawDeferredDropdownOption(
-                                MaterialDomainLabels[index],
-                                MaterialDomainLabels[index],
-                                material->domain == candidate,
-                                [material, scene, candidate]()
-                                {
-                                    material->domain = candidate;
-                                    material->dirty = true;
-                                    if (scene)
-                                    {
-                                        scene->GetSceneGraph()
-                                            ->GetRootNode()
-                                            ->InvalidateContent();
-                                    }
-                                });
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::SetItemTooltip(
-                        "Choose how the selected surface is rendered.");
-                    ImGui::PopID();
-
-                    material->dirty |=
-                        donut::app::MaterialEditor(
-                            material.get(),
-                            false,
-                            false);
-                }
-                else
-                {
-                    ImGui::TextDisabled(
-                        "Click a scene surface to select a material.");
-                }
-            }
-
-            if (deferredMaterialInputBlocked)
-            {
-                ImGui::EndDisabled();
-                ImGui::PopStyleVar();
-            }
-            if (visibilityBenchmarkBusy)
-                ImGui::EndDisabled();
-
-            ImGui::End();
-        }
+        DrawMaterialInspector(
+            width,
+            height,
+            uiMotionEnabled,
+            controlledExperimentActive,
+            style);
 
         // Commit only after every UI window has finished composing. Any
         // synchronous renderer work then holds a previously presented stable
@@ -21854,7 +31011,9 @@ protected:
         TryApplyDeferredDropdownUiActions(
             deferredDropdownCompositionIdle(
                 settingsLayoutIdle,
-                settingsScrollIdle));
+                settingsScrollIdle),
+            !uiMotionEnabled);
+        RestoreActiveUiWordSpacing();
         ImGui::PopFont();
     }
 };
@@ -22102,18 +31261,18 @@ bool ProcessCommandLine(
             if (value == "preset")
             {
                 aaBenchmark.settings.algorithmOverrides.rectification =
-                    MiniEngineTaaRectificationOverride::FromPreset;
+                    TemporalAaRectificationOverride::FromPreset;
             }
             else if (value == "pair" || value == "pair-rgb")
             {
                 aaBenchmark.settings.algorithmOverrides.rectification =
-                    MiniEngineTaaRectificationOverride::PairRgb;
+                    TemporalAaRectificationOverride::PairRgb;
             }
             else if (value == "variance" ||
                 value == "variance-ycocg")
             {
                 aaBenchmark.settings.algorithmOverrides.rectification =
-                    MiniEngineTaaRectificationOverride::VarianceYCoCg;
+                    TemporalAaRectificationOverride::VarianceYCoCg;
             }
             else
             {
@@ -22130,13 +31289,13 @@ bool ProcessCommandLine(
             const std::string value = argv[++i];
             if (value == "auto")
                 aaBenchmark.settings.performanceOverrides.executionPath =
-                    MiniEngineTaaExecutionPath::Auto;
+                    TemporalAaExecutionPath::Auto;
             else if (value == "compute")
                 aaBenchmark.settings.performanceOverrides.executionPath =
-                    MiniEngineTaaExecutionPath::Compute;
+                    TemporalAaExecutionPath::Compute;
             else if (value == "pixel")
                 aaBenchmark.settings.performanceOverrides.executionPath =
-                    MiniEngineTaaExecutionPath::FullscreenPixelShader;
+                    TemporalAaExecutionPath::FullscreenPixelShader;
             else
                 return invalidValue(
                     "--aa-execution",
@@ -22150,13 +31309,13 @@ bool ProcessCommandLine(
             const std::string value = argv[++i];
             if (value == "auto")
                 aaBenchmark.settings.performanceOverrides.computeKernel =
-                    MiniEngineTaaComputeKernel::Auto;
+                    TemporalAaComputeKernel::Auto;
             else if (value == "8x8")
                 aaBenchmark.settings.performanceOverrides.computeKernel =
-                    MiniEngineTaaComputeKernel::Threads8x8TwoPixels;
+                    TemporalAaComputeKernel::Threads8x8TwoPixels;
             else if (value == "16x8")
                 aaBenchmark.settings.performanceOverrides.computeKernel =
-                    MiniEngineTaaComputeKernel::Threads16x8OnePixel;
+                    TemporalAaComputeKernel::Threads16x8OnePixel;
             else
                 return invalidValue(
                     "--aa-kernel",
@@ -22170,16 +31329,16 @@ bool ProcessCommandLine(
             const std::string value = argv[++i];
             if (value == "auto")
                 aaBenchmark.settings.performanceOverrides.ldsLayout =
-                    MiniEngineTaaLdsLayout::Auto;
+                    TemporalAaLdsLayout::Auto;
             else if (value == "legacy")
                 aaBenchmark.settings.performanceOverrides.ldsLayout =
-                    MiniEngineTaaLdsLayout::Legacy;
+                    TemporalAaLdsLayout::Legacy;
             else if (value == "split")
                 aaBenchmark.settings.performanceOverrides.ldsLayout =
-                    MiniEngineTaaLdsLayout::Split;
+                    TemporalAaLdsLayout::Split;
             else if (value == "packed" || value == "split-packed")
                 aaBenchmark.settings.performanceOverrides.ldsLayout =
-                    MiniEngineTaaLdsLayout::SplitAndPacked;
+                    TemporalAaLdsLayout::SplitAndPacked;
             else
                 return invalidValue(
                     "--aa-lds",
@@ -22194,13 +31353,13 @@ bool ProcessCommandLine(
             const bool reuse = !strcmp(argv[i], "--aa-reuse");
             const char* option = argv[i];
             const std::string value = argv[++i];
-            MiniEngineTaaAutoToggle parsed;
+            TemporalAaAutoToggle parsed;
             if (value == "auto")
-                parsed = MiniEngineTaaAutoToggle::Auto;
+                parsed = TemporalAaAutoToggle::Auto;
             else if (value == "off")
-                parsed = MiniEngineTaaAutoToggle::Off;
+                parsed = TemporalAaAutoToggle::Off;
             else if (value == "on")
-                parsed = MiniEngineTaaAutoToggle::On;
+                parsed = TemporalAaAutoToggle::On;
             else
                 return invalidValue(option, value, "auto|off|on");
             if (reuse)
@@ -22217,13 +31376,13 @@ bool ProcessCommandLine(
             const std::string value = argv[++i];
             if (value == "auto")
                 aaBenchmark.settings.performanceOverrides.passFusion =
-                    MiniEngineTaaPassFusion::Auto;
+                    TemporalAaPassFusion::Auto;
             else if (value == "separate")
                 aaBenchmark.settings.performanceOverrides.passFusion =
-                    MiniEngineTaaPassFusion::Separate;
+                    TemporalAaPassFusion::Separate;
             else if (value == "fused")
                 aaBenchmark.settings.performanceOverrides.passFusion =
-                    MiniEngineTaaPassFusion::Fused;
+                    TemporalAaPassFusion::Fused;
             else
                 return invalidValue(
                     "--aa-fusion",
@@ -22237,19 +31396,19 @@ bool ProcessCommandLine(
             const std::string value = argv[++i];
             if (value == "auto")
                 aaBenchmark.settings.performanceOverrides.cacheBlocking =
-                    MiniEngineTaaCacheBlocking::Auto;
+                    TemporalAaCacheBlocking::Auto;
             else if (value == "off")
                 aaBenchmark.settings.performanceOverrides.cacheBlocking =
-                    MiniEngineTaaCacheBlocking::Off;
+                    TemporalAaCacheBlocking::Off;
             else if (value == "2")
                 aaBenchmark.settings.performanceOverrides.cacheBlocking =
-                    MiniEngineTaaCacheBlocking::Bands2;
+                    TemporalAaCacheBlocking::Bands2;
             else if (value == "3")
                 aaBenchmark.settings.performanceOverrides.cacheBlocking =
-                    MiniEngineTaaCacheBlocking::Bands3;
+                    TemporalAaCacheBlocking::Bands3;
             else if (value == "4")
                 aaBenchmark.settings.performanceOverrides.cacheBlocking =
-                    MiniEngineTaaCacheBlocking::Bands4;
+                    TemporalAaCacheBlocking::Bands4;
             else
                 return invalidValue(
                     "--aa-cache",
@@ -23158,8 +32317,8 @@ int main(int __argc, const char* const* __argv)
         if (aaBenchmark.enabled)
         {
             uiData.AntiAliasing = aaBenchmark.settings;
-            uiData.MiniEngineTaaSharpness =
-                ClampMiniEngineTaaSharpness(
+            uiData.TemporalAaSharpness =
+                ClampTemporalAaSharpness(
                     aaBenchmark.sharpness);
         }
         if (g_VisibilityPerfCapture.Enabled())
@@ -23172,7 +32331,7 @@ int main(int __argc, const char* const* __argv)
             else
                 log::info(
                     "UVSR_PERF applied variant token: taaprime");
-            uiData.MiniEngineTaaSharpenEnabled = false;
+            uiData.TemporalAaSharpenEnabled = false;
 
             ScreenSpaceVisibilitySettings& visibility =
                 uiData.ScreenSpaceVisibility;
@@ -23228,6 +32387,7 @@ int main(int __argc, const char* const* __argv)
             if (perf.isolateVisibility)
             {
                 uiData.ShowEnvironmentBackground = false;
+                uiData.EnableAmbientFill = false;
                 uiData.EnableDiffuseIbl = false;
                 uiData.EnableSpecularIbl = false;
             }
@@ -23287,8 +32447,8 @@ int main(int __argc, const char* const* __argv)
             uiData.EnablePbr = true;
             uiData.RenderMode = RendererMode::Deferred;
             uiData.AntiAliasing.enabled = false;
-            uiData.MiniEngineTaaSharpenEnabled = false;
-            uiData.BendScreenSpaceShadows.enabled = false;
+            uiData.TemporalAaSharpenEnabled = false;
+            uiData.ScreenSpaceDirectionalShadows.enabled = false;
             uiData.SparseVirtualShadowMaps.enabled = false;
             uiData.ScreenSpaceVisibility.enabled = false;
             uiData.DiagnosticCascadedShadowMaps =
@@ -23318,8 +32478,8 @@ int main(int __argc, const char* const* __argv)
             uiData.EnablePbr = true;
             uiData.RenderMode = RendererMode::Deferred;
             uiData.AntiAliasing.enabled = false;
-            uiData.MiniEngineTaaSharpenEnabled = false;
-            uiData.BendScreenSpaceShadows.enabled = false;
+            uiData.TemporalAaSharpenEnabled = false;
+            uiData.ScreenSpaceDirectionalShadows.enabled = false;
             uiData.DiagnosticCascadedShadowMaps.enabled = false;
             uiData.ScreenSpaceVisibility.enabled = false;
             uiData.SparseVirtualShadowMaps =

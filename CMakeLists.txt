@@ -8,7 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(
     UVSR_AA_DEVELOPER_OVERRIDES
-    "Compile the complete anti-aliasing override permutation matrix and UI"
+    "Compile the complete anti-aliasing override matrix and CLI controls"
     OFF
 )
 option(
@@ -18,8 +18,8 @@ option(
 )
 option(UVSR_BUILD_APPLICATION
     "Build the UVSR application that integrates every enabled producer" ON)
-option(UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS
-    "Build the standalone Bend screen-space-shadow component" ON)
+option(UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS
+    "Build the standalone screen-space directional-shadow component" ON)
 option(UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS
     "Build the standalone sparse-virtual-shadow-map component" ON)
 option(UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS
@@ -32,33 +32,19 @@ if (UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS AND
         "mutually exclusive.")
 endif()
 
+set(UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE ON)
+if (UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
+    set(UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE OFF)
+endif()
+
 if (UVSR_BUILD_APPLICATION AND
-    (NOT UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS OR
+    (NOT UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS OR
         NOT UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS OR
         NOT UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS))
     message(FATAL_ERROR
         "The aggregate UVSR application currently integrates all three visibility "
         "producers. Set UVSR_BUILD_APPLICATION=OFF to configure and build "
         "a component independently.")
-endif()
-
-if (UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS)
-    set(UVSR_BEND_SSS_DIR
-        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bend_sss/upstream")
-    file(SHA256 "${UVSR_BEND_SSS_DIR}/bend_sss_cpu.h"
-        UVSR_BEND_SSS_CPU_SHA256)
-    file(SHA256 "${UVSR_BEND_SSS_DIR}/bend_sss_gpu.h"
-        UVSR_BEND_SSS_GPU_SHA256)
-    if (NOT UVSR_BEND_SSS_CPU_SHA256 STREQUAL
-            "23aae596dbb1b9bdae23d87ac85079b138426823c3153079f7a7dd36f603d02a")
-        message(FATAL_ERROR
-            "Bend's upstream CPU header changed; restore the released bytes.")
-    endif()
-    if (NOT UVSR_BEND_SSS_GPU_SHA256 STREQUAL
-            "7fbe24bd2040a62536c31df6cd38a92cb22c172a9a419eed3c0af7df1d50a68c")
-        message(FATAL_ERROR
-            "Bend's upstream GPU header changed; restore the released bytes.")
-    endif()
 endif()
 
 # Embed the exact source commit in the executable so experiment titles describe
@@ -197,14 +183,17 @@ uvsr_stage_patched_sources(
     "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-app.patch"
     "${UVSR_DONUT_APP_OVERRIDE_DIR}"
     include/donut/app/ApplicationBase.h
+    include/donut/app/DeviceManager.h
     include/donut/app/UserInterfaceUtils.h
+    src/app/DeviceManager.cpp
     src/app/UserInterfaceUtils.cpp)
 
 set(UVSR_IMGUI_OVERRIDE_DIR
     "${CMAKE_BINARY_DIR}/uvsr_imgui_overrides")
 set(UVSR_IMGUI_PATCH_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-ui.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-dropdown-roll.patch")
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-dropdown-roll.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-runtime-policy.patch")
 uvsr_stage_patched_sources(
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/thirdparty/imgui"
     "${UVSR_IMGUI_PATCH_FILES}"
@@ -222,6 +211,7 @@ uvsr_replace_target_sources(
     donut_app
     "${CMAKE_CURRENT_SOURCE_DIR}/donut"
     "${UVSR_DONUT_APP_OVERRIDE_DIR}"
+    src/app/DeviceManager.cpp
     src/app/UserInterfaceUtils.cpp)
 target_include_directories(donut_app BEFORE PUBLIC
     "${UVSR_DONUT_APP_OVERRIDE_DIR}/include")
@@ -265,8 +255,8 @@ endif()
 set(UVSR_SHADER_STAGING_ROOT "${CMAKE_BINARY_DIR}/uvsr_shaders")
 set(UVSR_CORE_SHADER_STAGING_DIR
     "${UVSR_SHADER_STAGING_ROOT}/core")
-set(UVSR_BEND_SHADER_STAGING_DIR
-    "${UVSR_SHADER_STAGING_ROOT}/bend")
+set(UVSR_SCREEN_SPACE_SHADOW_SHADER_STAGING_DIR
+    "${UVSR_SHADER_STAGING_ROOT}/screen_space_directional_shadow")
 set(UVSR_SVSM_SHADER_STAGING_DIR
     "${UVSR_SHADER_STAGING_ROOT}/svsm")
 set(UVSR_CSM_SHADER_STAGING_DIR
@@ -285,8 +275,8 @@ elseif (UVSR_AA_DEVELOPER_OVERRIDES)
 else()
     set(UVSR_SHADER_CONFIG "${UVSR_PRODUCTION_SHADER_CONFIG}")
 endif()
-set(UVSR_BEND_SHADER_CONFIG
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/bend_screen_space_shadows_shaders.cfg")
+set(UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/screen_space_directional_shadows_shaders.cfg")
 set(UVSR_CSM_SHADER_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostic_cascaded_shadow_map_shaders.cfg")
 set(UVSR_SVSM_SHADER_CONFIG
@@ -295,7 +285,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${UVSR_DEVELOPER_SHADER_CONFIG}"
     "${UVSR_PRODUCTION_SHADER_CONFIG}"
     "${UVSR_DEFAULT_EXPERIMENT_SHADER_CONFIG}"
-    "${UVSR_BEND_SHADER_CONFIG}"
+    "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}"
     "${UVSR_CSM_SHADER_CONFIG}"
     "${UVSR_SVSM_SHADER_CONFIG}")
 
@@ -305,7 +295,6 @@ file(GLOB_RECURSE UVSR_SHADER_INPUTS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsli"
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bend_sss/upstream/bend_sss_gpu.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/shaders/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/include/donut/shaders/*"
 )
@@ -372,14 +361,14 @@ uvsr_add_shader_bundle(
     "${UVSR_CORE_SHADER_STAGING_DIR}"
     UVSR_SHADER_COMPILE_STAMP)
 
-if (UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS AND
+if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS AND
     NOT UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
     uvsr_add_shader_bundle(
-        uvsr_bend_screen_space_shadow_shaders
-        "UVSR Bend Screen-Space Shadows"
-        "${UVSR_BEND_SHADER_CONFIG}"
-        "${UVSR_BEND_SHADER_STAGING_DIR}"
-        UVSR_BEND_SHADER_COMPILE_STAMP)
+        uvsr_screen_space_directional_shadow_shaders
+        "UVSR Screen-Space Directional Shadows"
+        "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}"
+        "${UVSR_SCREEN_SPACE_SHADOW_SHADER_STAGING_DIR}"
+        UVSR_SCREEN_SPACE_SHADOW_SHADER_COMPILE_STAMP)
 endif()
 
 if (UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS AND
@@ -402,20 +391,18 @@ if (UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS AND
         UVSR_CSM_SHADER_COMPILE_STAMP)
 endif()
 
-if (UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS)
-    add_library(uvsr_bend_screen_space_shadows STATIC
-        src/bend_screen_space_shadows.cpp
+if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
+    add_library(uvsr_screen_space_directional_shadows STATIC
+        src/screen_space_directional_shadows.cpp
     )
-    target_include_directories(uvsr_bend_screen_space_shadows
-        PUBLIC
-            "${CMAKE_CURRENT_SOURCE_DIR}/src"
-            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bend_sss/upstream")
-    target_link_libraries(uvsr_bend_screen_space_shadows
+    target_include_directories(uvsr_screen_space_directional_shadows
+        PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(uvsr_screen_space_directional_shadows
         PUBLIC nvrhi
         PRIVATE donut_render donut_app donut_engine)
     if (NOT UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-        add_dependencies(uvsr_bend_screen_space_shadows
-            uvsr_bend_screen_space_shadow_shaders)
+        add_dependencies(uvsr_screen_space_directional_shadows
+            uvsr_screen_space_directional_shadow_shaders)
     endif()
 endif()
 
@@ -480,7 +467,7 @@ if (UVSR_BUILD_APPLICATION)
         src/scene_catalog.cpp
         src/screen_space_visibility.cpp
         src/sponza_camera_preset.cpp
-        src/taa_miniengine.cpp
+        src/temporal_aa.cpp
         src/temporal_aa_core.cpp
         src/uvsr.cpp
         src/visibility_blue_noise.cpp
@@ -498,12 +485,13 @@ if (UVSR_BUILD_APPLICATION)
         dwmapi
         bcrypt
         uvsr_gpu_crash_diagnostics
-        uvsr_bend_screen_space_shadows
+        uvsr_screen_space_directional_shadows
         uvsr_diagnostic_cascaded_shadow_maps
         uvsr_sparse_virtual_shadow_maps)
     target_compile_definitions(uvsr PRIVATE
         "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\""
         "UVSR_AA_DEVELOPER_OVERRIDES=$<BOOL:${UVSR_AA_DEVELOPER_OVERRIDES}>"
+        "UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE=$<BOOL:${UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE}>"
         "UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS=$<BOOL:${UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS}>")
     set(UVSR_ENVIRONMENT_SOURCE_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/environments")
@@ -574,6 +562,14 @@ target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/s
 target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
 add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
 
+add_executable(uvsr_flashlight_tests tests/flashlight_tests.cpp)
+target_include_directories(
+    uvsr_flashlight_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(
+    NAME uvsr_flashlight_reference
+    COMMAND uvsr_flashlight_tests)
+
 add_executable(uvsr_pbr_lighting_source_contract_tests
     tests/pbr_lighting_source_contract_tests.cpp)
 target_include_directories(
@@ -606,15 +602,16 @@ add_test(
     NAME uvsr_diffuse_environment_asset_reference
     COMMAND uvsr_diffuse_environment_asset_tests)
 
-if (UVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS)
-    add_executable(uvsr_bend_screen_space_shadow_tests
-        tests/bend_screen_space_shadows_tests.cpp
+if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
+    add_executable(uvsr_screen_space_directional_shadow_tests
+        tests/screen_space_directional_shadows_tests.cpp
     )
-    target_link_libraries(uvsr_bend_screen_space_shadow_tests
-        PRIVATE uvsr_bend_screen_space_shadows)
+    target_link_libraries(uvsr_screen_space_directional_shadow_tests
+        PRIVATE uvsr_screen_space_directional_shadows)
     add_test(
-        NAME uvsr_bend_screen_space_shadow_reference
-        COMMAND uvsr_bend_screen_space_shadow_tests
+        NAME uvsr_screen_space_directional_shadow_reference
+        COMMAND uvsr_screen_space_directional_shadow_tests
+            "${CMAKE_CURRENT_SOURCE_DIR}/src"
     )
 endif()
 
@@ -642,19 +639,20 @@ if (UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS)
     )
 endif()
 
-add_executable(uvsr_taa_miniengine_tests tests/taa_miniengine_tests.cpp)
+add_executable(uvsr_temporal_aa_tests tests/temporal_aa_tests.cpp)
 target_include_directories(
-    uvsr_taa_miniengine_tests
+    uvsr_temporal_aa_tests
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 target_compile_definitions(
-    uvsr_taa_miniengine_tests
+    uvsr_temporal_aa_tests
     PRIVATE
         "UVSR_AA_DEVELOPER_OVERRIDES=$<BOOL:${UVSR_AA_DEVELOPER_OVERRIDES}>"
+        "UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE=$<BOOL:${UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE}>"
 )
 add_test(
-    NAME uvsr_taa_miniengine_reference
-    COMMAND uvsr_taa_miniengine_tests
+    NAME uvsr_temporal_aa_reference
+    COMMAND uvsr_temporal_aa_tests
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
@@ -808,6 +806,54 @@ add_test(
     COMMAND uvsr_ui_animation_tests
 )
 
+add_executable(uvsr_ui_skin_tests
+    tests/ui_skin_tests.cpp
+)
+target_include_directories(
+    uvsr_ui_skin_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_ui_skin_reference
+    COMMAND uvsr_ui_skin_tests
+)
+
+add_executable(uvsr_ui_commands_tests
+    tests/ui_commands_tests.cpp
+)
+target_include_directories(
+    uvsr_ui_commands_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_ui_commands_reference
+    COMMAND uvsr_ui_commands_tests
+)
+
+add_executable(uvsr_ui_command_layout_tests
+    tests/ui_command_layout_tests.cpp
+)
+target_include_directories(
+    uvsr_ui_command_layout_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_ui_command_layout_reference
+    COMMAND uvsr_ui_command_layout_tests
+)
+
+add_executable(uvsr_ui_settings_command_catalog_tests
+    tests/ui_settings_command_catalog_tests.cpp
+)
+target_include_directories(
+    uvsr_ui_settings_command_catalog_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_ui_settings_command_catalog_reference
+    COMMAND uvsr_ui_settings_command_catalog_tests
+)
+
 add_executable(uvsr_imgui_dropdown_roll_tests
     tests/imgui_dropdown_roll_tests.cpp
 )
@@ -846,6 +892,8 @@ set(UVSR_ROOT_SHADERS
 )
 set(UVSR_PASS_SHADERS
     deferred_lighting_cs
+    depth_ps
+    depth_vs_buffer_loads
     forward_ps
     forward_vs_buffer_loads
     gbuffer_ps
@@ -858,14 +906,6 @@ set(UVSR_PASS_SHADERS
     material_id_ps
     pixel_readback_cs
 )
-
-if (UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS AND
-    NOT UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-    list(APPEND UVSR_PASS_SHADERS
-        depth_ps
-        depth_vs_buffer_loads
-    )
-endif()
 
 set(UVSR_RUNTIME_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/framework/dxil")
 set(UVSR_RUNTIME_APP_SHADER_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders/uvsr/dxil")
@@ -885,8 +925,8 @@ string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
 set(UVSR_COMPLETE_APP_SHADERS
     agx_tonemapping_ps
     backdrop_blur_ps
-    bend_screen_space_shadows_cs
-    bend_screen_space_shadows_debug_ps
+    screen_space_directional_shadows_cs
+    screen_space_directional_shadows_debug_ps
     cmaa2_ComputeDispatchArgsCS
     cmaa2_DeferredColorApply2x2CS
     cmaa2_EdgesColor2x2CS
@@ -935,9 +975,10 @@ set(UVSR_COMPLETE_APP_SHADERS
     sparse_virtual_shadow_map_sparse_resolve_cs_reference_balanced
     sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_legacy
     sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_balanced
-    taa_miniengine_blend_cs
-    taa_miniengine_resolve_cs
-    taa_miniengine_sharpen_cs
+    temporal_aa_blend_cs
+    temporal_aa_minimum_cs
+    temporal_aa_resolve_cs
+    temporal_aa_sharpen_cs
 )
 set(UVSR_DEFAULT_EXPERIMENT_APP_SHADERS
     agx_tonemapping_ps
@@ -955,9 +996,10 @@ set(UVSR_DEFAULT_EXPERIMENT_APP_SHADERS
     screen_space_visibility_filter_cs
     screen_space_visibility_cs
     screen_space_visibility_temporal_cs
-    taa_miniengine_blend_cs
-    taa_miniengine_resolve_cs
-    taa_miniengine_sharpen_cs
+    temporal_aa_blend_cs
+    temporal_aa_minimum_cs
+    temporal_aa_resolve_cs
+    temporal_aa_sharpen_cs
 )
 if (UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
     set(UVSR_APP_SHADERS ${UVSR_DEFAULT_EXPERIMENT_APP_SHADERS})
@@ -975,9 +1017,9 @@ file(GENERATE
     CONTENT "${UVSR_RUNTIME_SHADER_MANIFEST_CONTENT}"
 )
 
-set(UVSR_BEND_APP_SHADERS
-    bend_screen_space_shadows_cs
-    bend_screen_space_shadows_debug_ps
+set(UVSR_SCREEN_SPACE_SHADOW_APP_SHADERS
+    screen_space_directional_shadows_cs
+    screen_space_directional_shadows_debug_ps
 )
 set(UVSR_CSM_APP_SHADERS
     diagnostic_cascaded_shadow_map_clear_vs
@@ -1077,9 +1119,9 @@ if (UVSR_BUILD_APPLICATION)
         UVSR_DEFAULT_EXPERIMENT_APP_SHADERS
         "")
     uvsr_require_shader_config_packaged(
-        "${UVSR_BEND_SHADER_CONFIG}"
+        "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}"
         UVSR_COMPLETE_APP_SHADERS
-        UVSR_BEND_APP_SHADERS)
+        UVSR_SCREEN_SPACE_SHADOW_APP_SHADERS)
     uvsr_require_shader_config_packaged(
         "${UVSR_CSM_SHADER_CONFIG}"
         UVSR_COMPLETE_APP_SHADERS
@@ -1110,8 +1152,8 @@ if (UVSR_BUILD_APPLICATION)
     endforeach()
     foreach(shader IN LISTS UVSR_APP_SHADERS)
         set(shader_staging_dir "${UVSR_CORE_SHADER_STAGING_DIR}")
-        if ("${shader}" IN_LIST UVSR_BEND_APP_SHADERS)
-            set(shader_staging_dir "${UVSR_BEND_SHADER_STAGING_DIR}")
+        if ("${shader}" IN_LIST UVSR_SCREEN_SPACE_SHADOW_APP_SHADERS)
+            set(shader_staging_dir "${UVSR_SCREEN_SPACE_SHADOW_SHADER_STAGING_DIR}")
         elseif ("${shader}" IN_LIST UVSR_CSM_APP_SHADERS)
             set(shader_staging_dir "${UVSR_CSM_SHADER_STAGING_DIR}")
         elseif ("${shader}" IN_LIST UVSR_SVSM_APP_SHADERS)
@@ -1140,9 +1182,9 @@ if (UVSR_BUILD_APPLICATION)
             "The UVSR runtime shader manifest contains duplicate paths")
     endif()
     if (UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-        set(UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT 37)
+        set(UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT 40)
     else()
-        set(UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT 76)
+        set(UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT 77)
     endif()
     if (NOT UVSR_RUNTIME_SHADER_PATH_COUNT EQUAL
             UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT)
@@ -1183,14 +1225,14 @@ if (UVSR_BUILD_APPLICATION)
         "${SHADERMAKE_DXC_PATH}")
     if (NOT UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
         list(APPEND UVSR_RUNTIME_SHADER_TARGET_DEPENDENCIES
-            uvsr_bend_screen_space_shadow_shaders
+            uvsr_screen_space_directional_shadow_shaders
             uvsr_diagnostic_cascaded_shadow_map_shaders
             uvsr_sparse_virtual_shadow_map_shaders)
         list(APPEND UVSR_RUNTIME_SHADER_FILE_DEPENDENCIES
-            "${UVSR_BEND_SHADER_COMPILE_STAMP}"
+            "${UVSR_SCREEN_SPACE_SHADOW_SHADER_COMPILE_STAMP}"
             "${UVSR_CSM_SHADER_COMPILE_STAMP}"
             "${UVSR_SVSM_SHADER_COMPILE_STAMP}"
-            "${UVSR_BEND_SHADER_CONFIG}"
+            "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}"
             "${UVSR_CSM_SHADER_CONFIG}"
             "${UVSR_SVSM_SHADER_CONFIG}")
     endif()
@@ -1370,11 +1412,16 @@ if (UVSR_BUILD_APPLICATION)
             "${CMAKE_BINARY_DIR}/media/fonts/Geist"
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "${CMAKE_BINARY_DIR}/media/fonts/System"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${UVSR_UI_FONT_SOURCE}"
             "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI.ttf"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${UVSR_UI_HEADER_FONT_SOURCE}"
             "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI-Semibold.ttf"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/microsoft_directx_graphics_samples/LICENSE.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Microsoft-DirectX-Graphics-Samples.txt"
     )
 endif()

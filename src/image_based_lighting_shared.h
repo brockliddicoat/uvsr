@@ -59,6 +59,15 @@ namespace uvsr
             strength > 0.f;
     }
 
+    [[nodiscard]] inline bool IsAmbientFillLobeActive(
+        bool ambientFillEnabled,
+        bool lobeEnabled,
+        float strength)
+    {
+        return ambientFillEnabled &&
+            IsImageBasedLightingLobeActive(lobeEnabled, strength);
+    }
+
     [[nodiscard]] inline constexpr float
         ImageBasedLightingGenerationRoughness(float normalizedMip)
     {

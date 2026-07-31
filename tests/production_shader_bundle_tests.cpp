@@ -104,8 +104,8 @@ namespace
         constexpr const char* appShaders[] = {
             "agx_tonemapping_ps",
             "backdrop_blur_ps",
-            "bend_screen_space_shadows_cs",
-            "bend_screen_space_shadows_debug_ps",
+            "screen_space_directional_shadows_cs",
+            "screen_space_directional_shadows_debug_ps",
             "cmaa2_ComputeDispatchArgsCS",
             "cmaa2_DeferredColorApply2x2CS",
             "cmaa2_EdgesColor2x2CS",
@@ -154,9 +154,10 @@ namespace
             "sparse_virtual_shadow_map_sparse_resolve_cs_reference_balanced",
             "sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_legacy",
             "sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_balanced",
-            "taa_miniengine_blend_cs",
-            "taa_miniengine_resolve_cs",
-            "taa_miniengine_sharpen_cs"
+            "temporal_aa_blend_cs",
+            "temporal_aa_minimum_cs",
+            "temporal_aa_resolve_cs",
+            "temporal_aa_sharpen_cs"
         };
 
         std::set<std::string> expected;
@@ -276,19 +277,33 @@ int main(int argc, char** argv)
     passed &= Check(
         CountOccurrences(
             config,
-            "taa_miniengine_blend_cs.hlsl") == 1u,
-        "production must describe the complete normal-user temporal matrix once");
+            "temporal_aa_blend_cs.hlsl") == 3u,
+        "production must describe the full-quality, resurrection, and "
+        "reduced temporal matrices");
     constexpr const char* temporalUserMatrix =
-        "taa_miniengine_blend_cs.hlsl -T cs -E main -D TAA_MOTION_SOURCE={0,1,2} -D TAA_CURRENT_RECONSTRUCTION={0,1} -D TAA_HISTORY_FILTER={0,1,2,3} -D TAA_RECTIFICATION={0,1}";
+        "temporal_aa_blend_cs.hlsl -T cs -E main -D TAA_MOTION_SOURCE={0,1,2} -D TAA_CURRENT_RECONSTRUCTION={0,1} -D TAA_HISTORY_FILTER={0,1,2,3} -D TAA_RECTIFICATION={0,1}";
     passed &= Check(
-        CountOccurrences(config, temporalUserMatrix) == 1u,
-        "production TAA must package all three motion sources, de-jittering, "
-        "1x/5x/9x reconstruction, and the two retained rectification choices");
+        CountOccurrences(config, temporalUserMatrix) == 3u,
+        "all production TAA matrices must package all three motion sources, "
+        "de-jittering, 1x/5x/9x reconstruction, and both rectification "
+        "choices");
     passed &= Check(
-        CountOccurrences(config, "TAA_EXPORT_SELECTIVE=0") == 1u &&
-            CountOccurrences(config, "TAA_SAMPLE_RESURRECTION=0") == 1u &&
-            CountOccurrences(config, "TAA_DEVELOPER_DEBUG=0") == 1u &&
+        CountOccurrences(config, "TAA_EXPORT_SELECTIVE=0") == 3u &&
+            CountOccurrences(config, "TAA_SAMPLE_RESURRECTION=0") == 2u &&
+            CountOccurrences(
+                config,
+                "TAA_SAMPLE_RESURRECTION={1,2}") == 1u &&
+            CountOccurrences(config, "TAA_DEVELOPER_DEBUG=0") == 3u &&
             CountOccurrences(config, "TAA_SHARED_WORK_REUSE={0,1}") == 1u &&
+            CountOccurrences(
+                config,
+                "TAA_LDS_LAYOUT=2 -D TAA_SHARED_WORK_REUSE=1 "
+                "-D TAA_EARLY_HISTORY_REJECTION=1 "
+                "-D TAA_FUSED_OUTPUT={0,1}") == 1u &&
+            CountOccurrences(
+                config,
+                "temporal_aa_minimum_cs.hlsl -T cs -E main "
+                "-D TAA_RUNTIME_BEHAVIOR={0,1}") == 1u &&
             config.find("TAA_EXPORT_SELECTIVE={") ==
                 std::string::npos &&
             config.find("TAA_INTERIOR_WEIGHTING") == std::string::npos &&
@@ -296,14 +311,14 @@ int main(int argc, char** argv)
             config.find("TAA_DEVELOPER_DEBUG=1") ==
                 std::string::npos &&
             config.find("TAA_PIXEL_SHADER") == std::string::npos,
-        "production TAA must retain measured shared reuse while omitting "
-        "retired interior, per-pixel rectification, resurrection, debug, and "
-        "pixel experiments");
+        "production TAA must retain robust and resurrection matrices, package "
+        "the reduced topology and compact minimum path, and omit retired "
+        "experiments");
     passed &= Check(
-        CountShaderPermutations(config) == 311u &&
-            CountShaderPermutations(developerConfig) == 2809u,
-        "shader catalogs must remain at 311 production and 2,809 developer "
-        "permutations after the first retirement batch");
+        CountShaderPermutations(config) == 601u &&
+            CountShaderPermutations(developerConfig) == 2811u,
+        "shader catalogs must contain 601 production and 2,811 developer "
+        "permutations with the temporal cost paths");
     passed &= Check(
         CountOccurrences(config, "cmaa2.hlsl -T cs") == 4u &&
             CountOccurrences(
@@ -313,7 +328,7 @@ int main(int argc, char** argv)
     passed &= Check(
         CountOccurrences(
             config,
-            "taa_miniengine_sharpen_cs.hlsl") == 1u &&
+            "temporal_aa_sharpen_cs.hlsl") == 1u &&
             config.find(
                 "TAA_SHARPEN_INPUT_PREMULTIPLIED={0,1}") !=
                 std::string::npos,
@@ -350,8 +365,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 76u,
-        "production shader contract must enumerate exactly 76 files");
+        expectedFiles.size() == 77u,
+        "production shader contract must enumerate exactly 77 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

@@ -1,5 +1,6 @@
 #include "camera_controllers.h"
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -21,11 +22,83 @@ namespace
         return std::abs(actual - expected) <= tolerance;
     }
 
+    bool NearlyEqual(float3 actual, float3 expected, float tolerance = 1e-4f)
+    {
+        return lengthSquared(actual - expected) <= tolerance * tolerance;
+    }
+
+    bool IsFinite(float3 value)
+    {
+        return std::isfinite(value.x) &&
+            std::isfinite(value.y) &&
+            std::isfinite(value.z);
+    }
+
+    void BuildLevelBasis(
+        float3 direction,
+        float3& levelRight,
+        float3& levelUp)
+    {
+        const float3 directionAxis = normalize(direction);
+        const float3 worldUp(0.f, 1.f, 0.f);
+        const float3 fallbackUp(0.f, 0.f, 1.f);
+        const float3 referenceUp =
+            std::abs(dot(directionAxis, worldUp)) < 0.999f
+                ? worldUp
+                : fallbackUp;
+        levelRight = normalize(cross(directionAxis, referenceUp));
+        levelUp = normalize(cross(levelRight, directionAxis));
+    }
+
+    template <typename CameraType>
+    void SetRolledPose(
+        CameraType& camera,
+        float3 position,
+        float3 direction,
+        float rollAngle)
+    {
+        float3 levelRight;
+        float3 levelUp;
+        BuildLevelBasis(direction, levelRight, levelUp);
+        const float cosine = std::cos(rollAngle);
+        const float sine = std::sin(rollAngle);
+        const float3 rolledUp =
+            levelUp * cosine + levelRight * sine;
+        const float3 rolledRight =
+            levelRight * cosine - levelUp * sine;
+        camera.SetExactPose(
+            position, direction, rolledUp, rolledRight);
+    }
+
+    template <typename CameraType>
+    float SignedRollToLevel(const CameraType& camera)
+    {
+        const float3 directionAxis = normalize(camera.GetDir());
+        float3 levelRight;
+        float3 levelUp;
+        BuildLevelBasis(directionAxis, levelRight, levelUp);
+        const float3 projectedUp = normalize(
+            camera.GetUp() -
+            directionAxis * dot(camera.GetUp(), directionAxis));
+        return std::atan2(
+            dot(projectedUp, levelRight),
+            dot(projectedUp, levelUp));
+    }
+
+    template <typename CameraType>
+    void AnimateFrames(
+        CameraType& camera,
+        int frameCount,
+        float frameTime)
+    {
+        for (int frame = 0; frame < frameCount; ++frame)
+            camera.Animate(frameTime);
+    }
+
     void AnimateFrames(UvsrThirdPersonCamera& camera, int frameCount)
     {
         constexpr float FrameTime = 1.f / 60.f;
-        for (int frame = 0; frame < frameCount; ++frame)
-            camera.Animate(FrameTime);
+        AnimateFrames(camera, frameCount, FrameTime);
     }
 }
 
@@ -129,14 +202,279 @@ int main()
         "X performs the former Z roll-left camera action");
     const float3 positionBeforeRollReset = rollCamera.GetPosition();
     const float3 directionBeforeRollReset = rollCamera.GetDir();
+    const float3 upBeforeRollReset = rollCamera.GetUp();
     rollCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
     rollCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_RELEASE, 0);
     passed &= Check(
         all(rollCamera.GetPosition() == positionBeforeRollReset) &&
             all(rollCamera.GetDir() == directionBeforeRollReset) &&
+            all(rollCamera.GetUp() == upBeforeRollReset),
+        "V starts roll leveling without snapping the captured pose");
+    rollCamera.Animate(1.2f);
+    passed &= Check(
+        all(rollCamera.GetPosition() == positionBeforeRollReset) &&
+            all(rollCamera.GetDir() == directionBeforeRollReset) &&
             lengthSquared(rollCamera.GetUp() - float3(0.f, 1.f, 0.f)) <
                 1e-6f,
-        "V levels X/C roll without moving or redirecting the camera");
+        "V settles X/C roll exactly without moving or redirecting the camera");
+
+    constexpr float InitialRollAngle = 40.f * PI_f / 180.f;
+    constexpr float RollPeakTime = PI_f / 9.5f;
+    const float3 rollTestPosition(3.f, -2.f, 7.f);
+    const float3 rollTestDirection(0.f, 0.f, 1.f);
+    float3 rollTestLevelRight;
+    float3 rollTestLevelUp;
+    BuildLevelBasis(
+        rollTestDirection, rollTestLevelRight, rollTestLevelUp);
+
+    UvsrFirstPersonCamera trajectoryCamera(true);
+    SetRolledPose(
+        trajectoryCamera,
+        rollTestPosition,
+        rollTestDirection,
+        InitialRollAngle);
+    trajectoryCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    int crossingCount = 0;
+    int crossingFrame = 0;
+    float previousNonzeroRoll = InitialRollAngle;
+    float overshootPeak = 0.f;
+    float rollAtPeakSample = InitialRollAngle;
+    float rollAfterPeak = InitialRollAngle;
+    bool trajectoryPoseInvariant = true;
+    for (int frame = 1; frame <= 120; ++frame)
+    {
+        trajectoryCamera.Animate(0.01f);
+        const float roll = SignedRollToLevel(trajectoryCamera);
+        trajectoryPoseInvariant =
+            trajectoryPoseInvariant &&
+            all(trajectoryCamera.GetPosition() == rollTestPosition) &&
+            all(trajectoryCamera.GetDir() == rollTestDirection);
+        if (std::abs(roll) > 1e-6f)
+        {
+            if (roll * previousNonzeroRoll < 0.f)
+            {
+                ++crossingCount;
+                crossingFrame = frame;
+            }
+            previousNonzeroRoll = roll;
+        }
+        overshootPeak = std::min(overshootPeak, roll);
+        if (frame == 33)
+            rollAtPeakSample = roll;
+        if (frame == 60)
+            rollAfterPeak = roll;
+    }
+    passed &= Check(
+        crossingCount == 1 &&
+            crossingFrame >= 22 &&
+            crossingFrame <= 24,
+        "the analytic roll response crosses level exactly once");
+    passed &= Check(
+        std::abs(overshootPeak / InitialRollAngle) >= 0.145f &&
+            std::abs(overshootPeak / InitialRollAngle) <= 0.155f,
+        "the single roll overshoot is controlled to roughly fifteen percent");
+    passed &= Check(
+        rollAtPeakSample < 0.f &&
+            rollAfterPeak < 0.f &&
+            std::abs(rollAfterPeak) < std::abs(rollAtPeakSample),
+        "the post-overshoot tail converges toward level without recrossing");
+    passed &= Check(
+        trajectoryPoseInvariant,
+        "the complete roll trajectory preserves position and view direction");
+    passed &= Check(
+        all(trajectoryCamera.GetUp() == rollTestLevelUp),
+        "roll leveling finishes at the exact captured level target");
+
+    UvsrFirstPersonCamera peakCamera(true);
+    SetRolledPose(
+        peakCamera,
+        rollTestPosition,
+        rollTestDirection,
+        InitialRollAngle);
+    peakCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    peakCamera.Animate(RollPeakTime);
+    passed &= Check(
+        NearlyEqual(
+            std::abs(SignedRollToLevel(peakCamera) / InitialRollAngle),
+            std::exp(-5.75f * RollPeakTime),
+            2e-4f),
+        "the analytic response reaches its expected stationary overshoot peak");
+
+    UvsrFirstPersonCamera rollAt30Hz(true);
+    UvsrFirstPersonCamera rollAt60Hz(true);
+    UvsrFirstPersonCamera rollAt144Hz(true);
+    UvsrFirstPersonCamera rollAtIrregularRate(true);
+    SetRolledPose(
+        rollAt30Hz, rollTestPosition, rollTestDirection, InitialRollAngle);
+    SetRolledPose(
+        rollAt60Hz, rollTestPosition, rollTestDirection, InitialRollAngle);
+    SetRolledPose(
+        rollAt144Hz, rollTestPosition, rollTestDirection, InitialRollAngle);
+    SetRolledPose(
+        rollAtIrregularRate,
+        rollTestPosition,
+        rollTestDirection,
+        InitialRollAngle);
+    rollAt30Hz.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    rollAt60Hz.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    rollAt144Hz.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    rollAtIrregularRate.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    AnimateFrames(rollAt30Hz, 15, 1.f / 30.f);
+    AnimateFrames(rollAt60Hz, 30, 1.f / 60.f);
+    AnimateFrames(rollAt144Hz, 72, 1.f / 144.f);
+    constexpr std::array<float, 7> IrregularFrameTimes = {
+        0.017f, 0.041f, 0.099f, 0.013f, 0.137f, 0.071f, 0.122f
+    };
+    for (float frameTime : IrregularFrameTimes)
+        rollAtIrregularRate.Animate(frameTime);
+    passed &= Check(
+        NearlyEqual(
+            rollAt30Hz.GetUp(), rollAt60Hz.GetUp(), 2e-5f) &&
+        NearlyEqual(
+            rollAt30Hz.GetUp(), rollAt144Hz.GetUp(), 2e-5f) &&
+        NearlyEqual(
+            rollAt30Hz.GetUp(), rollAtIrregularRate.GetUp(), 2e-5f),
+        "roll leveling is frame-rate invariant at 30, 60, 144, and irregular Hz");
+
+    UvsrFirstPersonCamera repeatControl(true);
+    UvsrFirstPersonCamera repeatCamera(true);
+    UvsrFirstPersonCamera restartCamera(true);
+    SetRolledPose(
+        repeatControl, rollTestPosition, rollTestDirection, InitialRollAngle);
+    SetRolledPose(
+        repeatCamera, rollTestPosition, rollTestDirection, InitialRollAngle);
+    SetRolledPose(
+        restartCamera, rollTestPosition, rollTestDirection, InitialRollAngle);
+    repeatControl.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    repeatCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    restartCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    repeatControl.Animate(0.12f);
+    repeatCamera.Animate(0.12f);
+    restartCamera.Animate(0.12f);
+    repeatCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_REPEAT, 0);
+    restartCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    repeatCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_RELEASE, 0);
+    restartCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_RELEASE, 0);
+    repeatControl.Animate(0.18f);
+    repeatCamera.Animate(0.18f);
+    restartCamera.Animate(0.18f);
+    passed &= Check(
+        NearlyEqual(repeatCamera.GetUp(), repeatControl.GetUp(), 1e-6f),
+        "V repeat and release events are consumed without restarting leveling");
+    passed &= Check(
+        !NearlyEqual(restartCamera.GetUp(), repeatControl.GetUp(), 1e-3f),
+        "a new V press restarts leveling from the current roll");
+
+    UvsrFirstPersonCamera inputCanceledCamera(true);
+    SetRolledPose(
+        inputCanceledCamera,
+        rollTestPosition,
+        rollTestDirection,
+        InitialRollAngle);
+    inputCanceledCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    inputCanceledCamera.Animate(0.12f);
+    inputCanceledCamera.KeyboardUpdate(
+        GLFW_KEY_LEFT, 0, GLFW_PRESS, 0);
+    inputCanceledCamera.Animate(0.05f);
+    inputCanceledCamera.KeyboardUpdate(
+        GLFW_KEY_LEFT, 0, GLFW_RELEASE, 0);
+    const float3 inputCanceledDirection = inputCanceledCamera.GetDir();
+    const float3 inputCanceledUp = inputCanceledCamera.GetUp();
+    inputCanceledCamera.Animate(0.5f);
+    passed &= Check(
+        all(inputCanceledCamera.GetDir() == inputCanceledDirection) &&
+            all(inputCanceledCamera.GetUp() == inputCanceledUp),
+        "other camera-affecting input cancels pending roll leveling");
+
+    UvsrFirstPersonCamera replacedPoseCamera(true);
+    SetRolledPose(
+        replacedPoseCamera,
+        rollTestPosition,
+        rollTestDirection,
+        InitialRollAngle);
+    replacedPoseCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    replacedPoseCamera.Animate(0.12f);
+    const float replacementRoll = -23.f * PI_f / 180.f;
+    SetRolledPose(
+        replacedPoseCamera,
+        float3(-4.f, 6.f, 2.f),
+        rollTestDirection,
+        replacementRoll);
+    const float3 replacedPosition = replacedPoseCamera.GetPosition();
+    const float3 replacedDirection = replacedPoseCamera.GetDir();
+    const float3 replacedUp = replacedPoseCamera.GetUp();
+    replacedPoseCamera.Animate(0.7f);
+    passed &= Check(
+        all(replacedPoseCamera.GetPosition() == replacedPosition) &&
+            all(replacedPoseCamera.GetDir() == replacedDirection) &&
+            all(replacedPoseCamera.GetUp() == replacedUp),
+        "exact-pose replacement cancels pending roll leveling");
+
+    const float3 nearVerticalDirection =
+        normalize(float3(1e-5f, 1.f, -2e-5f));
+    const float3 nearVerticalPosition(8.f, 5.f, -3.f);
+    UvsrFirstPersonCamera nearVerticalCamera(true);
+    SetRolledPose(
+        nearVerticalCamera,
+        nearVerticalPosition,
+        nearVerticalDirection,
+        55.f * PI_f / 180.f);
+    nearVerticalCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    bool nearVerticalStable = true;
+    constexpr std::array<float, 5> NearVerticalFrameTimes = {
+        0.003f, 0.011f, 0.007f, 0.019f, 0.005f
+    };
+    for (int frame = 0; frame < 140; ++frame)
+    {
+        nearVerticalCamera.Animate(
+            NearVerticalFrameTimes[frame % NearVerticalFrameTimes.size()]);
+        nearVerticalStable =
+            nearVerticalStable &&
+            IsFinite(nearVerticalCamera.GetDir()) &&
+            IsFinite(nearVerticalCamera.GetUp()) &&
+            std::abs(dot(
+                nearVerticalCamera.GetDir(),
+                nearVerticalCamera.GetUp())) < 1e-4f &&
+            NearlyEqual(length(nearVerticalCamera.GetUp()), 1.f, 1e-4f);
+    }
+    float3 nearVerticalLevelRight;
+    float3 nearVerticalLevelUp;
+    BuildLevelBasis(
+        nearVerticalDirection,
+        nearVerticalLevelRight,
+        nearVerticalLevelUp);
+    passed &= Check(
+        nearVerticalStable &&
+            all(nearVerticalCamera.GetPosition() == nearVerticalPosition) &&
+            all(nearVerticalCamera.GetDir() == nearVerticalDirection) &&
+            NearlyEqual(
+                nearVerticalCamera.GetUp(), nearVerticalLevelUp, 2e-5f),
+        "roll leveling remains finite and exact near a vertical view direction");
+
+    UvsrThirdPersonCamera thirdPersonRollCamera;
+    const float3 thirdPersonRollPosition(-3.f, 4.f, -12.f);
+    SetRolledPose(
+        thirdPersonRollCamera,
+        thirdPersonRollPosition,
+        rollTestDirection,
+        InitialRollAngle);
+    thirdPersonRollCamera.ResetZoomReferenceDistance(10.f);
+    thirdPersonRollCamera.KeyboardUpdate(
+        GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    bool thirdPersonRollPositionInvariant = true;
+    for (int frame = 0; frame < 120; ++frame)
+    {
+        thirdPersonRollCamera.Animate(0.01f);
+        thirdPersonRollPositionInvariant =
+            thirdPersonRollPositionInvariant &&
+            all(thirdPersonRollCamera.GetPosition() ==
+                thirdPersonRollPosition);
+    }
+    passed &= Check(
+        thirdPersonRollPositionInvariant &&
+            all(thirdPersonRollCamera.GetDir() == rollTestDirection) &&
+            all(thirdPersonRollCamera.GetUp() == rollTestLevelUp),
+        "third-person roll leveling inherits the curve without moving the eye");
 
     UvsrFirstPersonCamera pivot(false);
     pivot.LookTo(float3(2.f, 3.f, 4.f), float3(1.f, 0.f, 0.f));

@@ -419,6 +419,22 @@ namespace uvsr
             return sourceColor;
         }
 
+        const nvrhi::TextureDesc& sourceDesc =
+            sourceColor->getDesc();
+        if (sourceDesc.width != m_Size.x ||
+            sourceDesc.height != m_Size.y ||
+            sourceDesc.sampleCount != 1u ||
+            sourceDesc.dimension !=
+                nvrhi::TextureDimension::Texture2D ||
+            sourceDesc.format != nvrhi::Format::RGBA16_FLOAT)
+        {
+            // copyTexture requires format-compatible resources. Keep the
+            // presentation unchanged if a caller supplies a compact temporal
+            // history or any other incompatible per-frame source.
+            m_Timings = {};
+            return sourceColor;
+        }
+
         RebuildBindingSet(sourceColor);
         if (!m_BindingSet)
             return sourceColor;

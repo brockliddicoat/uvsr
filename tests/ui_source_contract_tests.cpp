@@ -3,10 +3,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -149,6 +151,99 @@ namespace
         }
         return compact;
     }
+
+    struct ParsedCommandCatalogEntry
+    {
+        std::string name;
+        std::string section;
+        bool action = false;
+    };
+
+    std::vector<ParsedCommandCatalogEntry> ParseCommandCatalog(
+        std::string_view catalog)
+    {
+        constexpr std::string_view ValueAnchor =
+            "MakeUiSettingsValueCommand(";
+        constexpr std::string_view ActionAnchor =
+            "MakeUiSettingsActionCommand(";
+        constexpr std::string_view SectionAnchor =
+            "UiSettingsCommandSection::";
+
+        std::vector<ParsedCommandCatalogEntry> entries;
+        size_t cursor = 0u;
+        while (cursor < catalog.size())
+        {
+            const size_t valuePosition = catalog.find(ValueAnchor, cursor);
+            const size_t actionPosition = catalog.find(ActionAnchor, cursor);
+            if (valuePosition == std::string_view::npos &&
+                actionPosition == std::string_view::npos)
+            {
+                break;
+            }
+
+            const bool action =
+                valuePosition == std::string_view::npos ||
+                (actionPosition != std::string_view::npos &&
+                    actionPosition < valuePosition);
+            const size_t entryPosition =
+                action ? actionPosition : valuePosition;
+            const size_t nextValue = catalog.find(
+                ValueAnchor, entryPosition + 1u);
+            const size_t nextAction = catalog.find(
+                ActionAnchor, entryPosition + 1u);
+            size_t nextEntry = catalog.size();
+            if (nextValue != std::string_view::npos)
+                nextEntry = std::min(nextEntry, nextValue);
+            if (nextAction != std::string_view::npos)
+                nextEntry = std::min(nextEntry, nextAction);
+
+            const std::string_view entry =
+                catalog.substr(entryPosition, nextEntry - entryPosition);
+            const size_t nameBegin = entry.find('"');
+            const size_t nameEnd = nameBegin == std::string_view::npos
+                ? std::string_view::npos
+                : entry.find('"', nameBegin + 1u);
+            const size_t sectionBegin = entry.find(SectionAnchor);
+            if (nameBegin == std::string_view::npos ||
+                nameEnd == std::string_view::npos ||
+                sectionBegin == std::string_view::npos)
+            {
+                Fail("Settings command catalog entry is malformed.");
+                cursor = nextEntry;
+                continue;
+            }
+
+            const size_t sectionNameBegin =
+                sectionBegin + SectionAnchor.size();
+            size_t sectionNameEnd = sectionNameBegin;
+            while (sectionNameEnd < entry.size())
+            {
+                const unsigned char character =
+                    static_cast<unsigned char>(entry[sectionNameEnd]);
+                if (!std::isalnum(character) && character != '_')
+                    break;
+                ++sectionNameEnd;
+            }
+            entries.push_back({
+                std::string(entry.substr(
+                    nameBegin + 1u, nameEnd - nameBegin - 1u)),
+                std::string(entry.substr(
+                    sectionNameBegin,
+                    sectionNameEnd - sectionNameBegin)),
+                action
+            });
+            cursor = nextEntry;
+        }
+        return entries;
+    }
+
+    bool ContainsQuotedLiteral(
+        std::string_view source,
+        std::string_view value)
+    {
+        const std::string literal = "\"" + std::string(value) + "\"";
+        return source.find(literal) != std::string_view::npos;
+    }
 }
 
 int main(int argc, char** argv)
@@ -168,6 +263,73 @@ int main(int argc, char** argv)
         return 2;
     }
     const std::string compactSource = RemoveAsciiWhitespace(source);
+    const std::string_view keyboardUpdate = ExtractSection(
+        source,
+        "virtual bool KeyboardUpdate(",
+        "virtual void buildUI(void) override",
+        "UI keyboard routing");
+    ExpectContains(
+        keyboardUpdate,
+        "const bool captured = ImGui_Renderer::KeyboardUpdate(",
+        "base ImGui keyboard routing");
+    ExpectContains(
+        keyboardUpdate,
+        "key == GLFW_KEY_F",
+        "flashlight keyboard shortcut");
+    ExpectContains(
+        keyboardUpdate,
+        "action == GLFW_PRESS",
+        "single-press flashlight shortcut");
+    ExpectContains(
+        keyboardUpdate,
+        "!captured",
+        "captured-key flashlight isolation");
+    ExpectContains(
+        keyboardUpdate,
+        "!ImGui::GetIO().WantTextInput",
+        "text-input flashlight isolation");
+    ExpectContains(
+        keyboardUpdate,
+        "m_app->ToggleFlashlight();",
+        "flashlight shortcut dispatch");
+    ExpectContains(
+        source,
+        "Flashlight unavailable while PBR rendering is disabled",
+        "legacy-lighting flashlight shortcut rejection");
+    ExpectOrdered(
+        keyboardUpdate,
+        "const bool captured = ImGui_Renderer::KeyboardUpdate(",
+        "key == GLFW_KEY_F",
+        "base ImGui handling before flashlight shortcut");
+    const std::string_view rendererReset = ExtractSection(
+        source,
+        "void ResetAllRendererSettings()",
+        "void SynchronizeCameraInput()",
+        "renderer reset");
+    ExpectContains(
+        rendererReset,
+        "m_ui.FlashlightEnabled = DefaultFlashlightEnabled;",
+        "flashlight reset default");
+    ExpectContains(
+        rendererReset,
+        "m_FlashlightTransition = 0.f;",
+        "flashlight reset endpoint");
+    ExpectContains(
+        rendererReset,
+        "m_ui.Flashlight = DefaultFlashlightSettings;",
+        "flashlight setting reset defaults");
+    ExpectContains(
+        rendererReset,
+        "m_FlashlightHotspot->intensity = 0.f;",
+        "flashlight hotspot reset endpoint");
+    ExpectContains(
+        rendererReset,
+        "ResetFlashlightMotion();",
+        "flashlight motion reset");
+    ExpectContains(
+        rendererReset,
+        "m_ui.EnableAmbientFill = true;",
+        "ambient fill reset default");
     const std::filesystem::path uiAnimationPath =
         std::filesystem::path(argv[1]) / "src" / "ui_animation.h";
     const std::string uiAnimationSource = ReadFile(uiAnimationPath);
@@ -203,7 +365,7 @@ int main(int argc, char** argv)
         "README line-count verification policy");
     ExpectContains(
         uiReferenceSource,
-        "UI reference version: `2026-07-30.1`.",
+        "UI reference version: `2026-07-31.5`.",
         "current UI reference version");
     ExpectContains(
         uiReferenceSource,
@@ -282,10 +444,42 @@ int main(int argc, char** argv)
                   << imguiDropdownRollPath << '\n';
         return 2;
     }
+    const std::filesystem::path imguiRuntimePolicyPath =
+        std::filesystem::path(argv[1]) /
+        "overrides" /
+        "imgui-runtime-policy.patch";
+    const std::string imguiRuntimePolicy =
+        ReadFile(imguiRuntimePolicyPath);
+    const std::string uiSkinSource = ReadFile(
+        std::filesystem::path(argv[1]) / "src" / "ui_skin.h");
+    const std::string uiCommandsSource = ReadFile(
+        std::filesystem::path(argv[1]) / "src" / "ui_commands.h");
+    const std::string uiCommandLayoutSource = ReadFile(
+        std::filesystem::path(argv[1]) / "src" / "ui_command_layout.h");
+    const std::string uiSettingsCommandCatalogSource = ReadFile(
+        std::filesystem::path(argv[1]) /
+        "src" /
+        "ui_settings_command_catalog.h");
+    if (imguiRuntimePolicy.empty() ||
+        uiSkinSource.empty() ||
+        uiCommandsSource.empty() ||
+        uiCommandLayoutSource.empty() ||
+        uiSettingsCommandCatalogSource.empty())
+    {
+        std::cerr
+            << "FAIL: could not read the UI skin/command runtime policy "
+               "or command-layout helper\n";
+        return 2;
+    }
     ExpectContains(
         cmakeSource,
         "overrides/imgui-dropdown-roll.patch",
         "ordered ImGui dropdown-roll staging");
+    ExpectOrdered(
+        cmakeSource,
+        "overrides/imgui-dropdown-roll.patch",
+        "overrides/imgui-runtime-policy.patch",
+        "ordered ImGui runtime-policy staging");
     ExpectContains(
         cmakeSource,
         "overrides/donut-app.patch",
@@ -303,10 +497,33 @@ int main(int argc, char** argv)
         Fail("Donut Material Editor override must be staged and replace the "
             "pristine target source.");
     }
+    if (CountOccurrences(cmakeSource, "src/app/DeviceManager.cpp") < 2)
+    {
+        Fail("Donut fullscreen-shortcut override must be staged and replace "
+            "the pristine target source.");
+    }
+    ExpectContains(
+        cmakeSource,
+        "include/donut/app/DeviceManager.h",
+        "Donut fullscreen-shortcut interface override staging");
     ExpectContains(
         donutAppOverride,
         "+        std::atomic_bool m_SceneLoaded;",
         "thread-safe Donut scene-loaded override");
+    ExpectContains(
+        donutAppOverride,
+        "+        virtual bool ShouldSuppressFullscreenShortcut() const",
+        "Donut render-pass fullscreen-shortcut suppression hook");
+    const std::string_view deviceManagerOverride = ExtractSection(
+        donutAppOverride,
+        "diff --git a/src/app/DeviceManager.cpp",
+        "diff --git a/include/donut/app/UserInterfaceUtils.h",
+        "Donut fullscreen-shortcut override");
+    ExpectOrdered(
+        deviceManagerOverride,
+        "ShouldSuppressFullscreenShortcut()",
+        "ToggleFullscreen();",
+        "fullscreen suppression before fullscreen mutation");
     ExpectContains(
         donutAppOverride,
         "+        bool showMaterialDomain = true);",
@@ -315,6 +532,89 @@ int main(int argc, char** argv)
         donutAppOverride,
         "+        int domainIndex = int(material->domain);",
         "Material Editor domain storage safety");
+    ExpectContains(
+        uiSkinSource,
+        "enum class UiSkin\n"
+        "    {\n"
+        "        Amp,\n"
+        "        Og,\n"
+        "        Count\n"
+        "    };",
+        "exact Amp and OG skin model");
+    ExpectContains(
+        uiSkinSource,
+        "UiSkin::Amp,\n"
+        "        UiSkin::Og",
+        "stable Amp and OG picker order");
+    ExpectContains(
+        uiSkinSource,
+        "case UiSkin::Amp:",
+        "Amp behavior profile");
+    ExpectContains(
+        uiSkinSource,
+        "return { true, false, true, true };",
+        "authored animated Amp behavior");
+    ExpectContains(
+        uiSkinSource,
+        "case UiSkin::Og:",
+        "OG behavior profile");
+    ExpectContains(
+        uiSkinSource,
+        "return { false, true, false, false };",
+        "motion-free stock OG behavior");
+    ExpectContains(
+        uiSkinSource,
+        "normalized == \"amp\"",
+        "Amp command alias");
+    ExpectContains(
+        uiSkinSource,
+        "normalized == \"og\"",
+        "OG command alias");
+    for (const std::string_view retiredSkinContract : {
+            std::string_view("UiSkin::Current"),
+            std::string_view("UiSkin::ImGuiClassic"),
+            std::string_view("UiSkin::ChatGptCodex"),
+            std::string_view("UiSkin::UnrealEngine5"),
+            std::string_view("UiSkin::RenderLab"),
+            std::string_view("normalized == \"current\""),
+            std::string_view("normalized == \"original\""),
+            std::string_view("normalized == \"chatgpt-codex\""),
+            std::string_view("normalized == \"ue5\""),
+            std::string_view("normalized == \"signal\"") })
+    {
+        ExpectAbsent(
+            uiSkinSource,
+            retiredSkinContract,
+            "retired UI skin implementation and aliases");
+    }
+    ExpectContains(
+        uiCommandsSource,
+        "ParseUiCommand(",
+        "slash-command parser");
+    ExpectContains(
+        imguiRuntimePolicy,
+        "SetUvsrUiBehavior",
+        "runtime ImGui behavior selector");
+    ExpectContains(
+        imguiRuntimePolicy,
+        "UvsrStockWidgetRendering",
+        "runtime stock-widget branch");
+    ExpectContains(
+        imguiRuntimePolicy,
+        "if (!g.UvsrUiMotionEnabled)",
+        "motion-free ImGui endpoint branch");
+    ExpectContains(
+        imguiRuntimePolicy,
+        "if (g.UvsrStockWidgetRendering ||",
+        "stock ImGui disabled-color branch");
+    ExpectContains(
+        imguiRuntimePolicy,
+        "draw_list->AddTriangleFilled(",
+        "stock ImGui arrow primitive");
+    ExpectContains(
+        imguiRuntimePolicy,
+        "const float highlight_amount = g.UvsrStockWidgetRendering",
+        "stock ImGui combo rendering");
     ExpectOrdered(
         cmakeSource,
         "overrides/imgui-ui.patch",
@@ -350,15 +650,27 @@ int main(int argc, char** argv)
                   << backdropShaderPath << '\n';
         return 2;
     }
+    const std::filesystem::path pixelZoomShaderPath =
+        std::filesystem::path(argv[1]) /
+        "src" /
+        "pixel_zoom_ps.hlsl";
+    const std::string pixelZoomShader =
+        ReadFile(pixelZoomShaderPath);
+    if (pixelZoomShader.empty())
+    {
+        std::cerr << "FAIL: could not read "
+                  << pixelZoomShaderPath << '\n';
+        return 2;
+    }
     const std::filesystem::path temporalAaPath =
         std::filesystem::path(argv[1]) /
         "src" /
-        "taa_miniengine.cpp";
+        "temporal_aa.cpp";
     const std::string temporalAaSource = ReadFile(temporalAaPath);
     const std::filesystem::path sharpenShaderPath =
         std::filesystem::path(argv[1]) /
         "src" /
-        "taa_miniengine_sharpen_cs.hlsl";
+        "temporal_aa_sharpen_cs.hlsl";
     const std::string sharpenShader = ReadFile(sharpenShaderPath);
     if (temporalAaSource.empty() || sharpenShader.empty())
     {
@@ -457,7 +769,10 @@ int main(int argc, char** argv)
                 "if (skyOpen)"},
             {
                 "const bool lightsOpen = DrawCollapsingHeader(",
-                "if (lightsOpen)"} })
+                "if (lightsOpen)"},
+            {
+                "const bool shadowsOpen = DrawCollapsingHeader(",
+                "if (shadowsOpen)"} })
     {
         const std::string_view header = ExtractSection(
             source,
@@ -483,16 +798,698 @@ int main(int argc, char** argv)
         "Escape-only initial Settings state");
     ExpectContains(
         source,
+        "UiSkin                              Skin = DefaultUiSkin",
+        "session-only UI skin state");
+    ExpectContains(
+        source,
+        "m_ComposedUiSkin = m_ui.Skin;",
+        "immutable composed-skin snapshot");
+    ExpectContains(
+        source,
+        "ApplyUiSkin(m_ComposedUiSkin, m_UiDisplayScale)",
+        "per-frame composed UI skin application");
+    ExpectContains(
+        source,
+        "GetUiSkinBehavior(m_ComposedUiSkin).backdropEnabled",
+        "same-frame composed skin backdrop policy");
+    ExpectContains(
+        source,
+        "else if (!uiMotionEnabled)",
+        "motion-free pixel zoom endpoint");
+    ExpectContains(
+        source,
+        "skin == UiSkin::Og ? UiSkin::Og : UiSkin::Amp",
+        "two-skin runtime fallback");
+    ExpectContains(
+        source,
+        "ImGui::StyleColorsDark(&style);",
+        "stock OG ImGui style base");
+    ExpectContains(
+        source,
+        "if (resolvedSkin == UiSkin::Og)",
+        "stock OG visual-token branch");
+    ExpectContains(
+        source,
+        "if (resolvedSkin == UiSkin::Og)\n"
+        "        {\n"
+        "            style.ScrollbarRounding = 0.f;",
+        "square OG scrollbar");
+    ExpectContains(
+        source,
+        "tokens.drawControlOutlines = false;",
+        "stock OG authored-outline suppression");
+    ExpectContains(
+        source,
+        "tokens.drawScrollEdgeFades = false;",
+        "stock OG scroll-decoration suppression");
+    ExpectContains(
+        source,
+        "if (resolvedSkin == UiSkin::Amp)",
+        "authored Amp metric branch");
+    ExpectContains(
+        source,
+        "style.ScrollbarRounding = 8.f;",
+        "rounded Amp scrollbar");
+    ExpectContains(
+        source,
+        "ImGui::IsUvsrStockWidgetRenderingEnabled()",
+        "stock OG default-font selection");
+    ExpectContains(
+        source,
+        "GetUiSkinBehavior(m_ComposedUiSkin).expandedWordSpacing",
+        "skin-specific word-spacing behavior");
+    ExpectContains(
+        source,
+        "UiSkinLabel(m_ui.Skin).data()",
+        "General UI skin picker");
+    const std::string_view uiSkinPicker = ExtractSection(
+        source,
+        "ImGui::TextUnformatted(\"Interface Skin\")",
+        "ImGui::TextUnformatted(\"Graphics Adapter\")",
+        "General Interface Skin picker");
+    ExpectContains(
+        uiSkinPicker,
+        "DrawPresetResetIcon(\n"
+        "                    \"Interface Skin\"",
+        "Interface Skin reset identity");
+    ExpectContains(
+        uiSkinPicker,
+        "QueueDeferredControlUiAction(",
+        "frame-end UI skin reset");
+    ExpectContains(
+        uiSkinPicker,
+        "UiSkinValues",
+        "two-skin General picker source");
+    ExpectAbsent(
+        uiSkinPicker,
+        "\"UI Skin\"",
+        "retired General UI Skin label");
+    ExpectAbsent(
+        uiSkinPicker,
+        "Original ImGui",
+        "retired Original skin wording");
+    ExpectContains(
+        source,
+        "Use /skin [amp|og]",
+        "exact Amp and OG slash-command help");
+
+    const std::string_view commandCatalog = ExtractSection(
+        uiSettingsCommandCatalogSource,
+        "UiSettingsCommandCatalog = {{",
+        "        }};",
+        "Settings command catalog");
+    const std::vector<ParsedCommandCatalogEntry> commandCatalogEntries =
+        ParseCommandCatalog(commandCatalog);
+    std::set<std::string> commandNames;
+    std::set<std::string> valueCommandNames;
+    std::set<std::string> actionCommandNames;
+    for (const ParsedCommandCatalogEntry& entry : commandCatalogEntries)
+    {
+        if (!commandNames.insert(entry.name).second)
+        {
+            Fail("Settings command catalog path '" + entry.name +
+                "' must be unique.");
+        }
+        (entry.action ? actionCommandNames : valueCommandNames).insert(
+            entry.name);
+    }
+    if (commandCatalogEntries.size() != 245u ||
+        commandNames.size() != 245u)
+    {
+        Fail("Settings command catalog must contain exactly 245 unique "
+            "entries.");
+    }
+    if (valueCommandNames.size() != 235u)
+    {
+        Fail("Settings command catalog must contain exactly 235 value "
+            "entries.");
+    }
+    const std::set<std::string> expectedActionCommandNames = {
+        "open-scene-folder",
+        "visibility-benchmark",
+        "aa-motion-test",
+        "cancel-benchmark",
+        "svsm-camera-motion-test",
+        "svsm-sun-motion-test",
+        "cancel-svsm-motion-test",
+        "reset-settings",
+        "screenshot",
+        "restart"
+    };
+    if (actionCommandNames != expectedActionCommandNames)
+    {
+        Fail("Settings command catalog must contain the exact ten supported "
+            "actions.");
+    }
+
+    const std::string compactCommandCatalog =
+        RemoveAsciiWhitespace(uiSettingsCommandCatalogSource);
+    ExpectContains(
+        compactCommandCatalog,
+        "std::array<UiSettingsCommandDefinition,245>"
+        "UiSettingsCommandCatalog",
+        "exact Settings command catalog size");
+    ExpectContains(
+        uiSettingsCommandCatalogSource,
+        "UiSettingsFactoryMutationPolicy factoryMutationPolicy",
+        "typed factory-mutation policy");
+    ExpectAbsent(
+        uiSettingsCommandCatalogSource,
+        "bool factoryMutationPolicy",
+        "raw boolean factory-mutation policy");
+
+    const std::string_view commandRegistry = ExtractSection(
+        source,
+        "    struct UiSettingsCommandBinding",
+        "    static std::string NormalizeCommandAscii(",
+        "catalog-derived Settings command registry");
+    const std::string compactCommandRegistry =
+        RemoveAsciiWhitespace(commandRegistry);
+    ExpectContains(
+        compactCommandRegistry,
+        "std::array<UiSettingsCommandBinding,"
+        "UiSettingsCommandCatalog.size()>bindings{};",
+        "catalog-sized Settings command registry");
+    ExpectContains(
+        compactCommandRegistry,
+        "bindings[index]={"
+        "UiSettingsCommandCatalog[index].name,"
+        "UiSettingsCommandCatalog[index].section,"
+        "UiSettingsCommandCatalog[index].kind};",
+        "catalog-derived Settings command bindings");
+    ExpectContains(
+        compactCommandRegistry,
+        "static_assert(UiSettingsCommandBindings.size()=="
+        "UiSettingsCommandCatalog.size());",
+        "registry and catalog size equivalence");
+    ExpectContains(
+        compactCommandRegistry,
+        "static_assert(UiSettingsCommandBindings.size()==245u);",
+        "exact Settings command registry size");
+    ExpectAbsent(
+        compactCommandRegistry,
+        "std::array<UiSettingsCommandBinding,17>",
+        "retired short Settings command registry");
+    if (CountOccurrences(commandRegistry, "\"") != 0u)
+    {
+        Fail("Settings command registry must derive every path from the "
+            "catalog instead of repeating path literals.");
+    }
+
+    struct ValueDispatchContract
+    {
+        std::string_view section;
+        std::string_view function;
+        std::string_view implementation;
+    };
+    const std::vector<ValueDispatchContract> valueDispatchers = {
+        {
+            "Ui",
+            "DispatchUiCommandValue",
+            ExtractSection(
+                source,
+                "    bool DispatchUiCommandValue(",
+                "    bool DispatchGeneralCommandValue(",
+                "UI value-command dispatcher")
+        },
+        {
+            "General",
+            "DispatchGeneralCommandValue",
+            ExtractSection(
+                source,
+                "    bool DispatchGeneralCommandValue(",
+                "    bool DispatchVisibilityCommandValue(",
+                "General value-command dispatcher")
+        },
+        {
+            "Visibility",
+            "DispatchVisibilityCommandValue",
+            ExtractSection(
+                source,
+                "    bool DispatchVisibilityCommandValue(",
+                "    bool DispatchBufferCommandValue(",
+                "Visibility value-command dispatcher")
+        },
+        {
+            "Buffers",
+            "DispatchBufferCommandValue",
+            ExtractSection(
+                source,
+                "    bool DispatchBufferCommandValue(",
+                "    bool DispatchStatisticsCommandValue(",
+                "Buffer value-command dispatcher")
+        },
+        {
+            "Statistics",
+            "DispatchStatisticsCommandValue",
+            ExtractSection(
+                source,
+                "    bool DispatchStatisticsCommandValue(",
+                "    bool DispatchAliasingCommandValue(",
+                "Statistics value-command dispatcher")
+        },
+        {
+            "Aliasing",
+            "DispatchAliasingCommandValue",
+            ExtractSection(
+                source,
+                "    bool DispatchAliasingCommandValue(",
+                "    bool DispatchSkyCommandValue(",
+                "Aliasing value-command dispatcher")
+        },
+        {
+            "Sky",
+            "DispatchSkyCommandValue",
+            ExtractSection(
+                source,
+                "    bool DispatchSkyCommandValue(",
+                "    bool DispatchLightCommandValue(",
+                "Sky value-command dispatcher")
+        },
+        {
+            "Lights",
+            "DispatchLightCommandValue",
+            ExtractSection(
+                source,
+                "    struct FlashlightFloatCommandBinding",
+                "    bool DispatchScreenSpaceShadowCommandValue(",
+                "Light value-command dispatcher")
+        },
+        {
+            "ScreenSpaceDirectionalShadows",
+            "DispatchScreenSpaceShadowCommandValue",
+            ExtractSection(
+                source,
+                "    bool DispatchScreenSpaceShadowCommandValue(",
+                "    struct SvsmBoolCommandBinding",
+                "screen-space directional-shadow value-command dispatcher")
+        },
+        {
+            "SparseVirtualShadowMaps",
+            "DispatchSvsmCommandValue",
+            ExtractSection(
+                source,
+                "    struct SvsmBoolCommandBinding",
+                "    struct CsmBoolCommandBinding",
+                "SVSM value-command dispatcher")
+        },
+        {
+            "DiagnosticCascadedShadowMaps",
+            "DispatchCsmCommandValue",
+            ExtractSection(
+                source,
+                "    struct CsmBoolCommandBinding",
+                "    bool DispatchMaterialCommandValue(",
+                "diagnostic CSM value-command dispatcher")
+        },
+        {
+            "Materials",
+            "DispatchMaterialCommandValue",
+            ExtractSection(
+                source,
+                "    bool DispatchMaterialCommandValue(",
+                "    bool DispatchCommandValue(",
+                "Material value-command dispatcher")
+        }
+    };
+    const std::string_view commandValueRouter = ExtractSection(
+        source,
+        "    bool DispatchCommandValue(",
+        "    bool DispatchCommandAction(",
+        "Settings value-command section router");
+    const std::string compactCommandValueRouter =
+        RemoveAsciiWhitespace(commandValueRouter);
+    for (const ValueDispatchContract& dispatcher : valueDispatchers)
+    {
+        ExpectContains(
+            dispatcher.implementation,
+            "const std::string_view path = definition.name;",
+            "definition-owned value-command dispatch");
+        const std::string route =
+            "caseUiSettingsCommandSection::" +
+            std::string(dispatcher.section) +
+            ":return" +
+            std::string(dispatcher.function) +
+            "(";
+        ExpectContains(
+            compactCommandValueRouter,
+            route,
+            "complete Settings value-command section routing");
+    }
+    ExpectContains(
+        compactCommandValueRouter,
+        "caseUiSettingsCommandSection::Footer:"
+        "caseUiSettingsCommandSection::Count:break;",
+        "non-value Settings command section routing");
+
+    ExpectContains(
+        source,
+        "error = \"No change: \" + std::string(path) +\n"
+        "            \" already has the requested value.\";",
+        "stable unchanged-mutation failure");
+    if (CountOccurrences(
+            source,
+            "RejectUnchangedCommandMutation(path, error)") < 6u)
+    {
+        Fail("Every generic command value helper must reject unchanged "
+            "mutations before assignment.");
+    }
+
+    const std::string_view screenSpaceShadowCommand =
+        valueDispatchers[8].implementation;
+    const std::string_view svsmCommand =
+        valueDispatchers[9].implementation;
+    const std::string_view csmCommand =
+        valueDispatchers[10].implementation;
+    for (const std::string_view shadowCommand :
+        { screenSpaceShadowCommand, svsmCommand, csmCommand })
+    {
+        ExpectOrdered(
+            shadowCommand,
+            "operation != CommandValueOperation::Get",
+            "m_app->HasPrimaryDirectionalLight()",
+            "shadow command availability before mutation");
+        ExpectContains(
+            shadowCommand,
+            "require deferred PBR and a",
+            "visible shadow-section availability error");
+        ExpectContains(
+            shadowCommand,
+            "primary ",
+            "visible shadow-section primary-light requirement");
+        ExpectContains(
+            shadowCommand,
+            "directional light.",
+            "visible shadow-section directional-light requirement");
+    }
+    ExpectContains(
+        screenSpaceShadowCommand,
+        "const ScreenSpaceDirectionalShadowSettings factoryDefaults;",
+        "screen-space directional-shadow per-control factory resets");
+    ExpectContains(
+        csmCommand,
+        "const DiagnosticCascadedShadowMapSettings factoryDefaults;",
+        "CSM per-control factory resets");
+    for (const std::string_view csmAvailabilityPath : {
+            std::string_view("shadows.csm.filter-taps"),
+            std::string_view("shadows.csm.filter-radius"),
+            std::string_view("shadows.csm.dirty-rectangles"),
+            std::string_view("shadows.csm.minimum-scroll-overlap"),
+            std::string_view(
+                "shadows.csm.accurate-caster-hull-culling"),
+            std::string_view(
+                "shadows.csm.conservative-saturated-slope-shortcut"),
+            std::string_view(
+                "shadows.csm.precomputed-receiver-hull-axes") })
+    {
+        if (!ContainsQuotedLiteral(csmCommand, csmAvailabilityPath))
+        {
+            Fail("Diagnostic CSM command availability is missing for '" +
+                std::string(csmAvailabilityPath) + "'.");
+        }
+    }
+    ExpectContains(
+        valueDispatchers[2].implementation,
+        "operation == CommandValueOperation::Get &&",
+        "Visibility custom-profile mutation reapplies its compound preset");
+    ExpectContains(
+        valueDispatchers[5].implementation,
+        "TemporalAaSampleResurrectionOverride>, 4>",
+        "sample resurrection command maps every stored state");
+    ExpectContains(
+        valueDispatchers[5].implementation,
+        "\"preset\",\n"
+        "                            TemporalAaSampleResurrectionOverride::FromPreset",
+        "sample resurrection get and reset preserve the preset default");
+    ExpectContains(
+        valueDispatchers[2].implementation,
+        "candidate.quality ==\n"
+        "                        ScreenSpaceVisibilityQuality::Custom",
+        "Visibility custom-profile Get reports its preset origin");
+    ExpectContains(
+        svsmCommand,
+        "std::pair<std::string_view, SvsmDebugView>, 12>",
+        "complete SVSM debug-view command map");
+    for (const std::string_view debugView : {
+            std::string_view("required-pages"),
+            std::string_view("resident-pages"),
+            std::string_view("cached-pages"),
+            std::string_view("dirty-pages"),
+            std::string_view("rendered-pages") })
+    {
+        if (!ContainsQuotedLiteral(svsmCommand, debugView))
+        {
+            Fail("SVSM debug-view command is missing '" +
+                std::string(debugView) + "'.");
+        }
+    }
+    ExpectContains(
+        svsmCommand,
+        "const uint32_t resetBudget = std::min(\n"
+        "                    256u,\n"
+        "                    candidate.physicalPageCount);",
+        "finite SVSM page-budget reset");
+    ExpectContains(
+        svsmCommand,
+        "candidate.pageRenderBudget = resetBudget;",
+        "SVSM page-budget reset commit");
+    ExpectContains(
+        svsmCommand,
+        "m_CommandRememberedSvsmPageBudget =\n"
+        "            rememberedPageBudget;",
+        "transactional remembered SVSM page-budget commit");
+
+    const std::string_view commandActionDispatcher = ExtractSection(
+        source,
+        "    bool DispatchCommandAction(",
+        "    void AppendDynamicCommandValues(",
+        "Settings action dispatcher");
+    size_t coveredCommandCount = 0u;
+    for (const ParsedCommandCatalogEntry& entry : commandCatalogEntries)
+    {
+        std::string_view implementation = commandActionDispatcher;
+        if (!entry.action)
+        {
+            implementation = {};
+            for (const ValueDispatchContract& dispatcher :
+                valueDispatchers)
+            {
+                if (dispatcher.section == std::string_view(entry.section))
+                {
+                    implementation = dispatcher.implementation;
+                    break;
+                }
+            }
+        }
+        if (implementation.empty())
+        {
+            Fail("Settings command '" + entry.name +
+                "' has no section dispatcher.");
+            continue;
+        }
+        if (!ContainsQuotedLiteral(implementation, entry.name))
+        {
+            Fail("Settings command '" + entry.name +
+                "' is missing from its section dispatcher.");
+            continue;
+        }
+        ++coveredCommandCount;
+    }
+    if (coveredCommandCount != 245u)
+    {
+        Fail("Section dispatchers must cover all 245 catalog commands "
+            "literally.");
+    }
+    for (const std::string& action : expectedActionCommandNames)
+    {
+        ExpectContains(
+            commandActionDispatcher,
+            "action == \"" + action + "\"",
+            "exact Settings action dispatch");
+    }
+
+    const std::string_view mutationPolicy = ExtractSection(
+        source,
+        "    bool CheckCommandMutationAllowed(",
+        "    static bool ApplyCommandBool(",
+        "unified Settings command mutation policy");
+    ExpectContains(
+        mutationPolicy,
+        "UiSettingsFactoryMutationPolicy::UiSafe",
+        "factory-shader command mutation policy");
+    ExpectContains(
+        mutationPolicy,
+        "IsCommandRuntimeMutationLocked(definition)",
+        "runtime command mutation policy");
+    ExpectAbsent(
+        source,
+        "IsCommandMutationLocked(",
+        "retired raw command-mutation bypass");
+    if (CountOccurrences(source, "CheckCommandMutationAllowed(") != 4u)
+    {
+        Fail("Every mutating command route must share the one catalog-aware "
+            "policy gate.");
+    }
+
+    const std::string_view executeCommand = ExtractSection(
+        source,
+        "    void ExecuteUiCommand(",
+        "    void CompleteCommandInput(",
+        "Settings command execution");
+    const std::string_view runCommand = ExtractSection(
+        executeCommand,
+        "        if (command.verb == UiCommandVerb::Run)\n"
+        "        {",
+        "        if (command.verb == UiCommandVerb::Reset &&",
+        "catalog action execution");
+    ExpectOrdered(
+        runCommand,
+        "FindSettingsCommandDefinition(command.action)",
+        "definition->Supports(UiSettingsCommandVerb::Run)",
+        "catalog action verb validation");
+    ExpectOrdered(
+        runCommand,
+        "definition->Supports(UiSettingsCommandVerb::Run)",
+        "CheckCommandMutationAllowed(*definition, error)",
+        "catalog action mutation validation");
+    ExpectOrdered(
+        runCommand,
+        "CheckCommandMutationAllowed(*definition, error)",
+        "DispatchCommandAction(",
+        "validated catalog action dispatch");
+    const std::string_view valueCommand = ExtractSection(
+        executeCommand,
+        "        const UiSettingsCommandDefinition* definition =\n"
+        "            FindSettingsCommandDefinition(command.path);",
+        "        SetCommandResult(\n"
+        "            std::string(definition->name) + \" = \" + value);",
+        "catalog value-command execution");
+    ExpectOrdered(
+        valueCommand,
+        "FindSettingsCommandDefinition(command.path)",
+        "GetSettingsCommandVerb(operation)",
+        "catalog value-command lookup");
+    ExpectOrdered(
+        valueCommand,
+        "GetSettingsCommandVerb(operation)",
+        "definition->Supports(settingsVerb)",
+        "catalog value-command verb validation");
+    ExpectOrdered(
+        valueCommand,
+        "definition->Supports(settingsVerb)",
+        "CheckCommandMutationAllowed(*definition, error)",
+        "catalog value-command mutation validation");
+    ExpectOrdered(
+        valueCommand,
+        "CheckCommandMutationAllowed(*definition, error)",
+        "DispatchCommandValue(",
+        "validated catalog value-command dispatch");
+
+    const std::string_view commandCompletion = ExtractSection(
+        source,
+        "    std::vector<std::string> GetCommandCompletionCandidates(",
+        "    void ExecuteUiCommand(",
+        "catalog-driven command completion");
+    if (CountOccurrences(
+            commandCompletion, "UiSettingsCommandBindings") < 2u)
+    {
+        Fail("Path and action completion must derive from the complete "
+            "Settings command binding registry.");
+    }
+    ExpectContains(
+        commandCompletion,
+        "FindSettingsCommandDefinition(completion.valuePath)",
+        "path-scoped value completion");
+    ExpectContains(
+        commandCompletion,
+        "std::string_view remaining = definition->domain;",
+        "selected-path catalog-domain completion");
+    ExpectContains(
+        commandCompletion,
+        "AppendDynamicCommandValues(",
+        "selected-path runtime value completion");
+    ExpectAbsent(
+        commandCompletion,
+        "for (const UiSettingsCommandDefinition& definition :\n"
+        "                UiSettingsCommandCatalog)",
+        "global cross-path value completion pooling");
+    const std::string_view listCommand = ExtractSection(
+        executeCommand,
+        "        if (command.verb == UiCommandVerb::List)",
+        "        if (command.verb == UiCommandVerb::Run &&",
+        "catalog-driven Settings listing");
+    ExpectContains(
+        listCommand,
+        "for (const UiSettingsCommandDefinition& definition :\n"
+        "                UiSettingsCommandCatalog)",
+        "complete Settings catalog listing");
+    ExpectContains(
+        listCommand,
+        "GetSettingsCommandVerbList(definition)",
+        "catalog verb listing");
+    ExpectContains(
+        listCommand,
+        "AppendDynamicCommandValues(",
+        "runtime value listing");
+
+    const std::string_view dynamicCommandValues = ExtractSection(
+        source,
+        "    void AppendDynamicCommandValues(",
+        "    std::vector<std::string> GetCommandCompletionCandidates(",
+        "dynamic Settings command discovery");
+    for (const std::string_view dynamicPath : {
+            std::string_view("gpu.adapter"),
+            std::string_view("scene.current"),
+            std::string_view("sky.environment"),
+            std::string_view("light.selected"),
+            std::string_view("material.selected") })
+    {
+        ExpectContains(
+            dynamicCommandValues,
+            "path == \"" + std::string(dynamicPath) + "\"",
+            "dynamic Settings path discovery");
+    }
+    for (const std::string_view discoverySource : {
+            std::string_view("m_ui.GpuAdapterChoices"),
+            std::string_view("m_app->GetAvailableScenes()"),
+            std::string_view("ImageBasedLightingSource::Count"),
+            std::string_view("GetImageBasedLightingSourceInfo("),
+            std::string_view("m_app->GetEditableLights()"),
+            std::string_view("GetSceneGraph()->GetMaterials()") })
+    {
+        ExpectContains(
+            dynamicCommandValues,
+            discoverySource,
+            "live adapter, scene, environment, light, and material discovery");
+    }
+    ExpectContains(
+        source,
+        "Enter applies | Tab completes | Up/Down history | / closes | Esc cancels edit",
+        "font-safe slash-command shortcut legend");
+    ExpectContains(
+        source,
         "m_ui.ShowUI = !m_ui.ShowUI",
         "Escape Settings toggle");
     ExpectContains(
         source,
-        "m_SettingsAppearance,\n            m_ui.ShowUI",
+        "m_SettingsAppearance = uiMotionEnabled",
         "Settings open-and-close appearance target");
+    ExpectContains(
+        source,
+        ": m_ui.ShowUI ? 1.f : 0.f",
+        "motion-free Settings appearance endpoint");
     ExpectContains(
         source,
         "settingsWindowFlags |= ImGuiWindowFlags_NoInputs",
         "noninteractive Settings close animation");
+    ExpectContains(
+        source,
+        "TryApplyDeferredDropdownUiActions(",
+        "frame-end deferred settings mutation");
+    ExpectContains(
+        source,
+        "!uiMotionEnabled",
+        "motion-free immediate deferred-action policy");
     ExpectContains(
         source,
         "for (ImDrawCmd& command : drawList->CmdBuffer)",
@@ -501,6 +1498,514 @@ int main(int argc, char** argv)
         source,
         "m_SettingsEntranceStarted",
         "removed automatic Settings entrance gate");
+
+    const std::string_view commandInterface = ExtractSection(
+        source,
+        "    void DrawCommandInterface()",
+        "    void DrawMaterialInspector(",
+        "command-interface layout integration");
+    ExpectContains(
+        commandInterface,
+        "const CommandInterfaceLayout& commandLayout =\n"
+        "            m_CommandLayout;",
+        "frame-resolved command layout");
+    ExpectOrdered(
+        commandInterface,
+        "if (!commandLayout.fits)",
+        "ImGui::Begin(",
+        "unrenderable command-layout withholding");
+    const std::string_view withheldCommandLayout = ExtractSection(
+        commandInterface,
+        "        if (!commandLayout.fits)",
+        "        ImGui::SetNextWindowPos(",
+        "unrenderable command-layout focus retention");
+    ExpectOrdered(
+        withheldCommandLayout,
+        "if (m_CommandOpen)",
+        "m_CommandFocusRequested = true",
+        "open command focus re-arm while layout is withheld");
+    ExpectContains(
+        commandInterface,
+        "commandLayout.bottom",
+        "bottom-aligned command position");
+    ExpectContains(
+        commandInterface,
+        "ImVec2(0.f, 1.f)",
+        "bottom command-window pivot");
+    ExpectContains(
+        commandInterface,
+        "ImGui::SetNextWindowSize(",
+        "fixed command lane size");
+    ExpectContains(
+        commandInterface,
+        "commandLayout.width,\n"
+        "                commandLayout.height",
+        "full reserved command geometry");
+    ExpectAbsent(
+        commandInterface,
+        "ImGuiWindowFlags_AlwaysAutoResize",
+        "same-frame fixed command lane");
+    ExpectOrdered(
+        commandInterface,
+        "m_CommandAppearance = commandMotionEnabled",
+        "if (!m_CommandOpen && m_CommandAppearance <= 0.f)",
+        "command appearance advances before its hidden endpoint");
+    ExpectOrdered(
+        commandInterface,
+        "if (!m_CommandOpen && m_CommandAppearance <= 0.f)",
+        "if (!commandLayout.fits)",
+        "command appearance advances before layout withholding");
+    ExpectContains(
+        commandInterface,
+        "SmoothPixelZoomVisibility(m_CommandAppearance)",
+        "Amp command fade curve");
+    ExpectContains(
+        commandInterface,
+        "PixelZoomMinimumWindowScale +",
+        "Amp command zoom curve");
+    ExpectContains(
+        commandInterface,
+        ": m_CommandOpen ? 1.f : 0.f",
+        "motion-free OG command endpoints");
+    ExpectContains(
+        commandInterface,
+        "commandWindowFlags |= ImGuiWindowFlags_NoInputs",
+        "noninteractive command close animation");
+    ExpectContains(
+        commandInterface,
+        "commandWindowFlags |= ImGuiWindowFlags_NoMouseInputs",
+        "mouse-safe command open animation");
+    ExpectOrdered(
+        commandInterface,
+        "ImGui::End();",
+        "ApplyCommandWindowAppearance(",
+        "post-layout command appearance transform");
+    ExpectContains(
+        commandInterface,
+        "commandWindowPosition.y + commandWindowSize.y",
+        "bottom-anchored command appearance pivot");
+    ExpectContains(
+        commandInterface,
+        "m_CommandScrollToTopRequested",
+        "new command-output scroll reset");
+    ExpectOrdered(
+        commandInterface,
+        "ImGui::SetNextWindowScroll(ImVec2(-1.f, 0.f))",
+        "ImGui::Begin(",
+        "same-frame command-output first-line visibility");
+    ExpectAbsent(
+        commandInterface,
+        "ImGui::SetScrollY(0.f)",
+        "removed delayed command-output scroll target");
+    ExpectAbsent(
+        commandInterface,
+        "settingsExpanded",
+        "Settings-independent command geometry");
+    ExpectAbsent(
+        commandInterface,
+        "m_SettingsPresentation",
+        "removed presented-Settings command coupling");
+
+    const std::string_view commandWindowAppearance = ExtractSection(
+        source,
+        "    static void ApplyCommandWindowAppearance(",
+        "    static void ApplyBackdropAppearance(",
+        "command appearance geometry");
+    ExpectContains(
+        commandWindowAppearance,
+        "vertex.pos.y =",
+        "vertical command appearance transform");
+    ExpectContains(
+        commandWindowAppearance,
+        "command.ClipRect.y =",
+        "vertical command clip minimum transform");
+    ExpectContains(
+        commandWindowAppearance,
+        "command.ClipRect.w =",
+        "vertical command clip maximum transform");
+    ExpectAbsent(
+        commandWindowAppearance,
+        "vertex.pos.x =",
+        "full-width command appearance X stability");
+    ExpectAbsent(
+        commandWindowAppearance,
+        "command.ClipRect.x =",
+        "full-width command clip left stability");
+    ExpectAbsent(
+        commandWindowAppearance,
+        "command.ClipRect.z =",
+        "full-width command clip right stability");
+
+    const std::string_view commandLaneSetup = ExtractSection(
+        source,
+        "        const ImGuiViewport* mainViewport =",
+        "        const bool visibilityBenchmarkBusy =",
+        "per-frame command lane reservation");
+    ExpectContains(
+        commandLaneSetup,
+        "mainViewport->WorkPos.x",
+        "viewport-relative command lane origin");
+    ExpectContains(
+        commandLaneSetup,
+        "mainViewport->WorkSize.x",
+        "viewport-relative command lane extent");
+    ExpectContains(
+        commandLaneSetup,
+        "GetCommandInterfaceMinimumHeight()",
+        "command minimum-height measurement");
+    ExpectContains(
+        commandLaneSetup,
+        "GetCommandInterfaceReservedHeight()",
+        "fixed three-line command reservation");
+    ExpectContains(
+        commandLaneSetup,
+        "ImGui::GetStyle().WindowMinSize.x",
+        "minimum renderable fixed command width");
+    ExpectContains(
+        commandLaneSetup,
+        "GetSettingsCollapsedWindowHeight(\n"
+        "                    ImGui::GetStyle(),\n"
+        "                    ImGui::GetFontSize(),\n"
+        "                    true,\n"
+        "                    true)",
+        "worst-case Settings minimum envelope");
+    ExpectContains(
+        commandLaneSetup,
+        "m_CommandLayout = ResolveCommandInterfaceLayout(",
+        "pure command-layout helper integration");
+    ExpectContains(
+        commandLaneSetup,
+        "float(m_SettingsPanelMarginPixels)",
+        "shared Settings and command margin");
+    ExpectContains(
+        commandLaneSetup,
+        "m_CommandLayout.settingsMaximumBottom",
+        "Settings vertical cap from command lane");
+    ExpectOrdered(
+        source,
+        "m_CommandLayout = ResolveCommandInterfaceLayout(",
+        "        const bool sceneLoading =",
+        "command lane availability while loading");
+
+    const std::string_view settingsLayout = ExtractSection(
+        source,
+        "        constexpr float SettingsWindowWidthInFontHeights =",
+        "        const bool hasPerformanceStatus =",
+        "Settings bounded root geometry");
+    ExpectContains(
+        settingsLayout,
+        "workRectangle.minX + settingsPanelMarginPixels",
+        "viewport-relative Settings left edge");
+    ExpectContains(
+        settingsLayout,
+        "workRectangle.minY + settingsPanelMarginPixels",
+        "viewport-relative Settings top edge");
+    ExpectContains(
+        settingsLayout,
+        "settingsMaximumBottom - settingsWindowTop",
+        "Settings root height cap above command lane");
+    ExpectContains(
+        settingsLayout,
+        "settingsMaximumWindowHeight",
+        "Settings root constraint integration");
+
+    const std::string_view settingsBodyLayout = ExtractSection(
+        source,
+        "        const float settingsBodyMaxHeight =",
+        "        PrepareSettingsScrollStability();",
+        "Settings body command-lane cap");
+    ExpectContains(
+        settingsBodyLayout,
+        "settingsMaximumBottom -",
+        "Settings child height cap above command lane");
+    ExpectContains(
+        settingsBodyLayout,
+        "ImGui::GetCursorScreenPos().y",
+        "Settings child remaining-height measurement");
+
+    ExpectContains(
+        source,
+        "ImVec4 panelBodySurface;",
+        "shared Settings, Materials, and command body surface token");
+    ExpectContains(
+        source,
+        "ImVec4 settingsTitleSurface;",
+        "shared Settings and Materials title surface token");
+    ExpectContains(
+        source,
+        "tokens.settingsTitleSurface = CompositeUiColorOver(\n"
+        "            tokens.drawerHeader,\n"
+        "            tokens.panelBodySurface);",
+        "drawer-blue Settings title composition");
+    ExpectContains(
+        source,
+        "ImGuiCol_TitleBg,\n"
+        "            g_UiVisualTokens.settingsTitleSurface",
+        "resting Settings title color");
+    ExpectContains(
+        source,
+        "ImGuiCol_TitleBgActive,\n"
+        "            g_UiVisualTokens.settingsTitleSurface",
+        "active Settings title color");
+    ExpectContains(
+        source,
+        "ImGuiCol_TitleBgCollapsed,\n"
+        "            g_UiVisualTokens.settingsTitleSurface",
+        "collapsed Settings title color");
+    ExpectAbsent(
+        source,
+        "titleAndFooter",
+        "removed misleading shared title/footer token");
+    ExpectContains(
+        source,
+        "const float settingsPanelMarginPixels =\n"
+        "            float(m_SettingsPanelMarginPixels);",
+        "Settings placement shared-margin source");
+
+    ExpectContains(
+        uiCommandLayoutSource,
+        "const float safeReservedHeight",
+        "fixed command reservation sanitization");
+    ExpectContains(
+        uiCommandLayoutSource,
+        "const float safeMinimumRenderableWidth",
+        "fixed ImGui root minimum-width sanitization");
+    ExpectContains(
+        uiCommandLayoutSource,
+        "const float safeMinimumSettingsHeight",
+        "Settings root minimum-height sanitization");
+    ExpectContains(
+        uiCommandLayoutSource,
+        "result.left = innerLeft;",
+        "full-width command left edge");
+    ExpectContains(
+        uiCommandLayoutSource,
+        "result.width = std::max(\n"
+        "            0.f,\n"
+        "            innerRight - innerLeft);",
+        "margin-to-margin command width");
+    ExpectContains(
+        uiCommandLayoutSource,
+        "result.top = result.bottom - result.height;",
+        "bottom-reserved command lane");
+    ExpectContains(
+        uiCommandLayoutSource,
+        "result.settingsMaximumBottom = std::max(",
+        "Settings cap above command lane");
+    ExpectContains(
+        uiCommandLayoutSource,
+        "result.top - safeMargin",
+        "consistent vertical Settings-to-command margin");
+    ExpectContains(
+        uiCommandLayoutSource,
+        "result.width >= safeMinimumRenderableWidth",
+        "minimum renderable command width gate");
+    ExpectContains(
+        uiCommandLayoutSource,
+        "settingsAvailableHeight >= safeMinimumSettingsHeight",
+        "minimum renderable Settings height gate");
+    ExpectAbsent(
+        uiCommandLayoutSource,
+        "preferredWidth",
+        "removed command width cap");
+    ExpectAbsent(
+        uiCommandLayoutSource,
+        "UiSettingsPresentation",
+        "Settings-independent command layout helper");
+    ExpectAbsent(
+        uiCommandLayoutSource,
+        "settings.visible",
+        "visibility-independent command layout helper");
+    ExpectAbsent(
+        uiCommandLayoutSource,
+        "settings.bounds",
+        "geometry-independent command layout helper");
+    ExpectContains(
+        uiCommandLayoutSource,
+        "horizontallyInside",
+        "command edge-containment gate");
+
+    const std::string_view uiRendererFrame = ExtractSection(
+        source,
+        "        buildUI();\n        DrawCommandInterface();",
+        "    virtual void BackBufferResizing() override",
+        "UI renderer frame ordering");
+    ExpectOrdered(
+        uiRendererFrame,
+        "DrawCommandInterface();",
+        "ImGui::Render();",
+        "command interface composition");
+    ExpectOrdered(
+        uiRendererFrame,
+        "ImGui::Render();",
+        "TryApplyDeferredDropdownUiActions(true, true);",
+        "older deferred UI actions before slash-command dispatch");
+    ExpectOrdered(
+        uiRendererFrame,
+        "TryApplyDeferredDropdownUiActions(true, true);",
+        "ExecuteUiCommand(command);",
+        "frame-end command dispatch");
+    ExpectContains(
+        source,
+        "bool ShouldSuppressFullscreenShortcut() const override",
+        "command-interface fullscreen-shortcut suppression");
+    ExpectContains(
+        source,
+        "return m_CommandOpen;",
+        "fullscreen-shortcut suppression lifetime");
+    ExpectContains(
+        source,
+        "key == GLFW_KEY_SLASH",
+        "slash command-interface shortcut");
+    ExpectContains(
+        source,
+        "virtual bool KeyboardCharInput(",
+        "command-interface character capture");
+    ExpectContains(
+        source,
+        "if (m_CommandOpen)",
+        "command-interface shortcut isolation");
+    const std::string_view commandKeyboard = ExtractSection(
+        source,
+        "        const bool captured = ImGui_Renderer::KeyboardUpdate(",
+        "    virtual bool KeyboardCharInput(",
+        "command-interface keyboard ownership");
+    ExpectOrdered(
+        commandKeyboard,
+        "key, scancode, action, mods);",
+        "const bool plainCommandShortcut =",
+        "ImGui keyboard routing before slash classification");
+    ExpectOrdered(
+        commandKeyboard,
+        "const bool plainCommandShortcut =",
+        "if (m_CommandOpen)",
+        "slash classification before open command ownership");
+    const std::string_view commandOpenKeyboardGate = ExtractSection(
+        commandKeyboard,
+        "        if (m_CommandOpen)\n"
+        "        {",
+        "        if (key == GLFW_KEY_SLASH &&\n"
+        "            action == GLFW_PRESS &&\n"
+        "            plainCommandShortcut &&\n"
+        "            !ImGui::GetIO().WantTextInput)",
+        "open command-interface keyboard gate");
+    ExpectContains(
+        commandOpenKeyboardGate,
+        "return true;",
+        "open command interface captures every key including plain F and V");
+    ExpectContains(
+        commandOpenKeyboardGate,
+        "key == GLFW_KEY_SLASH",
+        "plain slash closes the open command interface");
+    ExpectContains(
+        commandOpenKeyboardGate,
+        "m_CommandOpen = false;",
+        "slash command close target");
+    ExpectContains(
+        commandOpenKeyboardGate,
+        "m_CommandFocusRequested = false;",
+        "slash command focus release");
+    ExpectContains(
+        commandOpenKeyboardGate,
+        "m_SuppressCommandShortcutSlashCharacter = true;",
+        "closing slash character suppression");
+    ExpectContains(
+        commandOpenKeyboardGate,
+        "ImGui::ClearActiveID();",
+        "closing slash active-text release");
+    ExpectAbsent(
+        commandOpenKeyboardGate,
+        "GLFW_KEY_ESCAPE",
+        "Escape-independent command lifetime");
+    ExpectAbsent(
+        commandOpenKeyboardGate,
+        "m_ui.ShowUI",
+        "open command isolation from Settings visibility");
+    const std::string_view commandOpeningShortcut = ExtractSection(
+        commandKeyboard,
+        "        if (key == GLFW_KEY_SLASH &&\n"
+        "            action == GLFW_PRESS &&\n"
+        "            plainCommandShortcut &&\n"
+        "            !ImGui::GetIO().WantTextInput)",
+        "        if (key == GLFW_KEY_ESCAPE &&",
+        "closed command-interface slash shortcut");
+    ExpectContains(
+        commandOpeningShortcut,
+        "m_CommandOpen = true;",
+        "slash command open target");
+    ExpectContains(
+        commandOpeningShortcut,
+        "m_CommandFocusRequested = true;",
+        "slash command focus request");
+    ExpectContains(
+        commandOpeningShortcut,
+        "m_CommandScrollToTopRequested = true;",
+        "slash command result scroll reset");
+    ExpectContains(
+        commandOpeningShortcut,
+        "m_SuppressCommandShortcutSlashCharacter = true;",
+        "opening slash character suppression");
+    if (CountOccurrences(
+            commandKeyboard,
+            "m_SuppressCommandShortcutSlashCharacter = true;") != 2u)
+    {
+        Fail("opening and closing slash shortcuts must each suppress their "
+            "paired character event exactly once.");
+    }
+    ExpectAbsent(
+        commandKeyboard,
+        "ImGuiInputTextFlags_EscapeClearsAll",
+        "native Escape edit cancellation");
+    const std::string_view commandCharacterInput = ExtractSection(
+        source,
+        "    virtual bool KeyboardCharInput(",
+        "    virtual void buildUI(void) override",
+        "command-interface character ownership");
+    ExpectOrdered(
+        commandCharacterInput,
+        "if (m_SuppressCommandShortcutSlashCharacter)",
+        "if (m_CommandOpen)",
+        "shortcut slash suppression before command character capture");
+    ExpectContains(
+        commandCharacterInput,
+        "m_SuppressCommandShortcutSlashCharacter = false;",
+        "one-shot shortcut slash suppression");
+    ExpectContains(
+        commandCharacterInput,
+        "unicode == static_cast<unsigned int>('/')",
+        "paired slash character identity");
+    ExpectContains(
+        commandCharacterInput,
+        "ImGui_Renderer::KeyboardCharInput(unicode, mods);",
+        "ordinary command character routing");
+    const std::string_view materialInspectorShortcut = ExtractSection(
+        commandKeyboard,
+        "        const bool plainMaterialEditorShortcut =",
+        "        return captured;",
+        "center Material Inspector shortcut");
+    ExpectContains(
+        materialInspectorShortcut,
+        "key == GLFW_KEY_M",
+        "center Material Inspector shortcut");
+    ExpectOrdered(
+        commandKeyboard,
+        "if (m_CommandOpen)",
+        "key == GLFW_KEY_M",
+        "command ownership before center Material Inspector shortcut");
+    ExpectOrdered(
+        commandKeyboard,
+        "key == GLFW_KEY_SLASH",
+        "key == GLFW_KEY_M",
+        "slash handling before center Material Inspector shortcut");
+    ExpectOrdered(
+        materialInspectorShortcut,
+        "!ImGui::GetIO().WantTextInput",
+        "m_app->ToggleCenterMaterialInspector();",
+        "text-input gate before center Material Inspector shortcut");
+    ExpectAbsent(
+        materialInspectorShortcut,
+        "m_ui.ShowMaterialEditor =",
+        "typed center Material Inspector shortcut");
     ExpectAbsent(
         source,
         "RequiredResponsiveSceneFrames",
@@ -517,22 +2022,178 @@ int main(int argc, char** argv)
         imguiOverride,
         "ImRect collapsed_title_rect = title_bar_rect",
         "collapsed Settings inset title outline");
+    if (CountOccurrences(
+            imguiOverride,
+            "const bool is_stacked_panel_title =") != 2u)
+    {
+        Fail("expanded and collapsed stacked-panel decorations must each keep "
+            "one skin-independent title identity.");
+    }
+    const std::string_view collapsedSettingsTitle = ExtractSection(
+        imguiOverride,
+        "// Title bar only for ordinary collapsed windows.",
+        "g.Style.FrameBorderSize = backup_border_size;",
+        "collapsed Settings title frame");
+    ExpectContains(
+        collapsedSettingsTitle,
+        "if (!is_stacked_panel_title)",
+        "collapsed stacked-panel native frame-border isolation");
+    ExpectContains(
+        collapsedSettingsTitle,
+        "is_stacked_panel_title\n"
+        "+                ? style.FrameRounding",
+        "collapsed stacked-panel drawer-header rounding");
+    ExpectContains(
+        collapsedSettingsTitle,
+        "!is_stacked_panel_title",
+        "collapsed stacked-panel skin-matched drawer-header border policy");
+    const std::string_view expandedSettingsTitle = ExtractSection(
+        imguiOverride,
+        "// Use the same frame radius and outline path as a resting",
+        "if (has_expanded_stacked_panel_body)",
+        "expanded stacked-panel title frame");
+    ExpectContains(
+        expandedSettingsTitle,
+        "RenderFrame(",
+        "expanded Settings drawer-header outline path");
+    ExpectContains(
+        expandedSettingsTitle,
+        "style.FrameRounding",
+        "expanded Settings drawer-header rounding");
+    ExpectContains(
+        expandedSettingsTitle,
+        "!is_stacked_panel_window",
+        "expanded stacked-panel skin-matched drawer-header border policy");
+    ExpectAbsent(
+        expandedSettingsTitle,
+        "RenderGradientFrameOutline(",
+        "expanded Settings duplicate title outline");
+    ExpectContains(
+        expandedSettingsTitle,
+        "window_rounding,\n"
+        "+                    ImDrawFlags_RoundCornersTop",
+        "ordinary expanded window title fallback");
+    ExpectAbsent(
+        imguiRuntimePolicy,
+        "is_stacked_panel_title",
+        "skin-independent stacked-panel title identity");
+    constexpr std::string_view sharedStackedPanelIdentity =
+        "(strcmp(window->Name, \"Settings\") == 0 || strcmp(window->Name, \"Materials\") == 0)";
+    if (CountOccurrences(imguiOverride, sharedStackedPanelIdentity) != 4u)
+    {
+        Fail("expanded/collapsed stacked-panel decorations must keep four "
+            "shared Settings and Material identities.");
+    }
+    if (CountOccurrences(
+            imguiOverride,
+            "const bool is_stacked_panel_window =") != 2u)
+    {
+        Fail("outer-border and expanded-body decoration must each keep one "
+            "shared stacked-panel window identity.");
+    }
+    if (CountOccurrences(
+            imguiRuntimePolicy,
+            "const bool is_stacked_panel_window =") != 2u ||
+        CountOccurrences(imguiRuntimePolicy, sharedStackedPanelIdentity) != 2u)
+    {
+        Fail("OG stock-widget policy must guard both stacked-panel window "
+            "decoration sites.");
+    }
+    ExpectContains(
+        imguiRuntimePolicy,
+        "const bool is_stacked_panel_window =\n"
+        "+        !g.UvsrStockWidgetRendering &&\n"
+         "         (strcmp(window->Name, \"Settings\") == 0 || strcmp(window->Name, \"Materials\") == 0);",
+        "OG stock-widget outer-border bypass");
+    ExpectContains(
+        imguiRuntimePolicy,
+        "        const bool is_stacked_panel_window =\n"
+        "+            !g.UvsrStockWidgetRendering &&\n"
+        "             (strcmp(window->Name, \"Settings\") == 0 || strcmp(window->Name, \"Materials\") == 0);",
+        "OG stock-widget expanded-body bypass");
+    ExpectAbsent(
+        imguiOverride,
+        "\"Material Editor\"",
+        "retired Material Editor ImGui window identity");
+    ExpectAbsent(
+        imguiRuntimePolicy,
+        "\"Material Editor\"",
+        "retired Material Editor runtime-policy identity");
     ExpectContains(
         source,
-        "std::array<UiBackdropRect, 3>",
-        "independent Settings and material backdrop masks");
+        "constexpr size_t UiBackdropRectCount = 5u;",
+        "split Settings, material, and command backdrop masks");
     ExpectContains(
         source,
-        "UiBackdropRect& titleBackdrop =",
-        "collapsed Settings title blur mask");
+        "constexpr size_t UiMaterialTitleBackdropIndex = 2u;",
+        "stable Material title backdrop slot");
     ExpectContains(
         source,
+        "constexpr size_t UiMaterialBodyBackdropIndex = 3u;",
+        "stable Material body backdrop slot");
+    ExpectContains(
+        source,
+        "constexpr size_t UiCommandBackdropIndex = 4u;",
+        "stable command backdrop slot");
+    const std::string_view collapsedSettingsBackdrops = ExtractSection(
+        source,
+        "        if (settingsCollapsed)\n"
+        "        {",
+        "        else\n"
+        "        {",
+        "collapsed Settings backdrop geometry");
+    ExpectContains(
+        collapsedSettingsBackdrops,
+        "titleBackdrop.minX = settingsWindowPosition.x + 0.5f;",
+        "collapsed Settings title left inset");
+    ExpectContains(
+        collapsedSettingsBackdrops,
+        "titleBackdrop.minY = settingsWindowPosition.y + 0.5f;",
+        "collapsed Settings title top inset");
+    ExpectContains(
+        collapsedSettingsBackdrops,
+        "settingsWindowPosition.x + settingsWindowSize.x - 0.5f",
+        "collapsed Settings right inset");
+    ExpectContains(
+        collapsedSettingsBackdrops,
+        "settingsWindowPosition.y + settingsTitleHeight - 0.5f",
+        "collapsed Settings title bottom inset");
+    ExpectContains(
+        collapsedSettingsBackdrops,
+        "titleBackdrop.rounding = style.FrameRounding;",
+        "collapsed Settings drawer-header blur radius");
+    ExpectContains(
+        collapsedSettingsBackdrops,
         "UiBackdropRect& statusBackdrop =",
         "collapsed Settings status blur mask");
     ExpectContains(
+        collapsedSettingsBackdrops,
+        "settingsWindowPosition.y + settingsWindowSize.y - 0.5f",
+        "collapsed Settings status bottom inset");
+    const std::string_view expandedSettingsBackdrops = ExtractSection(
         source,
+        "            // Match the two actual rounded surfaces drawn by the ImGui",
+        "        constexpr size_t settingsBackdropCount = 2u",
+        "expanded Settings backdrop geometry");
+    ExpectContains(
+        expandedSettingsBackdrops,
+        "titleBackdrop.rounding = style.FrameRounding;",
+        "expanded Settings drawer-header blur radius");
+    ExpectContains(
+        expandedSettingsBackdrops,
         "UiBackdropRect& bodyBackdrop =",
         "expanded Settings body blur mask");
+    if (CountOccurrences(
+            source,
+            "titleBackdrop.rounding = style.FrameRounding;") != 2u)
+    {
+        Fail("expanded and collapsed Settings titles must each use the "
+            "drawer-header frame radius.");
+    }
+    ExpectAbsent(
+        source,
+        "titleBackdrop.rounding = style.WindowRounding;",
+        "removed window-radius Settings title masks");
     ExpectContains(
         source,
         "constexpr size_t settingsBackdropCount = 2u",
@@ -543,16 +2204,92 @@ int main(int argc, char** argv)
         "removed collapsed Settings outline overlap");
     ExpectContains(
         source,
-        "backdrop.shadowBlur = 10.f",
+        "g_UiVisualTokens.backdropShadowBlur",
         "Settings shadow blur");
     ExpectContains(
         source,
-        "backdrop.shadowOpacity = 0.34f",
+        "g_UiVisualTokens.backdropShadowOpacity",
         "Settings shadow opacity");
     ExpectContains(
         source,
-        "backdrop.shadowOffsetY = 3.f",
+        "g_UiVisualTokens.backdropShadowOffsetY",
         "Settings shadow offset");
+    ExpectContains(
+        source,
+        "const bool hasVisibleShadow = std::any_of(",
+        "shadow-only panel presentation gate");
+    ExpectContains(
+        source,
+        "(!renderBackdrop && !hasVisibleShadow)",
+        "shadow-only backdrop-pass lifetime");
+    ExpectContains(
+        source,
+        "backdropEnabled ? UiBackgroundBlurPixels : 0.f",
+        "OG shadow-only backdrop dispatch");
+    ExpectAbsent(
+        source,
+        "tokens.backdropShadowBlur = 0.f",
+        "OG zoom-matched shadow retention");
+    const std::string_view commandBackdropAppearance = ExtractSection(
+        source,
+        "    static void ApplyCommandBackdropAppearance(",
+        "    static void ApplyBackdropAppearance(",
+        "command backdrop appearance transform");
+    ExpectContains(
+        commandBackdropAppearance,
+        "backdropRect.minY =",
+        "command backdrop vertical transform");
+    ExpectContains(
+        commandBackdropAppearance,
+        "backdropRect.maxY =",
+        "command backdrop vertical transform");
+    ExpectContains(
+        commandBackdropAppearance,
+        "backdropRect.opacity =",
+        "command backdrop opacity transform");
+    ExpectAbsent(
+        commandBackdropAppearance,
+        "backdropRect.minX",
+        "fixed command backdrop left edge");
+    ExpectAbsent(
+        commandBackdropAppearance,
+        "backdropRect.maxX",
+        "fixed command backdrop right edge");
+    ExpectContains(
+        commandInterface,
+        "m_ui.BackdropRects[UiCommandBackdropIndex]",
+        "shared Amp and OG command backdrop slot");
+    ExpectAbsent(
+        commandInterface,
+        "m_ComposedUiSkin == UiSkin::Og",
+        "skin-independent command backdrop registration");
+    ExpectAbsent(
+        commandInterface,
+        "m_ComposedUiSkin == UiSkin::Amp",
+        "skin-independent command backdrop registration");
+    if (CountOccurrences(
+            commandInterface,
+            "m_ui.BackdropRects[UiCommandBackdropIndex]") != 1u)
+    {
+        Fail("Amp and OG must share exactly one command backdrop slot.");
+    }
+    ExpectOrdered(
+        commandInterface,
+        "CaptureCurrentWindowBackdrop(",
+        "ApplyCommandBackdropAppearance(",
+        "command backdrop registration before appearance transform");
+    ExpectContains(
+        commandInterface,
+        "commandBackdrop.shadowBlur =",
+        "shared command shadow blur");
+    ExpectContains(
+        commandInterface,
+        "commandBackdrop.shadowOpacity =",
+        "shared command shadow opacity");
+    ExpectContains(
+        commandInterface,
+        "commandBackdrop.shadowOffsetY =",
+        "shared command shadow offset");
     ExpectContains(
         source,
         "TrackSettingsAppearanceDrawList(",
@@ -573,6 +2310,36 @@ int main(int argc, char** argv)
         backdropShader,
         "g_BackdropBlur.shadowOpacity",
         "Settings shadow alpha");
+    ExpectContains(
+        backdropShader,
+        "const float neutralLuminance = dot(\n"
+        "        outputColor.rgb,\n"
+        "        float3(0.2126, 0.7152, 0.0722));",
+        "neutral Amp backdrop luminance");
+    ExpectContains(
+        backdropShader,
+        "outputColor.rgb = neutralLuminance.xxx;",
+        "monotone Amp backdrop composite");
+    const std::string_view retainedStatusSurface = ExtractSection(
+        imguiOverride,
+        "Paint that retained area with the same WindowBg surface used while",
+        "// Title bar only for ordinary collapsed windows.",
+        "collapsed Settings retained status surface");
+    ExpectOrdered(
+        retainedStatusSurface,
+        "GetColorU32(GetWindowBgColorIdx(window))",
+        "ImGuiNextWindowDataFlags_HasBgAlpha",
+        "collapsed Settings background-alpha override");
+    ExpectOrdered(
+        retainedStatusSurface,
+        "ImGuiNextWindowDataFlags_HasBgAlpha",
+        "g.NextWindowData.BgAlphaVal",
+        "collapsed Settings explicit background alpha");
+    ExpectOrdered(
+        retainedStatusSurface,
+        "g.NextWindowData.BgAlphaVal",
+        "window->DrawList->AddRectFilled(",
+        "collapsed Settings applies alpha before drawing");
 
     ExpectDrawerContract(
         source,
@@ -607,15 +2374,21 @@ int main(int argc, char** argv)
     ExpectDrawerContract(
         source,
         "const bool skyOpen = DrawCollapsingHeader(",
-        "const auto& lights = m_app->GetScene()->GetSceneGraph()->GetLights();",
+        "const auto& lights = m_app->GetEditableLights();",
         "##SkyBody",
         "Sky drawer");
     ExpectDrawerContract(
         source,
         "const bool lightsOpen = DrawCollapsingHeader(",
-        "constexpr float ActionButtonCount = 4.f;",
+        "const bool shadowsOpen = DrawCollapsingHeader(",
         "##LightsBody",
         "Lights drawer");
+    ExpectDrawerContract(
+        source,
+        "const bool shadowsOpen = DrawCollapsingHeader(",
+        "constexpr float ActionButtonCount = 4.f;",
+        "##ShadowsBody",
+        "Shadows drawer");
 
     const std::string_view general = ExtractSection(
         source,
@@ -837,8 +2610,8 @@ int main(int argc, char** argv)
         "Anti-Aliasing statistics selector");
     for (const std::pair<std::string_view, std::string_view>& effect : {
             std::pair<std::string_view, std::string_view>{
-                "StatisticsEffect::BendShadows",
-                "\"Bend Shadows\""},
+                "StatisticsEffect::ScreenSpaceShadows",
+                "\"Screen-Space Shadows\""},
             {
                 "StatisticsEffect::SparseVirtualShadowMaps",
                 "\"Sparse Virtual Shadow Maps\""},
@@ -860,8 +2633,8 @@ int main(int argc, char** argv)
     }
     ExpectContains(
         statistics,
-        "m_BendShadowStatLines",
-        "Bend shadow statistics presentation");
+        "m_ScreenSpaceShadowStatLines",
+        "screen-space shadow statistics presentation");
     ExpectContains(
         statistics,
         "m_SparseShadowStatLines",
@@ -880,11 +2653,11 @@ int main(int argc, char** argv)
         "environment exposure statistics");
     ExpectContains(
         statistics,
-        "m_ui.EnableDiffuseIbl",
+        "m_ui.IsDiffuseAmbientFillActive()",
         "diffuse IBL statistics");
     ExpectContains(
         statistics,
-        "m_ui.EnableSpecularIbl",
+        "m_ui.IsSpecularAmbientFillActive()",
         "specular IBL statistics");
     const std::string_view rendererStatisticsTable = ExtractSection(
         statistics,
@@ -931,6 +2704,28 @@ int main(int argc, char** argv)
         statistics,
         "\"##AntiAliasingLiveStatistics\"",
         "Anti-Aliasing statistics table");
+    ExpectContains(
+        statistics,
+        "\"Effective Temporal Cost\"",
+        "Statistics ownership of Effective Temporal Cost");
+    ExpectContains(
+        statistics,
+        "m_app->GetTemporalAATimings()",
+        "runtime source of Effective Temporal Cost");
+    const std::string_view effectiveTemporalCostStatistics =
+        ExtractSection(
+            statistics,
+            "\"Effective Temporal Cost\"",
+            "\"Temporal Dispatches\"",
+            "Effective Temporal Cost statistics row");
+    ExpectContains(
+        effectiveTemporalCostStatistics,
+        "GetTemporalAaCostModeLabel(",
+        "Effective Temporal Cost label resolver");
+    ExpectContains(
+        effectiveTemporalCostStatistics,
+        "effectiveCostMode",
+        "timing-derived Effective Temporal Cost value");
     ExpectContains(
         statistics,
         "PresentStructuralBody(m_ui.AntiAliasing)",
@@ -1205,10 +3000,6 @@ int main(int argc, char** argv)
         "Aliasing UI attribution");
     ExpectAbsent(
         aliasing,
-        "\"MiniEngine",
-        "Aliasing UI attribution");
-    ExpectAbsent(
-        aliasing,
         "\"##AliasingEnabledControls\"",
         "Aliasing enabled selector gate");
     ExpectOrdered(
@@ -1247,13 +3038,17 @@ int main(int argc, char** argv)
             std::string_view("\"Dejitter##AliasingDejitter\""),
             std::string_view("\"Motion Source\""),
             std::string_view("\"Reconstruction\""),
-            std::string_view("\"Subpixel Morphology##Developer\"") })
+            std::string_view("\"Morphology##Developer\"") })
     {
         ExpectContains(
             aliasing,
             normalTaaControl,
             "normal production TAA controls");
     }
+    ExpectAbsent(
+        aliasing,
+        "\"Subpixel Morphology##Developer\"",
+        "retired Subpixel Morphology label");
     ExpectAbsent(
         aliasing,
         "\"Current Reconstruction\"",
@@ -1322,7 +3117,7 @@ int main(int argc, char** argv)
         "TAA Motion Source neutral Preset row");
     ExpectOrdered(
         motionSourceOrder,
-        "MiniEngineTaaMotionSourceOverride::Center",
+        "TemporalAaMotionSourceOverride::Center",
         "ClosestCross",
         "TAA Motion Source expense order");
     ExpectOrdered(
@@ -1351,7 +3146,7 @@ int main(int argc, char** argv)
     const std::string_view reconstructionOrder = ExtractSection(
         aliasing,
         "reconstructionOrder = {",
-        "#if UVSR_AA_DEVELOPER_OVERRIDES",
+        "historyStorageOrder = {",
         "TAA Reconstruction expense order");
     ExpectAbsent(
         reconstructionOrder,
@@ -1359,7 +3154,7 @@ int main(int argc, char** argv)
         "TAA Reconstruction neutral Preset row");
     ExpectOrdered(
         reconstructionOrder,
-        "MiniEngineTaaHistoryFilterOverride::Bilinear",
+        "TemporalAaHistoryFilterOverride::Bilinear",
         "OneSampleBicubic",
         "TAA Reconstruction expense order");
     ExpectOrdered(
@@ -1383,7 +3178,7 @@ int main(int argc, char** argv)
         "TAA Sample Resurrection neutral Preset row");
     ExpectOrdered(
         resurrectionOrder,
-        "MiniEngineTaaSampleResurrectionOverride::Off",
+        "TemporalAaSampleResurrectionOverride::Off",
         "OneOlderFrame",
         "TAA Sample Resurrection expense order");
     ExpectOrdered(
@@ -1394,20 +3189,20 @@ int main(int argc, char** argv)
     ExpectContains(
         aliasing,
         "&historyFrames,\n"
-        "                        1,\n"
-        "                        32,",
+        "                            1,\n"
+        "                            32,",
         "32-frame TAA history range");
     ExpectContains(
         aliasing,
         "&historyStrength,\n"
-        "                        0.f,\n"
-        "                        200.f,",
+        "                            0.f,\n"
+        "                            200.f,",
         "200-percent TAA history-strength range");
     ExpectContains(
         aliasing,
         "ImGui::SetItemTooltip(\n"
-        "                    \"%s\",\n"
-        "                    \"Scale accepted history",
+        "                        \"%s\",\n"
+        "                        \"Scale accepted history",
         "literal-safe History Strength tooltip");
     ExpectAbsent(
         aliasing,
@@ -1421,14 +3216,37 @@ int main(int argc, char** argv)
         source,
         "BeginAnimatedMutex",
         "dropdown selection close fading");
-    for (const std::string_view removedPerformanceControl : {
+    for (const std::string_view developerBehaviorControl : {
+            std::string_view("\"History Storage\""),
+            std::string_view("\"Previous-Depth Validation\""),
+            std::string_view("\"History Weight\""),
+            std::string_view("\"Motion Trust\""),
+            std::string_view("\"Rectification Clip\""),
+            std::string_view("\"Blend Domain\""),
+            std::string_view("\"Sharpness Policy\""),
+            std::string_view("\"Sample Resurrection\"") })
+    {
+        ExpectContains(
+            aliasing,
+            developerBehaviorControl,
+            "Aliasing Developer Options image controls");
+    }
+    for (const std::string_view developerTopologyControl : {
+            std::string_view("\"Execution Topology\""),
             std::string_view("\"Execution Path\""),
             std::string_view("\"Compute Kernel\""),
             std::string_view("\"LDS Layout\""),
             std::string_view("\"Shared-Work Reuse\""),
             std::string_view("\"Early History Rejection\""),
             std::string_view("\"Pass Fusion\""),
-            std::string_view("\"Cache Blocking\""),
+            std::string_view("\"Cache Blocking\"") })
+    {
+        ExpectAbsent(
+            aliasing,
+            developerTopologyControl,
+            "removed Aliasing Developer Options topology presentation");
+    }
+    for (const std::string_view removedPerformanceControl : {
             std::string_view("\"Debug View\""),
             std::string_view("\"Stable Interior\"") })
     {
@@ -1445,25 +3263,140 @@ int main(int argc, char** argv)
         aliasing,
         "drawDejitterControl();",
         "\"Sharpness###Sharpness\"",
-        "Dejitter control order");
-    ExpectAbsent(
+        "Dejitter and Sharpness toggle order");
+    ExpectOrdered(
+        aliasing,
+        "\"Sharpness###Sharpness\"",
+        "drawMorphologyOption();",
+        "toggle-first Aliasing Developer Options order");
+    ExpectContains(
         aliasing,
         "\"Developer Options##AliasingDeveloperOptions\"",
-        "removed Aliasing Developer Options panel");
-    const std::string_view aliasingAlgorithmConfiguration = ExtractSection(
+        "Aliasing Developer Options panel");
+    const std::string_view aliasingDeveloperOptions = ExtractSection(
         aliasing,
-        "\"Aliasing Algorithm Configuration\"",
-        "// Resurrection remains last",
-        "Aliasing Algorithm Configuration panel");
+        "\"Developer Options##AliasingDeveloperOptions\"",
+        "EndAnimatedTreeNode();",
+        "Aliasing Developer Options panel");
+    ExpectAbsent(
+        aliasing,
+        "\"Effective Temporal Cost\"",
+        "Statistics-only Effective Temporal Cost ownership");
+    ExpectAbsent(
+        aliasing,
+        "m_app->GetTemporalAATimings()",
+        "Statistics-only temporal timing ownership");
     ExpectContains(
-        aliasingAlgorithmConfiguration,
-        "drawRectificationControl();",
-        "Rectification Algorithm Configuration placement");
+        aliasing,
+        "BeginRoundedCombo(\n"
+        "                        \"Temporal Cost\"",
+        "editable authoritative Temporal Cost selector");
+    ExpectAbsent(
+        aliasing,
+        "\"Requested Temporal Cost\"",
+        "retired verbose Temporal Cost label");
+    const std::string_view aliasingPrimaryControls = ExtractSection(
+        aliasing,
+        "if (temporalMethodSelected)",
+        "\"Developer Options##AliasingDeveloperOptions\"",
+        "Aliasing primary controls");
+    ExpectContains(
+        aliasingPrimaryControls,
+        "\"Temporal Cost\"",
+        "primary Temporal Cost selector");
+    ExpectContains(
+        aliasingPrimaryControls,
+        "defaultAliasingSettings.temporalCostMode",
+        "Temporal Cost reset follows the startup default");
+    ExpectAbsent(
+        aliasingPrimaryControls,
+        "\"History Frames\"",
+        "History Frames moved out of primary Aliasing controls");
+    ExpectAbsent(
+        aliasingPrimaryControls,
+        "\"History Strength\"",
+        "History Strength moved out of primary Aliasing controls");
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "\"History Frames\"",
+        "History Frames Developer Options placement");
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "\"History Strength\"",
+        "History Strength Developer Options placement");
     ExpectOrdered(
-        aliasingAlgorithmConfiguration,
+        aliasingDeveloperOptions,
+        "\"Sharpness###Sharpness\"",
+        "\"History Frames\"",
+        "toggle-first History Frames placement");
+    ExpectOrdered(
+        aliasingDeveloperOptions,
+        "\"History Frames\"",
+        "\"History Strength\"",
+        "temporal history control order");
+    ExpectOrdered(
+        aliasingDeveloperOptions,
+        "\"History Strength\"",
+        "drawMorphologyOption();",
+        "history controls precede remaining dropdown tuning");
+    for (const std::string_view removedPanelCopy : {
+            std::string_view("\"Runtime State\""),
+            std::string_view("\"Image And Stability\""),
+            std::string_view(
+                "\"Best first comparison for small-edge swimming"),
+            std::string_view("\"Effective Temporal Cost\""),
+            std::string_view("m_app->GetTemporalAATimings()"),
+            std::string_view("drawStatusOption") })
+    {
+        ExpectAbsent(
+            aliasingDeveloperOptions,
+            removedPanelCopy,
+            "removed noninteractive Aliasing Developer Options copy");
+    }
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "drawRectificationControl();",
+        "Rectification Developer Options placement");
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "\"##TemporalSharpnessAvailability\",\n"
+        "                            resolvedCurrent.sharpeningAllowed",
+        "Sharpness policy animated availability gate");
+    ExpectOrdered(
+        aliasingDeveloperOptions,
         "\"Reconstruction\"",
         "drawRectificationControl();",
-        "Aliasing Algorithm Configuration control order");
+        "Aliasing Developer Options algorithm order");
+    ExpectOrdered(
+        aliasingDeveloperOptions,
+        "\"History Storage\"",
+        "\"Previous-Depth Validation\"",
+        "Aliasing Developer Options stability order");
+    ExpectOrdered(
+        aliasingDeveloperOptions,
+        "\"Previous-Depth Validation\"",
+        "\"History Weight\"",
+        "Aliasing Developer Options diagnosis order");
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "\"##SampleResurrectionAvailability\",\n"
+        "                            resolvedCurrent.temporalCostMode ==\n"
+        "                                TemporalAaCostMode::FullQuality",
+        "Sample Resurrection animated Full Quality gate");
+    for (const std::string_view removedGatedStatus : {
+            std::string_view("\"Off - Requires Full Quality\""),
+            std::string_view(
+                "\"Unavailable in Factory Shader Build\"") })
+    {
+        ExpectAbsent(
+            aliasingDeveloperOptions,
+            removedGatedStatus,
+            "collapsed Sample Resurrection status row");
+    }
+    ExpectAbsent(
+        aliasingDeveloperOptions,
+        "TemporalAaPerformanceOverrides& performanceOverrides",
+        "removed Aliasing performance topology surface");
     ExpectAbsent(
         aliasing,
         "(Preset)",
@@ -1499,8 +3432,21 @@ int main(int argc, char** argv)
         "explicit staged Aliasing normalization");
     ExpectContains(
         source,
-        "MiniEngineTaaSharpenEnabled = false;",
+        "TemporalAaSharpenEnabled = false;",
         "default-disabled Aliasing sharpness");
+    const std::string_view temporalPresentationSharpen = ExtractSection(
+        source,
+        "const bool deferTemporalSharpenToPresentation =",
+        "if (m_TemporalAAPass)",
+        "temporal presentation sharpening");
+    ExpectContains(
+        temporalPresentationSharpen,
+        "TemporalAaHistoryStorage::Compact",
+        "compact history presentation sharpening");
+    ExpectAbsent(
+        temporalPresentationSharpen,
+        "m_Cmaa2Pass",
+        "compact history sharpening independent of CMAA2 allocation");
     ExpectContains(
         sharpenShader,
         "#if TAA_SHARPEN_INPUT_PREMULTIPLIED",
@@ -1543,7 +3489,7 @@ int main(int argc, char** argv)
     const std::string_view environment = ExtractSection(
         source,
         "const bool skyOpen = DrawCollapsingHeader(",
-        "const auto& lights = m_app->GetScene()->GetSceneGraph()->GetLights();",
+        "const auto& lights = m_app->GetEditableLights();",
         "Environment drawer");
     ExpectContains(
         environment,
@@ -1609,7 +3555,7 @@ int main(int argc, char** argv)
         environment,
         "const float defaultEnvironmentExposure =",
         "if (ImGui::Checkbox(\n"
-        "                    \"Diffuse IBL\",",
+        "                    \"Ambient Fill\",",
         "environment exposure control");
     ExpectContains(
         environmentExposureControl,
@@ -1633,12 +3579,52 @@ int main(int argc, char** argv)
         "m_app->ResetImageBasedLightingHistory(true);",
         "environment exposure history reset");
 
+    const std::string_view ambientFillControls = ExtractSection(
+        environment,
+        "if (ImGui::Checkbox(\n"
+        "                    \"Ambient Fill\",",
+        "if (ImGui::Checkbox(\n"
+        "                    \"Show Environment Background\",",
+        "ambient fill controls");
+    ExpectContains(
+        ambientFillControls,
+        "&m_ui.EnableAmbientFill",
+        "ambient fill enable control");
+    ExpectContains(
+        ambientFillControls,
+        "\"##AmbientFillControls\"",
+        "animated ambient fill child controls");
+    ExpectContains(
+        ambientFillControls,
+        "\"Ambient Fill Enabled\"",
+        "ambient fill reset");
+    ExpectContains(
+        ambientFillControls,
+        "m_ui.EnableAmbientFill = true;",
+        "default ambient fill reset");
+    ExpectContains(
+        ambientFillControls,
+        "m_app->ResetImageBasedLightingHistory(true);",
+        "ambient fill history reset");
+    ExpectContains(
+        ambientFillControls,
+        "\"Diffuse IBL\"",
+        "ambient fill diffuse child");
+    ExpectContains(
+        ambientFillControls,
+        "\"Specular IBL\"",
+        "ambient fill specular child");
+    ExpectAbsent(
+        ambientFillControls,
+        "\"Show Environment Background\"",
+        "ambient fill independent environment background");
+
     const std::string_view diffuseIblControls = ExtractSection(
         environment,
         "if (ImGui::Checkbox(\n"
-        "                    \"Diffuse IBL\",",
+        "                        \"Diffuse IBL\",",
         "if (ImGui::Checkbox(\n"
-        "                    \"Specular IBL\",",
+        "                        \"Specular IBL\",",
         "diffuse IBL controls");
     ExpectContains(
         diffuseIblControls,
@@ -1676,7 +3662,7 @@ int main(int argc, char** argv)
     const std::string_view specularIblControls = ExtractSection(
         environment,
         "if (ImGui::Checkbox(\n"
-        "                    \"Specular IBL\",",
+        "                        \"Specular IBL\",",
         "if (ImGui::Checkbox(\n"
         "                    \"Show Environment Background\",",
         "specular IBL controls");
@@ -1743,8 +3729,17 @@ int main(int argc, char** argv)
     const std::string_view lights = ExtractSection(
         source,
         "const bool lightsOpen = DrawCollapsingHeader(",
-        "constexpr float ActionButtonCount = 4.f;",
+        "const bool shadowsOpen = DrawCollapsingHeader(",
         "Lights drawer");
+    const std::string_view shadows = ExtractSection(
+        source,
+        "const bool shadowsOpen = DrawCollapsingHeader(",
+        "constexpr float ActionButtonCount = 4.f;",
+        "Shadows drawer");
+    ExpectContains(
+        source,
+        "const auto& lights = m_app->GetEditableLights();",
+        "editable scene and flashlight controls");
     ExpectContains(
         lights,
         "DrawDeferredDropdownOption(",
@@ -1757,24 +3752,67 @@ int main(int argc, char** argv)
         lights,
         "m_SelectedLight != defaultSelectedLight",
         "primary sun reset");
-    const std::string compactLights = RemoveAsciiWhitespace(lights);
+    const std::string_view flashlightControls = ExtractSection(
+        lights,
+        "if (m_app->IsFlashlight(m_SelectedLight))",
+        "const auto selectedLightIterator = std::find(",
+        "selected flashlight controls");
+    ExpectContains(
+        flashlightControls,
+        "m_ui.FlashlightEnabled",
+        "selected flashlight enabled control");
+    ExpectContains(
+        flashlightControls,
+        "Enable PBR to use the flashlight.",
+        "selected flashlight PBR availability message");
+    ExpectContains(
+        flashlightControls,
+        "##RealisticFlashlightControls",
+        "animated realistic flashlight controls");
+    for (const std::pair<std::string_view, std::string_view>& orderedControls : {
+            std::pair<std::string_view, std::string_view>{
+                "Enabled (F)", "Cast Shadows"},
+            { "Cast Shadows", "Realistic Flashlight" },
+            { "Realistic Flashlight", "Hotspot Size" },
+            { "Hotspot Size", "Hotspot Strength" },
+            { "Hotspot Strength", "Sway" },
+            { "Sway", "Aim Correction" },
+            { "Aim Correction", "Brightness" },
+            { "Brightness", "Beam Size" },
+            { "Beam Size", "Beam Roundness" },
+            { "Beam Roundness", "Edge Softness" },
+            { "Edge Softness", "Range" },
+            { "Range", "Color" },
+            { "Color", "Camera Offset"} })
+    {
+        ExpectOrdered(
+            flashlightControls,
+            orderedControls.first,
+            orderedControls.second,
+            "selected flashlight control order");
+    }
+    ExpectAbsent(
+        flashlightControls,
+        "Azimuth",
+        "generic light controls must not leak into flashlight controls");
+    const std::string compactShadows = RemoveAsciiWhitespace(shadows);
     for (const std::pair<std::string_view, std::string_view>& shadowControl : {
             std::pair<std::string_view, std::string_view>{
-                "\"Bend Screen-Space Shadows##Lights\"",
-                "m_ui.BendScreenSpaceShadows"},
+                "\"Screen-Space Directional Shadows##Shadows\"",
+                "m_ui.ScreenSpaceDirectionalShadows"},
             {
-                "\"Sparse Virtual Shadow Maps##Lights\"",
+                "\"Sparse Virtual Shadow Maps##Shadows\"",
                 "m_ui.SparseVirtualShadowMaps"},
             {
-                "\"Diagnostic Cascaded Shadow Maps##Lights\"",
+                "\"Diagnostic Cascaded Shadow Maps##Shadows\"",
                 "m_ui.DiagnosticCascadedShadowMaps"} })
     {
         ExpectContains(
-            lights,
+            shadows,
             shadowControl.first,
             "integrated directional shadow control");
         ExpectContains(
-            lights,
+            shadows,
             shadowControl.second,
             "integrated directional shadow settings");
         const std::string defaultOpenCall =
@@ -1782,38 +3820,42 @@ int main(int argc, char** argv)
             std::string(shadowControl.first) +
             ",ImGuiTreeNodeFlags_DefaultOpen)";
         ExpectContains(
-            compactLights,
+            compactShadows,
             RemoveAsciiWhitespace(defaultOpenCall),
             "default-open directional shadow section");
     }
     ExpectContains(
-        lights,
-        "\"##BendShadowControls\"",
-        "animated Bend shadow controls");
+        shadows,
+        "\"##ScreenSpaceShadowControls\"",
+        "animated screen-space shadow controls");
     ExpectContains(
-        lights,
+        shadows,
         "\"SVSM Enabled\"",
         "SVSM default reset");
     ExpectContains(
-        lights,
+        shadows,
         "DrawSvsmSettingsSurface(",
         "integrated SVSM settings surface");
     ExpectContains(
-        lights,
+        shadows,
         "\"##DiagnosticCsmControls\"",
         "animated diagnostic CSM controls");
     ExpectContains(
-        lights,
+        shadows,
         "\"Diagnostic CSM Enabled\"",
         "diagnostic CSM default reset");
     ExpectContains(
-        lights,
+        shadows,
         "\"Developer Options##DiagnosticCsm\"",
         "diagnostic CSM developer controls");
     ExpectAbsent(
-        lights,
+        shadows,
         "ImGui::TreeNodeEx(",
         "integrated directional shadow animation");
+    ExpectAbsent(
+        lights,
+        "Screen-Space Directional Shadows##",
+        "directional shadow controls must be a Lights sibling");
 
     const std::string_view svsmSettingsSurface = ExtractSection(
         source,
@@ -2010,69 +4052,69 @@ int main(int argc, char** argv)
         }
     }
 
-    const std::string_view bendShadowControls = ExtractSection(
-        lights,
-        "\"Bend Screen-Space Shadows##Lights\"",
-        "\"Sparse Virtual Shadow Maps##Lights\"",
-        "Bend shadow controls");
-    const std::string compactBendShadowControls =
-        RemoveAsciiWhitespace(bendShadowControls);
+    const std::string_view screenSpaceShadowControls = ExtractSection(
+        shadows,
+        "\"Screen-Space Directional Shadows##Shadows\"",
+        "\"Sparse Virtual Shadow Maps##Shadows\"",
+        "screen-space shadow controls");
+    const std::string compactScreenSpaceShadowControls =
+        RemoveAsciiWhitespace(screenSpaceShadowControls);
     for (const std::string_view resetCall : {
             std::string_view(
-                "DrawNestedDropdownResetIcon(\"BendShadowProfile\","),
+                "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowProfile\","),
             std::string_view(
-                "DrawNestedDropdownResetIcon(\"BendShadowLength\","),
+                "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowLength\","),
             std::string_view(
-                "DrawNestedDropdownResetIcon(\"BendShadowHardSamples\","),
+                "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowHardSamples\","),
             std::string_view(
-                "DrawNestedDropdownResetIcon(\"BendShadowFade-OutSamples\","),
+                "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowFade-OutSamples\","),
             std::string_view(
-                "DrawNestedDropdownResetIcon(\"BendShadowDebugView\","),
+                "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowDebugView\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowsEnabled\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowsEnabled\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowSurfaceThickness\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowSurfaceThickness\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowBilinearThreshold\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowBilinearThreshold\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowContrast\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowContrast\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowIgnoreEdgePixels\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowIgnoreEdgePixels\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowPrecisionOffset\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowPrecisionOffset\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowBilinearOffsetMode\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowBilinearOffsetMode\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowEarlyOut\",") })
+                "DrawPresetResetIcon(\"ScreenSpaceShadowEarlyOut\",") })
     {
         ExpectContains(
-            compactBendShadowControls,
+            compactScreenSpaceShadowControls,
             resetCall,
-            "Bend shadow reset coverage");
+            "screen-space shadow reset coverage");
     }
     for (const std::string_view tooltip : {
             std::string_view("Trade trace reach and cost"),
-            std::string_view("Select a precompiled SAMPLE_COUNT shadow length."),
-            std::string_view("Set Bend's nonlinear-depth occluder thickness."),
+            std::string_view("Set the runtime screen-space trace reach."),
+            std::string_view("Set nonlinear-depth occluder thickness."),
             std::string_view("Set the relative depth discontinuity"),
-            std::string_view("Set Bend's visibility transition contrast."),
+            std::string_view("Set visibility transition contrast."),
             std::string_view("fully hard contact"),
             std::string_view("samples that soften"),
             std::string_view("Prevent detected depth-edge pixels"),
-            std::string_view("optional depth precision offset"),
-            std::string_view("Offset bilinear samples"),
-            std::string_view("debug view is active."),
-            std::string_view("Show the raw R8 edge") })
+            std::string_view("toward the near plane"),
+            std::string_view("one pixel farther"),
+            std::string_view("Keep tracing to preserve complete debug"),
+            std::string_view("Show raw occlusion") })
     {
         ExpectContains(
-            bendShadowControls,
+            screenSpaceShadowControls,
             tooltip,
-            "Bend shadow tooltip coverage");
+            "screen-space shadow tooltip coverage");
     }
 
     const std::string_view diagnosticCsmControls = ExtractSection(
-        lights,
-        "\"Diagnostic Cascaded Shadow Maps##Lights\"",
+        shadows,
+        "\"Diagnostic Cascaded Shadow Maps##Shadows\"",
         "EndDrawerBody();",
         "diagnostic CSM controls");
     const std::string compactDiagnosticCsmControls =
@@ -2177,7 +4219,7 @@ int main(int argc, char** argv)
         "pixel zoom controls");
     ExpectContains(
         source,
-        "if (pixelZoomRequested && pixelZoomOpacity > 0.f)",
+        "if (crosshairOpacity > 0.f)",
         "conditional crosshair");
     ExpectContains(
         source,
@@ -2215,6 +4257,51 @@ int main(int argc, char** argv)
         source,
         "150.f * pixelZoomOpacity",
         "pixel zoom descriptor shadow fade");
+    ExpectContains(
+        source,
+        "constexpr float UiPanelShadowBlurPixels = 10.f;",
+        "shared zoom and panel shadow blur");
+    ExpectContains(
+        source,
+        "constexpr float UiPanelShadowOpacity = 0.34f;",
+        "shared zoom and panel shadow opacity");
+    ExpectContains(
+        source,
+        "constexpr float UiPanelShadowOffsetYPixels = 3.f;",
+        "shared zoom and panel shadow offset");
+    ExpectContains(
+        source,
+        "constants.shadowBlur = UiPanelShadowBlurPixels;",
+        "pixel zoom shared shadow blur");
+    ExpectContains(
+        source,
+        "constants.shadowOpacity = UiPanelShadowOpacity;",
+        "pixel zoom shared shadow opacity");
+    ExpectContains(
+        source,
+        "constants.shadowOffsetY = UiPanelShadowOffsetYPixels;",
+        "pixel zoom shared shadow offset transport");
+    ExpectContains(
+        source,
+        "static_assert(sizeof(PixelZoomConstants) == 96u);",
+        "pixel zoom constant-buffer packing guard");
+    ExpectContains(
+        pixelZoomShader,
+        "g_PixelZoom.shadowOffsetY",
+        "pixel zoom shader shared shadow offset");
+    const std::string_view pixelZoomComposite = ExtractSection(
+        source,
+        "            m_PixelZoomPass->Composite(",
+        "        imgui_nvrhi->render(framebuffer);",
+        "pixel zoom skin composition");
+    ExpectContains(
+        pixelZoomComposite,
+        "ImGui::GetStyle().WindowRounding",
+        "skin-derived pixel zoom rounding");
+    ExpectAbsent(
+        pixelZoomComposite,
+        "                8.f,",
+        "removed hard-coded Amp rounding from OG zoom");
     ExpectContains(
         source,
         "zoomLabelLayout.panelMinY +",
@@ -2319,7 +4406,7 @@ int main(int argc, char** argv)
             "Visibility nested dropdown reset scope");
     }
     constexpr const char* aliasingNestedResetCalls[] = {
-        "DrawNestedDropdownResetIcon(\"AliasingSubpixelMorphology\",",
+        "DrawNestedDropdownResetIcon(\"AliasingMorphology\",",
         "DrawNestedDropdownResetIcon(label,"
     };
     for (const char* nestedResetCall : aliasingNestedResetCalls)
@@ -2333,19 +4420,20 @@ int main(int argc, char** argv)
         compactSvsmSettingsSurface,
         "DrawNestedDropdownResetIcon(label,",
         "SVSM nested dropdown reset scope");
-    constexpr const char* bendNestedResetCalls[] = {
-        "DrawNestedDropdownResetIcon(\"BendShadowProfile\",",
-        "DrawNestedDropdownResetIcon(\"BendShadowLength\",",
-        "DrawNestedDropdownResetIcon(\"BendShadowHardSamples\",",
-        "DrawNestedDropdownResetIcon(\"BendShadowFade-OutSamples\",",
-        "DrawNestedDropdownResetIcon(\"BendShadowDebugView\","
+    constexpr const char* screenSpaceShadowNestedResetCalls[] = {
+        "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowProfile\",",
+        "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowLength\",",
+        "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowHardSamples\",",
+        "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowFade-OutSamples\",",
+        "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowDebugView\","
     };
-    for (const char* nestedResetCall : bendNestedResetCalls)
+    for (const char* nestedResetCall :
+        screenSpaceShadowNestedResetCalls)
     {
         ExpectContains(
-            compactBendShadowControls,
+            compactScreenSpaceShadowControls,
             nestedResetCall,
-            "Bend shadow nested dropdown reset scope");
+            "screen-space shadow nested dropdown reset scope");
     }
     constexpr const char* diagnosticCsmNestedResetCalls[] = {
         "DrawNestedDropdownResetIcon(\"DiagnosticCSMProfile\",",
@@ -2385,9 +4473,9 @@ int main(int argc, char** argv)
             1u,
             "SVSM nested dropdown reset wrapper"},
         {
-            bendShadowControls,
+            screenSpaceShadowControls,
             5u,
-            "Bend shadow nested dropdown resets"},
+            "screen-space shadow nested dropdown resets"},
         {
             diagnosticCsmControls,
             4u,
@@ -2669,6 +4757,129 @@ int main(int argc, char** argv)
         "values[5]",
         "values[3]",
         "triangle counter before bandwidth");
+    const std::string_view ogPerformanceLines = ExtractSection(
+        source,
+        "static std::array<std::string, 2> BuildOgPerformanceLines(",
+        "static double StepTowardByTenth(",
+        "two-row OG performance status");
+    ExpectOrdered(
+        ogPerformanceLines,
+        "values[0]",
+        "values[5]",
+        "OG resolution before triangle count");
+    ExpectOrdered(
+        ogPerformanceLines,
+        "values[5]",
+        "values[3]",
+        "OG triangle count before bandwidth");
+    ExpectOrdered(
+        ogPerformanceLines,
+        "values[3]",
+        "values[4]",
+        "OG first row before second row");
+    ExpectOrdered(
+        ogPerformanceLines,
+        "values[4]",
+        "values[1]",
+        "OG compute before frame time");
+    ExpectOrdered(
+        ogPerformanceLines,
+        "values[1]",
+        "values[2]",
+        "OG frame time before frame rate");
+    ExpectContains(
+        source,
+        "const bool splitOgPerformanceStatus =\n"
+        "            hasPerformanceStatus &&\n"
+        "            m_ComposedUiSkin == UiSkin::Og;",
+        "OG-only performance status split");
+    ExpectContains(
+        source,
+        "splitOgPerformanceStatus\n"
+        "                        ? SettingsStatusLineSpacing + fontSize",
+        "OG second-row collapsed height");
+    ExpectContains(
+        source,
+        "ogPerformanceLines[0].c_str()",
+        "OG first performance row");
+    ExpectContains(
+        source,
+        "ogPerformanceLines[1].c_str()",
+        "OG second performance row");
+    ExpectContains(
+        source,
+        "else\n"
+        "            {\n"
+        "                ImGui::TextUnformatted(performanceLine.c_str());",
+        "unchanged single-row Amp performance status");
+    const std::string_view sharedSurfaceBackground = ExtractSection(
+        source,
+        "    static void PushPanelBodySurface()",
+        "    inline static constexpr float",
+        "shared panel-body surface helper");
+    ExpectContains(
+        sharedSurfaceBackground,
+        "ImGuiCol_WindowBg,\n"
+        "            g_UiVisualTokens.panelBodySurface",
+        "shared full-RGBA panel-body surface");
+    ExpectContains(
+        source,
+        "colors[ImGuiCol_WindowBg] =\n"
+        "                ImVec4(0.018f, 0.018f, 0.018f, 0.60f);",
+        "neutral Amp root surface RGB");
+    ExpectContains(
+        source,
+        "colors[ImGuiCol_FrameBg] =\n"
+        "                ImVec4(0.018f, 0.018f, 0.018f, 0.72f);",
+        "neutral Amp control surface RGB");
+    ExpectContains(
+        source,
+        "colors[ImGuiCol_Button] =\n"
+        "                ImVec4(0.018f, 0.018f, 0.018f, 0.72f);",
+        "neutral Amp button surface RGB");
+    ExpectContains(
+        source,
+        "tokens.panelBodySurface =\n"
+        "            colors[ImGuiCol_WindowBg];",
+        "OG-compatible panel body source");
+    ExpectContains(
+        source,
+        "tokens.panelBodySurface.w =\n"
+        "                colors[ImGuiCol_PopupBg].w;",
+        "Amp panel body opacity");
+    if (CountOccurrences(
+            source,
+            "        PushPanelBodySurface();") != 3u)
+    {
+        Fail("Settings, Materials, and the command interface must each push "
+            "the one shared full-RGBA panel body surface.");
+    }
+    ExpectAbsent(
+        source,
+        "GetCommandSurfaceBackgroundAlpha",
+        "retired alpha-only panel-surface contract");
+    ExpectContains(
+        commandInterface,
+        "PushPanelBodySurface();",
+        "command-interface full-RGBA panel surface");
+    ExpectAbsent(
+        commandInterface,
+        "ImGui::SetNextWindowBgAlpha(",
+        "command-interface alpha-only panel surface");
+    const std::string_view settingsWindowBackground = ExtractSection(
+        source,
+        "        // WindowBg is absent beneath title bars.",
+        "        ImGui::Begin(\n"
+        "            \"Settings\"",
+        "Settings root background policy");
+    ExpectContains(
+        settingsWindowBackground,
+        "PushPanelBodySurface();",
+        "Settings full-RGBA panel surface");
+    ExpectAbsent(
+        settingsWindowBackground,
+        "ImGui::SetNextWindowBgAlpha(",
+        "Settings alpha-only panel surface");
     ExpectContains(
         source,
         "FormatTriangleCount(snapshot.submittedTriangles)",
@@ -2726,10 +4937,85 @@ int main(int argc, char** argv)
         source,
         "ImGuiWindowFlags_AlwaysVerticalScrollbar",
         "single stable Settings scroll owner");
+    const std::string_view settingsScrollCorrection = ExtractSection(
+        source,
+        "    static void EndSettingsScrollStability()",
+        "    struct DrawerAnimationContext",
+        "Settings scroll anchor correction");
+    ExpectContains(
+        settingsScrollCorrection,
+        "window->ContentSizeExplicit.y",
+        "current-frame Settings content height");
+    ExpectContains(
+        settingsScrollCorrection,
+        "window->DC.CursorMaxPos.y",
+        "current-frame Settings content extent");
+    ExpectContains(
+        settingsScrollCorrection,
+        "window->DC.CursorStartPos.y",
+        "current-frame Settings content origin");
+    ExpectContains(
+        settingsScrollCorrection,
+        "window->InnerRect.GetHeight()",
+        "current-frame Settings viewport height");
+    ExpectContains(
+        settingsScrollCorrection,
+        "ResolveUiScrollAnchorCorrection(",
+        "single-use Settings scroll correction");
+    ExpectContains(
+        settingsScrollCorrection,
+        "window->ScrollTarget.y < FLT_MAX",
+        "pending ImGui scroll-target preservation");
+    ExpectContains(
+        settingsScrollCorrection,
+        "window->Scroll.y = correction.scrollY;",
+        "direct Settings scroll correction");
+    ExpectAbsent(
+        settingsScrollCorrection,
+        "ImGui::SetScrollY(",
+        "removed delayed Settings scroll target");
+    ExpectOrdered(
+        settingsScrollCorrection,
+        "ResolveUiScrollAnchorCorrection(",
+        "window->Scroll.y = correction.scrollY;",
+        "resolved Settings scroll correction assignment");
     ExpectContains(
         source,
-        "window->ScrollTarget.y < FLT_MAX",
-        "pending wheel-target composition");
+        "context.rootDrawVertexStart =",
+        "Settings content draw-range capture");
+    ExpectContains(
+        settingsScrollCorrection,
+        "const float visualScrollDelta =",
+        "same-frame Settings visual correction");
+    ExpectContains(
+        settingsScrollCorrection,
+        "g_SettingsAppearanceDrawLists",
+        "all Settings child draw-list correction");
+    ExpectContains(
+        settingsScrollCorrection,
+        "drawList->VtxBuffer[vertexIndex].pos.y -=",
+        "same-frame Settings vertex correction");
+    ExpectContains(
+        settingsScrollCorrection,
+        "command.ClipRect.y = std::max(",
+        "nested Settings clip correction");
+    const std::string_view scrollCorrectionHelper = ExtractSection(
+        uiAnimationSource,
+        "    struct UiScrollAnchorCorrection",
+        "    // Retain the Settings viewport",
+        "pure Settings scroll correction");
+    ExpectContains(
+        scrollCorrectionHelper,
+        "if (hasPendingScrollTarget ||",
+        "pending ImGui scroll-target ownership");
+    ExpectContains(
+        scrollCorrectionHelper,
+        "return { false, currentScrollY };",
+        "pending ImGui scroll-target preservation");
+    ExpectContains(
+        scrollCorrectionHelper,
+        "requestedScrollY > maximumScrollY",
+        "current-frame Settings maximum clamp");
     if (CountOccurrences(
             source,
             "EnsureAnimatedChildLayoutSubmission(") < 4)
@@ -2776,6 +5062,19 @@ int main(int argc, char** argv)
         source,
         "historyPresetSettings.enabled = true",
         "AA history display independent of execution bypass");
+    ExpectContains(
+        source,
+        "presetLabelSettings.enabled = true;",
+        "AA Developer Options inherited rows independent of execution bypass");
+    ExpectContains(
+        source,
+        "currentLabelSettings.enabled = true;",
+        "AA Developer Options retained state independent of execution bypass");
+    ExpectContains(
+        source,
+        "m_ui.GetResolvedAntiAliasingSettings(\n"
+        "                        currentLabelSettings)",
+        "AA Developer Options resolve retained state while disabled");
     ExpectAbsent(
         source,
         "measurementFreezeUntil",
@@ -2788,7 +5087,7 @@ int main(int argc, char** argv)
     const std::string_view deferredDropdownQueue = ExtractSection(
         source,
         "struct DeferredDropdownUiPayload",
-        "static ImVec4 LerpUiColor(",
+        "static bool BeginRoundedCombo(",
         "deferred dropdown commit queue");
     ExpectContains(
         deferredDropdownQueue,
@@ -2941,7 +5240,7 @@ int main(int argc, char** argv)
     const std::string_view deferredDropdownOption = ExtractSection(
         source,
         "static bool DrawDeferredDropdownOption(",
-        "static void ApplyExpandedWordSpacing(",
+        "static void ApplyWordSpacing(",
         "deferred dropdown selection wrapper");
     ExpectContains(
         deferredDropdownOption,
@@ -2952,6 +5251,11 @@ int main(int argc, char** argv)
         "QueueDeferredDropdownUiAction(",
         "deferred dropdown wrapper queue routing");
 
+    const std::string_view sliderTrackStyle = ExtractSection(
+        source,
+        "static void PushPanelSliderTrackStyle()",
+        "static bool DrawSliderFloat(",
+        "shared slider track style");
     const std::string_view sliderFloat = ExtractSection(
         source,
         "static bool DrawSliderFloat(",
@@ -2970,6 +5274,30 @@ int main(int argc, char** argv)
         sliderInt,
         "QueueDeferred",
         "integer slider immediate interaction");
+    if (CountOccurrences(
+            sliderTrackStyle,
+            "ImGui::PushStyleColor(") != 3u)
+    {
+        Fail("The shared slider track style must push exactly three colors.");
+    }
+    if (CountOccurrences(
+            sliderFloat,
+            "ImGui::PopStyleColor(3);") != 1u ||
+        CountOccurrences(
+            sliderFloat,
+            "ImGui::PopStyleColor(4);") != 0u)
+    {
+        Fail("The float slider must pop exactly the three shared track colors.");
+    }
+    if (CountOccurrences(
+            sliderInt,
+            "ImGui::PopStyleColor(3);") != 1u ||
+        CountOccurrences(
+            sliderInt,
+            "ImGui::PopStyleColor(4);") != 0u)
+    {
+        Fail("The integer slider must pop exactly the three shared track colors.");
+    }
 
     const std::string_view buildUi = ExtractSection(
         source,
@@ -2993,6 +5321,22 @@ int main(int argc, char** argv)
         compositionIdlePolicy,
         "IsPixelZoomCompositionIdle(",
         "pixel-zoom dropdown commit gate");
+    ExpectContains(
+        compositionIdlePolicy,
+        "const bool materialInspectorPlacementIdle =",
+        "Material Inspector placement commit gate");
+    ExpectContains(
+        compositionIdlePolicy,
+        "m_MaterialInspectorZoomPlacement <= 0.f",
+        "Material Inspector upper placement endpoint");
+    ExpectContains(
+        compositionIdlePolicy,
+        "m_MaterialInspectorZoomPlacement >= 1.f",
+        "Material Inspector lower placement endpoint");
+    ExpectContains(
+        compositionIdlePolicy,
+        "materialInspectorPlacementIdle &&",
+        "Material Inspector placement commit idleness");
     ExpectContains(
         compositionIdlePolicy,
         "g_DeferredAliasingUiPresentation.ReadyForCommit()",
@@ -3045,6 +5389,22 @@ int main(int argc, char** argv)
             "the pending dropdown input barrier must begin and end exactly "
             "once around SettingsBody controls.");
     }
+    ExpectContains(
+        settingsBody,
+        "const bool settingsScrollInputBlocked =",
+        "same-frame scroll correction input barrier");
+    ExpectContains(
+        settingsBody,
+        "g_SettingsScrollStabilityContext.layoutAnimatingLastFrame",
+        "continuing Settings layout-motion input barrier");
+    if (CountOccurrences(
+            settingsBody,
+            "if (settingsScrollInputBlocked)") != 2)
+    {
+        Fail(
+            "the Settings scroll-correction input barrier must begin and end "
+            "exactly once.");
+    }
     const size_t pendingBarrierClose =
         settingsBody.rfind("if (deferredDropdownInputBlocked)");
     const size_t settingsFooter =
@@ -3065,7 +5425,12 @@ int main(int argc, char** argv)
         "hidden Settings dropdown commit point");
     ExpectOrdered(
         hiddenSettingsCommit,
-        "FinishDeferredDropdownPopupTransition();",
+        "DrawMaterialInspector(",
+        "FinishUnsubmittedDeferredDropdownPopupTransition();",
+        "hidden Settings Material Inspector composition");
+    ExpectOrdered(
+        hiddenSettingsCommit,
+        "FinishUnsubmittedDeferredDropdownPopupTransition();",
         "g_DeferredAliasingUiPresentation.SkipInvisibleAnimation(",
         "hidden popup transition cleanup");
     ExpectOrdered(
@@ -3126,11 +5491,223 @@ int main(int argc, char** argv)
             "visible Settings composition must expose exactly one deferred "
             "dropdown commit point.");
     }
-    const std::string_view materialEditor = ExtractSection(
+    if (CountOccurrences(buildUi, "DrawMaterialInspector(") != 2u)
+    {
+        Fail("fully hidden and visible Settings paths must each compose the "
+            "Material Inspector exactly once.");
+    }
+    ExpectAbsent(
+        buildUi,
+        "float(width) - fontSize * 0.6f",
+        "removed corner-pinned Material Inspector placement");
+    ExpectAbsent(
         buildUi,
         "if (m_ui.ShowMaterialEditor)",
-        "// Commit only after every UI window has finished composing.",
+        "shared Material Inspector composition helper");
+    const std::string_view materialEditor = ExtractSection(
+        source,
+        "    void DrawMaterialInspector(",
+        "    static std::string BuildPerformanceLine(",
         "Material Editor deferred domain selection");
+    ExpectContains(
+        materialEditor,
+        "ResolveMaterialInspectorLayout(",
+        "fixed zoom-derived Material Inspector geometry");
+    ExpectContains(
+        materialEditor,
+        "m_SettingsPanelMarginPixels",
+        "consistent-margin Material Inspector geometry");
+    ExpectContains(
+        materialEditor,
+        "m_MaterialInspectorZoomPlacement",
+        "Material Inspector placement state");
+    ExpectContains(
+        materialEditor,
+        "ImGui::SetNextWindowPos(",
+        "fixed Material Inspector position");
+    ExpectContains(
+        materialEditor,
+        "ImGui::SetNextWindowSizeConstraints(",
+        "fixed Material Inspector width and maximum height");
+    ExpectContains(
+        materialEditor,
+        "IsMaterialInspectorPresentationActive(",
+        "retained Material Inspector close presentation");
+    ExpectContains(
+        materialEditor,
+        "SmoothPixelZoomVisibility(\n"
+        "                    m_MaterialInspectorAppearance)",
+        "Amp Material Inspector fade curve");
+    ExpectContains(
+        materialEditor,
+        "PixelZoomMinimumWindowScale +",
+        "Amp Material Inspector zoom curve");
+    ExpectContains(
+        materialEditor,
+        "materialWindowFlags |= ImGuiWindowFlags_NoInputs;",
+        "noninteractive Material Inspector transitions");
+    ExpectContains(
+        materialEditor,
+        "ImGui::Begin(\n"
+        "            \"Materials\",\n"
+        "            nullptr,\n"
+        "            materialWindowFlags);",
+        "Materials title without native close button");
+    ExpectAbsent(
+        materialEditor,
+        "\"Materials\",\n"
+        "            &m_ui.ShowMaterialEditor,",
+        "removed Materials title-bar close button");
+    ExpectAbsent(
+        materialEditor,
+        "\"Material Editor\"",
+        "retired Material Editor visible title");
+    ExpectAbsent(
+        materialEditor,
+        "ImGuiWindowFlags_NoCollapse",
+        "visible Material Editor title-triangle close control");
+    ExpectContains(
+        materialEditor,
+        "if (materialEditorWindow->WantCollapseToggle)",
+        "Material Editor title-triangle close request");
+    ExpectContains(
+        materialEditor,
+        "materialEditorWindow->WantCollapseToggle = false;",
+        "consumed native Material Editor collapse request");
+    ExpectContains(
+        materialEditor,
+        "materialEditorWindow->Collapsed = false;",
+        "Material Editor native collapse suppression");
+    ExpectContains(
+        materialEditor,
+        "m_ui.ShowMaterialEditor = false;",
+        "Material Editor retained close target");
+    ExpectOrdered(
+        materialEditor,
+        "const bool materialEditorVisible = ImGui::Begin(",
+        "if (materialEditorWindow->WantCollapseToggle)",
+        "same-frame Material Editor title-triangle handoff");
+    ExpectOrdered(
+        materialEditor,
+        "materialEditorWindow->WantCollapseToggle = false;",
+        "material->dirty |=",
+        "full Material body submission during close handoff");
+    ExpectContains(
+        materialEditor,
+        "if (materialEditorVisible)\n"
+        "        {",
+        "Material body submission from Begin result");
+    ExpectAbsent(
+        materialEditor,
+        "if (materialEditorVisible &&",
+        "Material close-target body guard");
+    ExpectContains(
+        imguiRuntimePolicy,
+        "strcmp(window->Name, \"Materials\") != 0 && "
+        "g.IO.MouseClickedCount[0] == 2",
+        "Materials title double-click native-collapse suppression");
+    if (CountOccurrences(
+            materialEditor,
+            "g_UiVisualTokens.settingsTitleSurface") != 3u)
+    {
+        Fail("Material Editor must reuse the shared title surface for resting, "
+            "active, and collapsed title states.");
+    }
+    ExpectContains(
+        materialEditor,
+        "PushPanelBodySurface();",
+        "Materials shared full-RGBA body surface");
+    ExpectAbsent(
+        materialEditor,
+        "ImGui::SetNextWindowBgAlpha(",
+        "Materials alpha-only body surface");
+    ExpectContains(
+        materialEditor,
+        "const float materialControlWidth =\n"
+        "                    ImGui::CalcItemWidth();",
+        "Material Domain slider-column width");
+    ExpectAbsent(
+        materialEditor,
+        "ImGui::SetNextItemWidth(-FLT_MIN)",
+        "removed full-width Material Domain combo");
+    ExpectContains(
+        materialEditor,
+        "ImGuiCol_ChildBg,\n"
+        "                    g_UiVisualTokens.drawerBackground",
+        "Materials drawer-style light body plate");
+    ExpectContains(
+        materialEditor,
+        "ImGuiStyleVar_ChildRounding,\n"
+        "                    g_UiVisualTokens.drawerRounding",
+        "Materials drawer-style body rounding");
+    ExpectContains(
+        materialEditor,
+        "\"##MaterialControlsBody\"",
+        "Materials controls body child identity");
+    ExpectContains(
+        materialEditor,
+        "ImGuiChildFlags_AlwaysUseWindowPadding |\n"
+        "                            ImGuiChildFlags_AutoResizeY |\n"
+        "                            ImGuiChildFlags_AlwaysAutoResize",
+        "Materials auto-height drawer-style body plate");
+    ExpectContains(
+        materialEditor,
+        "ImGui::PushItemWidth(materialControlWidth);",
+        "Materials plate preserves Material Domain slider width");
+    ExpectOrdered(
+        materialEditor,
+        "ImGui::PopID();",
+        "\"##MaterialControlsBody\"",
+        "Materials plate after Material Domain");
+    ExpectOrdered(
+        materialEditor,
+        "\"##MaterialControlsBody\"",
+        "donut::app::MaterialEditor(",
+        "Materials controls inside light body plate");
+    ExpectOrdered(
+        materialEditor,
+        "donut::app::MaterialEditor(",
+        "ImGui::EndChild();",
+        "Materials plate closes after editor controls");
+    ExpectContains(
+        materialEditor,
+        "materialControlsDrawList =\n"
+        "                    ImGui::GetWindowDrawList();",
+        "Materials child appearance draw list capture");
+    ExpectContains(
+        materialEditor,
+        "if (materialControlsDrawList &&\n"
+        "            materialControlsDrawList != materialWindowDrawList)",
+        "Materials child appearance transform guard");
+    ExpectContains(
+        materialEditor,
+        "UiMaterialTitleBackdropIndex",
+        "Material title blur mask");
+    ExpectContains(
+        materialEditor,
+        "UiMaterialBodyBackdropIndex",
+        "Material body blur mask");
+    ExpectContains(
+        materialEditor,
+        "materialTitleBackdrop.rounding = style.FrameRounding;",
+        "Material drawer-header blur radius");
+    ExpectContains(
+        materialEditor,
+        "materialBodyBackdrop.rounding = style.WindowRounding;",
+        "Material body blur radius");
+    ExpectContains(
+        materialEditor,
+        "ApplyBackdropAppearance(",
+        "Material backdrop zoom-and-fade transform");
+    ExpectOrdered(
+        materialEditor,
+        "ImGui::End();",
+        "ApplyWindowAppearance(",
+        "post-layout Material window appearance transform");
+    ExpectContains(
+        materialEditor,
+        "ImGui::PopStyleColor(4);",
+        "balanced Materials title and body colors");
     ExpectContains(
         materialEditor,
         "DrawDeferredDropdownOption(",
@@ -3155,6 +5732,209 @@ int main(int argc, char** argv)
         donutAppOverride,
         "+                &domainIndex,",
         "Material Editor domain storage safety");
+    ExpectContains(
+        donutAppOverride,
+        "-    const ImVec4 filenameColor = ImVec4(0.474f, 0.722f, 0.176f, 1.0f);\n"
+        "+    const ImVec4 filenameColor = ImVec4(0.26f, 0.59f, 0.98f, 1.0f);",
+        "exact drawer-blue Material texture annotations");
+    ExpectContains(
+        source,
+        "tokens.drawerHeader =\n"
+        "                ImVec4(0.26f, 0.59f, 0.98f, 0.31f);",
+        "authored drawer-blue RGB source");
+    ExpectAbsent(
+        donutAppOverride,
+        "+    const ImVec4 filenameColor = ImVec4(0.474f, 0.722f, 0.176f, 1.0f);",
+        "retired green Material texture annotation addition");
+    ExpectAbsent(
+        donutAppOverride,
+        "+    const ImVec4 filenameColor = ImVec4(0.22f, 0.78f, 0.98f, 1.0f);",
+        "retired cyan Material texture annotation addition");
+
+    const std::string_view rendererPresentation = ExtractSection(
+        source,
+        "    virtual void Render(nvrhi::IFramebuffer* framebuffer) override",
+        "    virtual void BackBufferResizing() override",
+        "renderer zoom and crosshair presentation");
+    ExpectContains(
+        rendererPresentation,
+        "ShouldDelayPixelZoomForMaterialInspector(",
+        "Material Inspector-first zoom opening");
+    ExpectContains(
+        rendererPresentation,
+        "AdvanceMaterialInspectorZoomPlacement(",
+        "animated Material Inspector zoom placement");
+    ExpectOrdered(
+        rendererPresentation,
+        "AdvanceMaterialInspectorAppearance(",
+        "AdvanceMaterialInspectorZoomPlacement(",
+        "Material appearance before zoom-relative placement");
+    ExpectContains(
+        rendererPresentation,
+        "IsMaterialInspectorPresentationActive(",
+        "retained Material presentation state");
+    ExpectContains(
+        rendererPresentation,
+        "m_MaterialInspectorZoomPlacement",
+        "zoom opening placement dependency");
+    ExpectContains(
+        rendererPresentation,
+        "pixelZoomRequestedByUi &&\n"
+        "            !pixelZoomOpeningDelayed",
+        "delayed zoom opening request");
+    ExpectContains(
+        rendererPresentation,
+        "const float crosshairOpacity = std::max(",
+        "maximum zoom-or-inspector crosshair opacity");
+    ExpectContains(
+        rendererPresentation,
+        "pixelZoomRequested ? pixelZoomOpacity : 0.f",
+        "zoom crosshair opacity source");
+    ExpectContains(
+        rendererPresentation,
+        "materialInspectorOpacity",
+        "eased Material Inspector crosshair opacity source");
+    ExpectAbsent(
+        rendererPresentation,
+        "m_ui.ShowMaterialEditor ? 1.f : 0.f",
+        "removed snapping Material Inspector crosshair opacity");
+    ExpectContains(
+        rendererPresentation,
+        "if (crosshairOpacity > 0.f)",
+        "crosshair maximum visibility policy");
+    ExpectContains(
+        rendererPresentation,
+        "m_app->IsSvsmMotionBenchmarkRunning()",
+        "SVSM benchmark zoom suppression");
+    ExpectContains(
+        source,
+        "const bool materialInspectorAppearanceIdle =\n"
+        "                    IsMaterialInspectorAppearanceIdle(",
+        "Material appearance deferred-commit barrier");
+    ExpectContains(
+        source,
+        "materialInspectorPlacementIdle &&\n"
+        "                    materialInspectorAppearanceIdle &&",
+        "Material presentation idle composition gate");
+
+    const std::string_view materialPickPurpose = ExtractSection(
+        source,
+        "    enum class MaterialPickPurpose",
+        "    std::shared_ptr<RootFileSystem>",
+        "typed material-pick purpose");
+    ExpectContains(
+        materialPickPurpose,
+        "FocusCameraAtCursor",
+        "focus-camera material-pick purpose");
+    ExpectContains(
+        materialPickPurpose,
+        "OpenCenterMaterialInspector",
+        "center Material Inspector pick purpose");
+    const std::string_view mouseMaterialPickRouting = ExtractSection(
+        source,
+        "    virtual bool MousePosUpdate(",
+        "    void AdvanceAntiAliasingTimer()",
+        "cursor material-pick routing");
+    ExpectContains(
+        mouseMaterialPickRouting,
+        "MaterialPickPurpose::FocusCameraAtCursor",
+        "middle-click focus-camera pick purpose");
+    const std::string_view centerInspectorToggle = ExtractSection(
+        source,
+        "    void ToggleCenterMaterialInspector()",
+        "    const Material* GetOriginalMaterial(",
+        "center Material Inspector toggle");
+    ExpectContains(
+        centerInspectorToggle,
+        "MaterialPickPurpose::OpenCenterMaterialInspector",
+        "center Material Inspector pick purpose");
+    ExpectContains(
+        centerInspectorToggle,
+        "m_MaterialPickScene = m_Scene.get();",
+        "center Material Inspector scene identity");
+    const std::string_view sceneUnloadMaterialPick = ExtractSection(
+        source,
+        "    virtual void SceneUnloading() override",
+        "    virtual bool LoadScene(",
+        "scene-unload material-pick cancellation");
+    ExpectContains(
+        sceneUnloadMaterialPick,
+        "m_MaterialPickPurpose = MaterialPickPurpose::None;",
+        "scene-unload material-pick cancellation");
+    ExpectContains(
+        sceneUnloadMaterialPick,
+        "m_MaterialPickScene = nullptr;",
+        "scene-unload material-pick scene release");
+    const std::string_view materialPickSubmission = ExtractSection(
+        source,
+        "        if (m_MaterialPickPurpose != MaterialPickPurpose::None &&",
+        "        if (m_ui.ShowEnvironmentBackground &&",
+        "material-pick submission");
+    ExpectContains(
+        materialPickSubmission,
+        "m_MaterialPickScene != m_Scene.get()",
+        "stale material-pick cancellation");
+    const std::string_view centerPickSubmission = ExtractSection(
+        materialPickSubmission,
+        "        if (m_MaterialPickPurpose ==\n"
+        "            MaterialPickPurpose::OpenCenterMaterialInspector)",
+        "        if (m_MaterialPickPurpose != MaterialPickPurpose::None)",
+        "center Material Inspector capture coordinate");
+    ExpectContains(
+        centerPickSubmission,
+        "m_RenderTargets->MaterialIDs->getDesc()",
+        "MaterialIDs capture dimensions");
+    ExpectContains(
+        centerPickSubmission,
+        "ResolveCenterMaterialPick(",
+        "exact MaterialIDs center coordinate");
+    ExpectContains(
+        centerPickSubmission,
+        "m_PickPosition =\n"
+        "                    uint2(centerPick.x, centerPick.y);",
+        "exact center capture coordinate");
+    ExpectAbsent(
+        centerPickSubmission,
+        "PointThirdPersonCameraAt(",
+        "center capture camera isolation");
+    ExpectOrdered(
+        materialPickSubmission,
+        "uint2(centerPick.x, centerPick.y);",
+        "m_PixelReadbackPass->Capture(",
+        "center coordinate before MaterialIDs capture");
+    const std::string_view materialPickCompletion = ExtractSection(
+        source,
+        "        if (m_MaterialPickPurpose != MaterialPickPurpose::None)\n"
+        "        {\n"
+        "            const MaterialPickPurpose completedPurpose =",
+        "    std::shared_ptr<ShaderFactory> GetShaderFactory()",
+        "material-pick completion");
+    ExpectContains(
+        materialPickCompletion,
+        "const bool completedForCurrentScene =",
+        "stale material-pick completion cancellation");
+    const std::string_view centerPickCompletion = ExtractSection(
+        materialPickCompletion,
+        "            if (completedPurpose ==\n"
+        "                MaterialPickPurpose::OpenCenterMaterialInspector)",
+        "            else if (completedForCurrentScene &&",
+        "center Material Inspector completion");
+    ExpectContains(
+        centerPickCompletion,
+        "m_ui.ShowMaterialEditor =",
+        "center Material Inspector opening");
+    ExpectAbsent(
+        centerPickCompletion,
+        "PointThirdPersonCameraAt(",
+        "center Material Inspector camera isolation");
+    ExpectContains(
+        materialPickCompletion,
+        "MaterialPickPurpose::FocusCameraAtCursor",
+        "focus-camera completion routing");
+    ExpectContains(
+        materialPickCompletion,
+        "PointThirdPersonCameraAt(",
+        "focus-camera-only material-pick mutation");
     const std::string_view settingsControls = ExtractSection(
         source,
         "const bool generalOpen = DrawCollapsingHeader(",
@@ -3173,7 +5953,8 @@ int main(int argc, char** argv)
         CountOccurrences(buffers, "ImGui::Selectable(") != 0 ||
         CountOccurrences(statistics, "ImGui::Selectable(") != 0 ||
         CountOccurrences(aliasing, "ImGui::Selectable(") != 0 ||
-        CountOccurrences(lights, "ImGui::Selectable(") != 0)
+        CountOccurrences(lights, "ImGui::Selectable(") != 0 ||
+        CountOccurrences(shadows, "ImGui::Selectable(") != 0)
     {
         Fail(
             "the sole raw Settings Selectable must remain scoped to the "

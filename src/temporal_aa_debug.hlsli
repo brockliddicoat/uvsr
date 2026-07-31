@@ -1,7 +1,7 @@
-#ifndef UVSR_TAA_MINIENGINE_DEBUG_HLSLI
-#define UVSR_TAA_MINIENGINE_DEBUG_HLSLI
+#ifndef UVSR_TAA_TEMPORAL_AA_DEBUG_HLSLI
+#define UVSR_TAA_TEMPORAL_AA_DEBUG_HLSLI
 
-float3 MiniEngineTaaDebugHeatmap(float value)
+float3 TemporalAaDebugHeatmap(float value)
 {
     value = saturate(value);
     return saturate(float3(

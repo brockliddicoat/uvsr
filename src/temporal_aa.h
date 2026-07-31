@@ -1,6 +1,6 @@
 #pragma once
 
-#include "taa_miniengine_reference.h"
+#include "temporal_aa_reference.h"
 #include "temporal_aa_core.h"
 
 #include <donut/core/math/math.h>
@@ -20,20 +20,30 @@ namespace donut::engine
 
 namespace uvsr
 {
-    struct MiniEngineTemporalAATimings
+    struct TemporalAATimings
     {
         float blendMilliseconds = 0.f;
         float outputMilliseconds = 0.f;
         float presentationSharpenMilliseconds = 0.f;
-        uint64_t historyTextureBytes = 0u;
+        uint64_t activeHistoryTextureBytes = 0u;
+        uint64_t residentHistoryTextureBytes = 0u;
+        uint64_t robustHistoryTextureBytes = 0u;
+        uint64_t persistentHistoryTextureBytes = 0u;
+        uint64_t minimumHistoryTextureBytes = 0u;
         uint64_t debugTextureBytes = 0u;
         uint32_t historyColorSamples = 1u;
         uint32_t historyDepthGathers = 1u;
         uint32_t historyDepthSamples = 0u;
+        uint32_t dispatchCount = 0u;
         uint32_t accumulationCount = 0u;
         uint32_t historyResetCount = 0u;
+        TemporalAaCostMode effectiveCostMode =
+            TemporalAaCostMode::FullQuality;
         bool historyValid = false;
         bool outputWasSharpened = true;
+        bool minimumPathSupported = false;
+        bool minimumColorIsR11G11B10 = false;
+        bool minimumDepthIsR16 = false;
 
         [[nodiscard]] float CompleteEffectMilliseconds() const
         {
@@ -43,10 +53,10 @@ namespace uvsr
         }
     };
 
-    class MiniEngineTemporalAAPass
+    class TemporalAAPass
     {
     public:
-        MiniEngineTemporalAAPass(
+        TemporalAAPass(
             nvrhi::IDevice* device,
             const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
             const std::shared_ptr<donut::engine::CommonRenderPasses>&
@@ -63,7 +73,7 @@ namespace uvsr
             const donut::engine::IView* previousView,
             uint64_t frameIndex,
             const ResolvedAntiAliasingSettings& settings,
-            MiniEngineTaaDebugView debugView,
+            TemporalAaDebugView debugView,
             bool exportSelectiveMorphology,
             bool enableSharpen,
             bool deferSharpenToPresentation,
@@ -73,7 +83,7 @@ namespace uvsr
             nvrhi::ICommandList* commandList,
             nvrhi::ITexture* sourceTexture);
 
-        [[nodiscard]] const MiniEngineTemporalAATimings& GetTimings() const
+        [[nodiscard]] const TemporalAATimings& GetTimings() const
         {
             return m_Timings;
         }
@@ -115,15 +125,15 @@ namespace uvsr
         nvrhi::SamplerHandle m_LinearClampSampler;
 
         static constexpr uint32_t c_BlendBaselinePermutationCount =
-            MiniEngineTaaBlendPermutationCount *
+            TemporalAaBlendPermutationCount *
             2u *
-            MiniEngineTaaSampleResurrectionCount *
+            TemporalAaSampleResurrectionCount *
             2u;
         static constexpr uint32_t c_RuntimeAlgorithmPermutationCount =
-            MiniEngineTaaBlendPermutationCount;
+            TemporalAaBlendPermutationCount;
         static constexpr uint32_t c_PerformancePermutationCount =
             c_RuntimeAlgorithmPermutationCount *
-            MiniEngineTaaStaticPerformanceCount *
+            TemporalAaStaticPerformanceCount *
             2u;
         static constexpr uint32_t c_PixelPermutationCount =
             c_RuntimeAlgorithmPermutationCount * 2u * 2u * 2u;
@@ -133,10 +143,12 @@ namespace uvsr
         std::array<nvrhi::ShaderHandle,
             c_PerformancePermutationCount> m_PerformanceBlendShaders;
         std::array<nvrhi::ShaderHandle,
-            MiniEngineTaaResolveDebugViewCount> m_ResolveShaders;
+            TemporalAaResolveDebugViewCount> m_ResolveShaders;
         nvrhi::ShaderHandle m_SharpenShader;
         nvrhi::ShaderHandle m_PresentationSharpenShader;
+        std::array<nvrhi::ShaderHandle, 2> m_MinimumShaders;
         nvrhi::BindingLayoutHandle m_BlendBindingLayout;
+        nvrhi::BindingLayoutHandle m_MinimumBindingLayout;
         nvrhi::BindingLayoutHandle m_OutputBindingLayout;
         std::array<nvrhi::ComputePipelineHandle,
             c_BlendBaselinePermutationCount> m_BlendPipelines;
@@ -144,9 +156,10 @@ namespace uvsr
             c_PerformancePermutationCount>
                 m_PerformanceBlendPipelines;
         std::array<nvrhi::ComputePipelineHandle,
-            MiniEngineTaaResolveDebugViewCount> m_ResolvePipelines;
+            TemporalAaResolveDebugViewCount> m_ResolvePipelines;
         nvrhi::ComputePipelineHandle m_SharpenPipeline;
         nvrhi::ComputePipelineHandle m_PresentationSharpenPipeline;
+        std::array<nvrhi::ComputePipelineHandle, 2> m_MinimumPipelines;
 #if UVSR_AA_DEVELOPER_OVERRIDES
         std::array<nvrhi::ShaderHandle,
             c_PixelPermutationCount> m_PixelBlendShaders;
@@ -161,7 +174,7 @@ namespace uvsr
 #endif
 
         TemporalHistoryState m_History;
-#if UVSR_AA_DEVELOPER_OVERRIDES
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
         std::array<nvrhi::TextureHandle, 2> m_PersistentColor;
         std::array<nvrhi::TextureHandle, 2> m_PersistentDepth;
 #endif
@@ -169,7 +182,10 @@ namespace uvsr
         nvrhi::TextureHandle m_FusedOutput;
         nvrhi::TextureHandle m_SelectiveCurrent;
         nvrhi::TextureHandle m_SelectiveRejection;
+        std::array<nvrhi::TextureHandle, 2> m_MinimumColor;
+        std::array<nvrhi::TextureHandle, 2> m_MinimumDepth;
         std::array<nvrhi::BindingSetHandle, 2> m_BlendBindingSets;
+        std::array<nvrhi::BindingSetHandle, 2> m_MinimumBindingSets;
         std::array<nvrhi::BindingSetHandle, 2> m_OutputBindingSets;
         nvrhi::BindingSetHandle m_PresentationSharpenBindingSet;
         nvrhi::ITexture* m_BoundPresentationSharpenSource = nullptr;
@@ -182,25 +198,35 @@ namespace uvsr
         uint32_t m_TimerFrame = 0u;
 
         bool m_LastHistoryInputValid = false;
+        std::array<bool, 2> m_MinimumValid{};
+        std::array<uint64_t, 2> m_MinimumCommittedSequence{};
+        uint64_t m_MinimumLastCommittedSequence = 0u;
+        uint32_t m_MinimumAccumulationCount = 0u;
+        uint32_t m_MinimumResetCount = 0u;
+        bool m_MinimumHasCommittedSequence = false;
+        bool m_LastRenderUsedMinimum = false;
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
         std::array<bool, 2> m_PersistentValid{};
         std::array<std::shared_ptr<donut::engine::PlanarView>, 2>
             m_PersistentViews{};
-        MiniEngineTemporalAATimings m_Timings;
+#endif
+        TemporalAATimings m_Timings;
         bool m_ReportedMissingComputePermutation = false;
+        bool m_ReportedMinimumFallback = false;
 #if UVSR_AA_DEVELOPER_OVERRIDES
         bool m_ReportedMissingPixelPermutation = false;
 #endif
 
         bool CreateBlendComputePermutation(
-            const MiniEngineTaaOptions& options,
+            const TemporalAaOptions& options,
             uint32_t exportSelective,
             uint32_t sampleResurrection,
-            const MiniEngineTaaStaticPerformanceOptions& performance,
+            const TemporalAaStaticPerformanceOptions& performance,
             nvrhi::ShaderHandle& shader,
             nvrhi::ComputePipelineHandle& pipeline);
 #if UVSR_AA_DEVELOPER_OVERRIDES
         bool CreateBlendPixelPermutation(
-            const MiniEngineTaaOptions& options,
+            const TemporalAaOptions& options,
             uint32_t exportSelective,
             bool earlyHistoryRejection,
             bool fusedOutput,

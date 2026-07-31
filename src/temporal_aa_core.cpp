@@ -65,7 +65,7 @@ namespace uvsr
         m_CommittedSequence = {};
         m_LastCommittedSequence = 0u;
         m_HasCommittedSequence = false;
-        m_ClearPending = true;
+        m_FirstWritePending = true;
 
         for (uint32_t slot = 0u; slot < 2u; ++slot)
         {
@@ -93,7 +93,7 @@ namespace uvsr
             m_Valid[0] ||
             m_Valid[1] ||
             m_AccumulationCount != 0u ||
-            !m_ClearPending;
+            !m_FirstWritePending;
         m_Valid = {};
         m_CommittedSequence = {};
         m_AccumulationCount = 0u;
@@ -101,30 +101,18 @@ namespace uvsr
         m_HasCommittedSequence = false;
         if (changed)
         {
-            m_ClearPending = true;
+            m_FirstWritePending = true;
             ++m_ResetCount;
         }
         return changed;
     }
 
-    bool TemporalHistoryState::PrepareForFirstUse(
-        nvrhi::ICommandList* commandList)
+    bool TemporalHistoryState::PrepareForFirstWrite()
     {
-        if (!m_ClearPending)
+        if (!m_FirstWritePending)
             return false;
 
-        for (uint32_t slot = 0u; slot < 2u; ++slot)
-        {
-            commandList->clearTextureFloat(
-                m_Color[slot],
-                nvrhi::AllSubresources,
-                nvrhi::Color(0.f));
-            commandList->clearTextureFloat(
-                m_Depth[slot],
-                nvrhi::AllSubresources,
-                nvrhi::Color(0.f));
-        }
-        m_ClearPending = false;
+        m_FirstWritePending = false;
         return true;
     }
 
@@ -158,8 +146,8 @@ namespace uvsr
         {
             // Physical contents do not need clearing here: validity is the
             // authority, and the new slot is fully overwritten before Commit.
-            // Preserve m_ClearPending so a sequence discontinuity does not
-            // introduce an unnecessary clear or reset count.
+            // Preserve m_FirstWritePending so a sequence discontinuity does
+            // not manufacture another reset count.
             m_Valid = {};
             m_CommittedSequence = {};
             m_AccumulationCount = 0u;
@@ -172,7 +160,7 @@ namespace uvsr
             m_MaximumAccumulation);
         m_LastCommittedSequence = sequenceIndex;
         m_HasCommittedSequence = true;
-        m_ClearPending = false;
+        m_FirstWritePending = false;
     }
 
     nvrhi::ITexture* TemporalHistoryState::Color(uint32_t slot) const
