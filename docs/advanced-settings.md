@@ -184,7 +184,11 @@ Options** surface for retained controls and the resolved policy overrides.
 
 - **Temporal Reconstructive** uses UVSR's temporal history, motion and jitter
   conventions, reverse-Z validation, disocclusion rejection, and rectification.
-- **Conservative Morphological** uses CMAA2 as a spatial presentation method.
+- **Conservative Morphological** uses CMAA2 as a full-resolution spatial
+  presentation method. Selecting it starts at Ultra: the `0.05` reference edge
+  threshold and full-color detector preserve isoluminant chromatic edges that
+  the faster luma detector can miss. The optional Intel extra-sharp mode remains
+  off because it preserves more jagged shape detail at the expense of AA.
 - **Multisample Reference** provides Low 2x, Medium 4x, High 8x, and Ultra 16x
   deferred MSAA.
 
@@ -194,8 +198,13 @@ one coherent closest reverse-Z surface per pixel and coverage-weights only that
 surface's signed correction back into the per-sample result.
 
 Temporal and Multisample presets leave CMAA2 off by default, so neither hides an
-extra full-screen morphology pass. CMAA2 can be selected after MSAA resolve or
-as temporal presentation morphology.
+extra full-screen morphology pass. In the normal renderer, explicitly selected
+CMAA2 classifies and blends the display-linear result after AgX, matching the
+visible edge domain instead of applying LDR thresholds to scene-linear HDR.
+The final presentation pass applies sRGB transfer and encoded-space dithering
+only after CMAA2, so quantization noise cannot perturb its marginal edge tests.
+The explicit tonemapperless comparison mode retains the reference HDR-range
+permutation because it has no bounded display image.
 
 Temporal quality bundles progress as follows:
 
@@ -268,8 +277,9 @@ flashlight's local planar shadow map.
 ### Screen-Space Directional Shadows
 
 Screen-Space Directional Shadows require deferred UVSR PBR and a primary
-directional light. The first-party path consumes the existing single-sample
-reverse-Z depth buffer and produces full-resolution directional visibility.
+directional light. The ray-coherent path consumes the existing single-sample
+reverse-Z depth buffer, shares depth reads along projected wavefronts, and
+produces full-resolution directional visibility.
 
 | Profile | Length | Shared Defaults |
 | --- | ---: | --- |
@@ -285,8 +295,9 @@ contrast `4`, and optional modes and diagnostics off without changing
 Custom settings include **Surface Thickness**, **Bilinear Threshold**, **Shadow
 Contrast**, compiled **Hard Shadow Samples** and **Fade-Out Samples**, **Ignore
 Edge Pixels**, **Precision Offset**, **Bilinear Offset Mode**, and **Early
-Out**. **Debug View** presents Occlusion, Trace Progress, or Ray Bounds as
-grayscale visibility.
+Out**. Early Out skips receivers on the configured depth bounds, normally sky,
+and stays disabled while debugging. **Debug View** presents Edge, Thread, or
+Wave diagnostics as grayscale output.
 
 ### Sparse Virtual Shadow Maps
 
@@ -359,11 +370,11 @@ When `flashlight_1` is selected, controls remain in this order: **Enabled (F)**,
 local planar shadow map and is independent of the directional techniques in
 **Shadows**. The 0 to 40 cm Camera Offset moves the emitter sideways while its
 beam converges on the camera aim at 6 m, exposing useful shadow parallax.
-The default camera-light profile is enabled with **Cast Shadows** and
-**Realistic Flashlight**: 600 cd, a 25 degree beam, 0.70 roundness, 0.60 edge
-softness, 30 m range, 20 cm camera offset, and `(1.00, 0.80, 0.65)` color. Its
-hotspot defaults are 0.40 size, 0.70 strength, 0.20 degree sway, and 0.05 s aim
-correction.
+The camera flashlight starts disabled. When enabled, its default profile uses
+**Cast Shadows** and **Realistic Flashlight**: 600 cd, a 25 degree beam, 0.70
+roundness, 0.60 edge softness, 30 m range, 20 cm camera offset, and
+`(1.00, 0.80, 0.65)` color. Its hotspot defaults are 0.40 size, 0.70 strength,
+0.20 degree sway, and 0.05 s aim correction.
 
 The slash interface uses `light.selected` to choose `flashlight_1`. Its
 dedicated `light.selected.flashlight.*` commands use the same bounds and reject
@@ -637,7 +648,7 @@ Keep using slash paths and actions for setup whenever that is faster than the
 menu. OG is session-only, affects presentation rather than renderer output, and
 does not change Amp as the normal launch default.
 
-This configuration stages 40 runtime shader blobs, compared with 77 blobs in
+This configuration stages 41 runtime shader blobs, compared with 78 blobs in
 the complete production build. It locks renderer-topology drawers to factory
 settings and omits Screen-Space Directional Shadows, SVSM, diagnostic CSM,
 CMAA2, non-default visibility, and developer shader families. A fresh tree

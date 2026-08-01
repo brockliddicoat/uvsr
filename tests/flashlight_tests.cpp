@@ -117,7 +117,7 @@ int main()
     assert(!ShouldSubmitFlashlight(0.f));
     assert(ShouldSubmitFlashlight(1.f));
 
-    assert(DefaultFlashlightEnabled);
+    assert(!DefaultFlashlightEnabled);
     assert(DefaultFlashlightSettings.realisticLens);
     assert(DefaultFlashlightSettings.castShadows);
     assert(std::string_view(FlashlightPublicName) ==

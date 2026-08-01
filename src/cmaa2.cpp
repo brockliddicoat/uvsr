@@ -91,13 +91,18 @@ namespace uvsr
         {
             log::error(
                 "Intel CMAA2 requires UVSR's single-sample "
-                "RGBA16F scene-color target");
+                "RGBA16F color target");
             return;
         }
+        const uint64_t pixelCount =
+            uint64_t(sceneDesc.width) * uint64_t(sceneDesc.height);
         if (sceneDesc.width >= (1u << 14u) ||
-            sceneDesc.height >= (1u << 14u))
+            sceneDesc.height >= (1u << 14u) ||
+            pixelCount > (uint64_t(1u) << 26u))
         {
-            // The pinned CMAA2 candidate list packs X and Y in 14 bits.
+            // The pinned shader packs X and Y in 14 bits and a deferred-item
+            // address in 26 bits. Accepting a larger dense list aliases the
+            // address with its header flags and silently corrupts edge work.
             log::error(
                 "Intel CMAA2 does not support a render extent of "
                 "%ux%u",
@@ -130,8 +135,11 @@ namespace uvsr
         // Use the official fully safe capacities rather than its optional
         // reduced-memory estimates. Extreme foliage/noise therefore cannot
         // silently drop candidates because a compact append list overflowed.
-        const uint64_t pixelCount =
-            uint64_t(m_Size.x) * uint64_t(m_Size.y);
+        // Deferred-location addresses cover every 2x2 item-head quad, so odd
+        // extents require each dimension to be rounded up independently.
+        const uint64_t deferredLocationCount =
+            uint64_t((sceneDesc.width + 1u) / 2u) *
+            uint64_t((sceneDesc.height + 1u) / 2u);
         m_ShapeCandidates = CreateStructuredBuffer(
             device,
             pixelCount,
@@ -144,7 +152,7 @@ namespace uvsr
             "CMAA2/DeferredItems");
         m_DeferredLocations = CreateStructuredBuffer(
             device,
-            (pixelCount + 3u) / 4u,
+            deferredLocationCount,
             sizeof(uint32_t),
             "CMAA2/DeferredLocations");
         m_Control = CreateRawBuffer(
@@ -177,47 +185,54 @@ namespace uvsr
         m_BindingLayout = device->createBindingLayout(layout);
         RebuildBindingSet(sceneColor);
 
-        for (uint32_t quality = 0u;
-            quality < c_QualityCount;
-            ++quality)
+        for (uint32_t colorRange = 0u;
+            colorRange < c_ColorRangeCount;
+            ++colorRange)
         {
-            std::vector<ShaderMacro> macros = {
-                { "CMAA2_STATIC_QUALITY_PRESET",
-                    std::to_string(quality) }
-            };
-            const auto createShader =
-                [&](const char* entryPoint)
+            for (uint32_t quality = 0u;
+                quality < c_QualityCount;
+                ++quality)
             {
-                return shaderFactory->CreateShader(
-                    "uvsr/cmaa2.hlsl",
-                    entryPoint,
-                    &macros,
-                    nvrhi::ShaderType::Compute);
-            };
-            nvrhi::ComputePipelineDesc pipeline;
-            pipeline.bindingLayouts = { m_BindingLayout };
+                std::vector<ShaderMacro> macros = {
+                    { "CMAA2_STATIC_QUALITY_PRESET",
+                        std::to_string(quality) },
+                    { "CMAA2_SUPPORT_HDR_COLOR_RANGE",
+                        std::to_string(colorRange) }
+                };
+                const auto createShader =
+                    [&](const char* entryPoint)
+                {
+                    return shaderFactory->CreateShader(
+                        "uvsr/cmaa2.hlsl",
+                        entryPoint,
+                        &macros,
+                        nvrhi::ShaderType::Compute);
+                };
+                nvrhi::ComputePipelineDesc pipeline;
+                pipeline.bindingLayouts = { m_BindingLayout };
 
-            pipeline.CS = createShader("EdgesColor2x2CS");
-            m_EdgePipelines[quality] =
-                pipeline.CS
-                    ? device->createComputePipeline(pipeline)
-                    : nullptr;
-            pipeline.CS = createShader("ProcessCandidatesCS");
-            m_CandidatePipelines[quality] =
-                pipeline.CS
-                    ? device->createComputePipeline(pipeline)
-                    : nullptr;
-            pipeline.CS =
-                createShader("DeferredColorApply2x2CS");
-            m_ApplyPipelines[quality] =
-                pipeline.CS
-                    ? device->createComputePipeline(pipeline)
-                    : nullptr;
-            pipeline.CS = createShader("ComputeDispatchArgsCS");
-            m_DispatchArgumentPipelines[quality] =
-                pipeline.CS
-                    ? device->createComputePipeline(pipeline)
-                    : nullptr;
+                pipeline.CS = createShader("EdgesColor2x2CS");
+                m_EdgePipelines[colorRange][quality] =
+                    pipeline.CS
+                        ? device->createComputePipeline(pipeline)
+                        : nullptr;
+                pipeline.CS = createShader("ProcessCandidatesCS");
+                m_CandidatePipelines[colorRange][quality] =
+                    pipeline.CS
+                        ? device->createComputePipeline(pipeline)
+                        : nullptr;
+                pipeline.CS =
+                    createShader("DeferredColorApply2x2CS");
+                m_ApplyPipelines[colorRange][quality] =
+                    pipeline.CS
+                        ? device->createComputePipeline(pipeline)
+                        : nullptr;
+                pipeline.CS = createShader("ComputeDispatchArgsCS");
+                m_DispatchArgumentPipelines[colorRange][quality] =
+                    pipeline.CS
+                        ? device->createComputePipeline(pipeline)
+                        : nullptr;
+            }
         }
 
         for (auto& stageQueries : m_TimerQueries)
@@ -242,16 +257,21 @@ namespace uvsr
         {
             return false;
         }
-        for (uint32_t quality = 0u;
-            quality < c_QualityCount;
-            ++quality)
+        for (uint32_t colorRange = 0u;
+            colorRange < c_ColorRangeCount;
+            ++colorRange)
         {
-            if (!m_EdgePipelines[quality] ||
-                !m_CandidatePipelines[quality] ||
-                !m_ApplyPipelines[quality] ||
-                !m_DispatchArgumentPipelines[quality])
+            for (uint32_t quality = 0u;
+                quality < c_QualityCount;
+                ++quality)
             {
-                return false;
+                if (!m_EdgePipelines[colorRange][quality] ||
+                    !m_CandidatePipelines[colorRange][quality] ||
+                    !m_ApplyPipelines[colorRange][quality] ||
+                    !m_DispatchArgumentPipelines[colorRange][quality])
+                {
+                    return false;
+                }
             }
         }
         return true;
@@ -403,7 +423,8 @@ namespace uvsr
     nvrhi::ITexture* Cmaa2Pass::Render(
         nvrhi::ICommandList* commandList,
         nvrhi::ITexture* sourceColor,
-        AntiAliasingQuality quality)
+        AntiAliasingQuality quality,
+        Cmaa2ColorRange colorRange)
     {
         AdvanceTimers();
         m_TimerActive.fill(false);
@@ -411,6 +432,9 @@ namespace uvsr
         const uint32_t qualityIndex = std::min(
             static_cast<uint32_t>(quality),
             c_QualityCount - 1u);
+        const uint32_t colorRangeIndex = std::min(
+            static_cast<uint32_t>(colorRange),
+            c_ColorRangeCount - 1u);
         if (!commandList ||
             !sourceColor ||
             !IsValid())
@@ -470,7 +494,8 @@ namespace uvsr
         }
 
         BeginStage(commandList, Stage::Edge);
-        state.pipeline = m_EdgePipelines[qualityIndex];
+        state.pipeline =
+            m_EdgePipelines[colorRangeIndex][qualityIndex];
         state.indirectParams = nullptr;
         commandList->setComputeState(state);
         // The official 16x16 input tile has a one-thread border and emits
@@ -483,7 +508,7 @@ namespace uvsr
         PublishUavWrites(commandList);
 
         state.pipeline =
-            m_DispatchArgumentPipelines[qualityIndex];
+            m_DispatchArgumentPipelines[colorRangeIndex][qualityIndex];
         commandList->setComputeState(state);
         commandList->dispatch(2u, 1u, 1u);
         nvrhi::utils::BufferUavBarrier(
@@ -497,7 +522,8 @@ namespace uvsr
         commandList->commitBarriers();
 
         BeginStage(commandList, Stage::Candidate);
-        state.pipeline = m_CandidatePipelines[qualityIndex];
+        state.pipeline =
+            m_CandidatePipelines[colorRangeIndex][qualityIndex];
         state.indirectParams = m_IndirectArguments;
         commandList->setComputeState(state);
         commandList->dispatchIndirect(0u);
@@ -510,7 +536,7 @@ namespace uvsr
         PublishUavWrites(commandList);
 
         state.pipeline =
-            m_DispatchArgumentPipelines[qualityIndex];
+            m_DispatchArgumentPipelines[colorRangeIndex][qualityIndex];
         state.indirectParams = nullptr;
         commandList->setComputeState(state);
         commandList->dispatch(1u, 2u, 1u);
@@ -525,7 +551,8 @@ namespace uvsr
         commandList->commitBarriers();
 
         BeginStage(commandList, Stage::Apply);
-        state.pipeline = m_ApplyPipelines[qualityIndex];
+        state.pipeline =
+            m_ApplyPipelines[colorRangeIndex][qualityIndex];
         state.indirectParams = m_IndirectArguments;
         commandList->setComputeState(state);
         commandList->dispatchIndirect(0u);

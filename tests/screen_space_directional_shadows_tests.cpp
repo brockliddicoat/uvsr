@@ -1,6 +1,6 @@
 #include "screen_space_directional_shadows.h"
+#include "bend_sss_cpu.h"
 
-#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -77,8 +77,7 @@ namespace
         settings.usePrecisionOffset = true;
         settings.bilinearSamplingOffsetMode = true;
         settings.useEarlyOut = true;
-        settings.debugView =
-            ScreenSpaceShadowDebugView::RayBounds;
+        settings.debugView = ScreenSpaceShadowDebugView::Wave;
 
         ApplyScreenSpaceShadowPreset(
             settings,
@@ -102,352 +101,199 @@ namespace
         assert(settings.preset ==
             ScreenSpaceShadowPreset::MaximumValidation);
 
+        uint32_t variantCount = 0u;
         for (uint32_t reach : ScreenSpaceShadowTraceReaches)
         {
             settings.length = ScreenSpaceShadowLength(reach);
-            for (uint32_t hard :
-                ScreenSpaceShadowHardSampleCounts)
+            for (uint32_t hard : ScreenSpaceShadowHardSampleCounts)
             {
                 settings.hardShadowSamples = hard;
-                for (uint32_t fade :
-                    ScreenSpaceShadowFadeSampleCounts)
+                for (uint32_t fade : ScreenSpaceShadowFadeSampleCounts)
                 {
                     settings.fadeOutSamples = fade;
                     assert(
                         IsScreenSpaceShadowConfigurationSupported(
                             settings));
+                    ++variantCount;
                 }
             }
         }
+        assert(variantCount == 45u);
 
         settings.hardShadowSamples = 3u;
         assert(
             !IsScreenSpaceShadowConfigurationSupported(settings));
     }
 
-    void TestProjectiveDepthSlope()
+    void AssertDispatchList(
+        const std::array<float, 4>& projectedLight,
+        const std::array<int, 2>& viewport)
     {
-        constexpr double scaleX = 960.0;
-        constexpr double scaleY = -540.0;
-        constexpr double epsilon = 1e-11;
+        float light[4] = {
+            projectedLight[0],
+            projectedLight[1],
+            projectedLight[2],
+            projectedLight[3]
+        };
+        int viewportSize[2] = {
+            viewport[0],
+            viewport[1]
+        };
+        int minimumBounds[2] = { 0, 0 };
+        int maximumBounds[2] = {
+            viewport[0],
+            viewport[1]
+        };
 
-        for (int caseIndex = 0; caseIndex < 32; ++caseIndex)
+        const Bend::DispatchList list = Bend::BuildDispatchList(
+            light,
+            viewportSize,
+            minimumBounds,
+            maximumBounds,
+            false,
+            64);
+        assert(list.DispatchCount >= 1);
+        assert(list.DispatchCount <= 8);
+        assert(list.LightCoordinate_Shader[3] ==
+            (projectedLight[3] > 0.f ? 1.f : -1.f));
+        for (float coordinate : list.LightCoordinate_Shader)
+            assert(std::isfinite(coordinate));
+
+        for (int index = 0; index < list.DispatchCount; ++index)
         {
-            const double receiverW =
-                0.8 + 0.11 * double(caseIndex + 1);
-            const double receiverX =
-                (-0.7 + 0.041 * double(caseIndex)) * receiverW;
-            const double receiverY =
-                (0.5 - 0.029 * double(caseIndex)) * receiverW;
-            const double receiverDepth =
-                0.08 + 0.021 * double(caseIndex);
-            const double receiverZ =
-                receiverDepth * receiverW;
-
-            const double directionX =
-                -0.45 + 0.017 * double(caseIndex);
-            const double directionY =
-                0.31 - 0.013 * double(caseIndex);
-            const double directionZ =
-                -0.12 + 0.009 * double(caseIndex);
-            const double directionW =
-                -0.07 + 0.004 * double(caseIndex);
-
-            const double receiverNdcX =
-                receiverX / receiverW;
-            const double receiverNdcY =
-                receiverY / receiverW;
-            const double tangentX =
-                (directionX -
-                    receiverNdcX * directionW) *
-                scaleX;
-            const double tangentY =
-                (directionY -
-                    receiverNdcY * directionW) *
-                scaleY;
-            const double tangentMajorLength =
-                std::max(
-                    std::abs(tangentX),
-                    std::abs(tangentY));
-            assert(tangentMajorLength > epsilon);
-
-            const double directionPixelX =
-                tangentX / tangentMajorLength;
-            const double directionPixelY =
-                tangentY / tangentMajorLength;
-            const double depthPerStep =
-                (directionZ -
-                    receiverDepth * directionW) /
-                tangentMajorLength;
-
-            const double rayParameter =
-                0.05 + 0.011 * double(caseIndex);
-            const double exactW =
-                receiverW + rayParameter * directionW;
-            assert(std::abs(exactW) > epsilon);
-            const double exactNdcX =
-                (receiverX +
-                    rayParameter * directionX) /
-                exactW;
-            const double exactNdcY =
-                (receiverY +
-                    rayParameter * directionY) /
-                exactW;
-            const double exactDepth =
-                (receiverZ +
-                    rayParameter * directionZ) /
-                exactW;
-            const double pixelDeltaX =
-                (exactNdcX - receiverNdcX) * scaleX;
-            const double pixelDeltaY =
-                (exactNdcY - receiverNdcY) * scaleY;
-            const bool xMajor =
-                std::abs(directionPixelX) >=
-                std::abs(directionPixelY);
-            const double signedStepDistance = xMajor
-                ? pixelDeltaX / directionPixelX
-                : pixelDeltaY / directionPixelY;
-            const double predictedDepth =
-                receiverDepth +
-                signedStepDistance * depthPerStep;
-            assert(std::abs(predictedDepth - exactDepth) < epsilon);
+            const Bend::DispatchData& dispatch = list.Dispatch[index];
+            assert(dispatch.WaveCount[0] > 0);
+            assert(dispatch.WaveCount[1] > 0);
+            assert(dispatch.WaveCount[2] > 0);
         }
     }
 
-    void TestMajorAxisDenseRaster()
+    void TestReleasedCpuDispatchContract()
     {
-        constexpr std::array<std::array<double, 2>, 12>
-            tangents = {{
-                {{ 1.0, 0.0 }},
-                {{ 1.0, 0.25 }},
-                {{ 1.0, 0.5 }},
-                {{ 1.0, 1.0 }},
-                {{ -1.0, 0.25 }},
-                {{ -1.0, -1.0 }},
-                {{ 0.0, 1.0 }},
-                {{ 0.25, 1.0 }},
-                {{ 0.5, 1.0 }},
-                {{ 1.0, -1.0 }},
-                {{ 0.25, -1.0 }},
-                {{ -1.0, -0.5 }}
-            }};
+        constexpr std::array<std::array<float, 4>, 5> projectedLights = {{
+            {{ 0.25f, -0.4f, 0.5f, 1.f }},
+            {{ 0.25f, -0.4f, 0.5f, -1.f }},
+            {{ 500.f, -250.f, 0.5f, 1.f }},
+            {{ -0.2f, 0.7f, -0.1f, 1e-8f }},
+            {{ -0.2f, 0.7f, -0.1f, -1e-8f }}
+        }};
+        constexpr std::array<std::array<int, 2>, 2> viewports = {{
+            {{ 1920, 1080 }},
+            {{ 1901, 1069 }}
+        }};
 
-        for (const auto& tangent : tangents)
+        for (const auto& viewport : viewports)
         {
-            const double majorLength = std::max(
-                std::abs(tangent[0]),
-                std::abs(tangent[1]));
-            const double stepX = tangent[0] / majorLength;
-            const double stepY = tangent[1] / majorLength;
-            const bool xMajor =
-                std::abs(stepX) >= std::abs(stepY);
-            const int majorSign =
-                (xMajor ? stepX : stepY) < 0.0 ? -1 : 1;
-
-            for (const uint32_t reach :
-                ScreenSpaceShadowTraceReaches)
-            {
-                int previousMajor = 200;
-                for (uint32_t sampleIndex = 0u;
-                    sampleIndex < reach;
-                    ++sampleIndex)
-                {
-                    const double distance =
-                        double(sampleIndex + 1u);
-                    const int rasterX = int(std::floor(
-                        200.5 + stepX * distance - 0.5));
-                    const int rasterY = int(std::floor(
-                        200.5 + stepY * distance - 0.5));
-                    const int rasterMajor =
-                        xMajor ? rasterX : rasterY;
-                    assert(
-                        rasterMajor ==
-                        previousMajor + majorSign);
-                    previousMajor = rasterMajor;
-                }
-                assert(
-                    std::abs(previousMajor - 200) ==
-                    int(reach));
-            }
+            for (const auto& projectedLight : projectedLights)
+                AssertDispatchList(projectedLight, viewport);
         }
     }
 
-    void TestMinorAxisInterpolationContract()
+    void TestSourceAndLicenseContract(
+        const std::filesystem::path& repositoryRoot)
     {
-        const auto interpolationWeight = [](
-            double sampleMinorCoordinate)
-        {
-            const double grid =
-                sampleMinorCoordinate - 0.5;
-            return grid - std::floor(grid);
-        };
-        assert(std::abs(
-            interpolationWeight(10.5) - 0.0) < 1e-12);
-        assert(std::abs(
-            interpolationWeight(10.75) - 0.25) < 1e-12);
-        assert(std::abs(
-            interpolationWeight(11.0) - 0.5) < 1e-12);
+        const std::filesystem::path sourceDirectory =
+            repositoryRoot / "src";
+        const std::filesystem::path upstreamDirectory =
+            repositoryRoot / "third_party" / "bend_sss" / "upstream";
 
-        const auto interpolate = [](
-            double primary,
-            double neighbor,
-            double weight)
-        {
-            return primary +
-                (neighbor - primary) * weight;
-        };
-        assert(std::abs(
-            interpolate(0.2, 0.6, 0.25) - 0.3) < 1e-12);
-
-        const auto isEdge = [](
-            double primary,
-            double neighbor,
-            double farDepth,
-            double threshold)
-        {
-            const double remaining = std::min(
-                std::abs(primary - farDepth),
-                std::abs(neighbor - farDepth));
-            return std::abs(neighbor - primary) >
-                threshold * remaining;
-        };
-        assert(!isEdge(0.50, 0.51, 0.0, 0.10));
-        assert(isEdge(0.50, 0.10, 0.0, 0.10));
-
-        const auto pointFallback = [](
-            double primary,
-            double neighbor,
-            double weight)
-        {
-            return weight < 0.5 ? primary : neighbor;
-        };
-        assert(pointFallback(0.2, 0.8, 0.49) == 0.2);
-        assert(pointFallback(0.2, 0.8, 0.50) == 0.8);
-    }
-
-    void TestDenseTraceContract()
-    {
-        for (uint32_t reach : ScreenSpaceShadowTraceReaches)
-        {
-            assert(reach >= 1u);
-            uint32_t lastDistance = 0u;
-            for (uint32_t sampleIndex = 0u;
-                sampleIndex < reach;
-                ++sampleIndex)
-            {
-                const uint32_t distance = sampleIndex + 1u;
-                assert(distance == lastDistance + 1u);
-                lastDistance = distance;
-            }
-            assert(lastDistance == reach);
-
-            constexpr uint32_t hardCount = 4u;
-            constexpr uint32_t fadeCount = 8u;
-            const uint32_t bodyCount =
-                reach - hardCount - fadeCount;
-            assert(
-                hardCount + bodyCount + fadeCount ==
-                reach);
-            assert(reach - fadeCount >= hardCount);
-        }
-
-        const auto remainingDepth = [](
-            float sceneDepth,
-            bool reverseDepth)
-        {
-            const float farDepth = reverseDepth ? 0.f : 1.f;
-            return std::abs(sceneDepth - farDepth);
-        };
-        assert(std::abs(
-            remainingDepth(0.2f, true) -
-            remainingDepth(0.8f, false)) < 1e-6f);
-        assert(std::abs(
-            remainingDepth(0.01f, true) * 0.005f -
-            0.00005f) < 1e-8f);
-        assert(std::abs(
-            remainingDepth(0.8f, true) * 0.005f -
-            0.004f) < 1e-8f);
-
-        const auto precisionOffset = [](
-            float receiverDepth,
-            bool reverseDepth)
-        {
-            const float farDepth = reverseDepth ? 0.f : 1.f;
-            return receiverDepth +
-                (receiverDepth - farDepth) / 65535.f;
-        };
-        assert(precisionOffset(0.5f, true) > 0.5f);
-        assert(precisionOffset(0.5f, false) < 0.5f);
-    }
-
-    void TestShaderSourceContract(
-        const std::filesystem::path& sourceDirectory)
-    {
         const std::string shader = ReadTextFile(
             sourceDirectory /
             "screen_space_directional_shadows_cs.hlsl");
-        assert(!shader.empty());
-        assert(shader.find(
-            "kMaximumTraceSamples = 960u") !=
+        const std::string shaderConfig = ReadTextFile(
+            sourceDirectory /
+            "screen_space_directional_shadows_shaders.cfg");
+        const std::string adapter = ReadTextFile(
+            sourceDirectory /
+            "screen_space_directional_shadows.cpp");
+        const std::string cpuSource = ReadTextFile(
+            upstreamDirectory / "bend_sss_cpu.h");
+        const std::string gpuSource = ReadTextFile(
+            upstreamDirectory / "bend_sss_gpu.h");
+        const std::string license = ReadTextFile(
+            repositoryRoot / "third_party" / "licenses" /
+            "Apache-2.0.txt");
+        const std::string attributes = ReadTextFile(
+            repositoryRoot / ".gitattributes");
+        const std::string cmake = ReadTextFile(
+            repositoryRoot / "CMakeLists.txt");
+
+        assert(shader.find("#define WAVE_SIZE 64") != std::string::npos);
+        assert(shader.find("bend_sss_gpu.h") != std::string::npos);
+        assert(shader.find("[numthreads(WAVE_SIZE, 1, 1)]") !=
             std::string::npos);
-        assert(shader.find(
-            "g_Shadow.traceSampleCount") !=
+        assert(shader.find("WriteScreenSpaceShadow(") !=
             std::string::npos);
-        assert(shader.find(
-            "float tangentMajorLength") !=
+        assert(shader.find("kTraceChunkSamples") == std::string::npos);
+        assert(shader.find("[numthreads(8, 8, 1)]") == std::string::npos);
+
+        assert(shaderConfig.find(
+            "SAMPLE_COUNT={60,120,240,480,960}") !=
             std::string::npos);
-        assert(shader.find("rsqrt(tangentLengthSquared)") ==
+        assert(shaderConfig.find(
+            "HARD_SHADOW_SAMPLES={0,4,8}") !=
             std::string::npos);
-        assert(shader.find(
-            "kTraceChunkSamples = 32u") !=
-            std::string::npos);
-        assert(shader.find(
-            "groupshared float s_DepthCache") !=
-            std::string::npos);
-        assert(shader.find(
-            "WaveActiveSum(localDirectReadCount)") !=
-            std::string::npos);
-        assert(shader.find(
-            "cachePixelCount * 4u <=") !=
-            std::string::npos);
-        assert(shader.find(
-            "samplePosition - 0.5f") !=
-            std::string::npos);
-        assert(shader.find(
-            "lerp(") !=
-            std::string::npos);
-        assert(shader.find(
-            "uint fadeStart = sampleCount - fadeCount;") !=
-            std::string::npos);
-        assert(shader.find(
-            "softEvidence * 0.25f") !=
-            std::string::npos);
-        assert(shader.find(
-            "g_Shadow.surfaceThickness * remainingDepth") !=
-            std::string::npos);
-        assert(shader.find(
-            "g_Shadow.depthDiscontinuityThreshold *") !=
-            std::string::npos);
-        assert(shader.find(
-            "(receiverDepth - GetFarDepth()) / 65535.0f") !=
-            std::string::npos);
-        assert(shader.find(
-            "samplePixel + traceAxis") !=
-            std::string::npos);
-        assert(shader.find(
-            "g_Shadow.debugView == 0u") !=
+        assert(shaderConfig.find(
+            "FADE_OUT_SAMPLES={0,8,16}") !=
             std::string::npos);
 
-        const size_t mainOffset = shader.find("void main(");
-        const size_t firstBarrier = shader.find(
-            "GroupMemoryBarrierWithGroupSync()",
-            mainOffset);
-        assert(mainOffset != std::string::npos);
-        assert(firstBarrier != std::string::npos);
-        assert(shader.substr(
-            mainOffset,
-            firstBarrier - mainOffset).find("return;") ==
+        assert(adapter.find("Bend::BuildDispatchList(") !=
             std::string::npos);
+        assert(adapter.find(
+            "m_PointBorderSamplers[reverseDepth ? 0u : 1u]") !=
+            std::string::npos);
+        assert(adapter.find("clearTextureFloat(") != std::string::npos);
+        assert(adapter.find("lightDirectionLengthSquared <= 1e-12f") !=
+            std::string::npos);
+        assert(adapter.find("ScreenSpaceShadowDebugView::Edge") !=
+            std::string::npos);
+        assert(adapter.find("ScreenSpaceShadowDebugView::Thread") !=
+            std::string::npos);
+        assert(adapter.find("ScreenSpaceShadowDebugView::Wave") !=
+            std::string::npos);
+        assert(adapter.find("Bend Screen-Space") == std::string::npos);
+
+        const size_t dispatchLoop = adapter.find(
+            "for (int dispatchIndex = 0;");
+        const size_t writeBuffer = adapter.find(
+            "commandList->writeBuffer(",
+            dispatchLoop);
+        const size_t setComputeState = adapter.find(
+            "commandList->setComputeState(state);",
+            dispatchLoop);
+        assert(dispatchLoop != std::string::npos);
+        assert(writeBuffer != std::string::npos);
+        assert(setComputeState != std::string::npos);
+        assert(writeBuffer < setComputeState);
+
+        constexpr const char* copyrightNotice =
+            "Copyright 2023 Sony Interactive Entertainment.";
+        assert(cpuSource.find(copyrightNotice) != std::string::npos);
+        assert(gpuSource.find(copyrightNotice) != std::string::npos);
+        assert(cpuSource.find("Licensed under the Apache License") !=
+            std::string::npos);
+        assert(gpuSource.find("Licensed under the Apache License") !=
+            std::string::npos);
+        assert(std::filesystem::file_size(
+            upstreamDirectory / "bend_sss_cpu.h") == 12335u);
+        assert(std::filesystem::file_size(
+            upstreamDirectory / "bend_sss_gpu.h") == 25289u);
+
+        assert(license.find("Apache License") != std::string::npos);
+        assert(license.find("4. Redistribution.") != std::string::npos);
+        assert(license.find("END OF TERMS AND CONDITIONS") !=
+            std::string::npos);
+        assert(attributes.find(
+            "third_party/bend_sss/upstream/bend_sss_cpu.h -text -whitespace") !=
+            std::string::npos);
+        assert(attributes.find(
+            "third_party/bend_sss/upstream/bend_sss_gpu.h -text -whitespace") !=
+            std::string::npos);
+        assert(attributes.find(
+            "third_party/licenses/Apache-2.0.txt -text -whitespace") !=
+            std::string::npos);
+        assert(cmake.find(
+            "licenses/Apache-2.0.txt") != std::string::npos);
     }
 }
 
@@ -457,10 +303,7 @@ int main(int argc, char** argv)
     TestDefaultSettings();
     TestPresetResetAndEnableIndependence();
     TestLengthPresetsAndSupportedConfigurations();
-    TestProjectiveDepthSlope();
-    TestMajorAxisDenseRaster();
-    TestMinorAxisInterpolationContract();
-    TestDenseTraceContract();
-    TestShaderSourceContract(argv[1]);
+    TestReleasedCpuDispatchContract();
+    TestSourceAndLicenseContract(argv[1]);
     return 0;
 }

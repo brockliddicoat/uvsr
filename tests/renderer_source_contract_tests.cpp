@@ -633,6 +633,18 @@ int main(int argc, char** argv)
         commandLine,
         "aaBenchmark.settings.algorithmOverrides.rectification",
         "AA rectification benchmark override routing");
+    passed &= ExpectContains(
+        commandLine,
+        "bool aaQualityExplicit = false;",
+        "AA command-line quality-order tracking");
+    passed &= ExpectContains(
+        commandLine,
+        "if (aaQualityExplicit)",
+        "AA explicit quality preservation across method options");
+    passed &= ExpectContains(
+        commandLine,
+        "aaQualityExplicit = true;",
+        "AA command-line explicit quality recording");
 
     const std::string_view aaMotionBenchmark = ExtractSection(
         viewer,

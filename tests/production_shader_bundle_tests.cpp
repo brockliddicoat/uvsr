@@ -103,6 +103,7 @@ namespace
         };
         constexpr const char* appShaders[] = {
             "agx_tonemapping_ps",
+            "display_output_ps",
             "backdrop_blur_ps",
             "screen_space_directional_shadows_cs",
             "screen_space_directional_shadows_debug_ps",
@@ -315,16 +316,20 @@ int main(int argc, char** argv)
         "the reduced topology and compact minimum path, and omit retired "
         "experiments");
     passed &= Check(
-        CountShaderPermutations(config) == 601u &&
-            CountShaderPermutations(developerConfig) == 2811u,
-        "shader catalogs must contain 601 production and 2,811 developer "
+        CountShaderPermutations(config) == 618u &&
+            CountShaderPermutations(developerConfig) == 2828u,
+        "shader catalogs must contain 618 production and 2,828 developer "
         "permutations with the temporal cost paths");
     passed &= Check(
         CountOccurrences(config, "cmaa2.hlsl -T cs") == 4u &&
             CountOccurrences(
                 config,
-                "CMAA2_STATIC_QUALITY_PRESET={0,1,2,3}") == 4u,
-        "production must retain all four official CMAA2 stages for Low, Medium, High, and Ultra");
+                "CMAA2_STATIC_QUALITY_PRESET={0,1,2,3}") == 4u &&
+            CountOccurrences(
+                config,
+                "CMAA2_SUPPORT_HDR_COLOR_RANGE={0,1}") == 4u,
+        "production must retain all four official CMAA2 stages across Low, "
+        "Medium, High, and Ultra display/HDR permutations");
     passed &= Check(
         CountOccurrences(
             config,
@@ -365,8 +370,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 77u,
-        "production shader contract must enumerate exactly 77 files");
+        expectedFiles.size() == 78u,
+        "production shader contract must enumerate exactly 78 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

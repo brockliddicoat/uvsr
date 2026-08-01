@@ -7,30 +7,26 @@
 #include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <string>
+#include <vector>
 
 using namespace donut;
 using namespace donut::engine;
 using namespace donut::math;
 
-#include <donut/shaders/view_cb.h>
 #include "screen_space_directional_shadows_cb.h"
+#include "bend_sss_cpu.h"
 
-static_assert(
-    sizeof(ScreenSpaceDirectionalShadowConstants) == 96u,
+static_assert(sizeof(ScreenSpaceDirectionalShadowConstants) == 96u,
     "Directional-shadow constants must occupy six HLSL registers.");
-static_assert(
-    offsetof(
-        ScreenSpaceDirectionalShadowConstants,
-        textureSize) == 32u,
-    "Directional-shadow packing drifted before textureSize.");
-static_assert(
-    offsetof(
-        ScreenSpaceDirectionalShadowConstants,
-        hardShadowSamples) == 64u,
-    "Directional-shadow packing drifted before sample controls.");
+static_assert(offsetof(ScreenSpaceDirectionalShadowConstants, waveOffset) == 16u,
+    "Directional-shadow packing drifted before waveOffset.");
+static_assert(offsetof(ScreenSpaceDirectionalShadowConstants, depthBounds) == 64u,
+    "Directional-shadow packing drifted before depthBounds.");
 
 namespace uvsr
 {
@@ -84,40 +80,23 @@ namespace uvsr
         m_BindingLayout = device->createBindingLayout(layoutDesc);
 
         nvrhi::BufferDesc bufferDesc;
-        bufferDesc.byteSize =
-            sizeof(ScreenSpaceDirectionalShadowConstants);
-        bufferDesc.debugName =
-            "ScreenSpaceDirectionalShadow/Constants";
+        bufferDesc.byteSize = sizeof(ScreenSpaceDirectionalShadowConstants);
+        bufferDesc.debugName = "ScreenSpaceDirectionalShadowConstants";
         bufferDesc.isConstantBuffer = true;
         bufferDesc.isVolatile = true;
-        bufferDesc.maxVersions =
-            engine::c_MaxRenderPassConstantBufferVersions;
+        bufferDesc.maxVersions = engine::c_MaxRenderPassConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(bufferDesc);
 
-        m_PointClampSampler = device->createSampler(
+        m_PointBorderSamplers[0] = device->createSampler(
             nvrhi::SamplerDesc()
                 .setAllFilters(false)
-                .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp));
-
-        m_TraceShader = shaderFactory->CreateShader(
-            "uvsr/screen_space_directional_shadows_cs.hlsl",
-            "main",
-            nullptr,
-            nvrhi::ShaderType::Compute);
-        if (m_TraceShader)
-        {
-            nvrhi::ComputePipelineDesc pipelineDesc;
-            pipelineDesc.CS = m_TraceShader;
-            pipelineDesc.bindingLayouts = { m_BindingLayout };
-            m_TracePipeline =
-                device->createComputePipeline(pipelineDesc);
-        }
-        if (!m_TracePipeline)
-        {
-            m_Timings.supported = false;
-            log::error(
-                "The screen-space directional-shadow trace shader is unavailable.");
-        }
+                .setAllAddressModes(nvrhi::SamplerAddressMode::Border)
+                .setBorderColor(0.f));
+        m_PointBorderSamplers[1] = device->createSampler(
+            nvrhi::SamplerDesc()
+                .setAllFilters(false)
+                .setAllAddressModes(nvrhi::SamplerAddressMode::Border)
+                .setBorderColor(1.f));
 
         for (nvrhi::TimerQueryHandle& query : m_TimerQueries)
             query = device->createTimerQuery();
@@ -132,12 +111,20 @@ namespace uvsr
         debugLayoutDesc.bindings = {
             nvrhi::BindingLayoutItem::Texture_SRV(0)
         };
-        m_DebugBindingLayout =
-            device->createBindingLayout(debugLayoutDesc);
+        m_DebugBindingLayout = device->createBindingLayout(debugLayoutDesc);
+
+        ScreenSpaceDirectionalShadowSettings defaultSettings;
+        if (!EnsurePipeline(defaultSettings))
+        {
+            m_Timings.supported = false;
+            log::error(
+                "The default screen-space directional-shadow shader variant is unavailable.");
+        }
     }
 
     bool ScreenSpaceDirectionalShadowPass::EnsureResources(
-        nvrhi::ITexture* depth)
+        nvrhi::ITexture* depth,
+        bool reverseDepth)
     {
         if (!depth || !m_Timings.supported)
             return false;
@@ -169,40 +156,101 @@ namespace uvsr
             outputDesc.format = nvrhi::Format::R8_UNORM;
             outputDesc.dimension = nvrhi::TextureDimension::Texture2D;
             outputDesc.isUAV = true;
-            outputDesc.debugName =
-                "Screen-Space Directional Shadow Visibility";
+            outputDesc.debugName = "Screen-Space Directional Shadow Visibility";
             outputDesc.enableAutomaticStateTracking(
                 nvrhi::ResourceStates::ShaderResource);
             m_NearVisibility = m_Device->createTexture(outputDesc);
             m_BindingSet = nullptr;
             m_DebugBindingSet = nullptr;
             m_Timings.outputTextureBytes =
-                uint64_t(depthDesc.width) *
-                uint64_t(depthDesc.height);
+                uint64_t(depthDesc.width) * uint64_t(depthDesc.height);
         }
 
         if (!m_NearVisibility)
             return false;
 
-        if (!m_BindingSet || m_BoundDepth != depth)
+        if (!m_BindingSet ||
+            m_BoundDepth != depth ||
+            m_BoundReverseDepth != reverseDepth)
         {
             nvrhi::BindingSetDesc bindings;
             bindings.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(
-                    0, m_ConstantBuffer),
+                nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
                 nvrhi::BindingSetItem::Texture_SRV(0, depth),
-                nvrhi::BindingSetItem::Texture_UAV(
-                    0, m_NearVisibility),
+                nvrhi::BindingSetItem::Texture_UAV(0, m_NearVisibility),
                 nvrhi::BindingSetItem::Sampler(
-                    0, m_PointClampSampler)
+                    0, m_PointBorderSamplers[reverseDepth ? 0u : 1u])
             };
             m_BindingSet =
                 m_Device->createBindingSet(bindings, m_BindingLayout);
             m_BoundDepth = depth;
+            m_BoundReverseDepth = reverseDepth;
         }
 
         m_ReportedInvalidInput = false;
         return bool(m_BindingSet);
+    }
+
+    ScreenSpaceDirectionalShadowPass::Pipeline*
+        ScreenSpaceDirectionalShadowPass::EnsurePipeline(
+            const ScreenSpaceDirectionalShadowSettings& settings)
+    {
+        if (!m_Timings.supported ||
+            !IsScreenSpaceShadowConfigurationSupported(settings))
+        {
+            if (!m_ReportedInvalidVariant)
+            {
+                log::error(
+                    "Requested screen-space directional-shadow variant is not compiled: %u samples, %u hard, %u fade.",
+                    GetScreenSpaceShadowTraceReach(settings.length),
+                    settings.hardShadowSamples,
+                    settings.fadeOutSamples);
+                m_ReportedInvalidVariant = true;
+            }
+            return nullptr;
+        }
+
+        const int lengthIndex = FindScreenSpaceShadowSupportedValue(
+            ScreenSpaceShadowTraceReaches,
+            GetScreenSpaceShadowTraceReach(settings.length));
+        const int hardIndex = FindScreenSpaceShadowSupportedValue(
+            ScreenSpaceShadowHardSampleCounts,
+            settings.hardShadowSamples);
+        const int fadeIndex = FindScreenSpaceShadowSupportedValue(
+            ScreenSpaceShadowFadeSampleCounts,
+            settings.fadeOutSamples);
+        assert(lengthIndex >= 0 && hardIndex >= 0 && fadeIndex >= 0);
+
+        Pipeline& pipeline =
+            m_Pipelines[size_t(lengthIndex)][size_t(hardIndex)]
+                [size_t(fadeIndex)];
+        if (!pipeline.pso)
+        {
+            std::vector<ShaderMacro> macros = {
+                { "SAMPLE_COUNT", std::to_string(
+                    GetScreenSpaceShadowTraceReach(settings.length)) },
+                { "HARD_SHADOW_SAMPLES", std::to_string(
+                    settings.hardShadowSamples) },
+                { "FADE_OUT_SAMPLES", std::to_string(
+                    settings.fadeOutSamples) }
+            };
+            pipeline.shader = m_ShaderFactory->CreateShader(
+                "uvsr/screen_space_directional_shadows_cs.hlsl",
+                "main",
+                &macros,
+                nvrhi::ShaderType::Compute);
+            if (!pipeline.shader)
+                return nullptr;
+
+            nvrhi::ComputePipelineDesc pipelineDesc;
+            pipelineDesc.CS = pipeline.shader;
+            pipelineDesc.bindingLayouts = { m_BindingLayout };
+            pipeline.pso =
+                m_Device->createComputePipeline(pipelineDesc);
+        }
+
+        m_ReportedInvalidVariant = false;
+        return pipeline.pso ? &pipeline : nullptr;
     }
 
     void ScreenSpaceDirectionalShadowPass::AdvanceTimer()
@@ -243,13 +291,12 @@ namespace uvsr
         m_TimerActive = false;
     }
 
-    ScreenSpaceDirectionalShadowResult
-        ScreenSpaceDirectionalShadowPass::Render(
-            nvrhi::ICommandList* commandList,
-            const ScreenSpaceDirectionalShadowSettings& settings,
-            const IView& view,
-            nvrhi::ITexture* depth,
-            const DirectionalLight* light)
+    ScreenSpaceDirectionalShadowResult ScreenSpaceDirectionalShadowPass::Render(
+        nvrhi::ICommandList* commandList,
+        const ScreenSpaceDirectionalShadowSettings& settings,
+        const IView& view,
+        nvrhi::ITexture* depth,
+        const DirectionalLight* light)
     {
         AdvanceTimer();
         m_Timings.active = false;
@@ -268,30 +315,17 @@ namespace uvsr
             return {};
         }
 
-        if (!IsScreenSpaceShadowConfigurationSupported(settings))
-        {
-            if (!m_ReportedInvalidConfiguration)
-            {
-                log::error(
-                    "Unsupported screen-space directional-shadow configuration: %u-pixel reach, %u hard samples, %u fade samples.",
-                    GetScreenSpaceShadowTraceReach(settings.length),
-                    settings.hardShadowSamples,
-                    settings.fadeOutSamples);
-                m_ReportedInvalidConfiguration = true;
-            }
-            ++m_TimerFrame;
-            return {};
-        }
-        m_ReportedInvalidConfiguration = false;
-
-        if (!EnsureResources(depth))
+        const bool reverseDepth = view.IsReverseDepth();
+        Pipeline* pipeline = EnsurePipeline(settings);
+        if (!pipeline ||
+            !EnsureResources(depth, reverseDepth))
         {
             ++m_TimerFrame;
             return {};
         }
 
-        // Directional lights store propagation direction. Rays travel from
-        // the receiver toward the light, so negate it before projection.
+        // Donut stores directional-light propagation. The vendored tracer marches
+        // toward the projected light, so convert to receiver-to-light here.
         const float3 lightDirection =
             float3(light->GetDirection());
         const float lightDirectionLengthSquared =
@@ -317,54 +351,103 @@ namespace uvsr
             return {};
         }
 
-        PlanarViewConstants planarView{};
-        view.FillPlanarViewConstants(planarView);
         const nvrhi::TextureDesc& depthDesc = depth->getDesc();
+        float lightProjection[4] = {
+            projectedLight.x,
+            projectedLight.y,
+            projectedLight.z,
+            projectedLight.w
+        };
+        int viewportSize[2] = {
+            int(depthDesc.width),
+            int(depthDesc.height)
+        };
+        int minimumBounds[2] = { 0, 0 };
+        int maximumBounds[2] = {
+            int(depthDesc.width),
+            int(depthDesc.height)
+        };
+        const Bend::DispatchList dispatchList = Bend::BuildDispatchList(
+            lightProjection,
+            viewportSize,
+            minimumBounds,
+            maximumBounds,
+            false,
+            64);
 
-        ScreenSpaceDirectionalShadowConstants constants{};
-        constants.projectedLight = projectedLight;
-        constants.clipToWindowScale = planarView.clipToWindowScale;
-        constants.clipToWindowBias = planarView.clipToWindowBias;
-        constants.textureSize =
-            uint2(depthDesc.width, depthDesc.height);
-        constants.traceSampleCount =
-            GetScreenSpaceShadowTraceReach(settings.length);
+        ScreenSpaceDirectionalShadowConstants constants = {};
+        constants.lightCoordinate = float4(
+            dispatchList.LightCoordinate_Shader[0],
+            dispatchList.LightCoordinate_Shader[1],
+            dispatchList.LightCoordinate_Shader[2],
+            dispatchList.LightCoordinate_Shader[3]);
         constants.surfaceThickness =
             std::max(settings.surfaceThickness, 0.f);
-        constants.depthDiscontinuityThreshold =
+        constants.bilinearThreshold =
             std::max(settings.bilinearThreshold, 0.f);
         constants.shadowContrast =
             std::max(settings.shadowContrast, 0.f);
-        constants.hardShadowSamples = settings.hardShadowSamples;
-        constants.fadeOutSamples = settings.fadeOutSamples;
         constants.ignoreEdgePixels =
             settings.ignoreEdgePixels ? 1u : 0u;
         constants.usePrecisionOffset =
             settings.usePrecisionOffset ? 1u : 0u;
         constants.bilinearSamplingOffsetMode =
             settings.bilinearSamplingOffsetMode ? 1u : 0u;
+        constants.debugOutputEdgeMask =
+            settings.debugView == ScreenSpaceShadowDebugView::Edge ? 1u : 0u;
+        constants.debugOutputThreadIndex =
+            settings.debugView == ScreenSpaceShadowDebugView::Thread ? 1u : 0u;
+        constants.debugOutputWaveIndex =
+            settings.debugView == ScreenSpaceShadowDebugView::Wave ? 1u : 0u;
         constants.useEarlyOut = settings.useEarlyOut ? 1u : 0u;
-        constants.debugView =
-            static_cast<uint32_t>(settings.debugView);
-        constants.reverseDepth = view.IsReverseDepth() ? 1u : 0u;
+        constants.depthBounds = float2(0.f, 1.f);
+        constants.farDepthValue = reverseDepth ? 0.f : 1.f;
+        constants.nearDepthValue = reverseDepth ? 1.f : 0.f;
+        constants.invDepthTextureSize = float2(
+            1.f / float(depthDesc.width),
+            1.f / float(depthDesc.height));
 
-        commandList->beginMarker(
-            "Screen-Space Directional Shadows");
+        commandList->beginMarker("Screen-Space Directional Shadows");
         BeginTimer(commandList);
-        commandList->writeBuffer(
-            m_ConstantBuffer,
-            &constants,
-            sizeof(constants));
+        commandList->clearTextureFloat(
+            m_NearVisibility,
+            nvrhi::AllSubresources,
+            nvrhi::Color(1.f));
 
         nvrhi::ComputeState state;
-        state.pipeline = m_TracePipeline;
+        state.pipeline = pipeline->pso;
         state.bindings = { m_BindingSet };
-        commandList->setComputeState(state);
-        const uint32_t groupsX = (depthDesc.width + 7u) / 8u;
-        const uint32_t groupsY = (depthDesc.height + 7u) / 8u;
-        commandList->dispatch(groupsX, groupsY, 1u);
-        m_Timings.dispatchCount = 1u;
-        m_Timings.totalGroups = groupsX * groupsY;
+        for (int dispatchIndex = 0;
+            dispatchIndex < dispatchList.DispatchCount;
+            ++dispatchIndex)
+        {
+            const Bend::DispatchData& dispatch =
+                dispatchList.Dispatch[dispatchIndex];
+            if (dispatch.WaveCount[0] <= 0 ||
+                dispatch.WaveCount[1] <= 0 ||
+                dispatch.WaveCount[2] <= 0)
+            {
+                continue;
+            }
+
+            constants.waveOffset = int2(
+                dispatch.WaveOffset_Shader[0],
+                dispatch.WaveOffset_Shader[1]);
+            commandList->writeBuffer(
+                m_ConstantBuffer,
+                &constants,
+                sizeof(constants));
+            commandList->setComputeState(state);
+            commandList->dispatch(
+                uint32_t(dispatch.WaveCount[0]),
+                uint32_t(dispatch.WaveCount[1]),
+                uint32_t(dispatch.WaveCount[2]));
+            ++m_Timings.dispatchCount;
+            m_Timings.totalGroups +=
+                uint32_t(dispatch.WaveCount[0]) *
+                uint32_t(dispatch.WaveCount[1]) *
+                uint32_t(dispatch.WaveCount[2]);
+        }
 
         EndTimer(commandList);
         commandList->endMarker();
@@ -431,8 +514,7 @@ namespace uvsr
             nvrhi::Viewport(float(info.width), float(info.height)));
         state.viewport.addScissorRect(
             nvrhi::Rect(int(info.width), int(info.height)));
-        commandList->beginMarker(
-            "Directional Shadow Debug View");
+        commandList->beginMarker("Screen-Space Directional Shadow Debug View");
         commandList->setGraphicsState(state);
 
         nvrhi::DrawArguments arguments;

@@ -26,9 +26,9 @@ namespace uvsr
     enum class ScreenSpaceShadowDebugView : uint32_t
     {
         None,
-        Occlusion,
-        TraceProgress,
-        RayBounds
+        Edge,
+        Thread,
+        Wave
     };
 
     inline constexpr std::array<uint32_t, 5>

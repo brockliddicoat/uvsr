@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 136,697 non-blank source lines.
+**First-Party Lines of Code:** 136,621 non-blank source lines.
 
-**Third-Party Lines of Code:** 387,622 non-blank source lines.
+**Third-Party Lines of Code:** 388,222 non-blank source lines.
 
-**Total Lines of Code:** 524,319 non-blank source lines.
+**Total Lines of Code:** 524,843 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -69,6 +69,11 @@ download, conversion, or scene setup is required.
 This section summarizes stable work that is active but not yet merged into
 `main`. Experimental entries are not promises that the work will ship.
 
+- **Directional Shadow and CMAA2 Integration — Approved for Canonical Promotion**
+  (`codex/directional-shadows-aa-integration`). Combines the ray-coherent
+  directional-shadow restoration with the post-AgX CMAA2 Ultra repair in one
+  isolated canon candidate, preserving required Apache-2.0 notices and the
+  final transfer-and-dither presentation order.
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidates shared
   depth, pixel-coordinate, and safe-normal helpers without changing equations,
@@ -77,6 +82,7 @@ This section summarizes stable work that is active but not yet merged into
   (`devin/1784102780-visibility-test-coverage`, PR #11). Adds reference coverage
   for degenerate clipping, radial-mask edge cases, and blue-noise rank fields
   without changing runtime rendering.
+
 ## Build and Run
 
 ### Requirements

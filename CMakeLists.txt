@@ -47,6 +47,39 @@ if (UVSR_BUILD_APPLICATION AND
         "a component independently.")
 endif()
 
+if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
+    set(UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bend_sss/upstream")
+    file(SHA256
+        "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}/bend_sss_cpu.h"
+        UVSR_SCREEN_SPACE_SHADOW_CPU_SHA256)
+    file(SHA256
+        "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}/bend_sss_gpu.h"
+        UVSR_SCREEN_SPACE_SHADOW_GPU_SHA256)
+    file(SHA256
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/licenses/Apache-2.0.txt"
+        UVSR_APACHE_2_LICENSE_SHA256)
+    if (NOT UVSR_SCREEN_SPACE_SHADOW_CPU_SHA256 STREQUAL
+            "23aae596dbb1b9bdae23d87ac85079b138426823c3153079f7a7dd36f603d02a")
+        message(FATAL_ERROR
+            "The vendored directional-shadow CPU planner changed; restore the released bytes.")
+    endif()
+    if (NOT UVSR_SCREEN_SPACE_SHADOW_GPU_SHA256 STREQUAL
+            "7fbe24bd2040a62536c31df6cd38a92cb22c172a9a419eed3c0af7df1d50a68c")
+        message(FATAL_ERROR
+            "The vendored directional-shadow GPU tracer changed; restore the released bytes.")
+    endif()
+    if (NOT UVSR_APACHE_2_LICENSE_SHA256 STREQUAL
+            "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30")
+        message(FATAL_ERROR
+            "The packaged Apache-2.0 license text changed; restore the complete license.")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}/bend_sss_cpu.h"
+        "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}/bend_sss_gpu.h"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/licenses/Apache-2.0.txt")
+endif()
+
 # Embed the exact source commit in the executable so experiment titles describe
 # the code that was built, not whichever checkout happens to exist at launch.
 # Watching both the worktree HEAD and its resolved branch ref makes a normal
@@ -295,6 +328,7 @@ file(GLOB_RECURSE UVSR_SHADER_INPUTS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsli"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bend_sss/upstream/bend_sss_gpu.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/shaders/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/include/donut/shaders/*"
 )
@@ -396,7 +430,8 @@ if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
         src/screen_space_directional_shadows.cpp
     )
     target_include_directories(uvsr_screen_space_directional_shadows
-        PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+        PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        PRIVATE "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}")
     target_link_libraries(uvsr_screen_space_directional_shadows
         PUBLIC nvrhi
         PRIVATE donut_render donut_app donut_engine)
@@ -608,10 +643,12 @@ if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
     )
     target_link_libraries(uvsr_screen_space_directional_shadow_tests
         PRIVATE uvsr_screen_space_directional_shadows)
+    target_include_directories(uvsr_screen_space_directional_shadow_tests
+        PRIVATE "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}")
     add_test(
         NAME uvsr_screen_space_directional_shadow_reference
         COMMAND uvsr_screen_space_directional_shadow_tests
-            "${CMAKE_CURRENT_SOURCE_DIR}/src"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
     )
 endif()
 
@@ -924,6 +961,7 @@ string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
 
 set(UVSR_COMPLETE_APP_SHADERS
     agx_tonemapping_ps
+    display_output_ps
     backdrop_blur_ps
     screen_space_directional_shadows_cs
     screen_space_directional_shadows_debug_ps
@@ -982,6 +1020,7 @@ set(UVSR_COMPLETE_APP_SHADERS
 )
 set(UVSR_DEFAULT_EXPERIMENT_APP_SHADERS
     agx_tonemapping_ps
+    display_output_ps
     backdrop_blur_ps
     image_based_lighting_background_ps
     msaa_visibility_resolve_cs
@@ -1182,9 +1221,9 @@ if (UVSR_BUILD_APPLICATION)
             "The UVSR runtime shader manifest contains duplicate paths")
     endif()
     if (UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-        set(UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT 40)
+        set(UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT 41)
     else()
-        set(UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT 77)
+        set(UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT 78)
     endif()
     if (NOT UVSR_RUNTIME_SHADER_PATH_COUNT EQUAL
             UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT)
@@ -1423,5 +1462,8 @@ if (UVSR_BUILD_APPLICATION)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/third_party/microsoft_directx_graphics_samples/LICENSE.txt"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Microsoft-DirectX-Graphics-Samples.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/licenses/Apache-2.0.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Apache-2.0.txt"
     )
 endif()

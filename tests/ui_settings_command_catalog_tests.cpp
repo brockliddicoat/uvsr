@@ -323,7 +323,7 @@ int main()
         },
         {
             "shadows.screen-space-directional.debug-view",
-            "off|occlusion|trace-progress|ray-bounds"
+            "off|edge|thread|wave"
         },
         {
             "light.selected.flashlight.camera-offset",

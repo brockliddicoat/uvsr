@@ -1,5 +1,6 @@
 #include "temporal_aa_reference.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -27,9 +28,13 @@ namespace
     std::string ReadTextFile(const std::filesystem::path& path)
     {
         std::ifstream stream(path, std::ios::binary);
-        return std::string(
+        std::string contents{
             std::istreambuf_iterator<char>(stream),
-            std::istreambuf_iterator<char>());
+            std::istreambuf_iterator<char>()};
+        contents.erase(
+            std::remove(contents.begin(), contents.end(), '\r'),
+            contents.end());
+        return contents;
     }
 }
 
@@ -117,7 +122,7 @@ int main(int argc, char** argv)
             std::string(uvsr::GetAntiAliasingQualityMenuLabel(
                 Method::Msaa,
                 Quality::Ultra)) == "Ultra (16x)",
-        "only the morphology control prefixes conservative strengths");
+        "only the morphology control prefixes conservative quality tiers");
     passed &= Check(
         uvsr::GetAntiAliasingImplementation(
             Method::IntelCmaa2,
@@ -126,6 +131,29 @@ int main(int argc, char** argv)
                 Method::IntelCmaa2,
                 Quality::Ultra),
         "CMAA2 must expose Low, Medium, High, and Ultra");
+    uvsr::AntiAliasingSettings methodSelection;
+    uvsr::SelectAntiAliasingMethod(
+        methodSelection,
+        Method::IntelCmaa2);
+    const bool cmaa2StartsAtUltra =
+        methodSelection.quality == Quality::Ultra;
+    uvsr::SelectAntiAliasingMethod(
+        methodSelection,
+        Method::TemporalSubpixelMorphological);
+    const bool temporalReturnsToMedium =
+        methodSelection.quality == Quality::Medium;
+    methodSelection.quality = Quality::Low;
+    uvsr::SelectAntiAliasingMethod(
+        methodSelection,
+        Method::IntelCmaa2);
+    passed &= Check(
+        cmaa2StartsAtUltra &&
+            temporalReturnsToMedium &&
+            methodSelection.quality == Quality::Low &&
+            uvsr::GetInitialAntiAliasingQuality(Method::Msaa) ==
+                Quality::Medium,
+        "method selection must start CMAA2 at Ultra while preserving an "
+        "explicit cross-method quality choice");
     passed &= Check(
         static_cast<uint32_t>(Cost::Count) == 3u &&
             std::string(uvsr::GetTemporalAaCostModeLabel(
@@ -1160,6 +1188,12 @@ int main(int argc, char** argv)
                 "temporal_aa_options.h");
         const std::string cmaaSource =
             ReadTextFile(sourceDirectory / "cmaa2.cpp");
+        const std::string cmaaShader =
+            ReadTextFile(sourceDirectory / "cmaa2.hlsl");
+        const std::string agxShader =
+            ReadTextFile(sourceDirectory / "agx_tonemapping_ps.hlsl");
+        const std::string displayOutputShader =
+            ReadTextFile(sourceDirectory / "display_output_ps.hlsl");
 
         passed &= Check(
             shaderManifest.find(
@@ -1318,6 +1352,83 @@ int main(int argc, char** argv)
                     std::string::npos,
             "CMAA2 must reject an incompatible per-frame source before its "
             "format-preserving copy");
+        const size_t agxInvocation = applicationSource.find(
+            "m_AgxToneMappingPass->Render(");
+        const size_t postToneCmaa2Invocation = applicationSource.find(
+            "displayTexture = m_Cmaa2Pass->Render(",
+            agxInvocation);
+        const size_t displayOutputInvocation = applicationSource.find(
+            "m_AgxToneMappingPass->RenderOutput(",
+            postToneCmaa2Invocation);
+        passed &= Check(
+            agxInvocation != std::string::npos &&
+                postToneCmaa2Invocation != std::string::npos &&
+                displayOutputInvocation != std::string::npos &&
+                agxInvocation < postToneCmaa2Invocation &&
+                postToneCmaa2Invocation < displayOutputInvocation &&
+                applicationSource.find(
+                    "Cmaa2ColorRange::DisplayLdr",
+                    postToneCmaa2Invocation) != std::string::npos &&
+                applicationSource.find(
+                    "desc.format = nvrhi::Format::RGBA16_FLOAT;\n"
+                    "        desc.isUAV = false;\n"
+                    "        desc.debugName = \"LdrColor\";") !=
+                    std::string::npos,
+            "normal CMAA2 must consume the display-linear RGBA16F image after "
+            "AgX rather than pre-tone scene radiance");
+        passed &= Check(
+            cmaaShader.find(
+                "#if CMAA2_STATIC_QUALITY_PRESET == 3") !=
+                    std::string::npos &&
+                cmaaShader.find(
+                    "#define CMAA2_EDGE_DETECTION_LUMA_PATH 0") !=
+                    std::string::npos &&
+                cmaaShader.find(
+                    "#error CMAA2_SUPPORT_HDR_COLOR_RANGE must be a "
+                    "compile-time shader define") != std::string::npos &&
+                shaderManifest.find(
+                    "CMAA2_SUPPORT_HDR_COLOR_RANGE={0,1}") !=
+                    std::string::npos &&
+                productionManifest.find(
+                    "CMAA2_SUPPORT_HDR_COLOR_RANGE={0,1}") !=
+                    std::string::npos,
+            "CMAA2 Ultra must use full-color edges and package distinct "
+            "display/HDR temporary-color permutations");
+        passed &= Check(
+            cmaaSource.find(
+                "pixelCount > (uint64_t(1u) << 26u)") !=
+                    std::string::npos &&
+                applicationSource.find(
+                    "BeginPostToneAntiAliasingTimer(") !=
+                    std::string::npos &&
+                applicationSource.find(
+                    "m_AaPostToneMilliseconds[slot]") !=
+                    std::string::npos &&
+                agxShader.find("Hash12") == std::string::npos &&
+                displayOutputShader.find("noise / 255.0") !=
+                    std::string::npos &&
+                shaderManifest.find("display_output_ps.hlsl") !=
+                    std::string::npos &&
+                productionManifest.find("display_output_ps.hlsl") !=
+                    std::string::npos,
+            "CMAA2 must guard its packed deferred address, keep post-tone "
+            "work out of AgX timing, and defer display dither until after AA");
+        passed &= Check(
+            cmaaSource.find(
+                "const uint64_t deferredLocationCount =\n"
+                "            uint64_t((sceneDesc.width + 1u) / 2u) *\n"
+                "            uint64_t((sceneDesc.height + 1u) / 2u);") !=
+                    std::string::npos &&
+                cmaaSource.find(
+                    "device,\n"
+                    "            deferredLocationCount,\n"
+                    "            sizeof(uint32_t),\n"
+                    "            \"CMAA2/DeferredLocations\"") !=
+                    std::string::npos &&
+                cmaaSource.find("(pixelCount + 3u) / 4u") ==
+                    std::string::npos,
+            "CMAA2 deferred-location capacity must cover every addressable "
+            "2x2 item-head quad at odd render extents");
         passed &= Check(
             applicationSource.find(
                 "\"Developer Options##AliasingDeveloperOptions\"") !=

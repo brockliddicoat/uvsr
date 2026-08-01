@@ -541,6 +541,31 @@ namespace uvsr
         TemporalAaPerformanceOverrides performanceOverrides;
     };
 
+    // Method selection starts from the representative configuration of each
+    // technique instead of reinterpreting an unrelated method's quality tier.
+    // CMAA2 uses its strongest reference permutation; Temporal and MSAA retain
+    // Balanced and 4x starting points respectively.
+    [[nodiscard]] inline constexpr AntiAliasingQuality
+        GetInitialAntiAliasingQuality(AntiAliasingMethod method)
+    {
+        return method == AntiAliasingMethod::IntelCmaa2
+            ? AntiAliasingQuality::Ultra
+            : AntiAliasingQuality::Medium;
+    }
+
+    inline constexpr void SelectAntiAliasingMethod(
+        AntiAliasingSettings& settings,
+        AntiAliasingMethod method)
+    {
+        const bool qualityStillUsesMethodDefault =
+            settings.quality ==
+                GetInitialAntiAliasingQuality(settings.method);
+        settings.method = method;
+        settings.quality = qualityStillUsesMethodDefault
+            ? GetInitialAntiAliasingQuality(method)
+            : SanitizeAntiAliasingQuality(method, settings.quality);
+    }
+
     struct ResolvedAntiAliasingSettings
     {
         bool enabled = true;

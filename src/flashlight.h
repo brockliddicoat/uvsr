@@ -8,7 +8,7 @@
 namespace uvsr
 {
     inline constexpr char FlashlightPublicName[] = "flashlight_1";
-    inline constexpr bool DefaultFlashlightEnabled = true;
+    inline constexpr bool DefaultFlashlightEnabled = false;
 
     struct FlashlightSettings
     {
