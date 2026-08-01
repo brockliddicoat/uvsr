@@ -17,6 +17,13 @@ namespace donut::engine
 
 namespace uvsr
 {
+    enum class Cmaa2ColorRange : uint32_t
+    {
+        DisplayLdr,
+        SceneHdr,
+        Count
+    };
+
     struct Cmaa2Timings
     {
         float edgeMilliseconds = 0.f;
@@ -49,7 +56,8 @@ namespace uvsr
         [[nodiscard]] nvrhi::ITexture* Render(
             nvrhi::ICommandList* commandList,
             nvrhi::ITexture* sourceColor,
-            AntiAliasingQuality quality);
+            AntiAliasingQuality quality,
+            Cmaa2ColorRange colorRange);
         void UpdateSourceColor(nvrhi::ITexture* sourceColor);
         void MarkInactiveFrame();
 
@@ -69,6 +77,8 @@ namespace uvsr
         };
 
         static constexpr uint32_t c_QualityCount = 4u;
+        static constexpr uint32_t c_ColorRangeCount =
+            static_cast<uint32_t>(Cmaa2ColorRange::Count);
         static constexpr uint32_t c_TimerLatency = 4u;
 
         nvrhi::IDevice* m_Device = nullptr;
@@ -85,13 +95,16 @@ namespace uvsr
         nvrhi::BindingSetHandle m_BindingSet;
         nvrhi::ITexture* m_BoundSource = nullptr;
 
-        std::array<nvrhi::ComputePipelineHandle, c_QualityCount>
+        using QualityPipelines = std::array<
+            nvrhi::ComputePipelineHandle,
+            c_QualityCount>;
+        std::array<QualityPipelines, c_ColorRangeCount>
             m_EdgePipelines;
-        std::array<nvrhi::ComputePipelineHandle, c_QualityCount>
+        std::array<QualityPipelines, c_ColorRangeCount>
             m_CandidatePipelines;
-        std::array<nvrhi::ComputePipelineHandle, c_QualityCount>
+        std::array<QualityPipelines, c_ColorRangeCount>
             m_ApplyPipelines;
-        std::array<nvrhi::ComputePipelineHandle, c_QualityCount>
+        std::array<QualityPipelines, c_ColorRangeCount>
             m_DispatchArgumentPipelines;
 
         std::array<std::array<nvrhi::TimerQueryHandle, c_TimerLatency>,

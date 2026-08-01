@@ -1036,8 +1036,11 @@ public:
         desc.debugName = "MaterialIDs";
         MaterialIDs = device->createTexture(desc);
 
-        // The render targets below this point are non-MSAA
-        desc.format = nvrhi::Format::SRGBA8_UNORM;
+        // Keep the display-referred image linear and undithered until the
+        // final presentation pass. CMAA2 can then detect and blend the same
+        // post-AgX edges the user sees without an illegal sRGB UAV alias or
+        // classifying quantization noise.
+        desc.format = nvrhi::Format::RGBA16_FLOAT;
         desc.isUAV = false;
         desc.debugName = "LdrColor";
         LdrColor = device->createTexture(desc);
@@ -1233,10 +1236,17 @@ class AgxToneMappingPass
 private:
     nvrhi::DeviceHandle m_Device;
     nvrhi::ShaderHandle m_PixelShader;
+    nvrhi::ShaderHandle m_OutputPixelShader;
     nvrhi::BindingLayoutHandle m_BindingLayout;
     nvrhi::BindingSetHandle m_BindingSet;
+    nvrhi::BindingSetHandle m_OutputBindingSet;
     nvrhi::GraphicsPipelineHandle m_Pipeline;
+    nvrhi::GraphicsPipelineHandle m_OutputPipeline;
     nvrhi::ITexture* m_BoundSource = nullptr;
+    nvrhi::ITexture* m_BoundOutputSource = nullptr;
+    nvrhi::Format m_OutputFramebufferFormat =
+        nvrhi::Format::UNKNOWN;
+    std::shared_ptr<CommonRenderPasses> m_CommonPasses;
     std::shared_ptr<FramebufferFactory> m_FramebufferFactory;
 
 public:
@@ -1246,10 +1256,16 @@ public:
         const std::shared_ptr<CommonRenderPasses>& commonPasses,
         const std::shared_ptr<FramebufferFactory>& framebufferFactory)
         : m_Device(device)
+        , m_CommonPasses(commonPasses)
         , m_FramebufferFactory(framebufferFactory)
     {
         m_PixelShader = shaderFactory->CreateShader(
             "uvsr/agx_tonemapping_ps.hlsl", "main", nullptr, nvrhi::ShaderType::Pixel);
+        m_OutputPixelShader = shaderFactory->CreateShader(
+            "uvsr/display_output_ps.hlsl",
+            "main",
+            nullptr,
+            nvrhi::ShaderType::Pixel);
 
         nvrhi::BindingLayoutDesc layoutDesc;
         layoutDesc.visibility = nvrhi::ShaderType::Pixel;
@@ -1304,6 +1320,88 @@ public:
             commandList->draw(arguments);
         }
         commandList->endMarker();
+    }
+
+    bool RenderOutput(
+        nvrhi::ICommandList* commandList,
+        const ICompositeView& compositeView,
+        nvrhi::IFramebuffer* framebuffer,
+        nvrhi::ITexture* sourceTexture)
+    {
+        if (!commandList || !framebuffer || !sourceTexture ||
+            !m_OutputPixelShader || !m_BindingLayout)
+        {
+            return false;
+        }
+
+        const nvrhi::FramebufferInfoEx& framebufferInfo =
+            framebuffer->getFramebufferInfo();
+        if (framebufferInfo.colorFormats.empty())
+            return false;
+        const nvrhi::Format framebufferFormat =
+            framebufferInfo.colorFormats[0];
+        if (!m_OutputPipeline ||
+            framebufferFormat != m_OutputFramebufferFormat)
+        {
+            nvrhi::GraphicsPipelineDesc pipelineDesc;
+            pipelineDesc.primType =
+                nvrhi::PrimitiveType::TriangleStrip;
+            pipelineDesc.VS = m_CommonPasses->m_FullscreenVS;
+            pipelineDesc.PS = m_OutputPixelShader;
+            pipelineDesc.bindingLayouts = { m_BindingLayout };
+            pipelineDesc.renderState.rasterState.setCullNone();
+            pipelineDesc.renderState.depthStencilState.depthTestEnable =
+                false;
+            pipelineDesc.renderState.depthStencilState.stencilEnable =
+                false;
+            m_OutputPipeline = m_Device->createGraphicsPipeline(
+                pipelineDesc,
+                framebufferInfo);
+            m_OutputFramebufferFormat = framebufferFormat;
+        }
+        if (!m_OutputPipeline)
+            return false;
+
+        if (!m_OutputBindingSet ||
+            m_BoundOutputSource != sourceTexture)
+        {
+            nvrhi::BindingSetDesc bindingSetDesc;
+            bindingSetDesc.bindings = {
+                nvrhi::BindingSetItem::Texture_SRV(
+                    0,
+                    sourceTexture)
+            };
+            m_OutputBindingSet = m_Device->createBindingSet(
+                bindingSetDesc,
+                m_BindingLayout);
+            m_BoundOutputSource = sourceTexture;
+        }
+        if (!m_OutputBindingSet)
+            return false;
+
+        commandList->beginMarker("Display Transfer and Dither");
+        for (uint32_t viewIndex = 0;
+            viewIndex < compositeView.GetNumChildViews(ViewType::PLANAR);
+            ++viewIndex)
+        {
+            const IView* view = compositeView.GetChildView(
+                ViewType::PLANAR,
+                viewIndex);
+            nvrhi::GraphicsState state;
+            state.pipeline = m_OutputPipeline;
+            state.framebuffer = framebuffer;
+            state.bindings = { m_OutputBindingSet };
+            state.viewport = view->GetViewportState();
+            commandList->setGraphicsState(state);
+
+            nvrhi::DrawArguments arguments;
+            arguments.instanceCount = 1;
+            arguments.vertexCount = 4;
+            commandList->draw(arguments);
+        }
+        commandList->endMarker();
+
+        return true;
     }
 };
 
@@ -2175,8 +2273,22 @@ private:
     static constexpr uint32_t           c_AaTimerLatency = 8u;
     std::array<nvrhi::TimerQueryHandle,
         c_AaTimerLatency>               m_AaTimerQueries;
+    std::array<nvrhi::TimerQueryHandle,
+        c_AaTimerLatency>               m_AaPostToneTimerQueries;
     std::array<bool,
         c_AaTimerLatency>               m_AaTimerPending{};
+    std::array<bool,
+        c_AaTimerLatency>               m_AaPostToneTimerPending{};
+    std::array<bool,
+        c_AaTimerLatency>               m_AaTimerReady{};
+    std::array<bool,
+        c_AaTimerLatency>               m_AaPostToneTimerReady{};
+    std::array<bool,
+        c_AaTimerLatency>               m_AaTimerUsesPostTone{};
+    std::array<float,
+        c_AaTimerLatency>               m_AaPreToneMilliseconds{};
+    std::array<float,
+        c_AaTimerLatency>               m_AaPostToneMilliseconds{};
     std::array<AaBenchmarkTimerTag,
         c_AaTimerLatency>               m_AaTimerTags{};
     uint32_t                            m_AaTimerFrame = 0u;
@@ -2612,6 +2724,8 @@ public:
 
         m_CommandList = GetDevice()->createCommandList();
         for (nvrhi::TimerQueryHandle& query : m_AaTimerQueries)
+            query = GetDevice()->createTimerQuery();
+        for (nvrhi::TimerQueryHandle& query : m_AaPostToneTimerQueries)
             query = GetDevice()->createTimerQuery();
         for (auto& stageQueries : m_RendererTimerQueries)
         {
@@ -5636,17 +5750,46 @@ public:
         // drain-frame timings appear inside the motion interval.
         for (uint32_t slot = 0u; slot < c_AaTimerLatency; ++slot)
         {
-            if (!m_AaTimerPending[slot])
-                continue;
+            if (m_AaTimerPending[slot])
+            {
+                nvrhi::ITimerQuery* query = m_AaTimerQueries[slot];
+                if (GetDevice()->pollTimerQuery(query))
+                {
+                    m_AaPreToneMilliseconds[slot] =
+                        GetDevice()->getTimerQueryTime(query) * 1000.f;
+                    GetDevice()->resetTimerQuery(query);
+                    m_AaTimerPending[slot] = false;
+                    m_AaTimerReady[slot] = true;
+                }
+            }
+            if (m_AaPostToneTimerPending[slot])
+            {
+                nvrhi::ITimerQuery* query =
+                    m_AaPostToneTimerQueries[slot];
+                if (GetDevice()->pollTimerQuery(query))
+                {
+                    m_AaPostToneMilliseconds[slot] =
+                        GetDevice()->getTimerQueryTime(query) * 1000.f;
+                    GetDevice()->resetTimerQuery(query);
+                    m_AaPostToneTimerPending[slot] = false;
+                    m_AaPostToneTimerReady[slot] = true;
+                }
+            }
 
-            nvrhi::ITimerQuery* query = m_AaTimerQueries[slot];
-            if (!GetDevice()->pollTimerQuery(query))
+            if (!m_AaTimerReady[slot] ||
+                (m_AaTimerUsesPostTone[slot] &&
+                    !m_AaPostToneTimerReady[slot]))
+            {
                 continue;
+            }
 
-            m_AaGpuMilliseconds =
-                GetDevice()->getTimerQueryTime(query) * 1000.f;
-            GetDevice()->resetTimerQuery(query);
-            m_AaTimerPending[slot] = false;
+            m_AaGpuMilliseconds = m_AaPreToneMilliseconds[slot] +
+                (m_AaTimerUsesPostTone[slot]
+                    ? m_AaPostToneMilliseconds[slot]
+                    : 0.f);
+            m_AaTimerReady[slot] = false;
+            m_AaPostToneTimerReady[slot] = false;
+            m_AaTimerUsesPostTone[slot] = false;
 
             const AaBenchmarkTimerTag tag = m_AaTimerTags[slot];
             if (m_AaBenchmark.enabled && tag.collect)
@@ -5674,7 +5817,10 @@ public:
             return false;
         const uint32_t slot =
             m_AaTimerFrame % c_AaTimerLatency;
-        if (m_AaTimerPending[slot])
+        if (m_AaTimerPending[slot] ||
+            m_AaPostToneTimerPending[slot] ||
+            m_AaTimerReady[slot] ||
+            m_AaPostToneTimerReady[slot])
         {
             if (m_AaBenchmark.enabled &&
                 m_AaBenchmarkCurrentTag.collect)
@@ -5686,10 +5832,24 @@ public:
 
         m_CommandList->beginTimerQuery(m_AaTimerQueries[slot]);
         m_AaTimerTags[slot] = m_AaBenchmarkCurrentTag;
+        m_AaPreToneMilliseconds[slot] = 0.f;
+        m_AaPostToneMilliseconds[slot] = 0.f;
+        m_AaTimerUsesPostTone[slot] = false;
         return true;
     }
 
-    void EndAntiAliasingTimer(bool active)
+    void RecordAntiAliasingTimerIssued(uint32_t slot)
+    {
+        if (m_AaBenchmark.enabled && m_AaTimerTags[slot].collect)
+        {
+            ++m_AaBenchmarkIssuedSamples;
+            ++m_AaBenchmarkOutstandingSamples;
+        }
+    }
+
+    void EndAntiAliasingTimer(
+        bool active,
+        bool postToneSegmentRequired)
     {
         if (g_VisibilityPerfDisableRendererTimers)
             return;
@@ -5701,12 +5861,42 @@ public:
         {
             m_CommandList->endTimerQuery(m_AaTimerQueries[slot]);
             m_AaTimerPending[slot] = true;
-            if (m_AaBenchmark.enabled &&
-                m_AaTimerTags[slot].collect)
-            {
-                ++m_AaBenchmarkIssuedSamples;
-                ++m_AaBenchmarkOutstandingSamples;
-            }
+            m_AaTimerUsesPostTone[slot] =
+                postToneSegmentRequired;
+        }
+        if (!postToneSegmentRequired)
+        {
+            if (active)
+                RecordAntiAliasingTimerIssued(slot);
+            ++m_AaTimerFrame;
+        }
+    }
+
+    bool BeginPostToneAntiAliasingTimer(bool frameActive)
+    {
+        if (!frameActive)
+            return false;
+        const uint32_t slot =
+            m_AaTimerFrame % c_AaTimerLatency;
+        m_CommandList->beginTimerQuery(
+            m_AaPostToneTimerQueries[slot]);
+        return true;
+    }
+
+    void EndPostToneAntiAliasingTimer(bool active)
+    {
+        if (g_VisibilityPerfDisableRendererTimers)
+            return;
+        if (!m_AaBenchmark.enabled)
+            return;
+        const uint32_t slot =
+            m_AaTimerFrame % c_AaTimerLatency;
+        if (active)
+        {
+            m_CommandList->endTimerQuery(
+                m_AaPostToneTimerQueries[slot]);
+            m_AaPostToneTimerPending[slot] = true;
+            RecordAntiAliasingTimerIssued(slot);
         }
         ++m_AaTimerFrame;
     }
@@ -7297,13 +7487,11 @@ public:
     }
 
     [[nodiscard]] nvrhi::ITexture*
-        GetResolvedMorphologySource() const
+        GetCmaa2InitializationSource() const
     {
         if (!m_RenderTargets)
             return nullptr;
-        return m_RenderTargets->GetSampleCount() > 1u
-            ? m_RenderTargets->DeferredMsaaColor.Get()
-            : m_RenderTargets->HdrColor.Get();
+        return m_RenderTargets->LdrColor.Get();
     }
 
     void CreateCmaa2Pass()
@@ -7312,12 +7500,12 @@ public:
             GetDevice(),
             m_ShaderFactory,
             m_CommonPasses,
-            GetResolvedMorphologySource());
+            GetCmaa2InitializationSource());
         if (!m_Cmaa2Pass->IsValid())
         {
             log::error(
                 "Intel CMAA2 initialization failed; "
-                "the scene-color input will be presented unchanged");
+                "the presentation input will be shown unchanged");
         }
     }
 
@@ -7436,10 +7624,10 @@ public:
         {
             // CMAA2 owns only same-sized single-sample intermediates and can
             // safely survive an MSAA/motion-vector target swap. Rebinding its
-            // source avoids recreating the large candidate buffers and all 16
-            // quality PSOs on every Method change.
+            // source avoids recreating the large candidate buffers and all 32
+            // color-range/quality PSOs on every Method change.
             m_Cmaa2Pass->UpdateSourceColor(
-                GetResolvedMorphologySource());
+                GetCmaa2InitializationSource());
         }
         else if (m_ui.UsesCmaa2())
         {
@@ -9823,26 +10011,46 @@ public:
             BeginAntiAliasingTimer();
         nvrhi::ITexture* antiAliasedTexture =
             sceneColor;
+        const ResolvedAntiAliasingSettings antiAliasing =
+            m_ui.GetResolvedAntiAliasingSettings();
+#if UVSR_AA_DEVELOPER_OVERRIDES
+        const TemporalAaDebugView activeAaVisualization =
+            m_ui.TemporalAaVisualization;
+#else
+        // Debug shaders and routing are absent from production. Ignore stale
+        // or hostile programmatic state before it alters the shipping graph.
+        constexpr TemporalAaDebugView activeAaVisualization =
+            TemporalAaDebugView::Off;
+#endif
+        const bool temporalDebugVisualizationActive =
+            m_TemporalAAPass &&
+            IsLongTermTemporalPreset(
+                antiAliasing.implementation) &&
+            IsTemporalAaDebugVisualization(
+                activeAaVisualization);
+        const bool externalDebugPresentationActive =
+            screenSpaceShadowResult.showDebug ||
+            sparseVirtualShadowMapResult.showDebug ||
+            diagnosticCsmResult.showDebug;
+        const bool toneMappingActive =
+            m_ui.UsesTonemapper() &&
+            !externalDebugPresentationActive;
+        const bool cmaa2Requested =
+            m_ui.AntiAliasing.enabled &&
+            m_Cmaa2Pass &&
+            antiAliasing.subpixelMorphology ==
+                MorphologyApplication::ConservativeMorphological;
+        const bool cmaa2PresentationActive =
+            cmaa2Requested &&
+            !externalDebugPresentationActive &&
+            !temporalDebugVisualizationActive;
+        const bool postToneCmaa2Active =
+            cmaa2PresentationActive && toneMappingActive;
+        const bool preToneCmaa2Active =
+            cmaa2PresentationActive && !toneMappingActive;
+        bool cmaa2RenderedThisFrame = false;
         if (m_ui.AntiAliasing.enabled)
         {
-            const ResolvedAntiAliasingSettings antiAliasing =
-                m_ui.GetResolvedAntiAliasingSettings();
-#if UVSR_AA_DEVELOPER_OVERRIDES
-            const TemporalAaDebugView activeAaVisualization =
-                m_ui.TemporalAaVisualization;
-#else
-            // Debug shaders and routing are absent from production. Ignore
-            // stale or hostile programmatic state before it can alter the
-            // shipping render graph.
-            constexpr TemporalAaDebugView activeAaVisualization =
-                TemporalAaDebugView::Off;
-#endif
-            const bool temporalDebugVisualizationActive =
-                m_TemporalAAPass &&
-                IsLongTermTemporalPreset(
-                    antiAliasing.implementation) &&
-                IsTemporalAaDebugVisualization(
-                    activeAaVisualization);
             const bool temporalSharpenEnabled =
                 antiAliasing.sharpeningAllowed &&
                 ShouldSharpenTemporalAa(
@@ -9879,40 +10087,35 @@ public:
                     m_ui.TemporalAaSharpness);
             }
 
-            bool cmaa2RenderedThisFrame = false;
-            if (m_Cmaa2Pass &&
-                antiAliasing.subpixelMorphology ==
-                    MorphologyApplication::ConservativeMorphological)
-            {
-                antiAliasedTexture = m_Cmaa2Pass->Render(
-                    m_CommandList,
-                    antiAliasedTexture,
-                    antiAliasing.morphologyQuality);
-                cmaa2RenderedThisFrame = true;
-            }
-            if (m_Cmaa2Pass && !cmaa2RenderedThisFrame)
-                m_Cmaa2Pass->MarkInactiveFrame();
-
             if (deferTemporalSharpenToPresentation)
             {
-                // Apply the same sharpness to the composed presentation
-                // result. Blending sharpened temporal against unsharpened
-                // spatial current made a changing selective rejection mask
-                // modulate edge detail.
+                // Keep the resolved sharpen separate from compact history,
+                // then let display mapping and CMAA2 observe its final edges.
                 antiAliasedTexture =
                     m_TemporalAAPass
                         ->SharpenPresentation(
                             m_CommandList,
                             antiAliasedTexture);
             }
+
+            if (preToneCmaa2Active)
+            {
+                // The explicit tonemapperless comparison path has no bounded
+                // display image, so retain Intel's HDR temporary packing.
+                antiAliasedTexture = m_Cmaa2Pass->Render(
+                    m_CommandList,
+                    antiAliasedTexture,
+                    antiAliasing.morphologyQuality,
+                    Cmaa2ColorRange::SceneHdr);
+                cmaa2RenderedThisFrame = true;
+            }
         }
-        EndAntiAliasingTimer(antiAliasingTimerActive);
+        EndAntiAliasingTimer(
+            antiAliasingTimerActive,
+            postToneCmaa2Active);
 
         nvrhi::ITexture* displayTexture = antiAliasedTexture;
-        if (m_ui.UsesTonemapper() &&
-            !screenSpaceShadowResult.showDebug &&
-            !sparseVirtualShadowMapResult.showDebug &&
-            !diagnosticCsmResult.showDebug)
+        if (toneMappingActive)
         {
             BeginRendererStage(RendererTimingStage::ToneMapping);
             m_AgxToneMappingPass->Render(
@@ -9922,11 +10125,28 @@ public:
             displayTexture = m_RenderTargets->LdrColor;
         }
 
+        if (postToneCmaa2Active)
+        {
+            const bool postToneAntiAliasingTimerActive =
+                BeginPostToneAntiAliasingTimer(
+                    antiAliasingTimerActive);
+            displayTexture = m_Cmaa2Pass->Render(
+                m_CommandList,
+                displayTexture,
+                antiAliasing.morphologyQuality,
+                Cmaa2ColorRange::DisplayLdr);
+            cmaa2RenderedThisFrame = true;
+            EndPostToneAntiAliasingTimer(
+                postToneAntiAliasingTimerActive);
+        }
+        if (m_Cmaa2Pass && !cmaa2RenderedThisFrame)
+            m_Cmaa2Pass->MarkInactiveFrame();
+
         // The tonemapperless renderer intentionally sends forward scene-linear
         // radiance straight to the sRGB swap-chain target. The render-target
         // conversion still applies the display transfer and clamps values to
-        // the target's representable range, but AgX output conversion and
-        // dithering are absent from this path.
+        // the target's representable range, but the AgX display transform and
+        // explicit encoded-space dithering are absent from this path.
         BeginRendererStage(RendererTimingStage::OutputBlit);
         if (diagnosticCsmResult.showDebug &&
             diagnosticCsmResult.debugVisualization)
@@ -9950,6 +10170,17 @@ public:
             m_ScreenSpaceDirectionalShadowPass->PresentDebug(
                 m_CommandList,
                 framebuffer);
+        }
+        else if (toneMappingActive &&
+            m_AgxToneMappingPass &&
+            m_AgxToneMappingPass->RenderOutput(
+                m_CommandList,
+                *m_View,
+                framebuffer,
+                displayTexture))
+        {
+            // The final display pass performs transfer and dither only after
+            // CMAA2 has finished classifying and blending display-linear edges.
         }
         else
         {
@@ -15885,6 +16116,7 @@ private:
         }
         else if (path == "anti-aliasing.method")
         {
+            const AntiAliasingMethod previousMethod = candidate.method;
             static constexpr std::array<
                 std::pair<std::string_view, AntiAliasingMethod>, 3>
                 Options = {{
@@ -15913,6 +16145,14 @@ private:
                 error);
             if (handled &&
                 operation != CommandValueOperation::Get &&
+                candidate.method != previousMethod)
+            {
+                const AntiAliasingMethod selectedMethod = candidate.method;
+                candidate.method = previousMethod;
+                SelectAntiAliasingMethod(candidate, selectedMethod);
+            }
+            if (handled &&
+                operation != CommandValueOperation::Get &&
                 candidate.method ==
                     AntiAliasingMethod::TemporalSubpixelMorphological &&
                 !m_ui.IsTemporalAntiAliasingAvailable())
@@ -15938,7 +16178,7 @@ private:
                 arguments,
                 path,
                 candidate.quality,
-                defaults.quality,
+                GetInitialAntiAliasingQuality(candidate.method),
                 Options,
                 value,
                 error);
@@ -17658,9 +17898,9 @@ private:
                 std::pair<std::string_view, ScreenSpaceShadowDebugView>, 4>
                 Options = {{
                     { "off", ScreenSpaceShadowDebugView::None },
-                    { "occlusion", ScreenSpaceShadowDebugView::Occlusion },
-                    { "trace-progress", ScreenSpaceShadowDebugView::TraceProgress },
-                    { "ray-bounds", ScreenSpaceShadowDebugView::RayBounds }
+                    { "edge", ScreenSpaceShadowDebugView::Edge },
+                    { "thread", ScreenSpaceShadowDebugView::Thread },
+                    { "wave", ScreenSpaceShadowDebugView::Wave }
                 }};
             handled = ApplyCommandEnum(
                 operation,
@@ -27559,11 +27799,7 @@ protected:
                             {
                                 NormalizeRedundantAntiAliasingOverrides(
                                     staged);
-                                staged.method = candidate;
-                                staged.quality =
-                                    SanitizeAntiAliasingQuality(
-                                        staged.method,
-                                        staged.quality);
+                                SelectAntiAliasingMethod(staged, candidate);
                                 NormalizeRedundantAntiAliasingOverrides(
                                     staged);
                             });
@@ -27594,11 +27830,7 @@ protected:
                     [defaultMethod](AntiAliasingSettings& staged)
                     {
                         NormalizeRedundantAntiAliasingOverrides(staged);
-                        staged.method = defaultMethod;
-                        staged.quality =
-                            SanitizeAntiAliasingQuality(
-                                staged.method,
-                                staged.quality);
+                        SelectAntiAliasingMethod(staged, defaultMethod);
                         NormalizeRedundantAntiAliasingOverrides(staged);
                     });
             }
@@ -27674,10 +27906,12 @@ protected:
             if (DrawPresetResetIcon(
                     "Aliasing Quality",
                     selectorSettings.quality !=
-                        defaultAliasingSettings.quality))
+                        GetInitialAntiAliasingQuality(
+                            selectorSettings.method)))
             {
                 const AntiAliasingQuality defaultQuality =
-                    defaultAliasingSettings.quality;
+                    GetInitialAntiAliasingQuality(
+                        selectorSettings.method);
                 QueueDeferredControlUiAction(
                     commitDeferredAliasingPresentation);
                 g_DeferredAliasingUiPresentation.Stage(
@@ -28058,8 +28292,9 @@ protected:
                             ImGui::EndCombo();
                         }
                         ImGui::SetItemTooltip(
-                            "Choose the CMAA2 strength applied after the "
-                            "resolved Temporal or Multisample image. With "
+                            "Choose the CMAA2 quality tier and edge threshold "
+                            "applied after the resolved Temporal or Multisample "
+                            "image. With "
                             "Minimum, compact R11G11B10 color reports an "
                             "effective Reduced fallback so CMAA2 receives "
                             "RGBA16F input.");
@@ -29808,7 +30043,8 @@ protected:
                         &shadows.useEarlyOut);
                     ImGui::SetItemTooltip(
                         shadows.debugView == ScreenSpaceShadowDebugView::None
-                            ? "Stop tracing after confirmed hard occlusion."
+                            ? "Skip depth-bound receivers, usually sky, when "
+                                "a complete wavefront can exit together."
                             : "Keep tracing to preserve complete debug "
                                 "diagnostics.");
                     if (DrawPresetResetIcon(
@@ -29822,7 +30058,7 @@ protected:
                     }
 
                     static constexpr const char* DebugLabels[] = {
-                        "Off", "Occlusion", "Trace Progress", "Ray Bounds"
+                        "Off", "Edge", "Thread", "Wave"
                     };
                     const int debugIndex = std::clamp(
                         int(shadows.debugView),
@@ -29853,8 +30089,8 @@ protected:
                         ImGui::EndCombo();
                     }
                     ImGui::SetItemTooltip(
-                        "Show raw occlusion, trace-progress, or ray-bounds "
-                        "diagnostics.");
+                        "Show depth edges, thread lanes, or projected "
+                        "wavefront layout.");
                     if (DrawNestedDropdownResetIcon(
                             "ScreenSpaceShadowDebugView",
                             shadows.debugView != shadowDefaults.debugView))
@@ -31094,6 +31330,7 @@ bool ProcessCommandLine(
         log::error("Missing value after %s", option);
         return false;
     };
+    bool aaQualityExplicit = false;
 
     try
     {
@@ -31195,23 +31432,22 @@ bool ProcessCommandLine(
             if (i + 1 >= argc)
                 return missingValue(argv[i]);
             const std::string value = argv[++i];
+            AntiAliasingMethod selectedMethod{};
             if (value == "temporal" ||
                 value == "temporal-subpixel" ||
                 value == "temporal-subpixel-morphological")
             {
-                aaBenchmark.settings.method =
+                selectedMethod =
                     AntiAliasingMethod::TemporalSubpixelMorphological;
             }
             else if (value == "cmaa2" ||
                 value == "intel-cmaa2")
             {
-                aaBenchmark.settings.method =
-                    AntiAliasingMethod::IntelCmaa2;
+                selectedMethod = AntiAliasingMethod::IntelCmaa2;
             }
             else if (value == "msaa")
             {
-                aaBenchmark.settings.method =
-                    AntiAliasingMethod::Msaa;
+                selectedMethod = AntiAliasingMethod::Msaa;
             }
             else
             {
@@ -31219,6 +31455,20 @@ bool ProcessCommandLine(
                     "--aa-method",
                     value,
                     "temporal|cmaa2|msaa");
+            }
+            if (aaQualityExplicit)
+            {
+                aaBenchmark.settings.method = selectedMethod;
+                aaBenchmark.settings.quality =
+                    SanitizeAntiAliasingQuality(
+                        selectedMethod,
+                        aaBenchmark.settings.quality);
+            }
+            else
+            {
+                SelectAntiAliasingMethod(
+                    aaBenchmark.settings,
+                    selectedMethod);
             }
         }
         else if (!strcmp(argv[i], "--aa-quality") ||
@@ -31240,6 +31490,7 @@ bool ProcessCommandLine(
                     argv[i - 1],
                     value,
                     "low|medium|high|ultra");
+            aaQualityExplicit = true;
         }
         else if (!strcmp(argv[i], "--aa-enabled"))
         {

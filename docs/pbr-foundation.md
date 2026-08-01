@@ -308,11 +308,21 @@ for active indirect lighting.
 
 ## Screen-Space Directional Shadows
 
-The optional first-party Screen-Space Directional Shadows pass consumes the
-single-sample device-depth texture after the G-buffer pass and produces a
-full-resolution `R8_UNORM` visibility texture. Projection conversion, reverse-Z
-near/far values, resources, shader permutations, and dispatch bindings are
-owned by UVSR.
+The optional Screen-Space Directional Shadows pass consumes the single-sample
+device-depth texture after the G-buffer pass and produces a full-resolution
+`R8_UNORM` visibility texture. Its ray-coherent traversal shares four depth
+reads per lane across the default 60-pixel trace, then evaluates the compiled
+sample loop from group memory.
+
+The CPU dispatch planner and GPU tracer are the byte-identical example released
+by [Bend Studio](https://www.bendstudio.com/blog/inside-bend-screen-space-shadows/)
+under Apache-2.0, Copyright 2023 Sony Interactive Entertainment. UVSR owns the
+generic projection conversion, finite-light validation, reverse-Z near/far
+values, resources, shader permutations, dispatch bindings, and product surface.
+The pinned `code_final_candidate.zip` archive has SHA-256
+`75707A8E287D485C0F71D04FB0EDE245BB9A7E9569F1492B1C4D1F6AB943DE83`;
+the complete license is retained at
+`third_party/licenses/Apache-2.0.txt` and packaged with the executable.
 
 ### Settings and Shader Variants
 
@@ -337,9 +347,12 @@ isolated to the adapter's variant table and shader registration.
 The remaining continuous controls are **Surface Thickness**, **Bilinear
 Threshold**, and **Shadow Contrast**. Optional algorithm modes are **Ignore Edge
 Pixels**, **Precision Offset**, **Bilinear Offset Mode**, and **Early Out**.
-**Debug View** selects Off, Occlusion, Trace Progress, or Ray Bounds; the three
-diagnostics present the raw R8 result as grayscale instead of compositing it
-into scene lighting.
+Early Out skips receivers at the configured depth bounds, normally sky, when a
+complete projected wavefront can exit together; it is disabled while a debug
+view is active. **Debug View** selects Off, Edge, Thread, or Wave. The three
+native diagnostics present depth discontinuities, lane indices, or projected
+wavefront layout through the R8 result instead of compositing it into scene
+lighting.
 
 ### Directional-Light Composite
 
@@ -373,6 +386,30 @@ This near tracer is intentionally a standalone producer. A future Hi-Z or
 hierarchical far tracer can replace one neutral producer slot or deliberately
 extend the renderer boundary without modifying the validated directional-shadow
 interface.
+
+### Performance Follow-Ups
+
+The measured historical foundation is the restored ray-coherent near tracer:
+on the earlier RTX 4090 Laptop session at 1902 x 1069, its white clear plus
+dispatches measured 0.098–0.106 ms at 60 pixels, 0.183–0.203 ms at 120, and
+0.347–0.362 ms at 240. Those are historical unmatched observations, not current
+candidate measurements.
+
+Exact follow-ups should be isolated and measured in this order: specialize the
+default optional-off reverse-Z mode; reduce per-dispatch constant-buffer work
+with a small wave-offset push constant; test explicit integer depth loads or a
+correctly mapped gather; prove complete dispatch coverage before removing the
+white clear; and investigate chunked LDS evaluation for 240–960-pixel variants.
+
+Long-ray research remains a separate far producer. The prior proposal builds a
+conservative front-minimum/back-maximum hierarchy with thickness, keeps roughly
+64–96 pixels on the exact near tracer, marches coarse mips to screen exit, and
+descends only where depth intervals overlap. Tile occupancy with indirect
+dispatch, a guide-aware half-resolution far field, stochastic light samples
+with validated temporal bitmasks, multi-bit blocker coverage, and asynchronous
+compute were also discussed but never implemented or measured. They are
+quality-, memory-, or scheduling-changing experiments rather than restoration
+optimizations.
 The current experiment does not allocate temporal history, stochastic inputs,
 a thickness texture, a depth hierarchy, or a far-trace resource.
 
@@ -385,11 +422,11 @@ Environment**, **Cardinal Environment Test**, **Prefiltered Specular**,
 Occlusion**, and **Environment Mip**. These views isolate normal encoding,
 source orientation, convolution, roughness selection, split-sum response, and
 occlusion without changing the production path. Screen-Space Directional
-Shadows separately exposes Occlusion, Trace Progress, and Ray Bounds diagnostics
-as direct grayscale views of the R8 output. The Donut legacy comparison path remains
+Shadows separately exposes Edge, Thread, and Wave diagnostics as direct
+grayscale views of the R8 output. The Donut legacy comparison path remains
 implemented for possible future experiments, but its **Enable PBR** control is
-not exposed in the production UI. Forward and deferred production lighting
-both use the same shared BSDF and IBL evaluator.
+not exposed in the production UI. Forward and deferred production lighting both
+use the same shared BSDF and IBL evaluator.
 
 `tests/pbr_reference_tests.cpp` validates defaults and invalid-value repair,
 roughness extremes, dielectric and metallic behavior, dark/bright base colors,
@@ -415,9 +452,12 @@ not otherwise need relinking.
 
 `tests/screen_space_directional_shadows_tests.cpp` validates Default reset
 values, Enabled independence, the Long and Maximum Validation lengths, and
-every registered sample-count combination. Runtime image quality, artifact,
-reliability, and performance conclusions are recorded separately only after the
-corresponding renderer evaluation.
+every registered sample-count combination. It also exercises the released CPU
+dispatch planner across light and viewport cases, enforces the generic adapter
+and shader-wrapper contracts, and checks the pinned source sizes, notices,
+license, and package registration. Runtime image quality, artifact, reliability,
+and performance conclusions are recorded separately only after the corresponding
+renderer evaluation.
 
 ## Current Limitations and Performance-Sensitive Areas
 

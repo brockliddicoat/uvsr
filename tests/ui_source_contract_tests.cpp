@@ -3462,7 +3462,7 @@ int main(int argc, char** argv)
     ExpectContains(
         temporalAaSource,
         "state.pipeline = m_PresentationSharpenPipeline;",
-        "CMAA2-compatible presentation sharpen dispatch");
+        "resolved presentation sharpen dispatch");
     for (const std::string_view morphologyStrength : {
             std::string_view("\"Conservative Low\""),
             std::string_view("\"Conservative Medium\""),
@@ -3472,7 +3472,7 @@ int main(int argc, char** argv)
         ExpectContains(
             aliasing,
             morphologyStrength,
-            "CMAA2 morphology strength");
+            "CMAA2 morphology quality tier");
     }
     for (const std::string_view removedExport : {
             std::string_view("VisibilityBenchmarkExportPaths"),
@@ -4104,7 +4104,8 @@ int main(int argc, char** argv)
             std::string_view("toward the near plane"),
             std::string_view("one pixel farther"),
             std::string_view("Keep tracing to preserve complete debug"),
-            std::string_view("Show raw occlusion") })
+            std::string_view("Skip depth-bound receivers"),
+            std::string_view("Show depth edges") })
     {
         ExpectContains(
             screenSpaceShadowControls,

@@ -42,9 +42,9 @@ namespace uvsr
         }
     };
 
-    // Full-screen, one-dispatch directional ray marcher. Its public result is
-    // deliberately producer-neutral: full-resolution R8 visibility where one
-    // means unoccluded, associated with the exact light it attenuates.
+    // Generic UVSR adapter around the vendored ray-coherent planner and tracer.
+    // Its public result stays producer-neutral: full-resolution R8 visibility
+    // where one means unoccluded, associated with the exact light it attenuates.
     class ScreenSpaceDirectionalShadowPass
     {
     public:
@@ -72,19 +72,26 @@ namespace uvsr
         }
 
     private:
+        struct Pipeline
+        {
+            nvrhi::ShaderHandle shader;
+            nvrhi::ComputePipelineHandle pso;
+        };
+
         static constexpr uint32_t c_TimerLatency = 4u;
 
         nvrhi::DeviceHandle m_Device;
         std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
         std::shared_ptr<donut::engine::CommonRenderPasses> m_CommonPasses;
-        nvrhi::ShaderHandle m_TraceShader;
-        nvrhi::ComputePipelineHandle m_TracePipeline;
         nvrhi::BindingLayoutHandle m_BindingLayout;
         nvrhi::BindingSetHandle m_BindingSet;
         nvrhi::BufferHandle m_ConstantBuffer;
-        nvrhi::SamplerHandle m_PointClampSampler;
+        std::array<nvrhi::SamplerHandle, 2> m_PointBorderSamplers;
         nvrhi::TextureHandle m_NearVisibility;
         nvrhi::ITexture* m_BoundDepth = nullptr;
+        bool m_BoundReverseDepth = true;
+
+        std::array<std::array<std::array<Pipeline, 3>, 3>, 5> m_Pipelines;
 
         nvrhi::ShaderHandle m_DebugPixelShader;
         nvrhi::BindingLayoutHandle m_DebugBindingLayout;
@@ -96,10 +103,12 @@ namespace uvsr
         bool m_TimerActive = false;
         uint32_t m_TimerFrame = 0u;
         ScreenSpaceDirectionalShadowTimings m_Timings;
-        bool m_ReportedInvalidConfiguration = false;
+        bool m_ReportedInvalidVariant = false;
         bool m_ReportedInvalidInput = false;
 
-        bool EnsureResources(nvrhi::ITexture* depth);
+        bool EnsureResources(nvrhi::ITexture* depth, bool reverseDepth);
+        Pipeline* EnsurePipeline(
+            const ScreenSpaceDirectionalShadowSettings& settings);
         void AdvanceTimer();
         void BeginTimer(nvrhi::ICommandList* commandList);
         void EndTimer(nvrhi::ICommandList* commandList);

@@ -59,9 +59,9 @@ void main(
         ST = clamp(ST, int2(0, 0), int2(BufferDim) - 1);
         float4 Color = TemporalColor[ST];
         // Temporal history stores premultiplied radiance and confidence.
-        // Presentation inputs such as CMAA2 are already resolved RGB; CMAA2
-        // uses alpha as scratch/unused output and writes zero on processed
-        // edges, so dividing that path by alpha creates white overflow.
+        // The presentation permutation receives already-resolved RGB before
+        // display mapping and spatial AA, so dividing it by its non-semantic
+        // alpha would create white overflow.
 #if TAA_SHARPEN_INPUT_PREMULTIPLIED
         float3 normalizedColor =
             Color.rgb / max(Color.w, 1e-6);

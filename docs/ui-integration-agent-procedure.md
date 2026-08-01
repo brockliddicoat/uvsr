@@ -1389,7 +1389,7 @@ The symptom had two independent contributors:
   called broad `CreateRenderPasses`, recreating Forward, G-buffer, Material ID,
   pixel readback, deferred or PBR lighting, MSAA visibility resolve,
   screen-space visibility, TAA, CMAA2, Sky, and tone mapping. A cold CMAA2
-  recreation also constructed its full 16-PSO quality set.
+  recreation also constructed its full 32-PSO color-range and quality set.
 
 These attempts established the central rule: animation timing, presentation
 purity, consumer synchronization, and renderer resource ownership must be
@@ -1456,7 +1456,7 @@ The AA-only refresh uses this ownership boundary:
 | Sky and AgX tone mapping | Recreate | They own replacement framebuffer bindings |
 | Legacy and PBR deferred lighting | Retain and clear binding caches | Pipelines remain compatible; target bindings do not |
 | Screen-space visibility | Retain, clear bindings, and reset history | Independent pipelines survive, but bindings and temporal history do not |
-| CMAA2 | Retain and call `UpdateSourceColor` | Same-sized single-sample RGBA16F intermediates and 16 quality PSOs remain compatible |
+| CMAA2 | Retain and call `UpdateSourceColor` | Same-sized single-sample RGBA16F intermediates and 32 color-range/quality PSOs remain compatible |
 | MSAA visibility resolve | Retain | All supported sample-count PSOs are created with the visibility renderer |
 | Material ID pass | Retain | Its pipeline is not target-owned by the AA-only swap |
 

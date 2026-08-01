@@ -88,6 +88,7 @@ namespace
         };
         constexpr const char* appShaders[] = {
             "agx_tonemapping_ps",
+            "display_output_ps",
             "backdrop_blur_ps",
             "image_based_lighting_background_ps",
             "msaa_visibility_resolve_cs",
@@ -155,13 +156,22 @@ int main(int argc, char** argv)
 
     const std::string config = ReadText(configPath);
     const std::string manifest = ReadText(manifestPath);
+    const size_t manifestCatalogStart =
+        manifest.find("Framework root:");
+    const std::string manifestCatalog =
+        manifestCatalogStart == std::string::npos
+            ? std::string()
+            : manifest.substr(manifestCatalogStart);
     passed &= Check(
-        CountShaderPermutations(config) == 61u,
-        "factory experiment catalog must contain exactly 61 permutations");
+        CountShaderPermutations(config) == 62u,
+        "factory experiment catalog must contain exactly 62 permutations");
     passed &= Check(
         manifest.find("src/shaders_experiment_defaults.cfg") !=
             std::string::npos,
         "runtime manifest must identify the factory experiment config");
+    passed &= Check(
+        !manifestCatalog.empty(),
+        "runtime manifest must contain its shader catalog");
     passed &= Check(
         config.find(
             "VISIBILITY_ESTIMATOR=1 -D ENABLE_AO=1 -D ENABLE_GI=1 "
@@ -213,7 +223,7 @@ int main(int argc, char** argv)
     {
         passed &= Check(
             config.find(token) == std::string::npos &&
-                manifest.find(token) == std::string::npos,
+                manifestCatalog.find(token) == std::string::npos,
             std::string("non-factory shader path must be absent: ") + token);
     }
 
@@ -235,8 +245,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 40u,
-        "factory experiment contract must enumerate exactly 40 files");
+        expectedFiles.size() == 41u,
+        "factory experiment contract must enumerate exactly 41 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

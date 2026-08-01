@@ -199,8 +199,14 @@ def pristine_third_party_files() -> list[Path]:
                 )
             files.append(path)
 
-    vendor_root = ROOT / "src" / "third_party"
-    if vendor_root.exists():
+    vendor_roots = (
+        ROOT / "src" / "third_party",
+        ROOT / "third_party",
+    )
+    for vendor_root in vendor_roots:
+        if not vendor_root.exists():
+            continue
+        relative_vendor_root = vendor_root.relative_to(ROOT).as_posix()
         output = run(
             [
                 "git",
@@ -210,7 +216,7 @@ def pristine_third_party_files() -> list[Path]:
                 "--others",
                 "--exclude-standard",
                 "--",
-                "src/third_party",
+                relative_vendor_root,
             ]
         )
         for encoded in output.split(b"\0"):

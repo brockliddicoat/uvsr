@@ -783,7 +783,7 @@ namespace uvsr
                 "shadows.screen-space-directional.debug-view",
                 UiSettingsCommandKind::Enum,
                 UiSettingsCommandSection::ScreenSpaceDirectionalShadows,
-                "off|occlusion|trace-progress|ray-bounds"),
+                "off|edge|thread|wave"),
 
             // Sparse virtual shadow maps: 62.
             MakeUiSettingsValueCommand(
