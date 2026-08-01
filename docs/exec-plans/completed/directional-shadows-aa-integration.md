@@ -2,8 +2,8 @@
 
 ## Status
 
-- State: active; product accepted with the flashlight-default tweak and
-  canonical promotion in progress
+- State: complete; merged into live GitHub `main` and reverified at the
+  integrated canonical snapshot
 - Coordinator: `/root`
 - Project/integration branch and worktree:
   `codex/directional-shadows-aa-integration` in
@@ -40,7 +40,7 @@ Done when:
 - [x] The user accepts the combined behavior, requests the startup flashlight
       default be disabled, and explicitly waives a replacement runtime smoke
       for that constant-only tweak.
-- [ ] The replacement is committed, merged into live GitHub `main`, rebuilt,
+- [x] The replacement is committed, merged into live GitHub `main`, rebuilt,
       and reverified at the integrated canonical snapshot.
 
 ## Scope
@@ -104,9 +104,9 @@ Shared hotspots reserved for the coordinator:
 | Live canonical line | `402ebb0` | Integrated as base | Whole task |
 | Directional-shadow input | Exact `1079DDD8...BC3` source diff and license files | Frozen and composed | Integration |
 | CMAA2 input | Exact `177CB419...AFB0F` source diff and display pipeline | Frozen and composed | Integration |
-| Independent review | Frozen replacement candidate | Passed on tree `160c957a` | Final handoff |
+| Independent review | Frozen replacement candidate | Passed on final tree `1ad1a974` | Final handoff |
 | Product acceptance | Exact launched artifact plus requested flashlight default | Accepted; replacement smoke waived | Canonical promotion |
-| GitHub `main` promotion | Commit, ready PR, merge, and post-merge checks | In progress | Canonical verification |
+| GitHub `main` promotion | PR #28 and merge commit `a159625c` | Complete and reverified | Canonical verification |
 
 Public interface, ABI, shader binding, resource layout, serialized setting, or
 asset/package contracts:
@@ -131,7 +131,7 @@ asset/package contracts:
 | `trace-shadow` | `/root/trace_shadow_build` | Read-only shared repository | `402ebb0` context | None | Shadow artifact | Complete |
 | `trace-aa` | `/root/trace_aa_build` | Read-only shared repository | `402ebb0` context | None | AA artifact | Complete |
 | `assess-integration` | `/root/assess_integration` | Read-only shared repository | `402ebb0` context | None | Both lineages | Complete |
-| `integrate` | `/root` | Task worktree | `402ebb0` | All task paths | Trace handoffs | Publication in progress |
+| `integrate` | `/root` | Task worktree | `402ebb0` | All task paths | Trace handoffs | Complete |
 | `independent-review` | `/root/independent_combined_review` | Frozen task worktree | Combined candidate | None | Integrated diff | Complete |
 
 ## Assignment Contracts
@@ -252,7 +252,8 @@ asset/package contracts:
 - Stop and report if: candidate changes during review
 - Handoff revision/artifact: initial tree
   `444a8a528ab07cba7f3eb2e8c45336e953b46ee5` reported one P1; replacement
-  tree `160c957ac929bb6cf2eb9f068e8a5c8ca42c5fec` passed with no unresolved
+  tree `160c957ac929bb6cf2eb9f068e8a5c8ca42c5fec` and final flashlight-default
+  tree `1ad1a9740c87a8a86d304efdff2df4de27169af7` passed with no unresolved
   P0-P2 findings
 - Handoff acknowledged by/on: `/root`, 2026-07-31
 
@@ -285,7 +286,7 @@ asset/package contracts:
 | Runtime viability | Responsive High-priority D3D12 window | Bounded smoke | Passed; PID 4804, exact path, one renderer, 10/10 responsive High-priority samples |
 | Product acceptance | User accepts exact launched artifact/settings | Interactive review | Passed; flashlight-default replacement smoke explicitly waived |
 | Flashlight startup default | Shared constant, direct test, and durable docs | Focused build and CTest | Passed; full 33/33 production suite also passes |
-| Canonical integration | Live `main` merge plus rebuilt exact snapshot | GitHub PR/merge and post-merge checks | Pending |
+| Canonical integration | Live `main` merge plus rebuilt exact snapshot | GitHub PR/merge and post-merge checks | Passed at `a159625c`; production 33/33 and factory 2/2 tests passed |
 
 ## Decisions
 
@@ -310,6 +311,8 @@ asset/package contracts:
 | 2026-07-31 | `/root/independent_combined_review` | Complete | Replacement tree `160c957ac929bb6cf2eb9f068e8a5c8ca42c5fec` | Odd-extent capacity repair correct; frozen before and after; no unresolved P0-P2 findings | Ready for runtime smoke |
 | 2026-07-31 | `/root` runtime | Launched for acceptance | Exact executable SHA-256 `CB0289E45935B58378D17C7A0079554EE86F60522E3852EE334FB255C5AAE2E0`, PID 4804 | PBR Sponza Decorated at 1920x1000; CMAA2 enabled at Ultra; directional shadows enabled on Default 60 px profile; debug view Off; one exact-path renderer and 10/10 responsive High-priority samples | Await user acceptance; any artifact or setting repair invalidates it |
 | 2026-07-31 | `/root` acceptance and publication | Pre-merge verified | Replacement `uvsr.exe` SHA-256 `585ECBB1FEAA41871A2C2AF07B5634BF334394880EDC472AD6E0CBB39BDDB1F0` | Live `origin/main` remains `402ebb0`; focused flashlight test and 33/33 production suite pass; exact dependency/package hashes, README counts, Title Case, and diff checks pass; replacement smoke waived | Publish through a ready PR, merge, and reverify canonical main |
+| 2026-07-31 | `/root` GitHub promotion | Merged | Feature commit `18236ffb`; PR #28; canonical merge `a159625c` | Both required GitHub workflows passed; exact merge subject, parents, and tree verified | Rebuild and verify live canonical snapshot |
+| 2026-07-31 | `/root` canonical verification | Complete | `uvsr.exe` SHA-256 `AF1EA0DE66B2DE4ED54BFE5889D64294CE2FBD899CB414F6E216F56951266AF8` from `a159625c` | Production build passed; CTest 33/33; factory bundles 2/2; exact package hashes; README counts and 1,003 Title Case headings passed; worktree clean; replacement runtime smoke remained waived | Remove merged roadmap entry and archive this plan |
 
 ## Risks and Escalation Triggers
 
@@ -334,15 +337,18 @@ Stop and ask the user if:
 
 ## Completion
 
-- Final integrated commit: pending; user-authorized publication in progress
-- Verification summary: combined candidate checks and bounded runtime smoke
-  pass; flashlight-default replacement automated checks pass and its runtime
-  smoke is explicitly waived
-- Independent review: replacement tree passed with no unresolved P0-P2 findings
-- Coming Soon/documentation update: candidate listed as approved for promotion;
-  final canonical reconciliation pending
-- Pushed/PR/merged, or intentionally local: publication in progress
-- Remaining experiments or follow-ups: post-integration canonical verification
-  and documentation closeout
-- Active ownership released: no
-- Archived to completed/abandoned path: pending
+- Final integrated commit: `a159625c8e84b8ae1cf308550fa9cc2ac75ce79c`
+- Verification summary: the integrated production build, all 33 production
+  tests, both factory shader-bundle contracts, exact dependency/package hashes,
+  README counts, Title Case validation, and diff/status checks pass; the user
+  explicitly waived a replacement runtime smoke for the flashlight constant
+- Independent review: final tree `1ad1a974` passed with no unresolved P0-P2
+  findings
+- Coming Soon/documentation update: merged candidate entry removed and this
+  plan archived
+- Pushed/PR/merged, or intentionally local: feature commit `18236ffb` pushed
+  and merged by PR #28 as canonical merge `a159625c`
+- Remaining experiments or follow-ups: none for this task
+- Active ownership released: yes
+- Archived to completed/abandoned path:
+  `docs/exec-plans/completed/directional-shadows-aa-integration.md`
