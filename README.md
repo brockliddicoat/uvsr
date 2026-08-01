@@ -69,11 +69,6 @@ download, conversion, or scene setup is required.
 This section summarizes stable work that is active but not yet merged into
 `main`. Experimental entries are not promises that the work will ship.
 
-- **Directional Shadow and CMAA2 Integration — Approved for Canonical Promotion**
-  (`codex/directional-shadows-aa-integration`). Combines the ray-coherent
-  directional-shadow restoration with the post-AgX CMAA2 Ultra repair in one
-  isolated canon candidate, preserving required Apache-2.0 notices and the
-  final transfer-and-dither presentation order.
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidates shared
   depth, pixel-coordinate, and safe-normal helpers without changing equations,
