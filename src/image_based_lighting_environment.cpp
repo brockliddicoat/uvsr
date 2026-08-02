@@ -172,8 +172,8 @@ namespace uvsr
         m_LightProbe->specularScale = 1.f;
     }
 
-    std::optional<ImageBasedLightingEnvironment::ImportedRadiance>
-        ImageBasedLightingEnvironment::LoadImportedRadiance(
+    std::optional<ImageBasedLightingEnvironment::PreparedRadiance>
+        ImageBasedLightingEnvironment::PrepareRadiance(
             ImageBasedLightingSource source,
             bool neutralize) const
     {
@@ -224,7 +224,9 @@ namespace uvsr
             return std::nullopt;
         }
 
-        ImportedRadiance imported;
+        PreparedRadiance imported;
+        imported.source = source;
+        imported.neutralize = neutralize;
         imported.width = uint32_t(width);
         imported.height = uint32_t(height);
         imported.pixels.resize(
@@ -260,36 +262,15 @@ namespace uvsr
         }
         imported.diffuseSh = projection->sh;
         imported.averageLuminance = projection->averageLuminance;
-        log::info(
-            "Loaded %s IBL source (%d x %d, average luminance %.4f).",
-            info.displayName,
-            width,
-            height,
-            imported.averageLuminance);
-        return imported;
-    }
 
-    bool ImageBasedLightingEnvironment::RebuildRadiance(
-        nvrhi::ICommandList* commandList,
-        const ImportedRadiance& imported)
-    {
-        if (!commandList ||
-            !m_ProbeProcessing ||
-            !m_RadianceTexture ||
-            !m_DiffuseTexture ||
-            !m_SpecularTexture)
-        {
-            return false;
-        }
-
-        m_LastSh = imported.diffuseSh;
-        m_SourceAverageLuminance = imported.averageLuminance;
-
-        std::vector<float16_t4> radianceFace(
-            size_t(RadianceCubeDimension) *
-            size_t(RadianceCubeDimension));
+        imported.radianceFaces.resize(
+            size_t(6u) * RadianceCubeDimension *
+            RadianceCubeDimension);
         for (uint32_t face = 0u; face < 6u; ++face)
         {
+            float16_t4* destination = imported.radianceFaces.data() +
+                size_t(face) * RadianceCubeDimension *
+                    RadianceCubeDimension;
             for (uint32_t y = 0u;
                 y < RadianceCubeDimension;
                 ++y)
@@ -306,28 +287,23 @@ namespace uvsr
                             RadianceCubeDimension);
                     const dm::float3 radiance =
                         SampleLatLongBilinear(imported, direction);
-                    radianceFace[
+                    destination[
                         size_t(y) * RadianceCubeDimension + x] =
                         Float32ToFloat16x4(float4(
                             SanitizeRadiance(radiance, false),
                             0.f));
                 }
             }
-            commandList->writeTexture(
-                m_RadianceTexture,
-                face,
-                0u,
-                radianceFace.data(),
-                size_t(RadianceCubeDimension) *
-                    sizeof(float16_t4));
         }
 
-        std::array<
-            float16_t4,
-            DiffuseCubeDimension * DiffuseCubeDimension>
-            diffuseFace{};
+        imported.diffuseFaces.resize(
+            size_t(6u) * DiffuseCubeDimension *
+            DiffuseCubeDimension);
         for (uint32_t face = 0u; face < 6u; ++face)
         {
+            float16_t4* destination = imported.diffuseFaces.data() +
+                size_t(face) * DiffuseCubeDimension *
+                    DiffuseCubeDimension;
             for (uint32_t y = 0u;
                 y < DiffuseCubeDimension;
                 ++y)
@@ -345,17 +321,259 @@ namespace uvsr
                     const dm::float3 response =
                         ClampDiffuseEnvironmentForHalf(
                             EvaluateDiffuseEnvironmentSh(
-                                m_LastSh, direction));
-                    diffuseFace[
+                                imported.diffuseSh,
+                                direction));
+                    destination[
                         y * DiffuseCubeDimension + x] =
                         Float32ToFloat16x4(float4(response, 0.f));
                 }
             }
+        }
+
+        // The lat-long source is no longer needed after CPU cubemap
+        // preparation. Release it on the worker rather than carrying another
+        // full HDR copy into scene activation.
+        std::vector<float>().swap(imported.pixels);
+        log::info(
+            "Prepared %s IBL source (%d x %d, average luminance %.4f).",
+            info.displayName,
+            width,
+            height,
+            imported.averageLuminance);
+        return imported;
+    }
+
+    void ImageBasedLightingEnvironment::StagePreparedRadiance(
+        PreparedRadiance prepared)
+    {
+        m_PreparedRadiance = std::move(prepared);
+        m_PreparedRadianceStage =
+            PreparedRadianceGpuStage::EnvironmentBrdf;
+        m_PreparedRadianceStep = 0u;
+        m_Uploaded = false;
+        m_LastSource = ImageBasedLightingSource::Count;
+        m_LastSh = {};
+        m_SourceAverageLuminance = 0.f;
+        m_LastLoadFailed = false;
+        m_ActiveLightProbes.clear();
+    }
+
+    bool ImageBasedLightingEnvironment::AdvancePreparedRadiance(
+        nvrhi::ICommandList* commandList)
+    {
+        if (!commandList ||
+            !m_PreparedRadiance ||
+            !m_ProbeProcessing ||
+            !m_RadianceTexture ||
+            !m_DiffuseTexture ||
+            !m_SpecularTexture)
+        {
+            m_PreparedRadiance.reset();
+            m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
+            m_PreparedRadianceStep = 0u;
+            m_Uploaded = false;
+            m_LastSource = ImageBasedLightingSource::Count;
+            m_LastSh = {};
+            m_SourceAverageLuminance = 0.f;
+            m_LastLoadFailed = true;
+            return false;
+        }
+
+        PreparedRadiance& prepared = *m_PreparedRadiance;
+        const size_t expectedRadianceTexels =
+            size_t(6u) * RadianceCubeDimension *
+            RadianceCubeDimension;
+        const size_t expectedDiffuseTexels =
+            size_t(6u) * DiffuseCubeDimension *
+            DiffuseCubeDimension;
+        if (prepared.radianceFaces.size() != expectedRadianceTexels ||
+            prepared.diffuseFaces.size() != expectedDiffuseTexels)
+        {
+            m_PreparedRadiance.reset();
+            m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
+            m_PreparedRadianceStep = 0u;
+            m_Uploaded = false;
+            m_LastSource = ImageBasedLightingSource::Count;
+            m_LastSh = {};
+            m_SourceAverageLuminance = 0.f;
+            m_LastLoadFailed = true;
+            return false;
+        }
+
+        switch (m_PreparedRadianceStage)
+        {
+        case PreparedRadianceGpuStage::EnvironmentBrdf:
+            if (!m_BrdfReady)
+            {
+                m_ProbeProcessing->RenderEnvironmentBrdfTexture(commandList);
+                m_BrdfReady = true;
+            }
+            m_PreparedRadianceStage =
+                PreparedRadianceGpuStage::RadianceFaceUpload;
+            m_PreparedRadianceStep = 0u;
+            return false;
+
+        case PreparedRadianceGpuStage::RadianceFaceUpload:
+        {
+            const uint32_t face = m_PreparedRadianceStep;
+            commandList->writeTexture(
+                m_RadianceTexture,
+                face,
+                0u,
+                prepared.radianceFaces.data() +
+                    size_t(face) * RadianceCubeDimension *
+                        RadianceCubeDimension,
+                size_t(RadianceCubeDimension) *
+                    sizeof(float16_t4));
+            ++m_PreparedRadianceStep;
+            if (m_PreparedRadianceStep == 6u)
+            {
+                m_PreparedRadianceStage =
+                    PreparedRadianceGpuStage::DiffuseUpload;
+                m_PreparedRadianceStep = 0u;
+            }
+            return false;
+        }
+
+        case PreparedRadianceGpuStage::DiffuseUpload:
+            for (uint32_t face = 0u; face < 6u; ++face)
+            {
+                commandList->writeTexture(
+                    m_DiffuseTexture,
+                    face,
+                    0u,
+                    prepared.diffuseFaces.data() +
+                        size_t(face) * DiffuseCubeDimension *
+                            DiffuseCubeDimension,
+                    size_t(DiffuseCubeDimension) *
+                        sizeof(float16_t4));
+            }
+            m_PreparedRadianceStage =
+                PreparedRadianceGpuStage::RadianceMipGeneration;
+            m_PreparedRadianceStep = 0u;
+            return false;
+
+        case PreparedRadianceGpuStage::RadianceMipGeneration:
+            m_ProbeProcessing->GenerateCubemapMips(
+                commandList,
+                m_RadianceTexture,
+                0u,
+                m_PreparedRadianceStep,
+                1u);
+            ++m_PreparedRadianceStep;
+            if (m_PreparedRadianceStep == RadianceCubeMipCount - 1u)
+            {
+                m_PreparedRadianceStage =
+                    PreparedRadianceGpuStage::SpecularBaseBlit;
+                m_PreparedRadianceStep = 0u;
+            }
+            return false;
+
+        case PreparedRadianceGpuStage::SpecularBaseBlit:
+            m_ProbeProcessing->BlitCubemap(
+                commandList,
+                m_RadianceTexture,
+                0u,
+                0u,
+                m_SpecularTexture,
+                0u,
+                0u);
+            m_PreparedRadianceStage =
+                PreparedRadianceGpuStage::SpecularMipGeneration;
+            m_PreparedRadianceStep = 1u;
+            return false;
+
+        case PreparedRadianceGpuStage::SpecularMipGeneration:
+        {
+            const uint32_t mip = m_PreparedRadianceStep;
+            const float normalizedMip =
+                float(mip) / float(SpecularCubeMipCount - 1u);
+            const float perceptualRoughness =
+                ImageBasedLightingGenerationRoughness(normalizedMip);
+            const nvrhi::TextureSubresourceSet radianceSubresources(
+                0u,
+                RadianceCubeMipCount,
+                0u,
+                6u);
+            m_ProbeProcessing->RenderSpecularMap(
+                commandList,
+                perceptualRoughness,
+                m_RadianceTexture,
+                radianceSubresources,
+                m_SpecularTexture,
+                0u,
+                mip);
+            ++m_PreparedRadianceStep;
+            if (m_PreparedRadianceStep < SpecularCubeMipCount)
+                return false;
+
+            m_LastSh = prepared.diffuseSh;
+            m_SourceAverageLuminance = prepared.averageLuminance;
+            m_Uploaded = true;
+            m_LastSource = prepared.source;
+            m_LastLoadFailed = false;
+            m_PreparedRadiance.reset();
+            m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
+            m_PreparedRadianceStep = 0u;
+            return true;
+        }
+
+        case PreparedRadianceGpuStage::None:
+        default:
+            return false;
+        }
+    }
+
+    bool ImageBasedLightingEnvironment::RebuildRadiance(
+        nvrhi::ICommandList* commandList,
+        const PreparedRadiance& prepared)
+    {
+        if (!commandList ||
+            !m_ProbeProcessing ||
+            !m_RadianceTexture ||
+            !m_DiffuseTexture ||
+            !m_SpecularTexture)
+        {
+            return false;
+        }
+
+        const size_t expectedRadianceTexels =
+            size_t(6u) * RadianceCubeDimension *
+            RadianceCubeDimension;
+        const size_t expectedDiffuseTexels =
+            size_t(6u) * DiffuseCubeDimension *
+            DiffuseCubeDimension;
+        if (prepared.radianceFaces.size() != expectedRadianceTexels ||
+            prepared.diffuseFaces.size() != expectedDiffuseTexels)
+        {
+            return false;
+        }
+
+        m_LastSh = prepared.diffuseSh;
+        m_SourceAverageLuminance = prepared.averageLuminance;
+
+        for (uint32_t face = 0u; face < 6u; ++face)
+        {
+            commandList->writeTexture(
+                m_RadianceTexture,
+                face,
+                0u,
+                prepared.radianceFaces.data() +
+                    size_t(face) * RadianceCubeDimension *
+                        RadianceCubeDimension,
+                size_t(RadianceCubeDimension) *
+                    sizeof(float16_t4));
+        }
+
+        for (uint32_t face = 0u; face < 6u; ++face)
+        {
             commandList->writeTexture(
                 m_DiffuseTexture,
                 face,
                 0u,
-                diffuseFace.data(),
+                prepared.diffuseFaces.data() +
+                    size_t(face) * DiffuseCubeDimension *
+                        DiffuseCubeDimension,
                 size_t(DiffuseCubeDimension) *
                     sizeof(float16_t4));
         }
@@ -415,18 +633,21 @@ namespace uvsr
         float specularStrength,
         ImageBasedLightingSource source)
     {
-        if (!commandList ||
-            !m_ProbeProcessing ||
-            !m_LightProbe)
-        {
+        if (!commandList)
             return false;
-        }
 
-        if (!m_BrdfReady)
+        if (!m_ProbeProcessing || !m_LightProbe)
         {
-            m_ProbeProcessing->RenderEnvironmentBrdfTexture(
-                commandList);
-            m_BrdfReady = true;
+            if (m_PreparedRadianceStage !=
+                PreparedRadianceGpuStage::None)
+            {
+                m_PreparedRadiance.reset();
+                m_PreparedRadianceStage =
+                    PreparedRadianceGpuStage::None;
+                m_PreparedRadianceStep = 0u;
+                m_LastLoadFailed = true;
+            }
+            return false;
         }
 
         const ImageBasedLightingScales scales =
@@ -445,6 +666,41 @@ namespace uvsr
             uint32_t(source) < uint32_t(ImageBasedLightingSource::Count)
                 ? source
                 : ImageBasedLightingSource::Kloppenheim03Day;
+
+        if (m_PreparedRadianceStage !=
+            PreparedRadianceGpuStage::None)
+        {
+            const bool preparedRequestMatches =
+                m_PreparedRadiance &&
+                m_PreparedRadiance->source == requestedSource &&
+                m_PreparedRadiance->neutralize == neutralize;
+            if (preparedRequestMatches)
+            {
+                m_LastRequestedSource = requestedSource;
+                m_LastNeutralize = neutralize;
+                const bool rebuilt =
+                    AdvancePreparedRadiance(commandList);
+                m_ActiveLightProbes.clear();
+                if (m_Uploaded && m_LightProbe->IsActive())
+                    m_ActiveLightProbes.push_back(m_LightProbe);
+                return rebuilt;
+            }
+
+            // A changed UI request supersedes worker-prepared startup data.
+            // Fall through to the existing synchronous path so interactive
+            // environment changes retain their immediate behavior.
+            m_PreparedRadiance.reset();
+            m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
+            m_PreparedRadianceStep = 0u;
+        }
+
+        if (!m_BrdfReady)
+        {
+            m_ProbeProcessing->RenderEnvironmentBrdfTexture(
+                commandList);
+            m_BrdfReady = true;
+        }
+
         const bool requestChanged =
             m_LastRequestedSource != requestedSource ||
             m_LastNeutralize != neutralize;
@@ -456,8 +712,16 @@ namespace uvsr
         {
             m_LastRequestedSource = requestedSource;
             m_LastNeutralize = neutralize;
-            std::optional<ImportedRadiance> imported =
-                LoadImportedRadiance(requestedSource, neutralize);
+            std::optional<PreparedRadiance> imported;
+            if (m_PreparedRadiance &&
+                m_PreparedRadiance->source == requestedSource &&
+                m_PreparedRadiance->neutralize == neutralize)
+            {
+                imported = std::move(m_PreparedRadiance);
+            }
+            m_PreparedRadiance.reset();
+            if (!imported)
+                imported = PrepareRadiance(requestedSource, neutralize);
             if (!imported)
             {
                 // A missing or invalid source must never reveal the retired

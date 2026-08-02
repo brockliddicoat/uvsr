@@ -3,3 +3,14 @@ overrides/*.patch -diff -text
 third_party/bend_sss/upstream/bend_sss_cpu.h -text -whitespace
 third_party/bend_sss/upstream/bend_sss_gpu.h -text -whitespace
 third_party/licenses/Apache-2.0.txt -text -whitespace
+assets/scenes/bistro_interior_retextured/LICENSE.txt -diff -text
+assets/scenes/bistro_interior_retextured/SOURCE-README.txt -diff -text
+assets/scenes/bistro_interior_retextured/components/bistro_interior.gltf -diff -text
+assets/scenes/san_miguel_retextured/LICENSE.txt -diff -text
+assets/scenes/san_miguel_retextured/components/san_miguel.gltf -diff -text
+assets/scenes/blender_classroom/LICENSE.txt -diff -text
+assets/scenes/blender_classroom/SOURCE-README.txt -diff -text
+assets/scenes/blender_classroom/components/blender_classroom.gltf -diff -text
+assets/scenes/blender_classroom/components/blender-export-report.json -diff -text
+assets/scenes/blender_classroom/components/buffer-repack-report.json -diff -text
+tools/export_blender_classroom.py -diff -text

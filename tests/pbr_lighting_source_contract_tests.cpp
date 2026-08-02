@@ -94,10 +94,14 @@ int main(int argc, char** argv)
         sourceDirectory / "src/pbr_deferred_lighting_pass.cpp"));
     const std::string pbrLighting = Canonicalize(ReadSource(
         sourceDirectory / "src/pbr_lighting.hlsli"));
+    const std::string pbrCore = Canonicalize(ReadSource(
+        sourceDirectory / "src/pbr.hlsli"));
     const std::string flashlightShared = Canonicalize(ReadSource(
         sourceDirectory / "src/flashlight_shared.h"));
     const std::string forwardShader = Canonicalize(ReadSource(
         sourceDirectory / "src/pbr_forward_ps.hlsl"));
+    const std::string gbufferShader = Canonicalize(ReadSource(
+        sourceDirectory / "src/pbr_gbuffer_ps.hlsl"));
     const std::string compositeShader = Canonicalize(ReadSource(
         sourceDirectory / "src/screen_space_indirect_composite_cs.hlsl"));
     const std::string fusedShader = Canonicalize(ReadSource(
@@ -199,6 +203,37 @@ int main(int argc, char** argv)
         forwardShader,
         "evaluateshadowgather16(",
         "forward PBR must evaluate attached local-light shadow maps");
+    RequireContains(
+        pbrCore,
+        "returnisdoublesided?dot(geometricnormal,viewdirection)<0.0f:!isfrontface;",
+        "double-sided normal orientation must use the view hemisphere while single-sided surfaces retain raster facing");
+    RequireContains(
+        gbufferShader,
+        "returndirectionorposition.w>0.0f?directionorposition.xyz-surfaceposition:-directionorposition.xyz;",
+        "deferred material fill must construct perspective and orthographic view directions with the transport-facing sign");
+    RequireContains(
+        gbufferShader,
+        "if(shouldflippbrsurfacenormals(isdoublesided,i_isfrontface,surface.geometrynormal,viewdirection))",
+        "deferred material fill must orient the evaluated geometric normal from the reconstructed view direction");
+    RequireContains(
+        forwardShader,
+        "float3viewdirection=-viewincident;",
+        "forward material fill must convert its incident vector into the surface-to-view direction");
+    RequireContains(
+        forwardShader,
+        "if(shouldflippbrsurfacenormals(isdoublesided,i_isfrontface,sampledmaterial.geometrynormal,viewdirection))",
+        "forward material fill must orient the evaluated geometric normal from its view direction");
+    for (const std::string* shader : { &gbufferShader, &forwardShader })
+    {
+        Require(
+            CountOccurrences(
+                *shader,
+                "shouldflippbrsurfacenormals(") == 1u,
+            "each PBR material path must use the shared normal-orientation contract exactly once");
+        Require(
+            shader->find("if(!i_isfrontface)") == std::string::npos,
+            "PBR material paths must not orient double-sided normals solely from raster winding");
+    }
     RequireContains(
         pbrLighting,
         "light.lighttype==lighttype_spot",

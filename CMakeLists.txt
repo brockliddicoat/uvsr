@@ -200,24 +200,34 @@ endfunction()
 
 set(UVSR_DONUT_ENGINE_OVERRIDE_DIR
     "${CMAKE_BINARY_DIR}/uvsr_donut_engine_overrides")
+set(UVSR_DONUT_ENGINE_PATCH_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-engine.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-loading.patch")
 uvsr_stage_patched_sources(
     "${CMAKE_CURRENT_SOURCE_DIR}/donut"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-engine.patch"
+    "${UVSR_DONUT_ENGINE_PATCH_FILES}"
     "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}"
+    include/donut/engine/Scene.h
     include/donut/engine/SceneTypes.h
+    include/donut/engine/ThreadPool.h
     src/engine/GltfImporter.cpp
     src/engine/Scene.cpp
-    src/engine/TextureCache.cpp)
+    src/engine/TextureCache.cpp
+    src/engine/ThreadPool.cpp)
 
 set(UVSR_DONUT_APP_OVERRIDE_DIR
     "${CMAKE_BINARY_DIR}/uvsr_donut_app_overrides")
+set(UVSR_DONUT_APP_PATCH_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-app.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-loading-app.patch")
 uvsr_stage_patched_sources(
     "${CMAKE_CURRENT_SOURCE_DIR}/donut"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-app.patch"
+    "${UVSR_DONUT_APP_PATCH_FILES}"
     "${UVSR_DONUT_APP_OVERRIDE_DIR}"
     include/donut/app/ApplicationBase.h
     include/donut/app/DeviceManager.h
     include/donut/app/UserInterfaceUtils.h
+    src/app/ApplicationBase.cpp
     src/app/DeviceManager.cpp
     src/app/UserInterfaceUtils.cpp)
 
@@ -244,6 +254,7 @@ uvsr_replace_target_sources(
     donut_app
     "${CMAKE_CURRENT_SOURCE_DIR}/donut"
     "${UVSR_DONUT_APP_OVERRIDE_DIR}"
+    src/app/ApplicationBase.cpp
     src/app/DeviceManager.cpp
     src/app/UserInterfaceUtils.cpp)
 target_include_directories(donut_app BEFORE PUBLIC
@@ -252,10 +263,13 @@ uvsr_replace_target_sources(
     donut_engine
     "${CMAKE_CURRENT_SOURCE_DIR}/donut"
     "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}"
+    include/donut/engine/Scene.h
     include/donut/engine/SceneTypes.h
+    include/donut/engine/ThreadPool.h
     src/engine/GltfImporter.cpp
     src/engine/Scene.cpp
-    src/engine/TextureCache.cpp)
+    src/engine/TextureCache.cpp
+    src/engine/ThreadPool.cpp)
 target_include_directories(donut_engine BEFORE PUBLIC
     "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}/include")
 
@@ -500,6 +514,7 @@ if (UVSR_BUILD_APPLICATION)
         src/msaa_visibility_resolve.cpp
         src/pbr_deferred_lighting_pass.cpp
         src/scene_catalog.cpp
+        src/scene_loading.h
         src/screen_space_visibility.cpp
         src/sponza_camera_preset.cpp
         src/temporal_aa.cpp
@@ -730,6 +745,10 @@ target_include_directories(
 )
 target_link_libraries(uvsr_camera_controls_tests PRIVATE donut_app)
 add_test(NAME uvsr_camera_controls_reference COMMAND uvsr_camera_controls_tests)
+
+add_executable(uvsr_scene_loading_tests tests/scene_loading_tests.cpp)
+target_include_directories(uvsr_scene_loading_tests PRIVATE src)
+add_test(NAME uvsr_scene_loading_reference COMMAND uvsr_scene_loading_tests)
 
 add_executable(uvsr_sponza_camera_tests
     tests/sponza_camera_preset_tests.cpp
@@ -1361,49 +1380,87 @@ if (UVSR_BUILD_APPLICATION)
     endif()
 endif()
 
-set(UVSR_INTEL_SPONZA_SOURCE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/intel_sponza")
-set(UVSR_INTEL_SPONZA_STAGING_DIR
-    "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/intel_sponza")
-file(GLOB_RECURSE UVSR_INTEL_SPONZA_RUNTIME_ASSETS
-    CONFIGURE_DEPENDS
-    LIST_DIRECTORIES false
-    "${UVSR_INTEL_SPONZA_SOURCE_DIR}/*"
-)
-list(SORT UVSR_INTEL_SPONZA_RUNTIME_ASSETS)
-string(JOIN "\n" UVSR_INTEL_SPONZA_ASSET_MANIFEST_CONTENT
-    ${UVSR_INTEL_SPONZA_RUNTIME_ASSETS})
-set(UVSR_INTEL_SPONZA_ASSET_MANIFEST
-    "${CMAKE_BINARY_DIR}/intel_sponza_runtime_assets.manifest")
+set(UVSR_SCENE_SOURCE_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes")
+set(UVSR_SCENE_STAGING_ROOT
+    "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models")
+set(UVSR_BUNDLED_SCENE_DIRECTORIES
+    intel_sponza
+    bistro_interior_retextured
+    san_miguel_retextured
+    blender_classroom)
+set(UVSR_SCENE_RUNTIME_ASSETS)
+set(UVSR_SCENE_STAGE_COMMANDS)
+foreach(UVSR_SCENE_DIRECTORY IN LISTS UVSR_BUNDLED_SCENE_DIRECTORIES)
+    file(GLOB_RECURSE UVSR_CURRENT_SCENE_RUNTIME_ASSETS
+        CONFIGURE_DEPENDS
+        LIST_DIRECTORIES false
+        "${UVSR_SCENE_SOURCE_ROOT}/${UVSR_SCENE_DIRECTORY}/*")
+    list(APPEND UVSR_SCENE_RUNTIME_ASSETS
+        ${UVSR_CURRENT_SCENE_RUNTIME_ASSETS})
+    list(APPEND UVSR_SCENE_STAGE_COMMANDS
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${UVSR_SCENE_SOURCE_ROOT}/${UVSR_SCENE_DIRECTORY}"
+            "${UVSR_SCENE_STAGING_ROOT}/${UVSR_SCENE_DIRECTORY}")
+endforeach()
+list(SORT UVSR_SCENE_RUNTIME_ASSETS)
+string(JOIN "\n" UVSR_SCENE_ASSET_MANIFEST_CONTENT
+    ${UVSR_SCENE_RUNTIME_ASSETS})
+set(UVSR_SCENE_ASSET_MANIFEST
+    "${CMAKE_BINARY_DIR}/scene_runtime_assets.manifest")
 file(GENERATE
-    OUTPUT "${UVSR_INTEL_SPONZA_ASSET_MANIFEST}"
-    CONTENT "${UVSR_INTEL_SPONZA_ASSET_MANIFEST_CONTENT}\n"
+    OUTPUT "${UVSR_SCENE_ASSET_MANIFEST}"
+    CONTENT "${UVSR_SCENE_ASSET_MANIFEST_CONTENT}\n"
 )
-set(UVSR_INTEL_SPONZA_STAGE_STAMP
-    "${UVSR_INTEL_SPONZA_STAGING_DIR}/.uvsr-stage.stamp")
+set(UVSR_SCENE_STAGE_STAMP
+    "${UVSR_SCENE_STAGING_ROOT}/.uvsr-stage.stamp")
 add_custom_command(
-    OUTPUT "${UVSR_INTEL_SPONZA_STAGE_STAMP}"
+    OUTPUT "${UVSR_SCENE_STAGE_STAMP}"
     COMMAND ${CMAKE_COMMAND} -E remove_directory
-        "${UVSR_INTEL_SPONZA_STAGING_DIR}"
+        "${UVSR_SCENE_STAGING_ROOT}"
     COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${UVSR_INTEL_SPONZA_STAGING_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${UVSR_INTEL_SPONZA_SOURCE_DIR}"
-        "${UVSR_INTEL_SPONZA_STAGING_DIR}"
+        "${UVSR_SCENE_STAGING_ROOT}"
+    ${UVSR_SCENE_STAGE_COMMANDS}
     COMMAND ${CMAKE_COMMAND} -E touch
-        "${UVSR_INTEL_SPONZA_STAGE_STAMP}"
+        "${UVSR_SCENE_STAGE_STAMP}"
     DEPENDS
-        ${UVSR_INTEL_SPONZA_RUNTIME_ASSETS}
-        "${UVSR_INTEL_SPONZA_ASSET_MANIFEST}"
-    COMMENT "Synchronizing Intel PBR Sponza runtime assets"
+        ${UVSR_SCENE_RUNTIME_ASSETS}
+        "${UVSR_SCENE_ASSET_MANIFEST}"
+    COMMENT "Synchronizing the explicit UVSR runtime scene bundle"
     VERBATIM
 )
-add_custom_target(uvsr_stage_intel_sponza
-    DEPENDS "${UVSR_INTEL_SPONZA_STAGE_STAMP}"
+add_custom_target(uvsr_stage_scenes
+    DEPENDS "${UVSR_SCENE_STAGE_STAMP}"
 )
 if (UVSR_BUILD_APPLICATION)
-    add_dependencies(uvsr uvsr_stage_intel_sponza)
+    add_dependencies(uvsr uvsr_stage_scenes)
 endif()
+
+add_executable(uvsr_scene_asset_contract_tests
+    tests/scene_asset_contract_tests.cpp
+    src/scene_catalog.cpp)
+target_include_directories(uvsr_scene_asset_contract_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(uvsr_scene_asset_contract_tests
+    PRIVATE donut_core cgltf)
+add_dependencies(uvsr_scene_asset_contract_tests uvsr_stage_scenes)
+add_test(
+    NAME uvsr_scene_asset_contract
+    COMMAND uvsr_scene_asset_contract_tests
+        "${UVSR_SCENE_SOURCE_ROOT}"
+        "${UVSR_SCENE_STAGING_ROOT}")
+add_test(
+    NAME uvsr_scene_asset_provenance
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_MODELS_ROOT=${UVSR_SCENE_SOURCE_ROOT}"
+        "-DSTAGED_MODELS_ROOT=${UVSR_SCENE_STAGING_ROOT}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/scene_asset_provenance.cmake")
+set_tests_properties(
+    uvsr_scene_asset_contract
+    uvsr_scene_asset_provenance
+    PROPERTIES
+        LABELS "assets;scenes"
+        TIMEOUT 600)
 
 if (WIN32)
     file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/SegUIVar.ttf"

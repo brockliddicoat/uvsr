@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "scene": "san_miguel_retextured",
+  "displayName": "Retextured San Miguel",
+  "source": {
+    "project": "San Miguel 2.1",
+    "creator": "Guillermo M. Leal Llaguno",
+    "contributors": [
+      "Morgan McGuire",
+      "Guedis Cardenas",
+      "Michael Mara",
+      "Nicholas Hull"
+    ],
+    "url": "https://casual-effects.com/data/",
+    "archiveFile": "San_Miguel.zip",
+    "archiveBytes": 535519642,
+    "archiveSha256": "85874077735808150E679B3C71D70A37A270CB8833F4911325AA1099DA3F7D4A",
+    "modelFile": "san-miguel.obj",
+    "modelBytes": 1143041382,
+    "modelSha256": "22533258BE1D94AA1ECE29053E98F11C91EBC17A8A3626545DEE3CECF90B71E3",
+    "materialLibraryFile": "san-miguel.mtl",
+    "materialLibraryBytes": 35143,
+    "materialLibrarySha256": "5C0618AE58CEB61B51B09B97C5A16BBB410CCFFC671E99C9076A3926CEE04916",
+    "license": "Research and educational use with attribution",
+    "licenseSha256": "708C9AD36ADAC62D13BD61DDF47D58D2B892B9E318BD87DA93AE9E55E2B5E680"
+  },
+  "conversion": {
+    "importTool": "tools/import_san_miguel.py",
+    "blenderVersion": "5.1.2",
+    "blenderBuildHash": "ec6e62d40fa9",
+    "repackTool": "tools/repack_gltf_buffers.py",
+    "method": "full-detail OBJ import with explicit opaque material-domain fallbacks followed by lossless buffer-view repack",
+    "maxBufferBytes": 90000000,
+    "trackedFileLimitBytes": 100000000,
+    "importReport": "blender-import-report.json",
+    "repackReport": "components/buffer-repack-report.json",
+    "materialCompatibility": {
+      "reason": "UVSR submits opaque and alpha-tested material domains but has no blended or transmissive draw pass",
+      "constantAlphaForcedOpaque": ["material_041"],
+      "transmissionFlattened": [
+        {"material": "material_79", "sourceFactor": 0.10000000149011612},
+        {"material": "materialn", "sourceFactor": 0.30000001192092896},
+        {"material": "materialo", "sourceFactor": 0.36666667461395264}
+      ],
+      "transmissionPrimitiveCount": 12,
+      "transmissionTriangleCount": 63910,
+      "transmissionPreserved": false
+    }
+  },
+  "camera": {
+    "source": "PBRT v4 San Miguel entry view",
+    "sourceUrl": "https://github.com/mmp/pbrt-v4-scenes/blob/master/sanmiguel/sanmiguel-entry.pbrt",
+    "repositoryCommit": "30cf4a0346ae5a80a2d7a530a3ef7d0fa4f70572",
+    "sourceBlobSha1": "3e442fb1f407316e6fb74cb066eddd5bf158ff9a",
+    "sourceCoordinateSystem": "PBRT Z-up",
+    "coordinateMapping": "(x, y, z) to (x, z, -y)",
+    "sourceEye": [27.6255, -2.42353, 1.49616],
+    "sourceTarget": [26.6582, -2.17012, 1.48803],
+    "sourceUp": [-0.00786446, 0.00206023, 0.999967],
+    "position": [27.6255, 1.49616, 2.42353],
+    "direction": [-0.9673232088, -0.0081301951, -0.2534160802],
+    "up": [-0.0078644596, 0.9999669523, -0.0020602299],
+    "verticalFovDegrees": 57.2209
+  }
+}

@@ -22,7 +22,7 @@
     "scene": {
       "type": "string",
       "minLength": 1,
-      "description": "Scene display name. Standard Sponza records use PBR Sponza Decorated or PBR Sponza Plain."
+      "description": "Scene display name. Standard Sponza records use Sponza Decorated or Sponza Plain."
     },
     "camera": {
       "type": "string",

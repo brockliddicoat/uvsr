@@ -1,0 +1,186 @@
+diff --git a/include/donut/app/ApplicationBase.h b/include/donut/app/ApplicationBase.h
+index 32d3f24..2afd42d 100644
+--- a/include/donut/app/ApplicationBase.h
++++ b/include/donut/app/ApplicationBase.h
+@@ -41,8 +41,25 @@ namespace donut::app
+     class ApplicationBase : public IRenderPass
+     {
+     private:
++        enum class SceneRetirementState
++        {
++            Idle,
++            ArmQuery,
++            WaitForQuery
++        };
++
+         std::atomic_bool m_SceneLoaded;
+         bool m_AllTexturesFinalized;
++        bool m_HasSceneResources = false;
++        SceneRetirementState m_SceneRetirementState =
++            SceneRetirementState::Idle;
++        std::shared_ptr<vfs::IFileSystem> m_PendingSceneFileSystem;
++        std::filesystem::path m_PendingSceneFileName;
++        nvrhi::EventQueryHandle m_SceneRetirementQuery;
++
++        void StartPendingSceneLoad();
++        bool ProcessPendingSceneRetirement(
++            nvrhi::IFramebuffer* framebuffer);
+ 
+     protected:
+         typedef IRenderPass Super;
+@@ -105,4 +122,4 @@ namespace donut::app
+     // searches for a given substring in the list of scenes, returns that name if found;
+     // if not found, returns the first scene in the list.
+     std::string FindPreferredScene(const std::vector<std::string>& available, const std::string& preferred);
+-}
+\ No newline at end of file
++}
+diff --git a/src/app/ApplicationBase.cpp b/src/app/ApplicationBase.cpp
+index 79d6d48..7a276ce 100644
+--- a/src/app/ApplicationBase.cpp
++++ b/src/app/ApplicationBase.cpp
+@@ -51,9 +51,18 @@ ApplicationBase::ApplicationBase(DeviceManager* deviceManager)
+ 
+ void ApplicationBase::Render(nvrhi::IFramebuffer* framebuffer)
+ {
++    // Scene switches retire the previous graphics work by polling a queue
++    // event across splash frames. Arming here (rather than in the UI callback)
++    // includes every old-scene and GUI submission from the preceding frame.
++    if (ProcessPendingSceneRetirement(framebuffer))
++        return;
++
+     if (m_TextureCache)
+     {
+-        bool anyTexturesProcessed = m_TextureCache->ProcessRenderingThreadCommands(*m_CommonPasses, 20.f);
++        // Leave most of each loading frame available to presentation and UI.
++        // TextureCache always finalizes at least one queued texture, so this
++        // remains forward-progressing even when a single texture exceeds it.
++        bool anyTexturesProcessed = m_TextureCache->ProcessRenderingThreadCommands(*m_CommonPasses, 4.f);
+ 
+         if (m_SceneLoaded && !anyTexturesProcessed)
+             m_AllTexturesFinalized = true;
+@@ -103,6 +112,7 @@ void ApplicationBase::SceneLoaded()
+         m_TextureCache->LoadingFinished();
+     }
+     m_SceneLoaded = true;
++    m_HasSceneResources = true;
+ }
+ 
+ void ApplicationBase::SetAsynchronousLoadingEnabled(bool enabled)
+@@ -112,7 +122,9 @@ void ApplicationBase::SetAsynchronousLoadingEnabled(bool enabled)
+ 
+ bool ApplicationBase::IsSceneLoading() const
+ {
+-    return m_SceneLoadingThread != nullptr;
++    return m_SceneLoadingThread != nullptr ||
++        m_SceneRetirementState != SceneRetirementState::Idle ||
++        bool(m_PendingSceneFileSystem);
+ }
+ 
+ bool ApplicationBase::IsSceneLoaded() const
+@@ -122,25 +134,44 @@ bool ApplicationBase::IsSceneLoaded() const
+ 
+ void ApplicationBase::BeginLoadingScene(std::shared_ptr<IFileSystem> fs, const std::filesystem::path& sceneFileName)
+ {
+-    if (m_SceneLoaded)
+-        SceneUnloading();
+-
++    m_PendingSceneFileSystem = std::move(fs);
++    m_PendingSceneFileName = sceneFileName;
+     m_SceneLoaded = false;
+     m_AllTexturesFinalized = false;
+ 
+-    if (m_TextureCache)
++    if (m_HasSceneResources)
+     {
+-        m_TextureCache->Reset();
++        // Keep every old-scene resource alive until the graphics queue reports
++        // that the preceding frame has retired. Render continues with the
++        // splash screen while the event query is pending.
++        m_SceneRetirementState = SceneRetirementState::ArmQuery;
++        return;
+     }
+-    GetDevice()->waitForIdle();
++
++    if (m_TextureCache)
++        m_TextureCache->Reset();
+     GetDevice()->runGarbageCollection();
++    StartPendingSceneLoad();
++}
+ 
++void ApplicationBase::StartPendingSceneLoad()
++{
++    std::shared_ptr<IFileSystem> fs =
++        std::move(m_PendingSceneFileSystem);
++    std::filesystem::path sceneFileName =
++        std::move(m_PendingSceneFileName);
++    m_PendingSceneFileSystem.reset();
++    m_PendingSceneFileName.clear();
++    m_SceneRetirementState = SceneRetirementState::Idle;
+ 
+     if (m_IsAsyncLoad)
+     {
+-        m_SceneLoadingThread = std::make_unique<std::thread>([this, fs, sceneFileName]() {
+-			m_SceneLoaded = LoadScene(fs, sceneFileName); 
+-			});
++        m_SceneLoadingThread = std::make_unique<std::thread>(
++            [this, fs = std::move(fs),
++             sceneFileName = std::move(sceneFileName)]()
++            {
++                m_SceneLoaded = LoadScene(fs, sceneFileName);
++            });
+     }
+     else
+     {
+@@ -149,6 +180,51 @@ void ApplicationBase::BeginLoadingScene(std::shared_ptr<IFileSystem> fs, const s
+     }
+ }
+ 
++bool ApplicationBase::ProcessPendingSceneRetirement(
++    nvrhi::IFramebuffer* framebuffer)
++{
++    if (m_SceneRetirementState == SceneRetirementState::Idle)
++        return false;
++
++    if (m_SceneRetirementState == SceneRetirementState::ArmQuery)
++    {
++        if (!m_SceneRetirementQuery)
++            m_SceneRetirementQuery = GetDevice()->createEventQuery();
++
++        if (m_SceneRetirementQuery)
++        {
++            GetDevice()->resetEventQuery(m_SceneRetirementQuery);
++            GetDevice()->setEventQuery(
++                m_SceneRetirementQuery,
++                nvrhi::CommandQueue::Graphics);
++            m_SceneRetirementState =
++                SceneRetirementState::WaitForQuery;
++            RenderSplashScreen(framebuffer);
++            return true;
++        }
++
++        // Event-query allocation failure is exceptional. Preserve correctness
++        // with the old blocking path rather than freeing in-flight resources.
++        GetDevice()->waitForIdle();
++    }
++    else if (!GetDevice()->pollEventQuery(m_SceneRetirementQuery))
++    {
++        RenderSplashScreen(framebuffer);
++        return true;
++    }
++
++    if (m_SceneRetirementQuery)
++        GetDevice()->resetEventQuery(m_SceneRetirementQuery);
++    SceneUnloading();
++    if (m_TextureCache)
++        m_TextureCache->Reset();
++    GetDevice()->runGarbageCollection();
++    m_HasSceneResources = false;
++    StartPendingSceneLoad();
++    RenderSplashScreen(framebuffer);
++    return true;
++}
++
+ std::shared_ptr<CommonRenderPasses> ApplicationBase::GetCommonPasses() const
+ {
+     return m_CommonPasses;

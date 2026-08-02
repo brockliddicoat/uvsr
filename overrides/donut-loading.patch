@@ -1,0 +1,419 @@
+diff --git a/include/donut/engine/Scene.h b/include/donut/engine/Scene.h
+index 5a0827f..ecac89a 100644
+--- a/include/donut/engine/Scene.h
++++ b/include/donut/engine/Scene.h
+@@ -79,6 +79,9 @@ namespace donut::engine
+         struct Resources; // Hide the implementation to avoid including <material_cb.h> and <bindless.h> here
+         std::shared_ptr<Resources> m_Resources;
+ 
++        struct MeshUploadState;
++        std::shared_ptr<MeshUploadState> m_MeshUploadState;
++
+         void LoadModelAsync(
+             uint32_t index,
+             const std::filesystem::path& fileName,
+@@ -122,6 +125,15 @@ namespace donut::engine
+         
+         void FinishedLoading(uint32_t frameIndex);
+ 
++        // Uploads imported mesh arrays in bounded pieces. The caller records
++        // one piece per loading frame and keeps scene rendering disabled until
++        // this method reports completion.
++        void BeginLoadingBuffers();
++        bool ProcessLoadingBuffers(
++            nvrhi::ICommandList* commandList,
++            uint64_t maximumBytes,
++            uint32_t frameIndex);
++
+         // Processes animations, transforms, bounding boxes etc.
+         void RefreshSceneGraph(uint32_t frameIndex);
+ 
+diff --git a/include/donut/engine/ThreadPool.h b/include/donut/engine/ThreadPool.h
+index 77cb726..a68aed8 100644
+--- a/include/donut/engine/ThreadPool.h
++++ b/include/donut/engine/ThreadPool.h
+@@ -68,8 +68,9 @@ private:
+     std::queue<std::shared_ptr<ThreadPoolTask>> m_tasks;
+     std::mutex m_mutex;
+     std::condition_variable m_forward;
++    std::condition_variable m_completion;
+     std::atomic<bool> m_terminate = false;
+     std::atomic<int> m_pendingTasks = 0;
+ };
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/src/engine/Scene.cpp b/src/engine/Scene.cpp
+index 86c9625..2271205 100644
+--- a/src/engine/Scene.cpp
++++ b/src/engine/Scene.cpp
+@@ -43,6 +43,9 @@ this software is released into the Public Domain.
+ #include <nvrhi/common/misc.h>
+ #include <json/json-forwards.h>
+ 
++#include <limits>
++#include <type_traits>
++
+ #include "donut/engine/ShaderFactory.h"
+ 
+ #if DONUT_WITH_STATIC_SHADERS
+@@ -79,6 +82,15 @@ struct Scene::Resources
+     std::vector<InstanceData> instanceData;
+ };
+ 
++struct Scene::MeshUploadState
++{
++    std::vector<std::shared_ptr<MeshInfo>> meshes;
++    size_t meshIndex = 0;
++    uint32_t attributeStage = 0;
++    uint64_t attributeByteOffset = 0;
++    uint32_t finalizationStage = 0;
++};
++
+ Scene::Scene(
+     nvrhi::IDevice* device,
+     ShaderFactory& shaderFactory,
+@@ -586,14 +598,307 @@ void Scene::FinishedLoading(uint32_t frameIndex)
+ {
+     nvrhi::CommandListHandle commandList = m_Device->createCommandList();
+     commandList->open();
+-    
+-    CreateMeshBuffers(commandList);
+-    Refresh(commandList, frameIndex);
++
++    BeginLoadingBuffers();
++    while (!ProcessLoadingBuffers(commandList, 0, frameIndex))
++    { }
+ 
+     commandList->close();
+     m_Device->executeCommandList(commandList);
+ }
+ 
++void Scene::BeginLoadingBuffers()
++{
++    m_MeshUploadState = std::make_shared<MeshUploadState>();
++    m_MeshUploadState->meshes.reserve(
++        m_SceneGraph->GetMeshes().size());
++    for (const std::shared_ptr<MeshInfo>& mesh :
++        m_SceneGraph->GetMeshes())
++    {
++        m_MeshUploadState->meshes.push_back(mesh);
++    }
++}
++
++bool Scene::ProcessLoadingBuffers(
++    nvrhi::ICommandList* commandList,
++    uint64_t maximumBytes,
++    uint32_t frameIndex)
++{
++    if (!commandList)
++        return false;
++    if (!m_MeshUploadState)
++        BeginLoadingBuffers();
++
++    MeshUploadState& upload = *m_MeshUploadState;
++    const auto& meshes = upload.meshes;
++    const uint64_t byteBudget = maximumBytes > 0
++        ? maximumBytes
++        : std::numeric_limits<uint64_t>::max();
++    uint64_t bytesWritten = 0;
++    nvrhi::IBuffer* trackedUploadBuffer = nullptr;
++
++    const auto pauseUpload = [&]()
++    {
++        if (trackedUploadBuffer)
++        {
++            commandList->setBufferState(
++                trackedUploadBuffer,
++                nvrhi::ResourceStates::Common);
++            commandList->commitBarriers();
++        }
++        return false;
++    };
++
++    const auto appendBufferRange = [](
++        nvrhi::BufferRange& range,
++        size_t size,
++        uint64_t& currentBufferSize)
++    {
++        range.byteOffset = currentBufferSize;
++        range.byteSize = nvrhi::align(size, size_t(16));
++        currentBufferSize += range.byteSize;
++    };
++
++    const auto writeVectorChunk = [&upload, byteBudget, &bytesWritten,
++                                   &trackedUploadBuffer, commandList](
++        auto& source,
++        nvrhi::IBuffer* destination,
++        uint64_t destinationOffset)
++    {
++        using Vector = std::decay_t<decltype(source)>;
++        using T = typename Vector::value_type;
++        const uint64_t sourceBytes = uint64_t(source.size()) * sizeof(T);
++        if (upload.attributeByteOffset >= sourceBytes)
++            return true;
++
++        if (trackedUploadBuffer != destination)
++        {
++            commandList->beginTrackingBufferState(
++                destination,
++                nvrhi::ResourceStates::Common);
++            trackedUploadBuffer = destination;
++        }
++
++        const uint64_t available = byteBudget - bytesWritten;
++        if (available == 0)
++            return false;
++        const uint64_t chunkBytes = std::min(
++            sourceBytes - upload.attributeByteOffset,
++            available);
++        commandList->writeBuffer(
++            destination,
++            reinterpret_cast<const uint8_t*>(source.data()) +
++                upload.attributeByteOffset,
++            size_t(chunkBytes),
++            destinationOffset + upload.attributeByteOffset);
++        upload.attributeByteOffset += chunkBytes;
++        bytesWritten += chunkBytes;
++        return upload.attributeByteOffset == sourceBytes;
++    };
++
++    while (upload.meshIndex < meshes.size())
++    {
++        const std::shared_ptr<MeshInfo>& mesh = meshes[upload.meshIndex];
++        const std::shared_ptr<BufferGroup> buffers = mesh ? mesh->buffers : nullptr;
++        if (!buffers)
++        {
++            ++upload.meshIndex;
++            upload.attributeStage = 0;
++            upload.attributeByteOffset = 0;
++            continue;
++        }
++
++        if (upload.attributeStage == 0)
++        {
++            if (buffers->indexData.empty() ||
++                (buffers->indexBuffer &&
++                 upload.attributeByteOffset == 0))
++            {
++                upload.attributeStage = 1;
++                upload.attributeByteOffset = 0;
++                continue;
++            }
++
++            if (!buffers->indexBuffer)
++            {
++                nvrhi::BufferDesc bufferDesc;
++                bufferDesc.isIndexBuffer = true;
++                bufferDesc.byteSize =
++                    buffers->indexData.size() * sizeof(uint32_t);
++                bufferDesc.debugName = "IndexBuffer";
++                bufferDesc.canHaveTypedViews = true;
++                bufferDesc.canHaveRawViews = true;
++                bufferDesc.format = nvrhi::Format::R32_UINT;
++                bufferDesc.isAccelStructBuildInput = m_RayTracingSupported;
++                buffers->indexBuffer = m_Device->createBuffer(bufferDesc);
++                if (m_DescriptorTable)
++                {
++                    buffers->indexBufferDescriptor =
++                        std::make_shared<DescriptorHandle>(
++                            m_DescriptorTable->CreateDescriptorHandle(
++                                nvrhi::BindingSetItem::RawBuffer_SRV(
++                                    0, buffers->indexBuffer)));
++                }
++            }
++
++            if (!writeVectorChunk(
++                    buffers->indexData,
++                    buffers->indexBuffer,
++                    0))
++            {
++                return pauseUpload();
++            }
++
++            std::vector<uint32_t>().swap(buffers->indexData);
++            nvrhi::ResourceStates state =
++                nvrhi::ResourceStates::IndexBuffer |
++                nvrhi::ResourceStates::ShaderResource;
++            if (m_RayTracingSupported)
++                state = state |
++                    nvrhi::ResourceStates::AccelStructBuildInput;
++            commandList->setPermanentBufferState(
++                buffers->indexBuffer, state);
++            commandList->commitBarriers();
++            trackedUploadBuffer = nullptr;
++            upload.attributeStage = 1;
++            upload.attributeByteOffset = 0;
++        }
++
++        if (bytesWritten >= byteBudget)
++            return pauseUpload();
++
++        if (buffers->vertexBuffer &&
++            upload.attributeStage == 1 &&
++            upload.attributeByteOffset == 0)
++        {
++            ++upload.meshIndex;
++            upload.attributeStage = 0;
++            continue;
++        }
++
++        if (!buffers->vertexBuffer)
++        {
++            nvrhi::BufferDesc bufferDesc;
++            bufferDesc.isVertexBuffer = true;
++            bufferDesc.debugName = "VertexBuffer";
++            bufferDesc.canHaveTypedViews = true;
++            bufferDesc.canHaveRawViews = true;
++            bufferDesc.isAccelStructBuildInput = m_RayTracingSupported;
++
++            if (!buffers->positionData.empty())
++                appendBufferRange(buffers->getVertexBufferRange(VertexAttribute::Position), buffers->positionData.size() * sizeof(float3), bufferDesc.byteSize);
++            if (!buffers->normalData.empty())
++                appendBufferRange(buffers->getVertexBufferRange(VertexAttribute::Normal), buffers->normalData.size() * sizeof(uint32_t), bufferDesc.byteSize);
++            if (!buffers->tangentData.empty())
++                appendBufferRange(buffers->getVertexBufferRange(VertexAttribute::Tangent), buffers->tangentData.size() * sizeof(uint32_t), bufferDesc.byteSize);
++            if (!buffers->texcoord1Data.empty())
++                appendBufferRange(buffers->getVertexBufferRange(VertexAttribute::TexCoord1), buffers->texcoord1Data.size() * sizeof(float2), bufferDesc.byteSize);
++            if (!buffers->texcoord2Data.empty())
++                appendBufferRange(buffers->getVertexBufferRange(VertexAttribute::TexCoord2), buffers->texcoord2Data.size() * sizeof(float2), bufferDesc.byteSize);
++            if (!buffers->weightData.empty())
++                appendBufferRange(buffers->getVertexBufferRange(VertexAttribute::JointWeights), buffers->weightData.size() * sizeof(float4), bufferDesc.byteSize);
++            if (!buffers->jointData.empty())
++                appendBufferRange(buffers->getVertexBufferRange(VertexAttribute::JointIndices), buffers->jointData.size() * sizeof(vector<uint16_t, 4>), bufferDesc.byteSize);
++            if (!buffers->radiusData.empty())
++                appendBufferRange(buffers->getVertexBufferRange(VertexAttribute::CurveRadius), buffers->radiusData.size() * sizeof(float), bufferDesc.byteSize);
++
++            if (bufferDesc.byteSize == 0)
++            {
++                ++upload.meshIndex;
++                upload.attributeStage = 0;
++                upload.attributeByteOffset = 0;
++                continue;
++            }
++
++            buffers->vertexBuffer = m_Device->createBuffer(bufferDesc);
++            if (m_DescriptorTable)
++            {
++                buffers->vertexBufferDescriptor =
++                    std::make_shared<DescriptorHandle>(
++                        m_DescriptorTable->CreateDescriptorHandle(
++                            nvrhi::BindingSetItem::RawBuffer_SRV(
++                                0, buffers->vertexBuffer)));
++            }
++        }
++
++        const auto finishAttribute = [&upload](auto& source)
++        {
++            using Vector = std::decay_t<decltype(source)>;
++            Vector().swap(source);
++            ++upload.attributeStage;
++            upload.attributeByteOffset = 0;
++        };
++        const auto processAttribute = [&](auto& source, VertexAttribute attribute)
++        {
++            if (source.empty())
++            {
++                ++upload.attributeStage;
++                upload.attributeByteOffset = 0;
++                return true;
++            }
++            if (!writeVectorChunk(
++                    source,
++                    buffers->vertexBuffer,
++                    buffers->getVertexBufferRange(attribute).byteOffset))
++            {
++                return false;
++            }
++            finishAttribute(source);
++            return true;
++        };
++
++        while (upload.attributeStage <= 8)
++        {
++            bool finished = false;
++            switch (upload.attributeStage)
++            {
++            case 1: finished = processAttribute(buffers->positionData, VertexAttribute::Position); break;
++            case 2: finished = processAttribute(buffers->normalData, VertexAttribute::Normal); break;
++            case 3: finished = processAttribute(buffers->tangentData, VertexAttribute::Tangent); break;
++            case 4: finished = processAttribute(buffers->texcoord1Data, VertexAttribute::TexCoord1); break;
++            case 5: finished = processAttribute(buffers->texcoord2Data, VertexAttribute::TexCoord2); break;
++            case 6: finished = processAttribute(buffers->weightData, VertexAttribute::JointWeights); break;
++            case 7: finished = processAttribute(buffers->jointData, VertexAttribute::JointIndices); break;
++            case 8: finished = processAttribute(buffers->radiusData, VertexAttribute::CurveRadius); break;
++            default: break;
++            }
++            if (!finished)
++                return pauseUpload();
++        }
++
++        nvrhi::ResourceStates state =
++            nvrhi::ResourceStates::VertexBuffer |
++            nvrhi::ResourceStates::ShaderResource;
++        if (m_RayTracingSupported)
++            state = state |
++                nvrhi::ResourceStates::AccelStructBuildInput;
++        commandList->setPermanentBufferState(
++            buffers->vertexBuffer, state);
++        commandList->commitBarriers();
++        trackedUploadBuffer = nullptr;
++
++        ++upload.meshIndex;
++        upload.attributeStage = 0;
++        upload.attributeByteOffset = 0;
++        if (bytesWritten >= byteBudget)
++            return pauseUpload();
++    }
++
++    // Keep the remaining Donut finalization phases on separate loading
++    // frames. Base mesh buffers are already resident, so CreateMeshBuffers
++    // only handles the smaller auxiliary/skinned resources here.
++    if (upload.finalizationStage == 0u)
++    {
++        CreateMeshBuffers(commandList);
++        upload.finalizationStage = 1u;
++        return false;
++    }
++
++    Refresh(commandList, frameIndex);
++    m_MeshUploadState.reset();
++    return true;
++}
++
+ void Scene::RefreshSceneGraph(uint32_t frameIndex)
+ {
+     m_SceneStructureChanged = m_SceneGraph->HasPendingStructureChanges();
+diff --git a/src/engine/ThreadPool.cpp b/src/engine/ThreadPool.cpp
+index 510ed07..38196ea 100644
+--- a/src/engine/ThreadPool.cpp
++++ b/src/engine/ThreadPool.cpp
+@@ -85,8 +85,8 @@ void ThreadPool::AddTask(std::function<void()> func)
+ 
+ void ThreadPool::WaitForTasks()
+ {
+-    while(m_pendingTasks.load() != 0)
+-        std::this_thread::yield();
++    std::unique_lock<std::mutex> lock(m_mutex);
++    m_completion.wait(lock, [this] { return m_pendingTasks.load() == 0; });
+ }
+ 
+ void ThreadPool::StaticThreadProc(ThreadPool* self)
+@@ -122,9 +122,13 @@ void ThreadPool::ThreadProc()
+             {
+                 // Ignore task exceptions
+             }
+-            --m_pendingTasks;
++            {
++                std::lock_guard<std::mutex> lock(m_mutex);
++                --m_pendingTasks;
++            }
++            m_completion.notify_all();
+         }
+     }
+ }
+ 
+-}
+\ No newline at end of file
++}

@@ -747,7 +747,9 @@ namespace uvsr
     ScreenSpaceVisibilityPass::ScreenSpaceVisibilityPass(
         nvrhi::IDevice* device,
         const std::shared_ptr<ShaderFactory>& shaderFactory,
-        std::shared_ptr<CommonRenderPasses> commonPasses)
+        std::shared_ptr<CommonRenderPasses> commonPasses,
+        const std::vector<uint16_t>* preparedBlueNoise,
+        bool deferPipelineCreation)
         : m_Device(device)
         , m_ShaderFactory(shaderFactory)
         , m_CommonPasses(std::move(commonPasses))
@@ -824,9 +826,21 @@ namespace uvsr
         m_DummyIndirectOutput = createDummyTexture(
             nvrhi::Format::RGBA16_FLOAT,
             "ScreenSpaceVisibility/DummyIndirectOutput");
-        // Independent void-and-cluster rank layers prevent the ray dimensions
-        // from becoming translated copies of one structured scalar field.
-        m_BlueNoiseUpload = GenerateVisibilityBlueNoise();
+        // Generating the deterministic void-and-cluster ranks costs hundreds
+        // of milliseconds on a cold CPU. The scene worker normally supplies
+        // the exact field; retain a fallback for standalone component users.
+        const size_t expectedBlueNoiseValues =
+            size_t(VisibilityBlueNoiseTexelCount) *
+            VisibilityBlueNoiseLayerCount;
+        if (preparedBlueNoise &&
+            preparedBlueNoise->size() == expectedBlueNoiseValues)
+        {
+            m_BlueNoiseUpload = *preparedBlueNoise;
+        }
+        else
+        {
+            m_BlueNoiseUpload = GenerateVisibilityBlueNoise();
+        }
 
         nvrhi::TextureDesc blueNoiseDesc;
         blueNoiseDesc.width = VisibilityBlueNoiseSize;
@@ -841,29 +855,25 @@ namespace uvsr
             "ScreenSpaceVisibility/ToroidalBlueNoiseRankField";
         m_BlueNoiseTexture = device->createTexture(blueNoiseDesc);
 
-        CreatePipelines(shaderFactory);
-        m_BounceDispatchControlBindingSet = device->createBindingSet(
-            nvrhi::BindingSetDesc().addItem(
-                nvrhi::BindingSetItem::RawBuffer_UAV(
-                    0, m_BounceContinuation)).addItem(
-                nvrhi::BindingSetItem::RawBuffer_UAV(
-                    1, m_BounceIndirectArguments)),
-            m_BounceDispatchControl.bindingLayout);
+        if (!deferPipelineCreation)
+            CreatePipelines(shaderFactory);
         for (auto& stageQueries : m_TimerQueries)
             for (nvrhi::TimerQueryHandle& query : stageQueries)
                 query = device->createTimerQuery();
     }
 
-    void ScreenSpaceVisibilityPass::CreatePipelines(
-        const std::shared_ptr<ShaderFactory>& shaderFactory)
+    bool ScreenSpaceVisibilityPass::PreparePipelinesStep()
     {
-        auto createPipeline = [this, &shaderFactory](
+        if (m_PipelinesReady)
+            return true;
+
+        auto createPipeline = [this](
             Pipeline& destination,
             const char* shaderName,
             const std::vector<nvrhi::BindingLayoutItem>& bindings,
             const std::vector<ShaderMacro>* macros = nullptr)
         {
-            destination.shader = shaderFactory->CreateShader(
+            destination.shader = m_ShaderFactory->CreateShader(
                 shaderName, "main", macros, nvrhi::ShaderType::Compute);
 
             nvrhi::BindingLayoutDesc layoutDesc;
@@ -879,18 +889,19 @@ namespace uvsr
                 m_Device->createComputePipeline(pipelineDesc);
         };
 
-        createPipeline(
-            m_BounceDispatchControl,
-            "uvsr/screen_space_visibility_bounce_control_cs.hlsl",
-            {
-                nvrhi::BindingLayoutItem::RawBuffer_UAV(0),
-                nvrhi::BindingLayoutItem::RawBuffer_UAV(1)
-            });
-
-        for (uint32_t consumer = 0u;
-            consumer < c_ConsumerVariantCount;
-            ++consumer)
+        if (m_PipelinePreparationStep == 0u)
         {
+            createPipeline(
+                m_BounceDispatchControl,
+                "uvsr/screen_space_visibility_bounce_control_cs.hlsl",
+                {
+                    nvrhi::BindingLayoutItem::RawBuffer_UAV(0),
+                    nvrhi::BindingLayoutItem::RawBuffer_UAV(1)
+                });
+        }
+        else if (m_PipelinePreparationStep <= 3u)
+        {
+            const uint32_t consumer = m_PipelinePreparationStep - 1u;
             const bool ambientEnabled = consumer != 1u;
             const bool indirectEnabled = consumer != 0u;
             std::vector<ShaderMacro> macros = {
@@ -917,40 +928,48 @@ namespace uvsr
                     nvrhi::BindingLayoutItem::Texture_UAV(3)
                 },
                 &macros);
-            for (uint32_t filter = 0u; filter < 2u; ++filter)
-            {
-                std::vector<ShaderMacro> filterMacros = macros;
-                filterMacros.push_back({
-                    "SPATIAL_FILTER", std::to_string(filter) });
-                createPipeline(
-                    m_Filter[filter][consumer],
-                    "uvsr/screen_space_visibility_filter_cs.hlsl",
-                    {
-                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                        nvrhi::BindingLayoutItem::Texture_SRV(0),
-                        nvrhi::BindingLayoutItem::Texture_SRV(1),
-                        nvrhi::BindingLayoutItem::Texture_SRV(2),
-                        nvrhi::BindingLayoutItem::Texture_SRV(3),
-                        nvrhi::BindingLayoutItem::Texture_UAV(0),
-                        nvrhi::BindingLayoutItem::Texture_UAV(1)
-                    },
-                    &filterMacros);
-            }
         }
-
-        createPipeline(
-            m_DepthHierarchy,
-            "uvsr/screen_space_depth_hierarchy_cs.hlsl",
-            {
-                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(0),
-                nvrhi::BindingLayoutItem::Texture_UAV(0).setSize(5)
-            });
-
-        for (uint32_t aoPowerEnabled = 0u;
-            aoPowerEnabled < 2u;
-            ++aoPowerEnabled)
+        else if (m_PipelinePreparationStep <= 9u)
         {
+            const uint32_t filterStep = m_PipelinePreparationStep - 4u;
+            const uint32_t filter = filterStep / c_ConsumerVariantCount;
+            const uint32_t consumer = filterStep % c_ConsumerVariantCount;
+            const bool ambientEnabled = consumer != 1u;
+            const bool indirectEnabled = consumer != 0u;
+            std::vector<ShaderMacro> macros = {
+                { "ENABLE_AO", ambientEnabled ? "1" : "0" },
+                { "ENABLE_GI", indirectEnabled ? "1" : "0" },
+                { "SPATIAL_FILTER", std::to_string(filter) }
+            };
+            createPipeline(
+                m_Filter[filter][consumer],
+                "uvsr/screen_space_visibility_filter_cs.hlsl",
+                {
+                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(1),
+                    nvrhi::BindingLayoutItem::Texture_SRV(2),
+                    nvrhi::BindingLayoutItem::Texture_SRV(3),
+                    nvrhi::BindingLayoutItem::Texture_UAV(0),
+                    nvrhi::BindingLayoutItem::Texture_UAV(1)
+                },
+                &macros);
+        }
+        else if (m_PipelinePreparationStep == 10u)
+        {
+            createPipeline(
+                m_DepthHierarchy,
+                "uvsr/screen_space_depth_hierarchy_cs.hlsl",
+                {
+                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                    nvrhi::BindingLayoutItem::Texture_SRV(0),
+                    nvrhi::BindingLayoutItem::Texture_UAV(0).setSize(5)
+                });
+        }
+        else
+        {
+            const uint32_t aoPowerEnabled =
+                m_PipelinePreparationStep - 11u;
             std::vector<ShaderMacro> macros = {{
                 "ENABLE_AO_POWER", aoPowerEnabled != 0u ? "1" : "0"
             }};
@@ -976,6 +995,29 @@ namespace uvsr
                     nvrhi::BindingLayoutItem::Sampler(1)
                 },
                 &macros);
+        }
+
+        ++m_PipelinePreparationStep;
+        if (m_PipelinePreparationStep == 13u)
+        {
+            m_BounceDispatchControlBindingSet = m_Device->createBindingSet(
+                nvrhi::BindingSetDesc().addItem(
+                    nvrhi::BindingSetItem::RawBuffer_UAV(
+                        0, m_BounceContinuation)).addItem(
+                    nvrhi::BindingSetItem::RawBuffer_UAV(
+                        1, m_BounceIndirectArguments)),
+                m_BounceDispatchControl.bindingLayout);
+            m_PipelinesReady = true;
+        }
+        return m_PipelinesReady;
+    }
+
+    void ScreenSpaceVisibilityPass::CreatePipelines(
+        const std::shared_ptr<ShaderFactory>& shaderFactory)
+    {
+        assert(shaderFactory == m_ShaderFactory);
+        while (!PreparePipelinesStep())
+        {
         }
     }
 

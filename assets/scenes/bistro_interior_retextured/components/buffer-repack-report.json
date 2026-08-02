@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 2,
+  "sourceId": "User-supplied Blender GLB associated with McGuire Computer Graphics Archive https://casual-effects.com/data: BistroInterior_Wine.glb SHA-256 47C71CF9FC3F0BBDF213F5788993BA5732565E7EACAE616DF26BC60818FDBC6A; separate supporting NVIDIA ORCA archive Bistro_v5_2.zip SHA-256 0D50E3C724C6C5DA19F8EB99AD3F53E36FEC37FFA2DF9621F9CCF0603F3934E1 (GLB is not a ZIP member)",
+  "sourceContainer": "glb",
+  "sourceContainerBytes": 421517664,
+  "sourceContainerSha256": "47C71CF9FC3F0BBDF213F5788993BA5732565E7EACAE616DF26BC60818FDBC6A",
+  "sourceBytes": 421517664,
+  "sourceSha256": "47C71CF9FC3F0BBDF213F5788993BA5732565E7EACAE616DF26BC60818FDBC6A",
+  "sourceFiles": [
+    {
+      "path": "BistroInterior_Wine.glb",
+      "bytes": 421517664,
+      "sha256": "47C71CF9FC3F0BBDF213F5788993BA5732565E7EACAE616DF26BC60818FDBC6A"
+    }
+  ],
+  "sourceBufferCount": 1,
+  "bufferViewCount": 9396,
+  "copiedBufferViewBytes": 419350992,
+  "alignmentPaddingBytes": 448,
+  "maxBufferBytes": 90000000,
+  "trackedFileLimitBytes": 100000000,
+  "outputBufferCount": 5,
+  "externalImagesCopied": [],
+  "extensionsUsed": [],
+  "materialCompatibilityOverrides": [
+    {
+      "materialIndex": 0,
+      "materialName": "Water",
+      "primitiveCount": 39,
+      "sourceAlphaMode": "BLEND",
+      "sourceBaseColorAlpha": 0.08588957786560059,
+      "removedExtensions": {},
+      "outputAlphaMode": "OPAQUE",
+      "outputBaseColorAlpha": 0.08588957786560059
+    },
+    {
+      "materialIndex": 1,
+      "materialName": "Ice",
+      "primitiveCount": 117,
+      "sourceAlphaMode": "BLEND",
+      "sourceBaseColorAlpha": 0.10429447889328003,
+      "removedExtensions": {},
+      "outputAlphaMode": "OPAQUE",
+      "outputBaseColorAlpha": 0.10429447889328003
+    },
+    {
+      "materialIndex": 27,
+      "materialName": "Beer",
+      "primitiveCount": 6,
+      "sourceAlphaMode": "BLEND",
+      "sourceBaseColorAlpha": 0.7483870983123779,
+      "removedExtensions": {},
+      "outputAlphaMode": "OPAQUE",
+      "outputBaseColorAlpha": 0.7483870983123779
+    },
+    {
+      "materialIndex": 72,
+      "materialName": "Red_Wine",
+      "primitiveCount": 33,
+      "sourceAlphaMode": "BLEND",
+      "sourceBaseColorAlpha": 0.7483870983123779,
+      "removedExtensions": {},
+      "outputAlphaMode": "OPAQUE",
+      "outputBaseColorAlpha": 0.7483870983123779
+    },
+    {
+      "materialIndex": 73,
+      "materialName": "White_Wine",
+      "primitiveCount": 32,
+      "sourceAlphaMode": "BLEND",
+      "sourceBaseColorAlpha": 0.6993007063865662,
+      "removedExtensions": {},
+      "outputAlphaMode": "OPAQUE",
+      "outputBaseColorAlpha": 0.6993007063865662
+    }
+  ],
+  "files": [
+    {
+      "path": "bistro_interior.gltf",
+      "bytes": 3650166,
+      "sha256": "B6B8FE05764A2F47E037E7CA78AD5A04FBBFFF4EB900C4E0AD4EE6F0E9314D68"
+    },
+    {
+      "path": "buffers/bistro_interior-01.bin",
+      "bytes": 87815365,
+      "sha256": "AAEDAEB09E8284172B7A0D6B4E72E25D73F17C982E6A1E9F53C7B987B91F62B4"
+    },
+    {
+      "path": "buffers/bistro_interior-02.bin",
+      "bytes": 87901321,
+      "sha256": "360ACE249926F03B151558EA974BABA18105A6C6D759D1757CF852E1A0A723B5"
+    },
+    {
+      "path": "buffers/bistro_interior-03.bin",
+      "bytes": 86750949,
+      "sha256": "C82E2A41ACE134D717057A1E9437CA58CB9DAE165D3FF0C1FFDA97A762F79F89"
+    },
+    {
+      "path": "buffers/bistro_interior-04.bin",
+      "bytes": 84441805,
+      "sha256": "57760D1FE6904AECB8A2CF651CF344A5AD3F3FFADFE4162E394E09FA80179C0B"
+    },
+    {
+      "path": "buffers/bistro_interior-05.bin",
+      "bytes": 72442000,
+      "sha256": "2366FB0FF918C73B825B55E1526A2AA1343724047146CF0FB7E4A0655384B784"
+    }
+  ]
+}

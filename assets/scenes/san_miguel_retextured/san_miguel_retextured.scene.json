@@ -1,0 +1,18 @@
+{
+  "displayName": "San Miguel",
+  "initialCamera": {
+    "position": [27.6255, 1.49616, 2.42353],
+    "direction": [-0.9673232088, -0.0081301951, -0.2534160802],
+    "up": [-0.0078644596, 0.9999669523, -0.0020602299],
+    "verticalFovDegrees": 57.2209
+  },
+  "models": [
+    "components/san_miguel.gltf"
+  ],
+  "graph": [
+    {
+      "name": "Retextured San Miguel",
+      "model": 0
+    }
+  ]
+}

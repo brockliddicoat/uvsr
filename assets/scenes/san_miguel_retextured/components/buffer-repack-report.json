@@ -1,0 +1,3026 @@
+{
+  "schemaVersion": 2,
+  "sourceId": "San_Miguel.zip SHA-256 85874077735808150E679B3C71D70A37A270CB8833F4911325AA1099DA3F7D4A; full san-miguel.obj SHA-256 22533258BE1D94AA1ECE29053E98F11C91EBC17A8A3626545DEE3CECF90B71E3",
+  "sourceContainer": "gltf",
+  "sourceContainerBytes": 3233979,
+  "sourceContainerSha256": "1EE4C41302EB3DBD7E1848BB53870723191DFE69332AE95B3484D8D21E8D9B38",
+  "sourceBytes": 493737473,
+  "sourceSha256": "1EE4C41302EB3DBD7E1848BB53870723191DFE69332AE95B3484D8D21E8D9B38",
+  "sourceFiles": [
+    {
+      "path": "san_miguel.bin",
+      "bytes": 365166708,
+      "sha256": "B8D279A939FD1B77F8554011EEE0BF3CB597E5568D1A189AD808860576FA8AC6"
+    },
+    {
+      "path": "san_miguel.gltf",
+      "bytes": 3233979,
+      "sha256": "1EE4C41302EB3DBD7E1848BB53870723191DFE69332AE95B3484D8D21E8D9B38"
+    },
+    {
+      "path": "textures/0001_carros.png",
+      "bytes": 245088,
+      "sha256": "E3F66BA32F6CB92240457F26AC849303B030CCE6B0AD9A44CA0BFE106819554C"
+    },
+    {
+      "path": "textures/027_Cola_Caballo_06-30-1997.png",
+      "bytes": 1306615,
+      "sha256": "BDB4E39573D4E6BDF45E4B4213A7700B3412F291E8C6A81E7CB98CBD80F844FC"
+    },
+    {
+      "path": "textures/052terresable.png",
+      "bytes": 446295,
+      "sha256": "15F130C0997538E02855F2A11C166791DD5812F4AE49F71C3824891ED661FB61"
+    },
+    {
+      "path": "textures/aglaonema_bark.png",
+      "bytes": 21812,
+      "sha256": "C8F2E74B5D1C106C606C3A7874E254CA441BB1E37480135CD70C62C44D132017"
+    },
+    {
+      "path": "textures/aglaonema_leaf.png",
+      "bytes": 66754,
+      "sha256": "43342949E6695A4586C4C3B332600EFE1A44D8A340CC09B4A2532D6527640EBB"
+    },
+    {
+      "path": "textures/ampelopsis_brevipedunculata_bark.png",
+      "bytes": 2114,
+      "sha256": "904B56A3FBEB04635A846C78F9702E8342E63B15F2775F42EB504C796A194CAF"
+    },
+    {
+      "path": "textures/arco_frente.png",
+      "bytes": 595356,
+      "sha256": "DBCC93C00908B027B35202EA64998113BF448A6D9650C78AAF0718D225C84579"
+    },
+    {
+      "path": "textures/arcos_lisos_2_color.png",
+      "bytes": 401072,
+      "sha256": "5600DCE29634317EE031C32827E214F059F1C79F0110075172F4749D26996909"
+    },
+    {
+      "path": "textures/arcos_lisos_3_color_1.png",
+      "bytes": 457621,
+      "sha256": "4FF3CBF6D9BD0AD9037227FF251475DEA4465F5A9AF766B1EEF35CEAEF63C07E"
+    },
+    {
+      "path": "textures/bark06mi.png",
+      "bytes": 79590,
+      "sha256": "9D878C0210170D8EF7FBEF93482B732D3DE098037F4B654D79647D31C58A0FD2"
+    },
+    {
+      "path": "textures/Barro_2.png",
+      "bytes": 2646512,
+      "sha256": "569D73970B1194704DFB9B98ABB51E8C95B0E368B380055285B486325375D739"
+    },
+    {
+      "path": "textures/BL05lef2.png",
+      "bytes": 174013,
+      "sha256": "AC56FE982062A8C3F440E28789A90EF691CADFEA1FED5E41D03B8A2ACB90F175"
+    },
+    {
+      "path": "textures/BS01brk.png",
+      "bytes": 47032,
+      "sha256": "2E94287480989A7263912E13AEBDAD362944B743B3C38F41989B15C316FB6581"
+    },
+    {
+      "path": "textures/BS01flo1.png",
+      "bytes": 151842,
+      "sha256": "4BC5F95E7A0B3E6D170427E1F8679EDBBB022D13BE8411CDD94652A477D07CE9"
+    },
+    {
+      "path": "textures/BS01flo2.png",
+      "bytes": 120606,
+      "sha256": "A9E9D05CA6EC68E5423131D26FC6B178131128DD4B4E2719FD76C3679A1851DE"
+    },
+    {
+      "path": "textures/BS01lef.png",
+      "bytes": 61944,
+      "sha256": "B76421044B639B186D89695B326BC8FA51C88158FC613D30463D3CB05F11A29B"
+    },
+    {
+      "path": "textures/BS04brk.png",
+      "bytes": 33610,
+      "sha256": "A01A9276A1E8A79539ADD79A6D051D22971C577A77DFD45CB50DB34ADEB748D5"
+    },
+    {
+      "path": "textures/BS04flo.png",
+      "bytes": 113404,
+      "sha256": "53D18584DD19B4BA776F075612ADF1D120DD23FBA252C7F5D512EF9C5A19C80B"
+    },
+    {
+      "path": "textures/BS04lef.png",
+      "bytes": 143408,
+      "sha256": "B99E87D4618F9023DD19D3E116AFBD04AB6B6A9EF0A54EE65085E997E541F73E"
+    },
+    {
+      "path": "textures/BWK_1024.png",
+      "bytes": 798070,
+      "sha256": "5ABFC1EE3433B6D779B04A2680EA931D021C8A4B55FB61F82C7E8ACA636075DE"
+    },
+    {
+      "path": "textures/bwk_1024_Spec2.png",
+      "bytes": 359256,
+      "sha256": "225725CDCBC7E1ABFD5FAFF89323C2FF336A5DA9D9CBE86DBEF0BEDC286F1933"
+    },
+    {
+      "path": "textures/candil_madera.png",
+      "bytes": 527760,
+      "sha256": "C75C86DD2FF9A49160D62C0F30148D3D29A0EE25772B0292D499794001B91625"
+    },
+    {
+      "path": "textures/cantera_naranja_liso.png",
+      "bytes": 905722,
+      "sha256": "E5311A42A8A376D3596556E9CA08821F68B94DE4442D2EEAE01355EA2C39BA74"
+    },
+    {
+      "path": "textures/cenicero.png",
+      "bytes": 386552,
+      "sha256": "C11DB54E3B536CD1D1F7EE627B8BC0A160D6665EB2414D692B39C35C87F70330"
+    },
+    {
+      "path": "textures/ceramic_tile.png",
+      "bytes": 196884,
+      "sha256": "32163669280E4B117689E954CA1012479C36733FD7A5DC5E66C3649DB7242240"
+    },
+    {
+      "path": "textures/citrus_limon_leaf.png",
+      "bytes": 65564,
+      "sha256": "30D08A21440C2099483FBA634FA5DB9BFC011C0B121BE73F7C902CED14FB9C13"
+    },
+    {
+      "path": "textures/columna_b_color.png",
+      "bytes": 602788,
+      "sha256": "0190101533C5193489E146B4DA2C7C228A98B81D96A8D51D4BFFA3A1CED76E60"
+    },
+    {
+      "path": "textures/concreto_01.png",
+      "bytes": 951892,
+      "sha256": "E11DC57D600CA907D0C18DF20FA20A8C3CF8F25915EEF9574D4849E55D355F99"
+    },
+    {
+      "path": "textures/concreto_02.png",
+      "bytes": 1282661,
+      "sha256": "12CB63F60302C0AF67AF09E6E7B5CC1DD1EB99A513257A774968E6E9587FCAE4"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7758.png",
+      "bytes": 1240364,
+      "sha256": "7ED9E3895A8F2DF0406E6F037467EECF79A8C20026F4FA6B00D97E907C26D67D"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7768.png",
+      "bytes": 1099111,
+      "sha256": "C2D433882972D2D5C6A4158A22DB3841E3932CBCAF4714CFF3A2827BF359AF64"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7785.png",
+      "bytes": 1639996,
+      "sha256": "B3FFA0869DE9F2091B1C9ABAC8BDC85698A6FC5B4B917341039627E6E9A7D0C6"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7812.png",
+      "bytes": 1227206,
+      "sha256": "1AFF72D1C09B747D53A0CF2CA604714346A1DBB72BCEFCC4870C323A6EAE94B8"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7815.png",
+      "bytes": 1136003,
+      "sha256": "BFE30F38BBA22B9E4173AB111570CE84458EA29600AA3B3F8AE2E70223B561C8"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7833.png",
+      "bytes": 1265051,
+      "sha256": "5E2456FFE6E0FE73D4B0514874B0957791038FC7DDD7D3C4F178730DE0AE8A39"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7843.png",
+      "bytes": 1097329,
+      "sha256": "E1E67D3EF429A6B949B320E13195ACD74B9A02B2BB5AA7E4C880EC84415333BB"
+    },
+    {
+      "path": "textures/detmoldura_01_color.png",
+      "bytes": 341222,
+      "sha256": "1D525BDE7A9A2410F28822B03437EE5642857567D73BDD07789BDDA7CCE7E5F4"
+    },
+    {
+      "path": "textures/detmoldura_02_color.png",
+      "bytes": 345216,
+      "sha256": "742DA9051F52FAC9A70413EEC1B19979F53FC5C21FEDC723F2F86AFB77222819"
+    },
+    {
+      "path": "textures/detmoldura_03_color.png",
+      "bytes": 354318,
+      "sha256": "9D516F34C1C82CA55DA226E3FCACD2ACCDD2D18E9E2440927752C83801C57E5E"
+    },
+    {
+      "path": "textures/detmoldura_04_color.png",
+      "bytes": 313935,
+      "sha256": "28983FA4628BDCCE201523634A3141F4F2ACA71A3213F7449504AD6C49DAEBE4"
+    },
+    {
+      "path": "textures/detmoldura_05_color.png",
+      "bytes": 356481,
+      "sha256": "143E0367C114AD6A6F4822812D0D32E54F6B49A4C7DA3B7EB2CAF4F6900357F3"
+    },
+    {
+      "path": "textures/detmoldura_06_color.png",
+      "bytes": 300778,
+      "sha256": "D6A8C0988BA8B43B32F62882A7BCC14E73817272799A2330F4BD7AEBAEF9257A"
+    },
+    {
+      "path": "textures/dracaena_fragrans_leaf.png",
+      "bytes": 173732,
+      "sha256": "44D0473FAA63DBE05297307B39077BA2F5052F72AB96157C3608BC079E7AD052"
+    },
+    {
+      "path": "textures/elaeagnus_umbellate_bark.png",
+      "bytes": 25845,
+      "sha256": "2A1D02402DD062AB1E9B5B9DEB9201AEB1FEE1FA74C9C2395A9646F075DE41F2"
+    },
+    {
+      "path": "textures/escalera_color.png",
+      "bytes": 561374,
+      "sha256": "9BB74A561F974B19A80ACA23BF68DB5C9D6A0CD0513E110EF3D1CA983BAD66DF"
+    },
+    {
+      "path": "textures/escurridera_color.png",
+      "bytes": 400664,
+      "sha256": "3342200630B8E25ABB4C970B8F5433C19D64DADA09F59FF956FCEAD6B317A364"
+    },
+    {
+      "path": "textures/EU15lef.png",
+      "bytes": 361122,
+      "sha256": "05C432025404DF361490AF8339A5A5330A0F09342AD6C3E064B10525FAA044B0"
+    },
+    {
+      "path": "textures/Fierro_A.png",
+      "bytes": 748450,
+      "sha256": "20DCA723EA903204CEEC352649A5BFBED11416EAD1E76DBD194567DFCECDA6DE"
+    },
+    {
+      "path": "textures/Fierro_A_Bump.png",
+      "bytes": 198016,
+      "sha256": "68410C0DA02BB98E89DBDD7105AA08225796DE7AE802D2B94449F995C89798CF"
+    },
+    {
+      "path": "textures/fierro_b.png",
+      "bytes": 277338,
+      "sha256": "34559B00F02B6909E508F7EC7EC7A2FF87DD280302F0D323B385E0AD48D7E5B0"
+    },
+    {
+      "path": "textures/Finishes.Flooring.Carpet.Loop.5.png",
+      "bytes": 199344,
+      "sha256": "8356EEE836A9D3C573054FFD04F635F5C1DF40F6DE0C93A25C29C5FC4D08FE55"
+    },
+    {
+      "path": "textures/fittonia_verschaffeltii_bark.png",
+      "bytes": 23454,
+      "sha256": "A0E37CBC6D865CFBFE292041148A70E46525F18193A21621FD987D29E60B5074"
+    },
+    {
+      "path": "textures/FL03lef1.png",
+      "bytes": 179062,
+      "sha256": "BC3FCD5EBD60A8091B2843FC73112605F7E4479D7DF306D9A36D5C777139DC2F"
+    },
+    {
+      "path": "textures/FL04cnt1.png",
+      "bytes": 363042,
+      "sha256": "F7C3227D17A299466E6B903114C755529FD15D4A4E795288E90558C816907CEF"
+    },
+    {
+      "path": "textures/FL04cnt2.png",
+      "bytes": 80645,
+      "sha256": "D5F1A5FA98BC5BA1B4133DBE9A3046935AB28437B24E29B9E9953153F3F4EBB4"
+    },
+    {
+      "path": "textures/FL04lef1.png",
+      "bytes": 111683,
+      "sha256": "1342EC15B54EC742A2F23AD81E33B1313B5682AD237F10A9193D08B80C5CA5F9"
+    },
+    {
+      "path": "textures/FL04lef2.png",
+      "bytes": 218609,
+      "sha256": "0A3EC427C567F2AF11B97524E7DE06A686C90C4CDCB2B329476C15849381AAA1"
+    },
+    {
+      "path": "textures/FL04pet1.png",
+      "bytes": 64991,
+      "sha256": "BC744B165497DB1947BC6947DE68A5E14FF1EB6BEDFD5EA715DA482BFDF6DEE9"
+    },
+    {
+      "path": "textures/FL04stm.png",
+      "bytes": 26580,
+      "sha256": "2CCE9F643718FEA3E22C4A196832549F5C01ADA3F4C2009E734C0B913AD997F3"
+    },
+    {
+      "path": "textures/FL11lef1.png",
+      "bytes": 70989,
+      "sha256": "2461F94B294AC0AD57F828F9E2231BD0280888F600366A009BE75DCB85AA6EB2"
+    },
+    {
+      "path": "textures/FL11lef2.png",
+      "bytes": 52832,
+      "sha256": "3C130004D9AB330C489295B597A62F2D81905235840B14E3A5A0C5E6E9503ABC"
+    },
+    {
+      "path": "textures/FL11pet1.png",
+      "bytes": 123338,
+      "sha256": "62FE0C5859FA4A873CE0F12DA82E18B67DAB9B003477D0EA2B40DE7EA9B9CEAC"
+    },
+    {
+      "path": "textures/FL11pet2.png",
+      "bytes": 66768,
+      "sha256": "899CF067F2D1BB31B0D86BB733F214E874317C8AD2E33FB7F98EB9AE3EDA967C"
+    },
+    {
+      "path": "textures/FL11pet3.png",
+      "bytes": 136470,
+      "sha256": "E1A46D3F370A6B54016C1088C63A639896242D59D659314074DDC414E5A3D0F2"
+    },
+    {
+      "path": "textures/FL11pet4.png",
+      "bytes": 67525,
+      "sha256": "BA0836C86BCED718C58CB6A5E73620EA6B4B99F361AC8B1C8341D4C58CB1EB7B"
+    },
+    {
+      "path": "textures/FL11sta.png",
+      "bytes": 75026,
+      "sha256": "299459032EF8B3F774507A4AC954A6DDDA06C3A57871B5EB74993D3C374617D5"
+    },
+    {
+      "path": "textures/FL11stm.png",
+      "bytes": 150668,
+      "sha256": "EE5286EA49FBE2BFEB369AE10C04B9E08EF738FFF5A52B5C73FB64B033E0F7B2"
+    },
+    {
+      "path": "textures/FL12lef1.png",
+      "bytes": 79664,
+      "sha256": "309A0773272DAB96FFB80E37EC43DF560BAF054BDC48B28BA56C06B6C0076330"
+    },
+    {
+      "path": "textures/FL12pet1.png",
+      "bytes": 68992,
+      "sha256": "D0182035015C00521EF1BC0F48A686C6712F85E6896863902AB54B7026977B43"
+    },
+    {
+      "path": "textures/FL12pet2.png",
+      "bytes": 140747,
+      "sha256": "745FA28BE382688FB1039F80F29511331528E7A7DEC96AF0C04A1CB3B583C8BA"
+    },
+    {
+      "path": "textures/FL12pis1.png",
+      "bytes": 7208,
+      "sha256": "3152CF05B46595816287934B98B134893A5DBFC699BC6F071541AC1DB972DE01"
+    },
+    {
+      "path": "textures/FL12sta1.png",
+      "bytes": 235170,
+      "sha256": "82C618FDD7EB2C54760B80EA2785CC3D6C8E2D6B4BACD82535C7113B5C916A16"
+    },
+    {
+      "path": "textures/FL12stm.png",
+      "bytes": 21789,
+      "sha256": "B43D2BC65EF4800428D39DE9515E0E82131E21C33CE55D1775203C57D8C0F04A"
+    },
+    {
+      "path": "textures/FL13lef1.png",
+      "bytes": 172310,
+      "sha256": "5496A151291B9B33D9F259E1110848B8818A600C931B7D8132064B89DF7CC945"
+    },
+    {
+      "path": "textures/FL13lef4.png",
+      "bytes": 105429,
+      "sha256": "E42D0222C441AE606565E00D62B5780DA20F51522C7A85B598B45295C866AD5F"
+    },
+    {
+      "path": "textures/FL13lef5.png",
+      "bytes": 258388,
+      "sha256": "AE1C9460296E251F9A422F8E9DD947F5FA7008F04E0939338F8D5CC561253BB2"
+    },
+    {
+      "path": "textures/FL13pet1.png",
+      "bytes": 103368,
+      "sha256": "84DB36956CF9103BD86B18539F518A421326ADC7C5E64398EF060FE8715199BF"
+    },
+    {
+      "path": "textures/FL13pet2.png",
+      "bytes": 165249,
+      "sha256": "024A669412A41D3BDEDA0944A5FDDC5008BA257C69D608968421F05AB265B13C"
+    },
+    {
+      "path": "textures/FL13pet3.png",
+      "bytes": 141144,
+      "sha256": "E0BB811026022BB26733BE7468AF3101DFE382E5F2BEC882AA1913D095FDD5A6"
+    },
+    {
+      "path": "textures/FL13stm.png",
+      "bytes": 19912,
+      "sha256": "A7BD9023AFFE71F1B965098199952EB2BD2DACAE1A46E24FB9A1D3115F864B72"
+    },
+    {
+      "path": "textures/FL15cnt1.png",
+      "bytes": 75490,
+      "sha256": "FB03E62EB7D982E53A150D5F614D2846EFE654D8DE470CE3AFCD03F21B7E094A"
+    },
+    {
+      "path": "textures/FL15cnt2.png",
+      "bytes": 138859,
+      "sha256": "BBA0010C426CC1233EEDD990F87D265D4FC368D70A8156A347C356C031F61A0F"
+    },
+    {
+      "path": "textures/FL15lef1.png",
+      "bytes": 134994,
+      "sha256": "6F5ACBEF303458E42F8B6E9A0D6E9F5094C62682BF73A8855082947CCB1EE46C"
+    },
+    {
+      "path": "textures/FL15lef2.png",
+      "bytes": 43620,
+      "sha256": "F41818BB016E14F2AD7AB9D2518D5CE24BBBBBDF28562C9F8F5BD0A2B09955A7"
+    },
+    {
+      "path": "textures/FL15pet2.png",
+      "bytes": 96774,
+      "sha256": "1BEC2590C83C31E306C3E9962262FA846A2FA74AEA720C1D11E8F8F8D419B41A"
+    },
+    {
+      "path": "textures/FL15stm.png",
+      "bytes": 13212,
+      "sha256": "D08A73B02440D36F229C7752A4C5F2C4DA39035301BA170193B7D1FE327A2EDF"
+    },
+    {
+      "path": "textures/FL16lef1.png",
+      "bytes": 195350,
+      "sha256": "5828B00A14364BF22ED82E43497F0713A2353AF0E5D0B8D953E6E44858908279"
+    },
+    {
+      "path": "textures/FL16lef3.png",
+      "bytes": 164109,
+      "sha256": "8B1385329E3239563B0141F33390365F1F99DECC38DC916C42CB536854AC56D1"
+    },
+    {
+      "path": "textures/FL16pet1.png",
+      "bytes": 141255,
+      "sha256": "9C1DADAEF033BFC8A7BA1FDCD67B93284981345F821BECD5C84828B3754E158F"
+    },
+    {
+      "path": "textures/FL16stm.png",
+      "bytes": 49017,
+      "sha256": "9747FABA43B25353C34307F253A48E5EBC342B4D1868CA2CE2A4385AF5762DD7"
+    },
+    {
+      "path": "textures/FL17cnt.png",
+      "bytes": 125986,
+      "sha256": "0B16BAD18411A84273D8A2BC1441D5FD577205D8A3AB85CA680E6810A646987D"
+    },
+    {
+      "path": "textures/FL17lef1.png",
+      "bytes": 207634,
+      "sha256": "0521BAC5B31E68B356B602CA1B8D6127FC08DCF8168A6CC936E515BEE908A8CD"
+    },
+    {
+      "path": "textures/FL17lef2.png",
+      "bytes": 171711,
+      "sha256": "1D482075BF67753B5FB0A569B923F635D1187EE51672A4F8DB1BAE59076599E2"
+    },
+    {
+      "path": "textures/FL17lef3.png",
+      "bytes": 128154,
+      "sha256": "CF4EFAE3C33D63CDE717D32F762E260358FFBFD1B1C38D67F1E5C5CF6385256D"
+    },
+    {
+      "path": "textures/FL17lef5.png",
+      "bytes": 58773,
+      "sha256": "DEB7973A512CB33B4E4E43B7805B63BF5AF56314019537580B7823795C35C57D"
+    },
+    {
+      "path": "textures/FL17lef6.png",
+      "bytes": 59588,
+      "sha256": "41CD1F5B9A16296C8EFA86FD3A2178B88930B85C312E0E8C3DC4896A5CD47EA6"
+    },
+    {
+      "path": "textures/FL17pet1.png",
+      "bytes": 134968,
+      "sha256": "E710C4BBACF53A0BE6E4A2D4AF58D9A36BBAA9ECA381422006935147628AE67F"
+    },
+    {
+      "path": "textures/FL17pet2.png",
+      "bytes": 142456,
+      "sha256": "3286BDA4A813F2C75FD00D31264B66117E684BE834BBDE59EA7FC3C4DC3A6775"
+    },
+    {
+      "path": "textures/FL17pet5.png",
+      "bytes": 170316,
+      "sha256": "5D9CBD597C798E62AC7AE83E52845ACD0AFA75B167330E23BB066A1C540355B1"
+    },
+    {
+      "path": "textures/FL17stm.png",
+      "bytes": 159540,
+      "sha256": "45D5B11946DC207624CE6245418AA279739DB26FD4BA1984288DC1DA188127C6"
+    },
+    {
+      "path": "textures/FL19lef2.png",
+      "bytes": 178554,
+      "sha256": "0639A7122D2C61411F145266E34CD6798AC72548E01BF7344468129E8E32B31C"
+    },
+    {
+      "path": "textures/FL19lef3.png",
+      "bytes": 158781,
+      "sha256": "77588F43367BFC43E74B4C1B0B238418316A4BD669F213B028FFEBC0572E04DC"
+    },
+    {
+      "path": "textures/FL19lef4.png",
+      "bytes": 81581,
+      "sha256": "52C4D7581407F88E717D4EA3FE4256B464E5AE4FDFCEE3449BD174A3808D46C1"
+    },
+    {
+      "path": "textures/FL19pe13.png",
+      "bytes": 178139,
+      "sha256": "78BD28328CBD867D9245DB43EA681EEBA7E4A4AC259716699B5BE2D7C075F07A"
+    },
+    {
+      "path": "textures/FL19pe14.png",
+      "bytes": 160072,
+      "sha256": "31C2AF8E91531CCC304E81D2C468360EA40081B022E3DD3B8611D4D1FA411EB0"
+    },
+    {
+      "path": "textures/FL19pe15.png",
+      "bytes": 151561,
+      "sha256": "C8E0D0667F2F0D31AB7A624F74AB09923D4DAF6AED8C4E5286075F46E16F5CA1"
+    },
+    {
+      "path": "textures/FL19pe16.png",
+      "bytes": 170017,
+      "sha256": "F1871148A4EBA697888EC17BBD7DDEC279F62504B9FADD69415F543266CED86F"
+    },
+    {
+      "path": "textures/FL19stm.png",
+      "bytes": 25370,
+      "sha256": "3DE3F778818663D1D2B4FAC7E9327C5B04FC52173325011372DE062434708BF0"
+    },
+    {
+      "path": "textures/FL29cnt1.png",
+      "bytes": 164328,
+      "sha256": "4F009AA1A84B8AD403FFC40D4A2D379177EF8DA00B991065E5D94418BBCA6A51"
+    },
+    {
+      "path": "textures/FL29cnt2.png",
+      "bytes": 71567,
+      "sha256": "1199D011DBA004E16D7C0E0BED35EF590F5DD8F06E91D362710904A06DE5E6C3"
+    },
+    {
+      "path": "textures/FL29lef.png",
+      "bytes": 193795,
+      "sha256": "AA41966C83533B98226AF23144B0C6E3DD95CB5B64A79C38B2289DFB7E89E8A3"
+    },
+    {
+      "path": "textures/FL29pet1.png",
+      "bytes": 85744,
+      "sha256": "F18258E2331F84F45A16073837393A22C0EA5A1256301F5E53E63FC790597658"
+    },
+    {
+      "path": "textures/FL29pet2.png",
+      "bytes": 69371,
+      "sha256": "078BF88D3A9A5892400F391E29A54BD9D8C7B5C33AEA9F1D9CBF2BF6ED87E71F"
+    },
+    {
+      "path": "textures/FL29stm1.png",
+      "bytes": 76380,
+      "sha256": "43162C5798FFC41F55FD097182FF3947EA38A1002F7F2E2D2C49756F28871B61"
+    },
+    {
+      "path": "textures/FL29stm2.png",
+      "bytes": 34169,
+      "sha256": "D16DFDC422386D6B0D324964D0EC222822722EFE68A0F4FF124D84C9DF4A09DE"
+    },
+    {
+      "path": "textures/FL29twg.png",
+      "bytes": 67473,
+      "sha256": "46044DB439EE7420C89ABB3485EA11686794ADE983BC997B306AA280D0BF83EF"
+    },
+    {
+      "path": "textures/Forja_Macetas.png",
+      "bytes": 190637,
+      "sha256": "B0D05B2AA24948DD465AA3958A94327D864CD12972D2B370D2B73C5DA54FEF23"
+    },
+    {
+      "path": "textures/fuente_azulejo.png",
+      "bytes": 30189,
+      "sha256": "0CAA0EC9CF48197C232810B5E2463B8BC11925FB4295CCE52BD231B9851C2AFC"
+    },
+    {
+      "path": "textures/fuente_piedra_01.png",
+      "bytes": 922196,
+      "sha256": "99153D027F6251A7188C77A4DCA3686B22DD6BD89ABBC66DD19800DC01FD774C"
+    },
+    {
+      "path": "textures/fuente_piedra_02.png",
+      "bytes": 987649,
+      "sha256": "9C360D4253E73F86649AECFA5AA85733EFE4134B13534BE0C38A0638361D46BB"
+    },
+    {
+      "path": "textures/HP01lef1.png",
+      "bytes": 274590,
+      "sha256": "7140CF41B761858A3D72876D8AA37C2288A6B96C269256E840DA8BFE5B81432C"
+    },
+    {
+      "path": "textures/HP01lef2.png",
+      "bytes": 87122,
+      "sha256": "519606478906E1576E3557E37700757103D70FCF3F9AF4DC0EB79FE189A2FE2A"
+    },
+    {
+      "path": "textures/HP01pet3.png",
+      "bytes": 187913,
+      "sha256": "3BC63DEB8D6E3AD4CAD357B9CAB04C91DFC873E6D2F74A0BE7EF095A533AC299"
+    },
+    {
+      "path": "textures/HP01stm1.png",
+      "bytes": 42364,
+      "sha256": "57AF18B44E33E2C3D1FCF31C840480799648CE899EF7054C8771E11E5CC9AEBA"
+    },
+    {
+      "path": "textures/HP01stm2.png",
+      "bytes": 365143,
+      "sha256": "6A6C2213C6240ABEB1044A033219494C00BA533F7EF5818A9B281017ADC02B30"
+    },
+    {
+      "path": "textures/HP04lef2.png",
+      "bytes": 121957,
+      "sha256": "F6F136C67DA6729633D55D87B1072A8106FC657F66935B026D69708FC768E592"
+    },
+    {
+      "path": "textures/HP07lef1.png",
+      "bytes": 117642,
+      "sha256": "DE7BFE91923CDF29EAC56B030F438E08948F5187DB5116A709688C7DF16B9339"
+    },
+    {
+      "path": "textures/HP07lef2.png",
+      "bytes": 118542,
+      "sha256": "44B9ED4C0737C2E29901ED2F580D2C524E1FDF718449F43222B657193DF4B396"
+    },
+    {
+      "path": "textures/HP07stm1.png",
+      "bytes": 239098,
+      "sha256": "85384CB8EF84CF48AF1478B0E2129DABC39F52D5E0D82EE58480663244BCFC8D"
+    },
+    {
+      "path": "textures/HP07stm2.png",
+      "bytes": 112065,
+      "sha256": "CDB65476A2D08C6304A4C0076234912AB550A433FB9AEDCDCAA4450D552F72DF"
+    },
+    {
+      "path": "textures/HP11lef2.png",
+      "bytes": 221269,
+      "sha256": "ABB1E0B09217E5364EB2C76F18582C6F1D20E291899FC508ECB89C2B09EDCF1F"
+    },
+    {
+      "path": "textures/HP11stm.png",
+      "bytes": 260113,
+      "sha256": "07020E26DD0A84094883B54486657C12D2904050E5A7F93DF2DB7535454D51A7"
+    },
+    {
+      "path": "textures/HP13lef2.png",
+      "bytes": 130948,
+      "sha256": "E2DF63B6F1BB29D784968ADE841CC5832D76FEFC3C4491A45C67C277B909EAAB"
+    },
+    {
+      "path": "textures/HP13lef3.png",
+      "bytes": 138801,
+      "sha256": "FE14DE0BD75E4037484824587E5F8276AA72A461BB1AAF533E09B9BA66E26778"
+    },
+    {
+      "path": "textures/HP13stm2.png",
+      "bytes": 189893,
+      "sha256": "B61BFA18915F537C5B0D00ABF6BE65A7D308BA8EA686B8A782A219BFDFAF326A"
+    },
+    {
+      "path": "textures/HP17lef1.png",
+      "bytes": 294127,
+      "sha256": "27C3590CFCB35C69D2CC53AA017E3AB496742860EF7DD4C42972728AFBA99F50"
+    },
+    {
+      "path": "textures/HP17lef2.png",
+      "bytes": 97577,
+      "sha256": "D5D8AB805618D3B7F628F5DB2DFBEF0BFED40F06EFAE28911BF4DB90147D2E5C"
+    },
+    {
+      "path": "textures/HP17stm.png",
+      "bytes": 43517,
+      "sha256": "3814A38A4F9A584B9D32FA8A89177A5DBBD0B6ECC9DE1D00D7371A7C0AFB72A5"
+    },
+    {
+      "path": "textures/HP19lef2.png",
+      "bytes": 182160,
+      "sha256": "4BD07AEDD59CE64C07FED0B6FC8312EBCFADA0A811FA5875BA47A0F7579D950C"
+    },
+    {
+      "path": "textures/HP19lef3.png",
+      "bytes": 164993,
+      "sha256": "6CA236E416E7A32EA5EFFD48508EFBB386B0B20565756A48964568113B68B268"
+    },
+    {
+      "path": "textures/HP19stm1.png",
+      "bytes": 167832,
+      "sha256": "1F862E650A0EA9B70CEED6819E5D504C59729ACB13FF09702CCE79858F4432F0"
+    },
+    {
+      "path": "textures/HP19stm2.png",
+      "bytes": 187361,
+      "sha256": "0A499F238F43C40781ACECCA0FF683752526A40517EE197BE839F55C942EC34B"
+    },
+    {
+      "path": "textures/hypoestes_phyllostachya_bark.png",
+      "bytes": 30255,
+      "sha256": "8FD8140A150CED7BD327F5C269FDA91B04BC76D5C6A1FDACACE4E1FE4489BA80"
+    },
+    {
+      "path": "textures/impatiens_newguinea_hybrids_petal.png",
+      "bytes": 13467,
+      "sha256": "0C0BB72DFD042D5752113633550585CF86931F2A35BB4D38C08CF5E34F21A10B"
+    },
+    {
+      "path": "textures/individual_b.png",
+      "bytes": 244395,
+      "sha256": "1EE5F30C4CCEB152511169A9CE8DE1A58411BB914F17CCD4A16574BD1A7AF6CE"
+    },
+    {
+      "path": "textures/jardinera_1_color.png",
+      "bytes": 1068314,
+      "sha256": "D3EE285E89E957F6747D904616BF8B93E56574ABE88B6E159422AA08FE668749"
+    },
+    {
+      "path": "textures/l04-upper.png",
+      "bytes": 31335,
+      "sha256": "45624DA42632C5AEFED033C9A44AFD435236D86E25E3B6C2DFD1DEE4DBD67A7B"
+    },
+    {
+      "path": "textures/l33-upper.png",
+      "bytes": 32834,
+      "sha256": "4A407E5AE6D64E18701D80FF30B6AD1156B63F093D3630144D1DC6EFD3AFB45A"
+    },
+    {
+      "path": "textures/l37-upper.png",
+      "bytes": 24750,
+      "sha256": "5ED89BD7E3B6EC79E5023CA662858633EE7930519B20CA6759E67116FDB905DA"
+    },
+    {
+      "path": "textures/losa.png",
+      "bytes": 155674,
+      "sha256": "DE8B0937570E979065E3A5DD5355D94C41BDC750CF2662CA1282776D4B64B243"
+    },
+    {
+      "path": "textures/Maceta_A2_Color.png",
+      "bytes": 403504,
+      "sha256": "C4501C69808111D512AE0874CD3367E1B16E3FF1269E2CB4E41A726FC5709985"
+    },
+    {
+      "path": "textures/Maceta_A_Color.png",
+      "bytes": 398166,
+      "sha256": "C6F199CA2D44CA21522F98CA52D71540890F425B3D97E72E2B7A90B4B99E93C5"
+    },
+    {
+      "path": "textures/Maceta_B2_Color.png",
+      "bytes": 507382,
+      "sha256": "535D963D3C824458C3DD91B58355FF9F739265F8575D9F591448C72451A0B1C9"
+    },
+    {
+      "path": "textures/Maceta_B_Color.png",
+      "bytes": 409437,
+      "sha256": "72EEA1E1128915DCDBECA52ADD90D89C505F69CEE0A1395431D0BF49F12364F9"
+    },
+    {
+      "path": "textures/Maceta_C2_Color.png",
+      "bytes": 440195,
+      "sha256": "31738FA7843BE6580C09FAA0396F08CB1CE323F76ED8F5629BDC230378E21F58"
+    },
+    {
+      "path": "textures/Maceta_C_Color.png",
+      "bytes": 384346,
+      "sha256": "8128950BB6DB53F0F0E54C0B75837D1133C04872F984C0825B1FA7E53DC98EC6"
+    },
+    {
+      "path": "textures/Maceta_D2_Color_0.png",
+      "bytes": 472488,
+      "sha256": "AA8325B259691C45C98D8720603E321B366B5FA5902F8B07AF14C972BF2206DB"
+    },
+    {
+      "path": "textures/madera_barandal_esc_2.png",
+      "bytes": 225463,
+      "sha256": "BF144C9CE33EC93A546CD6521E84FFD3806ABA1BDCD13718C5E0E42C3FB9CE1D"
+    },
+    {
+      "path": "textures/madera_marcos.png",
+      "bytes": 277407,
+      "sha256": "B8535FB90320702CAFC77F7A733062EE5E30E16E376002E8C1362902845D05E8"
+    },
+    {
+      "path": "textures/madera_rustica_2.png",
+      "bytes": 2588481,
+      "sha256": "E846BD5B0B20A49D5129A589910BE77E2DA2B337209753248A0B9A24E0CE7124"
+    },
+    {
+      "path": "textures/madera_triplay_01.png",
+      "bytes": 351321,
+      "sha256": "05D23BF0101B2A0E4F6C3712E63D54F550929745572D4661E28553457102C9A5"
+    },
+    {
+      "path": "textures/marco_puerta_1.png",
+      "bytes": 767524,
+      "sha256": "86EC1132B03A92803B89C7DFBE048F4C27783EFEAD62DB3A68D387EE81CBBB5E"
+    },
+    {
+      "path": "textures/metal_viejo_2.png",
+      "bytes": 336998,
+      "sha256": "038738D5061BA7B14E7BBF2F7F4112647D35E4D228DFF1ACB7604A5F3FE27CCE"
+    },
+    {
+      "path": "textures/mold_arco_01_color.png",
+      "bytes": 1068379,
+      "sha256": "65D86AF04F1D079ACD72D654EC90A6F07EEDC16A27F75D4D9B67BEA427C1D875"
+    },
+    {
+      "path": "textures/moldura2piso_color.png",
+      "bytes": 1456193,
+      "sha256": "18A12DAAEFF754433CDB2099E8D772FA5C87E388EC1D589613C5C87500131CE3"
+    },
+    {
+      "path": "textures/moldura_techo.png",
+      "bytes": 757999,
+      "sha256": "9ACB5E14E9F711A413E992F33CE0146CC90C110B2F1B936FCB6B03DC5CF5A4BD"
+    },
+    {
+      "path": "textures/moldura_volado.png",
+      "bytes": 280836,
+      "sha256": "286E25A904A4C3D5C355231B39F1DA5BDCE52AF68AC294752E058498A83E9D8A"
+    },
+    {
+      "path": "textures/molduraterraza__color.png",
+      "bytes": 671847,
+      "sha256": "0FDA4B06A847B2522F1C41839D04AE33AA8BD8D54487E34BB8DCE8D31327CB0A"
+    },
+    {
+      "path": "textures/muros_a.png",
+      "bytes": 3030691,
+      "sha256": "E1B69392038B36FDA66B539F1534FD3FEA0FD4B8F3A7EDDDD67B274FFAEAC7E0"
+    },
+    {
+      "path": "textures/muros_b.png",
+      "bytes": 1926958,
+      "sha256": "2301F3532532B257A1EA6F9CF8FA4A4805584AFD8D318C9642CFEEB699D8F8BD"
+    },
+    {
+      "path": "textures/muros_b1.png",
+      "bytes": 1051085,
+      "sha256": "34888EF5CF7F9ED3D7A84C8716B832098E80C52DDCA7924168DD75CA403711B5"
+    },
+    {
+      "path": "textures/muros_b2.png",
+      "bytes": 1050296,
+      "sha256": "5907F9077D2466FA7A23F9B97A388C5A284DE4EFA43F0AB847E6A933B414B99A"
+    },
+    {
+      "path": "textures/muros_c2.png",
+      "bytes": 773996,
+      "sha256": "C7B4DCCE79E346511C3AE2889E3BECB1E1D7EF9F4D5361C8BC6323482C31F85E"
+    },
+    {
+      "path": "textures/muros_d.png",
+      "bytes": 3285849,
+      "sha256": "B5BD709A856E1B08A9531249632CF867E16C8970AD6849C6944E2120D63D2FE0"
+    },
+    {
+      "path": "textures/muros_e.png",
+      "bytes": 3621142,
+      "sha256": "C0177C168714F9127596D290598B798067D93F6B4356B6DB01EEF581B7EB1BE3"
+    },
+    {
+      "path": "textures/muros_f.png",
+      "bytes": 89683,
+      "sha256": "17716BDB73157390693FD8E3AE0E01B9DEB446073451EF9B9177A93CCEAEEEAA"
+    },
+    {
+      "path": "textures/muros_g.png",
+      "bytes": 2875283,
+      "sha256": "80EF72B158C7584EB45D47ED7E8D8063D37CA3DFAA360955933AD4F32C1F2713"
+    },
+    {
+      "path": "textures/muros_h.png",
+      "bytes": 3259492,
+      "sha256": "00170A8A614E4F0B25D05CF00BA4BDEC0DCF43F9D715C75BB7D20D6BC503FB89"
+    },
+    {
+      "path": "textures/muros_j.png",
+      "bytes": 802076,
+      "sha256": "99546554FCE589601EDC4BCC678533172B512A6802781B28DB037E947A5B28D4"
+    },
+    {
+      "path": "textures/muros_k.png",
+      "bytes": 1036326,
+      "sha256": "142CB7C1AF581A07BFAE25B8F7EEBC0238BD87B3ACB9B98568A514E2DA7AF40D"
+    },
+    {
+      "path": "textures/muros_l.png",
+      "bytes": 2547783,
+      "sha256": "BEEF3DE76B3D5C75B5D13E3A03D880BCE2B96094CC38F207338AA364218F35CF"
+    },
+    {
+      "path": "textures/muros_m.png",
+      "bytes": 305453,
+      "sha256": "D6D8220451146CE7C64645B262AA07E26BB667DE1E41917370F5D408C9D66A51"
+    },
+    {
+      "path": "textures/muros_n.png",
+      "bytes": 1743844,
+      "sha256": "948D7D75784A097DA03E45902ADD64FFB87AD034CD0C8B9484778D162E991DE4"
+    },
+    {
+      "path": "textures/muros_p_.png",
+      "bytes": 2748115,
+      "sha256": "BB38B70126B643B02CC1471332B5C9416C4BE6710CF87853A5D4BC02044E662D"
+    },
+    {
+      "path": "textures/muros_q.png",
+      "bytes": 3799081,
+      "sha256": "B63BF5FC53F27C4F888B845C5C20CF2D6BFBFE172C24BE6E59B5BBDA8F56F504"
+    },
+    {
+      "path": "textures/muros_q3.png",
+      "bytes": 1041553,
+      "sha256": "00E39FF3EE3E8671CD5C41224A89205AD82F4A427DDABC877700F5A4E30964B2"
+    },
+    {
+      "path": "textures/muros_q4.png",
+      "bytes": 1097514,
+      "sha256": "D762EDEECDEB01AC85C4062F1B3125B1D7D2DC635EA21C4F1AFA6E4F7E68F58E"
+    },
+    {
+      "path": "textures/muros_q_patio2.png",
+      "bytes": 2537917,
+      "sha256": "FD6315900E40F0035C30C4F5F0D0EBD9D1CFB607FCE3669A4DE116E5BD59365D"
+    },
+    {
+      "path": "textures/N_arco_frente_displace_inv.png",
+      "bytes": 205738,
+      "sha256": "C5FB2BED67A1CB46B68462F2A0C9D283C63C36647E4C3BC883CC37791290925E"
+    },
+    {
+      "path": "textures/N_arcos_lisos_2_bump.png",
+      "bytes": 357165,
+      "sha256": "43B2419937ADCB355DB563EE217C8E2936137B28518DBE70FED25FD91D3FB5EF"
+    },
+    {
+      "path": "textures/N_arcos_lisos_3_bump_1.png",
+      "bytes": 242056,
+      "sha256": "261950CC58D79547B5781405C227F39D2A12BCC108F85C3475AD9701B6375960"
+    },
+    {
+      "path": "textures/N_bark06mi.png",
+      "bytes": 61599,
+      "sha256": "4F6EC4A86570B7DB948CA77CD601C6563F6BB7375B50C83A70E738AC31DACA29"
+    },
+    {
+      "path": "textures/N_bwk_1024_Bump.png",
+      "bytes": 614819,
+      "sha256": "FA9710A404A6B818F9659697A4FCCC93F16A79FA772BB360739CAA968749BD6A"
+    },
+    {
+      "path": "textures/N_columna_b_displacement_3_inv.png",
+      "bytes": 397490,
+      "sha256": "D8A1E235098FF5F1379C297F143EBDEE267B410DA11246B79E7D7F71759F6EAF"
+    },
+    {
+      "path": "textures/N_detmoldura_01_bump.png",
+      "bytes": 213799,
+      "sha256": "3425CADE1095690CE7158010A3EAE23A8887401D7D68965E1DC4CEDB23E3350F"
+    },
+    {
+      "path": "textures/N_detmoldura_02_bump.png",
+      "bytes": 213740,
+      "sha256": "62AF9F25ED7C1E075D0BAC4B93DC01D78BB97B01A210FC667FA4911DFBA8B894"
+    },
+    {
+      "path": "textures/N_detmoldura_03_bump.png",
+      "bytes": 213273,
+      "sha256": "72F82C9148885EE706E24D500DF0535682A8224AD5043DC743349D14EAD56952"
+    },
+    {
+      "path": "textures/N_detmoldura_04_bump.png",
+      "bytes": 213116,
+      "sha256": "757811B9E36FBF58A53320561522DD5C4FC1495A0A5659029CCB84F994D1122D"
+    },
+    {
+      "path": "textures/N_detmoldura_05_bump.png",
+      "bytes": 213311,
+      "sha256": "47F6C30A0489E2CAFD7C0821AC10E99C38BBB784F6A3C3C1690BF2196FF33B96"
+    },
+    {
+      "path": "textures/N_detmoldura_06_bump.png",
+      "bytes": 210449,
+      "sha256": "42ACB14F59E640A91D0B2914E7AF23C704D288C01F05F9561DCCFCCBF8CECDF3"
+    },
+    {
+      "path": "textures/N_escalera_bump.png",
+      "bytes": 498597,
+      "sha256": "1698D3DD4955EFF30E1A5C4530DBE08439A0DE52BC7C4469C3DF533A345C6C32"
+    },
+    {
+      "path": "textures/N_escurridera_bump.png",
+      "bytes": 314913,
+      "sha256": "552817EBEEDD0DABB77647D337A7CDE6678D2B76C397B58B84E146591AB8F8D2"
+    },
+    {
+      "path": "textures/N_Fierro_A_Bump.png",
+      "bytes": 227244,
+      "sha256": "2EB884D20BB180A92B5AEBABAD95FD7565A66898FDEBA2CA80717230363FE3FC"
+    },
+    {
+      "path": "textures/N_Finishes.Flooring.Carpet.Loop.5.png",
+      "bytes": 152015,
+      "sha256": "D3F0C897AAB6DF1A1DF41B7EA98E6B43B6B3229AF56777D5DBF418D180156274"
+    },
+    {
+      "path": "textures/N_Forja_Macetas_bump.png",
+      "bytes": 170475,
+      "sha256": "ACD1309501BFFA070612E0898D95C045E1D2DD12990A293CEF67B2D665ADB332"
+    },
+    {
+      "path": "textures/N_HP11stm.png",
+      "bytes": 182046,
+      "sha256": "409660FE3154E9811B56E877B119095CA4EC499D9CAB68B046D424049C5D16C4"
+    },
+    {
+      "path": "textures/N_hp13lef1_bump.png",
+      "bytes": 151477,
+      "sha256": "8DD2171196F2A323C124F6D9F0BA7BEFB558E065A460B0E1BA8F1F8DC36B432B"
+    },
+    {
+      "path": "textures/N_jardinera_1_displacement_2.png",
+      "bytes": 290472,
+      "sha256": "7686AAE3DCB6CD652F7D761CD176F5ED51E398C31480AC63677C6C562B36F2EF"
+    },
+    {
+      "path": "textures/N_l04-upper.png",
+      "bytes": 19367,
+      "sha256": "F3AD7082FCEA58066833A5F55CB01D1CE551CA5C28157289A8BDA026C6A09F7D"
+    },
+    {
+      "path": "textures/N_l33-upper.png",
+      "bytes": 20717,
+      "sha256": "AD8EBA90A55828531FC7F2FBF5ED8ACFB798431EFE9C926B2822E8C1466B8E57"
+    },
+    {
+      "path": "textures/N_l37-upper.png",
+      "bytes": 28584,
+      "sha256": "F523791779DB56A070C4686CFD5E45F3F97B9162C0F3AEC7BC179FD0C529DBF7"
+    },
+    {
+      "path": "textures/N_Maceta_A_Bump.png",
+      "bytes": 329033,
+      "sha256": "09E48821ED414A84810E23EF82578036D7DA74C02D2D4AC28C2AD2013B0245B5"
+    },
+    {
+      "path": "textures/N_Maceta_B_Bump.png",
+      "bytes": 360549,
+      "sha256": "3494262B8D2E6ED48856033F6DFDAF8E71D133B89145FE5C93BFABF2639C8576"
+    },
+    {
+      "path": "textures/N_Maceta_C_Bump.png",
+      "bytes": 328742,
+      "sha256": "C3A2770D68B5963682F543954F95D781713F195A3679E7516BD823FE214B01AC"
+    },
+    {
+      "path": "textures/N_Maceta_D_Bump_0.png",
+      "bytes": 398669,
+      "sha256": "30C77B9C7B27B5AF159EB700A68E7A82F135BC67B1459BBD16288AB37935CEFD"
+    },
+    {
+      "path": "textures/N_madera_barandal_esc_2_bump.png",
+      "bytes": 221286,
+      "sha256": "21A2C7AEBFA764186C874C58A03B8768C00528549799FEAF9F5CF7B5DB0848D1"
+    },
+    {
+      "path": "textures/N_marco_puerta_1_bump.png",
+      "bytes": 544185,
+      "sha256": "E82F330A1235EC62F0BB5B29B638D3C371A0EA05D008A2B450D3BAA544A687BA"
+    },
+    {
+      "path": "textures/N_metal_viejo_2.png",
+      "bytes": 284403,
+      "sha256": "02590A32D72941A072647D88BDF1ED14E9FBA0DD68301122312045CFF58E580D"
+    },
+    {
+      "path": "textures/N_mold_arco_01_bump.png",
+      "bytes": 444408,
+      "sha256": "A17866382227B3F05C36AB5B8A61567F9174AE0E9FE66DF79A607759182560A8"
+    },
+    {
+      "path": "textures/N_moldura2piso_bump.png",
+      "bytes": 702482,
+      "sha256": "1E1336248FDA4CE70CC1E9A54A890350A6B07A44CC3A791A8156C9DC5345682C"
+    },
+    {
+      "path": "textures/N_moldura_techo_bump.png",
+      "bytes": 578264,
+      "sha256": "AF939107C43713D9035C63BB486412AA510A16F9DC001A7049E9CAAE0F116E3E"
+    },
+    {
+      "path": "textures/N_molduraterraza_bump.png",
+      "bytes": 272116,
+      "sha256": "EB86D6A4B3B39A3BB3138069A18825A74000BA5DFFD7D8AF4D62BF8CE24746F1"
+    },
+    {
+      "path": "textures/N_muros_b1.png",
+      "bytes": 770967,
+      "sha256": "E1FF61F95616DAF23C8D9011090B5C1CEC25A6888927554943817E54C7C8D08F"
+    },
+    {
+      "path": "textures/N_piso_patio_exterior_displace_inv.png",
+      "bytes": 534446,
+      "sha256": "E0408C5B85E07F1C9C608B9DA2D71E7B6736D0CDB66B925F29FE7882FA6EF8FB"
+    },
+    {
+      "path": "textures/N_piso_rustico_displace2.png",
+      "bytes": 447128,
+      "sha256": "DF00F74A7B7A8BFD2C47A4CF44892749DD2F695D8D146398AA724FC12F4B0D3D"
+    },
+    {
+      "path": "textures/N_PITTED.png",
+      "bytes": 6409,
+      "sha256": "2B9D2261B3FFA7885DBF7D474F44415C7898DC0792D1C0DC2325F0958E26ED1B"
+    },
+    {
+      "path": "textures/N_postes_barandal_bump.png",
+      "bytes": 399575,
+      "sha256": "297B68AE17E625FDFA21229150F23B3A2D3DC13B2E48078564234791F8CA77D9"
+    },
+    {
+      "path": "textures/N_puerta_bump.png",
+      "bytes": 605902,
+      "sha256": "421D0AC765535B057AA2D93F24DECE67752E953464510B27701DF70AFF92234C"
+    },
+    {
+      "path": "textures/N_rust_detalle_bump.png",
+      "bytes": 714062,
+      "sha256": "7CCDEAED31DE55614A1D3C8AB128562FDB5F163AF54602E2DDAA642ACA711656"
+    },
+    {
+      "path": "textures/N_silla_d_piel_bump.png",
+      "bytes": 138041,
+      "sha256": "50A089823C4A13ABC19A2441599014AE12FA2007004025BCAE45739CEB1520E9"
+    },
+    {
+      "path": "textures/N_sm_leaf_02_bump.png",
+      "bytes": 48874,
+      "sha256": "35E1A98087A2F6681DDF3D9A2F133AB77B4ADABA9163C863D4A281D75D29ECCE"
+    },
+    {
+      "path": "textures/N_sm_tronco_bump.png",
+      "bytes": 192324,
+      "sha256": "2C485BB45CBF92BA6F217003BE4AF902C4E9E0B381A478E106FA2EE9B5FB900E"
+    },
+    {
+      "path": "textures/N_tela_blanca.png",
+      "bytes": 453849,
+      "sha256": "183234C76F079EB4A015A5B19DEBF33A63FE9F74E1393AFDEACCDF947C700024"
+    },
+    {
+      "path": "textures/N_vigas_a2_bump.png",
+      "bytes": 544558,
+      "sha256": "C3800F749C384E2A4D18893406F92992ABBED17CFDC31CBA135AC3DF4F5F6FEF"
+    },
+    {
+      "path": "textures/N_WOOD08_Bump.png",
+      "bytes": 387526,
+      "sha256": "DB73DB0EB546385DA94A1CFEE0822A59BA812E66EEF408D11B7878ABF1C0207E"
+    },
+    {
+      "path": "textures/pared_barro_afinado.png",
+      "bytes": 761291,
+      "sha256": "6A7D3D5CEA112C366C7DF321645EE76A6000DFE68FF85A6779D74749063D644F"
+    },
+    {
+      "path": "textures/pared_calle.png",
+      "bytes": 801683,
+      "sha256": "25FF5D71A5BCB03F5A5731199FA911C43124F62FD731EED64AEF29E3179EB2EE"
+    },
+    {
+      "path": "textures/piso_patio_exterior.png",
+      "bytes": 1006422,
+      "sha256": "A2188C957E0D46C38F8B81FBC3B1A03E35723EC8E6A7D359C57F03B1769BE1D6"
+    },
+    {
+      "path": "textures/piso_patio_exterior2.png",
+      "bytes": 981732,
+      "sha256": "E12AF0D1F2B7BC02B217703E598415C0842934D7D02D8476F171E33233E822F8"
+    },
+    {
+      "path": "textures/piso_rustico.png",
+      "bytes": 707438,
+      "sha256": "28B118E1F45186C65A080F1F9D5E5881ECF5EB8F9C3196CED1D8C1A6205AD796"
+    },
+    {
+      "path": "textures/piso_rustico_Spec.png",
+      "bytes": 425530,
+      "sha256": "EB4AFC4083DDB58754E721F869C1FFC4A2F6A380FCAB42E961F546837286B5BF"
+    },
+    {
+      "path": "textures/plato_a.png",
+      "bytes": 189663,
+      "sha256": "8CE413F69ED21288377DA5124FC9006210F37C6D449A16970F8436941A729B06"
+    },
+    {
+      "path": "textures/postes_barandal_color.png",
+      "bytes": 580896,
+      "sha256": "19F6CC3A2BB0E3F3E764607E3843E50DBFE6572BE9B0FFD9010356900885B839"
+    },
+    {
+      "path": "textures/puerta.png",
+      "bytes": 668126,
+      "sha256": "63A1A185917DCCA004F7F293678D996874E8039FBEF501751922CCB61473E629"
+    },
+    {
+      "path": "textures/quercus_rubra_bark.png",
+      "bytes": 33021,
+      "sha256": "BBBED689DC56069A6E416A39B66D49F35340E31A56028095986B861FF76A0EB5"
+    },
+    {
+      "path": "textures/rust_a1.png",
+      "bytes": 526163,
+      "sha256": "2D3EAD30FFD734F5DDD2F02899286D135180EFA635CAFA963181CC481F550CC8"
+    },
+    {
+      "path": "textures/rust_detalle.png",
+      "bytes": 643731,
+      "sha256": "01DDEF45015A56DFF96556044D8374D742033453C94ED2805700240353F1C0D9"
+    },
+    {
+      "path": "textures/silla_d_piel.png",
+      "bytes": 83756,
+      "sha256": "0BDCD9AC1498C5C6FA6613C5DE9E6E7D47D4D369ADEC07A74927BA1C2740FCC5"
+    },
+    {
+      "path": "textures/sm_hoja_c_seca.png",
+      "bytes": 103915,
+      "sha256": "92DD7C88A7F45E7CC5CB67C6A27D869C823A3FFCD564A92EC6A2A4C5BE266378"
+    },
+    {
+      "path": "textures/sm_leaf_02a.png",
+      "bytes": 136535,
+      "sha256": "1D6575F35057D43113FAB8ECF69B51014D8A97761A68D06743290CF44D98ABFB"
+    },
+    {
+      "path": "textures/sm_leaf_02b.png",
+      "bytes": 136274,
+      "sha256": "2E8F9C6AB3696FA46F96B40D1C5FB1944F11061322D62E8CD6EFD7FAF94D6D9D"
+    },
+    {
+      "path": "textures/sm_leaf_03a.png",
+      "bytes": 136210,
+      "sha256": "AC8F9C8A264F8ECA1DC2BC240B90AAD8DD3E78EACECB8EC534A5269CDBAEF0EC"
+    },
+    {
+      "path": "textures/sm_leaf_seca_02b.png",
+      "bytes": 99550,
+      "sha256": "B5AD79DA0F9B3E360E9BC84DD711E6587C25AF1D533658B581320F84C5DDBBCD"
+    },
+    {
+      "path": "textures/sm_leaf_seca_03b.png",
+      "bytes": 96271,
+      "sha256": "24E8FFEC7FE9E6CD15C9A99463248022B8119498F81D083CE63913ED75F7644D"
+    },
+    {
+      "path": "textures/sm_tronco.png",
+      "bytes": 299402,
+      "sha256": "538B8BFDDCF3DF8B7373887E03499DAD654771480CDB582E6ED7B2614E43A8D6"
+    },
+    {
+      "path": "textures/tapa_talabera.png",
+      "bytes": 46438,
+      "sha256": "4C7377805414F64F10ACB8F01A396210C70BD013DA7868F4CBDDE75477F786BB"
+    },
+    {
+      "path": "textures/techo.png",
+      "bytes": 1069202,
+      "sha256": "D2CBDBE7B430F5211DBFC6D31D178073C304CB190D72F074D9ADBE17774B2000"
+    },
+    {
+      "path": "textures/techo_01.png",
+      "bytes": 563357,
+      "sha256": "DAD2863F7A803C83676DFDB7451244325B0FA8F34B3E152838DC118C1F093E0D"
+    },
+    {
+      "path": "textures/tela_blanca.png",
+      "bytes": 594120,
+      "sha256": "1EE60986A3939B46DF77D5E1173A66F1A100E297485C3646805915B6AAF5D1F1"
+    },
+    {
+      "path": "textures/tela_mesa_b.png",
+      "bytes": 3065762,
+      "sha256": "FB831B1F256B7E07CF0204B44E2B857AD2948E100AAB40A72FCCF348196400E1"
+    },
+    {
+      "path": "textures/tela_mesa_d.png",
+      "bytes": 2130135,
+      "sha256": "6BE482AD83185599D8C1844B9EE6EBD50CBC7B0624840AF5728DA41F50F4FF4F"
+    },
+    {
+      "path": "textures/tela_silla_b.png",
+      "bytes": 862971,
+      "sha256": "45DFDFB8A0AB7E0BB55F20B0E242E7CBA9B25576035001BCF14407A4462FA874"
+    },
+    {
+      "path": "textures/TR02lef5.png",
+      "bytes": 46782,
+      "sha256": "EDBA460F5059C8C12BFF934FA578D9358C55B03A07127963067C8C16F3983893"
+    },
+    {
+      "path": "textures/TR14lef1.png",
+      "bytes": 74697,
+      "sha256": "52EDCF4C4BFA47227392D8B7FE3E135F30AD58CEC03962C3BB1DC1F15BA11D69"
+    },
+    {
+      "path": "textures/Vigas_A2.png",
+      "bytes": 667087,
+      "sha256": "262C326C676FFC1ADFECA309553E8E6126A580B961814397E0069F898037A9EF"
+    },
+    {
+      "path": "textures/Vigas_B.png",
+      "bytes": 69784,
+      "sha256": "C87947C3F25C477C1F8AEF725F47B2F8B6E3A64E9CE789A6236E05213ADECF77"
+    },
+    {
+      "path": "textures/wood.3.Bubinga.png",
+      "bytes": 75372,
+      "sha256": "6285A7BD81CA0A1AD11C48347EEBE4A789382F8546124B8D1F7C4A1BAE82FC23"
+    },
+    {
+      "path": "textures/WOOD08.png",
+      "bytes": 354015,
+      "sha256": "23076919C0B62E905473FEB100BEC898F713886AB91E8969F49B7F5563FBF961"
+    },
+    {
+      "path": "textures/zebrina_pendula_bark.png",
+      "bytes": 15878,
+      "sha256": "219787BF8FC5BB903A5C080EFA37295C2ADF1A3686BB2BC943CD65DB76433B60"
+    }
+  ],
+  "sourceBufferCount": 1,
+  "bufferViewCount": 8304,
+  "copiedBufferViewBytes": 365166522,
+  "alignmentPaddingBytes": 184,
+  "maxBufferBytes": 90000000,
+  "trackedFileLimitBytes": 100000000,
+  "outputBufferCount": 5,
+  "externalImagesCopied": [
+    "textures/0001_carros.png",
+    "textures/027_Cola_Caballo_06-30-1997.png",
+    "textures/052terresable.png",
+    "textures/aglaonema_bark.png",
+    "textures/aglaonema_leaf.png",
+    "textures/ampelopsis_brevipedunculata_bark.png",
+    "textures/arco_frente.png",
+    "textures/arcos_lisos_2_color.png",
+    "textures/arcos_lisos_3_color_1.png",
+    "textures/bark06mi.png",
+    "textures/Barro_2.png",
+    "textures/BL05lef2.png",
+    "textures/BS01brk.png",
+    "textures/BS01flo1.png",
+    "textures/BS01flo2.png",
+    "textures/BS01lef.png",
+    "textures/BS04brk.png",
+    "textures/BS04flo.png",
+    "textures/BS04lef.png",
+    "textures/BWK_1024.png",
+    "textures/bwk_1024_Spec2.png",
+    "textures/candil_madera.png",
+    "textures/cantera_naranja_liso.png",
+    "textures/cenicero.png",
+    "textures/ceramic_tile.png",
+    "textures/citrus_limon_leaf.png",
+    "textures/columna_b_color.png",
+    "textures/concreto_01.png",
+    "textures/concreto_02.png",
+    "textures/D30_Smiguel_2003_7758.png",
+    "textures/D30_Smiguel_2003_7768.png",
+    "textures/D30_Smiguel_2003_7785.png",
+    "textures/D30_Smiguel_2003_7812.png",
+    "textures/D30_Smiguel_2003_7815.png",
+    "textures/D30_Smiguel_2003_7833.png",
+    "textures/D30_Smiguel_2003_7843.png",
+    "textures/detmoldura_01_color.png",
+    "textures/detmoldura_02_color.png",
+    "textures/detmoldura_03_color.png",
+    "textures/detmoldura_04_color.png",
+    "textures/detmoldura_05_color.png",
+    "textures/detmoldura_06_color.png",
+    "textures/dracaena_fragrans_leaf.png",
+    "textures/elaeagnus_umbellate_bark.png",
+    "textures/escalera_color.png",
+    "textures/escurridera_color.png",
+    "textures/EU15lef.png",
+    "textures/Fierro_A.png",
+    "textures/Fierro_A_Bump.png",
+    "textures/fierro_b.png",
+    "textures/Finishes.Flooring.Carpet.Loop.5.png",
+    "textures/fittonia_verschaffeltii_bark.png",
+    "textures/FL03lef1.png",
+    "textures/FL04cnt1.png",
+    "textures/FL04cnt2.png",
+    "textures/FL04lef1.png",
+    "textures/FL04lef2.png",
+    "textures/FL04pet1.png",
+    "textures/FL04stm.png",
+    "textures/FL11lef1.png",
+    "textures/FL11lef2.png",
+    "textures/FL11pet1.png",
+    "textures/FL11pet2.png",
+    "textures/FL11pet3.png",
+    "textures/FL11pet4.png",
+    "textures/FL11sta.png",
+    "textures/FL11stm.png",
+    "textures/FL12lef1.png",
+    "textures/FL12pet1.png",
+    "textures/FL12pet2.png",
+    "textures/FL12pis1.png",
+    "textures/FL12sta1.png",
+    "textures/FL12stm.png",
+    "textures/FL13lef1.png",
+    "textures/FL13lef4.png",
+    "textures/FL13lef5.png",
+    "textures/FL13pet1.png",
+    "textures/FL13pet2.png",
+    "textures/FL13pet3.png",
+    "textures/FL13stm.png",
+    "textures/FL15cnt1.png",
+    "textures/FL15cnt2.png",
+    "textures/FL15lef1.png",
+    "textures/FL15lef2.png",
+    "textures/FL15pet2.png",
+    "textures/FL15stm.png",
+    "textures/FL16lef1.png",
+    "textures/FL16lef3.png",
+    "textures/FL16pet1.png",
+    "textures/FL16stm.png",
+    "textures/FL17cnt.png",
+    "textures/FL17lef1.png",
+    "textures/FL17lef2.png",
+    "textures/FL17lef3.png",
+    "textures/FL17lef5.png",
+    "textures/FL17lef6.png",
+    "textures/FL17pet1.png",
+    "textures/FL17pet2.png",
+    "textures/FL17pet5.png",
+    "textures/FL17stm.png",
+    "textures/FL19lef2.png",
+    "textures/FL19lef3.png",
+    "textures/FL19lef4.png",
+    "textures/FL19pe13.png",
+    "textures/FL19pe14.png",
+    "textures/FL19pe15.png",
+    "textures/FL19pe16.png",
+    "textures/FL19stm.png",
+    "textures/FL29cnt1.png",
+    "textures/FL29cnt2.png",
+    "textures/FL29lef.png",
+    "textures/FL29pet1.png",
+    "textures/FL29pet2.png",
+    "textures/FL29stm1.png",
+    "textures/FL29stm2.png",
+    "textures/FL29twg.png",
+    "textures/Forja_Macetas.png",
+    "textures/fuente_azulejo.png",
+    "textures/fuente_piedra_01.png",
+    "textures/fuente_piedra_02.png",
+    "textures/HP01lef1.png",
+    "textures/HP01lef2.png",
+    "textures/HP01pet3.png",
+    "textures/HP01stm1.png",
+    "textures/HP01stm2.png",
+    "textures/HP04lef2.png",
+    "textures/HP07lef1.png",
+    "textures/HP07lef2.png",
+    "textures/HP07stm1.png",
+    "textures/HP07stm2.png",
+    "textures/HP11lef2.png",
+    "textures/HP11stm.png",
+    "textures/HP13lef2.png",
+    "textures/HP13lef3.png",
+    "textures/HP13stm2.png",
+    "textures/HP17lef1.png",
+    "textures/HP17lef2.png",
+    "textures/HP17stm.png",
+    "textures/HP19lef2.png",
+    "textures/HP19lef3.png",
+    "textures/HP19stm1.png",
+    "textures/HP19stm2.png",
+    "textures/hypoestes_phyllostachya_bark.png",
+    "textures/impatiens_newguinea_hybrids_petal.png",
+    "textures/individual_b.png",
+    "textures/jardinera_1_color.png",
+    "textures/l04-upper.png",
+    "textures/l33-upper.png",
+    "textures/l37-upper.png",
+    "textures/losa.png",
+    "textures/Maceta_A2_Color.png",
+    "textures/Maceta_A_Color.png",
+    "textures/Maceta_B2_Color.png",
+    "textures/Maceta_B_Color.png",
+    "textures/Maceta_C2_Color.png",
+    "textures/Maceta_C_Color.png",
+    "textures/Maceta_D2_Color_0.png",
+    "textures/madera_barandal_esc_2.png",
+    "textures/madera_marcos.png",
+    "textures/madera_rustica_2.png",
+    "textures/madera_triplay_01.png",
+    "textures/marco_puerta_1.png",
+    "textures/metal_viejo_2.png",
+    "textures/mold_arco_01_color.png",
+    "textures/moldura2piso_color.png",
+    "textures/moldura_techo.png",
+    "textures/moldura_volado.png",
+    "textures/molduraterraza__color.png",
+    "textures/muros_a.png",
+    "textures/muros_b.png",
+    "textures/muros_b1.png",
+    "textures/muros_b2.png",
+    "textures/muros_c2.png",
+    "textures/muros_d.png",
+    "textures/muros_e.png",
+    "textures/muros_f.png",
+    "textures/muros_g.png",
+    "textures/muros_h.png",
+    "textures/muros_j.png",
+    "textures/muros_k.png",
+    "textures/muros_l.png",
+    "textures/muros_m.png",
+    "textures/muros_n.png",
+    "textures/muros_p_.png",
+    "textures/muros_q.png",
+    "textures/muros_q3.png",
+    "textures/muros_q4.png",
+    "textures/muros_q_patio2.png",
+    "textures/N_arco_frente_displace_inv.png",
+    "textures/N_arcos_lisos_2_bump.png",
+    "textures/N_arcos_lisos_3_bump_1.png",
+    "textures/N_bark06mi.png",
+    "textures/N_bwk_1024_Bump.png",
+    "textures/N_columna_b_displacement_3_inv.png",
+    "textures/N_detmoldura_01_bump.png",
+    "textures/N_detmoldura_02_bump.png",
+    "textures/N_detmoldura_03_bump.png",
+    "textures/N_detmoldura_04_bump.png",
+    "textures/N_detmoldura_05_bump.png",
+    "textures/N_detmoldura_06_bump.png",
+    "textures/N_escalera_bump.png",
+    "textures/N_escurridera_bump.png",
+    "textures/N_Fierro_A_Bump.png",
+    "textures/N_Finishes.Flooring.Carpet.Loop.5.png",
+    "textures/N_Forja_Macetas_bump.png",
+    "textures/N_HP11stm.png",
+    "textures/N_hp13lef1_bump.png",
+    "textures/N_jardinera_1_displacement_2.png",
+    "textures/N_l04-upper.png",
+    "textures/N_l33-upper.png",
+    "textures/N_l37-upper.png",
+    "textures/N_Maceta_A_Bump.png",
+    "textures/N_Maceta_B_Bump.png",
+    "textures/N_Maceta_C_Bump.png",
+    "textures/N_Maceta_D_Bump_0.png",
+    "textures/N_madera_barandal_esc_2_bump.png",
+    "textures/N_marco_puerta_1_bump.png",
+    "textures/N_metal_viejo_2.png",
+    "textures/N_mold_arco_01_bump.png",
+    "textures/N_moldura2piso_bump.png",
+    "textures/N_moldura_techo_bump.png",
+    "textures/N_molduraterraza_bump.png",
+    "textures/N_muros_b1.png",
+    "textures/N_piso_patio_exterior_displace_inv.png",
+    "textures/N_piso_rustico_displace2.png",
+    "textures/N_PITTED.png",
+    "textures/N_postes_barandal_bump.png",
+    "textures/N_puerta_bump.png",
+    "textures/N_rust_detalle_bump.png",
+    "textures/N_silla_d_piel_bump.png",
+    "textures/N_sm_leaf_02_bump.png",
+    "textures/N_sm_tronco_bump.png",
+    "textures/N_tela_blanca.png",
+    "textures/N_vigas_a2_bump.png",
+    "textures/N_WOOD08_Bump.png",
+    "textures/pared_barro_afinado.png",
+    "textures/pared_calle.png",
+    "textures/piso_patio_exterior.png",
+    "textures/piso_patio_exterior2.png",
+    "textures/piso_rustico.png",
+    "textures/piso_rustico_Spec.png",
+    "textures/plato_a.png",
+    "textures/postes_barandal_color.png",
+    "textures/puerta.png",
+    "textures/quercus_rubra_bark.png",
+    "textures/rust_a1.png",
+    "textures/rust_detalle.png",
+    "textures/silla_d_piel.png",
+    "textures/sm_hoja_c_seca.png",
+    "textures/sm_leaf_02a.png",
+    "textures/sm_leaf_02b.png",
+    "textures/sm_leaf_03a.png",
+    "textures/sm_leaf_seca_02b.png",
+    "textures/sm_leaf_seca_03b.png",
+    "textures/sm_tronco.png",
+    "textures/tapa_talabera.png",
+    "textures/techo.png",
+    "textures/techo_01.png",
+    "textures/tela_blanca.png",
+    "textures/tela_mesa_b.png",
+    "textures/tela_mesa_d.png",
+    "textures/tela_silla_b.png",
+    "textures/TR02lef5.png",
+    "textures/TR14lef1.png",
+    "textures/Vigas_A2.png",
+    "textures/Vigas_B.png",
+    "textures/wood.3.Bubinga.png",
+    "textures/WOOD08.png",
+    "textures/zebrina_pendula_bark.png"
+  ],
+  "extensionsUsed": [
+    "KHR_materials_specular",
+    "KHR_materials_ior"
+  ],
+  "materialCompatibilityOverrides": [],
+  "files": [
+    {
+      "path": "buffers/san_miguel-01.bin",
+      "bytes": 87885896,
+      "sha256": "C5C738BE4C8FEC02F85933F8D65313854ACBCA2E49746940CCDC305AB740D294"
+    },
+    {
+      "path": "buffers/san_miguel-02.bin",
+      "bytes": 89598012,
+      "sha256": "97138BCEF709F2CC1062F43EAF8952F232934B57996FA59397E8A6E2FDA51DB2"
+    },
+    {
+      "path": "buffers/san_miguel-03.bin",
+      "bytes": 89997080,
+      "sha256": "A8D4649404995A7D2698F0CE93765E573CA3881E8C776DCBC3B67C54BB2DF84C"
+    },
+    {
+      "path": "buffers/san_miguel-04.bin",
+      "bytes": 89970336,
+      "sha256": "753B1203B7F4C92E6FAD37B2D6421E1428B4698440A821896D1D70DE15F00392"
+    },
+    {
+      "path": "buffers/san_miguel-05.bin",
+      "bytes": 7715382,
+      "sha256": "90CA5AC6B8216A59974207DB8EF9D29FF2098EA61E44E1ABBD77EC83D7A02A48"
+    },
+    {
+      "path": "san_miguel.gltf",
+      "bytes": 3225714,
+      "sha256": "0BEB7BFB29CA932AE2807B4DF04318B5629421CB1F8461DDD5DB5F7B9E713A1B"
+    },
+    {
+      "path": "textures/0001_carros.png",
+      "bytes": 245088,
+      "sha256": "E3F66BA32F6CB92240457F26AC849303B030CCE6B0AD9A44CA0BFE106819554C"
+    },
+    {
+      "path": "textures/027_Cola_Caballo_06-30-1997.png",
+      "bytes": 1306615,
+      "sha256": "BDB4E39573D4E6BDF45E4B4213A7700B3412F291E8C6A81E7CB98CBD80F844FC"
+    },
+    {
+      "path": "textures/052terresable.png",
+      "bytes": 446295,
+      "sha256": "15F130C0997538E02855F2A11C166791DD5812F4AE49F71C3824891ED661FB61"
+    },
+    {
+      "path": "textures/aglaonema_bark.png",
+      "bytes": 21812,
+      "sha256": "C8F2E74B5D1C106C606C3A7874E254CA441BB1E37480135CD70C62C44D132017"
+    },
+    {
+      "path": "textures/aglaonema_leaf.png",
+      "bytes": 66754,
+      "sha256": "43342949E6695A4586C4C3B332600EFE1A44D8A340CC09B4A2532D6527640EBB"
+    },
+    {
+      "path": "textures/ampelopsis_brevipedunculata_bark.png",
+      "bytes": 2114,
+      "sha256": "904B56A3FBEB04635A846C78F9702E8342E63B15F2775F42EB504C796A194CAF"
+    },
+    {
+      "path": "textures/arco_frente.png",
+      "bytes": 595356,
+      "sha256": "DBCC93C00908B027B35202EA64998113BF448A6D9650C78AAF0718D225C84579"
+    },
+    {
+      "path": "textures/arcos_lisos_2_color.png",
+      "bytes": 401072,
+      "sha256": "5600DCE29634317EE031C32827E214F059F1C79F0110075172F4749D26996909"
+    },
+    {
+      "path": "textures/arcos_lisos_3_color_1.png",
+      "bytes": 457621,
+      "sha256": "4FF3CBF6D9BD0AD9037227FF251475DEA4465F5A9AF766B1EEF35CEAEF63C07E"
+    },
+    {
+      "path": "textures/bark06mi.png",
+      "bytes": 79590,
+      "sha256": "9D878C0210170D8EF7FBEF93482B732D3DE098037F4B654D79647D31C58A0FD2"
+    },
+    {
+      "path": "textures/Barro_2.png",
+      "bytes": 2646512,
+      "sha256": "569D73970B1194704DFB9B98ABB51E8C95B0E368B380055285B486325375D739"
+    },
+    {
+      "path": "textures/BL05lef2.png",
+      "bytes": 174013,
+      "sha256": "AC56FE982062A8C3F440E28789A90EF691CADFEA1FED5E41D03B8A2ACB90F175"
+    },
+    {
+      "path": "textures/BS01brk.png",
+      "bytes": 47032,
+      "sha256": "2E94287480989A7263912E13AEBDAD362944B743B3C38F41989B15C316FB6581"
+    },
+    {
+      "path": "textures/BS01flo1.png",
+      "bytes": 151842,
+      "sha256": "4BC5F95E7A0B3E6D170427E1F8679EDBBB022D13BE8411CDD94652A477D07CE9"
+    },
+    {
+      "path": "textures/BS01flo2.png",
+      "bytes": 120606,
+      "sha256": "A9E9D05CA6EC68E5423131D26FC6B178131128DD4B4E2719FD76C3679A1851DE"
+    },
+    {
+      "path": "textures/BS01lef.png",
+      "bytes": 61944,
+      "sha256": "B76421044B639B186D89695B326BC8FA51C88158FC613D30463D3CB05F11A29B"
+    },
+    {
+      "path": "textures/BS04brk.png",
+      "bytes": 33610,
+      "sha256": "A01A9276A1E8A79539ADD79A6D051D22971C577A77DFD45CB50DB34ADEB748D5"
+    },
+    {
+      "path": "textures/BS04flo.png",
+      "bytes": 113404,
+      "sha256": "53D18584DD19B4BA776F075612ADF1D120DD23FBA252C7F5D512EF9C5A19C80B"
+    },
+    {
+      "path": "textures/BS04lef.png",
+      "bytes": 143408,
+      "sha256": "B99E87D4618F9023DD19D3E116AFBD04AB6B6A9EF0A54EE65085E997E541F73E"
+    },
+    {
+      "path": "textures/BWK_1024.png",
+      "bytes": 798070,
+      "sha256": "5ABFC1EE3433B6D779B04A2680EA931D021C8A4B55FB61F82C7E8ACA636075DE"
+    },
+    {
+      "path": "textures/bwk_1024_Spec2.png",
+      "bytes": 359256,
+      "sha256": "225725CDCBC7E1ABFD5FAFF89323C2FF336A5DA9D9CBE86DBEF0BEDC286F1933"
+    },
+    {
+      "path": "textures/candil_madera.png",
+      "bytes": 527760,
+      "sha256": "C75C86DD2FF9A49160D62C0F30148D3D29A0EE25772B0292D499794001B91625"
+    },
+    {
+      "path": "textures/cantera_naranja_liso.png",
+      "bytes": 905722,
+      "sha256": "E5311A42A8A376D3596556E9CA08821F68B94DE4442D2EEAE01355EA2C39BA74"
+    },
+    {
+      "path": "textures/cenicero.png",
+      "bytes": 386552,
+      "sha256": "C11DB54E3B536CD1D1F7EE627B8BC0A160D6665EB2414D692B39C35C87F70330"
+    },
+    {
+      "path": "textures/ceramic_tile.png",
+      "bytes": 196884,
+      "sha256": "32163669280E4B117689E954CA1012479C36733FD7A5DC5E66C3649DB7242240"
+    },
+    {
+      "path": "textures/citrus_limon_leaf.png",
+      "bytes": 65564,
+      "sha256": "30D08A21440C2099483FBA634FA5DB9BFC011C0B121BE73F7C902CED14FB9C13"
+    },
+    {
+      "path": "textures/columna_b_color.png",
+      "bytes": 602788,
+      "sha256": "0190101533C5193489E146B4DA2C7C228A98B81D96A8D51D4BFFA3A1CED76E60"
+    },
+    {
+      "path": "textures/concreto_01.png",
+      "bytes": 951892,
+      "sha256": "E11DC57D600CA907D0C18DF20FA20A8C3CF8F25915EEF9574D4849E55D355F99"
+    },
+    {
+      "path": "textures/concreto_02.png",
+      "bytes": 1282661,
+      "sha256": "12CB63F60302C0AF67AF09E6E7B5CC1DD1EB99A513257A774968E6E9587FCAE4"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7758.png",
+      "bytes": 1240364,
+      "sha256": "7ED9E3895A8F2DF0406E6F037467EECF79A8C20026F4FA6B00D97E907C26D67D"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7768.png",
+      "bytes": 1099111,
+      "sha256": "C2D433882972D2D5C6A4158A22DB3841E3932CBCAF4714CFF3A2827BF359AF64"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7785.png",
+      "bytes": 1639996,
+      "sha256": "B3FFA0869DE9F2091B1C9ABAC8BDC85698A6FC5B4B917341039627E6E9A7D0C6"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7812.png",
+      "bytes": 1227206,
+      "sha256": "1AFF72D1C09B747D53A0CF2CA604714346A1DBB72BCEFCC4870C323A6EAE94B8"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7815.png",
+      "bytes": 1136003,
+      "sha256": "BFE30F38BBA22B9E4173AB111570CE84458EA29600AA3B3F8AE2E70223B561C8"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7833.png",
+      "bytes": 1265051,
+      "sha256": "5E2456FFE6E0FE73D4B0514874B0957791038FC7DDD7D3C4F178730DE0AE8A39"
+    },
+    {
+      "path": "textures/D30_Smiguel_2003_7843.png",
+      "bytes": 1097329,
+      "sha256": "E1E67D3EF429A6B949B320E13195ACD74B9A02B2BB5AA7E4C880EC84415333BB"
+    },
+    {
+      "path": "textures/detmoldura_01_color.png",
+      "bytes": 341222,
+      "sha256": "1D525BDE7A9A2410F28822B03437EE5642857567D73BDD07789BDDA7CCE7E5F4"
+    },
+    {
+      "path": "textures/detmoldura_02_color.png",
+      "bytes": 345216,
+      "sha256": "742DA9051F52FAC9A70413EEC1B19979F53FC5C21FEDC723F2F86AFB77222819"
+    },
+    {
+      "path": "textures/detmoldura_03_color.png",
+      "bytes": 354318,
+      "sha256": "9D516F34C1C82CA55DA226E3FCACD2ACCDD2D18E9E2440927752C83801C57E5E"
+    },
+    {
+      "path": "textures/detmoldura_04_color.png",
+      "bytes": 313935,
+      "sha256": "28983FA4628BDCCE201523634A3141F4F2ACA71A3213F7449504AD6C49DAEBE4"
+    },
+    {
+      "path": "textures/detmoldura_05_color.png",
+      "bytes": 356481,
+      "sha256": "143E0367C114AD6A6F4822812D0D32E54F6B49A4C7DA3B7EB2CAF4F6900357F3"
+    },
+    {
+      "path": "textures/detmoldura_06_color.png",
+      "bytes": 300778,
+      "sha256": "D6A8C0988BA8B43B32F62882A7BCC14E73817272799A2330F4BD7AEBAEF9257A"
+    },
+    {
+      "path": "textures/dracaena_fragrans_leaf.png",
+      "bytes": 173732,
+      "sha256": "44D0473FAA63DBE05297307B39077BA2F5052F72AB96157C3608BC079E7AD052"
+    },
+    {
+      "path": "textures/elaeagnus_umbellate_bark.png",
+      "bytes": 25845,
+      "sha256": "2A1D02402DD062AB1E9B5B9DEB9201AEB1FEE1FA74C9C2395A9646F075DE41F2"
+    },
+    {
+      "path": "textures/escalera_color.png",
+      "bytes": 561374,
+      "sha256": "9BB74A561F974B19A80ACA23BF68DB5C9D6A0CD0513E110EF3D1CA983BAD66DF"
+    },
+    {
+      "path": "textures/escurridera_color.png",
+      "bytes": 400664,
+      "sha256": "3342200630B8E25ABB4C970B8F5433C19D64DADA09F59FF956FCEAD6B317A364"
+    },
+    {
+      "path": "textures/EU15lef.png",
+      "bytes": 361122,
+      "sha256": "05C432025404DF361490AF8339A5A5330A0F09342AD6C3E064B10525FAA044B0"
+    },
+    {
+      "path": "textures/Fierro_A.png",
+      "bytes": 748450,
+      "sha256": "20DCA723EA903204CEEC352649A5BFBED11416EAD1E76DBD194567DFCECDA6DE"
+    },
+    {
+      "path": "textures/Fierro_A_Bump.png",
+      "bytes": 198016,
+      "sha256": "68410C0DA02BB98E89DBDD7105AA08225796DE7AE802D2B94449F995C89798CF"
+    },
+    {
+      "path": "textures/fierro_b.png",
+      "bytes": 277338,
+      "sha256": "34559B00F02B6909E508F7EC7EC7A2FF87DD280302F0D323B385E0AD48D7E5B0"
+    },
+    {
+      "path": "textures/Finishes.Flooring.Carpet.Loop.5.png",
+      "bytes": 199344,
+      "sha256": "8356EEE836A9D3C573054FFD04F635F5C1DF40F6DE0C93A25C29C5FC4D08FE55"
+    },
+    {
+      "path": "textures/fittonia_verschaffeltii_bark.png",
+      "bytes": 23454,
+      "sha256": "A0E37CBC6D865CFBFE292041148A70E46525F18193A21621FD987D29E60B5074"
+    },
+    {
+      "path": "textures/FL03lef1.png",
+      "bytes": 179062,
+      "sha256": "BC3FCD5EBD60A8091B2843FC73112605F7E4479D7DF306D9A36D5C777139DC2F"
+    },
+    {
+      "path": "textures/FL04cnt1.png",
+      "bytes": 363042,
+      "sha256": "F7C3227D17A299466E6B903114C755529FD15D4A4E795288E90558C816907CEF"
+    },
+    {
+      "path": "textures/FL04cnt2.png",
+      "bytes": 80645,
+      "sha256": "D5F1A5FA98BC5BA1B4133DBE9A3046935AB28437B24E29B9E9953153F3F4EBB4"
+    },
+    {
+      "path": "textures/FL04lef1.png",
+      "bytes": 111683,
+      "sha256": "1342EC15B54EC742A2F23AD81E33B1313B5682AD237F10A9193D08B80C5CA5F9"
+    },
+    {
+      "path": "textures/FL04lef2.png",
+      "bytes": 218609,
+      "sha256": "0A3EC427C567F2AF11B97524E7DE06A686C90C4CDCB2B329476C15849381AAA1"
+    },
+    {
+      "path": "textures/FL04pet1.png",
+      "bytes": 64991,
+      "sha256": "BC744B165497DB1947BC6947DE68A5E14FF1EB6BEDFD5EA715DA482BFDF6DEE9"
+    },
+    {
+      "path": "textures/FL04stm.png",
+      "bytes": 26580,
+      "sha256": "2CCE9F643718FEA3E22C4A196832549F5C01ADA3F4C2009E734C0B913AD997F3"
+    },
+    {
+      "path": "textures/FL11lef1.png",
+      "bytes": 70989,
+      "sha256": "2461F94B294AC0AD57F828F9E2231BD0280888F600366A009BE75DCB85AA6EB2"
+    },
+    {
+      "path": "textures/FL11lef2.png",
+      "bytes": 52832,
+      "sha256": "3C130004D9AB330C489295B597A62F2D81905235840B14E3A5A0C5E6E9503ABC"
+    },
+    {
+      "path": "textures/FL11pet1.png",
+      "bytes": 123338,
+      "sha256": "62FE0C5859FA4A873CE0F12DA82E18B67DAB9B003477D0EA2B40DE7EA9B9CEAC"
+    },
+    {
+      "path": "textures/FL11pet2.png",
+      "bytes": 66768,
+      "sha256": "899CF067F2D1BB31B0D86BB733F214E874317C8AD2E33FB7F98EB9AE3EDA967C"
+    },
+    {
+      "path": "textures/FL11pet3.png",
+      "bytes": 136470,
+      "sha256": "E1A46D3F370A6B54016C1088C63A639896242D59D659314074DDC414E5A3D0F2"
+    },
+    {
+      "path": "textures/FL11pet4.png",
+      "bytes": 67525,
+      "sha256": "BA0836C86BCED718C58CB6A5E73620EA6B4B99F361AC8B1C8341D4C58CB1EB7B"
+    },
+    {
+      "path": "textures/FL11sta.png",
+      "bytes": 75026,
+      "sha256": "299459032EF8B3F774507A4AC954A6DDDA06C3A57871B5EB74993D3C374617D5"
+    },
+    {
+      "path": "textures/FL11stm.png",
+      "bytes": 150668,
+      "sha256": "EE5286EA49FBE2BFEB369AE10C04B9E08EF738FFF5A52B5C73FB64B033E0F7B2"
+    },
+    {
+      "path": "textures/FL12lef1.png",
+      "bytes": 79664,
+      "sha256": "309A0773272DAB96FFB80E37EC43DF560BAF054BDC48B28BA56C06B6C0076330"
+    },
+    {
+      "path": "textures/FL12pet1.png",
+      "bytes": 68992,
+      "sha256": "D0182035015C00521EF1BC0F48A686C6712F85E6896863902AB54B7026977B43"
+    },
+    {
+      "path": "textures/FL12pet2.png",
+      "bytes": 140747,
+      "sha256": "745FA28BE382688FB1039F80F29511331528E7A7DEC96AF0C04A1CB3B583C8BA"
+    },
+    {
+      "path": "textures/FL12pis1.png",
+      "bytes": 7208,
+      "sha256": "3152CF05B46595816287934B98B134893A5DBFC699BC6F071541AC1DB972DE01"
+    },
+    {
+      "path": "textures/FL12sta1.png",
+      "bytes": 235170,
+      "sha256": "82C618FDD7EB2C54760B80EA2785CC3D6C8E2D6B4BACD82535C7113B5C916A16"
+    },
+    {
+      "path": "textures/FL12stm.png",
+      "bytes": 21789,
+      "sha256": "B43D2BC65EF4800428D39DE9515E0E82131E21C33CE55D1775203C57D8C0F04A"
+    },
+    {
+      "path": "textures/FL13lef1.png",
+      "bytes": 172310,
+      "sha256": "5496A151291B9B33D9F259E1110848B8818A600C931B7D8132064B89DF7CC945"
+    },
+    {
+      "path": "textures/FL13lef4.png",
+      "bytes": 105429,
+      "sha256": "E42D0222C441AE606565E00D62B5780DA20F51522C7A85B598B45295C866AD5F"
+    },
+    {
+      "path": "textures/FL13lef5.png",
+      "bytes": 258388,
+      "sha256": "AE1C9460296E251F9A422F8E9DD947F5FA7008F04E0939338F8D5CC561253BB2"
+    },
+    {
+      "path": "textures/FL13pet1.png",
+      "bytes": 103368,
+      "sha256": "84DB36956CF9103BD86B18539F518A421326ADC7C5E64398EF060FE8715199BF"
+    },
+    {
+      "path": "textures/FL13pet2.png",
+      "bytes": 165249,
+      "sha256": "024A669412A41D3BDEDA0944A5FDDC5008BA257C69D608968421F05AB265B13C"
+    },
+    {
+      "path": "textures/FL13pet3.png",
+      "bytes": 141144,
+      "sha256": "E0BB811026022BB26733BE7468AF3101DFE382E5F2BEC882AA1913D095FDD5A6"
+    },
+    {
+      "path": "textures/FL13stm.png",
+      "bytes": 19912,
+      "sha256": "A7BD9023AFFE71F1B965098199952EB2BD2DACAE1A46E24FB9A1D3115F864B72"
+    },
+    {
+      "path": "textures/FL15cnt1.png",
+      "bytes": 75490,
+      "sha256": "FB03E62EB7D982E53A150D5F614D2846EFE654D8DE470CE3AFCD03F21B7E094A"
+    },
+    {
+      "path": "textures/FL15cnt2.png",
+      "bytes": 138859,
+      "sha256": "BBA0010C426CC1233EEDD990F87D265D4FC368D70A8156A347C356C031F61A0F"
+    },
+    {
+      "path": "textures/FL15lef1.png",
+      "bytes": 134994,
+      "sha256": "6F5ACBEF303458E42F8B6E9A0D6E9F5094C62682BF73A8855082947CCB1EE46C"
+    },
+    {
+      "path": "textures/FL15lef2.png",
+      "bytes": 43620,
+      "sha256": "F41818BB016E14F2AD7AB9D2518D5CE24BBBBBDF28562C9F8F5BD0A2B09955A7"
+    },
+    {
+      "path": "textures/FL15pet2.png",
+      "bytes": 96774,
+      "sha256": "1BEC2590C83C31E306C3E9962262FA846A2FA74AEA720C1D11E8F8F8D419B41A"
+    },
+    {
+      "path": "textures/FL15stm.png",
+      "bytes": 13212,
+      "sha256": "D08A73B02440D36F229C7752A4C5F2C4DA39035301BA170193B7D1FE327A2EDF"
+    },
+    {
+      "path": "textures/FL16lef1.png",
+      "bytes": 195350,
+      "sha256": "5828B00A14364BF22ED82E43497F0713A2353AF0E5D0B8D953E6E44858908279"
+    },
+    {
+      "path": "textures/FL16lef3.png",
+      "bytes": 164109,
+      "sha256": "8B1385329E3239563B0141F33390365F1F99DECC38DC916C42CB536854AC56D1"
+    },
+    {
+      "path": "textures/FL16pet1.png",
+      "bytes": 141255,
+      "sha256": "9C1DADAEF033BFC8A7BA1FDCD67B93284981345F821BECD5C84828B3754E158F"
+    },
+    {
+      "path": "textures/FL16stm.png",
+      "bytes": 49017,
+      "sha256": "9747FABA43B25353C34307F253A48E5EBC342B4D1868CA2CE2A4385AF5762DD7"
+    },
+    {
+      "path": "textures/FL17cnt.png",
+      "bytes": 125986,
+      "sha256": "0B16BAD18411A84273D8A2BC1441D5FD577205D8A3AB85CA680E6810A646987D"
+    },
+    {
+      "path": "textures/FL17lef1.png",
+      "bytes": 207634,
+      "sha256": "0521BAC5B31E68B356B602CA1B8D6127FC08DCF8168A6CC936E515BEE908A8CD"
+    },
+    {
+      "path": "textures/FL17lef2.png",
+      "bytes": 171711,
+      "sha256": "1D482075BF67753B5FB0A569B923F635D1187EE51672A4F8DB1BAE59076599E2"
+    },
+    {
+      "path": "textures/FL17lef3.png",
+      "bytes": 128154,
+      "sha256": "CF4EFAE3C33D63CDE717D32F762E260358FFBFD1B1C38D67F1E5C5CF6385256D"
+    },
+    {
+      "path": "textures/FL17lef5.png",
+      "bytes": 58773,
+      "sha256": "DEB7973A512CB33B4E4E43B7805B63BF5AF56314019537580B7823795C35C57D"
+    },
+    {
+      "path": "textures/FL17lef6.png",
+      "bytes": 59588,
+      "sha256": "41CD1F5B9A16296C8EFA86FD3A2178B88930B85C312E0E8C3DC4896A5CD47EA6"
+    },
+    {
+      "path": "textures/FL17pet1.png",
+      "bytes": 134968,
+      "sha256": "E710C4BBACF53A0BE6E4A2D4AF58D9A36BBAA9ECA381422006935147628AE67F"
+    },
+    {
+      "path": "textures/FL17pet2.png",
+      "bytes": 142456,
+      "sha256": "3286BDA4A813F2C75FD00D31264B66117E684BE834BBDE59EA7FC3C4DC3A6775"
+    },
+    {
+      "path": "textures/FL17pet5.png",
+      "bytes": 170316,
+      "sha256": "5D9CBD597C798E62AC7AE83E52845ACD0AFA75B167330E23BB066A1C540355B1"
+    },
+    {
+      "path": "textures/FL17stm.png",
+      "bytes": 159540,
+      "sha256": "45D5B11946DC207624CE6245418AA279739DB26FD4BA1984288DC1DA188127C6"
+    },
+    {
+      "path": "textures/FL19lef2.png",
+      "bytes": 178554,
+      "sha256": "0639A7122D2C61411F145266E34CD6798AC72548E01BF7344468129E8E32B31C"
+    },
+    {
+      "path": "textures/FL19lef3.png",
+      "bytes": 158781,
+      "sha256": "77588F43367BFC43E74B4C1B0B238418316A4BD669F213B028FFEBC0572E04DC"
+    },
+    {
+      "path": "textures/FL19lef4.png",
+      "bytes": 81581,
+      "sha256": "52C4D7581407F88E717D4EA3FE4256B464E5AE4FDFCEE3449BD174A3808D46C1"
+    },
+    {
+      "path": "textures/FL19pe13.png",
+      "bytes": 178139,
+      "sha256": "78BD28328CBD867D9245DB43EA681EEBA7E4A4AC259716699B5BE2D7C075F07A"
+    },
+    {
+      "path": "textures/FL19pe14.png",
+      "bytes": 160072,
+      "sha256": "31C2AF8E91531CCC304E81D2C468360EA40081B022E3DD3B8611D4D1FA411EB0"
+    },
+    {
+      "path": "textures/FL19pe15.png",
+      "bytes": 151561,
+      "sha256": "C8E0D0667F2F0D31AB7A624F74AB09923D4DAF6AED8C4E5286075F46E16F5CA1"
+    },
+    {
+      "path": "textures/FL19pe16.png",
+      "bytes": 170017,
+      "sha256": "F1871148A4EBA697888EC17BBD7DDEC279F62504B9FADD69415F543266CED86F"
+    },
+    {
+      "path": "textures/FL19stm.png",
+      "bytes": 25370,
+      "sha256": "3DE3F778818663D1D2B4FAC7E9327C5B04FC52173325011372DE062434708BF0"
+    },
+    {
+      "path": "textures/FL29cnt1.png",
+      "bytes": 164328,
+      "sha256": "4F009AA1A84B8AD403FFC40D4A2D379177EF8DA00B991065E5D94418BBCA6A51"
+    },
+    {
+      "path": "textures/FL29cnt2.png",
+      "bytes": 71567,
+      "sha256": "1199D011DBA004E16D7C0E0BED35EF590F5DD8F06E91D362710904A06DE5E6C3"
+    },
+    {
+      "path": "textures/FL29lef.png",
+      "bytes": 193795,
+      "sha256": "AA41966C83533B98226AF23144B0C6E3DD95CB5B64A79C38B2289DFB7E89E8A3"
+    },
+    {
+      "path": "textures/FL29pet1.png",
+      "bytes": 85744,
+      "sha256": "F18258E2331F84F45A16073837393A22C0EA5A1256301F5E53E63FC790597658"
+    },
+    {
+      "path": "textures/FL29pet2.png",
+      "bytes": 69371,
+      "sha256": "078BF88D3A9A5892400F391E29A54BD9D8C7B5C33AEA9F1D9CBF2BF6ED87E71F"
+    },
+    {
+      "path": "textures/FL29stm1.png",
+      "bytes": 76380,
+      "sha256": "43162C5798FFC41F55FD097182FF3947EA38A1002F7F2E2D2C49756F28871B61"
+    },
+    {
+      "path": "textures/FL29stm2.png",
+      "bytes": 34169,
+      "sha256": "D16DFDC422386D6B0D324964D0EC222822722EFE68A0F4FF124D84C9DF4A09DE"
+    },
+    {
+      "path": "textures/FL29twg.png",
+      "bytes": 67473,
+      "sha256": "46044DB439EE7420C89ABB3485EA11686794ADE983BC997B306AA280D0BF83EF"
+    },
+    {
+      "path": "textures/Forja_Macetas.png",
+      "bytes": 190637,
+      "sha256": "B0D05B2AA24948DD465AA3958A94327D864CD12972D2B370D2B73C5DA54FEF23"
+    },
+    {
+      "path": "textures/fuente_azulejo.png",
+      "bytes": 30189,
+      "sha256": "0CAA0EC9CF48197C232810B5E2463B8BC11925FB4295CCE52BD231B9851C2AFC"
+    },
+    {
+      "path": "textures/fuente_piedra_01.png",
+      "bytes": 922196,
+      "sha256": "99153D027F6251A7188C77A4DCA3686B22DD6BD89ABBC66DD19800DC01FD774C"
+    },
+    {
+      "path": "textures/fuente_piedra_02.png",
+      "bytes": 987649,
+      "sha256": "9C360D4253E73F86649AECFA5AA85733EFE4134B13534BE0C38A0638361D46BB"
+    },
+    {
+      "path": "textures/HP01lef1.png",
+      "bytes": 274590,
+      "sha256": "7140CF41B761858A3D72876D8AA37C2288A6B96C269256E840DA8BFE5B81432C"
+    },
+    {
+      "path": "textures/HP01lef2.png",
+      "bytes": 87122,
+      "sha256": "519606478906E1576E3557E37700757103D70FCF3F9AF4DC0EB79FE189A2FE2A"
+    },
+    {
+      "path": "textures/HP01pet3.png",
+      "bytes": 187913,
+      "sha256": "3BC63DEB8D6E3AD4CAD357B9CAB04C91DFC873E6D2F74A0BE7EF095A533AC299"
+    },
+    {
+      "path": "textures/HP01stm1.png",
+      "bytes": 42364,
+      "sha256": "57AF18B44E33E2C3D1FCF31C840480799648CE899EF7054C8771E11E5CC9AEBA"
+    },
+    {
+      "path": "textures/HP01stm2.png",
+      "bytes": 365143,
+      "sha256": "6A6C2213C6240ABEB1044A033219494C00BA533F7EF5818A9B281017ADC02B30"
+    },
+    {
+      "path": "textures/HP04lef2.png",
+      "bytes": 121957,
+      "sha256": "F6F136C67DA6729633D55D87B1072A8106FC657F66935B026D69708FC768E592"
+    },
+    {
+      "path": "textures/HP07lef1.png",
+      "bytes": 117642,
+      "sha256": "DE7BFE91923CDF29EAC56B030F438E08948F5187DB5116A709688C7DF16B9339"
+    },
+    {
+      "path": "textures/HP07lef2.png",
+      "bytes": 118542,
+      "sha256": "44B9ED4C0737C2E29901ED2F580D2C524E1FDF718449F43222B657193DF4B396"
+    },
+    {
+      "path": "textures/HP07stm1.png",
+      "bytes": 239098,
+      "sha256": "85384CB8EF84CF48AF1478B0E2129DABC39F52D5E0D82EE58480663244BCFC8D"
+    },
+    {
+      "path": "textures/HP07stm2.png",
+      "bytes": 112065,
+      "sha256": "CDB65476A2D08C6304A4C0076234912AB550A433FB9AEDCDCAA4450D552F72DF"
+    },
+    {
+      "path": "textures/HP11lef2.png",
+      "bytes": 221269,
+      "sha256": "ABB1E0B09217E5364EB2C76F18582C6F1D20E291899FC508ECB89C2B09EDCF1F"
+    },
+    {
+      "path": "textures/HP11stm.png",
+      "bytes": 260113,
+      "sha256": "07020E26DD0A84094883B54486657C12D2904050E5A7F93DF2DB7535454D51A7"
+    },
+    {
+      "path": "textures/HP13lef2.png",
+      "bytes": 130948,
+      "sha256": "E2DF63B6F1BB29D784968ADE841CC5832D76FEFC3C4491A45C67C277B909EAAB"
+    },
+    {
+      "path": "textures/HP13lef3.png",
+      "bytes": 138801,
+      "sha256": "FE14DE0BD75E4037484824587E5F8276AA72A461BB1AAF533E09B9BA66E26778"
+    },
+    {
+      "path": "textures/HP13stm2.png",
+      "bytes": 189893,
+      "sha256": "B61BFA18915F537C5B0D00ABF6BE65A7D308BA8EA686B8A782A219BFDFAF326A"
+    },
+    {
+      "path": "textures/HP17lef1.png",
+      "bytes": 294127,
+      "sha256": "27C3590CFCB35C69D2CC53AA017E3AB496742860EF7DD4C42972728AFBA99F50"
+    },
+    {
+      "path": "textures/HP17lef2.png",
+      "bytes": 97577,
+      "sha256": "D5D8AB805618D3B7F628F5DB2DFBEF0BFED40F06EFAE28911BF4DB90147D2E5C"
+    },
+    {
+      "path": "textures/HP17stm.png",
+      "bytes": 43517,
+      "sha256": "3814A38A4F9A584B9D32FA8A89177A5DBBD0B6ECC9DE1D00D7371A7C0AFB72A5"
+    },
+    {
+      "path": "textures/HP19lef2.png",
+      "bytes": 182160,
+      "sha256": "4BD07AEDD59CE64C07FED0B6FC8312EBCFADA0A811FA5875BA47A0F7579D950C"
+    },
+    {
+      "path": "textures/HP19lef3.png",
+      "bytes": 164993,
+      "sha256": "6CA236E416E7A32EA5EFFD48508EFBB386B0B20565756A48964568113B68B268"
+    },
+    {
+      "path": "textures/HP19stm1.png",
+      "bytes": 167832,
+      "sha256": "1F862E650A0EA9B70CEED6819E5D504C59729ACB13FF09702CCE79858F4432F0"
+    },
+    {
+      "path": "textures/HP19stm2.png",
+      "bytes": 187361,
+      "sha256": "0A499F238F43C40781ACECCA0FF683752526A40517EE197BE839F55C942EC34B"
+    },
+    {
+      "path": "textures/hypoestes_phyllostachya_bark.png",
+      "bytes": 30255,
+      "sha256": "8FD8140A150CED7BD327F5C269FDA91B04BC76D5C6A1FDACACE4E1FE4489BA80"
+    },
+    {
+      "path": "textures/impatiens_newguinea_hybrids_petal.png",
+      "bytes": 13467,
+      "sha256": "0C0BB72DFD042D5752113633550585CF86931F2A35BB4D38C08CF5E34F21A10B"
+    },
+    {
+      "path": "textures/individual_b.png",
+      "bytes": 244395,
+      "sha256": "1EE5F30C4CCEB152511169A9CE8DE1A58411BB914F17CCD4A16574BD1A7AF6CE"
+    },
+    {
+      "path": "textures/jardinera_1_color.png",
+      "bytes": 1068314,
+      "sha256": "D3EE285E89E957F6747D904616BF8B93E56574ABE88B6E159422AA08FE668749"
+    },
+    {
+      "path": "textures/l04-upper.png",
+      "bytes": 31335,
+      "sha256": "45624DA42632C5AEFED033C9A44AFD435236D86E25E3B6C2DFD1DEE4DBD67A7B"
+    },
+    {
+      "path": "textures/l33-upper.png",
+      "bytes": 32834,
+      "sha256": "4A407E5AE6D64E18701D80FF30B6AD1156B63F093D3630144D1DC6EFD3AFB45A"
+    },
+    {
+      "path": "textures/l37-upper.png",
+      "bytes": 24750,
+      "sha256": "5ED89BD7E3B6EC79E5023CA662858633EE7930519B20CA6759E67116FDB905DA"
+    },
+    {
+      "path": "textures/losa.png",
+      "bytes": 155674,
+      "sha256": "DE8B0937570E979065E3A5DD5355D94C41BDC750CF2662CA1282776D4B64B243"
+    },
+    {
+      "path": "textures/Maceta_A2_Color.png",
+      "bytes": 403504,
+      "sha256": "C4501C69808111D512AE0874CD3367E1B16E3FF1269E2CB4E41A726FC5709985"
+    },
+    {
+      "path": "textures/Maceta_A_Color.png",
+      "bytes": 398166,
+      "sha256": "C6F199CA2D44CA21522F98CA52D71540890F425B3D97E72E2B7A90B4B99E93C5"
+    },
+    {
+      "path": "textures/Maceta_B2_Color.png",
+      "bytes": 507382,
+      "sha256": "535D963D3C824458C3DD91B58355FF9F739265F8575D9F591448C72451A0B1C9"
+    },
+    {
+      "path": "textures/Maceta_B_Color.png",
+      "bytes": 409437,
+      "sha256": "72EEA1E1128915DCDBECA52ADD90D89C505F69CEE0A1395431D0BF49F12364F9"
+    },
+    {
+      "path": "textures/Maceta_C2_Color.png",
+      "bytes": 440195,
+      "sha256": "31738FA7843BE6580C09FAA0396F08CB1CE323F76ED8F5629BDC230378E21F58"
+    },
+    {
+      "path": "textures/Maceta_C_Color.png",
+      "bytes": 384346,
+      "sha256": "8128950BB6DB53F0F0E54C0B75837D1133C04872F984C0825B1FA7E53DC98EC6"
+    },
+    {
+      "path": "textures/Maceta_D2_Color_0.png",
+      "bytes": 472488,
+      "sha256": "AA8325B259691C45C98D8720603E321B366B5FA5902F8B07AF14C972BF2206DB"
+    },
+    {
+      "path": "textures/madera_barandal_esc_2.png",
+      "bytes": 225463,
+      "sha256": "BF144C9CE33EC93A546CD6521E84FFD3806ABA1BDCD13718C5E0E42C3FB9CE1D"
+    },
+    {
+      "path": "textures/madera_marcos.png",
+      "bytes": 277407,
+      "sha256": "B8535FB90320702CAFC77F7A733062EE5E30E16E376002E8C1362902845D05E8"
+    },
+    {
+      "path": "textures/madera_rustica_2.png",
+      "bytes": 2588481,
+      "sha256": "E846BD5B0B20A49D5129A589910BE77E2DA2B337209753248A0B9A24E0CE7124"
+    },
+    {
+      "path": "textures/madera_triplay_01.png",
+      "bytes": 351321,
+      "sha256": "05D23BF0101B2A0E4F6C3712E63D54F550929745572D4661E28553457102C9A5"
+    },
+    {
+      "path": "textures/marco_puerta_1.png",
+      "bytes": 767524,
+      "sha256": "86EC1132B03A92803B89C7DFBE048F4C27783EFEAD62DB3A68D387EE81CBBB5E"
+    },
+    {
+      "path": "textures/metal_viejo_2.png",
+      "bytes": 336998,
+      "sha256": "038738D5061BA7B14E7BBF2F7F4112647D35E4D228DFF1ACB7604A5F3FE27CCE"
+    },
+    {
+      "path": "textures/mold_arco_01_color.png",
+      "bytes": 1068379,
+      "sha256": "65D86AF04F1D079ACD72D654EC90A6F07EEDC16A27F75D4D9B67BEA427C1D875"
+    },
+    {
+      "path": "textures/moldura2piso_color.png",
+      "bytes": 1456193,
+      "sha256": "18A12DAAEFF754433CDB2099E8D772FA5C87E388EC1D589613C5C87500131CE3"
+    },
+    {
+      "path": "textures/moldura_techo.png",
+      "bytes": 757999,
+      "sha256": "9ACB5E14E9F711A413E992F33CE0146CC90C110B2F1B936FCB6B03DC5CF5A4BD"
+    },
+    {
+      "path": "textures/moldura_volado.png",
+      "bytes": 280836,
+      "sha256": "286E25A904A4C3D5C355231B39F1DA5BDCE52AF68AC294752E058498A83E9D8A"
+    },
+    {
+      "path": "textures/molduraterraza__color.png",
+      "bytes": 671847,
+      "sha256": "0FDA4B06A847B2522F1C41839D04AE33AA8BD8D54487E34BB8DCE8D31327CB0A"
+    },
+    {
+      "path": "textures/muros_a.png",
+      "bytes": 3030691,
+      "sha256": "E1B69392038B36FDA66B539F1534FD3FEA0FD4B8F3A7EDDDD67B274FFAEAC7E0"
+    },
+    {
+      "path": "textures/muros_b.png",
+      "bytes": 1926958,
+      "sha256": "2301F3532532B257A1EA6F9CF8FA4A4805584AFD8D318C9642CFEEB699D8F8BD"
+    },
+    {
+      "path": "textures/muros_b1.png",
+      "bytes": 1051085,
+      "sha256": "34888EF5CF7F9ED3D7A84C8716B832098E80C52DDCA7924168DD75CA403711B5"
+    },
+    {
+      "path": "textures/muros_b2.png",
+      "bytes": 1050296,
+      "sha256": "5907F9077D2466FA7A23F9B97A388C5A284DE4EFA43F0AB847E6A933B414B99A"
+    },
+    {
+      "path": "textures/muros_c2.png",
+      "bytes": 773996,
+      "sha256": "C7B4DCCE79E346511C3AE2889E3BECB1E1D7EF9F4D5361C8BC6323482C31F85E"
+    },
+    {
+      "path": "textures/muros_d.png",
+      "bytes": 3285849,
+      "sha256": "B5BD709A856E1B08A9531249632CF867E16C8970AD6849C6944E2120D63D2FE0"
+    },
+    {
+      "path": "textures/muros_e.png",
+      "bytes": 3621142,
+      "sha256": "C0177C168714F9127596D290598B798067D93F6B4356B6DB01EEF581B7EB1BE3"
+    },
+    {
+      "path": "textures/muros_f.png",
+      "bytes": 89683,
+      "sha256": "17716BDB73157390693FD8E3AE0E01B9DEB446073451EF9B9177A93CCEAEEEAA"
+    },
+    {
+      "path": "textures/muros_g.png",
+      "bytes": 2875283,
+      "sha256": "80EF72B158C7584EB45D47ED7E8D8063D37CA3DFAA360955933AD4F32C1F2713"
+    },
+    {
+      "path": "textures/muros_h.png",
+      "bytes": 3259492,
+      "sha256": "00170A8A614E4F0B25D05CF00BA4BDEC0DCF43F9D715C75BB7D20D6BC503FB89"
+    },
+    {
+      "path": "textures/muros_j.png",
+      "bytes": 802076,
+      "sha256": "99546554FCE589601EDC4BCC678533172B512A6802781B28DB037E947A5B28D4"
+    },
+    {
+      "path": "textures/muros_k.png",
+      "bytes": 1036326,
+      "sha256": "142CB7C1AF581A07BFAE25B8F7EEBC0238BD87B3ACB9B98568A514E2DA7AF40D"
+    },
+    {
+      "path": "textures/muros_l.png",
+      "bytes": 2547783,
+      "sha256": "BEEF3DE76B3D5C75B5D13E3A03D880BCE2B96094CC38F207338AA364218F35CF"
+    },
+    {
+      "path": "textures/muros_m.png",
+      "bytes": 305453,
+      "sha256": "D6D8220451146CE7C64645B262AA07E26BB667DE1E41917370F5D408C9D66A51"
+    },
+    {
+      "path": "textures/muros_n.png",
+      "bytes": 1743844,
+      "sha256": "948D7D75784A097DA03E45902ADD64FFB87AD034CD0C8B9484778D162E991DE4"
+    },
+    {
+      "path": "textures/muros_p_.png",
+      "bytes": 2748115,
+      "sha256": "BB38B70126B643B02CC1471332B5C9416C4BE6710CF87853A5D4BC02044E662D"
+    },
+    {
+      "path": "textures/muros_q.png",
+      "bytes": 3799081,
+      "sha256": "B63BF5FC53F27C4F888B845C5C20CF2D6BFBFE172C24BE6E59B5BBDA8F56F504"
+    },
+    {
+      "path": "textures/muros_q3.png",
+      "bytes": 1041553,
+      "sha256": "00E39FF3EE3E8671CD5C41224A89205AD82F4A427DDABC877700F5A4E30964B2"
+    },
+    {
+      "path": "textures/muros_q4.png",
+      "bytes": 1097514,
+      "sha256": "D762EDEECDEB01AC85C4062F1B3125B1D7D2DC635EA21C4F1AFA6E4F7E68F58E"
+    },
+    {
+      "path": "textures/muros_q_patio2.png",
+      "bytes": 2537917,
+      "sha256": "FD6315900E40F0035C30C4F5F0D0EBD9D1CFB607FCE3669A4DE116E5BD59365D"
+    },
+    {
+      "path": "textures/N_arco_frente_displace_inv.png",
+      "bytes": 205738,
+      "sha256": "C5FB2BED67A1CB46B68462F2A0C9D283C63C36647E4C3BC883CC37791290925E"
+    },
+    {
+      "path": "textures/N_arcos_lisos_2_bump.png",
+      "bytes": 357165,
+      "sha256": "43B2419937ADCB355DB563EE217C8E2936137B28518DBE70FED25FD91D3FB5EF"
+    },
+    {
+      "path": "textures/N_arcos_lisos_3_bump_1.png",
+      "bytes": 242056,
+      "sha256": "261950CC58D79547B5781405C227F39D2A12BCC108F85C3475AD9701B6375960"
+    },
+    {
+      "path": "textures/N_bark06mi.png",
+      "bytes": 61599,
+      "sha256": "4F6EC4A86570B7DB948CA77CD601C6563F6BB7375B50C83A70E738AC31DACA29"
+    },
+    {
+      "path": "textures/N_bwk_1024_Bump.png",
+      "bytes": 614819,
+      "sha256": "FA9710A404A6B818F9659697A4FCCC93F16A79FA772BB360739CAA968749BD6A"
+    },
+    {
+      "path": "textures/N_columna_b_displacement_3_inv.png",
+      "bytes": 397490,
+      "sha256": "D8A1E235098FF5F1379C297F143EBDEE267B410DA11246B79E7D7F71759F6EAF"
+    },
+    {
+      "path": "textures/N_detmoldura_01_bump.png",
+      "bytes": 213799,
+      "sha256": "3425CADE1095690CE7158010A3EAE23A8887401D7D68965E1DC4CEDB23E3350F"
+    },
+    {
+      "path": "textures/N_detmoldura_02_bump.png",
+      "bytes": 213740,
+      "sha256": "62AF9F25ED7C1E075D0BAC4B93DC01D78BB97B01A210FC667FA4911DFBA8B894"
+    },
+    {
+      "path": "textures/N_detmoldura_03_bump.png",
+      "bytes": 213273,
+      "sha256": "72F82C9148885EE706E24D500DF0535682A8224AD5043DC743349D14EAD56952"
+    },
+    {
+      "path": "textures/N_detmoldura_04_bump.png",
+      "bytes": 213116,
+      "sha256": "757811B9E36FBF58A53320561522DD5C4FC1495A0A5659029CCB84F994D1122D"
+    },
+    {
+      "path": "textures/N_detmoldura_05_bump.png",
+      "bytes": 213311,
+      "sha256": "47F6C30A0489E2CAFD7C0821AC10E99C38BBB784F6A3C3C1690BF2196FF33B96"
+    },
+    {
+      "path": "textures/N_detmoldura_06_bump.png",
+      "bytes": 210449,
+      "sha256": "42ACB14F59E640A91D0B2914E7AF23C704D288C01F05F9561DCCFCCBF8CECDF3"
+    },
+    {
+      "path": "textures/N_escalera_bump.png",
+      "bytes": 498597,
+      "sha256": "1698D3DD4955EFF30E1A5C4530DBE08439A0DE52BC7C4469C3DF533A345C6C32"
+    },
+    {
+      "path": "textures/N_escurridera_bump.png",
+      "bytes": 314913,
+      "sha256": "552817EBEEDD0DABB77647D337A7CDE6678D2B76C397B58B84E146591AB8F8D2"
+    },
+    {
+      "path": "textures/N_Fierro_A_Bump.png",
+      "bytes": 227244,
+      "sha256": "2EB884D20BB180A92B5AEBABAD95FD7565A66898FDEBA2CA80717230363FE3FC"
+    },
+    {
+      "path": "textures/N_Finishes.Flooring.Carpet.Loop.5.png",
+      "bytes": 152015,
+      "sha256": "D3F0C897AAB6DF1A1DF41B7EA98E6B43B6B3229AF56777D5DBF418D180156274"
+    },
+    {
+      "path": "textures/N_Forja_Macetas_bump.png",
+      "bytes": 170475,
+      "sha256": "ACD1309501BFFA070612E0898D95C045E1D2DD12990A293CEF67B2D665ADB332"
+    },
+    {
+      "path": "textures/N_HP11stm.png",
+      "bytes": 182046,
+      "sha256": "409660FE3154E9811B56E877B119095CA4EC499D9CAB68B046D424049C5D16C4"
+    },
+    {
+      "path": "textures/N_hp13lef1_bump.png",
+      "bytes": 151477,
+      "sha256": "8DD2171196F2A323C124F6D9F0BA7BEFB558E065A460B0E1BA8F1F8DC36B432B"
+    },
+    {
+      "path": "textures/N_jardinera_1_displacement_2.png",
+      "bytes": 290472,
+      "sha256": "7686AAE3DCB6CD652F7D761CD176F5ED51E398C31480AC63677C6C562B36F2EF"
+    },
+    {
+      "path": "textures/N_l04-upper.png",
+      "bytes": 19367,
+      "sha256": "F3AD7082FCEA58066833A5F55CB01D1CE551CA5C28157289A8BDA026C6A09F7D"
+    },
+    {
+      "path": "textures/N_l33-upper.png",
+      "bytes": 20717,
+      "sha256": "AD8EBA90A55828531FC7F2FBF5ED8ACFB798431EFE9C926B2822E8C1466B8E57"
+    },
+    {
+      "path": "textures/N_l37-upper.png",
+      "bytes": 28584,
+      "sha256": "F523791779DB56A070C4686CFD5E45F3F97B9162C0F3AEC7BC179FD0C529DBF7"
+    },
+    {
+      "path": "textures/N_Maceta_A_Bump.png",
+      "bytes": 329033,
+      "sha256": "09E48821ED414A84810E23EF82578036D7DA74C02D2D4AC28C2AD2013B0245B5"
+    },
+    {
+      "path": "textures/N_Maceta_B_Bump.png",
+      "bytes": 360549,
+      "sha256": "3494262B8D2E6ED48856033F6DFDAF8E71D133B89145FE5C93BFABF2639C8576"
+    },
+    {
+      "path": "textures/N_Maceta_C_Bump.png",
+      "bytes": 328742,
+      "sha256": "C3A2770D68B5963682F543954F95D781713F195A3679E7516BD823FE214B01AC"
+    },
+    {
+      "path": "textures/N_Maceta_D_Bump_0.png",
+      "bytes": 398669,
+      "sha256": "30C77B9C7B27B5AF159EB700A68E7A82F135BC67B1459BBD16288AB37935CEFD"
+    },
+    {
+      "path": "textures/N_madera_barandal_esc_2_bump.png",
+      "bytes": 221286,
+      "sha256": "21A2C7AEBFA764186C874C58A03B8768C00528549799FEAF9F5CF7B5DB0848D1"
+    },
+    {
+      "path": "textures/N_marco_puerta_1_bump.png",
+      "bytes": 544185,
+      "sha256": "E82F330A1235EC62F0BB5B29B638D3C371A0EA05D008A2B450D3BAA544A687BA"
+    },
+    {
+      "path": "textures/N_metal_viejo_2.png",
+      "bytes": 284403,
+      "sha256": "02590A32D72941A072647D88BDF1ED14E9FBA0DD68301122312045CFF58E580D"
+    },
+    {
+      "path": "textures/N_mold_arco_01_bump.png",
+      "bytes": 444408,
+      "sha256": "A17866382227B3F05C36AB5B8A61567F9174AE0E9FE66DF79A607759182560A8"
+    },
+    {
+      "path": "textures/N_moldura2piso_bump.png",
+      "bytes": 702482,
+      "sha256": "1E1336248FDA4CE70CC1E9A54A890350A6B07A44CC3A791A8156C9DC5345682C"
+    },
+    {
+      "path": "textures/N_moldura_techo_bump.png",
+      "bytes": 578264,
+      "sha256": "AF939107C43713D9035C63BB486412AA510A16F9DC001A7049E9CAAE0F116E3E"
+    },
+    {
+      "path": "textures/N_molduraterraza_bump.png",
+      "bytes": 272116,
+      "sha256": "EB86D6A4B3B39A3BB3138069A18825A74000BA5DFFD7D8AF4D62BF8CE24746F1"
+    },
+    {
+      "path": "textures/N_muros_b1.png",
+      "bytes": 770967,
+      "sha256": "E1FF61F95616DAF23C8D9011090B5C1CEC25A6888927554943817E54C7C8D08F"
+    },
+    {
+      "path": "textures/N_piso_patio_exterior_displace_inv.png",
+      "bytes": 534446,
+      "sha256": "E0408C5B85E07F1C9C608B9DA2D71E7B6736D0CDB66B925F29FE7882FA6EF8FB"
+    },
+    {
+      "path": "textures/N_piso_rustico_displace2.png",
+      "bytes": 447128,
+      "sha256": "DF00F74A7B7A8BFD2C47A4CF44892749DD2F695D8D146398AA724FC12F4B0D3D"
+    },
+    {
+      "path": "textures/N_PITTED.png",
+      "bytes": 6409,
+      "sha256": "2B9D2261B3FFA7885DBF7D474F44415C7898DC0792D1C0DC2325F0958E26ED1B"
+    },
+    {
+      "path": "textures/N_postes_barandal_bump.png",
+      "bytes": 399575,
+      "sha256": "297B68AE17E625FDFA21229150F23B3A2D3DC13B2E48078564234791F8CA77D9"
+    },
+    {
+      "path": "textures/N_puerta_bump.png",
+      "bytes": 605902,
+      "sha256": "421D0AC765535B057AA2D93F24DECE67752E953464510B27701DF70AFF92234C"
+    },
+    {
+      "path": "textures/N_rust_detalle_bump.png",
+      "bytes": 714062,
+      "sha256": "7CCDEAED31DE55614A1D3C8AB128562FDB5F163AF54602E2DDAA642ACA711656"
+    },
+    {
+      "path": "textures/N_silla_d_piel_bump.png",
+      "bytes": 138041,
+      "sha256": "50A089823C4A13ABC19A2441599014AE12FA2007004025BCAE45739CEB1520E9"
+    },
+    {
+      "path": "textures/N_sm_leaf_02_bump.png",
+      "bytes": 48874,
+      "sha256": "35E1A98087A2F6681DDF3D9A2F133AB77B4ADABA9163C863D4A281D75D29ECCE"
+    },
+    {
+      "path": "textures/N_sm_tronco_bump.png",
+      "bytes": 192324,
+      "sha256": "2C485BB45CBF92BA6F217003BE4AF902C4E9E0B381A478E106FA2EE9B5FB900E"
+    },
+    {
+      "path": "textures/N_tela_blanca.png",
+      "bytes": 453849,
+      "sha256": "183234C76F079EB4A015A5B19DEBF33A63FE9F74E1393AFDEACCDF947C700024"
+    },
+    {
+      "path": "textures/N_vigas_a2_bump.png",
+      "bytes": 544558,
+      "sha256": "C3800F749C384E2A4D18893406F92992ABBED17CFDC31CBA135AC3DF4F5F6FEF"
+    },
+    {
+      "path": "textures/N_WOOD08_Bump.png",
+      "bytes": 387526,
+      "sha256": "DB73DB0EB546385DA94A1CFEE0822A59BA812E66EEF408D11B7878ABF1C0207E"
+    },
+    {
+      "path": "textures/pared_barro_afinado.png",
+      "bytes": 761291,
+      "sha256": "6A7D3D5CEA112C366C7DF321645EE76A6000DFE68FF85A6779D74749063D644F"
+    },
+    {
+      "path": "textures/pared_calle.png",
+      "bytes": 801683,
+      "sha256": "25FF5D71A5BCB03F5A5731199FA911C43124F62FD731EED64AEF29E3179EB2EE"
+    },
+    {
+      "path": "textures/piso_patio_exterior.png",
+      "bytes": 1006422,
+      "sha256": "A2188C957E0D46C38F8B81FBC3B1A03E35723EC8E6A7D359C57F03B1769BE1D6"
+    },
+    {
+      "path": "textures/piso_patio_exterior2.png",
+      "bytes": 981732,
+      "sha256": "E12AF0D1F2B7BC02B217703E598415C0842934D7D02D8476F171E33233E822F8"
+    },
+    {
+      "path": "textures/piso_rustico.png",
+      "bytes": 707438,
+      "sha256": "28B118E1F45186C65A080F1F9D5E5881ECF5EB8F9C3196CED1D8C1A6205AD796"
+    },
+    {
+      "path": "textures/piso_rustico_Spec.png",
+      "bytes": 425530,
+      "sha256": "EB4AFC4083DDB58754E721F869C1FFC4A2F6A380FCAB42E961F546837286B5BF"
+    },
+    {
+      "path": "textures/plato_a.png",
+      "bytes": 189663,
+      "sha256": "8CE413F69ED21288377DA5124FC9006210F37C6D449A16970F8436941A729B06"
+    },
+    {
+      "path": "textures/postes_barandal_color.png",
+      "bytes": 580896,
+      "sha256": "19F6CC3A2BB0E3F3E764607E3843E50DBFE6572BE9B0FFD9010356900885B839"
+    },
+    {
+      "path": "textures/puerta.png",
+      "bytes": 668126,
+      "sha256": "63A1A185917DCCA004F7F293678D996874E8039FBEF501751922CCB61473E629"
+    },
+    {
+      "path": "textures/quercus_rubra_bark.png",
+      "bytes": 33021,
+      "sha256": "BBBED689DC56069A6E416A39B66D49F35340E31A56028095986B861FF76A0EB5"
+    },
+    {
+      "path": "textures/rust_a1.png",
+      "bytes": 526163,
+      "sha256": "2D3EAD30FFD734F5DDD2F02899286D135180EFA635CAFA963181CC481F550CC8"
+    },
+    {
+      "path": "textures/rust_detalle.png",
+      "bytes": 643731,
+      "sha256": "01DDEF45015A56DFF96556044D8374D742033453C94ED2805700240353F1C0D9"
+    },
+    {
+      "path": "textures/silla_d_piel.png",
+      "bytes": 83756,
+      "sha256": "0BDCD9AC1498C5C6FA6613C5DE9E6E7D47D4D369ADEC07A74927BA1C2740FCC5"
+    },
+    {
+      "path": "textures/sm_hoja_c_seca.png",
+      "bytes": 103915,
+      "sha256": "92DD7C88A7F45E7CC5CB67C6A27D869C823A3FFCD564A92EC6A2A4C5BE266378"
+    },
+    {
+      "path": "textures/sm_leaf_02a.png",
+      "bytes": 136535,
+      "sha256": "1D6575F35057D43113FAB8ECF69B51014D8A97761A68D06743290CF44D98ABFB"
+    },
+    {
+      "path": "textures/sm_leaf_02b.png",
+      "bytes": 136274,
+      "sha256": "2E8F9C6AB3696FA46F96B40D1C5FB1944F11061322D62E8CD6EFD7FAF94D6D9D"
+    },
+    {
+      "path": "textures/sm_leaf_03a.png",
+      "bytes": 136210,
+      "sha256": "AC8F9C8A264F8ECA1DC2BC240B90AAD8DD3E78EACECB8EC534A5269CDBAEF0EC"
+    },
+    {
+      "path": "textures/sm_leaf_seca_02b.png",
+      "bytes": 99550,
+      "sha256": "B5AD79DA0F9B3E360E9BC84DD711E6587C25AF1D533658B581320F84C5DDBBCD"
+    },
+    {
+      "path": "textures/sm_leaf_seca_03b.png",
+      "bytes": 96271,
+      "sha256": "24E8FFEC7FE9E6CD15C9A99463248022B8119498F81D083CE63913ED75F7644D"
+    },
+    {
+      "path": "textures/sm_tronco.png",
+      "bytes": 299402,
+      "sha256": "538B8BFDDCF3DF8B7373887E03499DAD654771480CDB582E6ED7B2614E43A8D6"
+    },
+    {
+      "path": "textures/tapa_talabera.png",
+      "bytes": 46438,
+      "sha256": "4C7377805414F64F10ACB8F01A396210C70BD013DA7868F4CBDDE75477F786BB"
+    },
+    {
+      "path": "textures/techo.png",
+      "bytes": 1069202,
+      "sha256": "D2CBDBE7B430F5211DBFC6D31D178073C304CB190D72F074D9ADBE17774B2000"
+    },
+    {
+      "path": "textures/techo_01.png",
+      "bytes": 563357,
+      "sha256": "DAD2863F7A803C83676DFDB7451244325B0FA8F34B3E152838DC118C1F093E0D"
+    },
+    {
+      "path": "textures/tela_blanca.png",
+      "bytes": 594120,
+      "sha256": "1EE60986A3939B46DF77D5E1173A66F1A100E297485C3646805915B6AAF5D1F1"
+    },
+    {
+      "path": "textures/tela_mesa_b.png",
+      "bytes": 3065762,
+      "sha256": "FB831B1F256B7E07CF0204B44E2B857AD2948E100AAB40A72FCCF348196400E1"
+    },
+    {
+      "path": "textures/tela_mesa_d.png",
+      "bytes": 2130135,
+      "sha256": "6BE482AD83185599D8C1844B9EE6EBD50CBC7B0624840AF5728DA41F50F4FF4F"
+    },
+    {
+      "path": "textures/tela_silla_b.png",
+      "bytes": 862971,
+      "sha256": "45DFDFB8A0AB7E0BB55F20B0E242E7CBA9B25576035001BCF14407A4462FA874"
+    },
+    {
+      "path": "textures/TR02lef5.png",
+      "bytes": 46782,
+      "sha256": "EDBA460F5059C8C12BFF934FA578D9358C55B03A07127963067C8C16F3983893"
+    },
+    {
+      "path": "textures/TR14lef1.png",
+      "bytes": 74697,
+      "sha256": "52EDCF4C4BFA47227392D8B7FE3E135F30AD58CEC03962C3BB1DC1F15BA11D69"
+    },
+    {
+      "path": "textures/Vigas_A2.png",
+      "bytes": 667087,
+      "sha256": "262C326C676FFC1ADFECA309553E8E6126A580B961814397E0069F898037A9EF"
+    },
+    {
+      "path": "textures/Vigas_B.png",
+      "bytes": 69784,
+      "sha256": "C87947C3F25C477C1F8AEF725F47B2F8B6E3A64E9CE789A6236E05213ADECF77"
+    },
+    {
+      "path": "textures/wood.3.Bubinga.png",
+      "bytes": 75372,
+      "sha256": "6285A7BD81CA0A1AD11C48347EEBE4A789382F8546124B8D1F7C4A1BAE82FC23"
+    },
+    {
+      "path": "textures/WOOD08.png",
+      "bytes": 354015,
+      "sha256": "23076919C0B62E905473FEB100BEC898F713886AB91E8969F49B7F5563FBF961"
+    },
+    {
+      "path": "textures/zebrina_pendula_bark.png",
+      "bytes": 15878,
+      "sha256": "219787BF8FC5BB903A5C080EFA37295C2ADF1A3686BB2BC943CD65DB76433B60"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 {
-  "displayName": "PBR Sponza Decorated",
+  "displayName": "Sponza Decorated",
   "cameraPreset": "intel-pbr-sponza-courtyard-simplified-v1",
   "models": [
     "components/intel_pbr_sponza_flat_roof_part1.glb",

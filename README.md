@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 136,621 non-blank source lines.
+**First-Party Lines of Code:** 145,256 non-blank source lines.
 
-**Third-Party Lines of Code:** 388,222 non-blank source lines.
+**Third-Party Lines of Code:** 388,207 non-blank source lines.
 
-**Total Lines of Code:** 524,843 non-blank source lines.
+**Total Lines of Code:** 533,463 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -16,7 +16,7 @@ with `tools/update_readme_line_counts.cmd --write`.
 <!-- uvsr-codebase-size:end -->
 
 UVSR is a focused DirectX 12 research renderer built on NVIDIA's pinned Donut
-framework and NVRHI. It ships with two ready-to-run Intel PBR Sponza scenes, a
+framework and NVRHI. It ships with five ready-to-run research scenes, a
 production-oriented deferred PBR path, and several independently testable
 visibility, anti-aliasing, and shadow-rendering systems.
 
@@ -59,10 +59,23 @@ visibility, anti-aliasing, and shadow-rendering systems.
   remain documented with controlled evidence instead of surviving as dormant
   runtime code.
 
-The bundled **PBR Sponza Decorated** scene includes Intel's separately
-distributed curtains and ivy. **PBR Sponza Plain** keeps the same flat-roof
-architecture without those add-ons. CMake stages both scenes; no separate model
-download, conversion, or scene setup is required.
+The bundled **Sponza Decorated** scene includes Intel's separately distributed
+curtains and ivy. **Sponza Plain** keeps the same flat-roof architecture without
+those add-ons. **Bistro Interior** packages the Wine variant of Amazon
+Lumberyard Bistro, and **San Miguel** packages the full high-detail San Miguel
+2.1 model. **Classroom Interior** packages Christophe Seux's official Blender
+Classroom demo under CC0 1.0 with its legacy Cycles
+materials translated for UVSR's PBR path while retaining the source-authored
+image textures. Both production PBR paths keep mirrored double-sided instances
+view-facing, so Classroom's duplicated doors and papers remain lit with
+screen-space Visibility enabled. Its spawn-side wire bin and 13 crumpled-paper
+objects are omitted, and eight source diagnostic UV-checker sheets use the
+scene's blank-paper appearance. The large scenes use standard glTF external
+buffers; Bistro and San Miguel are cut losslessly at buffer-view boundaries,
+while Classroom needs only one buffer beneath the repository's 90 MB cutting
+threshold. Every tracked file remains below GitHub's hard 100,000,000-byte
+limit. CMake stages the explicit five-scene bundle; no separate model download,
+conversion, or scene setup is required.
 
 ## Coming Soon
 

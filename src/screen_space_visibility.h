@@ -364,7 +364,17 @@ namespace uvsr
         ScreenSpaceVisibilityPass(
             nvrhi::IDevice* device,
             const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
-            std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses);
+            std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses,
+            const std::vector<uint16_t>* preparedBlueNoise = nullptr,
+            bool deferPipelineCreation = false);
+
+        // Pipeline creation can be spread over loading frames. The default
+        // constructor behavior remains eager for standalone component users.
+        [[nodiscard]] bool PreparePipelinesStep();
+        [[nodiscard]] bool ArePipelinesReady() const
+        {
+            return m_PipelinesReady;
+        }
 
         void Render(
             nvrhi::ICommandList* commandList,
@@ -537,6 +547,8 @@ namespace uvsr
         bool m_HasExecutionPlanCache = false;
         VisibilityBenchmarkStatistics m_BenchmarkStatistics;
         bool m_BenchmarkActive = false;
+        uint32_t m_PipelinePreparationStep = 0u;
+        bool m_PipelinesReady = false;
 
         void CreatePipelines(
             const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory);

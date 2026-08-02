@@ -14,6 +14,11 @@ transform, output gamut conversion, and display transfer happen afterward.
 - Opacity is carried through material evaluation and the G-buffer. Existing
   alpha testing remains active; transmission/refraction is not part of the
   base BSDF.
+- Single-sided normal orientation follows raster front-face classification.
+  Double-sided material normals are instead oriented into the view hemisphere
+  before forward shading or G-buffer encoding. This preserves ordinary
+  back-face lighting and valid negative-determinant glTF instances even when
+  their declared winding differs from the shared rasterizer state.
 - Ambient occlusion is not part of the BSDF or direct lighting. Authored
   material occlusion modulates global diffuse IBL, roughness-aware specular
   occlusion, and screen-space diffuse transport. When screen-space ambient
@@ -431,7 +436,8 @@ use the same shared BSDF and IBL evaluator.
 `tests/pbr_reference_tests.cpp` validates defaults and invalid-value repair,
 roughness extremes, dielectric and metallic behavior, dark/bright base colors,
 IOR 1.0/1.33/1.5/2.0, directional and point lights, grazing Fresnel,
-geometric-normal rejection, no-light/emission-only behavior, visibility
+geometric-normal rejection, double-sided view-hemisphere orientation for
+mirrored and ordinary surfaces, no-light/emission-only behavior, visibility
 0/0.5/1, finite nonnegative output, independence of direct lighting from
 ambient occlusion, source-mask composition, contribution-gate boundary cases,
 the four-bounce frontier recurrence, neutral unmatched directional visibility,
@@ -470,10 +476,13 @@ renderer evaluation.
   user-facing rotation control or automatic alignment between an HDR sky and
   the separate directional light. Dedicated night selections likewise do not
   change that light.
-- Source switching performs synchronous HDR decode, source-cube upload, mip
-  generation, and GGX prefiltering. This can hitch an interactive frame; it is
-  intentionally absent from unchanged warm frames but is not yet an
-  asynchronous streaming pipeline.
+- Initial HDR decode, SH projection, and source-cube resampling run on the scene
+  worker. The initial GPU path advances through BRDF generation, one radiance
+  face upload, one radiance mip, or one GGX specular mip per loading update;
+  partially prepared maps remain hidden from scene rendering. A later
+  interactive source change uses the same exact preparation path synchronously
+  because environment streaming is not yet a general asynchronous pipeline.
+  Unchanged warm frames remain zero-work.
 - The 16-by-16 diffuse cube is an SH9 Lambert response, so it intentionally
   cannot retain sharp high-frequency lighting. The 256-by-256, nine-mip
   specular cube and 64-by-64 BRDF LUT are fixed-quality resources rather than

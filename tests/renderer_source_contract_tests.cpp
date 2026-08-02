@@ -102,7 +102,236 @@ int main(int argc, char** argv)
         root / "src/screen_space_visibility_cb.h");
     const std::string lightingSources = ReadFile(
         root / "src/lighting_contribution_shared.h");
+    const std::string imageBasedLighting = ReadFile(
+        root / "src/image_based_lighting_environment.cpp");
+    const std::string imageBasedLightingHeader = ReadFile(
+        root / "src/image_based_lighting_environment.h");
+    const std::string visibilityPass = ReadFile(
+        root / "src/screen_space_visibility.cpp");
+    const std::string visibilityPassHeader = ReadFile(
+        root / "src/screen_space_visibility.h");
+    const std::string pbrDeferredLightingPass = ReadFile(
+        root / "src/pbr_deferred_lighting_pass.cpp");
+    const std::string pbrDeferredLightingPassHeader = ReadFile(
+        root / "src/pbr_deferred_lighting_pass.h");
+    const std::string msaaVisibilityResolvePass = ReadFile(
+        root / "src/msaa_visibility_resolve.cpp");
+    const std::string msaaVisibilityResolvePassHeader = ReadFile(
+        root / "src/msaa_visibility_resolve.h");
+    const std::string temporalAaPass = ReadFile(
+        root / "src/temporal_aa.cpp");
+    const std::string temporalAaPassHeader = ReadFile(
+        root / "src/temporal_aa.h");
+    const std::string donutLoadingOverride = ReadFile(
+        root / "overrides/donut-loading.patch");
+    const std::string donutLoadingAppOverride = ReadFile(
+        root / "overrides/donut-loading-app.patch");
     bool passed = true;
+
+    passed &= ExpectContains(
+        viewer,
+        "DWORD requested = NORMAL_PRIORITY_CLASS;",
+        "normal interactive process priority");
+    passed &= ExpectContains(
+        donutLoadingAppOverride,
+        "ProcessRenderingThreadCommands(*m_CommonPasses, 4.f)",
+        "soft texture-finalization frame budget");
+    passed &= ExpectContains(
+        donutLoadingAppOverride,
+        "SceneRetirementState::ArmQuery",
+        "deferred old-scene retirement state");
+    passed &= ExpectContains(
+        donutLoadingAppOverride,
+        "pollEventQuery(m_SceneRetirementQuery)",
+        "nonblocking old-scene graphics retirement");
+    passed &= ExpectOrdered(
+        donutLoadingAppOverride,
+        "ProcessPendingSceneRetirement(framebuffer)",
+        "ProcessRenderingThreadCommands(*m_CommonPasses, 4.f)",
+        "scene retirement before texture finalization");
+    const std::string_view beginLoadingScene = ExtractSection(
+        donutLoadingAppOverride,
+        "void ApplicationBase::BeginLoadingScene(",
+        "void ApplicationBase::StartPendingSceneLoad()");
+    passed &= ExpectAbsent(
+        beginLoadingScene,
+        "+    GetDevice()->waitForIdle();",
+        "blocking wait in ordinary scene switching");
+    passed &= ExpectContains(
+        donutLoadingOverride,
+        "m_completion.wait(lock, [this] { return m_pendingTasks.load() == 0; });",
+        "blocking scene task completion wait");
+    passed &= ExpectContains(
+        donutLoadingOverride,
+        "-        std::this_thread::yield();",
+        "retired busy scene task completion wait");
+    passed &= ExpectContains(
+        donutLoadingOverride,
+        "bool Scene::ProcessLoadingBuffers(",
+        "bounded Donut mesh-upload state machine");
+    passed &= ExpectContains(
+        donutLoadingOverride,
+        "nvrhi::IBuffer* trackedUploadBuffer = nullptr;",
+        "per-command-list staged mesh-buffer tracking");
+    passed &= ExpectContains(
+        donutLoadingOverride,
+        "commandList->beginTrackingBufferState(\n+                destination,\n+                nvrhi::ResourceStates::Common);",
+        "known mesh-buffer state at the start of each upload frame");
+    passed &= ExpectContains(
+        donutLoadingOverride,
+        "commandList->setBufferState(\n+                trackedUploadBuffer,\n+                nvrhi::ResourceStates::Common);",
+        "known mesh-buffer state at the end of each partial upload frame");
+    passed &= ExpectContains(
+        donutLoadingOverride,
+        "return pauseUpload();",
+        "partial mesh-upload exits routed through state finalization");
+    passed &= ExpectContains(
+        donutLoadingOverride,
+        "(buffers->indexBuffer &&\n+                 upload.attributeByteOffset == 0)",
+        "partially written index buffers must resume instead of being skipped");
+    passed &= ExpectAbsent(
+        donutLoadingOverride,
+        "buffers->indexData.empty() || buffers->indexBuffer",
+        "index-buffer existence guard that skips partial staged uploads");
+    passed &= ExpectContains(
+        donutLoadingOverride,
+        "if (buffers->vertexBuffer &&\n+            upload.attributeStage == 1 &&",
+        "pre-existing shared vertex buffers must not be uploaded twice");
+    passed &= ExpectContains(
+        donutLoadingOverride,
+        "if (upload.finalizationStage == 0u)",
+        "separate mesh-buffer finalization frame");
+    passed &= ExpectOrdered(
+        donutLoadingOverride,
+        "CreateMeshBuffers(commandList);",
+        "Refresh(commandList, frameIndex);",
+        "separated Donut scene finalization phases");
+    passed &= ExpectContains(
+        viewer,
+        "scene->LoadWithThreadPool(fileName, &threadPool)",
+        "explicit capped scene-import pool");
+    passed &= ExpectOrdered(
+        viewer,
+        "if (!m_PendingSceneCpuState || !m_Scene)",
+        "Super::SceneLoaded();",
+        "prepared scene handoff validation before publication");
+    passed &= ExpectContains(
+        viewer,
+        "ProcessRenderPassPreparationStep()",
+        "loading-frame render-pass preparation state machine");
+    passed &= ExpectContains(
+        viewer,
+        "ScenePreparationStage::RenderPasses",
+        "scene activation gated on render-pass preparation");
+    passed &= ExpectContains(
+        viewer,
+        "RecordLoadingPresentationFrame();",
+        "loading presentation frame-gap telemetry");
+    passed &= ExpectContains(
+        viewer,
+        "maximum presentation gap %.2f ms",
+        "reported loading presentation maximum gap");
+    passed &= ExpectContains(
+        visibilityPassHeader,
+        "bool deferPipelineCreation = false",
+        "standalone-compatible deferred visibility pipeline creation");
+    passed &= ExpectContains(
+        visibilityPass,
+        "bool ScreenSpaceVisibilityPass::PreparePipelinesStep()",
+        "one-step visibility pipeline preparation");
+    passed &= ExpectContains(
+        pbrDeferredLightingPassHeader,
+        "bool deferPipelineCreation = false",
+        "standalone-compatible deferred-lighting pipeline creation");
+    passed &= ExpectContains(
+        pbrDeferredLightingPass,
+        "bool PbrDeferredLightingPass::PreparePipelinesStep()",
+        "one-step deferred-lighting pipeline preparation");
+    passed &= ExpectContains(
+        pbrDeferredLightingPass,
+        "while (!PreparePipelinesStep())",
+        "default eager deferred-lighting pipeline preparation");
+    passed &= ExpectContains(
+        msaaVisibilityResolvePassHeader,
+        "bool deferPipelineCreation = false",
+        "standalone-compatible MSAA visibility-resolve pipeline creation");
+    passed &= ExpectContains(
+        msaaVisibilityResolvePass,
+        "bool MsaaVisibilityResolvePass::PreparePipelinesStep()",
+        "one-step MSAA visibility-resolve pipeline preparation");
+    passed &= ExpectContains(
+        temporalAaPassHeader,
+        "bool deferPipelineCreation = false",
+        "standalone-compatible temporal-AA pipeline creation");
+    passed &= ExpectContains(
+        temporalAaPass,
+        "bool TemporalAAPass::PreparePipelinesStep()",
+        "one-step temporal-AA pipeline preparation");
+    passed &= ExpectContains(
+        temporalAaPass,
+        "while (!PreparePipelinesStep())",
+        "default eager temporal-AA pipeline preparation");
+    passed &= ExpectContains(
+        viewer,
+        "RenderPassPreparationStage::DeferredLightingPipelines",
+        "staged deferred-lighting pipeline preparation");
+    passed &= ExpectContains(
+        viewer,
+        "m_PbrDeferredLightingPass->PreparePipelinesStep()",
+        "deferred-lighting loading-frame pipeline step");
+    passed &= ExpectContains(
+        viewer,
+        "RenderPassPreparationStage::MsaaVisibilityResolvePipelines",
+        "staged MSAA visibility-resolve pipeline preparation");
+    passed &= ExpectContains(
+        viewer,
+        "m_MsaaVisibilityResolvePass->PreparePipelinesStep()",
+        "MSAA visibility-resolve loading-frame pipeline step");
+    passed &= ExpectContains(
+        viewer,
+        "RenderPassPreparationStage::TemporalAAPipelines",
+        "staged temporal-AA pipeline preparation");
+    passed &= ExpectContains(
+        viewer,
+        "m_TemporalAAPass->PreparePipelinesStep()",
+        "temporal-AA loading-frame pipeline step");
+
+    const std::string_view prepareRadiance = ExtractSection(
+        imageBasedLighting,
+        "ImageBasedLightingEnvironment::PrepareRadiance(",
+        "void ImageBasedLightingEnvironment::StagePreparedRadiance(");
+    passed &= ExpectContains(
+        prepareRadiance,
+        "stbi_loadf(",
+        "worker-callable HDR decode");
+    passed &= ExpectContains(
+        prepareRadiance,
+        "imported.radianceFaces.resize(",
+        "worker-callable radiance cube resampling");
+    const std::string_view rebuildRadiance = ExtractSection(
+        imageBasedLighting,
+        "bool ImageBasedLightingEnvironment::RebuildRadiance(",
+        "bool ImageBasedLightingEnvironment::Update(");
+    passed &= ExpectAbsent(
+        rebuildRadiance,
+        "SampleLatLongBilinear(",
+        "render-thread HDR cube resampling");
+    passed &= ExpectContains(
+        imageBasedLightingHeader,
+        "IsPreparedRadianceReady() const",
+        "staged IBL readiness gate");
+    const std::string_view advancePreparedRadiance = ExtractSection(
+        imageBasedLighting,
+        "bool ImageBasedLightingEnvironment::AdvancePreparedRadiance(",
+        "bool ImageBasedLightingEnvironment::RebuildRadiance(");
+    passed &= ExpectContains(
+        advancePreparedRadiance,
+        "case PreparedRadianceGpuStage::RadianceFaceUpload:",
+        "per-face staged IBL upload");
+    passed &= ExpectContains(
+        advancePreparedRadiance,
+        "case PreparedRadianceGpuStage::SpecularMipGeneration:",
+        "per-mip staged IBL prefilter");
 
     const std::string_view flashlightLightClass = ExtractSection(
         viewer,
@@ -195,7 +424,15 @@ int main(int argc, char** argv)
         viewer,
         "virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override\n"
         "    {\n"
-        "        ApplyFactoryExperimentShaderTopology(m_ui);",
+        "        if (m_SceneGpuUploadPending)",
+        "bounded scene upload gate");
+    passed &= ExpectOrdered(
+        ExtractSection(
+            viewer,
+            "virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override",
+            "std::shared_ptr<ShaderFactory> GetShaderFactory()"),
+        "RenderSceneGpuUploadFrame(framebuffer);",
+        "ApplyFactoryExperimentShaderTopology(m_ui);",
         "factory experiment per-frame topology lock");
     passed &= ExpectContains(
         viewer,
@@ -205,7 +442,7 @@ int main(int argc, char** argv)
     const std::string_view refresh = ExtractSection(
         viewer,
         "void RefreshAntiAliasingTargetPasses(bool sampleCountChanged)",
-        "void CreateRenderPasses()");
+        "void BeginRenderPassPreparation(bool waitForIbl)");
     passed &= ExpectContains(
         refresh,
         "m_PbrDeferredLightingPass->ResetBindingCache();",
@@ -229,8 +466,8 @@ int main(int argc, char** argv)
 
     const std::string_view createPasses = ExtractSection(
         viewer,
-        "void CreateRenderPasses()",
-        "virtual void RenderSplashScreen(");
+        "bool ProcessRenderPassPreparationStep()",
+        "void EnsureOptionalDirectionalVisibilityPasses()");
     passed &= ExpectContains(
         createPasses,
         "#if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS",
@@ -247,6 +484,35 @@ int main(int argc, char** argv)
         createPasses,
         "m_DiagnosticCascadedShadowMapPass.reset();",
         "factory experiment diagnostic CSM omission");
+    passed &= ExpectAbsent(
+        createPasses,
+        "std::make_unique<SparseVirtualShadowMapPass>",
+        "disabled SVSM startup omission");
+    passed &= ExpectContains(
+        createPasses,
+        "&m_PreparedVisibilityBlueNoise",
+        "worker-prepared visibility sampling data");
+
+    const std::string_view ensureOptionalPasses = ExtractSection(
+        viewer,
+        "void EnsureOptionalDirectionalVisibilityPasses()",
+        "virtual void RenderSplashScreen(");
+    passed &= ExpectContains(
+        ensureOptionalPasses,
+        "m_ui.ScreenSpaceDirectionalShadows.enabled",
+        "lazy screen-space shadow construction gate");
+    passed &= ExpectContains(
+        ensureOptionalPasses,
+        "m_ui.SparseVirtualShadowMaps.enabled ||\n"
+            "            m_SvsmMotionBenchmarkAutostartPending ||\n"
+            "            m_SvsmMotionBenchmarkActive",
+        "lazy SVSM construction and benchmark gate");
+    passed &= ExpectContains(
+        ensureOptionalPasses,
+        "m_ui.DiagnosticCascadedShadowMaps.enabled ||\n"
+            "            m_DiagnosticCsmBenchmarkRequested ||\n"
+            "            m_DiagnosticCsmRecordRequested",
+        "lazy diagnostic CSM construction and benchmark gate");
     passed &= ExpectAbsent(
         refresh,
         "std::make_unique<PbrDeferredLightingPass>",
@@ -515,6 +781,108 @@ int main(int argc, char** argv)
         renderScene,
         "m_ui.Flashlight.realisticLens",
         "realistic flashlight hotspot submission gate");
+
+    const std::string_view loadScene = ExtractSection(
+        viewer,
+        "virtual bool LoadScene(",
+        "virtual void SceneLoaded() override");
+    passed &= ExpectContains(
+        loadScene,
+        "ResolveSceneLoadWorkerCount(",
+        "reserved-core scene import policy");
+    passed &= ExpectContains(
+        loadScene,
+        "engine::ThreadPool threadPool(workerCount);",
+        "explicit bounded scene import pool");
+    passed &= ExpectAbsent(
+        loadScene,
+        "scene->Load(fileName)",
+        "unbounded default scene import pool");
+    passed &= ExpectOrdered(
+        loadScene,
+        "scene->RefreshSceneGraph(0u);",
+        "prepared.collisionWorld = BuildCameraCollisionWorld(",
+        "worker collision transform preparation");
+    passed &= ExpectOrdered(
+        loadScene,
+        "prepared.collisionWorld = BuildCameraCollisionWorld(",
+        "m_PendingSceneCpuState.emplace(std::move(prepared));",
+        "worker collision publication order");
+    passed &= ExpectOrdered(
+        loadScene,
+        "m_PendingSceneCpuState.emplace(std::move(prepared));",
+        "m_Scene = std::move(scene);",
+        "complete CPU handoff publication");
+    passed &= ExpectContains(
+        loadScene,
+        "GenerateVisibilityBlueNoise();",
+        "worker visibility-rank preparation");
+    passed &= ExpectContains(
+        loadScene,
+        "m_ImageBasedLightingEnvironment->PrepareRadiance(",
+        "worker HDR preparation");
+
+    const std::string_view sceneLoadedHandoff = ExtractSection(
+        viewer,
+        "virtual void SceneLoaded() override",
+        "void CompleteSceneActivation()");
+    passed &= ExpectAbsent(
+        sceneLoadedHandoff,
+        "BuildCameraCollisionWorld(",
+        "render-thread collision construction");
+    passed &= ExpectAbsent(
+        sceneLoadedHandoff,
+        "FinishedLoading(",
+        "monolithic render-thread scene upload");
+    passed &= ExpectOrdered(
+        sceneLoadedHandoff,
+        "m_CameraCollisionWorld = std::move(",
+        "m_Scene->BeginLoadingBuffers();",
+        "prepared collision installation before bounded upload");
+    passed &= ExpectContains(
+        sceneLoadedHandoff,
+        "StagePreparedRadiance(",
+        "prepared HDR activation handoff");
+
+    const std::string_view boundedSceneUpload = ExtractSection(
+        viewer,
+        "void RenderSceneGpuUploadFrame(",
+        "static bool IsSameDiagnosticCsmBenchmarkWork(");
+    passed &= ExpectContains(
+        boundedSceneUpload,
+        "c_SceneUploadBytesPerFrame",
+        "bounded scene-upload byte budget");
+    passed &= ExpectContains(
+        boundedSceneUpload,
+        "m_Scene->ProcessLoadingBuffers(",
+        "incremental scene-upload dispatch");
+    passed &= ExpectOrdered(
+        boundedSceneUpload,
+        "m_ScenePreparationStage =\n"
+            "                    ScenePreparationStage::SceneActivation;",
+        "case ScenePreparationStage::SceneActivation:",
+        "scene activation deferred beyond the final mesh-upload frame");
+    passed &= ExpectOrdered(
+        boundedSceneUpload,
+        "case ScenePreparationStage::SceneActivation:",
+        "CompleteSceneActivation();",
+        "scene activation stage dispatch");
+    passed &= ExpectOrdered(
+        boundedSceneUpload,
+        "CompleteSceneActivation();",
+        "case ScenePreparationStage::MaterialBuffers:",
+        "post-activation material-buffer loading phase");
+    passed &= ExpectOrdered(
+        boundedSceneUpload,
+        "case ScenePreparationStage::MaterialBuffers:",
+        "m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());",
+        "post-activation material-buffer refresh");
+    passed &= ExpectOrdered(
+        boundedSceneUpload,
+        "m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());",
+        "ScenePreparationStage::RenderTargets;",
+        "material-buffer refresh before renderer resources");
+
     const std::string_view sceneLoaded = ExtractSection(
         viewer,
         "virtual void SceneLoaded() override",
@@ -528,15 +896,30 @@ int main(int argc, char** argv)
         "light != m_Flashlight &&\n"
             "                light != m_FlashlightHotspot",
         "scene-light list flashlight-lobe exclusion");
+    passed &= ExpectOrdered(
+        sceneLoaded,
+        "sceneInitialCamera->VerticalFovDegrees;",
+        "PointThirdPersonCameraAt(",
+        "descriptor camera FOV framing");
+    passed &= ExpectOrdered(
+        sceneLoaded,
+        "PointThirdPersonCameraAt(",
+        "ApplySceneInitialCamera(*sceneInitialCamera);",
+        "descriptor camera pose application");
     passed &= ExpectContains(
-        renderScene,
+        sceneLoaded,
+        "else\n"
+            "            m_CameraVerticalFov = 60.f;",
+        "descriptor camera FOV reset fallback");
+    passed &= ExpectContains(
+        viewer,
         "m_ui.EnableAmbientFill &&\n"
-            "                    m_ui.EnableDiffuseIbl",
+            "                m_ui.EnableDiffuseIbl",
         "ambient fill diffuse renderer gate");
     passed &= ExpectContains(
-        renderScene,
+        viewer,
         "m_ui.EnableAmbientFill &&\n"
-            "                    m_ui.EnableSpecularIbl",
+            "                m_ui.EnableSpecularIbl",
         "ambient fill specular renderer gate");
 
     passed &= ExpectContains(

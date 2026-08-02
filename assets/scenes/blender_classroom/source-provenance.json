@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "scene": "blender_classroom",
+  "displayName": "Blender Classroom",
+  "source": {
+    "project": "Blender Classroom",
+    "creator": "Christophe Seux",
+    "distributor": "Blender.org",
+    "archiveUrl": "https://web.archive.org/web/20240926142651/https://download.blender.org/demo/test/classroom.zip",
+    "archiveCapturedAtUtc": "2024-09-26T14:26:51Z",
+    "originalUrl": "https://download.blender.org/demo/test/classroom.zip",
+    "originalLastModified": "2019-06-13",
+    "officialDemoPageUrl": "https://web.archive.org/web/20240926105256/https://www.blender.org/download/demo-files/",
+    "archiveFile": "classroom.zip",
+    "archiveBytes": 70279690,
+    "archiveSha256": "0F0ECC58D45F12B2F4272A53E2D8E69135518E16E956B118F10C20D8DCFDF5E6",
+    "blendFile": "classroom/classroom.blend",
+    "blendBytes": 32045332,
+    "blendSha256": "5C526EA3F280566E80253673C9955640527CD0F247EA41B1742620B5BC39F7A4",
+    "sourceReadmeSha256": "12A546E6D33EC1D3280182CF5DFBB931ACEDA27E0FE30D37A173BEDF2CE9586F",
+    "license": "CC0 1.0 Universal",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "licenseLegalCodeUrl": "https://creativecommons.org/publicdomain/zero/1.0/legalcode.txt",
+    "licenseSha256": "A2010F343487D3F7618AFFE54F789F5487602331C0A8D03F49E9A7C547CF0499"
+  },
+  "conversion": {
+    "exportTool": "tools/export_blender_classroom.py",
+    "exportToolSha256": "23814985CE097765EBAD8DF56796D32184A65AF6C94E5C5585A6B79B2CD2BC00",
+    "blenderVersion": "5.1.2",
+    "blenderBuildHash": "ec6e62d40fa9",
+    "activeScene": "_mainScene",
+    "frame": 1,
+    "method": "evaluated static-frame export with linked instances realized, curves converted to meshes, and audited legacy Cycles materials mapped to glTF metallic-roughness PBR",
+    "exportReport": "components/blender-export-report.json",
+    "exportReportBytes": 97316,
+    "exportReportSha256": "F537BD83FC8D91AF8317326A65F04DCFC77186094FCE9A81BEF8E456D2E50BD9",
+    "sourceTextureRestoration": {
+      "reason": "the generated height-derived normal maps materially distorted the original Classroom appearance",
+      "archiveFileImagesCopiedByteForByte": 19,
+      "blenderGeneratedSourceImages": [],
+      "outputImages": 19,
+      "generatedNormalTextures": 0,
+      "sourceBumpPolicy": "audited but omitted because UVSR cannot reproduce the legacy Cycles bump graphs without changing their source-authored appearance",
+      "texturedBaseColorFactor": "white for every retained source color image",
+      "inactiveOrUnreachableColorImages": "not bound as base color textures",
+      "linkedColorNetworks": "mapped only through explicit audited color approximations",
+      "diagnosticUvTestReplacement": {
+        "sourceImage": "checker",
+        "sourceMaterial": "drawing",
+        "appearanceReferenceMaterial": "drawing.004",
+        "affectedSheets": 8,
+        "packaged": false
+      }
+    },
+    "geometry": {
+      "sourceFrameOneTriangles": 607484,
+      "exportedTriangles": 545830,
+      "removedTriangles": {
+        "spawnCornerTrashCluster": 58320,
+        "dayLight_portal": 6,
+        "wallClock_Glass": 3328
+      },
+      "spawnCornerTrashCluster": {
+        "rootOwner": "dustBin",
+        "childOwners": 13,
+        "omittedInstances": 16,
+        "omittedTriangles": 58320
+      }
+    },
+    "materialCompatibility": {
+      "reason": "UVSR submits opaque and alpha-tested material domains but has no blended or transmissive draw pass",
+      "outputDomains": ["OPAQUE"],
+      "transmissionPreserved": false,
+      "glassApproximation": "neutral opaque rough PBR",
+      "proceduralBumpApproximationRecorded": true
+    },
+    "repackTool": "tools/repack_gltf_buffers.py",
+    "repackMethod": "lossless buffer-view repack and external-image copy",
+    "maxBufferBytes": 90000000,
+    "trackedFileLimitBytes": 100000000,
+    "repackReport": "components/buffer-repack-report.json",
+    "repackReportBytes": 8209,
+    "repackReportSha256": "38369D33D0500D246B5E12E846B133B0EF92668275049FB2D9F8BB082A2D8B89",
+    "outputBufferCount": 1,
+    "outputImageCount": 19,
+    "outputGltfSha256": "BD25BE258B36A5EE648CD3DDB4722E4EF8D93AC4B9124246CEF926406633AFFB",
+    "outputBufferSha256": "947CE15A46A0FBB1FECEBF2CCEB4BCD6EB1688D0BB6930A3371A2962B69DEF3E"
+  },
+  "camera": {
+    "source": "embedded Blender render camera with a 0.25-metre enclosed-position offset",
+    "embeddedPosition": [2.5763953, 1.0944755, 4.4657507],
+    "enclosedPositionOffset": [-0.0630126, 0.0027997, -0.2419124],
+    "position": [2.5133827, 1.0972751, 4.2238383],
+    "direction": [-0.2520502, 0.0111987, -0.9676494],
+    "up": [0.0028260, 0.9999372, 0.0108363],
+    "verticalFovDegrees": 39.5977509
+  }
+}

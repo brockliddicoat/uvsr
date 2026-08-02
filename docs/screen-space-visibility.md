@@ -729,7 +729,8 @@ not count hypothetical recomputation or bandwidth savings.
 
 ## Benchmark and Command Line
 
-Windows requests `HIGH_PRIORITY_CLASS` at startup. Instrumented
+Windows uses `NORMAL_PRIORITY_CLASS` for ordinary interactive sessions so scene
+workers do not starve presentation or the desktop compositor. Instrumented
 `UVSR_PERF_*` captures can explicitly request Normal or High priority with
 `UVSR_PERF_PRIORITY`; exported metadata records the live process priority so
 priority-mismatched runs are not treated as equivalent.
@@ -752,9 +753,14 @@ than the selected preset label. Modified presets therefore remain runnable once
 their settings reach the GPU. A run is blocked only for another active run,
 non-deferred rendering, no active AO/GI consumer, an invalid execution plan, a
 permutation that has not reached the GPU yet, or a scene without the controlled
-camera. Only PBR Sponza Decorated and PBR Sponza Plain currently provide that
+camera. Only Sponza Decorated and Sponza Plain currently provide that
 camera. Command-line runs queued before asynchronous scene loading finishes now
 wait for `SceneLoaded` instead of being misclassified as an unsupported scene.
+Cold construction of the thirteen shared visibility compute pipelines is
+spread across loading frames. Standalone component users retain eager
+construction by default, while UVSR does not expose the first scene until the
+staged pipeline set is ready. The exact first-trace specialization depends on
+the final runtime execution plan and remains one lazy first-use pipeline.
 
 The command-line surface is:
 
@@ -827,7 +833,7 @@ not performance evidence; the controlled finalist results follow below.
 ### Controlled Intel 600-Frame Evidence
 
 The current controlled runs used the Intel Arc integrated GPU (`DEV_7D55`,
-driver `32.0.101.8724`), PBR Sponza Decorated, 1920x1080, Benchmark Position 1,
+driver `32.0.101.8724`), Sponza Decorated, 1920x1080, Benchmark Position 1,
 120 warm-up frames, and 600 measured frames per profile. Every reported entry
 completed 600/600 frames with zero incomplete frames.
 
@@ -881,7 +887,7 @@ run and an independent controlled precision repeat.
 
 ### Controlled Local 600-Frame Evidence
 
-The final local run used PBR Sponza Decorated at 1920x1080 on the NVIDIA GeForce
+The final local run used Sponza Decorated at 1920x1080 on the NVIDIA GeForce
 RTX 4090 Laptop GPU, 120 warm-up frames, and 600 measured frames per profile.
 Every profile exported 600 complete and zero incomplete frames with
 `controlled_protocol_valid=true`. Final captures were clean, including both PS4

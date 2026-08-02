@@ -60,6 +60,16 @@ namespace
             Near(actual[2], expected[2], tolerance);
     }
 
+    bool ShouldFlipSurfaceNormals(
+        bool isDoubleSided,
+        bool isFrontFace,
+        float geometricNormalDotView)
+    {
+        return isDoubleSided
+            ? geometricNormalDotView < 0.f
+            : !isFrontFace;
+    }
+
     Color Add(const Color& left, const Color& right)
     {
         return {
@@ -754,6 +764,13 @@ int main()
     // Geometric-normal validity, no-light, and emission-only behavior.
     const float geometricNormalDotLight = -0.2f;
     Require(geometricNormalDotLight <= 0.f, "back-side light rejected");
+    Require(!ShouldFlipSurfaceNormals(true, false, 0.8f),
+        "a reflected double-sided instance keeps its view-facing normal despite raster winding");
+    Require(ShouldFlipSurfaceNormals(true, true, -0.8f),
+        "a double-sided back face is oriented into the view hemisphere");
+    Require(ShouldFlipSurfaceNormals(false, false, 0.8f) &&
+        !ShouldFlipSurfaceNormals(false, true, -0.8f),
+        "single-sided normal orientation retains the raster-facing contract");
     const float emission = 7.f;
     const float noLightFinal = 0.f + emission;
     Require(noLightFinal == emission, "emission remains additive without lights");

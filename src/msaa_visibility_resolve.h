@@ -51,13 +51,23 @@ namespace uvsr
 
         nvrhi::DeviceHandle m_Device;
         std::array<Pipeline, 4> m_Pipelines;
+        std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
+        uint32_t m_PipelinePreparationStep = 0u;
+        bool m_PipelinesReady = false;
 
     public:
         explicit MsaaVisibilityResolvePass(nvrhi::IDevice* device);
 
         void Init(
             const std::shared_ptr<donut::engine::ShaderFactory>&
-                shaderFactory);
+                shaderFactory,
+            bool deferPipelineCreation = false);
+
+        [[nodiscard]] bool PreparePipelinesStep();
+        [[nodiscard]] bool ArePipelinesReady() const
+        {
+            return m_PipelinesReady;
+        }
 
         void Render(
             nvrhi::ICommandList* commandList,

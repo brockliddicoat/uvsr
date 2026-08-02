@@ -63,7 +63,16 @@ namespace uvsr
                 commonPasses,
             nvrhi::ITexture* sceneColor,
             nvrhi::ITexture* currentDepth,
-            nvrhi::ITexture* motionVectors);
+            nvrhi::ITexture* motionVectors,
+            bool deferPipelineCreation = false);
+
+        // Pipeline creation can be spread over loading frames. Construction
+        // remains eager by default for standalone component users.
+        [[nodiscard]] bool PreparePipelinesStep();
+        [[nodiscard]] bool ArePipelinesReady() const
+        {
+            return m_PipelinesReady;
+        }
 
         void ResetHistory();
 
@@ -213,6 +222,8 @@ namespace uvsr
         TemporalAATimings m_Timings;
         bool m_ReportedMissingComputePermutation = false;
         bool m_ReportedMinimumFallback = false;
+        uint32_t m_PipelinePreparationStep = 0u;
+        bool m_PipelinesReady = false;
 #if UVSR_AA_DEVELOPER_OVERRIDES
         bool m_ReportedMissingPixelPermutation = false;
 #endif

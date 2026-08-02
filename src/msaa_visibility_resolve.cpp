@@ -34,18 +34,32 @@ namespace uvsr
     }
 
     void MsaaVisibilityResolvePass::Init(
-        const std::shared_ptr<ShaderFactory>& shaderFactory)
+        const std::shared_ptr<ShaderFactory>& shaderFactory,
+        bool deferPipelineCreation)
     {
-        for (uint32_t variant = 0u;
-            variant < m_Pipelines.size();
-            ++variant)
+        m_ShaderFactory = shaderFactory;
+        m_PipelinePreparationStep = 0u;
+        m_PipelinesReady = false;
+        if (!deferPipelineCreation)
         {
-            const uint32_t sampleCount = 2u << variant;
-            Pipeline& pipeline = m_Pipelines[variant];
+            while (!PreparePipelinesStep())
+            {
+            }
+        }
+    }
 
-            nvrhi::BindingLayoutDesc layoutDesc;
-            layoutDesc.visibility = nvrhi::ShaderType::Compute;
-            layoutDesc.bindings = {
+    bool MsaaVisibilityResolvePass::PreparePipelinesStep()
+    {
+        if (m_PipelinesReady)
+            return true;
+
+        const uint32_t variant = m_PipelinePreparationStep;
+        const uint32_t sampleCount = 2u << variant;
+        Pipeline& pipeline = m_Pipelines[variant];
+
+        nvrhi::BindingLayoutDesc layoutDesc;
+        layoutDesc.visibility = nvrhi::ShaderType::Compute;
+        layoutDesc.bindings = {
                 nvrhi::BindingLayoutItem::Texture_SRV(0),
                 nvrhi::BindingLayoutItem::Texture_SRV(1),
                 nvrhi::BindingLayoutItem::Texture_SRV(2),
@@ -60,28 +74,29 @@ namespace uvsr
                 nvrhi::BindingLayoutItem::Texture_UAV(4),
                 nvrhi::BindingLayoutItem::Texture_UAV(5),
                 nvrhi::BindingLayoutItem::Texture_UAV(6)
-            };
-            pipeline.bindingLayout =
-                m_Device->createBindingLayout(layoutDesc);
+        };
+        pipeline.bindingLayout =
+            m_Device->createBindingLayout(layoutDesc);
 
-            std::vector<ShaderMacro> macros;
-            macros.emplace_back(
-                "MSAA_VISIBILITY_SAMPLES",
-                std::to_string(sampleCount));
-            pipeline.shader = shaderFactory->CreateShader(
-                "uvsr/msaa_visibility_resolve_cs.hlsl",
-                "main",
-                &macros,
-                nvrhi::ShaderType::Compute);
+        std::vector<ShaderMacro> macros;
+        macros.emplace_back(
+            "MSAA_VISIBILITY_SAMPLES",
+            std::to_string(sampleCount));
+        pipeline.shader = m_ShaderFactory->CreateShader(
+            "uvsr/msaa_visibility_resolve_cs.hlsl",
+            "main",
+            &macros,
+            nvrhi::ShaderType::Compute);
 
-            nvrhi::ComputePipelineDesc pipelineDesc;
-            pipelineDesc.CS = pipeline.shader;
-            pipelineDesc.bindingLayouts = {
-                pipeline.bindingLayout
-            };
-            pipeline.pso =
-                m_Device->createComputePipeline(pipelineDesc);
-        }
+        nvrhi::ComputePipelineDesc pipelineDesc;
+        pipelineDesc.CS = pipeline.shader;
+        pipelineDesc.bindingLayouts = { pipeline.bindingLayout };
+        pipeline.pso = m_Device->createComputePipeline(pipelineDesc);
+
+        ++m_PipelinePreparationStep;
+        m_PipelinesReady =
+            m_PipelinePreparationStep == m_Pipelines.size();
+        return m_PipelinesReady;
     }
 
     void MsaaVisibilityResolvePass::Render(
@@ -90,6 +105,13 @@ namespace uvsr
         const MsaaVisibilityResolveOutputs& outputs,
         uint32_t sampleCount) const
     {
+        if (!m_PipelinesReady)
+        {
+            log::error(
+                "MSAA visibility resolve rendered before pipeline preparation completed.");
+            return;
+        }
+
         const int pipelineIndex =
             GetPipelineIndex(sampleCount);
         if (!commandList || pipelineIndex < 0)

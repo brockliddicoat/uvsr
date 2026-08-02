@@ -51,9 +51,9 @@ int main(int argc, const char* const* argv)
             directory / "intel_sponza/intel_pbr_sponza_copy.scene.json";
         {
             std::ofstream(decoratedPath)
-                << R"({"displayName":"PBR Sponza Decorated","cameraPreset":"intel-pbr-sponza-courtyard-simplified-v1"})";
+                << R"({"displayName":"Sponza Decorated","cameraPreset":"intel-pbr-sponza-courtyard-simplified-v1"})";
             std::ofstream(plainPath)
-                << R"({"displayName":"PBR Sponza Plain","cameraPreset":"intel-pbr-sponza-courtyard-simplified-v1"})";
+                << R"({"displayName":"Sponza Plain","cameraPreset":"intel-pbr-sponza-courtyard-simplified-v1"})";
             std::ofstream(unrelatedPath)
                 << R"({"cameraPreset":"another-camera"})";
             std::ofstream(oldExactPath)
@@ -74,9 +74,9 @@ int main(int argc, const char* const* argv)
             plainPath);
 
         Require(decorated == &simplified,
-            "PBR Sponza Decorated must resolve the simplified default camera");
+            "Sponza Decorated must resolve the simplified default camera");
         Require(plain == &simplified,
-            "PBR Sponza Plain must resolve the same simplified default camera");
+            "Sponza Plain must resolve the same simplified default camera");
         Require(simplifiedByLocation == &simplified,
             "Benchmark Position 1 must be the sole stored camera preset");
         Require(uvsr::SelectableSponzaCameraLocations.size() == 2 &&

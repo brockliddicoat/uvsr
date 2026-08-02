@@ -43,13 +43,26 @@ private:
     std::array<std::array<Pipeline, 4>, 2> m_MsaaPipelines;
     donut::engine::BindingCache m_BindingSets;
     std::shared_ptr<donut::engine::CommonRenderPasses> m_CommonPasses;
+    std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
+    uint32_t m_PipelinePreparationStep = 0u;
+    bool m_PipelinesReady = false;
 
 public:
     PbrDeferredLightingPass(
         nvrhi::IDevice* device,
         std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses);
 
-    void Init(const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory);
+    void Init(
+        const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
+        bool deferPipelineCreation = false);
+
+    // Pipeline creation can be spread over loading frames. Init remains eager
+    // by default for standalone component users.
+    [[nodiscard]] bool PreparePipelinesStep();
+    [[nodiscard]] bool ArePipelinesReady() const
+    {
+        return m_PipelinesReady;
+    }
 
     void Render(
         nvrhi::ICommandList* commandList,

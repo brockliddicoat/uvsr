@@ -116,7 +116,18 @@ void main(
     MaterialSample sampledMaterial = EvaluateSceneMaterial(
         i_vtx.normal, i_vtx.tangent, g_Material, textures);
 
-    if (!i_isFrontFace)
+    float3 surfaceWorldPosition = i_vtx.pos;
+    float3 viewIncident = GetForwardIncidentVector(
+        g_ForwardView.view.cameraDirectionOrPosition,
+        surfaceWorldPosition);
+    float3 viewDirection = -viewIncident;
+    bool isDoubleSided =
+        (g_Material.flags & MaterialFlags_DoubleSided) != 0;
+    if (ShouldFlipPbrSurfaceNormals(
+        isDoubleSided,
+        i_isFrontFace,
+        sampledMaterial.geometryNormal,
+        viewDirection))
     {
         sampledMaterial.shadingNormal = -sampledMaterial.shadingNormal;
         sampledMaterial.geometryNormal = -sampledMaterial.geometryNormal;
@@ -136,15 +147,11 @@ void main(
     material.emissive = max(sampledMaterial.emissiveColor, 0.0f);
     material.opacity = saturate(sampledMaterial.opacity);
 
-    float3 surfaceWorldPosition = i_vtx.pos;
-    float3 viewIncident = GetForwardIncidentVector(
-        g_ForwardView.view.cameraDirectionOrPosition,
-        surfaceWorldPosition);
     PbrSurfaceInteraction surface;
     surface.position = surfaceWorldPosition;
     surface.shadingNormal = sampledMaterial.shadingNormal;
     surface.geometricNormal = sampledMaterial.geometryNormal;
-    surface.viewDirection = -viewIncident;
+    surface.viewDirection = viewDirection;
 
     float3 directDiffuse = 0.0f;
     float3 directSpecular = 0.0f;

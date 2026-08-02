@@ -72,11 +72,17 @@ class OverrideGroup:
 OVERRIDE_GROUPS = (
     OverrideGroup(
         ROOT / "donut",
-        (ROOT / "overrides" / "donut-engine.patch",),
+        (
+            ROOT / "overrides" / "donut-engine.patch",
+            ROOT / "overrides" / "donut-loading.patch",
+        ),
     ),
     OverrideGroup(
         ROOT / "donut",
-        (ROOT / "overrides" / "donut-app.patch",),
+        (
+            ROOT / "overrides" / "donut-app.patch",
+            ROOT / "overrides" / "donut-loading-app.patch",
+        ),
     ),
     OverrideGroup(
         ROOT / "donut" / "thirdparty" / "imgui",

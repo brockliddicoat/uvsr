@@ -16,6 +16,28 @@ The **General** drawer contains **Interface Skin**, **Graphics Adapter**,
 World presentations and the **Indirect Diffuse Response** diagnostic.
 **World Scenes** owns the scene picker.
 
+Scene changes retain the full-screen loading presentation through CPU import,
+collision preparation, texture finalization, immutable mesh upload, renderer
+resource preparation, and GPU environment preparation. UVSR reserves CPU
+capacity for presentation, builds the collision BVH and initial environment
+data on the loader worker, and submits at most 8 MiB of imported immutable mesh
+array writes per loading frame. Donut's smaller auxiliary-buffer creation and
+scene-table refresh and UVSR's post-activation material-buffer refresh run as
+separate later phases. Texture finalization uses a soft 4 ms target checked
+between whole textures, so one unusually expensive texture may exceed that
+target. Initial environment work advances one cube face or mip at a time, and
+shared visibility, deferred-lighting, MSAA resolve, and temporal-AA pipelines
+are created one per loading frame. The exact runtime visibility trace pipeline
+and Donut's graphics pipelines remain lazy single first-use pipelines. The new
+scene becomes interactive only after the bounded preparation stages complete.
+The completion diagnostic reports the number of loading-presentation frames
+and their maximum observed wall-clock gap for cold-load regression checks.
+
+On a later scene change, UVSR keeps the old resources alive behind the loading
+presentation and polls a graphics-queue retirement event. It tears the old
+scene down and starts the replacement worker only after that event completes;
+ordinary scene changes do not block the window thread with a full GPU idle.
+
 **Interface Skin** is a session-only presentation choice:
 
 - **Amp** preserves UVSR's established animated translucent appearance and is
@@ -45,12 +67,26 @@ At startup, UVSR selects the DirectX 12-capable adapter with the most dedicated
 video memory. Selecting another compatible adapter restarts the renderer on that
 device.
 
-The bundled **PBR Sponza Decorated** and **PBR Sponza Plain** scenes open at
+The bundled **Sponza Decorated** and **Sponza Plain** scenes open at
 **Benchmark Position 1**, the
 `intel-pbr-sponza-courtyard-simplified-v1` camera preset. The preset uses a
 60-degree perspective view and a 1920x1080 reference frame. Moving or rotating
 the camera changes **Camera Location** to **Piloted**; selecting **Piloted**
 detaches the preset name without changing the view.
+
+The bundled **Bistro Interior**, **San Miguel**, and **Classroom Interior**
+scenes open at source-backed descriptor cameras placed
+inside their architecture. UVSR applies each descriptor's position, direction,
+up vector, and vertical field of view after generic scene framing. The
+**Camera Mode** controls navigate each view normally; **Camera Location** remains
+specific to the PBR Sponza presets.
+
+Classroom Interior is a static frame-1 glTF export of Christophe Seux's official
+CC0 Blender Classroom demo. Its legacy Cycles materials are reauthored into
+UVSR-compatible PBR materials, curve and linked collection instances are
+realized, and blended or transmissive material domains are replaced with
+documented opaque or masked
+fallbacks so visible classroom geometry is retained.
 
 **Camera Mode** provides:
 

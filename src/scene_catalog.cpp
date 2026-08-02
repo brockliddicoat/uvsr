@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -57,6 +59,106 @@ namespace
             return !std::isspace(character);
         });
     }
+
+    std::optional<std::array<float, 3>> ReadFiniteFloat3(
+        const Json::Value& value)
+    {
+        if (!value.isArray() || value.size() != 3u)
+            return std::nullopt;
+
+        std::array<float, 3> result{};
+        for (Json::ArrayIndex index = 0u; index < 3u; ++index)
+        {
+            if (!value[index].isNumeric())
+                return std::nullopt;
+
+            result[index] = value[index].asFloat();
+            if (!std::isfinite(result[index]))
+                return std::nullopt;
+        }
+        return result;
+    }
+
+    double LengthSquared(const std::array<float, 3>& value)
+    {
+        return double(value[0]) * double(value[0]) +
+            double(value[1]) * double(value[1]) +
+            double(value[2]) * double(value[2]);
+    }
+
+    std::optional<std::array<float, 3>> NormalizeCameraVector(
+        const std::array<float, 3>& value)
+    {
+        const double lengthSquared = LengthSquared(value);
+        if (!std::isfinite(lengthSquared) || lengthSquared <= 1e-8)
+            return std::nullopt;
+
+        const double inverseLength = 1.0 / std::sqrt(lengthSquared);
+        return std::array<float, 3>{
+            float(double(value[0]) * inverseLength),
+            float(double(value[1]) * inverseLength),
+            float(double(value[2]) * inverseLength)
+        };
+    }
+
+    double CrossLengthSquared(
+        const std::array<float, 3>& left,
+        const std::array<float, 3>& right)
+    {
+        const double x =
+            double(left[1]) * double(right[2]) -
+            double(left[2]) * double(right[1]);
+        const double y =
+            double(left[2]) * double(right[0]) -
+            double(left[0]) * double(right[2]);
+        const double z =
+            double(left[0]) * double(right[1]) -
+            double(left[1]) * double(right[0]);
+        return x * x + y * y + z * z;
+    }
+
+    std::optional<uvsr::SceneInitialCamera> ReadInitialCamera(
+        const Json::Value& document)
+    {
+        const Json::Value& camera = document["initialCamera"];
+        if (!camera.isObject())
+            return std::nullopt;
+
+        const auto position = ReadFiniteFloat3(camera["position"]);
+        const auto direction = ReadFiniteFloat3(camera["direction"]);
+        const auto up = ReadFiniteFloat3(camera["up"]);
+        const auto normalizedDirection =
+            direction ? NormalizeCameraVector(*direction) : std::nullopt;
+        const auto normalizedUp =
+            up ? NormalizeCameraVector(*up) : std::nullopt;
+        if (!position || !normalizedDirection || !normalizedUp ||
+            CrossLengthSquared(*normalizedDirection, *normalizedUp) <= 1e-8)
+        {
+            return std::nullopt;
+        }
+
+        float verticalFovDegrees = 60.f;
+        const Json::Value& verticalFov = camera["verticalFovDegrees"];
+        if (!verticalFov.isNull())
+        {
+            if (!verticalFov.isNumeric())
+                return std::nullopt;
+            verticalFovDegrees = verticalFov.asFloat();
+            if (!std::isfinite(verticalFovDegrees) ||
+                verticalFovDegrees <= 1.f ||
+                verticalFovDegrees >= 179.f)
+            {
+                return std::nullopt;
+            }
+        }
+
+        return uvsr::SceneInitialCamera{
+            *position,
+            *normalizedDirection,
+            *normalizedUp,
+            verticalFovDegrees
+        };
+    }
 }
 
 std::string uvsr::MakeSceneDisplayName(
@@ -95,6 +197,7 @@ std::vector<uvsr::SceneCatalogEntry> uvsr::BuildSceneCatalog(
     // launcher and claim its component models, while unrelated glTF/GLB files
     // remain available exactly as before.
     std::unordered_map<std::string, std::string> descriptorDisplayNames;
+    std::unordered_map<std::string, SceneInitialCamera> descriptorInitialCameras;
     std::unordered_set<std::string> descriptorComponents;
 
     for (const std::string& discovered : discoveredSceneFiles)
@@ -110,6 +213,13 @@ std::vector<uvsr::SceneCatalogEntry> uvsr::BuildSceneCatalog(
         const Json::Value& displayName = document["displayName"];
         if (displayName.isString() && HasVisibleText(displayName.asString()))
             descriptorDisplayNames.emplace(ComparisonKey(normalized), displayName.asString());
+
+        if (const auto initialCamera = ReadInitialCamera(document))
+        {
+            descriptorInitialCameras.emplace(
+                ComparisonKey(normalized),
+                *initialCamera);
+        }
 
         const Json::Value& models = document["models"];
         if (!models.isArray())
@@ -153,6 +263,9 @@ std::vector<uvsr::SceneCatalogEntry> uvsr::BuildSceneCatalog(
         entry.DisplayName = descriptorName != descriptorDisplayNames.end()
             ? descriptorName->second
             : MakeSceneDisplayName(sceneDirectory, normalized);
+        const auto descriptorCamera = descriptorInitialCameras.find(key);
+        if (descriptorCamera != descriptorInitialCameras.end())
+            entry.InitialCamera = descriptorCamera->second;
         catalog.push_back(std::move(entry));
     }
 

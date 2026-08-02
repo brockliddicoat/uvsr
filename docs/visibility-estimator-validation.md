@@ -148,7 +148,7 @@ Controlled Intel PBR Sponza runs use `--benchmark-camera`. The flag selects the
 enforces its 1920x1080 reference frame in a non-resizable window, blocks
 fullscreen transitions, and freezes the view in **Locked**. The benchmark
 launch disables the **Camera Location** dropdown at Benchmark Position 1.
-**PBR Sponza Decorated** and **PBR Sponza Plain** therefore share one 60-degree
+**Sponza Decorated** and **Sponza Plain** therefore share one 60-degree
 benchmark pose while remaining distinct values in the benchmark record's
 `scene` field. Record the preset ID in the `camera` field and keep the adapter,
 driver, settings, warmup, and sample window fixed for comparisons.

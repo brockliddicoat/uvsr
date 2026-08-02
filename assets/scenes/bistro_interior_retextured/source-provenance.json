@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "scene": "bistro_interior_retextured",
+  "displayName": "Retextured Bistro Interior",
+  "source": {
+    "project": "Amazon Lumberyard Bistro",
+    "creator": "Amazon Lumberyard",
+    "year": 2017,
+    "archiveIndexUrl": "https://casual-effects.com/data",
+    "upstreamProjectUrl": "https://developer.nvidia.com/orca/amazon-lumberyard-bistro",
+    "archiveFile": "Bistro_v5_2.zip",
+    "archiveBytes": 894377473,
+    "archiveSha256": "0D50E3C724C6C5DA19F8EB99AD3F53E36FEC37FFA2DF9621F9CCF0603F3934E1",
+    "archiveRole": "supporting upstream ORCA source, citation, and license package; does not contain modelFile",
+    "modelFile": "BistroInterior_Wine.glb",
+    "modelContainer": "user-supplied Blender-exported GLB associated with the McGuire archive entry",
+    "modelRelationshipToArchive": "separate file; not a member of Bistro_v5_2.zip",
+    "modelGenerator": "Khronos glTF Blender I/O v5.1.20",
+    "modelUvsrOrmRepairVersion": 4,
+    "modelBytes": 421517664,
+    "modelSha256": "47C71CF9FC3F0BBDF213F5788993BA5732565E7EACAE616DF26BC60818FDBC6A",
+    "sourceReadmeSha256": "C87C5B60992CEDEE49FCE1EA9BFE10CF60498EBF1113685B723D6DC9006C2BEF",
+    "license": "CC BY 4.0",
+    "licenseSha256": "9A9EF3C33320EEBE6126B0C7DC327885806BDE242283BBE6E4AE77641AD703E4"
+  },
+  "conversion": {
+    "tool": "tools/repack_gltf_buffers.py",
+    "method": "lossless buffer-view repack plus explicit opaque material-domain fallback",
+    "maxBufferBytes": 90000000,
+    "trackedFileLimitBytes": 100000000,
+    "report": "components/buffer-repack-report.json",
+    "materialCompatibility": {
+      "reason": "UVSR submits opaque and alpha-tested material domains but has no blended draw pass",
+      "sourceDomain": "BLEND",
+      "outputDomain": "OPAQUE",
+      "materials": ["Water", "Ice", "Beer", "Red_Wine", "White_Wine"],
+      "primitiveCount": 227,
+      "triangleCount": 109600,
+      "transparencyPreserved": false
+    }
+  },
+  "camera": {
+    "source": "embedded glTF camera with an enclosed-position offset",
+    "embeddedPosition": [3.444546, 2.258351, -2.246721],
+    "enclosedPositionOffset": [1.0, 0.0, -0.5],
+    "position": [4.444546, 2.258351, -2.746721],
+    "direction": [0.992681, -0.037313, -0.114857],
+    "up": [0.037065, 0.999304, -0.004289],
+    "verticalFovDegrees": 33.9666
+  }
+}

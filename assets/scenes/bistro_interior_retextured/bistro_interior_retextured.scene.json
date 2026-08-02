@@ -1,0 +1,18 @@
+{
+  "displayName": "Bistro Interior",
+  "initialCamera": {
+    "position": [4.444546, 2.258351, -2.746721],
+    "direction": [0.992681, -0.037313, -0.114857],
+    "up": [0.037065, 0.999304, -0.004289],
+    "verticalFovDegrees": 33.9666
+  },
+  "models": [
+    "components/bistro_interior.gltf"
+  ],
+  "graph": [
+    {
+      "name": "Retextured Bistro Interior",
+      "model": 0
+    }
+  ]
+}

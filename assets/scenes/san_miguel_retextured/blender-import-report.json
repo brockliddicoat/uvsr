@@ -1,0 +1,3043 @@
+{
+  "schemaVersion": 1,
+  "scene": "san_miguel_retextured",
+  "displayName": "Retextured San Miguel",
+  "blenderVersion": "5.1.2",
+  "blenderBuildHash": "ec6e62d40fa9",
+  "source": "san-miguel.obj",
+  "sourceBytes": 1143041382,
+  "sourceSha256": "22533258BE1D94AA1ECE29053E98F11C91EBC17A8A3626545DEE3CECF90B71E3",
+  "materialLibrary": "san-miguel.mtl",
+  "materialLibraryBytes": 35143,
+  "materialLibrarySha256": "5C0618AE58CEB61B51B09B97C5A16BBB410CCFFC671E99C9076A3926CEE04916",
+  "licenseSha256": "708C9AD36ADAC62D13BD61DDF47D58D2B892B9E318BD87DA93AE9E55E2B5E680",
+  "scale": 1.0,
+  "objForwardAxis": "-Z",
+  "objUpAxis": "Y",
+  "gltfUpAxis": "Y",
+  "importResult": [
+    "FINISHED"
+  ],
+  "exportResult": [
+    "FINISHED"
+  ],
+  "sourceGeometry": {
+    "positionStatements": 5933233,
+    "texcoordStatements": 2221669,
+    "normalStatements": 6721532,
+    "faceStatements": 9932385,
+    "trianglesAfterFanTriangulation": 9980699,
+    "facesWithRepeatedPositionIndices": 9186,
+    "trianglesWithRepeatedPositionIndices": 9186,
+    "objectStatements": 1034,
+    "groupStatements": 2203,
+    "materialAssignments": 1599
+  },
+  "topologyAudit": {
+    "sourceFaceStatements": 9932385,
+    "sourceTrianglesAfterFanTriangulation": 9980699,
+    "discardedRepeatedPositionIndexFaces": 9186,
+    "discardedRepeatedPositionIndexTriangles": 9186,
+    "importedPolygons": 9923199,
+    "importedFanTriangles": 9971513,
+    "importedTessellatedTriangles": 9971513,
+    "validationRemovedPolygons": 8322,
+    "validationRemovedFanTriangles": 8322,
+    "validatedPolygons": 9914877,
+    "validatedTessellatedTriangles": 9963191,
+    "validatedNonTessellatedDegenerateFanTriangles": 0,
+    "validSourceTopologyImportedBeforeRequiredValidation": true,
+    "exportedInstancedTriangles": 9963191,
+    "renderableTopologyPreserved": true
+  },
+  "blenderWorldBounds": {
+    "minimum": [
+      -22.2743,
+      -14.9374,
+      -0.463129
+    ],
+    "maximum": [
+      46.774399,
+      12.0422,
+      14.600001
+    ],
+    "dimensions": [
+      69.048698,
+      26.9796,
+      15.06313
+    ]
+  },
+  "gltfWorldBounds": {
+    "minimum": [
+      -22.2743,
+      -0.463129,
+      -12.0422
+    ],
+    "maximum": [
+      46.774399,
+      14.600001,
+      14.9374
+    ],
+    "dimensions": [
+      69.048699,
+      15.06313,
+      26.9796
+    ]
+  },
+  "geometry": {
+    "objects": 2203,
+    "vertices": 5933438,
+    "polygons": 9914877,
+    "fanTriangles": 9963191,
+    "triangles": 9963191,
+    "nonTessellatedDegenerateFanTriangles": 0,
+    "loops": 29792945,
+    "materials": 287,
+    "largestObjectsByTriangles": [
+      {
+        "name": "group145",
+        "triangles": 178171
+      },
+      {
+        "name": "group152",
+        "triangles": 155376
+      },
+      {
+        "name": "group135",
+        "triangles": 149409
+      },
+      {
+        "name": "group114",
+        "triangles": 143184
+      },
+      {
+        "name": "group202",
+        "triangles": 140320
+      },
+      {
+        "name": "group195",
+        "triangles": 140000
+      },
+      {
+        "name": "group271",
+        "triangles": 115836
+      },
+      {
+        "name": "group331",
+        "triangles": 109247
+      },
+      {
+        "name": "group387",
+        "triangles": 100476
+      },
+      {
+        "name": "group275",
+        "triangles": 83476
+      },
+      {
+        "name": "group156",
+        "triangles": 77760
+      },
+      {
+        "name": "group243",
+        "triangles": 74198
+      },
+      {
+        "name": "group268",
+        "triangles": 73749
+      },
+      {
+        "name": "group265",
+        "triangles": 70015
+      },
+      {
+        "name": "group169",
+        "triangles": 69804
+      },
+      {
+        "name": "group394",
+        "triangles": 68304
+      },
+      {
+        "name": "group381",
+        "triangles": 66014
+      },
+      {
+        "name": "group150",
+        "triangles": 63648
+      },
+      {
+        "name": "group345",
+        "triangles": 63150
+      },
+      {
+        "name": "group250",
+        "triangles": 58790
+      }
+    ]
+  },
+  "preValidationGeometry": {
+    "objects": 2203,
+    "vertices": 5933438,
+    "polygons": 9923199,
+    "fanTriangles": 9971513,
+    "triangles": 9971513,
+    "nonTessellatedDegenerateFanTriangles": 0,
+    "loops": 29817911,
+    "materials": 287,
+    "largestObjectsByTriangles": [
+      {
+        "name": "group145",
+        "triangles": 178175
+      },
+      {
+        "name": "group152",
+        "triangles": 155376
+      },
+      {
+        "name": "group135",
+        "triangles": 153982
+      },
+      {
+        "name": "group114",
+        "triangles": 143184
+      },
+      {
+        "name": "group202",
+        "triangles": 140320
+      },
+      {
+        "name": "group195",
+        "triangles": 140000
+      },
+      {
+        "name": "group271",
+        "triangles": 115836
+      },
+      {
+        "name": "group331",
+        "triangles": 109263
+      },
+      {
+        "name": "group387",
+        "triangles": 100548
+      },
+      {
+        "name": "group275",
+        "triangles": 83490
+      },
+      {
+        "name": "group156",
+        "triangles": 77760
+      },
+      {
+        "name": "group243",
+        "triangles": 74198
+      },
+      {
+        "name": "group268",
+        "triangles": 73749
+      },
+      {
+        "name": "group265",
+        "triangles": 70375
+      },
+      {
+        "name": "group169",
+        "triangles": 69804
+      },
+      {
+        "name": "group394",
+        "triangles": 68360
+      },
+      {
+        "name": "group381",
+        "triangles": 66026
+      },
+      {
+        "name": "group150",
+        "triangles": 63648
+      },
+      {
+        "name": "group345",
+        "triangles": 63150
+      },
+      {
+        "name": "group250",
+        "triangles": 58790
+      }
+    ]
+  },
+  "meshValidation": {
+    "uniqueMeshes": 2203,
+    "changedMeshes": 32
+  },
+  "exportedGeometry": {
+    "meshes": 2203,
+    "meshInstances": 2203,
+    "primitives": 2203,
+    "uniqueMeshTriangles": 9963191,
+    "instancedTriangles": 9963191
+  },
+  "materialChanges": {
+    "alphaMasks": [
+      "material_131",
+      "material_133",
+      "material_134",
+      "material_135",
+      "material_136",
+      "material_138",
+      "material_142",
+      "material_143",
+      "material_144",
+      "material_145",
+      "material_149",
+      "material_150",
+      "material_151",
+      "material_152",
+      "material_155",
+      "material_156",
+      "material_158",
+      "material_159",
+      "material_160",
+      "material_161",
+      "material_163",
+      "material_165",
+      "material_166",
+      "material_167",
+      "material_168",
+      "material_169",
+      "material_170",
+      "material_171",
+      "material_173",
+      "material_174",
+      "material_175",
+      "material_176",
+      "material_177",
+      "material_178",
+      "material_179",
+      "material_182",
+      "material_183",
+      "material_184",
+      "material_185",
+      "material_187",
+      "material_188",
+      "material_189",
+      "material_191",
+      "material_192",
+      "material_194",
+      "material_195",
+      "material_197",
+      "material_198",
+      "material_199",
+      "material_201",
+      "material_202",
+      "material_207",
+      "material_212",
+      "material_215",
+      "material_216",
+      "material_217",
+      "material_220",
+      "material_221",
+      "material_222",
+      "material_224",
+      "material_226",
+      "material_228",
+      "material_229",
+      "material_230",
+      "material_231",
+      "material_232",
+      "material_233",
+      "material_234",
+      "material_236",
+      "material_238",
+      "material_242",
+      "material_244",
+      "material_245",
+      "material_249",
+      "material_250",
+      "material_251",
+      "material_252",
+      "material_253",
+      "material_255",
+      "material_257",
+      "material_258",
+      "material_261",
+      "material_262",
+      "material_263",
+      "material_264",
+      "material_266",
+      "material_92",
+      "material_93",
+      "material_94",
+      "materialt",
+      "materialu",
+      "materialv",
+      "materialx",
+      "materialy",
+      "materialz"
+    ],
+    "forcedOpaque": [
+      "material_041"
+    ],
+    "transmissionFlattened": {
+      "material_79": 0.10000000149011612,
+      "materialn": 0.30000001192092896,
+      "materialo": 0.36666667461395264
+    },
+    "normalMapsPreserved": [
+      "material_039",
+      "material_1",
+      "material_11",
+      "material_123",
+      "material_124",
+      "material_125",
+      "material_126",
+      "material_127",
+      "material_128",
+      "material_129",
+      "material_130",
+      "material_14",
+      "material_18",
+      "material_181",
+      "material_182",
+      "material_268",
+      "material_269",
+      "material_270",
+      "material_271",
+      "material_273",
+      "material_276",
+      "material_277",
+      "material_278",
+      "material_279",
+      "material_280",
+      "material_39",
+      "material_4",
+      "material_40",
+      "material_46",
+      "material_48",
+      "material_5",
+      "material_51",
+      "material_69",
+      "material_73",
+      "material_81",
+      "material_84",
+      "material_85",
+      "material_86",
+      "material_87",
+      "material_88",
+      "material_89",
+      "material_90",
+      "material_95",
+      "material_96",
+      "material_97",
+      "material_98",
+      "materiald",
+      "materiali",
+      "materials",
+      "materialt",
+      "materialu",
+      "materialv",
+      "materialw",
+      "materialx",
+      "materialy",
+      "materialz"
+    ],
+    "omittedHeightOrAmbiguousNormalMaps": [
+      "material_44"
+    ],
+    "baseColorTextures": {
+      "material_032": "textures/individual_b.png",
+      "material_033": "textures/cenicero.png",
+      "material_034": "textures/ceramic_tile.png",
+      "material_1": "textures/jardinera_1_color.png",
+      "material_10": "textures/losa.png",
+      "material_11": "textures/moldura2piso_color.png",
+      "material_123": "textures/Forja_Macetas.png",
+      "material_124": "textures/Maceta_A_Color.png",
+      "material_125": "textures/Maceta_A2_Color.png",
+      "material_126": "textures/Maceta_B_Color.png",
+      "material_127": "textures/Maceta_B2_Color.png",
+      "material_128": "textures/Maceta_C_Color.png",
+      "material_129": "textures/Maceta_C2_Color.png",
+      "material_130": "textures/Maceta_D2_Color_0.png",
+      "material_131": "textures/dracaena_fragrans_leaf.png",
+      "material_132": "textures/BS01brk.png",
+      "material_133": "textures/BS01lef.png",
+      "material_134": "textures/BS01flo1.png",
+      "material_135": "textures/BS01flo2.png",
+      "material_136": "textures/aglaonema_leaf.png",
+      "material_137": "textures/aglaonema_bark.png",
+      "material_138": "textures/FL13pet2.png",
+      "material_14": "textures/piso_rustico.png",
+      "material_141": "textures/FL16stm.png",
+      "material_142": "textures/FL16lef1.png",
+      "material_143": "textures/FL16pet1.png",
+      "material_144": "textures/FL16lef3.png",
+      "material_145": "textures/TR14lef1.png",
+      "material_146": "textures/ampelopsis_brevipedunculata_bark.png",
+      "material_147": "textures/HP19stm1.png",
+      "material_148": "textures/HP19stm2.png",
+      "material_149": "textures/HP19lef2.png",
+      "material_15": "textures/madera_triplay_01.png",
+      "material_150": "textures/HP19lef3.png",
+      "material_151": "textures/HP19lef2.png",
+      "material_152": "textures/FL15lef1.png",
+      "material_153": "textures/FL15cnt2.png",
+      "material_154": "textures/FL15stm.png",
+      "material_155": "textures/FL15pet2.png",
+      "material_156": "textures/FL15lef2.png",
+      "material_157": "textures/FL15cnt1.png",
+      "material_158": "textures/FL15lef1.png",
+      "material_159": "textures/FL15lef2.png",
+      "material_16": "textures/rust_a1.png",
+      "material_160": "textures/FL15pet2.png",
+      "material_161": "textures/HP07lef1.png",
+      "material_162": "textures/HP07stm1.png",
+      "material_163": "textures/HP07lef2.png",
+      "material_164": "textures/HP07stm2.png",
+      "material_165": "textures/FL11pet1.png",
+      "material_166": "textures/FL11pet2.png",
+      "material_167": "textures/FL11sta.png",
+      "material_168": "textures/FL11pet3.png",
+      "material_169": "textures/FL11pet4.png",
+      "material_17": "textures/muros_a.png",
+      "material_170": "textures/FL11lef1.png",
+      "material_171": "textures/FL11lef2.png",
+      "material_172": "textures/FL11stm.png",
+      "material_173": "textures/FL11pet1.png",
+      "material_174": "textures/FL11pet2.png",
+      "material_175": "textures/FL11pet3.png",
+      "material_176": "textures/FL11pet4.png",
+      "material_177": "textures/FL11lef1.png",
+      "material_178": "textures/HP17lef1.png",
+      "material_179": "textures/HP17lef2.png",
+      "material_18": "textures/muros_b1.png",
+      "material_180": "textures/HP17stm.png",
+      "material_181": "textures/HP11stm.png",
+      "material_182": "textures/HP11lef2.png",
+      "material_183": "textures/FL13pet1.png",
+      "material_184": "textures/FL13pet2.png",
+      "material_185": "textures/FL13pet3.png",
+      "material_186": "textures/FL13stm.png",
+      "material_187": "textures/FL13lef5.png",
+      "material_188": "textures/FL13lef4.png",
+      "material_189": "textures/FL13lef1.png",
+      "material_19": "textures/muros_c2.png",
+      "material_190": "textures/elaeagnus_umbellate_bark.png",
+      "material_191": "textures/impatiens_newguinea_hybrids_petal.png",
+      "material_192": "textures/citrus_limon_leaf.png",
+      "material_193": "textures/HP13stm2.png",
+      "material_194": "textures/FL13lef1.png",
+      "material_195": "textures/HP13lef2.png",
+      "material_196": "textures/HP13stm2.png",
+      "material_197": "textures/HP13lef3.png",
+      "material_198": "textures/BS04lef.png",
+      "material_199": "textures/BS04flo.png",
+      "material_2": "textures/cantera_naranja_liso.png",
+      "material_20": "textures/muros_f.png",
+      "material_200": "textures/BS04brk.png",
+      "material_201": "textures/FL12lef1.png",
+      "material_202": "textures/FL12pet2.png",
+      "material_203": "textures/FL12pis1.png",
+      "material_204": "textures/FL12sta1.png",
+      "material_205": "textures/FL12stm.png",
+      "material_206": "textures/FL12pis1.png",
+      "material_207": "textures/FL12pet1.png",
+      "material_208": "textures/FL12stm.png",
+      "material_209": "textures/HP01stm1.png",
+      "material_21": "textures/muros_e.png",
+      "material_210": "textures/HP01stm2.png",
+      "material_211": "textures/HP01stm1.png",
+      "material_212": "textures/FL16pet1.png",
+      "material_213": "textures/HP01stm1.png",
+      "material_214": "textures/HP01stm2.png",
+      "material_215": "textures/FL17lef6.png",
+      "material_216": "textures/HP01lef2.png",
+      "material_217": "textures/HP01lef1.png",
+      "material_218": "textures/HP01pet3.png",
+      "material_22": "textures/muros_d.png",
+      "material_220": "textures/FL04lef1.png",
+      "material_221": "textures/FL04lef2.png",
+      "material_222": "textures/FL04pet1.png",
+      "material_223": "textures/FL04cnt2.png",
+      "material_224": "textures/FL04cnt1.png",
+      "material_225": "textures/FL04stm.png",
+      "material_226": "textures/TR02lef5.png",
+      "material_227": "textures/quercus_rubra_bark.png",
+      "material_228": "textures/FL19pe13.png",
+      "material_229": "textures/FL19pe16.png",
+      "material_23": "textures/muros_g.png",
+      "material_230": "textures/FL19pe14.png",
+      "material_231": "textures/FL19pe15.png",
+      "material_232": "textures/FL19lef4.png",
+      "material_233": "textures/FL19lef2.png",
+      "material_234": "textures/FL19lef3.png",
+      "material_235": "textures/FL19stm.png",
+      "material_236": "textures/HP04lef2.png",
+      "material_237": "textures/zebrina_pendula_bark.png",
+      "material_238": "textures/BL05lef2.png",
+      "material_239": "textures/hypoestes_phyllostachya_bark.png",
+      "material_24": "textures/muros_h.png",
+      "material_240": "textures/FL29cnt1.png",
+      "material_241": "textures/FL29cnt2.png",
+      "material_242": "textures/FL29lef.png",
+      "material_243": "textures/FL29twg.png",
+      "material_244": "textures/FL29pet1.png",
+      "material_245": "textures/FL29pet2.png",
+      "material_246": "textures/FL29stm1.png",
+      "material_247": "textures/FL29twg.png",
+      "material_248": "textures/FL29stm2.png",
+      "material_249": "textures/FL29lef.png",
+      "material_25": "textures/muros_l.png",
+      "material_250": "textures/FL29pet2.png",
+      "material_251": "textures/FL17lef1.png",
+      "material_252": "textures/FL17lef2.png",
+      "material_253": "textures/FL17pet5.png",
+      "material_254": "textures/FL17stm.png",
+      "material_255": "textures/FL17lef6.png",
+      "material_256": "textures/FL17cnt.png",
+      "material_257": "textures/FL17lef3.png",
+      "material_258": "textures/FL17pet1.png",
+      "material_259": "textures/FL17stm.png",
+      "material_26": "textures/muros_j.png",
+      "material_260": "textures/FL17cnt.png",
+      "material_261": "textures/FL17lef5.png",
+      "material_262": "textures/FL17lef2.png",
+      "material_263": "textures/FL17pet2.png",
+      "material_264": "textures/FL03lef1.png",
+      "material_265": "textures/fittonia_verschaffeltii_bark.png",
+      "material_266": "textures/EU15lef.png",
+      "material_268": "textures/Fierro_A.png",
+      "material_269": "textures/silla_d_piel.png",
+      "material_27": "textures/muros_l.png",
+      "material_270": "textures/WOOD08.png",
+      "material_271": "textures/WOOD08.png",
+      "material_272": "textures/tapa_talabera.png",
+      "material_273": "textures/WOOD08.png",
+      "material_274": "textures/tela_mesa_d.png",
+      "material_275": "textures/tela_mesa_b.png",
+      "material_276": "textures/WOOD08.png",
+      "material_277": "textures/Finishes.Flooring.Carpet.Loop.5.png",
+      "material_278": "textures/BWK_1024.png",
+      "material_279": "textures/tela_blanca.png",
+      "material_28": "textures/muros_m.png",
+      "material_280": "textures/Fierro_A.png",
+      "material_281": "textures/wood.3.Bubinga.png",
+      "material_282": "textures/tela_silla_b.png",
+      "material_284": "textures/Vigas_B.png",
+      "material_285": "textures/BWK_1024.png",
+      "material_286": "textures/tela_silla_b.png",
+      "material_287": "textures/plato_a.png",
+      "material_29": "textures/muros_n.png",
+      "material_3": "textures/moldura_volado.png",
+      "material_30": "textures/muros_b.png",
+      "material_31": "textures/muros_p_.png",
+      "material_32": "textures/muros_q3.png",
+      "material_33": "textures/muros_q.png",
+      "material_34": "textures/muros_q4.png",
+      "material_35": "textures/techo.png",
+      "material_36": "textures/052terresable.png",
+      "material_37": "textures/muros_q_patio2.png",
+      "material_39": "textures/arcos_lisos_2_color.png",
+      "material_4": "textures/moldura_techo.png",
+      "material_40": "textures/arcos_lisos_3_color_1.png",
+      "material_41": "textures/muros_b2.png",
+      "material_42": "textures/madera_rustica_2.png",
+      "material_43": "textures/madera_rustica_2.png",
+      "material_44": "textures/muros_k.png",
+      "material_45": "textures/concreto_01.png",
+      "material_46": "textures/Vigas_A2.png",
+      "material_47": "textures/techo_01.png",
+      "material_48": "textures/piso_patio_exterior.png",
+      "material_49": "textures/fuente_piedra_01.png",
+      "material_5": "textures/escalera_color.png",
+      "material_51": "textures/arco_frente.png",
+      "material_53": "textures/D30_Smiguel_2003_7785.png",
+      "material_54": "textures/0001_carros.png",
+      "material_55": "textures/D30_Smiguel_2003_7815.png",
+      "material_56": "textures/D30_Smiguel_2003_7812.png",
+      "material_57": "textures/027_Cola_Caballo_06-30-1997.png",
+      "material_58": "textures/D30_Smiguel_2003_7812.png",
+      "material_59": "textures/D30_Smiguel_2003_7843.png",
+      "material_6": "textures/pared_barro_afinado.png",
+      "material_60": "textures/D30_Smiguel_2003_7785.png",
+      "material_61": "textures/D30_Smiguel_2003_7758.png",
+      "material_62": "textures/D30_Smiguel_2003_7843.png",
+      "material_63": "textures/D30_Smiguel_2003_7833.png",
+      "material_64": "textures/D30_Smiguel_2003_7768.png",
+      "material_65": "textures/D30_Smiguel_2003_7833.png",
+      "material_66": "textures/D30_Smiguel_2003_7833.png",
+      "material_67": "textures/D30_Smiguel_2003_7833.png",
+      "material_68": "textures/madera_marcos.png",
+      "material_69": "textures/postes_barandal_color.png",
+      "material_7": "textures/techo.png",
+      "material_70": "textures/piso_patio_exterior2.png",
+      "material_72": "textures/rust_a1.png",
+      "material_73": "textures/rust_detalle.png",
+      "material_74": "textures/madera_barandal_esc_2.png",
+      "material_75": "textures/pared_calle.png",
+      "material_76": "textures/fierro_b.png",
+      "material_77": "textures/fierro_b.png",
+      "material_8": "textures/concreto_02.png",
+      "material_80": "textures/candil_madera.png",
+      "material_81": "textures/metal_viejo_2.png",
+      "material_84": "textures/detmoldura_06_color.png",
+      "material_85": "textures/detmoldura_05_color.png",
+      "material_86": "textures/detmoldura_04_color.png",
+      "material_87": "textures/detmoldura_03_color.png",
+      "material_88": "textures/detmoldura_02_color.png",
+      "material_89": "textures/detmoldura_01_color.png",
+      "material_9": "textures/moldura_volado.png",
+      "material_90": "textures/escurridera_color.png",
+      "material_91": "textures/rust_a1.png",
+      "material_92": "textures/sm_leaf_seca_03b.png",
+      "material_93": "textures/sm_leaf_seca_02b.png",
+      "material_94": "textures/sm_hoja_c_seca.png",
+      "material_95": "textures/marco_puerta_1.png",
+      "material_96": "textures/madera_barandal_esc_2.png",
+      "material_97": "textures/mold_arco_01_color.png",
+      "material_98": "textures/molduraterraza__color.png",
+      "materiald": "textures/puerta.png",
+      "materiale": "textures/Barro_2.png",
+      "materiali": "textures/columna_b_color.png",
+      "materialp": "textures/fuente_piedra_02.png",
+      "materialq": "textures/fuente_azulejo.png",
+      "materials": "textures/sm_tronco.png",
+      "materialt": "textures/sm_leaf_02a.png",
+      "materialu": "textures/sm_leaf_02b.png",
+      "materialv": "textures/sm_leaf_03a.png",
+      "materialw": "textures/bark06mi.png",
+      "materialx": "textures/l33-upper.png",
+      "materialy": "textures/l37-upper.png",
+      "materialz": "textures/l04-upper.png"
+    }
+  },
+  "exportedMaterials": {
+    "materialCount": 287,
+    "alphaMaskMaterials": [
+      "material_131",
+      "material_133",
+      "material_134",
+      "material_135",
+      "material_136",
+      "material_138",
+      "material_142",
+      "material_143",
+      "material_144",
+      "material_145",
+      "material_149",
+      "material_150",
+      "material_151",
+      "material_152",
+      "material_155",
+      "material_156",
+      "material_158",
+      "material_159",
+      "material_160",
+      "material_161",
+      "material_163",
+      "material_165",
+      "material_166",
+      "material_167",
+      "material_168",
+      "material_169",
+      "material_170",
+      "material_171",
+      "material_173",
+      "material_174",
+      "material_175",
+      "material_176",
+      "material_177",
+      "material_178",
+      "material_179",
+      "material_182",
+      "material_183",
+      "material_184",
+      "material_185",
+      "material_187",
+      "material_188",
+      "material_189",
+      "material_191",
+      "material_192",
+      "material_194",
+      "material_195",
+      "material_197",
+      "material_198",
+      "material_199",
+      "material_201",
+      "material_202",
+      "material_207",
+      "material_212",
+      "material_215",
+      "material_216",
+      "material_217",
+      "material_220",
+      "material_221",
+      "material_222",
+      "material_224",
+      "material_226",
+      "material_228",
+      "material_229",
+      "material_230",
+      "material_231",
+      "material_232",
+      "material_233",
+      "material_234",
+      "material_236",
+      "material_238",
+      "material_242",
+      "material_244",
+      "material_245",
+      "material_249",
+      "material_250",
+      "material_251",
+      "material_252",
+      "material_253",
+      "material_255",
+      "material_257",
+      "material_258",
+      "material_261",
+      "material_262",
+      "material_263",
+      "material_264",
+      "material_266",
+      "material_92",
+      "material_93",
+      "material_94",
+      "materialt",
+      "materialu",
+      "materialv",
+      "materialx",
+      "materialy",
+      "materialz"
+    ],
+    "alphaBlendMaterials": [],
+    "transmissionMaterials": [],
+    "normalTextureMaterials": [
+      "material_039",
+      "material_1",
+      "material_11",
+      "material_123",
+      "material_124",
+      "material_125",
+      "material_126",
+      "material_127",
+      "material_128",
+      "material_129",
+      "material_130",
+      "material_14",
+      "material_18",
+      "material_181",
+      "material_182",
+      "material_268",
+      "material_269",
+      "material_270",
+      "material_271",
+      "material_273",
+      "material_276",
+      "material_277",
+      "material_278",
+      "material_279",
+      "material_280",
+      "material_39",
+      "material_4",
+      "material_40",
+      "material_46",
+      "material_48",
+      "material_5",
+      "material_51",
+      "material_69",
+      "material_73",
+      "material_81",
+      "material_84",
+      "material_85",
+      "material_86",
+      "material_87",
+      "material_88",
+      "material_89",
+      "material_90",
+      "material_95",
+      "material_96",
+      "material_97",
+      "material_98",
+      "materiald",
+      "materiali",
+      "materials",
+      "materialt",
+      "materialu",
+      "materialv",
+      "materialw",
+      "materialx",
+      "materialy",
+      "materialz"
+    ],
+    "baseColorTextures": {
+      "material_032": "textures/individual_b.png",
+      "material_033": "textures/cenicero.png",
+      "material_034": "textures/ceramic_tile.png",
+      "material_1": "textures/jardinera_1_color.png",
+      "material_10": "textures/losa.png",
+      "material_11": "textures/moldura2piso_color.png",
+      "material_123": "textures/Forja_Macetas.png",
+      "material_124": "textures/Maceta_A_Color.png",
+      "material_125": "textures/Maceta_A2_Color.png",
+      "material_126": "textures/Maceta_B_Color.png",
+      "material_127": "textures/Maceta_B2_Color.png",
+      "material_128": "textures/Maceta_C_Color.png",
+      "material_129": "textures/Maceta_C2_Color.png",
+      "material_130": "textures/Maceta_D2_Color_0.png",
+      "material_131": "textures/dracaena_fragrans_leaf.png",
+      "material_132": "textures/BS01brk.png",
+      "material_133": "textures/BS01lef.png",
+      "material_134": "textures/BS01flo1.png",
+      "material_135": "textures/BS01flo2.png",
+      "material_136": "textures/aglaonema_leaf.png",
+      "material_137": "textures/aglaonema_bark.png",
+      "material_138": "textures/FL13pet2.png",
+      "material_14": "textures/piso_rustico.png",
+      "material_141": "textures/FL16stm.png",
+      "material_142": "textures/FL16lef1.png",
+      "material_143": "textures/FL16pet1.png",
+      "material_144": "textures/FL16lef3.png",
+      "material_145": "textures/TR14lef1.png",
+      "material_146": "textures/ampelopsis_brevipedunculata_bark.png",
+      "material_147": "textures/HP19stm1.png",
+      "material_148": "textures/HP19stm2.png",
+      "material_149": "textures/HP19lef2.png",
+      "material_15": "textures/madera_triplay_01.png",
+      "material_150": "textures/HP19lef3.png",
+      "material_151": "textures/HP19lef2.png",
+      "material_152": "textures/FL15lef1.png",
+      "material_153": "textures/FL15cnt2.png",
+      "material_154": "textures/FL15stm.png",
+      "material_155": "textures/FL15pet2.png",
+      "material_156": "textures/FL15lef2.png",
+      "material_157": "textures/FL15cnt1.png",
+      "material_158": "textures/FL15lef1.png",
+      "material_159": "textures/FL15lef2.png",
+      "material_16": "textures/rust_a1.png",
+      "material_160": "textures/FL15pet2.png",
+      "material_161": "textures/HP07lef1.png",
+      "material_162": "textures/HP07stm1.png",
+      "material_163": "textures/HP07lef2.png",
+      "material_164": "textures/HP07stm2.png",
+      "material_165": "textures/FL11pet1.png",
+      "material_166": "textures/FL11pet2.png",
+      "material_167": "textures/FL11sta.png",
+      "material_168": "textures/FL11pet3.png",
+      "material_169": "textures/FL11pet4.png",
+      "material_17": "textures/muros_a.png",
+      "material_170": "textures/FL11lef1.png",
+      "material_171": "textures/FL11lef2.png",
+      "material_172": "textures/FL11stm.png",
+      "material_173": "textures/FL11pet1.png",
+      "material_174": "textures/FL11pet2.png",
+      "material_175": "textures/FL11pet3.png",
+      "material_176": "textures/FL11pet4.png",
+      "material_177": "textures/FL11lef1.png",
+      "material_178": "textures/HP17lef1.png",
+      "material_179": "textures/HP17lef2.png",
+      "material_18": "textures/muros_b1.png",
+      "material_180": "textures/HP17stm.png",
+      "material_181": "textures/HP11stm.png",
+      "material_182": "textures/HP11lef2.png",
+      "material_183": "textures/FL13pet1.png",
+      "material_184": "textures/FL13pet2.png",
+      "material_185": "textures/FL13pet3.png",
+      "material_186": "textures/FL13stm.png",
+      "material_187": "textures/FL13lef5.png",
+      "material_188": "textures/FL13lef4.png",
+      "material_189": "textures/FL13lef1.png",
+      "material_19": "textures/muros_c2.png",
+      "material_190": "textures/elaeagnus_umbellate_bark.png",
+      "material_191": "textures/impatiens_newguinea_hybrids_petal.png",
+      "material_192": "textures/citrus_limon_leaf.png",
+      "material_193": "textures/HP13stm2.png",
+      "material_194": "textures/FL13lef1.png",
+      "material_195": "textures/HP13lef2.png",
+      "material_196": "textures/HP13stm2.png",
+      "material_197": "textures/HP13lef3.png",
+      "material_198": "textures/BS04lef.png",
+      "material_199": "textures/BS04flo.png",
+      "material_2": "textures/cantera_naranja_liso.png",
+      "material_20": "textures/muros_f.png",
+      "material_200": "textures/BS04brk.png",
+      "material_201": "textures/FL12lef1.png",
+      "material_202": "textures/FL12pet2.png",
+      "material_203": "textures/FL12pis1.png",
+      "material_204": "textures/FL12sta1.png",
+      "material_205": "textures/FL12stm.png",
+      "material_206": "textures/FL12pis1.png",
+      "material_207": "textures/FL12pet1.png",
+      "material_208": "textures/FL12stm.png",
+      "material_209": "textures/HP01stm1.png",
+      "material_21": "textures/muros_e.png",
+      "material_210": "textures/HP01stm2.png",
+      "material_211": "textures/HP01stm1.png",
+      "material_212": "textures/FL16pet1.png",
+      "material_213": "textures/HP01stm1.png",
+      "material_214": "textures/HP01stm2.png",
+      "material_215": "textures/FL17lef6.png",
+      "material_216": "textures/HP01lef2.png",
+      "material_217": "textures/HP01lef1.png",
+      "material_218": "textures/HP01pet3.png",
+      "material_22": "textures/muros_d.png",
+      "material_220": "textures/FL04lef1.png",
+      "material_221": "textures/FL04lef2.png",
+      "material_222": "textures/FL04pet1.png",
+      "material_223": "textures/FL04cnt2.png",
+      "material_224": "textures/FL04cnt1.png",
+      "material_225": "textures/FL04stm.png",
+      "material_226": "textures/TR02lef5.png",
+      "material_227": "textures/quercus_rubra_bark.png",
+      "material_228": "textures/FL19pe13.png",
+      "material_229": "textures/FL19pe16.png",
+      "material_23": "textures/muros_g.png",
+      "material_230": "textures/FL19pe14.png",
+      "material_231": "textures/FL19pe15.png",
+      "material_232": "textures/FL19lef4.png",
+      "material_233": "textures/FL19lef2.png",
+      "material_234": "textures/FL19lef3.png",
+      "material_235": "textures/FL19stm.png",
+      "material_236": "textures/HP04lef2.png",
+      "material_237": "textures/zebrina_pendula_bark.png",
+      "material_238": "textures/BL05lef2.png",
+      "material_239": "textures/hypoestes_phyllostachya_bark.png",
+      "material_24": "textures/muros_h.png",
+      "material_240": "textures/FL29cnt1.png",
+      "material_241": "textures/FL29cnt2.png",
+      "material_242": "textures/FL29lef.png",
+      "material_243": "textures/FL29twg.png",
+      "material_244": "textures/FL29pet1.png",
+      "material_245": "textures/FL29pet2.png",
+      "material_246": "textures/FL29stm1.png",
+      "material_247": "textures/FL29twg.png",
+      "material_248": "textures/FL29stm2.png",
+      "material_249": "textures/FL29lef.png",
+      "material_25": "textures/muros_l.png",
+      "material_250": "textures/FL29pet2.png",
+      "material_251": "textures/FL17lef1.png",
+      "material_252": "textures/FL17lef2.png",
+      "material_253": "textures/FL17pet5.png",
+      "material_254": "textures/FL17stm.png",
+      "material_255": "textures/FL17lef6.png",
+      "material_256": "textures/FL17cnt.png",
+      "material_257": "textures/FL17lef3.png",
+      "material_258": "textures/FL17pet1.png",
+      "material_259": "textures/FL17stm.png",
+      "material_26": "textures/muros_j.png",
+      "material_260": "textures/FL17cnt.png",
+      "material_261": "textures/FL17lef5.png",
+      "material_262": "textures/FL17lef2.png",
+      "material_263": "textures/FL17pet2.png",
+      "material_264": "textures/FL03lef1.png",
+      "material_265": "textures/fittonia_verschaffeltii_bark.png",
+      "material_266": "textures/EU15lef.png",
+      "material_268": "textures/Fierro_A.png",
+      "material_269": "textures/silla_d_piel.png",
+      "material_27": "textures/muros_l.png",
+      "material_270": "textures/WOOD08.png",
+      "material_271": "textures/WOOD08.png",
+      "material_272": "textures/tapa_talabera.png",
+      "material_273": "textures/WOOD08.png",
+      "material_274": "textures/tela_mesa_d.png",
+      "material_275": "textures/tela_mesa_b.png",
+      "material_276": "textures/WOOD08.png",
+      "material_277": "textures/Finishes.Flooring.Carpet.Loop.5.png",
+      "material_278": "textures/BWK_1024.png",
+      "material_279": "textures/tela_blanca.png",
+      "material_28": "textures/muros_m.png",
+      "material_280": "textures/Fierro_A.png",
+      "material_281": "textures/wood.3.Bubinga.png",
+      "material_282": "textures/tela_silla_b.png",
+      "material_284": "textures/Vigas_B.png",
+      "material_285": "textures/BWK_1024.png",
+      "material_286": "textures/tela_silla_b.png",
+      "material_287": "textures/plato_a.png",
+      "material_29": "textures/muros_n.png",
+      "material_3": "textures/moldura_volado.png",
+      "material_30": "textures/muros_b.png",
+      "material_31": "textures/muros_p_.png",
+      "material_32": "textures/muros_q3.png",
+      "material_33": "textures/muros_q.png",
+      "material_34": "textures/muros_q4.png",
+      "material_35": "textures/techo.png",
+      "material_36": "textures/052terresable.png",
+      "material_37": "textures/muros_q_patio2.png",
+      "material_39": "textures/arcos_lisos_2_color.png",
+      "material_4": "textures/moldura_techo.png",
+      "material_40": "textures/arcos_lisos_3_color_1.png",
+      "material_41": "textures/muros_b2.png",
+      "material_42": "textures/madera_rustica_2.png",
+      "material_43": "textures/madera_rustica_2.png",
+      "material_44": "textures/muros_k.png",
+      "material_45": "textures/concreto_01.png",
+      "material_46": "textures/Vigas_A2.png",
+      "material_47": "textures/techo_01.png",
+      "material_48": "textures/piso_patio_exterior.png",
+      "material_49": "textures/fuente_piedra_01.png",
+      "material_5": "textures/escalera_color.png",
+      "material_51": "textures/arco_frente.png",
+      "material_53": "textures/D30_Smiguel_2003_7785.png",
+      "material_54": "textures/0001_carros.png",
+      "material_55": "textures/D30_Smiguel_2003_7815.png",
+      "material_56": "textures/D30_Smiguel_2003_7812.png",
+      "material_57": "textures/027_Cola_Caballo_06-30-1997.png",
+      "material_58": "textures/D30_Smiguel_2003_7812.png",
+      "material_59": "textures/D30_Smiguel_2003_7843.png",
+      "material_6": "textures/pared_barro_afinado.png",
+      "material_60": "textures/D30_Smiguel_2003_7785.png",
+      "material_61": "textures/D30_Smiguel_2003_7758.png",
+      "material_62": "textures/D30_Smiguel_2003_7843.png",
+      "material_63": "textures/D30_Smiguel_2003_7833.png",
+      "material_64": "textures/D30_Smiguel_2003_7768.png",
+      "material_65": "textures/D30_Smiguel_2003_7833.png",
+      "material_66": "textures/D30_Smiguel_2003_7833.png",
+      "material_67": "textures/D30_Smiguel_2003_7833.png",
+      "material_68": "textures/madera_marcos.png",
+      "material_69": "textures/postes_barandal_color.png",
+      "material_7": "textures/techo.png",
+      "material_70": "textures/piso_patio_exterior2.png",
+      "material_72": "textures/rust_a1.png",
+      "material_73": "textures/rust_detalle.png",
+      "material_74": "textures/madera_barandal_esc_2.png",
+      "material_75": "textures/pared_calle.png",
+      "material_76": "textures/fierro_b.png",
+      "material_77": "textures/fierro_b.png",
+      "material_8": "textures/concreto_02.png",
+      "material_80": "textures/candil_madera.png",
+      "material_81": "textures/metal_viejo_2.png",
+      "material_84": "textures/detmoldura_06_color.png",
+      "material_85": "textures/detmoldura_05_color.png",
+      "material_86": "textures/detmoldura_04_color.png",
+      "material_87": "textures/detmoldura_03_color.png",
+      "material_88": "textures/detmoldura_02_color.png",
+      "material_89": "textures/detmoldura_01_color.png",
+      "material_9": "textures/moldura_volado.png",
+      "material_90": "textures/escurridera_color.png",
+      "material_91": "textures/rust_a1.png",
+      "material_92": "textures/sm_leaf_seca_03b.png",
+      "material_93": "textures/sm_leaf_seca_02b.png",
+      "material_94": "textures/sm_hoja_c_seca.png",
+      "material_95": "textures/marco_puerta_1.png",
+      "material_96": "textures/madera_barandal_esc_2.png",
+      "material_97": "textures/mold_arco_01_color.png",
+      "material_98": "textures/molduraterraza__color.png",
+      "materiald": "textures/puerta.png",
+      "materiale": "textures/Barro_2.png",
+      "materiali": "textures/columna_b_color.png",
+      "materialp": "textures/fuente_piedra_02.png",
+      "materialq": "textures/fuente_azulejo.png",
+      "materials": "textures/sm_tronco.png",
+      "materialt": "textures/sm_leaf_02a.png",
+      "materialu": "textures/sm_leaf_02b.png",
+      "materialv": "textures/sm_leaf_03a.png",
+      "materialw": "textures/bark06mi.png",
+      "materialx": "textures/l33-upper.png",
+      "materialy": "textures/l37-upper.png",
+      "materialz": "textures/l04-upper.png"
+    }
+  },
+  "localizedImages": [
+    "textures/0001_carros.png",
+    "textures/027_Cola_Caballo_06-30-1997.png",
+    "textures/052terresable.png",
+    "textures/aglaonema_bark.png",
+    "textures/aglaonema_leaf.png",
+    "textures/ampelopsis_brevipedunculata_bark.png",
+    "textures/arco_frente.png",
+    "textures/arcos_lisos_2_color.png",
+    "textures/arcos_lisos_3_color_1.png",
+    "textures/bark06mi.png",
+    "textures/Barro_2.png",
+    "textures/BL05lef2.png",
+    "textures/BS01brk.png",
+    "textures/BS01flo1.png",
+    "textures/BS01flo2.png",
+    "textures/BS01lef.png",
+    "textures/BS04brk.png",
+    "textures/BS04flo.png",
+    "textures/BS04lef.png",
+    "textures/BWK_1024.png",
+    "textures/bwk_1024_Spec2.png",
+    "textures/candil_madera.png",
+    "textures/cantera_naranja_liso.png",
+    "textures/cenicero.png",
+    "textures/ceramic_tile.png",
+    "textures/citrus_limon_leaf.png",
+    "textures/columna_b_color.png",
+    "textures/concreto_01.png",
+    "textures/concreto_02.png",
+    "textures/D30_Smiguel_2003_7758.png",
+    "textures/D30_Smiguel_2003_7768.png",
+    "textures/D30_Smiguel_2003_7785.png",
+    "textures/D30_Smiguel_2003_7812.png",
+    "textures/D30_Smiguel_2003_7815.png",
+    "textures/D30_Smiguel_2003_7833.png",
+    "textures/D30_Smiguel_2003_7843.png",
+    "textures/detmoldura_01_color.png",
+    "textures/detmoldura_02_color.png",
+    "textures/detmoldura_03_color.png",
+    "textures/detmoldura_04_color.png",
+    "textures/detmoldura_05_color.png",
+    "textures/detmoldura_06_color.png",
+    "textures/dracaena_fragrans_leaf.png",
+    "textures/elaeagnus_umbellate_bark.png",
+    "textures/escalera_color.png",
+    "textures/escurridera_color.png",
+    "textures/EU15lef.png",
+    "textures/Fierro_A.png",
+    "textures/Fierro_A_Bump.png",
+    "textures/fierro_b.png",
+    "textures/Finishes.Flooring.Carpet.Loop.5.png",
+    "textures/fittonia_verschaffeltii_bark.png",
+    "textures/FL03lef1.png",
+    "textures/FL04cnt1.png",
+    "textures/FL04cnt2.png",
+    "textures/FL04lef1.png",
+    "textures/FL04lef2.png",
+    "textures/FL04pet1.png",
+    "textures/FL04stm.png",
+    "textures/FL11lef1.png",
+    "textures/FL11lef2.png",
+    "textures/FL11pet1.png",
+    "textures/FL11pet2.png",
+    "textures/FL11pet3.png",
+    "textures/FL11pet4.png",
+    "textures/FL11sta.png",
+    "textures/FL11stm.png",
+    "textures/FL12lef1.png",
+    "textures/FL12pet1.png",
+    "textures/FL12pet2.png",
+    "textures/FL12pis1.png",
+    "textures/FL12sta1.png",
+    "textures/FL12stm.png",
+    "textures/FL13lef1.png",
+    "textures/FL13lef4.png",
+    "textures/FL13lef5.png",
+    "textures/FL13pet1.png",
+    "textures/FL13pet2.png",
+    "textures/FL13pet3.png",
+    "textures/FL13stm.png",
+    "textures/FL15cnt1.png",
+    "textures/FL15cnt2.png",
+    "textures/FL15lef1.png",
+    "textures/FL15lef2.png",
+    "textures/FL15pet2.png",
+    "textures/FL15stm.png",
+    "textures/FL16lef1.png",
+    "textures/FL16lef3.png",
+    "textures/FL16pet1.png",
+    "textures/FL16stm.png",
+    "textures/FL17cnt.png",
+    "textures/FL17lef1.png",
+    "textures/FL17lef2.png",
+    "textures/FL17lef3.png",
+    "textures/FL17lef5.png",
+    "textures/FL17lef6.png",
+    "textures/FL17pet1.png",
+    "textures/FL17pet2.png",
+    "textures/FL17pet5.png",
+    "textures/FL17stm.png",
+    "textures/FL19lef2.png",
+    "textures/FL19lef3.png",
+    "textures/FL19lef4.png",
+    "textures/FL19pe13.png",
+    "textures/FL19pe14.png",
+    "textures/FL19pe15.png",
+    "textures/FL19pe16.png",
+    "textures/FL19stm.png",
+    "textures/FL29cnt1.png",
+    "textures/FL29cnt2.png",
+    "textures/FL29lef.png",
+    "textures/FL29pet1.png",
+    "textures/FL29pet2.png",
+    "textures/FL29stm1.png",
+    "textures/FL29stm2.png",
+    "textures/FL29twg.png",
+    "textures/Forja_Macetas.png",
+    "textures/fuente_azulejo.png",
+    "textures/fuente_piedra_01.png",
+    "textures/fuente_piedra_02.png",
+    "textures/HP01lef1.png",
+    "textures/HP01lef2.png",
+    "textures/HP01pet3.png",
+    "textures/HP01stm1.png",
+    "textures/HP01stm2.png",
+    "textures/HP04lef2.png",
+    "textures/HP07lef1.png",
+    "textures/HP07lef2.png",
+    "textures/HP07stm1.png",
+    "textures/HP07stm2.png",
+    "textures/HP11lef2.png",
+    "textures/HP11stm.png",
+    "textures/HP13lef2.png",
+    "textures/HP13lef3.png",
+    "textures/HP13stm2.png",
+    "textures/HP17lef1.png",
+    "textures/HP17lef2.png",
+    "textures/HP17stm.png",
+    "textures/HP19lef2.png",
+    "textures/HP19lef3.png",
+    "textures/HP19stm1.png",
+    "textures/HP19stm2.png",
+    "textures/hypoestes_phyllostachya_bark.png",
+    "textures/impatiens_newguinea_hybrids_petal.png",
+    "textures/individual_b.png",
+    "textures/jardinera_1_color.png",
+    "textures/l04-upper.png",
+    "textures/l33-upper.png",
+    "textures/l37-upper.png",
+    "textures/losa.png",
+    "textures/Maceta_A2_Color.png",
+    "textures/Maceta_A_Color.png",
+    "textures/Maceta_B2_Color.png",
+    "textures/Maceta_B_Color.png",
+    "textures/Maceta_C2_Color.png",
+    "textures/Maceta_C_Color.png",
+    "textures/Maceta_D2_Color_0.png",
+    "textures/madera_barandal_esc_2.png",
+    "textures/madera_marcos.png",
+    "textures/madera_rustica_2.png",
+    "textures/madera_triplay_01.png",
+    "textures/marco_puerta_1.png",
+    "textures/metal_viejo_2.png",
+    "textures/mold_arco_01_color.png",
+    "textures/moldura2piso_color.png",
+    "textures/moldura_techo.png",
+    "textures/moldura_volado.png",
+    "textures/molduraterraza__color.png",
+    "textures/muros_a.png",
+    "textures/muros_b.png",
+    "textures/muros_b1.png",
+    "textures/muros_b2.png",
+    "textures/muros_c2.png",
+    "textures/muros_d.png",
+    "textures/muros_e.png",
+    "textures/muros_f.png",
+    "textures/muros_g.png",
+    "textures/muros_h.png",
+    "textures/muros_j.png",
+    "textures/muros_k.png",
+    "textures/muros_l.png",
+    "textures/muros_m.png",
+    "textures/muros_n.png",
+    "textures/muros_p_.png",
+    "textures/muros_q.png",
+    "textures/muros_q3.png",
+    "textures/muros_q4.png",
+    "textures/muros_q_patio2.png",
+    "textures/N_arco_frente_displace_inv.png",
+    "textures/N_arcos_lisos_2_bump.png",
+    "textures/N_arcos_lisos_3_bump_1.png",
+    "textures/N_bark06mi.png",
+    "textures/N_bwk_1024_Bump.png",
+    "textures/N_columna_b_displacement_3_inv.png",
+    "textures/N_detmoldura_01_bump.png",
+    "textures/N_detmoldura_02_bump.png",
+    "textures/N_detmoldura_03_bump.png",
+    "textures/N_detmoldura_04_bump.png",
+    "textures/N_detmoldura_05_bump.png",
+    "textures/N_detmoldura_06_bump.png",
+    "textures/N_escalera_bump.png",
+    "textures/N_escurridera_bump.png",
+    "textures/N_Fierro_A_Bump.png",
+    "textures/N_Finishes.Flooring.Carpet.Loop.5.png",
+    "textures/N_Forja_Macetas_bump.png",
+    "textures/N_HP11stm.png",
+    "textures/N_hp13lef1_bump.png",
+    "textures/N_jardinera_1_displacement_2.png",
+    "textures/N_l04-upper.png",
+    "textures/N_l33-upper.png",
+    "textures/N_l37-upper.png",
+    "textures/N_Maceta_A_Bump.png",
+    "textures/N_Maceta_B_Bump.png",
+    "textures/N_Maceta_C_Bump.png",
+    "textures/N_Maceta_D_Bump_0.png",
+    "textures/N_madera_barandal_esc_2_bump.png",
+    "textures/N_marco_puerta_1_bump.png",
+    "textures/N_metal_viejo_2.png",
+    "textures/N_mold_arco_01_bump.png",
+    "textures/N_moldura2piso_bump.png",
+    "textures/N_moldura_techo_bump.png",
+    "textures/N_molduraterraza_bump.png",
+    "textures/N_muros_b1.png",
+    "textures/N_piso_patio_exterior_displace_inv.png",
+    "textures/N_piso_rustico_displace2.png",
+    "textures/N_PITTED.png",
+    "textures/N_postes_barandal_bump.png",
+    "textures/N_puerta_bump.png",
+    "textures/N_rust_detalle_bump.png",
+    "textures/N_silla_d_piel_bump.png",
+    "textures/N_sm_leaf_02_bump.png",
+    "textures/N_sm_tronco_bump.png",
+    "textures/N_tela_blanca.png",
+    "textures/N_vigas_a2_bump.png",
+    "textures/N_WOOD08_Bump.png",
+    "textures/pared_barro_afinado.png",
+    "textures/pared_calle.png",
+    "textures/piso_patio_exterior.png",
+    "textures/piso_patio_exterior2.png",
+    "textures/piso_rustico.png",
+    "textures/piso_rustico_Spec.png",
+    "textures/plato_a.png",
+    "textures/postes_barandal_color.png",
+    "textures/puerta.png",
+    "textures/quercus_rubra_bark.png",
+    "textures/rust_a1.png",
+    "textures/rust_detalle.png",
+    "textures/silla_d_piel.png",
+    "textures/sm_hoja_c_seca.png",
+    "textures/sm_leaf_02a.png",
+    "textures/sm_leaf_02b.png",
+    "textures/sm_leaf_03a.png",
+    "textures/sm_leaf_seca_02b.png",
+    "textures/sm_leaf_seca_03b.png",
+    "textures/sm_tronco.png",
+    "textures/tapa_talabera.png",
+    "textures/techo.png",
+    "textures/techo_01.png",
+    "textures/tela_blanca.png",
+    "textures/tela_mesa_b.png",
+    "textures/tela_mesa_d.png",
+    "textures/tela_silla_b.png",
+    "textures/TR02lef5.png",
+    "textures/TR14lef1.png",
+    "textures/Vigas_A2.png",
+    "textures/Vigas_B.png",
+    "textures/wood.3.Bubinga.png",
+    "textures/WOOD08.png",
+    "textures/zebrina_pendula_bark.png"
+  ],
+  "importedImages": [
+    {
+      "name": "0001_carros.png",
+      "source": "FILE",
+      "path": "textures/0001_carros.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "027_Cola_Caballo_06-30-1997.png",
+      "source": "FILE",
+      "path": "textures/027_Cola_Caballo_06-30-1997.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "052terresable.png",
+      "source": "FILE",
+      "path": "textures/052terresable.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "aglaonema_bark.png",
+      "source": "FILE",
+      "path": "textures/aglaonema_bark.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "aglaonema_leaf.png",
+      "source": "FILE",
+      "path": "textures/aglaonema_leaf.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "ampelopsis_brevipedunculata_bark.png",
+      "source": "FILE",
+      "path": "textures/ampelopsis_brevipedunculata_bark.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "arco_frente.png",
+      "source": "FILE",
+      "path": "textures/arco_frente.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "arcos_lisos_2_color.png",
+      "source": "FILE",
+      "path": "textures/arcos_lisos_2_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "arcos_lisos_3_color_1.png",
+      "source": "FILE",
+      "path": "textures/arcos_lisos_3_color_1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "bark06mi.png",
+      "source": "FILE",
+      "path": "textures/bark06mi.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Barro_2.png",
+      "source": "FILE",
+      "path": "textures/Barro_2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "BL05lef2.png",
+      "source": "FILE",
+      "path": "textures/BL05lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "BS01brk.png",
+      "source": "FILE",
+      "path": "textures/BS01brk.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "BS01flo1.png",
+      "source": "FILE",
+      "path": "textures/BS01flo1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "BS01flo2.png",
+      "source": "FILE",
+      "path": "textures/BS01flo2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "BS01lef.png",
+      "source": "FILE",
+      "path": "textures/BS01lef.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "BS04brk.png",
+      "source": "FILE",
+      "path": "textures/BS04brk.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "BS04flo.png",
+      "source": "FILE",
+      "path": "textures/BS04flo.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "BS04lef.png",
+      "source": "FILE",
+      "path": "textures/BS04lef.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "BWK_1024.png",
+      "source": "FILE",
+      "path": "textures/BWK_1024.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "bwk_1024_Spec2.png",
+      "source": "FILE",
+      "path": "textures/bwk_1024_Spec2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "candil_madera.png",
+      "source": "FILE",
+      "path": "textures/candil_madera.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "cantera_naranja_liso.png",
+      "source": "FILE",
+      "path": "textures/cantera_naranja_liso.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "cenicero.png",
+      "source": "FILE",
+      "path": "textures/cenicero.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "ceramic_tile.png",
+      "source": "FILE",
+      "path": "textures/ceramic_tile.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "citrus_limon_leaf.png",
+      "source": "FILE",
+      "path": "textures/citrus_limon_leaf.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "columna_b_color.png",
+      "source": "FILE",
+      "path": "textures/columna_b_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "concreto_01.png",
+      "source": "FILE",
+      "path": "textures/concreto_01.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "concreto_02.png",
+      "source": "FILE",
+      "path": "textures/concreto_02.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "D30_Smiguel_2003_7758.png",
+      "source": "FILE",
+      "path": "textures/D30_Smiguel_2003_7758.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "D30_Smiguel_2003_7768.png",
+      "source": "FILE",
+      "path": "textures/D30_Smiguel_2003_7768.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "D30_Smiguel_2003_7785.png",
+      "source": "FILE",
+      "path": "textures/D30_Smiguel_2003_7785.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "D30_Smiguel_2003_7812.png",
+      "source": "FILE",
+      "path": "textures/D30_Smiguel_2003_7812.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "D30_Smiguel_2003_7815.png",
+      "source": "FILE",
+      "path": "textures/D30_Smiguel_2003_7815.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "D30_Smiguel_2003_7833.png",
+      "source": "FILE",
+      "path": "textures/D30_Smiguel_2003_7833.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "D30_Smiguel_2003_7843.png",
+      "source": "FILE",
+      "path": "textures/D30_Smiguel_2003_7843.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "detmoldura_01_color.png",
+      "source": "FILE",
+      "path": "textures/detmoldura_01_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "detmoldura_02_color.png",
+      "source": "FILE",
+      "path": "textures/detmoldura_02_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "detmoldura_03_color.png",
+      "source": "FILE",
+      "path": "textures/detmoldura_03_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "detmoldura_04_color.png",
+      "source": "FILE",
+      "path": "textures/detmoldura_04_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "detmoldura_05_color.png",
+      "source": "FILE",
+      "path": "textures/detmoldura_05_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "detmoldura_06_color.png",
+      "source": "FILE",
+      "path": "textures/detmoldura_06_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "dracaena_fragrans_leaf.png",
+      "source": "FILE",
+      "path": "textures/dracaena_fragrans_leaf.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "elaeagnus_umbellate_bark.png",
+      "source": "FILE",
+      "path": "textures/elaeagnus_umbellate_bark.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "escalera_color.png",
+      "source": "FILE",
+      "path": "textures/escalera_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "escurridera_color.png",
+      "source": "FILE",
+      "path": "textures/escurridera_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "EU15lef.png",
+      "source": "FILE",
+      "path": "textures/EU15lef.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Fierro_A.png",
+      "source": "FILE",
+      "path": "textures/Fierro_A.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Fierro_A_Bump.png",
+      "source": "FILE",
+      "path": "textures/Fierro_A_Bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "fierro_b.png",
+      "source": "FILE",
+      "path": "textures/fierro_b.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Finishes.Flooring.Carpet.Loop.5.png",
+      "source": "FILE",
+      "path": "textures/Finishes.Flooring.Carpet.Loop.5.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "fittonia_verschaffeltii_bark.png",
+      "source": "FILE",
+      "path": "textures/fittonia_verschaffeltii_bark.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL03lef1.png",
+      "source": "FILE",
+      "path": "textures/FL03lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL04cnt1.png",
+      "source": "FILE",
+      "path": "textures/FL04cnt1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL04cnt2.png",
+      "source": "FILE",
+      "path": "textures/FL04cnt2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL04lef1.png",
+      "source": "FILE",
+      "path": "textures/FL04lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL04lef2.png",
+      "source": "FILE",
+      "path": "textures/FL04lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL04pet1.png",
+      "source": "FILE",
+      "path": "textures/FL04pet1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL04stm.png",
+      "source": "FILE",
+      "path": "textures/FL04stm.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL11lef1.png",
+      "source": "FILE",
+      "path": "textures/FL11lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL11lef2.png",
+      "source": "FILE",
+      "path": "textures/FL11lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL11pet1.png",
+      "source": "FILE",
+      "path": "textures/FL11pet1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL11pet2.png",
+      "source": "FILE",
+      "path": "textures/FL11pet2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL11pet3.png",
+      "source": "FILE",
+      "path": "textures/FL11pet3.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL11pet4.png",
+      "source": "FILE",
+      "path": "textures/FL11pet4.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL11sta.png",
+      "source": "FILE",
+      "path": "textures/FL11sta.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL11stm.png",
+      "source": "FILE",
+      "path": "textures/FL11stm.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL12lef1.png",
+      "source": "FILE",
+      "path": "textures/FL12lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL12pet1.png",
+      "source": "FILE",
+      "path": "textures/FL12pet1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL12pet2.png",
+      "source": "FILE",
+      "path": "textures/FL12pet2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL12pis1.png",
+      "source": "FILE",
+      "path": "textures/FL12pis1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL12sta1.png",
+      "source": "FILE",
+      "path": "textures/FL12sta1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL12stm.png",
+      "source": "FILE",
+      "path": "textures/FL12stm.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL13lef1.png",
+      "source": "FILE",
+      "path": "textures/FL13lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL13lef4.png",
+      "source": "FILE",
+      "path": "textures/FL13lef4.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL13lef5.png",
+      "source": "FILE",
+      "path": "textures/FL13lef5.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL13pet1.png",
+      "source": "FILE",
+      "path": "textures/FL13pet1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL13pet2.png",
+      "source": "FILE",
+      "path": "textures/FL13pet2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL13pet3.png",
+      "source": "FILE",
+      "path": "textures/FL13pet3.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL13stm.png",
+      "source": "FILE",
+      "path": "textures/FL13stm.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL15cnt1.png",
+      "source": "FILE",
+      "path": "textures/FL15cnt1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL15cnt2.png",
+      "source": "FILE",
+      "path": "textures/FL15cnt2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL15lef1.png",
+      "source": "FILE",
+      "path": "textures/FL15lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL15lef2.png",
+      "source": "FILE",
+      "path": "textures/FL15lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL15pet2.png",
+      "source": "FILE",
+      "path": "textures/FL15pet2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL15stm.png",
+      "source": "FILE",
+      "path": "textures/FL15stm.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL16lef1.png",
+      "source": "FILE",
+      "path": "textures/FL16lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL16lef3.png",
+      "source": "FILE",
+      "path": "textures/FL16lef3.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL16pet1.png",
+      "source": "FILE",
+      "path": "textures/FL16pet1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL16stm.png",
+      "source": "FILE",
+      "path": "textures/FL16stm.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL17cnt.png",
+      "source": "FILE",
+      "path": "textures/FL17cnt.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL17lef1.png",
+      "source": "FILE",
+      "path": "textures/FL17lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL17lef2.png",
+      "source": "FILE",
+      "path": "textures/FL17lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL17lef3.png",
+      "source": "FILE",
+      "path": "textures/FL17lef3.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL17lef5.png",
+      "source": "FILE",
+      "path": "textures/FL17lef5.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL17lef6.png",
+      "source": "FILE",
+      "path": "textures/FL17lef6.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL17pet1.png",
+      "source": "FILE",
+      "path": "textures/FL17pet1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL17pet2.png",
+      "source": "FILE",
+      "path": "textures/FL17pet2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL17pet5.png",
+      "source": "FILE",
+      "path": "textures/FL17pet5.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL17stm.png",
+      "source": "FILE",
+      "path": "textures/FL17stm.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL19lef2.png",
+      "source": "FILE",
+      "path": "textures/FL19lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL19lef3.png",
+      "source": "FILE",
+      "path": "textures/FL19lef3.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL19lef4.png",
+      "source": "FILE",
+      "path": "textures/FL19lef4.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL19pe13.png",
+      "source": "FILE",
+      "path": "textures/FL19pe13.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL19pe14.png",
+      "source": "FILE",
+      "path": "textures/FL19pe14.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL19pe15.png",
+      "source": "FILE",
+      "path": "textures/FL19pe15.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL19pe16.png",
+      "source": "FILE",
+      "path": "textures/FL19pe16.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL19stm.png",
+      "source": "FILE",
+      "path": "textures/FL19stm.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL29cnt1.png",
+      "source": "FILE",
+      "path": "textures/FL29cnt1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL29cnt2.png",
+      "source": "FILE",
+      "path": "textures/FL29cnt2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL29lef.png",
+      "source": "FILE",
+      "path": "textures/FL29lef.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL29pet1.png",
+      "source": "FILE",
+      "path": "textures/FL29pet1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL29pet2.png",
+      "source": "FILE",
+      "path": "textures/FL29pet2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL29stm1.png",
+      "source": "FILE",
+      "path": "textures/FL29stm1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL29stm2.png",
+      "source": "FILE",
+      "path": "textures/FL29stm2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "FL29twg.png",
+      "source": "FILE",
+      "path": "textures/FL29twg.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Forja_Macetas.png",
+      "source": "FILE",
+      "path": "textures/Forja_Macetas.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "fuente_azulejo.png",
+      "source": "FILE",
+      "path": "textures/fuente_azulejo.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "fuente_piedra_01.png",
+      "source": "FILE",
+      "path": "textures/fuente_piedra_01.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "fuente_piedra_02.png",
+      "source": "FILE",
+      "path": "textures/fuente_piedra_02.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP01lef1.png",
+      "source": "FILE",
+      "path": "textures/HP01lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP01lef2.png",
+      "source": "FILE",
+      "path": "textures/HP01lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP01pet3.png",
+      "source": "FILE",
+      "path": "textures/HP01pet3.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP01stm1.png",
+      "source": "FILE",
+      "path": "textures/HP01stm1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP01stm2.png",
+      "source": "FILE",
+      "path": "textures/HP01stm2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP04lef2.png",
+      "source": "FILE",
+      "path": "textures/HP04lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP07lef1.png",
+      "source": "FILE",
+      "path": "textures/HP07lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP07lef2.png",
+      "source": "FILE",
+      "path": "textures/HP07lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP07stm1.png",
+      "source": "FILE",
+      "path": "textures/HP07stm1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP07stm2.png",
+      "source": "FILE",
+      "path": "textures/HP07stm2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP11lef2.png",
+      "source": "FILE",
+      "path": "textures/HP11lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP11stm.png",
+      "source": "FILE",
+      "path": "textures/HP11stm.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP13lef2.png",
+      "source": "FILE",
+      "path": "textures/HP13lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP13lef3.png",
+      "source": "FILE",
+      "path": "textures/HP13lef3.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP13stm2.png",
+      "source": "FILE",
+      "path": "textures/HP13stm2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP17lef1.png",
+      "source": "FILE",
+      "path": "textures/HP17lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP17lef2.png",
+      "source": "FILE",
+      "path": "textures/HP17lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP17stm.png",
+      "source": "FILE",
+      "path": "textures/HP17stm.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP19lef2.png",
+      "source": "FILE",
+      "path": "textures/HP19lef2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP19lef3.png",
+      "source": "FILE",
+      "path": "textures/HP19lef3.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP19stm1.png",
+      "source": "FILE",
+      "path": "textures/HP19stm1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "HP19stm2.png",
+      "source": "FILE",
+      "path": "textures/HP19stm2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "hypoestes_phyllostachya_bark.png",
+      "source": "FILE",
+      "path": "textures/hypoestes_phyllostachya_bark.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "impatiens_newguinea_hybrids_petal.png",
+      "source": "FILE",
+      "path": "textures/impatiens_newguinea_hybrids_petal.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "individual_b.png",
+      "source": "FILE",
+      "path": "textures/individual_b.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "jardinera_1_color.png",
+      "source": "FILE",
+      "path": "textures/jardinera_1_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "l04-upper.png",
+      "source": "FILE",
+      "path": "textures/l04-upper.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "l33-upper.png",
+      "source": "FILE",
+      "path": "textures/l33-upper.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "l37-upper.png",
+      "source": "FILE",
+      "path": "textures/l37-upper.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "losa.png",
+      "source": "FILE",
+      "path": "textures/losa.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Maceta_A2_Color.png",
+      "source": "FILE",
+      "path": "textures/Maceta_A2_Color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Maceta_A_Color.png",
+      "source": "FILE",
+      "path": "textures/Maceta_A_Color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Maceta_B2_Color.png",
+      "source": "FILE",
+      "path": "textures/Maceta_B2_Color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Maceta_B_Color.png",
+      "source": "FILE",
+      "path": "textures/Maceta_B_Color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Maceta_C2_Color.png",
+      "source": "FILE",
+      "path": "textures/Maceta_C2_Color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Maceta_C_Color.png",
+      "source": "FILE",
+      "path": "textures/Maceta_C_Color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Maceta_D2_Color_0.png",
+      "source": "FILE",
+      "path": "textures/Maceta_D2_Color_0.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Maceta_D_Bump_0.png",
+      "source": "FILE",
+      "path": "textures/Maceta_D_Bump_0.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "madera_barandal_esc_2.png",
+      "source": "FILE",
+      "path": "textures/madera_barandal_esc_2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "madera_marcos.png",
+      "source": "FILE",
+      "path": "textures/madera_marcos.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "madera_rustica_2.png",
+      "source": "FILE",
+      "path": "textures/madera_rustica_2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "madera_triplay_01.png",
+      "source": "FILE",
+      "path": "textures/madera_triplay_01.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "marco_puerta_1.png",
+      "source": "FILE",
+      "path": "textures/marco_puerta_1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "metal_viejo_2.png",
+      "source": "FILE",
+      "path": "textures/metal_viejo_2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "mold_arco_01_color.png",
+      "source": "FILE",
+      "path": "textures/mold_arco_01_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "moldura2piso_color.png",
+      "source": "FILE",
+      "path": "textures/moldura2piso_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "moldura_techo.png",
+      "source": "FILE",
+      "path": "textures/moldura_techo.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "moldura_volado.png",
+      "source": "FILE",
+      "path": "textures/moldura_volado.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "molduraterraza__color.png",
+      "source": "FILE",
+      "path": "textures/molduraterraza__color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_a.png",
+      "source": "FILE",
+      "path": "textures/muros_a.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_b.png",
+      "source": "FILE",
+      "path": "textures/muros_b.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_b1.png",
+      "source": "FILE",
+      "path": "textures/muros_b1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_b2.png",
+      "source": "FILE",
+      "path": "textures/muros_b2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_c2.png",
+      "source": "FILE",
+      "path": "textures/muros_c2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_d.png",
+      "source": "FILE",
+      "path": "textures/muros_d.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_e.png",
+      "source": "FILE",
+      "path": "textures/muros_e.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_f.png",
+      "source": "FILE",
+      "path": "textures/muros_f.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_g.png",
+      "source": "FILE",
+      "path": "textures/muros_g.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_h.png",
+      "source": "FILE",
+      "path": "textures/muros_h.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_j.png",
+      "source": "FILE",
+      "path": "textures/muros_j.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_k.png",
+      "source": "FILE",
+      "path": "textures/muros_k.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_l.png",
+      "source": "FILE",
+      "path": "textures/muros_l.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_m.png",
+      "source": "FILE",
+      "path": "textures/muros_m.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_n.png",
+      "source": "FILE",
+      "path": "textures/muros_n.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_p_.png",
+      "source": "FILE",
+      "path": "textures/muros_p_.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_q.png",
+      "source": "FILE",
+      "path": "textures/muros_q.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_q3.png",
+      "source": "FILE",
+      "path": "textures/muros_q3.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_q4.png",
+      "source": "FILE",
+      "path": "textures/muros_q4.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "muros_q_patio2.png",
+      "source": "FILE",
+      "path": "textures/muros_q_patio2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_arco_frente_displace_inv.png",
+      "source": "FILE",
+      "path": "textures/N_arco_frente_displace_inv.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_arcos_lisos_2_bump.png",
+      "source": "FILE",
+      "path": "textures/N_arcos_lisos_2_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_arcos_lisos_3_bump_1.png",
+      "source": "FILE",
+      "path": "textures/N_arcos_lisos_3_bump_1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_bark06mi.png",
+      "source": "FILE",
+      "path": "textures/N_bark06mi.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_bwk_1024_Bump.png",
+      "source": "FILE",
+      "path": "textures/N_bwk_1024_Bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_columna_b_displacement_3_inv.png",
+      "source": "FILE",
+      "path": "textures/N_columna_b_displacement_3_inv.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_detmoldura_01_bump.png",
+      "source": "FILE",
+      "path": "textures/N_detmoldura_01_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_detmoldura_02_bump.png",
+      "source": "FILE",
+      "path": "textures/N_detmoldura_02_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_detmoldura_03_bump.png",
+      "source": "FILE",
+      "path": "textures/N_detmoldura_03_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_detmoldura_04_bump.png",
+      "source": "FILE",
+      "path": "textures/N_detmoldura_04_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_detmoldura_05_bump.png",
+      "source": "FILE",
+      "path": "textures/N_detmoldura_05_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_detmoldura_06_bump.png",
+      "source": "FILE",
+      "path": "textures/N_detmoldura_06_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_escalera_bump.png",
+      "source": "FILE",
+      "path": "textures/N_escalera_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_escurridera_bump.png",
+      "source": "FILE",
+      "path": "textures/N_escurridera_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_Fierro_A_Bump.png",
+      "source": "FILE",
+      "path": "textures/N_Fierro_A_Bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_Finishes.Flooring.Carpet.Loop.5.png",
+      "source": "FILE",
+      "path": "textures/N_Finishes.Flooring.Carpet.Loop.5.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_Forja_Macetas_bump.png",
+      "source": "FILE",
+      "path": "textures/N_Forja_Macetas_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_HP11stm.png",
+      "source": "FILE",
+      "path": "textures/N_HP11stm.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_hp13lef1_bump.png",
+      "source": "FILE",
+      "path": "textures/N_hp13lef1_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_jardinera_1_displacement_2.png",
+      "source": "FILE",
+      "path": "textures/N_jardinera_1_displacement_2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_l04-upper.png",
+      "source": "FILE",
+      "path": "textures/N_l04-upper.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_l33-upper.png",
+      "source": "FILE",
+      "path": "textures/N_l33-upper.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_l37-upper.png",
+      "source": "FILE",
+      "path": "textures/N_l37-upper.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_Maceta_A_Bump.png",
+      "source": "FILE",
+      "path": "textures/N_Maceta_A_Bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_Maceta_B_Bump.png",
+      "source": "FILE",
+      "path": "textures/N_Maceta_B_Bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_Maceta_C_Bump.png",
+      "source": "FILE",
+      "path": "textures/N_Maceta_C_Bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_Maceta_D_Bump_0.png",
+      "source": "FILE",
+      "path": "textures/N_Maceta_D_Bump_0.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_madera_barandal_esc_2_bump.png",
+      "source": "FILE",
+      "path": "textures/N_madera_barandal_esc_2_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_marco_puerta_1_bump.png",
+      "source": "FILE",
+      "path": "textures/N_marco_puerta_1_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_metal_viejo_2.png",
+      "source": "FILE",
+      "path": "textures/N_metal_viejo_2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_mold_arco_01_bump.png",
+      "source": "FILE",
+      "path": "textures/N_mold_arco_01_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_moldura2piso_bump.png",
+      "source": "FILE",
+      "path": "textures/N_moldura2piso_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_moldura_techo_bump.png",
+      "source": "FILE",
+      "path": "textures/N_moldura_techo_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_molduraterraza_bump.png",
+      "source": "FILE",
+      "path": "textures/N_molduraterraza_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_muros_b1.png",
+      "source": "FILE",
+      "path": "textures/N_muros_b1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_piso_patio_exterior_displace_inv.png",
+      "source": "FILE",
+      "path": "textures/N_piso_patio_exterior_displace_inv.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_piso_rustico_displace2.png",
+      "source": "FILE",
+      "path": "textures/N_piso_rustico_displace2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_PITTED.png",
+      "source": "FILE",
+      "path": "textures/N_PITTED.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_postes_barandal_bump.png",
+      "source": "FILE",
+      "path": "textures/N_postes_barandal_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_puerta_bump.png",
+      "source": "FILE",
+      "path": "textures/N_puerta_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_rust_detalle_bump.png",
+      "source": "FILE",
+      "path": "textures/N_rust_detalle_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_silla_d_piel_bump.png",
+      "source": "FILE",
+      "path": "textures/N_silla_d_piel_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_sm_leaf_02_bump.png",
+      "source": "FILE",
+      "path": "textures/N_sm_leaf_02_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_sm_tronco_bump.png",
+      "source": "FILE",
+      "path": "textures/N_sm_tronco_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_tela_blanca.png",
+      "source": "FILE",
+      "path": "textures/N_tela_blanca.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_vigas_a2_bump.png",
+      "source": "FILE",
+      "path": "textures/N_vigas_a2_bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "N_WOOD08_Bump.png",
+      "source": "FILE",
+      "path": "textures/N_WOOD08_Bump.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "pared_barro_afinado.png",
+      "source": "FILE",
+      "path": "textures/pared_barro_afinado.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "pared_calle.png",
+      "source": "FILE",
+      "path": "textures/pared_calle.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "piso_patio_exterior.png",
+      "source": "FILE",
+      "path": "textures/piso_patio_exterior.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "piso_patio_exterior2.png",
+      "source": "FILE",
+      "path": "textures/piso_patio_exterior2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "piso_rustico.png",
+      "source": "FILE",
+      "path": "textures/piso_rustico.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "piso_rustico_Spec.png",
+      "source": "FILE",
+      "path": "textures/piso_rustico_Spec.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "plato_a.png",
+      "source": "FILE",
+      "path": "textures/plato_a.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "postes_barandal_color.png",
+      "source": "FILE",
+      "path": "textures/postes_barandal_color.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "puerta.png",
+      "source": "FILE",
+      "path": "textures/puerta.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "quercus_rubra_bark.png",
+      "source": "FILE",
+      "path": "textures/quercus_rubra_bark.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "rust_a1.png",
+      "source": "FILE",
+      "path": "textures/rust_a1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "rust_detalle.png",
+      "source": "FILE",
+      "path": "textures/rust_detalle.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "silla_d_piel.png",
+      "source": "FILE",
+      "path": "textures/silla_d_piel.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "sm_hoja_c_seca.png",
+      "source": "FILE",
+      "path": "textures/sm_hoja_c_seca.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "sm_leaf_02a.png",
+      "source": "FILE",
+      "path": "textures/sm_leaf_02a.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "sm_leaf_02b.png",
+      "source": "FILE",
+      "path": "textures/sm_leaf_02b.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "sm_leaf_03a.png",
+      "source": "FILE",
+      "path": "textures/sm_leaf_03a.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "sm_leaf_seca_02b.png",
+      "source": "FILE",
+      "path": "textures/sm_leaf_seca_02b.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "sm_leaf_seca_03b.png",
+      "source": "FILE",
+      "path": "textures/sm_leaf_seca_03b.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "sm_tronco.png",
+      "source": "FILE",
+      "path": "textures/sm_tronco.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "tapa_talabera.png",
+      "source": "FILE",
+      "path": "textures/tapa_talabera.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "techo.png",
+      "source": "FILE",
+      "path": "textures/techo.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "techo_01.png",
+      "source": "FILE",
+      "path": "textures/techo_01.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "tela_blanca.png",
+      "source": "FILE",
+      "path": "textures/tela_blanca.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "tela_mesa_b.png",
+      "source": "FILE",
+      "path": "textures/tela_mesa_b.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "tela_mesa_d.png",
+      "source": "FILE",
+      "path": "textures/tela_mesa_d.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "tela_silla_b.png",
+      "source": "FILE",
+      "path": "textures/tela_silla_b.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "TR02lef5.png",
+      "source": "FILE",
+      "path": "textures/TR02lef5.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "TR14lef1.png",
+      "source": "FILE",
+      "path": "textures/TR14lef1.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Vigas_A2.png",
+      "source": "FILE",
+      "path": "textures/Vigas_A2.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "Vigas_B.png",
+      "source": "FILE",
+      "path": "textures/Vigas_B.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "wood.3.Bubinga.png",
+      "source": "FILE",
+      "path": "textures/wood.3.Bubinga.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "WOOD08.png",
+      "source": "FILE",
+      "path": "textures/WOOD08.png",
+      "existsOrPacked": true
+    },
+    {
+      "name": "zebrina_pendula_bark.png",
+      "source": "FILE",
+      "path": "textures/zebrina_pendula_bark.png",
+      "existsOrPacked": true
+    }
+  ],
+  "exportedTextureCount": 269,
+  "exportedTextureBytes": 125336786,
+  "outputGltfBytes": 3233979,
+  "outputGltfSha256": "1EE4C41302EB3DBD7E1848BB53870723191DFE69332AE95B3484D8D21E8D9B38",
+  "outputBuffer": "san_miguel.bin",
+  "outputBufferBytes": 365166708,
+  "outputBufferSha256": "B8D279A939FD1B77F8554011EEE0BF3CB597E5568D1A189AD808860576FA8AC6",
+  "maximumBufferViewBytes": 4008540
+}

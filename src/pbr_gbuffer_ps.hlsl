@@ -38,6 +38,15 @@ uint GetPbrFeatureMask()
     return featureMask;
 }
 
+float3 GetGBufferViewDirection(
+    float4 directionOrPosition,
+    float3 surfacePosition)
+{
+    return directionOrPosition.w > 0.0f
+        ? directionOrPosition.xyz - surfacePosition
+        : -directionOrPosition.xyz;
+}
+
 void main(
     in float4 i_position : SV_Position,
     in SceneVertex i_vtx,
@@ -67,7 +76,16 @@ void main(
         clip(surface.opacity - g_Material.alphaCutoff);
 #endif
 
-    if (!i_isFrontFace)
+    float3 viewDirection = GetGBufferViewDirection(
+        c_GBuffer.view.cameraDirectionOrPosition,
+        i_vtx.pos);
+    bool isDoubleSided =
+        (g_Material.flags & MaterialFlags_DoubleSided) != 0;
+    if (ShouldFlipPbrSurfaceNormals(
+        isDoubleSided,
+        i_isFrontFace,
+        surface.geometryNormal,
+        viewDirection))
     {
         surface.shadingNormal = -surface.shadingNormal;
         surface.geometryNormal = -surface.geometryNormal;

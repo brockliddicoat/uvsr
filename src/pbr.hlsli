@@ -102,6 +102,24 @@ float3 PbrSafeNormalize(float3 value, float3 fallback)
     return lengthSquared > 1e-12f ? value * rsqrt(lengthSquared) : fallback;
 }
 
+bool ShouldFlipPbrSurfaceNormals(
+    bool isDoubleSided,
+    bool isFrontFace,
+    float3 geometricNormal,
+    float3 viewDirection)
+{
+    // A negative-determinant instance reverses glTF's declared front-face
+    // winding without changing the rasterizer state shared by its material
+    // batch. SV_IsFrontFace is therefore insufficient for double-sided
+    // lighting: it can report the visible side of a reflected instance as a
+    // back face and invert an already view-facing transformed normal. Orient
+    // double-sided normals from the actual view hemisphere while retaining the
+    // raster-facing contract for ordinary single-sided materials.
+    return isDoubleSided
+        ? dot(geometricNormal, viewDirection) < 0.0f
+        : !isFrontFace;
+}
+
 PbrPreparedSurface PreparePbrSurface(PbrSurfaceInteraction surface)
 {
     PbrPreparedSurface prepared;

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace donut;
@@ -121,7 +122,8 @@ namespace uvsr
         const std::shared_ptr<CommonRenderPasses>& commonPasses,
         nvrhi::ITexture* sceneColor,
         nvrhi::ITexture* currentDepth,
-        nvrhi::ITexture* motionVectors)
+        nvrhi::ITexture* motionVectors,
+        bool deferPipelineCreation)
         : m_Device(device)
         , m_ShaderFactory(shaderFactory)
         , m_SceneColor(sceneColor)
@@ -317,108 +319,6 @@ namespace uvsr
         };
         m_MinimumBindingLayout =
             device->createBindingLayout(minimumLayoutDesc);
-        for (uint32_t runtimeBehavior = 0u;
-            runtimeBehavior < m_MinimumShaders.size();
-            ++runtimeBehavior)
-        {
-            const std::vector<ShaderMacro> macros = {
-                { "TAA_RUNTIME_BEHAVIOR",
-                    std::to_string(runtimeBehavior) }
-            };
-            m_MinimumShaders[runtimeBehavior] =
-                shaderFactory->CreateShader(
-                    "uvsr/temporal_aa_minimum_cs.hlsl",
-                    "main",
-                    &macros,
-                    nvrhi::ShaderType::Compute);
-            if (m_MinimumShaders[runtimeBehavior] &&
-                m_MinimumColor[0] &&
-                m_MinimumColor[1] &&
-                m_MinimumDepth[0] &&
-                m_MinimumDepth[1])
-            {
-                nvrhi::ComputePipelineDesc minimumPipelineDesc;
-                minimumPipelineDesc.CS =
-                    m_MinimumShaders[runtimeBehavior];
-                minimumPipelineDesc.bindingLayouts = {
-                    m_MinimumBindingLayout
-                };
-                m_MinimumPipelines[runtimeBehavior] =
-                    device->createComputePipeline(
-                        minimumPipelineDesc);
-            }
-        }
-
-        auto createBlendPermutation =
-            [&](const TemporalAaOptions& options,
-                uint32_t exportSelective,
-                uint32_t sampleResurrection,
-                const TemporalAaStaticPerformanceOptions&
-                    performance,
-                nvrhi::ShaderHandle& shader,
-                nvrhi::ComputePipelineHandle& pipeline)
-        {
-            CreateBlendComputePermutation(
-                options,
-                exportSelective,
-                sampleResurrection,
-                performance,
-                shader,
-                pipeline);
-        };
-
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        // Developer permutations are compiled into the shader package but
-        // their D3D12 PSOs are created on first use. Eagerly materializing the
-        // complete matrix stalls startup for more than a minute and consumes
-        // over a gigabyte before the first frame.
-#else
-        const TemporalAaStaticPerformanceOptions
-            baselinePerformance{};
-        constexpr std::array<AntiAliasingPreset, 4>
-            productionPresets = {
-                AntiAliasingPreset::TemporalPerformance,
-                AntiAliasingPreset::TemporalBalanced,
-                AntiAliasingPreset::TemporalQuality,
-                AntiAliasingPreset::TemporalUltra
-            };
-        for (AntiAliasingPreset preset : productionPresets)
-        {
-            const TemporalAaOptions options =
-                GetPresetTemporalOptions(preset);
-            // Selective morphology is no longer part of the shipping path.
-            constexpr uint32_t exportSelective = 0u;
-            for (uint32_t fused = 0u;
-                fused < 2u;
-                ++fused)
-            {
-                TemporalAaStaticPerformanceOptions performance =
-                    baselinePerformance;
-                performance.fusedOutput = fused != 0u;
-                const uint32_t permutation =
-                    GetTemporalAaBlendPermutationIndex(
-                        options) *
-                        (2u *
-                            TemporalAaSampleResurrectionCount *
-                            2u) +
-                    exportSelective *
-                        (TemporalAaSampleResurrectionCount *
-                            2u) +
-                    fused;
-                createBlendPermutation(
-                    options,
-                    exportSelective,
-                    0u,
-                    performance,
-                    m_BlendShaders[permutation],
-                    m_BlendPipelines[permutation]);
-            }
-        }
-#endif
-
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        // Performance-experiment PSOs use the same lazy creation policy.
-#endif
 
 #if UVSR_AA_DEVELOPER_OVERRIDES
         m_FullscreenVS = commonPasses->m_FullscreenVS;
@@ -464,52 +364,6 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         };
         m_OutputBindingLayout = device->createBindingLayout(outputLayoutDesc);
-
-        nvrhi::ComputePipelineDesc outputPipelineDesc;
-        outputPipelineDesc.bindingLayouts = { m_OutputBindingLayout };
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        constexpr uint32_t compiledDebugViewCount =
-            TemporalAaResolveDebugViewCount;
-#else
-        constexpr uint32_t compiledDebugViewCount = 1u;
-#endif
-        for (uint32_t debugView = 0u;
-            debugView < compiledDebugViewCount;
-            ++debugView)
-        {
-            std::vector<ShaderMacro> macros = {
-                { "TAA_DEBUG_VIEW", std::to_string(debugView) }
-            };
-            m_ResolveShaders[debugView] = shaderFactory->CreateShader(
-                "uvsr/temporal_aa_resolve_cs.hlsl",
-                "main",
-                &macros,
-                nvrhi::ShaderType::Compute);
-            outputPipelineDesc.CS = m_ResolveShaders[debugView];
-            m_ResolvePipelines[debugView] =
-                device->createComputePipeline(outputPipelineDesc);
-        }
-        const auto createSharpenShader =
-            [&](bool premultipliedInput)
-        {
-            std::vector<ShaderMacro> macros = {
-                { "TAA_SHARPEN_INPUT_PREMULTIPLIED",
-                    premultipliedInput ? "1" : "0" }
-            };
-            return shaderFactory->CreateShader(
-                "uvsr/temporal_aa_sharpen_cs.hlsl",
-                "main",
-                &macros,
-                nvrhi::ShaderType::Compute);
-        };
-        m_SharpenShader = createSharpenShader(true);
-        outputPipelineDesc.CS = m_SharpenShader;
-        m_SharpenPipeline =
-            device->createComputePipeline(outputPipelineDesc);
-        m_PresentationSharpenShader = createSharpenShader(false);
-        outputPipelineDesc.CS = m_PresentationSharpenShader;
-        m_PresentationSharpenPipeline =
-            device->createComputePipeline(outputPipelineDesc);
 
         for (uint32_t source = 0u; source < 2u; ++source)
         {
@@ -563,8 +417,10 @@ namespace uvsr
             m_BlendBindingSets[source] = device->createBindingSet(
                 blendBindings, m_BlendBindingLayout);
 
-            if (m_MinimumPipelines[0] &&
-                m_MinimumPipelines[1])
+            if (m_MinimumColor[0] &&
+                m_MinimumColor[1] &&
+                m_MinimumDepth[0] &&
+                m_MinimumDepth[1])
             {
                 nvrhi::BindingSetDesc minimumBindings;
                 minimumBindings.bindings = {
@@ -630,15 +486,162 @@ namespace uvsr
             m_OutputBindingSets[source] = device->createBindingSet(
                 outputBindings, m_OutputBindingLayout);
         }
-        m_Timings.minimumPathSupported =
-            bool(m_MinimumPipelines[0]) &&
-            bool(m_MinimumPipelines[1]) &&
-            bool(m_MinimumBindingSets[0]) &&
-            bool(m_MinimumBindingSets[1]);
-
         for (auto& stageQueries : m_TimerQueries)
             for (nvrhi::TimerQueryHandle& query : stageQueries)
                 query = device->createTimerQuery();
+
+        if (!deferPipelineCreation)
+        {
+            while (!PreparePipelinesStep())
+            {
+            }
+        }
+    }
+
+    bool TemporalAAPass::PreparePipelinesStep()
+    {
+        if (m_PipelinesReady)
+            return true;
+
+        constexpr uint32_t minimumPipelineCount = 2u;
+#if UVSR_AA_DEVELOPER_OVERRIDES
+        constexpr uint32_t productionBlendPipelineCount = 0u;
+        constexpr uint32_t resolvePipelineCount =
+            TemporalAaResolveDebugViewCount;
+#else
+        constexpr uint32_t productionBlendPipelineCount = 8u;
+        constexpr uint32_t resolvePipelineCount = 1u;
+#endif
+        constexpr uint32_t sharpenPipelineCount = 2u;
+        constexpr uint32_t productionBlendBegin = minimumPipelineCount;
+        constexpr uint32_t resolveBegin =
+            productionBlendBegin + productionBlendPipelineCount;
+        constexpr uint32_t sharpenBegin =
+            resolveBegin + resolvePipelineCount;
+        constexpr uint32_t pipelineCount =
+            sharpenBegin + sharpenPipelineCount;
+
+        if (m_PipelinePreparationStep < minimumPipelineCount)
+        {
+            const uint32_t runtimeBehavior = m_PipelinePreparationStep;
+            const std::vector<ShaderMacro> macros = {
+                { "TAA_RUNTIME_BEHAVIOR",
+                    std::to_string(runtimeBehavior) }
+            };
+            m_MinimumShaders[runtimeBehavior] =
+                m_ShaderFactory->CreateShader(
+                    "uvsr/temporal_aa_minimum_cs.hlsl",
+                    "main",
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            if (m_MinimumShaders[runtimeBehavior] &&
+                m_MinimumColor[0] &&
+                m_MinimumColor[1] &&
+                m_MinimumDepth[0] &&
+                m_MinimumDepth[1])
+            {
+                nvrhi::ComputePipelineDesc pipelineDesc;
+                pipelineDesc.CS = m_MinimumShaders[runtimeBehavior];
+                pipelineDesc.bindingLayouts = {
+                    m_MinimumBindingLayout
+                };
+                m_MinimumPipelines[runtimeBehavior] =
+                    m_Device->createComputePipeline(pipelineDesc);
+            }
+        }
+        else if (m_PipelinePreparationStep < resolveBegin)
+        {
+#if !UVSR_AA_DEVELOPER_OVERRIDES
+            constexpr std::array<AntiAliasingPreset, 4>
+                productionPresets = {
+                    AntiAliasingPreset::TemporalPerformance,
+                    AntiAliasingPreset::TemporalBalanced,
+                    AntiAliasingPreset::TemporalQuality,
+                    AntiAliasingPreset::TemporalUltra
+                };
+            const uint32_t productionStep =
+                m_PipelinePreparationStep - productionBlendBegin;
+            const uint32_t presetIndex = productionStep / 2u;
+            const uint32_t fused = productionStep % 2u;
+            const TemporalAaOptions options =
+                GetPresetTemporalOptions(productionPresets[presetIndex]);
+            constexpr uint32_t exportSelective = 0u;
+            TemporalAaStaticPerformanceOptions performance{};
+            performance.fusedOutput = fused != 0u;
+            const uint32_t permutation =
+                GetTemporalAaBlendPermutationIndex(options) *
+                    (2u * TemporalAaSampleResurrectionCount * 2u) +
+                exportSelective *
+                    (TemporalAaSampleResurrectionCount * 2u) +
+                fused;
+            CreateBlendComputePermutation(
+                options,
+                exportSelective,
+                0u,
+                performance,
+                m_BlendShaders[permutation],
+                m_BlendPipelines[permutation]);
+#endif
+        }
+        else if (m_PipelinePreparationStep < sharpenBegin)
+        {
+            const uint32_t debugView =
+                m_PipelinePreparationStep - resolveBegin;
+            const std::vector<ShaderMacro> macros = {
+                { "TAA_DEBUG_VIEW", std::to_string(debugView) }
+            };
+            m_ResolveShaders[debugView] = m_ShaderFactory->CreateShader(
+                "uvsr/temporal_aa_resolve_cs.hlsl",
+                "main",
+                &macros,
+                nvrhi::ShaderType::Compute);
+            nvrhi::ComputePipelineDesc pipelineDesc;
+            pipelineDesc.CS = m_ResolveShaders[debugView];
+            pipelineDesc.bindingLayouts = { m_OutputBindingLayout };
+            m_ResolvePipelines[debugView] =
+                m_Device->createComputePipeline(pipelineDesc);
+        }
+        else
+        {
+            const bool premultipliedInput =
+                m_PipelinePreparationStep == sharpenBegin;
+            const std::vector<ShaderMacro> macros = {
+                { "TAA_SHARPEN_INPUT_PREMULTIPLIED",
+                    premultipliedInput ? "1" : "0" }
+            };
+            nvrhi::ShaderHandle shader = m_ShaderFactory->CreateShader(
+                "uvsr/temporal_aa_sharpen_cs.hlsl",
+                "main",
+                &macros,
+                nvrhi::ShaderType::Compute);
+            nvrhi::ComputePipelineDesc pipelineDesc;
+            pipelineDesc.CS = shader;
+            pipelineDesc.bindingLayouts = { m_OutputBindingLayout };
+            nvrhi::ComputePipelineHandle pipeline =
+                m_Device->createComputePipeline(pipelineDesc);
+            if (premultipliedInput)
+            {
+                m_SharpenShader = std::move(shader);
+                m_SharpenPipeline = std::move(pipeline);
+            }
+            else
+            {
+                m_PresentationSharpenShader = std::move(shader);
+                m_PresentationSharpenPipeline = std::move(pipeline);
+            }
+        }
+
+        ++m_PipelinePreparationStep;
+        if (m_PipelinePreparationStep == pipelineCount)
+        {
+            m_Timings.minimumPathSupported =
+                bool(m_MinimumPipelines[0]) &&
+                bool(m_MinimumPipelines[1]) &&
+                bool(m_MinimumBindingSets[0]) &&
+                bool(m_MinimumBindingSets[1]);
+            m_PipelinesReady = true;
+        }
+        return m_PipelinesReady;
     }
 
     bool TemporalAAPass::CreateBlendComputePermutation(
@@ -937,6 +940,13 @@ namespace uvsr
         bool deferSharpenToPresentation,
         float sharpness)
     {
+        if (!m_PipelinesReady)
+        {
+            log::error(
+                "TemporalAAPass rendered before pipeline preparation completed.");
+            return m_SceneColor;
+        }
+
         const TemporalAaOptions& options = settings.temporal;
         const TemporalAaSampleResurrection sampleResurrection =
             settings.sampleResurrection;
@@ -1606,6 +1616,13 @@ namespace uvsr
             nvrhi::ICommandList* commandList,
             nvrhi::ITexture* sourceTexture)
     {
+        if (!m_PipelinesReady)
+        {
+            log::error(
+                "TemporalAAPass sharpened before pipeline preparation completed.");
+            return sourceTexture;
+        }
+
         if (!sourceTexture || sourceTexture == m_SceneColor)
             return sourceTexture;
 

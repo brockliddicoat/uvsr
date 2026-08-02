@@ -6,10 +6,10 @@ or path setup; CMake stages the bundle automatically.
 
 ## Standard Scenes
 
-- **PBR Sponza Decorated** is the default. It composes the flat-roof architecture,
+- **Sponza Decorated** is the default. It composes the flat-roof architecture,
   Intel's curtains, and the roof-trimmed ivy package at their authored identity
   transforms.
-- **PBR Sponza Plain** loads the same architecture without curtains or
+- **Sponza Plain** loads the same architecture without curtains or
   ivy.
 
 The architecture and add-ons remain separate GLBs. The `.scene.json`
@@ -21,7 +21,7 @@ component files so these are the only two Intel Sponza picker entries.
 Both standardized scene descriptors declare
 `intel-pbr-sponza-courtyard-simplified-v1` as their default camera metadata, so
 staged picker loads and explicit source-tree descriptor loads behave
-identically. **PBR Sponza Decorated** and **PBR Sponza Plain** open in
+identically. **Sponza Decorated** and **Sponza Plain** open in
 **Freelook** at **Benchmark Position 1**. The **Camera Location** dropdown
 retains this sole named location so more locations can be added later and also
 includes an always-selectable **Free** entry.
@@ -55,7 +55,7 @@ Launching with `--benchmark-camera` starts and locks Benchmark Position 1 in
 the disabled Camera Location dropdown, enforces the 1920x1080 reference frame,
 and selects **Locked** so the benchmark view cannot move or switch modes.
 Benchmark records use `intel-pbr-sponza-courtyard-simplified-v1` in their
-`camera` field and identify **PBR Sponza Decorated** or **PBR Sponza Plain**
+`camera` field and identify **Sponza Decorated** or **Sponza Plain**
 separately in their `scene` field.
 
 ## Runtime Components

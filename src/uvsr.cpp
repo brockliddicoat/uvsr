@@ -49,6 +49,7 @@
 #include <limits>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <iterator>
 #include <utility>
 #include <Windows.h>
@@ -67,6 +68,7 @@
 #include <donut/engine/Scene.h>
 #include <donut/engine/ShaderFactory.h>
 #include <donut/engine/TextureCache.h>
+#include <donut/engine/ThreadPool.h>
 #include <donut/engine/View.h>
 #include <donut/render/DeferredLightingPass.h>
 #include <donut/render/DepthPass.h>
@@ -107,6 +109,7 @@
 #include "pixel_zoom.h"
 #include "renderer_statistics.h"
 #include "scene_catalog.h"
+#include "scene_loading.h"
 #include "scene_light_names.h"
 #include "screen_space_visibility.h"
 #include "sponza_camera_preset.h"
@@ -119,6 +122,7 @@
 #include "ui_settings_command_catalog.h"
 #include "ui_skin.h"
 #include "visibility_perf_capture.h"
+#include "visibility_blue_noise.h"
 #include "world_material_view.h"
 
 #ifndef UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
@@ -190,9 +194,9 @@ static const char* GetLiveProcessPriorityLabel()
 
 static void ApplyVisibilityPerfProcessPriority()
 {
-    // This experimental performance build runs at High priority by default.
-    // Captures can still request Normal explicitly for controlled A/B tests.
-    DWORD requested = HIGH_PRIORITY_CLASS;
+    // Interactive loading shares CPU time with the compositor and renderer.
+    // Reserve High priority for an explicitly controlled performance capture.
+    DWORD requested = NORMAL_PRIORITY_CLASS;
     if (g_VisibilityPerfCapture.Enabled() &&
         g_VisibilityPerfCapture.Options().priority ==
         VisibilityPerfPriority::Normal)
@@ -2181,6 +2185,45 @@ private:
         OpenCenterMaterialInspector
     };
 
+    enum class ScenePreparationStage
+    {
+        MeshUpload,
+        SceneActivation,
+        MaterialBuffers,
+        RenderTargets,
+        RenderPasses,
+        Complete
+    };
+
+    enum class RenderPassPreparationStage
+    {
+        Idle,
+        Forward,
+        GBuffer,
+        MaterialId,
+        ReadbackAndFlashlight,
+        DeferredLighting,
+        DeferredLightingPipelines,
+        MsaaVisibilityResolvePipelines,
+        Visibility,
+        VisibilityPipelines,
+        TemporalAA,
+        TemporalAAPipelines,
+        Cmaa2,
+        EnvironmentBackground,
+        ToneMapping,
+        Complete
+    };
+
+    struct PreparedSceneCpuState
+    {
+        CameraCollisionWorld collisionWorld;
+        float sceneDiagonal = 100.f;
+        float collisionRadius = 0.1f;
+        std::optional<ImageBasedLightingEnvironment::PreparedRadiance>
+            environmentRadiance;
+    };
+
     std::shared_ptr<RootFileSystem>     m_RootFs;
     std::shared_ptr<NativeFileSystem>   m_NativeFs;
     std::vector<SceneCatalogEntry>      m_SceneCatalog;
@@ -2257,6 +2300,9 @@ private:
     UvsrFirstPersonCamera               m_PivotCamera{ false };
     StaticViewCamera                    m_StaticCamera;
     CameraCollisionWorld                m_CameraCollisionWorld;
+    std::optional<PreparedSceneCpuState> m_PendingSceneCpuState;
+    std::optional<CameraCollisionWorld> m_RetiredCameraCollisionWorld;
+    std::vector<uint16_t>               m_PreparedVisibilityBlueNoise;
     BindingCache                        m_BindingCache;
     uint64_t                            m_SubmittedMainViewTriangles = 0u;
 
@@ -2324,6 +2370,22 @@ private:
     std::string                         m_VisibilityBenchmarkError;
     std::string                         m_VisibilityBenchmarkPermutation;
     bool                                m_SceneFinishedLoading = false;
+    bool                                m_SceneGpuUploadPending = false;
+    ScenePreparationStage               m_ScenePreparationStage =
+                                            ScenePreparationStage::Complete;
+    RenderPassPreparationStage          m_RenderPassPreparationStage =
+                                            RenderPassPreparationStage::Idle;
+    bool                                m_RenderPassPreparationWaitForIbl =
+                                            false;
+    std::chrono::high_resolution_clock::time_point
+                                        m_SceneGpuUploadStart;
+    std::chrono::steady_clock::time_point
+                                        m_LastLoadingPresentationFrame;
+    double                              m_MaximumLoadingPresentationGapMs =
+                                            0.0;
+    uint64_t                            m_LoadingPresentationFrameCount = 0u;
+    static constexpr uint64_t           c_SceneUploadBytesPerFrame =
+                                            8ull * 1024ull * 1024ull;
     bool                                m_DiagnosticCsmBenchmarkRequested =
         false;
     DiagnosticCascadedShadowMapSettings m_DiagnosticCsmBenchmarkSettings;
@@ -2748,7 +2810,7 @@ public:
             else
             {
                 log::warning(
-                    "Default PBR Sponza Decorated descriptor '%s' was not found; loading '%s' instead.",
+                    "Default Sponza Decorated descriptor '%s' was not found; loading '%s' instead.",
                     defaultScene.c_str(),
                     m_SceneCatalog.front().FileName.c_str());
                 SetCurrentSceneName(m_SceneCatalog.front().FileName);
@@ -3491,37 +3553,76 @@ public:
         m_AntiAliasingPhase = 0u;
     }
 
-    void ApplySponzaCameraPreset(const SponzaCameraPreset& preset)
+    void ApplyCameraPose(
+        float3 position,
+        float3 direction,
+        float3 up,
+        float3 right,
+        float verticalFovDegrees)
     {
-        m_CameraVerticalFov = preset.VerticalFovDegrees;
+        m_CameraVerticalFov = verticalFovDegrees;
         const float zoomReferenceDistance =
             m_ThirdPersonCamera.GetReferenceZoomDistance();
         m_ThirdPersonCamera.ResetZoomReferenceDistance(zoomReferenceDistance);
         m_ThirdPersonCamera.SetExactPose(
-            preset.Position,
-            preset.Direction,
-            preset.Up,
-            preset.Right);
+            position,
+            direction,
+            up,
+            right);
         m_FirstPersonCamera.SetExactPose(
-            preset.Position,
-            preset.Direction,
-            preset.Up,
-            preset.Right);
+            position,
+            direction,
+            up,
+            right);
         m_PivotCamera.SetExactPose(
-            preset.Position,
-            preset.Direction,
-            preset.Up,
-            preset.Right);
+            position,
+            direction,
+            up,
+            right);
         m_StaticCamera.SetExactPose(
-            preset.Position,
-            preset.Direction,
-            preset.Up,
-            preset.Right);
+            position,
+            direction,
+            up,
+            right);
 
         m_PreviousView.reset();
         if (m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetHistory();
         ResetAntiAliasingState();
+    }
+
+    void ApplySponzaCameraPreset(const SponzaCameraPreset& preset)
+    {
+        ApplyCameraPose(
+            preset.Position,
+            preset.Direction,
+            preset.Up,
+            preset.Right,
+            preset.VerticalFovDegrees);
+    }
+
+    void ApplySceneInitialCamera(const SceneInitialCamera& preset)
+    {
+        const float3 position(
+            preset.Position[0],
+            preset.Position[1],
+            preset.Position[2]);
+        const float3 direction = normalize(float3(
+            preset.Direction[0],
+            preset.Direction[1],
+            preset.Direction[2]));
+        const float3 upHint = normalize(float3(
+            preset.Up[0],
+            preset.Up[1],
+            preset.Up[2]));
+        const float3 right = normalize(cross(direction, upHint));
+        const float3 up = normalize(cross(right, direction));
+        ApplyCameraPose(
+            position,
+            direction,
+            up,
+            right,
+            preset.VerticalFovDegrees);
     }
 
     void SetSponzaCameraLocation(SponzaCameraLocation location)
@@ -5604,10 +5705,15 @@ public:
         }
     }
 
-    void BuildCameraCollisionWorld()
+    static CameraCollisionWorld BuildCameraCollisionWorld(
+        const Scene& scene,
+        float collisionRadius)
     {
+        const auto extractionStart =
+            std::chrono::high_resolution_clock::now();
         std::vector<CameraCollisionWorld::Triangle> triangles;
-        const auto& instances = m_Scene->GetSceneGraph()->GetMeshInstances();
+        const auto& instances =
+            scene.GetSceneGraph()->GetMeshInstances();
 
         size_t triangleCapacity = 0;
         for (const auto& instance : instances)
@@ -5683,14 +5789,20 @@ public:
         }
 
         const auto buildStart = std::chrono::high_resolution_clock::now();
-        m_CameraCollisionWorld.Build(std::move(triangles));
+        const auto extractionDuration =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                buildStart - extractionStart).count();
+        CameraCollisionWorld collisionWorld;
+        collisionWorld.Build(std::move(triangles));
         const auto buildDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::high_resolution_clock::now() - buildStart).count();
         log::info(
-            "Camera collision: %zu triangles, %.3f-unit radius, built in %lld ms",
-            m_CameraCollisionWorld.GetTriangleCount(),
-            m_CameraCollisionRadius,
+            "Camera collision: %zu triangles, %.3f-unit radius, extracted in %lld ms and built in %lld ms on the scene worker",
+            collisionWorld.GetTriangleCount(),
+            collisionRadius,
+            static_cast<long long>(extractionDuration),
             static_cast<long long>(buildDuration));
+        return collisionWorld;
     }
 
     virtual bool KeyboardUpdate(int key, int scancode, int action, int mods) override
@@ -6937,6 +7049,10 @@ public:
     virtual void SceneUnloading() override
     {
         m_SceneFinishedLoading = false;
+        m_SceneGpuUploadPending = false;
+        m_ScenePreparationStage = ScenePreparationStage::Complete;
+        m_RenderPassPreparationStage =
+            RenderPassPreparationStage::Idle;
         if (m_ForwardPass) m_ForwardPass->ResetBindingCache();
         if (m_DeferredLightingPass) m_DeferredLightingPass->ResetBindingCache();
         if (m_PbrDeferredLightingPass) m_PbrDeferredLightingPass->ResetBindingCache();
@@ -6969,7 +7085,13 @@ public:
         m_MaterialPickScene = nullptr;
         m_OriginalMaterials.clear();
         m_PreviousView.reset();
-        m_CameraCollisionWorld.Clear();
+        // Move the large vectors without freeing them here. The next loader
+        // worker releases this retired world before allocating its replacement,
+        // keeping hundreds of megabytes of allocator work off the render thread.
+        m_RetiredCameraCollisionWorld.emplace(
+            std::move(m_CameraCollisionWorld));
+        m_CameraCollisionWorld = CameraCollisionWorld{};
+        m_PendingSceneCpuState.reset();
         m_SubmittedMainViewTriangles = 0u;
 
     }
@@ -6978,39 +7100,122 @@ public:
     {
         using namespace std::chrono;
 
+        // SceneUnloading transfers the previous BVH here so its large vector
+        // allocations are released by the loader rather than by a present
+        // frame. This also lowers the peak before the replacement is built.
+        m_RetiredCameraCollisionWorld.reset();
+        m_PendingSceneCpuState.reset();
+
         std::unique_ptr<engine::Scene> scene = std::make_unique<engine::Scene>(GetDevice(),
             *m_ShaderFactory, fs, m_TextureCache, nullptr, nullptr);
 
-        auto startTime = high_resolution_clock::now();
+        const auto startTime = high_resolution_clock::now();
+        const uint32_t workerCount = ResolveSceneLoadWorkerCount(
+            std::thread::hardware_concurrency());
+        engine::ThreadPool threadPool(workerCount);
+        log::info(
+            "Scene import is using %u background workers",
+            workerCount);
 
-        if (scene->Load(fileName))
+        if (scene->LoadWithThreadPool(fileName, &threadPool))
         {
+            const auto importFinished = high_resolution_clock::now();
+
+            // The scene is private to this worker, so transforms and CPU
+            // importer arrays can be consumed without synchronizing with the
+            // renderer. FinishedLoading later frees these arrays after their
+            // bounded GPU upload completes.
+            scene->RefreshSceneGraph(0u);
+            const box3 loadedSceneBounds = scene->GetSceneGraph()
+                ->GetRootNode()->GetGlobalBoundingBox();
+            PreparedSceneCpuState prepared;
+            prepared.sceneDiagonal = std::max(
+                length(loadedSceneBounds.diagonal()),
+                100.f);
+            prepared.collisionRadius = std::max(
+                0.1f,
+                prepared.sceneDiagonal * 0.0005f);
+            prepared.collisionWorld = BuildCameraCollisionWorld(
+                *scene,
+                prepared.collisionRadius);
+
+            if (m_PreparedVisibilityBlueNoise.empty())
+            {
+                m_PreparedVisibilityBlueNoise =
+                    GenerateVisibilityBlueNoise();
+                log::info(
+                    "Prepared visibility sampling ranks on the scene worker");
+            }
+
+            if (m_ImageBasedLightingEnvironment &&
+                !m_ImageBasedLightingEnvironment->GetRadianceTexture())
+            {
+                prepared.environmentRadiance =
+                    m_ImageBasedLightingEnvironment->PrepareRadiance(
+                        m_ui.EnvironmentSource,
+                        m_ui.WhiteWorld != WhiteWorldMode::Off);
+            }
+
+            // ApplicationBase publishes the LoadScene return value through an
+            // atomic completion flag. Write the complete handoff before that
+            // release so SceneLoaded never observes a partial scene state.
+            m_PendingSceneCpuState.emplace(std::move(prepared));
             m_Scene = std::move(scene);
 
-            auto endTime = high_resolution_clock::now();
-            auto duration = duration_cast<milliseconds>(endTime - startTime).count();
-            log::info("Scene loading time: %llu ms", duration);
+            const auto endTime = high_resolution_clock::now();
+            const auto importDuration = duration_cast<milliseconds>(
+                importFinished - startTime).count();
+            const auto preparationDuration = duration_cast<milliseconds>(
+                endTime - importFinished).count();
+            log::info(
+                "Scene worker completed import in %lld ms and CPU preparation in %lld ms",
+                static_cast<long long>(importDuration),
+                static_cast<long long>(preparationDuration));
 
             return true;
         }
 
+        m_PendingSceneCpuState.reset();
         return false;
     }
 
     virtual void SceneLoaded() override
     {
+        if (!m_PendingSceneCpuState || !m_Scene)
+        {
+            log::error(
+                "Scene worker completed without a prepared CPU handoff");
+            return;
+        }
+
+        // Do not publish a loaded scene until the worker handoff is known to
+        // be internally complete. This keeps the base loading state coherent
+        // even if a future importer exits without producing its CPU payload.
         Super::SceneLoaded();
 
-        // Refresh transforms before extracting collision triangles. Donut frees
-        // importer CPU arrays while FinishedLoading uploads mesh buffers, so the
-        // first-party collision copy must be built between these two steps.
-        m_Scene->RefreshSceneGraph(GetFrameIndex());
-        const box3 loadedSceneBounds = m_Scene->GetSceneGraph()->GetRootNode()->GetGlobalBoundingBox();
-        m_SceneDiagonal = std::max(length(loadedSceneBounds.diagonal()), 100.f);
-        m_CameraCollisionRadius = std::max(0.1f, m_SceneDiagonal * 0.0005f);
-        BuildCameraCollisionWorld();
+        m_CameraCollisionWorld = std::move(
+            m_PendingSceneCpuState->collisionWorld);
+        m_SceneDiagonal = m_PendingSceneCpuState->sceneDiagonal;
+        m_CameraCollisionRadius =
+            m_PendingSceneCpuState->collisionRadius;
+        if (m_ImageBasedLightingEnvironment &&
+            m_PendingSceneCpuState->environmentRadiance)
+        {
+            m_ImageBasedLightingEnvironment->StagePreparedRadiance(
+                std::move(
+                    *m_PendingSceneCpuState->environmentRadiance));
+        }
+        m_PendingSceneCpuState.reset();
 
-        m_Scene->FinishedLoading(GetFrameIndex());
+        m_Scene->BeginLoadingBuffers();
+        m_SceneGpuUploadPending = true;
+        m_ScenePreparationStage = ScenePreparationStage::MeshUpload;
+        m_SceneGpuUploadStart =
+            std::chrono::high_resolution_clock::now();
+    }
+
+    void CompleteSceneActivation()
+    {
 
         m_OriginalMaterials.clear();
         for (const auto& material : m_Scene->GetSceneGraph()->GetMaterials())
@@ -7077,8 +7282,18 @@ public:
         const SponzaCameraPreset* sponzaCamera = m_SponzaCameraLocationsAvailable
             ? FindSponzaCameraPreset(m_SponzaCameraLocation)
             : nullptr;
+        const SceneCatalogEntry* currentCatalogEntry =
+            FindSceneCatalogEntry(m_SceneCatalog, m_CurrentSceneName);
+        const SceneInitialCamera* sceneInitialCamera =
+            currentCatalogEntry && currentCatalogEntry->InitialCamera
+            ? &*currentCatalogEntry->InitialCamera
+            : nullptr;
         if (sponzaCamera)
             m_CameraVerticalFov = sponzaCamera->VerticalFovDegrees;
+        else if (sceneInitialCamera)
+            m_CameraVerticalFov = sceneInitialCamera->VerticalFovDegrees;
+        else
+            m_CameraVerticalFov = 60.f;
 
         std::shared_ptr<SceneGraphNode> cameraTarget = m_Scene->GetSceneGraph()->GetRootNode();
         // Prefer the compact asteroid core when present so the initial view
@@ -7106,10 +7321,21 @@ public:
                 sponzaCamera->ReferenceHeight,
                 sponzaCamera->VerticalFovDegrees);
         }
+        else if (sceneInitialCamera)
+        {
+            ApplySceneInitialCamera(*sceneInitialCamera);
+            log::info(
+                "Applied descriptor initial camera to '%s' at %.3f, %.3f, %.3f and %.1f degrees vertical FOV",
+                m_CurrentSceneName.c_str(),
+                sceneInitialCamera->Position[0],
+                sceneInitialCamera->Position[1],
+                sceneInitialCamera->Position[2],
+                sceneInitialCamera->VerticalFovDegrees);
+        }
 
         m_ui.Camera = CameraMode::ThirdPerson;
 
-        if (!sponzaCamera)
+        if (!sponzaCamera && !sceneInitialCamera)
         {
             const float3 initialPosition = m_ThirdPersonCamera.GetPosition();
             const float3 initialDirection = m_ThirdPersonCamera.GetDir();
@@ -7314,6 +7540,16 @@ public:
         return m_TextureCache;
     }
 
+    [[nodiscard]] bool IsSceneBusy() const
+    {
+        return IsSceneLoading() || m_SceneGpuUploadPending;
+    }
+
+    [[nodiscard]] bool IsSceneGpuUploadPending() const
+    {
+        return m_SceneGpuUploadPending;
+    }
+
     std::shared_ptr<Scene> GetScene()
     {
         return m_Scene;
@@ -7336,7 +7572,7 @@ public:
         }
 
         const bool controlledExperimentActive =
-            IsSceneLoading() ||
+            IsSceneBusy() ||
             IsVisibilityBenchmarkQueued() ||
             IsVisibilityBenchmarkActive() ||
             IsAntiAliasingMotionTestRunning() ||
@@ -7509,7 +7745,7 @@ public:
         }
     }
 
-    void CreateTemporalAAPass()
+    void CreateTemporalAAPass(bool deferPipelineCreation = false)
     {
         m_TemporalAAPass.reset();
         if (!m_ui.UsesLongTermTemporalAA())
@@ -7522,10 +7758,12 @@ public:
                 m_CommonPasses,
                 m_RenderTargets->HdrColor,
                 m_RenderTargets->Depth,
-                m_RenderTargets->MotionVectors);
+                m_RenderTargets->MotionVectors,
+                deferPipelineCreation);
     }
 
-    void EnsureMsaaVisibilityResolvePass()
+    void EnsureMsaaVisibilityResolvePass(
+        bool deferPipelineCreation = false)
     {
         if (!m_ui.EnablePbr ||
             !m_RenderTargets->VisibilityResourcesEnabled)
@@ -7541,7 +7779,8 @@ public:
         // change to Multisample Reference.
         m_MsaaVisibilityResolvePass =
             std::make_unique<MsaaVisibilityResolvePass>(GetDevice());
-        m_MsaaVisibilityResolvePass->Init(m_ShaderFactory);
+        m_MsaaVisibilityResolvePass->Init(
+            m_ShaderFactory, deferPipelineCreation);
     }
 
     void RefreshAntiAliasingTargetPasses(bool sampleCountChanged)
@@ -7653,7 +7892,7 @@ public:
                 m_RenderTargets->LdrFramebuffer);
     }
 
-    void CreateRenderPasses()
+    void BeginRenderPassPreparation(bool waitForIbl)
     {
         m_TemporalAAPass.reset();
         m_Cmaa2Pass.reset();
@@ -7664,104 +7903,329 @@ public:
                 "The renderer recreated visibility passes during the run.");
         }
 
-        ForwardShadingPass::CreateParameters ForwardParams;
-        ForwardParams.trackLiveness = false;
-        if (m_ui.EnablePbr)
-            m_ForwardPass = std::make_shared<PbrForwardShadingPass>(
-                GetDevice(), m_CommonPasses, m_ui.WhiteWorld != WhiteWorldMode::Off);
-        else
-            m_ForwardPass = std::make_shared<ForwardShadingPass>(GetDevice(), m_CommonPasses);
-        m_ForwardPass->Init(*m_ShaderFactory, ForwardParams);
+        m_RenderPassPreparationWaitForIbl = waitForIbl;
+        m_RenderPassPreparationStage =
+            RenderPassPreparationStage::Forward;
+    }
 
-        GBufferFillPass::CreateParameters GBufferParams;
-        GBufferParams.enableMotionVectors = m_RenderTargets->MotionVectorsEnabled;
-        if (m_ui.EnablePbr)
-            m_GBufferPass = std::make_shared<PbrGBufferFillPass>(
-                GetDevice(), m_CommonPasses, m_ui.WhiteWorld != WhiteWorldMode::Off);
-        else
-            m_GBufferPass = std::make_shared<GBufferFillPass>(GetDevice(), m_CommonPasses);
-        m_GBufferPass->Init(*m_ShaderFactory, GBufferParams);
-
-        GBufferParams.enableMotionVectors = false;
-        m_MaterialIDPass = std::make_unique<MaterialIDPass>(GetDevice(), m_CommonPasses);
-        m_MaterialIDPass->Init(*m_ShaderFactory, GBufferParams);
-
-        m_PixelReadbackPass = std::make_unique<PixelReadbackPass>(GetDevice(), m_ShaderFactory, m_RenderTargets->MaterialIDs, nvrhi::Format::RGBA32_UINT);
-        CreateFlashlightShadowResources();
-
-        if (m_ui.EnablePbr)
+    bool ProcessRenderPassPreparationStep()
+    {
+        switch (m_RenderPassPreparationStage)
         {
-            m_DeferredLightingPass.reset();
-            m_PbrDeferredLightingPass = std::make_unique<PbrDeferredLightingPass>(
-                GetDevice(), m_CommonPasses);
-            m_PbrDeferredLightingPass->Init(m_ShaderFactory);
-            EnsureMsaaVisibilityResolvePass();
+        case RenderPassPreparationStage::Idle:
+        case RenderPassPreparationStage::Complete:
+            return true;
+
+        case RenderPassPreparationStage::Forward:
+        {
+            ForwardShadingPass::CreateParameters forwardParams;
+            forwardParams.trackLiveness = false;
+            if (m_ui.EnablePbr)
+            {
+                m_ForwardPass =
+                    std::make_shared<PbrForwardShadingPass>(
+                        GetDevice(),
+                        m_CommonPasses,
+                        m_ui.WhiteWorld != WhiteWorldMode::Off);
+            }
+            else
+            {
+                m_ForwardPass = std::make_shared<ForwardShadingPass>(
+                    GetDevice(), m_CommonPasses);
+            }
+            m_ForwardPass->Init(*m_ShaderFactory, forwardParams);
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::GBuffer;
+            return false;
+        }
+
+        case RenderPassPreparationStage::GBuffer:
+        {
+            GBufferFillPass::CreateParameters gbufferParams;
+            gbufferParams.enableMotionVectors =
+                m_RenderTargets->MotionVectorsEnabled;
+            if (m_ui.EnablePbr)
+            {
+                m_GBufferPass =
+                    std::make_shared<PbrGBufferFillPass>(
+                        GetDevice(),
+                        m_CommonPasses,
+                        m_ui.WhiteWorld != WhiteWorldMode::Off);
+            }
+            else
+            {
+                m_GBufferPass = std::make_shared<GBufferFillPass>(
+                    GetDevice(), m_CommonPasses);
+            }
+            m_GBufferPass->Init(*m_ShaderFactory, gbufferParams);
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::MaterialId;
+            return false;
+        }
+
+        case RenderPassPreparationStage::MaterialId:
+        {
+            GBufferFillPass::CreateParameters materialParams;
+            materialParams.enableMotionVectors = false;
+            m_MaterialIDPass =
+                std::make_unique<MaterialIDPass>(
+                    GetDevice(), m_CommonPasses);
+            m_MaterialIDPass->Init(*m_ShaderFactory, materialParams);
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::ReadbackAndFlashlight;
+            return false;
+        }
+
+        case RenderPassPreparationStage::ReadbackAndFlashlight:
+            m_PixelReadbackPass = std::make_unique<PixelReadbackPass>(
+                GetDevice(),
+                m_ShaderFactory,
+                m_RenderTargets->MaterialIDs,
+                nvrhi::Format::RGBA32_UINT);
+            CreateFlashlightShadowResources();
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::DeferredLighting;
+            return false;
+
+        case RenderPassPreparationStage::DeferredLighting:
+            if (m_ui.EnablePbr)
+            {
+                m_DeferredLightingPass.reset();
+                m_PbrDeferredLightingPass =
+                    std::make_unique<PbrDeferredLightingPass>(
+                        GetDevice(), m_CommonPasses);
+                m_PbrDeferredLightingPass->Init(m_ShaderFactory, true);
+                EnsureMsaaVisibilityResolvePass(true);
 #if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
-            m_ScreenSpaceDirectionalShadowPass.reset();
-            m_SparseVirtualShadowMapPass.reset();
-            m_DiagnosticCascadedShadowMapPass.reset();
-#else
+                m_ScreenSpaceDirectionalShadowPass.reset();
+                m_SparseVirtualShadowMapPass.reset();
+                m_DiagnosticCascadedShadowMapPass.reset();
+#endif
+            }
+            else
+            {
+                m_PbrDeferredLightingPass.reset();
+                m_MsaaVisibilityResolvePass.reset();
+                m_ScreenSpaceDirectionalShadowPass.reset();
+                m_SparseVirtualShadowMapPass.reset();
+                m_DiagnosticCascadedShadowMapPass.reset();
+                m_DeferredLightingPass =
+                    std::make_shared<DeferredLightingPass>(
+                        GetDevice(), m_CommonPasses);
+                m_DeferredLightingPass->Init(m_ShaderFactory);
+            }
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::DeferredLightingPipelines;
+            return false;
+
+        case RenderPassPreparationStage::DeferredLightingPipelines:
+            if (m_PbrDeferredLightingPass &&
+                !m_PbrDeferredLightingPass->PreparePipelinesStep())
+            {
+                return false;
+            }
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::MsaaVisibilityResolvePipelines;
+            return false;
+
+        case RenderPassPreparationStage::MsaaVisibilityResolvePipelines:
+            if (m_MsaaVisibilityResolvePass &&
+                !m_MsaaVisibilityResolvePass->PreparePipelinesStep())
+            {
+                return false;
+            }
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::Visibility;
+            return false;
+
+        case RenderPassPreparationStage::Visibility:
+            if (m_ui.EnablePbr)
+            {
+                m_ScreenSpaceVisibilityPass =
+                    std::make_unique<ScreenSpaceVisibilityPass>(
+                        GetDevice(),
+                        m_ShaderFactory,
+                        m_CommonPasses,
+                        &m_PreparedVisibilityBlueNoise,
+                        true);
+            }
+            else
+            {
+                m_ScreenSpaceVisibilityPass.reset();
+            }
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::VisibilityPipelines;
+            return false;
+
+        case RenderPassPreparationStage::VisibilityPipelines:
+            if (m_ScreenSpaceVisibilityPass &&
+                !m_ScreenSpaceVisibilityPass->PreparePipelinesStep())
+            {
+                return false;
+            }
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::TemporalAA;
+            return false;
+
+        case RenderPassPreparationStage::TemporalAA:
+            CreateTemporalAAPass(true);
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::TemporalAAPipelines;
+            return false;
+
+        case RenderPassPreparationStage::TemporalAAPipelines:
+            if (m_TemporalAAPass &&
+                !m_TemporalAAPass->PreparePipelinesStep())
+            {
+                return false;
+            }
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::Cmaa2;
+            return false;
+
+        case RenderPassPreparationStage::Cmaa2:
+            if (m_ui.UsesCmaa2())
+                CreateCmaa2Pass();
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::EnvironmentBackground;
+            return false;
+
+        case RenderPassPreparationStage::EnvironmentBackground:
+            if (m_RenderPassPreparationWaitForIbl &&
+                m_ImageBasedLightingEnvironment &&
+                !m_ImageBasedLightingEnvironment->
+                    IsPreparedRadianceReady())
+            {
+                return false;
+            }
+            m_ImageBasedLightingBackgroundPass =
+                m_ImageBasedLightingEnvironment
+                    ? std::make_unique<ImageBasedLightingBackgroundPass>(
+                        GetDevice(),
+                        m_ShaderFactory,
+                        m_CommonPasses,
+                        m_RenderTargets->ForwardFramebuffer,
+                        *m_View,
+                        m_ImageBasedLightingEnvironment->
+                            GetRadianceTextureResource())
+                    : nullptr;
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::ToneMapping;
+            return false;
+
+        case RenderPassPreparationStage::ToneMapping:
+            m_AgxToneMappingPass =
+                std::make_unique<AgxToneMappingPass>(
+                    GetDevice(),
+                    m_ShaderFactory,
+                    m_CommonPasses,
+                    m_RenderTargets->LdrFramebuffer);
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::Complete;
+            m_RenderPassPreparationWaitForIbl = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    void CreateRenderPasses()
+    {
+        BeginRenderPassPreparation(false);
+        while (!ProcessRenderPassPreparationStep())
+        {
+        }
+    }
+
+    void EnsureOptionalDirectionalVisibilityPasses()
+    {
+#if !UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
+        if (!m_ui.EnablePbr || !m_ui.UsesDeferredShading())
+            return;
+
+        if (m_ui.ScreenSpaceDirectionalShadows.enabled &&
+            !m_ScreenSpaceDirectionalShadowPass)
+        {
             m_ScreenSpaceDirectionalShadowPass =
                 std::make_unique<ScreenSpaceDirectionalShadowPass>(
                     GetDevice(),
                     m_ShaderFactory,
                     m_CommonPasses);
+        }
+
+        const bool sparseShadowPassRequired =
+            m_ui.SparseVirtualShadowMaps.enabled ||
+            m_SvsmMotionBenchmarkAutostartPending ||
+            m_SvsmMotionBenchmarkActive;
+        if (sparseShadowPassRequired &&
+            !m_SparseVirtualShadowMapPass)
+        {
             m_SparseVirtualShadowMapPass =
                 std::make_unique<SparseVirtualShadowMapPass>(
                     GetDevice(),
                     m_ShaderFactory,
                     m_CommonPasses);
-            if (!m_DiagnosticCascadedShadowMapPass)
-            {
-                m_DiagnosticCascadedShadowMapPass =
-                    std::make_unique<DiagnosticCascadedShadowMapPass>(
-                        GetDevice(),
-                        m_ShaderFactory,
-                        m_CommonPasses);
-            }
-#endif
-            m_ScreenSpaceVisibilityPass =
-                std::make_unique<ScreenSpaceVisibilityPass>(
+        }
+
+        const bool diagnosticCsmPassRequired =
+            m_ui.DiagnosticCascadedShadowMaps.enabled ||
+            m_DiagnosticCsmBenchmarkRequested ||
+            m_DiagnosticCsmRecordRequested;
+        if (diagnosticCsmPassRequired &&
+            !m_DiagnosticCascadedShadowMapPass)
+        {
+            m_DiagnosticCascadedShadowMapPass =
+                std::make_unique<DiagnosticCascadedShadowMapPass>(
                     GetDevice(),
                     m_ShaderFactory,
                     m_CommonPasses);
         }
-        else
+#endif
+    }
+
+    void UpdateImageBasedLighting(nvrhi::ICommandList* commandList)
+    {
+        if (!m_ImageBasedLightingEnvironment)
+            return;
+
+        constexpr float WhiteWorldIndirectReferenceScale = 4.0f;
+        const bool whiteWorldEnabled =
+            m_ui.WhiteWorld != WhiteWorldMode::Off;
+        m_ImageBasedLightingEnvironment->Update(
+            commandList,
+            whiteWorldEnabled,
+            whiteWorldEnabled
+                ? WhiteWorldIndirectReferenceScale
+                : 1.f,
+            m_ui.EnvironmentExposureStops,
+            m_ui.EnableAmbientFill &&
+                m_ui.EnableDiffuseIbl,
+            m_ui.DiffuseIblStrength,
+            m_ui.EnableAmbientFill &&
+                m_ui.EnableSpecularIbl,
+            m_ui.SpecularIblStrength,
+            m_ui.EnvironmentSource);
+    }
+
+    void RecordLoadingPresentationFrame()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (m_LoadingPresentationFrameCount > 0u)
         {
-            m_PbrDeferredLightingPass.reset();
-            m_MsaaVisibilityResolvePass.reset();
-            m_ScreenSpaceDirectionalShadowPass.reset();
-            m_SparseVirtualShadowMapPass.reset();
-            m_DiagnosticCascadedShadowMapPass.reset();
-            m_ScreenSpaceVisibilityPass.reset();
-            m_DeferredLightingPass = std::make_shared<DeferredLightingPass>(GetDevice(), m_CommonPasses);
-            m_DeferredLightingPass->Init(m_ShaderFactory);
+            const double gapMilliseconds =
+                std::chrono::duration<double, std::milli>(
+                    now - m_LastLoadingPresentationFrame).count();
+            m_MaximumLoadingPresentationGapMs = std::max(
+                m_MaximumLoadingPresentationGapMs,
+                gapMilliseconds);
         }
-
-        CreateTemporalAAPass();
-
-        if (m_ui.UsesCmaa2())
-            CreateCmaa2Pass();
-
-        m_ImageBasedLightingBackgroundPass =
-            m_ImageBasedLightingEnvironment
-                ? std::make_unique<ImageBasedLightingBackgroundPass>(
-                    GetDevice(),
-                    m_ShaderFactory,
-                    m_CommonPasses,
-                    m_RenderTargets->ForwardFramebuffer,
-                    *m_View,
-                    m_ImageBasedLightingEnvironment->
-                        GetRadianceTextureResource())
-                : nullptr;
-
-        m_AgxToneMappingPass = std::make_unique<AgxToneMappingPass>(
-            GetDevice(), m_ShaderFactory, m_CommonPasses, m_RenderTargets->LdrFramebuffer);
-
+        m_LastLoadingPresentationFrame = now;
+        ++m_LoadingPresentationFrameCount;
     }
 
     virtual void RenderSplashScreen(nvrhi::IFramebuffer* framebuffer) override
     {
+        RecordLoadingPresentationFrame();
         nvrhi::ITexture* framebufferTexture = framebuffer->getDesc().colorAttachments[0].texture;
         m_CommandList->open();
 #ifdef _WIN32
@@ -7773,6 +8237,193 @@ public:
         m_CommandList->clearTextureFloat(framebufferTexture, nvrhi::AllSubresources, nvrhi::Color(0.f));
         m_CommandList->close();
         GetDevice()->executeCommandList(m_CommandList);
+    }
+
+    bool PrepareLoadingRenderTargets(nvrhi::IFramebuffer* framebuffer)
+    {
+        const nvrhi::FramebufferInfoEx& framebufferInfo =
+            framebuffer->getFramebufferInfo();
+        if (framebufferInfo.width == 0u || framebufferInfo.height == 0u)
+            return false;
+
+        const uint2 renderSize(
+            framebufferInfo.width,
+            framebufferInfo.height);
+        const uint32_t sampleCount =
+            !m_ui.AntiAliasing.enabled
+                ? 1u
+                : ResolveSupportedMsaaSampleCount(
+                    GetDevice(),
+                    m_ui.GetResolvedAntiAliasingSettings()
+                        .rasterSampleCount,
+                    m_ui.EnablePbr);
+        const bool screenSpaceVisibilityResourcesRequired =
+            m_ui.EnablePbr &&
+            m_ui.IsScreenSpaceVisibilityAvailable() &&
+            m_ui.HasActiveScreenSpaceVisibilityConsumer();
+        const bool msaaClosestSurfaceResolveResourcesRequired =
+            m_ui.EnablePbr &&
+            m_ui.UsesDeferredShading() &&
+            sampleCount > 1u;
+        const bool visibilityResourcesRequired =
+            screenSpaceVisibilityResourcesRequired ||
+            msaaClosestSurfaceResolveResourcesRequired;
+        const bool submittedLightingAvailable =
+            !m_SceneLightsWithoutFlashlight.empty() ||
+            (ShouldSubmitFlashlight(m_FlashlightTransition) &&
+                bool(m_Flashlight));
+        const bool visibilitySourceRadianceRequired =
+            screenSpaceVisibilityResourcesRequired &&
+            m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
+            (submittedLightingAvailable ||
+                IsAmbientFillLobeActive(
+                    m_ui.EnableAmbientFill,
+                    m_ui.EnableDiffuseIbl,
+                    m_ui.DiffuseIblStrength));
+        const bool motionVectorsRequired =
+            m_ui.RequiresAntiAliasingMotionVectors() ||
+            (visibilityResourcesRequired &&
+                (m_ui.ScreenSpaceVisibility.RequiresMotionVectors() ||
+                    sampleCount > 1u));
+
+        bool needNewPasses = false;
+        if (!m_RenderTargets || m_RenderTargets->IsUpdateRequired(
+                renderSize,
+                sampleCount,
+                m_ui.EnablePbr,
+                visibilityResourcesRequired,
+                visibilitySourceRadianceRequired,
+                motionVectorsRequired))
+        {
+            m_RenderTargets.reset();
+            m_BindingCache.Clear();
+            m_RenderTargets = std::make_unique<RenderTargets>();
+            m_RenderTargets->Init(
+                GetDevice(),
+                renderSize,
+                sampleCount,
+                motionVectorsRequired,
+                true,
+                m_ui.EnablePbr,
+                visibilityResourcesRequired,
+                visibilitySourceRadianceRequired);
+            m_PreviousView.reset();
+            needNewPasses = true;
+        }
+
+        if (SetupView())
+        {
+            needNewPasses = true;
+            m_PreviousView.reset();
+        }
+
+        if (needNewPasses || !m_ForwardPass || !m_GBufferPass ||
+            !m_MaterialIDPass || !m_AgxToneMappingPass)
+        {
+            BeginRenderPassPreparation(true);
+        }
+        else
+        {
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::Complete;
+        }
+        return true;
+    }
+
+    void RenderSceneGpuUploadFrame(nvrhi::IFramebuffer* framebuffer)
+    {
+        RecordLoadingPresentationFrame();
+        nvrhi::ITexture* framebufferTexture =
+            framebuffer->getDesc().colorAttachments[0].texture;
+        m_CommandList->open();
+#ifdef _WIN32
+        NameD3d12CommandList(
+            m_CommandList,
+            L"UVSR Bounded Scene Upload Command List");
+        SetD3d12DredMarker(
+            m_CommandList,
+            L"UVSR Bounded Scene Upload");
+#endif
+        m_CommandList->clearTextureFloat(
+            framebufferTexture,
+            nvrhi::AllSubresources,
+            nvrhi::Color(0.f));
+        switch (m_ScenePreparationStage)
+        {
+        case ScenePreparationStage::MeshUpload:
+            if (m_Scene->ProcessLoadingBuffers(
+                    m_CommandList,
+                    c_SceneUploadBytesPerFrame,
+                    GetFrameIndex()))
+            {
+                // Activation has its own loading frame so its material, light,
+                // and camera setup cannot stack on the final mesh-buffer work.
+                m_ScenePreparationStage =
+                    ScenePreparationStage::SceneActivation;
+            }
+            break;
+
+        case ScenePreparationStage::SceneActivation:
+            CompleteSceneActivation();
+            m_ScenePreparationStage =
+                ScenePreparationStage::MaterialBuffers;
+            break;
+
+        case ScenePreparationStage::MaterialBuffers:
+            // Activation applies the renderer's PBR defaults and can attach
+            // its fallback lights, which dirties Donut's material and scene
+            // buffers after the importer's final refresh. Consume those
+            // writes on their own loading frame so the first visible scene
+            // frame does not inherit the whole update.
+            m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());
+            m_ScenePreparationStage =
+                ScenePreparationStage::RenderTargets;
+            break;
+
+        case ScenePreparationStage::RenderTargets:
+            if (PrepareLoadingRenderTargets(framebuffer))
+            {
+                m_ScenePreparationStage =
+                    ScenePreparationStage::RenderPasses;
+            }
+            break;
+
+        case ScenePreparationStage::RenderPasses:
+            if (ProcessRenderPassPreparationStep())
+                m_ScenePreparationStage = ScenePreparationStage::Complete;
+            break;
+
+        case ScenePreparationStage::Complete:
+            break;
+        }
+
+        // Consume worker-prepared HDR data one GPU unit per loading frame.
+        // Partially generated environment maps are not exposed to rendering.
+        UpdateImageBasedLighting(m_CommandList);
+        m_CommandList->close();
+        GetDevice()->executeCommandList(m_CommandList);
+
+        const bool environmentReady =
+            !m_ImageBasedLightingEnvironment ||
+            m_ImageBasedLightingEnvironment->IsPreparedRadianceReady();
+        if (m_ScenePreparationStage == ScenePreparationStage::Complete &&
+            environmentReady)
+        {
+            m_SceneGpuUploadPending = false;
+            const auto duration =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::high_resolution_clock::now() -
+                    m_SceneGpuUploadStart).count();
+            log::info(
+                "Staged scene upload and renderer preparation completed in %lld ms across %llu loading frames (maximum presentation gap %.2f ms)",
+                static_cast<long long>(duration),
+                static_cast<unsigned long long>(
+                    m_LoadingPresentationFrameCount),
+                m_MaximumLoadingPresentationGapMs);
+            m_LastLoadingPresentationFrame = {};
+            m_MaximumLoadingPresentationGapMs = 0.0;
+            m_LoadingPresentationFrameCount = 0u;
+        }
     }
 
     static bool IsSameDiagnosticCsmBenchmarkWork(
@@ -9018,7 +9669,14 @@ public:
 
     virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override
     {
+        if (m_SceneGpuUploadPending)
+        {
+            RenderSceneGpuUploadFrame(framebuffer);
+            return;
+        }
+
         ApplyFactoryExperimentShaderTopology(m_ui);
+        EnsureOptionalDirectionalVisibilityPasses();
         if (g_VisibilityTaaPrimeFramesRemaining != 0u &&
             --g_VisibilityTaaPrimeFramesRemaining == 0u)
         {
@@ -9278,6 +9936,8 @@ public:
 
             if (m_ui.ShaderReloadRequested)
             {
+                m_ScreenSpaceDirectionalShadowPass.reset();
+                m_SparseVirtualShadowMapPass.reset();
                 m_DiagnosticCascadedShadowMapPass.reset();
                 m_FlashlightDepthPass.reset();
                 // This pass owns shader handles and PSOs independently of the
@@ -9330,6 +9990,8 @@ public:
             m_ui.ShaderReloadRequested = false;
         }
 
+        EnsureOptionalDirectionalVisibilityPasses();
+
         AdvanceAntiAliasingTimer();
         m_CommandList->open();
         AdvanceRendererTimers();
@@ -9347,27 +10009,7 @@ public:
         nvrhi::ITexture* framebufferTexture = framebuffer->getDesc().colorAttachments[0].texture;
         m_CommandList->clearTextureFloat(framebufferTexture, nvrhi::AllSubresources, nvrhi::Color(0.f));
 
-        constexpr float WhiteWorldIndirectReferenceScale = 4.0f;
-        const bool whiteWorldEnabled =
-            m_ui.WhiteWorld != WhiteWorldMode::Off;
-
-        if (m_ImageBasedLightingEnvironment)
-        {
-            m_ImageBasedLightingEnvironment->Update(
-                m_CommandList,
-                whiteWorldEnabled,
-                whiteWorldEnabled
-                    ? WhiteWorldIndirectReferenceScale
-                    : 1.f,
-                m_ui.EnvironmentExposureStops,
-                m_ui.EnableAmbientFill &&
-                    m_ui.EnableDiffuseIbl,
-                m_ui.DiffuseIblStrength,
-                m_ui.EnableAmbientFill &&
-                    m_ui.EnableSpecularIbl,
-                m_ui.SpecularIblStrength,
-                m_ui.EnvironmentSource);
-        }
+        UpdateImageBasedLighting(m_CommandList);
         const std::vector<std::shared_ptr<LightProbe>> emptyLightProbes;
         const auto& environmentLightProbes =
             m_ui.EnablePbr && m_ImageBasedLightingEnvironment
@@ -11393,8 +12035,8 @@ bool UvsrSceneViewer::QueueVisibilityBenchmark(
         else if (!m_SponzaCameraLocationsAvailable)
         {
             m_VisibilityBenchmarkError =
-                "Visibility benchmarks require PBR Sponza Decorated or "
-                "PBR Sponza Plain so Benchmark Position 1 can be locked.";
+                "Visibility benchmarks require Sponza Decorated or "
+                "Sponza Plain so Benchmark Position 1 can be locked.";
             log::warning("%s", m_VisibilityBenchmarkError.c_str());
             return false;
         }
@@ -11527,8 +12169,8 @@ void UvsrSceneViewer::UpdateVisibilityBenchmarkAfterRender()
             !m_SponzaCameraLocationsAvailable)
         {
             FailVisibilityBenchmark(
-                "Visibility benchmarks require PBR Sponza Decorated or "
-                "PBR Sponza Plain so Benchmark Position 1 can be locked.");
+                "Visibility benchmarks require Sponza Decorated or "
+                "Sponza Plain so Benchmark Position 1 can be locked.");
             return;
         }
         const SponzaCameraPreset& preset = GetDefaultSponzaCameraPreset();
@@ -14531,7 +15173,7 @@ private:
         {
             return false;
         }
-        return m_app->IsSceneLoading() ||
+        return m_app->IsSceneBusy() ||
             m_app->IsVisibilityBenchmarkQueued() ||
             m_app->IsVisibilityBenchmarkActive() ||
             m_app->IsAntiAliasingMotionTestRunning() ||
@@ -20464,7 +21106,7 @@ private:
                 true);
             return;
 #else
-            if (m_app->IsSceneLoading() ||
+            if (m_app->IsSceneBusy() ||
                 m_app->IsVisibilityBenchmarkQueued() ||
                 m_app->IsVisibilityBenchmarkActive() ||
                 m_app->IsAntiAliasingMotionTestRunning() ||
@@ -24114,7 +24756,7 @@ protected:
             ImGui::PopFont();
         }
 
-        const bool sceneLoading = m_app->IsSceneLoading();
+        const bool sceneLoading = m_app->IsSceneBusy();
         if (sceneLoading)
         {
             if (!m_WasSceneLoading)
@@ -24189,14 +24831,20 @@ protected:
             char messageBuffer[512];
             const std::string sceneDisplayName =
                 m_app->GetCurrentSceneDisplayName();
+            const char* loadingPhase =
+                m_app->IsSceneGpuUploadPending()
+                    ? "Uploading mesh buffers in bounded chunks"
+                    : "Importing and preparing scene data";
             snprintf(
                 messageBuffer,
                 std::size(messageBuffer),
                 "Loading scene: %s, please wait%s\n"
+                "%s\n"
                 "Objects: %u/%u / Import steps: %llu/%llu / "
                 "Textures decoded: %u/%u / GPU ready: %u/%u",
                 sceneDisplayName.c_str(),
                 LoadingDots[loadingDotIndex],
+                loadingPhase,
                 objectsLoaded,
                 objectsTotal,
                 static_cast<unsigned long long>(importStepsCompleted),
@@ -27327,7 +27975,7 @@ protected:
             else if (!benchmarkSceneValid)
             {
                 benchmarkBlockedReason =
-                    "Load PBR Sponza Decorated or PBR Sponza Plain so the "
+                    "Load Sponza Decorated or Sponza Plain so the "
                     "standard benchmark camera can be locked.";
             }
             else if (!benchmarkPlan.valid)

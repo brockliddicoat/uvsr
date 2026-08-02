@@ -262,8 +262,14 @@ PbrDeferredLightingPass::PbrDeferredLightingPass(
 {
 }
 
-void PbrDeferredLightingPass::Init(const std::shared_ptr<ShaderFactory>& shaderFactory)
+void PbrDeferredLightingPass::Init(
+    const std::shared_ptr<ShaderFactory>& shaderFactory,
+    bool deferPipelineCreation)
 {
+    m_ShaderFactory = shaderFactory;
+    m_PipelinePreparationStep = 0u;
+    m_PipelinesReady = false;
+
     auto samplerDesc = nvrhi::SamplerDesc()
         .setAllAddressModes(nvrhi::SamplerAddressMode::Border)
         .setBorderColor(1.0f)
@@ -278,8 +284,22 @@ void PbrDeferredLightingPass::Init(const std::shared_ptr<ShaderFactory>& shaderF
     constantBufferDesc.maxVersions = c_MaxRenderPassConstantBufferVersions;
     m_DeferredLightingCB = m_Device->createBuffer(constantBufferDesc);
 
-    for (uint32_t variant = 0; variant < m_Pipelines.size(); ++variant)
+    if (!deferPipelineCreation)
     {
+        while (!PreparePipelinesStep())
+        {
+        }
+    }
+}
+
+bool PbrDeferredLightingPass::PreparePipelinesStep()
+{
+    if (m_PipelinesReady)
+        return true;
+
+    if (m_PipelinePreparationStep < m_Pipelines.size())
+    {
+        const uint32_t variant = m_PipelinePreparationStep;
         const bool writeSourceRadiance = variant != 0u;
         const bool writeBounceMetadata = variant == 2u;
         Pipeline& pipeline = m_Pipelines[variant];
@@ -317,7 +337,7 @@ void PbrDeferredLightingPass::Init(const std::shared_ptr<ShaderFactory>& shaderF
             "WRITE_SOURCE_RADIANCE", writeSourceRadiance ? "1" : "0");
         macros.emplace_back(
             "WRITE_BOUNCE_METADATA", writeBounceMetadata ? "1" : "0");
-        pipeline.shader = shaderFactory->CreateShader(
+        pipeline.shader = m_ShaderFactory->CreateShader(
             "uvsr/pbr_deferred_lighting_cs.hlsl",
             "main",
             &macros,
@@ -328,25 +348,24 @@ void PbrDeferredLightingPass::Init(const std::shared_ptr<ShaderFactory>& shaderF
         pipelineDesc.bindingLayouts = { pipeline.bindingLayout };
         pipeline.pso = m_Device->createComputePipeline(pipelineDesc);
     }
-
-    for (uint32_t visibilityVariant = 0u;
-        visibilityVariant < m_MsaaPipelines.size();
-        ++visibilityVariant)
+    else
     {
-        for (uint32_t sampleVariant = 0u;
-            sampleVariant <
-                m_MsaaPipelines[visibilityVariant].size();
-            ++sampleVariant)
-        {
-            const uint32_t sampleCount =
-                2u << sampleVariant;
-            Pipeline& pipeline =
-                m_MsaaPipelines[visibilityVariant][sampleVariant];
+        const uint32_t msaaStep =
+            m_PipelinePreparationStep -
+            static_cast<uint32_t>(m_Pipelines.size());
+        const uint32_t sampleVariant =
+            msaaStep %
+            static_cast<uint32_t>(m_MsaaPipelines[0].size());
+        const uint32_t visibilityVariant =
+            msaaStep /
+            static_cast<uint32_t>(m_MsaaPipelines[0].size());
+        const uint32_t sampleCount = 2u << sampleVariant;
+        Pipeline& pipeline =
+            m_MsaaPipelines[visibilityVariant][sampleVariant];
 
-            nvrhi::BindingLayoutDesc layoutDesc;
-            layoutDesc.visibility =
-                nvrhi::ShaderType::Compute;
-            layoutDesc.bindings = {
+        nvrhi::BindingLayoutDesc layoutDesc;
+        layoutDesc.visibility = nvrhi::ShaderType::Compute;
+        layoutDesc.bindings = {
                 nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
                 nvrhi::BindingLayoutItem::Texture_SRV(0),
                 nvrhi::BindingLayoutItem::Texture_SRV(1),
@@ -368,39 +387,40 @@ void PbrDeferredLightingPass::Init(const std::shared_ptr<ShaderFactory>& shaderF
                 nvrhi::BindingLayoutItem::Sampler(1),
                 nvrhi::BindingLayoutItem::Sampler(2),
                 nvrhi::BindingLayoutItem::Sampler(3)
-            };
-            if (visibilityVariant != 0u)
-            {
-                layoutDesc.bindings.push_back(
-                    nvrhi::BindingLayoutItem::Texture_SRV(18));
-                layoutDesc.bindings.push_back(
-                    nvrhi::BindingLayoutItem::Texture_SRV(19));
-            }
-            pipeline.bindingLayout =
-                m_Device->createBindingLayout(layoutDesc);
-
-            std::vector<ShaderMacro> macros;
-            macros.emplace_back(
-                "PBR_DEFERRED_MSAA_SAMPLES",
-                std::to_string(sampleCount));
-            macros.emplace_back(
-                "PBR_DEFERRED_MSAA_VISIBILITY",
-                visibilityVariant != 0u ? "1" : "0");
-            pipeline.shader = shaderFactory->CreateShader(
-                "uvsr/pbr_deferred_lighting_msaa_cs.hlsl",
-                "main",
-                &macros,
-                nvrhi::ShaderType::Compute);
-
-            nvrhi::ComputePipelineDesc pipelineDesc;
-            pipelineDesc.CS = pipeline.shader;
-            pipelineDesc.bindingLayouts = {
-                pipeline.bindingLayout
-            };
-            pipeline.pso =
-                m_Device->createComputePipeline(pipelineDesc);
+        };
+        if (visibilityVariant != 0u)
+        {
+            layoutDesc.bindings.push_back(
+                nvrhi::BindingLayoutItem::Texture_SRV(18));
+            layoutDesc.bindings.push_back(
+                nvrhi::BindingLayoutItem::Texture_SRV(19));
         }
+        pipeline.bindingLayout =
+            m_Device->createBindingLayout(layoutDesc);
+
+        std::vector<ShaderMacro> macros;
+        macros.emplace_back(
+            "PBR_DEFERRED_MSAA_SAMPLES",
+            std::to_string(sampleCount));
+        macros.emplace_back(
+            "PBR_DEFERRED_MSAA_VISIBILITY",
+            visibilityVariant != 0u ? "1" : "0");
+        pipeline.shader = m_ShaderFactory->CreateShader(
+            "uvsr/pbr_deferred_lighting_msaa_cs.hlsl",
+            "main",
+            &macros,
+            nvrhi::ShaderType::Compute);
+
+        nvrhi::ComputePipelineDesc pipelineDesc;
+        pipelineDesc.CS = pipeline.shader;
+        pipelineDesc.bindingLayouts = { pipeline.bindingLayout };
+        pipeline.pso = m_Device->createComputePipeline(pipelineDesc);
     }
+
+    ++m_PipelinePreparationStep;
+    constexpr uint32_t pipelineCount = 3u + 2u * 4u;
+    m_PipelinesReady = m_PipelinePreparationStep == pipelineCount;
+    return m_PipelinesReady;
 }
 
 void PbrDeferredLightingPass::Render(
@@ -422,6 +442,12 @@ void PbrDeferredLightingPass::Render(
     nvrhi::ITexture* visibilityComposite)
 {
     assert(!writeBounceMetadata || writeSourceRadiance);
+    if (!m_PipelinesReady)
+    {
+        log::error(
+            "PbrDeferredLightingPass rendered before pipeline preparation completed.");
+        return;
+    }
     const bool msaa = msaaSampleCount > 1u;
     if (!commandList ||
         !inputs.depth ||

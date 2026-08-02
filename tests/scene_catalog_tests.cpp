@@ -102,11 +102,11 @@ int main()
         const std::filesystem::path standalone = root / "standalone/example.glb";
 
         WriteText(mainDescriptor,
-            R"({"displayName":"PBR Sponza Decorated","models":["components/part1.glb","components/../components/part2.glb","components/curtains.glb","components/ivy/ivy1.glb","components/ivy/ivy2.glb"],"graph":[]})");
+            R"({"displayName":"Sponza Decorated","initialCamera":{"position":[1,2,3],"direction":[0,0,-2],"up":[0,3,0],"verticalFovDegrees":55},"models":["components/part1.glb","components/../components/part2.glb","components/curtains.glb","components/ivy/ivy1.glb","components/ivy/ivy2.glb"],"graph":[]})");
         WriteText(plainDescriptor,
-            R"({"displayName":"PBR Sponza Plain","models":["components/part1.glb","components/part2.glb"],"graph":[]})");
+            R"({"displayName":"Sponza Plain","models":["components/part1.glb","components/part2.glb"],"graph":[]})");
         WriteText(fallbackDescriptor,
-            R"({"displayName":"   ","models":[],"graph":[]})");
+            R"({"displayName":"   ","initialCamera":{"position":[0,0,0],"direction":[3e38,0,0],"up":[3e38,1,0]},"models":[],"graph":[]})");
 
         std::vector<std::string> discovered = {
             Generic(part2),
@@ -125,12 +125,29 @@ int main()
         const auto catalog = uvsr::BuildSceneCatalog(fileSystem, root, discovered);
 
         Require(catalog.size() == 4, "catalog must hide all descriptor-owned components");
-        Require(FindByDisplayName(catalog, "PBR Sponza Decorated") != nullptr,
+        const auto* decorated = FindByDisplayName(catalog, "Sponza Decorated");
+        Require(decorated != nullptr,
             "main descriptor must use its friendly display name");
-        Require(FindByDisplayName(catalog, "PBR Sponza Plain") != nullptr,
+        Require(decorated->InitialCamera.has_value(),
+            "valid descriptor initial camera must be retained");
+        Require(
+            decorated->InitialCamera->Position ==
+                    std::array<float, 3>{ 1.f, 2.f, 3.f } &&
+                decorated->InitialCamera->Direction ==
+                    std::array<float, 3>{ 0.f, 0.f, -1.f } &&
+                decorated->InitialCamera->Up ==
+                    std::array<float, 3>{ 0.f, 1.f, 0.f } &&
+                decorated->InitialCamera->VerticalFovDegrees == 55.f,
+            "descriptor initial camera must normalize vectors and retain its pose");
+        Require(FindByDisplayName(catalog, "Sponza Plain") != nullptr,
             "plain descriptor must remain visible when it shares architecture components");
-        Require(FindByDisplayName(catalog, "intel_sponza/fallback.scene.json") != nullptr,
+        const auto* fallback = FindByDisplayName(
+            catalog,
+            "intel_sponza/fallback.scene.json");
+        Require(fallback != nullptr,
             "empty displayName must fall back to the relative descriptor path");
+        Require(!fallback->InitialCamera.has_value(),
+            "overflow-prone near-parallel vectors must reject an invalid initial camera");
         Require(FindByDisplayName(catalog, "standalone/example.glb") != nullptr,
             "unreferenced standalone GLB must remain visible");
 
