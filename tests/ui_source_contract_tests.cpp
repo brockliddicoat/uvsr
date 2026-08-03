@@ -28,7 +28,7 @@ namespace
 
     std::string ReadFile(const std::filesystem::path& path)
     {
-        std::ifstream stream(path, std::ios::binary);
+        std::ifstream stream(path);
         if (!stream)
             return {};
         return std::string(
