@@ -420,10 +420,14 @@ ownership. Policy now verifies the commit embedded in the retained
 `UVSR Renderer D3D12 (<commit>)` title.
 
 This cleanup changes launcher, policy, and restoration guidance only. It does
-not change renderer source or the accepted executable's bytes. Its provisional
-post-cleanup build-input diff identifier is
-`d0b7279b3242493ebbdb1b4fbaa1e7f72ae4b77e`; the committed tree and clean
-canonical executable own the final source evidence.
+not change renderer source or the accepted executable's bytes. The later
+frozen-tree review found that a stale pre-tonemapping compatibility gate made
+Conservative Morphological Anti-Aliasing force the Minimum Temporal
+Reconstructive path onto its robust fallback. The gate is removed because the
+techniques now use separate history and display-linear resources, and a
+source-contract test prevents the regression. The final build-input diff
+identifier is `04bc8b8ad81f823290258b82bfd1870f9617a12b`; the committed tree and
+clean canonical executable own the final source evidence.
 
 ### Final Source and Evidence Map
 
@@ -442,10 +446,10 @@ canonical executable own the final source evidence.
 
 | Measure | Pre-Cutdown Baseline | Final Accepted Source | Reduction |
 | --- | ---: | ---: | ---: |
-| First-party nonblank source lines | 145,256 | 64,611 | 80,645 fewer (55.52%) |
+| First-party nonblank source lines | 145,256 | 64,615 | 80,641 fewer (55.52%) |
 | `src/uvsr.cpp` physical lines | 33,577 | 17,306 | 16,271 fewer (48.46%) |
 | Third-party nonblank source lines | 388,207 | 388,207 | Unchanged |
-| Total nonblank source lines | 533,463 | 452,818 | 80,645 fewer (15.12%) |
+| Total nonblank source lines | 533,463 | 452,822 | 80,641 fewer (15.12%) |
 | Core first-party shader tasks | 823 production / 3,033 developer | 268 | 555 fewer than production (67.44%) |
 | Integrated shader tasks | 899 production | 390 | 509 fewer (56.62%) |
 | Runtime shader package files | Historical package differs | 39 | Exact current package |

@@ -109,11 +109,16 @@ Shared hotspots reserved for the coordinator:
   label. Only `LaunchUVSR.cmd`, `tools/launch_uvsr.ps1`, policy, and restoration
   guidance changed; renderer source and executable bytes remain unchanged. A
   new full-source identity and clean canonical build will own final evidence.
-- Final pre-commit counted source: 64,611 first-party, 388,207 third-party, and
-  452,818 total nonblank lines; `src/uvsr.cpp` has 17,306 physical lines. The
+- Final pre-commit counted source: 64,615 first-party, 388,207 third-party, and
+  452,822 total nonblank lines; `src/uvsr.cpp` has 17,306 physical lines. The
   current build-input diff is
-  `d0b7279b3242493ebbdb1b4fbaa1e7f72ae4b77e`, with zero untracked build
+  `04bc8b8ad81f823290258b82bfd1870f9617a12b`, with zero untracked build
   inputs.
+- The frozen-tree renderer review found one priority-two composition defect:
+  Conservative Morphological Anti-Aliasing incorrectly forced the Minimum
+  Temporal Reconstructive path onto its robust fallback even though the two
+  techniques now consume separate history and display-linear resources. The
+  compatibility gate is removed and a source-contract test prevents its return.
 - Known pre-existing failures: none in the accepted candidate's registered
   suite.
 
@@ -187,6 +192,7 @@ Public contracts:
 | 2026-08-03 | Archive five superseded plans with their complete evidence | Their done conditions remain unmet, but deleting failure, benchmark, and recovery evidence would make future restoration less safe; archiving does not revive runtime code | Documentation |
 | 2026-08-03 | Leave PRs #10 and #11 outside this publication | They have separate owners and are not required by the accepted renderer | Integration |
 | 2026-08-03 | Treat performance benchmarking as out of scope | The cleanup claims reduced code and permutations, not a matched frame-time improvement | Verification |
+| 2026-08-03 | Repair the frozen-review anti-aliasing composition finding before publication | Minimum Temporal Reconstructive and Conservative Morphological Anti-Aliasing are user-composable techniques; retaining a stale pre-tonemapping resource gate would silently change the selected Cost preset | Renderer checkpoint |
 
 ## Risks and Escalation Triggers
 
@@ -208,7 +214,8 @@ Public contracts:
 | 2026-08-03 | `/root` candidate acceptance | Complete | SHA-256 `194D1637...` | 30 of 30 tests and full candidate hygiene passed | Freeze source and commit |
 | 2026-08-03 | `/root` live-target audit | Complete | `origin/main` `f7c0c87`; local `main` `5e300c9` | Fresh fetch, graph, worktrees, PRs, and Coming Soon inspected | Await ownership reviews |
 | 2026-08-03 | Read-only publication audits | Complete | Topology, ownership, protocol, launcher, and plan-lifecycle handoffs | No cleanup-diff P0; launcher label retired; stale plans archived; contaminated local main excluded | Freeze final source and commit |
-| 2026-08-03 | `/root` final pre-commit hygiene | Complete | Build-input diff `d0b7279...`; 64,611 first-party lines | README self-test/check, 1,121-heading Title Case scan, launcher audit, and diff check pass | Stage exact task paths and commit |
+| 2026-08-03 | `/root` final pre-commit hygiene | Complete | Build-input diff `04bc8b8...`; 64,615 first-party lines | README self-test/check, 1,121-heading Title Case scan, launcher audit, and diff check pass | Stage exact task paths and commit |
+| 2026-08-03 | Frozen renderer review and `/root` repair | In progress | Minimum Temporal Reconstructive composition repair | Focused temporal target and source-contract test pass in the isolated diagnostic tree | Commit the repair, rebuild the exact final tree, and obtain reviewer closeout |
 
 ## Completion
 

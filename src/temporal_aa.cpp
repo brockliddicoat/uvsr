@@ -661,9 +661,6 @@ namespace uvsr
             ShouldSharpenTemporalAa(enableSharpen, clampedSharpness);
         const TemporalAaSharpenWeights sharpenWeights =
             GetTemporalAaSharpenWeights(clampedSharpness);
-        const bool minimumPresentationCompatible =
-            !settings.cmaa2Enabled ||
-            !m_Timings.minimumColorIsR11G11B10;
         const bool minimumAlgorithmCompatible =
             IsTemporalAaCompactHistoryCompatible(settings);
         const bool useMinimum =
@@ -671,8 +668,7 @@ namespace uvsr
             m_MinimumPipelines[minimumBehaviorIndex] &&
             m_MinimumBindingSets[0] &&
             m_MinimumBindingSets[1] &&
-            minimumAlgorithmCompatible &&
-            minimumPresentationCompatible;
+            minimumAlgorithmCompatible;
         m_Timings.effectiveCostMode = useMinimum
             ? TemporalAaCostMode::Minimum
             : settings.temporalCostMode ==
@@ -688,7 +684,7 @@ namespace uvsr
             !m_ReportedMinimumFallback)
         {
             log::warning(
-                "Temporal AA compact history fell back to the robust path because its algorithm, history weight, format support, or CMAA2 input is incompatible with this frame.");
+                "Temporal AA compact history fell back to the robust path because its algorithm, history weight, or format support is incompatible with this frame.");
             m_ReportedMinimumFallback = true;
         }
         else if (!compactHistoryRequested || useMinimum)

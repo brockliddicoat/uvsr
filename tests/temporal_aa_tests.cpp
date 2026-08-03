@@ -308,6 +308,14 @@ int main(int argc, char** argv)
                     std::string::npos,
             "CMAA2 must be display-linear LDR only");
         passed &= Check(
+            temporalPass.find("minimumPresentationCompatible") ==
+                    std::string::npos &&
+                temporalPass.find("settings.cmaa2Enabled") ==
+                    std::string::npos &&
+                temporalPass.find("CMAA2 input is incompatible") ==
+                    std::string::npos,
+            "Minimum TAA and display-linear CMAA2 must remain composable");
+        passed &= Check(
             shaderManifest.find("TAA_SAMPLE_RESURRECTION") ==
                     std::string::npos &&
                 shaderManifest.find("TAA_COMPUTE_KERNEL") ==
