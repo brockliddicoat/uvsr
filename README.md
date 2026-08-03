@@ -77,13 +77,6 @@ conversion, or scene setup is required.
 This section summarizes stable work that is active but not yet merged into
 `main`. Experimental entries are not promises that the work will ship.
 
-- **Engine Core Cleanup and Front-End Restoration — Local Candidate**
-  (`codex/engine-core-cleanup`). Removes dormant visibility, shadow, benchmark,
-  forward-rendering, and shader-permutation paths while retaining the focused
-  deferred PBR, screen-space visibility, screen-space directional shadow, and
-  independently composable aliasing routes. The current local candidate also
-  restores preset identity, compact Buffers, detailed one-effect Statistics,
-  tooltips, reset ownership, and animated effect disclosures.
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidates shared
   depth, pixel-coordinate, and safe-normal helpers without changing equations,

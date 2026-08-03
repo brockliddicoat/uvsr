@@ -2,7 +2,7 @@
 
 ## Status
 
-- State: integration
+- State: completed
 - Coordinator: `/root`
 - Project branch and worktree: `codex/engine-core-cleanup` in
   `C:\Users\brock\OneDrive\Documents\uvsr\work\engine-core-cleanup`
@@ -11,7 +11,8 @@
 - Live remote base: `f7c0c87d8cba6880428fbc34400eb2882fb5182e`
 - Started: 2026-08-03
 - Last updated: 2026-08-03
-- Planned archive:
+- Completed: 2026-08-03
+- Archived path:
   `docs/exec-plans/completed/canonicalize-engine-core-cleanup.md`
 
 ## Goal and Done Condition
@@ -23,17 +24,17 @@ Canonical verified build.
 
 Done when:
 
-- [ ] The accepted dirty source is captured in a focused feature commit without
+- [x] The accepted dirty source is captured in a focused feature commit without
       generated build output or unrelated worktree state.
-- [ ] Valid local policy semantics are transplanted without publishing the
+- [x] Valid local policy semantics are transplanted without publishing the
       contaminated local `main` ancestry, importing superseded planning bloat,
       or reviving superseded README behavior.
-- [ ] The integrated renderer receives a fresh clean Release build, complete
+- [x] The integrated renderer receives a fresh clean Release build, complete
       shader-package verification, all registered tests, document validation,
       and independent review.
-- [ ] The exact integrated checkpoint and executable are recorded in a durable
+- [x] The exact integrated checkpoint and executable are recorded in a durable
       Canonical-verification record.
-- [ ] `main` is pushed without history rewriting and a fresh remote query proves
+- [x] `main` is pushed without history rewriting and a fresh remote query proves
       the expected SHA is live.
 
 ## Scope
@@ -119,6 +120,13 @@ Shared hotspots reserved for the coordinator:
   Temporal Reconstructive path onto its robust fallback even though the two
   techniques now consume separate history and display-linear resources. The
   compatibility gate is removed and a source-contract test prevents its return.
+- Final Canonical artifact: commit
+  `b4dc24128e4f38effdeaf5a2dbc33cae107e9134`, tree
+  `8a3fbc4848a65e057bdabc669d0f6e73f074207f`, executable SHA-256
+  `5F3779B0EFDE94B9C9B202BEB5A069265869D111ACE32D1132CA3D16F9430362`.
+  The user verified Temporal Reconstructive, Conservative Morphological, and
+  Multisample Reference running together on this exact executable and then
+  renewed authorization to publish it.
 - Known pre-existing failures: none in the accepted candidate's registered
   suite.
 
@@ -131,7 +139,7 @@ Shared hotspots reserved for the coordinator:
 | Local main policy | Transplant exact-build-link policy and retired experiment-build guidance removal without its ancestry | Complete | Feature commit |
 | Retired launcher label | Remove unused `UVSR_EXPERIMENT` interface while preserving exact build-directory and commit identity | Complete | Canonical smoke |
 | Superseded local README | Preserve compact intent only where the accepted README already implements it | Excluded by audit | Feature commit |
-| Independent deletion review | No unresolved priority-zero through priority-two renderer or packaging issue | Pending final handoff | Publication |
+| Independent deletion review | No unresolved priority-zero through priority-two renderer or packaging issue | Complete | Publication |
 
 Public contracts:
 
@@ -153,7 +161,7 @@ Public contracts:
 | Cleanup diff ownership audit | `/root/taa_ui_copy_audit` | Read-only feature worktree | Dirty accepted state | None | Candidate freeze | Complete |
 | Canonical protocol audit | `/root/fidelity_report_review` | Read-only repository | Current docs and refs | None | Prior records | Complete |
 | Plan lifecycle audit | `/root/plan_lifecycle_audit` | Read-only feature worktree | Current plans and deleted base records | None | Ownership audit | Complete |
-| Commit, integration, verification, and publication | `/root` | Feature and isolated verification worktree | `f7c0c87` plus accepted diff | All integration resources | Audit handoffs | In progress |
+| Commit, integration, verification, and publication | `/root` | Feature and isolated verification worktree | `f7c0c87` plus accepted diff | All integration resources | Audit handoffs | Complete |
 
 ## Integration Order
 
@@ -173,15 +181,15 @@ Public contracts:
 
 | Acceptance Criterion | Evidence Required | Command Or Experiment | Result Or Artifact |
 | --- | --- | --- | --- |
-| Exact candidate captured | Clean focused commit, tree and build-input identities | Git status, staged diff, tree and hash audit | Pending |
-| Integration preserves intent | Parentage, semantic conflict review, accepted renderer-path comparison | Git graph, diff, source contract review | Pending |
-| Release build | Fresh configure and all-target x64 Release build | CMake and MSBuild in isolated canonical tree | Pending |
-| Shader package | 268 core, 46 retained shadow, 76 Donut tasks; exact 39 files | Build logs and package contract | Pending |
-| Registered tests | Every CTest target passes | `ctest --output-on-failure` | Pending |
-| Runtime smoke | Exact integrated executable starts on D3D12 and remains responsive without disturbing another UVSR owner | Isolated launch and process/window identity | Pending |
-| Documentation policy | Line-count self-test/check, Title Case self-test/full scan, diff check | Repository tools | Pending |
-| Independent review | No unresolved priority-zero through priority-two finding | Read-only frozen integration review | Pending |
-| Publication | Live `origin/main` equals the expected renderer and final documentation commits | Fresh fetch and `ls-remote` | Pending |
+| Exact candidate captured | Clean focused commit, tree and build-input identities | Git status, staged diff, tree and hash audit | Passed: renderer commit `b4dc241`, tree `8a3fbc4`, build-input diff `04bc8b8...`, zero untracked build inputs |
+| Integration preserves intent | Parentage, semantic conflict review, accepted renderer-path comparison | Git graph, diff, source contract review | Passed: three-commit fast-forward from `f7c0c87`; contaminated local `main` excluded |
+| Release build | Fresh configure and all-target x64 Release build | CMake and MSBuild in isolated canonical tree | Passed in `canonical-engine-core-cleanup-final/build-canonical`; DirectX 12 on, DirectX 11 and Vulkan off |
+| Shader package | 268 core, 46 retained shadow, 76 Donut tasks; exact 39 files | Build logs and package contract | Passed: 390 tasks and 39 files split 7 framework root, 10 framework passes, and 22 UVSR |
+| Registered tests | Every CTest target passes | `ctest --output-on-failure` | Passed: 30 of 30 in 73.79 seconds |
+| Runtime smoke | Exact integrated executable starts on D3D12 and remains responsive without disturbing another UVSR owner | Isolated launch and process/window identity | Passed: PID 7268, exact path and title `UVSR Renderer D3D12 (b4dc241)`, responsive at High priority; user verified all three aliasing techniques together |
+| Documentation policy | Line-count self-test/check, Title Case self-test/full scan, diff check | Repository tools | Passed: counts current, 1,121 headings and bold lead-ins with zero violations, clean patch |
+| Independent review | No unresolved priority-zero through priority-two finding | Read-only frozen integration review | Passed on commit `b4dc241` and tree `8a3fbc4`; no unresolved P0–P2 finding |
+| Publication | Live `origin/main` equals the expected renderer and final documentation commits | Fresh fetch and `ls-remote` | Renderer checkpoint `b4dc241` confirmed live; README Line Counts and Document Title Case workflows passed; this documentation-only closing commit records but does not supersede it |
 
 ## Decisions
 
@@ -215,16 +223,92 @@ Public contracts:
 | 2026-08-03 | `/root` live-target audit | Complete | `origin/main` `f7c0c87`; local `main` `5e300c9` | Fresh fetch, graph, worktrees, PRs, and Coming Soon inspected | Await ownership reviews |
 | 2026-08-03 | Read-only publication audits | Complete | Topology, ownership, protocol, launcher, and plan-lifecycle handoffs | No cleanup-diff P0; launcher label retired; stale plans archived; contaminated local main excluded | Freeze final source and commit |
 | 2026-08-03 | `/root` final pre-commit hygiene | Complete | Build-input diff `04bc8b8...`; 64,615 first-party lines | README self-test/check, 1,121-heading Title Case scan, launcher audit, and diff check pass | Stage exact task paths and commit |
-| 2026-08-03 | Frozen renderer review and `/root` repair | In progress | Minimum Temporal Reconstructive composition repair | Focused temporal target and source-contract test pass in the isolated diagnostic tree | Commit the repair, rebuild the exact final tree, and obtain reviewer closeout |
+| 2026-08-03 | Frozen renderer review and `/root` repair | Complete | Commit `b4dc241`, tree `8a3fbc4` | Exact review found no unresolved P0–P2 finding; regression contract present | Fresh canonical build and acceptance |
+| 2026-08-03 | `/root` exact canonical build | Complete | SHA-256 `5F3779B0...`, 2,516,480 bytes | Fresh all-target Release build, 390 shader tasks, exact 39-file package, 30 of 30 tests, clean source and document checks | Runtime verification |
+| 2026-08-03 | `/root` runtime and product acceptance | Complete | `UVSR Renderer D3D12 (b4dc241)`, PID 7268 | Responsive at High priority; user verified all three aliasing techniques enabled together | Publish renderer checkpoint |
+| 2026-08-03 | `/root` renderer publication | Complete | Live `origin/main` `b4dc241` | Fresh fetch and `ls-remote`; README Line Counts and Document Title Case workflows passed | Publish documentation-only closing record |
 
 ## Completion
 
-- Final integrated commit: pending
-- Verification summary: pending
-- Independent review: pending
-- Coming Soon and documentation update: pending
-- Publication: explicitly authorized; pending
+- Final integrated commit: `b4dc24128e4f38effdeaf5a2dbc33cae107e9134`
+- Verification summary: fresh DirectX 12 Release build; 268 core, 46 retained
+  shadow, and 76 Donut shader tasks; exact 39-file runtime package; 30 of 30
+  registered tests; responsive exact-commit runtime; user-verified simultaneous
+  aliasing composition; repository and remote document checks passed
+- Independent review: complete on tree
+  `8a3fbc4848a65e057bdabc669d0f6e73f074207f`, with no unresolved P0–P2 finding
+- Coming Soon and documentation update: shipped cleanup entry removed; durable
+  reports and this completed plan retained
+- Publication: renderer checkpoint confirmed live on `origin/main`; this
+  documentation-only closing commit does not supersede the renderer checkpoint
 - Remaining external work: PRs #10 and #11 remain separate; Bend, Emissive,
   SVSM, and diagnostic CSM plan evidence is archived as superseded
-- Active ownership released: no
-- Archived path: pending
+- Active ownership released: yes
+- Archived path:
+  `docs/exec-plans/completed/canonicalize-engine-core-cleanup.md`
+
+## Artifact Identity
+
+| Field | Canonical Renderer Artifact |
+| --- | --- |
+| Renderer commit | `b4dc24128e4f38effdeaf5a2dbc33cae107e9134` |
+| Renderer tree | `8a3fbc4848a65e057bdabc669d0f6e73f074207f` |
+| Verification worktree | `C:\Users\brock\OneDrive\Documents\uvsr\work\canonical-engine-core-cleanup-final` |
+| Executable | `build-canonical/bin/uvsr.exe` |
+| SHA-256 | `5F3779B0EFDE94B9C9B202BEB5A069265869D111ACE32D1132CA3D16F9430362` |
+| Size | 2,516,480 bytes |
+| UTC write time | `2026-08-03T09:24:15.2747310Z` |
+| Runtime identity | PID 7268; `UVSR Renderer D3D12 (b4dc241)`; responsive; High priority |
+| Product acceptance | The user verified all three aliasing techniques enabled together on this exact runtime and authorized publication |
+
+The earlier SHA-256 `194D1637...` executable remains the historical artifact
+for the accepted interface restoration. It is not the Canonical renderer
+artifact because the independent-review repair changed Temporal Reconstructive
+composition afterward.
+
+## Publication Lineage
+
+The renderer checkpoint is a three-commit fast-forward from the refreshed live
+base: `f7c0c87` → `b9287b0` → `e6f1591` → `b4dc241`. A fresh remote query after
+the push returned `b4dc241` for `refs/heads/main` and tree `8a3fbc4`. The
+documentation-only commit containing this completed plan closes the record but
+does not change, rebuild, or supersede that renderer checkpoint.
+
+The contaminated root-worktree `main` remains preserved locally at `5e300c9`
+and was never merged, rebased, reset, or published. Its generated-build parent
+`891f4f0` and 116.9 MB shader blob are absent from the Canonical lineage.
+
+## Verification Evidence
+
+- A fresh Visual Studio 2022 x64 tree configured DirectX 12 on and DirectX 11
+  and Vulkan off, then completed the unqualified all-target Release build with
+  MSBuild node reuse disabled.
+- ShaderMake completed 268 UVSR core, 46 Screen-Space Directional Shadow, and
+  76 Donut tasks. The synchronized runtime package contains exactly 39 files.
+- CTest passed all 30 registered tests in 73.79 seconds, including production
+  and runtime shader contracts, scene provenance, interface source contracts,
+  and the new simultaneous-aliasing regression guard.
+- README line-count self-test/check, Document Title Case self-test and complete
+  1,121-item scan, patch-whitespace checks, clean worktree/index checks, and
+  recursive pinned-submodule checks all passed.
+- The independent frozen-tree reviewer traced compact temporal history through
+  sharpening, AgX, and conservative morphological filtering and reported no
+  unresolved priority-zero through priority-two finding.
+- The exact executable launched through the repaired build-directory launcher,
+  exposed the expected D3D12 commit title, remained responsive at High process
+  priority, and was then verified by the user with all three aliasing techniques
+  enabled together.
+- GitHub's README Line Counts run `30802049605` and Document Title Case run
+  `30802051077` both passed on live renderer commit `b4dc241`.
+
+This evidence supports correctness and packaging claims, not a controlled
+frame-time improvement. No thermal benchmark or matched performance comparison
+was performed.
+
+## Canonical Resolution
+
+`b4dc24128e4f38effdeaf5a2dbc33cae107e9134` is UVSR's Canonical renderer
+checkpoint for the engine-core cleanup and front-end restoration. Its exact
+executable is the artifact recorded above. The documentation-only closing
+commit is provenance, not a replacement renderer build. The evidence-weighted
+average confidence in the remaining configurable feature set is 96.3 percent.

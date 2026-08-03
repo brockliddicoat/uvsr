@@ -442,9 +442,9 @@ clean canonical executable own the final source evidence.
 | `docs/exec-plans/abandoned/` | Preserves full Bend, Emissive, SVSM, and diagnostic CSM evidence without keeping stale plans active |
 | `docs/exec-plans/completed/ao-performance-optimization.md` | Preserves completed historical evidence without restoring packed or ambient-occlusion-only runtime routes |
 
-### Final Count Snapshot Before Canonical Build
+### Final Canonical Count Snapshot
 
-| Measure | Pre-Cutdown Baseline | Final Accepted Source | Reduction |
+| Measure | Pre-Cutdown Baseline | Final Canonical Source | Reduction |
 | --- | ---: | ---: | ---: |
 | First-party nonblank source lines | 145,256 | 64,615 | 80,641 fewer (55.52%) |
 | `src/uvsr.cpp` physical lines | 33,577 | 17,306 | 16,271 fewer (48.46%) |
@@ -455,9 +455,35 @@ clean canonical executable own the final source evidence.
 | Runtime shader package files | Historical package differs | 39 | Exact current package |
 | Command catalog entries | Earlier integrated catalog: 245 | 122 | 123 fewer (50.20%) |
 
-The accepted candidate passed all 30 registered tests, compiled 268 core plus
-46 Screen-Space Directional Shadow shader tasks and Donut's 76 tasks, and
-staged the exact 39-file runtime shader package. The evidence-weighted
-confidence in remaining features remains **96.3 percent**. Canonical status is
-reserved for the clean committed rebuild, independent deletion/package review,
-runtime smoke, live remote confirmation, and completed verification record.
+### Canonical Verification Addendum
+
+| Field | Canonical Renderer |
+| --- | --- |
+| Commit | `b4dc24128e4f38effdeaf5a2dbc33cae107e9134` |
+| Tree | `8a3fbc4848a65e057bdabc669d0f6e73f074207f` |
+| Exact executable | `canonical-engine-core-cleanup-final/build-canonical/bin/uvsr.exe` |
+| SHA-256 | `5F3779B0EFDE94B9C9B202BEB5A069265869D111ACE32D1132CA3D16F9430362` |
+| Size | 2,516,480 bytes |
+| UTC write time | `2026-08-03T09:24:15.2747310Z` |
+| Runtime identity | `UVSR Renderer D3D12 (b4dc241)`, responsive at High priority |
+| Product acceptance | The user verified Temporal Reconstructive, Conservative Morphological, and Multisample Reference enabled together on this exact build |
+| Publication | Fast-forwarded to `origin/main`; README Line Counts and Document Title Case workflows passed |
+
+The final clean build compiled 268 core plus 46 Screen-Space Directional
+Shadow shader tasks and Donut's 76 tasks, synchronized the exact 39-file
+runtime shader package, and passed all 30 registered tests. The independent
+frozen-tree review found no unresolved priority-zero through priority-two
+issue. The renderer launched through the repaired build-directory launcher,
+reported its exact DirectX 12 commit title, remained responsive, and received
+renewed user acceptance after the composition repair.
+
+The renderer checkpoint is the three-commit fast-forward `f7c0c87` →
+`b9287b0` → `e6f1591` → `b4dc241`. The contaminated local `main` ancestry at
+`5e300c9` remains preserved and unpublished. The documentation-only closing
+commit records this evidence and does not supersede the renderer checkpoint or
+require a second executable build.
+
+The evidence-weighted confidence in remaining configurable features is
+**96.3 percent**. This confidence covers retained feature reachability,
+composition, tests, packaging, and the verified runtime surface; it does not
+claim a controlled frame-time improvement.
