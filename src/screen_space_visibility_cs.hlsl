@@ -1,8 +1,6 @@
 #pragma pack_matrix(row_major)
 
-#include <donut/shaders/gbuffer.hlsli>
 #include <donut/shaders/binding_helpers.hlsli>
-#include "pbr.hlsli"
 #include "radial_visibility_mask.hlsli"
 #include "visibility_estimator_shared.h"
 #include "visibility_projection_shared.h"
@@ -17,18 +15,6 @@
 #ifndef ENABLE_GI
 #define ENABLE_GI 1
 #endif
-#ifndef ENABLE_BOUNCE_REINJECTION
-#define ENABLE_BOUNCE_REINJECTION 0
-#endif
-#ifndef INITIALIZE_BOUNCE_CUMULATIVE
-#define INITIALIZE_BOUNCE_CUMULATIVE 0
-#endif
-#ifndef ENABLE_BOUNCE_METADATA
-#define ENABLE_BOUNCE_METADATA 0
-#endif
-#ifndef ENABLE_BOUNCE_CONTINUATION
-#define ENABLE_BOUNCE_CONTINUATION 0
-#endif
 #ifndef RUNTIME_SAMPLE_PARITY
 #define RUNTIME_SAMPLE_PARITY 0
 #endif
@@ -39,40 +25,6 @@
 #if RUNTIME_SAMPLE_PARITY > 2
 #error RUNTIME_SAMPLE_PARITY must be 0 (guarded), 1 (even), or 2 (odd).
 #endif
-#ifndef PACKED_EDGE_MODE
-// 1 = depth, 2 = depth + normal, 3 = slope-adjusted depth + normal.
-#define PACKED_EDGE_MODE 2
-#endif
-#ifndef VISIBILITY_GROUP_SIZE_X
-#define VISIBILITY_GROUP_SIZE_X 8
-#endif
-#ifndef VISIBILITY_GROUP_SIZE_Y
-#define VISIBILITY_GROUP_SIZE_Y 8
-#endif
-#ifndef VISIBILITY_ACOS_MODE
-// 0 = native standard, 1 = native fast-exact/compiler path,
-// 2 = Lagarde/XeGTAO approximation.
-#define VISIBILITY_ACOS_MODE 2
-#endif
-#ifndef VISIBILITY_TRIG_MODE
-// 0 = separate native sin/cos, 1 = native sincos, 2 = polynomial sincos.
-#define VISIBILITY_TRIG_MODE 0
-#endif
-#ifndef VISIBILITY_RADIAL_POWER_MODE
-// 0 = native pow, 1 = exact special cases, 2 = exp2/log2 approximation.
-#define VISIBILITY_RADIAL_POWER_MODE 1
-#endif
-#ifndef VISIBILITY_NORMALIZATION_MODE
-// 0 = guarded standard normalization, 1 = shared exact reciprocal length,
-// 2 = approximate rsqrt path. HLSL exposes the same intrinsic for 0/1, while
-// the approximate mode permits the compiler's fast-math contraction.
-#define VISIBILITY_NORMALIZATION_MODE 0
-#endif
-#define SELECTED_VISIBILITY_ACOS_MODE VISIBILITY_ACOS_MODE
-#define SELECTED_VISIBILITY_TRIG_MODE VISIBILITY_TRIG_MODE
-#define SELECTED_VISIBILITY_RADIAL_POWER_MODE VISIBILITY_RADIAL_POWER_MODE
-#define SELECTED_VISIBILITY_NORMALIZATION_MODE VISIBILITY_NORMALIZATION_MODE
-
 #define VisibilityEstimator_UniformProjectedAngle 0
 #define VisibilityEstimator_UniformSolidAngle 1
 #define VisibilityEstimator_CosineWeightedSolidAngle 2
@@ -84,23 +36,14 @@ cbuffer c_Visibility : register(b0)
 
 Texture2D<float> t_Depth : register(t0);
 Texture2D<float4> t_Normals : register(t1);
-#if ENABLE_BOUNCE_REINJECTION
-Texture2D<float4> t_PreviousBounceFrontier : register(t2);
-Texture2D<float> t_DepthHierarchy : register(t3);
-Texture2D<float4> t_GBufferDiffuse : register(t4);
-Texture2D<float4> t_Emissive : register(t5);
-Texture2D<float> t_MaterialAmbientOcclusion : register(t6);
-Texture2DArray<float> t_BlueNoise : register(t8);
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_BounceFrontier : register(u0);
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
-#if ENABLE_BOUNCE_CONTINUATION
-globallycoherent RWByteAddressBuffer u_BounceContinuation : register(u2);
-#endif
-#else
+#if ENABLE_GI
 Texture2D<float4> t_SourceRadiance : register(t2);
-Texture2D<float> t_DepthHierarchy : register(t3);
-Texture2DArray<float> t_BlueNoise : register(t5);
+#endif
+Texture2DArray<float> t_VoidClusterNoise : register(t3);
+#if ENABLE_AO
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
+#endif
+#if ENABLE_GI
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 #endif
 #if OUTPUT_PACKED_EDGES
@@ -110,7 +53,6 @@ VK_IMAGE_FORMAT("r8ui") RWTexture2D<uint> u_PackedEdges : register(u3);
 static const float VisibilityPi = 3.14159265358979323846f;
 static const float VisibilityHalfPi = 1.57079632679489661923f;
 static const float VisibilityEpsilon = 1e-6f;
-static const float BounceContinuationThresholdGrowth = 4.0f;
 
 // Bit i selects radial stratum i. Entry n contains the first n strata in the
 // 5-bit reversal sequence, so budgets remain nested while firstbitlow consumes
@@ -129,16 +71,13 @@ static const uint ProgressiveRadialPrefixMasks[33] = {
 
 static const uint SchedulerDimension_SliceRotation = 0u;
 static const uint SchedulerDimension_SectorPhase = 1u;
-static const uint SchedulerDimension_SampleBudget = 2u;
 static const uint SchedulerDimension_OddSampleSide = 3u;
 static const uint SchedulerDimension_RadialNegative = 4u;
 static const uint SchedulerDimension_RadialPositive = 5u;
 
-static const uint2 BlueNoiseTemporalSteps[8] = {
+static const uint2 VoidClusterTemporalSteps[5] = {
     uint2(13u, 29u), uint2(31u, 11u),
-    uint2(17u, 27u), uint2(23u, 19u),
-    uint2(7u, 25u), uint2(29u, 15u),
-    uint2(21u, 31u), uint2(11u, 23u)
+    uint2(23u, 19u), uint2(7u, 25u), uint2(29u, 15u)
 };
 
 uint VisibilityHash(uint value)
@@ -151,7 +90,20 @@ uint VisibilityHash(uint value)
     return value;
 }
 
-float VisibilityRandom(uint2 pixel, uint dimension, uint phase)
+float PermutatedWhiteNoise(uint2 pixel, uint dimension, uint phase)
+{
+    // PCG's conventional output permutation gives the baseline option a
+    // deterministic white spectrum distinct from the retained custom hash.
+    uint state = pixel.x + pixel.y * 65537u +
+        dimension * 747796405u + phase * 2891336453u + 1u;
+    state = state * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) *
+        277803737u;
+    word = (word >> 22u) ^ word;
+    return float((word >> 8u) & 0x00ffffffu) / 16777216.0f;
+}
+
+float HashedWhiteNoise(uint2 pixel, uint dimension, uint phase)
 {
     uint value = pixel.x * 0x9e3779b9u ^ pixel.y * 0x85ebca6bu;
     value ^= dimension * 0xc2b2ae35u ^ phase * 0x27d4eb2fu;
@@ -160,13 +112,6 @@ float VisibilityRandom(uint2 pixel, uint dimension, uint phase)
 
 float VisibilityFastAcos(float value)
 {
-    if (SELECTED_VISIBILITY_ACOS_MODE < 2u)
-    {
-    // No algebraically exact acos replacement exists. Fast Exact deliberately
-    // retains native acos so the UI never represents an approximation as
-    // exact; driver compilation is free to select its native fast path.
-        return acos(clamp(value, -1.0f, 1.0f));
-    }
     // XeGTAO / Lagarde approximation: avoids two native acos operations per
     // radial sample while retaining sufficient precision for 32 mask sectors.
     float x = abs(clamp(value, -1.0f, 1.0f));
@@ -176,64 +121,33 @@ float VisibilityFastAcos(float value)
 
 float2 VisibilitySliceSinCos(float angle)
 {
-    if (SELECTED_VISIBILITY_TRIG_MODE == 1u)
-    {
-        float sineValue;
-        float cosineValue;
-        sincos(angle, sineValue, cosineValue);
-        return float2(cosineValue, sineValue);
-    }
-    if (SELECTED_VISIBILITY_TRIG_MODE == 2u)
-    {
-    // The slice angle is in [0, pi). This minimax-style parabolic correction
-    // avoids range reduction and keeps endpoints exact.
-        float normalized = saturate(angle * (1.0f / VisibilityPi));
-        float sineValue = 4.0f * normalized * (1.0f - normalized);
-        sineValue = sineValue *
-            (0.775f + 0.225f * sineValue);
-        float cosineNormalized = frac(normalized + 0.5f);
-        float cosineAbs = 4.0f * cosineNormalized *
-            (1.0f - cosineNormalized);
-        cosineAbs = cosineAbs *
-            (0.775f + 0.225f * cosineAbs);
-        float cosineValue = normalized <= 0.5f
-            ? cosineAbs : -cosineAbs;
-        return float2(cosineValue, sineValue);
-    }
     return float2(cos(angle), sin(angle));
 }
 
 float VisibilityRadialPower(float value, float exponent)
 {
-    if (SELECTED_VISIBILITY_RADIAL_POWER_MODE == 1u)
-    {
-        if (abs(exponent - 1.0f) < 1e-4f)
-            return value;
-        if (abs(exponent - 2.0f) < 1e-4f)
-            return value * value;
-        return pow(value, exponent);
-    }
-    if (SELECTED_VISIBILITY_RADIAL_POWER_MODE == 2u)
-    {
-        return value > 0.0f
-            ? exp2(log2(value) * exponent)
-            : 0.0f;
-    }
+    if (abs(exponent - 1.0f) < 1e-4f)
+        return value;
+    if (abs(exponent - 2.0f) < 1e-4f)
+        return value * value;
     return pow(value, exponent);
 }
 
 float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
 {
-    // Scheduler selection is uniform for the dispatch. Keeping this small
-    // runtime branch avoids multiplying every estimator/consumer/parity
-    // shader by the two retained noise choices.
+    // Scheduler selection remains a uniform runtime branch, so adding the
+    // baseline noise sequence does not create shader permutations.
     if (g_Visibility.sampleScheduler == 0u)
-        return VisibilityRandom(samplingPixel, dimension, phase);
+        return PermutatedWhiteNoise(samplingPixel, dimension, phase);
+    if (g_Visibility.sampleScheduler == 1u)
+        return HashedWhiteNoise(samplingPixel, dimension, phase);
 
     // Each semantic random dimension owns an independently optimized rank
     // layer. Moving the layer toroidally preserves its spatial spectrum;
     // changing the cycle offset prevents an exact 64-frame repetition.
-    uint layer = dimension & 7u;
+    // Dimension two belonged to the removed sample-budget planner. Compact
+    // the remaining layers without changing their sequences.
+    uint layer = dimension <= 1u ? dimension : min(dimension - 1u, 4u);
     uint frameInCycle = phase & 63u;
     uint cycle = phase >> 6u;
     uint cycleHashX = VisibilityHash(
@@ -242,8 +156,8 @@ float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
         cycle ^ (dimension * 0x85ebca6bu) ^ 0x02e5be93u);
     uint2 cycleOffset = uint2(cycleHashX, cycleHashY) & 63u;
     uint2 coordinate = (samplingPixel + cycleOffset +
-        BlueNoiseTemporalSteps[layer] * frameInCycle) & 63u;
-    return t_BlueNoise.Load(int4(coordinate, layer, 0));
+        VoidClusterTemporalSteps[layer] * frameInCycle) & 63u;
+    return t_VoidClusterNoise.Load(int4(coordinate, layer, 0));
 }
 
 uint2 SamplingToFullPixel(uint2 samplingPixel)
@@ -251,13 +165,6 @@ uint2 SamplingToFullPixel(uint2 samplingPixel)
     uint scale = max(g_Visibility.resolutionScale, 1u);
     uint2 fullSize = uint2(g_Visibility.fullResolution);
     return min(samplingPixel * scale + scale / 2u, fullSize - 1u);
-}
-
-uint2 FullToSamplingPixel(uint2 fullPixel)
-{
-    uint scale = max(g_Visibility.resolutionScale, 1u);
-    return min(fullPixel / scale,
-        uint2(g_Visibility.samplingResolution) - 1u);
 }
 
 float ProgressiveRadialSample(uint radialStratum, float rotation)
@@ -281,14 +188,6 @@ bool IsFiniteFloat3(float3 value)
 float3 SafeNormalize(float3 value, float3 fallback)
 {
     float lengthSquared = dot(value, value);
-    if (SELECTED_VISIBILITY_NORMALIZATION_MODE == 2u)
-    {
-        // The clamp keeps zero vectors finite but deliberately drops the
-        // non-finite branch and fallback selection.
-        return value * rsqrt(max(
-            lengthSquared,
-            VisibilityEpsilon * VisibilityEpsilon));
-    }
     if (!(lengthSquared > VisibilityEpsilon * VisibilityEpsilon) || !isfinite(lengthSquared))
         return fallback;
     return value * rsqrt(lengthSquared);
@@ -386,16 +285,13 @@ uint ComputePackedReceiverEdges(
         depthDiscontinuity[edgeIndex] = saturate(
             abs(neighborLinearDepth - receiverLinearDepth) /
             max(receiverLinearDepth * 0.08f, 0.01f));
-        if (g_Visibility.packedEdgeMode >= 2u)
-        {
-            float3 neighborNormal = SafeNormalize(
-                t_Normals[neighborPixel].xyz, receiverNormal);
-            normalDiscontinuity[edgeIndex] = saturate(
-                (1.0f - dot(receiverNormal, neighborNormal)) * 4.0f);
-        }
+        float3 neighborNormal = SafeNormalize(
+            t_Normals[neighborPixel].xyz, receiverNormal);
+        normalDiscontinuity[edgeIndex] = saturate(
+            (1.0f - dot(receiverNormal, neighborNormal)) * 4.0f);
     }
 
-    if (g_Visibility.packedEdgeMode == 3u)
+    if (g_Visibility.packedEdgeMode == 2u)
     {
         float horizontalSlope = min(
             depthDiscontinuity.x, depthDiscontinuity.y);
@@ -411,39 +307,6 @@ uint ComputePackedReceiverEdges(
     return PackEdgeContinuity(continuity);
 }
 #endif
-
-bool ReconstructViewPositionFromLinearDepth(
-    float2 pixelPosition,
-    float linearDepth,
-    out float3 positionVS)
-{
-    if (!(linearDepth > 0.0f) || linearDepth >= 65503.0f ||
-        !isfinite(linearDepth) || g_Visibility.orthographicProjection != 0u)
-    {
-        positionVS = 0.0f;
-        return false;
-    }
-
-    float4x4 projection = g_Visibility.view.matViewToClip;
-    float projectionHandedness = projection[2][3] >= 0.0f ? 1.0f : -1.0f;
-    float viewZ = linearDepth * projectionHandedness;
-    float clipW = viewZ * projection[2][3] + projection[3][3];
-    if (!isfinite(clipW) || abs(clipW) <= VisibilityEpsilon)
-    {
-        positionVS = 0.0f;
-        return false;
-    }
-
-    float2 ndc = (pixelPosition - g_Visibility.view.clipToWindowBias) /
-        g_Visibility.view.clipToWindowScale;
-    positionVS = float3(
-        (ndc.x * clipW - viewZ * projection[2][0] - projection[3][0]) /
-            projection[0][0],
-        (ndc.y * clipW - viewZ * projection[2][1] - projection[3][1]) /
-            projection[1][1],
-        viewZ);
-    return IsFiniteFloat3(positionVS);
-}
 
 bool ProjectClippedViewEndpoint(
     float4 receiverClipPosition,
@@ -497,28 +360,17 @@ VisibilityInterval BuildProjectedAngleVisibilityInterval(
     return MakeVisibilityInterval(min(front01, back01), max(front01, back01));
 }
 
-void WriteEmptyVisibilityOutput(
-    uint2 pixel,
-    float4 previousFrontier)
+void WriteEmptyVisibilityOutput(uint2 pixel)
 {
-#if ENABLE_BOUNCE_REINJECTION
-    u_BounceFrontier[pixel] = 0.0f;
-#if INITIALIZE_BOUNCE_CUMULATIVE
-    // Bounce two initializes C2 from B1 even when this receiver cannot launch
-    // another path. Later bounces leave the existing cumulative value intact.
-    u_IndirectDiffuse[pixel] = previousFrontier;
-#endif
-#else
 #if ENABLE_AO
     u_AmbientVisibility[pixel] = 1.0f;
 #endif
 #if ENABLE_GI
     u_IndirectDiffuse[pixel] = 0.0f;
 #endif
-#endif
 }
 
-[numthreads(VISIBILITY_GROUP_SIZE_X, VISIBILITY_GROUP_SIZE_Y, 1)]
+[numthreads(8, 8, 1)]
 void main(uint2 dispatchPixel : SV_DispatchThreadID)
 {
     if (any(dispatchPixel >= uint2(g_Visibility.samplingResolution)))
@@ -527,44 +379,19 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     uint2 receiverPixel = SamplingToFullPixel(dispatchPixel);
     float receiverDepth = t_Depth[receiverPixel];
     float2 receiverPixelCenter = float2(receiverPixel) + 0.5f;
-    float4 previousReceiverFrontier = 0.0f;
 
 #if OUTPUT_PACKED_EDGES
     u_PackedEdges[dispatchPixel] = ComputePackedReceiverEdges(
         dispatchPixel, receiverPixel, receiverDepth);
 #endif
 
-#if ENABLE_BOUNCE_REINJECTION
-    LightingContributionGate bounceContributionGate = MakeLightingContributionGate(
-        g_Visibility.knownInactiveLightingSources,
-        g_Visibility.minimumBounceContribution,
-        g_Visibility.lightingExposureScale);
-    float bounceToFinalUpperBound =
-        max(g_Visibility.indirectDiffuseIntensity, 0.0f) * UVSR_INV_PI;
-#else
-    const uint firstBounceSources =
-        LightingSource_Direct |
-        LightingSource_Environment;
-    LightingContributionGate firstBounceContributionGate =
-        MakeLightingContributionGate(
-            g_Visibility.knownInactiveLightingSources,
-            0.0f,
-            1.0f);
-#endif
-
 #if ENABLE_GI
-#if ENABLE_BOUNCE_REINJECTION
-    const bool giSourcePotential = LightingHasPotentialSource(
-        bounceContributionGate, LightingSource_IndirectDiffuse);
-#else
-    const bool giSourcePotential = LightingHasPotentialSource(
-        firstBounceContributionGate, firstBounceSources);
-#endif
-#if !ENABLE_AO && !ENABLE_BOUNCE_REINJECTION
+    const bool giSourcePotential =
+        g_Visibility.sourceRadianceAvailable != 0u;
+#if !ENABLE_AO
     if (!giSourcePotential)
     {
-        WriteEmptyVisibilityOutput(
-            dispatchPixel, previousReceiverFrontier);
+        WriteEmptyVisibilityOutput(dispatchPixel);
         return;
     }
 #endif
@@ -572,51 +399,16 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 
     if (!IsValidDepth(receiverDepth) || !(g_Visibility.radiusWorld > VisibilityEpsilon))
     {
-        // The first-bounce frontier is guaranteed empty at an ineligible
-        // depth, so bounce two can initialize its cumulative output from zero
-        // without performing a frontier read that cannot carry energy.
-        WriteEmptyVisibilityOutput(
-            dispatchPixel, previousReceiverFrontier);
+        WriteEmptyVisibilityOutput(dispatchPixel);
         return;
     }
-
-#if ENABLE_BOUNCE_REINJECTION
-    // Read the packed receiver transport fact as soon as basic depth/radius
-    // eligibility is known. This gate precedes position reconstruction, normal
-    // loading/transformation, and slice setup. The same value is passed to
-    // every inactive-output path and later resolve, so there is one receiver
-    // frontier read per eligible higher-bounce pixel.
-    // Bounce frontiers live at the visibility sampling resolution. The
-    // dispatch coordinate is therefore the receiver coordinate for this
-    // texture even though depth and G-buffer data use receiverPixel.
-    previousReceiverFrontier = t_PreviousBounceFrontier[dispatchPixel];
-    uint receiverFrontierMetadata = (uint)round(
-        max(previousReceiverFrontier.a, 0.0f));
-    bool receiverRejectsDiffuseTransport =
-        (receiverFrontierMetadata & PbrGiMetadata_DiffuseActive) == 0u;
-    if (receiverRejectsDiffuseTransport)
-    {
-        WriteEmptyVisibilityOutput(
-            dispatchPixel, previousReceiverFrontier);
-        return;
-    }
-#if !ENABLE_AO
-    if (!giSourcePotential)
-    {
-        WriteEmptyVisibilityOutput(
-            dispatchPixel, previousReceiverFrontier);
-        return;
-    }
-#endif
-#endif
 
     float3 receiverPositionVS;
     bool receiverReconstructed = ReconstructViewPositionSafe(
         receiverPixelCenter, receiverDepth, receiverPositionVS);
     if (!receiverReconstructed)
     {
-        WriteEmptyVisibilityOutput(
-            dispatchPixel, previousReceiverFrontier);
+        WriteEmptyVisibilityOutput(dispatchPixel);
         return;
     }
 
@@ -625,8 +417,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         g_Visibility.view.matWorldToView).xyz;
     if (dot(receiverNormalVS, receiverNormalVS) <= VisibilityEpsilon * VisibilityEpsilon)
     {
-        WriteEmptyVisibilityOutput(
-            dispatchPixel, previousReceiverFrontier);
+        WriteEmptyVisibilityOutput(dispatchPixel);
         return;
     }
     receiverNormalVS = SafeNormalize(receiverNormalVS, float3(0.0f, 0.0f, -1.0f));
@@ -662,8 +453,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     if (!all(isfinite(receiverClipPosition)) ||
         !(receiverClipPosition.w > VisibilityProjectionEpsilon))
     {
-        WriteEmptyVisibilityOutput(
-            dispatchPixel, previousReceiverFrontier);
+        WriteEmptyVisibilityOutput(dispatchPixel);
         return;
     }
 
@@ -871,34 +661,14 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 previousSamplePixel[sideIndex] = sampleRepresentativePixel;
                 hasPreviousSample[sideIndex] = true;
                 float3 samplePositionVS;
-                bool reconstructed = false;
-                if (g_Visibility.useDepthHierarchy != 0u &&
-                    g_Visibility.orthographicProjection == 0u)
-                {
-                    uint depthMip = sampleDistance >= 111.4305f ? 4u
-                        : sampleDistance >= 55.7152f ? 3u
-                        : sampleDistance >= 27.8576f ? 2u
-                        : sampleDistance >= 13.9288f ? 1u : 0u;
-                    float sampleViewDepth = t_DepthHierarchy.Load(int3(
-                        samplePixel >> depthMip, depthMip));
-                    if (sampleViewDepth > 0.0f && sampleViewDepth < 65503.0f &&
-                        isfinite(sampleViewDepth))
-                    {
-                        reconstructed = ReconstructViewPositionFromLinearDepth(
-                            float2(samplePixel) + 0.5f,
-                            sampleViewDepth,
-                        samplePositionVS);
-                    }
-                }
-                if (!reconstructed)
-                {
-                    float sampleDepth = t_Depth[sampleRepresentativePixel];
-                    if (!IsValidDepth(sampleDepth) || !ReconstructViewPositionSafe(
+                float sampleDepth = t_Depth[sampleRepresentativePixel];
+                if (!IsValidDepth(sampleDepth) ||
+                    !ReconstructViewPositionSafe(
                         float2(sampleRepresentativePixel) + 0.5f,
-                        sampleDepth, samplePositionVS))
-                    {
-                        continue;
-                    }
+                        sampleDepth,
+                        samplePositionVS))
+                {
+                    continue;
                 }
 
                 float effectiveThickness = g_Visibility.thicknessWorld;
@@ -967,49 +737,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     continue;
 #endif
 
-#if ENABLE_BOUNCE_REINJECTION
-                // Only the newest transport frontier is eligible for another
-                // bounce. Reject its conservative final-image upper bound
-                // before fetching material textures; the sum of angular-sector
-                // weights is at most one, so all rejected source pieces remain
-                // bounded by the configured cutoff at this receiver.
-                uint2 previousSamplingPixel =
-                    FullToSamplingPixel(samplePixel);
-                float4 previousFrontierSample =
-                    t_PreviousBounceFrontier[previousSamplingPixel];
-                float3 previousFrontier = max(previousFrontierSample.rgb, 0.0f);
-                uint sourceRejection = LightingClassifyContribution(
-                    bounceContributionGate,
-                    LightingSource_IndirectDiffuse,
-                    previousFrontier,
-                    bounceToFinalUpperBound);
-                if (!LightingShouldEvaluate(sourceRejection))
-                    continue;
-
-                float3 sourceBaseColor = max(
-                    t_GBufferDiffuse[samplePixel].rgb, 0.0f);
-                float sourceMetalness = saturate(t_Emissive[samplePixel].a);
-                float sourceMaterialAo = saturate(
-                    t_MaterialAmbientOcclusion[samplePixel]);
-                float3 sourceDiffuseReflectance = sourceBaseColor *
-                    (1.0f - sourceMetalness);
-                float3 transportedFrontier = previousFrontier *
-                    sourceDiffuseReflectance * sourceMaterialAo;
-                sourceRejection = LightingClassifyContribution(
-                    bounceContributionGate,
-                    LightingSource_IndirectDiffuse,
-                    transportedFrontier,
-                    bounceToFinalUpperBound);
-                if (!LightingShouldEvaluate(sourceRejection))
-                    continue;
-
-                float3 sourceRadiance = transportedFrontier * UVSR_INV_PI;
-                uint sourceFrontierMetadata = (uint)round(
-                    max(previousFrontierSample.a, 0.0f));
-                bool sourceIsDoubleSided =
-                    (sourceFrontierMetadata &
-                        PbrGiMetadata_SurfaceDoubleSided) != 0u;
-#else
                 if (!giSourcePotential)
                     continue;
                 float4 sourceSample = t_SourceRadiance[samplePixel];
@@ -1020,20 +747,13 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 if (!IsFiniteFloat3(sourceRadiance) ||
                     !any(sourceRadiance > 0.0f))
                     continue;
-#endif
 
                 float3 sampleNormalWS = t_Normals[samplePixel].xyz;
                 float3 sampleNormalVS = mul(float4(sampleNormalWS, 0.0f),
                     g_Visibility.view.matWorldToView).xyz;
                 sampleNormalVS = SafeNormalize(sampleNormalVS, 0.0f);
                 float signedSourceCosine = dot(sampleNormalVS, -directionToSample);
-#if ENABLE_BOUNCE_REINJECTION
-                float sourceCosine = sourceIsDoubleSided
-                    ? abs(signedSourceCosine)
-                    : saturate(signedSourceCosine);
-#else
                 float sourceCosine = saturate(signedSourceCosine);
-#endif
                 float3 weightedSource = sourceRadiance * sourceCosine;
                 if (!any(weightedSource > 0.0f))
                     continue;
@@ -1105,59 +825,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         ambientVisibility, 65504.0f);
 #endif
 #if ENABLE_GI
-#if ENABLE_BOUNCE_REINJECTION
-    float frontierMetadataValue = previousReceiverFrontier.a;
-    float3 storedBounceFrontier = min(indirectDiffuse, 65504.0f);
-    u_BounceFrontier[dispatchPixel] = float4(
-        storedBounceFrontier, frontierMetadataValue);
-#if INITIALIZE_BOUNCE_CUMULATIVE
-    float3 cumulativeIndirectDiffuse = max(
-        previousReceiverFrontier.rgb, 0.0f) + indirectDiffuse;
     u_IndirectDiffuse[dispatchPixel] = float4(
-        min(cumulativeIndirectDiffuse, 65504.0f), frontierMetadataValue);
-#else
-    float4 cumulativeSample = u_IndirectDiffuse[dispatchPixel];
-    float3 cumulativeIndirectDiffuse = max(cumulativeSample.rgb, 0.0f) +
-        indirectDiffuse;
-    u_IndirectDiffuse[dispatchPixel] = float4(
-        min(cumulativeIndirectDiffuse, 65504.0f), cumulativeSample.a);
-#endif
-#if ENABLE_BOUNCE_CONTINUATION
-    LightingContributionGate nextBounceGate = MakeLightingContributionGate(
-        g_Visibility.knownInactiveLightingSources,
-        g_Visibility.minimumBounceContribution *
-            BounceContinuationThresholdGrowth,
-        g_Visibility.lightingExposureScale);
-    const bool pixelCanContinue = LightingClassifyContribution(
-        nextBounceGate,
-        LightingSource_IndirectDiffuse,
-        storedBounceFrontier,
-        bounceToFinalUpperBound) == LightingRejection_None;
-    if (WaveActiveAnyTrue(pixelCanContinue) && WaveIsFirstLane())
-    {
-        // Most waves see the already-set flag and avoid a contended atomic.
-        // The exchange remains the correctness path for simultaneously
-        // arriving first waves.
-        if (u_BounceContinuation.Load(0u) == 0u)
-        {
-            uint previousContinuation = 0u;
-            u_BounceContinuation.InterlockedOr(
-                0u, 1u, previousContinuation);
-        }
-    }
-#endif
-#else
-    float receiverFrontierMetadataValue = 0.0f;
-#if ENABLE_BOUNCE_METADATA
-    uint receiverSourceMetadata = (uint)round(max(
-        t_SourceRadiance[receiverPixel].a, 0.0f));
-    uint receiverFrontierMetadata = receiverSourceMetadata &
-        (PbrGiMetadata_SurfaceDoubleSided |
-            PbrGiMetadata_DiffuseActive);
-    receiverFrontierMetadataValue = float(receiverFrontierMetadata);
-#endif
-    u_IndirectDiffuse[dispatchPixel] = float4(
-        min(indirectDiffuse, 65504.0f), receiverFrontierMetadataValue);
-#endif
+        min(indirectDiffuse, 65504.0f), 0.0f);
 #endif
 }

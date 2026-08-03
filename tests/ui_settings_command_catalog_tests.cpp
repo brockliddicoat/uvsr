@@ -1,6 +1,7 @@
 #include "ui_settings_command_catalog.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <set>
@@ -9,52 +10,37 @@
 
 namespace
 {
-    void Require(bool condition, const char* message)
+    [[noreturn]] void Fail(const std::string& message)
+    {
+        std::cerr << "UI Settings command catalog validation failed: "
+                  << message << '\n';
+        std::exit(EXIT_FAILURE);
+    }
+
+    void Require(bool condition, const std::string& message)
     {
         if (!condition)
-        {
-            std::cerr
-                << "UI settings command catalog validation failed: "
-                << message << '\n';
-            std::exit(EXIT_FAILURE);
-        }
+            Fail(message);
     }
 
     bool IsStableLowercaseName(std::string_view name)
     {
-        if (name.empty() ||
-            name.front() == '.' ||
-            name.front() == '-' ||
-            name.back() == '.' ||
-            name.back() == '-')
-        {
+        if (name.empty())
             return false;
-        }
 
         for (const unsigned char character : name)
         {
-            const bool lowercase =
-                character >= static_cast<unsigned char>('a') &&
-                character <= static_cast<unsigned char>('z');
-            const bool digit =
-                character >= static_cast<unsigned char>('0') &&
-                character <= static_cast<unsigned char>('9');
-            if (!lowercase &&
-                !digit &&
-                character != static_cast<unsigned char>('.') &&
-                character != static_cast<unsigned char>('-'))
-            {
+            const bool lowercase = character >= 'a' && character <= 'z';
+            const bool digit = character >= '0' && character <= '9';
+            if (!lowercase && !digit && character != '.' && character != '-')
                 return false;
-            }
         }
         return true;
     }
 
-    const uvsr::UiSettingsCommandDefinition* Find(
-        std::string_view name)
+    const uvsr::UiSettingsCommandDefinition* Find(std::string_view name)
     {
-        for (const auto& definition :
-            uvsr::UiSettingsCommandCatalog)
+        for (const auto& definition : uvsr::UiSettingsCommandCatalog)
         {
             if (definition.name == name)
                 return &definition;
@@ -67,316 +53,193 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 245u);
-    static_assert(
-        static_cast<std::size_t>(
-            UiSettingsCommandSection::Count) == 13u);
-    static_assert(
-        UiSettingsCommandDefinition{}.factoryMutationPolicy ==
-        UiSettingsFactoryMutationPolicy::Locked);
+    static_assert(UiSettingsCommandCatalog.size() == 122u);
+    static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 10u);
+    static_assert(Action("test", Section::General, "test").supportedVerbs ==
+        static_cast<std::uint8_t>(UiSettingsCommandVerb::Run));
 
-    constexpr UiSettingsCommandDefinition ImplicitFactoryValue =
-        MakeUiSettingsValueCommand(
-            "test.value",
-            UiSettingsCommandKind::Enum,
-            UiSettingsCommandSection::General,
-            "test");
-    constexpr UiSettingsCommandDefinition ImplicitFactoryAction =
-        MakeUiSettingsActionCommand(
-            "test-action",
-            UiSettingsCommandSection::General,
-            "test");
-    static_assert(
-        ImplicitFactoryValue.factoryMutationPolicy ==
-            UiSettingsFactoryMutationPolicy::Locked &&
-        ImplicitFactoryAction.factoryMutationPolicy ==
-            UiSettingsFactoryMutationPolicy::Locked);
-
-    constexpr std::array<std::size_t, 13> ExpectedSectionCounts = {
+    constexpr std::array<std::size_t, 10> ExpectedSectionCounts = {
         5u,  // UI
-        6u,  // General
-        20u, // Visibility
-        7u,  // Buffers
-        9u,  // Statistics
-        21u, // Aliasing
-        9u,  // Sky
+        5u,  // General
+        19u, // Visibility
+        22u, // Anti-Aliasing
+        4u,  // Debug
+        8u,  // Sky
         23u, // Lights
-        13u, // Screen-space directional shadows
-        62u, // Sparse virtual shadow maps
-        46u, // Diagnostic cascaded shadow maps
-        3u,  // Footer
-        21u  // Materials
+        12u, // Screen-Space Directional Shadows
+        21u, // Materials
+        3u   // Footer
     };
-
-    const std::set<std::string> expectedUiSafe = {
-        "camera.location",
-        "camera.mode",
-        "material-editor.visible",
-        "statistics.effect",
-        "ui.settings-collapsed",
-        "ui.skin",
-        "ui.visible",
-        "ui.zoom"
-    };
-    const std::set<std::string> expectedDynamicSelections = {
+    const std::set<std::string> ExpectedDynamicSelections = {
         "gpu.adapter",
         "light.selected",
         "material.selected",
         "scene.current"
     };
+    const std::set<std::string> ExpectedVisibility = {
+        "visibility.ao.enabled",
+        "visibility.ao.precision",
+        "visibility.ao.strength",
+        "visibility.distribution",
+        "visibility.enabled",
+        "visibility.estimator",
+        "visibility.gi.enabled",
+        "visibility.gi.intensity",
+        "visibility.gi.precision",
+        "visibility.noise",
+        "visibility.quality",
+        "visibility.radius",
+        "visibility.reconstruction",
+        "visibility.resolution",
+        "visibility.samples",
+        "visibility.spatial.enabled",
+        "visibility.spatial.filter",
+        "visibility.spatial.radius",
+        "visibility.thickness"
+    };
 
     std::set<std::string> names;
-    std::set<std::string> uiSafe;
     std::set<std::string> dynamicSelections;
-    std::array<std::size_t, 13> sectionCounts{};
+    std::set<std::string> visibility;
+    std::array<std::size_t, 10> sectionCounts{};
     std::size_t actionCount = 0u;
-    std::size_t booleanCount = 0u;
     std::size_t dynamicCount = 0u;
 
     for (const UiSettingsCommandDefinition& definition :
         UiSettingsCommandCatalog)
     {
-        Require(
-            IsStableLowercaseName(definition.name),
-            "every path/action must be nonempty stable lowercase ASCII");
-        Require(
-            names.insert(std::string(definition.name)).second,
-            "every path/action must occur exactly once");
-        Require(
-            !definition.domain.empty(),
-            "every operation must provide a concise domain summary");
+        Require(IsStableLowercaseName(definition.name),
+            "every command must use stable lowercase ASCII");
+        Require(names.insert(std::string(definition.name)).second,
+            "every command must occur exactly once");
+        Require(!definition.domain.empty(),
+            "every command must describe its accepted values");
 
-        const std::size_t sectionIndex =
-            static_cast<std::size_t>(definition.section);
-        Require(
-            sectionIndex < sectionCounts.size(),
-            "every operation must belong to a known section");
-        ++sectionCounts[sectionIndex];
+        const std::size_t section = static_cast<std::size_t>(definition.section);
+        Require(section < sectionCounts.size(),
+            "every command must belong to a live UI section");
+        ++sectionCounts[section];
 
-        const bool action =
-            definition.kind == UiSettingsCommandKind::Action;
+        const bool action = definition.kind == UiSettingsCommandKind::Action;
         if (action)
         {
             ++actionCount;
-            Require(
-                definition.supportedVerbs ==
-                    UiSettingsVerbMask(UiSettingsCommandVerb::Run),
-                "actions must support run and no value verbs");
-            Require(
-                !definition.dynamic,
-                "actions must not masquerade as dynamic value paths");
+            Require(definition.supportedVerbs ==
+                static_cast<std::uint8_t>(UiSettingsCommandVerb::Run),
+                "actions must only support run");
+            Require(!definition.dynamic,
+                "actions must not masquerade as dynamic values");
         }
         else
         {
-            Require(
-                definition.Supports(UiSettingsCommandVerb::Get) &&
-                    definition.Supports(UiSettingsCommandVerb::Set),
-                "every value path must support get and set");
-            Require(
-                !definition.Supports(UiSettingsCommandVerb::Run),
-                "value paths must not support run");
+            Require(definition.Supports(UiSettingsCommandVerb::Get) &&
+                    definition.Supports(UiSettingsCommandVerb::Set) &&
+                    !definition.Supports(UiSettingsCommandVerb::Run),
+                "values must support get and set but not run");
         }
 
-        const bool boolean =
-            definition.kind == UiSettingsCommandKind::Boolean;
-        if (boolean)
-        {
-            ++booleanCount;
-            Require(
-                definition.Supports(UiSettingsCommandVerb::Get) &&
-                    definition.Supports(UiSettingsCommandVerb::Set) &&
-                    definition.Supports(UiSettingsCommandVerb::Toggle),
-                "boolean paths must support get, set, and toggle");
-            Require(
-                !definition.Supports(UiSettingsCommandVerb::Run),
-                "boolean paths must not support run");
-        }
-        else
-        {
-            Require(
-                !definition.Supports(UiSettingsCommandVerb::Toggle),
-                "only boolean paths may support toggle");
-        }
+        const bool boolean = definition.kind == UiSettingsCommandKind::Boolean;
+        Require(definition.Supports(UiSettingsCommandVerb::Toggle) == boolean,
+            "only booleans may support toggle");
 
         if (definition.dynamic)
         {
             ++dynamicCount;
-            Require(
-                definition.section ==
-                        UiSettingsCommandSection::General ||
-                    definition.section ==
-                        UiSettingsCommandSection::Lights ||
-                    definition.section ==
-                        UiSettingsCommandSection::Materials,
-                "dynamic paths must belong to a runtime-owned section");
+            Require(definition.section == Section::General ||
+                    definition.section == Section::Lights ||
+                    definition.section == Section::Materials,
+                "dynamic values must belong to a runtime-owned UI section");
         }
-
-        if (definition.kind ==
-            UiSettingsCommandKind::DynamicSelection)
+        if (definition.kind == UiSettingsCommandKind::DynamicSelection)
         {
-            Require(
-                definition.dynamic,
-                "dynamic-selection paths must advertise dynamic metadata");
+            Require(definition.dynamic,
+                "dynamic selections must advertise dynamic metadata");
             dynamicSelections.insert(std::string(definition.name));
         }
+        if (definition.section == Section::Visibility)
+            visibility.insert(std::string(definition.name));
 
-        if (definition.factoryMutationPolicy ==
-            UiSettingsFactoryMutationPolicy::UiSafe)
-        {
-            uiSafe.insert(std::string(definition.name));
-        }
-        else
-        {
-            Require(
-                definition.factoryMutationPolicy ==
-                    UiSettingsFactoryMutationPolicy::Locked,
-                "unknown factory policies must fail closed");
-        }
+        Require(definition.name.find("shadows.svsm") == std::string_view::npos &&
+                definition.name.find("shadows.csm") == std::string_view::npos &&
+                definition.name.find("benchmark") == std::string_view::npos &&
+                definition.name.find("world-material") == std::string_view::npos &&
+                definition.name.find("sample-resurrection") == std::string_view::npos &&
+                definition.name != "engine.pbr",
+            "retired engine taxonomies must not remain discoverable");
     }
 
-    Require(
-        names.size() == UiSettingsCommandCatalog.size(),
-        "the catalog must contain exactly 245 unique operations");
-    Require(
-        sectionCounts == ExpectedSectionCounts,
-        "section counts must retain the complete Settings inventory");
-    Require(
-        actionCount == 10u,
-        "the catalog must contain ten Settings actions");
-    Require(
-        booleanCount > 0u,
-        "the catalog must exercise boolean command contracts");
-    Require(
-        dynamicCount == 46u,
-        "the catalog must contain all 46 runtime-owned paths");
-    Require(
-        dynamicSelections == expectedDynamicSelections,
+    Require(names.size() == UiSettingsCommandCatalog.size(),
+        "the compact catalog must contain 122 unique controls");
+    Require(sectionCounts == ExpectedSectionCounts,
+        "section counts must match the current UI");
+    Require(actionCount == 4u,
+        "only open-folder, reset, screenshot, and restart actions remain");
+    Require(dynamicCount == 46u,
+        "runtime lights and materials must retain their 46 dynamic controls");
+    Require(dynamicSelections == ExpectedDynamicSelections,
         "dynamic selections must cover adapters, scenes, lights, and materials");
-    Require(
-        uiSafe == expectedUiSafe &&
-            uiSafe.size() == 8u,
-        "only the eight proven topology-neutral operations may mutate the factory build");
+    Require(visibility == ExpectedVisibility,
+        "Visibility commands must exactly mirror the direct UI settings");
 
-    struct SelectionContract
-    {
-        std::string_view name;
-        bool supportsReset;
+    const auto requireDomain = [](std::string_view name, std::string_view domain) {
+        const UiSettingsCommandDefinition* definition = Find(name);
+        Require(definition && definition->domain == domain,
+            "command domain must exactly match its visible values");
     };
-    constexpr SelectionContract SelectionContracts[] = {
-        { "gpu.adapter", false },
-        { "scene.current", false },
-        { "light.selected", true },
-        { "material.selected", false }
-    };
-    for (const SelectionContract& expected : SelectionContracts)
-    {
-        const UiSettingsCommandDefinition* definition =
-            Find(expected.name);
-        Require(
-            definition &&
-                definition->kind ==
-                    UiSettingsCommandKind::DynamicSelection &&
-                definition->Supports(
-                    UiSettingsCommandVerb::Reset) ==
-                    expected.supportsReset,
-            "dynamic selection reset metadata must match its UI contract");
-    }
+    requireDomain("visibility.noise",
+        "permutated-white-noise|hashed-white-noise|void-cluster-blue-noise");
+    requireDomain("visibility.reconstruction",
+        "direct-or-guide-aware|packed-depth-normal|packed-slope-aware|packed-leak-controlled");
+    requireDomain("visibility.spatial.filter",
+        "joint-bilateral|gaussian-bilateral");
+    requireDomain("anti-aliasing.taa.temporal-cost",
+        "full-quality|reduced|minimum");
+    requireDomain("anti-aliasing.taa.previous-depth",
+        "stationary-bypass|four-texel-footprint");
+    requireDomain("anti-aliasing.taa.history.frames",
+        "-1 or integer 1..32; -1 uses quality preset");
+    requireDomain("anti-aliasing.taa.history.strength",
+        "-1 or float 0..2; -1 uses quality preset");
+    requireDomain("debug.world.materials",
+        "scene|white|white-detail|white-lighting");
+    requireDomain("debug.shadows.isolation",
+        "final|thread-lanes|wave-groups");
+    requireDomain("debug.visibility.view",
+        "final|ambient-visibility|traced-indirect|applied-indirect");
+    requireDomain("shadows.screen-space-directional.profile",
+        "default|long|maximum-validation|custom");
 
-    struct DomainContract
-    {
-        std::string_view name;
-        std::string_view domain;
-    };
-    constexpr DomainContract DomainContracts[] = {
-        {
-            "world-materials",
-            "white-world-off|white-world-on|preserve-detail|"
-            "preserve-lighting|indirect-diffuse"
-        },
-        {
-            "visibility.reconstruction.method",
-            "full-resolution|guide-aware-upsampling|joint-bilateral|"
-            "gaussian-bilateral|depth-guided|depth-normal|slope-aware|"
-            "leakage-limited"
-        },
-        {
-            "shadows.svsm.debug-view",
-            "off|clipmap-level|required-pages|resident-pages|cached-pages|"
-            "dirty-pages|rendered-pages|physical-pages|fallback-level|"
-            "missing-pages|tap-count|visibility"
-        },
-        {
-            "shadows.csm.filter-radius",
-            "float 0..8 texels; Poisson only"
-        },
-        {
-            "anti-aliasing.temporal-cost",
-            "minimum|reduced|full-quality"
-        },
-        {
-            "anti-aliasing.previous-depth-validation",
-            "temporal-cost|four-texel-footprint|stationary-bypass"
-        },
-        {
-            "anti-aliasing.sample-resurrection",
-            "preset|off|one-older-frame|two-older-frames"
-        },
-        {
-            "shadows.screen-space-directional.debug-view",
-            "off|edge|thread|wave"
-        },
-        {
-            "light.selected.flashlight.camera-offset",
-            "meters 0..0.4; flashlight_1"
-        },
-        {
-            "light.selected.flashlight.hotspot-size",
-            "float 0.2..0.75; flashlight_1"
-        }
-    };
-    for (const DomainContract& expected : DomainContracts)
-    {
-        const UiSettingsCommandDefinition* definition =
-            Find(expected.name);
-        Require(
-            definition && definition->domain == expected.domain,
-            "catalog domains must exactly enumerate their accepted visible "
-            "values");
-    }
-    const UiSettingsCommandDefinition* reconstructionMethod =
-        Find("visibility.reconstruction.method");
-    Require(
-        reconstructionMethod &&
-            reconstructionMethod->domain.find(
-                "available-packed-edge-profile") ==
-                std::string_view::npos,
-        "reconstruction completion must not expose a placeholder value");
+    Require(!Find("visibility.profile") &&
+            !Find("visibility.sampling.noise-pattern") &&
+            !Find("visibility.reconstruction.method") &&
+            !Find("visibility.buffers.preset") &&
+            !Find("anti-aliasing.method") &&
+            !Find("anti-aliasing.taa.stationary-bypass") &&
+            !Find("debug.visibility.indirect-diffuse-only") &&
+            !Find("debug.shadows.edge-overlay") &&
+            !Find("debug.shadows.overlay-opacity") &&
+            !Find("shadows.screen-space-directional.debug-view") &&
+            !Find("statistics.effect"),
+        "legacy planner, mode, buffer-profile, and debug-view paths must stay retired");
 
-    std::set<std::string> exemptionNames;
-    for (const std::string_view name :
-        UiSettingsNavigationExemptions)
+    std::set<std::string> exemptions;
+    for (const std::string_view name : UiSettingsNavigationExemptions)
     {
-        Require(
-            IsStableLowercaseName(name),
-            "navigation exemptions must use stable lowercase names");
-        Require(
-            exemptionNames.insert(std::string(name)).second,
-            "navigation exemptions must be unique");
+        Require(IsStableLowercaseName(name) &&
+                exemptions.insert(std::string(name)).second,
+            "navigation exemptions must be stable and unique");
     }
-    for (const std::string_view name :
-        UiSettingsTelemetryExemptions)
+    for (const std::string_view name : UiSettingsTelemetryExemptions)
     {
-        Require(
-            IsStableLowercaseName(name),
-            "telemetry exemptions must use stable lowercase names");
-        Require(
-            exemptionNames.insert(std::string(name)).second,
-            "telemetry exemptions must be separate and unique");
+        Require(IsStableLowercaseName(name) &&
+                exemptions.insert(std::string(name)).second,
+            "telemetry exemptions must be stable and unique");
+        Require(name.find("benchmark") == std::string_view::npos,
+            "benchmark telemetry exemptions must stay retired");
     }
-    Require(
-        UiSettingsNavigationExemptions.size() == 5u &&
-            UiSettingsTelemetryExemptions.size() == 8u,
-        "navigation and telemetry exemptions must stay explicit");
+    Require(UiSettingsNavigationExemptions.size() == 5u &&
+            UiSettingsTelemetryExemptions.size() == 4u,
+        "only live navigation and telemetry surfaces may be exempted");
 
     return EXIT_SUCCESS;
 }

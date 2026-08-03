@@ -27,18 +27,26 @@ namespace uvsr
         uint32_t sampleCount = 0u;
         uint64_t outputTextureBytes = 0u;
         bool active = false;
+        bool available = false;
         bool supported = true;
     };
 
     struct ScreenSpaceDirectionalShadowResult
     {
         nvrhi::ITexture* nearVisibility = nullptr;
+        nvrhi::ITexture* isolationOutput = nullptr;
         const donut::engine::Light* light = nullptr;
-        bool showDebug = false;
+        ScreenSpaceShadowIsolationView isolationView =
+            ScreenSpaceShadowIsolationView::None;
 
         [[nodiscard]] explicit operator bool() const
         {
             return nearVisibility && light;
+        }
+
+        [[nodiscard]] bool HasDebugOutput() const
+        {
+            return isolationOutput != nullptr;
         }
     };
 
@@ -63,7 +71,8 @@ namespace uvsr
 
         void PresentDebug(
             nvrhi::ICommandList* commandList,
-            nvrhi::IFramebuffer* framebuffer);
+            nvrhi::IFramebuffer* framebuffer,
+            const ScreenSpaceDirectionalShadowResult& result);
 
         [[nodiscard]] const ScreenSpaceDirectionalShadowTimings&
             GetTimings() const
@@ -88,14 +97,16 @@ namespace uvsr
         nvrhi::BufferHandle m_ConstantBuffer;
         std::array<nvrhi::SamplerHandle, 2> m_PointBorderSamplers;
         nvrhi::TextureHandle m_NearVisibility;
+        nvrhi::TextureHandle m_DebugOutput;
         nvrhi::ITexture* m_BoundDepth = nullptr;
         bool m_BoundReverseDepth = true;
+        nvrhi::BindingSetHandle m_DebugTraceBindingSet;
 
         std::array<std::array<std::array<Pipeline, 3>, 3>, 5> m_Pipelines;
 
         nvrhi::ShaderHandle m_DebugPixelShader;
         nvrhi::BindingLayoutHandle m_DebugBindingLayout;
-        nvrhi::BindingSetHandle m_DebugBindingSet;
+        nvrhi::BindingSetHandle m_DebugPresentBindingSet;
         nvrhi::GraphicsPipelineHandle m_DebugPipeline;
 
         std::array<nvrhi::TimerQueryHandle, c_TimerLatency> m_TimerQueries;
@@ -106,7 +117,10 @@ namespace uvsr
         bool m_ReportedInvalidVariant = false;
         bool m_ReportedInvalidInput = false;
 
-        bool EnsureResources(nvrhi::ITexture* depth, bool reverseDepth);
+        bool EnsureResources(
+            nvrhi::ITexture* depth,
+            bool reverseDepth,
+            bool isolationOutputRequired);
         Pipeline* EnsurePipeline(
             const ScreenSpaceDirectionalShadowSettings& settings);
         void AdvanceTimer();

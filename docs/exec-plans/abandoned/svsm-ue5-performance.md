@@ -2,7 +2,7 @@
 
 ## Status
 
-- State: active
+- State: superseded by shadow retirement
 - Coordinator: `/root`
 - Project/integration branch and worktree:
   `codex/bend-screen-space-shadows` at
@@ -209,14 +209,7 @@ asset/package contracts:
 | 2026-07-25 | Treat every shader-manifest entry used at runtime as an explicit staging dependency. | The compiled `invalidatePages` and scheduled-page-hierarchy binaries existed in the shader staging directory but were absent from `build/bin`, causing startup to fail before runtime validation. | Build and runtime staging |
 | 2026-07-25 | Split the sparse resolve family into explicit reference and translation-cache blobs. | A runtime launch proved that the staged shared blob contained only the sixteen reference permutations even though the renderer requested thirty-two combinations. Two complete sixteen-entry blobs keep both independently selectable paths explicit and prevent a partial family from reaching runtime. | Shader compilation and staging |
 | 2026-07-25 | Invalidate indirect templates whenever the render-packet cache rebuilds. | Packet preparation may rebuild while GPU-gated submission is disabled. Retaining the old initialized bit could make a later re-enable submit stale arguments for the previous packet set. | Packet-cache correctness |
-| 2026-07-25 | Build the first static-depth hierarchy only from complete paired-static pages and use reverse-Z minimum reduction. | A dynamic caster/page pair is safely rejected only when every covered hierarchy cell contains valid static depth nearer than the caster; empty cells, stale owner tags, static-dirty pages, scatter work, or uncertain depth must fail open. | Page-mask and HZB culling |
-| 2026-07-25 | Count resident dirty pages rather than every page-table entry carrying initialization dirty bits. | Nonresident entries deliberately remain fully dirty so future allocations cannot expose uninitialized depth. Counting them as pending raster work made a clean 729-page cache appear to contain 23,847 dirty pages. | Runtime diagnostics |
-| 2026-07-25 | Use balanced progressive Poisson subsets for named optimized profiles while retaining the exact legacy stride ordering. | The original four- and eight-tap subsets were spatially biased. A fixed progressive order provides more even early subsets, preserves the same sixteen-sample kernel, and adds no runtime selection cost because each ordering is an explicit shader family. | Filtering |
-| 2026-07-25 | Implement deferred static-depth merging as an independent raster permutation, not as an HZB-dependent feature. | UE writes static depth to one slice and merges it after raster. UVSR can fuse `max(merged, static)` into the existing post-raster hierarchy scan, but paired-depth correctness must remain available when HZB is disabled or unavailable and the legacy dual-atomic path must remain exact. | Paired depth and raster |
-| 2026-07-25 | Latch any lazy failure of the allocated deferred raster permutation to the exact dual-atomic reference until the feature is toggled off. | Shader creation alone cannot prove that every lazy graphics pipeline will instantiate. A failed optional permutation must return white for the failed transaction, rebuild once with the reference pass, and avoid an indefinite per-frame retry loop, including effective-unpaired moving-light frames. | Optional raster fallback |
-| 2026-07-25 | Apply receiver-distance LOD only to receiver selection, with the coarsest level retained as an independent complete fallback. | A camera-distance caster rejection can remove a distant or hidden caster that shadows a near receiver. Identical mark-and-resolve receiver thresholds reduce fine-page demand without weakening world-space caster coverage. | Receiver distance and moving-light recovery |
-| 2026-07-25 | Never receiver-mask paired static casters, and track dynamic page coverage before reusing any partially rendered dynamic slice. | UE disables receiver masks for cached static geometry because static depth must remain complete. UVSR can preserve zero-work dynamic reuse only when the current mask is a subset of transactionally published rasterized coverage; expansion or feature disablement must dirty the dynamic slice. | Receiver-subpage masks |
-| 2026-07-25 | Treat raster submission and page publication as one transaction. | A failed material, binding, pipeline, packet, or argument setup after a page clear must not reach hierarchy publication, finalization, visibility resolve, or cache-state commit. Sparse failure returns white and latches a full resource clear; dense failure returns white and redraws from clear depth on the next frame. | Raster correctness |
+| 2026-07-25 | Build the first static-depth hierarchy only from complete paired-static pages and use reverse-Z minimum reduction. | A dynamic caster/page pair is safely rejected only w…701 tokens truncated…n and page publication as one transaction. | A failed material, binding, pipeline, packet, or argument setup after a page clear must not reach hierarchy publication, finalization, visibility resolve, or cache-state commit. Sparse failure returns white and latches a full resource clear; dense failure returns white and redraws from clear depth on the next frame. | Raster correctness |
 | 2026-07-25 | Keep spatial filter rotation cache-stable until stochastic visibility has an explicit cache identity. | A frame-varying filter phase conflicts with static request reuse and the eight cached full-resolution visibility slots. Fixed per-pixel rotation can decorrelate the kernel without breaking zero-work reuse; temporal blue noise remains a later explicit policy. | Filtering and static reuse |
 | 2026-07-25 | Keep Quality on exact receiver clipmap selection and zero moving-light bias until a transition band is implemented. | A global one-level bias degraded every near receiver during exact light motion, while enabling a hard distance threshold in the quality path would introduce a possible clipmap seam. Balanced and Performance may exercise continuous receiver-distance coarsening while the exact zero-bias path remains available. | Receiver distance and moving-light quality |
 
@@ -289,5 +282,16 @@ Stop and ask the user only if:
 - Coming Soon and documentation update: pending
 - Pushed, pull request, merged, or intentionally local: intentionally local
 - Remaining experiments or follow-ups: all implementation phases active
-- Active ownership released: no
-- Archived to completed or abandoned path: pending
+- Active ownership released: yes; superseded ownership closed on 2026-08-03
+- Archived to completed or abandoned path: `docs/exec-plans/abandoned/svsm-ue5-performance.md`
+
+## Archival Resolution
+
+Superseded on 2026-08-03 when sparse virtual shadows left the product. Its
+many implemented research phases do not satisfy the still-open integration,
+runtime, and verification conditions. Recovery source is preserved locally on
+`codex/svsm-csm-preserved` at `f7c0c87d8cba6880428fbc34400eb2882fb5182e`.
+
+The full historical evidence is preserved above. This archive does not claim
+completion of any unchecked runtime, visual, performance, thermal, parity, or
+product-acceptance criterion.

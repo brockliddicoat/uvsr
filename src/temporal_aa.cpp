@@ -15,8 +15,6 @@ using namespace donut;
 using namespace donut::engine;
 using namespace donut::math;
 
-#include <donut/shaders/view_cb.h>
-
 namespace
 {
     // Portions of the quality path are adapted from Microsoft DirectX Graphics
@@ -42,16 +40,6 @@ namespace
         float maximumHistoryWeight;
         uint32_t behaviorFlags;
         uint32_t behaviorPadding;
-#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
-        PlanarViewConstants currentView;
-        PlanarViewConstants immediateHistoryView;
-        PlanarViewConstants persistentHistoryView0;
-        PlanarViewConstants persistentHistoryView1;
-        uint32_t persistentValidMask;
-        uint32_t persistentPadding0;
-        uint32_t persistentPadding1;
-        uint32_t persistentPadding2;
-#endif
     };
 
     struct alignas(16) TemporalAaOutputConstants
@@ -61,13 +49,7 @@ namespace
         uint2 bufferDimensions;
     };
 
-#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
-    static_assert(
-        sizeof(TemporalAaBlendConstants) ==
-        128u + 4u * sizeof(PlanarViewConstants) + 16u);
-#else
     static_assert(sizeof(TemporalAaBlendConstants) == 128u);
-#endif
     static_assert(
         offsetof(
             TemporalAaBlendConstants,
@@ -89,29 +71,6 @@ namespace
             required;
     }
 
-#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
-    std::shared_ptr<PlanarView> CapturePlanarView(
-        const IView& source)
-    {
-        const nvrhi::ViewportState viewportState =
-            source.GetViewportState();
-        if (viewportState.viewports.empty())
-            return nullptr;
-
-        auto result = std::make_shared<PlanarView>();
-        result->SetViewport(viewportState.viewports.front());
-        result->SetVariableRateShadingState(
-            source.GetVariableRateShadingState());
-        result->SetMatrices(
-            source.GetViewMatrix(),
-            source.GetProjectionMatrix(false));
-        result->SetPixelOffset(source.GetPixelOffset());
-        result->SetArraySlice(static_cast<int>(
-            source.GetSubresources().baseArraySlice));
-        result->UpdateCache();
-        return result;
-    }
-#endif
 }
 
 namespace uvsr
@@ -139,16 +98,6 @@ namespace uvsr
             GetTemporalAaHistoryBytes(
                 m_Size.x,
                 m_Size.y);
-#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
-        m_Timings.persistentHistoryTextureBytes =
-            GetTemporalAaPersistentHistoryBytes(
-                m_Size.x,
-                m_Size.y);
-#endif
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        m_Timings.debugTextureBytes =
-            GetTemporalAaDebugBytes(m_Size.x, m_Size.y);
-#endif
         m_Timings.activeHistoryTextureBytes =
             m_Timings.robustHistoryTextureBytes;
 
@@ -158,10 +107,6 @@ namespace uvsr
             "TemporalAA/QualityHistory";
         temporalHistoryDesc.colorUnorderedAccess = true;
         temporalHistoryDesc.depthUnorderedAccess = true;
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        temporalHistoryDesc.colorRenderTarget = true;
-        temporalHistoryDesc.depthRenderTarget = true;
-#endif
         temporalHistoryDesc.maximumAccumulation = 65504u;
         m_History.Initialize(device, temporalHistoryDesc);
 
@@ -171,9 +116,6 @@ namespace uvsr
         historyDesc.dimension = nvrhi::TextureDimension::Texture2D;
         historyDesc.mipLevels = 1u;
         historyDesc.isUAV = true;
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        historyDesc.isRenderTarget = true;
-#endif
         historyDesc.initialState = nvrhi::ResourceStates::ShaderResource;
         historyDesc.keepInitialState = true;
 
@@ -205,12 +147,8 @@ namespace uvsr
                 m_Size.x,
                 m_Size.y,
                 m_Timings.minimumColorIsR11G11B10 ? 4u : 8u,
-                m_Timings.minimumDepthIsR16 ? 2u : 4u,
-                m_Timings.persistentHistoryTextureBytes != 0u);
+                m_Timings.minimumDepthIsR16 ? 2u : 4u);
 
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        historyDesc.isRenderTarget = false;
-#endif
         for (uint32_t slot = 0u; slot < 2u; ++slot)
         {
             historyDesc.format = minimumColorFormat;
@@ -226,44 +164,11 @@ namespace uvsr
             m_MinimumDepth[slot] =
                 device->createTexture(historyDesc);
         }
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        historyDesc.isRenderTarget = true;
-#endif
 
-#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
-        historyDesc.format = nvrhi::Format::RGBA16_FLOAT;
-        historyDesc.debugName = "TemporalAA/PersistentColor0";
-        m_PersistentColor[0] = device->createTexture(historyDesc);
-        historyDesc.debugName = "TemporalAA/PersistentColor1";
-        m_PersistentColor[1] = device->createTexture(historyDesc);
-        historyDesc.format = nvrhi::Format::R32_FLOAT;
-        historyDesc.debugName = "TemporalAA/PersistentDepth0";
-        m_PersistentDepth[0] = device->createTexture(historyDesc);
-        historyDesc.debugName = "TemporalAA/PersistentDepth1";
-        m_PersistentDepth[1] = device->createTexture(historyDesc);
-#endif
 
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        historyDesc.format = nvrhi::Format::R16_FLOAT;
-        historyDesc.debugName = "TemporalAA/DebugValues";
-        m_DebugValues = device->createTexture(historyDesc);
-#endif
         historyDesc.format = sceneColorDesc.format;
         historyDesc.debugName = "TemporalAA/FusedOutput";
         m_FusedOutput = device->createTexture(historyDesc);
-        historyDesc.format = sceneColorDesc.format;
-        historyDesc.debugName = "TemporalAA/SelectiveMorphologyCurrent";
-        m_SelectiveCurrent = device->createTexture(historyDesc);
-        historyDesc.format = nvrhi::Format::R16_FLOAT;
-        historyDesc.debugName = "TemporalAA/SelectiveMorphologyRejection";
-        m_SelectiveRejection = device->createTexture(historyDesc);
-#if !UVSR_AA_DEVELOPER_OVERRIDES
-        // Shipping blend shaders compile debug output away. Reuse the
-        // selective rejection allocation for the inert ABI slots instead of
-        // carrying a dedicated debug texture in release builds.
-        m_DebugValues = m_SelectiveRejection;
-#endif
-
         nvrhi::BufferDesc constantBufferDesc;
         constantBufferDesc.byteSize = sizeof(TemporalAaBlendConstants);
         constantBufferDesc.debugName = "TemporalAA/BlendConstants";
@@ -291,16 +196,9 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(2),
             nvrhi::BindingLayoutItem::Texture_SRV(3),
             nvrhi::BindingLayoutItem::Texture_SRV(4),
-            nvrhi::BindingLayoutItem::Texture_SRV(5),
-            nvrhi::BindingLayoutItem::Texture_SRV(6),
-            nvrhi::BindingLayoutItem::Texture_SRV(7),
-            nvrhi::BindingLayoutItem::Texture_SRV(8),
             nvrhi::BindingLayoutItem::Texture_UAV(0),
             nvrhi::BindingLayoutItem::Texture_UAV(1),
-            nvrhi::BindingLayoutItem::Texture_UAV(2),
-            nvrhi::BindingLayoutItem::Texture_UAV(3),
-            nvrhi::BindingLayoutItem::Texture_UAV(4),
-            nvrhi::BindingLayoutItem::Texture_UAV(5)
+            nvrhi::BindingLayoutItem::Texture_UAV(2)
         };
         m_BlendBindingLayout = device->createBindingLayout(blendLayoutDesc);
 
@@ -320,47 +218,12 @@ namespace uvsr
         m_MinimumBindingLayout =
             device->createBindingLayout(minimumLayoutDesc);
 
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        m_FullscreenVS = commonPasses->m_FullscreenVS;
-        nvrhi::BindingLayoutDesc pixelBlendLayout;
-        pixelBlendLayout.visibility = nvrhi::ShaderType::Pixel;
-        pixelBlendLayout.bindings = {
-            nvrhi::BindingLayoutItem::VolatileConstantBuffer(1),
-            nvrhi::BindingLayoutItem::Sampler(0),
-            nvrhi::BindingLayoutItem::Texture_SRV(0),
-            nvrhi::BindingLayoutItem::Texture_SRV(1),
-            nvrhi::BindingLayoutItem::Texture_SRV(2),
-            nvrhi::BindingLayoutItem::Texture_SRV(3),
-            nvrhi::BindingLayoutItem::Texture_SRV(4)
-        };
-        m_PixelBlendBindingLayout =
-            device->createBindingLayout(pixelBlendLayout);
-
-        for (uint32_t source = 0u; source < 2u; ++source)
-        {
-            const uint32_t destination = source ^ 1u;
-            m_PixelBlendFramebuffers[source] =
-                device->createFramebuffer(
-                    nvrhi::FramebufferDesc()
-                        .addColorAttachment(
-                            m_History.Color(destination))
-                        .addColorAttachment(
-                            m_History.Depth(destination))
-                        .addColorAttachment(m_DebugValues)
-                        .addColorAttachment(m_SelectiveCurrent)
-                        .addColorAttachment(m_SelectiveRejection)
-                        .addColorAttachment(m_FusedOutput));
-        }
-
-        // Pixel-path PSOs are likewise created only when selected.
-#endif
 
         nvrhi::BindingLayoutDesc outputLayoutDesc;
         outputLayoutDesc.visibility = nvrhi::ShaderType::Compute;
         outputLayoutDesc.bindings = {
             nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
             nvrhi::BindingLayoutItem::Texture_SRV(0),
-            nvrhi::BindingLayoutItem::Texture_SRV(1),
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         };
         m_OutputBindingLayout = device->createBindingLayout(outputLayoutDesc);
@@ -379,40 +242,12 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(3, currentDepth),
                 nvrhi::BindingSetItem::Texture_SRV(
                     4, m_History.Depth(source)),
-#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
-                nvrhi::BindingSetItem::Texture_SRV(
-                    5, m_PersistentColor[0]),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    6, m_PersistentDepth[0]),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    7, m_PersistentColor[1]),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    8, m_PersistentDepth[1]),
-#else
-                // The factory-startup shader experiment compiles resurrection
-                // out and aliases its otherwise-unused binding slots.
-                nvrhi::BindingSetItem::Texture_SRV(
-                    5, m_History.Color(source)),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    6, m_History.Depth(source)),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    7, m_History.Color(source)),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    8, m_History.Depth(source)),
-#endif
                 nvrhi::BindingSetItem::Texture_UAV(
                     0, m_History.Color(destination)),
                 nvrhi::BindingSetItem::Texture_UAV(
                     1, m_History.Depth(destination)),
                 nvrhi::BindingSetItem::Texture_UAV(
-                    2, m_DebugValues),
-                nvrhi::BindingSetItem::Texture_UAV(
-                    3, m_SelectiveCurrent),
-                nvrhi::BindingSetItem::Texture_UAV(
-                    4, m_SelectiveRejection)
-                ,
-                nvrhi::BindingSetItem::Texture_UAV(
-                    5, m_FusedOutput)
+                    2, m_FusedOutput)
             };
             m_BlendBindingSets[source] = device->createBindingSet(
                 blendBindings, m_BlendBindingLayout);
@@ -449,29 +284,6 @@ namespace uvsr
                         m_MinimumBindingLayout);
             }
 
-#if UVSR_AA_DEVELOPER_OVERRIDES
-            nvrhi::BindingSetDesc pixelBlendBindings;
-            pixelBlendBindings.bindings = {
-                nvrhi::BindingSetItem::ConstantBuffer(
-                    1, m_BlendConstantBuffer),
-                nvrhi::BindingSetItem::Sampler(
-                    0, m_LinearClampSampler),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    0, motionVectors),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    1, sceneColor),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    2, m_History.Color(source)),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    3, currentDepth),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    4, m_History.Depth(source))
-            };
-            m_PixelBlendBindingSets[source] =
-                device->createBindingSet(
-                    pixelBlendBindings,
-                    m_PixelBlendBindingLayout);
-#endif
 
             nvrhi::BindingSetDesc outputBindings;
             outputBindings.bindings = {
@@ -479,8 +291,6 @@ namespace uvsr
                     0, m_OutputConstantBuffer),
                 nvrhi::BindingSetItem::Texture_SRV(
                     0, m_History.Color(destination)),
-                nvrhi::BindingSetItem::Texture_SRV(
-                    1, m_DebugValues),
                 nvrhi::BindingSetItem::Texture_UAV(0, sceneColor)
             };
             m_OutputBindingSets[source] = device->createBindingSet(
@@ -504,14 +314,8 @@ namespace uvsr
             return true;
 
         constexpr uint32_t minimumPipelineCount = 2u;
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        constexpr uint32_t productionBlendPipelineCount = 0u;
-        constexpr uint32_t resolvePipelineCount =
-            TemporalAaResolveDebugViewCount;
-#else
-        constexpr uint32_t productionBlendPipelineCount = 8u;
+        constexpr uint32_t productionBlendPipelineCount = 16u;
         constexpr uint32_t resolvePipelineCount = 1u;
-#endif
         constexpr uint32_t sharpenPipelineCount = 2u;
         constexpr uint32_t productionBlendBegin = minimumPipelineCount;
         constexpr uint32_t resolveBegin =
@@ -551,54 +355,43 @@ namespace uvsr
         }
         else if (m_PipelinePreparationStep < resolveBegin)
         {
-#if !UVSR_AA_DEVELOPER_OVERRIDES
-            constexpr std::array<AntiAliasingPreset, 4>
-                productionPresets = {
-                    AntiAliasingPreset::TemporalPerformance,
-                    AntiAliasingPreset::TemporalBalanced,
-                    AntiAliasingPreset::TemporalQuality,
-                    AntiAliasingPreset::TemporalUltra
-                };
             const uint32_t productionStep =
                 m_PipelinePreparationStep - productionBlendBegin;
-            const uint32_t presetIndex = productionStep / 2u;
+            const uint32_t qualityIndex = productionStep / 4u;
+            const bool optimized =
+                ((productionStep / 2u) & 1u) != 0u;
             const uint32_t fused = productionStep % 2u;
             const TemporalAaOptions options =
-                GetPresetTemporalOptions(productionPresets[presetIndex]);
-            constexpr uint32_t exportSelective = 0u;
+                GetPresetTemporalOptions(
+                    AntiAliasingQuality(qualityIndex));
             TemporalAaStaticPerformanceOptions performance{};
+            performance.optimizedCompute = optimized;
             performance.fusedOutput = fused != 0u;
+            const uint32_t algorithmIndex =
+                GetTemporalAaBlendPermutationIndex(options);
+            const uint32_t performanceIndex =
+                GetTemporalAaStaticPerformanceIndex(performance);
             const uint32_t permutation =
-                GetTemporalAaBlendPermutationIndex(options) *
-                    (2u * TemporalAaSampleResurrectionCount * 2u) +
-                exportSelective *
-                    (TemporalAaSampleResurrectionCount * 2u) +
-                fused;
+                algorithmIndex *
+                    TemporalAaStaticPerformanceCount +
+                performanceIndex;
             CreateBlendComputePermutation(
                 options,
-                exportSelective,
-                0u,
                 performance,
-                m_BlendShaders[permutation],
-                m_BlendPipelines[permutation]);
-#endif
+                m_PerformanceBlendShaders[permutation],
+                m_PerformanceBlendPipelines[permutation]);
         }
         else if (m_PipelinePreparationStep < sharpenBegin)
         {
-            const uint32_t debugView =
-                m_PipelinePreparationStep - resolveBegin;
-            const std::vector<ShaderMacro> macros = {
-                { "TAA_DEBUG_VIEW", std::to_string(debugView) }
-            };
-            m_ResolveShaders[debugView] = m_ShaderFactory->CreateShader(
+            m_ResolveShader = m_ShaderFactory->CreateShader(
                 "uvsr/temporal_aa_resolve_cs.hlsl",
                 "main",
-                &macros,
+                nullptr,
                 nvrhi::ShaderType::Compute);
             nvrhi::ComputePipelineDesc pipelineDesc;
-            pipelineDesc.CS = m_ResolveShaders[debugView];
+            pipelineDesc.CS = m_ResolveShader;
             pipelineDesc.bindingLayouts = { m_OutputBindingLayout };
-            m_ResolvePipelines[debugView] =
+            m_ResolvePipeline =
                 m_Device->createComputePipeline(pipelineDesc);
         }
         else
@@ -646,8 +439,6 @@ namespace uvsr
 
     bool TemporalAAPass::CreateBlendComputePermutation(
         const TemporalAaOptions& options,
-        uint32_t exportSelective,
-        uint32_t sampleResurrection,
         const TemporalAaStaticPerformanceOptions& performance,
         nvrhi::ShaderHandle& shader,
         nvrhi::ComputePipelineHandle& pipeline)
@@ -668,35 +459,10 @@ namespace uvsr
             { "TAA_RECTIFICATION",
                 std::to_string(
                     static_cast<uint32_t>(options.rectification)) },
-            { "TAA_EXPORT_SELECTIVE",
-                std::to_string(exportSelective) },
-            { "TAA_SAMPLE_RESURRECTION",
-                std::to_string(sampleResurrection) },
-            { "TAA_COMPUTE_KERNEL",
-                performance.computeKernel ==
-                        TemporalAaComputeKernel::Threads16x8OnePixel
-                    ? "1"
-                    : "0" },
-            { "TAA_LDS_LAYOUT",
-                std::to_string(
-                    performance.ldsLayout ==
-                            TemporalAaLdsLayout::SplitAndPacked
-                        ? UVSR_TAA_LDS_SPLIT_PACKED
-                        : performance.ldsLayout ==
-                                TemporalAaLdsLayout::Split
-                            ? UVSR_TAA_LDS_SPLIT
-                            : UVSR_TAA_LDS_LEGACY) },
-            { "TAA_SHARED_WORK_REUSE",
-                performance.sharedWorkReuse ? "1" : "0" },
-            { "TAA_EARLY_HISTORY_REJECTION",
-                performance.earlyHistoryRejection ? "1" : "0" },
+            { "TAA_OPTIMIZED_COMPUTE",
+                performance.optimizedCompute ? "1" : "0" },
             { "TAA_FUSED_OUTPUT",
-                performance.fusedOutput ? "1" : "0" },
-#if UVSR_AA_DEVELOPER_OVERRIDES
-            { "TAA_DEVELOPER_DEBUG", "1" }
-#else
-            { "TAA_DEVELOPER_DEBUG", "0" }
-#endif
+                performance.fusedOutput ? "1" : "0" }
         };
         shader = m_ShaderFactory->CreateShader(
             "uvsr/temporal_aa_blend_cs.hlsl",
@@ -709,13 +475,11 @@ namespace uvsr
             {
                 log::error(
                     "Missing precompiled Temporal AA compute permutation "
-                    "(algorithm=%u, performance=%u, selective=%u, "
-                    "resurrection=%u). TAA will bypass instead of creating "
+                    "(algorithm=%u, performance=%u). "
+                    "TAA will bypass instead of creating "
                     "an invalid pipeline.",
                     GetTemporalAaBlendPermutationIndex(options),
-                    GetTemporalAaStaticPerformanceIndex(performance),
-                    exportSelective,
-                    sampleResurrection);
+                    GetTemporalAaStaticPerformanceIndex(performance));
                 m_ReportedMissingComputePermutation = true;
             }
             return false;
@@ -731,12 +495,10 @@ namespace uvsr
             {
                 log::error(
                     "Failed to create Temporal AA compute pipeline "
-                    "(algorithm=%u, performance=%u, selective=%u, "
-                    "resurrection=%u). TAA will bypass.",
+                    "(algorithm=%u, performance=%u). "
+                    "TAA will bypass.",
                     GetTemporalAaBlendPermutationIndex(options),
-                    GetTemporalAaStaticPerformanceIndex(performance),
-                    exportSelective,
-                    sampleResurrection);
+                    GetTemporalAaStaticPerformanceIndex(performance));
                 m_ReportedMissingComputePermutation = true;
             }
             return false;
@@ -744,101 +506,6 @@ namespace uvsr
         return true;
     }
 
-#if UVSR_AA_DEVELOPER_OVERRIDES
-    bool TemporalAAPass::CreateBlendPixelPermutation(
-        const TemporalAaOptions& options,
-        uint32_t exportSelective,
-        bool earlyHistoryRejection,
-        bool fusedOutput,
-        nvrhi::ShaderHandle& shader,
-        nvrhi::GraphicsPipelineHandle& pipeline)
-    {
-        if (pipeline)
-            return true;
-
-        std::vector<ShaderMacro> macros = {
-            { "TAA_PIXEL_SHADER", "1" },
-            { "TAA_MOTION_SOURCE",
-                std::to_string(
-                    static_cast<uint32_t>(options.motionSource)) },
-            { "TAA_CURRENT_RECONSTRUCTION",
-                std::to_string(static_cast<uint32_t>(
-                    options.currentReconstruction)) },
-            { "TAA_HISTORY_FILTER",
-                std::to_string(
-                    static_cast<uint32_t>(options.historyFilter)) },
-            { "TAA_RECTIFICATION",
-                std::to_string(
-                    static_cast<uint32_t>(options.rectification)) },
-            { "TAA_EXPORT_SELECTIVE",
-                std::to_string(exportSelective) },
-            { "TAA_SAMPLE_RESURRECTION", "0" },
-            { "TAA_COMPUTE_KERNEL", "0" },
-            { "TAA_LDS_LAYOUT", "0" },
-            { "TAA_SHARED_WORK_REUSE", "0" },
-            { "TAA_EARLY_HISTORY_REJECTION",
-                earlyHistoryRejection ? "1" : "0" },
-            { "TAA_FUSED_OUTPUT", fusedOutput ? "1" : "0" },
-            { "TAA_DEVELOPER_DEBUG", "1" }
-        };
-        shader = m_ShaderFactory->CreateShader(
-            "uvsr/temporal_aa_blend_cs.hlsl",
-            "main",
-            &macros,
-            nvrhi::ShaderType::Pixel);
-        if (!shader)
-        {
-            if (!m_ReportedMissingPixelPermutation)
-            {
-                log::error(
-                    "Missing precompiled Temporal AA fullscreen-pixel "
-                    "permutation (algorithm=%u, selective=%u, early=%u, "
-                    "fused=%u). TAA will bypass instead of creating an "
-                    "invalid pipeline.",
-                    GetTemporalAaBlendPermutationIndex(options),
-                    exportSelective,
-                    uint32_t(earlyHistoryRejection),
-                    uint32_t(fusedOutput));
-                m_ReportedMissingPixelPermutation = true;
-            }
-            return false;
-        }
-
-        nvrhi::GraphicsPipelineDesc pipelineDesc;
-        pipelineDesc.primType =
-            nvrhi::PrimitiveType::TriangleStrip;
-        pipelineDesc.VS = m_FullscreenVS;
-        pipelineDesc.PS = shader;
-        pipelineDesc.bindingLayouts = {
-            m_PixelBlendBindingLayout
-        };
-        pipelineDesc.renderState.rasterState.setCullNone();
-        pipelineDesc.renderState.depthStencilState.depthTestEnable =
-            false;
-        pipelineDesc.renderState.depthStencilState.stencilEnable =
-            false;
-        pipeline = m_Device->createGraphicsPipeline(
-            pipelineDesc,
-            m_PixelBlendFramebuffers[0]->getFramebufferInfo());
-        if (!pipeline)
-        {
-            if (!m_ReportedMissingPixelPermutation)
-            {
-                log::error(
-                    "Failed to create Temporal AA fullscreen-pixel "
-                    "pipeline (algorithm=%u, selective=%u, early=%u, "
-                    "fused=%u). TAA will bypass.",
-                    GetTemporalAaBlendPermutationIndex(options),
-                    exportSelective,
-                    uint32_t(earlyHistoryRejection),
-                    uint32_t(fusedOutput));
-                m_ReportedMissingPixelPermutation = true;
-            }
-            return false;
-        }
-        return true;
-    }
-#endif
 
     void TemporalAAPass::ResetHistory()
     {
@@ -857,15 +524,12 @@ namespace uvsr
             ++m_MinimumResetCount;
         m_LastHistoryInputValid = false;
         m_LastRenderUsedMinimum = false;
-#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
-        m_PersistentValid = {};
-        m_PersistentViews = {};
-#endif
     }
 
     void TemporalAAPass::AdvanceTimers()
     {
         const uint32_t slot = m_TimerFrame % c_TimerLatency;
+        m_TimerSubmissionSlot = slot;
         for (uint32_t stageIndex = 0u;
             stageIndex < static_cast<uint32_t>(Stage::Count);
             ++stageIndex)
@@ -899,14 +563,34 @@ namespace uvsr
                 break;
             }
         }
+
+        m_TimerFrameWritable = true;
+        for (uint32_t stageIndex = 0u;
+            stageIndex < static_cast<uint32_t>(Stage::Count);
+            ++stageIndex)
+        {
+            if (m_TimerPending[stageIndex][slot])
+            {
+                m_TimerFrameWritable = false;
+                break;
+            }
+        }
+        if (m_TimerFrameWritable && m_TimerHasSubmission[slot])
+        {
+            m_Timings.available = true;
+            m_TimerHasSubmission[slot] = false;
+        }
     }
 
     void TemporalAAPass::BeginStage(
         nvrhi::ICommandList* commandList,
         Stage stage)
     {
+        if (!m_TimerFrameWritable)
+            return;
+
         const uint32_t stageIndex = static_cast<uint32_t>(stage);
-        const uint32_t slot = m_TimerFrame % c_TimerLatency;
+        const uint32_t slot = m_TimerSubmissionSlot;
         if (m_TimerPending[stageIndex][slot])
             return;
 
@@ -922,9 +606,10 @@ namespace uvsr
         if (!m_TimerActive[stageIndex])
             return;
 
-        const uint32_t slot = m_TimerFrame % c_TimerLatency;
+        const uint32_t slot = m_TimerSubmissionSlot;
         commandList->endTimerQuery(m_TimerQueries[stageIndex][slot]);
         m_TimerPending[stageIndex][slot] = true;
+        m_TimerHasSubmission[slot] = true;
         m_TimerActive[stageIndex] = false;
     }
 
@@ -934,8 +619,6 @@ namespace uvsr
         const IView* previousView,
         uint64_t frameIndex,
         const ResolvedAntiAliasingSettings& settings,
-        TemporalAaDebugView debugView,
-        bool exportSelectiveMorphology,
         bool enableSharpen,
         bool deferSharpenToPresentation,
         float sharpness)
@@ -948,10 +631,6 @@ namespace uvsr
         }
 
         const TemporalAaOptions& options = settings.temporal;
-        const TemporalAaSampleResurrection sampleResurrection =
-            settings.sampleResurrection;
-        const bool usesSampleResurrection =
-            UsesSampleResurrection(sampleResurrection);
         const bool compactHistoryRequested =
             settings.historyStorage ==
             TemporalAaHistoryStorage::Compact;
@@ -982,23 +661,8 @@ namespace uvsr
             ShouldSharpenTemporalAa(enableSharpen, clampedSharpness);
         const TemporalAaSharpenWeights sharpenWeights =
             GetTemporalAaSharpenWeights(clampedSharpness);
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        const uint32_t requestedDebugIndex =
-            static_cast<uint32_t>(debugView);
-        const uint32_t debugIndex =
-            requestedDebugIndex < TemporalAaResolveDebugViewCount
-                ? requestedDebugIndex
-                : UVSR_TAA_DEBUG_OFF;
-#else
-        // Production packages only the Off resolve permutation.
-        (void)debugView;
-        constexpr uint32_t debugIndex = UVSR_TAA_DEBUG_OFF;
-#endif
-        const bool showDebug =
-            debugIndex != UVSR_TAA_DEBUG_OFF;
         const bool minimumPresentationCompatible =
-            settings.subpixelMorphology ==
-                MorphologyApplication::Off ||
+            !settings.cmaa2Enabled ||
             !m_Timings.minimumColorIsR11G11B10;
         const bool minimumAlgorithmCompatible =
             IsTemporalAaCompactHistoryCompatible(settings);
@@ -1008,10 +672,7 @@ namespace uvsr
             m_MinimumBindingSets[0] &&
             m_MinimumBindingSets[1] &&
             minimumAlgorithmCompatible &&
-            !usesSampleResurrection &&
-            !exportSelectiveMorphology &&
-            minimumPresentationCompatible &&
-            !showDebug;
+            minimumPresentationCompatible;
         m_Timings.effectiveCostMode = useMinimum
             ? TemporalAaCostMode::Minimum
             : settings.temporalCostMode ==
@@ -1020,17 +681,14 @@ namespace uvsr
                 : settings.temporalCostMode;
         m_Timings.activeHistoryTextureBytes = useMinimum
             ? m_Timings.minimumHistoryTextureBytes
-            : m_Timings.robustHistoryTextureBytes +
-                (usesSampleResurrection
-                    ? m_Timings.persistentHistoryTextureBytes
-                    : 0u);
+            : m_Timings.robustHistoryTextureBytes;
         m_Timings.dispatchCount = 0u;
 
         if (compactHistoryRequested && !useMinimum &&
             !m_ReportedMinimumFallback)
         {
             log::warning(
-                "Temporal AA compact history fell back to the robust path because its algorithm, history weight, format support, presentation morphology, diagnostics, or selective output is incompatible with this frame.");
+                "Temporal AA compact history fell back to the robust path because its algorithm, history weight, format support, or CMAA2 input is incompatible with this frame.");
             m_ReportedMinimumFallback = true;
         }
         else if (!compactHistoryRequested || useMinimum)
@@ -1058,10 +716,6 @@ namespace uvsr
         {
             (void)m_History.Invalidate();
             invalidateMinimumHistory();
-#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
-            m_PersistentValid = {};
-            m_PersistentViews = {};
-#endif
         }
         m_LastRenderUsedMinimum = useMinimum;
 
@@ -1091,16 +745,6 @@ namespace uvsr
                     source,
                     previousView != nullptr,
                     frameIndex);
-#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
-            // A pass-global history break also invalidates every older
-            // snapshot. Resurrection may repair a locally rejected sample,
-            // but it must never bridge a cut, skipped frame, or missing view.
-            if (!m_LastHistoryInputValid)
-            {
-                m_PersistentValid = {};
-                m_PersistentViews = {};
-            }
-#endif
 
             // Validity is authoritative and every in-bounds destination texel
             // is overwritten. Avoid reset-time color, depth, snapshot, and
@@ -1147,51 +791,6 @@ namespace uvsr
             m_LastHistoryInputValid
                 ? 1u
                 : 0u;
-#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
-        blendConstants.persistentValidMask = 0u;
-        blendConstants.persistentPadding0 = 0u;
-        blendConstants.persistentPadding1 = 0u;
-        blendConstants.persistentPadding2 = 0u;
-        if (usesSampleResurrection)
-        {
-            currentView.FillPlanarViewConstants(
-                blendConstants.currentView);
-            const IView& immediateHistoryView =
-                previousView ? *previousView : currentView;
-            immediateHistoryView.FillPlanarViewConstants(
-                blendConstants.immediateHistoryView);
-            if (m_PersistentValid[0] &&
-                m_PersistentViews[0])
-            {
-                m_PersistentViews[0]->FillPlanarViewConstants(
-                    blendConstants.persistentHistoryView0);
-            }
-            else
-            {
-                blendConstants.persistentHistoryView0 =
-                    blendConstants.immediateHistoryView;
-            }
-            if (m_PersistentValid[1] &&
-                m_PersistentViews[1])
-            {
-                m_PersistentViews[1]->FillPlanarViewConstants(
-                    blendConstants.persistentHistoryView1);
-            }
-            else
-            {
-                blendConstants.persistentHistoryView1 =
-                    blendConstants.persistentHistoryView0;
-            }
-            blendConstants.persistentValidMask =
-                (m_PersistentValid[0] ? 1u : 0u) |
-                (sampleResurrection ==
-                            TemporalAaSampleResurrection::
-                                TwoOlderFrames &&
-                        m_PersistentValid[1]
-                    ? 2u
-                    : 0u);
-        }
-#endif
 
         TemporalAaOutputConstants outputConstants{};
         outputConstants.centerWeight = sharpenWeights.center;
@@ -1272,268 +871,85 @@ namespace uvsr
 
         nvrhi::ComputeState outputState;
         const bool useFusedOutput =
-            (settings.passFusion ==
-                    TemporalAaPassFusion::Fused ||
-                effectiveDeferredSharpen) &&
-            !useSharpen &&
-            !showDebug;
-
-        TemporalAaStaticPerformanceOptions performance =
+            (settings.fusedOutput || effectiveDeferredSharpen) &&
+            !useSharpen;
+        const TemporalAaStaticPerformanceOptions performance =
             GetTemporalAaStaticPerformanceOptions(
                 settings,
                 useFusedOutput);
-        if (usesSampleResurrection)
-        {
-            // Resurrection is deliberately constrained to the known baseline
-            // until each image-equivalent optimization is separately proven.
-            // This prevents the old Intel Auto path from compiling the option
-            // out while continuing to pay snapshot-copy traffic.
-            performance = TemporalAaStaticPerformanceOptions{};
-            performance.fusedOutput = useFusedOutput;
-        }
-        const bool baselinePerformance =
-            performance.computeKernel ==
-                    TemporalAaComputeKernel::
-                        Threads8x8TwoPixels &&
-                performance.ldsLayout ==
-                    TemporalAaLdsLayout::Legacy &&
-                !performance.sharedWorkReuse &&
-                !performance.earlyHistoryRejection;
 
-        bool usePixelPath = false;
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        usePixelPath =
-            settings.executionPath ==
-                TemporalAaExecutionPath::FullscreenPixelShader &&
-            !usesSampleResurrection;
-#endif
         const auto bypassMissingPermutation = [&]()
         {
-            // Seed dormant selective exports deterministically if a developer
-            // caller explicitly requests them.
-            if (exportSelectiveMorphology)
-            {
-                commandList->copyTexture(
-                    m_SelectiveCurrent,
-                    nvrhi::TextureSlice(),
-                    m_SceneColor,
-                    nvrhi::TextureSlice());
-                commandList->clearTextureFloat(
-                    m_SelectiveRejection,
-                    nvrhi::AllSubresources,
-                    nvrhi::Color(0.f));
-            }
             ResetHistory();
             m_LastHistoryInputValid = false;
             m_Timings.historyValid = false;
             m_Timings.accumulationCount = 0u;
-            m_Timings.historyResetCount =
-                m_History.ResetCount();
+            m_Timings.historyResetCount = m_History.ResetCount();
             ++m_TimerFrame;
             return m_SceneColor;
         };
-        nvrhi::ComputeState blendState;
-        if (!usePixelPath && baselinePerformance)
-        {
-            const uint32_t blendPermutation =
-                GetTemporalAaBlendPermutationIndex(options) *
-                    (2u *
-                        TemporalAaSampleResurrectionCount *
-                        2u) +
-                uint32_t(exportSelectiveMorphology) *
-                    (TemporalAaSampleResurrectionCount *
-                        2u) +
-                static_cast<uint32_t>(sampleResurrection) * 2u +
-                uint32_t(useFusedOutput);
-            if (!CreateBlendComputePermutation(
+
+        const uint32_t algorithmIndex =
+            GetTemporalAaBlendPermutationIndex(options);
+        const uint32_t performanceIndex =
+            GetTemporalAaStaticPerformanceIndex(performance);
+        const uint32_t permutation =
+            algorithmIndex * TemporalAaStaticPerformanceCount +
+            performanceIndex;
+        if (!CreateBlendComputePermutation(
                 options,
-                uint32_t(exportSelectiveMorphology),
-                static_cast<uint32_t>(sampleResurrection),
-                performance,
-                m_BlendShaders[blendPermutation],
-                m_BlendPipelines[blendPermutation]))
-            {
-                return bypassMissingPermutation();
-            }
-            blendState.pipeline =
-                m_BlendPipelines[blendPermutation];
-        }
-        else if (!usePixelPath)
-        {
-            const uint32_t algorithmIndex =
-                GetTemporalAaBlendPermutationIndex(options);
-            const uint32_t performanceIndex =
-                GetTemporalAaStaticPerformanceIndex(
-                    performance);
-            const uint32_t permutation =
-                algorithmIndex *
-                    TemporalAaStaticPerformanceCount * 2u +
-                performanceIndex * 2u +
-                uint32_t(exportSelectiveMorphology);
-            if (!CreateBlendComputePermutation(
-                options,
-                uint32_t(exportSelectiveMorphology),
-                0u,
                 performance,
                 m_PerformanceBlendShaders[permutation],
                 m_PerformanceBlendPipelines[permutation]))
-            {
-                return bypassMissingPermutation();
-            }
-            blendState.pipeline =
-                m_PerformanceBlendPipelines[permutation];
-        }
-        if (!usePixelPath && !blendState.pipeline)
-            return bypassMissingPermutation();
-        if (!usePixelPath)
-            blendState.bindings = { m_BlendBindingSets[source] };
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        uint32_t pixelPermutation = 0u;
-        if (usePixelPath)
         {
-            pixelPermutation =
-                GetTemporalAaBlendPermutationIndex(options) * 8u +
-                uint32_t(settings.earlyHistoryRejection) * 4u +
-                uint32_t(exportSelectiveMorphology) * 2u +
-                uint32_t(useFusedOutput);
-            if (!CreateBlendPixelPermutation(
-                options,
-                uint32_t(exportSelectiveMorphology),
-                settings.earlyHistoryRejection,
-                useFusedOutput,
-                m_PixelBlendShaders[pixelPermutation],
-                m_PixelBlendPipelines[pixelPermutation]))
-            {
-                return bypassMissingPermutation();
-            }
+            return bypassMissingPermutation();
         }
-#endif
+
+        nvrhi::ComputeState blendState;
+        blendState.pipeline =
+            m_PerformanceBlendPipelines[permutation];
+        blendState.bindings = { m_BlendBindingSets[source] };
         m_Timings.historyColorSamples =
-            GetTemporalAaHistoryColorSampleCount(
-                options.historyFilter) +
-            (sampleResurrection ==
-                    TemporalAaSampleResurrection::TwoOlderFrames
-                ? 2u
-                : sampleResurrection ==
-                        TemporalAaSampleResurrection::OneOlderFrame
-                    ? 1u
-                    : 0u);
+            GetTemporalAaHistoryColorSampleCount(options.historyFilter);
         const bool movingPointDepthValidation =
             settings.depthValidation ==
-            TemporalAaDepthValidation::MovingPoint;
+                TemporalAaDepthValidation::MovingPoint;
         m_Timings.historyDepthGathers =
             movingPointDepthValidation ? 0u : 1u;
         m_Timings.historyDepthSamples =
-            (movingPointDepthValidation
+            movingPointDepthValidation
                 ? 1u
                 : GetTemporalAaHistoryDepthSampleCount(
-                    options.historyFilter)) +
-            (sampleResurrection ==
-                    TemporalAaSampleResurrection::TwoOlderFrames
-                ? 2u
-                : sampleResurrection ==
-                        TemporalAaSampleResurrection::OneOlderFrame
-                    ? 1u
-                    : 0u);
+                    options.historyFilter);
 
-        commandList->beginMarker(usePixelPath
-            ? useFusedOutput
-                ? "Temporal AA Fullscreen Pixel + Fused Output"
-                : "Temporal AA Fullscreen Pixel"
-            : useFusedOutput
-                ? "Temporal AA Blend + Fused Output"
-                : "Temporal AA Blend");
+        commandList->beginMarker(useFusedOutput
+            ? "Temporal AA Blend + Fused Output"
+            : "Temporal AA Blend");
         BeginStage(commandList, Stage::Blend);
-#if UVSR_AA_DEVELOPER_OVERRIDES
-        if (usePixelPath)
-        {
-            commandList->writeBuffer(
-                m_BlendConstantBuffer,
-                &blendConstants,
-                sizeof(blendConstants));
-            nvrhi::GraphicsState pixelState;
-            pixelState.pipeline =
-                m_PixelBlendPipelines[pixelPermutation];
-            pixelState.framebuffer =
-                m_PixelBlendFramebuffers[source];
-            pixelState.bindings = {
-                m_PixelBlendBindingSets[source]
-            };
-            pixelState.viewport = nvrhi::ViewportState()
-                .addViewportAndScissorRect(
-                    nvrhi::Viewport(
-                        float(m_Size.x),
-                        float(m_Size.y)));
-            commandList->setGraphicsState(pixelState);
-            nvrhi::DrawArguments arguments;
-            arguments.instanceCount = 1u;
-            arguments.vertexCount = 4u;
-            commandList->draw(arguments);
-            ++m_Timings.dispatchCount;
-        }
-        else
-#endif
-        {
-            // Cache-blocking is a dispatch-scheduling experiment, not a shader
-            // branch. Each band owns complete 16x8 tiles; LDS halo loads cross
-            // band boundaries normally, so image results are unchanged.
-            const uint32_t bandCount =
-                settings.cacheBlocking ==
-                        TemporalAaCacheBlocking::Bands2
-                    ? 2u
-                    : settings.cacheBlocking ==
-                            TemporalAaCacheBlocking::Bands3
-                        ? 3u
-                        : settings.cacheBlocking ==
-                                TemporalAaCacheBlocking::Bands4
-                            ? 4u
-                            : 1u;
-            const uint32_t tileRows =
-                (m_Size.y + 7u) / 8u;
-            for (uint32_t band = 0u;
-                band < bandCount;
-                ++band)
-            {
-                const uint32_t firstRow =
-                    tileRows * band / bandCount;
-                const uint32_t lastRow =
-                    tileRows * (band + 1u) / bandCount;
-                blendConstants.dispatchGroupYOffset =
-                    firstRow;
-                commandList->writeBuffer(
-                    m_BlendConstantBuffer,
-                    &blendConstants,
-                    sizeof(blendConstants));
-                // Volatile constant-buffer versions are assigned by the
-                // write. Bind the state afterward so validation and the D3D12
-                // backend both observe the version used by this band.
-                commandList->setComputeState(blendState);
-                commandList->dispatch(
-                    (m_Size.x + 15u) / 16u,
-                    lastRow - firstRow,
-                    1u);
-                ++m_Timings.dispatchCount;
-            }
-        }
+        commandList->writeBuffer(
+            m_BlendConstantBuffer,
+            &blendConstants,
+            sizeof(blendConstants));
+        commandList->setComputeState(blendState);
+        commandList->dispatch(
+            (m_Size.x + 15u) / 16u,
+            (m_Size.y + 7u) / 8u,
+            1u);
+        ++m_Timings.dispatchCount;
         EndStage(commandList, Stage::Blend);
         commandList->endMarker();
 
-        outputState.pipeline = showDebug
-            ? m_ResolvePipelines[debugIndex]
-            : useSharpen
-                ? m_SharpenPipeline
-                : m_ResolvePipelines[debugIndex];
+        outputState.pipeline = useSharpen
+            ? m_SharpenPipeline
+            : m_ResolvePipeline;
         outputState.bindings = { m_OutputBindingSets[source] };
-        m_Timings.outputWasSharpened =
-            useSharpen && !showDebug;
+        m_Timings.outputWasSharpened = useSharpen;
 
         if (!useFusedOutput)
         {
-            commandList->beginMarker(showDebug
-                ? "Temporal AA Developer Visualization"
-                : useSharpen
-                    ? "Temporal AA Sharpen"
-                    : "Temporal AA Resolve");
+            commandList->beginMarker(useSharpen
+                ? "Temporal AA Sharpen"
+                : "Temporal AA Resolve");
             BeginStage(commandList, Stage::Output);
             commandList->setComputeState(outputState);
             commandList->dispatch(
@@ -1551,54 +967,6 @@ namespace uvsr
 
         const uint32_t destination = source ^ 1u;
         m_History.Commit(destination, frameIndex);
-#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
-        // Preserve exact v1-style ages at interval one. At the end of frame N,
-        // the source ping-pong texture is frame N-1. On frame N+1, slot zero is
-        // therefore age two and slot one is age three. This avoids both an
-        // immediate-history duplicate and the old undocumented ages four/eight.
-        if (usesSampleResurrection &&
-            m_LastHistoryInputValid &&
-            previousView)
-        {
-            if (sampleResurrection ==
-                    TemporalAaSampleResurrection::TwoOlderFrames &&
-                m_PersistentValid[0])
-            {
-                commandList->copyTexture(
-                    m_PersistentColor[1],
-                    nvrhi::TextureSlice(),
-                    m_PersistentColor[0],
-                    nvrhi::TextureSlice());
-                commandList->copyTexture(
-                    m_PersistentDepth[1],
-                    nvrhi::TextureSlice(),
-                    m_PersistentDepth[0],
-                    nvrhi::TextureSlice());
-                m_PersistentViews[1] = m_PersistentViews[0];
-                m_PersistentValid[1] =
-                    m_PersistentViews[1] != nullptr;
-            }
-            else
-            {
-                m_PersistentValid[1] = false;
-            }
-
-            commandList->copyTexture(
-                m_PersistentColor[0],
-                nvrhi::TextureSlice(),
-                m_History.Color(source),
-                nvrhi::TextureSlice());
-            commandList->copyTexture(
-                m_PersistentDepth[0],
-                nvrhi::TextureSlice(),
-                m_History.Depth(source),
-                nvrhi::TextureSlice());
-            m_PersistentViews[0] =
-                CapturePlanarView(*previousView);
-            m_PersistentValid[0] =
-                m_PersistentViews[0] != nullptr;
-        }
-#endif
         m_Timings.historyValid =
             m_History.ValidSlotCount() > 0u;
         m_Timings.accumulationCount =
@@ -1635,10 +1003,6 @@ namespace uvsr
                     0, m_OutputConstantBuffer),
                 nvrhi::BindingSetItem::Texture_SRV(
                     0, sourceTexture),
-                // The sharpen shader does not consume t1. Bind the existing
-                // developer texture to satisfy the shared output layout.
-                nvrhi::BindingSetItem::Texture_SRV(
-                    1, m_DebugValues),
                 nvrhi::BindingSetItem::Texture_UAV(
                     0, m_SceneColor)
             };
@@ -1660,6 +1024,7 @@ namespace uvsr
             (m_Size.x + 7u) / 8u,
             (m_Size.y + 7u) / 8u,
             1u);
+        ++m_Timings.dispatchCount;
         EndStage(commandList, Stage::PresentationSharpen);
         commandList->endMarker();
         m_Timings.outputWasSharpened = true;

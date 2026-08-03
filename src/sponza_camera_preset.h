@@ -41,9 +41,6 @@ namespace uvsr
 
     const char* GetSponzaCameraLocationLabel(SponzaCameraLocation location);
     const SponzaCameraPreset* FindSponzaCameraPreset(SponzaCameraLocation location);
-    SponzaCameraLocation ResolveSponzaCameraLocation(
-        SponzaCameraLocation selectedLocation,
-        bool benchmarkCameraRequested);
     const SponzaCameraPreset& GetDefaultSponzaCameraPreset();
     bool IsSponzaCameraAtPreset(
         const SponzaCameraPreset& preset,

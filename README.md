@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 145,256 non-blank source lines.
+**First-Party Lines of Code:** 64,611 non-blank source lines.
 
 **Third-Party Lines of Code:** 388,207 non-blank source lines.
 
-**Total Lines of Code:** 533,463 non-blank source lines.
+**Total Lines of Code:** 452,818 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -22,16 +22,11 @@ visibility, anti-aliasing, and shadow-rendering systems.
 
 ## Renderer Highlights
 
-- **Unified Screen-Space Visibility.** AO and multi-bounce diffuse GI share one
-  stochastic 32-sector traversal, exact sample budget, depth hierarchy, and
-  directional visibility result. Reduced-resolution modes use guide-aware
-  reconstruction, while full-resolution rendering can bypass spatial filtering
-  and composite the current result directly.
-- **GPU-Driven Indirect-Light Convergence.** Higher diffuse bounces transport
-  only the newest light frontier. A wave-coalesced activity flag and indirect
-  dispatch turn the remaining chain into zero work after scene-wide
-  convergence, without a CPU readback. Resources for AO, GI, history, filtering,
-  and later bounces exist only while their consumers need them.
+- **Unified Screen-Space Visibility.** AO and one-bounce indirect diffuse share
+  a current-frame stochastic traversal, exact runtime sample budget, and
+  guide-aware reconstruction. Permutated White Noise, Hashed White Noise, and
+  Void Cluster Blue Noise are available without a temporal-history, depth-
+  hierarchy, or recursive-bounce resource chain.
 - **Physically Grounded Deferred Lighting.** UVSR uses a packed G-buffer,
   material-aware direct lighting, shared contribution gates, Lambert-convolved
   SH9 diffuse IBL, roughness-prefiltered GGX specular IBL, and a split-sum
@@ -40,24 +35,24 @@ visibility, anti-aliasing, and shadow-rendering systems.
 - **Explicit Ambient Fill Gate.** The legacy hemispherical ambient term is
   removed. The Sky drawer's Ambient Fill setting explicitly gates diffuse and
   specular IBL while preserving the selected environment background.
-- **Three Shadow-Rendering Research Paths.** UVSR Screen-Space Directional
-  Shadows, sparse virtual shadow maps, and a conventional cascaded-shadow-map
-  diagnostic each resolve an independent full-resolution visibility texture
-  through a producer-neutral deferred-lighting interface. The SVSM path includes
-  sparse residency, validated caching, localized invalidation, packet-page
-  culling, page-safe filtering, and coarser-clipmap fallback.
-- **Sample-Correct Anti-Aliasing Comparisons.** UVSR temporal reconstruction,
-  CMAA2 morphology, and 2x through 16x deferred MSAA share one
-  settings and benchmark surface. MSAA preserves every G-buffer sample through
-  material decode and lighting before resolving final HDR radiance.
-- **Built-In Measurement and Inspection.** GPU timings are separated by effect
-  and visibility stage, logical and avoided memory payloads are reported
-  independently, standardized motion and static benchmarks use a locked Sponza
-  camera, and the pixel zoom view uses exact integer texel replication.
+- **Focused Directional Shadows.** Screen-Space Directional Shadows are the one
+  retained directional-shadow technique. Their thread- and wave-group
+  isolation views live in the effect-grouped Debug drawer.
+- **Composable Anti-Aliasing.** TAA, CMAA2, and 2x through 16x deferred MSAA are
+  independent, default-off controls. When combined, MSAA resolves scene-linear
+  lighting before TAA, tone mapping, and the display-linear CMAA2 pass.
+- **Composable Debugging.** World appearance is independent from the
+  Visibility and physically based lighting information filters. Shadow
+  thread/wave isolation remains a deliberate full-image diagnostic.
+- **Compact Runtime Surface.** The first-party build compiles 268 core shader
+  tasks plus 46 Screen-Space Directional Shadow tasks, for 314 first-party and
+  390 integrated tasks after Donut's 76. Nine Settings drawers and 122 command
+  entries retain the active product controls without benchmark planners or
+  dormant profiles.
 - **Source-Backed Optimization Decisions.** Retired shader families, rejected
-  XeGTAO ports, packed-edge paths, scheduler variants, and math approximations
-  remain documented with controlled evidence instead of surviving as dormant
-  runtime code.
+  XeGTAO ports, Packed Depth and packed/fused ambient-occlusion-only paths,
+  scheduler variants, and math approximations remain documented with controlled
+  evidence instead of surviving as dormant runtime code.
 
 The bundled **Sponza Decorated** scene includes Intel's separately distributed
 curtains and ivy. **Sponza Plain** keeps the same flat-roof architecture without
@@ -66,7 +61,7 @@ Lumberyard Bistro, and **San Miguel** packages the full high-detail San Miguel
 2.1 model. **Classroom Interior** packages Christophe Seux's official Blender
 Classroom demo under CC0 1.0 with its legacy Cycles
 materials translated for UVSR's PBR path while retaining the source-authored
-image textures. Both production PBR paths keep mirrored double-sided instances
+image textures. The deferred PBR path keeps mirrored double-sided instances
 view-facing, so Classroom's duplicated doors and papers remain lit with
 screen-space Visibility enabled. Its spawn-side wire bin and 13 crumpled-paper
 objects are omitted, and eight source diagnostic UV-checker sheets use the
@@ -82,6 +77,13 @@ conversion, or scene setup is required.
 This section summarizes stable work that is active but not yet merged into
 `main`. Experimental entries are not promises that the work will ship.
 
+- **Engine Core Cleanup and Front-End Restoration — Local Candidate**
+  (`codex/engine-core-cleanup`). Removes dormant visibility, shadow, benchmark,
+  forward-rendering, and shader-permutation paths while retaining the focused
+  deferred PBR, screen-space visibility, screen-space directional shadow, and
+  independently composable aliasing routes. The current local candidate also
+  restores preset identity, compact Buffers, detailed one-effect Statistics,
+  tooltips, reset ownership, and animated effect disclosures.
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidates shared
   depth, pixel-coordinate, and safe-normal helpers without changing equations,
@@ -119,16 +121,14 @@ git submodule update --init --recursive
 The first configure may download Microsoft's Direct3D 12 Agility SDK when it is
 not already cached.
 
-Launch through the experiment wrapper so the window title records the source
-commit, launch time, and a one-word experiment label:
+Launch the exact executable produced by that build:
 
 ```powershell
-.\tools\launch_uvsr.ps1 -Experiment main
+.\build\bin\uvsr.exe
 ```
 
-The label must be one lowercase ASCII word. `LaunchUVSR.cmd` provides the same
-launcher with a fixed main-build label for double-click launches. Use
-`-BuildDirectory <path>` to launch an isolated build tree.
+The window title records the graphics API and source commit. Use the executable
+inside an isolated build tree when validating an experimental branch.
 
 At startup, UVSR selects the DirectX 12 adapter with the most dedicated video
 memory. A different compatible adapter can be selected from **General >
@@ -139,7 +139,10 @@ Graphics Adapter**, which restarts the renderer on that device.
 - Press **Escape** to open or close Settings.
 - Press **/** to open or close the command interface. Enter applies, Tab
   completes, Up/Down recalls history, and Escape cancels the active edit without
-  closing the bar.
+  closing the bar. Slash-separated tips appear inside the single-row input only
+  while no command result is pending. Enter replaces them with a green success
+  or red error status; long output remains available through an explicit details
+  button. The status disappears as soon as typing begins.
 - Press **M** to inspect the editable material at the exact screen center or
   close the material editor.
 - Press **F** to toggle the selected camera flashlight when the command bar is
@@ -148,8 +151,8 @@ Graphics Adapter**, which restarts the renderer on that device.
   pixel inspection.
 - Press **V** to level camera roll with an exponential overshoot-and-settle
   motion while preserving camera position and view direction.
-- Use **General > Camera Location > Benchmark Position 1** for the standardized
-  1920x1080 Sponza view.
+- Use **General > Camera Location > Position 1** for the standardized Sponza
+  view.
 
 **General > Interface Skin** selects **Amp** or **OG**. Amp is UVSR's authored animated
 presentation and gives expanded Settings and its collapsed status block the
@@ -175,8 +178,8 @@ or changes the command width.
 
 Settings always begin at factory defaults and are not persisted between
 launches. The [advanced settings and developer workflows
-guide](docs/advanced-settings.md) covers renderer controls, defaults, benchmark
-flags, developer overrides, and specialist build modes.
+guide](docs/advanced-settings.md) covers renderer controls, defaults, commands,
+and the retained component build.
 
 ### Build and Test Everything
 
@@ -189,30 +192,26 @@ ctest --test-dir build -C Release --output-on-failure
 ```
 
 This includes the scene, camera, PBR, AA/UI, screen-space visibility,
-Screen-Space Directional Shadows,
-diagnostic CSM, SVSM, environment, command-line, benchmark, and runtime shader
+Screen-Space Directional Shadows, environment, command-line, and runtime shader
 bundle contracts.
 
 ## Engineering Documentation
 
 - [Advanced Settings and Developer Workflows](docs/advanced-settings.md) covers
-  the full interactive control surface, factory behavior, command-line
-  benchmarks, developer overrides, and specialist build modes.
+  the interactive control surface, factory behavior, commands, and the retained
+  specialist build.
 - [PBR Foundation](docs/pbr-foundation.md) defines material inputs, G-buffer
   packing, lighting equations, IBL, contribution gates, validation, and
   extension points.
 - [Screen-Space Visibility](docs/screen-space-visibility.md) documents the
   shared AO/GI traversal, estimators, reconstruction, memory contracts,
-  performance profiles, and runtime evidence.
-- [Temporal Anti-Aliasing Options](docs/temporal-aa-options.md) defines temporal,
-  morphological, and multisample quality bundles, history behavior, coordinate
-  conventions, and motion benchmarks.
-- [AO Optimization Ledger](docs/ao-optimization-ledger.md) records implemented
-  and rejected optimization candidates, controlled measurements, quality
-  boundaries, and source provenance.
-- [Shader Path Retirement Postmortem](docs/postmortem/shader-path-retirements.md)
-  records removed shader families, the multiplication mechanisms behind their
-  cost, supporting evidence, and restoration boundaries.
+  supported quality profiles, and validation boundary.
+- [Temporal Aliasing Options](docs/temporal-aa-options.md) defines temporal,
+  morphological, and multisample composition, history behavior, and coordinate
+  conventions.
+- [Engine Cutdown Archive](docs/postmortem/engine-cutdowns/README.md) keeps the
+  dated shader and renderer cutdown reports, their measurements, complete
+  removal inventories, and restoration boundaries.
 - [Visibility Estimator Validation](docs/visibility-estimator-validation.md)
   records the shared C++/HLSL measure contracts and deterministic fixtures.
 - [GPU Clock Normalization](docs/performance/gpu-clock-normalization.md)
@@ -226,15 +225,14 @@ bundle contracts.
 ## Project Boundaries
 
 - DirectX 12 is the production backend; DirectX 11 and Vulkan are disabled.
-- Deferred UVSR PBR is the primary path. Forward and legacy shading remain
-  comparison paths and do not provide the complete temporal motion contract.
+- Deferred UVSR PBR is the only lighting path.
 - The renderer is uncapped, single-view, and opaque-focused. VSync, stereo,
   bloom, translucent rendering, and animation playback are intentionally out of
   scope.
 - IBL uses one infinite global environment. Local probe capture,
   parallax-corrected probe volumes, and probe blending are not implemented.
-- The conventional CSM path is a diagnostic comparison, not the preferred
-  production shadow renderer.
+- Screen-Space Directional Shadows are the only retained directional-shadow
+  technique.
 
 The executable, repository slug, package names, and paths use lowercase
 `uvsr`; the displayed product name is uppercase **UVSR**.

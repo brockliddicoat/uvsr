@@ -12,9 +12,6 @@
 #ifndef WRITE_SOURCE_RADIANCE
 #define WRITE_SOURCE_RADIANCE 0
 #endif
-#ifndef WRITE_BOUNCE_METADATA
-#define WRITE_BOUNCE_METADATA 0
-#endif
 
 cbuffer c_Deferred : register(b0)
 {
@@ -38,11 +35,7 @@ Texture2D t_GBuffer1 : register(t10);
 Texture2D t_GBuffer2 : register(t11);
 Texture2D t_GBuffer3 : register(t12);
 Texture2D t_MaterialAmbientOcclusion : register(t14);
-Texture2D t_IndirectSpecular : register(t15);
-Texture2D t_ShadowBuffer : register(t16);
-Texture2D<float> t_DirectionalVisibility0 : register(t20);
-Texture2D<float> t_DirectionalVisibility1 : register(t21);
-Texture2D<float> t_DirectionalVisibility2 : register(t22);
+Texture2D<float> t_DirectionalVisibility : register(t20);
 
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Output : register(u0);
 #if WRITE_SOURCE_RADIANCE
@@ -56,43 +49,16 @@ float GetRandom(float2 position)
     return g_Deferred.noisePattern[y][x];
 }
 
-float GetScreenShadowVisibility(
-    LightConstants light,
-    int2 pixelPosition)
-{
-    if ((light.shadowChannel.x & 0xfffffffc) == 0)
-    {
-        float4 channels = t_ShadowBuffer[pixelPosition];
-        return saturate(channels[light.shadowChannel.x]);
-    }
-
-    return 1.0f;
-}
-
 float GetDirectionalLightVisibility(
     uint lightIndex,
     int2 pixelPosition)
 {
-    float visibility = 1.0f;
     if (int(lightIndex) ==
-        g_PbrDeferred.directionalVisibilityLightIndices.x)
+        g_PbrDeferred.directionalVisibilityLightIndex)
     {
-        visibility *= saturate(
-            t_DirectionalVisibility0[pixelPosition]);
+        return saturate(t_DirectionalVisibility[pixelPosition]);
     }
-    if (int(lightIndex) ==
-        g_PbrDeferred.directionalVisibilityLightIndices.y)
-    {
-        visibility *= saturate(
-            t_DirectionalVisibility1[pixelPosition]);
-    }
-    if (int(lightIndex) ==
-        g_PbrDeferred.directionalVisibilityLightIndices.z)
-    {
-        visibility *= saturate(
-            t_DirectionalVisibility2[pixelPosition]);
-    }
-    return visibility;
+    return 1.0f;
 }
 
 float EvaluateLightVisibility(
@@ -269,16 +235,18 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         }
     }
 
+    float3 lightingDebugColor = 0.0f;
     if (g_PbrDeferred.lightingDebugView != 0u)
     {
-        float3 debugColor = 0.0f;
         if (g_PbrDeferred.lightingDebugView == 1u)
         {
-            debugColor = gbuffer.shadingNormal * 0.5f + 0.5f;
+            lightingDebugColor =
+                gbuffer.shadingNormal * 0.5f + 0.5f;
         }
         else if (g_PbrDeferred.lightingDebugView == 2u)
         {
-            debugColor = gbuffer.geometricNormal * 0.5f + 0.5f;
+            lightingDebugColor =
+                gbuffer.geometricNormal * 0.5f + 0.5f;
         }
         else if (g_PbrDeferred.lightingDebugView == 3u)
         {
@@ -286,14 +254,14 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                 1.0f - dot(
                     gbuffer.shadingNormal,
                     gbuffer.geometricNormal));
-            debugColor = float3(
+            lightingDebugColor = float3(
                 angularDifference,
                 0.0f,
                 1.0f - angularDifference);
         }
         else if (g_PbrDeferred.lightingDebugView == 4u)
         {
-            debugColor = environmentDiffuseResponse;
+            lightingDebugColor = environmentDiffuseResponse;
         }
         else if (g_PbrDeferred.lightingDebugView == 5u)
         {
@@ -302,26 +270,26 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
             // E(n) / pi = 1 + (2 * 0.75 / 3) * n.x.
             float cardinalResponse =
                 1.0f + 0.5f * gbuffer.shadingNormal.x;
-            debugColor = cardinalResponse * 0.5f;
+            lightingDebugColor = cardinalResponse * 0.5f;
         }
         else if (g_PbrDeferred.lightingDebugView == 6u)
         {
-            debugColor = prefilteredEnvironment;
+            lightingDebugColor = prefilteredEnvironment;
         }
         else if (g_PbrDeferred.lightingDebugView == 7u)
         {
-            debugColor = float3(
+            lightingDebugColor = float3(
                 environmentBrdf.x,
                 environmentBrdf.y,
                 0.0f);
         }
         else if (g_PbrDeferred.lightingDebugView == 8u)
         {
-            debugColor = environmentSpecular;
+            lightingDebugColor = environmentSpecular;
         }
         else if (g_PbrDeferred.lightingDebugView == 9u)
         {
-            debugColor =
+            lightingDebugColor =
                 environmentDiffuse + environmentSpecular;
         }
         else if (g_PbrDeferred.lightingDebugView == 10u)
@@ -331,7 +299,7 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                     preparedEnvironment.noV,
                     gbuffer.ambientOcclusion,
                     preparedEnvironment.perceptualRoughness);
-            debugColor = specularOcclusion.xxx;
+            lightingDebugColor = specularOcclusion.xxx;
         }
         else if (g_PbrDeferred.lightingDebugView == 11u)
         {
@@ -340,16 +308,8 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                     ? preparedEnvironment.specularMip /
                         (environmentProbe.mipLevels - 1.0f)
                     : 0.0f;
-            debugColor = normalizedMip.xxx;
+            lightingDebugColor = normalizedMip.xxx;
         }
-
-        u_Output[pixelPosition] = float4(
-            min(max(debugColor, 0.0f), 65504.0f),
-            0.0f);
-#if WRITE_SOURCE_RADIANCE
-        u_SourceRadiance[pixelPosition] = 0.0f;
-#endif
-        return;
     }
 
     float3 directDiffuse = 0.0f;
@@ -358,36 +318,25 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
     {
         float angle = GetRandom(i_globalIdx.xy + float2(g_Deferred.randomOffset.x, 0.0f));
         float2 sinCosRotation = float2(sin(angle), cos(angle));
-        LightingContributionGate exactDirectGate = MakeLightingContributionGate(
-            0u,
-            0.0f,
-            1.0f);
-
         [loop]
         for (uint lightIndex = 0; lightIndex < g_Deferred.numLights; ++lightIndex)
         {
             LightConstants light = g_Deferred.lights[lightIndex];
-            float visibility = GetScreenShadowVisibility(
-                light,
-                pixelPosition) *
-                GetDirectionalLightVisibility(
-                    lightIndex,
-                    pixelPosition);
+            float visibility = GetDirectionalLightVisibility(
+                lightIndex,
+                pixelPosition);
             if (!(visibility > 0.0f))
                 continue;
 
             PbrLightSample lightSample = SamplePbrLight(
                 light, surfaceWorldPosition, 1.0f);
-            uint lightRejection = LightingClassifyContribution(
-                exactDirectGate,
-                LightingSource_Direct,
-                lightSample.incidentRadiance,
-                1.0f);
-            if (!LightingShouldEvaluate(lightRejection))
+            if (!HasPositiveFinitePbrSignal(
+                    lightSample.incidentRadiance,
+                    1.0f))
                 continue;
-            lightRejection = ClassifyPbrDirectSurfacePrepared(
-                preparedSurface, lightSample.directionToLight);
-            if (!LightingShouldEvaluate(lightRejection))
+            if (!CanEvaluatePbrDirectSurfacePrepared(
+                    preparedSurface,
+                    lightSample.directionToLight))
                 continue;
 
             visibility = EvaluateLightVisibility(
@@ -402,10 +351,6 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         }
     }
 
-    float3 indirectSpecular = 0.0f;
-    if (g_Deferred.indirectSpecularScale > 0.0f)
-        indirectSpecular = t_IndirectSpecular[pixelPosition].rgb * g_Deferred.indirectSpecularScale;
-
 #if WRITE_SOURCE_RADIANCE
     // Environment diffuse is direct lighting from the global radiance field
     // at the source surface. Carry it into the diffuse GI source so the next
@@ -415,18 +360,6 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         directDiffuse + environmentDiffuse, 0.0f);
     if (any(isnan(sourceRadiance)) || any(isinf(sourceRadiance)))
         sourceRadiance = 0.0f;
-    uint sourceMetadata = 0u;
-#if WRITE_BOUNCE_METADATA
-    float3 diffuseTransport = max(gbuffer.material.baseColor, 0.0f) *
-        (1.0f - saturate(gbuffer.material.metalness)) *
-        saturate(gbuffer.ambientOcclusion);
-    bool diffuseActive = all(isfinite(diffuseTransport)) &&
-        any(diffuseTransport > 0.0f);
-    if ((gbuffer.material.featureMask & PbrFeature_DoubleSided) != 0u)
-        sourceMetadata |= PbrGiMetadata_SurfaceDoubleSided;
-    if (diffuseActive)
-        sourceMetadata |= PbrGiMetadata_DiffuseActive;
-#endif
 #endif
 
     float3 diffuse = directDiffuse +
@@ -436,16 +369,19 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
     float3 specular = directSpecular +
         (g_PbrDeferred.separateIndirect != 0
             ? 0.0f
-            : environmentSpecular) +
-        indirectSpecular;
+            : environmentSpecular);
     float3 finalLinearHdr = max(diffuse + specular + gbuffer.material.emissive, 0.0f);
     if (any(isnan(finalLinearHdr)) || any(isinf(finalLinearHdr)))
         finalLinearHdr = 0.0f;
 
+    const float3 presentedColor =
+        g_PbrDeferred.lightingDebugView != 0u
+            ? lightingDebugColor
+            : finalLinearHdr;
     u_Output[pixelPosition] = float4(
-        min(max(finalLinearHdr, 0.0f), 65504.0f), 0.0f);
+        min(max(presentedColor, 0.0f), 65504.0f), 0.0f);
 #if WRITE_SOURCE_RADIANCE
     u_SourceRadiance[pixelPosition] = float4(
-        min(sourceRadiance, 65504.0f), float(sourceMetadata));
+        min(sourceRadiance, 65504.0f), 0.0f);
 #endif
 }

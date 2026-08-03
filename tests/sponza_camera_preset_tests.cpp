@@ -159,21 +159,6 @@ int main(int argc, const char* const* argv)
             length(cross(simplified.Direction, simplified.Up) - simplified.Right) < 1e-6f,
             "simplified camera basis must be orthonormal and right-handed");
 
-        Require(uvsr::ResolveSponzaCameraLocation(
-            uvsr::SponzaCameraLocation::Free,
-            false) == uvsr::SponzaCameraLocation::SimplifiedApproximation &&
-            uvsr::ResolveSponzaCameraLocation(
-                uvsr::SponzaCameraLocation::SimplifiedApproximation,
-                false) == uvsr::SponzaCameraLocation::SimplifiedApproximation,
-            "scene loading must resolve Piloted and the named location to the sole preset");
-        Require(uvsr::ResolveSponzaCameraLocation(
-            uvsr::SponzaCameraLocation::Free,
-            true) == uvsr::SponzaCameraLocation::SimplifiedApproximation &&
-            uvsr::ResolveSponzaCameraLocation(
-                uvsr::SponzaCameraLocation::SimplifiedApproximation,
-                true) == uvsr::SponzaCameraLocation::SimplifiedApproximation,
-            "benchmark mode must force the sole simplified preset");
-
         Require(uvsr::IsSponzaCameraAtPreset(
             simplified,
             simplified.Position,

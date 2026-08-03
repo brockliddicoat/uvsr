@@ -177,11 +177,6 @@ namespace uvsr
             : nullptr;
     }
 
-    bool TemporalHistoryState::IsSlotValid(uint32_t slot) const
-    {
-        return slot < m_Valid.size() && m_Valid[slot];
-    }
-
     uint32_t TemporalHistoryState::ValidSlotCount() const
     {
         return uint32_t(m_Valid[0]) + uint32_t(m_Valid[1]);
@@ -197,32 +192,4 @@ namespace uvsr
         return m_ResetCount;
     }
 
-    uint32_t TemporalHistoryState::MaximumAccumulation() const
-    {
-        return m_MaximumAccumulation;
-    }
-
-    uint64_t TemporalHistoryState::LogicalBytes() const
-    {
-        // Two RGBA16F color slots plus two R32F depth slots.
-        return uint64_t(m_Size.x) * uint64_t(m_Size.y) * 24u;
-    }
-
-    bool TemporalHistoryState::IsInitialized() const
-    {
-        return m_Color[0] &&
-            m_Color[1] &&
-            m_Depth[0] &&
-            m_Depth[1];
-    }
-
-    bool TemporalHistoryState::HasCommittedSequence() const
-    {
-        return m_HasCommittedSequence;
-    }
-
-    uint64_t TemporalHistoryState::LastCommittedSequence() const
-    {
-        return m_LastCommittedSequence;
-    }
 }

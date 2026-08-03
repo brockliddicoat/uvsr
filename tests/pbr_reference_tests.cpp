@@ -1,7 +1,6 @@
 #include "directional_light_visibility.h"
 #include "diffuse_environment_math.h"
 #include "pbr_material.h"
-#include "lighting_contribution_shared.h"
 #include "screen_space_indirect_composite_shared.h"
 #include "screen_space_visibility_defaults.h"
 
@@ -20,24 +19,8 @@ namespace
 {
     constexpr float Pi = 3.14159265358979323846f;
     constexpr float MinAlpha = 0.002f;
-    constexpr std::uint32_t DirectSource = UVSR_LIGHTING_SOURCE_DIRECT;
-    constexpr std::uint32_t EnvironmentSource =
-        UVSR_LIGHTING_SOURCE_ENVIRONMENT;
-    constexpr std::uint32_t IndirectDiffuseSource =
-        UVSR_LIGHTING_SOURCE_INDIRECT_DIFFUSE;
-    constexpr std::uint32_t IndirectSpecularSource =
-        UVSR_LIGHTING_SOURCE_INDIRECT_SPECULAR;
-    constexpr std::uint32_t AllLightingSources = UVSR_LIGHTING_SOURCE_ALL;
 
     using Color = std::array<float, 3>;
-
-    enum class ContributionRejection
-    {
-        None,
-        ZeroSignal,
-        BelowThreshold,
-        NonFinite
-    };
 
     void Require(bool condition, const char* message)
     {
@@ -86,77 +69,6 @@ namespace
             left[1] * right[1],
             left[2] * right[2]
         };
-    }
-
-    bool HasPotentialSource(
-        std::uint32_t knownInactiveSources,
-        std::uint32_t relevantSources)
-    {
-        knownInactiveSources &= AllLightingSources;
-        relevantSources &= AllLightingSources;
-        return relevantSources != 0u &&
-            (knownInactiveSources & relevantSources) != relevantSources;
-    }
-
-    ContributionRejection ClassifyContribution(
-        std::uint32_t knownInactiveSources,
-        std::uint32_t relevantSources,
-        const Color& signal,
-        float throughputUpperBound,
-        float minimumContribution,
-        float exposureScale)
-    {
-        if (!HasPotentialSource(knownInactiveSources, relevantSources))
-        {
-            return ContributionRejection::ZeroSignal;
-        }
-        if (!std::isfinite(signal[0]) || !std::isfinite(signal[1]) ||
-            !std::isfinite(signal[2]) || !std::isfinite(throughputUpperBound))
-        {
-            return ContributionRejection::NonFinite;
-        }
-
-        const float peakSignal = std::max({
-            signal[0], signal[1], signal[2], 0.f
-        });
-        const float peakContribution = peakSignal *
-            std::max(throughputUpperBound, 0.f) * std::max(exposureScale, 0.f);
-        if (!(peakContribution > 0.f))
-            return ContributionRejection::ZeroSignal;
-        if (peakContribution <= std::max(minimumContribution, 0.f))
-            return ContributionRejection::BelowThreshold;
-        return ContributionRejection::None;
-    }
-
-    Color AccumulateDiffuseFrontiers(
-        const Color& firstBounce,
-        const Color& diffuseTransport,
-        std::uint32_t bounceCount,
-        float minimumContribution,
-        float exposureScale)
-    {
-        Color cumulative = firstBounce;
-        Color frontier = firstBounce;
-        for (std::uint32_t bounce = 2u; bounce <= bounceCount; ++bounce)
-        {
-            if (ClassifyContribution(
-                0u, IndirectDiffuseSource, frontier, 1.f,
-                minimumContribution, exposureScale) != ContributionRejection::None)
-            {
-                break;
-            }
-
-            const Color nextFrontier = Multiply(frontier, diffuseTransport);
-            if (ClassifyContribution(
-                0u, IndirectDiffuseSource, nextFrontier, 1.f,
-                minimumContribution, exposureScale) != ContributionRejection::None)
-            {
-                break;
-            }
-            cumulative = Add(cumulative, nextFrontier);
-            frontier = nextFrontier;
-        }
-        return cumulative;
     }
 
     float Alpha(float perceptualRoughness)
@@ -542,35 +454,21 @@ int main()
             blackPixels.data(), 8u, 4u).has_value(),
         "zero-energy lat-long input is rejected");
 
-    // Independent directional visibility producers compose only when their
-    // exact light identity matches. Missing or unrelated factors are white.
-    Require(uvsr::DirectionalLightVisibilityCount == 3u,
-        "three fixed directional visibility slots");
+    // The singular directional visibility input applies only when its exact
+    // light identity matches. Missing or unrelated visibility is white.
     Require(!uvsr::DirectionalLightVisibility{}.IsComplete(),
         "an empty visibility input is incomplete");
     int textureToken0 = 0;
-    int textureToken1 = 0;
-    int textureToken2 = 0;
     int lightToken0 = 0;
     int lightToken1 = 0;
     auto* texture0 = reinterpret_cast<nvrhi::ITexture*>(
         &textureToken0);
-    auto* texture1 = reinterpret_cast<nvrhi::ITexture*>(
-        &textureToken1);
-    auto* texture2 = reinterpret_cast<nvrhi::ITexture*>(
-        &textureToken2);
     auto* light0 = reinterpret_cast<const donut::engine::Light*>(
         &lightToken0);
     auto* light1 = reinterpret_cast<const donut::engine::Light*>(
         &lightToken1);
     const uvsr::DirectionalLightVisibility factor0{
         texture0, light0
-    };
-    const uvsr::DirectionalLightVisibility factor1{
-        texture1, light0
-    };
-    const uvsr::DirectionalLightVisibility factor2{
-        texture2, light0
     };
     Require(uvsr::TargetsDirectionalLight(factor0, light0),
         "pointer-identical light accepts its factor");
@@ -580,24 +478,9 @@ int main()
         uvsr::DirectionalLightVisibility{ texture0, nullptr },
         light0),
         "incomplete factor remains neutral");
-    float threeFactorVisibility = 1.f;
-    threeFactorVisibility = uvsr::ComposeDirectionalLightVisibility(
-        threeFactorVisibility,
-        0.5f,
-        uvsr::TargetsDirectionalLight(factor0, light0));
-    threeFactorVisibility = uvsr::ComposeDirectionalLightVisibility(
-        threeFactorVisibility,
-        0.25f,
-        uvsr::TargetsDirectionalLight(factor1, light0));
-    threeFactorVisibility = uvsr::ComposeDirectionalLightVisibility(
-        threeFactorVisibility,
-        0.5f,
-        uvsr::TargetsDirectionalLight(factor2, light0));
-    Require(threeFactorVisibility == 0.0625f,
-        "three same-light producer slots multiply");
     Require(uvsr::ComposeDirectionalLightVisibility(
         0.5f, 0.25f, true) == 0.125f,
-        "matching visibility factors multiply");
+        "the matching visibility factor applies once");
     Require(uvsr::ComposeDirectionalLightVisibility(
         0.25f, 0.f, false) == 0.25f,
         "unmatched visibility remains neutral");
@@ -776,56 +659,6 @@ int main()
     Require(noLightFinal == emission, "emission remains additive without lights");
     Require(std::isfinite(noLightFinal) && noLightFinal >= 0.f, "final radiance is finite and nonnegative");
 
-    // Source-state composition is deliberately conservative: unknown scene
-    // data stays active, every relevant source must be known inactive before a
-    // scope can be skipped.
-    constexpr std::array<std::uint32_t, 4> sourceMasks = {
-        DirectSource,
-        EnvironmentSource,
-        IndirectDiffuseSource,
-        IndirectSpecularSource
-    };
-    std::uint32_t combinedSourceMask = 0u;
-    for (std::size_t sourceIndex = 0;
-        sourceIndex < sourceMasks.size();
-        ++sourceIndex)
-    {
-        const std::uint32_t sourceMask = sourceMasks[sourceIndex];
-        Require(sourceMask != 0u &&
-            (sourceMask & (sourceMask - 1u)) == 0u,
-            "each lighting source owns one nonzero bit");
-        for (std::size_t otherIndex = sourceIndex + 1u;
-            otherIndex < sourceMasks.size();
-            ++otherIndex)
-        {
-            Require((sourceMask & sourceMasks[otherIndex]) == 0u,
-                "lighting source bits are pairwise disjoint");
-        }
-        combinedSourceMask |= sourceMask;
-    }
-    Require(combinedSourceMask == AllLightingSources,
-        "all lighting source bits exactly compose the all-sources mask");
-
-    Require(HasPotentialSource(0u, IndirectDiffuseSource),
-        "unknown indirect source remains conservatively active");
-    Require(HasPotentialSource(DirectSource,
-        DirectSource | IndirectDiffuseSource),
-        "one inactive source cannot suppress another relevant source");
-    Require(!HasPotentialSource(DirectSource | IndirectDiffuseSource,
-        DirectSource | IndirectDiffuseSource),
-        "all relevant known-inactive sources permit an early out");
-    Require(!HasPotentialSource(0u, 0u),
-        "an empty relevant-source set has no work");
-    constexpr std::uint32_t FirstBounceSources =
-        DirectSource | EnvironmentSource;
-    Require(HasPotentialSource(
-            DirectSource,
-            FirstBounceSources),
-        "environment-only source radiance keeps first-bounce GI active");
-    Require(!HasPotentialSource(
-            FirstBounceSources,
-            FirstBounceSources),
-        "GI can early out only when every first-bounce source is inactive");
     Require(uvsr::HasActiveScreenSpaceLightingConsumer(
             true, false, true, false, false),
         "active diffuse GI is an independent visibility consumer");
@@ -841,65 +674,6 @@ int main()
     Require(!uvsr::HasActiveScreenSpaceLightingConsumer(
             false, true, true, true, true),
         "the visibility master toggle disables every consumer");
-
-    const Color positiveSignal = { 0.001f, 0.00025f, 0.0005f };
-    Require(ClassifyContribution(
-        0u, IndirectDiffuseSource, positiveSignal, 1.f, 0.f, 1.f) ==
-        ContributionRejection::None,
-        "zero cutoff retains every finite positive contribution");
-    Require(ClassifyContribution(
-        0u, IndirectDiffuseSource, Color{ 0.f, -1.f, 0.f },
-        1.f, 0.f, 1.f) == ContributionRejection::ZeroSignal,
-        "exact-zero and negative signals safely early out");
-    Require(ClassifyContribution(
-        0u, IndirectDiffuseSource,
-        Color{ std::numeric_limits<float>::quiet_NaN(), 1.f, 1.f },
-        1.f, 0.f, 1.f) == ContributionRejection::NonFinite,
-        "non-finite signals are rejected");
-    Require(ClassifyContribution(
-        IndirectDiffuseSource, IndirectDiffuseSource,
-        Color{ 1.f, 1.f, 1.f }, 1.f, 0.f, 1.f) ==
-        ContributionRejection::ZeroSignal,
-        "known-inactive source rejects work before signal evaluation");
-    Require(ClassifyContribution(
-        0u, IndirectDiffuseSource, positiveSignal, 0.5f, 0.001f, 2.f) ==
-        ContributionRejection::BelowThreshold,
-        "contribution cutoff is inclusive after throughput and exposure");
-    Require(ClassifyContribution(
-        0u, IndirectDiffuseSource, positiveSignal, 0.5f, 0.00099f, 2.f) ==
-        ContributionRejection::None,
-        "contribution just above the exposed cutoff remains active");
-    // Multi-bounce transport advances a frontier B[n] = T(B[n-1]) and keeps a
-    // separate cumulative sum C[n] = C[n-1] + B[n]. Feeding C back into T
-    // would double-count all earlier paths.
-    const Color firstBounce = { 4.f, 2.f, 1.f };
-    const Color diffuseTransport = { 0.5f, 0.25f, 0.1f };
-    const Color secondBounce = Multiply(firstBounce, diffuseTransport);
-    const Color thirdBounce = Multiply(secondBounce, diffuseTransport);
-    const Color fourthBounce = Multiply(thirdBounce, diffuseTransport);
-    const Color cumulativeFour = Add(
-        Add(Add(firstBounce, secondBounce), thirdBounce), fourthBounce);
-    Require(Near(AccumulateDiffuseFrontiers(
-        firstBounce, diffuseTransport, 4u, 0.f, 1.f), cumulativeFour),
-        "four-bounce frontier recurrence matches the explicit path sum");
-    const Color incorrectThirdBounce = Multiply(
-        Add(firstBounce, secondBounce), diffuseTransport);
-    Require(!Near(incorrectThirdBounce, thirdBounce),
-        "cumulative radiance is never reinjected as the next frontier");
-
-    const Color decayingFirstBounce = { 1.f, 0.5f, 0.25f };
-    const Color decayingTransport = { 0.1f, 0.1f, 0.1f };
-    Require(Near(AccumulateDiffuseFrontiers(
-        decayingFirstBounce, decayingTransport, 4u, 0.015f, 1.f),
-        Color{ 1.1f, 0.55f, 0.275f }),
-        "pruned tail preserves all previously accumulated bounces");
-    Require(Near(AccumulateDiffuseFrontiers(
-        decayingFirstBounce, decayingTransport, 4u, 0.015f, 2.f),
-        Color{ 1.11f, 0.555f, 0.2775f }),
-        "exposure consistently controls which frontier crosses the cutoff");
-    Require(Near(AccumulateDiffuseFrontiers(
-        firstBounce, Color{ 0.f, 0.f, 0.f }, 4u, 0.f, 1.f), firstBounce),
-        "zero diffuse transport preserves the first bounce and ends the tail");
 
     std::cout << "UVSR PBR reference validation passed\n";
     return EXIT_SUCCESS;

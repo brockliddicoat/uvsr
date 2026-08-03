@@ -36,8 +36,8 @@ private:
     nvrhi::DeviceHandle m_Device;
     nvrhi::SamplerHandle m_ShadowSamplerComparison;
     nvrhi::BufferHandle m_DeferredLightingCB;
-    // No source UAV, compact one-bounce source, and packed multi-bounce source.
-    std::array<Pipeline, 3> m_Pipelines;
+    // No source UAV and the one-bounce diffuse source used by visibility.
+    std::array<Pipeline, 2> m_Pipelines;
     // Static 2x, 4x, 8x, and 16x per-sample deferred pipelines, each compiled
     // without and with the single-surface visibility correction.
     std::array<std::array<Pipeline, 4>, 2> m_MsaaPipelines;
@@ -68,14 +68,13 @@ public:
         nvrhi::ICommandList* commandList,
         const donut::engine::ICompositeView& compositeView,
         const donut::render::DeferredLightingPass::Inputs& inputs,
-        const uvsr::DirectionalLightVisibilitySet&
-            directionalLightVisibility,
+        const uvsr::DirectionalLightVisibility& directionalLightVisibility,
         const donut::engine::LightProbe* environment,
         nvrhi::ITexture* sourceRadianceOutput,
         bool separateIndirect,
         bool writeSourceRadiance,
-        bool writeBounceMetadata,
         uint32_t lightingDebugView,
+        uint32_t visibilityDebugView,
         donut::math::float2 randomOffset = donut::math::float2::zero(),
         nvrhi::ITexture* resolvedBackground = nullptr,
         uint32_t msaaSampleCount = 1u,

@@ -14,7 +14,7 @@ struct ScreenSpaceDirectionalShadowConstants
     uint usePrecisionOffset;
     uint bilinearSamplingOffsetMode;
 
-    uint debugOutputEdgeMask;
+    uint padding0;
     uint debugOutputThreadIndex;
     uint debugOutputWaveIndex;
     uint useEarlyOut;

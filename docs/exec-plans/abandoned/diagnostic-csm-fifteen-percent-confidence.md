@@ -1,8 +1,8 @@
-# Diagnostic Csm Fifteen-Percent Confidence
+# Diagnostic Cascaded Shadow Maps: Fifteen-Percent Confidence
 
 ## Status
 
-- State: active
+- State: superseded by shadow retirement
 - Coordinator: `/root`
 - Branch/worktree: preserved local `codex/bend-screen-space-shadows` worktree
 - Started: 2026-07-24
@@ -399,3 +399,14 @@ valid Donut mesh/buffer and scene-revision contracts, modern shader Gather
 support for the UE nine-Gather filter, one CSM render per command-list
 recording for the current volatile-buffer capacity, and Donut's existing
 engine-wide treatment of mirrored one-sided instances.
+
+## Archival Resolution
+
+Superseded on 2026-08-03 when diagnostic cascaded shadows left the product.
+Its parity, thermal benchmark, normalization, runtime-matrix, and confidence
+criteria remain unfinished. Recovery source is preserved locally on
+`codex/svsm-csm-preserved` at `f7c0c87d8cba6880428fbc34400eb2882fb5182e`.
+
+The full historical evidence is preserved above. This archive does not claim
+completion of any unchecked runtime, visual, performance, thermal, parity, or
+product-acceptance criterion.

@@ -2,7 +2,7 @@
 
 ## Status
 
-- State: active
+- State: superseded after partial integration
 - Coordinator: `/root`
 - Project/integration branch and worktree:
   `codex/prune-shader-paths` in
@@ -251,5 +251,17 @@ Stop and ask the user if:
 - Remaining experiments or follow-ups: launch the candidate after PID 8584 is
   closed; compare Lights with the supplied screenshot, inspect an emissive-only
   scene, run the uncapped motion benchmark, and smoke the experiment profile
-- Active ownership released: no
-- Archived to completed/abandoned path: pending
+- Active ownership released: yes; superseded ownership closed on 2026-08-03
+- Archived to completed/abandoned path: `docs/exec-plans/abandoned/emissive-motion-lights-experiment-build.md`
+
+
+## Archival Resolution
+
+Superseded on 2026-08-03 after the retained emissive cleanup and default
+history landed through commits `519306c` and `b83e7d3`. This engine cleanup
+retires the factory experiment profile, antialiasing motion benchmark, and
+SVSM/CSM presentation contract whose runtime checks remained unfinished.
+
+The full historical evidence is preserved above. This archive does not claim
+completion of any unchecked runtime, visual, performance, thermal, parity, or
+product-acceptance criterion.

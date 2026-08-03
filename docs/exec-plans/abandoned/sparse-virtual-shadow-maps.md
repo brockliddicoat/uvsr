@@ -2,7 +2,7 @@
 
 ## Status
 
-- State: active
+- State: superseded by shadow retirement
 - Coordinator: `/root`
 - Project branch: `experimental/shadow-maps-ibl-20260726`
 - Base commit: `a55e215e4bf0eddb20330283d9a4f8e853bda49f`
@@ -334,23 +334,7 @@ Public interface, shader binding, resource layout, and settings contracts:
 | Debug and counters | Every requested state is inspectable | Debug view/counter audit | Pending |
 | Timings | Each requested pass and total cost measured separately | GPU timer query audit | Detailed diagnostic mode and total-only benchmark mode pass source and focused-test review; runtime comparison pending |
 | Automated verification | Release build, full tests, title scan, hashes, diff | Repository commands | Latest Release app, packed scatter shader permutations, and focused SVSM test pass; full CTest, title scan, hashes, and final diff audit remain pending |
-| Runtime matrix | Both requested GPUs when available; no estimates | Controlled runtime matrix | RTX 4090 Laptop enable regression passed; full matrix and iGPU pending |
-| Position-1 control | Cold TFLOPS, clocks, temperatures, frame time, memory, and repeatability | Three runs of at least 1,000 frames or 15 seconds | Pending verified CPU cooldown |
-| Static performance | Stable visibility, zero page rerenders after warmup, at most 0.4 ms median | Thermally bracketed position-1 static benchmark | Pending |
-| Motion performance | Stable visibility at exactly 0.1 degrees per rendered frame, at most 0.4 ms median | Thermally bracketed motion benchmark | Pending |
-
-Performance evidence records the exact source state, GPU, scene, camera,
-resolution, preset, warmup, sample count, pass timings, total shadow time,
-correctness guardrails, and raw artifact. Unavailable hardware is reported as
-unmeasured.
-
-## Decisions
-
-| Date | Decision | Reasoning And Rejected Alternatives | Tasks Affected |
-| --- | --- | --- | --- |
-| 2026-07-29 | Organize the SVSM drawer around a small normal tuning surface, collapsed Developer Options with four default-collapsed raw subgroups, and collapsed Diagnostics. | Adaptive Filtering stays beside Filter Taps on the main receiver surface. Resources And Cache Policy, Movement And Invalidation, Culling And Raster, and Unabstracted compact the raw controls without reintroducing a separate Advanced panel. Low-risk switches trending toward always-on behavior remain independently reversible under Unabstracted. Mode, moving-light bias, and dirty-scatter safety each have one authoritative UI state so duplicate controls cannot contradict the effective runtime configuration. Fine-caster exclusion was removed because it had no conservative implementation. | UI, profiles, documentation, and validation |
-| 2026-07-22 | Fully decouple Bend and SVSM behind a neutral exact-light deferred-lighting interface, initially with two slots and later with a third diagnostic CSM slot. | The Bend-assisted resolve read could only avoid final filtering, could not reduce dominant culling or rendering work, and disabled static full-resolution visibility reuse. A separate composition dispatch and a general bindless visibility system were rejected as extra cost and architecture. Every producer now exposes only an independent full-resolution factor and exact light pointer; deferred lighting performs the optional same-light product across the fixed three-slot interface. | Integration, SVSM resolve/cache, UI, profiles, and motion benchmark |
-| 2026-07-22 | Replace implementation-named SVSM presets with Performance, Balanced, Quality, and Custom profiles. | Working reference modes remain available through the backend and Custom controls. The current profiles express the speed-to-quality trade as adaptive nearest-Poisson 8 taps with global `+1` and moving-light `+2` bias; bilinear 4 taps with zero global and moving-light `+1` bias; or bilinear 8 taps with zero bias. Balanced and Quality keep adaptive filtering off, and Quality also keeps receiver-distance clamping off. All use validated no-work cache and submission paths. | Settings, UI, tests, and documentation |
+| Runtime matrix | Both requested GPUs when available; no estimates | Controlled runtime matrix…770 tokens truncated…I, tests, and documentation |
 | 2026-07-20 | Use a separate SVSM visibility texture and exact-light pointer. | It satisfies the requested producer boundary and avoids Donut's four-cascade receiver. Encoding SVSM into Bend channels or `IShadowMap` was rejected. | Integration and resolve |
 | 2026-07-20 | Use normal NVRHI `R32_UINT` resources and a software-managed fixed pool. | This matches the required reference backend without dependency changes. Native sparse resources and an NVRHI fork were rejected. | Dense and sparse backends |
 | 2026-07-20 | Translate Stephano's conventional-Z atomic minimum to reverse-Z clear zero plus atomic maximum. | Non-negative IEEE-754 `[0,1]` values preserve unsigned bit ordering. | Depth backend and tests |
@@ -447,5 +431,16 @@ Stop and ask the user if:
 - Coming Soon/documentation update: pending
 - Pushed/PR/merged, or intentionally local: intentionally local
 - Remaining experiments or follow-ups: all implementation phases active
-- Active ownership released: no
-- Archived to completed/abandoned path: pending
+- Active ownership released: yes; superseded ownership closed on 2026-08-03
+- Archived to completed/abandoned path: `docs/exec-plans/abandoned/sparse-virtual-shadow-maps.md`
+
+## Archival Resolution
+
+Superseded on 2026-08-03 when sparse virtual shadows left the product. The
+runtime matrix and tail targets remain unproven, including the recorded cold-
+motion timeout history. Recovery source is preserved locally on
+`codex/svsm-csm-preserved` at `f7c0c87d8cba6880428fbc34400eb2882fb5182e`.
+
+The full historical evidence is preserved above. This archive does not claim
+completion of any unchecked runtime, visual, performance, thermal, parity, or
+product-acceptance criterion.

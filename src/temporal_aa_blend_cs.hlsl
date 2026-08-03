@@ -12,11 +12,6 @@
 
 #include "temporal_aa_options_shared.h"
 #include "temporal_aa_common.hlsli"
-#include <donut/shaders/view_cb.h>
-
-#ifndef TAA_PIXEL_SHADER
-#define TAA_PIXEL_SHADER 0
-#endif
 
 #ifndef TAA_MOTION_SOURCE
 #error TAA_MOTION_SOURCE must be a compile-time shader define
@@ -30,44 +25,22 @@
 #ifndef TAA_RECTIFICATION
 #error TAA_RECTIFICATION must be a compile-time shader define
 #endif
-#ifndef TAA_EXPORT_SELECTIVE
-#error TAA_EXPORT_SELECTIVE must be a compile-time shader define
-#endif
-#ifndef TAA_SAMPLE_RESURRECTION
-#error TAA_SAMPLE_RESURRECTION must be a compile-time shader define
-#endif
-#ifndef TAA_COMPUTE_KERNEL
-#error TAA_COMPUTE_KERNEL must be a compile-time shader define
-#endif
-#ifndef TAA_LDS_LAYOUT
-#error TAA_LDS_LAYOUT must be a compile-time shader define
-#endif
-#ifndef TAA_SHARED_WORK_REUSE
-#error TAA_SHARED_WORK_REUSE must be a compile-time shader define
-#endif
-#ifndef TAA_EARLY_HISTORY_REJECTION
-#error TAA_EARLY_HISTORY_REJECTION must be a compile-time shader define
+#ifndef TAA_OPTIMIZED_COMPUTE
+#error TAA_OPTIMIZED_COMPUTE must be a compile-time shader define
 #endif
 #ifndef TAA_FUSED_OUTPUT
 #error TAA_FUSED_OUTPUT must be a compile-time shader define
 #endif
-#ifndef TAA_DEVELOPER_DEBUG
-#error TAA_DEVELOPER_DEBUG must be a compile-time shader define
-#endif
-
-// Resurrection must inspect exact-zero immediate confidence. An early return
-// would remove precisely the pixels this mode exists to recover, so even an
-// accidentally requested early-rejection permutation resolves to the safe
-// non-early algorithm at compile time.
-#if TAA_EARLY_HISTORY_REJECTION && \
-    TAA_SAMPLE_RESURRECTION == UVSR_TAA_SAMPLE_RESURRECTION_OFF
-#define TAA_EFFECTIVE_EARLY_HISTORY_REJECTION 1
+#if TAA_OPTIMIZED_COMPUTE
+#define TAA_LDS_LAYOUT UVSR_TAA_LDS_PACKED
 #else
-#define TAA_EFFECTIVE_EARLY_HISTORY_REJECTION 0
+#define TAA_LDS_LAYOUT UVSR_TAA_LDS_LEGACY
 #endif
+#define TAA_SHARED_WORK_REUSE TAA_OPTIMIZED_COMPUTE
+#define TAA_EFFECTIVE_EARLY_HISTORY_REJECTION \
+    TAA_OPTIMIZED_COMPUTE
 
-#if TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
-    TAA_EXPORT_SELECTIVE
+#if TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED
 static const uint kColorBorder = 2;
 #else
 static const uint kColorBorder = 1;
@@ -82,12 +55,6 @@ static const uint kColorBorder = 1;
 
 static const uint kOutputTileWidth = 16;
 static const uint kOutputTileHeight = 8;
-#if TAA_PIXEL_SHADER
-#define kColorPitch (BufferDim.x + 4u)
-#define kColorRows (BufferDim.y + 4u)
-#define kCorePitch kColorPitch
-#define kCoreRows kColorRows
-#else
 static const uint kColorPitch =
     kOutputTileWidth + 2 * kColorBorder;
 static const uint kColorRows =
@@ -109,28 +76,13 @@ static const uint kCoreRows =
 #endif
 static const uint kCorePixelCount =
     kCorePitch * kCoreRows;
-#endif
 static const float kFarViewDepth = 65504.0;
 static const float kFiniteHdrLimit = 65504.0;
 
-#if TAA_PIXEL_SHADER
-static float4 PixelOutTemporal;
-static float PixelOutDepth;
-static float PixelOutDebug;
-static float4 PixelOutMorphologyCurrent;
-static float PixelOutMorphologyRejection;
-static float4 PixelOutFusedScene;
-#else
 RWTexture2D<float4> OutTemporal : register(u0);
 RWTexture2D<float> OutDepth : register(u1);
-#if TAA_DEVELOPER_DEBUG
-RWTexture2D<float> OutDebug : register(u2);
-#endif
-RWTexture2D<float4> OutMorphologyCurrent : register(u3);
-RWTexture2D<float> OutMorphologyRejection : register(u4);
 #if TAA_FUSED_OUTPUT
-RWTexture2D<float4> OutFusedScene : register(u5);
-#endif
+RWTexture2D<float4> OutFusedScene : register(u2);
 #endif
 
 Texture2D<float4> VelocityBuffer : register(t0);
@@ -138,45 +90,24 @@ Texture2D<float3> InColor : register(t1);
 Texture2D<float4> InTemporal : register(t2);
 Texture2D<float> CurDepth : register(t3);
 Texture2D<float> PreDepth : register(t4);
-#if TAA_SAMPLE_RESURRECTION
-Texture2D<float4> PersistentColor0 : register(t5);
-Texture2D<float> PersistentDepth0 : register(t6);
-Texture2D<float4> PersistentColor1 : register(t7);
-Texture2D<float> PersistentDepth1 : register(t8);
-#endif
 
 SamplerState LinearSampler : register(s0);
 
-#if !TAA_PIXEL_SHADER
 groupshared float ldsDepth[kCorePixelCount];
 #if TAA_SHARED_WORK_REUSE
 groupshared float ldsViewDepth[kCorePixelCount];
-#if TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_16X8_ONE_PIXEL && \
-    (TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
-        TAA_EXPORT_SELECTIVE)
-groupshared float3 ldsReconstructedCurrent[
-    kOutputTileWidth * kOutputTileHeight];
-#endif
-#if TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_16X8_ONE_PIXEL && \
-    !TAA_EFFECTIVE_EARLY_HISTORY_REJECTION
-groupshared float3 ldsReusedBoxMin[
-    kOutputTileWidth * kOutputTileHeight];
-groupshared float3 ldsReusedBoxMax[
-    kOutputTileWidth * kOutputTileHeight];
-#endif
 #endif
 groupshared float ldsR[kColorPixelCount];
 groupshared float ldsG[kColorPixelCount];
 groupshared float ldsB[kColorPixelCount];
 #if TAA_NEEDS_LDS_MOTION
-#if TAA_LDS_LAYOUT == UVSR_TAA_LDS_SPLIT_PACKED
+#if TAA_LDS_LAYOUT == UVSR_TAA_LDS_PACKED
 groupshared uint2 ldsPackedMotion[kCorePixelCount];
 #else
 groupshared float ldsMotionX[kCorePixelCount];
 groupshared float ldsMotionY[kCorePixelCount];
 groupshared float ldsMotionZ[kCorePixelCount];
 groupshared float ldsMotionValidity[kCorePixelCount];
-#endif
 #endif
 #endif
 
@@ -207,29 +138,11 @@ cbuffer CB1 : register(b1)
     float MaximumHistoryWeight;
     uint TemporalBehaviorFlags;
     uint TemporalBehaviorPadding;
-#if TAA_SAMPLE_RESURRECTION
-    // The resolved persistent color and raw persistent depth occupy different
-    // grids. These captured views preserve the producing camera and jitter so
-    // resurrection can use NRA-RTAA v1's repaired world reprojection: resolved
-    // color uses the current phase once, while raw depth uses the stored phase
-    // already embedded in MatWorldToClip.
-    PlanarViewConstants CurrentView;
-    PlanarViewConstants ImmediateHistoryView;
-    PlanarViewConstants PersistentHistoryView0;
-    PlanarViewConstants PersistentHistoryView1;
-    uint PersistentValidMask;
-    uint3 PersistentPadding;
-#endif
 }
 
 struct MotionSelection
 {
     float3 velocity;
-    // Motion dilation may replace currentDeviceDepth with the depth owned by
-    // the selected motion sample. Resurrection must instead reconstruct the
-    // immutable center pixel's geometry so a borrowed foreground depth is
-    // never paired with the center ray across a silhouette.
-    float centerDeviceDepth;
     float currentDeviceDepth;
     float currentViewDepth;
     float valid;
@@ -240,16 +153,6 @@ struct HistorySample
     float3 color;
     float weight;
 };
-
-#if TAA_SAMPLE_RESURRECTION
-struct ResurrectionCandidate
-{
-    float3 color;
-    float confidence;
-    float match;
-    uint sourceIndex;
-};
-#endif
 
 struct CatmullRomCross
 {
@@ -338,7 +241,6 @@ uint ColorIndexToCoreIndex(uint colorIdx)
 #endif
 }
 
-#if !TAA_PIXEL_SHADER
 void StoreWorkingColor(
     uint colorIdx,
     float3 rgb)
@@ -351,40 +253,21 @@ void StoreWorkingColor(
     ldsG[colorIdx] = working.y;
     ldsB[colorIdx] = working.z;
 }
-#endif
 
 float3 LoadWorkingColor(uint colorIdx)
 {
-#if TAA_PIXEL_SHADER
-    int2 pixel = int2(
-        int(colorIdx % kColorPitch) - 2,
-        int(colorIdx / kColorPitch) - 2);
-    pixel = clamp(pixel, int2(0, 0), int2(BufferDim) - 1);
-    return RgbToWorking(SanitizeHdr(
-        InColor.Load(int3(pixel, 0))));
-#else
     return float3(
         ldsR[colorIdx],
         ldsG[colorIdx],
         ldsB[colorIdx]);
-#endif
 }
 
 float LoadDepth(uint colorIdx)
 {
-#if TAA_PIXEL_SHADER
-    int2 pixel = int2(
-        int(colorIdx % kColorPitch) - 2,
-        int(colorIdx / kColorPitch) - 2);
-    pixel = clamp(pixel, int2(0, 0), int2(BufferDim) - 1);
-    return CurDepth.Load(int3(pixel, 0));
-#else
     return ldsDepth[ColorIndexToCoreIndex(colorIdx)];
-#endif
 }
 
 #if TAA_NEEDS_LDS_MOTION
-#if !TAA_PIXEL_SHADER
 void StoreMotion(uint coreIdx, float4 packedMotion)
 {
     // Sanitize once while loading the tile. Invalid NaN/Inf motion must not
@@ -394,7 +277,7 @@ void StoreMotion(uint coreIdx, float4 packedMotion)
     float3 safeMotion = valid > 0.0
         ? packedMotion.xyz
         : 0.0;
-#if TAA_LDS_LAYOUT == UVSR_TAA_LDS_SPLIT_PACKED
+#if TAA_LDS_LAYOUT == UVSR_TAA_LDS_PACKED
     // The source texture is RGBA16F. Round-tripping those already-FP16 values
     // through half bit patterns is lossless while halving the motion LDS
     // footprint relative to four float arrays.
@@ -410,21 +293,10 @@ void StoreMotion(uint coreIdx, float4 packedMotion)
     ldsMotionValidity[coreIdx] = valid;
 #endif
 }
-#endif
 
 float4 LoadMotion(uint colorIdx)
 {
-#if TAA_PIXEL_SHADER
-    int2 pixel = int2(
-        int(colorIdx % kColorPitch) - 2,
-        int(colorIdx / kColorPitch) - 2);
-    pixel = clamp(pixel, int2(0, 0), int2(BufferDim) - 1);
-    float4 motion = VelocityBuffer.Load(int3(pixel, 0));
-    float valid = MotionValidity(motion);
-    return float4(
-        valid > 0.0 ? motion.xyz : 0.0,
-        valid);
-#elif TAA_LDS_LAYOUT == UVSR_TAA_LDS_SPLIT_PACKED
+#if TAA_LDS_LAYOUT == UVSR_TAA_LDS_PACKED
     uint2 packed =
         ldsPackedMotion[ColorIndexToCoreIndex(colorIdx)];
     return float4(
@@ -743,7 +615,7 @@ float3 ReconstructDeJitteredCurrent(uint ldsIdx)
         : clipped;
 }
 
-#if TAA_SHARED_WORK_REUSE && !TAA_PIXEL_SHADER
+#if TAA_SHARED_WORK_REUSE
 void ReconstructDeJitteredAdjacent(
     uint leftIdx,
     out float3 leftResult,
@@ -841,7 +713,7 @@ float DeviceDepthValidity(float deviceDepth)
 
 float LoadViewDepth(uint colorIdx)
 {
-#if TAA_SHARED_WORK_REUSE && !TAA_PIXEL_SHADER
+#if TAA_SHARED_WORK_REUSE
     return ldsViewDepth[ColorIndexToCoreIndex(colorIdx)];
 #else
     return LinearViewDepth(LoadDepth(colorIdx));
@@ -852,8 +724,7 @@ MotionSelection SelectMotion(uint2 ST, uint ldsIdx)
 {
     MotionSelection selection;
     selection.velocity = 0.0;
-    selection.centerDeviceDepth = LoadDepth(ldsIdx);
-    selection.currentDeviceDepth = selection.centerDeviceDepth;
+    selection.currentDeviceDepth = LoadDepth(ldsIdx);
     selection.currentViewDepth = LoadViewDepth(ldsIdx);
     selection.valid = 0.0;
 
@@ -1126,186 +997,6 @@ HistorySample RecoverHistory(float4 premultiplied)
     return history;
 }
 
-#if TAA_SAMPLE_RESURRECTION
-bool DeviceDepthToViewDepth(
-    float deviceDepth,
-    PlanarViewConstants view,
-    out float viewDepth)
-{
-    float denominator =
-        deviceDepth * view.matViewToClip[2][3] -
-        view.matViewToClip[2][2];
-    if (!isfinite(denominator) || abs(denominator) <= 1e-8)
-    {
-        viewDepth = kFarViewDepth;
-        return false;
-    }
-
-    viewDepth = abs(
-        (view.matViewToClip[3][2] -
-            deviceDepth * view.matViewToClip[3][3]) /
-        denominator);
-    return isfinite(viewDepth);
-}
-
-bool ReconstructWorldPosition(
-    float2 pixelCenter,
-    float deviceDepth,
-    PlanarViewConstants view,
-    out float3 worldPosition)
-{
-    float2 clipXY =
-        pixelCenter * view.windowToClipScale +
-        view.windowToClipBias;
-    float4 world = mul(
-        float4(clipXY, deviceDepth, 1.0),
-        view.matClipToWorld);
-    if (!all(isfinite(world)) || abs(world.w) <= 1e-8)
-    {
-        worldPosition = 0.0;
-        return false;
-    }
-
-    worldPosition = world.xyz / world.w;
-    return all(isfinite(worldPosition));
-}
-
-bool ProjectWorldToHistory(
-    float3 worldPosition,
-    PlanarViewConstants view,
-    out float2 resolvedColorCenter,
-    out float2 rawDepthCenter,
-    out float expectedDeviceDepth)
-{
-    // This is the repaired NRA-RTAA v1 coordinate split. Resolved history
-    // retains the current subpixel phase exactly once. Raw depth is projected
-    // through the stored jittered view and therefore receives no extra offset.
-    float4 clipNoOffset = mul(
-        float4(worldPosition, 1.0),
-        view.matWorldToClipNoOffset);
-    float4 clipWithOffset = mul(
-        float4(worldPosition, 1.0),
-        view.matWorldToClip);
-    if (!all(isfinite(clipNoOffset)) ||
-        !all(isfinite(clipWithOffset)) ||
-        clipNoOffset.w <= 1e-8 ||
-        clipWithOffset.w <= 1e-8)
-    {
-        resolvedColorCenter = 0.0;
-        rawDepthCenter = 0.0;
-        expectedDeviceDepth = 0.0;
-        return false;
-    }
-
-    float2 noOffsetNdc =
-        clipNoOffset.xy / clipNoOffset.w;
-    float2 rawNdc =
-        clipWithOffset.xy / clipWithOffset.w;
-    resolvedColorCenter =
-        noOffsetNdc * view.clipToWindowScale +
-        view.clipToWindowBias +
-        CurrentJitter;
-    rawDepthCenter =
-        rawNdc * view.clipToWindowScale +
-        view.clipToWindowBias;
-    expectedDeviceDepth =
-        clipWithOffset.z / clipWithOffset.w;
-    return all(isfinite(resolvedColorCenter)) &&
-        all(isfinite(rawDepthCenter)) &&
-        isfinite(expectedDeviceDepth);
-}
-
-float PixelCenterInBounds(float2 pixelCenter)
-{
-    bool2 lowerInside = pixelCenter >= 0.5;
-    bool2 upperInside =
-        pixelCenter <= float2(BufferDim) - 0.5;
-    return float(
-        lowerInside.x & lowerInside.y &
-        upperInside.x & upperInside.y);
-}
-
-float PersistentDepthConfidence(
-    float storedDeviceDepth,
-    float expectedDeviceDepth,
-    PlanarViewConstants storedView)
-{
-    float storedViewDepth;
-    float expectedViewDepth;
-    float valid =
-        DeviceDepthValidity(storedDeviceDepth) *
-        DeviceDepthValidity(expectedDeviceDepth) *
-        float(DeviceDepthToViewDepth(
-            storedDeviceDepth,
-            storedView,
-            storedViewDepth)) *
-        float(DeviceDepthToViewDepth(
-            expectedDeviceDepth,
-            storedView,
-            expectedViewDepth));
-    float relativeError =
-        abs(storedViewDepth - expectedViewDepth) /
-        max(min(storedViewDepth, expectedViewDepth), 1e-3);
-    return valid *
-        (1.0 - smoothstep(0.002, 0.02, relativeError));
-}
-
-ResurrectionCandidate SamplePersistentCandidate(
-    Texture2D<float4> colorTexture,
-    Texture2D<float> depthTexture,
-    PlanarViewConstants storedView,
-    float3 currentWorld,
-    float slotValid,
-    uint sourceIndex)
-{
-    ResurrectionCandidate candidate =
-        (ResurrectionCandidate)0;
-    candidate.sourceIndex = sourceIndex;
-    if (slotValid == 0.0)
-        return candidate;
-
-    float2 colorCenter;
-    float2 rawDepthCenter;
-    float expectedDeviceDepth;
-    if (!ProjectWorldToHistory(
-            currentWorld,
-            storedView,
-            colorCenter,
-            rawDepthCenter,
-            expectedDeviceDepth) ||
-        PixelCenterInBounds(colorCenter) == 0.0 ||
-        PixelCenterInBounds(rawDepthCenter) == 0.0)
-    {
-        return candidate;
-    }
-
-    // Point-load raw depth. Linear depth sampling across a reverse-Z
-    // foreground/background boundary can fabricate a surface that never
-    // existed and was the old experiment's most dangerous false acceptance.
-    int2 rawDepthPixel = clamp(
-        int2(floor(rawDepthCenter)),
-        int2(0, 0),
-        int2(BufferDim) - 1);
-    float storedDeviceDepth =
-        depthTexture.Load(int3(rawDepthPixel, 0));
-    float depthConfidence = PersistentDepthConfidence(
-        storedDeviceDepth,
-        expectedDeviceDepth,
-        storedView);
-    if (depthConfidence == 0.0)
-        return candidate;
-
-    HistorySample recovered = RecoverHistory(
-        colorTexture.SampleLevel(
-            LinearSampler,
-            colorCenter * RcpBufferDim,
-            0));
-    candidate.color = recovered.color;
-    candidate.confidence =
-        recovered.weight * depthConfidence;
-    return candidate;
-}
-#endif
 
 HistorySample SampleHistory(
     float2 historyPixel,
@@ -1619,76 +1310,9 @@ float FarthestReverseZDeviceDepth(float4 depths)
         depths).farthestValidDeviceDepth;
 }
 
-#if TAA_EXPORT_SELECTIVE
-float3 GetSelectiveMorphologyCurrent(
-    uint ldsIdx,
-    float3 reusedDeJittered)
-{
-#if TAA_SHARED_WORK_REUSE && !TAA_PIXEL_SHADER && \
-    TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_8X8_TWO_PIXELS
-    float3 morphologyCurrentWorking = reusedDeJittered;
-#elif TAA_SHARED_WORK_REUSE && !TAA_PIXEL_SHADER && \
-    TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_16X8_ONE_PIXEL
-    float3 morphologyCurrentWorking = reusedDeJittered;
-#else
-    float3 morphologyCurrentWorking =
-        ReconstructDeJitteredCurrent(ldsIdx);
-#endif
-    // Selective morphology is presentation-only and follows an unjittered pixel
-    // center even at silhouettes. ReconstructDeJitteredCurrent and its shared
-    // adjacent variant already apply their positive-footprint anti-ringing;
-    // returning to the raw jittered center here made rejected edges swim.
-    return WorkingToRgb(morphologyCurrentWorking);
-}
-
-void WriteSelectiveMorphology(
-    uint2 ST,
-    float3 current,
-    float acceptedHistoryWeight)
-{
-#if TAA_PIXEL_SHADER
-    PixelOutMorphologyCurrent = float4(current, 1.0);
-#else
-    OutMorphologyCurrent[ST] = float4(current, 1.0);
-#endif
-    // Temporal AA confidence starts at 0.5 and reaches 0.8 after four accepted
-    // contributions. Smoothly remap that per-pixel recurrence to an exact
-    // zero instead of combining a binary reprojection step with the global
-    // frame count. The old binary mask made a phase-varying silhouette switch
-    // an entire dilated region between spatial current and temporal output.
-    float rejection = 1.0 - smoothstep(
-        UVSR_TAA_SELECTIVE_HISTORY_MINIMUM,
-        UVSR_TAA_SELECTIVE_HISTORY_TRUSTED,
-        saturate(acceptedHistoryWeight));
-    rejection = saturate(
-        (rejection - UVSR_TAA_SELECTIVE_REJECTION_FLOOR) /
-        (1.0 - UVSR_TAA_SELECTIVE_REJECTION_FLOOR));
-#if TAA_PIXEL_SHADER
-    PixelOutMorphologyRejection = rejection;
-#else
-    OutMorphologyRejection[ST] = rejection;
-#endif
-}
-#endif
-
 void WriteDepthOutput(uint2 ST, float value)
 {
-#if TAA_PIXEL_SHADER
-    PixelOutDepth = value;
-#else
     OutDepth[ST] = value;
-#endif
-}
-
-void WriteDebugOutput(uint2 ST, float value)
-{
-#if TAA_DEVELOPER_DEBUG
-#if TAA_PIXEL_SHADER
-    PixelOutDebug = value;
-#else
-    OutDebug[ST] = value;
-#endif
-#endif
 }
 
 float4 RoundTripHalf(float4 value)
@@ -1707,11 +1331,7 @@ void WriteTemporalColor(
 {
     float4 premultiplied =
         float4(resolvedColor, 1.0) * storedWeight;
-#if TAA_PIXEL_SHADER
-    PixelOutTemporal = premultiplied;
-#else
     OutTemporal[ST] = premultiplied;
-#endif
 #if TAA_FUSED_OUTPUT
     // The separate resolve reads RGBA16F history, so reproduce that
     // quantization before dividing by alpha. This keeps fused and separate
@@ -1721,31 +1341,17 @@ void WriteTemporalColor(
         SanitizeHdr(
             quantized.rgb / max(quantized.a, 1e-6)),
         1.0);
-#if TAA_PIXEL_SHADER
-    PixelOutFusedScene = fused;
-#else
     OutFusedScene[ST] = fused;
-#endif
 #endif
 }
 
 void WriteRejectedCurrent(
     uint2 ST,
     uint ldsIdx,
-    float3 currentRgb,
-    float3 reusedDeJittered)
+    float3 currentRgb)
 {
     WriteTemporalColor(ST, currentRgb, 0.5);
     WriteDepthOutput(ST, LoadDepth(ldsIdx));
-    WriteDebugOutput(ST, 0.0);
-#if TAA_EXPORT_SELECTIVE
-    WriteSelectiveMorphology(
-        ST,
-        GetSelectiveMorphologyCurrent(
-            ldsIdx,
-            reusedDeJittered),
-        0.0);
-#endif
 }
 
 bool TemporalBehaviorEnabled(uint flag)
@@ -1778,11 +1384,9 @@ void ApplyTemporalBlend(
         return;
 
 #if TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
-    TAA_EXPORT_SELECTIVE || \
-    TAA_SAMPLE_RESURRECTION || \
     TAA_HISTORY_FILTER != UVSR_TAA_HISTORY_BILINEAR
-    // Compute the LDS-only silhouette support once. De-Jittered current,
-    // resurrection, and the wider history filters share it.
+    // Compute the LDS-only silhouette support once. De-Jittered current and
+    // the wider history filters share it.
     float centerViewDepth;
     float centerDepthValid;
     float4 depthSupport = GetCrossDepthSupport(
@@ -1794,7 +1398,7 @@ void ApplyTemporalBlend(
 #endif
 
 #if TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED && \
-    TAA_SHARED_WORK_REUSE && !TAA_PIXEL_SHADER
+    TAA_SHARED_WORK_REUSE
     float3 currentWorking = reusedDeJittered;
 #else
     float3 currentWorking = ReconstructCurrent(ldsIdx);
@@ -1826,8 +1430,7 @@ void ApplyTemporalBlend(
         WriteRejectedCurrent(
             ST,
             ldsIdx,
-            currentRgb,
-            reusedDeJittered);
+            currentRgb);
         return;
     }
 
@@ -1881,8 +1484,7 @@ void ApplyTemporalBlend(
         WriteRejectedCurrent(
             ST,
             ldsIdx,
-            currentRgb,
-            reusedDeJittered);
+            currentRgb);
         return;
     }
 
@@ -1969,16 +1571,13 @@ void ApplyTemporalBlend(
         WriteRejectedCurrent(
             ST,
             ldsIdx,
-            currentRgb,
-            reusedDeJittered);
+            currentRgb);
         return;
     }
 #endif
 
 #if TAA_EFFECTIVE_EARLY_HISTORY_REJECTION
     // Bounds are deliberately delayed until after the exact-zero exit.
-#if !TAA_PIXEL_SHADER && \
-    TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_8X8_TWO_PIXELS
     if (shareDelayedPairBounds)
     {
         if (delayedPairBounds.ready == 0u)
@@ -2011,7 +1610,6 @@ void ApplyTemporalBlend(
             : delayedPairBounds.maximum1;
     }
     else
-#endif
     {
 #if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_PAIR_RGB
         GetBBoxForPair(
@@ -2042,145 +1640,6 @@ void ApplyTemporalBlend(
     float baseHistoryWeight = min(
         historyConfidence * hardAcceptance,
         MaximumHistoryWeight);
-    float resurrectionPresentationTrust = 0.0;
-    float resurrectionDebugValue = 0.0;
-
-#if TAA_SAMPLE_RESURRECTION
-    // Copy NRA-RTAA v1's repaired resurrection contract closely: reconstruct
-    // the current world point, verify that actual current-to-previous motion
-    // agrees with camera-only motion, and independently project/validate each
-    // older color/depth pair in its captured view. The old screen-aligned
-    // sample and 0.05-pixel motion cutoff made camera turns a guaranteed no-op.
-    bool resurrectionRequested =
-        baseHistoryWeight < 0.2 &&
-        motion.valid > 0.0 &&
-        centerDepthValid > 0.0 &&
-        PersistentValidMask != 0u;
-    if (resurrectionRequested)
-        resurrectionDebugValue = 0.25;
-
-    float3 currentWorld = 0.0;
-    bool currentWorldValid =
-        resurrectionRequested &&
-        ReconstructWorldPosition(
-            float2(ST) + 0.5,
-            motion.centerDeviceDepth,
-            CurrentView,
-            currentWorld);
-    float staticSurfaceForResurrection = 0.0;
-    if (currentWorldValid &&
-        expectedPreviousDepthValid > 0.0)
-    {
-        float2 cameraOnlyColorCenter;
-        float2 cameraOnlyDepthCenter;
-        float cameraOnlyDeviceDepth;
-        if (ProjectWorldToHistory(
-                currentWorld,
-                ImmediateHistoryView,
-                cameraOnlyColorCenter,
-                cameraOnlyDepthCenter,
-                cameraOnlyDeviceDepth))
-        {
-            float cameraMotionError = length(
-                cameraOnlyColorCenter -
-                (float2(ST) + 0.5 + motion.velocity.xy));
-            float cameraDepthAgreement =
-                PersistentDepthConfidence(
-                    expectedPreviousDeviceDepth,
-                    cameraOnlyDeviceDepth,
-                    ImmediateHistoryView);
-            staticSurfaceForResurrection =
-                cameraMotionError <= 0.125 &&
-                cameraDepthAgreement > 0.5
-                    ? 1.0
-                    : 0.0;
-        }
-    }
-
-    [branch]
-    if (currentWorldValid &&
-        staticSurfaceForResurrection > 0.0)
-    {
-        ResurrectionCandidate candidate0 =
-            SamplePersistentCandidate(
-            PersistentColor0,
-            PersistentDepth0,
-            PersistentHistoryView0,
-            currentWorld,
-            float((PersistentValidMask & 1u) != 0u),
-            1u);
-#if TAA_SAMPLE_RESURRECTION == \
-    UVSR_TAA_SAMPLE_RESURRECTION_TWO_OLDER_FRAMES
-        ResurrectionCandidate candidate1 =
-            SamplePersistentCandidate(
-            PersistentColor1,
-            PersistentDepth1,
-            PersistentHistoryView1,
-            currentWorld,
-            float((PersistentValidMask & 2u) != 0u),
-            2u);
-#else
-        ResurrectionCandidate candidate1 =
-            (ResurrectionCandidate)0;
-        candidate1.sourceIndex = 2u;
-#endif
-
-        float3 candidateRange = max(
-            boxMax - boxMin,
-            abs(currentWorking) * 0.05 + 0.01);
-        float3 candidate0Working =
-            RgbToWorking(candidate0.color);
-        float3 candidate1Working =
-            RgbToWorking(candidate1.color);
-        float3 candidate0Units =
-            abs(candidate0Working - currentWorking) /
-            candidateRange;
-        float3 candidate1Units =
-            abs(candidate1Working - currentWorking) /
-            candidateRange;
-        candidate0.match = saturate(
-            1.0 - max(
-                candidate0Units.x,
-                max(candidate0Units.y, candidate0Units.z)));
-        candidate1.match = saturate(
-            1.0 - max(
-                candidate1Units.x,
-                max(candidate1Units.y, candidate1Units.z)));
-        candidate0.confidence *= candidate0.match;
-        candidate1.confidence *= candidate1.match;
-
-        ResurrectionCandidate best = candidate0;
-        if (candidate1.confidence > candidate0.confidence)
-            best = candidate1;
-
-        static const float kResurrectionMatchThreshold = 0.70;
-        static const float kResurrectionMaximumWeight = 0.20;
-        if (best.confidence > baseHistoryWeight &&
-            best.match >= kResurrectionMatchThreshold)
-        {
-            // Older support is clipped more aggressively than immediate
-            // history, matching v1's half-range rectification rule.
-            float3 boxCenter = (boxMin + boxMax) * 0.5;
-            float3 aggressiveMin =
-                lerp(boxCenter, boxMin, 0.5);
-            float3 aggressiveMax =
-                lerp(boxCenter, boxMax, 0.5);
-            float3 clippedWorking = ClipColor(
-                RgbToWorking(best.color),
-                aggressiveMin,
-                aggressiveMax);
-            history.color = WorkingToRgb(clippedWorking);
-            float resurrectedWeight = min(
-                best.confidence,
-                kResurrectionMaximumWeight);
-            baseHistoryWeight = resurrectedWeight;
-            resurrectionPresentationTrust = best.confidence;
-            resurrectionDebugValue =
-                (best.sourceIndex == 1u ? 0.50 : 0.75) +
-                resurrectedWeight;
-        }
-    }
-#endif
 
     float3 temporalWorking = RgbToWorking(history.color);
 
@@ -2235,37 +1694,16 @@ void ApplyTemporalBlend(
 
     WriteTemporalColor(ST, temporalColor, storedWeight);
     WriteDepthOutput(ST, LoadDepth(ldsIdx));
-    WriteDebugOutput(ST, resurrectionDebugValue);
-#if TAA_EXPORT_SELECTIVE
-    // Selective morphology consumes de-jittered current only as a presentation
-    // source. It is deliberately separate from OutTemporal and can never be
-    // sampled by the next temporal frame.
-    WriteSelectiveMorphology(
-        ST,
-        GetSelectiveMorphologyCurrent(
-            ldsIdx,
-            reusedDeJittered),
-        max(baseHistoryWeight, resurrectionPresentationTrust));
-#endif
 }
 
-#if !TAA_PIXEL_SHADER
-#if TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_8X8_TWO_PIXELS
 [numthreads(8, 8, 1)]
-#else
-[numthreads(16, 8, 1)]
-#endif
 void main(
     uint3 DTid : SV_DispatchThreadID,
     uint GI : SV_GroupIndex,
     uint3 GTid : SV_GroupThreadID,
     uint3 Gid : SV_GroupID)
 {
-#if TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_8X8_TWO_PIXELS
     const uint threadCount = 64;
-#else
-    const uint threadCount = 128;
-#endif
     const int2 groupOrigin =
         int2(
             Gid.x * kOutputTileWidth,
@@ -2366,7 +1804,6 @@ void main(
 
     GroupMemoryBarrierWithGroupSync();
 
-#if TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_8X8_TWO_PIXELS
     uint idx0 =
         GTid.x * 2 +
         GTid.y * kColorPitch +
@@ -2381,8 +1818,7 @@ void main(
     DelayedPairBounds delayedPairBounds =
         (DelayedPairBounds)0;
 #if TAA_SHARED_WORK_REUSE && \
-    (TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
-        TAA_EXPORT_SELECTIVE)
+    TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED
     ReconstructDeJitteredAdjacent(
         idx0,
         reusedDeJittered0,
@@ -2470,221 +1906,4 @@ void main(
         1u,
         true);
 #endif
-#else
-    uint idx =
-        GTid.x +
-        GTid.y * kColorPitch +
-        kColorBorder * kColorPitch +
-        kColorBorder;
-    uint2 st = uint2(groupOrigin) + GTid.xy;
-    float3 reusedDeJittered = 0.0;
-    DelayedPairBounds delayedPairBounds =
-        (DelayedPairBounds)0;
-#if TAA_SHARED_WORK_REUSE && \
-    (TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
-        TAA_EXPORT_SELECTIVE || \
-        !TAA_EFFECTIVE_EARLY_HISTORY_REJECTION)
-    if ((GTid.x & 1u) == 0u)
-    {
-        uint pairIdx =
-            GTid.x +
-            GTid.y * kColorPitch +
-            kColorBorder * kColorPitch +
-            kColorBorder;
-#if TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
-    TAA_EXPORT_SELECTIVE
-        float3 leftReconstruction;
-        float3 rightReconstruction;
-        ReconstructDeJitteredAdjacent(
-            pairIdx,
-            leftReconstruction,
-            rightReconstruction);
-        uint pairOutputIndex =
-            GTid.y * kOutputTileWidth + GTid.x;
-        ldsReconstructedCurrent[pairOutputIndex] =
-            leftReconstruction;
-        ldsReconstructedCurrent[pairOutputIndex + 1u] =
-            rightReconstruction;
-#endif
-#if !TAA_EFFECTIVE_EARLY_HISTORY_REJECTION
-        float3 leftBoxMin;
-        float3 leftBoxMax;
-        float3 rightBoxMin;
-        float3 rightBoxMax;
-#if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_PAIR_RGB
-        GetBBoxForPair(
-            pairIdx,
-            pairIdx + 1u,
-            leftBoxMin,
-            leftBoxMax);
-        rightBoxMin = leftBoxMin;
-        rightBoxMax = leftBoxMax;
-#else
-        GetBBoxForAdjacentPixels(
-            pairIdx,
-            leftBoxMin,
-            leftBoxMax,
-            rightBoxMin,
-            rightBoxMax);
-#endif
-        uint pairBoxIndex =
-            GTid.y * kOutputTileWidth + GTid.x;
-        ldsReusedBoxMin[pairBoxIndex] = leftBoxMin;
-        ldsReusedBoxMax[pairBoxIndex] = leftBoxMax;
-        ldsReusedBoxMin[pairBoxIndex + 1u] = rightBoxMin;
-        ldsReusedBoxMax[pairBoxIndex + 1u] = rightBoxMax;
-#endif
-    }
-    GroupMemoryBarrierWithGroupSync();
-    uint outputIndex =
-        GTid.y * kOutputTileWidth + GTid.x;
-#if TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
-    TAA_EXPORT_SELECTIVE
-    reusedDeJittered =
-        ldsReconstructedCurrent[outputIndex];
-#endif
-#endif
-#if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_PAIR_RGB
-    uint pairOffset = GTid.x & ~1u;
-    uint pairIdx0 =
-        pairOffset +
-        GTid.y * kColorPitch +
-        kColorBorder * kColorPitch +
-        kColorBorder;
-    float3 pairMin;
-    float3 pairMax;
-#if TAA_EFFECTIVE_EARLY_HISTORY_REJECTION
-    pairMin = 0.0;
-    pairMax = 0.0;
-#else
-#if TAA_SHARED_WORK_REUSE
-    pairMin = ldsReusedBoxMin[outputIndex];
-    pairMax = ldsReusedBoxMax[outputIndex];
-#else
-    GetBBoxForPair(
-        pairIdx0,
-        pairIdx0 + 1,
-        pairMin,
-        pairMax);
-#endif
-#endif
-    ApplyTemporalBlend(
-        st,
-        idx,
-        pairMin,
-        pairMax,
-        pairIdx0,
-        pairIdx0 + 1,
-        reusedDeJittered,
-        delayedPairBounds,
-        GTid.x & 1u,
-        false);
-#else
-    float3 boxMin;
-    float3 boxMax;
-#if TAA_EFFECTIVE_EARLY_HISTORY_REJECTION
-    boxMin = 0.0;
-    boxMax = 0.0;
-#else
-#if TAA_SHARED_WORK_REUSE
-    boxMin = ldsReusedBoxMin[outputIndex];
-    boxMax = ldsReusedBoxMax[outputIndex];
-#else
-    GetBBoxForPixel(idx, boxMin, boxMax);
-#endif
-#endif
-    ApplyTemporalBlend(
-        st,
-        idx,
-        boxMin,
-        boxMax,
-        idx,
-        idx,
-        reusedDeJittered,
-        delayedPairBounds,
-        0u,
-        false);
-#endif
-#endif
 }
-#else
-struct TaaPixelOutputs
-{
-    float4 temporal : SV_Target0;
-    float depth : SV_Target1;
-    float debugValue : SV_Target2;
-    float4 selectiveCurrent : SV_Target3;
-    float selectiveRejection : SV_Target4;
-    float4 fusedScene : SV_Target5;
-};
-
-TaaPixelOutputs main(float4 position : SV_Position)
-{
-    uint2 ST = uint2(position.xy);
-    DelayedPairBounds delayedPairBounds =
-        (DelayedPairBounds)0;
-    PixelOutTemporal = 0.0;
-    PixelOutDepth = 0.0;
-    PixelOutDebug = 0.0;
-    PixelOutMorphologyCurrent = 0.0;
-    PixelOutMorphologyRejection = 0.0;
-    PixelOutFusedScene = 0.0;
-
-    uint ldsIdx =
-        ST.x + 2u +
-        (ST.y + 2u) * kColorPitch;
-#if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_PAIR_RGB
-    uint pairX = ST.x & ~1u;
-    uint pairFillIdx =
-        pairX + 2u +
-        (ST.y + 2u) * kColorPitch;
-    uint pairHoleIdx = pairFillIdx + 1u;
-    float3 boxMin = 0.0;
-    float3 boxMax = 0.0;
-#if !TAA_EFFECTIVE_EARLY_HISTORY_REJECTION
-    GetBBoxForPair(
-        pairFillIdx,
-        pairHoleIdx,
-        boxMin,
-        boxMax);
-#endif
-    ApplyTemporalBlend(
-        ST,
-        ldsIdx,
-        boxMin,
-        boxMax,
-        pairFillIdx,
-        pairHoleIdx,
-        0.0,
-        delayedPairBounds,
-        ST.x & 1u,
-        false);
-#else
-    float3 boxMin = 0.0;
-    float3 boxMax = 0.0;
-#if !TAA_EFFECTIVE_EARLY_HISTORY_REJECTION
-    GetBBoxForPixel(ldsIdx, boxMin, boxMax);
-#endif
-    ApplyTemporalBlend(
-        ST,
-        ldsIdx,
-        boxMin,
-        boxMax,
-        ldsIdx,
-        ldsIdx,
-        0.0,
-        delayedPairBounds,
-        0u,
-        false);
-#endif
-
-    TaaPixelOutputs output;
-    output.temporal = PixelOutTemporal;
-    output.depth = PixelOutDepth;
-    output.debugValue = PixelOutDebug;
-    output.selectiveCurrent = PixelOutMorphologyCurrent;
-    output.selectiveRejection = PixelOutMorphologyRejection;
-    output.fusedScene = PixelOutFusedScene;
-    return output;
-}
-#endif

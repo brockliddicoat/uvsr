@@ -351,11 +351,7 @@ namespace uvsr
             PreparedRadianceGpuStage::EnvironmentBrdf;
         m_PreparedRadianceStep = 0u;
         m_Uploaded = false;
-        m_LastSource = ImageBasedLightingSource::Count;
-        m_LastSh = {};
-        m_SourceAverageLuminance = 0.f;
         m_LastLoadFailed = false;
-        m_ActiveLightProbes.clear();
     }
 
     bool ImageBasedLightingEnvironment::AdvancePreparedRadiance(
@@ -372,9 +368,6 @@ namespace uvsr
             m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
             m_PreparedRadianceStep = 0u;
             m_Uploaded = false;
-            m_LastSource = ImageBasedLightingSource::Count;
-            m_LastSh = {};
-            m_SourceAverageLuminance = 0.f;
             m_LastLoadFailed = true;
             return false;
         }
@@ -393,9 +386,6 @@ namespace uvsr
             m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
             m_PreparedRadianceStep = 0u;
             m_Uploaded = false;
-            m_LastSource = ImageBasedLightingSource::Count;
-            m_LastSh = {};
-            m_SourceAverageLuminance = 0.f;
             m_LastLoadFailed = true;
             return false;
         }
@@ -507,10 +497,7 @@ namespace uvsr
             if (m_PreparedRadianceStep < SpecularCubeMipCount)
                 return false;
 
-            m_LastSh = prepared.diffuseSh;
-            m_SourceAverageLuminance = prepared.averageLuminance;
             m_Uploaded = true;
-            m_LastSource = prepared.source;
             m_LastLoadFailed = false;
             m_PreparedRadiance.reset();
             m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
@@ -548,9 +535,6 @@ namespace uvsr
         {
             return false;
         }
-
-        m_LastSh = prepared.diffuseSh;
-        m_SourceAverageLuminance = prepared.averageLuminance;
 
         for (uint32_t face = 0u; face < 6u; ++face)
         {
@@ -680,9 +664,6 @@ namespace uvsr
                 m_LastNeutralize = neutralize;
                 const bool rebuilt =
                     AdvancePreparedRadiance(commandList);
-                m_ActiveLightProbes.clear();
-                if (m_Uploaded && m_LightProbe->IsActive())
-                    m_ActiveLightProbes.push_back(m_LightProbe);
                 return rebuilt;
             }
 
@@ -729,9 +710,6 @@ namespace uvsr
                 // probe and background, then latch the failed request so the
                 // render loop does not retry synchronous disk I/O each frame.
                 m_Uploaded = false;
-                m_LastSource = ImageBasedLightingSource::Count;
-                m_LastSh = {};
-                m_SourceAverageLuminance = 0.f;
                 m_LastLoadFailed = true;
             }
             else
@@ -740,23 +718,16 @@ namespace uvsr
                 if (rebuilt)
                 {
                     m_Uploaded = true;
-                    m_LastSource = requestedSource;
                     m_LastLoadFailed = false;
                 }
                 else
                 {
                     m_Uploaded = false;
-                    m_LastSource = ImageBasedLightingSource::Count;
-                    m_LastSh = {};
-                    m_SourceAverageLuminance = 0.f;
                     m_LastLoadFailed = true;
                 }
             }
         }
 
-        m_ActiveLightProbes.clear();
-        if (m_Uploaded && m_LightProbe->IsActive())
-            m_ActiveLightProbes.push_back(m_LightProbe);
         return rebuilt;
     }
 

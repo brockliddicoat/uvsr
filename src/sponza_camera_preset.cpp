@@ -62,19 +62,6 @@ const uvsr::SponzaCameraPreset* uvsr::FindSponzaCameraPreset(
     return nullptr;
 }
 
-uvsr::SponzaCameraLocation uvsr::ResolveSponzaCameraLocation(
-    SponzaCameraLocation selectedLocation,
-    bool benchmarkCameraRequested)
-{
-    if (benchmarkCameraRequested ||
-        selectedLocation != SponzaCameraLocation::SimplifiedApproximation)
-    {
-        return SponzaCameraLocation::SimplifiedApproximation;
-    }
-
-    return selectedLocation;
-}
-
 bool uvsr::IsSponzaCameraAtPreset(
     const SponzaCameraPreset& preset,
     donut::math::float3 position,

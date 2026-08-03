@@ -53,11 +53,6 @@ Texture2DMS<float4, PBR_DEFERRED_MSAA_SAMPLES>
 Texture2DMS<float, PBR_DEFERRED_MSAA_SAMPLES>
     t_MaterialAmbientOcclusion : register(t14);
 
-// These legacy indirect-specular and screen-shadow inputs remain
-// single-sample.
-Texture2D t_IndirectSpecular : register(t15);
-Texture2D t_ShadowBuffer : register(t16);
-
 // HdrColor contains the environment/IBL background and was resolved before
 // this dispatch. Covered samples are still zero because the background depth
 // test failed; the resolved value therefore already represents the exact
@@ -67,9 +62,7 @@ Texture2D t_ResolvedBackground : register(t17);
 Texture2D t_VisibilityBaseLighting : register(t18);
 Texture2D t_VisibilityComposite : register(t19);
 #endif
-Texture2D<float> t_DirectionalVisibility0 : register(t20);
-Texture2D<float> t_DirectionalVisibility1 : register(t21);
-Texture2D<float> t_DirectionalVisibility2 : register(t22);
+Texture2D<float> t_DirectionalVisibility : register(t20);
 
 VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_Output : register(u0);
@@ -81,43 +74,16 @@ float GetRandom(float2 position)
     return g_Deferred.noisePattern[y][x];
 }
 
-float GetScreenShadowVisibility(
-    LightConstants light,
-    int2 pixelPosition)
-{
-    if ((light.shadowChannel.x & 0xfffffffc) == 0)
-    {
-        float4 channels = t_ShadowBuffer[pixelPosition];
-        return saturate(channels[light.shadowChannel.x]);
-    }
-
-    return 1.0f;
-}
-
 float GetDirectionalLightVisibility(
     uint lightIndex,
     int2 pixelPosition)
 {
-    float visibility = 1.0f;
     if (int(lightIndex) ==
-        g_PbrDeferred.directionalVisibilityLightIndices.x)
+        g_PbrDeferred.directionalVisibilityLightIndex)
     {
-        visibility *= saturate(
-            t_DirectionalVisibility0[pixelPosition]);
+        return saturate(t_DirectionalVisibility[pixelPosition]);
     }
-    if (int(lightIndex) ==
-        g_PbrDeferred.directionalVisibilityLightIndices.y)
-    {
-        visibility *= saturate(
-            t_DirectionalVisibility1[pixelPosition]);
-    }
-    if (int(lightIndex) ==
-        g_PbrDeferred.directionalVisibilityLightIndices.z)
-    {
-        visibility *= saturate(
-            t_DirectionalVisibility2[pixelPosition]);
-    }
-    return visibility;
+    return 1.0f;
 }
 
 float EvaluateLightVisibility(
@@ -385,9 +351,6 @@ bool ShadeDeferredSample(
             float2(g_Deferred.randomOffset.x, 0.0f));
         float2 sinCosRotation =
             float2(sin(angle), cos(angle));
-        LightingContributionGate exactDirectGate =
-            MakeLightingContributionGate(0u, 0.0f, 1.0f);
-
         [loop]
         for (uint lightIndex = 0;
             lightIndex < g_Deferred.numLights;
@@ -395,12 +358,9 @@ bool ShadeDeferredSample(
         {
             LightConstants light =
                 g_Deferred.lights[lightIndex];
-            float visibility = GetScreenShadowVisibility(
-                light,
-                pixelPosition) *
-                GetDirectionalLightVisibility(
-                    lightIndex,
-                    pixelPosition);
+            float visibility = GetDirectionalLightVisibility(
+                lightIndex,
+                pixelPosition);
             if (!(visibility > 0.0f))
                 continue;
 
@@ -408,19 +368,13 @@ bool ShadeDeferredSample(
                 light,
                 surfaceWorldPosition,
                 1.0f);
-            uint lightRejection =
-                LightingClassifyContribution(
-                    exactDirectGate,
-                    LightingSource_Direct,
+            if (!HasPositiveFinitePbrSignal(
                     lightSample.incidentRadiance,
-                    1.0f);
-            if (!LightingShouldEvaluate(lightRejection))
+                    1.0f))
                 continue;
-            lightRejection =
-                ClassifyPbrDirectSurfacePrepared(
+            if (!CanEvaluatePbrDirectSurfacePrepared(
                     preparedSurface,
-                    lightSample.directionToLight);
-            if (!LightingShouldEvaluate(lightRejection))
+                    lightSample.directionToLight))
                 continue;
 
             visibility = EvaluateLightVisibility(
@@ -441,14 +395,6 @@ bool ShadeDeferredSample(
         }
     }
 
-    float3 indirectSpecular = 0.0f;
-    if (g_Deferred.indirectSpecularScale > 0.0f)
-    {
-        indirectSpecular =
-            t_IndirectSpecular[pixelPosition].rgb *
-            g_Deferred.indirectSpecularScale;
-    }
-
     float3 diffuse = directDiffuse +
         (g_PbrDeferred.separateIndirect != 0
             ? 0.0f
@@ -456,8 +402,7 @@ bool ShadeDeferredSample(
     float3 specular = directSpecular +
         (g_PbrDeferred.separateIndirect != 0
             ? 0.0f
-            : environmentSpecular) +
-        indirectSpecular;
+            : environmentSpecular);
     finalLinearHdr = max(
         diffuse +
             specular +
@@ -484,7 +429,9 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         i_globalIdx.xy +
         int2(g_Deferred.view.viewportOrigin);
     float3 finalLinearHdr =
-        max(t_ResolvedBackground[pixelPosition].rgb, 0.0f);
+        g_PbrDeferred.lightingDebugView == 0u
+            ? max(t_ResolvedBackground[pixelPosition].rgb, 0.0f)
+            : 0.0f;
     const float inverseSampleCount =
         1.0f / float(PBR_DEFERRED_MSAA_SAMPLES);
     uint coveredSampleCount = 0u;
@@ -508,18 +455,25 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
     }
 
 #if PBR_DEFERRED_MSAA_VISIBILITY
-    // Visibility evaluates the closest coherent covered surface once. Apply
-    // only its signed lighting correction and scale it by raster coverage;
-    // uncovered MSAA samples retain their already-resolved sky contribution.
-    const float coverage =
-        float(coveredSampleCount) * inverseSampleCount;
-    const float3 visibilityCorrection =
-        t_VisibilityComposite[pixelPosition].rgb -
-        t_VisibilityBaseLighting[pixelPosition].rgb;
-    if (all(isfinite(visibilityCorrection)))
+    if (g_PbrDeferred.visibilityDebugView != 0u)
     {
-        finalLinearHdr +=
-            visibilityCorrection * coverage;
+        finalLinearHdr = t_VisibilityComposite[pixelPosition].rgb;
+    }
+    else if (g_PbrDeferred.lightingDebugView == 0u)
+    {
+        // Visibility evaluates the closest coherent covered surface once.
+        // Apply only its signed lighting correction and scale it by raster
+        // coverage; uncovered samples retain their resolved sky contribution.
+        const float coverage =
+            float(coveredSampleCount) * inverseSampleCount;
+        const float3 visibilityCorrection =
+            t_VisibilityComposite[pixelPosition].rgb -
+            t_VisibilityBaseLighting[pixelPosition].rgb;
+        if (all(isfinite(visibilityCorrection)))
+        {
+            finalLinearHdr +=
+                visibilityCorrection * coverage;
+        }
     }
 #endif
 

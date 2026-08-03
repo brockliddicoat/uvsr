@@ -31,7 +31,6 @@
 #include <donut/engine/View.h>
 
 #include <algorithm>
-#include <cassert>
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -50,13 +49,13 @@ static_assert(offsetof(PbrDeferredLightingConstants, separateIndirect) ==
     sizeof(DeferredLightingConstants),
     "The UVSR extension must follow Donut's deferred constants without padding drift.");
 static_assert(sizeof(PbrDeferredLightingConstants) ==
-    sizeof(DeferredLightingConstants) + 32,
-    "The UVSR deferred extension must occupy two constant-buffer registers.");
+    sizeof(DeferredLightingConstants) + 16,
+    "The UVSR deferred extension must occupy one constant-buffer register.");
 static_assert(offsetof(
         PbrDeferredLightingConstants,
-        directionalVisibilityLightIndices) ==
-    sizeof(DeferredLightingConstants) + 16u,
-    "Directional visibility indices must begin the second UVSR register.");
+        directionalVisibilityLightIndex) ==
+    sizeof(DeferredLightingConstants) + 8u,
+    "The directional visibility index must share the UVSR register.");
 
 namespace
 {
@@ -301,7 +300,6 @@ bool PbrDeferredLightingPass::PreparePipelinesStep()
     {
         const uint32_t variant = m_PipelinePreparationStep;
         const bool writeSourceRadiance = variant != 0u;
-        const bool writeBounceMetadata = variant == 2u;
         Pipeline& pipeline = m_Pipelines[variant];
 
         nvrhi::BindingLayoutDesc layoutDesc;
@@ -318,11 +316,7 @@ bool PbrDeferredLightingPass::PreparePipelinesStep()
             nvrhi::BindingLayoutItem::Texture_SRV(11),
             nvrhi::BindingLayoutItem::Texture_SRV(12),
             nvrhi::BindingLayoutItem::Texture_SRV(14),
-            nvrhi::BindingLayoutItem::Texture_SRV(15),
-            nvrhi::BindingLayoutItem::Texture_SRV(16),
             nvrhi::BindingLayoutItem::Texture_SRV(20),
-            nvrhi::BindingLayoutItem::Texture_SRV(21),
-            nvrhi::BindingLayoutItem::Texture_SRV(22),
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         };
         if (writeSourceRadiance)
@@ -335,8 +329,6 @@ bool PbrDeferredLightingPass::PreparePipelinesStep()
         std::vector<ShaderMacro> macros;
         macros.emplace_back(
             "WRITE_SOURCE_RADIANCE", writeSourceRadiance ? "1" : "0");
-        macros.emplace_back(
-            "WRITE_BOUNCE_METADATA", writeBounceMetadata ? "1" : "0");
         pipeline.shader = m_ShaderFactory->CreateShader(
             "uvsr/pbr_deferred_lighting_cs.hlsl",
             "main",
@@ -377,12 +369,8 @@ bool PbrDeferredLightingPass::PreparePipelinesStep()
                 nvrhi::BindingLayoutItem::Texture_SRV(11),
                 nvrhi::BindingLayoutItem::Texture_SRV(12),
                 nvrhi::BindingLayoutItem::Texture_SRV(14),
-                nvrhi::BindingLayoutItem::Texture_SRV(15),
-                nvrhi::BindingLayoutItem::Texture_SRV(16),
                 nvrhi::BindingLayoutItem::Texture_SRV(17),
                 nvrhi::BindingLayoutItem::Texture_SRV(20),
-                nvrhi::BindingLayoutItem::Texture_SRV(21),
-                nvrhi::BindingLayoutItem::Texture_SRV(22),
                 nvrhi::BindingLayoutItem::Texture_UAV(0),
                 nvrhi::BindingLayoutItem::Sampler(1),
                 nvrhi::BindingLayoutItem::Sampler(2),
@@ -418,7 +406,7 @@ bool PbrDeferredLightingPass::PreparePipelinesStep()
     }
 
     ++m_PipelinePreparationStep;
-    constexpr uint32_t pipelineCount = 3u + 2u * 4u;
+    constexpr uint32_t pipelineCount = 2u + 2u * 4u;
     m_PipelinesReady = m_PipelinePreparationStep == pipelineCount;
     return m_PipelinesReady;
 }
@@ -427,21 +415,19 @@ void PbrDeferredLightingPass::Render(
     nvrhi::ICommandList* commandList,
     const ICompositeView& compositeView,
     const DeferredLightingPass::Inputs& inputs,
-    const uvsr::DirectionalLightVisibilitySet&
-        directionalLightVisibility,
+    const uvsr::DirectionalLightVisibility& directionalLightVisibility,
     const LightProbe* environment,
     nvrhi::ITexture* sourceRadianceOutput,
     bool separateIndirect,
     bool writeSourceRadiance,
-    bool writeBounceMetadata,
     uint32_t lightingDebugView,
+    uint32_t visibilityDebugView,
     float2 randomOffset,
     nvrhi::ITexture* resolvedBackground,
     uint32_t msaaSampleCount,
     nvrhi::ITexture* visibilityBaseLighting,
     nvrhi::ITexture* visibilityComposite)
 {
-    assert(!writeBounceMetadata || writeSourceRadiance);
     if (!m_PipelinesReady)
     {
         log::error(
@@ -465,7 +451,6 @@ void PbrDeferredLightingPass::Render(
         visibilityComposite;
     if (msaa &&
         (writeSourceRadiance ||
-            writeBounceMetadata ||
             (separateIndirect &&
                 !applyMsaaVisibility)))
     {
@@ -488,19 +473,12 @@ void PbrDeferredLightingPass::Render(
         return;
     }
 
-    uvsr::DirectionalLightVisibilitySet activeVisibility;
-    for (uint32_t slot = 0u;
-        slot < activeVisibility.size();
-        ++slot)
+    uvsr::DirectionalLightVisibility activeVisibility;
+    if (directionalLightVisibility.IsComplete() &&
+        IsDirectionalVisibilityTextureCompatible(
+            directionalLightVisibility.texture, inputs))
     {
-        const uvsr::DirectionalLightVisibility& candidate =
-            directionalLightVisibility[slot];
-        if (candidate.IsComplete() &&
-            IsDirectionalVisibilityTextureCompatible(
-                candidate.texture, inputs))
-        {
-            activeVisibility[slot] = candidate;
-        }
+        activeVisibility = directionalLightVisibility;
     }
 
     commandList->beginMarker(
@@ -512,7 +490,8 @@ void PbrDeferredLightingPass::Render(
     DeferredLightingConstants& deferredConstants = constants.deferred;
     constants.separateIndirect = separateIndirect ? 1 : 0;
     constants.lightingDebugView = lightingDebugView;
-    constants.directionalVisibilityLightIndices = int4(-1);
+    constants.visibilityDebugView = visibilityDebugView;
+    constants.directionalVisibilityLightIndex = -1;
     deferredConstants.randomOffset = randomOffset;
     deferredConstants.noisePattern[0] = float4(0.059f, 0.529f, 0.176f, 0.647f);
     deferredConstants.noisePattern[1] = float4(0.765f, 0.294f, 0.882f, 0.412f);
@@ -526,7 +505,6 @@ void PbrDeferredLightingPass::Render(
             deferredConstants.lightProbes[0]);
     }
     deferredConstants.indirectDiffuseScale = 1.f;
-    deferredConstants.indirectSpecularScale = inputs.indirectSpecular ? 1.f : 0.f;
 
     nvrhi::ITexture* shadowMapTexture = nullptr;
     int numShadows = 0;
@@ -561,16 +539,11 @@ void PbrDeferredLightingPass::Render(
             LightConstants& lightConstants =
                 deferredConstants.lights[deferredConstants.numLights];
             light->FillLightConstants(lightConstants);
-            for (uint32_t slot = 0u;
-                slot < activeVisibility.size();
-                ++slot)
+            if (uvsr::TargetsDirectionalLight(
+                    activeVisibility, light.get()))
             {
-                if (uvsr::TargetsDirectionalLight(
-                        activeVisibility[slot], light.get()))
-                {
-                    constants.directionalVisibilityLightIndices[slot] =
-                        int(deferredConstants.numLights);
-                }
+                constants.directionalVisibilityLightIndex =
+                    int(deferredConstants.numLights);
             }
 
             if (light->shadowMap)
@@ -619,9 +592,7 @@ void PbrDeferredLightingPass::Render(
         viewIndex < compositeView.GetNumChildViews(ViewType::PLANAR);
         ++viewIndex)
     {
-        const uint32_t pipelineIndex = writeBounceMetadata
-            ? 2u
-            : (writeSourceRadiance ? 1u : 0u);
+        const uint32_t pipelineIndex = writeSourceRadiance ? 1u : 0u;
         const Pipeline& pipeline = msaa
             ? m_MsaaPipelines[
                   applyMsaaVisibility ? 1u : 0u][size_t(
@@ -659,15 +630,7 @@ void PbrDeferredLightingPass::Render(
                 nvrhi::Format::UNKNOWN, viewSubresources),
             nvrhi::BindingSetItem::Texture_SRV(14,
                 inputs.indirectDiffuse ? inputs.indirectDiffuse : m_CommonPasses->m_BlackTexture.Get(),
-                nvrhi::Format::UNKNOWN, viewSubresources),
-            nvrhi::BindingSetItem::Texture_SRV(15,
-                inputs.indirectSpecular ? inputs.indirectSpecular : m_CommonPasses->m_BlackTexture.Get(),
-                nvrhi::Format::UNKNOWN, viewSubresources),
-            nvrhi::BindingSetItem::Texture_SRV(
-                16,
-                inputs.shadowChannels
-                    ? inputs.shadowChannels
-                    : m_CommonPasses->m_BlackTexture.Get())
+                nvrhi::Format::UNKNOWN, viewSubresources)
         };
         if (msaa)
         {
@@ -705,17 +668,12 @@ void PbrDeferredLightingPass::Render(
                         viewSubresources));
             }
         }
-        for (uint32_t slot = 0u;
-            slot < activeVisibility.size();
-            ++slot)
-        {
-            bindingSetDesc.bindings.push_back(
-                nvrhi::BindingSetItem::Texture_SRV(
-                    20u + slot,
-                    activeVisibility[slot].texture
-                        ? activeVisibility[slot].texture
-                        : m_CommonPasses->m_WhiteTexture.Get()));
-        }
+        bindingSetDesc.bindings.push_back(
+            nvrhi::BindingSetItem::Texture_SRV(
+                20,
+                activeVisibility.texture
+                    ? activeVisibility.texture
+                    : m_CommonPasses->m_WhiteTexture.Get()));
         bindingSetDesc.bindings.push_back(
             nvrhi::BindingSetItem::Texture_UAV(
                 0, inputs.output, nvrhi::Format::UNKNOWN, viewSubresources));

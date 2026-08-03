@@ -9,10 +9,8 @@ struct PbrDeferredLightingConstants
 
     int separateIndirect;
     uint lightingDebugView;
-    uint paddingDebug0;
-    uint paddingDebug1;
-
-    int4 directionalVisibilityLightIndices;
+    int directionalVisibilityLightIndex;
+    uint visibilityDebugView;
 };
 
 #endif // UVSR_PBR_DEFERRED_LIGHTING_CB_H

@@ -8,10 +8,6 @@
 #include "screen_space_indirect_composite_shared.h"
 #include "screen_space_visibility_cb.h"
 
-#ifndef ENABLE_AO_POWER
-#define ENABLE_AO_POWER 0
-#endif
-
 cbuffer c_Visibility : register(b0)
 {
     ScreenSpaceVisibilityConstants g_Visibility;
@@ -44,6 +40,14 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float4 normalChannels = t_Normal[pixel];
     if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
     {
+        u_Output[pixel] = g_Visibility.visibilityDebugView == 0u
+            ? t_BaseLighting[pixel]
+            : float4(0.0f, 0.0f, 0.0f, 1.0f);
+        return;
+    }
+    if (g_Visibility.visibilityDebugView == 0u &&
+        g_Visibility.lightingDebugView != 0u)
+    {
         u_Output[pixel] = t_BaseLighting[pixel];
         return;
     }
@@ -56,15 +60,9 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float adjustedAmbientVisibility = 1.0f;
     if (g_Visibility.enableAmbientOcclusion != 0u)
     {
-#if ENABLE_AO_POWER
-        float poweredAmbientVisibility = pow(
-            ambientVisibility, max(g_Visibility.ambientPower, 0.01f));
-#else
-        float poweredAmbientVisibility = ambientVisibility;
-#endif
         adjustedAmbientVisibility = saturate(
             1.0f - g_Visibility.ambientStrength *
-                (1.0f - poweredAmbientVisibility));
+                (1.0f - ambientVisibility));
     }
 
     float3 baseColor = max(t_GBufferDiffuse[pixel].rgb, 0.0f);
@@ -179,11 +177,12 @@ void main(uint2 pixel : SV_DispatchThreadID)
         environmentDiffuse,
         adjustedAmbientVisibility,
         screenSpaceIndirect);
-    if (g_Visibility.showIndirectDiffuseOnly != 0u &&
-        g_Visibility.enableIndirectDiffuse != 0u)
-    {
+    if (g_Visibility.visibilityDebugView == 1u)
+        finalComposite = ambientVisibility.xxx;
+    else if (g_Visibility.visibilityDebugView == 2u)
+        finalComposite = indirectDiffuse;
+    else if (g_Visibility.visibilityDebugView == 3u)
         finalComposite = screenSpaceIndirect;
-    }
     if (any(!isfinite(finalComposite)))
         finalComposite = 0.0f;
     finalComposite = max(finalComposite, 0.0f);

@@ -202,20 +202,10 @@ namespace uvsr
                     return {};
 
                 const auto now = std::chrono::steady_clock::now();
-                const auto snapshot = [this, now]() {
-                    GpuPerformanceMetrics result = m_Metrics;
-                    if (m_LastSample.time_since_epoch().count() != 0)
-                    {
-                        result.telemetryAgeMilliseconds =
-                            std::chrono::duration<double, std::milli>(
-                                now - m_LastSample).count();
-                    }
-                    return result;
-                };
                 if (m_LastQuery.time_since_epoch().count() != 0 &&
                     now - m_LastQuery < QueryInterval)
                 {
-                    return snapshot();
+                    return m_Metrics;
                 }
                 m_LastQuery = now;
 
@@ -230,12 +220,12 @@ namespace uvsr
                     m_GetMemoryBusWidth(m_Device, &memoryBusWidthBits) != NvmlSuccess ||
                     m_GetGpuCoreCount(m_Device, &gpuCoreCount) != NvmlSuccess)
                 {
-                    return snapshot();
+                    return m_Metrics;
                 }
 
                 NvmlUtilization utilization{};
                 double gpuUtilization = 0.0;
-                bool gpuUtilizationValid = false;
+                bool utilizationValid = false;
                 if (m_GetUtilizationRates &&
                     m_GetUtilizationRates(m_Device, &utilization) == NvmlSuccess)
                 {
@@ -243,7 +233,7 @@ namespace uvsr
                         double(utilization.gpu) / 100.0,
                         0.0,
                         1.0);
-                    gpuUtilizationValid = true;
+                    utilizationValid = true;
                 }
 
                 // NVML reports the physical memory clock. Double-data-rate
@@ -253,16 +243,10 @@ namespace uvsr
                 m_Metrics.gpuGFlops =
                     double(gpuCoreCount) * 2.0 * double(graphicsClockMHz) / 1000.0;
                 m_Metrics.gpuUtilization = gpuUtilization;
-                m_Metrics.gpuUtilizationValid = gpuUtilizationValid;
+                m_Metrics.utilizationValid = utilizationValid;
                 m_Metrics.valid = memoryClockMHz > 0 && memoryBusWidthBits > 0 &&
                     graphicsClockMHz > 0 && gpuCoreCount > 0;
-                if (m_Metrics.valid)
-                {
-                    m_LastSample = now;
-                    m_Metrics.telemetryAgeMilliseconds = 0.0;
-                    m_Metrics.telemetryGeneration = ++m_TelemetryGeneration;
-                }
-                return snapshot();
+                return m_Metrics;
             }
 
         private:
@@ -306,8 +290,6 @@ namespace uvsr
             GetUnsignedMetricFunction m_GetGpuCoreCount = nullptr;
             GetUtilizationRatesFunction m_GetUtilizationRates = nullptr;
             std::chrono::steady_clock::time_point m_LastQuery{};
-            std::chrono::steady_clock::time_point m_LastSample{};
-            uint64_t m_TelemetryGeneration = 0u;
             GpuPerformanceMetrics m_Metrics;
         };
 
@@ -453,20 +435,10 @@ namespace uvsr
                     return {};
 
                 const auto now = std::chrono::steady_clock::now();
-                const auto snapshot = [this, now]() {
-                    GpuPerformanceMetrics result = m_Metrics;
-                    if (m_LastSample.time_since_epoch().count() != 0)
-                    {
-                        result.telemetryAgeMilliseconds =
-                            std::chrono::duration<double, std::milli>(
-                                now - m_LastSample).count();
-                    }
-                    return result;
-                };
                 if (m_LastQuery.time_since_epoch().count() != 0 &&
                     now - m_LastQuery < QueryInterval)
                 {
-                    return snapshot();
+                    return m_Metrics;
                 }
                 m_LastQuery = now;
 
@@ -475,7 +447,7 @@ namespace uvsr
                 if (m_GetFrequencyState(m_GpuFrequency, &frequencyState) != CtlSuccess ||
                     frequencyState.actual <= 0.0)
                 {
-                    return snapshot();
+                    return m_Metrics;
                 }
 
                 double memoryBandwidthGBps = 0.0;
@@ -494,16 +466,10 @@ namespace uvsr
                 m_Metrics.gpuGFlops = m_Fp32OperationsPerClock *
                     frequencyState.actual / 1000.0;
                 m_Metrics.gpuUtilization = 0.0;
-                m_Metrics.gpuUtilizationValid = false;
+                m_Metrics.utilizationValid = false;
                 m_Metrics.valid = m_Metrics.memoryBandwidthGBps > 0.0 &&
                     m_Metrics.gpuGFlops > 0.0;
-                if (m_Metrics.valid)
-                {
-                    m_LastSample = now;
-                    m_Metrics.telemetryAgeMilliseconds = 0.0;
-                    m_Metrics.telemetryGeneration = ++m_TelemetryGeneration;
-                }
-                return snapshot();
+                return m_Metrics;
             }
 
         private:
@@ -650,8 +616,6 @@ namespace uvsr
             EnumerateFunction m_EnumerateMemory = nullptr;
             GetMemoryBandwidthFunction m_GetMemoryBandwidth = nullptr;
             std::chrono::steady_clock::time_point m_LastQuery{};
-            std::chrono::steady_clock::time_point m_LastSample{};
-            uint64_t m_TelemetryGeneration = 0u;
             GpuPerformanceMetrics m_Metrics;
         };
     }

@@ -2,6 +2,7 @@
 #include "bend_sss_cpu.h"
 
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -38,9 +39,28 @@ namespace
             std::istreambuf_iterator<char>());
     }
 
+    std::string Canonicalize(const std::string& source)
+    {
+        std::string canonical;
+        canonical.reserve(source.size());
+        for (const char character : source)
+        {
+            const unsigned char byte =
+                static_cast<unsigned char>(character);
+            if (!std::isspace(byte))
+            {
+                canonical.push_back(
+                    static_cast<char>(std::tolower(byte)));
+            }
+        }
+        return canonical;
+    }
+
     void AssertDefault(
         const ScreenSpaceDirectionalShadowSettings& settings,
-        bool expectedEnabled)
+        bool expectedEnabled,
+        ScreenSpaceShadowIsolationView expectedIsolation =
+            ScreenSpaceShadowIsolationView::None)
     {
         assert(settings.enabled == expectedEnabled);
         assert(settings.preset == ScreenSpaceShadowPreset::Default);
@@ -54,13 +74,27 @@ namespace
         assert(!settings.usePrecisionOffset);
         assert(!settings.bilinearSamplingOffsetMode);
         assert(!settings.useEarlyOut);
-        assert(settings.debugView == ScreenSpaceShadowDebugView::None);
+        assert(settings.isolationView == expectedIsolation);
         assert(IsScreenSpaceShadowConfigurationSupported(settings));
     }
 
     void TestDefaultSettings()
     {
         AssertDefault(ScreenSpaceDirectionalShadowSettings{}, false);
+    }
+
+    void TestIsolationSettings()
+    {
+        ScreenSpaceDirectionalShadowSettings settings;
+        settings.isolationView = ScreenSpaceShadowIsolationView::Thread;
+        assert(
+            settings.isolationView ==
+            ScreenSpaceShadowIsolationView::Thread);
+
+        settings.isolationView = ScreenSpaceShadowIsolationView::Wave;
+        assert(
+            settings.isolationView ==
+            ScreenSpaceShadowIsolationView::Wave);
     }
 
     void TestPresetResetAndEnableIndependence()
@@ -77,12 +111,15 @@ namespace
         settings.usePrecisionOffset = true;
         settings.bilinearSamplingOffsetMode = true;
         settings.useEarlyOut = true;
-        settings.debugView = ScreenSpaceShadowDebugView::Wave;
+        settings.isolationView = ScreenSpaceShadowIsolationView::Wave;
 
         ApplyScreenSpaceShadowPreset(
             settings,
             ScreenSpaceShadowPreset::Default);
-        AssertDefault(settings, true);
+        AssertDefault(
+            settings,
+            true,
+            ScreenSpaceShadowIsolationView::Wave);
     }
 
     void TestLengthPresetsAndSupportedConfigurations()
@@ -206,6 +243,10 @@ namespace
         const std::string adapter = ReadTextFile(
             sourceDirectory /
             "screen_space_directional_shadows.cpp");
+        const std::string debugShader = ReadTextFile(
+            sourceDirectory /
+            "screen_space_directional_shadows_debug_ps.hlsl");
+        const std::string canonicalAdapter = Canonicalize(adapter);
         const std::string cpuSource = ReadTextFile(
             upstreamDirectory / "bend_sss_cpu.h");
         const std::string gpuSource = ReadTextFile(
@@ -245,13 +286,67 @@ namespace
         assert(adapter.find("clearTextureFloat(") != std::string::npos);
         assert(adapter.find("lightDirectionLengthSquared <= 1e-12f") !=
             std::string::npos);
-        assert(adapter.find("ScreenSpaceShadowDebugView::Edge") !=
+        assert(adapter.find("ScreenSpaceShadowIsolationView::Thread") !=
             std::string::npos);
-        assert(adapter.find("ScreenSpaceShadowDebugView::Thread") !=
+        assert(adapter.find("ScreenSpaceShadowIsolationView::Wave") !=
             std::string::npos);
-        assert(adapter.find("ScreenSpaceShadowDebugView::Wave") !=
+        assert(adapter.find("edgeOverlay") == std::string::npos);
+        assert(adapter.find("edgeOutput") == std::string::npos);
+        assert(adapter.find("debugOutputEdgeMask") == std::string::npos);
+        assert(adapter.find("ScreenSpaceShadowDebugView") ==
             std::string::npos);
+        assert(adapter.find("m_DebugOutput") != std::string::npos);
+        assert(adapter.find("m_DebugOutputs") == std::string::npos);
+        assert(adapter.find("m_DebugTraceBindingSet") !=
+            std::string::npos);
+        assert(adapter.find("m_DebugTraceBindingSets") ==
+            std::string::npos);
+        assert(adapter.find(
+            "result.nearVisibility = m_NearVisibility;") !=
+            std::string::npos);
+        assert(adapter.find(
+            "result.isolationOutput =") != std::string::npos);
+        assert(adapter.find("setSrcBlend(") == std::string::npos);
         assert(adapter.find("Bend Screen-Space") == std::string::npos);
+
+        const size_t beautyDispatch = adapter.find(
+            "dispatchTrace(");
+        const size_t canonicalBeautyDispatch = canonicalAdapter.find(
+            "dispatchtrace(m_bindingset,"
+            "screenspaceshadowisolationview::none,true);");
+        const size_t endBeautyTimer = canonicalAdapter.find(
+            "endtimer(commandlist);", canonicalBeautyDispatch);
+        const size_t debugDispatch = canonicalAdapter.find(
+            "dispatchtrace(m_debugtracebindingset,settings.isolationview,false);",
+            endBeautyTimer);
+        assert(beautyDispatch != std::string::npos);
+        assert(canonicalBeautyDispatch != std::string::npos);
+        assert(endBeautyTimer != std::string::npos);
+        assert(debugDispatch != std::string::npos);
+        assert(canonicalBeautyDispatch < endBeautyTimer);
+        assert(endBeautyTimer < debugDispatch);
+
+        const size_t presentDebug = adapter.find(
+            "ScreenSpaceDirectionalShadowPass::PresentDebug(");
+        assert(presentDebug != std::string::npos);
+        assert(adapter.find("result.isolationOutput", presentDebug) !=
+            std::string::npos);
+        assert(adapter.find("result.edgeOutput", presentDebug) ==
+            std::string::npos);
+        assert(adapter.find("m_NearVisibility", presentDebug) ==
+            std::string::npos);
+
+        assert(debugShader.find("Overlay") == std::string::npos);
+        assert(debugShader.find("float4(visibility.xxx, 1.0f)") !=
+            std::string::npos);
+        assert(shader.find("parameters.DebugOutputEdgeMask = false;") !=
+            std::string::npos);
+
+        assert(canonicalAdapter.find(
+            "settings.isolationview!="
+            "screenspaceshadowisolationview::none&&"
+            "bool(m_debugoutput)&&"
+            "bool(m_debugtracebindingset)") != std::string::npos);
 
         const size_t dispatchLoop = adapter.find(
             "for (int dispatchIndex = 0;");
@@ -301,6 +396,7 @@ int main(int argc, char** argv)
 {
     assert(argc >= 2);
     TestDefaultSettings();
+    TestIsolationSettings();
     TestPresetResetAndEnableIndependence();
     TestLengthPresetsAndSupportedConfigurations();
     TestReleasedCpuDispatchContract();

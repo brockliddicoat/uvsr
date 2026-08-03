@@ -124,7 +124,8 @@ namespace uvsr
 
     bool ScreenSpaceDirectionalShadowPass::EnsureResources(
         nvrhi::ITexture* depth,
-        bool reverseDepth)
+        bool reverseDepth,
+        bool isolationOutputRequired)
     {
         if (!depth || !m_Timings.supported)
             return false;
@@ -144,30 +145,47 @@ namespace uvsr
             return false;
         }
 
+        nvrhi::TextureDesc outputDesc;
+        outputDesc.width = depthDesc.width;
+        outputDesc.height = depthDesc.height;
+        outputDesc.format = nvrhi::Format::R8_UNORM;
+        outputDesc.dimension = nvrhi::TextureDimension::Texture2D;
+        outputDesc.isUAV = true;
+        outputDesc.enableAutomaticStateTracking(
+            nvrhi::ResourceStates::ShaderResource);
+
         const bool recreateOutput =
             !m_NearVisibility ||
             m_NearVisibility->getDesc().width != depthDesc.width ||
             m_NearVisibility->getDesc().height != depthDesc.height;
         if (recreateOutput)
         {
-            nvrhi::TextureDesc outputDesc;
-            outputDesc.width = depthDesc.width;
-            outputDesc.height = depthDesc.height;
-            outputDesc.format = nvrhi::Format::R8_UNORM;
-            outputDesc.dimension = nvrhi::TextureDimension::Texture2D;
-            outputDesc.isUAV = true;
             outputDesc.debugName = "Screen-Space Directional Shadow Visibility";
-            outputDesc.enableAutomaticStateTracking(
-                nvrhi::ResourceStates::ShaderResource);
             m_NearVisibility = m_Device->createTexture(outputDesc);
             m_BindingSet = nullptr;
-            m_DebugBindingSet = nullptr;
             m_Timings.outputTextureBytes =
                 uint64_t(depthDesc.width) * uint64_t(depthDesc.height);
         }
 
         if (!m_NearVisibility)
             return false;
+
+        if (!isolationOutputRequired)
+        {
+            m_DebugOutput = nullptr;
+            m_DebugTraceBindingSet = nullptr;
+            m_DebugPresentBindingSet = nullptr;
+        }
+        else if (!m_DebugOutput ||
+            m_DebugOutput->getDesc().width != depthDesc.width ||
+            m_DebugOutput->getDesc().height != depthDesc.height)
+        {
+            outputDesc.debugName =
+                "Screen-Space Directional Shadow Isolation";
+            m_DebugOutput = m_Device->createTexture(outputDesc);
+            m_DebugTraceBindingSet = nullptr;
+            m_DebugPresentBindingSet = nullptr;
+        }
 
         if (!m_BindingSet ||
             m_BoundDepth != depth ||
@@ -185,6 +203,23 @@ namespace uvsr
                 m_Device->createBindingSet(bindings, m_BindingLayout);
             m_BoundDepth = depth;
             m_BoundReverseDepth = reverseDepth;
+            m_DebugTraceBindingSet = nullptr;
+        }
+
+        if (isolationOutputRequired &&
+            m_DebugOutput &&
+            !m_DebugTraceBindingSet)
+        {
+            nvrhi::BindingSetDesc bindings;
+            bindings.bindings = {
+                nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
+                nvrhi::BindingSetItem::Texture_SRV(0, depth),
+                nvrhi::BindingSetItem::Texture_UAV(0, m_DebugOutput),
+                nvrhi::BindingSetItem::Sampler(
+                    0, m_PointBorderSamplers[reverseDepth ? 0u : 1u])
+            };
+            m_DebugTraceBindingSet =
+                m_Device->createBindingSet(bindings, m_BindingLayout);
         }
 
         m_ReportedInvalidInput = false;
@@ -266,6 +301,7 @@ namespace uvsr
 
         m_Timings.traceMilliseconds =
             m_Device->getTimerQueryTime(query) * 1000.f;
+        m_Timings.available = true;
         m_Device->resetTimerQuery(query);
         m_TimerPending[slot] = false;
     }
@@ -305,12 +341,20 @@ namespace uvsr
         m_Timings.sampleCount =
             GetScreenSpaceShadowTraceReach(settings.length);
 
+        if (!settings.enabled)
+        {
+            m_DebugOutput = nullptr;
+            m_DebugTraceBindingSet = nullptr;
+            m_DebugPresentBindingSet = nullptr;
+        }
+
         if (!settings.enabled ||
             !commandList ||
             !depth ||
             !light ||
             !m_Timings.supported)
         {
+            m_Timings.available = false;
             ++m_TimerFrame;
             return {};
         }
@@ -318,7 +362,11 @@ namespace uvsr
         const bool reverseDepth = view.IsReverseDepth();
         Pipeline* pipeline = EnsurePipeline(settings);
         if (!pipeline ||
-            !EnsureResources(depth, reverseDepth))
+            !EnsureResources(
+                depth,
+                reverseDepth,
+                settings.isolationView !=
+                    ScreenSpaceShadowIsolationView::None))
         {
             ++m_TimerFrame;
             return {};
@@ -393,12 +441,8 @@ namespace uvsr
             settings.usePrecisionOffset ? 1u : 0u;
         constants.bilinearSamplingOffsetMode =
             settings.bilinearSamplingOffsetMode ? 1u : 0u;
-        constants.debugOutputEdgeMask =
-            settings.debugView == ScreenSpaceShadowDebugView::Edge ? 1u : 0u;
-        constants.debugOutputThreadIndex =
-            settings.debugView == ScreenSpaceShadowDebugView::Thread ? 1u : 0u;
-        constants.debugOutputWaveIndex =
-            settings.debugView == ScreenSpaceShadowDebugView::Wave ? 1u : 0u;
+        constants.debugOutputThreadIndex = 0u;
+        constants.debugOutputWaveIndex = 0u;
         constants.useEarlyOut = settings.useEarlyOut ? 1u : 0u;
         constants.depthBounds = float2(0.f, 1.f);
         constants.farDepthValue = reverseDepth ? 0.f : 1.f;
@@ -416,105 +460,139 @@ namespace uvsr
 
         nvrhi::ComputeState state;
         state.pipeline = pipeline->pso;
-        state.bindings = { m_BindingSet };
-        for (int dispatchIndex = 0;
-            dispatchIndex < dispatchList.DispatchCount;
-            ++dispatchIndex)
+        const auto dispatchTrace =
+            [&](const nvrhi::BindingSetHandle& bindingSet,
+                ScreenSpaceShadowIsolationView isolationView,
+                bool recordWorkload)
         {
-            const Bend::DispatchData& dispatch =
-                dispatchList.Dispatch[dispatchIndex];
-            if (dispatch.WaveCount[0] <= 0 ||
-                dispatch.WaveCount[1] <= 0 ||
-                dispatch.WaveCount[2] <= 0)
+            constants.debugOutputThreadIndex =
+                isolationView ==
+                    ScreenSpaceShadowIsolationView::Thread ? 1u : 0u;
+            constants.debugOutputWaveIndex =
+                isolationView ==
+                    ScreenSpaceShadowIsolationView::Wave ? 1u : 0u;
+            state.bindings = { bindingSet };
+            for (int dispatchIndex = 0;
+                dispatchIndex < dispatchList.DispatchCount;
+                ++dispatchIndex)
             {
-                continue;
-            }
+                const Bend::DispatchData& dispatch =
+                    dispatchList.Dispatch[dispatchIndex];
+                if (dispatch.WaveCount[0] <= 0 ||
+                    dispatch.WaveCount[1] <= 0 ||
+                    dispatch.WaveCount[2] <= 0)
+                {
+                    continue;
+                }
 
-            constants.waveOffset = int2(
-                dispatch.WaveOffset_Shader[0],
-                dispatch.WaveOffset_Shader[1]);
-            commandList->writeBuffer(
-                m_ConstantBuffer,
-                &constants,
-                sizeof(constants));
-            commandList->setComputeState(state);
-            commandList->dispatch(
-                uint32_t(dispatch.WaveCount[0]),
-                uint32_t(dispatch.WaveCount[1]),
-                uint32_t(dispatch.WaveCount[2]));
-            ++m_Timings.dispatchCount;
-            m_Timings.totalGroups +=
-                uint32_t(dispatch.WaveCount[0]) *
-                uint32_t(dispatch.WaveCount[1]) *
-                uint32_t(dispatch.WaveCount[2]);
-        }
+                constants.waveOffset = int2(
+                    dispatch.WaveOffset_Shader[0],
+                    dispatch.WaveOffset_Shader[1]);
+                commandList->writeBuffer(
+                    m_ConstantBuffer,
+                    &constants,
+                    sizeof(constants));
+                commandList->setComputeState(state);
+                commandList->dispatch(
+                    uint32_t(dispatch.WaveCount[0]),
+                    uint32_t(dispatch.WaveCount[1]),
+                    uint32_t(dispatch.WaveCount[2]));
+                if (recordWorkload)
+                {
+                    ++m_Timings.dispatchCount;
+                    m_Timings.totalGroups +=
+                        uint32_t(dispatch.WaveCount[0]) *
+                        uint32_t(dispatch.WaveCount[1]) *
+                        uint32_t(dispatch.WaveCount[2]);
+                }
+            }
+        };
+
+        dispatchTrace(
+            m_BindingSet,
+            ScreenSpaceShadowIsolationView::None,
+            true);
 
         EndTimer(commandList);
         commandList->endMarker();
+
+        const bool debugOutputActive =
+            settings.isolationView !=
+                ScreenSpaceShadowIsolationView::None &&
+            bool(m_DebugOutput) &&
+            bool(m_DebugTraceBindingSet);
+        if (debugOutputActive)
+        {
+            commandList->beginMarker(
+                "Screen-Space Directional Shadow Debug Trace");
+            commandList->clearTextureFloat(
+                m_DebugOutput,
+                nvrhi::AllSubresources,
+                nvrhi::Color(0.f));
+            dispatchTrace(
+                m_DebugTraceBindingSet,
+                settings.isolationView,
+                false);
+            commandList->endMarker();
+        }
         m_Timings.active = true;
         ++m_TimerFrame;
 
         ScreenSpaceDirectionalShadowResult result;
         result.nearVisibility = m_NearVisibility;
+        result.isolationOutput = debugOutputActive
+            ? m_DebugOutput.Get()
+            : nullptr;
         result.light = light;
-        result.showDebug =
-            settings.debugView != ScreenSpaceShadowDebugView::None;
+        result.isolationView = debugOutputActive
+            ? settings.isolationView
+            : ScreenSpaceShadowIsolationView::None;
         return result;
     }
 
     void ScreenSpaceDirectionalShadowPass::PresentDebug(
         nvrhi::ICommandList* commandList,
-        nvrhi::IFramebuffer* framebuffer)
+        nvrhi::IFramebuffer* framebuffer,
+        const ScreenSpaceDirectionalShadowResult& result)
     {
-        if (!commandList ||
-            !framebuffer ||
-            !m_NearVisibility ||
-            !m_DebugPixelShader)
-        {
+        if (!commandList || !framebuffer || !m_DebugPixelShader ||
+            !result.isolationOutput)
             return;
-        }
 
         if (!m_DebugPipeline)
         {
             nvrhi::GraphicsPipelineDesc pipelineDesc;
-            pipelineDesc.primType =
-                nvrhi::PrimitiveType::TriangleStrip;
+            pipelineDesc.primType = nvrhi::PrimitiveType::TriangleStrip;
             pipelineDesc.VS = m_CommonPasses->m_FullscreenVS;
             pipelineDesc.PS = m_DebugPixelShader;
             pipelineDesc.bindingLayouts = { m_DebugBindingLayout };
             pipelineDesc.renderState.rasterState.setCullNone();
-            pipelineDesc.renderState.depthStencilState.depthTestEnable =
-                false;
-            pipelineDesc.renderState.depthStencilState.stencilEnable =
-                false;
+            pipelineDesc.renderState.depthStencilState.depthTestEnable = false;
+            pipelineDesc.renderState.depthStencilState.stencilEnable = false;
             m_DebugPipeline = m_Device->createGraphicsPipeline(
-                pipelineDesc,
-                framebuffer->getFramebufferInfo());
+                pipelineDesc, framebuffer->getFramebufferInfo());
         }
 
-        if (!m_DebugBindingSet)
+        if (!m_DebugPresentBindingSet)
         {
             nvrhi::BindingSetDesc bindings;
-            bindings.bindings = {
-                nvrhi::BindingSetItem::Texture_SRV(
-                    0, m_NearVisibility)
-            };
-            m_DebugBindingSet = m_Device->createBindingSet(
-                bindings,
-                m_DebugBindingLayout);
+            bindings.bindings = { nvrhi::BindingSetItem::Texture_SRV(
+                0, result.isolationOutput) };
+            m_DebugPresentBindingSet = m_Device->createBindingSet(
+                bindings, m_DebugBindingLayout);
         }
 
         nvrhi::GraphicsState state;
         state.pipeline = m_DebugPipeline;
         state.framebuffer = framebuffer;
-        state.bindings = { m_DebugBindingSet };
+        state.bindings = { m_DebugPresentBindingSet };
         const nvrhi::FramebufferInfoEx& info =
             framebuffer->getFramebufferInfo();
         state.viewport.addViewport(
             nvrhi::Viewport(float(info.width), float(info.height)));
         state.viewport.addScissorRect(
             nvrhi::Rect(int(info.width), int(info.height)));
-        commandList->beginMarker("Screen-Space Directional Shadow Debug View");
+        commandList->beginMarker("Screen-Space Shadow Isolation View");
         commandList->setGraphicsState(state);
 
         nvrhi::DrawArguments arguments;

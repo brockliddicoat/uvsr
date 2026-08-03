@@ -8,6 +8,9 @@ implementation wholesale.
 
 ## Records
 
+- [Engine Cutdown Archive](engine-cutdowns/README.md) keeps the dated shader and
+  renderer cutdown reports, complete removal inventories, and restoration
+  boundaries.
 - [Native-Resolution Analytical/Reconstructive Temporal Anti-Aliasing v1](native-resolution-analytical-reconstructive-temporal-anti-aliasing-v1.md)
   records the retired temporal anti-aliasing
   experiment and the required order for a smaller successor.

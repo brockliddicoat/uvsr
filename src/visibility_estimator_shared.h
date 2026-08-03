@@ -452,17 +452,6 @@ UVSR_VISIBILITY_INLINE VisibilityInterval BuildGtInterval(
     return BuildGtIntervalDetails(frontDirection, backDirection, measure).interval;
 }
 
-UVSR_VISIBILITY_INLINE VisibilityEstimatorUint BuildGtStochasticEndpointMask(
-    VisibilityEstimatorFloat3 frontDirection,
-    VisibilityEstimatorFloat3 backDirection,
-    SliceMeasure measure,
-    float sectorPhase)
-{
-    return MakeStochasticSectorRangeMask(
-        BuildGtInterval(frontDirection, backDirection, measure),
-        sectorPhase);
-}
-
 UVSR_VISIBILITY_INLINE float ResolveGtUniformAmbientVisibility(
     RadialVisibilityMask mask)
 {

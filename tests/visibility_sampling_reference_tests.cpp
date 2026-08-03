@@ -4,10 +4,8 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <cstdlib>
 #include <iostream>
-#include <limits>
 #include <numeric>
 #include <string>
 #include <vector>
@@ -48,6 +46,150 @@ namespace
             rightVariance += centeredRight * centeredRight;
         }
         return covariance / std::sqrt(leftVariance * rightVariance);
+    }
+
+    uint32_t Hash32(uint32_t value)
+    {
+        value ^= value >> 16u;
+        value *= 0x7feb352du;
+        value ^= value >> 15u;
+        value *= 0x846ca68bu;
+        value ^= value >> 16u;
+        return value;
+    }
+
+    uint32_t PermutatedWhiteNoiseBits(
+        uint32_t x,
+        uint32_t y,
+        uint32_t dimension,
+        uint32_t phase)
+    {
+        uint32_t state = x + y * 65537u +
+            dimension * 747796405u + phase * 2891336453u + 1u;
+        state = state * 747796405u + 2891336453u;
+        uint32_t word = ((state >> ((state >> 28u) + 4u)) ^ state) *
+            277803737u;
+        word = (word >> 22u) ^ word;
+        return (word >> 8u) & 0x00ffffffu;
+    }
+
+    uint32_t HashedWhiteNoiseBits(
+        uint32_t x,
+        uint32_t y,
+        uint32_t dimension,
+        uint32_t phase)
+    {
+        uint32_t value = x * 0x9e3779b9u ^ y * 0x85ebca6bu;
+        value ^= dimension * 0xc2b2ae35u ^ phase * 0x27d4eb2fu;
+        return Hash32(value) & 0x00ffffffu;
+    }
+
+    void ValidateWhiteNoiseSchedulers()
+    {
+        struct Fixture
+        {
+            uint32_t x;
+            uint32_t y;
+            uint32_t dimension;
+            uint32_t phase;
+            uint32_t standard;
+            uint32_t hashed;
+        };
+        constexpr std::array<Fixture, 4> fixtures = {{
+            { 0u, 0u, 0u, 0u, 11058922u, 0u },
+            { 1u, 2u, 3u, 4u, 12018152u, 5117332u },
+            { 63u, 63u, 7u, 255u, 14726014u, 4186230u },
+            { 1920u, 1080u, 5u, 1024u, 7051780u, 3933022u }
+        }};
+        for (const Fixture& fixture : fixtures)
+        {
+            Require(PermutatedWhiteNoiseBits(
+                    fixture.x,
+                    fixture.y,
+                    fixture.dimension,
+                    fixture.phase) == fixture.standard,
+                "permutated white noise keeps its deterministic sequence");
+            Require(HashedWhiteNoiseBits(
+                    fixture.x,
+                    fixture.y,
+                    fixture.dimension,
+                    fixture.phase) == fixture.hashed,
+                "hashed white noise keeps its deterministic sequence");
+        }
+
+        constexpr double scale = 1.0 / 16777216.0;
+        constexpr uint32_t sampleCount = 4096u;
+        std::array<double, sampleCount> standard{};
+        std::array<double, sampleCount> hashed{};
+        double standardMean = 0.0;
+        double hashedMean = 0.0;
+        uint32_t equalCount = 0u;
+        for (uint32_t index = 0u; index < sampleCount; ++index)
+        {
+            const uint32_t x = index & 63u;
+            const uint32_t y = (index >> 6u) & 63u;
+            const uint32_t dimension = index & 7u;
+            const uint32_t phase = index * 17u;
+            standard[index] = double(PermutatedWhiteNoiseBits(
+                x, y, dimension, phase)) * scale;
+            hashed[index] = double(HashedWhiteNoiseBits(
+                x, y, dimension, phase)) * scale;
+            standardMean += standard[index];
+            hashedMean += hashed[index];
+            equalCount += standard[index] == hashed[index];
+        }
+        standardMean /= double(sampleCount);
+        hashedMean /= double(sampleCount);
+        Require(standardMean > 0.48 && standardMean < 0.52,
+            "permutated white noise spans the unit interval without bias");
+        Require(hashedMean > 0.48 && hashedMean < 0.52,
+            "hashed white noise spans the unit interval without bias");
+        Require(equalCount < 4u,
+            "permutated and hashed white noise are distinct sequences");
+
+        double covariance = 0.0;
+        double standardVariance = 0.0;
+        double hashedVariance = 0.0;
+        for (uint32_t index = 0u; index < sampleCount; ++index)
+        {
+            const double centeredStandard =
+                standard[index] - standardMean;
+            const double centeredHashed = hashed[index] - hashedMean;
+            covariance += centeredStandard * centeredHashed;
+            standardVariance += centeredStandard * centeredStandard;
+            hashedVariance += centeredHashed * centeredHashed;
+        }
+        const double correlation = covariance /
+            std::sqrt(standardVariance * hashedVariance);
+        Require(std::abs(correlation) < 0.05,
+            "permutated and hashed white noise remain decorrelated");
+
+        std::array<double, sampleCount> spatial{};
+        double spatialMean = 0.0;
+        for (uint32_t index = 0u; index < sampleCount; ++index)
+        {
+            spatial[index] = double(PermutatedWhiteNoiseBits(
+                index & 63u, index >> 6u, 0u, 0u)) * scale;
+            spatialMean += spatial[index];
+        }
+        spatialMean /= double(sampleCount);
+        const auto neighborCorrelation = [&](uint32_t offset)
+        {
+            double neighborCovariance = 0.0;
+            double variance = 0.0;
+            for (uint32_t index = 0u; index < sampleCount; ++index)
+            {
+                const double centered = spatial[index] - spatialMean;
+                neighborCovariance += centered *
+                    (spatial[(index + offset) & (sampleCount - 1u)] -
+                        spatialMean);
+                variance += centered * centered;
+            }
+            return neighborCovariance / variance;
+        };
+        Require(std::abs(neighborCorrelation(1u)) < 0.06 &&
+                std::abs(neighborCorrelation(64u)) < 0.06,
+            "permutated white noise has low nearest-neighbor correlation");
     }
 
     bool IsIndependentContributionDiscovery(
@@ -312,6 +454,7 @@ namespace
 
 int main()
 {
+    ValidateWhiteNoiseSchedulers();
     ValidateExactTraceControls();
     ValidateHorizonIntegralReference();
 
@@ -402,11 +545,9 @@ int main()
     }
 
     constexpr std::array<std::array<uint32_t, 2>,
-        uvsr::VisibilityBlueNoiseLayerCount> temporalSteps = {{
+        uvsr::VisibilityBlueNoiseLayerCount> voidClusterSteps = {{
         {{ 13u, 29u }}, {{ 31u, 11u }},
-        {{ 17u, 27u }}, {{ 23u, 19u }},
-        {{ 7u, 25u }}, {{ 29u, 15u }},
-        {{ 21u, 31u }}, {{ 11u, 23u }}
+        {{ 23u, 19u }}, {{ 7u, 25u }}, {{ 29u, 15u }}
     }};
     for (uint32_t layer = 0u;
         layer < uvsr::VisibilityBlueNoiseLayerCount;
@@ -422,9 +563,9 @@ int main()
             for (uint32_t frame = 0u; frame < 64u; ++frame)
             {
                 const uint32_t x = (probeX +
-                    temporalSteps[layer][0] * frame) & 63u;
+                    voidClusterSteps[layer][0] * frame) & 63u;
                 const uint32_t y = (probeY +
-                    temporalSteps[layer][1] * frame) & 63u;
+                    voidClusterSteps[layer][1] * frame) & 63u;
                 const uint32_t bin = std::min(
                     uint32_t(values[y * uvsr::VisibilityBlueNoiseSize + x]) *
                         8u / 65536u,
@@ -435,7 +576,7 @@ int main()
         for (uint32_t count : histogram)
         {
             Require(count >= 80u && count <= 176u,
-                "toroidal temporal traversal covers the scalar rank range");
+                "void-cluster traversal covers the scalar rank range");
         }
     }
 

@@ -1,8 +1,6 @@
 #ifndef UVSR_PBR_HLSLI
 #define UVSR_PBR_HLSLI
 
-#include "lighting_contribution.hlsli"
-
 // UVSR's transport-independent, single-scattering metallic-roughness core.
 // Directions point away from the surface. Radiometric inputs and outputs are
 // scene-linear HDR values; exposure and display mapping happen later.
@@ -13,6 +11,13 @@ static const float UVSR_MIN_ALPHA = 0.002f;
 static const float UVSR_MIN_COSINE = 1e-5f;
 static const float UVSR_MIN_PDF = 1e-6f;
 
+bool HasPositiveFinitePbrSignal(float3 signal, float throughput)
+{
+    return all(isfinite(signal)) && isfinite(throughput) &&
+        max(signal.r, max(signal.g, signal.b)) *
+            max(throughput, 0.0f) > 0.0f;
+}
+
 static const uint PbrFeature_Coat = 1u << 0;
 static const uint PbrFeature_Anisotropy = 1u << 1;
 static const uint PbrFeature_Translucency = 1u << 2;
@@ -21,12 +26,6 @@ static const uint PbrFeature_Scattering = 1u << 4;
 static const uint PbrFeature_ThinFilmIridescence = 1u << 5;
 static const uint PbrFeature_Absorption = 1u << 6;
 static const uint PbrFeature_DoubleSided = 1u << 7;
-
-// Packed into the FP16 alpha of UVSR's GI source/frontier textures. These
-// integer values are exact in half precision, so the metadata survives
-// every bounce without another full-resolution G-buffer feature read.
-static const uint PbrGiMetadata_SurfaceDoubleSided = 1u << 0;
-static const uint PbrGiMetadata_DiffuseActive = 1u << 1;
 
 struct PbrMaterialParameters
 {
@@ -134,26 +133,14 @@ PbrPreparedSurface PreparePbrSurface(PbrSurfaceInteraction surface)
     return prepared;
 }
 
-uint ClassifyPbrDirectSurfacePrepared(
+bool CanEvaluatePbrDirectSurfacePrepared(
     PbrPreparedSurface surface,
     float3 directionToLight)
 {
-    bool backFacing = surface.geometricNoV <= UVSR_MIN_COSINE ||
-        dot(surface.geometricNormal, directionToLight) <= UVSR_MIN_COSINE ||
-        surface.shadingNoV <= UVSR_MIN_COSINE ||
-        dot(surface.shadingNormal, directionToLight) <= UVSR_MIN_COSINE;
-    return LightingRejectIf(backFacing, LightingRejection_BackFacing);
-}
-
-uint ClassifyPbrDirectSurface(
-    PbrSurfaceInteraction surface,
-    float3 lightDirection)
-{
-    PbrPreparedSurface preparedSurface = PreparePbrSurface(surface);
-    float3 directionToLight = PbrSafeNormalize(
-        lightDirection, preparedSurface.geometricNormal);
-    return ClassifyPbrDirectSurfacePrepared(
-        preparedSurface, directionToLight);
+    return surface.geometricNoV > UVSR_MIN_COSINE &&
+        dot(surface.geometricNormal, directionToLight) > UVSR_MIN_COSINE &&
+        surface.shadingNoV > UVSR_MIN_COSINE &&
+        dot(surface.shadingNormal, directionToLight) > UVSR_MIN_COSINE;
 }
 
 float PerceptualRoughnessToAlpha(float perceptualRoughness)
@@ -303,14 +290,9 @@ PbrDirectLighting EvaluateDirectLight(
     PbrSurfaceInteraction surface,
     PbrLightSample lightSample)
 {
-    LightingContributionGate exactGate = MakeLightingContributionGate(
-        0u, 0.0f, 1.0f);
-    uint rejection = LightingClassifyContribution(
-        exactGate,
-        LightingSource_Direct,
-        lightSample.incidentRadiance,
-        lightSample.visibility);
-    if (!LightingShouldEvaluate(rejection))
+    if (!HasPositiveFinitePbrSignal(
+            lightSample.incidentRadiance,
+            lightSample.visibility))
     {
         PbrDirectLighting result = (PbrDirectLighting)0;
         result.incidentRadiance = max(lightSample.incidentRadiance, 0.0f);
@@ -323,9 +305,9 @@ PbrDirectLighting EvaluateDirectLight(
     PbrPreparedSurface preparedSurface = PreparePbrSurface(surface);
     lightSample.directionToLight = PbrSafeNormalize(
         lightSample.directionToLight, preparedSurface.geometricNormal);
-    rejection = ClassifyPbrDirectSurfacePrepared(
-        preparedSurface, lightSample.directionToLight);
-    if (!LightingShouldEvaluate(rejection))
+    if (!CanEvaluatePbrDirectSurfacePrepared(
+            preparedSurface,
+            lightSample.directionToLight))
     {
         PbrDirectLighting result = (PbrDirectLighting)0;
         result.incidentRadiance = max(lightSample.incidentRadiance, 0.0f);

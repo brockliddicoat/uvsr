@@ -6,45 +6,16 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(
-    UVSR_AA_DEVELOPER_OVERRIDES
-    "Compile the complete anti-aliasing override matrix and CLI controls"
-    OFF
-)
-option(
-    UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
-    "Compile only the shader topology used by factory startup settings"
-    OFF
-)
 option(UVSR_BUILD_APPLICATION
     "Build the UVSR application that integrates every enabled producer" ON)
 option(UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS
     "Build the standalone screen-space directional-shadow component" ON)
-option(UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS
-    "Build the standalone sparse-virtual-shadow-map component" ON)
-option(UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS
-    "Build the standalone diagnostic cascaded-shadow-map component" ON)
-
-if (UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS AND
-    UVSR_AA_DEVELOPER_OVERRIDES)
-    message(FATAL_ERROR
-        "Factory-settings experiment shaders and developer AA overrides are "
-        "mutually exclusive.")
-endif()
-
-set(UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE ON)
-if (UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-    set(UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE OFF)
-endif()
 
 if (UVSR_BUILD_APPLICATION AND
-    (NOT UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS OR
-        NOT UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS OR
-        NOT UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS))
+    NOT UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
     message(FATAL_ERROR
-        "The aggregate UVSR application currently integrates all three visibility "
-        "producers. Set UVSR_BUILD_APPLICATION=OFF to configure and build "
-        "a component independently.")
+        "UVSR requires the screen-space directional-shadow component. Set "
+        "UVSR_BUILD_APPLICATION=OFF to build the component independently.")
 endif()
 
 if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
@@ -80,7 +51,7 @@ if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/licenses/Apache-2.0.txt")
 endif()
 
-# Embed the exact source commit in the executable so experiment titles describe
+# Embed the exact source commit in the renderer title so the executable records
 # the code that was built, not whichever checkout happens to exist at launch.
 # Watching both the worktree HEAD and its resolved branch ref makes a normal
 # `cmake --build` reconfigure automatically after commits and branch changes.
@@ -304,37 +275,14 @@ set(UVSR_CORE_SHADER_STAGING_DIR
     "${UVSR_SHADER_STAGING_ROOT}/core")
 set(UVSR_SCREEN_SPACE_SHADOW_SHADER_STAGING_DIR
     "${UVSR_SHADER_STAGING_ROOT}/screen_space_directional_shadow")
-set(UVSR_SVSM_SHADER_STAGING_DIR
-    "${UVSR_SHADER_STAGING_ROOT}/svsm")
-set(UVSR_CSM_SHADER_STAGING_DIR
-    "${UVSR_SHADER_STAGING_ROOT}/csm")
 include(donut/compileshaders.cmake)
-set(UVSR_DEVELOPER_SHADER_CONFIG
+set(UVSR_SHADER_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders.cfg")
-set(UVSR_PRODUCTION_SHADER_CONFIG
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders_production.cfg")
-set(UVSR_DEFAULT_EXPERIMENT_SHADER_CONFIG
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders_experiment_defaults.cfg")
-if (UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-    set(UVSR_SHADER_CONFIG "${UVSR_DEFAULT_EXPERIMENT_SHADER_CONFIG}")
-elseif (UVSR_AA_DEVELOPER_OVERRIDES)
-    set(UVSR_SHADER_CONFIG "${UVSR_DEVELOPER_SHADER_CONFIG}")
-else()
-    set(UVSR_SHADER_CONFIG "${UVSR_PRODUCTION_SHADER_CONFIG}")
-endif()
 set(UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/src/screen_space_directional_shadows_shaders.cfg")
-set(UVSR_CSM_SHADER_CONFIG
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/diagnostic_cascaded_shadow_map_shaders.cfg")
-set(UVSR_SVSM_SHADER_CONFIG
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/sparse_virtual_shadow_map_shaders.cfg")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${UVSR_DEVELOPER_SHADER_CONFIG}"
-    "${UVSR_PRODUCTION_SHADER_CONFIG}"
-    "${UVSR_DEFAULT_EXPERIMENT_SHADER_CONFIG}"
-    "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}"
-    "${UVSR_CSM_SHADER_CONFIG}"
-    "${UVSR_SVSM_SHADER_CONFIG}")
+    "${UVSR_SHADER_CONFIG}"
+    "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}")
 
 file(GLOB_RECURSE UVSR_SHADER_INPUTS
     CONFIGURE_DEPENDS
@@ -409,34 +357,13 @@ uvsr_add_shader_bundle(
     "${UVSR_CORE_SHADER_STAGING_DIR}"
     UVSR_SHADER_COMPILE_STAMP)
 
-if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS AND
-    NOT UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
+if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
     uvsr_add_shader_bundle(
         uvsr_screen_space_directional_shadow_shaders
         "UVSR Screen-Space Directional Shadows"
         "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}"
         "${UVSR_SCREEN_SPACE_SHADOW_SHADER_STAGING_DIR}"
         UVSR_SCREEN_SPACE_SHADOW_SHADER_COMPILE_STAMP)
-endif()
-
-if (UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS AND
-    NOT UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-    uvsr_add_shader_bundle(
-        uvsr_sparse_virtual_shadow_map_shaders
-        "UVSR Sparse Virtual Shadow Maps"
-        "${UVSR_SVSM_SHADER_CONFIG}"
-        "${UVSR_SVSM_SHADER_STAGING_DIR}"
-        UVSR_SVSM_SHADER_COMPILE_STAMP)
-endif()
-
-if (UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS AND
-    NOT UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-    uvsr_add_shader_bundle(
-        uvsr_diagnostic_cascaded_shadow_map_shaders
-        "UVSR Diagnostic Cascaded Shadow Maps"
-        "${UVSR_CSM_SHADER_CONFIG}"
-        "${UVSR_CSM_SHADER_STAGING_DIR}"
-        UVSR_CSM_SHADER_COMPILE_STAMP)
 endif()
 
 if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
@@ -449,59 +376,8 @@ if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
     target_link_libraries(uvsr_screen_space_directional_shadows
         PUBLIC nvrhi
         PRIVATE donut_render donut_app donut_engine)
-    if (NOT UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-        add_dependencies(uvsr_screen_space_directional_shadows
-            uvsr_screen_space_directional_shadow_shaders)
-    endif()
-endif()
-
-if (UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS)
-    add_library(uvsr_gpu_crash_diagnostics STATIC
-        src/gpu_crash_diagnostics.cpp
-    )
-    target_include_directories(uvsr_gpu_crash_diagnostics
-        PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_link_libraries(uvsr_gpu_crash_diagnostics
-        PUBLIC nvrhi
-        PRIVATE donut_render donut_app donut_engine)
-
-    add_library(uvsr_sparse_virtual_shadow_maps STATIC
-        src/sparse_virtual_shadow_map.cpp
-    )
-    target_include_directories(uvsr_sparse_virtual_shadow_maps
-        PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_link_libraries(uvsr_sparse_virtual_shadow_maps
-        PUBLIC
-            donut_core
-            nvrhi
-        PRIVATE
-            donut_render
-            donut_app
-            donut_engine
-            uvsr_gpu_crash_diagnostics)
-    if (NOT UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-        add_dependencies(uvsr_sparse_virtual_shadow_maps
-            uvsr_sparse_virtual_shadow_map_shaders)
-    endif()
-endif()
-
-if (UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS)
-    add_library(uvsr_diagnostic_cascaded_shadow_maps STATIC
-        src/diagnostic_cascaded_shadow_map.cpp
-    )
-    target_include_directories(uvsr_diagnostic_cascaded_shadow_maps
-        PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_link_libraries(uvsr_diagnostic_cascaded_shadow_maps
-        PUBLIC
-            donut_core
-            nvrhi
-        PRIVATE
-            donut_render
-            donut_engine)
-    if (NOT UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-        add_dependencies(uvsr_diagnostic_cascaded_shadow_maps
-            uvsr_diagnostic_cascaded_shadow_map_shaders)
-    endif()
+    add_dependencies(uvsr_screen_space_directional_shadows
+        uvsr_screen_space_directional_shadow_shaders)
 endif()
 
 if (UVSR_BUILD_APPLICATION)
@@ -521,8 +397,6 @@ if (UVSR_BUILD_APPLICATION)
         src/temporal_aa_core.cpp
         src/uvsr.cpp
         src/visibility_blue_noise.cpp
-        src/visibility_benchmark_statistics.cpp
-        src/visibility_performance_plan.cpp
     )
     target_include_directories(uvsr BEFORE PRIVATE
         "${UVSR_IMGUI_OVERRIDE_DIR}"
@@ -533,16 +407,9 @@ if (UVSR_BUILD_APPLICATION)
         donut_app
         donut_engine
         dwmapi
-        bcrypt
-        uvsr_gpu_crash_diagnostics
-        uvsr_screen_space_directional_shadows
-        uvsr_diagnostic_cascaded_shadow_maps
-        uvsr_sparse_virtual_shadow_maps)
+        uvsr_screen_space_directional_shadows)
     target_compile_definitions(uvsr PRIVATE
-        "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\""
-        "UVSR_AA_DEVELOPER_OVERRIDES=$<BOOL:${UVSR_AA_DEVELOPER_OVERRIDES}>"
-        "UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE=$<BOOL:${UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE}>"
-        "UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS=$<BOOL:${UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS}>")
+        "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\"")
     set(UVSR_ENVIRONMENT_SOURCE_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/environments")
     set(UVSR_ENVIRONMENT_STAGE_DIR
@@ -667,65 +534,16 @@ if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
     )
 endif()
 
-if (UVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS)
-    add_executable(uvsr_sparse_virtual_shadow_map_tests
-        tests/sparse_virtual_shadow_map_tests.cpp
-    )
-    target_link_libraries(uvsr_sparse_virtual_shadow_map_tests
-        PRIVATE uvsr_sparse_virtual_shadow_maps)
-    add_test(
-        NAME uvsr_sparse_virtual_shadow_map_reference
-        COMMAND uvsr_sparse_virtual_shadow_map_tests
-    )
-endif()
-
-if (UVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS)
-    add_executable(uvsr_diagnostic_cascaded_shadow_map_tests
-        tests/diagnostic_cascaded_shadow_map_tests.cpp
-    )
-    target_link_libraries(uvsr_diagnostic_cascaded_shadow_map_tests
-        PRIVATE uvsr_diagnostic_cascaded_shadow_maps)
-    add_test(
-        NAME uvsr_diagnostic_cascaded_shadow_map_reference
-        COMMAND uvsr_diagnostic_cascaded_shadow_map_tests
-    )
-endif()
-
 add_executable(uvsr_temporal_aa_tests tests/temporal_aa_tests.cpp)
 target_include_directories(
     uvsr_temporal_aa_tests
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
-)
-target_compile_definitions(
-    uvsr_temporal_aa_tests
-    PRIVATE
-        "UVSR_AA_DEVELOPER_OVERRIDES=$<BOOL:${UVSR_AA_DEVELOPER_OVERRIDES}>"
-        "UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE=$<BOOL:${UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE}>"
 )
 add_test(
     NAME uvsr_temporal_aa_reference
     COMMAND uvsr_temporal_aa_tests
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
-
-add_executable(uvsr_world_material_view_tests
-    tests/world_material_view_tests.cpp
-)
-target_include_directories(
-    uvsr_world_material_view_tests
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
-)
-add_test(
-    NAME uvsr_world_material_view_reference
-    COMMAND uvsr_world_material_view_tests
-)
-
-add_executable(uvsr_experiment_title_tests tests/experiment_title_tests.cpp)
-target_include_directories(
-    uvsr_experiment_title_tests
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
-)
-add_test(NAME uvsr_experiment_title_reference COMMAND uvsr_experiment_title_tests)
 
 add_executable(uvsr_camera_collision_tests
     tests/camera_collision_tests.cpp
@@ -804,32 +622,6 @@ target_include_directories(
 add_test(
     NAME uvsr_visibility_sampling_reference
     COMMAND uvsr_visibility_sampling_tests
-)
-
-add_executable(uvsr_visibility_performance_plan_tests
-    tests/visibility_performance_plan_tests.cpp
-    src/visibility_performance_plan.cpp
-)
-target_include_directories(
-    uvsr_visibility_performance_plan_tests
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
-)
-add_test(
-    NAME uvsr_visibility_performance_plan_reference
-    COMMAND uvsr_visibility_performance_plan_tests
-)
-
-add_executable(uvsr_visibility_benchmark_statistics_tests
-    tests/visibility_benchmark_statistics_tests.cpp
-    src/visibility_benchmark_statistics.cpp
-)
-target_include_directories(
-    uvsr_visibility_benchmark_statistics_tests
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
-)
-add_test(
-    NAME uvsr_visibility_benchmark_statistics_reference
-    COMMAND uvsr_visibility_benchmark_statistics_tests
 )
 
 add_executable(uvsr_ui_source_contract_tests
@@ -947,12 +739,8 @@ set(UVSR_ROOT_SHADERS
     skinning_cs
 )
 set(UVSR_PASS_SHADERS
-    deferred_lighting_cs
     depth_ps
     depth_vs_buffer_loads
-    forward_ps
-    forward_vs_buffer_loads
-    gbuffer_ps
     gbuffer_vs_buffer_loads
     light_probe_cubemap_gs
     light_probe_diffuse_probe_ps
@@ -978,7 +766,7 @@ string(JOIN "\n" UVSR_RUNTIME_PASS_SHADER_MANIFEST
 string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
     "${UVSR_RUNTIME_PASS_SHADER_MANIFEST}\n")
 
-set(UVSR_COMPLETE_APP_SHADERS
+set(UVSR_APP_SHADERS
     agx_tonemapping_ps
     display_output_ps
     backdrop_blur_ps
@@ -988,82 +776,20 @@ set(UVSR_COMPLETE_APP_SHADERS
     cmaa2_DeferredColorApply2x2CS
     cmaa2_EdgesColor2x2CS
     cmaa2_ProcessCandidatesCS
-    diagnostic_cascaded_shadow_map_clear_vs
-    diagnostic_cascaded_shadow_map_depth_vs
-    diagnostic_cascaded_shadow_map_depth_vs_alpha_tested
-    diagnostic_cascaded_shadow_map_depth_vs_alpha_tested_input_assembler
-    diagnostic_cascaded_shadow_map_depth_vs_main_input_assembler
-    diagnostic_cascaded_shadow_map_scroll_ps
-    diagnostic_cascaded_shadow_map_resolve_cs
     image_based_lighting_background_ps
     msaa_visibility_resolve_cs
     pbr_deferred_lighting_cs
     pbr_deferred_lighting_msaa_cs
-    pbr_forward_ps
     pbr_gbuffer_ps
     pixel_zoom_ps
-    screen_space_depth_hierarchy_cs
     screen_space_indirect_composite_cs
-    screen_space_visibility_bounce_control_cs
     screen_space_visibility_filter_cs
-    screen_space_visibility_filter_packed_edge_cs
-    screen_space_visibility_fused_apply_cs
-    screen_space_visibility_composed_edges_cs
     screen_space_visibility_cs
-    screen_space_visibility_temporal_cs
-    sparse_virtual_shadow_map_depth_ps
-    sparse_virtual_shadow_map_debug_ps
-    sparse_virtual_shadow_map_resolve_cs
-    sparse_virtual_shadow_map_sparse_cs_allocate
-    sparse_virtual_shadow_map_sparse_cs_buildScheduledPageTileMasks
-    sparse_virtual_shadow_map_sparse_cs_buildStaticDepthHierarchy
-    sparse_virtual_shadow_map_sparse_cs_clearPages
-    sparse_virtual_shadow_map_sparse_cs_fillIndirect
-    sparse_virtual_shadow_map_sparse_cs_finalize
-    sparse_virtual_shadow_map_sparse_cs_invalidatePages
-    sparse_virtual_shadow_map_sparse_cs_mark
-    sparse_virtual_shadow_map_sparse_cs_prepare
-    sparse_virtual_shadow_map_sparse_cs_recycle
-    sparse_virtual_shadow_map_sparse_cs_scheduleFine
-    sparse_virtual_shadow_map_sparse_cs_stats
-    sparse_virtual_shadow_map_sparse_depth_pixelMain
-    sparse_virtual_shadow_map_sparse_depth_vertexMain
-    sparse_virtual_shadow_map_sparse_resolve_cs_reference_legacy
-    sparse_virtual_shadow_map_sparse_resolve_cs_reference_balanced
-    sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_legacy
-    sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_balanced
     temporal_aa_blend_cs
     temporal_aa_minimum_cs
     temporal_aa_resolve_cs
     temporal_aa_sharpen_cs
 )
-set(UVSR_DEFAULT_EXPERIMENT_APP_SHADERS
-    agx_tonemapping_ps
-    display_output_ps
-    backdrop_blur_ps
-    image_based_lighting_background_ps
-    msaa_visibility_resolve_cs
-    pbr_deferred_lighting_cs
-    pbr_deferred_lighting_msaa_cs
-    pbr_forward_ps
-    pbr_gbuffer_ps
-    pixel_zoom_ps
-    screen_space_depth_hierarchy_cs
-    screen_space_indirect_composite_cs
-    screen_space_visibility_bounce_control_cs
-    screen_space_visibility_filter_cs
-    screen_space_visibility_cs
-    screen_space_visibility_temporal_cs
-    temporal_aa_blend_cs
-    temporal_aa_minimum_cs
-    temporal_aa_resolve_cs
-    temporal_aa_sharpen_cs
-)
-if (UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-    set(UVSR_APP_SHADERS ${UVSR_DEFAULT_EXPERIMENT_APP_SHADERS})
-else()
-    set(UVSR_APP_SHADERS ${UVSR_COMPLETE_APP_SHADERS})
-endif()
 string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
     "UVSR shaders:\n")
 string(JOIN "\n" UVSR_RUNTIME_APP_SHADER_MANIFEST
@@ -1078,38 +804,6 @@ file(GENERATE
 set(UVSR_SCREEN_SPACE_SHADOW_APP_SHADERS
     screen_space_directional_shadows_cs
     screen_space_directional_shadows_debug_ps
-)
-set(UVSR_CSM_APP_SHADERS
-    diagnostic_cascaded_shadow_map_clear_vs
-    diagnostic_cascaded_shadow_map_depth_vs
-    diagnostic_cascaded_shadow_map_depth_vs_alpha_tested
-    diagnostic_cascaded_shadow_map_depth_vs_alpha_tested_input_assembler
-    diagnostic_cascaded_shadow_map_depth_vs_main_input_assembler
-    diagnostic_cascaded_shadow_map_scroll_ps
-    diagnostic_cascaded_shadow_map_resolve_cs
-)
-set(UVSR_SVSM_APP_SHADERS
-    sparse_virtual_shadow_map_depth_ps
-    sparse_virtual_shadow_map_debug_ps
-    sparse_virtual_shadow_map_resolve_cs
-    sparse_virtual_shadow_map_sparse_cs_allocate
-    sparse_virtual_shadow_map_sparse_cs_buildScheduledPageTileMasks
-    sparse_virtual_shadow_map_sparse_cs_buildStaticDepthHierarchy
-    sparse_virtual_shadow_map_sparse_cs_clearPages
-    sparse_virtual_shadow_map_sparse_cs_fillIndirect
-    sparse_virtual_shadow_map_sparse_cs_finalize
-    sparse_virtual_shadow_map_sparse_cs_invalidatePages
-    sparse_virtual_shadow_map_sparse_cs_mark
-    sparse_virtual_shadow_map_sparse_cs_prepare
-    sparse_virtual_shadow_map_sparse_cs_recycle
-    sparse_virtual_shadow_map_sparse_cs_scheduleFine
-    sparse_virtual_shadow_map_sparse_cs_stats
-    sparse_virtual_shadow_map_sparse_depth_pixelMain
-    sparse_virtual_shadow_map_sparse_depth_vertexMain
-    sparse_virtual_shadow_map_sparse_resolve_cs_reference_legacy
-    sparse_virtual_shadow_map_sparse_resolve_cs_reference_balanced
-    sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_legacy
-    sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_balanced
 )
 
 if (UVSR_BUILD_APPLICATION)
@@ -1165,29 +859,13 @@ if (UVSR_BUILD_APPLICATION)
     endfunction()
 
     uvsr_require_shader_config_packaged(
-        "${UVSR_DEVELOPER_SHADER_CONFIG}"
-        UVSR_COMPLETE_APP_SHADERS
-        "")
-    uvsr_require_shader_config_packaged(
-        "${UVSR_PRODUCTION_SHADER_CONFIG}"
-        UVSR_COMPLETE_APP_SHADERS
-        "")
-    uvsr_require_shader_config_packaged(
-        "${UVSR_DEFAULT_EXPERIMENT_SHADER_CONFIG}"
-        UVSR_DEFAULT_EXPERIMENT_APP_SHADERS
+        "${UVSR_SHADER_CONFIG}"
+        UVSR_APP_SHADERS
         "")
     uvsr_require_shader_config_packaged(
         "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}"
-        UVSR_COMPLETE_APP_SHADERS
+        UVSR_APP_SHADERS
         UVSR_SCREEN_SPACE_SHADOW_APP_SHADERS)
-    uvsr_require_shader_config_packaged(
-        "${UVSR_CSM_SHADER_CONFIG}"
-        UVSR_COMPLETE_APP_SHADERS
-        UVSR_CSM_APP_SHADERS)
-    uvsr_require_shader_config_packaged(
-        "${UVSR_SVSM_SHADER_CONFIG}"
-        UVSR_COMPLETE_APP_SHADERS
-        UVSR_SVSM_APP_SHADERS)
 
     set(UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES)
     set(UVSR_RUNTIME_SHADER_SOURCE_MANIFEST_ENTRIES)
@@ -1212,10 +890,6 @@ if (UVSR_BUILD_APPLICATION)
         set(shader_staging_dir "${UVSR_CORE_SHADER_STAGING_DIR}")
         if ("${shader}" IN_LIST UVSR_SCREEN_SPACE_SHADOW_APP_SHADERS)
             set(shader_staging_dir "${UVSR_SCREEN_SPACE_SHADOW_SHADER_STAGING_DIR}")
-        elseif ("${shader}" IN_LIST UVSR_CSM_APP_SHADERS)
-            set(shader_staging_dir "${UVSR_CSM_SHADER_STAGING_DIR}")
-        elseif ("${shader}" IN_LIST UVSR_SVSM_APP_SHADERS)
-            set(shader_staging_dir "${UVSR_SVSM_SHADER_STAGING_DIR}")
         endif()
         list(APPEND UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES
             "uvsr/dxil/${shader}.bin")
@@ -1238,18 +912,6 @@ if (UVSR_BUILD_APPLICATION)
             UVSR_RUNTIME_SHADER_UNIQUE_PATH_COUNT)
         message(FATAL_ERROR
             "The UVSR runtime shader manifest contains duplicate paths")
-    endif()
-    if (UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-        set(UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT 41)
-    else()
-        set(UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT 78)
-    endif()
-    if (NOT UVSR_RUNTIME_SHADER_PATH_COUNT EQUAL
-            UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT)
-        message(FATAL_ERROR
-            "The integrated UVSR runtime shader manifest must contain exactly "
-            "${UVSR_EXPECTED_RUNTIME_SHADER_PATH_COUNT} shaders, but contains "
-            "${UVSR_RUNTIME_SHADER_PATH_COUNT}")
     endif()
     string(JOIN "\n" UVSR_RUNTIME_SHADER_PATH_MANIFEST_CONTENT
         ${UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES})
@@ -1281,19 +943,11 @@ if (UVSR_BUILD_APPLICATION)
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SyncRuntimeShaderBundle.cmake"
         "${SHADERMAKE_PATH}"
         "${SHADERMAKE_DXC_PATH}")
-    if (NOT UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-        list(APPEND UVSR_RUNTIME_SHADER_TARGET_DEPENDENCIES
-            uvsr_screen_space_directional_shadow_shaders
-            uvsr_diagnostic_cascaded_shadow_map_shaders
-            uvsr_sparse_virtual_shadow_map_shaders)
-        list(APPEND UVSR_RUNTIME_SHADER_FILE_DEPENDENCIES
-            "${UVSR_SCREEN_SPACE_SHADOW_SHADER_COMPILE_STAMP}"
-            "${UVSR_CSM_SHADER_COMPILE_STAMP}"
-            "${UVSR_SVSM_SHADER_COMPILE_STAMP}"
-            "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}"
-            "${UVSR_CSM_SHADER_CONFIG}"
-            "${UVSR_SVSM_SHADER_CONFIG}")
-    endif()
+    list(APPEND UVSR_RUNTIME_SHADER_TARGET_DEPENDENCIES
+        uvsr_screen_space_directional_shadow_shaders)
+    list(APPEND UVSR_RUNTIME_SHADER_FILE_DEPENDENCIES
+        "${UVSR_SCREEN_SPACE_SHADOW_SHADER_COMPILE_STAMP}"
+        "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}")
     add_custom_command(
         OUTPUT "${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
         BYPRODUCTS ${UVSR_RUNTIME_SHADER_BYPRODUCTS}
@@ -1345,39 +999,21 @@ if (UVSR_BUILD_APPLICATION)
         uvsr_runtime_shader_bundle_contract
         PROPERTIES LABELS "runtime;shaders")
 
-    if (UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS)
-        add_executable(
-            uvsr_experiment_shader_bundle_tests
-            tests/experiment_shader_bundle_tests.cpp)
-        add_dependencies(
-            uvsr_experiment_shader_bundle_tests
-            uvsr_stage_runtime_shaders)
-        add_test(
-            NAME uvsr_experiment_shader_bundle_contract
-            COMMAND uvsr_experiment_shader_bundle_tests
-                "${UVSR_SHADER_CONFIG}"
-                "${UVSR_RUNTIME_SHADER_MANIFEST}"
-                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders")
-        set_tests_properties(
-            uvsr_experiment_shader_bundle_contract
-            PROPERTIES LABELS "experiment;shaders")
-    elseif (NOT UVSR_AA_DEVELOPER_OVERRIDES)
-        add_executable(
-            uvsr_production_shader_bundle_tests
-            tests/production_shader_bundle_tests.cpp)
-        add_dependencies(
-            uvsr_production_shader_bundle_tests
-            uvsr_stage_runtime_shaders)
-        add_test(
-            NAME uvsr_production_shader_bundle_contract
-            COMMAND uvsr_production_shader_bundle_tests
-                "${UVSR_SHADER_CONFIG}"
-                "${UVSR_RUNTIME_SHADER_MANIFEST}"
-                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders")
-        set_tests_properties(
-            uvsr_production_shader_bundle_contract
-            PROPERTIES LABELS "production;shaders")
-    endif()
+    add_executable(
+        uvsr_production_shader_bundle_tests
+        tests/production_shader_bundle_tests.cpp)
+    add_dependencies(
+        uvsr_production_shader_bundle_tests
+        uvsr_stage_runtime_shaders)
+    add_test(
+        NAME uvsr_production_shader_bundle_contract
+        COMMAND uvsr_production_shader_bundle_tests
+            "${UVSR_SHADER_CONFIG}"
+            "${UVSR_RUNTIME_SHADER_MANIFEST}"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders")
+    set_tests_properties(
+        uvsr_production_shader_bundle_contract
+        PROPERTIES LABELS "production;shaders")
 endif()
 
 set(UVSR_SCENE_SOURCE_ROOT

@@ -11,24 +11,17 @@
 
 namespace donut::engine
 {
-    class CommonRenderPasses;
     class ShaderFactory;
 }
 
 namespace uvsr
 {
-    enum class Cmaa2ColorRange : uint32_t
-    {
-        DisplayLdr,
-        SceneHdr,
-        Count
-    };
-
     struct Cmaa2Timings
     {
         float edgeMilliseconds = 0.f;
         float candidateMilliseconds = 0.f;
         float applyMilliseconds = 0.f;
+        bool available = false;
 
         [[nodiscard]] float CompleteEffectMilliseconds() const
         {
@@ -49,17 +42,13 @@ namespace uvsr
             nvrhi::IDevice* device,
             const std::shared_ptr<donut::engine::ShaderFactory>&
                 shaderFactory,
-            const std::shared_ptr<donut::engine::CommonRenderPasses>&
-                commonPasses,
             nvrhi::ITexture* sceneColor);
 
         [[nodiscard]] nvrhi::ITexture* Render(
             nvrhi::ICommandList* commandList,
             nvrhi::ITexture* sourceColor,
-            AntiAliasingQuality quality,
-            Cmaa2ColorRange colorRange);
+            AntiAliasingQuality quality);
         void UpdateSourceColor(nvrhi::ITexture* sourceColor);
-        void MarkInactiveFrame();
 
         [[nodiscard]] bool IsValid() const;
         [[nodiscard]] const Cmaa2Timings& GetTimings() const
@@ -77,8 +66,6 @@ namespace uvsr
         };
 
         static constexpr uint32_t c_QualityCount = 4u;
-        static constexpr uint32_t c_ColorRangeCount =
-            static_cast<uint32_t>(Cmaa2ColorRange::Count);
         static constexpr uint32_t c_TimerLatency = 4u;
 
         nvrhi::IDevice* m_Device = nullptr;
@@ -98,14 +85,10 @@ namespace uvsr
         using QualityPipelines = std::array<
             nvrhi::ComputePipelineHandle,
             c_QualityCount>;
-        std::array<QualityPipelines, c_ColorRangeCount>
-            m_EdgePipelines;
-        std::array<QualityPipelines, c_ColorRangeCount>
-            m_CandidatePipelines;
-        std::array<QualityPipelines, c_ColorRangeCount>
-            m_ApplyPipelines;
-        std::array<QualityPipelines, c_ColorRangeCount>
-            m_DispatchArgumentPipelines;
+        QualityPipelines m_EdgePipelines;
+        QualityPipelines m_CandidatePipelines;
+        QualityPipelines m_ApplyPipelines;
+        QualityPipelines m_DispatchArgumentPipelines;
 
         std::array<std::array<nvrhi::TimerQueryHandle, c_TimerLatency>,
             static_cast<size_t>(Stage::Count)> m_TimerQueries;

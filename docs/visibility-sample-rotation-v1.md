@@ -183,12 +183,13 @@ no mip bias or sharpening control.
 ### Fixed Benchmark Setup
 
 1. Build Release and launch with
-   `tools\launch_uvsr.ps1 -Experiment "samplerotation" --benchmark-camera`.
+   `tools\launch_uvsr.ps1 -BuildDirectory "<isolated-build>"`, then select the
+   locked benchmark camera through the renderer interface.
 2. Use the **PBR Sponza Decorated** scene at the locked Benchmark Position 1,
    1920x1080 output, deferred PBR, AO and GI enabled, Uniform Solid Angle, and a
    fixed sample count.
 3. Hold scene, camera, adapter, resolution, estimator, sample scheduler,
-   bounce count, filtering, temporal response, and warmup constant.
+   filtering, temporal response, and warmup constant.
 4. Compare the verified `a7e51b7` baseline, candidate with rotation disabled,
    and candidate with rotation enabled in an interleaved A/B/A/B order.
 

@@ -635,10 +635,6 @@ namespace
                 { { -0.4f, 1.2f, 0.3f, { 4.f, 3.f, 2.f } } } },
             { "black diffuse receiver", { 0.f, 0.f, -4.f }, false, -0.1f, 0.f, 0.f,
                 { { 0.42f, 1.2f, 0.3f, { 3.f, 2.f, 1.f } } } },
-            { "diffuse furnace and multibounce energy", { 0.f, 0.f, -4.f }, false, 0.f, 0.f, 0.8f,
-                { { -1.1f, 1.f, 0.9f, { 1.f, 1.f, 1.f }, 0.f, true },
-                  { 0.f, 1.f, 0.9f, { 1.f, 1.f, 1.f }, 0.f, true },
-                  { 1.1f, 1.f, 0.9f, { 1.f, 1.f, 1.f }, 0.f, true } } },
             { "screen-edge emitter entering and leaving the viewport", { 0.f, 0.f, -4.f }, false, 0.12f, 0.f, 1.f,
                 { { -1.25f, 1.8f, 0.09f, { 8.f, 1.f, 0.2f }, 0.f, false, false },
                   { 1.22f, 1.7f, 0.09f, { 0.2f, 1.f, 8.f }, 0.f, false, true } } },
@@ -1067,24 +1063,6 @@ namespace
             "Cosine-Weighted Solid Angle irradiance normalization is pi without double cosine");
     }
 
-    void TestFiniteMultibounceEnergy()
-    {
-        constexpr float DiffuseReflectance = 0.8f;
-        constexpr uint32_t BounceCount = 4u;
-        float frontier = 1.f;
-        float cumulative = 0.f;
-        for (uint32_t bounce = 0u; bounce < BounceCount; ++bounce)
-        {
-            frontier *= DiffuseReflectance;
-            cumulative += frontier;
-            Require(std::isfinite(frontier) && std::isfinite(cumulative),
-                "finite current-frame bounce chain remains finite");
-        }
-        const float geometricBound = DiffuseReflectance /
-            (1.f - DiffuseReflectance);
-        Require(cumulative < geometricBound,
-            "four-bounce furnace energy stays below the infinite geometric series");
-    }
 }
 
 int main()
@@ -1094,8 +1072,6 @@ int main()
     TestSampleRayThickness();
     TestStochasticEqualMassQuantization();
     TestDeterministicReferenceSuite();
-    TestFiniteMultibounceEnergy();
-
     std::cout << "UVSR visibility estimator reference validation passed\n";
     return EXIT_SUCCESS;
 }

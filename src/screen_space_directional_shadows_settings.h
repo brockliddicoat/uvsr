@@ -23,10 +23,9 @@ namespace uvsr
         Pixels960 = 960
     };
 
-    enum class ScreenSpaceShadowDebugView : uint32_t
+    enum class ScreenSpaceShadowIsolationView : uint32_t
     {
         None,
-        Edge,
         Thread,
         Wave
     };
@@ -59,8 +58,8 @@ namespace uvsr
         bool usePrecisionOffset = false;
         bool bilinearSamplingOffsetMode = false;
         bool useEarlyOut = false;
-        ScreenSpaceShadowDebugView debugView =
-            ScreenSpaceShadowDebugView::None;
+        ScreenSpaceShadowIsolationView isolationView =
+            ScreenSpaceShadowIsolationView::None;
     };
 
     [[nodiscard]] inline constexpr uint32_t
@@ -113,8 +112,11 @@ namespace uvsr
         }
 
         const bool enabled = settings.enabled;
+        const ScreenSpaceShadowIsolationView isolationView =
+            settings.isolationView;
         settings = ScreenSpaceDirectionalShadowSettings{};
         settings.enabled = enabled;
+        settings.isolationView = isolationView;
         settings.preset = preset;
 
         if (preset == ScreenSpaceShadowPreset::Long)

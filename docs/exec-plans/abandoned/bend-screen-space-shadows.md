@@ -2,7 +2,7 @@
 
 ## Status
 
-- State: active
+- State: superseded
 - Coordinator: `/root`
 - Project/integration branch and worktree:
   `codex/bend-screen-space-shadows` in
@@ -335,5 +335,17 @@ Stop and ask the user if:
 - Coming Soon/documentation update: pending
 - Pushed/PR/merged, or intentionally local: intentionally local
 - Remaining experiments or follow-ups: pending
-- Active ownership released: no
-- Archived to completed/abandoned path: pending
+- Active ownership released: yes; superseded ownership closed on 2026-08-03
+- Archived to completed/abandoned path: `docs/exec-plans/abandoned/bend-screen-space-shadows.md`
+
+
+## Archival Resolution
+
+Superseded on 2026-08-03. Its unchecked debug, correctness, long-variant,
+and timing matrix was not completed. The maintained successor was verified in
+`docs/exec-plans/completed/screen-space-shadow-performance.md` and integrated
+through `docs/exec-plans/completed/directional-shadows-aa-integration.md`.
+
+The full historical evidence is preserved above. This archive does not claim
+completion of any unchecked runtime, visual, performance, thermal, parity, or
+product-acceptance criterion.

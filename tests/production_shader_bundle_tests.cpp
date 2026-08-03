@@ -86,10 +86,6 @@ namespace
             "skinning_cs"
         };
         constexpr const char* passShaders[] = {
-            "deferred_lighting_cs",
-            "forward_ps",
-            "forward_vs_buffer_loads",
-            "gbuffer_ps",
             "gbuffer_vs_buffer_loads",
             "light_probe_cubemap_gs",
             "light_probe_diffuse_probe_ps",
@@ -111,50 +107,15 @@ namespace
             "cmaa2_DeferredColorApply2x2CS",
             "cmaa2_EdgesColor2x2CS",
             "cmaa2_ProcessCandidatesCS",
-            "diagnostic_cascaded_shadow_map_clear_vs",
-            "diagnostic_cascaded_shadow_map_depth_vs",
-            "diagnostic_cascaded_shadow_map_depth_vs_alpha_tested",
-            "diagnostic_cascaded_shadow_map_depth_vs_alpha_tested_input_assembler",
-            "diagnostic_cascaded_shadow_map_depth_vs_main_input_assembler",
-            "diagnostic_cascaded_shadow_map_scroll_ps",
-            "diagnostic_cascaded_shadow_map_resolve_cs",
             "image_based_lighting_background_ps",
             "msaa_visibility_resolve_cs",
             "pbr_deferred_lighting_cs",
             "pbr_deferred_lighting_msaa_cs",
-            "pbr_forward_ps",
             "pbr_gbuffer_ps",
             "pixel_zoom_ps",
-            "screen_space_depth_hierarchy_cs",
             "screen_space_indirect_composite_cs",
-            "screen_space_visibility_bounce_control_cs",
-            "screen_space_visibility_composed_edges_cs",
             "screen_space_visibility_filter_cs",
-            "screen_space_visibility_filter_packed_edge_cs",
-            "screen_space_visibility_fused_apply_cs",
             "screen_space_visibility_cs",
-            "screen_space_visibility_temporal_cs",
-            "sparse_virtual_shadow_map_depth_ps",
-            "sparse_virtual_shadow_map_debug_ps",
-            "sparse_virtual_shadow_map_resolve_cs",
-            "sparse_virtual_shadow_map_sparse_cs_allocate",
-            "sparse_virtual_shadow_map_sparse_cs_buildScheduledPageTileMasks",
-            "sparse_virtual_shadow_map_sparse_cs_buildStaticDepthHierarchy",
-            "sparse_virtual_shadow_map_sparse_cs_clearPages",
-            "sparse_virtual_shadow_map_sparse_cs_fillIndirect",
-            "sparse_virtual_shadow_map_sparse_cs_finalize",
-            "sparse_virtual_shadow_map_sparse_cs_invalidatePages",
-            "sparse_virtual_shadow_map_sparse_cs_mark",
-            "sparse_virtual_shadow_map_sparse_cs_prepare",
-            "sparse_virtual_shadow_map_sparse_cs_recycle",
-            "sparse_virtual_shadow_map_sparse_cs_scheduleFine",
-            "sparse_virtual_shadow_map_sparse_cs_stats",
-            "sparse_virtual_shadow_map_sparse_depth_pixelMain",
-            "sparse_virtual_shadow_map_sparse_depth_vertexMain",
-            "sparse_virtual_shadow_map_sparse_resolve_cs_reference_legacy",
-            "sparse_virtual_shadow_map_sparse_resolve_cs_reference_balanced",
-            "sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_legacy",
-            "sparse_virtual_shadow_map_sparse_resolve_cs_translation_cache_balanced",
             "temporal_aa_blend_cs",
             "temporal_aa_minimum_cs",
             "temporal_aa_resolve_cs",
@@ -200,16 +161,11 @@ int main(int argc, char** argv)
     const std::filesystem::path stageRoot = argv[3];
     const std::filesystem::path sourceDirectory =
         configPath.parent_path();
-    const std::filesystem::path developerConfigPath =
-        sourceDirectory / "shaders.cfg";
     const std::filesystem::path visibilitySourcePath =
         sourceDirectory / "screen_space_visibility_cs.hlsl";
     passed &= Check(
         std::filesystem::is_regular_file(configPath),
         "production shader config must exist");
-    passed &= Check(
-        std::filesystem::is_regular_file(developerConfigPath),
-        "developer shader config must exist");
     passed &= Check(
         std::filesystem::is_regular_file(visibilitySourcePath),
         "visibility shader source must exist");
@@ -223,16 +179,13 @@ int main(int argc, char** argv)
         return 1;
 
     const std::string config = ReadText(configPath);
-    const std::string developerConfig = ReadText(developerConfigPath);
     const std::string visibilitySource = ReadText(visibilitySourcePath);
     const std::string manifest = ReadText(manifestPath);
     constexpr const char* runtimeParityBundle =
-        "screen_space_visibility_cs.hlsl -T cs -E main -D VISIBILITY_ESTIMATOR=1 -D ENABLE_AO=1 -D ENABLE_GI=1 -D ENABLE_BOUNCE_REINJECTION=0 -D INITIALIZE_BOUNCE_CUMULATIVE=0 -D ENABLE_BOUNCE_METADATA=0 -D RUNTIME_SAMPLE_PARITY={1,2}";
+        "screen_space_visibility_cs.hlsl -T cs -E main -D VISIBILITY_ESTIMATOR=1 -D ENABLE_AO=1 -D ENABLE_GI=1 -D RUNTIME_SAMPLE_PARITY={1,2}";
     passed &= Check(
-        CountOccurrences(config, runtimeParityBundle) == 1u &&
-            CountOccurrences(developerConfig, runtimeParityBundle) == 1u,
-        "developer and production configs must each package the compact even "
-        "and odd Runtime visibility loops");
+        CountOccurrences(config, runtimeParityBundle) == 1u,
+        "the runtime config must package compact even and odd visibility loops");
     passed &= Check(
         visibilitySource.find("#ifndef RUNTIME_SAMPLE_PARITY") !=
                 std::string::npos &&
@@ -266,70 +219,57 @@ int main(int argc, char** argv)
         passed &= Check(
             config.find(shader) == std::string::npos &&
                 manifest.find(shader) == std::string::npos,
-            std::string("developer shader must be absent from production: ") +
+            std::string("retired shader must be absent from production: ") +
                 shader);
     }
 
     passed &= Check(
-        config.find("src/shaders.cfg") == std::string::npos &&
-            manifest.find("src/shaders_production.cfg") !=
+        manifest.find("src/shaders.cfg") != std::string::npos &&
+            manifest.find("shaders_production.cfg") == std::string::npos &&
+            manifest.find("shaders_experiment_defaults.cfg") ==
                 std::string::npos,
-        "production manifest must identify only the production shader config");
-    passed &= Check(
-        CountOccurrences(
-            config,
-            "temporal_aa_blend_cs.hlsl") == 3u,
-        "production must describe the full-quality, resurrection, and "
-        "reduced temporal matrices");
+        "the runtime manifest must identify the single shader config");
     constexpr const char* temporalUserMatrix =
-        "temporal_aa_blend_cs.hlsl -T cs -E main -D TAA_MOTION_SOURCE={0,1,2} -D TAA_CURRENT_RECONSTRUCTION={0,1} -D TAA_HISTORY_FILTER={0,1,2,3} -D TAA_RECTIFICATION={0,1}";
+        "temporal_aa_blend_cs.hlsl -T cs -E main -D TAA_MOTION_SOURCE={0,1,2} -D TAA_CURRENT_RECONSTRUCTION={0,1} -D TAA_HISTORY_FILTER={0,1,2,3} -D TAA_RECTIFICATION={0,1} -D TAA_OPTIMIZED_COMPUTE={0,1} -D TAA_FUSED_OUTPUT={0,1}";
     passed &= Check(
-        CountOccurrences(config, temporalUserMatrix) == 3u,
-        "all production TAA matrices must package all three motion sources, "
-        "de-jittering, 1x/5x/9x reconstruction, and both rectification "
-        "choices");
-    passed &= Check(
-        CountOccurrences(config, "TAA_EXPORT_SELECTIVE=0") == 3u &&
-            CountOccurrences(config, "TAA_SAMPLE_RESURRECTION=0") == 2u &&
-            CountOccurrences(
-                config,
-                "TAA_SAMPLE_RESURRECTION={1,2}") == 1u &&
-            CountOccurrences(config, "TAA_DEVELOPER_DEBUG=0") == 3u &&
-            CountOccurrences(config, "TAA_SHARED_WORK_REUSE={0,1}") == 1u &&
-            CountOccurrences(
-                config,
-                "TAA_LDS_LAYOUT=2 -D TAA_SHARED_WORK_REUSE=1 "
-                "-D TAA_EARLY_HISTORY_REJECTION=1 "
-                "-D TAA_FUSED_OUTPUT={0,1}") == 1u &&
+        CountOccurrences(config, temporalUserMatrix) == 1u &&
             CountOccurrences(
                 config,
                 "temporal_aa_minimum_cs.hlsl -T cs -E main "
                 "-D TAA_RUNTIME_BEHAVIOR={0,1}") == 1u &&
-            config.find("TAA_EXPORT_SELECTIVE={") ==
-                std::string::npos &&
-            config.find("TAA_INTERIOR_WEIGHTING") == std::string::npos &&
-            config.find("TAA_RECTIFICATION={0,1,2") == std::string::npos &&
-            config.find("TAA_DEVELOPER_DEBUG=1") ==
-                std::string::npos &&
-            config.find("TAA_PIXEL_SHADER") == std::string::npos,
-        "production TAA must retain robust and resurrection matrices, package "
-        "the reduced topology and compact minimum path, and omit retired "
-        "experiments");
+            CountOccurrences(config, "temporal_aa_resolve_cs.hlsl") == 1u,
+        "TAA must expose one robust matrix plus compact minimum and resolve paths");
+    constexpr const char* retiredAxes[] = {
+        "TAA_SAMPLE_RESURRECTION",
+        "TAA_DEVELOPER_DEBUG",
+        "TAA_PIXEL_SHADER",
+        "TAA_EXPORT_SELECTIVE",
+        "TAA_INTERIOR_WEIGHTING",
+        "TAA_LDS_LAYOUT",
+        "TAA_SHARED_WORK_REUSE",
+        "TAA_EARLY_HISTORY_REJECTION",
+        "CMAA2_SUPPORT_HDR_COLOR_RANGE",
+        "ENABLE_AO_POWER",
+        "ENABLE_BOUNCE",
+        "DEPTH_HIERARCHY",
+        "VISIBILITY_TEMPORAL"
+    };
+    for (const char* axis : retiredAxes)
+    {
+        passed &= Check(
+            config.find(axis) == std::string::npos,
+            std::string("retired shader axis must remain absent: ") + axis);
+    }
     passed &= Check(
-        CountShaderPermutations(config) == 618u &&
-            CountShaderPermutations(developerConfig) == 2828u,
-        "shader catalogs must contain 618 production and 2,828 developer "
-        "permutations with the temporal cost paths");
+        CountShaderPermutations(config) == 268u,
+        "the production shader catalog must contain exactly 268 permutations");
     passed &= Check(
         CountOccurrences(config, "cmaa2.hlsl -T cs") == 4u &&
             CountOccurrences(
                 config,
-                "CMAA2_STATIC_QUALITY_PRESET={0,1,2,3}") == 4u &&
-            CountOccurrences(
-                config,
-                "CMAA2_SUPPORT_HDR_COLOR_RANGE={0,1}") == 4u,
+                "CMAA2_STATIC_QUALITY_PRESET={0,1,2,3}") == 4u,
         "production must retain all four official CMAA2 stages across Low, "
-        "Medium, High, and Ultra display/HDR permutations");
+        "Medium, High, and Ultra display-linear permutations");
     passed &= Check(
         CountOccurrences(
             config,
@@ -370,8 +310,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 78u,
-        "production shader contract must enumerate exactly 78 files");
+        expectedFiles.size() == 39u,
+        "production shader contract must enumerate exactly 39 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

@@ -64,15 +64,9 @@ namespace uvsr
         [[nodiscard]] nvrhi::ITexture* Color(uint32_t slot) const;
         [[nodiscard]] nvrhi::ITexture* Depth(uint32_t slot) const;
 
-        [[nodiscard]] bool IsSlotValid(uint32_t slot) const;
         [[nodiscard]] uint32_t ValidSlotCount() const;
         [[nodiscard]] uint32_t AccumulationCount() const;
         [[nodiscard]] uint32_t ResetCount() const;
-        [[nodiscard]] uint32_t MaximumAccumulation() const;
-        [[nodiscard]] uint64_t LogicalBytes() const;
-        [[nodiscard]] bool IsInitialized() const;
-        [[nodiscard]] bool HasCommittedSequence() const;
-        [[nodiscard]] uint64_t LastCommittedSequence() const;
 
     private:
         std::array<nvrhi::TextureHandle, 2> m_Color;

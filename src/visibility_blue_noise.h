@@ -6,11 +6,11 @@
 namespace uvsr
 {
     inline constexpr uint32_t VisibilityBlueNoiseSize = 64u;
-    inline constexpr uint32_t VisibilityBlueNoiseLayerCount = 8u;
+    inline constexpr uint32_t VisibilityBlueNoiseLayerCount = 5u;
     inline constexpr uint32_t VisibilityBlueNoiseTexelCount =
         VisibilityBlueNoiseSize * VisibilityBlueNoiseSize;
 
-    // Returns independent, toroidal scalar rank layers in array-slice order.
-    // Every layer contains each progressive rank exactly once.
+    // Returns the Void Cluster Blue Noise scheduler's independent, toroidal
+    // scalar rank layers. Each layer contains every progressive rank once.
     std::vector<uint16_t> GenerateVisibilityBlueNoise();
 }

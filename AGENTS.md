@@ -1,6 +1,6 @@
 # UVSR Agent Guide
 
-Agent policy version: `2026-07-22.1`.
+Agent policy version: `2026-08-03.1`.
 
 ## Product and Scope
 
@@ -77,6 +77,12 @@ Agent policy version: `2026-07-22.1`.
 - "Run it" or "launch it" launches the current task candidate. If none exists,
   launch the last verified build associated with the active task. Launching does
   not itself verify the build.
+- Every final handoff after any modification, no matter how small, must include
+  a clickable absolute-path link to launch the exact `uvsr.exe` artifact
+  associated with that work. If the modification did not require rebuilding
+  UVSR, link the active task's current candidate or last verified build and say
+  explicitly that it was not rebuilt. Never substitute an unrelated or merely
+  recent executable, and never link only a build directory or a launch command.
 - "That looks good" or similar language records visual acceptance only for the
   exact build and settings most recently shown. It does not waive automated
   checks and does not authorize GitHub changes.
@@ -316,13 +322,6 @@ Agent policy version: `2026-07-22.1`.
 - Concurrent writers use separate worktrees and build directories. Never run
   two builds against the same build tree; serialize configure, build, shader
   packaging, and test operations when isolation is unavailable.
-- Default to a reused, isolated
-  `UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS=ON` build for development
-  iterations when the factory startup shader topology covers the change. Move
-  to the production or developer shader catalog as soon as an experiment
-  changes an excluded shader path, permutation axis, or runtime-selectable
-  topology, and always run the task-appropriate full-catalog build and tests
-  before claiming final technical verification.
 - Only one designated agent controls a UVSR window or GPU benchmark at a time.
   Do not fight user input. Close or restart only the process that belongs to the
   current experiment, and account for Windows executable/object-file locks.
@@ -385,7 +384,8 @@ Agent policy version: `2026-07-22.1`.
   Record UVSR's stat-line TFLOPS, total frame/GPU time, feature time, GPU clock,
   CPU and GPU temperature, live throttle reasons, and process memory. TFLOPS is
   a current-clock-and-utilization indicator, so compare it only between
-  identical position-1 control workloads, never between different SVSM options.
+  identical position-1 control workloads, never between different renderer
+  settings.
 - Match and record the complete display/presentation state: active refresh rate
   for every display, primary-output identity, VRR/G-SYNC/FreeSync, VSync and
   frame caps, latency controls, HDR/color depth, desktop resolution/scaling,
@@ -398,11 +398,12 @@ Agent policy version: `2026-07-22.1`.
   intervals. A refresh-rate change is a diagnostic run, not a matched score.
 - Keep renderer debug views, GPU captures, validation layers, and diagnostic
   overlays disabled during accepted performance windows unless the identical
-  control explicitly includes them. SVSM debug views add statistics dispatches
-  and readbacks, so use them in separate diagnostic runs and return the view to
-  Off before collecting a position-1 baseline or candidate measurement. The
-  ordinary stat line may remain visible when it is held identical across every
-  compared run.
+  control explicitly includes them. Information filters and shadow-isolation
+  views add presentation work, so use them in separate diagnostic runs and
+  return World, Visibility, Physically Based Lighting, and Screen-Space Shadows
+  to Default before collecting a position-1 baseline or candidate measurement.
+  The ordinary stat line may remain visible when it is held identical across
+  every compared run.
 - Treat the Codex computer-control worker as capture infrastructure even though
   its CPU time belongs to the excluded ChatGPT/Codex process tree. Use it to
   configure the renderer and collect screenshots only outside an accepted
@@ -648,8 +649,8 @@ Agent policy version: `2026-07-22.1`.
 - Any Settings dropdown that changes dependent layout must use
   `DeferredUiStructuralPresentation<T>` or an explicitly equivalent tested phase
   machine, synchronize every dependent consumer, and commit only after the
-  separate shared dropdown barrier. Use the Aliasing Method reference incident
-  for renderer-topology selectors; a delay or disabled scope is not a repair.
+  separate shared dropdown barrier. Renderer-topology selectors require the
+  same explicit state transition; a delay or disabled scope is not a repair.
 - Dropdown popup motion uses the canonical full-alpha geometric roll. Discard
   input received before roll-down completes, never replay a delayed click, keep
   popup size and row layout fixed, and hold renderer-facing changes behind both
@@ -675,11 +676,9 @@ Agent policy version: `2026-07-22.1`.
 - Cleanup and infrastructure work must not silently change authored colors, AgX
   output, screen-space indirect lighting, scene lighting, or other visible
   rendering behavior.
-- Keep the forward and deferred PBR paths on the shared UVSR material/lighting
-  contract. The PBR comparison implementation is the documented exception to
-  the dormant-feature rule: it is retained as a regression/experiment oracle,
-  but its production UI control is hidden. If restored, the toggle must retain
-  the same camera, scene, tonemapper, sky, and lights.
+- Keep deferred PBR as the single UVSR material and lighting contract. Do not
+  restore hidden forward or legacy comparison paths without a current product
+  control, end-to-end validation, and an explicit restoration decision.
 - Preserve the active display pipeline order: scene-linear HDR radiance, fixed
   neutral AgX inset transform, logarithmic encoding, default contrast tone
   scale, output gamut conversion, display transfer, then dithering. User-facing
@@ -742,18 +741,14 @@ Agent policy version: `2026-07-22.1`.
   `cmake --build build --config Release --target uvsr`.
 - For PBR or rendering changes, also build `uvsr_pbr_tests` and run
   `ctest --test-dir build -C Release --output-on-failure`.
-- Launch through `tools/launch_uvsr.ps1 -Experiment "<lowercaseword>"` and
+- Launch through `tools/launch_uvsr.ps1 -BuildDirectory "<isolated-build>"` and
   smoke-test after runtime, rendering, shader, scene-loading, or UI changes.
-  The one-word experiment/title token must match `\A[a-z]+\z`: use one or more
-  lowercase ASCII letters and nothing else. Never use uppercase letters,
-  digits, spaces, hyphens, underscores, or punctuation. Valid examples are
-  `main` and `localtone`; invalid examples include `LocalTone`, `localtone2`,
-  and `local-tone`.
-  Never launch the bare executable during agent work: every renderer taskbar
-  title must identify the experiment with that lowercase ASCII letters-only
-  token; the renderer appends its source commit and local `HHmm` launch time.
-  Exercise the relevant forward/deferred and screen-space AO/GI combinations
-  when they could be affected.
+  Use the exact isolated build directory associated with the task and verify
+  that the renderer title's embedded source commit matches the intended
+  checkpoint. Never substitute another worktree's executable or a merely recent
+  build.
+  Exercise the retained deferred PBR, screen-space ambient occlusion, indirect
+  diffuse, aliasing, and shadow combinations when they could be affected.
 - An experiment is not verified merely because it builds, passes tests, or
   briefly looks correct. Validate the task's behavioral and performance claims
   against the recorded baseline and list any checks not run.

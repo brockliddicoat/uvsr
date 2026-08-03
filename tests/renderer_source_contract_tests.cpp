@@ -100,8 +100,6 @@ int main(int argc, char** argv)
         root / "src/pbr_deferred_lighting_cb.h");
     const std::string visibilityConstants = ReadFile(
         root / "src/screen_space_visibility_cb.h");
-    const std::string lightingSources = ReadFile(
-        root / "src/lighting_contribution_shared.h");
     const std::string imageBasedLighting = ReadFile(
         root / "src/image_based_lighting_environment.cpp");
     const std::string imageBasedLightingHeader = ReadFile(
@@ -122,6 +120,10 @@ int main(int argc, char** argv)
         root / "src/temporal_aa.cpp");
     const std::string temporalAaPassHeader = ReadFile(
         root / "src/temporal_aa.h");
+    const std::string gpuPerformanceMonitor = ReadFile(
+        root / "src/gpu_performance_monitor.cpp");
+    const std::string gpuPerformanceMonitorHeader = ReadFile(
+        root / "src/gpu_performance_monitor.h");
     const std::string donutLoadingOverride = ReadFile(
         root / "overrides/donut-loading.patch");
     const std::string donutLoadingAppOverride = ReadFile(
@@ -129,9 +131,31 @@ int main(int argc, char** argv)
     bool passed = true;
 
     passed &= ExpectContains(
+        gpuPerformanceMonitorHeader,
+        "bool utilizationValid = false;",
+        "graphics utilization validity transport");
+    passed &= ExpectContains(
+        gpuPerformanceMonitor,
+        "m_Metrics.utilizationValid = utilizationValid;",
+        "NVIDIA utilization validity publication");
+    passed &= ExpectContains(
+        gpuPerformanceMonitor,
+        "m_Metrics.utilizationValid = false;",
+        "Intel unavailable utilization publication");
+    passed &= ExpectContains(
         viewer,
-        "DWORD requested = NORMAL_PRIORITY_CLASS;",
-        "normal interactive process priority");
+        "if (snapshot.gpuMetrics.utilizationValid)",
+        "utilization-scaled throughput validity gate");
+
+    passed &= ExpectContains(
+        viewer,
+        "SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)",
+        "required High process-priority request");
+    passed &= ExpectOrdered(
+        viewer,
+        "int WINAPI WinMain(",
+        "ApplyProcessPriority();",
+        "process-priority request before renderer startup");
     passed &= ExpectContains(
         donutLoadingAppOverride,
         "ProcessRenderingThreadCommands(*m_CommonPasses, 4.f)",
@@ -239,6 +263,24 @@ int main(int argc, char** argv)
         visibilityPass,
         "bool ScreenSpaceVisibilityPass::PreparePipelinesStep()",
         "one-step visibility pipeline preparation");
+    for (const std::string_view retiredVisibilitySurface : {
+            std::string_view("ResetHistory"),
+            std::string_view("Temporal"),
+            std::string_view("DepthHierarchy"),
+            std::string_view("LaterBounce"),
+            std::string_view("FusedResolve"),
+            std::string_view("VisibilityPerformanceProfile"),
+            std::string_view("VisibilityVerificationProfile") })
+    {
+        passed &= ExpectAbsent(
+            visibilityPass,
+            retiredVisibilitySurface,
+            "retired visibility history, planner, or multi-bounce runtime");
+        passed &= ExpectAbsent(
+            visibilityPassHeader,
+            retiredVisibilitySurface,
+            "retired visibility history, planner, or multi-bounce API");
+    }
     passed &= ExpectContains(
         pbrDeferredLightingPassHeader,
         "bool deferPipelineCreation = false",
@@ -384,10 +426,6 @@ int main(int argc, char** argv)
             visibilityConstants,
             retiredEmissiveSourceSurface,
             "retired emissive GI source visibility constants");
-        passed &= ExpectAbsent(
-            lightingSources,
-            retiredEmissiveSourceSurface,
-            "retired emissive GI source classification");
     }
     passed &= ExpectContains(
         deferredLighting,
@@ -395,30 +433,22 @@ int main(int argc, char** argv)
             "gbuffer.material.emissive, 0.0f);",
         "visible authored emissive retention");
 
-    const std::string_view factoryExperimentTopology = ExtractSection(
+    passed &= ExpectContains(
         viewer,
-        "static void ApplyFactoryExperimentShaderTopology(UIData& ui)",
-        "static std::string FindVisibilityVerificationSettingsMismatch(");
-    for (const std::string_view factorySetting : {
-            std::string_view("ui.EnablePbr = true;"),
-            std::string_view("ui.RenderMode = RendererMode::Deferred;"),
-            std::string_view("ui.AntiAliasing = AntiAliasingSettings{};"),
-            std::string_view(
-                "ui.ScreenSpaceDirectionalShadows = "
-                "ScreenSpaceDirectionalShadowSettings{};"),
-            std::string_view(
-                "ui.SparseVirtualShadowMaps = "
-                "SparseVirtualShadowMapSettings{};"),
-            std::string_view(
-                "ui.ScreenSpaceVisibility = "
-                "ScreenSpaceVisibilitySettings{};"),
-            std::string_view(
-                "ui.WhiteWorld = WhiteWorldMode::Off;") })
+        "std::unique_ptr<PbrDeferredLightingPass> m_PbrDeferredLightingPass;",
+        "singular deferred PBR pass ownership");
+    for (const std::string_view retiredRendererSurface : {
+            std::string_view("m_ForwardPass"),
+            std::string_view("RendererMode::Forward"),
+            std::string_view("SparseVirtualShadowMap"),
+            std::string_view("DiagnosticCascadedShadowMap"),
+            std::string_view("VisibilityBenchmark"),
+            std::string_view("VisibilityPerformanceProfile") })
     {
-        passed &= ExpectContains(
-            factoryExperimentTopology,
-            factorySetting,
-            "factory experiment topology lock");
+        passed &= ExpectAbsent(
+            viewer,
+            retiredRendererSurface,
+            "retired renderer mode, shadow engine, or visibility planner");
     }
     passed &= ExpectContains(
         viewer,
@@ -426,22 +456,9 @@ int main(int argc, char** argv)
         "    {\n"
         "        if (m_SceneGpuUploadPending)",
         "bounded scene upload gate");
-    passed &= ExpectOrdered(
-        ExtractSection(
-            viewer,
-            "virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override",
-            "std::shared_ptr<ShaderFactory> GetShaderFactory()"),
-        "RenderSceneGpuUploadFrame(framebuffer);",
-        "ApplyFactoryExperimentShaderTopology(m_ui);",
-        "factory experiment per-frame topology lock");
-    passed &= ExpectContains(
-        viewer,
-        "This factory-settings experiment build supports only the ",
-        "factory experiment command-line topology rejection");
-
     const std::string_view refresh = ExtractSection(
         viewer,
-        "void RefreshAntiAliasingTargetPasses(bool sampleCountChanged)",
+        "void RefreshAntiAliasingTargetPasses()",
         "void BeginRenderPassPreparation(bool waitForIbl)");
     passed &= ExpectContains(
         refresh,
@@ -451,10 +468,10 @@ int main(int argc, char** argv)
         refresh,
         "m_ScreenSpaceVisibilityPass->ResetBindingCache();",
         "AA-only target refresh");
-    passed &= ExpectContains(
+    passed &= ExpectAbsent(
         refresh,
         "m_ScreenSpaceVisibilityPass->ResetHistory();",
-        "AA-only target refresh history invalidation");
+        "visibility-owned temporal history invalidation");
     passed &= ExpectContains(
         refresh,
         "m_Cmaa2Pass->UpdateSourceColor(",
@@ -467,52 +484,28 @@ int main(int argc, char** argv)
     const std::string_view createPasses = ExtractSection(
         viewer,
         "bool ProcessRenderPassPreparationStep()",
-        "void EnsureOptionalDirectionalVisibilityPasses()");
+        "void CreateRenderPasses()");
     passed &= ExpectContains(
         createPasses,
-        "#if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS",
-        "factory experiment pass construction guard");
-    passed &= ExpectContains(
-        createPasses,
-        "m_ScreenSpaceDirectionalShadowPass.reset();",
-        "factory experiment screen-space shadow omission");
-    passed &= ExpectContains(
-        createPasses,
-        "m_SparseVirtualShadowMapPass.reset();",
-        "factory experiment SVSM omission");
-    passed &= ExpectContains(
-        createPasses,
-        "m_DiagnosticCascadedShadowMapPass.reset();",
-        "factory experiment diagnostic CSM omission");
-    passed &= ExpectAbsent(
-        createPasses,
-        "std::make_unique<SparseVirtualShadowMapPass>",
-        "disabled SVSM startup omission");
+        "std::make_unique<PbrDeferredLightingPass>",
+        "deferred PBR pass construction");
     passed &= ExpectContains(
         createPasses,
         "&m_PreparedVisibilityBlueNoise",
         "worker-prepared visibility sampling data");
 
-    const std::string_view ensureOptionalPasses = ExtractSection(
+    const std::string_view ensureScreenSpaceShadows = ExtractSection(
         viewer,
-        "void EnsureOptionalDirectionalVisibilityPasses()",
-        "virtual void RenderSplashScreen(");
+        "void EnsureScreenSpaceDirectionalShadowPass()",
+        "void UpdateImageBasedLighting(");
     passed &= ExpectContains(
-        ensureOptionalPasses,
+        ensureScreenSpaceShadows,
         "m_ui.ScreenSpaceDirectionalShadows.enabled",
         "lazy screen-space shadow construction gate");
     passed &= ExpectContains(
-        ensureOptionalPasses,
-        "m_ui.SparseVirtualShadowMaps.enabled ||\n"
-            "            m_SvsmMotionBenchmarkAutostartPending ||\n"
-            "            m_SvsmMotionBenchmarkActive",
-        "lazy SVSM construction and benchmark gate");
-    passed &= ExpectContains(
-        ensureOptionalPasses,
-        "m_ui.DiagnosticCascadedShadowMaps.enabled ||\n"
-            "            m_DiagnosticCsmBenchmarkRequested ||\n"
-            "            m_DiagnosticCsmRecordRequested",
-        "lazy diagnostic CSM construction and benchmark gate");
+        ensureScreenSpaceShadows,
+        "std::make_unique<ScreenSpaceDirectionalShadowPass>",
+        "retained screen-space shadow construction");
     passed &= ExpectAbsent(
         refresh,
         "std::make_unique<PbrDeferredLightingPass>",
@@ -567,12 +560,13 @@ int main(int argc, char** argv)
         "static float3 ClampFlashlightAimLag(");
     passed &= ExpectContains(
         flashlightAnimation,
-        "!m_ui.EnablePbr",
-        "legacy-lighting flashlight animation exclusion");
-    passed &= ExpectContains(
+        "m_FlashlightTransition = AdvanceFlashlightTransition(",
+        "bounded flashlight transition helper");
+    passed &= ExpectOrdered(
         flashlightAnimation,
-        "m_FlashlightTransition = 0.f;",
-        "legacy-lighting flashlight exact-zero endpoint");
+        "AdvanceFlashlightTransition(",
+        "ApplyFlashlightPresentation();",
+        "flashlight transition before presentation");
 
     const std::string_view flashlightMotion = ExtractSection(
         viewer,
@@ -702,10 +696,6 @@ int main(int argc, char** argv)
         "virtual void Animate(float fElapsedTimeSeconds) override");
     passed &= ExpectContains(
         flashlightShadowRender,
-        "if (!m_ui.EnablePbr ||",
-        "legacy-lighting flashlight shadow exclusion");
-    passed &= ExpectContains(
-        flashlightShadowRender,
         "!ShouldRenderFlashlightShadow(",
         "settled-off flashlight shadow work gate");
     passed &= ExpectContains(
@@ -751,11 +741,6 @@ int main(int argc, char** argv)
     passed &= ExpectOrdered(
         renderScene,
         "RenderFlashlightShadow();",
-        "m_ForwardPass->PrepareLights(",
-        "forward flashlight shadow-before-lighting order");
-    passed &= ExpectOrdered(
-        renderScene,
-        "RenderFlashlightShadow();",
         "deferredInputs.lights = submittedLights;",
         "deferred flashlight shadow-before-lighting order");
     passed &= ExpectContains(
@@ -772,11 +757,6 @@ int main(int argc, char** argv)
         renderScene,
         "submittedLights = &lightingLights;",
         "active flashlight-prioritized light path");
-    passed &= ExpectContains(
-        renderScene,
-        "if (m_ui.EnablePbr &&\n"
-            "            ShouldSubmitFlashlight(",
-        "legacy-lighting flashlight submission exclusion");
     passed &= ExpectContains(
         renderScene,
         "m_ui.Flashlight.realisticLens",
@@ -847,7 +827,7 @@ int main(int argc, char** argv)
     const std::string_view boundedSceneUpload = ExtractSection(
         viewer,
         "void RenderSceneGpuUploadFrame(",
-        "static bool IsSameDiagnosticCsmBenchmarkWork(");
+        "virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override");
     passed &= ExpectContains(
         boundedSceneUpload,
         "c_SceneUploadBytesPerFrame",
@@ -930,10 +910,10 @@ int main(int argc, char** argv)
         viewer,
         "static uint32_t ResolveSupportedMsaaSampleCount(",
         "class RenderTargets : public GBufferRenderTargets");
-    passed &= ExpectContains(
+    passed &= ExpectAbsent(
         msaaSampleCountResolution,
         "bool enablePbr",
-        "MSAA allocation-aware PBR format selection");
+        "retired renderer-mode MSAA parameter");
     passed &= ExpectContains(
         msaaSampleCountResolution,
         "nvrhi::utils::ChooseFormat(",
@@ -961,8 +941,7 @@ int main(int argc, char** argv)
     passed &= ExpectContains(
         msaaSampleCountResolution,
         "cache.device == nativeDevice &&\n"
-        "        cache.requestedSampleCount == requestedSampleCount &&\n"
-        "        cache.enablePbr == enablePbr",
+        "        cache.requestedSampleCount == requestedSampleCount",
         "MSAA query cache topology key");
     passed &= ExpectContains(
         msaaSampleCountResolution,
@@ -974,13 +953,30 @@ int main(int argc, char** argv)
         "MSAA any-depth false-positive acceptance");
     passed &= ExpectContains(
         viewer,
-        ".rasterSampleCount,\n"
-        "                        m_ui.EnablePbr);",
-        "MSAA PBR topology routing");
+        ".rasterSampleCount);",
+        "MSAA sample-count routing");
+    const std::string_view temporalAaPassCreation = ExtractSection(
+        viewer,
+        "void CreateTemporalAAPass(",
+        "void EnsureMsaaVisibilityResolvePass(");
+    for (const std::string_view resolvedMsaaInput : {
+            std::string_view("m_RenderTargets->DeferredMsaaColor.Get()"),
+            std::string_view("m_RenderTargets->VisibilityDepth.Get()"),
+            std::string_view("m_RenderTargets->VisibilityMotionVectors.Get()") })
+    {
+        passed &= ExpectContains(
+            temporalAaPassCreation,
+            resolvedMsaaInput,
+            "single-sample temporal input for composable MSAA");
+    }
     passed &= ExpectContains(
         viewer,
-        "RefreshAntiAliasingTargetPasses(\n"
-        "                    antiAliasingSampleCountChanged);",
+        "directionalVisibilityProducerEnabled ||\n"
+            "                    m_ui.UsesLongTermTemporalAA()",
+        "temporal MSAA closest-surface resolve gate");
+    passed &= ExpectContains(
+        viewer,
+        "RefreshAntiAliasingTargetPasses();",
         "AA-only refresh dispatch");
     passed &= ExpectContains(
         cmaa,
@@ -994,65 +990,25 @@ int main(int argc, char** argv)
     const std::string_view commandLine = ExtractSection(
         viewer,
         "bool ProcessCommandLine(",
-        "std::string FormatExperimentLaunchTime(");
-    passed &= ExpectContains(
-        commandLine,
-        "else if (!strcmp(argv[i], \"--aa-rectification\"))",
-        "AA rectification benchmark option");
-    for (const std::string_view mode : {
-            std::string_view("\"pair-rgb\""),
-            std::string_view("\"variance-ycocg\"") })
+        "bool SelectGraphicsAdapter(");
+    for (const std::string_view retiredExperimentOption : {
+            std::string_view("--aa-benchmark-output"),
+            std::string_view("--aa-rectification"),
+            std::string_view("--visibility-benchmark"),
+            std::string_view("--visibility-implementation-profile"),
+            std::string_view("--diagnostic-csm-"),
+            std::string_view("--svsm-motion-"),
+            std::string_view("--benchmark-camera") })
     {
-        passed &= ExpectContains(
+        passed &= ExpectAbsent(
             commandLine,
-            mode,
-            "AA rectification benchmark mode");
+            retiredExperimentOption,
+            "retired benchmark or planner command-line surface");
     }
     passed &= ExpectAbsent(
-        commandLine,
-        "per-pixel",
-        "retired AA per-pixel rectification benchmark modes");
-    passed &= ExpectContains(
-        commandLine,
-        "aaBenchmark.settings.algorithmOverrides.rectification",
-        "AA rectification benchmark override routing");
-    passed &= ExpectContains(
-        commandLine,
-        "bool aaQualityExplicit = false;",
-        "AA command-line quality-order tracking");
-    passed &= ExpectContains(
-        commandLine,
-        "if (aaQualityExplicit)",
-        "AA explicit quality preservation across method options");
-    passed &= ExpectContains(
-        commandLine,
-        "aaQualityExplicit = true;",
-        "AA command-line explicit quality recording");
-
-    const std::string_view aaMotionBenchmark = ExtractSection(
         viewer,
-        "void UpdateAntiAliasingBenchmark()",
-        "virtual void Animate(float fElapsedTimeSeconds) override");
-    passed &= ExpectContains(
-        aaMotionBenchmark,
-        "float(turnStep) /",
-        "AA motion benchmark fixed per-frame turn");
-    passed &= ExpectContains(
-        aaMotionBenchmark,
-        "float(AaBenchmarkTurnFrames);",
-        "AA motion benchmark fixed per-frame turn");
-    passed &= ExpectContains(
-        viewer,
-        "\"wall_clock_pacing_enabled\\\": false",
-        "AA motion benchmark uncapped report");
-    passed &= ExpectAbsent(
-        viewer,
-        "sleep_until",
-        "AA motion benchmark wall-clock pacing");
-    passed &= ExpectAbsent(
-        viewer,
-        "AaBenchmarkTargetFramesPerSecond",
-        "AA motion benchmark frame-rate target");
+        "UpdateAntiAliasingBenchmark",
+        "retired AA motion benchmark implementation");
     passed &= ExpectContains(
         viewer,
         "deviceParams.vsyncEnabled = false;",
@@ -1078,14 +1034,26 @@ int main(int argc, char** argv)
         "deferred submitted-triangle accounting");
     passed &= ExpectContains(
         viewer,
-        "SubmittedTriangleCountingPass geometryPass(\n"
-        "                *m_ForwardPass);",
-        "forward submitted-triangle accounting");
-    passed &= ExpectContains(
-        viewer,
         "m_SubmittedMainViewTriangles =\n"
         "                geometryPass.GetSubmittedTriangles();",
         "submitted-triangle publication");
+    passed &= ExpectContains(
+        viewer,
+        "RendererTimingStage::MultisampleResolve",
+        "multisample closest-surface timing attribution");
+    passed &= ExpectOrdered(
+        viewer,
+        "if (renderDeferredMsaaLighting)\n"
+            "            BeginRendererStage(RendererTimingStage::DirectLighting);",
+        "m_CommandList->resolveTexture(",
+        "multisample color-resolve timing attribution");
+    passed &= ExpectOrdered(
+        viewer,
+        "BeginRendererStage(\n"
+            "                        RendererTimingStage::ScreenSpaceVisibility);\n"
+            "                    m_PbrDeferredLightingPass->Render(",
+        "m_ScreenSpaceVisibilityPass->Render(",
+        "multisample Visibility preparation timing attribution");
 
     const auto expectTriangleFormat =
         [&passed](uint64_t count, const char* expected)

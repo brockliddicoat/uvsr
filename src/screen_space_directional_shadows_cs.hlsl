@@ -25,8 +25,7 @@ void main(int3 groupID : SV_GroupID, int3 groupThreadID : SV_GroupThreadID)
     parameters.UsePrecisionOffset = g_Shadow.usePrecisionOffset != 0u;
     parameters.BilinearSamplingOffsetMode =
         g_Shadow.bilinearSamplingOffsetMode != 0u;
-    parameters.DebugOutputEdgeMask =
-        g_Shadow.debugOutputEdgeMask != 0u;
+    parameters.DebugOutputEdgeMask = false;
     parameters.DebugOutputThreadIndex =
         g_Shadow.debugOutputThreadIndex != 0u;
     parameters.DebugOutputWaveIndex =

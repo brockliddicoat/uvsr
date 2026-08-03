@@ -97,16 +97,6 @@ namespace uvsr
             return m_RadianceTexture.Get();
         }
 
-        [[nodiscard]] nvrhi::ITexture* GetDiffuseTexture() const
-        {
-            return m_Uploaded ? m_DiffuseTexture.Get() : nullptr;
-        }
-
-        [[nodiscard]] nvrhi::ITexture* GetSpecularTexture() const
-        {
-            return m_Uploaded ? m_SpecularTexture.Get() : nullptr;
-        }
-
         [[nodiscard]] nvrhi::ITexture* GetEnvironmentBrdfTexture() const;
 
         [[nodiscard]] const donut::engine::LightProbe* GetLightProbe() const
@@ -114,30 +104,9 @@ namespace uvsr
             return m_Uploaded ? m_LightProbe.get() : nullptr;
         }
 
-        [[nodiscard]] const std::vector<
-            std::shared_ptr<donut::engine::LightProbe>>& GetLightProbes() const
-        {
-            return m_ActiveLightProbes;
-        }
-
         [[nodiscard]] float GetRadianceScale() const
         {
             return m_RadianceScale;
-        }
-
-        [[nodiscard]] float GetSourceAverageLuminance() const
-        {
-            return m_SourceAverageLuminance;
-        }
-
-        [[nodiscard]] ImageBasedLightingSource GetActiveSource() const
-        {
-            return m_LastSource;
-        }
-
-        [[nodiscard]] const DiffuseEnvironmentSh& GetLastSh() const
-        {
-            return m_LastSh;
         }
 
     private:
@@ -166,16 +135,10 @@ namespace uvsr
         nvrhi::TextureHandle m_DiffuseTexture;
         nvrhi::TextureHandle m_SpecularTexture;
         std::shared_ptr<donut::engine::LightProbe> m_LightProbe;
-        std::vector<std::shared_ptr<donut::engine::LightProbe>>
-            m_ActiveLightProbes;
         std::filesystem::path m_EnvironmentAssetDirectory;
         ImageBasedLightingSource m_LastRequestedSource =
             ImageBasedLightingSource::Count;
-        ImageBasedLightingSource m_LastSource =
-            ImageBasedLightingSource::Count;
-        DiffuseEnvironmentSh m_LastSh;
         float m_RadianceScale = 1.f;
-        float m_SourceAverageLuminance = 0.f;
         bool m_BrdfReady = false;
         bool m_Uploaded = false;
         bool m_LastNeutralize = false;

@@ -2,81 +2,64 @@
 
 UVSR compiles three runtime estimators: `UniformProjectedAngle`,
 `UniformSolidAngle`, and `CosineWeightedSolidAngle`. Their UI labels are
-**Uniform Projected Angle**, **Uniform Solid Angle**, and **Cosine-Weighted
-Solid Angle**. Uniform Solid Angle is the default; all three are selectable.
+**Projected Angle**, **Solid Angle**, and **Cosine Weighted**. Solid Angle is the
+factory default; all three remain selectable.
 
 The projected-angle measure follows
 [Screen Space Indirect Lighting with Visibility Bitmask](https://arxiv.org/abs/2301.11376).
-Uniform Solid Angle and Cosine-Weighted Solid Angle are UVSR alternatives
-derived and tested against explicit slice integrals. Activision's
+Solid Angle and Cosine Weighted are UVSR alternatives tested against explicit
+slice integrals. Activision's
 [Practical Realtime Strategies for Accurate Indirect Occlusion](https://www.activision.com/cdn/research/PracticalRealtimeStrategiesTRfinal.pdf)
-informs traversal and reconstruction choices, but GTAO does not define UVSR's
-finite-thickness bitmask sectors.
+informs traversal and reconstruction, but GTAO does not define UVSR's finite-
+thickness bitmask sectors.
 
 ## Shared Estimator Contract
 
-`src/visibility_estimator_shared.h` is compiled as both C++ and HLSL. CPU
-quadrature and the renderer therefore share the slice basis, projected-normal
-sign convention, finite-thickness back direction, CDF mapping, endpoint
-interval, AO resolve, GI sector weight, and irradiance normalization.
+`src/visibility_estimator_shared.h` compiles as both C++ and HLSL. CPU quadrature
+and the renderer therefore share the slice basis, projected-normal sign,
+finite-thickness back direction, CDF mapping, endpoint interval, AO resolve, GI
+sector weight, and irradiance normalization.
 
 For receiver-to-camera unit vector `V`, positive slice direction `S`, and a
-normal projected into the slice,
+normal projected into the slice:
 
 ```text
-Nslice = p * (cosGamma * V - sinGamma * S).
+Nslice = p * (cosGamma * V - sinGamma * S)
 ```
 
-The uniform-solid-angle no-`acos` CDF is
+The solid-angle no-`acos` CDF is:
 
 ```text
-u(D) = 0.5 * (1 + sinGamma + side * (1 - dot(D,V))).
+u(D) = 0.5 * (1 + sinGamma + side * (1 - dot(D,V)))
 ```
 
-Within the receiver hemisphere,
+Within the receiver hemisphere, `du = 0.5 * abs(sin(alpha)) d(alpha)`, so each
+of 32 sectors owns `1/32` of the conditional uniform measure. Solid-angle GI
+keeps the front sample's receiver cosine explicit and normalizes irradiance by
+`2*pi`.
 
-```text
-du = 0.5 * abs(sin(alpha)) d(alpha),
-```
-
-so each of 32 sectors owns `1/32` of the conditional uniform measure.
-Uniform-solid-angle GI keeps the front sample's receiver cosine explicit and
-normalizes irradiance by `2*pi`.
-
-The complete joint-cosine CDF instead integrates
+The joint-cosine CDF integrates:
 
 ```text
 cos(alpha + gamma) * abs(sin(alpha))
 ```
 
-over `[-pi/2-gamma, pi/2-gamma]`. Its projected slice mass is
+Its projected slice mass is
+`p * (cos(gamma) + gamma*sin(gamma))`. Receiver cosine is already present in
+that CDF and mass, so Cosine Weighted GI multiplies new sector fraction by slice
+mass and source-facing cosine, does not apply receiver cosine again, and uses
+the outer `pi` normalization.
+
+Perspective thickness extends each sample along its camera ray:
 
 ```text
-p * (cos(gamma) + gamma*sin(gamma)).
-```
-
-The receiver cosine is already present in the CDF and mass. Cosine-weighted GI
-therefore multiplies newly covered sector fraction by slice mass and source-
-facing cosine, but not receiver cosine again, and uses the outer `pi`
-normalization. Averaging complete slice mass over uniformly selected azimuths
-recovers one, which is the normalized cosine hemisphere.
-
-Uniform Solid Angle and Cosine-Weighted Solid Angle intentionally estimate
-different per-slice approximations. Uniform sectors hold the front sample's
-receiver cosine constant over its finite angular interval. Cosine sectors
-integrate receiver cosine across that interval. A cosine result should be
-compared with joint-cosine quadrature, not with the uniform-sector reference.
-
-Perspective thickness extends each sampled point along its own camera ray:
-
-```text
-sampleBackVS = sampleVS + normalize(sampleVS) * thickness.
+sampleBackVS = sampleVS + normalize(sampleVS) * thickness
 ```
 
 Orthographic projection uses the constant camera-away direction.
-`src/visibility_projection_shared.h` analytically clips projected radius
-endpoints against positive homogeneous `w` and the active D3D near plane before
-the one perspective divide.
+`src/visibility_projection_shared.h` clips projected radius endpoints against
+positive homogeneous `w` and the active D3D near plane before the one
+perspective divide.
 
 ## Deterministic Reference Suite
 
@@ -84,71 +67,55 @@ the one perspective divide.
 coherent sector phases per fixture. It covers:
 
 1. Infinite floor and wall.
-2. Thin vertical card.
-3. Two overlapping thin cards.
-4. Fence or evenly spaced bars.
-5. Wide-FOV off-axis receiver.
-6. Near-plane-crossing geometry.
-7. Orthographic projection.
-8. Small bright transported source.
-9. Double-sided transported source card.
-10. High-frequency normal-map tilt, including out-of-plane normals.
-11. Fully metallic and black diffuse receivers.
-12. Diffuse-furnace finite multibounce energy.
-13. Screen-edge emitters.
-14. Foreground/background depth-layer ambiguity.
+2. Thin and overlapping cards.
+3. Fence-like repeated bars.
+4. Wide-FOV off-axis receivers.
+5. Near-plane-crossing geometry.
+6. Orthographic projection.
+7. Small bright and double-sided transported sources.
+8. High-frequency normal-map tilt.
+9. Metallic and black diffuse receivers.
+10. Screen-edge emitters.
+11. Foreground/background depth ambiguity.
 
 The current deterministic summary is:
 
-| Estimator/reference pair | Signed mean AO bias | AO RMSE | GI luminance RMSE | Mean GI chroma error | AO P95 | AO P99 | Mean AO phase variance |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Uniform Projected Angle / uniform fixture reference | 0.0272703 | 0.0693457 | 0.6425340 | 0.0092881 | 0.1653101 | 0.1764001 | 0.0002806 |
-| Uniform Solid Angle / uniform quadrature | -0.0000012 | 0.0000142 | 0.0002069 | 0.0000673 | 0.0000216 | 0.0000245 | 0.0002442 |
-| Cosine-Weighted Solid Angle / joint-cosine quadrature | -0.0000032 | 0.0000178 | 0.0000539 | 0.0000406 | 0.0000333 | 0.0000396 | 0.0003131 |
+| Estimator and Reference | Signed Mean AO Bias | AO RMSE | GI Luminance RMSE | Mean GI Chroma Error | AO P95 | AO P99 | Mean AO Phase Variance |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Projected Angle / uniform fixture | 0.0272703 | 0.0693457 | 0.6425340 | 0.0092881 | 0.1653101 | 0.1764001 | 0.0002806 |
+| Solid Angle / uniform quadrature | -0.0000012 | 0.0000142 | 0.0002069 | 0.0000673 | 0.0000216 | 0.0000245 | 0.0002442 |
+| Cosine Weighted / joint-cosine quadrature | -0.0000032 | 0.0000178 | 0.0000539 | 0.0000406 | 0.0000333 | 0.0000396 | 0.0003131 |
 
 These are estimator/quantization checks, not renderer image-quality or runtime
-performance evidence. In particular, the projected-angle row is not directly
-comparable to the cosine row as a ranking because the references differ.
+performance evidence. The references differ, so the rows are not a direct
+visual ranking.
 
 ## Additional Checks
 
 The estimator target also proves:
 
-- the analytic cosine antiderivative against numerical integration across
-  normal tilts and out-of-plane components;
+- the analytic cosine antiderivative against numerical integration;
 - complete projected slice mass and azimuth normalization;
 - coherent stochastic endpoint ordering and sector quantization;
-- invalid, degenerate, and non-finite inputs fail deterministically;
-- source-sidedness, chroma, and finite GI output;
-- `2*pi` uniform and `pi` cosine irradiance normalizations; and
-- no receiver-cosine double weighting in the cosine path.
+- deterministic failure for invalid, degenerate, and non-finite inputs;
+- source sidedness, chroma, and finite one-bounce GI output;
+- `2*pi` solid-angle and `pi` cosine normalization; and
+- no receiver-cosine double weighting.
 
 `uvsr_visibility_projection_tests` independently covers forward/reversed depth,
-perspective and orthographic projection, camera-plane and near-plane crossings,
-near-plane receivers, large finite radii, both-side symmetry, and invalid
-inputs.
+perspective/orthographic projection, camera-plane and near-plane crossings,
+large finite radii, symmetry, and invalid inputs.
 
-ShaderMake compiles AO-only, GI-only, combined AO/GI, first-bounce metadata,
-higher-bounce reinjection, temporal reconstruction, and both spatial-filter
-permutations. The complete configured DXIL set compiles with the pinned DXC,
-and the Release C++ renderer links with the configured Visual Studio toolchain.
+Shader packaging covers AO-only, GI-only, and combined AO/GI for the retained
+current-frame trace and both spatial filters. It does not compile bounce
+reinjection or visibility temporal reconstruction.
 
 ## Runtime Validation Still Required
 
-Automated evidence is sufficient to make Cosine-Weighted Solid Angle
-selectable, but not to make it the default. Human testing should compare thin
-geometry, normal-mapped surfaces, off-axis views, near-plane geometry, bright
-small emitters, disocclusions, and full/half/quarter resolution. Controlled
-hardware records should include GPU timestamps, register count, occupancy,
-cache/traffic measurements, memory, and matched captures. No performance win
-is claimed without those measurements.
-
-Controlled Intel PBR Sponza runs use `--benchmark-camera`. The flag selects the
-**Benchmark Position 1** `intel-pbr-sponza-courtyard-simplified-v1` preset,
-enforces its 1920x1080 reference frame in a non-resizable window, blocks
-fullscreen transitions, and freezes the view in **Locked**. The benchmark
-launch disables the **Camera Location** dropdown at Benchmark Position 1.
-**Sponza Decorated** and **Sponza Plain** therefore share one 60-degree
-benchmark pose while remaining distinct values in the benchmark record's
-`scene` field. Record the preset ID in the `camera` field and keep the adapter,
-driver, settings, warmup, and sample window fixed for comparisons.
+Automated evidence makes all three estimators selectable but does not make a
+visual or performance claim. Compare thin geometry, normal-mapped surfaces,
+off-axis views, near-plane geometry, bright small sources, disocclusions, and
+full/half/quarter resolution on the exact candidate. A controlled performance
+record must fix the executable, adapter, driver, scene, camera, resolution,
+settings, warmup, and sample window and report complete-frame time alongside
+the visibility stages.

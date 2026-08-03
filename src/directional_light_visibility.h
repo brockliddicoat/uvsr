@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 
 namespace nvrhi
@@ -30,15 +29,6 @@ namespace uvsr
             return texture != nullptr && light != nullptr;
         }
     };
-
-    // UVSR currently has three independent directional visibility producers:
-    // Screen-space shadows, SVSM, and the diagnostic CSM. Keeping the fixed
-    // ordinary-SRV interface at exactly that capacity avoids bindless
-    // requirements and an extra full-screen composition dispatch.
-    constexpr uint32_t DirectionalLightVisibilityCount = 3u;
-    using DirectionalLightVisibilitySet = std::array<
-        DirectionalLightVisibility,
-        DirectionalLightVisibilityCount>;
 
     // Renderer adapters translate their native texture descriptors into this
     // portable contract before a producer result is accepted. Every rejected

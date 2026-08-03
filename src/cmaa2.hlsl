@@ -3,16 +3,11 @@
 //
 // The algorithm body is pinned to GameTechDev/CMAA2 commit
 // 071c6b0857559f4e36f614362e6d2aab1b61938a with one documented boundary-load
-// patch. This wrapper selects the color-range and quality contracts used by
-// UVSR's RGBA16F display-linear and scene-linear targets.
+// patch. UVSR runs CMAA2 only on its RGBA16F display-linear target.
 //
 
 #ifndef CMAA2_STATIC_QUALITY_PRESET
 #error CMAA2_STATIC_QUALITY_PRESET must be a compile-time shader define
-#endif
-
-#ifndef CMAA2_SUPPORT_HDR_COLOR_RANGE
-#error CMAA2_SUPPORT_HDR_COLOR_RANGE must be a compile-time shader define
 #endif
 
 // Intel documents the full-color detector as its highest-quality path. Keep
@@ -28,6 +23,7 @@
 #define CMAA2_UAV_STORE_TYPED 1
 #define CMAA2_UAV_STORE_TYPED_UNORM_FLOAT 0
 #define CMAA2_UAV_STORE_CONVERT_TO_SRGB 0
+#define CMAA2_SUPPORT_HDR_COLOR_RANGE 0
 #define CMAA_MSAA_SAMPLE_COUNT 1
 // Intel's sample dispatches partial 28x28 edge tiles but its raw Texture.Load
 // helper does not clamp those lanes. UVSR supports arbitrary viewport sizes;

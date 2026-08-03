@@ -14,8 +14,8 @@ namespace
         uvsr::VisibilityBlueNoiseTexelCount / 10u;
     constexpr uint32_t kLayerSeeds[
         uvsr::VisibilityBlueNoiseLayerCount] = {
-        0x212ca684u, 0xaa3d4b62u, 0xbd62607cu, 0x785ad35eu,
-        0x4909ee03u, 0xb1da2d4eu, 0x4f8a460du, 0x6f55a3bau
+        0x212ca684u, 0xaa3d4b62u, 0x785ad35eu,
+        0x4909ee03u, 0xb1da2d4eu
     };
 
     struct KernelTap

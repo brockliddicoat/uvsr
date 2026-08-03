@@ -1,7 +1,6 @@
 #include "cmaa2.h"
 
 #include <donut/core/log.h>
-#include <donut/engine/CommonRenderPasses.h>
 #include <donut/engine/ShaderFactory.h>
 #include <nvrhi/utils.h>
 
@@ -74,11 +73,9 @@ namespace uvsr
     Cmaa2Pass::Cmaa2Pass(
         nvrhi::IDevice* device,
         const std::shared_ptr<ShaderFactory>& shaderFactory,
-        const std::shared_ptr<CommonRenderPasses>& commonPasses,
         nvrhi::ITexture* sceneColor)
         : m_Device(device)
     {
-        (void)commonPasses;
         if (!device || !shaderFactory || !sceneColor)
             return;
 
@@ -185,61 +182,48 @@ namespace uvsr
         m_BindingLayout = device->createBindingLayout(layout);
         RebuildBindingSet(sceneColor);
 
-        for (uint32_t colorRange = 0u;
-            colorRange < c_ColorRangeCount;
-            ++colorRange)
+        for (uint32_t quality = 0u;
+            quality < c_QualityCount;
+            ++quality)
         {
-            for (uint32_t quality = 0u;
-                quality < c_QualityCount;
-                ++quality)
+            std::vector<ShaderMacro> macros = {
+                { "CMAA2_STATIC_QUALITY_PRESET",
+                    std::to_string(quality) }
+            };
+            const auto createShader =
+                [&](const char* entryPoint)
             {
-                std::vector<ShaderMacro> macros = {
-                    { "CMAA2_STATIC_QUALITY_PRESET",
-                        std::to_string(quality) },
-                    { "CMAA2_SUPPORT_HDR_COLOR_RANGE",
-                        std::to_string(colorRange) }
-                };
-                const auto createShader =
-                    [&](const char* entryPoint)
-                {
-                    return shaderFactory->CreateShader(
-                        "uvsr/cmaa2.hlsl",
-                        entryPoint,
-                        &macros,
-                        nvrhi::ShaderType::Compute);
-                };
-                nvrhi::ComputePipelineDesc pipeline;
-                pipeline.bindingLayouts = { m_BindingLayout };
+                return shaderFactory->CreateShader(
+                    "uvsr/cmaa2.hlsl",
+                    entryPoint,
+                    &macros,
+                    nvrhi::ShaderType::Compute);
+            };
+            nvrhi::ComputePipelineDesc pipeline;
+            pipeline.bindingLayouts = { m_BindingLayout };
 
-                pipeline.CS = createShader("EdgesColor2x2CS");
-                m_EdgePipelines[colorRange][quality] =
-                    pipeline.CS
-                        ? device->createComputePipeline(pipeline)
-                        : nullptr;
-                pipeline.CS = createShader("ProcessCandidatesCS");
-                m_CandidatePipelines[colorRange][quality] =
-                    pipeline.CS
-                        ? device->createComputePipeline(pipeline)
-                        : nullptr;
-                pipeline.CS =
-                    createShader("DeferredColorApply2x2CS");
-                m_ApplyPipelines[colorRange][quality] =
-                    pipeline.CS
-                        ? device->createComputePipeline(pipeline)
-                        : nullptr;
-                pipeline.CS = createShader("ComputeDispatchArgsCS");
-                m_DispatchArgumentPipelines[colorRange][quality] =
-                    pipeline.CS
-                        ? device->createComputePipeline(pipeline)
-                        : nullptr;
-            }
+            pipeline.CS = createShader("EdgesColor2x2CS");
+            m_EdgePipelines[quality] = pipeline.CS
+                ? device->createComputePipeline(pipeline)
+                : nullptr;
+            pipeline.CS = createShader("ProcessCandidatesCS");
+            m_CandidatePipelines[quality] = pipeline.CS
+                ? device->createComputePipeline(pipeline)
+                : nullptr;
+            pipeline.CS = createShader("DeferredColorApply2x2CS");
+            m_ApplyPipelines[quality] = pipeline.CS
+                ? device->createComputePipeline(pipeline)
+                : nullptr;
+            pipeline.CS = createShader("ComputeDispatchArgsCS");
+            m_DispatchArgumentPipelines[quality] = pipeline.CS
+                ? device->createComputePipeline(pipeline)
+                : nullptr;
         }
 
         for (auto& stageQueries : m_TimerQueries)
-        {
             for (auto& query : stageQueries)
                 query = device->createTimerQuery();
-        }
+
     }
 
     bool Cmaa2Pass::IsValid() const
@@ -257,21 +241,16 @@ namespace uvsr
         {
             return false;
         }
-        for (uint32_t colorRange = 0u;
-            colorRange < c_ColorRangeCount;
-            ++colorRange)
+        for (uint32_t quality = 0u;
+            quality < c_QualityCount;
+            ++quality)
         {
-            for (uint32_t quality = 0u;
-                quality < c_QualityCount;
-                ++quality)
+            if (!m_EdgePipelines[quality] ||
+                !m_CandidatePipelines[quality] ||
+                !m_ApplyPipelines[quality] ||
+                !m_DispatchArgumentPipelines[quality])
             {
-                if (!m_EdgePipelines[colorRange][quality] ||
-                    !m_CandidatePipelines[colorRange][quality] ||
-                    !m_ApplyPipelines[colorRange][quality] ||
-                    !m_DispatchArgumentPipelines[colorRange][quality])
-                {
-                    return false;
-                }
+                return false;
             }
         }
         return true;
@@ -338,9 +317,7 @@ namespace uvsr
             stageIndex < static_cast<uint32_t>(Stage::Count);
             ++stageIndex)
         {
-            for (uint32_t slot = 0u;
-                slot < c_TimerLatency;
-                ++slot)
+            for (uint32_t slot = 0u; slot < c_TimerLatency; ++slot)
             {
                 if (!m_TimerPending[stageIndex][slot])
                     continue;
@@ -358,11 +335,11 @@ namespace uvsr
                     m_Timings.edgeMilliseconds = milliseconds;
                     break;
                 case Stage::Candidate:
-                    m_Timings.candidateMilliseconds =
-                        milliseconds;
+                    m_Timings.candidateMilliseconds = milliseconds;
                     break;
                 case Stage::Apply:
                     m_Timings.applyMilliseconds = milliseconds;
+                    m_Timings.available = true;
                     break;
                 default:
                     break;
@@ -375,13 +352,11 @@ namespace uvsr
         nvrhi::ICommandList* commandList,
         Stage stage)
     {
-        const uint32_t stageIndex =
-            static_cast<uint32_t>(stage);
+        const uint32_t stageIndex = static_cast<uint32_t>(stage);
         const uint32_t slot = m_TimerFrame % c_TimerLatency;
         if (m_TimerPending[stageIndex][slot])
             return;
-        commandList->beginTimerQuery(
-            m_TimerQueries[stageIndex][slot]);
+        commandList->beginTimerQuery(m_TimerQueries[stageIndex][slot]);
         m_TimerActive[stageIndex] = true;
     }
 
@@ -389,13 +364,11 @@ namespace uvsr
         nvrhi::ICommandList* commandList,
         Stage stage)
     {
-        const uint32_t stageIndex =
-            static_cast<uint32_t>(stage);
+        const uint32_t stageIndex = static_cast<uint32_t>(stage);
         if (!m_TimerActive[stageIndex])
             return;
         const uint32_t slot = m_TimerFrame % c_TimerLatency;
-        commandList->endTimerQuery(
-            m_TimerQueries[stageIndex][slot]);
+        commandList->endTimerQuery(m_TimerQueries[stageIndex][slot]);
         m_TimerPending[stageIndex][slot] = true;
         m_TimerActive[stageIndex] = false;
     }
@@ -423,18 +396,13 @@ namespace uvsr
     nvrhi::ITexture* Cmaa2Pass::Render(
         nvrhi::ICommandList* commandList,
         nvrhi::ITexture* sourceColor,
-        AntiAliasingQuality quality,
-        Cmaa2ColorRange colorRange)
+        AntiAliasingQuality quality)
     {
         AdvanceTimers();
         m_TimerActive.fill(false);
-
         const uint32_t qualityIndex = std::min(
             static_cast<uint32_t>(quality),
             c_QualityCount - 1u);
-        const uint32_t colorRangeIndex = std::min(
-            static_cast<uint32_t>(colorRange),
-            c_ColorRangeCount - 1u);
         if (!commandList ||
             !sourceColor ||
             !IsValid())
@@ -494,8 +462,7 @@ namespace uvsr
         }
 
         BeginStage(commandList, Stage::Edge);
-        state.pipeline =
-            m_EdgePipelines[colorRangeIndex][qualityIndex];
+        state.pipeline = m_EdgePipelines[qualityIndex];
         state.indirectParams = nullptr;
         commandList->setComputeState(state);
         // The official 16x16 input tile has a one-thread border and emits
@@ -507,8 +474,7 @@ namespace uvsr
         EndStage(commandList, Stage::Edge);
         PublishUavWrites(commandList);
 
-        state.pipeline =
-            m_DispatchArgumentPipelines[colorRangeIndex][qualityIndex];
+        state.pipeline = m_DispatchArgumentPipelines[qualityIndex];
         commandList->setComputeState(state);
         commandList->dispatch(2u, 1u, 1u);
         nvrhi::utils::BufferUavBarrier(
@@ -522,21 +488,18 @@ namespace uvsr
         commandList->commitBarriers();
 
         BeginStage(commandList, Stage::Candidate);
-        state.pipeline =
-            m_CandidatePipelines[colorRangeIndex][qualityIndex];
+        state.pipeline = m_CandidatePipelines[qualityIndex];
         state.indirectParams = m_IndirectArguments;
         commandList->setComputeState(state);
         commandList->dispatchIndirect(0u);
         EndStage(commandList, Stage::Candidate);
-
         commandList->setBufferState(
             m_IndirectArguments,
             nvrhi::ResourceStates::UnorderedAccess);
         commandList->commitBarriers();
         PublishUavWrites(commandList);
 
-        state.pipeline =
-            m_DispatchArgumentPipelines[colorRangeIndex][qualityIndex];
+        state.pipeline = m_DispatchArgumentPipelines[qualityIndex];
         state.indirectParams = nullptr;
         commandList->setComputeState(state);
         commandList->dispatch(1u, 2u, 1u);
@@ -551,13 +514,11 @@ namespace uvsr
         commandList->commitBarriers();
 
         BeginStage(commandList, Stage::Apply);
-        state.pipeline =
-            m_ApplyPipelines[colorRangeIndex][qualityIndex];
+        state.pipeline = m_ApplyPipelines[qualityIndex];
         state.indirectParams = m_IndirectArguments;
         commandList->setComputeState(state);
         commandList->dispatchIndirect(0u);
         EndStage(commandList, Stage::Apply);
-
         commandList->setBufferState(
             m_IndirectArguments,
             nvrhi::ResourceStates::UnorderedAccess);
@@ -570,15 +531,5 @@ namespace uvsr
 
         ++m_TimerFrame;
         return m_OutputColor;
-    }
-
-    void Cmaa2Pass::MarkInactiveFrame()
-    {
-        // Retire any delayed queries, then publish zero for a frame where the
-        // pass was retained only to avoid rebuilding Temporal and discarding
-        // its history when presentation morphology changes.
-        AdvanceTimers();
-        m_Timings = {};
-        ++m_TimerFrame;
     }
 }
