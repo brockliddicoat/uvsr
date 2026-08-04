@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 66,733 non-blank source lines.
+**First-Party Lines of Code:** 66,791 non-blank source lines.
 
 **Third-Party Lines of Code:** 388,209 non-blank source lines.
 
-**Total Lines of Code:** 454,942 non-blank source lines.
+**Total Lines of Code:** 455,000 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,

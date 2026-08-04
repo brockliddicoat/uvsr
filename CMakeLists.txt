@@ -452,6 +452,31 @@ if (UVSR_BUILD_APPLICATION)
 endif()
 
 enable_testing()
+if (WIN32)
+    set(UVSR_README_LINE_COUNT_COMMAND
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/update_readme_line_counts.cmd"
+    )
+else()
+    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+    set(UVSR_README_LINE_COUNT_COMMAND
+        "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/update_readme_line_counts.py"
+    )
+endif()
+add_test(
+    NAME uvsr_readme_line_count_self_test
+    COMMAND ${UVSR_README_LINE_COUNT_COMMAND} --self-test
+)
+add_test(
+    NAME uvsr_readme_line_count_contract
+    COMMAND ${UVSR_README_LINE_COUNT_COMMAND} --check
+)
+set_tests_properties(
+    uvsr_readme_line_count_self_test
+    uvsr_readme_line_count_contract
+    PROPERTIES LABELS "documentation"
+)
+
 add_executable(uvsr_scene_catalog_tests
     tests/scene_catalog_tests.cpp
     src/scene_catalog.cpp
