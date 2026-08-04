@@ -92,8 +92,20 @@ int main(int argc, char** argv)
     }
 
     const std::filesystem::path root = argv[1];
+    const std::string buildSystem = ReadFile(root / "CMakeLists.txt");
+    const std::string attributes = ReadFile(root / ".gitattributes");
     const std::string viewer = ReadFile(root / "src/uvsr.cpp");
     const std::string cmaa = ReadFile(root / "src/cmaa2.cpp");
+    const std::string cmaaHeader = ReadFile(root / "src/cmaa2.h");
+    const std::string cmaaShader = ReadFile(root / "src/cmaa2.hlsl");
+    const std::string cmaaVendoredShader = ReadFile(
+        root / "src/third_party/intel_cmaa2/CMAA2.hlsl");
+    const std::string fastApproximate = ReadFile(
+        root / "src/fast_approximate_aa.cpp");
+    const std::string fastApproximateHeader = ReadFile(
+        root / "src/fast_approximate_aa.h");
+    const std::string fastApproximateShader = ReadFile(
+        root / "src/fast_approximate_aa_ps.hlsl");
     const std::string deferredLighting = ReadFile(
         root / "src/pbr_deferred_lighting_cs.hlsl");
     const std::string deferredConstants = ReadFile(
@@ -337,6 +349,23 @@ int main(int argc, char** argv)
         viewer,
         "m_TemporalAAPass->PreparePipelinesStep()",
         "temporal-AA loading-frame pipeline step");
+    passed &= ExpectContains(
+        viewer,
+        "RenderPassPreparationStage::FastApproximateAA",
+        "staged Fast Approximate pass preparation");
+    passed &= ExpectContains(
+        viewer,
+        "CreateFastApproximateAAPass();",
+        "lazy Fast Approximate pass creation");
+    const std::string_view fastApproximateLifetime = ExtractSection(
+        viewer,
+        "if (fastApproximateAARequired && !m_FastApproximateAAPass)",
+        "m_ui.ShaderReloadRequested = false;");
+    passed &= ExpectOrdered(
+        fastApproximateLifetime,
+        "m_Cmaa2Pass->UpdateSourceColor(",
+        "m_FastApproximateAAPass.reset();",
+        "retained CMAA2 source release before Fast Approximate teardown");
 
     const std::string_view prepareRadiance = ExtractSection(
         imageBasedLighting,
@@ -472,6 +501,10 @@ int main(int argc, char** argv)
         refresh,
         "m_ScreenSpaceVisibilityPass->ResetHistory();",
         "visibility-owned temporal history invalidation");
+    passed &= ExpectContains(
+        refresh,
+        "m_FastApproximateAAPass->UpdateSourceColor(",
+        "Fast Approximate resource retention");
     passed &= ExpectContains(
         refresh,
         "m_Cmaa2Pass->UpdateSourceColor(",
@@ -723,6 +756,107 @@ int main(int argc, char** argv)
         viewer,
         "virtual void RenderScene(nvrhi::IFramebuffer* framebuffer) override",
         "std::shared_ptr<ShaderFactory> GetShaderFactory()");
+    const std::string_view setupView = ExtractSection(
+        viewer,
+        "bool SetupView()",
+        "void CaptureCurrentViewForMotionVectors()");
+    passed &= ExpectContains(
+        setupView,
+        "m_ui.GetResolvedAntiAliasingSettings()",
+        "resolved TAA jitter selection");
+    passed &= ExpectContains(
+        setupView,
+        "antiAliasing.temporalJitterSequence,\n"
+            "                m_AntiAliasingPhase",
+        "selected TAA jitter sequence and phase");
+    passed &= ExpectContains(
+        setupView,
+        "planarView->SetPixelOffset(float2(jitter.x, jitter.y));",
+        "selected subpixel camera offset");
+    passed &= ExpectOrdered(
+        renderScene,
+        "m_AgxToneMappingPass->Render(",
+        "m_FastApproximateAAPass->Render(",
+        "Fast Approximate post-tone-map order");
+    passed &= ExpectOrdered(
+        renderScene,
+        "m_FastApproximateAAPass->Render(",
+        "m_Cmaa2Pass->Render(",
+        "Fast Approximate before morphological AA");
+    passed &= ExpectContains(
+        renderScene,
+        "BeginRendererStage(RendererTimingStage::FastApproximate);",
+        "Fast Approximate timing attribution");
+    passed &= ExpectContains(
+        renderScene,
+        "antiAliasing.fastApproximateEnabled ||",
+        "temporal presentation sharpening before spatial AA");
+    passed &= ExpectContains(
+        renderScene,
+        "const bool fastApproximateAARequired =",
+        "independent Fast Approximate topology gate");
+
+    passed &= ExpectContains(
+        fastApproximateHeader,
+        "class FastApproximateAAPass",
+        "Fast Approximate first-party pass API");
+    passed &= ExpectContains(
+        fastApproximate,
+        "outputDesc.format = nvrhi::Format::RGBA16_FLOAT;",
+        "matching Fast Approximate display-linear output");
+    passed &= ExpectContains(
+        fastApproximate,
+        "sourceColor == m_OutputColor.Get()",
+        "Fast Approximate SRV/RT feedback rejection");
+    passed &= ExpectContains(
+        fastApproximate,
+        "m_BindingSet = nullptr;\n"
+            "            m_BoundSource = nullptr;",
+        "incompatible Fast Approximate source release");
+    passed &= ExpectContains(
+        fastApproximate,
+        "compositeView.GetNumChildViews(ViewType::PLANAR) != 1u",
+        "Fast Approximate full-view fail-closed gate");
+    passed &= ExpectContains(
+        fastApproximateShader,
+        "sqrt(dot(",
+        "Fast Approximate perceptual edge classification");
+    passed &= ExpectContains(
+        fastApproximateShader,
+        "const float lumaNearNegative = PerceptualLuma(",
+        "Fast Approximate per-sample near luminance");
+    passed &= ExpectContains(
+        fastApproximateShader,
+        "const float lumaFarPositive = PerceptualLuma(",
+        "Fast Approximate per-sample far luminance");
+    passed &= ExpectAbsent(
+        fastApproximateShader,
+        "PerceptualLuma(filtered.rgb)",
+        "Fast Approximate nonlinear filtered-luminance reconstruction");
+    passed &= ExpectContains(
+        fastApproximateShader,
+        "float4(filtered.rgb, colorCenter.a)",
+        "Fast Approximate presentation alpha preservation");
+    passed &= ExpectContains(
+        buildSystem,
+        "src/fast_approximate_aa.cpp",
+        "Fast Approximate application build registration");
+    passed &= ExpectContains(
+        buildSystem,
+        "fast_approximate_aa_ps",
+        "Fast Approximate runtime shader registration");
+    passed &= ExpectContains(
+        buildSystem,
+        "licenses/Google-Filament-FXAA-Attribution.md",
+        "Fast Approximate runtime attribution packaging");
+    passed &= ExpectContains(
+        buildSystem,
+        "licenses/BSD-2-Clause.txt",
+        "Fast Approximate runtime BSD packaging");
+    passed &= ExpectContains(
+        attributes,
+        "third_party/licenses/BSD-2-Clause.txt -text -whitespace",
+        "stable Fast Approximate BSD license bytes");
     passed &= ExpectOrdered(
         renderScene,
         "UpdateFlashlightTransform();",
@@ -986,6 +1120,86 @@ int main(int argc, char** argv)
         cmaa,
         "RebuildBindingSet(sourceColor);",
         "CMAA2 source rebinding");
+    passed &= ExpectContains(
+        cmaa,
+        "struct alignas(16) Cmaa2Constants",
+        "CMAA2 runtime threshold constants");
+    passed &= ExpectContains(
+        cmaa,
+        "static_assert(sizeof(Cmaa2Constants) == 16u);",
+        "CMAA2 constant-buffer alignment");
+    passed &= ExpectContains(
+        cmaa,
+        "constantBufferDesc.isVolatile = true;",
+        "CMAA2 volatile threshold constants");
+    passed &= ExpectContains(
+        cmaa,
+        "nvrhi::BindingLayoutItem::VolatileConstantBuffer(0)",
+        "CMAA2 threshold binding layout");
+    passed &= ExpectContains(
+        cmaa,
+        "nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer)",
+        "CMAA2 threshold binding set");
+    passed &= ExpectContains(
+        cmaa,
+        "ClampCmaa2EdgeThreshold(settings.cmaa2EdgeThreshold)",
+        "CMAA2 runtime threshold clamp");
+    passed &= ExpectContains(
+        cmaa,
+        "commandList->writeBuffer(\n"
+            "            m_ConstantBuffer, &constants, sizeof(constants));",
+        "CMAA2 per-frame threshold upload");
+    passed &= ExpectContains(
+        cmaaHeader,
+        "static_cast<uint32_t>(Cmaa2EdgeDetector::Count)",
+        "CMAA2 detector permutation count");
+    passed &= ExpectContains(
+        cmaa,
+        "m_EdgePipelines[detector]",
+        "CMAA2 detector pipeline creation");
+    passed &= ExpectContains(
+        cmaa,
+        "m_EdgePipelines[detectorIndex]",
+        "CMAA2 detector pipeline selection");
+    for (const std::string_view sharedPipeline : {
+            std::string_view("m_CandidatePipeline"),
+            std::string_view("m_ApplyPipeline"),
+            std::string_view("m_DispatchArgumentPipeline") })
+    {
+        passed &= ExpectContains(
+            cmaaHeader,
+            sharedPipeline,
+            "detector-independent CMAA2 pipeline");
+    }
+    passed &= ExpectAbsent(
+        cmaaHeader,
+        "c_QualityCount",
+        "retired CMAA2 quality permutation count");
+    passed &= ExpectAbsent(
+        cmaa,
+        "m_CandidatePipelines",
+        "retired duplicated CMAA2 stage pipelines");
+    passed &= ExpectAbsent(
+        cmaa,
+        "CMAA2_STATIC_QUALITY_PRESET",
+        "retired CMAA2 static threshold axis");
+    passed &= ExpectContains(
+        cmaaShader,
+        "cbuffer UvsrCmaa2Constants : register(b0)",
+        "CMAA2 runtime threshold shader constants");
+    passed &= ExpectContains(
+        cmaaShader,
+        "#define g_CMAA2_EdgeThreshold "
+            "lpfloat(g_UvsrCmaa2EdgeThreshold)",
+        "CMAA2 runtime threshold hook");
+    passed &= ExpectContains(
+        cmaaVendoredShader,
+        "#ifndef g_CMAA2_EdgeThreshold",
+        "pinned CMAA2 threshold override boundary");
+    passed &= ExpectContains(
+        renderScene,
+        "displayTexture,\n                antiAliasing);",
+        "resolved CMAA2 runtime settings dispatch");
 
     const std::string_view commandLine = ExtractSection(
         viewer,

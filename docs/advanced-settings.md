@@ -12,8 +12,8 @@ The Settings panel contains nine top-level drawers in this order:
    reconstruction.
 3. **Buffers** owns the two retained Visibility precision choices.
 4. **Statistics** reports a compact frame summary and a detailed selected effect.
-5. **Aliasing** independently enables the temporal, morphological, and
-   multisample techniques.
+5. **Aliasing** independently enables the temporal, fast approximate,
+   morphological, and multisample techniques.
 6. **Debug** combines world appearance and effect-specific information views.
 7. **Sky** configures the global environment and ambient fill.
 8. **Lights** edits scene lights and the camera flashlight.
@@ -70,32 +70,50 @@ tracking.
 
 ## Aliasing
 
-TAA, CMAA2, and MSAA are separate checkboxes and all default off. They can be
-combined. The execution order is deferred MSAA resolve, TAA, tone mapping, then
+TAA, Fast Approximate AA, CMAA2, and MSAA are separate checkboxes and all
+default off. They can be combined. The execution order is deferred MSAA
+resolve, TAA, tone mapping, display-linear Fast Approximate AA, then
 display-linear CMAA2.
 
-The three animated technique sections are **Temporal Reconstructive**,
-**Conservative Morphological**, and **Multisample Reference**. Each has an
-**Enable** control. The visible temporal controls are Quality and Temporal
-Cost. The default-closed **Advanced** tree begins with an **Algorithm** group;
-its first control is **Previous-Depth Validation**, whose choices are Stationary
-Bypass and Four-Texel Footprint. Reconstruction, history, motion, and
-rectification follow. The **Cost** group contains storage, weighting, motion
+The four animated technique sections are **Temporal Reconstructive**, **Fast
+Approximate**, **Conservative Morphological**, and **Multisample Adaptive**.
+Each has an **Enable** control, a visible **Quality** selector with Low, Medium,
+High, and Ultra choices, and its own default-closed **Advanced** tree. Temporal
+Reconstructive also keeps **Cost** visible beside Quality. Temporal Advanced
+begins with an **Algorithm** group. Its first control is **Jitter Sequence**,
+with Rotated Grid 4, Uniform Helix 4, Halton 8, Halton 16, Halton 32, and Sobol
+32 choices. Filament Halton 16 is the factory default. The selector owns its
+own reset and does not make Quality or Cost Custom. Changing it restarts
+temporal history at phase zero. **Depth Validation** follows, with Stationary
+Bypass and Four-Texel Footprint choices. Reconstruction, history, motion, and
+rectification come next. The **Cost** group contains storage, weighting, motion
 trust, clipping, blending, and sharpening policies. Inherited dropdowns preview
 their effective choice and list every concrete choice once; the adjacent reset
 icon reattaches a row to its recipe. Only Preset Sharpening retains an
 **(Automatic)** choice. History Frames displays 1 through 32 and History
 Strength displays 0 through 200 percent; neither exposes the internal
-inheritance value. Algorithm changes append **(Custom)** to Quality, while Cost
-changes append **(Custom)** to Temporal Cost; each marker clears after its group
-returns to the selected recipe. Each top-level reset arrow restores its complete
+inheritance value. Recipe-owned Algorithm changes append **(Custom)** to
+Quality, while Jitter Sequence remains independent and Cost changes append
+**(Custom)** to Cost. Each marker clears after its group returns to the selected
+recipe. Each top-level reset arrow restores its complete
 factory preset-and-owned-settings group. Choosing a named preset reapplies the
 complete group, and choosing a preset-equivalent Advanced value reattaches that
 row. Disabling the technique does not erase stored choices.
 
-CMAA2 exposes its quality. It is LDR/display-linear only; the retired HDR
-variant is not compiled. MSAA exposes 2x, 4x, 8x, and 16x sample counts and
-falls back with a visible diagnostic when the active adapter cannot provide the
+Fast Approximate Quality owns Edge Sharpness, Relative Edge Threshold, and
+Minimum Edge Threshold. Low uses 2, 0.25, and 0.06; Medium uses 4, 0.1875, and
+0.055; High uses 8, 0.125, and 0.05; Ultra uses Filament's 8, 0.08, and 0.04.
+Advanced exposes those three controls over their source-backed ranges.
+
+CMAA2 Quality owns **Edge Threshold** and **Detector**. Low, Medium, High, and
+Ultra use thresholds 0.15, 0.10, 0.07, and 0.05 respectively; Low through High
+use Luma detection, while Ultra uses Full Color. Advanced exposes the continuous
+0.05-through-0.15 threshold and Luma/Full Color detector. CMAA2 remains
+LDR/display-linear only; the retired HDR variant is not compiled.
+
+Multisample Adaptive Quality maps Low, Medium, High, and Ultra to 2x, 4x, 8x,
+and 16x respectively. Advanced retains direct sample-count selection and falls
+back with a visible diagnostic when the active adapter cannot provide the
 requested topology.
 
 See [Temporal Aliasing Options](temporal-aa-options.md) for the retained
@@ -139,7 +157,8 @@ shows one selected effect at a time in a labeled, striped two-column table. The
 selector contains **Complete
 Renderer**, **Scene Setup**, **Geometry**, **Direct Lighting**, **Screen-Space
 Visibility**, **Screen-Space Shadows**, **Temporal Reconstructive**,
-**Conservative Morphological**, **Multisample**, **Material Picking**,
+**Fast Approximate**, **Conservative Morphological**, **Multisample Adaptive**,
+**Material Picking**,
 **Environment Background**, **Tone Mapping**, and **Output Blit**. Complete
 Renderer restores the full stage breakdown, including an available Closest
 Surface Resolve; selecting an ordinary stage keeps
@@ -161,13 +180,14 @@ Press `/` to open the command bar. Enter applies a command, Tab completes the
 current token, Up and Down browse history, and Escape cancels the active edit.
 The input reserves one row. Its empty guidance separates those instructions
 with slashes and disappears as soon as typing begins. After Enter, that same
-input shows a green `Success` or red `Error` result until the next command is
-typed; no floating result bar can cover Settings. When the complete result is
+input shows a blue `Success` or saturated-crimson `Error` result until the next
+command is typed; no floating result bar can cover Settings. When the complete result is
 longer than the input, a trailing details button deliberately opens a bounded,
 scrollable, selectable read-only view. The catalog mirrors the current
-UI-backed settings with 122 entries: 118 values and four actions. Type a section
+UI-backed settings with 131 entries: 127 values and four actions. Type a section
 prefix such as
-`visibility.`, `anti-aliasing.taa.`, `anti-aliasing.cmaa2.`,
+`visibility.`, `anti-aliasing.taa.`, `anti-aliasing.fxaa.`,
+`anti-aliasing.cmaa2.`,
 `anti-aliasing.msaa.`, `debug.`, or `shadows.` and use completion to inspect the
 exact paths and accepted values.
 
@@ -187,8 +207,8 @@ cmake --build build --config Release --target uvsr
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The shader build contains 268 core tasks and 46 Screen-Space Directional Shadow
-tasks, for 314 first-party and 390 integrated tasks after Donut's 76.
+The shader build contains 258 core tasks and 46 Screen-Space Directional Shadow
+tasks, for 304 first-party and 380 integrated tasks after Donut's 76.
 `uvsr_screen_space_directional_shadows` remains the only specialist renderer
 component target. Production/developer/factory manifest forks and
 shadow-technique component builds were removed.

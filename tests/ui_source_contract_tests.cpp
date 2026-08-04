@@ -540,8 +540,9 @@ namespace
                 "Screen-Space Visibility",
                 "Screen-Space Shadows",
                 "Temporal Reconstructive",
+                "Fast Approximate",
                 "Conservative Morphological",
-                "Multisample",
+                "Multisample Adaptive",
                 "Material Picking",
                 "Environment Background",
                 "Tone Mapping",
@@ -578,6 +579,7 @@ namespace
                 "\"Material Picking\"",
                 "\"Environment Background\"",
                 "\"Tone Mapping\"",
+                "\"Fast Approximate\"",
                 "\"Output Blit\""
             },
             "complete renderer timing table");
@@ -634,6 +636,10 @@ namespace
             viewer,
             "m_ui.AntiAliasing.cmaa2.enabled",
             "disabled morphological timing gate");
+        RequireContains(
+            statistics,
+            "RendererTimingStage::FastApproximate",
+            "Fast Approximate renderer timing gate");
         RequireContains(
             viewer,
             "m_DisplayedTemporalAATimings = snapshot.temporalAATimings;",
@@ -727,15 +733,31 @@ namespace
             {
                 "\"Temporal Reconstructive##Aliasing\"",
                 "\"Enable##TemporalReconstructive\"",
-                "\"Temporal Cost\"",
+                "\"Quality##TemporalReconstructive\"",
+                "\"Cost\",",
                 "ImGui::SetNextItemOpen(false, ImGuiCond_Once);",
                 "\"Advanced##TemporalReconstructive\"",
                 "ImGui::SeparatorText(\"Algorithm\")",
-                "\"Previous-Depth Validation\"",
+                "\"Jitter Sequence##TemporalReconstructive\"",
+                "\"Depth Validation\"",
+                "\"Fast Approximate##Aliasing\"",
+                "\"Enable##FastApproximate\"",
+                "\"Quality##FastApproximate\"",
+                "\"Advanced##FastApproximate\"",
+                "\"Edge Sharpness##FastApproximate\"",
+                "\"Relative Edge Threshold##FastApproximate\"",
+                "\"Minimum Edge Threshold##FastApproximate\"",
                 "\"Conservative Morphological##Aliasing\"",
                 "\"Enable##ConservativeMorphological\"",
-                "\"Multisample Reference##Aliasing\"",
-                "\"Enable##MultisampleReference\""
+                "\"Quality##ConservativeMorphological\"",
+                "\"Advanced##ConservativeMorphological\"",
+                "\"Edge Threshold##ConservativeMorphological\"",
+                "\"Detector##ConservativeMorphological\"",
+                "\"Multisample Adaptive##Aliasing\"",
+                "\"Enable##MultisampleAdaptive\"",
+                "\"Quality##MultisampleAdaptive\"",
+                "\"Advanced##MultisampleAdaptive\"",
+                "\"Samples##MultisampleAdaptive\""
             },
             "independent Aliasing controls");
         RequireContains(
@@ -746,7 +768,7 @@ namespace
             aliasing,
             "aliasing.temporal.stationaryBypass !=\n"
             "                    aliasingDefaults.temporal.stationaryBypass ||",
-            "Previous-Depth Validation Quality ownership");
+            "Depth Validation Quality ownership");
         RequireContains(
             aliasing,
             "!(aliasing.temporal.algorithmOverrides ==\n"
@@ -755,7 +777,7 @@ namespace
         RequireContains(
             aliasing,
             "const bool temporalCostCustom =",
-            "Cost-owned Temporal Cost custom state");
+            "Cost-owned custom state");
         RequireContains(
             aliasing,
             "!(aliasing.temporal.behaviorOverrides ==\n"
@@ -798,9 +820,39 @@ namespace
                 aliasing,
                 "static constexpr const char* CostLabels[] = {",
                 "};",
-                "Temporal Cost labels"),
+                "Cost labels"),
             { "Full Quality", "Reduced", "Minimum" },
-            "Temporal Cost labels");
+            "Cost labels");
+        RequireExactStrings(
+            ExtractSection(
+                aliasing,
+                "static constexpr const char* JitterSequenceLabels[] = {",
+                "};",
+                "Jitter Sequence labels"),
+            {
+                "Rotated Grid 4",
+                "Uniform Helix 4",
+                "Halton 8",
+                "Halton 16",
+                "Halton 32",
+                "Sobol 32"
+            },
+            "Jitter Sequence labels");
+        RequireContains(
+            aliasing,
+            "\"TemporalJitterSequence\"",
+            "Jitter Sequence dedicated reset");
+        RequireContains(
+            aliasing,
+            "settings->temporal.jitterSequence =\n"
+            "                                    static_cast<TemporalAaJitterSequence>(",
+            "Jitter Sequence independent selection callback");
+        RequireContains(
+            aliasing,
+            "Recipe-owned Algorithm changes append (Custom). The circular \"\n"
+            "                \"arrow restores factory Quality and its owned Algorithm \"\n"
+            "                \"controls.",
+            "Quality tooltip excludes independent Jitter Sequence ownership");
         RequireContains(
             aliasing,
             "temporalQualityCustom,\n"
@@ -810,7 +862,7 @@ namespace
             aliasing,
             "temporalCostCustom,\n"
             "                applyTemporalCostPreset);",
-            "Temporal Cost custom preview and group binding");
+            "Cost custom preview and group binding");
         RequireContains(
             aliasing,
             "aliasingDefaults.temporal.quality ||\n"
@@ -820,7 +872,7 @@ namespace
             aliasing,
             "settings->temporal.stationaryBypass =\n"
             "                        stationaryBypass;",
-            "Quality group Previous-Depth reset");
+            "Quality group Depth Validation reset");
         RequireContains(
             aliasing,
             "settings->temporal.algorithmOverrides =\n"
@@ -830,26 +882,69 @@ namespace
             aliasing,
             "aliasingDefaults.temporal.costMode ||\n"
             "                    temporalCostCustom",
-            "Temporal Cost group reset visibility");
+            "Cost group reset visibility");
         RequireContains(
             aliasing,
             "settings->temporal.behaviorOverrides =\n"
             "                        behaviorOverrides;",
-            "Temporal Cost group policy reset");
+            "Cost group policy reset");
         RequireContains(
             aliasing,
             "ui->TemporalAaSharpenEnabled = false;\n"
             "                    ui->TemporalAaSharpness =\n"
             "                        TemporalAaDefaultSharpness;",
-            "Temporal Cost group sharpening reset");
+            "Cost group sharpening reset");
+
+        Require(
+            CountOccurrences(aliasing, "drawPresetEnum(") == 5u,
+            "Aliasing must expose four shared Quality rows and Cost; Jitter Sequence is independent inside Algorithm.");
+        for (const std::string_view recipeContract : {
+                std::string_view("MatchesFastApproximateAaQualityPreset"),
+                std::string_view("ApplyFastApproximateAaQualityPreset"),
+                std::string_view("MatchesCmaa2QualityPreset"),
+                std::string_view("ApplyCmaa2QualityPreset"),
+                std::string_view("MatchesMultisampleQualityPreset"),
+                std::string_view("ApplyMultisampleQualityPreset") })
+        {
+            RequireContains(
+                aliasing,
+                recipeContract,
+                "spatial AA Quality recipe wiring");
+        }
+
+        const std::string_view cmaa2Advanced = ExtractSection(
+            aliasing,
+            "\"Advanced##ConservativeMorphological\"",
+            "\"Multisample Adaptive##Aliasing\"",
+            "CMAA2 Advanced section");
+        RequireOrdered(
+            cmaa2Advanced,
+            {
+                "\"Edge Threshold##ConservativeMorphological\"",
+                "\"Detector##ConservativeMorphological\""
+            },
+            "CMAA2 Advanced controls");
+        RequireExactStrings(
+            ExtractSection(
+                cmaa2Advanced,
+                "static constexpr const char* DetectorLabels[] = {",
+                "};",
+                "CMAA2 detector labels"),
+            { "Luma", "Full Color" },
+            "CMAA2 detector labels");
+        RequireAbsent(
+            cmaa2Advanced,
+            "Quality##ConservativeMorphological",
+            "CMAA2 Advanced section");
 
         const std::string_view advanced = ExtractSection(
             aliasing,
             "\"Advanced##TemporalReconstructive\"",
-            "\"Conservative Morphological##Aliasing\"",
+            "\"Fast Approximate##Aliasing\"",
             "Temporal Advanced section");
         for (const std::string_view control : {
-                std::string_view("\"Previous-Depth Validation\""),
+                std::string_view("\"Jitter Sequence##TemporalReconstructive\""),
+                std::string_view("\"Depth Validation\""),
                 std::string_view("\"Motion Source\""),
                 std::string_view("\"Current Sample\""),
                 std::string_view("\"History Filter\""),
@@ -878,7 +973,8 @@ namespace
             advanced,
             {
                 "ImGui::SeparatorText(\"Algorithm\")",
-                "\"Previous-Depth Validation\"",
+                "\"Jitter Sequence##TemporalReconstructive\"",
+                "\"Depth Validation\"",
                 "\"Motion Source\"",
                 "\"History Strength\"",
                 "ImGui::SeparatorText(\"Cost\")",
@@ -952,15 +1048,25 @@ namespace
             "requested != -1.f &&\n                        (requested < 0.f || requested > 2.f)",
             "history-strength command rejects sentinel-adjacent values");
         Require(
-            CountOccurrences(aliasing, "BeginAnimatedTreeNode(") == 4u,
-            "Aliasing must retain three technique disclosures and one "
-            "Advanced disclosure.");
+            CountOccurrences(aliasing, "BeginAnimatedTreeNode(") == 8u,
+            "Aliasing must expose four technique disclosures and one "
+            "Advanced disclosure for each technique.");
+        Require(
+            CountOccurrences(
+                aliasing,
+                "ImGui::SetNextItemOpen(false, ImGuiCond_Once);") == 4u,
+            "every Aliasing Advanced disclosure must start collapsed.");
 
         const std::string_view temporalSettings = ExtractSection(
             temporalOptions,
             "struct TemporalAaSettings",
-            "struct Cmaa2Settings",
+            "struct FastApproximateAaSettings",
             "Temporal AA defaults");
+        const std::string_view fastApproximateSettings = ExtractSection(
+            temporalOptions,
+            "struct FastApproximateAaSettings",
+            "struct Cmaa2Settings",
+            "Fast Approximate defaults");
         const std::string_view cmaa2Settings = ExtractSection(
             temporalOptions,
             "struct Cmaa2Settings",
@@ -976,13 +1082,37 @@ namespace
             "boolenabled=false;",
             "TAA default");
         RequireContains(
+            Compact(fastApproximateSettings),
+            "boolenabled=false;",
+            "Fast Approximate default");
+        RequireContains(
+            Compact(fastApproximateSettings),
+            "edgeSharpness=FastApproximateAaDefaultEdgeSharpness;",
+            "Fast Approximate sharpness default");
+        RequireContains(
+            Compact(fastApproximateSettings),
+            "AntiAliasingQualityquality=AntiAliasingQuality::Ultra;",
+            "Fast Approximate Quality default");
+        RequireContains(
             Compact(cmaa2Settings),
             "boolenabled=false;",
             "CMAA2 default");
         RequireContains(
+            Compact(cmaa2Settings),
+            "edgeThreshold=Cmaa2DefaultEdgeThreshold;",
+            "CMAA2 threshold default");
+        RequireContains(
+            Compact(cmaa2Settings),
+            "Cmaa2EdgeDetectordetector=Cmaa2EdgeDetector::FullColor;",
+            "CMAA2 detector default");
+        RequireContains(
             Compact(msaaSettings),
             "boolenabled=false;",
             "MSAA default");
+        RequireContains(
+            Compact(msaaSettings),
+            "AntiAliasingQualityquality=AntiAliasingQuality::Medium;",
+            "Multisample Adaptive Quality default");
         RequireContains(
             Compact(temporalSettings),
             "boolstationaryBypass=true;",
@@ -1259,14 +1389,67 @@ namespace
         std::string_view viewer,
         std::string_view catalogSource)
     {
+        const std::string_view enumCommandHelper = ExtractSection(
+            viewer,
+            "static bool ApplyCommandEnum(",
+            "bool DispatchUiCommandValue(",
+            "enum command helper");
+        const std::string compactEnumCommandHelper =
+            Compact(enumCommandHelper);
+        RequireContains(
+            compactEnumCommandHelper,
+            "boolallowSameValueMutation=false",
+            "recipe-aware enum command mutation contract");
+        RequireContains(
+            compactEnumCommandHelper,
+            "candidate==current&&!allowSameValueMutation",
+            "same-tier recipe command mutation contract");
+
+        const std::string_view aliasingDispatcher = ExtractSection(
+            viewer,
+            "bool DispatchAliasingCommandValue(",
+            "bool DispatchDebugCommandValue(",
+            "Aliasing command dispatcher");
+        const std::string_view jitterDispatcher = ExtractSection(
+            aliasingDispatcher,
+            "else if (path == \"anti-aliasing.taa.jitter-sequence\")",
+            "else if (path == \"anti-aliasing.taa.previous-depth\")",
+            "TAA Jitter Sequence command dispatcher");
+        RequireOrdered(
+            jitterDispatcher,
+            {
+                "{ \"rotated-grid-4\", Sequence::RotatedGrid4 }",
+                "{ \"uniform-helix-4\", Sequence::UniformHelix4 }",
+                "{ \"halton-8\", Sequence::Halton23x8 }",
+                "{ \"halton-16\", Sequence::Halton23x16 }",
+                "{ \"halton-32\", Sequence::Halton23x32 }",
+                "{ \"sobol-32\", Sequence::Sobol32 }"
+            },
+            "TAA Jitter Sequence command tokens and enum mapping");
+        Require(
+            CountOccurrences(jitterDispatcher, "{ \"") == 6u,
+            "the TAA Jitter Sequence dispatcher must expose exactly six values");
+        for (const std::string_view customState : {
+                std::string_view("temporalQualityCustom"),
+                std::string_view("temporalCostCustom"),
+                std::string_view("fastApproximateQualityCustom"),
+                std::string_view("cmaa2QualityCustom"),
+                std::string_view("multisampleQualityCustom") })
+        {
+            Require(
+                CountOccurrences(aliasingDispatcher, customState) == 2u,
+                "Aliasing recipe commands must permit same-tier reapplication only for " +
+                    std::string(customState) + ".");
+        }
+
         const std::string_view catalog = ExtractSection(
             catalogSource,
             "inline constexpr auto UiSettingsCommandCatalog = std::array{",
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 122u,
-            "Settings command catalog must contain exactly 122 entries.");
+        Require(entries.size() == 131u,
+            "Settings command catalog must contain exactly 131 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -1280,8 +1463,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 118u,
-            "Settings command catalog must contain exactly 118 values.");
+        Require(valueCount == 127u,
+            "Settings command catalog must contain exactly 127 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -1293,9 +1476,17 @@ namespace
         for (const std::string_view path : {
                 std::string_view("visibility.noise"),
                 std::string_view("anti-aliasing.taa.enabled"),
+                std::string_view("anti-aliasing.taa.jitter-sequence"),
                 std::string_view("anti-aliasing.taa.previous-depth"),
+                std::string_view("anti-aliasing.fxaa.enabled"),
+                std::string_view("anti-aliasing.fxaa.quality"),
+                std::string_view(
+                    "anti-aliasing.fxaa.minimum-edge-threshold"),
                 std::string_view("anti-aliasing.cmaa2.enabled"),
+                std::string_view("anti-aliasing.cmaa2.edge-threshold"),
+                std::string_view("anti-aliasing.cmaa2.detector"),
                 std::string_view("anti-aliasing.msaa.enabled"),
+                std::string_view("anti-aliasing.msaa.quality"),
                 std::string_view("debug.world.materials"),
                 std::string_view("debug.visibility.view"),
                 std::string_view("debug.pbr.filter"),
@@ -1350,10 +1541,7 @@ namespace
             },
             {
                 "Aliasing",
-                ExtractSection(viewer,
-                    "bool DispatchAliasingCommandValue(",
-                    "bool DispatchDebugCommandValue(",
-                    "Aliasing command dispatcher")
+                aliasingDispatcher
             },
             {
                 "Debug",
@@ -1440,8 +1628,86 @@ namespace
             "retired factory command taxonomy");
     }
 
-    void ValidateUiSafety(std::string_view viewer)
+    void ValidateUiSafety(
+        std::string_view viewer,
+        std::string_view donutAppOverride,
+        std::string_view imguiUiOverride)
     {
+        const std::string_view visualTokens = ExtractSection(
+            viewer,
+            "struct UiVisualTokens",
+            "struct StatSnapshot",
+            "UI visual tokens");
+        RequireContains(
+            visualTokens,
+            "ImVec4 errorText = ImVec4(0.92f, 0.12f, 0.16f, 1.f);",
+            "saturated command failure red");
+        RequireContains(
+            visualTokens,
+            "ImVec4 successText = ImVec4(0.26f, 0.59f, 0.98f, 1.f);",
+            "Material-accent command success blue");
+        RequireContains(
+            donutAppOverride,
+            "+    const ImVec4 filenameColor = ImVec4(0.26f, 0.59f, 0.98f, 1.0f);",
+            "staged Material texture-filename accent blue");
+        RequireAbsent(
+            viewer,
+            "tokens.errorText =",
+            "skin-specific command failure color override");
+
+        const std::string_view resetIcon = ExtractSection(
+            viewer,
+            "static bool DrawPresetResetIconAtPlacement(",
+            "static bool DrawPresetResetIcon(",
+            "preset reset icon renderer");
+        RequireContains(
+            Compact(resetIcon),
+            "constboolpressed=ImGui::Button(\"##PresetReset\","
+            "ImVec2(buttonSize,buttonSize));",
+            "native preset reset button frame");
+        RequireAbsent(
+            resetIcon,
+            "ImGui::InvisibleButton(",
+            "preset reset manual interaction surface");
+        RequireAbsent(
+            resetIcon,
+            "AddRectFilled",
+            "preset reset manual background");
+
+        const std::string_view sceneFolder = ExtractSection(
+            viewer,
+            "ImGui::TextUnformatted(\"World Scenes\");",
+            "EndDrawerBody();",
+            "scene folder control");
+        RequireContains(
+            Compact(sceneFolder),
+            "constboolopenSceneFolderPressed=ImGui::Button("
+            "\"##OpenSceneFolder\",ImVec2(folderButtonWidth,"
+            "ImGui::GetFrameHeight()));",
+            "native scene folder button frame");
+        RequireAbsent(
+            sceneFolder,
+            "ImGui::InvisibleButton(",
+            "scene folder manual interaction surface");
+        RequireAbsent(
+            sceneFolder,
+            "AddRectFilled",
+            "scene folder double-composited backgrounds");
+        RequireAbsent(
+            viewer,
+            "folderOutline",
+            "retired scene folder manual outline token");
+
+        const std::string_view nativeFrame = ExtractSection(
+            imguiUiOverride,
+            "void ImGui::RenderFrame(",
+            "void ImGui::RenderGradientFrame(",
+            "staged native frame renderer");
+        RequireContains(
+            nativeFrame,
+            "RenderGradientFrameOutline(",
+            "Amp native-button gradient outline");
+
         const std::string_view commandHeight = ExtractSection(
             viewer,
             "static float GetCommandInterfaceMinimumHeight()",
@@ -1531,6 +1797,37 @@ namespace
             CountOccurrences(viewer, "ImGui::Selectable(") == 1u,
             "all Settings dropdown choices must route through the one "
             "deferred selection wrapper.");
+        const std::string_view combo = ExtractSection(
+            viewer,
+            "static bool BeginRoundedCombo(",
+            "template<typename Action>",
+            "deferred dropdown trigger wrapper");
+        Require(
+            CountOccurrences(combo, "ImGui::BeginCombo(") == 1u,
+            "the deferred dropdown trigger must use one native combo renderer");
+        RequireContains(
+            combo,
+            "ImGui::BeginCombo(label, visiblePreview, flags);",
+            "native integrated-arrow dropdown presentation");
+        for (const std::string_view retiredDropdownDrawing : {
+                std::string_view("ImGuiComboFlags_NoArrowButton"),
+                std::string_view("AddRectFilled"),
+                std::string_view("ImGuiCol_Button"),
+                std::string_view("DrawRoundedDownTriangle") })
+        {
+            RequireAbsent(
+                combo,
+                retiredDropdownDrawing,
+                "deferred dropdown trigger manual arrow drawing");
+        }
+        RequireAbsent(
+            viewer,
+            "static void DrawRoundedDownTriangle(",
+            "retired custom dropdown triangle helper");
+        RequireAbsent(
+            viewer,
+            "static ImVec2 MovePointToward(",
+            "retired custom dropdown triangle geometry helper");
         const std::string_view dropdown = ExtractSection(
             viewer,
             "static bool DrawDeferredDropdownOption(",
@@ -1588,8 +1885,13 @@ int main(int argc, char** argv)
         root / "src" / "temporal_aa.cpp");
     const std::string shadowSettings = ReadFile(
         root / "src" / "screen_space_directional_shadows_settings.h");
+    const std::string donutAppOverride = ReadFile(
+        root / "overrides" / "donut-app.patch");
+    const std::string imguiUiOverride = ReadFile(
+        root / "overrides" / "imgui-ui.patch");
     if (viewer.empty() || catalog.empty() || temporalOptions.empty() ||
-        temporalPass.empty() || shadowSettings.empty())
+        temporalPass.empty() || shadowSettings.empty() ||
+        donutAppOverride.empty() || imguiUiOverride.empty())
     {
         std::cerr << "FAIL: could not read current UI contract sources\n";
         return 2;
@@ -1605,7 +1907,7 @@ int main(int argc, char** argv)
     ValidateVisibilityPbrDecoupling(viewer);
     ValidateScreenSpaceShadows(viewer, shadowSettings, catalog);
     ValidateCatalogAndDispatch(viewer, catalog);
-    ValidateUiSafety(viewer);
+    ValidateUiSafety(viewer, donutAppOverride, imguiUiOverride);
 
     if (g_FailureCount != 0)
     {

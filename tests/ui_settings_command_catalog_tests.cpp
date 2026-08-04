@@ -53,7 +53,7 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 122u);
+    static_assert(UiSettingsCommandCatalog.size() == 131u);
     static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 10u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
         static_cast<std::uint8_t>(UiSettingsCommandVerb::Run));
@@ -62,7 +62,7 @@ int main()
         5u,  // UI
         5u,  // General
         19u, // Visibility
-        22u, // Anti-Aliasing
+        31u, // Anti-Aliasing
         4u,  // Debug
         8u,  // Sky
         23u, // Lights
@@ -169,7 +169,7 @@ int main()
     }
 
     Require(names.size() == UiSettingsCommandCatalog.size(),
-        "the compact catalog must contain 122 unique controls");
+        "the compact catalog must contain 131 unique controls");
     Require(sectionCounts == ExpectedSectionCounts,
         "section counts must match the current UI");
     Require(actionCount == 4u,
@@ -194,12 +194,25 @@ int main()
         "joint-bilateral|gaussian-bilateral");
     requireDomain("anti-aliasing.taa.temporal-cost",
         "full-quality|reduced|minimum");
+    requireDomain("anti-aliasing.taa.jitter-sequence",
+        "rotated-grid-4|uniform-helix-4|halton-8|halton-16|halton-32|sobol-32");
     requireDomain("anti-aliasing.taa.previous-depth",
         "stationary-bypass|four-texel-footprint");
     requireDomain("anti-aliasing.taa.history.frames",
         "-1 or integer 1..32; -1 uses quality preset");
     requireDomain("anti-aliasing.taa.history.strength",
         "-1 or float 0..2; -1 uses quality preset");
+    requireDomain("anti-aliasing.fxaa.enabled", "on|off");
+    requireDomain("anti-aliasing.fxaa.quality", "low|medium|high|ultra");
+    requireDomain("anti-aliasing.fxaa.edge-sharpness", "float 2..8");
+    requireDomain("anti-aliasing.fxaa.edge-threshold",
+        "float 0.08..0.25");
+    requireDomain("anti-aliasing.fxaa.minimum-edge-threshold",
+        "float 0.04..0.06");
+    requireDomain("anti-aliasing.cmaa2.edge-threshold",
+        "float 0.05..0.15");
+    requireDomain("anti-aliasing.cmaa2.detector", "luma|full-color");
+    requireDomain("anti-aliasing.msaa.quality", "low|medium|high|ultra");
     requireDomain("debug.world.materials",
         "scene|white|white-detail|white-lighting");
     requireDomain("debug.shadows.isolation",

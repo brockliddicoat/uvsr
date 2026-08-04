@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-08-03.4`.
+UI reference version: `2026-08-03.8`.
 
 ## Purpose
 
@@ -85,11 +85,14 @@ each owned control can return to its originating recipe value.
 
 ## Control Composition
 
-Use the established UVSR helpers for drawer bodies, rounded combos, animated
-tree and toggle regions, reset icons, tooltips, and footer actions. Visibility,
+Use the established UVSR helpers for drawer bodies, deferred combos, animated
+tree and toggle regions, reset icons, tooltips, and footer actions. Every
+dropdown uses ImGui's native integrated-arrow trigger presentation; deferred
+and immediate dropdowns differ only in when their mutation is applied. Do not
+paint a second background or custom arrow over the native trigger. Visibility,
 Aliasing, Debug, and Advanced groups retain animated disclosure. Every retained
-setting has a concise hover explanation, and dropdown width must leave its label
-and reset lane visible. Maintain balanced ImGui ID, style, disabled, tree,
+setting has a concise hover explanation, and dropdown width must leave its
+label and reset lane visible. Maintain balanced ImGui ID, style, disabled, tree,
 table, child, and popup lifetimes on every branch.
 
 Debug and its World, Visibility, Physically Based Lighting, and Screen-Space
@@ -99,13 +102,24 @@ labeled **Default**. Visibility Reconstruction starts collapsed for a full-
 resolution trace and expanded for a reduced-resolution trace; its stored manual
 state takes precedence after interaction.
 
+Temporal Reconstructive, Fast Approximate, Conservative Morphological, and
+Multisample Adaptive each show a Low, Medium, High, or Ultra **Quality** row
+while enabled, followed by an animated **Advanced** tree that starts collapsed.
+Disabling a technique preserves its stored values. Temporal **Cost** also
+remains visible. Temporal **Jitter Sequence** is the first control under
+Advanced's **Algorithm** section; it owns a dedicated reset and does not
+participate in either Custom recipe marker. **Depth Validation** follows it.
+Fast Approximate's three edge controls, CMAA2 Edge Threshold and Detector, and
+Multisample Adaptive Samples live inside their respective Advanced trees.
+
 An inherited dropdown previews its resolved concrete value but lists that value
 only once. Its reset icon is the route back to recipe ownership. Do not append
 owner text in parentheses; **(Automatic)** and the modified-profile status
-**(Custom)** are the only exceptions. Temporal Advanced begins with Stationary
-Bypass under **Algorithm** and places its remaining cost policies under **Cost**.
-Any Algorithm change appends **(Custom)** to the selected Quality preview; any
-Cost change appends it to the selected Temporal Cost preview. The marker clears
+**(Custom)** are the only exceptions. Temporal Advanced begins with Jitter
+Sequence and Depth Validation under **Algorithm** and places its cost policies
+under **Cost**. A recipe-owned Algorithm change appends **(Custom)** to the
+selected Quality preview; Jitter Sequence remains independent. A Cost change
+appends it to the selected Cost preview. The marker clears
 when every setting in its ownership group returns to the selected recipe. Each
 top-level reset arrow restores its complete factory preset and owned group. A
 named preset selection reapplies the complete selected group, including when it
@@ -140,8 +154,8 @@ Keep the six general values on one dash-separated summary line. The labeled
 Effect selector shows one retained renderer effect at a time and keeps its reset
 beside the label. Complete Renderer uses a striped two-column table for the full
 retained stage list; an ordinary stage includes the complete frame for context.
-Visibility, Screen-Space Shadows, Temporal Reconstructive, Conservative
-Morphological, and Multisample use the same readable table language for their
+Visibility, Screen-Space Shadows, Temporal Reconstructive, Fast Approximate,
+Conservative Morphological, and Multisample Adaptive use the same readable table language for their
 retained breakdowns. Completed query availability gates every timing. Dormant,
 unsupported, or newly enabled work displays `--` or a direct status instead of
 a fabricated zero. Never repopulate this panel with retired planners,
@@ -155,11 +169,11 @@ interaction until submitted geometry and hit rectangles agree. The command bar
 owns its permanently reserved one-row bottom lane; Settings must not overlap or
 resize that lane. Guidance belongs in the empty input hint and disappears when
 typing begins. Separate guidance with slashes. After submission, the same empty
-input shows a green `Success` or red `Error` message until editing resumes.
-Never add a floating result window above the command row. Up and Down continue
+input shows a blue `Success` or saturated-crimson `Error` message until editing
+resumes. Never add a floating result window above the command row. Up and Down continue
 to recall command history. A long or multiline result may expose a trailing
 details button; only an explicit click may open its bounded, scrollable,
-selectable read-only popup. The catalog contains 122 entries: 118 values and
+selectable read-only popup. The catalog contains 131 entries: 127 values and
 four actions.
 
 Escape toggles Settings unless an active edit or popup owns it. `/` toggles the
@@ -177,7 +191,8 @@ Controls must remain decoupled unless their actual resource contract requires a
 dependency. In particular:
 
 - Visibility changes only visibility-owned state and resources.
-- TAA, CMAA2, and MSAA are independent states with deterministic pass order.
+- TAA, Fast Approximate AA, CMAA2, and MSAA are independent states with
+  deterministic pass order.
 - World appearance, Visibility views, Physically Based Lighting filters, and
   shadow isolation are separate Debug states. A Physically Based Lighting
   filter preserves Visibility execution but suppresses its ordinary composite;
@@ -250,8 +265,20 @@ The UI handoff includes:
 
 ## Reference Revision History
 
+- `2026-08-03.8`: Moved Jitter Sequence into Temporal Advanced Algorithm,
+  shortened its Halton/Sobol and Depth Validation labels, and unified every
+  dropdown on the native integrated-arrow presentation without changing
+  deferred mutation timing.
+- `2026-08-03.7`: Added the visible Temporal Jitter Sequence selector with all
+  five Filament choices, experimental Sobol 32, an independent reset,
+  and history-reset ownership outside Advanced.
+- `2026-08-03.6`: Added visible four-tier Quality rows to every Aliasing
+  technique, renamed Temporal Cost to Cost and Multisample Reference to
+  Multisample Adaptive, and exposed CMAA2 Edge Threshold and Detector.
+- `2026-08-03.5`: Added Fast Approximate AA, kept all four Aliasing techniques
+  independent, and gave each a default-collapsed Advanced disclosure.
 - `2026-08-03.4`: Added group-owned Custom markers to Quality after Algorithm
-  changes and to Temporal Cost after Cost changes.
+  changes and to Cost after Cost changes.
 - `2026-08-03.3`: Restored the Visibility profile Custom notice and renamed the
   initial World material choice from Scene to Default.
 - `2026-08-03.2`: Removed duplicate inherited dropdown choices and parenthetical

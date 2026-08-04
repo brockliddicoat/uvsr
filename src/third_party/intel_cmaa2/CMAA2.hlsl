@@ -125,20 +125,22 @@ static const uint c_maxLineLength = 86;
 #define CMAA2_SCALE_QUALITY_WITH_MSAA               0
 //
 // 
-#ifndef CMAA2_STATIC_QUALITY_PRESET
-    #define CMAA2_STATIC_QUALITY_PRESET 2  // 0 - LOW, 1 - MEDIUM, 2 - HIGH, 3 - ULTRA
-#endif
-// presets (for HDR color buffer maybe use higher values)
-#if CMAA2_STATIC_QUALITY_PRESET == 0   // LOW
-    #define g_CMAA2_EdgeThreshold                   lpfloat(0.15)
-#elif CMAA2_STATIC_QUALITY_PRESET == 1 // MEDIUM
-    #define g_CMAA2_EdgeThreshold                   lpfloat(0.10)
-#elif CMAA2_STATIC_QUALITY_PRESET == 2 // HIGH (default)
-    #define g_CMAA2_EdgeThreshold                   lpfloat(0.07)
-#elif CMAA2_STATIC_QUALITY_PRESET == 3 // ULTRA
-    #define g_CMAA2_EdgeThreshold                   lpfloat(0.05)
-#else
-    #error CMAA2_STATIC_QUALITY_PRESET not set?
+#ifndef g_CMAA2_EdgeThreshold
+    #ifndef CMAA2_STATIC_QUALITY_PRESET
+        #define CMAA2_STATIC_QUALITY_PRESET 2  // 0 - LOW, 1 - MEDIUM, 2 - HIGH, 3 - ULTRA
+    #endif
+    // presets (for HDR color buffer maybe use higher values)
+    #if CMAA2_STATIC_QUALITY_PRESET == 0   // LOW
+        #define g_CMAA2_EdgeThreshold                   lpfloat(0.15)
+    #elif CMAA2_STATIC_QUALITY_PRESET == 1 // MEDIUM
+        #define g_CMAA2_EdgeThreshold                   lpfloat(0.10)
+    #elif CMAA2_STATIC_QUALITY_PRESET == 2 // HIGH (default)
+        #define g_CMAA2_EdgeThreshold                   lpfloat(0.07)
+    #elif CMAA2_STATIC_QUALITY_PRESET == 3 // ULTRA
+        #define g_CMAA2_EdgeThreshold                   lpfloat(0.05)
+    #else
+        #error CMAA2_STATIC_QUALITY_PRESET not set?
+    #endif
 #endif
 // 
 #if CMAA2_EXTRA_SHARPNESS

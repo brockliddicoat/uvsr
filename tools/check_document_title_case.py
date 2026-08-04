@@ -64,7 +64,9 @@ PRESERVED_WORDS = frozenset(
         "DirectX",
         "DX11",
         "DXIL",
+        "FXAA",
         "GGX",
+        "G3D",
         "GI",
         "GitHub",
         "GLB",
@@ -78,6 +80,7 @@ PRESERVED_WORDS = frozenset(
         "185H",
         "MiniEngine",
         "NRA-RTAA",
+        "NVIDIA",
         "PBR",
         "README",
         "README.md",
@@ -1015,6 +1018,9 @@ def run_self_tests() -> None:
         "Use ``literal lower`` Safely": "Use ``literal lower`` Safely",
         "Use ``lower content``` safely": "Use ``Lower Content``` Safely",
         "DirectX and AgX UI": "DirectX and AgX UI",
+        "Google Filament FXAA and G3D NVIDIA": (
+            "Google Filament FXAA and G3D NVIDIA"
+        ),
         "Visibility Optimization and AA/UI Integration": (
             "Visibility Optimization and AA/UI Integration"
         ),

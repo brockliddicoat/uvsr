@@ -100,6 +100,7 @@ namespace
         constexpr const char* appShaders[] = {
             "agx_tonemapping_ps",
             "display_output_ps",
+            "fast_approximate_aa_ps",
             "backdrop_blur_ps",
             "screen_space_directional_shadows_cs",
             "screen_space_directional_shadows_debug_ps",
@@ -249,6 +250,7 @@ int main(int argc, char** argv)
         "TAA_SHARED_WORK_REUSE",
         "TAA_EARLY_HISTORY_REJECTION",
         "CMAA2_SUPPORT_HDR_COLOR_RANGE",
+        "CMAA2_STATIC_QUALITY_PRESET",
         "ENABLE_AO_POWER",
         "ENABLE_BOUNCE",
         "DEPTH_HIERARCHY",
@@ -261,15 +263,24 @@ int main(int argc, char** argv)
             std::string("retired shader axis must remain absent: ") + axis);
     }
     passed &= Check(
-        CountShaderPermutations(config) == 268u,
-        "the production shader catalog must contain exactly 268 permutations");
+        CountShaderPermutations(config) == 258u,
+        "the production shader catalog must contain exactly 258 permutations");
+    passed &= Check(
+        CountOccurrences(
+            config,
+            "fast_approximate_aa_ps.hlsl -T ps -E main") == 1u &&
+            manifest.find("fast_approximate_aa_ps") != std::string::npos,
+        "production must package one runtime-configured Fast Approximate shader");
     passed &= Check(
         CountOccurrences(config, "cmaa2.hlsl -T cs") == 4u &&
             CountOccurrences(
                 config,
-                "CMAA2_STATIC_QUALITY_PRESET={0,1,2,3}") == 4u,
-        "production must retain all four official CMAA2 stages across Low, "
-        "Medium, High, and Ultra display-linear permutations");
+                "CMAA2_EDGE_DETECTION_LUMA_PATH={0,1}") == 1u &&
+            CountOccurrences(
+                config,
+                "CMAA2_EDGE_DETECTION_LUMA_PATH=1") == 3u,
+        "production must package two CMAA2 edge detectors and one copy of "
+        "each detector-independent stage");
     passed &= Check(
         CountOccurrences(
             config,
@@ -310,8 +321,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 39u,
-        "production shader contract must enumerate exactly 39 files");
+        expectedFiles.size() == 40u,
+        "production shader contract must enumerate exactly 40 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

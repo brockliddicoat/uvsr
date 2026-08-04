@@ -1,6 +1,7 @@
 #include "cmaa2.h"
 
 #include <donut/core/log.h>
+#include <donut/engine/CommonRenderPasses.h>
 #include <donut/engine/ShaderFactory.h>
 #include <nvrhi/utils.h>
 
@@ -13,6 +14,14 @@ using namespace donut::engine;
 
 namespace
 {
+    struct alignas(16) Cmaa2Constants
+    {
+        float edgeThreshold = uvsr::Cmaa2DefaultEdgeThreshold;
+        float padding[3] = {};
+    };
+
+    static_assert(sizeof(Cmaa2Constants) == 16u);
+
     nvrhi::TextureHandle CreateTexture(
         nvrhi::IDevice* device,
         uint32_t width,
@@ -163,9 +172,19 @@ namespace uvsr
             true,
             "CMAA2/IndirectArguments");
 
+        nvrhi::BufferDesc constantBufferDesc;
+        constantBufferDesc.byteSize = sizeof(Cmaa2Constants);
+        constantBufferDesc.debugName = "CMAA2 Constants";
+        constantBufferDesc.isConstantBuffer = true;
+        constantBufferDesc.isVolatile = true;
+        constantBufferDesc.maxVersions =
+            c_MaxRenderPassConstantBufferVersions;
+        m_ConstantBuffer = device->createBuffer(constantBufferDesc);
+
         nvrhi::BindingLayoutDesc layout;
         layout.visibility = nvrhi::ShaderType::Compute;
         layout.bindings = {
+            nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
             nvrhi::BindingLayoutItem::Texture_SRV(0),
             nvrhi::BindingLayoutItem::Texture_SRV(1),
             nvrhi::BindingLayoutItem::Texture_SRV(2),
@@ -182,43 +201,50 @@ namespace uvsr
         m_BindingLayout = device->createBindingLayout(layout);
         RebuildBindingSet(sceneColor);
 
-        for (uint32_t quality = 0u;
-            quality < c_QualityCount;
-            ++quality)
+        nvrhi::ComputePipelineDesc pipeline;
+        pipeline.bindingLayouts = { m_BindingLayout };
+        for (uint32_t detector = 0u;
+            detector < c_DetectorCount;
+            ++detector)
         {
             std::vector<ShaderMacro> macros = {
-                { "CMAA2_STATIC_QUALITY_PRESET",
-                    std::to_string(quality) }
+                { "CMAA2_EDGE_DETECTION_LUMA_PATH",
+                    detector == static_cast<uint32_t>(
+                        Cmaa2EdgeDetector::Luma)
+                        ? "1"
+                        : "0" }
             };
-            const auto createShader =
-                [&](const char* entryPoint)
-            {
-                return shaderFactory->CreateShader(
-                    "uvsr/cmaa2.hlsl",
-                    entryPoint,
-                    &macros,
-                    nvrhi::ShaderType::Compute);
-            };
-            nvrhi::ComputePipelineDesc pipeline;
-            pipeline.bindingLayouts = { m_BindingLayout };
-
-            pipeline.CS = createShader("EdgesColor2x2CS");
-            m_EdgePipelines[quality] = pipeline.CS
-                ? device->createComputePipeline(pipeline)
-                : nullptr;
-            pipeline.CS = createShader("ProcessCandidatesCS");
-            m_CandidatePipelines[quality] = pipeline.CS
-                ? device->createComputePipeline(pipeline)
-                : nullptr;
-            pipeline.CS = createShader("DeferredColorApply2x2CS");
-            m_ApplyPipelines[quality] = pipeline.CS
-                ? device->createComputePipeline(pipeline)
-                : nullptr;
-            pipeline.CS = createShader("ComputeDispatchArgsCS");
-            m_DispatchArgumentPipelines[quality] = pipeline.CS
+            pipeline.CS = shaderFactory->CreateShader(
+                "uvsr/cmaa2.hlsl",
+                "EdgesColor2x2CS",
+                &macros,
+                nvrhi::ShaderType::Compute);
+            m_EdgePipelines[detector] = pipeline.CS
                 ? device->createComputePipeline(pipeline)
                 : nullptr;
         }
+
+        std::vector<ShaderMacro> sharedMacros = {
+            { "CMAA2_EDGE_DETECTION_LUMA_PATH", "1" }
+        };
+        const auto createSharedPipeline =
+            [&](const char* entryPoint)
+        {
+            pipeline.CS = shaderFactory->CreateShader(
+                "uvsr/cmaa2.hlsl",
+                entryPoint,
+                &sharedMacros,
+                nvrhi::ShaderType::Compute);
+            return pipeline.CS
+                ? device->createComputePipeline(pipeline)
+                : nullptr;
+        };
+        m_CandidatePipeline =
+            createSharedPipeline("ProcessCandidatesCS");
+        m_ApplyPipeline =
+            createSharedPipeline("DeferredColorApply2x2CS");
+        m_DispatchArgumentPipeline =
+            createSharedPipeline("ComputeDispatchArgsCS");
 
         for (auto& stageQueries : m_TimerQueries)
             for (auto& query : stageQueries)
@@ -236,22 +262,21 @@ namespace uvsr
             !m_DeferredItems ||
             !m_Control ||
             !m_IndirectArguments ||
+            !m_ConstantBuffer ||
             !m_BindingLayout ||
-            !m_BindingSet)
+            !m_BindingSet ||
+            !m_CandidatePipeline ||
+            !m_ApplyPipeline ||
+            !m_DispatchArgumentPipeline)
         {
             return false;
         }
-        for (uint32_t quality = 0u;
-            quality < c_QualityCount;
-            ++quality)
+        for (uint32_t detector = 0u;
+            detector < c_DetectorCount;
+            ++detector)
         {
-            if (!m_EdgePipelines[quality] ||
-                !m_CandidatePipelines[quality] ||
-                !m_ApplyPipelines[quality] ||
-                !m_DispatchArgumentPipelines[quality])
-            {
+            if (!m_EdgePipelines[detector])
                 return false;
-            }
         }
         return true;
     }
@@ -267,6 +292,7 @@ namespace uvsr
         // faithfully serve all four official entry points.
         nvrhi::BindingSetDesc set;
         set.bindings = {
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
             nvrhi::BindingSetItem::Texture_SRV(0, sourceColor),
             nvrhi::BindingSetItem::Texture_SRV(1, sourceColor),
             nvrhi::BindingSetItem::Texture_SRV(2, sourceColor),
@@ -396,15 +422,13 @@ namespace uvsr
     nvrhi::ITexture* Cmaa2Pass::Render(
         nvrhi::ICommandList* commandList,
         nvrhi::ITexture* sourceColor,
-        AntiAliasingQuality quality)
+        const ResolvedAntiAliasingSettings& settings)
     {
         AdvanceTimers();
         m_TimerActive.fill(false);
-        const uint32_t qualityIndex = std::min(
-            static_cast<uint32_t>(quality),
-            c_QualityCount - 1u);
         if (!commandList ||
             !sourceColor ||
+            !settings.cmaa2Enabled ||
             !IsValid())
         {
             m_Timings = {};
@@ -430,6 +454,16 @@ namespace uvsr
         RebuildBindingSet(sourceColor);
         if (!m_BindingSet)
             return sourceColor;
+
+        const Cmaa2EdgeDetector detector =
+            SanitizeCmaa2EdgeDetector(settings.cmaa2EdgeDetector);
+        const uint32_t detectorIndex =
+            static_cast<uint32_t>(detector);
+        Cmaa2Constants constants{};
+        constants.edgeThreshold =
+            ClampCmaa2EdgeThreshold(settings.cmaa2EdgeThreshold);
+        commandList->writeBuffer(
+            m_ConstantBuffer, &constants, sizeof(constants));
 
         commandList->beginMarker("Intel CMAA2");
         commandList->copyTexture(
@@ -462,7 +496,7 @@ namespace uvsr
         }
 
         BeginStage(commandList, Stage::Edge);
-        state.pipeline = m_EdgePipelines[qualityIndex];
+        state.pipeline = m_EdgePipelines[detectorIndex];
         state.indirectParams = nullptr;
         commandList->setComputeState(state);
         // The official 16x16 input tile has a one-thread border and emits
@@ -474,7 +508,7 @@ namespace uvsr
         EndStage(commandList, Stage::Edge);
         PublishUavWrites(commandList);
 
-        state.pipeline = m_DispatchArgumentPipelines[qualityIndex];
+        state.pipeline = m_DispatchArgumentPipeline;
         commandList->setComputeState(state);
         commandList->dispatch(2u, 1u, 1u);
         nvrhi::utils::BufferUavBarrier(
@@ -488,7 +522,7 @@ namespace uvsr
         commandList->commitBarriers();
 
         BeginStage(commandList, Stage::Candidate);
-        state.pipeline = m_CandidatePipelines[qualityIndex];
+        state.pipeline = m_CandidatePipeline;
         state.indirectParams = m_IndirectArguments;
         commandList->setComputeState(state);
         commandList->dispatchIndirect(0u);
@@ -499,7 +533,7 @@ namespace uvsr
         commandList->commitBarriers();
         PublishUavWrites(commandList);
 
-        state.pipeline = m_DispatchArgumentPipelines[qualityIndex];
+        state.pipeline = m_DispatchArgumentPipeline;
         state.indirectParams = nullptr;
         commandList->setComputeState(state);
         commandList->dispatch(1u, 2u, 1u);
@@ -514,7 +548,7 @@ namespace uvsr
         commandList->commitBarriers();
 
         BeginStage(commandList, Stage::Apply);
-        state.pipeline = m_ApplyPipelines[qualityIndex];
+        state.pipeline = m_ApplyPipeline;
         state.indirectParams = m_IndirectArguments;
         commandList->setComputeState(state);
         commandList->dispatchIndirect(0u);

@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 64,615 non-blank source lines.
+**First-Party Lines of Code:** 66,733 non-blank source lines.
 
-**Third-Party Lines of Code:** 388,207 non-blank source lines.
+**Third-Party Lines of Code:** 388,209 non-blank source lines.
 
-**Total Lines of Code:** 452,822 non-blank source lines.
+**Total Lines of Code:** 454,942 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -38,15 +38,18 @@ visibility, anti-aliasing, and shadow-rendering systems.
 - **Focused Directional Shadows.** Screen-Space Directional Shadows are the one
   retained directional-shadow technique. Their thread- and wave-group
   isolation views live in the effect-grouped Debug drawer.
-- **Composable Anti-Aliasing.** TAA, CMAA2, and 2x through 16x deferred MSAA are
-  independent, default-off controls. When combined, MSAA resolves scene-linear
-  lighting before TAA, tone mapping, and the display-linear CMAA2 pass.
+- **Composable Anti-Aliasing.** TAA, Google Filament-based Fast Approximate AA,
+  CMAA2, and 2x through 16x deferred MSAA are independent, default-off
+  controls. When combined, MSAA resolves scene-linear lighting before TAA,
+  tone mapping, display-linear Fast Approximate AA, and CMAA2. TAA exposes all
+  five Filament camera-jitter sequences plus an experimental Sobol 32 sequence
+  with stronger toroidal spacing than the matching Filament Halton prefixes.
 - **Composable Debugging.** World appearance is independent from the
   Visibility and physically based lighting information filters. Shadow
   thread/wave isolation remains a deliberate full-image diagnostic.
-- **Compact Runtime Surface.** The first-party build compiles 268 core shader
-  tasks plus 46 Screen-Space Directional Shadow tasks, for 314 first-party and
-  390 integrated tasks after Donut's 76. Nine Settings drawers and 122 command
+- **Compact Runtime Surface.** The first-party build compiles 258 core shader
+  tasks plus 46 Screen-Space Directional Shadow tasks, for 304 first-party and
+  380 integrated tasks after Donut's 76. Nine Settings drawers and 131 command
   entries retain the active product controls without benchmark planners or
   dormant profiles.
 - **Source-Backed Optimization Decisions.** Retired shader families, rejected
@@ -133,9 +136,9 @@ Graphics Adapter**, which restarts the renderer on that device.
 - Press **/** to open or close the command interface. Enter applies, Tab
   completes, Up/Down recalls history, and Escape cancels the active edit without
   closing the bar. Slash-separated tips appear inside the single-row input only
-  while no command result is pending. Enter replaces them with a green success
-  or red error status; long output remains available through an explicit details
-  button. The status disappears as soon as typing begins.
+  while no command result is pending. Enter replaces them with a blue success
+  or saturated-crimson error status; long output remains available through an
+  explicit details button. The status disappears as soon as typing begins.
 - Press **M** to inspect the editable material at the exact screen center or
   close the material editor.
 - Press **F** to toggle the selected camera flashlight when the command bar is
@@ -200,8 +203,8 @@ bundle contracts.
   shared AO/GI traversal, estimators, reconstruction, memory contracts,
   supported quality profiles, and validation boundary.
 - [Temporal Aliasing Options](docs/temporal-aa-options.md) defines temporal,
-  morphological, and multisample composition, history behavior, and coordinate
-  conventions.
+  fast approximate, morphological, and multisample composition, history
+  behavior, and coordinate conventions.
 - [Engine Cutdown Archive](docs/postmortem/engine-cutdowns/README.md) keeps the
   dated shader and renderer cutdown reports, their measurements, complete
   removal inventories, and restoration boundaries.

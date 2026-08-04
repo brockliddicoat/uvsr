@@ -67,8 +67,9 @@ later on the complete scene image.
 ## Tone Mapping and Output
 
 A neutral AgX transform maps scene-linear HDR radiance for display. TAA, when
-enabled, runs before tone mapping. CMAA2, when enabled, runs afterward in the
-display-linear domain. Final transfer and dithering are applied at output.
+enabled, runs before tone mapping. Fast Approximate AA and CMAA2, when enabled,
+run afterward in that order in the display-linear domain. Final transfer and
+dithering are applied at output.
 
 ## Debug Contract
 

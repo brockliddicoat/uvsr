@@ -47,7 +47,7 @@ namespace uvsr
         [[nodiscard]] nvrhi::ITexture* Render(
             nvrhi::ICommandList* commandList,
             nvrhi::ITexture* sourceColor,
-            AntiAliasingQuality quality);
+            const ResolvedAntiAliasingSettings& settings);
         void UpdateSourceColor(nvrhi::ITexture* sourceColor);
 
         [[nodiscard]] bool IsValid() const;
@@ -65,7 +65,8 @@ namespace uvsr
             Count
         };
 
-        static constexpr uint32_t c_QualityCount = 4u;
+        static constexpr uint32_t c_DetectorCount =
+            static_cast<uint32_t>(Cmaa2EdgeDetector::Count);
         static constexpr uint32_t c_TimerLatency = 4u;
 
         nvrhi::IDevice* m_Device = nullptr;
@@ -78,17 +79,18 @@ namespace uvsr
         nvrhi::BufferHandle m_DeferredItems;
         nvrhi::BufferHandle m_Control;
         nvrhi::BufferHandle m_IndirectArguments;
+        nvrhi::BufferHandle m_ConstantBuffer;
         nvrhi::BindingLayoutHandle m_BindingLayout;
         nvrhi::BindingSetHandle m_BindingSet;
         nvrhi::ITexture* m_BoundSource = nullptr;
 
-        using QualityPipelines = std::array<
+        using DetectorPipelines = std::array<
             nvrhi::ComputePipelineHandle,
-            c_QualityCount>;
-        QualityPipelines m_EdgePipelines;
-        QualityPipelines m_CandidatePipelines;
-        QualityPipelines m_ApplyPipelines;
-        QualityPipelines m_DispatchArgumentPipelines;
+            c_DetectorCount>;
+        DetectorPipelines m_EdgePipelines;
+        nvrhi::ComputePipelineHandle m_CandidatePipeline;
+        nvrhi::ComputePipelineHandle m_ApplyPipeline;
+        nvrhi::ComputePipelineHandle m_DispatchArgumentPipeline;
 
         std::array<std::array<nvrhi::TimerQueryHandle, c_TimerLatency>,
             static_cast<size_t>(Stage::Count)> m_TimerQueries;

@@ -141,6 +141,7 @@ namespace uvsr
         // Anti-Aliasing.
         Value("anti-aliasing.taa.enabled", Kind::Boolean, Section::Aliasing, "on|off"),
         Value("anti-aliasing.taa.quality", Kind::Enum, Section::Aliasing, "low|medium|high|ultra"),
+        Value("anti-aliasing.taa.jitter-sequence", Kind::Enum, Section::Aliasing, "rotated-grid-4|uniform-helix-4|halton-8|halton-16|halton-32|sobol-32"),
         Value("anti-aliasing.taa.previous-depth", Kind::Enum, Section::Aliasing, "stationary-bypass|four-texel-footprint"),
         Value("anti-aliasing.taa.temporal-cost", Kind::Enum, Section::Aliasing, "full-quality|reduced|minimum"),
         Value("anti-aliasing.taa.motion-source", Kind::Enum, Section::Aliasing, "preset|center|closest-cross|edge-dilation"),
@@ -157,9 +158,17 @@ namespace uvsr
         Value("anti-aliasing.taa.preset-sharpening", Kind::Enum, Section::Aliasing, "auto|off|on"),
         Value("anti-aliasing.sharpen.enabled", Kind::Boolean, Section::Aliasing, "on|off"),
         Value("anti-aliasing.sharpen.strength", Kind::Float, Section::Aliasing, "float 0..1"),
+        Value("anti-aliasing.fxaa.enabled", Kind::Boolean, Section::Aliasing, "on|off"),
+        Value("anti-aliasing.fxaa.quality", Kind::Enum, Section::Aliasing, "low|medium|high|ultra"),
+        Value("anti-aliasing.fxaa.edge-sharpness", Kind::Float, Section::Aliasing, "float 2..8"),
+        Value("anti-aliasing.fxaa.edge-threshold", Kind::Float, Section::Aliasing, "float 0.08..0.25"),
+        Value("anti-aliasing.fxaa.minimum-edge-threshold", Kind::Float, Section::Aliasing, "float 0.04..0.06"),
         Value("anti-aliasing.cmaa2.enabled", Kind::Boolean, Section::Aliasing, "on|off"),
         Value("anti-aliasing.cmaa2.quality", Kind::Enum, Section::Aliasing, "low|medium|high|ultra"),
+        Value("anti-aliasing.cmaa2.edge-threshold", Kind::Float, Section::Aliasing, "float 0.05..0.15"),
+        Value("anti-aliasing.cmaa2.detector", Kind::Enum, Section::Aliasing, "luma|full-color"),
         Value("anti-aliasing.msaa.enabled", Kind::Boolean, Section::Aliasing, "on|off"),
+        Value("anti-aliasing.msaa.quality", Kind::Enum, Section::Aliasing, "low|medium|high|ultra"),
         Value("anti-aliasing.msaa.samples", Kind::Enum, Section::Aliasing, "2x|4x|8x|16x"),
 
         // Debug.

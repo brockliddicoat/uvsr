@@ -99,6 +99,7 @@
 #include "camera_controllers.h"
 #include "cmaa2.h"
 #include "command_line_options.h"
+#include "fast_approximate_aa.h"
 #include "flashlight.h"
 #include "pixel_zoom.h"
 #include "renderer_statistics.h"
@@ -1208,6 +1209,11 @@ struct UIData
         return GetResolvedAntiAliasingSettings().cmaa2Enabled;
     }
 
+    [[nodiscard]] bool UsesFastApproximateAA() const
+    {
+        return GetResolvedAntiAliasingSettings().fastApproximateEnabled;
+    }
+
 };
 
 enum class RendererTimingStage : uint32_t
@@ -1221,6 +1227,7 @@ enum class RendererTimingStage : uint32_t
     MaterialPicking,
     EnvironmentBackground,
     ToneMapping,
+    FastApproximate,
     OutputBlit,
     Count
 };
@@ -1278,6 +1285,7 @@ private:
         VisibilityPipelines,
         TemporalAA,
         TemporalAAPipelines,
+        FastApproximateAA,
         Cmaa2,
         EnvironmentBackground,
         ToneMapping,
@@ -1337,6 +1345,8 @@ private:
                                         m_ScreenSpaceDirectionalShadowPass;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
     std::unique_ptr<TemporalAAPass> m_TemporalAAPass;
+    std::unique_ptr<FastApproximateAAPass>
+                                        m_FastApproximateAAPass;
     std::unique_ptr<Cmaa2Pass>          m_Cmaa2Pass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
     std::unique_ptr<PixelReadbackPass>  m_PixelReadbackPass;
@@ -3165,9 +3175,12 @@ public:
             renderTargetSize.x,
             renderTargetSize.y));
         TemporalAaJitterSample jitter{ 0.f, 0.f };
-        if (m_ui.UsesLongTermTemporalAA())
+        const ResolvedAntiAliasingSettings antiAliasing =
+            m_ui.GetResolvedAntiAliasingSettings();
+        if (antiAliasing.temporalEnabled)
         {
             jitter = GetTemporalAaJitter(
+                antiAliasing.temporalJitterSequence,
                 m_AntiAliasingPhase);
         }
         planarView->SetPixelOffset(float2(jitter.x, jitter.y));
@@ -3198,11 +3211,27 @@ public:
     }
 
     [[nodiscard]] nvrhi::ITexture*
-        GetCmaa2InitializationSource() const
+        GetPresentationAaInitializationSource() const
     {
         if (!m_RenderTargets)
             return nullptr;
         return m_RenderTargets->LdrColor.Get();
+    }
+
+    void CreateFastApproximateAAPass()
+    {
+        m_FastApproximateAAPass =
+            std::make_unique<FastApproximateAAPass>(
+                GetDevice(),
+                m_ShaderFactory,
+                m_CommonPasses,
+                GetPresentationAaInitializationSource());
+        if (!m_FastApproximateAAPass->IsValid())
+        {
+            log::error(
+                "Fast Approximate AA initialization failed; "
+                "the presentation input will be shown unchanged");
+        }
     }
 
     void CreateCmaa2Pass()
@@ -3210,7 +3239,7 @@ public:
         m_Cmaa2Pass = std::make_unique<Cmaa2Pass>(
             GetDevice(),
             m_ShaderFactory,
-            GetCmaa2InitializationSource());
+            GetPresentationAaInitializationSource());
         if (!m_Cmaa2Pass->IsValid())
         {
             log::error(
@@ -3258,7 +3287,7 @@ public:
 
         // All four sample-count PSOs are static. Materialize them while the
         // visibility renderer is first created instead of on the first Method
-        // change to Multisample Reference.
+        // change to Multisample Adaptive.
         m_MsaaVisibilityResolvePass =
             std::make_unique<MsaaVisibilityResolvePass>(GetDevice());
         m_MsaaVisibilityResolvePass->Init(
@@ -3296,14 +3325,24 @@ public:
         EnsureMsaaVisibilityResolvePass();
 
         CreateTemporalAAPass();
+        if (m_FastApproximateAAPass)
+        {
+            m_FastApproximateAAPass->UpdateSourceColor(
+                GetPresentationAaInitializationSource());
+        }
+        else if (m_ui.UsesFastApproximateAA())
+        {
+            CreateFastApproximateAAPass();
+        }
         if (m_Cmaa2Pass)
         {
             // CMAA2 owns only same-sized single-sample intermediates and can
             // safely survive an MSAA/motion-vector target swap. Rebinding its
-            // source avoids recreating the large candidate buffers and all 16
-            // stage/quality PSOs on every technique change.
+            // source avoids recreating the large candidate buffers, two edge
+            // detector PSOs, and three shared pipelines on every technique
+            // change.
             m_Cmaa2Pass->UpdateSourceColor(
-                GetCmaa2InitializationSource());
+                GetPresentationAaInitializationSource());
         }
         else if (m_ui.UsesCmaa2())
         {
@@ -3332,6 +3371,7 @@ public:
     void BeginRenderPassPreparation(bool waitForIbl)
     {
         m_TemporalAAPass.reset();
+        m_FastApproximateAAPass.reset();
         m_Cmaa2Pass.reset();
         m_RenderPassPreparationWaitForIbl = waitForIbl;
         m_RenderPassPreparationStage =
@@ -3450,6 +3490,13 @@ public:
             {
                 return false;
             }
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::FastApproximateAA;
+            return false;
+
+        case RenderPassPreparationStage::FastApproximateAA:
+            if (m_ui.UsesFastApproximateAA())
+                CreateFastApproximateAAPass();
             m_RenderPassPreparationStage =
                 RenderPassPreparationStage::Cmaa2;
             return false;
@@ -3808,6 +3855,8 @@ public:
                         m_ui.DiffuseIblStrength));
             const bool temporalAARequired =
                 m_ui.UsesLongTermTemporalAA();
+            const bool fastApproximateAARequired =
+                m_ui.UsesFastApproximateAA();
             const bool cmaa2Required = m_ui.UsesCmaa2();
             const bool motionVectorsRequired =
                 m_ui.UsesLongTermTemporalAA() ||
@@ -3898,6 +3947,24 @@ public:
                 // lighting, visibility, sky, or output passes while the
                 // render-target topology stays unchanged.
                 CreateTemporalAAPass();
+            }
+
+            // Fast Approximate is a presentation-only spatial filter. Its
+            // resources are independent of temporal history and can follow
+            // any raster or temporal AA combination without rebuilding them.
+            if (fastApproximateAARequired && !m_FastApproximateAAPass)
+                CreateFastApproximateAAPass();
+            else if (!fastApproximateAARequired && m_FastApproximateAAPass)
+            {
+                // A retained CMAA2 pass may still own a binding to the FXAA
+                // output. Rebind it before releasing the producing pass so
+                // disabling FXAA also releases that full-resolution texture.
+                if (m_Cmaa2Pass)
+                {
+                    m_Cmaa2Pass->UpdateSourceColor(
+                        GetPresentationAaInitializationSource());
+                }
+                m_FastApproximateAAPass.reset();
             }
 
             // CMAA2 is a presentation-only spatial filter when Temporal is
@@ -4420,7 +4487,8 @@ public:
                     m_ui.TemporalAaSharpness);
             const bool deferTemporalSharpenToPresentation =
                 temporalSharpenEnabled &&
-                (antiAliasing.cmaa2Enabled ||
+                (antiAliasing.fastApproximateEnabled ||
+                    antiAliasing.cmaa2Enabled ||
                     antiAliasing.historyStorage ==
                         TemporalAaHistoryStorage::Compact);
             antiAliasedTexture = m_TemporalAAPass->Render(
@@ -4437,7 +4505,8 @@ public:
             if (deferTemporalSharpenToPresentation)
             {
                 // Keep the resolved sharpen separate from compact history,
-                // then let display mapping and CMAA2 observe its final edges.
+                // then let display mapping and spatial AA observe its final
+                // edges.
                 antiAliasedTexture =
                     m_TemporalAAPass
                         ->SharpenPresentation(
@@ -4455,12 +4524,24 @@ public:
 
         displayTexture = m_RenderTargets->LdrColor;
 
+        if (antiAliasing.fastApproximateEnabled &&
+            m_FastApproximateAAPass)
+        {
+            BeginRendererStage(RendererTimingStage::FastApproximate);
+            displayTexture = m_FastApproximateAAPass->Render(
+                m_CommandList,
+                *m_View,
+                displayTexture,
+                antiAliasing);
+            EndRendererStage(RendererTimingStage::FastApproximate);
+        }
+
         if (antiAliasing.cmaa2Enabled && m_Cmaa2Pass)
         {
             displayTexture = m_Cmaa2Pass->Render(
                 m_CommandList,
                 displayTexture,
-                antiAliasing.cmaa2Quality);
+                antiAliasing);
         }
 
         BeginRendererStage(RendererTimingStage::OutputBlit);
@@ -4471,7 +4552,7 @@ public:
                 framebuffer,
                 displayTexture))
         {
-            // Transfer and dither are applied after CMAA2.
+            // Transfer and dither are applied after presentation AA.
         }
         else
         {
@@ -5519,6 +5600,7 @@ private:
         Visibility,
         Shadows,
         TemporalReconstructive,
+        FastApproximate,
         ConservativeMorphological,
         Multisample,
         MaterialPicking,
@@ -5539,7 +5621,6 @@ private:
         ImVec4 drawerFrameActive;
         ImVec4 outlineTop;
         ImVec4 outlineBottom;
-        ImVec4 folderOutline;
         ImVec4 panelBodySurface;
         ImVec4 settingsTitleSurface;
         ImVec4 actionButton;
@@ -5550,8 +5631,10 @@ private:
         float backdropShadowOpacity = UiPanelShadowOpacity;
         float backdropShadowOffsetY = UiPanelShadowOffsetYPixels;
         float floatingPanelOpacity = 0.82f;
-        ImVec4 errorText = ImVec4(1.f, 0.35f, 0.30f, 1.f);
-        ImVec4 successText = ImVec4(0.35f, 0.92f, 0.45f, 1.f);
+        ImVec4 errorText = ImVec4(0.92f, 0.12f, 0.16f, 1.f);
+        // Match MaterialEditor's texture-filename accent in the staged Donut
+        // override so success has one deliberate product color everywhere.
+        ImVec4 successText = ImVec4(0.26f, 0.59f, 0.98f, 1.f);
         bool drawControlOutlines = true;
         bool drawScrollEdgeFades = true;
     };
@@ -5845,7 +5928,6 @@ private:
                 colors[ImGuiCol_FrameBgActive];
             tokens.outlineTop = colors[ImGuiCol_Border];
             tokens.outlineBottom = colors[ImGuiCol_Border];
-            tokens.folderOutline = colors[ImGuiCol_Border];
             tokens.actionButton = colors[ImGuiCol_Button];
             tokens.actionButtonHovered =
                 colors[ImGuiCol_ButtonHovered];
@@ -5856,7 +5938,6 @@ private:
             tokens.drawScrollEdgeFades = false;
             tokens.floatingPanelOpacity =
                 colors[ImGuiCol_WindowBg].w;
-            tokens.errorText = ImVec4(1.f, 0.40f, 0.40f, 1.f);
         }
         else
         {
@@ -5942,8 +6023,6 @@ private:
                 ImVec4(0.88f, 0.90f, 0.94f, 0.10f);
             tokens.outlineBottom =
                 ImVec4(0.96f, 0.97f, 1.f, 0.30f);
-            tokens.folderOutline =
-                ImVec4(0.90f, 0.92f, 0.96f, 0.10f);
             tokens.actionButton =
                 ImVec4(0.66f, 0.67f, 0.69f, 0.13f);
             tokens.actionButtonHovered =
@@ -7158,66 +7237,6 @@ private:
         ImGui::PopStyleColor();
     }
 
-    static ImVec2 MovePointToward(
-        const ImVec2& point,
-        const ImVec2& target,
-        float distance)
-    {
-        const ImVec2 delta(
-            target.x - point.x,
-            target.y - point.y);
-        const float length =
-            std::sqrt(delta.x * delta.x + delta.y * delta.y);
-        if (length <= 0.f)
-            return point;
-
-        const float scale = std::min(distance / length, 1.f);
-        return ImVec2(
-            point.x + delta.x * scale,
-            point.y + delta.y * scale);
-    }
-
-    static void DrawRoundedDownTriangle(
-        ImDrawList* drawList,
-        const ImVec2& center,
-        float width,
-        float height,
-        ImU32 color)
-    {
-        const ImVec2 left(
-            center.x - width * 0.5f,
-            center.y - height * 0.45f);
-        const ImVec2 right(
-            center.x + width * 0.5f,
-            center.y - height * 0.45f);
-        const ImVec2 bottom(
-            center.x,
-            center.y + height * 0.55f);
-        const float cornerDistance =
-            std::min(width, height) * 0.22f;
-
-        drawList->PathClear();
-        drawList->PathLineTo(
-            MovePointToward(left, bottom, cornerDistance));
-        drawList->PathBezierQuadraticCurveTo(
-            left,
-            MovePointToward(left, right, cornerDistance),
-            4);
-        drawList->PathLineTo(
-            MovePointToward(right, left, cornerDistance));
-        drawList->PathBezierQuadraticCurveTo(
-            right,
-            MovePointToward(right, bottom, cornerDistance),
-            4);
-        drawList->PathLineTo(
-            MovePointToward(bottom, right, cornerDistance));
-        drawList->PathBezierQuadraticCurveTo(
-            bottom,
-            MovePointToward(bottom, left, cornerDistance),
-            4);
-        drawList->PathFillConvex(color);
-    }
-
     static float GetUiHighlightFade(
         ImGuiID id,
         bool highlighted,
@@ -7339,29 +7358,18 @@ private:
             ImGuiStyleVar_Alpha,
             style.Alpha * visibility);
         ImGui::BeginDisabled(!modified || visibility < 0.98f);
-        const bool pressed = ImGui::InvisibleButton(
+        // Route through the native button frame so the reset control receives
+        // the same Amp gradient outline and interaction surface as every other
+        // framed menu element.
+        const bool pressed = ImGui::Button(
             "##PresetReset",
             ImVec2(buttonSize, buttonSize));
-        const bool hovered = ImGui::IsItemHovered();
-        const bool held = ImGui::IsItemActive();
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
         const ImVec2 center(
             (minimum.x + maximum.x) * 0.5f,
             (minimum.y + maximum.y) * 0.5f);
-        const ImU32 background = ImGui::GetColorU32(
-            held
-                ? ImGuiCol_ButtonActive
-                : hovered
-                    ? ImGuiCol_ButtonHovered
-                    : ImGuiCol_Button);
-        drawList->AddRectFilled(
-            minimum,
-            maximum,
-            background,
-            style.FrameRounding);
-
         constexpr float Pi = 3.14159265358979323846f;
         const float radius = buttonSize * 0.24f;
         const ImU32 iconColor = ImGui::GetColorU32(ImGuiCol_Text);
@@ -7582,41 +7590,13 @@ private:
         const char* previewValue,
         ImGuiComboFlags flags = ImGuiComboFlags_None)
     {
-        const ImGuiStyle& style = ImGui::GetStyle();
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        const ImVec2 frameMin = ImGui::GetCursorScreenPos();
-        const float frameHeight = ImGui::GetFrameHeight();
-        const ImVec2 frameMax(
-            frameMin.x + ImGui::CalcItemWidth(),
-            frameMin.y + frameHeight);
-        const bool hovered =
-            ImGui::IsMouseHoveringRect(frameMin, frameMax, false);
         const ImGuiID comboId = ImGui::GetID(label);
         const char* deferredPreview =
             GetDeferredDropdownPreview(comboId);
         const char* visiblePreview =
             deferredPreview ? deferredPreview : previewValue;
-
-        if (ImGui::IsUvsrStockWidgetRenderingEnabled())
-        {
-            const bool open =
-                ImGui::BeginCombo(label, visiblePreview, flags);
-            DeferredDropdownUiState& deferredState =
-                g_DeferredDropdownUiState;
-            if (open &&
-                deferredState.transitionComboId == comboId)
-            {
-                deferredState.transitionComboLastSubmittedFrame =
-                    ImGui::GetFrameCount();
-            }
-            g_ActiveRoundedComboId = open ? comboId : 0;
-            return open;
-        }
-
-        const bool open = ImGui::BeginCombo(
-            label,
-            visiblePreview,
-            flags | ImGuiComboFlags_NoArrowButton);
+        const bool open =
+            ImGui::BeginCombo(label, visiblePreview, flags);
         DeferredDropdownUiState& deferredState =
             g_DeferredDropdownUiState;
         if (open && deferredState.transitionComboId == comboId)
@@ -7625,34 +7605,6 @@ private:
                 ImGui::GetFrameCount();
         }
         g_ActiveRoundedComboId = open ? comboId : 0;
-
-        const ImVec2 buttonMin(
-            frameMax.x - frameHeight,
-            frameMin.y);
-        const float highlightFade = GetUiHighlightFade(
-            comboId,
-            hovered || open);
-        const ImVec4 buttonColor = LerpUiColor(
-            style.Colors[ImGuiCol_Button],
-            style.Colors[
-                open
-                    ? ImGuiCol_ButtonActive
-                    : ImGuiCol_ButtonHovered],
-            highlightFade);
-        drawList->AddRectFilled(
-            buttonMin,
-            frameMax,
-            ImGui::GetColorU32(buttonColor),
-            style.FrameRounding,
-            ImDrawFlags_RoundCornersAll);
-        DrawRoundedDownTriangle(
-            drawList,
-            ImVec2(
-                (buttonMin.x + frameMax.x) * 0.5f,
-                (buttonMin.y + frameMax.y) * 0.5f),
-            frameHeight * 0.38f,
-            frameHeight * 0.27f,
-            ImGui::GetColorU32(ImGuiCol_Text));
         return open;
     }
 
@@ -8238,7 +8190,8 @@ private:
         Enum defaultValue,
         const std::array<std::pair<std::string_view, Enum>, Count>& options,
         std::string& value,
-        std::string& error)
+        std::string& error,
+        bool allowSameValueMutation = false)
     {
         Enum candidate = current;
         if (operation == CommandValueOperation::Set)
@@ -8287,7 +8240,8 @@ private:
         }
 
         if (operation != CommandValueOperation::Get &&
-            candidate == current)
+            candidate == current &&
+            !allowSameValueMutation)
         {
             return RejectUnchangedCommandMutation(path, error);
         }
@@ -8845,9 +8799,41 @@ private:
                 candidate.temporal.enabled, defaults.temporal.enabled,
                 value, error);
         else if (path == "anti-aliasing.taa.quality")
+        {
+            const bool temporalQualityCustom =
+                candidate.temporal.stationaryBypass !=
+                    defaults.temporal.stationaryBypass ||
+                !(candidate.temporal.algorithmOverrides ==
+                    defaults.temporal.algorithmOverrides);
             handled = ApplyCommandEnum(operation, arguments, path,
                 candidate.temporal.quality, defaults.temporal.quality,
-                QualityOptions, value, error);
+                QualityOptions, value, error,
+                temporalQualityCustom);
+            if (handled && operation != CommandValueOperation::Get)
+            {
+                candidate.temporal.stationaryBypass =
+                    defaults.temporal.stationaryBypass;
+                candidate.temporal.algorithmOverrides =
+                    defaults.temporal.algorithmOverrides;
+            }
+        }
+        else if (path == "anti-aliasing.taa.jitter-sequence")
+        {
+            using Sequence = TemporalAaJitterSequence;
+            static constexpr std::array<
+                std::pair<std::string_view, Sequence>, 6> Options = {{
+                    { "rotated-grid-4", Sequence::RotatedGrid4 },
+                    { "uniform-helix-4", Sequence::UniformHelix4 },
+                    { "halton-8", Sequence::Halton23x8 },
+                    { "halton-16", Sequence::Halton23x16 },
+                    { "halton-32", Sequence::Halton23x32 },
+                    { "sobol-32", Sequence::Sobol32 }
+                }};
+            handled = ApplyCommandEnum(operation, arguments, path,
+                candidate.temporal.jitterSequence,
+                defaults.temporal.jitterSequence,
+                Options, value, error);
+        }
         else if (path == "anti-aliasing.taa.previous-depth")
         {
             static constexpr std::array<std::pair<
@@ -8883,9 +8869,23 @@ private:
                     { "reduced", TemporalAaCostMode::Reduced },
                     { "minimum", TemporalAaCostMode::Minimum }
                 }};
+            const bool temporalCostCustom =
+                !(candidate.temporal.behaviorOverrides ==
+                    defaults.temporal.behaviorOverrides) ||
+                m_ui.TemporalAaSharpenEnabled ||
+                m_ui.TemporalAaSharpness !=
+                    TemporalAaDefaultSharpness;
             handled = ApplyCommandEnum(operation, arguments, path,
                 candidate.temporal.costMode,
-                defaults.temporal.costMode, Options, value, error);
+                defaults.temporal.costMode, Options, value, error,
+                temporalCostCustom);
+            if (handled && operation != CommandValueOperation::Get)
+            {
+                candidate.temporal.behaviorOverrides =
+                    defaults.temporal.behaviorOverrides;
+                m_ui.TemporalAaSharpenEnabled = false;
+                m_ui.TemporalAaSharpness = TemporalAaDefaultSharpness;
+            }
         }
         else if (path == "anti-aliasing.taa.motion-source")
         {
@@ -9071,27 +9071,135 @@ private:
                 defaults.temporal.behaviorOverrides.sharpening,
                 Options, value, error);
         }
+        else if (path == "anti-aliasing.fxaa.enabled")
+            handled = ApplyCommandBool(operation, arguments, path,
+                candidate.fastApproximate.enabled,
+                defaults.fastApproximate.enabled,
+                value, error);
+        else if (path == "anti-aliasing.fxaa.quality")
+        {
+            const bool fastApproximateQualityCustom =
+                !MatchesFastApproximateAaQualityPreset(
+                    candidate.fastApproximate);
+            handled = ApplyCommandEnum(operation, arguments, path,
+                candidate.fastApproximate.quality,
+                defaults.fastApproximate.quality,
+                QualityOptions, value, error,
+                fastApproximateQualityCustom);
+            if (handled && operation != CommandValueOperation::Get)
+            {
+                ApplyFastApproximateAaQualityPreset(
+                    candidate.fastApproximate,
+                    candidate.fastApproximate.quality);
+            }
+        }
+        else if (path == "anti-aliasing.fxaa.edge-sharpness")
+        {
+            const FastApproximateAaQualityPreset preset =
+                GetFastApproximateAaQualityPreset(
+                    candidate.fastApproximate.quality);
+            handled = ApplyCommandFloat(operation, arguments, path,
+                candidate.fastApproximate.edgeSharpness,
+                preset.edgeSharpness,
+                FastApproximateAaMinimumEdgeSharpness,
+                FastApproximateAaMaximumEdgeSharpness,
+                value, error);
+        }
+        else if (path == "anti-aliasing.fxaa.edge-threshold")
+        {
+            const FastApproximateAaQualityPreset preset =
+                GetFastApproximateAaQualityPreset(
+                    candidate.fastApproximate.quality);
+            handled = ApplyCommandFloat(operation, arguments, path,
+                candidate.fastApproximate.edgeThreshold,
+                preset.edgeThreshold,
+                FastApproximateAaMinimumEdgeThreshold,
+                FastApproximateAaMaximumEdgeThreshold,
+                value, error);
+        }
+        else if (path == "anti-aliasing.fxaa.minimum-edge-threshold")
+        {
+            const FastApproximateAaQualityPreset preset =
+                GetFastApproximateAaQualityPreset(
+                    candidate.fastApproximate.quality);
+            handled = ApplyCommandFloat(operation, arguments, path,
+                candidate.fastApproximate.darkEdgeThreshold,
+                preset.darkEdgeThreshold,
+                FastApproximateAaMinimumDarkEdgeThreshold,
+                FastApproximateAaMaximumDarkEdgeThreshold,
+                value, error);
+        }
         else if (path == "anti-aliasing.cmaa2.enabled")
             handled = ApplyCommandBool(operation, arguments, path,
                 candidate.cmaa2.enabled, defaults.cmaa2.enabled,
                 value, error);
         else if (path == "anti-aliasing.cmaa2.quality")
+        {
+            const bool cmaa2QualityCustom =
+                !MatchesCmaa2QualityPreset(candidate.cmaa2);
             handled = ApplyCommandEnum(operation, arguments, path,
                 candidate.cmaa2.quality, defaults.cmaa2.quality,
-                QualityOptions, value, error);
+                QualityOptions, value, error,
+                cmaa2QualityCustom);
+            if (handled && operation != CommandValueOperation::Get)
+            {
+                ApplyCmaa2QualityPreset(
+                    candidate.cmaa2, candidate.cmaa2.quality);
+            }
+        }
+        else if (path == "anti-aliasing.cmaa2.edge-threshold")
+        {
+            const Cmaa2QualityPreset preset = GetCmaa2QualityPreset(
+                candidate.cmaa2.quality);
+            handled = ApplyCommandFloat(operation, arguments, path,
+                candidate.cmaa2.edgeThreshold,
+                preset.edgeThreshold,
+                Cmaa2MinimumEdgeThreshold,
+                Cmaa2MaximumEdgeThreshold,
+                value, error);
+        }
+        else if (path == "anti-aliasing.cmaa2.detector")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, Cmaa2EdgeDetector>, 2>
+                Options = {{
+                    { "luma", Cmaa2EdgeDetector::Luma },
+                    { "full-color", Cmaa2EdgeDetector::FullColor }
+                }};
+            const Cmaa2QualityPreset preset = GetCmaa2QualityPreset(
+                candidate.cmaa2.quality);
+            handled = ApplyCommandEnum(operation, arguments, path,
+                candidate.cmaa2.detector, preset.detector,
+                Options, value, error);
+        }
         else if (path == "anti-aliasing.msaa.enabled")
             handled = ApplyCommandBool(operation, arguments, path,
                 candidate.msaa.enabled, defaults.msaa.enabled,
                 value, error);
+        else if (path == "anti-aliasing.msaa.quality")
+        {
+            const bool multisampleQualityCustom =
+                !MatchesMultisampleQualityPreset(candidate.msaa);
+            handled = ApplyCommandEnum(operation, arguments, path,
+                candidate.msaa.quality, defaults.msaa.quality,
+                QualityOptions, value, error,
+                multisampleQualityCustom);
+            if (handled && operation != CommandValueOperation::Get)
+            {
+                ApplyMultisampleQualityPreset(
+                    candidate.msaa, candidate.msaa.quality);
+            }
+        }
         else if (path == "anti-aliasing.msaa.samples")
         {
             static constexpr std::array<
                 std::pair<std::string_view, uint32_t>, 4> Options = {{
                     { "2x", 2u }, { "4x", 4u },
                     { "8x", 8u }, { "16x", 16u }
-                }};
+            }};
             handled = ApplyCommandEnum(operation, arguments, path,
-                candidate.msaa.sampleCount, defaults.msaa.sampleCount,
+                candidate.msaa.sampleCount,
+                GetMultisampleQualitySampleCount(candidate.msaa.quality),
                 Options, value, error);
         }
         else if (path == "anti-aliasing.sharpen.enabled")
@@ -9118,6 +9226,19 @@ private:
             return false;
         if (operation != CommandValueOperation::Get)
         {
+            candidate.fastApproximate.edgeSharpness =
+                ClampFastApproximateAaEdgeSharpness(
+                    candidate.fastApproximate.edgeSharpness);
+            candidate.fastApproximate.edgeThreshold =
+                ClampFastApproximateAaEdgeThreshold(
+                    candidate.fastApproximate.edgeThreshold);
+            candidate.fastApproximate.darkEdgeThreshold =
+                ClampFastApproximateAaDarkEdgeThreshold(
+                    candidate.fastApproximate.darkEdgeThreshold);
+            candidate.cmaa2.edgeThreshold = ClampCmaa2EdgeThreshold(
+                candidate.cmaa2.edgeThreshold);
+            candidate.cmaa2.detector = SanitizeCmaa2EdgeDetector(
+                candidate.cmaa2.detector);
             candidate.msaa.sampleCount =
                 SanitizeMsaaSampleCount(candidate.msaa.sampleCount);
             m_ui.AntiAliasing = candidate;
@@ -13341,67 +13462,14 @@ protected:
         }
 
         ImGui::SameLine();
-        const ImGuiID folderButtonId =
-            ImGui::GetID("##OpenSceneFolder");
-        const bool openSceneFolderPressed = ImGui::InvisibleButton(
+        // A single native button frame matches the neighboring scene combo.
+        // The previous two translucent fills composited into a darker surface.
+        const bool openSceneFolderPressed = ImGui::Button(
             "##OpenSceneFolder",
             ImVec2(folderButtonWidth, ImGui::GetFrameHeight()));
-        const bool folderButtonActive = ImGui::IsItemActive();
-        const bool folderButtonHovered = ImGui::IsItemHovered();
-        const float folderHighlightFade = GetUiHighlightFade(
-            folderButtonId,
-            folderButtonHovered || folderButtonActive);
         const ImVec2 iconMin = ImGui::GetItemRectMin();
         const ImVec2 iconMax = ImGui::GetItemRectMax();
         ImDrawList* folderDrawList = ImGui::GetWindowDrawList();
-        ImVec4 folderUnderlayNormal =
-            style.Colors[ImGuiCol_FrameBg];
-        ImVec4 folderUnderlayInteraction = style.Colors[
-            folderButtonActive
-                ? ImGuiCol_FrameBgActive
-                : ImGuiCol_FrameBgHovered];
-        folderUnderlayNormal.w = 0.88f;
-        folderUnderlayInteraction.w = 0.88f;
-        ImVec4 folderUnderlay = LerpUiColor(
-            folderUnderlayNormal,
-            folderUnderlayInteraction,
-            folderHighlightFade);
-        folderUnderlay.w = 0.88f;
-        folderDrawList->AddRectFilled(
-            iconMin,
-            iconMax,
-            ImGui::GetColorU32(folderUnderlay),
-            style.FrameRounding,
-            ImDrawFlags_RoundCornersAll);
-        folderDrawList->AddRectFilled(
-            iconMin,
-            iconMax,
-            ImGui::GetColorU32(LerpUiColor(
-                style.Colors[ImGuiCol_Button],
-                style.Colors[
-                    folderButtonActive
-                        ? ImGuiCol_ButtonActive
-                        : ImGuiCol_ButtonHovered],
-                folderHighlightFade)),
-            style.FrameRounding,
-            ImDrawFlags_RoundCornersAll);
-        ImVec4 folderOutlineColor =
-            g_UiVisualTokens.folderOutline;
-        folderOutlineColor.w = std::clamp(
-            folderOutlineColor.w *
-                (1.f + 0.8f * folderHighlightFade),
-            0.f,
-            1.f);
-        if (g_UiVisualTokens.drawControlOutlines)
-        {
-            folderDrawList->AddRect(
-                ImVec2(iconMin.x + 0.5f, iconMin.y + 0.5f),
-                ImVec2(iconMax.x - 0.5f, iconMax.y - 0.5f),
-                ImGui::GetColorU32(folderOutlineColor),
-                std::max(0.f, style.FrameRounding - 0.5f),
-                ImDrawFlags_RoundCornersAll,
-                1.f);
-        }
         if (openSceneFolderPressed)
         {
             const std::filesystem::path sceneFolder = m_app->GetSceneDir();
@@ -14085,8 +14153,9 @@ protected:
                 "Screen-Space Visibility",
                 "Screen-Space Shadows",
                 "Temporal Reconstructive",
+                "Fast Approximate",
                 "Conservative Morphological",
-                "Multisample",
+                "Multisample Adaptive",
                 "Material Picking",
                 "Environment Background",
                 "Tone Mapping",
@@ -14262,6 +14331,8 @@ protected:
                         { "Environment Background",
                             RendererTimingStage::EnvironmentBackground },
                         { "Tone Mapping", RendererTimingStage::ToneMapping },
+                        { "Fast Approximate",
+                            RendererTimingStage::FastApproximate },
                         { "Output Blit", RendererTimingStage::OutputBlit }
                     };
                     static_assert(
@@ -14470,6 +14541,11 @@ protected:
                     ImGui::EndTable();
                 }
                 break;
+            case StatisticsEffect::FastApproximate:
+                drawSelectedRendererTable(
+                    "Fast Approximate",
+                    RendererTimingStage::FastApproximate);
+                break;
             case StatisticsEffect::ConservativeMorphological:
                 if (beginStatisticsTable(
                         "##MorphologicalStatistics", "Morphological Stage"))
@@ -14570,30 +14646,14 @@ protected:
         ImGui::Spacing();
         const bool antiAliasingOpen = DrawCollapsingHeader(
             "Aliasing",
-            "Enable temporal, morphological, and multisample techniques "
-            "independently.");
+            "Enable temporal, fast approximate, morphological, and "
+            "multisample techniques independently.");
         if (antiAliasingOpen)
         {
             BeginDrawerBody("##AliasingBody", settingsControlWidth);
             ImGui::PushID("AliasingControls");
             AntiAliasingSettings& aliasing = m_ui.AntiAliasing;
             const AntiAliasingSettings aliasingDefaults{};
-
-            const auto drawEnum =
-                [settingsControlWidth](const char* label,
-                    auto& value,
-                    const char* const* labels,
-                    int count)
-                {
-                    int selected = static_cast<int>(value);
-                    SetNextLabeledControlWidth(
-                        label, settingsControlWidth);
-                    if (!ImGui::Combo(label, &selected, labels, count))
-                        return false;
-                    value = static_cast<std::decay_t<decltype(value)>>(
-                        selected);
-                    return true;
-                };
 
             const auto drawPresetEnum =
                 [settingsControlWidth](const char* label,
@@ -14685,9 +14745,10 @@ protected:
                 temporalQualityCustom,
                 applyTemporalQualityPreset);
             ImGui::SetItemTooltip(
-                "Choose the default reconstruction quality recipe. Algorithm "
-                "changes append (Custom). The circular arrow restores the "
-                "factory Quality and every Algorithm control.");
+                "Choose the default reconstruction quality recipe. "
+                "Recipe-owned Algorithm changes append (Custom). The circular "
+                "arrow restores factory Quality and its owned Algorithm "
+                "controls.");
             if (DrawPresetResetIcon(
                     "TemporalQuality",
                     aliasing.temporal.quality !=
@@ -14720,7 +14781,7 @@ protected:
                         TemporalAaDefaultSharpness;
                 };
             drawPresetEnum(
-                "Temporal Cost",
+                "Cost",
                 aliasing.temporal.costMode,
                 CostLabels,
                 static_cast<int>(std::size(CostLabels)),
@@ -14729,7 +14790,7 @@ protected:
             ImGui::SetItemTooltip(
                 "Choose the retained history quality and processing cost. Cost "
                 "changes append (Custom). The circular arrow restores the "
-                "factory Temporal Cost and every Cost control.");
+                "factory Cost and every Cost control.");
             if (DrawPresetResetIcon(
                     "TemporalCost",
                     aliasing.temporal.costMode !=
@@ -14834,16 +14895,72 @@ protected:
                 };
 
                 ImGui::SeparatorText("Algorithm");
+                static constexpr const char* JitterSequenceLabels[] = {
+                    "Rotated Grid 4",
+                    "Uniform Helix 4",
+                    "Halton 8",
+                    "Halton 16",
+                    "Halton 32",
+                    "Sobol 32"
+                };
+                const int jitterSequence = static_cast<int>(
+                    SanitizeTemporalAaJitterSequence(
+                        aliasing.temporal.jitterSequence));
+                SetNextLabeledControlWidth(
+                    "Jitter Sequence##TemporalReconstructive",
+                    settingsControlWidth);
+                if (BeginRoundedCombo(
+                        "Jitter Sequence##TemporalReconstructive",
+                        JitterSequenceLabels[jitterSequence]))
+                {
+                    for (int index = 0;
+                        index < static_cast<int>(
+                            std::size(JitterSequenceLabels));
+                        ++index)
+                    {
+                        const bool selected = index == jitterSequence;
+                        DrawDeferredDropdownOption(
+                            JitterSequenceLabels[index],
+                            JitterSequenceLabels[index],
+                            selected,
+                            [settings = &aliasing, index]()
+                            {
+                                settings->temporal.jitterSequence =
+                                    static_cast<TemporalAaJitterSequence>(
+                                        index);
+                            });
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Choose the subpixel camera pattern. Sobol 32 is a fixed "
+                    "seed-43 stochastic Sobol sequence. The seed produces the "
+                    "first point; each later point is chosen from 100 "
+                    "same-stratum candidates to maximize minimum toroidal "
+                    "separation. Its measured spacing advantage is only over "
+                    "matching Filament Halton prefixes. Changing this resets "
+                    "temporal history.");
+                if (DrawNestedDropdownResetIcon(
+                        "TemporalJitterSequence",
+                        aliasing.temporal.jitterSequence !=
+                            aliasingDefaults.temporal.jitterSequence))
+                {
+                    aliasing.temporal.jitterSequence =
+                        aliasingDefaults.temporal.jitterSequence;
+                }
+
                 static constexpr const char* DepthValidationLabels[] = {
                     "Stationary Bypass", "Four-Texel Footprint"
                 };
                 int depthValidation =
                     aliasing.temporal.stationaryBypass ? 0 : 1;
                 SetNextLabeledControlWidth(
-                    "Previous-Depth Validation",
+                    "Depth Validation",
                     settingsControlWidth);
                 if (ImGui::Combo(
-                        "Previous-Depth Validation",
+                        "Depth Validation",
                         &depthValidation,
                         DepthValidationLabels,
                         static_cast<int>(
@@ -15119,6 +15236,135 @@ protected:
             }
 
             if (BeginAnimatedTreeNode(
+                    "Fast Approximate##Aliasing",
+                    ImGuiTreeNodeFlags_DefaultOpen,
+                    "Smooth current-frame edges with Filament-based FXAA."))
+            {
+            ImGui::Checkbox(
+                "Enable##FastApproximate",
+                &aliasing.fastApproximate.enabled);
+            ImGui::SetItemTooltip(
+                "Apply a fast post-tone-map edge filter before morphological AA.");
+            if (DrawPresetResetIcon(
+                    "FastApproximateEnabled",
+                    aliasing.fastApproximate.enabled !=
+                        aliasingDefaults.fastApproximate.enabled))
+            {
+                aliasing.fastApproximate.enabled =
+                    aliasingDefaults.fastApproximate.enabled;
+            }
+            if (BeginAnimatedToggleRegion(
+                    "##FastApproximateControls",
+                    aliasing.fastApproximate.enabled))
+            {
+            const bool fastApproximateQualityCustom =
+                !MatchesFastApproximateAaQualityPreset(
+                    aliasing.fastApproximate);
+            const auto applyFastApproximateQualityPreset =
+                [settings = &aliasing.fastApproximate](
+                    AntiAliasingQuality quality)
+                {
+                    ApplyFastApproximateAaQualityPreset(
+                        *settings, quality);
+                };
+            drawPresetEnum(
+                "Quality##FastApproximate",
+                aliasing.fastApproximate.quality,
+                QualityLabels,
+                static_cast<int>(std::size(QualityLabels)),
+                fastApproximateQualityCustom,
+                applyFastApproximateQualityPreset);
+            ImGui::SetItemTooltip(
+                "Choose the FXAA edge-filter recipe. Advanced changes append "
+                "(Custom). The circular arrow restores the factory Quality "
+                "and every FXAA control.");
+            if (DrawPresetResetIcon(
+                    "FastApproximateQuality",
+                    aliasing.fastApproximate.quality !=
+                        aliasingDefaults.fastApproximate.quality ||
+                    fastApproximateQualityCustom))
+            {
+                applyFastApproximateQualityPreset(
+                    aliasingDefaults.fastApproximate.quality);
+            }
+
+            const FastApproximateAaQualityPreset
+                fastApproximatePreset =
+                    GetFastApproximateAaQualityPreset(
+                        aliasing.fastApproximate.quality);
+            ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+            if (BeginAnimatedTreeNode(
+                    "Advanced##FastApproximate",
+                    ImGuiTreeNodeFlags_None,
+                    "Tune edge detection and filtering. This section is closed by default."))
+            {
+                SetNextLabeledControlWidth(
+                    "Edge Sharpness##FastApproximate",
+                    settingsControlWidth);
+                ImGui::SliderFloat(
+                    "Edge Sharpness##FastApproximate",
+                    &aliasing.fastApproximate.edgeSharpness,
+                    FastApproximateAaMinimumEdgeSharpness,
+                    FastApproximateAaMaximumEdgeSharpness,
+                    "%.2f");
+                ImGui::SetItemTooltip(
+                    "Increase to keep the edge filter narrower and sharper.");
+                if (DrawNestedDropdownResetIcon(
+                        "FastApproximateEdgeSharpness",
+                        aliasing.fastApproximate.edgeSharpness !=
+                            fastApproximatePreset.edgeSharpness))
+                {
+                    aliasing.fastApproximate.edgeSharpness =
+                        fastApproximatePreset.edgeSharpness;
+                }
+
+                SetNextLabeledControlWidth(
+                    "Relative Edge Threshold##FastApproximate",
+                    settingsControlWidth);
+                ImGui::SliderFloat(
+                    "Relative Edge Threshold##FastApproximate",
+                    &aliasing.fastApproximate.edgeThreshold,
+                    FastApproximateAaMinimumEdgeThreshold,
+                    FastApproximateAaMaximumEdgeThreshold,
+                    "%.3f");
+                ImGui::SetItemTooltip(
+                    "Increase to skip more edges relative to local brightness.");
+                if (DrawNestedDropdownResetIcon(
+                        "FastApproximateEdgeThreshold",
+                        aliasing.fastApproximate.edgeThreshold !=
+                            fastApproximatePreset.edgeThreshold))
+                {
+                    aliasing.fastApproximate.edgeThreshold =
+                        fastApproximatePreset.edgeThreshold;
+                }
+
+                SetNextLabeledControlWidth(
+                    "Minimum Edge Threshold##FastApproximate",
+                    settingsControlWidth);
+                ImGui::SliderFloat(
+                    "Minimum Edge Threshold##FastApproximate",
+                    &aliasing.fastApproximate.darkEdgeThreshold,
+                    FastApproximateAaMinimumDarkEdgeThreshold,
+                    FastApproximateAaMaximumDarkEdgeThreshold,
+                    "%.3f");
+                ImGui::SetItemTooltip(
+                    "Increase to skip more low-contrast edges in dark regions.");
+                if (DrawNestedDropdownResetIcon(
+                        "FastApproximateMinimumEdgeThreshold",
+                        aliasing.fastApproximate.darkEdgeThreshold !=
+                            fastApproximatePreset.darkEdgeThreshold))
+                {
+                    aliasing.fastApproximate.darkEdgeThreshold =
+                        fastApproximatePreset.darkEdgeThreshold;
+                }
+                EndAnimatedTreeNode();
+            }
+            EndAnimatedToggleRegion();
+            }
+            EndAnimatedTreeNode();
+            }
+
+            if (BeginAnimatedTreeNode(
                     "Conservative Morphological##Aliasing",
                     ImGuiTreeNodeFlags_DefaultOpen,
                     "Detect and smooth visible edge patterns in the current frame."))
@@ -15139,19 +15385,92 @@ protected:
                     "##ConservativeMorphologicalControls",
                     aliasing.cmaa2.enabled))
             {
-            drawEnum(
+            const bool cmaa2QualityCustom =
+                !MatchesCmaa2QualityPreset(aliasing.cmaa2);
+            const auto applyCmaa2QualityPreset =
+                [settings = &aliasing.cmaa2](AntiAliasingQuality quality)
+                {
+                    ApplyCmaa2QualityPreset(*settings, quality);
+                };
+            drawPresetEnum(
                 "Quality##ConservativeMorphological",
                 aliasing.cmaa2.quality,
                 QualityLabels,
-                static_cast<int>(std::size(QualityLabels)));
+                static_cast<int>(std::size(QualityLabels)),
+                cmaa2QualityCustom,
+                applyCmaa2QualityPreset);
             ImGui::SetItemTooltip(
-                "Choose the edge search and smoothing quality.");
+                "Choose the CMAA2 edge-detection recipe. Advanced changes "
+                "append (Custom). The circular arrow restores the factory "
+                "Quality and both CMAA2 controls.");
             if (DrawPresetResetIcon(
                     "MorphologicalQuality",
                     aliasing.cmaa2.quality !=
-                        aliasingDefaults.cmaa2.quality))
+                        aliasingDefaults.cmaa2.quality ||
+                    cmaa2QualityCustom))
             {
-                aliasing.cmaa2.quality = aliasingDefaults.cmaa2.quality;
+                applyCmaa2QualityPreset(
+                    aliasingDefaults.cmaa2.quality);
+            }
+
+            const Cmaa2QualityPreset cmaa2Preset =
+                GetCmaa2QualityPreset(aliasing.cmaa2.quality);
+            ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+            if (BeginAnimatedTreeNode(
+                    "Advanced##ConservativeMorphological",
+                    ImGuiTreeNodeFlags_None,
+                    "Tune edge detection. This section is closed by default."))
+            {
+                SetNextLabeledControlWidth(
+                    "Edge Threshold##ConservativeMorphological",
+                    settingsControlWidth);
+                ImGui::SliderFloat(
+                    "Edge Threshold##ConservativeMorphological",
+                    &aliasing.cmaa2.edgeThreshold,
+                    Cmaa2MinimumEdgeThreshold,
+                    Cmaa2MaximumEdgeThreshold,
+                    "%.3f");
+                ImGui::SetItemTooltip(
+                    "Lower values detect and smooth lower-contrast edges.");
+                if (DrawNestedDropdownResetIcon(
+                        "MorphologicalEdgeThreshold",
+                        aliasing.cmaa2.edgeThreshold !=
+                            cmaa2Preset.edgeThreshold))
+                {
+                    aliasing.cmaa2.edgeThreshold =
+                        cmaa2Preset.edgeThreshold;
+                }
+
+                static constexpr const char* DetectorLabels[] = {
+                    "Luma", "Full Color"
+                };
+                int detector = std::clamp(
+                    static_cast<int>(aliasing.cmaa2.detector),
+                    0,
+                    static_cast<int>(std::size(DetectorLabels)) - 1);
+                SetNextLabeledControlWidth(
+                    "Detector##ConservativeMorphological",
+                    settingsControlWidth);
+                if (ImGui::Combo(
+                        "Detector##ConservativeMorphological",
+                        &detector,
+                        DetectorLabels,
+                        static_cast<int>(std::size(DetectorLabels))))
+                {
+                    aliasing.cmaa2.detector =
+                        static_cast<Cmaa2EdgeDetector>(detector);
+                }
+                ImGui::SetItemTooltip(
+                    "Use the faster luma detector or full-color detection "
+                    "that also catches isoluminant chromatic edges.");
+                if (DrawNestedDropdownResetIcon(
+                        "MorphologicalDetector",
+                        aliasing.cmaa2.detector !=
+                            cmaa2Preset.detector))
+                {
+                    aliasing.cmaa2.detector = cmaa2Preset.detector;
+                }
+            EndAnimatedTreeNode();
             }
             EndAnimatedToggleRegion();
             }
@@ -15159,15 +15478,15 @@ protected:
             }
 
             if (BeginAnimatedTreeNode(
-                    "Multisample Reference##Aliasing",
+                    "Multisample Adaptive##Aliasing",
                     ImGuiTreeNodeFlags_DefaultOpen,
                     "Render multiple coverage samples for each pixel."))
             {
             ImGui::Checkbox(
-                "Enable##MultisampleReference",
+                "Enable##MultisampleAdaptive",
                 &aliasing.msaa.enabled);
             ImGui::SetItemTooltip(
-                "Render multiple geometry samples per pixel as a reference-quality option.");
+                "Render multiple geometry coverage samples per pixel.");
             if (DrawPresetResetIcon(
                     "MultisampleEnabled",
                     aliasing.msaa.enabled != aliasingDefaults.msaa.enabled))
@@ -15175,8 +15494,43 @@ protected:
                 aliasing.msaa.enabled = aliasingDefaults.msaa.enabled;
             }
             if (BeginAnimatedToggleRegion(
-                    "##MultisampleReferenceControls",
+                    "##MultisampleAdaptiveControls",
                     aliasing.msaa.enabled))
+            {
+            const bool multisampleQualityCustom =
+                !MatchesMultisampleQualityPreset(aliasing.msaa);
+            const auto applyMultisampleQualityPreset =
+                [settings = &aliasing.msaa](AntiAliasingQuality quality)
+                {
+                    ApplyMultisampleQualityPreset(*settings, quality);
+                };
+            drawPresetEnum(
+                "Quality##MultisampleAdaptive",
+                aliasing.msaa.quality,
+                QualityLabels,
+                static_cast<int>(std::size(QualityLabels)),
+                multisampleQualityCustom,
+                applyMultisampleQualityPreset);
+            ImGui::SetItemTooltip(
+                "Choose the raster sample-count recipe: 2x, 4x, 8x, or "
+                "16x. Advanced changes append (Custom).");
+            if (DrawPresetResetIcon(
+                    "MultisampleQuality",
+                    aliasing.msaa.quality !=
+                        aliasingDefaults.msaa.quality ||
+                    multisampleQualityCustom))
+            {
+                applyMultisampleQualityPreset(
+                    aliasingDefaults.msaa.quality);
+            }
+
+            const uint32_t multisamplePresetSamples =
+                GetMultisampleQualitySampleCount(aliasing.msaa.quality);
+            ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+            if (BeginAnimatedTreeNode(
+                    "Advanced##MultisampleAdaptive",
+                    ImGuiTreeNodeFlags_None,
+                    "Choose the raster sample count. This section is closed by default."))
             {
             static constexpr uint32_t SampleCounts[] = {
                 2u, 4u, 8u, 16u
@@ -15193,10 +15547,10 @@ protected:
                     sampleIndex = index;
             }
             SetNextLabeledControlWidth(
-                "Samples##MultisampleReference",
+                "Samples##MultisampleAdaptive",
                 settingsControlWidth);
             if (ImGui::Combo(
-                    "Samples##MultisampleReference",
+                    "Samples##MultisampleAdaptive",
                     &sampleIndex,
                     SampleLabels,
                     static_cast<int>(std::size(SampleLabels))))
@@ -15205,13 +15559,15 @@ protected:
             }
             ImGui::SetItemTooltip(
                 "Choose the number of geometry coverage samples per pixel.");
-            if (DrawPresetResetIcon(
+            if (DrawNestedDropdownResetIcon(
                     "MultisampleSamples",
                     aliasing.msaa.sampleCount !=
-                        aliasingDefaults.msaa.sampleCount))
+                        multisamplePresetSamples))
             {
                 aliasing.msaa.sampleCount =
-                    aliasingDefaults.msaa.sampleCount;
+                    multisamplePresetSamples;
+            }
+            EndAnimatedTreeNode();
             }
             EndAnimatedToggleRegion();
             }

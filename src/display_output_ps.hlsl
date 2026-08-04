@@ -1,6 +1,6 @@
 // Final UVSR SDR presentation. The source is display-linear RGBA16F after
 // tone mapping and presentation AA. Apply the display transfer and stable
-// triangular dither only now, so neither becomes CMAA2 edge input.
+// triangular dither only now, so neither becomes presentation-AA edge input.
 
 #pragma pack_matrix(row_major)
 

@@ -2,22 +2,25 @@
 // Thin UVSR compile wrapper around Intel CMAA2 2.3.
 //
 // The algorithm body is pinned to GameTechDev/CMAA2 commit
-// 071c6b0857559f4e36f614362e6d2aab1b61938a with one documented boundary-load
-// patch. UVSR runs CMAA2 only on its RGBA16F display-linear target.
+// 071c6b0857559f4e36f614362e6d2aab1b61938a with two documented integration
+// hooks: a runtime edge threshold and clamped partial-tile source loads. UVSR
+// runs CMAA2 only on its RGBA16F display-linear target.
 //
 
-#ifndef CMAA2_STATIC_QUALITY_PRESET
-#error CMAA2_STATIC_QUALITY_PRESET must be a compile-time shader define
+#ifndef CMAA2_EDGE_DETECTION_LUMA_PATH
+#error CMAA2_EDGE_DETECTION_LUMA_PATH must be a compile-time shader define
 #endif
 
-// Intel documents the full-color detector as its highest-quality path. Keep
-// the faster luma detector for the cost-oriented tiers and make Ultra the
-// uncompromised color-edge permutation, including isoluminant chromatic edges.
-#if CMAA2_STATIC_QUALITY_PRESET == 3
-#define CMAA2_EDGE_DETECTION_LUMA_PATH 0
-#else
-#define CMAA2_EDGE_DETECTION_LUMA_PATH 1
-#endif
+cbuffer UvsrCmaa2Constants : register(b0)
+{
+    float g_UvsrCmaa2EdgeThreshold;
+    float3 g_UvsrCmaa2Padding;
+};
+
+// Intel's source normally chooses this value from a static quality preset.
+// The pinned hook lets UVSR expose the same range continuously without
+// multiplying detector permutations by four redundant threshold variants.
+#define g_CMAA2_EdgeThreshold lpfloat(g_UvsrCmaa2EdgeThreshold)
 #define CMAA2_EXTRA_SHARPNESS 0
 #define CMAA2_USE_HALF_FLOAT_PRECISION 0
 #define CMAA2_UAV_STORE_TYPED 1

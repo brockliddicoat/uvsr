@@ -3,6 +3,7 @@ overrides/*.patch -diff -text
 third_party/bend_sss/upstream/bend_sss_cpu.h -text -whitespace
 third_party/bend_sss/upstream/bend_sss_gpu.h -text -whitespace
 third_party/licenses/Apache-2.0.txt -text -whitespace
+third_party/licenses/BSD-2-Clause.txt -text -whitespace
 assets/scenes/bistro_interior_retextured/LICENSE.txt -diff -text
 assets/scenes/bistro_interior_retextured/SOURCE-README.txt -diff -text
 assets/scenes/bistro_interior_retextured/components/bistro_interior.gltf -diff -text

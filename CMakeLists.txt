@@ -384,6 +384,7 @@ if (UVSR_BUILD_APPLICATION)
     add_executable(uvsr WIN32
         src/camera_collision.cpp
         src/cmaa2.cpp
+        src/fast_approximate_aa.cpp
         src/gpu_performance_monitor.cpp
         src/image_based_lighting_background_pass.cpp
         src/image_based_lighting_environment.cpp
@@ -769,6 +770,7 @@ string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
 set(UVSR_APP_SHADERS
     agx_tonemapping_ps
     display_output_ps
+    fast_approximate_aa_ps
     backdrop_blur_ps
     screen_space_directional_shadows_cs
     screen_space_directional_shadows_debug_ps
@@ -1158,5 +1160,11 @@ if (UVSR_BUILD_APPLICATION)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/third_party/licenses/Apache-2.0.txt"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Apache-2.0.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/licenses/BSD-2-Clause.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/BSD-2-Clause.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/google_filament_fxaa/ATTRIBUTION.md"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Google-Filament-FXAA-Attribution.md"
     )
 endif()
