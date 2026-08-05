@@ -24,6 +24,13 @@ environment lighting, material picking, motion, visibility, and debug views.
 MSAA uses multisampled G-buffer attachments and preserves each sample through
 material decode and lighting before resolving HDR radiance.
 
+The normal channels have distinct meanings. The shading normal remains the
+material-derived smooth or normal-mapped normal used by the BSDF. The geometric
+normal is the view-facing raster triangle-plane normal derived from world-space
+position derivatives. That flat normal drives geometric hemisphere gates and
+ray-origin construction, so smooth vertex normals cannot weaken separation from
+the actual BLAS triangle plane.
+
 Resource creation follows active consumers. Motion vectors exist when TAA or a
 retained MSAA visibility resolve needs them. Visibility guides and source
 radiance exist only while AO, indirect diffuse, or screen-space directional
@@ -33,12 +40,13 @@ shadows consume them.
 
 Deferred lighting evaluates the scene's supported directional, point, spot, and
 flashlight contributions with shared material gates. The primary directional
-light receives one `DirectionalLightVisibility` texture. Screen-Space
-Directional Shadows are its only producer; a neutral texture means fully
-visible.
+light has fixed, named Screen-Space and Ratio-Estimator visibility slots. Each
+slot validates its exact source light independently and falls back to neutral
+white. When both are valid, deferred PBR takes their componentwise minimum so
+the strongest occlusion survives without multiplying overlapping estimates.
 
-The old three-producer SVSM/CSM/SSS taxonomy and its composite slots were
-removed. Toggling screen-space visibility does not toggle PBR or light
+The old SVSM/CSM taxonomy and generic composite slots remain removed. Toggling
+either retained directional-shadow producer does not toggle PBR or light
 submission.
 
 ## Environment Lighting
@@ -96,8 +104,8 @@ transparent Edge Overlay was removed.
 The PBR boundary is protected by:
 
 - CPU reference tests for material and lighting equations;
-- source-contract tests for shared CPU/HLSL layouts and singular directional
-  visibility;
+- source-contract tests for shared CPU/HLSL layouts and two-slot directional
+  visibility composition;
 - shader-package tests proving the forward/legacy families are absent;
 - scene and asset contracts for bundled material inputs;
 - AA tests for per-sample deferred MSAA and output ordering; and

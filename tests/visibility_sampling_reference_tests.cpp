@@ -48,16 +48,6 @@ namespace
         return covariance / std::sqrt(leftVariance * rightVariance);
     }
 
-    uint32_t Hash32(uint32_t value)
-    {
-        value ^= value >> 16u;
-        value *= 0x7feb352du;
-        value ^= value >> 15u;
-        value *= 0x846ca68bu;
-        value ^= value >> 16u;
-        return value;
-    }
-
     uint32_t PermutatedWhiteNoiseBits(
         uint32_t x,
         uint32_t y,
@@ -73,17 +63,6 @@ namespace
         return (word >> 8u) & 0x00ffffffu;
     }
 
-    uint32_t HashedWhiteNoiseBits(
-        uint32_t x,
-        uint32_t y,
-        uint32_t dimension,
-        uint32_t phase)
-    {
-        uint32_t value = x * 0x9e3779b9u ^ y * 0x85ebca6bu;
-        value ^= dimension * 0xc2b2ae35u ^ phase * 0x27d4eb2fu;
-        return Hash32(value) & 0x00ffffffu;
-    }
-
     void ValidateWhiteNoiseSchedulers()
     {
         struct Fixture
@@ -93,13 +72,12 @@ namespace
             uint32_t dimension;
             uint32_t phase;
             uint32_t standard;
-            uint32_t hashed;
         };
         constexpr std::array<Fixture, 4> fixtures = {{
-            { 0u, 0u, 0u, 0u, 11058922u, 0u },
-            { 1u, 2u, 3u, 4u, 12018152u, 5117332u },
-            { 63u, 63u, 7u, 255u, 14726014u, 4186230u },
-            { 1920u, 1080u, 5u, 1024u, 7051780u, 3933022u }
+            { 0u, 0u, 0u, 0u, 11058922u },
+            { 1u, 2u, 3u, 4u, 12018152u },
+            { 63u, 63u, 7u, 255u, 14726014u },
+            { 1920u, 1080u, 5u, 1024u, 7051780u }
         }};
         for (const Fixture& fixture : fixtures)
         {
@@ -109,21 +87,12 @@ namespace
                     fixture.dimension,
                     fixture.phase) == fixture.standard,
                 "permutated white noise keeps its deterministic sequence");
-            Require(HashedWhiteNoiseBits(
-                    fixture.x,
-                    fixture.y,
-                    fixture.dimension,
-                    fixture.phase) == fixture.hashed,
-                "hashed white noise keeps its deterministic sequence");
         }
 
         constexpr double scale = 1.0 / 16777216.0;
         constexpr uint32_t sampleCount = 4096u;
         std::array<double, sampleCount> standard{};
-        std::array<double, sampleCount> hashed{};
         double standardMean = 0.0;
-        double hashedMean = 0.0;
-        uint32_t equalCount = 0u;
         for (uint32_t index = 0u; index < sampleCount; ++index)
         {
             const uint32_t x = index & 63u;
@@ -132,37 +101,11 @@ namespace
             const uint32_t phase = index * 17u;
             standard[index] = double(PermutatedWhiteNoiseBits(
                 x, y, dimension, phase)) * scale;
-            hashed[index] = double(HashedWhiteNoiseBits(
-                x, y, dimension, phase)) * scale;
             standardMean += standard[index];
-            hashedMean += hashed[index];
-            equalCount += standard[index] == hashed[index];
         }
         standardMean /= double(sampleCount);
-        hashedMean /= double(sampleCount);
         Require(standardMean > 0.48 && standardMean < 0.52,
             "permutated white noise spans the unit interval without bias");
-        Require(hashedMean > 0.48 && hashedMean < 0.52,
-            "hashed white noise spans the unit interval without bias");
-        Require(equalCount < 4u,
-            "permutated and hashed white noise are distinct sequences");
-
-        double covariance = 0.0;
-        double standardVariance = 0.0;
-        double hashedVariance = 0.0;
-        for (uint32_t index = 0u; index < sampleCount; ++index)
-        {
-            const double centeredStandard =
-                standard[index] - standardMean;
-            const double centeredHashed = hashed[index] - hashedMean;
-            covariance += centeredStandard * centeredHashed;
-            standardVariance += centeredStandard * centeredStandard;
-            hashedVariance += centeredHashed * centeredHashed;
-        }
-        const double correlation = covariance /
-            std::sqrt(standardVariance * hashedVariance);
-        Require(std::abs(correlation) < 0.05,
-            "permutated and hashed white noise remain decorrelated");
 
         std::array<double, sampleCount> spatial{};
         double spatialMean = 0.0;

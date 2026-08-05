@@ -437,6 +437,88 @@ namespace uvsr
         return m_PipelinesReady;
     }
 
+    bool TemporalAAPass::PrepareForRender(
+        const ResolvedAntiAliasingSettings& settings,
+        bool enableSharpen,
+        bool deferSharpenToPresentation,
+        float sharpness)
+    {
+        m_RenderedThisFrame = false;
+        const auto rejectFrame = [&]()
+        {
+            ResetHistory();
+            return false;
+        };
+        if (!m_PipelinesReady)
+            return rejectFrame();
+
+        const uint32_t behaviorFlags = GetTemporalAaBehaviorFlags(
+            settings.depthValidation,
+            settings.historyWeight,
+            settings.motionTrust,
+            settings.rectificationClip,
+            settings.blendDomain);
+        constexpr uint32_t minimumDefaultBehaviorFlags =
+            UVSR_TAA_BEHAVIOR_MOVING_POINT_DEPTH |
+            UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT |
+            UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST |
+            UVSR_TAA_BEHAVIOR_TIGHT_RECTIFICATION |
+            UVSR_TAA_BEHAVIOR_LINEAR_BLEND_DOMAIN;
+        const uint32_t minimumBehaviorIndex =
+            behaviorFlags == minimumDefaultBehaviorFlags ? 0u : 1u;
+        const bool useMinimum =
+            settings.historyStorage == TemporalAaHistoryStorage::Compact &&
+            m_MinimumPipelines[minimumBehaviorIndex] &&
+            m_MinimumBindingSets[0] &&
+            m_MinimumBindingSets[1] &&
+            IsTemporalAaCompactHistoryCompatible(settings);
+        if (deferSharpenToPresentation &&
+            !m_PresentationSharpenPipeline)
+        {
+            return rejectFrame();
+        }
+        if (useMinimum)
+            return true;
+
+        const bool useSharpen =
+            !deferSharpenToPresentation &&
+            ShouldSharpenTemporalAa(
+                enableSharpen,
+                ClampTemporalAaSharpness(sharpness));
+        const bool useFusedOutput =
+            (settings.fusedOutput || deferSharpenToPresentation) &&
+            !useSharpen;
+        if (!m_BlendBindingSets[0] || !m_BlendBindingSets[1] ||
+            !m_OutputBindingSets[0] || !m_OutputBindingSets[1] ||
+            (!useFusedOutput &&
+                !(useSharpen ? m_SharpenPipeline : m_ResolvePipeline)))
+        {
+            return rejectFrame();
+        }
+
+        const TemporalAaOptions& options = settings.temporal;
+        const TemporalAaStaticPerformanceOptions performance =
+            GetTemporalAaStaticPerformanceOptions(
+                settings,
+                useFusedOutput);
+        const uint32_t algorithmIndex =
+            GetTemporalAaBlendPermutationIndex(options);
+        const uint32_t performanceIndex =
+            GetTemporalAaStaticPerformanceIndex(performance);
+        const uint32_t permutation =
+            algorithmIndex * TemporalAaStaticPerformanceCount +
+            performanceIndex;
+        if (!CreateBlendComputePermutation(
+            options,
+            performance,
+            m_PerformanceBlendShaders[permutation],
+            m_PerformanceBlendPipelines[permutation]))
+        {
+            return rejectFrame();
+        }
+        return true;
+    }
+
     bool TemporalAAPass::CreateBlendComputePermutation(
         const TemporalAaOptions& options,
         const TemporalAaStaticPerformanceOptions& performance,
@@ -623,6 +705,7 @@ namespace uvsr
         bool deferSharpenToPresentation,
         float sharpness)
     {
+        m_RenderedThisFrame = false;
         if (!m_PipelinesReady)
         {
             log::error(
@@ -862,6 +945,7 @@ namespace uvsr
             m_Timings.historyResetCount =
                 m_MinimumResetCount;
             ++m_TimerFrame;
+            m_RenderedThisFrame = true;
             return m_MinimumColor[destination].Get();
         }
 
@@ -970,6 +1054,7 @@ namespace uvsr
         m_Timings.historyResetCount =
             m_History.ResetCount();
         ++m_TimerFrame;
+        m_RenderedThisFrame = true;
         return useFusedOutput
             ? m_FusedOutput.Get()
             : m_SceneColor;

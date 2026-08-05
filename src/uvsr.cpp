@@ -101,6 +101,7 @@
 #include "command_line_options.h"
 #include "fast_approximate_aa.h"
 #include "flashlight.h"
+#include "heitz_ratio_estimator_shadows.h"
 #include "pixel_zoom.h"
 #include "renderer_statistics.h"
 #include "scene_catalog.h"
@@ -115,6 +116,7 @@
 #include "ui_settings_command_catalog.h"
 #include "ui_skin.h"
 #include "visibility_blue_noise.h"
+#include "world_space_representation.h"
 
 using namespace donut;
 using namespace donut::math;
@@ -1133,7 +1135,9 @@ struct UIData
     bool                                TemporalAaSharpenEnabled = false;
     float                               TemporalAaSharpness =
         TemporalAaDefaultSharpness;
+    DirectionalShadowSettings           DirectionalShadows;
     ScreenSpaceDirectionalShadowSettings       ScreenSpaceDirectionalShadows;
+    WorldSpaceRepresentationSettings    Representation;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
     bool                                ShaderReloadRequested = false;
     bool                                FlashlightEnabled =
@@ -1222,6 +1226,7 @@ enum class RendererTimingStage : uint32_t
     SceneSetup,
     Geometry,
     MultisampleResolve,
+    RatioEstimatorShadows,
     DirectLighting,
     ScreenSpaceVisibility,
     MaterialPicking,
@@ -1267,6 +1272,7 @@ private:
         MeshUpload,
         SceneActivation,
         MaterialBuffers,
+        WorldRepresentation,
         RenderTargets,
         RenderPasses,
         Complete
@@ -1343,6 +1349,10 @@ private:
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
     std::unique_ptr<ScreenSpaceDirectionalShadowPass>
                                         m_ScreenSpaceDirectionalShadowPass;
+    std::unique_ptr<HeitzRatioEstimatorShadowPass>
+                                        m_HeitzRatioEstimatorShadowPass;
+    std::unique_ptr<WorldSpaceRepresentation>
+                                        m_WorldSpaceRepresentation;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
     std::unique_ptr<TemporalAAPass> m_TemporalAAPass;
     std::unique_ptr<FastApproximateAAPass>
@@ -1363,6 +1373,12 @@ private:
     std::array<std::array<bool, c_RendererTimerLatency>,
         static_cast<size_t>(RendererTimingStage::Count)>
                                         m_RendererTimerPending{};
+    std::array<std::array<uint64_t, c_RendererTimerLatency>,
+        static_cast<size_t>(RendererTimingStage::Count)>
+                                        m_RendererTimerPendingEpoch{};
+    std::array<uint64_t,
+        static_cast<size_t>(RendererTimingStage::Count)>
+                                        m_RendererTimerStageEpoch{};
     std::array<bool, static_cast<size_t>(RendererTimingStage::Count)>
                                         m_RendererTimerActive{};
     uint32_t                            m_RendererTimerFrame = 0u;
@@ -1387,6 +1403,11 @@ private:
         MaterialPickPurpose::None;
     const Scene*                        m_MaterialPickScene = nullptr;
     uint64_t                            m_AntiAliasingPhase = 0u;
+    uint64_t                            m_HeitzRatioEstimatorPhase = 0u;
+    bool                                m_HeitzRatioEstimatorContributedLastFrame =
+                                            false;
+    bool                                m_HeitzRatioEstimatorDispatchedThisFrame =
+                                            false;
     bool                                m_HasAppliedAntiAliasingSettings =
         false;
     AntiAliasingSettings                m_AppliedAntiAliasingSettings;
@@ -1418,6 +1439,7 @@ private:
     void BeginRendererStage(RendererTimingStage stage);
     void EndRendererStage(RendererTimingStage stage);
     void CompleteRendererTimerFrame();
+    void InvalidateRendererStageTiming(RendererTimingStage stage);
 
 public:
 
@@ -1479,6 +1501,8 @@ public:
 
 
         m_CommandList = GetDevice()->createCommandList();
+        m_WorldSpaceRepresentation =
+            std::make_unique<WorldSpaceRepresentation>(GetDevice());
         for (auto& stageQueries : m_RendererTimerQueries)
         {
             for (nvrhi::TimerQueryHandle& query : stageQueries)
@@ -1591,6 +1615,7 @@ public:
         if (m_TemporalAAPass)
             m_TemporalAAPass->ResetHistory();
         m_AntiAliasingPhase = 0u;
+        m_HeitzRatioEstimatorPhase = 0u;
     }
 
     void ApplyCameraPose(
@@ -1755,8 +1780,14 @@ public:
         m_ui.AntiAliasing = AntiAliasingSettings{};
         m_ui.TemporalAaSharpenEnabled = false;
         m_ui.TemporalAaSharpness = TemporalAaDefaultSharpness;
+        m_ui.DirectionalShadows = DirectionalShadowSettings{};
         m_ui.ScreenSpaceDirectionalShadows =
             ScreenSpaceDirectionalShadowSettings{};
+        m_ui.Representation = WorldSpaceRepresentationSettings{};
+        if (m_HeitzRatioEstimatorShadowPass)
+            m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+        if (m_WorldSpaceRepresentation)
+            m_WorldSpaceRepresentation->Reset();
         m_ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
         m_ui.PixelZoom = PixelZoomMode::Off;
         m_ui.FlashlightEnabled = DefaultFlashlightEnabled;
@@ -2610,6 +2641,10 @@ public:
         m_RenderPassPreparationStage =
             RenderPassPreparationStage::Idle;
         if (m_PbrDeferredLightingPass) m_PbrDeferredLightingPass->ResetBindingCache();
+        if (m_HeitzRatioEstimatorShadowPass)
+            m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+        if (m_WorldSpaceRepresentation)
+            m_WorldSpaceRepresentation->Reset();
         if (m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetBindingCache();
         ResetAntiAliasingState();
@@ -2782,6 +2817,11 @@ public:
                 m_SunLight = std::static_pointer_cast<DirectionalLight>(light);
                 if (m_SunLight->irradiance <= 0.f)
                     m_SunLight->irradiance = 1.f;
+                if (!(m_SunLight->angularSize > 0.f) ||
+                    !std::isfinite(m_SunLight->angularSize))
+                {
+                    m_SunLight->angularSize = 0.53f;
+                }
             }
         }
 
@@ -3114,6 +3154,7 @@ public:
             m_Scene->GetSceneGraph()->GetRootNode()->
                 InvalidateContent();
         }
+        ResetImageBasedLightingHistory();
     }
 
     void SynchronizeAntiAliasingSettings()
@@ -3568,6 +3609,21 @@ public:
         }
     }
 
+    void EnsureHeitzRatioEstimatorShadowPass()
+    {
+        if (!m_ui.DirectionalShadows.ratioEstimator.enabled ||
+            m_HeitzRatioEstimatorShadowPass ||
+            !SupportsHeitzRatioEstimatorShadows())
+        {
+            return;
+        }
+        m_HeitzRatioEstimatorShadowPass =
+            std::make_unique<HeitzRatioEstimatorShadowPass>(
+                GetDevice(),
+                m_ShaderFactory,
+                &m_PreparedVisibilityBlueNoise);
+    }
+
     void UpdateImageBasedLighting(nvrhi::ICommandList* commandList)
     {
         if (!m_ImageBasedLightingEnvironment)
@@ -3735,7 +3791,26 @@ public:
             // frame does not inherit the whole update.
             m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());
             m_ScenePreparationStage =
-                ScenePreparationStage::RenderTargets;
+                ScenePreparationStage::WorldRepresentation;
+            break;
+
+        case ScenePreparationStage::WorldRepresentation:
+            if (!m_ui.DirectionalShadows.ratioEstimator.enabled ||
+                !SupportsHeitzRatioEstimatorShadows() ||
+                !m_WorldSpaceRepresentation ||
+                !m_WorldSpaceRepresentation->IsSupported() ||
+                m_WorldSpaceRepresentation->GetStatus().state ==
+                    WorldSpaceRepresentationState::Failed ||
+                m_WorldSpaceRepresentation->Update(
+                    m_CommandList,
+                    m_Scene.get(),
+                    m_ui.Representation,
+                    uint32_t(GetFrameIndex()),
+                    true))
+            {
+                m_ScenePreparationStage =
+                    ScenePreparationStage::RenderTargets;
+            }
             break;
 
         case ScenePreparationStage::RenderTargets:
@@ -3793,6 +3868,7 @@ public:
         }
 
         EnsureScreenSpaceDirectionalShadowPass();
+        EnsureHeitzRatioEstimatorShadowPass();
 
         int windowWidth, windowHeight;
         GetDeviceManager()->GetWindowDimensions(windowWidth, windowHeight);
@@ -3859,7 +3935,7 @@ public:
                 m_ui.UsesFastApproximateAA();
             const bool cmaa2Required = m_ui.UsesCmaa2();
             const bool motionVectorsRequired =
-                m_ui.UsesLongTermTemporalAA() ||
+                temporalAARequired ||
                 (visibilityResourcesRequired && sampleCount > 1u);
 
             bool needNewPasses = false;
@@ -3888,6 +3964,8 @@ public:
                         m_RenderTargets->MotionVectorsEnabled !=
                             motionVectorsRequired);
 
+                if (m_HeitzRatioEstimatorShadowPass)
+                    m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
                 m_RenderTargets = nullptr;
                 m_BindingCache.Clear();
                 m_RenderTargets = std::make_unique<RenderTargets>();
@@ -3914,6 +3992,7 @@ public:
             if (m_ui.ShaderReloadRequested)
             {
                 m_ScreenSpaceDirectionalShadowPass.reset();
+                m_HeitzRatioEstimatorShadowPass.reset();
                 m_FlashlightDepthPass.reset();
                 // This pass owns shader handles and PSOs independently of the
                 // main pass set. Drop it before clearing the factory cache so
@@ -3983,12 +4062,78 @@ public:
         }
 
         EnsureScreenSpaceDirectionalShadowPass();
+        EnsureHeitzRatioEstimatorShadowPass();
 
         m_CommandList->open();
         AdvanceRendererTimers();
+        m_HeitzRatioEstimatorDispatchedThisFrame = false;
         BeginRendererStage(RendererTimingStage::CompleteFrame);
         BeginRendererStage(RendererTimingStage::SceneSetup);
         m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());
+        const bool heitzRatioEstimatorSelected =
+            m_ui.DirectionalShadows.ratioEstimator.enabled &&
+            m_RenderTargets->GetSampleCount() == 1u &&
+            SupportsHeitzRatioEstimatorShadows();
+        const uint64_t worldRepresentationGenerationBefore =
+            m_WorldSpaceRepresentation
+            ? m_WorldSpaceRepresentation->GetStatus().generation
+            : 0u;
+        const bool worldRepresentationReady =
+            m_WorldSpaceRepresentation &&
+            m_WorldSpaceRepresentation->Update(
+                m_CommandList,
+                m_Scene.get(),
+                m_ui.Representation,
+                uint32_t(GetFrameIndex()),
+                heitzRatioEstimatorSelected);
+        if (m_HeitzRatioEstimatorShadowPass &&
+            m_WorldSpaceRepresentation &&
+            (m_WorldSpaceRepresentation->GetStatus().generation !=
+                    worldRepresentationGenerationBefore ||
+                (heitzRatioEstimatorSelected &&
+                    !worldRepresentationReady)))
+        {
+            m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+            ResetAntiAliasingState();
+        }
+
+        const ResolvedAntiAliasingSettings antiAliasing =
+            m_ui.GetResolvedAntiAliasingSettings();
+        const bool temporalSharpenEnabled =
+            antiAliasing.sharpeningAllowed &&
+            ShouldSharpenTemporalAa(
+                m_ui.TemporalAaSharpenEnabled,
+                m_ui.TemporalAaSharpness);
+        const bool deferTemporalSharpenToPresentation =
+            temporalSharpenEnabled &&
+            (antiAliasing.fastApproximateEnabled ||
+                antiAliasing.cmaa2Enabled ||
+                antiAliasing.historyStorage ==
+                    TemporalAaHistoryStorage::Compact);
+        const bool temporalAaWillRender =
+            m_ui.UsesLongTermTemporalAA() &&
+            m_TemporalAAPass &&
+            m_TemporalAAPass->PrepareForRender(
+                antiAliasing,
+                temporalSharpenEnabled &&
+                    !deferTemporalSharpenToPresentation,
+                deferTemporalSharpenToPresentation,
+                m_ui.TemporalAaSharpness);
+        bool temporalAaRenderedThisFrame = false;
+        const bool heitzRatioEstimatorExpectedToContribute =
+            heitzRatioEstimatorSelected &&
+            m_HeitzRatioEstimatorShadowPass &&
+            worldRepresentationReady &&
+            m_SunLight;
+        if (heitzRatioEstimatorExpectedToContribute !=
+            m_HeitzRatioEstimatorContributedLastFrame)
+        {
+            ResetAntiAliasingState();
+            InvalidateRendererStageTiming(
+                RendererTimingStage::RatioEstimatorShadows);
+            m_HeitzRatioEstimatorContributedLastFrame =
+                heitzRatioEstimatorExpectedToContribute;
+        }
 
         nvrhi::ITexture* framebufferTexture = framebuffer->getDesc().colorAttachments[0].texture;
         m_CommandList->clearTextureFloat(framebufferTexture, nvrhi::AllSubresources, nvrhi::Color(0.f));
@@ -4015,7 +4160,8 @@ public:
 
         m_RenderTargets->Clear(m_CommandList);
         ScreenSpaceDirectionalShadowResult screenSpaceShadowResult;
-        DirectionalLightVisibility directionalVisibility;
+        HeitzRatioEstimatorShadowResult heitzShadowResult;
+        DirectionalLightVisibilities directionalVisibilities;
         MsaaVisibilityResolveOutputs closestSurfaceOutputs;
         bool closestSurfaceResolved = false;
 
@@ -4107,7 +4253,8 @@ public:
             EndRendererStage(RendererTimingStage::Geometry);
 
             const bool directionalVisibilityProducerEnabled =
-                m_ui.ScreenSpaceDirectionalShadows.enabled;
+                m_ui.ScreenSpaceDirectionalShadows.enabled ||
+                heitzRatioEstimatorSelected;
             if (m_RenderTargets->GetSampleCount() > 1u &&
                 (runScreenSpaceVisibility ||
                     directionalVisibilityProducerEnabled ||
@@ -4122,9 +4269,9 @@ public:
                 closestSurfaceResolved
                     ? closestSurfaceOutputs.depth
                     : m_RenderTargets->Depth.Get();
-            if (m_ScreenSpaceDirectionalShadowPass &&
-                (!m_ui.ScreenSpaceDirectionalShadows.enabled ||
-                    singleSurfaceInputsAvailable))
+            if (m_ui.ScreenSpaceDirectionalShadows.enabled &&
+                m_ScreenSpaceDirectionalShadowPass &&
+                singleSurfaceInputsAvailable)
             {
                 screenSpaceShadowResult = m_ScreenSpaceDirectionalShadowPass->Render(
                     m_CommandList,
@@ -4132,10 +4279,68 @@ public:
                     *m_View,
                     visibilityDepth,
                     m_SunLight.get());
-                directionalVisibility = {
+                directionalVisibilities.screenSpace = {
                     screenSpaceShadowResult.nearVisibility,
-                    screenSpaceShadowResult.light
+                    screenSpaceShadowResult.light,
+                    DirectionalLightVisibilityEncoding::ScalarR8Unorm
                 };
+            }
+            if (heitzRatioEstimatorSelected &&
+                m_HeitzRatioEstimatorShadowPass &&
+                worldRepresentationReady &&
+                singleSurfaceInputsAvailable)
+            {
+                HeitzRatioEstimatorShadowInputs shadowInputs;
+                shadowInputs.depth = visibilityDepth;
+                shadowInputs.diffuse = closestSurfaceResolved
+                    ? closestSurfaceOutputs.diffuse
+                    : m_RenderTargets->GBufferDiffuse.Get();
+                shadowInputs.material = closestSurfaceResolved
+                    ? closestSurfaceOutputs.material
+                    : m_RenderTargets->GBufferSpecular.Get();
+                shadowInputs.normals = closestSurfaceResolved
+                    ? closestSurfaceOutputs.normals
+                    : m_RenderTargets->GBufferNormals.Get();
+                shadowInputs.emissive = closestSurfaceResolved
+                    ? closestSurfaceOutputs.emissive
+                    : m_RenderTargets->GBufferEmissive.Get();
+                shadowInputs.materialAmbientOcclusion =
+                    closestSurfaceResolved
+                        ? closestSurfaceOutputs.materialAmbientOcclusion
+                        : m_RenderTargets->MaterialAmbientOcclusion.Get();
+                BeginRendererStage(
+                    RendererTimingStage::RatioEstimatorShadows);
+                heitzShadowResult =
+                    m_HeitzRatioEstimatorShadowPass->Render(
+                        m_CommandList,
+                        m_ui.DirectionalShadows.ratioEstimator,
+                        *m_View,
+                        shadowInputs,
+                        m_WorldSpaceRepresentation
+                            ->GetTopLevelAccelerationStructure(),
+                        m_SunLight.get(),
+                        uint32_t(m_HeitzRatioEstimatorPhase),
+                        m_SceneDiagonal);
+                EndRendererStage(
+                    RendererTimingStage::RatioEstimatorShadows);
+                directionalVisibilities.ratioEstimator = {
+                    heitzShadowResult.modulation,
+                    heitzShadowResult.light,
+                    DirectionalLightVisibilityEncoding::RgbRgba16Float
+                };
+            }
+            const bool heitzRatioEstimatorContributed =
+                bool(heitzShadowResult);
+            m_HeitzRatioEstimatorDispatchedThisFrame =
+                heitzShadowResult.dispatched;
+            if (heitzRatioEstimatorContributed !=
+                m_HeitzRatioEstimatorContributedLastFrame)
+            {
+                ResetAntiAliasingState();
+                InvalidateRendererStageTiming(
+                    RendererTimingStage::RatioEstimatorShadows);
+                m_HeitzRatioEstimatorContributedLastFrame =
+                    heitzRatioEstimatorContributed;
             }
             DeferredLightingPass::Inputs deferredInputs;
             deferredInputs.SetGBuffer(*m_RenderTargets);
@@ -4187,7 +4392,7 @@ public:
                         m_CommandList,
                         *m_View,
                         visibilityDeferredInputs,
-                        directionalVisibility,
+                        directionalVisibilities,
                         globalEnvironment,
                         m_RenderTargets
                             ->DirectDiffuseRadiance,
@@ -4267,7 +4472,7 @@ public:
                     m_CommandList,
                     *m_View,
                     deferredInputs,
-                    directionalVisibility,
+                    directionalVisibilities,
                     globalEnvironment,
                     m_RenderTargets->DirectDiffuseRadiance,
                     runScreenSpaceVisibility,
@@ -4452,7 +4657,7 @@ public:
                 m_CommandList,
                 *m_View,
                 deferredMsaaInputs,
-                directionalVisibility,
+                directionalVisibilities,
                 globalEnvironment,
                 nullptr,
                 deferredMsaaVisibilityPending,
@@ -4476,21 +4681,8 @@ public:
 
         nvrhi::ITexture* antiAliasedTexture =
             sceneColor;
-        const ResolvedAntiAliasingSettings antiAliasing =
-            m_ui.GetResolvedAntiAliasingSettings();
-        if (antiAliasing.temporalEnabled && m_TemporalAAPass)
+        if (temporalAaWillRender)
         {
-            const bool temporalSharpenEnabled =
-                antiAliasing.sharpeningAllowed &&
-                ShouldSharpenTemporalAa(
-                    m_ui.TemporalAaSharpenEnabled,
-                    m_ui.TemporalAaSharpness);
-            const bool deferTemporalSharpenToPresentation =
-                temporalSharpenEnabled &&
-                (antiAliasing.fastApproximateEnabled ||
-                    antiAliasing.cmaa2Enabled ||
-                    antiAliasing.historyStorage ==
-                        TemporalAaHistoryStorage::Compact);
             antiAliasedTexture = m_TemporalAAPass->Render(
                 m_CommandList,
                 *m_View,
@@ -4501,8 +4693,11 @@ public:
                     !deferTemporalSharpenToPresentation,
                 deferTemporalSharpenToPresentation,
                 m_ui.TemporalAaSharpness);
+            temporalAaRenderedThisFrame =
+                m_TemporalAAPass->DidRenderThisFrame();
 
-            if (deferTemporalSharpenToPresentation)
+            if (temporalAaRenderedThisFrame &&
+                deferTemporalSharpenToPresentation)
             {
                 // Keep the resolved sharpen separate from compact history,
                 // then let display mapping and spatial AA observe its final
@@ -4578,8 +4773,13 @@ public:
         GetDevice()->executeCommandList(m_CommandList);
         if (m_RenderTargets->MotionVectorsEnabled)
             CaptureCurrentViewForMotionVectors();
-        if (m_ui.UsesLongTermTemporalAA())
+        if (temporalAaRenderedThisFrame)
             ++m_AntiAliasingPhase;
+        if (heitzShadowResult.dispatched &&
+            heitzShadowResult.stochastic)
+        {
+            ++m_HeitzRatioEstimatorPhase;
+        }
 
         if (m_ui.CopyScreenshotToClipboard)
         {
@@ -4674,8 +4874,11 @@ public:
 
     void ResetImageBasedLightingHistory()
     {
-        if (m_TemporalAAPass)
-            m_TemporalAAPass->ResetHistory();
+        ResetAntiAliasingState();
+        InvalidateRendererStageTiming(
+            RendererTimingStage::RatioEstimatorShadows);
+        InvalidateRendererStageTiming(
+            RendererTimingStage::CompleteFrame);
     }
 
     const ScreenSpaceVisibilityTimings* GetScreenSpaceVisibilityTimings() const
@@ -4705,7 +4908,44 @@ public:
         return bool(m_SunLight);
     }
 
-    std::shared_ptr<Light> GetPrimaryDirectionalLight() const
+    bool HasHeitzRatioEstimatorHardwareSupport() const
+    {
+        return m_WorldSpaceRepresentation &&
+            m_WorldSpaceRepresentation->IsSupported() &&
+            HeitzRatioEstimatorShadowPass::IsDeviceSupported(GetDevice());
+    }
+
+    bool SupportsHeitzRatioEstimatorShadows() const
+    {
+        return HasHeitzRatioEstimatorHardwareSupport() &&
+            m_ui.GetResolvedAntiAliasingSettings().rasterSampleCount == 1u;
+    }
+
+    const WorldSpaceRepresentationStatus&
+        GetWorldSpaceRepresentationStatus() const
+    {
+        static const WorldSpaceRepresentationStatus unsupported = {
+            WorldSpaceRepresentationState::Unsupported
+        };
+        return m_WorldSpaceRepresentation
+            ? m_WorldSpaceRepresentation->GetStatus()
+            : unsupported;
+    }
+
+    void InvalidateWorldSpaceRepresentation(
+        WorldSpaceRepresentationInvalidation invalidation)
+    {
+        if (invalidation != WorldSpaceRepresentationInvalidation::None &&
+            m_HeitzRatioEstimatorShadowPass)
+        {
+            m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+            ResetAntiAliasingState();
+        }
+        if (m_WorldSpaceRepresentation)
+            m_WorldSpaceRepresentation->Invalidate(invalidation);
+    }
+
+    std::shared_ptr<DirectionalLight> GetPrimaryDirectionalLight() const
     {
         return m_SunLight;
     }
@@ -4742,6 +4982,11 @@ public:
     [[nodiscard]] const RendererTimings& GetRendererTimings() const
     {
         return m_RendererTimings;
+    }
+
+    [[nodiscard]] bool DidDispatchHeitzRatioEstimatorThisFrame() const
+    {
+        return m_HeitzRatioEstimatorDispatchedThisFrame;
     }
 
 };
@@ -5543,9 +5788,15 @@ void UvsrSceneViewer::AdvanceRendererTimers()
             continue;
         }
 
-        m_RendererTimings.milliseconds[stageIndex] =
-            GetDevice()->getTimerQueryTime(query) * 1000.f;
-        m_RendererTimings.available[stageIndex] = true;
+        const bool currentEpoch =
+            m_RendererTimerPendingEpoch[stageIndex][slot] ==
+                m_RendererTimerStageEpoch[stageIndex];
+        if (currentEpoch)
+        {
+            m_RendererTimings.milliseconds[stageIndex] =
+                GetDevice()->getTimerQueryTime(query) * 1000.f;
+        }
+        m_RendererTimings.available[stageIndex] = currentEpoch;
         GetDevice()->resetTimerQuery(query);
         m_RendererTimerPending[stageIndex][slot] = false;
     }
@@ -5578,6 +5829,8 @@ void UvsrSceneViewer::EndRendererStage(RendererTimingStage stage)
     m_CommandList->endTimerQuery(
         m_RendererTimerQueries[stageIndex][slot]);
     m_RendererTimerPending[stageIndex][slot] = true;
+    m_RendererTimerPendingEpoch[stageIndex][slot] =
+        m_RendererTimerStageEpoch[stageIndex];
     m_RendererTimerActive[stageIndex] = false;
 }
 
@@ -5585,6 +5838,14 @@ void UvsrSceneViewer::CompleteRendererTimerFrame()
 {
     if (m_RendererTimerFrameWritable)
         ++m_RendererTimerFrame;
+}
+
+void UvsrSceneViewer::InvalidateRendererStageTiming(
+    RendererTimingStage stage)
+{
+    const size_t stageIndex = static_cast<size_t>(stage);
+    ++m_RendererTimerStageEpoch[stageIndex];
+    m_RendererTimings.available[stageIndex] = false;
 }
 
 
@@ -8542,6 +8803,95 @@ private:
         return false;
     }
 
+    bool DispatchRepresentationCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        WorldSpaceRepresentationSettings candidate = m_ui.Representation;
+        const WorldSpaceRepresentationSettings factoryDefaults;
+        bool handled = true;
+
+        if (path == "representation.bvh.build-preference")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, BvhBuildPreference>, 3>
+                Options = {{
+                    { "fast-trace", BvhBuildPreference::FastTrace },
+                    { "balanced", BvhBuildPreference::Balanced },
+                    { "fast-build", BvhBuildPreference::FastBuild }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.bvhBuildPreference,
+                factoryDefaults.bvhBuildPreference,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "representation.blas.update-mode")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, BlasUpdateMode>, 2>
+                Options = {{
+                    { "rebuild", BlasUpdateMode::Rebuild },
+                    { "refit", BlasUpdateMode::Refit }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.blasUpdateMode,
+                factoryDefaults.blasUpdateMode,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "representation.tlas.update-mode")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, TlasUpdateMode>, 2>
+                Options = {{
+                    { "rebuild", TlasUpdateMode::Rebuild },
+                    { "refit", TlasUpdateMode::Refit }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.tlasUpdateMode,
+                factoryDefaults.tlasUpdateMode,
+                Options,
+                value,
+                error);
+        }
+        else
+        {
+            handled = false;
+            error =
+                "Internal Representation command binding is missing for '" +
+                std::string(path) + "'.";
+        }
+
+        if (!handled)
+            return false;
+        if (operation != CommandValueOperation::Get)
+        {
+            const WorldSpaceRepresentationInvalidation invalidation =
+                GetWorldSpaceRepresentationInvalidation(
+                    m_ui.Representation,
+                    candidate);
+            m_ui.Representation = candidate;
+            m_app->InvalidateWorldSpaceRepresentation(invalidation);
+        }
+        return true;
+    }
+
 
     bool DispatchVisibilityCommandValue(
         const UiSettingsCommandDefinition& definition,
@@ -8615,12 +8965,10 @@ private:
         else if (path == "visibility.noise")
         {
             static constexpr std::array<
-                std::pair<std::string_view, VisibilitySampleScheduler>, 3>
+                std::pair<std::string_view, VisibilitySampleScheduler>, 2>
                 Options = {{
                     { "permutated-white-noise",
                         VisibilitySampleScheduler::PermutatedWhiteNoise },
-                    { "hashed-white-noise",
-                        VisibilitySampleScheduler::HashedWhiteNoise },
                     { "void-cluster-blue-noise",
                         VisibilitySampleScheduler::VoidClusterBlueNoise }
                 }};
@@ -10004,6 +10352,8 @@ private:
                     azimuth,
                     elevation,
                     directional));
+                if (directional)
+                    m_app->ResetImageBasedLightingHistory();
             }
             return true;
         }
@@ -10051,16 +10401,19 @@ private:
                 return false;
             }
             auto& light = static_cast<DirectionalLight&>(*selected);
-            return ApplyCommandFloat(
+            const bool handled = ApplyCommandFloat(
                 operation,
                 arguments,
                 path,
                 light.angularSize,
                 defaults.angularSize,
-                0.1f,
+                0.f,
                 20.f,
                 value,
                 error);
+            if (handled && operation != CommandValueOperation::Get)
+                m_app->ResetImageBasedLightingHistory();
+            return handled;
         }
         if (path == "light.selected.radius" ||
             path == "light.selected.intensity")
@@ -10159,6 +10512,159 @@ private:
         return false;
     }
 
+    bool DispatchDirectionalShadowCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        DirectionalShadowSettings candidate = m_ui.DirectionalShadows;
+        const DirectionalShadowSettings factoryDefaults;
+        bool handled = true;
+
+        if (path == "shadows.ratio-estimator.enabled")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.enabled,
+                factoryDefaults.ratioEstimator.enabled,
+                value,
+                error);
+        }
+        else if (path == "shadows.ratio-estimator.samples-per-pixel")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, int32_t>, 7> Options = {{
+                    { "1", 0 },
+                    { "2", 1 },
+                    { "4", 2 },
+                    { "8", 3 },
+                    { "16", 4 },
+                    { "32", 5 },
+                    { "64", 6 }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.sampleRateLog2,
+                factoryDefaults.ratioEstimator.sampleRateLog2,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.ratio-estimator.hard-shadows")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.hardShadows,
+                factoryDefaults.ratioEstimator.hardShadows,
+                value,
+                error);
+        }
+        else if (path == "shadows.ratio-estimator.noise-pattern")
+        {
+            static constexpr std::array<std::pair<std::string_view,
+                HeitzRatioEstimatorNoisePattern>, 2> Options = {{
+                    { "permutated-white-noise",
+                        HeitzRatioEstimatorNoisePattern::PermutatedWhiteNoise },
+                    { "void-cluster-blue-noise",
+                        HeitzRatioEstimatorNoisePattern::VoidClusterBlueNoise }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.noisePattern,
+                factoryDefaults.ratioEstimator.noisePattern,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.ratio-estimator.animate-samples")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.animateSamples,
+                factoryDefaults.ratioEstimator.animateSamples,
+                value,
+                error);
+        }
+        else if (path == "shadows.ratio-estimator.ray-bias")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.rayBias,
+                factoryDefaults.ratioEstimator.rayBias,
+                0.f,
+                HeitzRatioEstimatorMaximumRayBias,
+                value,
+                error);
+        }
+        else
+        {
+            handled = false;
+            error =
+                "Internal Directional Shadows command binding is missing for '" +
+                std::string(path) + "'.";
+        }
+
+        if (!handled)
+            return false;
+        if (operation == CommandValueOperation::Get)
+            return true;
+        if (!IsHeitzRatioEstimatorConfigurationSupported(
+                candidate.ratioEstimator))
+        {
+            error =
+                "The requested ratio-estimator shadow configuration is not supported.";
+            return false;
+        }
+        if (candidate.ratioEstimator.enabled &&
+            !m_app->HasPrimaryDirectionalLight())
+        {
+            error =
+                "Directional shadow techniques require a primary directional light.";
+            return false;
+        }
+        if (candidate.ratioEstimator.enabled &&
+            !m_app->SupportsHeitzRatioEstimatorShadows())
+        {
+            error =
+                "Heitz ratio-estimator shadows require DXR 1.1 support and "
+                "single-sample rendering.";
+            return false;
+        }
+
+        const bool changed =
+            candidate.ratioEstimator.enabled !=
+                m_ui.DirectionalShadows.ratioEstimator.enabled ||
+            candidate.ratioEstimator.hardShadows !=
+                m_ui.DirectionalShadows.ratioEstimator.hardShadows ||
+            candidate.ratioEstimator.sampleRateLog2 !=
+                m_ui.DirectionalShadows.ratioEstimator.sampleRateLog2 ||
+            candidate.ratioEstimator.noisePattern !=
+                m_ui.DirectionalShadows.ratioEstimator.noisePattern ||
+            candidate.ratioEstimator.animateSamples !=
+                m_ui.DirectionalShadows.ratioEstimator.animateSamples ||
+            candidate.ratioEstimator.rayBias !=
+                m_ui.DirectionalShadows.ratioEstimator.rayBias;
+        m_ui.DirectionalShadows = candidate;
+        if (changed)
+            m_app->ResetImageBasedLightingHistory();
+        return true;
+    }
+
     static bool IsSameCommandScreenSpaceShadowConfiguration(
         const ScreenSpaceDirectionalShadowSettings& left,
         const ScreenSpaceDirectionalShadowSettings& right)
@@ -10206,7 +10712,8 @@ private:
         std::string& error)
     {
         const std::string_view path = definition.name;
-        if (operation != CommandValueOperation::Get &&
+        if (path != "shadows.screen-space-directional.enabled" &&
+            operation != CommandValueOperation::Get &&
             !m_app->HasPrimaryDirectionalLight())
         {
             error =
@@ -10229,6 +10736,15 @@ private:
                 factoryDefaults.enabled,
                 value,
                 error);
+            if (handled && operation != CommandValueOperation::Get &&
+                candidate.enabled &&
+                !m_app->HasPrimaryDirectionalLight())
+            {
+                error =
+                    "Screen-space directional shadows require a "
+                    "primary directional light.";
+                return false;
+            }
         }
         else if (path == "shadows.screen-space-directional.profile")
         {
@@ -10436,7 +10952,14 @@ private:
             {
                 candidate.preset = ScreenSpaceShadowPreset::Custom;
             }
+            const bool changed =
+                !IsSameCommandScreenSpaceShadowConfiguration(
+                    m_ui.ScreenSpaceDirectionalShadows, candidate) ||
+                m_ui.ScreenSpaceDirectionalShadows.enabled !=
+                    candidate.enabled;
             m_ui.ScreenSpaceDirectionalShadows = candidate;
+            if (changed)
+                m_app->ResetImageBasedLightingHistory();
         }
         return true;
     }
@@ -10989,6 +11512,9 @@ private:
         case UiSettingsCommandSection::General:
             return DispatchGeneralCommandValue(
                 definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::Representation:
+            return DispatchRepresentationCommandValue(
+                definition, operation, arguments, value, error);
         case UiSettingsCommandSection::Visibility:
             return DispatchVisibilityCommandValue(
                 definition, operation, arguments, value, error);
@@ -11003,6 +11529,9 @@ private:
                 definition, operation, arguments, value, error);
         case UiSettingsCommandSection::Lights:
             return DispatchLightCommandValue(
+                definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::DirectionalShadows:
+            return DispatchDirectionalShadowCommandValue(
                 definition, operation, arguments, value, error);
         case UiSettingsCommandSection::ScreenSpaceDirectionalShadows:
             return DispatchScreenSpaceShadowCommandValue(
@@ -12019,22 +12548,14 @@ private:
                     {
                         const MaterialDomain candidate =
                             MaterialDomain(index);
-                        const std::shared_ptr<Scene> scene =
-                            m_app->GetScene();
                         DrawDeferredDropdownOption(
                             MaterialDomainLabels[index],
                             MaterialDomainLabels[index],
                             material->domain == candidate,
-                            [material, scene, candidate]()
+                            [app = m_app, material, candidate]()
                             {
                                 material->domain = candidate;
-                                material->dirty = true;
-                                if (scene)
-                                {
-                                    scene->GetSceneGraph()
-                                        ->GetRootNode()
-                                        ->InvalidateContent();
-                                }
+                                app->NotifyMaterialCommandChanged(material);
                             });
                     }
                     ImGui::EndCombo();
@@ -12075,11 +12596,13 @@ private:
                 if (materialControlsVisible)
                 {
                     ImGui::PushItemWidth(materialControlWidth);
-                    material->dirty |=
+                    const bool materialChanged =
                         donut::app::MaterialEditor(
                             material.get(),
                             false,
                             false);
+                    if (materialChanged)
+                        m_app->NotifyMaterialCommandChanged(material);
                     ImGui::PopItemWidth();
                 }
                 ImGui::EndChild();
@@ -12264,6 +12787,7 @@ private:
         {
             snapshot.screenSpaceShadowTimings = *timings;
             snapshot.hasScreenSpaceShadowTimings =
+                m_ui.ScreenSpaceDirectionalShadows.enabled &&
                 timings->active && timings->available;
         }
         if (const ScreenSpaceVisibilityTimings* timings =
@@ -13497,6 +14021,470 @@ protected:
         }
         ImGui::Spacing();
 
+        const bool representationOpen = DrawCollapsingHeader(
+            "Representation",
+            "Configure the world-space hierarchy shared by ray-traced "
+            "techniques.");
+        if (representationOpen)
+        {
+            BeginDrawerBody(
+                "##RepresentationBody",
+                settingsControlWidth);
+
+            WorldSpaceRepresentationSettings& representation =
+                m_ui.Representation;
+            const WorldSpaceRepresentationSettings representationDefaults{};
+            const WorldSpaceRepresentationStatus& representationStatus =
+                m_app->GetWorldSpaceRepresentationStatus();
+            const char* representationState = "Inactive";
+            switch (representationStatus.state)
+            {
+            case WorldSpaceRepresentationState::Unsupported:
+                representationState = "Unsupported";
+                break;
+            case WorldSpaceRepresentationState::BuildingBlas:
+                representationState = "Building BLAS";
+                break;
+            case WorldSpaceRepresentationState::BuildingTlas:
+                representationState = "Building TLAS";
+                break;
+            case WorldSpaceRepresentationState::Ready:
+                representationState = "Ready";
+                break;
+            case WorldSpaceRepresentationState::Failed:
+                representationState = "Failed";
+                break;
+            case WorldSpaceRepresentationState::Idle:
+            default:
+                break;
+            }
+            ImGui::Text("Status: %s", representationState);
+            if (representationStatus.totalBlasCount > 0u)
+            {
+                ImGui::TextDisabled(
+                    "BLAS %u/%u  |  TLAS Instances %u",
+                    representationStatus.builtBlasCount,
+                    representationStatus.totalBlasCount,
+                    representationStatus.instanceCount);
+            }
+            else if (!representationStatus.accelerationStructuresSupported ||
+                !representationStatus.rayQueriesSupported)
+            {
+                ImGui::TextDisabled(
+                    "Requires DirectX Raytracing 1.1 inline ray queries.");
+            }
+            else
+            {
+                ImGui::TextDisabled(
+                    "Builds lazily when a ray-traced technique needs it.");
+            }
+
+            if (BeginAnimatedTreeNode(
+                    "Bounding Volume Hierarchy##Representation",
+                    ImGuiTreeNodeFlags_DefaultOpen,
+                    "Configure the shared world-space BVH family."))
+            {
+                static constexpr const char* BuildPreferenceLabels[] = {
+                    "Fast Trace", "Balanced", "Fast Build"
+                };
+                const int buildPreferenceIndex = std::clamp(
+                    int(representation.bvhBuildPreference),
+                    0,
+                    int(std::size(BuildPreferenceLabels)) - 1);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (BeginRoundedCombo(
+                        "Build Preference##BVH",
+                        BuildPreferenceLabels[buildPreferenceIndex]))
+                {
+                    for (int index = 0;
+                        index < int(std::size(BuildPreferenceLabels));
+                        ++index)
+                    {
+                        const BvhBuildPreference candidate =
+                            BvhBuildPreference(index);
+                        DrawDeferredDropdownOption(
+                            BuildPreferenceLabels[index],
+                            BuildPreferenceLabels[index],
+                            representation.bvhBuildPreference == candidate,
+                            [settings = &representation,
+                                app = m_app,
+                                candidate]()
+                            {
+                                const WorldSpaceRepresentationSettings before =
+                                    *settings;
+                                settings->bvhBuildPreference = candidate;
+                                app->InvalidateWorldSpaceRepresentation(
+                                    GetWorldSpaceRepresentationInvalidation(
+                                        before, *settings));
+                            });
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Choose whether BVH construction prioritizes ray traversal, "
+                    "balanced work, or construction speed.");
+                if (DrawNestedDropdownResetIcon(
+                        "RepresentationBvhBuildPreference",
+                        representation.bvhBuildPreference !=
+                            representationDefaults.bvhBuildPreference))
+                {
+                    QueueDeferredControlUiAction(
+                        [settings = &representation,
+                            app = m_app,
+                            defaultValue = representationDefaults
+                                .bvhBuildPreference]()
+                        {
+                            const WorldSpaceRepresentationSettings before =
+                                *settings;
+                            settings->bvhBuildPreference = defaultValue;
+                            app->InvalidateWorldSpaceRepresentation(
+                                GetWorldSpaceRepresentationInvalidation(
+                                    before, *settings));
+                        });
+                }
+                EndAnimatedTreeNode();
+            }
+
+            if (BeginAnimatedTreeNode(
+                    "Bottom-Level Acceleration Structures##Representation",
+                    ImGuiTreeNodeFlags_DefaultOpen,
+                    "Configure per-mesh triangle acceleration structures."))
+            {
+                static constexpr const char* BlasUpdateLabels[] = {
+                    "Rebuild", "Refit"
+                };
+                const int updateIndex = std::clamp(
+                    int(representation.blasUpdateMode),
+                    0,
+                    int(std::size(BlasUpdateLabels)) - 1);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (BeginRoundedCombo(
+                        "Dynamic Updates##BLAS",
+                        BlasUpdateLabels[updateIndex]))
+                {
+                    for (int index = 0;
+                        index < int(std::size(BlasUpdateLabels));
+                        ++index)
+                    {
+                        const BlasUpdateMode candidate =
+                            BlasUpdateMode(index);
+                        DrawDeferredDropdownOption(
+                            BlasUpdateLabels[index],
+                            BlasUpdateLabels[index],
+                            representation.blasUpdateMode == candidate,
+                            [settings = &representation,
+                                app = m_app,
+                                candidate]()
+                            {
+                                const WorldSpaceRepresentationSettings before =
+                                    *settings;
+                                settings->blasUpdateMode = candidate;
+                                app->InvalidateWorldSpaceRepresentation(
+                                    GetWorldSpaceRepresentationInvalidation(
+                                        before, *settings));
+                            });
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Rebuild or refit changed skinned-mesh BLAS geometry.");
+                if (DrawNestedDropdownResetIcon(
+                        "RepresentationBlasUpdateMode",
+                        representation.blasUpdateMode !=
+                            representationDefaults.blasUpdateMode))
+                {
+                    QueueDeferredControlUiAction(
+                        [settings = &representation,
+                            app = m_app,
+                            defaultValue = representationDefaults
+                                .blasUpdateMode]()
+                        {
+                            const WorldSpaceRepresentationSettings before =
+                                *settings;
+                            settings->blasUpdateMode = defaultValue;
+                            app->InvalidateWorldSpaceRepresentation(
+                                GetWorldSpaceRepresentationInvalidation(
+                                    before, *settings));
+                        });
+                }
+                EndAnimatedTreeNode();
+            }
+
+            if (BeginAnimatedTreeNode(
+                    "Top-Level Acceleration Structure##Representation",
+                    ImGuiTreeNodeFlags_DefaultOpen,
+                    "Configure the instance hierarchy consumed by ray queries."))
+            {
+                static constexpr const char* TlasUpdateLabels[] = {
+                    "Rebuild", "Refit"
+                };
+                const int updateIndex = std::clamp(
+                    int(representation.tlasUpdateMode),
+                    0,
+                    int(std::size(TlasUpdateLabels)) - 1);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (BeginRoundedCombo(
+                        "Transform Updates##TLAS",
+                        TlasUpdateLabels[updateIndex]))
+                {
+                    for (int index = 0;
+                        index < int(std::size(TlasUpdateLabels));
+                        ++index)
+                    {
+                        const TlasUpdateMode candidate =
+                            TlasUpdateMode(index);
+                        DrawDeferredDropdownOption(
+                            TlasUpdateLabels[index],
+                            TlasUpdateLabels[index],
+                            representation.tlasUpdateMode == candidate,
+                            [settings = &representation,
+                                app = m_app,
+                                candidate]()
+                            {
+                                const WorldSpaceRepresentationSettings before =
+                                    *settings;
+                                settings->tlasUpdateMode = candidate;
+                                app->InvalidateWorldSpaceRepresentation(
+                                    GetWorldSpaceRepresentationInvalidation(
+                                        before, *settings));
+                            });
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Rebuild or refit the TLAS when instance transforms change.");
+                if (DrawNestedDropdownResetIcon(
+                        "RepresentationTlasUpdateMode",
+                        representation.tlasUpdateMode !=
+                            representationDefaults.tlasUpdateMode))
+                {
+                    QueueDeferredControlUiAction(
+                        [settings = &representation,
+                            app = m_app,
+                            defaultValue = representationDefaults
+                                .tlasUpdateMode]()
+                        {
+                            const WorldSpaceRepresentationSettings before =
+                                *settings;
+                            settings->tlasUpdateMode = defaultValue;
+                            app->InvalidateWorldSpaceRepresentation(
+                                GetWorldSpaceRepresentationInvalidation(
+                                    before, *settings));
+                        });
+                }
+                EndAnimatedTreeNode();
+            }
+
+            EndDrawerBody();
+        }
+        ImGui::Spacing();
+
+        const auto drawRatioEstimatorShadowControls = [&]()
+        {
+            if (BeginAnimatedTreeNode(
+                    "Ratio-Estimator Ray-Traced Shadows##Shadows",
+                    ImGuiTreeNodeFlags_DefaultOpen,
+                    "Configure correlated stochastic numerator and denominator "
+                    "estimates for the directional emitter."))
+            {
+                HeitzRatioEstimatorShadowSettings& ratio =
+                    m_ui.DirectionalShadows.ratioEstimator;
+                const HeitzRatioEstimatorShadowSettings ratioDefaults{};
+                const bool ratioAvailable =
+                    m_app->HasPrimaryDirectionalLight() &&
+                    m_app->SupportsHeitzRatioEstimatorShadows();
+                const bool disableRatioEnable =
+                    !ratioAvailable && !ratio.enabled;
+                if (disableRatioEnable)
+                    ImGui::BeginDisabled();
+                if (ImGui::Checkbox(
+                        "Enabled##RatioEstimatorShadows",
+                        &ratio.enabled))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Trace world-space directional-shadow rays independently "
+                    "of the screen-space technique.");
+                if (disableRatioEnable)
+                    ImGui::EndDisabled();
+                if (DrawPresetResetIcon(
+                        "RatioEstimatorShadowEnabled",
+                        ratio.enabled != ratioDefaults.enabled))
+                {
+                    ratio.enabled = ratioDefaults.enabled;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                if (BeginAnimatedToggleRegion(
+                        "##RatioEstimatorShadowControls",
+                        ratio.enabled && ratioAvailable))
+                {
+                    if (ImGui::Checkbox(
+                            "Hard Shadows##RatioEstimatorShadows",
+                            &ratio.hardShadows))
+                    {
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Trace one center ray and skip emitter sampling, full "
+                        "material preparation, and ratio evaluation. The "
+                        "light's Angular Size is preserved for soft mode.");
+                    if (DrawPresetResetIcon(
+                            "RatioEstimatorHardShadows",
+                            ratio.hardShadows !=
+                                ratioDefaults.hardShadows))
+                    {
+                        ratio.hardShadows = ratioDefaults.hardShadows;
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+
+                    const std::shared_ptr<DirectionalLight> primaryLight =
+                        m_app->GetPrimaryDirectionalLight();
+                    const float angularSize = primaryLight
+                        ? primaryLight->angularSize
+                        : 0.f;
+                    const bool softSamplingControlsEnabled =
+                        !ratio.hardShadows && angularSize > 1e-4f;
+                    if (!softSamplingControlsEnabled)
+                        ImGui::BeginDisabled();
+                    if (ImGui::Checkbox(
+                            "Animate Samples##RatioEstimatorShadows",
+                            &ratio.animateSamples))
+                    {
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Advance emitter samples after each stochastic shadow "
+                        "dispatch. This changes the frame-local sample set with "
+                        "or without TAA; only the renderer's final-color TAA "
+                        "may accumulate the result over time.");
+                    if (DrawPresetResetIcon(
+                            "RatioEstimatorShadowAnimateSamples",
+                            ratio.animateSamples !=
+                                ratioDefaults.animateSamples))
+                    {
+                        ratio.animateSamples =
+                            ratioDefaults.animateSamples;
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+
+                    int sampleRateLog2 = ratio.sampleRateLog2;
+                    const std::string_view sampleRateLabel =
+                        GetHeitzRatioEstimatorSampleRateLabel(
+                            sampleRateLog2);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (ImGui::SliderInt(
+                            "Samples Per Pixel##RatioEstimatorShadows",
+                            &sampleRateLog2,
+                            HeitzRatioEstimatorMinimumSampleRateLog2,
+                            HeitzRatioEstimatorMaximumSampleRateLog2,
+                            sampleRateLabel.data(),
+                            ImGuiSliderFlags_AlwaysClamp))
+                    {
+                        ratio.sampleRateLog2 = sampleRateLog2;
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Choose 1 through 64 matched rays per pixel. Every "
+                        "numerator and denominator sample is evaluated in the "
+                        "current frame; this shadow pass keeps no private "
+                        "temporal history.");
+                    if (DrawPresetResetIcon(
+                            "RatioEstimatorShadowSamples",
+                            ratio.sampleRateLog2 !=
+                                ratioDefaults.sampleRateLog2))
+                    {
+                        ratio.sampleRateLog2 =
+                            ratioDefaults.sampleRateLog2;
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+
+                    static constexpr const char* NoisePatternLabels[] = {
+                        "Permutated White Noise",
+                        "Void Cluster Blue Noise"
+                    };
+                    int noisePattern =
+                        static_cast<int>(ratio.noisePattern);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (ImGui::Combo(
+                            "Noise Pattern##RatioEstimatorShadows",
+                            &noisePattern,
+                            NoisePatternLabels,
+                            static_cast<int>(
+                                std::size(NoisePatternLabels))))
+                    {
+                        ratio.noisePattern =
+                            static_cast<HeitzRatioEstimatorNoisePattern>(
+                                noisePattern);
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Choose the current-frame emitter-direction noise "
+                        "sequence.");
+                    if (DrawPresetResetIcon(
+                            "RatioEstimatorShadowNoisePattern",
+                            ratio.noisePattern !=
+                                ratioDefaults.noisePattern))
+                    {
+                        ratio.noisePattern =
+                            ratioDefaults.noisePattern;
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+
+                    if (!softSamplingControlsEnabled)
+                        ImGui::EndDisabled();
+
+                    if (DrawSliderFloat(
+                            "Ray Bias##RatioEstimatorShadows",
+                            &ratio.rayBias,
+                            0.f,
+                            HeitzRatioEstimatorMaximumRayBias,
+                            "%.4f"))
+                    {
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Move the ray origin this many world units along the "
+                        "view-facing raster triangle normal. This does not add "
+                        "rays or shorten their reach; larger values can detach "
+                        "contact shadows.");
+                    if (DrawPresetResetIcon(
+                            "RatioEstimatorShadowRayBias",
+                            ratio.rayBias != ratioDefaults.rayBias))
+                    {
+                        ratio.rayBias = ratioDefaults.rayBias;
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+
+                    if (ratio.hardShadows)
+                    {
+                        ImGui::TextDisabled(
+                            "Hard Shadows uses one center ray; soft settings are preserved.");
+                    }
+                    else if (!(angularSize > 1e-4f))
+                    {
+                        ImGui::TextDisabled(
+                            "Angular Size is 0 deg: this directional emitter has zero extent.");
+                    }
+
+                    const WorldSpaceRepresentationStatus& status =
+                        m_app->GetWorldSpaceRepresentationStatus();
+                    if (status.state ==
+                        WorldSpaceRepresentationState::BuildingBlas ||
+                        status.state ==
+                            WorldSpaceRepresentationState::BuildingTlas)
+                    {
+                        ImGui::TextDisabled(
+                            "Preparing world hierarchy: BLAS %u/%u.",
+                            status.builtBlasCount,
+                            status.totalBlasCount);
+                    }
+                    EndAnimatedToggleRegion();
+                }
+                EndAnimatedTreeNode();
+            }
+        };
+
         const bool indirectLightingOpen = DrawCollapsingHeader(
             "Visibility",
             "Configure ambient occlusion, indirect diffuse, sampling, "
@@ -13749,7 +14737,6 @@ protected:
 
             static constexpr const char* NoiseLabels[] = {
                 "Permutated White Noise",
-                "Hashed White Noise",
                 "Void Cluster Blue Noise"
             };
             int scheduler =
@@ -13765,8 +14752,8 @@ protected:
                 finishVisibilityEdit(visibility);
             }
             ImGui::SetItemTooltip(
-                "Permutated and hashed patterns are white-noise choices; "
-                "Void Cluster Blue Noise distributes error more evenly.");
+                "Permutated White Noise is the baseline; Void Cluster Blue "
+                "Noise distributes error more evenly.");
             if (DrawNestedDropdownResetIcon(
                     "VisibilityNoise",
                     visibility.sampling.scheduler !=
@@ -14151,7 +15138,7 @@ protected:
                 "Geometry",
                 "Direct Lighting",
                 "Screen-Space Visibility",
-                "Screen-Space Shadows",
+                "Directional Shadows",
                 "Temporal Reconstructive",
                 "Fast Approximate",
                 "Conservative Morphological",
@@ -14287,10 +15274,15 @@ protected:
                     ImGui::TextDisabled("--");
             };
             const auto drawRendererTiming =
-                [&timings, &drawMilliseconds](
+                [this, &timings, &drawMilliseconds](
                     const char* label, RendererTimingStage stage)
             {
-                const bool available = timings.IsAvailable(stage);
+                const bool currentDispatchAvailable =
+                    stage != RendererTimingStage::RatioEstimatorShadows ||
+                    m_app->DidDispatchHeitzRatioEstimatorThisFrame();
+                const bool available =
+                    currentDispatchAvailable &&
+                    timings.IsAvailable(stage);
                 drawMilliseconds(label, timings.Get(stage), available);
             };
             const auto drawSelectedRendererTable =
@@ -14322,6 +15314,8 @@ protected:
                         { "Geometry", RendererTimingStage::Geometry },
                         { "Closest Surface Resolve",
                             RendererTimingStage::MultisampleResolve },
+                        { "Ratio-Estimator Ray Dispatch",
+                            RendererTimingStage::RatioEstimatorShadows },
                         { "Direct Lighting",
                             RendererTimingStage::DirectLighting },
                         { "Screen-Space Visibility",
@@ -14426,22 +15420,33 @@ protected:
                     const bool available =
                         m_HasScreenSpaceShadowStatSnapshot;
                     drawText(
-                        "Status",
+                        "Screen-Space Status",
                         available ? "Active" :
                             shadows.supported ? "Unavailable" : "Unsupported",
                         true);
                     drawMilliseconds(
-                        "Trace", shadows.traceMilliseconds, available);
+                        "Screen-Space Trace",
+                        shadows.traceMilliseconds,
+                        available);
                     drawCount(
-                        "Dispatches", shadows.dispatchCount, available);
+                        "Screen-Space Dispatches",
+                        shadows.dispatchCount,
+                        available);
                     drawCount(
-                        "Work Groups", shadows.totalGroups, available);
+                        "Screen-Space Work Groups",
+                        shadows.totalGroups,
+                        available);
                     drawCount(
-                        "Samples", shadows.sampleCount, available);
+                        "Screen-Space Samples",
+                        shadows.sampleCount,
+                        available);
                     drawMemory(
-                        "Output Texture Memory",
+                        "Screen-Space Output Memory",
                         shadows.outputTextureBytes,
                         available);
+                    drawRendererTiming(
+                        "Ratio-Estimator Ray Dispatch",
+                        RendererTimingStage::RatioEstimatorShadows);
                     drawRendererTiming(
                         "Complete Renderer Frame",
                         RendererTimingStage::CompleteFrame);
@@ -16458,6 +17463,7 @@ protected:
                                     direction, negative))
                             {
                                 light.SetDirection(direction);
+                                m_app->ResetImageBasedLightingHistory();
                             }
                             ImGui::SetItemTooltip(
                                 "Set the selected light's direction.");
@@ -16469,6 +17475,7 @@ protected:
                             {
                                 light.SetDirection(
                                     defaultLight.direction);
+                                m_app->ResetImageBasedLightingHistory();
                             }
                         };
 
@@ -16498,13 +17505,18 @@ protected:
                             light.irradiance =
                                 defaultLight.irradiance;
                         }
-                        DrawSliderFloat(
-                            "Angular Size",
-                            &light.angularSize,
-                            0.1f,
-                            20.f);
+                        if (DrawSliderFloat(
+                                "Angular Size",
+                                &light.angularSize,
+                                0.f,
+                                20.f))
+                        {
+                            m_app->ResetImageBasedLightingHistory();
+                        }
                         ImGui::SetItemTooltip(
-                            "Set the directional light's angular size.");
+                            "Set the directional light's full angular diameter. "
+                            "Zero degrees is a zero-extent directional emitter "
+                            "with geometrically hard shadows.");
                         if (DrawPresetResetIcon(
                                 "Light Angular Size",
                                 floatChanged(
@@ -16513,6 +17525,7 @@ protected:
                         {
                             light.angularSize =
                                 defaultLight.angularSize;
+                            m_app->ResetImageBasedLightingHistory();
                         }
                         break;
                     }
@@ -16647,7 +17660,7 @@ protected:
         ImGui::Spacing();
 
         const bool shadowsOpen = DrawCollapsingHeader(
-            "Shadows", "Show directional shadow technique controls.");
+            "Shadows", "Configure independent directional-shadow producers.");
         if (shadowsOpen)
         {
             BeginDrawerBody(
@@ -16656,6 +17669,28 @@ protected:
 
             const bool directionalVisibilityAvailable =
                 m_app->HasPrimaryDirectionalLight();
+            const bool rayTracedShadowHardwareAvailable =
+                m_app->HasHeitzRatioEstimatorHardwareSupport();
+            const bool rayTracedShadowsAvailable =
+                directionalVisibilityAvailable &&
+                m_app->SupportsHeitzRatioEstimatorShadows();
+
+            if (!directionalVisibilityAvailable)
+            {
+                ImGui::TextDisabled(
+                    "Directional techniques require a directional light.");
+            }
+            else if (!rayTracedShadowHardwareAvailable)
+            {
+                ImGui::TextDisabled(
+                    "Ray-traced ratio estimation requires DXR 1.1 support.");
+            }
+            else if (!rayTracedShadowsAvailable)
+            {
+                ImGui::TextDisabled(
+                    "Ray-traced ratio estimation requires single-sample "
+                    "rendering; disable MSAA to use it.");
+            }
 
             if (BeginAnimatedTreeNode(
                     "Screen-Space Directional Shadows##Shadows",
@@ -16664,6 +17699,28 @@ protected:
                 ScreenSpaceDirectionalShadowSettings& shadows =
                     m_ui.ScreenSpaceDirectionalShadows;
                 const ScreenSpaceDirectionalShadowSettings shadowDefaults{};
+                const bool disableScreenSpaceEnable =
+                    !directionalVisibilityAvailable && !shadows.enabled;
+                if (disableScreenSpaceEnable)
+                    ImGui::BeginDisabled();
+                if (ImGui::Checkbox(
+                        "Enabled##ScreenSpaceShadows",
+                        &shadows.enabled))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Trace screen-space directional shadows independently "
+                    "of the ray-traced ratio estimator.");
+                if (disableScreenSpaceEnable)
+                    ImGui::EndDisabled();
+                if (DrawPresetResetIcon(
+                        "ScreenSpaceShadowEnabled",
+                        shadows.enabled != shadowDefaults.enabled))
+                {
+                    shadows.enabled = shadowDefaults.enabled;
+                    m_app->ResetImageBasedLightingHistory();
+                }
                 static constexpr auto isSameShadowConfiguration =
                     [](const ScreenSpaceDirectionalShadowSettings& left,
                         const ScreenSpaceDirectionalShadowSettings& right)
@@ -16712,21 +17769,9 @@ protected:
                         }
                         settings.preset = ScreenSpaceShadowPreset::Custom;
                     };
-                if (!directionalVisibilityAvailable)
-                    ImGui::BeginDisabled();
-                ImGui::Checkbox("Enabled##ScreenSpaceShadows", &shadows.enabled);
-                ImGui::SetItemTooltip(
-                    "Trace the existing depth buffer for the primary "
-                    "directional light.");
-                if (DrawPresetResetIcon(
-                        "ScreenSpaceShadowsEnabled",
-                        shadows.enabled))
-                {
-                    shadows.enabled = false;
-                }
                 if (BeginAnimatedToggleRegion(
                         "##ScreenSpaceShadowControls",
-                        shadows.enabled))
+                        shadows.enabled && directionalVisibilityAvailable))
                 {
                     bool shadowCustomChanged = false;
                     bool shadowResetApplied = false;
@@ -17072,15 +18117,10 @@ protected:
                         reconcileShadowPreset(shadows);
                     EndAnimatedToggleRegion();
                 }
-                if (!directionalVisibilityAvailable)
-                {
-                    ImGui::EndDisabled();
-                    ImGui::TextDisabled(
-                        "Requires a directional light.");
-                }
                 EndAnimatedTreeNode();
             }
 
+            drawRatioEstimatorShadowControls();
             EndDrawerBody();
         }
         ImGui::Spacing();

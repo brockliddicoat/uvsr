@@ -136,6 +136,12 @@ int main(int argc, char** argv)
         root / "src/gpu_performance_monitor.cpp");
     const std::string gpuPerformanceMonitorHeader = ReadFile(
         root / "src/gpu_performance_monitor.h");
+    const std::string worldRepresentation = ReadFile(
+        root / "src/world_space_representation.cpp");
+    const std::string worldRepresentationHeader = ReadFile(
+        root / "src/world_space_representation.h");
+    const std::string heitzShadows = ReadFile(
+        root / "src/heitz_ratio_estimator_shadows.cpp");
     const std::string donutLoadingOverride = ReadFile(
         root / "overrides/donut-loading.patch");
     const std::string donutLoadingAppOverride = ReadFile(
@@ -158,6 +164,194 @@ int main(int argc, char** argv)
         viewer,
         "if (snapshot.gpuMetrics.utilizationValid)",
         "utilization-scaled throughput validity gate");
+
+    const std::string_view representationInvalidation = ExtractSection(
+        worldRepresentation,
+        "void WorldSpaceRepresentation::Invalidate(",
+        "void WorldSpaceRepresentation::Fail(");
+    passed &= ExpectContains(
+        representationInvalidation,
+        "m_NextBlas < m_BlasRecords.size()",
+        "TLAS invalidation during staged BLAS construction");
+    passed &= ExpectContains(
+        representationInvalidation,
+        "m_Status.state = WorldSpaceRepresentationState::Unsupported;",
+        "unsupported representation status preservation");
+    passed &= ExpectContains(
+        worldRepresentationHeader,
+        "uint32_t lastSynchronizedFrameIndex = 0u;",
+        "dynamic BLAS synchronization watermark");
+    passed &= ExpectContains(
+        worldRepresentation,
+        "mesh.skinPrototype ? 1u : 0u",
+        "skinning classification topology signature");
+    passed &= ExpectContains(
+        worldRepresentation,
+        "mesh.isMorphTargetAnimationMesh ? 1u : 0u",
+        "morph classification topology signature");
+    const std::string_view dynamicBlasUpdates = ExtractSection(
+        worldRepresentation,
+        "bool WorldSpaceRepresentation::UpdateDynamicBlases(",
+        "bool WorldSpaceRepresentation::Update(");
+    passed &= ExpectContains(
+        dynamicBlasUpdates,
+        "IsFrameIndexNewer(",
+        "inactive-period dynamic BLAS dirtiness");
+    passed &= ExpectContains(
+        dynamicBlasUpdates,
+        "forceAll ||",
+        "pre-TLAS dynamic BLAS synchronization");
+    passed &= ExpectContains(
+        dynamicBlasUpdates,
+        "record.mesh->buffers->indexBuffer,\n"
+            "                nvrhi::ResourceStates::AccelStructBuildInput",
+        "dynamic BLAS index-buffer build-input transition");
+    passed &= ExpectContains(
+        worldRepresentationHeader,
+        "std::vector<SourceInstanceTopology> m_SourceInstanceTopology;",
+        "exact source instance topology ownership");
+    passed &= ExpectContains(
+        worldRepresentation,
+        "instance.get() != expected.instance ||",
+        "exact scene-instance topology comparison");
+    passed &= ExpectContains(
+        worldRepresentation,
+        "snapshot.instanceId != instanceId",
+        "TLAS instance-ID change detection");
+    passed &= ExpectContains(
+        worldRepresentation,
+        "geometry->material->domain == MaterialDomain::Opaque",
+        "material-aware opaque geometry classification");
+    passed &= ExpectAbsent(
+        worldRepresentation,
+        "InstanceFlags::ForceOpaque",
+        "consumer-neutral TLAS instance flags");
+    const std::string_view beginWorldGeneration = ExtractSection(
+        worldRepresentation,
+        "bool WorldSpaceRepresentation::BeginGeneration(",
+        "bool WorldSpaceRepresentation::BuildNextBlas(");
+    const std::string_view stagedBlasBuild = ExtractSection(
+        worldRepresentation,
+        "bool WorldSpaceRepresentation::BuildNextBlas(",
+        "bool WorldSpaceRepresentation::BuildOrUpdateTlas(");
+    passed &= ExpectAbsent(
+        beginWorldGeneration,
+        "createAccelStruct(",
+        "eager BLAS allocation during generation planning");
+    passed &= ExpectContains(
+        stagedBlasBuild,
+        "m_Device->createAccelStruct(record.description)",
+        "one-at-a-time BLAS allocation");
+    const std::string_view updateWorldRepresentation = ExtractSection(
+        worldRepresentation,
+        "bool WorldSpaceRepresentation::Update(",
+        "\n}");
+    passed &= ExpectOrdered(
+        updateWorldRepresentation,
+        "if (!TopologyMatches())",
+        "WorldSpaceRepresentationState::BuildingBlas",
+        "topology revalidation before staged build publication");
+    passed &= ExpectOrdered(
+        updateWorldRepresentation,
+        "commandList, frameIndex, true,",
+        "BuildOrUpdateTlas(commandList, false)",
+        "dynamic BLAS synchronization before initial TLAS build");
+    passed &= ExpectContains(
+        worldRepresentationHeader,
+        "uint64_t generation = 0u;",
+        "world-representation consumer generation serial");
+    passed &= ExpectAbsent(
+        worldRepresentationHeader,
+        "contentRevision",
+        "retired shadow-private content revision");
+    passed &= ExpectAbsent(
+        worldRepresentation,
+        "contentRevision",
+        "retired TLAS private-history publication revision");
+    passed &= ExpectContains(
+        viewer,
+        "worldRepresentationGenerationBefore",
+        "Heitz binding retirement generation observation");
+    passed &= ExpectAbsent(
+        viewer,
+        "worldRepresentationContentRevisionBefore",
+        "retired dynamic-occluder private-history observation");
+    passed &= ExpectAbsent(
+        viewer,
+        "shadowInputs.motionVectors",
+        "Heitz-private motion-vector input");
+    passed &= ExpectAbsent(
+        viewer,
+        "HeitzRatioEstimatorRequiresPrivateHistory(",
+        "Heitz-private temporal policy");
+    passed &= ExpectContains(
+        viewer,
+        "m_SunLight.get(),\n"
+            "                        uint32_t(m_HeitzRatioEstimatorPhase),\n"
+            "                        m_SceneDiagonal);",
+        "TAA-independent Heitz sampling phase input");
+    passed &= ExpectContains(
+        viewer,
+        "if (heitzShadowResult.dispatched &&\n"
+            "            heitzShadowResult.stochastic)",
+        "actual stochastic-dispatch phase commit");
+    passed &= ExpectAbsent(
+        viewer,
+        "m_HeitzRatioEstimatorShadowPass->ResetHistory();",
+        "private shadow-history reset");
+    passed &= ExpectContains(
+        viewer,
+        "const bool motionVectorsRequired =\n"
+            "            m_ui.UsesLongTermTemporalAA() ||\n"
+            "            (visibilityResourcesRequired && sampleCount > 1u);",
+        "load-time motion topology without Heitz history");
+    passed &= ExpectContains(
+        viewer,
+        "const bool motionVectorsRequired =\n"
+            "                temporalAARequired ||\n"
+            "                (visibilityResourcesRequired && sampleCount > 1u);",
+        "runtime motion topology without Heitz history");
+    const std::string_view renderTargetReplacement = ExtractSection(
+        viewer,
+        "const bool antiAliasingTopologyChanged =",
+        "const bool refreshTemporalPass =");
+    passed &= ExpectOrdered(
+        renderTargetReplacement,
+        "m_HeitzRatioEstimatorShadowPass->ResetBindingCache();",
+        "m_RenderTargets->Init(",
+        "Heitz input binding retirement before render-target replacement");
+    const std::string_view ensureHeitzResources = ExtractSection(
+        heitzShadows,
+        "bool HeitzRatioEstimatorShadowPass::EnsureResources(",
+        "bool HeitzRatioEstimatorShadowPass::EnsureBindingSets(");
+    passed &= ExpectContains(
+        ensureHeitzResources,
+        "if (outputSizeMatches)",
+        "frame-local Heitz output resource fast path");
+    passed &= ExpectContains(
+        ensureHeitzResources,
+        "if (!outputModulation)",
+        "Heitz output allocation validation");
+    passed &= ExpectAbsent(
+        ensureHeitzResources,
+        "History",
+        "Heitz private-history allocation");
+    const std::string_view ensureHeitzBindings = ExtractSection(
+        heitzShadows,
+        "bool HeitzRatioEstimatorShadowPass::EnsureBindingSets(",
+        "HeitzRatioEstimatorShadowResult");
+    passed &= ExpectContains(
+        ensureHeitzBindings,
+        "if (m_BindingSet &&",
+        "complete frame-local Heitz binding fast path");
+    passed &= ExpectContains(
+        ensureHeitzBindings,
+        "ClearBindingSets();",
+        "stale Heitz binding retirement before replacement");
+    passed &= ExpectAbsent(
+        ensureHeitzBindings,
+        "ResetHistory();",
+        "private history invalidation before binding replacement");
 
     passed &= ExpectContains(
         viewer,
@@ -325,6 +519,18 @@ int main(int argc, char** argv)
         temporalAaPass,
         "while (!PreparePipelinesStep())",
         "default eager temporal-AA pipeline preparation");
+    passed &= ExpectContains(
+        temporalAaPass,
+        "bool TemporalAAPass::PrepareForRender(",
+        "exact temporal-AA frame permutation preflight");
+    passed &= ExpectContains(
+        temporalAaPass,
+        "const auto rejectFrame = [&]()",
+        "preflight-failure history retirement");
+    passed &= ExpectContains(
+        temporalAaPassHeader,
+        "bool DidRenderThisFrame() const",
+        "actual temporal-AA dispatch result");
     passed &= ExpectContains(
         viewer,
         "RenderPassPreparationStage::DeferredLightingPipelines",

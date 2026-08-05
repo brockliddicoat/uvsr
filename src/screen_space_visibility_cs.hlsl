@@ -93,7 +93,7 @@ uint VisibilityHash(uint value)
 float PermutatedWhiteNoise(uint2 pixel, uint dimension, uint phase)
 {
     // PCG's conventional output permutation gives the baseline option a
-    // deterministic white spectrum distinct from the retained custom hash.
+    // deterministic white spectrum.
     uint state = pixel.x + pixel.y * 65537u +
         dimension * 747796405u + phase * 2891336453u + 1u;
     state = state * 747796405u + 2891336453u;
@@ -101,13 +101,6 @@ float PermutatedWhiteNoise(uint2 pixel, uint dimension, uint phase)
         277803737u;
     word = (word >> 22u) ^ word;
     return float((word >> 8u) & 0x00ffffffu) / 16777216.0f;
-}
-
-float HashedWhiteNoise(uint2 pixel, uint dimension, uint phase)
-{
-    uint value = pixel.x * 0x9e3779b9u ^ pixel.y * 0x85ebca6bu;
-    value ^= dimension * 0xc2b2ae35u ^ phase * 0x27d4eb2fu;
-    return float(VisibilityHash(value) & 0x00ffffffu) / 16777216.0f;
 }
 
 float VisibilityFastAcos(float value)
@@ -139,8 +132,6 @@ float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
     // baseline noise sequence does not create shader permutations.
     if (g_Visibility.sampleScheduler == 0u)
         return PermutatedWhiteNoise(samplingPixel, dimension, phase);
-    if (g_Visibility.sampleScheduler == 1u)
-        return HashedWhiteNoise(samplingPixel, dimension, phase);
 
     // Each semantic random dimension owns an independently optimized rank
     // layer. Moving the layer toroidally preserves its spatial spectrum;

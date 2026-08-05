@@ -179,8 +179,10 @@ collapsible groups. Retained dropdowns reserve enough label space, display
 their effective values, and carry concise hover explanations. Ambient
 Occlusion exposes Enabled and one-word Strength only.
 
-The exact current noise names are Permutated White Noise, Hashed White Noise,
-and Void Cluster Blue Noise. The exact current reconstruction choices are:
+At the time of this cleanup, the noise names were Permutated White Noise,
+Hashed White Noise, and Void Cluster Blue Noise. Current UVSR has since removed
+Hashed White Noise and retains Permutated White Noise and Void Cluster Blue
+Noise. The exact current reconstruction choices are:
 
 1. Full Resolution or Guide-Aware Upsampling, selected dynamically for the same
    direct-or-guide-aware mode;

@@ -53,19 +53,21 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 131u);
-    static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 10u);
+    static_assert(UiSettingsCommandCatalog.size() == 140u);
+    static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 12u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
         static_cast<std::uint8_t>(UiSettingsCommandVerb::Run));
 
-    constexpr std::array<std::size_t, 10> ExpectedSectionCounts = {
+    constexpr std::array<std::size_t, 12> ExpectedSectionCounts = {
         5u,  // UI
         5u,  // General
+        3u,  // Representation
         19u, // Visibility
         31u, // Anti-Aliasing
         4u,  // Debug
         8u,  // Sky
         23u, // Lights
+        6u,  // Directional Shadows
         12u, // Screen-Space Directional Shadows
         21u, // Materials
         3u   // Footer
@@ -97,11 +99,26 @@ int main()
         "visibility.spatial.radius",
         "visibility.thickness"
     };
+    const std::set<std::string> ExpectedRepresentation = {
+        "representation.blas.update-mode",
+        "representation.bvh.build-preference",
+        "representation.tlas.update-mode"
+    };
+    const std::set<std::string> ExpectedDirectionalShadows = {
+        "shadows.ratio-estimator.animate-samples",
+        "shadows.ratio-estimator.enabled",
+        "shadows.ratio-estimator.hard-shadows",
+        "shadows.ratio-estimator.noise-pattern",
+        "shadows.ratio-estimator.ray-bias",
+        "shadows.ratio-estimator.samples-per-pixel"
+    };
 
     std::set<std::string> names;
     std::set<std::string> dynamicSelections;
     std::set<std::string> visibility;
-    std::array<std::size_t, 10> sectionCounts{};
+    std::set<std::string> representation;
+    std::set<std::string> directionalShadows;
+    std::array<std::size_t, 12> sectionCounts{};
     std::size_t actionCount = 0u;
     std::size_t dynamicCount = 0u;
 
@@ -158,6 +175,10 @@ int main()
         }
         if (definition.section == Section::Visibility)
             visibility.insert(std::string(definition.name));
+        if (definition.section == Section::Representation)
+            representation.insert(std::string(definition.name));
+        if (definition.section == Section::DirectionalShadows)
+            directionalShadows.insert(std::string(definition.name));
 
         Require(definition.name.find("shadows.svsm") == std::string_view::npos &&
                 definition.name.find("shadows.csm") == std::string_view::npos &&
@@ -169,7 +190,7 @@ int main()
     }
 
     Require(names.size() == UiSettingsCommandCatalog.size(),
-        "the compact catalog must contain 131 unique controls");
+        "the compact catalog must contain 138 unique controls");
     Require(sectionCounts == ExpectedSectionCounts,
         "section counts must match the current UI");
     Require(actionCount == 4u,
@@ -180,6 +201,10 @@ int main()
         "dynamic selections must cover adapters, scenes, lights, and materials");
     Require(visibility == ExpectedVisibility,
         "Visibility commands must exactly mirror the direct UI settings");
+    Require(representation == ExpectedRepresentation,
+        "Representation commands must exactly mirror the direct UI settings");
+    Require(directionalShadows == ExpectedDirectionalShadows,
+        "Directional Shadow commands must exactly mirror the direct UI settings");
 
     const auto requireDomain = [](std::string_view name, std::string_view domain) {
         const UiSettingsCommandDefinition* definition = Find(name);
@@ -187,7 +212,7 @@ int main()
             "command domain must exactly match its visible values");
     };
     requireDomain("visibility.noise",
-        "permutated-white-noise|hashed-white-noise|void-cluster-blue-noise");
+        "permutated-white-noise|void-cluster-blue-noise");
     requireDomain("visibility.reconstruction",
         "direct-or-guide-aware|packed-depth-normal|packed-slope-aware|packed-leak-controlled");
     requireDomain("visibility.spatial.filter",
@@ -219,8 +244,63 @@ int main()
         "final|thread-lanes|wave-groups");
     requireDomain("debug.visibility.view",
         "final|ambient-visibility|traced-indirect|applied-indirect");
+    requireDomain("representation.bvh.build-preference",
+        "fast-trace|balanced|fast-build");
+    requireDomain("representation.blas.update-mode", "rebuild|refit");
+    requireDomain("representation.tlas.update-mode", "rebuild|refit");
+    requireDomain("shadows.ratio-estimator.enabled", "on|off");
+    requireDomain("shadows.ratio-estimator.hard-shadows", "on|off");
+    requireDomain("shadows.ratio-estimator.animate-samples", "on|off");
+    requireDomain("shadows.ratio-estimator.noise-pattern",
+        "permutated-white-noise|void-cluster-blue-noise");
+    requireDomain("shadows.ratio-estimator.samples-per-pixel",
+        "1|2|4|8|16|32|64");
+    requireDomain("shadows.ratio-estimator.ray-bias",
+        "world units 0..0.1");
     requireDomain("shadows.screen-space-directional.profile",
         "default|long|maximum-validation|custom");
+
+    const auto requireKindAndSection = [](
+        std::string_view name,
+        UiSettingsCommandKind kind,
+        UiSettingsCommandSection section) {
+        const UiSettingsCommandDefinition* definition = Find(name);
+        Require(definition && definition->kind == kind &&
+                definition->section == section,
+            "command kind and section must match the represented control");
+    };
+    for (const std::string_view name : {
+            std::string_view("representation.bvh.build-preference"),
+            std::string_view("representation.blas.update-mode"),
+            std::string_view("representation.tlas.update-mode") })
+    {
+        requireKindAndSection(
+            name, Kind::Enum, Section::Representation);
+    }
+    requireKindAndSection(
+        "shadows.ratio-estimator.enabled",
+        Kind::Boolean,
+        Section::DirectionalShadows);
+    requireKindAndSection(
+        "shadows.ratio-estimator.hard-shadows",
+        Kind::Boolean,
+        Section::DirectionalShadows);
+    requireKindAndSection(
+        "shadows.ratio-estimator.animate-samples",
+        Kind::Boolean,
+        Section::DirectionalShadows);
+    requireKindAndSection(
+        "shadows.ratio-estimator.noise-pattern",
+        Kind::Enum,
+        Section::DirectionalShadows);
+    requireKindAndSection(
+        "shadows.ratio-estimator.samples-per-pixel",
+        Kind::Enum,
+        Section::DirectionalShadows);
+    requireKindAndSection(
+        "shadows.ratio-estimator.ray-bias",
+        Kind::Float,
+        Section::DirectionalShadows);
 
     Require(!Find("visibility.profile") &&
             !Find("visibility.sampling.noise-pattern") &&

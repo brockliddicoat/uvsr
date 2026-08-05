@@ -102,6 +102,7 @@ namespace
             "display_output_ps",
             "fast_approximate_aa_ps",
             "backdrop_blur_ps",
+            "heitz_ratio_estimator_shadows_cs_Generate",
             "screen_space_directional_shadows_cs",
             "screen_space_directional_shadows_debug_ps",
             "cmaa2_ComputeDispatchArgsCS",
@@ -263,8 +264,17 @@ int main(int argc, char** argv)
             std::string("retired shader axis must remain absent: ") + axis);
     }
     passed &= Check(
-        CountShaderPermutations(config) == 258u,
-        "the production shader catalog must contain exactly 258 permutations");
+        CountShaderPermutations(config) == 259u,
+        "the production shader catalog must contain exactly 259 permutations");
+    passed &= Check(
+        CountOccurrences(
+            config,
+            "heitz_ratio_estimator_shadows_cs.hlsl -T cs -E Generate") ==
+                1u &&
+            CountOccurrences(
+                config,
+                "heitz_ratio_estimator_shadows_cs.hlsl") == 1u,
+        "production must package only the direct Heitz Generate dispatch");
     passed &= Check(
         CountOccurrences(
             config,
@@ -321,8 +331,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 40u,
-        "production shader contract must enumerate exactly 40 files");
+        expectedFiles.size() == 41u,
+        "production shader contract must enumerate exactly 41 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

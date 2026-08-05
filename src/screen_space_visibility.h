@@ -49,7 +49,6 @@ namespace uvsr
     enum class VisibilitySampleScheduler : uint32_t
     {
         PermutatedWhiteNoise,
-        HashedWhiteNoise,
         VoidClusterBlueNoise
     };
 

@@ -386,6 +386,7 @@ if (UVSR_BUILD_APPLICATION)
         src/cmaa2.cpp
         src/fast_approximate_aa.cpp
         src/gpu_performance_monitor.cpp
+        src/heitz_ratio_estimator_shadows.cpp
         src/image_based_lighting_background_pass.cpp
         src/image_based_lighting_environment.cpp
         src/msaa_visibility_resolve.cpp
@@ -398,6 +399,7 @@ if (UVSR_BUILD_APPLICATION)
         src/temporal_aa_core.cpp
         src/uvsr.cpp
         src/visibility_blue_noise.cpp
+        src/world_space_representation.cpp
     )
     target_include_directories(uvsr BEFORE PRIVATE
         "${UVSR_IMGUI_OVERRIDE_DIR}"
@@ -504,6 +506,35 @@ add_executable(uvsr_pbr_tests tests/pbr_reference_tests.cpp)
 target_include_directories(uvsr_pbr_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
 add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
+
+add_executable(
+    uvsr_heitz_ratio_estimator_tests
+    tests/heitz_ratio_estimator_tests.cpp
+    src/visibility_blue_noise.cpp)
+target_include_directories(
+    uvsr_heitz_ratio_estimator_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(
+    NAME uvsr_heitz_ratio_estimator_reference
+    COMMAND uvsr_heitz_ratio_estimator_tests)
+
+add_executable(
+    uvsr_heitz_ratio_estimator_source_contract_tests
+    tests/heitz_ratio_estimator_source_contract_tests.cpp)
+add_test(
+    NAME uvsr_heitz_ratio_estimator_source_contract
+    COMMAND uvsr_heitz_ratio_estimator_source_contract_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_executable(
+    uvsr_world_space_representation_settings_tests
+    tests/world_space_representation_settings_tests.cpp)
+target_include_directories(
+    uvsr_world_space_representation_settings_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(
+    NAME uvsr_world_space_representation_settings_reference
+    COMMAND uvsr_world_space_representation_settings_tests)
 
 add_executable(uvsr_flashlight_tests tests/flashlight_tests.cpp)
 target_include_directories(
@@ -797,6 +828,7 @@ set(UVSR_APP_SHADERS
     display_output_ps
     fast_approximate_aa_ps
     backdrop_blur_ps
+    heitz_ratio_estimator_shadows_cs_Generate
     screen_space_directional_shadows_cs
     screen_space_directional_shadows_debug_ps
     cmaa2_ComputeDispatchArgsCS

@@ -5,22 +5,39 @@ on every launch and are not persisted.
 
 ## Settings Drawers
 
-The Settings panel contains nine top-level drawers in this order:
+The Settings panel contains ten top-level drawers in this order:
 
 1. **General** selects the interface skin, graphics adapter, camera, and scene.
-2. **Visibility** controls ambient occlusion, indirect diffuse, sampling, and
+2. **Representation** configures the shared BVH, BLAS, and TLAS policies.
+3. **Visibility** controls ambient occlusion, indirect diffuse, sampling, and
    reconstruction.
-3. **Buffers** owns the two retained Visibility precision choices.
-4. **Statistics** reports a compact frame summary and a detailed selected effect.
-5. **Aliasing** independently enables the temporal, fast approximate,
+4. **Buffers** owns the two retained Visibility precision choices.
+5. **Statistics** reports a compact frame summary and a detailed selected effect.
+6. **Aliasing** independently enables the temporal, fast approximate,
    morphological, and multisample techniques.
-6. **Debug** combines world appearance and effect-specific information views.
-7. **Sky** configures the global environment and ambient fill.
-8. **Lights** edits scene lights and the camera flashlight.
-9. **Shadows** configures Screen-Space Directional Shadows.
+7. **Debug** combines world appearance and effect-specific information views.
+8. **Sky** configures the global environment and ambient fill.
+9. **Lights** edits scene lights and the camera flashlight.
+10. **Shadows** selects and configures one directional-shadow technique.
 
 Escape opens or closes Settings. A reset icon beside a control restores that
 control or group to its current factory value.
+
+## Representation
+
+Representation owns UVSR's consumer-neutral world-space triangle hierarchy.
+**Bounding Volume Hierarchy** selects Fast Trace, Balanced, or Fast Build for
+acceleration-structure construction. **Bottom-Level Acceleration Structures**
+selects Rebuild or Refit for changed dynamic geometry. **Top-Level Acceleration
+Structure** selects Rebuild or Refit for changed instance transforms. A status
+line reports unsupported, inactive, BLAS construction, TLAS construction,
+ready, or failed state and the current structure counts.
+
+Construction is lazy until a ray-query consumer is selected. Initial loading
+builds one unique-mesh BLAS per presentation frame and then one coherent TLAS.
+Changing the hierarchy preference or BLAS policy rebuilds both levels; changing
+only the TLAS policy preserves BLAS allocations. Reset and invalidation release
+consumer bindings before replacing acceleration structures.
 
 ## Visibility
 
@@ -39,7 +56,7 @@ The main controls are:
 - ambient occlusion enable and strength;
 - one-bounce indirect diffuse enable and intensity;
 - Projected Angle, Solid Angle, or Cosine Weighted estimation;
-- Permutated White Noise, Hashed White Noise, or Void Cluster Blue Noise;
+- Permutated White Noise or Void Cluster Blue Noise;
 - 1 through 64 samples, radius, thickness, and distribution;
 - one direct-or-guide-aware reconstruction mode, labeled **Full Resolution** at
   full sampling resolution and **Guide-Aware Upsampling** at reduced resolution,
@@ -140,11 +157,34 @@ diagnostic; the unhelpful edge overlay was removed.
 
 ## Shadows
 
-Screen-Space Directional Shadows are the sole retained directional-shadow
-technique. They default off and are available only when the scene has a primary
-directional light. The drawer exposes Default, Long, Maximum Validation, and
-Custom profiles plus the trace and filtering controls required by the retained
-pass.
+Screen-Space Directional Shadows and Ratio-Estimator Ray-Traced Shadows each
+have an independent **Enabled** control and both default off. Both can be off,
+either can run alone, or both can run together. Both-on takes the componentwise
+minimum visibility, preserving the strongest occlusion without multiplying two
+estimates of the same blocker. Every active producer requires a primary
+directional light.
+
+Screen Space exposes Default, Long, Maximum Validation, and Custom profiles
+plus its retained trace and filtering controls. Ratio Estimator uses matched
+RGB stochastic numerator and denominator sums and inline ray queries in one
+compute dispatch, with no private spatial or temporal denoiser. **Hard Shadows**
+takes an early one-center-ray path and rejects surfaces that cannot receive the
+selected light before issuing a query. **Animate Samples** sits directly above
+the logarithmic **Samples Per Pixel** slider, which covers `1` through `64`.
+**Noise Pattern** selects Permutated White Noise or Void Cluster Blue Noise.
+Animated samples change the current-frame emitter set independently of TAA;
+final-color TAA is the only temporal accumulator. **Ray Bias** moves the origin
+along the view-facing raster triangle normal, defaults to `0.002` world units,
+and is applied once rather than as `TMin`; larger values can miss nearby blockers
+or detach contact shadows without changing ray count or reach. Ratio Estimator
+additionally requires
+DirectX Raytracing 1.1 and
+single-sample deferred rendering. The Representation drawer reports its staged
+BVH/BLAS/TLAS readiness. A zero-extent directional emitter takes the hard path;
+a primary sun defaults to a `0.53` degree full diameter for physical penumbrae.
+
+See [Heitz Ratio-Estimator Shadows](heitz-ratio-estimator-shadows.md) for the
+mathematical contract, framework adaptations, and current ray-query limits.
 
 Sparse virtual shadow maps and diagnostic cascaded shadow maps are not part of
 the engine or production shader package. Their pre-removal source is preserved
@@ -156,13 +196,15 @@ Statistics condenses the six general values into one dash-separated line and
 shows one selected effect at a time in a labeled, striped two-column table. The
 selector contains **Complete
 Renderer**, **Scene Setup**, **Geometry**, **Direct Lighting**, **Screen-Space
-Visibility**, **Screen-Space Shadows**, **Temporal Reconstructive**,
+Visibility**, **Directional Shadows**, **Temporal Reconstructive**,
 **Fast Approximate**, **Conservative Morphological**, **Multisample Adaptive**,
 **Material Picking**,
 **Environment Background**, **Tone Mapping**, and **Output Blit**. Complete
 Renderer restores the full stage breakdown, including an available Closest
 Surface Resolve; selecting an ordinary stage keeps
-the complete frame beside it for context. Visibility, shadows, temporal
+the complete frame beside it for context. Directional Shadows includes the
+screen-space breakdown plus the complete Ratio-Estimator Ray Dispatch timing.
+Visibility, shadows, temporal
 reconstruction, and conservative morphology retain their measured stages,
 resource or history metrics, and active-work counts. Multisample reports its
 requested and hardware-resolved sample counts plus Geometry, Direct Lighting,
@@ -184,9 +226,9 @@ input shows a blue `Success` or saturated-crimson `Error` result until the next
 command is typed; no floating result bar can cover Settings. When the complete result is
 longer than the input, a trailing details button deliberately opens a bounded,
 scrollable, selectable read-only view. The catalog mirrors the current
-UI-backed settings with 131 entries: 127 values and four actions. Type a section
+UI-backed settings with 137 entries: 133 values and four actions. Type a section
 prefix such as
-`visibility.`, `anti-aliasing.taa.`, `anti-aliasing.fxaa.`,
+`representation.`, `visibility.`, `anti-aliasing.taa.`, `anti-aliasing.fxaa.`,
 `anti-aliasing.cmaa2.`,
 `anti-aliasing.msaa.`, `debug.`, or `shadows.` and use completion to inspect the
 exact paths and accepted values.
@@ -207,8 +249,8 @@ cmake --build build --config Release --target uvsr
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The shader build contains 258 core tasks and 46 Screen-Space Directional Shadow
-tasks, for 304 first-party and 380 integrated tasks after Donut's 76.
+The shader build contains 259 core tasks and 46 Screen-Space Directional Shadow
+tasks, for 305 first-party and 381 integrated tasks after Donut's 76.
 `uvsr_screen_space_directional_shadows` remains the only specialist renderer
 component target. Production/developer/factory manifest forks and
 shadow-technique component builds were removed.
@@ -218,6 +260,12 @@ shadow-technique component builds were removed.
 Validate a candidate with the exact executable from its isolated build tree.
 At minimum, load a bundled scene and exercise Visibility, each noise pattern,
 the independent AA toggles, Debug composition, sky, lights, the flashlight,
-and Screen-Space Directional Shadows. A launch alone is not verification; pair
+all four directional-shadow enable combinations, Ratio Estimator on a
+single-sample target, and the Representation rebuild/refit choices. Exercise
+hard and soft shadows, 1- and 64-sample endpoints, zero and positive
+directional-light angular sizes, zero and default Ray Bias, temporal motion and
+disocclusion, and the Ratio-Estimator Ray Dispatch timing. Confirm the Ratio
+Estimator's unavailable
+explanation under MSAA. A launch alone is not verification; pair
 it with the Release build, complete CTest result, shader-package checks, and a
 record of the observed scene and settings.

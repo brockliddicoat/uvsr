@@ -62,13 +62,10 @@ degenerate-segment, and normalization contracts. See
 
 - **Permutated White Noise** uses an ordinary per-pixel pseudorandom sequence
   passed through a deterministic output permutation.
-- **Hashed White Noise** uses the retained independent hash scheduler.
 - **Void Cluster Blue Noise** uses UVSR's prepared toroidal void-and-cluster
   rank field.
 
-These names describe user-visible intent. Renaming the two existing options did
-not change their algorithms. Noise is current-frame sample placement, not a
-history system.
+Noise is current-frame sample placement, not a history system.
 
 ## Sampling Controls
 

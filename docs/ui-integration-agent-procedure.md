@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-08-03.8`.
+UI reference version: `2026-08-04.1`.
 
 ## Purpose
 
@@ -19,14 +19,15 @@ Settings uses one title, one status block, one scrolling body, and one footer.
 The top-level drawers are:
 
 1. General
-2. Visibility
-3. Buffers
-4. Statistics
-5. Aliasing
-6. Debug
-7. Sky
-8. Lights
-9. Shadows
+2. Representation
+3. Visibility
+4. Buffers
+5. Statistics
+6. Aliasing
+7. Debug
+8. Sky
+9. Lights
+10. Shadows
 
 The order is product behavior. Add a top-level drawer only when the feature has
 a distinct user goal and enough retained controls to justify it. Effect-specific
@@ -102,6 +103,20 @@ labeled **Default**. Visibility Reconstruction starts collapsed for a full-
 resolution trace and expanded for a reduced-resolution trace; its stored manual
 state takes precedence after interaction.
 
+Representation's Bounding Volume Hierarchy, Bottom-Level Acceleration
+Structures, and Top-Level Acceleration Structure groups start expanded. Their
+dropdowns use deferred mutations because build policy can invalidate shared
+renderer resources. The read-only status names unsupported, inactive, BLAS
+construction, TLAS construction, ready, or failed state.
+
+Shadows exposes independent Screen-Space Directional Shadows and
+Ratio-Estimator Ray-Traced Shadows groups. Each group owns an **Enabled**
+control and preserves its stored values while inactive. Both producers may be
+off or active together; deferred PBR combines both-on visibility with a
+componentwise minimum. The ray-traced group directly explains missing
+directional-light, DXR 1.1, MSAA, hierarchy-readiness, zero-angular-size, and
+temporal-convergence conditions.
+
 Temporal Reconstructive, Fast Approximate, Conservative Morphological, and
 Multisample Adaptive each show a Low, Medium, High, or Ultra **Quality** row
 while enabled, followed by an animated **Advanced** tree that starts collapsed.
@@ -154,7 +169,7 @@ Keep the six general values on one dash-separated summary line. The labeled
 Effect selector shows one retained renderer effect at a time and keeps its reset
 beside the label. Complete Renderer uses a striped two-column table for the full
 retained stage list; an ordinary stage includes the complete frame for context.
-Visibility, Screen-Space Shadows, Temporal Reconstructive, Fast Approximate,
+Visibility, Directional Shadows, Temporal Reconstructive, Fast Approximate,
 Conservative Morphological, and Multisample Adaptive use the same readable table language for their
 retained breakdowns. Completed query availability gates every timing. Dormant,
 unsupported, or newly enabled work displays `--` or a direct status instead of
@@ -173,7 +188,7 @@ input shows a blue `Success` or saturated-crimson `Error` message until editing
 resumes. Never add a floating result window above the command row. Up and Down continue
 to recall command history. A long or multiline result may expose a trailing
 details button; only an explicit click may open its bounded, scrollable,
-selectable read-only popup. The catalog contains 131 entries: 127 values and
+selectable read-only popup. The catalog contains 137 entries: 133 values and
 four actions.
 
 Escape toggles Settings unless an active edit or popup owns it. `/` toggles the
@@ -191,6 +206,9 @@ Controls must remain decoupled unless their actual resource contract requires a
 dependency. In particular:
 
 - Visibility changes only visibility-owned state and resources.
+- Representation owns shared BLAS/TLAS lifetime and build policy. A consumer
+  may read only a coherent ready TLAS and must release its bindings before
+  hierarchy invalidation or reset.
 - TAA, Fast Approximate AA, CMAA2, and MSAA are independent states with
   deterministic pass order.
 - World appearance, Visibility views, Physically Based Lighting filters, and
@@ -198,8 +216,11 @@ dependency. In particular:
   filter preserves Visibility execution but suppresses its ordinary composite;
   an explicit Visibility view wins. The retired Edge Overlay must not return as
   hidden shadow state.
-- Screen-Space Directional Shadows require a primary directional light but do
-  not enable unrelated lighting features.
+- Directional-shadow producers are independent. Both require a primary
+  directional light; Ratio Estimator additionally requires DXR 1.1, a ready
+  Representation hierarchy, and single-sample deferred rendering. Both-on
+  composition uses the componentwise minimum. Neither producer enables
+  unrelated lighting or anti-aliasing features.
 
 Changing renderer topology must invalidate only the affected passes/history.
 Do not force a scene reload when a narrower pass or render-target refresh is
@@ -242,6 +263,9 @@ Use the exact candidate executable and a bundled scene. Exercise:
 
 - opening, closing, scrolling, and resetting Settings in Amp and OG;
 - every changed control at both endpoints and its unavailable state;
+- Representation rebuild/refit transitions and staged status;
+- all four Screen Space and Ratio Estimator enable combinations, including the
+  Ratio Estimator's MSAA unavailable state;
 - affected dropdowns while their dependent layout is open and clipped;
 - scene loading and command completion;
 - Debug composition rather than each debug state only in isolation;
@@ -265,6 +289,30 @@ The UI handoff includes:
 
 ## Reference Revision History
 
+- `2026-08-05.4`: Removed fractional shadow rates and both private ratio
+  histories, made final-color TAA the only temporal accumulator, reduced both
+  Visibility and ray-traced noise choices to Permutated White Noise and Void
+  Cluster Blue Noise, moved Animate Samples directly above Samples Per Pixel,
+  and replaced the rejected `TMin` policy with a low-default raster
+  triangle-normal origin bias. This supersedes the shadow sampling and bias
+  behavior recorded in revisions `2026-08-05.2` and `2026-08-05.3`.
+- `2026-08-05.3`: Defined Ray Bias exclusively as the ray-query `TMin`, made
+  fractional duty and sample animation independent of global TAA, exposed three
+  emitter-noise patterns plus Animate Samples, and culled non-receiving surfaces
+  before the hard-shadow query.
+- `2026-08-05.2`: Replaced ineffective Origin Safety with the known-working
+  world-unit Ray Bias default; added the hard-shadow fast path, logarithmic
+  `1/16`-through-`64` sample slider, `0.53` degree sun default, blue-noise
+  phases, and motion-reprojected ratio history before division.
+- `2026-08-05.1`: Replaced the exclusive directional-shadow selector with two
+  independent enable controls; added conservative both-on composition,
+  Ratio-Estimator Ray Dispatch timing, depth-aware Origin Safety, and explicit
+  finite-emitter guidance; and removed the ray-traced spatial denoiser.
+- `2026-08-04.1`: Added the Representation drawer and its BVH, BLAS, and TLAS
+  policy/status contract; replaced the implicit screen-space shadow toggle with
+  one directional-shadow Technique selector; and added the Ratio-Estimator
+  Ray-Traced Shadows group, command coverage, unavailable states, and
+  consumer-before-representation reset ordering.
 - `2026-08-03.8`: Moved Jitter Sequence into Temporal Advanced Algorithm,
   shortened its Halton/Sobol and Depth Validation labels, and unified every
   dropdown on the native integrated-arrow presentation without changing

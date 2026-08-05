@@ -14,15 +14,23 @@ namespace donut::engine
 
 namespace uvsr
 {
-    // A frame-local, non-owning visibility factor for one exact light.
-    // Producers expose only this common R8_UNORM contract; they never need to
-    // know which other visibility producers are active. Deferred lighting
-    // multiplies every complete factor whose light pointer is identical to the
-    // light being evaluated. Incomplete or unmatched factors are neutral white.
+    enum class DirectionalLightVisibilityEncoding : uint32_t
+    {
+        ScalarR8Unorm,
+        RgbRgba16Float
+    };
+
+    // A frame-local, non-owning direct-light modulation for one exact light.
+    // Screen-space producers expose scalar R8 visibility. Correlated ratio
+    // estimators expose RGB floating-point modulation because material response
+    // can vary by channel across the emitter. Incomplete or unmatched values
+    // are neutral white.
     struct DirectionalLightVisibility
     {
         nvrhi::ITexture* texture = nullptr;
         const donut::engine::Light* light = nullptr;
+        DirectionalLightVisibilityEncoding encoding =
+            DirectionalLightVisibilityEncoding::ScalarR8Unorm;
 
         [[nodiscard]] constexpr bool IsComplete() const
         {
@@ -42,17 +50,34 @@ namespace uvsr
         uint32_t mipLevels = 0u;
         uint32_t sampleCount = 0u;
         bool r8Unorm = false;
+        bool rgba16Float = false;
         bool texture2D = false;
         bool shaderResource = false;
+    };
+
+    // UVSR currently has two independent directional-shadow producers. Named
+    // slots keep their ownership explicit while allowing both to be absent,
+    // either one to be active, or both to be combined by the lighting pass.
+    struct DirectionalLightVisibilities
+    {
+        DirectionalLightVisibility screenSpace;
+        DirectionalLightVisibility ratioEstimator;
     };
 
     [[nodiscard]] constexpr bool
         IsDirectionalLightVisibilityTextureCompatible(
             const DirectionalLightVisibilityTextureProperties& properties,
             uint32_t outputWidth,
-            uint32_t outputHeight)
+            uint32_t outputHeight,
+            DirectionalLightVisibilityEncoding encoding =
+                DirectionalLightVisibilityEncoding::ScalarR8Unorm)
     {
-        return properties.r8Unorm &&
+        const bool formatCompatible =
+            encoding ==
+                DirectionalLightVisibilityEncoding::ScalarR8Unorm
+                ? properties.r8Unorm
+                : properties.rgba16Float;
+        return formatCompatible &&
             properties.texture2D &&
             properties.width == outputWidth &&
             properties.height == outputHeight &&
@@ -86,8 +111,10 @@ namespace uvsr
         const float accumulated = ClampDirectionalLightVisibility(
             accumulatedVisibility);
         return pointerIdenticalLight
-            ? accumulated * ClampDirectionalLightVisibility(
-                producerVisibility)
+            ? (accumulated < ClampDirectionalLightVisibility(
+                    producerVisibility)
+                ? accumulated
+                : ClampDirectionalLightVisibility(producerVisibility))
             : accumulated;
     }
 }

@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 66,791 non-blank source lines.
+**First-Party Lines of Code:** 71,628 non-blank source lines.
 
 **Third-Party Lines of Code:** 388,209 non-blank source lines.
 
-**Total Lines of Code:** 455,000 non-blank source lines.
+**Total Lines of Code:** 459,837 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -24,8 +24,8 @@ visibility, anti-aliasing, and shadow-rendering systems.
 
 - **Unified Screen-Space Visibility.** AO and one-bounce indirect diffuse share
   a current-frame stochastic traversal, exact runtime sample budget, and
-  guide-aware reconstruction. Permutated White Noise, Hashed White Noise, and
-  Void Cluster Blue Noise are available without a temporal-history, depth-
+  guide-aware reconstruction. Permutated White Noise and Void Cluster Blue
+  Noise are available without a temporal-history, depth-
   hierarchy, or recursive-bounce resource chain.
 - **Physically Grounded Deferred Lighting.** UVSR uses a packed G-buffer,
   material-aware direct lighting, shared contribution gates, Lambert-convolved
@@ -35,9 +35,19 @@ visibility, anti-aliasing, and shadow-rendering systems.
 - **Explicit Ambient Fill Gate.** The legacy hemispherical ambient term is
   removed. The Sky drawer's Ambient Fill setting explicitly gates diffuse and
   specular IBL while preserving the selected environment background.
-- **Focused Directional Shadows.** Screen-Space Directional Shadows are the one
-  retained directional-shadow technique. Their thread- and wave-group
-  isolation views live in the effect-grouped Debug drawer.
+- **Focused Directional Shadows.** Screen-space and Heitz Ratio-Estimator
+  shadows have independent controls, including both-off and both-on operation.
+  The ray-traced pass forms its matched RGB stochastic numerator and
+  denominator in one current-frame dispatch and applies the bounded ratio only
+  to the selected directional light. It includes a one-ray hard path,
+  `1`-through-`64` sample rates, two emitter-noise patterns, independently
+  animated sampling, and a `0.002` default world-space triangle-normal origin
+  bias. Final-color TAA is the only temporal accumulator, and both-on
+  composition keeps the strongest
+  componentwise occlusion without double-darkening overlap.
+- **Shared World Representation.** A consumer-neutral Representation drawer
+  owns the ray-query BVH, per-mesh BLAS build/update policy, TLAS transform
+  policy, staged construction, and explicit supported/building/ready state.
 - **Composable Anti-Aliasing.** TAA, Google Filament-based Fast Approximate AA,
   CMAA2, and 2x through 16x deferred MSAA are independent, default-off
   controls. When combined, MSAA resolves scene-linear lighting before TAA,
@@ -47,9 +57,9 @@ visibility, anti-aliasing, and shadow-rendering systems.
 - **Composable Debugging.** World appearance is independent from the
   Visibility and physically based lighting information filters. Shadow
   thread/wave isolation remains a deliberate full-image diagnostic.
-- **Compact Runtime Surface.** The first-party build compiles 258 core shader
-  tasks plus 46 Screen-Space Directional Shadow tasks, for 304 first-party and
-  380 integrated tasks after Donut's 76. Nine Settings drawers and 131 command
+- **Compact Runtime Surface.** The first-party build compiles 259 core shader
+  tasks plus 46 Screen-Space Directional Shadow tasks, for 305 first-party and
+  381 integrated tasks after Donut's 76. Ten Settings drawers and 137 command
   entries retain the active product controls without benchmark planners or
   dormant profiles.
 - **Source-Backed Optimization Decisions.** Retired shader families, rejected
@@ -188,8 +198,8 @@ ctest --test-dir build -C Release --output-on-failure
 ```
 
 This includes the scene, camera, PBR, AA/UI, screen-space visibility,
-Screen-Space Directional Shadows, environment, command-line, and runtime shader
-bundle contracts.
+directional-shadow ratio-estimator, world-representation, environment,
+command-line, and runtime shader bundle contracts.
 
 ## Engineering Documentation
 
@@ -202,6 +212,10 @@ bundle contracts.
 - [Screen-Space Visibility](docs/screen-space-visibility.md) documents the
   shared AO/GI traversal, estimators, reconstruction, memory contracts,
   supported quality profiles, and validation boundary.
+- [Heitz Ratio-Estimator Shadows](docs/heitz-ratio-estimator-shadows.md)
+  documents the single-dispatch matched RGB estimator, current-frame sampling,
+  hard-shadow path, ray-origin safety, independent composition, shared
+  BLAS/TLAS representation, and limits.
 - [Temporal Aliasing Options](docs/temporal-aa-options.md) defines temporal,
   fast approximate, morphological, and multisample composition, history
   behavior, and coordinate conventions.
@@ -227,8 +241,9 @@ bundle contracts.
   scope.
 - IBL uses one infinite global environment. Local probe capture,
   parallax-corrected probe volumes, and probe blending are not implemented.
-- Screen-Space Directional Shadows are the only retained directional-shadow
-  technique.
+- Screen-space and Heitz Ratio-Estimator directional shadows are independent;
+  both may be disabled or enabled together. The ray-traced producer currently
+  requires DXR 1.1 and single-sample deferred rendering.
 
 The executable, repository slug, package names, and paths use lowercase
 `uvsr`; the displayed product name is uppercase **UVSR**.

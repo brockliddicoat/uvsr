@@ -49,13 +49,18 @@ static_assert(offsetof(PbrDeferredLightingConstants, separateIndirect) ==
     sizeof(DeferredLightingConstants),
     "The UVSR extension must follow Donut's deferred constants without padding drift.");
 static_assert(sizeof(PbrDeferredLightingConstants) ==
-    sizeof(DeferredLightingConstants) + 16,
-    "The UVSR deferred extension must occupy one constant-buffer register.");
+    sizeof(DeferredLightingConstants) + 32,
+    "The UVSR deferred extension must occupy two constant-buffer registers.");
 static_assert(offsetof(
         PbrDeferredLightingConstants,
-        directionalVisibilityLightIndex) ==
-    sizeof(DeferredLightingConstants) + 8u,
-    "The directional visibility index must share the UVSR register.");
+        directionalVisibilityLightIndices) ==
+    sizeof(DeferredLightingConstants) + 16u,
+    "The directional visibility indices must begin the second UVSR register.");
+static_assert(offsetof(
+        PbrDeferredLightingConstants,
+        directionalVisibilityEncodings) ==
+    sizeof(DeferredLightingConstants) + 24u,
+    "The directional visibility encodings must complete the second UVSR register.");
 
 namespace
 {
@@ -227,7 +232,8 @@ namespace
 
     bool IsDirectionalVisibilityTextureCompatible(
         nvrhi::ITexture* texture,
-        const DeferredLightingPass::Inputs& inputs)
+        const DeferredLightingPass::Inputs& inputs,
+        uvsr::DirectionalLightVisibilityEncoding encoding)
     {
         if (!texture || !inputs.output)
             return false;
@@ -243,12 +249,14 @@ namespace
                 textureDesc.mipLevels,
                 textureDesc.sampleCount,
                 textureDesc.format == nvrhi::Format::R8_UNORM,
+                textureDesc.format == nvrhi::Format::RGBA16_FLOAT,
                 textureDesc.dimension ==
                     nvrhi::TextureDimension::Texture2D,
                 textureDesc.isShaderResource
             },
             outputDesc.width,
-            outputDesc.height);
+            outputDesc.height,
+            encoding);
     }
 }
 
@@ -317,6 +325,7 @@ bool PbrDeferredLightingPass::PreparePipelinesStep()
             nvrhi::BindingLayoutItem::Texture_SRV(12),
             nvrhi::BindingLayoutItem::Texture_SRV(14),
             nvrhi::BindingLayoutItem::Texture_SRV(20),
+            nvrhi::BindingLayoutItem::Texture_SRV(21),
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         };
         if (writeSourceRadiance)
@@ -371,6 +380,7 @@ bool PbrDeferredLightingPass::PreparePipelinesStep()
                 nvrhi::BindingLayoutItem::Texture_SRV(14),
                 nvrhi::BindingLayoutItem::Texture_SRV(17),
                 nvrhi::BindingLayoutItem::Texture_SRV(20),
+                nvrhi::BindingLayoutItem::Texture_SRV(21),
                 nvrhi::BindingLayoutItem::Texture_UAV(0),
                 nvrhi::BindingLayoutItem::Sampler(1),
                 nvrhi::BindingLayoutItem::Sampler(2),
@@ -415,7 +425,7 @@ void PbrDeferredLightingPass::Render(
     nvrhi::ICommandList* commandList,
     const ICompositeView& compositeView,
     const DeferredLightingPass::Inputs& inputs,
-    const uvsr::DirectionalLightVisibility& directionalLightVisibility,
+    const uvsr::DirectionalLightVisibilities& directionalLightVisibilities,
     const LightProbe* environment,
     nvrhi::ITexture* sourceRadianceOutput,
     bool separateIndirect,
@@ -473,13 +483,22 @@ void PbrDeferredLightingPass::Render(
         return;
     }
 
-    uvsr::DirectionalLightVisibility activeVisibility;
-    if (directionalLightVisibility.IsComplete() &&
-        IsDirectionalVisibilityTextureCompatible(
-            directionalLightVisibility.texture, inputs))
+    uvsr::DirectionalLightVisibilities activeVisibilities;
+    const auto acceptVisibility = [&](
+        const uvsr::DirectionalLightVisibility& visibility)
     {
-        activeVisibility = directionalLightVisibility;
-    }
+        return visibility.IsComplete() &&
+            IsDirectionalVisibilityTextureCompatible(
+                visibility.texture,
+                inputs,
+                visibility.encoding)
+            ? visibility
+            : uvsr::DirectionalLightVisibility{};
+    };
+    activeVisibilities.screenSpace = acceptVisibility(
+        directionalLightVisibilities.screenSpace);
+    activeVisibilities.ratioEstimator = acceptVisibility(
+        directionalLightVisibilities.ratioEstimator);
 
     commandList->beginMarker(
         msaa
@@ -491,7 +510,9 @@ void PbrDeferredLightingPass::Render(
     constants.separateIndirect = separateIndirect ? 1 : 0;
     constants.lightingDebugView = lightingDebugView;
     constants.visibilityDebugView = visibilityDebugView;
-    constants.directionalVisibilityLightIndex = -1;
+    constants.directionalVisibilityLightIndices = int2(-1);
+    constants.directionalVisibilityEncodings = uint2(
+        uint32_t(uvsr::DirectionalLightVisibilityEncoding::ScalarR8Unorm));
     deferredConstants.randomOffset = randomOffset;
     deferredConstants.noisePattern[0] = float4(0.059f, 0.529f, 0.176f, 0.647f);
     deferredConstants.noisePattern[1] = float4(0.765f, 0.294f, 0.882f, 0.412f);
@@ -540,10 +561,20 @@ void PbrDeferredLightingPass::Render(
                 deferredConstants.lights[deferredConstants.numLights];
             light->FillLightConstants(lightConstants);
             if (uvsr::TargetsDirectionalLight(
-                    activeVisibility, light.get()))
+                    activeVisibilities.screenSpace, light.get()))
             {
-                constants.directionalVisibilityLightIndex =
+                constants.directionalVisibilityLightIndices.x =
                     int(deferredConstants.numLights);
+                constants.directionalVisibilityEncodings.x = uint32_t(
+                    activeVisibilities.screenSpace.encoding);
+            }
+            if (uvsr::TargetsDirectionalLight(
+                    activeVisibilities.ratioEstimator, light.get()))
+            {
+                constants.directionalVisibilityLightIndices.y =
+                    int(deferredConstants.numLights);
+                constants.directionalVisibilityEncodings.y = uint32_t(
+                    activeVisibilities.ratioEstimator.encoding);
             }
 
             if (light->shadowMap)
@@ -671,8 +702,14 @@ void PbrDeferredLightingPass::Render(
         bindingSetDesc.bindings.push_back(
             nvrhi::BindingSetItem::Texture_SRV(
                 20,
-                activeVisibility.texture
-                    ? activeVisibility.texture
+                activeVisibilities.screenSpace.texture
+                    ? activeVisibilities.screenSpace.texture
+                    : m_CommonPasses->m_WhiteTexture.Get()));
+        bindingSetDesc.bindings.push_back(
+            nvrhi::BindingSetItem::Texture_SRV(
+                21,
+                activeVisibilities.ratioEstimator.texture
+                    ? activeVisibilities.ratioEstimator.texture
                     : m_CommonPasses->m_WhiteTexture.Get()));
         bindingSetDesc.bindings.push_back(
             nvrhi::BindingSetItem::Texture_UAV(

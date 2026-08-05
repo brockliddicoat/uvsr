@@ -454,8 +454,8 @@ int main()
             blackPixels.data(), 8u, 4u).has_value(),
         "zero-energy lat-long input is rejected");
 
-    // The singular directional visibility input applies only when its exact
-    // light identity matches. Missing or unrelated visibility is white.
+    // Each directional visibility input applies only when its exact light
+    // identity matches. Missing or unrelated visibility is white.
     Require(!uvsr::DirectionalLightVisibility{}.IsComplete(),
         "an empty visibility input is incomplete");
     int textureToken0 = 0;
@@ -470,6 +470,14 @@ int main()
     const uvsr::DirectionalLightVisibility factor0{
         texture0, light0
     };
+    const uvsr::DirectionalLightVisibilities factors{
+        factor0,
+        { texture0, light0,
+            uvsr::DirectionalLightVisibilityEncoding::RgbRgba16Float }
+    };
+    Require(factors.screenSpace.IsComplete() &&
+        factors.ratioEstimator.IsComplete(),
+        "screen-space and ratio-estimator slots are independently complete");
     Require(uvsr::TargetsDirectionalLight(factor0, light0),
         "pointer-identical light accepts its factor");
     Require(!uvsr::TargetsDirectionalLight(factor0, light1),
@@ -479,18 +487,26 @@ int main()
         light0),
         "incomplete factor remains neutral");
     Require(uvsr::ComposeDirectionalLightVisibility(
-        0.5f, 0.25f, true) == 0.125f,
-        "the matching visibility factor applies once");
+        0.5f, 0.25f, true) == 0.25f,
+        "matching visibility inputs select the strongest occlusion");
     Require(uvsr::ComposeDirectionalLightVisibility(
         0.25f, 0.f, false) == 0.25f,
         "unmatched visibility remains neutral");
     Require(uvsr::ComposeDirectionalLightVisibility(
         4.f, -1.f, true) == 0.f,
         "visibility factors clamp before composition");
+    const Color combinedVisibility = {
+        uvsr::ComposeDirectionalLightVisibility(0.6f, 0.8f, true),
+        uvsr::ComposeDirectionalLightVisibility(0.6f, 0.4f, true),
+        uvsr::ComposeDirectionalLightVisibility(0.6f, 0.7f, true)
+    };
+    Require(Near(combinedVisibility, Color{ 0.6f, 0.4f, 0.6f }),
+        "both-on composition uses componentwise minimum, not multiplication");
 
     const uvsr::DirectionalLightVisibilityTextureProperties
         compatibleVisibilityTexture{
-            1920u, 1080u, 1u, 1u, 1u, 1u, true, true, true
+            1920u, 1080u, 1u, 1u, 1u, 1u,
+            true, false, true, true
         };
     Require(uvsr::IsDirectionalLightVisibilityTextureCompatible(
         compatibleVisibilityTexture, 1920u, 1080u),
@@ -505,6 +521,21 @@ int main()
     Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(
         incompatibleVisibilityTexture, 1920u, 1080u),
         "wrong-format visibility texture fails white");
+    auto compatibleRgbVisibilityTexture = compatibleVisibilityTexture;
+    compatibleRgbVisibilityTexture.r8Unorm = false;
+    compatibleRgbVisibilityTexture.rgba16Float = true;
+    Require(uvsr::IsDirectionalLightVisibilityTextureCompatible(
+        compatibleRgbVisibilityTexture,
+        1920u,
+        1080u,
+        uvsr::DirectionalLightVisibilityEncoding::RgbRgba16Float),
+        "full-resolution RGBA16F RGB modulation texture is accepted");
+    Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(
+        compatibleRgbVisibilityTexture,
+        1920u,
+        1080u,
+        uvsr::DirectionalLightVisibilityEncoding::ScalarR8Unorm),
+        "RGB modulation cannot masquerade as scalar R8 visibility");
     incompatibleVisibilityTexture = compatibleVisibilityTexture;
     incompatibleVisibilityTexture.sampleCount = 2u;
     Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(

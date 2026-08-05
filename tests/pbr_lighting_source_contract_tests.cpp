@@ -124,41 +124,56 @@ int main(int argc, char** argv)
     Require(
         CountOccurrences(
             deferredShader,
-            "texture2d<float>t_directionalvisibility") == 1u,
-        "the single-sample deferred shader must declare exactly one "
-        "directional visibility texture");
+            "texture2d<float4>t_screenspacedirectionalvisibility") == 1u &&
+            CountOccurrences(
+                deferredShader,
+                "texture2d<float4>t_ratioestimatordirectionalvisibility") ==
+                1u,
+        "the single-sample deferred shader must declare both independent "
+        "directional visibility textures");
     Require(
         CountOccurrences(
             deferredMsaaShader,
-            "texture2d<float>t_directionalvisibility") == 1u,
-        "the MSAA deferred shader must declare exactly one directional "
-        "visibility texture");
+            "texture2d<float4>t_screenspacedirectionalvisibility") == 1u &&
+            CountOccurrences(
+                deferredMsaaShader,
+                "texture2d<float4>t_ratioestimatordirectionalvisibility") ==
+                1u,
+        "the MSAA deferred shader must declare both independent directional "
+        "visibility textures");
 
     for (const std::string* shader :
         { &deferredShader, &deferredMsaaShader })
     {
         RequireContains(
             *shader,
-            "texture2d<float>t_directionalvisibility:register(t20);",
-            "directional visibility must retain its single t20 binding");
+            "texture2d<float4>t_screenspacedirectionalvisibility:register(t20);",
+            "screen-space directional visibility must bind at t20");
         RequireContains(
             *shader,
-            "if(int(lightindex)==g_pbrdeferred."
-                "directionalvisibilitylightindex)"
-                "{returnsaturate(t_directionalvisibility[pixelposition]);}"
-                "return1.0f;",
-            "directional visibility must clamp only its exact indexed light "
-            "and fail open to white");
-        Require(
-            shader->find("register(t21)") == std::string::npos &&
-                shader->find("register(t22)") == std::string::npos,
-            "removed directional visibility slots must not retain bindings");
+            "texture2d<float4>t_ratioestimatordirectionalvisibility:register(t21);",
+            "ratio-estimator directional visibility must bind at t21");
         RequireContains(
             *shader,
-            "floatvisibility=getdirectionallightvisibility("
+            "if(encoding==uvsr_directional_visibility_rgb_rgba16f)"
+                "{returnsaturate(encoded.rgb);}"
+                "returnsaturate(encoded.r).xxx;",
+            "directional visibility must decode RGB ratio modulation and "
+            "scalar R8 visibility from their explicit encoding");
+        RequireContains(
+            *shader,
+            "if(any(!isfinite(encoded)))return1.0f;",
+            "non-finite directional modulation must fail open to white");
+        RequireContains(
+            *shader,
+            "visibility=min(visibility,decodedirectionallightvisibility(",
+            "both exact-light inputs must combine by componentwise minimum");
+        RequireContains(
+            *shader,
+            "float3directionalmodulation=getdirectionallightvisibility("
                 "lightindex,pixelposition);",
-            "each direct-light loop must use the singular exact-light "
-            "visibility input");
+            "each direct-light loop must use the combined exact-light "
+            "visibility inputs");
         Require(
             shader->find("register(t15)") == std::string::npos &&
                 shader->find("register(t16)") == std::string::npos &&
@@ -256,6 +271,30 @@ int main(int argc, char** argv)
         "deferred PBR must not orient double-sided normals solely from "
         "raster winding");
     RequireContains(
+        gbufferShader,
+        "float3trianglenormal=pbrsafenormalize("
+            "cross(ddx(i_vtx.pos),ddy(i_vtx.pos)),surface.geometrynormal);",
+        "the packed geometric normal must come from the raster triangle plane");
+    RequireContains(
+        gbufferShader,
+        "if(dot(trianglenormal,viewdirection)<0.0f)"
+            "trianglenormal=-trianglenormal;",
+        "the raster triangle normal must face the visible view hemisphere");
+    RequireContains(
+        gbufferShader,
+        "if(dot(surface.shadingnormal,trianglenormal)<0.0f)"
+            "surface.shadingnormal=-surface.shadingnormal;",
+        "the material shading normal must stay in the triangle hemisphere");
+    RequireContains(
+        gbufferShader,
+        "pbrdata.shadingnormal=surface.shadingnormal;"
+            "pbrdata.geometricnormal=trianglenormal;",
+        "the G-buffer must preserve distinct shading and triangle normals");
+    Require(
+        gbufferShader.find("float3trianglenormal=") <
+            gbufferShader.find("clip(surface.opacity-g_material.alphacutoff);"),
+        "triangle derivatives must be evaluated before alpha discard");
+    RequireContains(
         pbrLighting,
         "light.lighttype==lighttype_spot",
         "PBR lighting must retain spotlight evaluation");
@@ -337,21 +376,30 @@ int main(int argc, char** argv)
     Require(
         CountOccurrences(
             deferredPass,
-            "bindinglayoutitem::texture_srv(20)") == 2u,
-        "directional visibility needs one normal and one MSAA CPU layout "
-        "entry");
+            "bindinglayoutitem::texture_srv(20)") == 2u &&
+            CountOccurrences(
+                deferredPass,
+                "bindinglayoutitem::texture_srv(21)") == 2u,
+        "each directional visibility slot needs one normal and one MSAA CPU "
+        "layout entry");
     Require(
-        deferredPass.find("bindinglayoutitem::texture_srv(21)") ==
-                std::string::npos &&
-            deferredPass.find("bindinglayoutitem::texture_srv(22)") ==
-                std::string::npos,
-        "removed visibility slots must not retain CPU layout entries");
+        deferredPass.find("bindinglayoutitem::texture_srv(22)") ==
+            std::string::npos,
+        "unused directional visibility slots must not retain CPU layouts");
     RequireContains(
         deferredPass,
-        "bindingsetitem::texture_srv(20,activevisibility.texture?"
-            "activevisibility.texture:"
+        "bindingsetitem::texture_srv(20,"
+            "activevisibilities.screenspace.texture?"
+            "activevisibilities.screenspace.texture:"
             "m_commonpasses->m_whitetexture.get())",
-        "directional visibility must fail open to white");
+        "screen-space directional visibility must fail open to white");
+    RequireContains(
+        deferredPass,
+        "bindingsetitem::texture_srv(21,"
+            "activevisibilities.ratioestimator.texture?"
+            "activevisibilities.ratioestimator.texture:"
+            "m_commonpasses->m_whitetexture.get())",
+        "ratio-estimator directional visibility must fail open to white");
     Require(
         deferredPass.find("bindinglayoutitem::texture_srv(15)") ==
                 std::string::npos &&
@@ -365,18 +413,28 @@ int main(int argc, char** argv)
         "screen-shadow bindings");
     RequireContains(
         deferredPass,
-        "constants.directionalvisibilitylightindex=-1;",
-        "unmatched visibility must retain the neutral light index");
+        "constants.directionalvisibilitylightindices=int2(-1);",
+        "unmatched visibility slots must retain neutral light indices");
     RequireContains(
         deferredPass,
         "uvsr::targetsdirectionallight("
-            "activevisibility,light.get())",
-        "the CPU adapter must use pointer-identical light matching");
+            "activevisibilities.screenspace,light.get())",
+        "the screen-space CPU adapter must use pointer-identical matching");
     RequireContains(
         deferredPass,
-        "constants.directionalvisibilitylightindex="
+        "uvsr::targetsdirectionallight("
+            "activevisibilities.ratioestimator,light.get())",
+        "the ratio-estimator CPU adapter must use pointer-identical matching");
+    RequireContains(
+        deferredPass,
+        "constants.directionalvisibilitylightindices.x="
             "int(deferredconstants.numlights);",
-        "the CPU adapter must publish the matching deferred-light index");
+        "the CPU adapter must publish the screen-space light index");
+    RequireContains(
+        deferredPass,
+        "constants.directionalvisibilitylightindices.y="
+            "int(deferredconstants.numlights);",
+        "the CPU adapter must publish the ratio-estimator light index");
     RequireContains(
         deferredPassHeader,
         "std::array<pipeline,2>m_pipelines;",
@@ -443,17 +501,25 @@ int main(int argc, char** argv)
         "evaluatepbrenvironmentspecular(",
         "visibility composition must evaluate specular IBL");
 
-    Require(
-        rendererSource.find("directionallightvisibilityset") ==
-            std::string::npos,
-        "the renderer must not retain the removed multi-producer set");
+    RequireContains(
+        rendererSource,
+        "directionallightvisibilitiesdirectionalvisibilities;",
+        "the renderer must retain two named independent producer slots");
     Require(
         CountOccurrences(
             rendererSource,
             "{screenspaceshadowresult.nearvisibility,"
-                "screenspaceshadowresult.light}") == 1u,
-        "the retained visibility texture must remain paired exactly once "
-        "with its pointer-identical light");
+                "screenspaceshadowresult.light,"
+                "directionallightvisibilityencoding::scalarr8unorm}") ==
+                1u &&
+            CountOccurrences(
+                rendererSource,
+                "{heitzshadowresult.modulation,"
+                    "heitzshadowresult.light,"
+                    "directionallightvisibilityencoding::rgbrgba16float}") ==
+                1u,
+        "each selected directional modulation must remain paired exactly "
+        "once with its pointer-identical light and encoding");
     RequireContains(
         rendererSource,
         "conststd::shared_ptr<ishadowmap>activeshadowmap="

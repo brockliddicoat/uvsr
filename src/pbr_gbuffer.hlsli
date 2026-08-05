@@ -11,6 +11,15 @@ struct PbrGBufferData
     float ambientOcclusion;
 };
 
+struct PbrGBufferSurfaceNormals
+{
+    // Material-derived smooth/normal-mapped normal used for BSDF evaluation.
+    float3 shadingNormal;
+    // View-facing raster triangle-plane normal used for geometric gates and
+    // robust ray-origin construction.
+    float3 geometricNormal;
+};
+
 float2 PbrSignNotZero(float2 value)
 {
     return float2(value.x >= 0.0f ? 1.0f : -1.0f,
@@ -33,6 +42,20 @@ float3 DecodeOctahedralNormal(float2 encoded)
     float correction = saturate(-normal.z);
     normal.xy -= PbrSignNotZero(normal.xy) * correction;
     return PbrSafeNormalize(normal, float3(0.0f, 1.0f, 0.0f));
+}
+
+PbrGBufferSurfaceNormals DecodePbrGBufferSurfaceNormals(
+    float4 normalChannels,
+    float4 materialChannels)
+{
+    PbrGBufferSurfaceNormals result;
+    result.geometricNormal = DecodeOctahedralNormal(materialChannels.rg);
+    result.shadingNormal = PbrSafeNormalize(
+        normalChannels.xyz,
+        result.geometricNormal);
+    if (dot(result.shadingNormal, result.geometricNormal) < 0.0f)
+        result.shadingNormal = -result.shadingNormal;
+    return result;
 }
 
 void EncodePbrGBuffer(
@@ -62,13 +85,13 @@ PbrGBufferData DecodePbrGBuffer(float4 channels[4], float materialAmbientOcclusi
     PbrGBufferData result = (PbrGBufferData)0;
     result.material.baseColor = max(channels[0].rgb, 0.0f);
     result.material.opacity = saturate(channels[0].a);
-    result.geometricNormal = DecodeOctahedralNormal(channels[1].rg);
+    const PbrGBufferSurfaceNormals surfaceNormals =
+        DecodePbrGBufferSurfaceNormals(channels[2], channels[1]);
+    result.geometricNormal = surfaceNormals.geometricNormal;
     float ior = lerp(1.0f, 3.0f, saturate(channels[1].b));
     result.material.dielectricF0 = IorToF0(ior);
     result.material.featureMask = (uint)round(saturate(channels[1].a) * 255.0f);
-    result.shadingNormal = PbrSafeNormalize(channels[2].xyz, result.geometricNormal);
-    if (dot(result.shadingNormal, result.geometricNormal) < 0.0f)
-        result.shadingNormal = -result.shadingNormal;
+    result.shadingNormal = surfaceNormals.shadingNormal;
     result.material.perceptualRoughness = saturate(channels[2].w);
     result.material.emissive = max(channels[3].rgb, 0.0f);
     result.material.metalness = saturate(channels[3].a);

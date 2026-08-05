@@ -71,11 +71,6 @@ void main(
     MaterialSample surface = EvaluateSceneMaterial(
         i_vtx.normal, i_vtx.tangent, g_Material, textures);
 
-#if ALPHA_TESTED
-    if (g_Material.domain != MaterialDomain_Opaque)
-        clip(surface.opacity - g_Material.alphaCutoff);
-#endif
-
     float3 viewDirection = GetGBufferViewDirection(
         c_GBuffer.view.cameraDirectionOrPosition,
         i_vtx.pos);
@@ -90,6 +85,23 @@ void main(
         surface.shadingNormal = -surface.shadingNormal;
         surface.geometryNormal = -surface.geometryNormal;
     }
+    // Donut's material geometry normal is an interpolated vertex normal. Keep
+    // that as the degenerate fallback, but store the actual raster triangle
+    // plane normal for hemisphere tests and future ray-origin construction.
+    // World-position derivatives lie in the same transformed triangle plane
+    // represented by the BLAS, including non-uniform instance transforms.
+    float3 triangleNormal = PbrSafeNormalize(
+        cross(ddx(i_vtx.pos), ddy(i_vtx.pos)),
+        surface.geometryNormal);
+    if (dot(triangleNormal, viewDirection) < 0.0f)
+        triangleNormal = -triangleNormal;
+    if (dot(surface.shadingNormal, triangleNormal) < 0.0f)
+        surface.shadingNormal = -surface.shadingNormal;
+
+#if ALPHA_TESTED
+    if (g_Material.domain != MaterialDomain_Opaque)
+        clip(surface.opacity - g_Material.alphaCutoff);
+#endif
 
     float dielectricF0 = (g_Material.flags & MaterialFlags_UseSpecularGlossModel) == 0 &&
         g_Material.specularColor.r > 0.0f
@@ -105,7 +117,7 @@ void main(
     pbrData.material.opacity = surface.opacity;
     pbrData.material.featureMask = GetPbrFeatureMask();
     pbrData.shadingNormal = surface.shadingNormal;
-    pbrData.geometricNormal = surface.geometryNormal;
+    pbrData.geometricNormal = triangleNormal;
     pbrData.ambientOcclusion = surface.occlusion;
     EncodePbrGBuffer(
         pbrData,

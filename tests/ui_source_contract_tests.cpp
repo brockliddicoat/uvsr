@@ -245,9 +245,15 @@ namespace
         const std::vector<Drawer> drawers = {
             {
                 "const bool generalOpen = DrawCollapsingHeader(",
-                "const bool indirectLightingOpen = DrawCollapsingHeader(",
+                "const bool representationOpen = DrawCollapsingHeader(",
                 "##GeneralBody",
                 "General"
+            },
+            {
+                "const bool representationOpen = DrawCollapsingHeader(",
+                "const bool indirectLightingOpen = DrawCollapsingHeader(",
+                "##RepresentationBody",
+                "Representation"
             },
             {
                 "const bool indirectLightingOpen = DrawCollapsingHeader(",
@@ -346,7 +352,6 @@ namespace
             noiseLabels,
             {
                 "Permutated White Noise",
-                "Hashed White Noise",
                 "Void Cluster Blue Noise"
             },
             "Visibility noise labels");
@@ -430,8 +435,7 @@ namespace
         RequireContains(
             Compact(catalog),
             "Value(\"visibility.noise\",Kind::Enum,Section::Visibility,"
-            "\"permutated-white-noise|hashed-white-noise|"
-            "void-cluster-blue-noise\")",
+            "\"permutated-white-noise|void-cluster-blue-noise\")",
             "Visibility noise command domain");
         for (const std::string_view reconstructionLabel : {
                 std::string_view("Full Resolution"),
@@ -538,7 +542,7 @@ namespace
                 "Geometry",
                 "Direct Lighting",
                 "Screen-Space Visibility",
-                "Screen-Space Shadows",
+                "Directional Shadows",
                 "Temporal Reconstructive",
                 "Fast Approximate",
                 "Conservative Morphological",
@@ -618,8 +622,8 @@ namespace
             "dormant renderer timing invalidation");
         RequireContains(
             viewer,
-            "m_RendererTimings.available[stageIndex] = true;",
-            "completed renderer timing publication");
+            "m_RendererTimings.available[stageIndex] = currentEpoch;",
+            "epoch-validated renderer timing publication");
         RequireContains(
             viewer,
             "timings->active && timings->available",
@@ -1335,8 +1339,19 @@ namespace
             shadows,
             "m_app->HasPrimaryDirectionalLight()",
             "directional-light availability gate");
+        RequireContains(
+            shadows,
+            "Enabled##ScreenSpaceShadows",
+            "independent screen-space shadow enable control");
+        RequireContains(
+            viewer,
+            "Enabled##RatioEstimatorShadows",
+            "independent ratio-estimator shadow enable control");
+        RequireAbsent(
+            shadows,
+            "Technique##DirectionalShadows",
+            "retired exclusive directional-shadow selector");
         for (const std::string_view control : {
-                std::string_view("Enabled##ScreenSpaceShadows"),
                 std::string_view("Profile##ScreenSpaceShadows"),
                 std::string_view("Length##ScreenSpaceShadows"),
                 std::string_view("Surface Thickness##ScreenSpaceShadows"),
@@ -1350,6 +1365,37 @@ namespace
                 std::string_view("Early Out##ScreenSpaceShadows") })
         {
             RequireContains(shadows, control, "screen-space shadow control");
+        }
+        RequireContains(
+            shadows,
+            "drawRatioEstimatorShadowControls();",
+            "ratio-estimator shadow control placement");
+        for (const std::string_view control : {
+                std::string_view("Hard Shadows##RatioEstimatorShadows"),
+                std::string_view("Samples Per Pixel##RatioEstimatorShadows"),
+                std::string_view("Noise Pattern##RatioEstimatorShadows"),
+                std::string_view("Animate Samples##RatioEstimatorShadows"),
+                std::string_view("Ray Bias##RatioEstimatorShadows") })
+        {
+            RequireContains(viewer, control, "ratio-estimator shadow control");
+        }
+        RequireOrdered(
+            viewer,
+            {
+                "Animate Samples##RatioEstimatorShadows",
+                "Samples Per Pixel##RatioEstimatorShadows",
+                "Noise Pattern##RatioEstimatorShadows"
+            },
+            "ratio-estimator sampling control order");
+        for (const std::string_view removedControl : {
+                std::string_view("Denoiser Radius##RatioEstimatorShadows"),
+                std::string_view("Origin Safety##RatioEstimatorShadows"),
+                std::string_view("Noise Response##RatioEstimatorShadows"),
+                std::string_view("Plane Rejection##RatioEstimatorShadows"),
+                std::string_view("Normal Rejection##RatioEstimatorShadows"),
+                std::string_view("Analytic Rejection##RatioEstimatorShadows") })
+        {
+            RequireAbsent(viewer, removedControl, "removed Heitz denoiser control");
         }
         RequireAbsent(shadows, "\"Isolation View\"", "Shadows drawer");
         RequireAbsent(shadows, "\"Edge Overlay\"", "Shadows drawer");
@@ -1448,8 +1494,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 131u,
-            "Settings command catalog must contain exactly 131 entries.");
+        Require(entries.size() == 140u,
+            "Settings command catalog must contain exactly 140 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -1463,8 +1509,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 127u,
-            "Settings command catalog must contain exactly 127 values.");
+        Require(valueCount == 136u,
+            "Settings command catalog must contain exactly 136 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -1492,6 +1538,21 @@ namespace
                 std::string_view("debug.pbr.filter"),
                 std::string_view("debug.shadows.isolation"),
                 std::string_view(
+                    "representation.bvh.build-preference"),
+                std::string_view("representation.blas.update-mode"),
+                std::string_view("representation.tlas.update-mode"),
+                std::string_view("shadows.ratio-estimator.enabled"),
+                std::string_view(
+                    "shadows.ratio-estimator.samples-per-pixel"),
+                std::string_view(
+                    "shadows.ratio-estimator.hard-shadows"),
+                std::string_view(
+                    "shadows.ratio-estimator.noise-pattern"),
+                std::string_view(
+                    "shadows.ratio-estimator.animate-samples"),
+                std::string_view(
+                    "shadows.ratio-estimator.ray-bias"),
+                std::string_view(
                     "shadows.screen-space-directional.enabled") })
         {
             Require(names.find(std::string(path)) != names.end(),
@@ -1505,6 +1566,14 @@ namespace
                 std::string_view("shadows.csm"),
                 std::string_view("debug.shadows.edge-overlay"),
                 std::string_view("debug.shadows.overlay-opacity"),
+                std::string_view("shadows.directional.technique"),
+                std::string_view("shadows.ratio-estimator.filter-radius"),
+                std::string_view(
+                    "shadows.ratio-estimator.origin-safety-steps"),
+                std::string_view("shadows.ratio-estimator.noise-response"),
+                std::string_view("shadows.ratio-estimator.plane-rejection"),
+                std::string_view("shadows.ratio-estimator.normal-rejection"),
+                std::string_view("shadows.ratio-estimator.analytic-rejection"),
                 std::string_view("debug.visibility.indirect-diffuse-only"),
                 std::string_view("visibility.ao.power"),
                 std::string_view("buffers."),
@@ -1516,6 +1585,22 @@ namespace
                     "retired Settings command path returned: " + name);
             }
         }
+
+        const std::string_view representationDispatcher = ExtractSection(
+            viewer,
+            "bool DispatchRepresentationCommandValue(",
+            "bool DispatchVisibilityCommandValue(",
+            "Representation command dispatcher");
+        const std::string_view directionalShadowDispatcher = ExtractSection(
+            viewer,
+            "bool DispatchDirectionalShadowCommandValue(",
+            "bool DispatchScreenSpaceShadowCommandValue(",
+            "Directional Shadow command dispatcher");
+        const std::string_view screenSpaceShadowDispatcher = ExtractSection(
+            viewer,
+            "bool DispatchScreenSpaceShadowCommandValue(",
+            "bool DispatchMaterialCommandValue(",
+            "screen-space shadow command dispatcher");
 
         const std::map<std::string, std::string_view> dispatchers = {
             {
@@ -1529,8 +1614,12 @@ namespace
                 "General",
                 ExtractSection(viewer,
                     "bool DispatchGeneralCommandValue(",
-                    "bool DispatchVisibilityCommandValue(",
+                    "bool DispatchRepresentationCommandValue(",
                     "General command dispatcher")
+            },
+            {
+                "Representation",
+                representationDispatcher
             },
             {
                 "Visibility",
@@ -1561,15 +1650,16 @@ namespace
                 "Lights",
                 ExtractSection(viewer,
                     "struct FlashlightFloatCommandBinding",
-                    "bool DispatchScreenSpaceShadowCommandValue(",
+                    "bool DispatchDirectionalShadowCommandValue(",
                     "Lights command dispatcher")
             },
             {
+                "DirectionalShadows",
+                directionalShadowDispatcher
+            },
+            {
                 "ScreenSpaceDirectionalShadows",
-                ExtractSection(viewer,
-                    "bool DispatchScreenSpaceShadowCommandValue(",
-                    "bool DispatchMaterialCommandValue(",
-                    "screen-space shadow command dispatcher")
+                screenSpaceShadowDispatcher
             },
             {
                 "Materials",
@@ -1595,6 +1685,118 @@ namespace
             }
         }
 
+        const std::string compactRepresentationDispatcher =
+            Compact(representationDispatcher);
+        for (const std::string_view mapping : {
+                std::string_view(
+                    "{\"fast-trace\",BvhBuildPreference::FastTrace}"),
+                std::string_view(
+                    "{\"balanced\",BvhBuildPreference::Balanced}"),
+                std::string_view(
+                    "{\"fast-build\",BvhBuildPreference::FastBuild}"),
+                std::string_view("{\"rebuild\",BlasUpdateMode::Rebuild}"),
+                std::string_view("{\"refit\",BlasUpdateMode::Refit}"),
+                std::string_view("{\"rebuild\",TlasUpdateMode::Rebuild}"),
+                std::string_view("{\"refit\",TlasUpdateMode::Refit}") })
+        {
+            RequireContains(
+                compactRepresentationDispatcher,
+                mapping,
+                "Representation command token and enum mapping");
+        }
+        RequireContains(
+            compactRepresentationDispatcher,
+            "GetWorldSpaceRepresentationInvalidation("
+            "m_ui.Representation,candidate)",
+            "Representation command invalidation classification");
+        RequireContains(
+            compactRepresentationDispatcher,
+            "m_app->InvalidateWorldSpaceRepresentation(invalidation)",
+            "Representation command invalidation request");
+
+        const std::string compactDirectionalShadowDispatcher =
+            Compact(directionalShadowDispatcher);
+        for (const std::string_view mapping : {
+                std::string_view("{\"1\",0}"),
+                std::string_view("{\"2\",1}"),
+                std::string_view("{\"4\",2}"),
+                std::string_view("{\"8\",3}"),
+                std::string_view("{\"16\",4}"),
+                std::string_view("{\"32\",5}"),
+                std::string_view("{\"64\",6}") })
+        {
+            RequireContains(
+                compactDirectionalShadowDispatcher,
+                mapping,
+                "Directional Shadow command token and enum mapping");
+        }
+        for (const std::string_view retired : {
+                std::string_view("{\"1/16\",-4}"),
+                std::string_view("{\"1/8\",-3}"),
+                std::string_view("{\"1/4\",-2}"),
+                std::string_view("{\"1/2\",-1}"),
+                std::string_view("hashed-white-noise") })
+        {
+            RequireAbsent(
+                compactDirectionalShadowDispatcher,
+                retired,
+                "retired Directional Shadow command value");
+        }
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "IsHeitzRatioEstimatorConfigurationSupported("
+            "candidate.ratioEstimator)",
+            "ratio-estimator command validation");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "candidate.ratioEstimator.rayBias,"
+            "factoryDefaults.ratioEstimator.rayBias,0.f,"
+            "HeitzRatioEstimatorMaximumRayBias",
+            "ratio-estimator ray-bias command bounds");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "candidate.ratioEstimator.hardShadows,"
+            "factoryDefaults.ratioEstimator.hardShadows",
+            "ratio-estimator hard-shadow command");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "candidate.ratioEstimator.noisePattern,"
+            "factoryDefaults.ratioEstimator.noisePattern",
+            "ratio-estimator noise-pattern command");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "candidate.ratioEstimator.animateSamples,"
+            "factoryDefaults.ratioEstimator.animateSamples",
+            "ratio-estimator sample-animation command");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "candidate.ratioEstimator.enabled,"
+            "factoryDefaults.ratioEstimator.enabled",
+            "independent ratio-estimator enable command");
+        RequireAbsent(
+            compactDirectionalShadowDispatcher,
+            "ScreenSpaceDirectionalShadows",
+            "ratio-estimator commands mutating screen-space state");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "!m_app->HasPrimaryDirectionalLight()",
+            "directional-shadow command light validation");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "!m_app->SupportsHeitzRatioEstimatorShadows()",
+            "ratio-estimator command device validation");
+
+        const std::string compactScreenSpaceShadowDispatcher =
+            Compact(screenSpaceShadowDispatcher);
+        RequireContains(
+            compactScreenSpaceShadowDispatcher,
+            "candidate.enabled,factoryDefaults.enabled",
+            "independent screen-space enable command");
+        RequireAbsent(
+            compactScreenSpaceShadowDispatcher,
+            "DirectionalShadowTechnique",
+            "retired screen-space technique synchronization");
+
         const std::string_view router = ExtractSection(
             viewer,
             "bool DispatchCommandValue(",
@@ -1603,11 +1805,13 @@ namespace
         for (const std::string_view section : {
                 std::string_view("Ui"),
                 std::string_view("General"),
+                std::string_view("Representation"),
                 std::string_view("Visibility"),
                 std::string_view("Aliasing"),
                 std::string_view("Debug"),
                 std::string_view("Sky"),
                 std::string_view("Lights"),
+                std::string_view("DirectionalShadows"),
                 std::string_view("ScreenSpaceDirectionalShadows"),
                 std::string_view("Materials") })
         {
@@ -1626,6 +1830,59 @@ namespace
             catalogSource,
             "FactoryMutationPolicy",
             "retired factory command taxonomy");
+    }
+
+    void ValidateMaterialHistoryInvalidation(std::string_view viewer)
+    {
+        const std::string_view notification = ExtractSection(
+            viewer,
+            "void NotifyMaterialCommandChanged(",
+            "void SynchronizeAntiAliasingSettings(",
+            "material mutation notification");
+        RequireOrdered(
+            notification,
+            {
+                "material->dirty = true;",
+                "InvalidateContent();",
+                "ResetImageBasedLightingHistory();"
+            },
+            "material mutation notification");
+
+        const std::string_view materialWindow = ExtractSection(
+            viewer,
+            "if (materialEditorVisible)",
+            "if (deferredMaterialInputBlocked)",
+            "Material editor mutation routing");
+        RequireContains(
+            materialWindow,
+            "[app = m_app, material, candidate]()",
+            "Material Domain deferred mutation routing");
+        RequireContains(
+            materialWindow,
+            "app->NotifyMaterialCommandChanged(material);",
+            "Material Domain history invalidation");
+        RequireOrdered(
+            materialWindow,
+            {
+                "const bool materialChanged =",
+                "donut::app::MaterialEditor(",
+                "if (materialChanged)",
+                "m_app->NotifyMaterialCommandChanged(material);"
+            },
+            "Material editor history invalidation");
+
+        const std::string_view materialDispatcher = ExtractSection(
+            viewer,
+            "bool DispatchMaterialCommandValue(",
+            "bool DispatchCommandValue(",
+            "Material command mutation routing");
+        RequireOrdered(
+            materialDispatcher,
+            {
+                "*material = candidate;",
+                "m_app->NotifyMaterialCommandChanged(material);"
+            },
+            "Material command history invalidation");
     }
 
     void ValidateUiSafety(
@@ -1907,6 +2164,7 @@ int main(int argc, char** argv)
     ValidateVisibilityPbrDecoupling(viewer);
     ValidateScreenSpaceShadows(viewer, shadowSettings, catalog);
     ValidateCatalogAndDispatch(viewer, catalog);
+    ValidateMaterialHistoryInvalidation(viewer);
     ValidateUiSafety(viewer, donutAppOverride, imguiUiOverride);
 
     if (g_FailureCount != 0)

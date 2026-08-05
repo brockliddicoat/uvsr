@@ -21,11 +21,13 @@ namespace uvsr
     {
         Ui,
         General,
+        Representation,
         Visibility,
         Aliasing,
         Debug,
         Sky,
         Lights,
+        DirectionalShadows,
         ScreenSpaceDirectionalShadows,
         Materials,
         Footer,
@@ -117,6 +119,11 @@ namespace uvsr
         Value("scene.current", Kind::DynamicSelection, Section::General, "runtime scene filename or unique display name", false, true),
         Action("open-scene-folder", Section::General, "open the active scene directory"),
 
+        // Representation.
+        Value("representation.bvh.build-preference", Kind::Enum, Section::Representation, "fast-trace|balanced|fast-build"),
+        Value("representation.blas.update-mode", Kind::Enum, Section::Representation, "rebuild|refit"),
+        Value("representation.tlas.update-mode", Kind::Enum, Section::Representation, "rebuild|refit"),
+
         // Visibility.
         Value("visibility.enabled", Kind::Boolean, Section::Visibility, "on|off"),
         Value("visibility.quality", Kind::Enum, Section::Visibility, "low|medium|high|ultra|custom"),
@@ -126,7 +133,7 @@ namespace uvsr
         Value("visibility.radius", Kind::Float, Section::Visibility, "float 0.1..10"),
         Value("visibility.thickness", Kind::Float, Section::Visibility, "float 0.01..2"),
         Value("visibility.distribution", Kind::Float, Section::Visibility, "float 0.25..4"),
-        Value("visibility.noise", Kind::Enum, Section::Visibility, "permutated-white-noise|hashed-white-noise|void-cluster-blue-noise"),
+        Value("visibility.noise", Kind::Enum, Section::Visibility, "permutated-white-noise|void-cluster-blue-noise"),
         Value("visibility.ao.enabled", Kind::Boolean, Section::Visibility, "on|off"),
         Value("visibility.ao.strength", Kind::Float, Section::Visibility, "float 0..4"),
         Value("visibility.ao.precision", Kind::Enum, Section::Visibility, "16-bit|32-bit"),
@@ -193,7 +200,7 @@ namespace uvsr
         Value("light.selected.elevation", Kind::Float, Section::Lights, "degrees -90..90; directional or spot", true, true),
         Value("light.selected.color", Kind::Float3, Section::Lights, "linear rgb float3", true, true),
         Value("light.selected.irradiance", Kind::Float, Section::Lights, "float 0..100; directional", true, true),
-        Value("light.selected.angular-size", Kind::Float, Section::Lights, "float 0.1..20; directional", true, true),
+        Value("light.selected.angular-size", Kind::Float, Section::Lights, "float 0..20; directional", true, true),
         Value("light.selected.radius", Kind::Float, Section::Lights, "float 0.01..1; point or spot", true, true),
         Value("light.selected.intensity", Kind::Float, Section::Lights, "float 0..100; point or spot", true, true),
         Value("light.selected.inner-angle", Kind::Float, Section::Lights, "degrees 0..180; spot", true, true),
@@ -211,6 +218,14 @@ namespace uvsr
         Value("light.selected.flashlight.edge-softness", Kind::Float, Section::Lights, "float 0..1; flashlight_1", true, true),
         Value("light.selected.flashlight.range", Kind::Float, Section::Lights, "meters 2..100; flashlight_1", true, true),
         Value("light.selected.flashlight.camera-offset", Kind::Float, Section::Lights, "meters 0..0.4; flashlight_1", true, true),
+
+        // Directional Shadows.
+        Value("shadows.ratio-estimator.enabled", Kind::Boolean, Section::DirectionalShadows, "on|off"),
+        Value("shadows.ratio-estimator.hard-shadows", Kind::Boolean, Section::DirectionalShadows, "on|off"),
+        Value("shadows.ratio-estimator.samples-per-pixel", Kind::Enum, Section::DirectionalShadows, "1|2|4|8|16|32|64"),
+        Value("shadows.ratio-estimator.noise-pattern", Kind::Enum, Section::DirectionalShadows, "permutated-white-noise|void-cluster-blue-noise"),
+        Value("shadows.ratio-estimator.animate-samples", Kind::Boolean, Section::DirectionalShadows, "on|off"),
+        Value("shadows.ratio-estimator.ray-bias", Kind::Float, Section::DirectionalShadows, "world units 0..0.1"),
 
         // Screen-Space Directional Shadows.
         Value("shadows.screen-space-directional.enabled", Kind::Boolean, Section::ScreenSpaceDirectionalShadows, "on|off"),

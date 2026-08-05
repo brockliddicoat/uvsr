@@ -38,9 +38,7 @@ static_assert(sizeof(ScreenSpaceVisibilityConstants) % 16u == 0u);
 static_assert(static_cast<uint32_t>(
     uvsr::VisibilitySampleScheduler::PermutatedWhiteNoise) == 0u);
 static_assert(static_cast<uint32_t>(
-    uvsr::VisibilitySampleScheduler::HashedWhiteNoise) == 1u);
-static_assert(static_cast<uint32_t>(
-    uvsr::VisibilitySampleScheduler::VoidClusterBlueNoise) == 2u);
+    uvsr::VisibilitySampleScheduler::VoidClusterBlueNoise) == 1u);
 static_assert(static_cast<uint32_t>(
     uvsr::VisibilityReconstructionMode::PackedDepthNormal) == 1u);
 static_assert(static_cast<uint32_t>(
@@ -841,7 +839,7 @@ namespace uvsr
             view->IsOrthographicProjection() ? 1u : 0u;
         constants.resolutionScale = resolutionScale;
         constants.sampleScheduler = std::min(
-            static_cast<uint32_t>(settings.sampling.scheduler), 2u);
+            static_cast<uint32_t>(settings.sampling.scheduler), 1u);
         constants.visibilityDebugView = std::min(
             static_cast<uint32_t>(settings.debugView), 3u);
         constants.packedEdgeMode = packedEdgesEnabled

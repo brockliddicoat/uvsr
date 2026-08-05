@@ -62,7 +62,8 @@ Texture2D t_ResolvedBackground : register(t17);
 Texture2D t_VisibilityBaseLighting : register(t18);
 Texture2D t_VisibilityComposite : register(t19);
 #endif
-Texture2D<float> t_DirectionalVisibility : register(t20);
+Texture2D<float4> t_ScreenSpaceDirectionalVisibility : register(t20);
+Texture2D<float4> t_RatioEstimatorDirectionalVisibility : register(t21);
 
 VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_Output : register(u0);
@@ -74,16 +75,41 @@ float GetRandom(float2 position)
     return g_Deferred.noisePattern[y][x];
 }
 
-float GetDirectionalLightVisibility(
+float3 DecodeDirectionalLightVisibility(float4 encoded, uint encoding)
+{
+    if (any(!isfinite(encoded)))
+        return 1.0f;
+    if (encoding == UVSR_DIRECTIONAL_VISIBILITY_RGB_RGBA16F)
+    {
+        return saturate(encoded.rgb);
+    }
+    return saturate(encoded.r).xxx;
+}
+
+float3 GetDirectionalLightVisibility(
     uint lightIndex,
     int2 pixelPosition)
 {
+    float3 visibility = 1.0f;
     if (int(lightIndex) ==
-        g_PbrDeferred.directionalVisibilityLightIndex)
+        g_PbrDeferred.directionalVisibilityLightIndices.x)
     {
-        return saturate(t_DirectionalVisibility[pixelPosition]);
+        visibility = min(
+            visibility,
+            DecodeDirectionalLightVisibility(
+                t_ScreenSpaceDirectionalVisibility[pixelPosition],
+                g_PbrDeferred.directionalVisibilityEncodings.x));
     }
-    return 1.0f;
+    if (int(lightIndex) ==
+        g_PbrDeferred.directionalVisibilityLightIndices.y)
+    {
+        visibility = min(
+            visibility,
+            DecodeDirectionalLightVisibility(
+                t_RatioEstimatorDirectionalVisibility[pixelPosition],
+                g_PbrDeferred.directionalVisibilityEncodings.y));
+    }
+    return visibility;
 }
 
 float EvaluateLightVisibility(
@@ -358,10 +384,11 @@ bool ShadeDeferredSample(
         {
             LightConstants light =
                 g_Deferred.lights[lightIndex];
-            float visibility = GetDirectionalLightVisibility(
+            float3 directionalModulation =
+                GetDirectionalLightVisibility(
                 lightIndex,
                 pixelPosition);
-            if (!(visibility > 0.0f))
+            if (!any(directionalModulation > 0.0f))
                 continue;
 
             PbrLightSample lightSample = SamplePbrLight(
@@ -377,11 +404,11 @@ bool ShadeDeferredSample(
                     lightSample.directionToLight))
                 continue;
 
-            visibility = EvaluateLightVisibility(
+            float visibility = EvaluateLightVisibility(
                 light,
                 surfaceWorldPosition,
                 sinCosRotation,
-                visibility);
+                1.0f);
             if (!(visibility > 0.0f))
                 continue;
             lightSample.visibility = visibility;
@@ -390,8 +417,8 @@ bool ShadeDeferredSample(
                     preparedMaterial,
                     preparedSurface,
                     lightSample);
-            directDiffuse += direct.diffuse;
-            directSpecular += direct.specular;
+            directDiffuse += direct.diffuse * directionalModulation;
+            directSpecular += direct.specular * directionalModulation;
         }
     }
 

@@ -68,7 +68,7 @@ public:
         nvrhi::ICommandList* commandList,
         const donut::engine::ICompositeView& compositeView,
         const donut::render::DeferredLightingPass::Inputs& inputs,
-        const uvsr::DirectionalLightVisibility& directionalLightVisibility,
+        const uvsr::DirectionalLightVisibilities& directionalLightVisibilities,
         const donut::engine::LightProbe* environment,
         nvrhi::ITexture* sourceRadianceOutput,
         bool separateIndirect,

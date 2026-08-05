@@ -3,14 +3,20 @@
 
 #include <donut/shaders/deferred_lighting_cb.h>
 
+#define UVSR_DIRECTIONAL_VISIBILITY_SCALAR_R8 0u
+#define UVSR_DIRECTIONAL_VISIBILITY_RGB_RGBA16F 1u
+
 struct PbrDeferredLightingConstants
 {
     DeferredLightingConstants deferred;
 
     int separateIndirect;
     uint lightingDebugView;
-    int directionalVisibilityLightIndex;
     uint visibilityDebugView;
+    uint padding0;
+
+    int2 directionalVisibilityLightIndices;
+    uint2 directionalVisibilityEncodings;
 };
 
 #endif // UVSR_PBR_DEFERRED_LIGHTING_CB_H

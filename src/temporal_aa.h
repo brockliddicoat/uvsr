@@ -72,6 +72,14 @@ namespace uvsr
             return m_PipelinesReady;
         }
 
+        // Resolves and creates the exact pipeline permutation needed by the
+        // upcoming frame before any producer commits TAA-dependent history.
+        [[nodiscard]] bool PrepareForRender(
+            const ResolvedAntiAliasingSettings& settings,
+            bool enableSharpen,
+            bool deferSharpenToPresentation,
+            float sharpness);
+
         void ResetHistory();
 
         [[nodiscard]] nvrhi::ITexture* Render(
@@ -83,6 +91,11 @@ namespace uvsr
             bool enableSharpen,
             bool deferSharpenToPresentation,
             float sharpness);
+
+        [[nodiscard]] bool DidRenderThisFrame() const
+        {
+            return m_RenderedThisFrame;
+        }
 
         [[nodiscard]] nvrhi::ITexture* SharpenPresentation(
             nvrhi::ICommandList* commandList,
@@ -167,6 +180,7 @@ namespace uvsr
         TemporalAATimings m_Timings;
         bool m_ReportedMissingComputePermutation = false;
         bool m_ReportedMinimumFallback = false;
+        bool m_RenderedThisFrame = false;
         uint32_t m_PipelinePreparationStep = 0u;
         bool m_PipelinesReady = false;
 
