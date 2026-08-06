@@ -155,11 +155,17 @@ function(uvsr_replace_target_sources
     foreach(relative_path IN LISTS ARGN)
         set(original_source "${source_root}/${relative_path}")
         list(FIND target_sources "${original_source}" source_index)
+        set(source_to_remove "${original_source}")
+        if (source_index EQUAL -1)
+            # Donut appends backend sources with target-relative paths.
+            list(FIND target_sources "${relative_path}" source_index)
+            set(source_to_remove "${relative_path}")
+        endif()
         if (source_index EQUAL -1)
             message(FATAL_ERROR
                 "Cannot replace ${original_source} in target ${target}")
         endif()
-        list(REMOVE_ITEM target_sources "${original_source}")
+        list(REMOVE_ITEM target_sources "${source_to_remove}")
     endforeach()
     set_property(TARGET "${target}" PROPERTY SOURCES "${target_sources}")
 
@@ -200,6 +206,7 @@ uvsr_stage_patched_sources(
     include/donut/app/UserInterfaceUtils.h
     src/app/ApplicationBase.cpp
     src/app/DeviceManager.cpp
+    src/app/dx12/DeviceManager_DX12.cpp
     src/app/UserInterfaceUtils.cpp)
 
 set(UVSR_IMGUI_OVERRIDE_DIR
@@ -227,6 +234,7 @@ uvsr_replace_target_sources(
     "${UVSR_DONUT_APP_OVERRIDE_DIR}"
     src/app/ApplicationBase.cpp
     src/app/DeviceManager.cpp
+    src/app/dx12/DeviceManager_DX12.cpp
     src/app/UserInterfaceUtils.cpp)
 target_include_directories(donut_app BEFORE PUBLIC
     "${UVSR_DONUT_APP_OVERRIDE_DIR}/include")
@@ -562,6 +570,15 @@ target_include_directories(
 add_test(
     NAME uvsr_command_line_options_reference
     COMMAND uvsr_command_line_options_tests)
+
+add_executable(uvsr_adaptive_sync_tests
+    tests/adaptive_sync_tests.cpp)
+target_include_directories(
+    uvsr_adaptive_sync_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(
+    NAME uvsr_adaptive_sync_reference
+    COMMAND uvsr_adaptive_sync_tests)
 
 add_executable(uvsr_diffuse_environment_asset_tests
     tests/diffuse_environment_asset_tests.cpp)

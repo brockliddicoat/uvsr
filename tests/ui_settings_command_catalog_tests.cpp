@@ -53,14 +53,14 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 140u);
+    static_assert(UiSettingsCommandCatalog.size() == 141u);
     static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 12u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
         static_cast<std::uint8_t>(UiSettingsCommandVerb::Run));
 
     constexpr std::array<std::size_t, 12> ExpectedSectionCounts = {
         5u,  // UI
-        5u,  // General
+        6u,  // General
         3u,  // Representation
         19u, // Visibility
         31u, // Anti-Aliasing
@@ -190,7 +190,7 @@ int main()
     }
 
     Require(names.size() == UiSettingsCommandCatalog.size(),
-        "the compact catalog must contain 138 unique controls");
+        "the compact catalog must contain 141 unique controls");
     Require(sectionCounts == ExpectedSectionCounts,
         "section counts must match the current UI");
     Require(actionCount == 4u,
@@ -211,6 +211,9 @@ int main()
         Require(definition && definition->domain == domain,
             "command domain must exactly match its visible values");
     };
+    requireDomain(
+        "gpu.adaptive-sync",
+        "off|vendor-agnostic|nvidia-exclusive");
     requireDomain("visibility.noise",
         "permutated-white-noise|void-cluster-blue-noise");
     requireDomain("visibility.reconstruction",

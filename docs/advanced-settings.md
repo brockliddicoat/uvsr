@@ -7,9 +7,10 @@ on every launch and are not persisted.
 
 The Settings panel contains ten top-level drawers in this order:
 
-1. **General** selects the interface skin, graphics adapter, camera, and scene.
+1. **General** selects the interface skin, graphics adapter, Adaptive Sync,
+   camera, and scene.
 2. **Representation** configures the shared BVH, BLAS, and TLAS policies.
-3. **Visibility** controls ambient occlusion, indirect diffuse, sampling, and
+3. **Diffuse** controls Occlusion, Illumination, sampling, and
    reconstruction.
 4. **Buffers** owns the two retained Visibility precision choices.
 5. **Statistics** reports a compact frame summary and a detailed selected effect.
@@ -18,10 +19,25 @@ The Settings panel contains ten top-level drawers in this order:
 7. **Debug** combines world appearance and effect-specific information views.
 8. **Sky** configures the global environment and ambient fill.
 9. **Lights** edits scene lights and the camera flashlight.
-10. **Shadows** selects and configures one directional-shadow technique.
+10. **Shadows** configures independent screen-space and ratio-estimator
+    directional shadows.
 
-Escape opens or closes Settings. A reset icon beside a control restores that
-control or group to its current factory value.
+Escape or `~` opens or closes Settings. A reset icon beside a control restores
+that control or group to its current factory value. Q moves the camera up, E
+moves it down, and the retired Space and Shift vertical bindings are inert.
+
+## General
+
+**Graphics Adapter** selects the DirectX 12 device and restarts UVSR when it
+changes. **Adaptive Sync** follows it directly and offers **Off**, **Vendor
+Agnostic**, and **Nvidia Exclusive**. Off suppresses the windowed DXGI Present
+allow-tearing flag. Both enabled choices request the same Windows
+tearing-compatible presentation path while VSync remains disabled; Nvidia
+Exclusive is offered only on NVIDIA adapters. Windows, the driver, and the
+display decide whether variable refresh actually engages, and UVSR cannot
+confirm that state. Systems without DXGI tearing-present support expose Off
+only. The reset restores Nvidia Exclusive on a supported NVIDIA adapter, Vendor
+Agnostic on any other supported adapter, and Off when the path is unsupported.
 
 ## Representation
 
@@ -39,10 +55,11 @@ Changing the hierarchy preference or BLAS policy rebuilds both levels; changing
 only the TLAS policy preserves BLAS allocations. Reset and invalidation release
 consumer bindings before replacing acceleration structures.
 
-## Visibility
+## Diffuse
 
-Visibility is independent from PBR, lights, sky, shadows, and anti-aliasing.
-Enabling or disabling it changes only the visibility pass and its resources.
+Diffuse is independent from PBR, lights, sky, shadows, and anti-aliasing.
+Enabling or disabling it changes only the Screen-Space Visibility pass and its
+resources.
 
 The four quality recipes configure the supported route. The selector shows
 **Low**, **Medium**, **High**, or **Ultra**. Editing an owned value preserves
@@ -53,9 +70,10 @@ originating recipe value.
 The main controls are:
 
 - full, half, or quarter resolution;
-- ambient occlusion enable and strength;
-- one-bounce indirect diffuse enable and intensity;
-- Projected Angle, Solid Angle, or Cosine Weighted estimation;
+- Occlusion enable and strength;
+- one-bounce Illumination enable and intensity;
+- **Bitmask Approximation**, **Bitmask Directional Visibility**, or **Bitmask
+  Cosine Visibility** estimation;
 - Permutated White Noise or Void Cluster Blue Noise;
 - 1 through 64 samples, radius, thickness, and distribution;
 - one direct-or-guide-aware reconstruction mode, labeled **Full Resolution** at
@@ -64,14 +82,14 @@ The main controls are:
   Leak-Controlled**; and
 - optional spatial reconstruction.
 
-Ambient Occlusion, Indirect Diffuse, Sampling, and Reconstruction are animated
+Occlusion, Illumination, Sampling, and Reconstruction are animated
 collapsible groups. Reconstruction starts collapsed when tracing at full
 resolution and expanded when a reduced-resolution trace needs reconstruction;
 after the first interaction, the user's disclosure choice is preserved. Every
 retained setting has a concise hover explanation, and dropdown widths preserve
 both the value and its visible label.
 
-Visibility has no private temporal accumulation, depth hierarchy, recursive
+Diffuse has no private temporal accumulation, depth hierarchy, recursive
 diffuse bounces, resurrection history, benchmark planner, fused ambient-
 occlusion-only profile, or separate contrast/power axis.
 
@@ -79,11 +97,11 @@ occlusion-only profile, or separate contrast/power axis.
 
 Buffers is a compact precision surface for the two Visibility outputs that
 remain in production. **Performance** selects 16-bit floating point for both;
-**Maximum Precision** selects 32-bit for both; **Compact Occlusion** keeps
-ambient occlusion at 16-bit and indirect diffuse at 32-bit; **Compact
-Indirect** uses the opposite combination. The two labeled precision selectors
-remain directly editable and participate in Visibility profile custom/reset
-tracking.
+**Maximum Precision** selects 32-bit for both; **Compact Occlusion** keeps the
+Occlusion output at 16-bit and the Illumination output at 32-bit; **Compact
+Indirect** uses the opposite combination. The two precision selectors are
+labeled **Occlusion** and **Illumination**, remain directly editable, and
+participate in Visibility profile custom/reset tracking.
 
 ## Aliasing
 
@@ -192,7 +210,7 @@ on the local `codex/svsm-csm-preserved` branch.
 
 ## Statistics
 
-Statistics condenses the six general values into one dash-separated line and
+Statistics condenses the six general values into one slash-separated line and
 shows one selected effect at a time in a labeled, striped two-column table. The
 selector contains **Complete
 Renderer**, **Scene Setup**, **Geometry**, **Direct Lighting**, **Screen-Space
@@ -226,12 +244,13 @@ input shows a blue `Success` or saturated-crimson `Error` result until the next
 command is typed; no floating result bar can cover Settings. When the complete result is
 longer than the input, a trailing details button deliberately opens a bounded,
 scrollable, selectable read-only view. The catalog mirrors the current
-UI-backed settings with 137 entries: 133 values and four actions. Type a section
+UI-backed settings with 141 entries: 137 values and four actions. Type a section
 prefix such as
 `representation.`, `visibility.`, `anti-aliasing.taa.`, `anti-aliasing.fxaa.`,
 `anti-aliasing.cmaa2.`,
 `anti-aliasing.msaa.`, `debug.`, or `shadows.` and use completion to inspect the
-exact paths and accepted values.
+exact paths and accepted values. A `list` result uses `/` between each row's
+supported verbs and value domain.
 
 Renderer mutations are rejected while a scene load owns renderer resources.
 Interface-only commands remain available. Accepted renderer changes use the
@@ -258,7 +277,7 @@ shadow-technique component builds were removed.
 ## Runtime Validation
 
 Validate a candidate with the exact executable from its isolated build tree.
-At minimum, load a bundled scene and exercise Visibility, each noise pattern,
+At minimum, load a bundled scene and exercise Diffuse, each noise pattern,
 the independent AA toggles, Debug composition, sky, lights, the flashlight,
 all four directional-shadow enable combinations, Ratio Estimator on a
 single-sample target, and the Representation rebuild/refit choices. Exercise

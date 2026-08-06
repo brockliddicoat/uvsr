@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 71,628 non-blank source lines.
+**First-Party Lines of Code:** 72,265 non-blank source lines.
 
-**Third-Party Lines of Code:** 388,209 non-blank source lines.
+**Third-Party Lines of Code:** 388,208 non-blank source lines.
 
-**Total Lines of Code:** 459,837 non-blank source lines.
+**Total Lines of Code:** 460,473 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -59,7 +59,7 @@ visibility, anti-aliasing, and shadow-rendering systems.
   thread/wave isolation remains a deliberate full-image diagnostic.
 - **Compact Runtime Surface.** The first-party build compiles 259 core shader
   tasks plus 46 Screen-Space Directional Shadow tasks, for 305 first-party and
-  381 integrated tasks after Donut's 76. Ten Settings drawers and 137 command
+  381 integrated tasks after Donut's 76. Ten Settings drawers and 141 command
   entries retain the active product controls without benchmark planners or
   dormant profiles.
 - **Source-Backed Optimization Decisions.** Retired shader families, rejected
@@ -140,9 +140,15 @@ At startup, UVSR selects the DirectX 12 adapter with the most dedicated video
 memory. A different compatible adapter can be selected from **General >
 Graphics Adapter**, which restarts the renderer on that device.
 
+**General > Adaptive Sync** selects **Off**, **Vendor Agnostic**, or **Nvidia
+Exclusive**. The enabled choices request UVSR's windowed DXGI
+tearing-compatible presentation path while VSync remains disabled; the
+Nvidia-exclusive choice is available only on NVIDIA adapters. Windows, the
+driver, and the display decide whether adaptive refresh actually engages.
+
 ### Useful Controls
 
-- Press **Escape** to open or close Settings.
+- Press **Escape** or **~** to open or close Settings.
 - Press **/** to open or close the command interface. Enter applies, Tab
   completes, Up/Down recalls history, and Escape cancels the active edit without
   closing the bar. Slash-separated tips appear inside the single-row input only
@@ -157,6 +163,8 @@ Graphics Adapter**, which restarts the renderer on that device.
   pixel inspection.
 - Press **V** to level camera roll with an exponential overshoot-and-settle
   motion while preserving camera position and view direction.
+- Use **Q** to move the camera up and **E** to move it down. Space and Shift are
+  not vertical-motion bindings.
 - Use **General > Camera Location > Position 1** for the standardized Sponza
   view.
 

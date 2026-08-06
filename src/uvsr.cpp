@@ -95,6 +95,7 @@
 #include "image_based_lighting_shared.h"
 #include "screen_space_directional_shadows.h"
 #include "gpu_performance_monitor.h"
+#include "adaptive_sync.h"
 #include "camera_collision.h"
 #include "camera_controllers.h"
 #include "cmaa2.h"
@@ -1131,6 +1132,8 @@ struct UIData
         PixelZoomMode::Off;
     std::vector<GpuAdapterChoice>       GpuAdapterChoices;
     int                                 ActiveGpuAdapterIndex = -1;
+    AdaptiveSyncMode                    AdaptiveSync =
+        AdaptiveSyncMode::Off;
     AntiAliasingSettings                AntiAliasing;
     bool                                TemporalAaSharpenEnabled = false;
     float                               TemporalAaSharpness =
@@ -1839,7 +1842,6 @@ public:
             GLFW_KEY_D,
             GLFW_KEY_W,
             GLFW_KEY_S,
-            GLFW_KEY_SPACE,
             GLFW_KEY_LEFT,
             GLFW_KEY_RIGHT,
             GLFW_KEY_UP,
@@ -1847,8 +1849,6 @@ public:
             GLFW_KEY_X,
             GLFW_KEY_C,
             GLFW_KEY_V,
-            GLFW_KEY_LEFT_SHIFT,
-            GLFW_KEY_RIGHT_SHIFT,
             GLFW_KEY_LEFT_CONTROL,
             GLFW_KEY_RIGHT_CONTROL,
             GLFW_KEY_LEFT_ALT
@@ -8614,6 +8614,46 @@ private:
         return false;
     }
 
+    const GpuAdapterChoice* GetActiveGpuAdapterChoice() const
+    {
+        const auto active = std::find_if(
+            m_ui.GpuAdapterChoices.begin(),
+            m_ui.GpuAdapterChoices.end(),
+            [this](const GpuAdapterChoice& adapter)
+            {
+                return adapter.adapterIndex ==
+                    m_ui.ActiveGpuAdapterIndex;
+            });
+        return active != m_ui.GpuAdapterChoices.end()
+            ? &*active
+            : nullptr;
+    }
+
+    AdaptiveSyncMode GetDefaultAdaptiveSyncMode() const
+    {
+        const GpuAdapterChoice* adapter = GetActiveGpuAdapterChoice();
+        return DefaultAdaptiveSyncMode(
+            adapter ? adapter->vendorId : 0u,
+            GetDeviceManager()->IsPresentAllowTearingSupported());
+    }
+
+    bool IsAdaptiveSyncModeAvailableForActiveAdapter(
+        AdaptiveSyncMode mode) const
+    {
+        const GpuAdapterChoice* adapter = GetActiveGpuAdapterChoice();
+        return IsAdaptiveSyncModeAvailable(
+            mode,
+            adapter ? adapter->vendorId : 0u,
+            GetDeviceManager()->IsPresentAllowTearingSupported());
+    }
+
+    void ApplyAdaptiveSyncMode(AdaptiveSyncMode mode)
+    {
+        m_ui.AdaptiveSync = mode;
+        GetDeviceManager()->SetPresentAllowTearing(
+            AdaptiveSyncRequestsPresentTearing(mode));
+    }
+
     bool DispatchGeneralCommandValue(
         const UiSettingsCommandDefinition& definition,
         CommandValueOperation operation,
@@ -8691,6 +8731,40 @@ private:
             glfwSetWindowShouldClose(
                 GetDeviceManager()->GetWindow(),
                 GLFW_TRUE);
+            return true;
+        }
+        if (path == "gpu.adaptive-sync")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, AdaptiveSyncMode>, 3> Options = {{
+                { "off", AdaptiveSyncMode::Off },
+                { "vendor-agnostic", AdaptiveSyncMode::VendorAgnostic },
+                { "nvidia-exclusive", AdaptiveSyncMode::NvidiaExclusive }
+            }};
+            AdaptiveSyncMode candidate = m_ui.AdaptiveSync;
+            if (!ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate,
+                    GetDefaultAdaptiveSyncMode(),
+                    Options,
+                    value,
+                    error))
+            {
+                return false;
+            }
+            if (operation == CommandValueOperation::Get)
+                return true;
+            if (!IsAdaptiveSyncModeAvailableForActiveAdapter(candidate))
+            {
+                error = GetDeviceManager()->IsPresentAllowTearingSupported()
+                    ? "Nvidia Exclusive requires an NVIDIA graphics adapter."
+                    : "Adaptive Sync requires DXGI tearing-present support.";
+                return false;
+            }
+            ApplyAdaptiveSyncMode(candidate);
+            value = std::string(AdaptiveSyncModeToken(candidate));
             return true;
         }
         if (path == "camera.mode")
@@ -11830,7 +11904,7 @@ private:
                 listing += definition.name;
                 listing += " [";
                 listing += GetSettingsCommandVerbList(definition);
-                listing += "] - ";
+                listing += "] / ";
                 listing += definition.domain;
 
                 std::vector<std::string> dynamicValues;
@@ -12699,11 +12773,11 @@ private:
     static std::string BuildPerformanceLine(
         const std::array<std::string, 6>& values)
     {
-        return values[0] + " - " +
-            values[5] + " - " +
-            values[3] + " - " +
-            values[4] + " - " +
-            values[1] + " - " +
+        return values[0] + " / " +
+            values[5] + " / " +
+            values[3] + " / " +
+            values[4] + " / " +
+            values[1] + " / " +
             values[2];
     }
 
@@ -12711,11 +12785,11 @@ private:
         const std::array<std::string, 6>& values)
     {
         return {{
-            values[0] + " - " +
-                values[5] + " - " +
+            values[0] + " / " +
+                values[5] + " / " +
                 values[3],
-            values[4] + " - " +
-                values[1] + " - " +
+            values[4] + " / " +
+                values[1] + " / " +
                 values[2]
         }};
     }
@@ -13289,6 +13363,10 @@ protected:
     {
         const bool captured = ImGui_Renderer::KeyboardUpdate(
             key, scancode, action, mods);
+        const bool settingsShortcutOwnedByUi =
+            ImGui::GetIO().WantTextInput ||
+            ImGui::IsAnyItemActive() ||
+            ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
         const bool plainCommandShortcut =
             (mods & (GLFW_MOD_CONTROL |
                 GLFW_MOD_ALT |
@@ -13319,9 +13397,10 @@ protected:
             return true;
         }
 
-        if (key == GLFW_KEY_ESCAPE &&
+        if ((key == GLFW_KEY_ESCAPE ||
+                key == GLFW_KEY_GRAVE_ACCENT) &&
             action == GLFW_PRESS &&
-            !ImGui::GetIO().WantTextInput)
+            !settingsShortcutOwnedByUi)
         {
             m_ui.ShowUI = !m_ui.ShowUI;
             return true;
@@ -13547,7 +13626,7 @@ protected:
         const ImGuiStyle& style = ImGui::GetStyle();
         const float settingsControlWidth =
             ImGui::CalcTextSize(
-                "Cosine-Weighted Solid Angle").x +
+                "Bitmask Directional Visibility").x +
             style.FramePadding.x * 2.f;
 
         const char* rendererString = GetDeviceManager()->GetRendererString();
@@ -13893,6 +13972,83 @@ protected:
                 "Choose the graphics processor. UVSR restarts after a change.");
         }
 
+        ImGui::TextUnformatted("Adaptive Sync");
+        if (DrawPresetResetIcon(
+                "Adaptive Sync",
+                m_ui.AdaptiveSync != GetDefaultAdaptiveSyncMode()))
+        {
+            QueueDeferredControlUiAction(
+                [this]()
+                {
+                    ApplyAdaptiveSyncMode(
+                        GetDefaultAdaptiveSyncMode());
+                });
+        }
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (BeginRoundedCombo(
+                "##AdaptiveSync",
+                AdaptiveSyncModeLabel(m_ui.AdaptiveSync).data()))
+        {
+            for (const AdaptiveSyncMode candidate : AdaptiveSyncModeValues)
+            {
+                const bool available =
+                    IsAdaptiveSyncModeAvailableForActiveAdapter(candidate);
+                const bool selected = candidate == m_ui.AdaptiveSync;
+                if (!available)
+                    ImGui::BeginDisabled();
+                DrawDeferredDropdownOption(
+                    AdaptiveSyncModeLabel(candidate).data(),
+                    AdaptiveSyncModeLabel(candidate).data(),
+                    selected,
+                    [this, candidate]()
+                    {
+                        ApplyAdaptiveSyncMode(candidate);
+                    });
+                if (!available)
+                {
+                    ImGui::SetItemTooltip(
+                        GetDeviceManager()->IsPresentAllowTearingSupported()
+                            ? "Nvidia Exclusive is available only on NVIDIA "
+                                "graphics adapters."
+                            : "This mode requires DXGI tearing-present "
+                                "support on the active system.");
+                    ImGui::EndDisabled();
+                }
+                else
+                {
+                    switch (candidate)
+                    {
+                    case AdaptiveSyncMode::Off:
+                        ImGui::SetItemTooltip(
+                            "Suppress the DXGI Present allow-tearing flag.");
+                        break;
+                    case AdaptiveSyncMode::VendorAgnostic:
+                        ImGui::SetItemTooltip(
+                            "Request the generic Windows variable-refresh "
+                            "presentation path on any compatible adapter.");
+                        break;
+                    case AdaptiveSyncMode::NvidiaExclusive:
+                        ImGui::SetItemTooltip(
+                            "Expose the shared Windows variable-refresh "
+                            "request only when the active adapter is NVIDIA; "
+                            "the driver and display decide whether it engages.");
+                        break;
+                    case AdaptiveSyncMode::Count:
+                        break;
+                    }
+                }
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip(
+            "Control UVSR's windowed DXGI tearing-compatible Present policy. "
+            "VSync remains disabled; both adaptive choices request the same "
+            "Windows path, while Nvidia Exclusive is vendor-gated. Windows, "
+            "the driver, and the display decide whether adaptive refresh "
+            "actually engages, and UVSR cannot confirm it.");
+
         ImGui::TextUnformatted("Camera Mode");
         if (DrawPresetResetIcon(
                 "Camera Mode",
@@ -13921,7 +14077,7 @@ protected:
             ImGui::EndCombo();
         }
         ImGui::SetItemTooltip(
-            "Choose Freelook or Locked. Space moves up, Shift moves "
+            "Choose Freelook or Locked. Q moves up, E moves "
             "down, X/C roll, and V levels the roll.");
 
         if (m_app->HasSponzaCameraLocations())
@@ -14485,13 +14641,13 @@ protected:
             }
         };
 
-        const bool indirectLightingOpen = DrawCollapsingHeader(
-            "Visibility",
-            "Configure ambient occlusion, indirect diffuse, sampling, "
+        const bool diffuseOpen = DrawCollapsingHeader(
+            "Diffuse",
+            "Configure occlusion, illumination, sampling, "
             "reconstruction, and buffer precision.");
-        if (indirectLightingOpen)
+        if (diffuseOpen)
         {
-            BeginDrawerBody("##VisibilityBody", settingsControlWidth);
+            BeginDrawerBody("##DiffuseBody", settingsControlWidth);
             ScreenSpaceVisibilitySettings& visibility =
                 m_ui.ScreenSpaceVisibility;
             const auto finishVisibilityEdit =
@@ -14513,7 +14669,7 @@ protected:
             if (ImGui::Checkbox("Enabled", &visibility.enabled))
                 finishVisibilityEdit(visibility);
             ImGui::SetItemTooltip(
-                "Enable screen-space ambient occlusion and indirect diffuse. "
+                "Enable screen-space occlusion and illumination. "
                 "Other lighting and material effects remain independent.");
             if (DrawPresetResetIcon(
                     "VisibilityEnabled",
@@ -14543,10 +14699,10 @@ protected:
                     profilePreview.c_str()))
             {
                 static constexpr const char* ProfileTooltips[] = {
-                    "Quarter-resolution projected-angle sampling with eight samples, Void Cluster Blue Noise, joint-bilateral reconstruction, and 16-bit buffers.",
-                    "Half-resolution solid-angle sampling with eight samples, Void Cluster Blue Noise, joint-bilateral reconstruction, and 16-bit buffers.",
-                    "Full-resolution solid-angle sampling with twenty samples, Void Cluster Blue Noise, and 16-bit buffers.",
-                    "Full-resolution solid-angle sampling with forty-eight samples, Void Cluster Blue Noise, and 32-bit buffers."
+                    "Quarter-resolution Bitmask Approximation with eight samples, Void Cluster Blue Noise, joint-bilateral reconstruction, and 16-bit buffers.",
+                    "Half-resolution Bitmask Directional Visibility with eight samples, Void Cluster Blue Noise, joint-bilateral reconstruction, and 16-bit buffers.",
+                    "Full-resolution Bitmask Directional Visibility with twenty samples, Void Cluster Blue Noise, and 16-bit buffers.",
+                    "Full-resolution Bitmask Directional Visibility with forty-eight samples, Void Cluster Blue Noise, and 32-bit buffers."
                 };
                 for (int index = 0;
                     index < static_cast<int>(std::size(QualityLabels));
@@ -14568,7 +14724,7 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Choose a complete visibility recipe. Individual changes "
+                "Choose a complete diffuse recipe. Individual changes "
                 "retain the originating profile and append (Custom); the "
                 "circular arrow restores the complete High recipe.");
             if (DrawPresetResetIcon(
@@ -14591,7 +14747,7 @@ protected:
             {
 
             if (BeginAnimatedTreeNode(
-                    "Ambient Occlusion##Visibility",
+                    "Occlusion###Ambient Occlusion##Visibility",
                     ImGuiTreeNodeFlags_DefaultOpen,
                     "Configure contact darkening from nearby geometry."))
             {
@@ -14635,7 +14791,7 @@ protected:
             }
 
             if (BeginAnimatedTreeNode(
-                    "Indirect Diffuse##Visibility",
+                    "Illumination###Indirect Diffuse##Visibility",
                     ImGuiTreeNodeFlags_DefaultOpen,
                     "Configure diffuse light reflected from visible surfaces."))
             {
@@ -14710,9 +14866,9 @@ protected:
             }
 
             static constexpr const char* EstimatorLabels[] = {
-                "Uniform Projected Angle",
-                "Uniform Solid Angle",
-                "Cosine-Weighted Solid Angle"
+                "Bitmask Approximation",
+                "Bitmask Directional Visibility",
+                "Bitmask Cosine Visibility"
             };
             int estimator = static_cast<int>(visibility.estimator);
             SetNextLabeledControlWidth(
@@ -15016,8 +15172,8 @@ protected:
                 static constexpr const char* BufferProfileTooltips[] = {
                     "Use 16-bit floating point for both retained visibility buffers.",
                     "Use 32-bit floating point for both retained visibility buffers.",
-                    "Use 16-bit ambient occlusion and 32-bit indirect diffuse.",
-                    "Use 32-bit ambient occlusion and 16-bit indirect diffuse."
+                    "Use 16-bit Occlusion and 32-bit Illumination.",
+                    "Use 32-bit Occlusion and 16-bit Illumination."
                 };
                 for (int index = 0;
                     index < static_cast<int>(
@@ -15066,9 +15222,9 @@ protected:
             };
             int ambientPrecision = ambient16 ? 0 : 1;
             SetNextLabeledControlWidth(
-                "Ambient Occlusion", settingsControlWidth);
+                "Occlusion###Ambient Occlusion", settingsControlWidth);
             if (ImGui::Combo(
-                    "Ambient Occlusion",
+                    "Occlusion###Ambient Occlusion",
                     &ambientPrecision,
                     PrecisionLabels,
                     static_cast<int>(std::size(PrecisionLabels))))
@@ -15080,7 +15236,7 @@ protected:
                 finishBufferEdit(visibility);
             }
             ImGui::SetItemTooltip(
-                "Set the storage precision of the ambient visibility field.");
+                "Set the storage precision of the Occlusion field.");
             if (DrawPresetResetIcon(
                     "VisibilityAmbientPrecision",
                     visibility.bufferPrecision.ambient !=
@@ -15093,9 +15249,9 @@ protected:
 
             int indirectPrecision = indirect16 ? 0 : 1;
             SetNextLabeledControlWidth(
-                "Indirect Diffuse", settingsControlWidth);
+                "Illumination###Indirect Diffuse", settingsControlWidth);
             if (ImGui::Combo(
-                    "Indirect Diffuse",
+                    "Illumination###Indirect Diffuse",
                     &indirectPrecision,
                     PrecisionLabels,
                     static_cast<int>(std::size(PrecisionLabels))))
@@ -15107,7 +15263,7 @@ protected:
                 finishBufferEdit(visibility);
             }
             ImGui::SetItemTooltip(
-                "Set the storage precision of the indirect diffuse field.");
+                "Set the storage precision of the Illumination field.");
             if (DrawPresetResetIcon(
                     "VisibilityIndirectPrecision",
                     visibility.bufferPrecision.indirect !=
@@ -16869,8 +17025,8 @@ protected:
             }
             ImGui::SetItemTooltip(
                 "Enable physical diffuse and specular environment fill. "
-                "Disable it to isolate direct lights. Ambient-occlusion "
-                "settings are preserved, but ambient occlusion needs indirect light to "
+                "Disable it to isolate direct lights. Occlusion settings are "
+                "preserved, but Occlusion needs indirect light to "
                 "affect the beauty image.");
             if (DrawPresetResetIcon(
                     "Ambient Fill Enabled",
@@ -18670,6 +18826,24 @@ int WINAPI WinMain(
         UIData uiData;
         uiData.GpuAdapterChoices = std::move(adapterChoices);
         uiData.ActiveGpuAdapterIndex = deviceParams.adapterIndex;
+        const auto activeAdapter = std::find_if(
+            uiData.GpuAdapterChoices.begin(),
+            uiData.GpuAdapterChoices.end(),
+            [&uiData](const GpuAdapterChoice& adapter)
+            {
+                return adapter.adapterIndex ==
+                    uiData.ActiveGpuAdapterIndex;
+            });
+        const uint32_t activeVendorId =
+            activeAdapter != uiData.GpuAdapterChoices.end()
+                ? activeAdapter->vendorId
+                : 0u;
+        uiData.AdaptiveSync = DefaultAdaptiveSyncMode(
+            activeVendorId,
+            deviceManager->IsPresentAllowTearingSupported());
+        deviceManager->SetPresentAllowTearing(
+            AdaptiveSyncRequestsPresentTearing(
+                uiData.AdaptiveSync));
 
         auto demo = std::make_shared<UvsrSceneViewer>(
             deviceManager,

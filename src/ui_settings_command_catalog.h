@@ -114,6 +114,7 @@ namespace uvsr
 
         // General.
         Value("gpu.adapter", Kind::DynamicSelection, Section::General, "runtime adapter index or unique display name", false, true),
+        Value("gpu.adaptive-sync", Kind::Enum, Section::General, "off|vendor-agnostic|nvidia-exclusive"),
         Value("camera.mode", Kind::Enum, Section::General, "freelook|locked"),
         Value("camera.location", Kind::Enum, Section::General, "piloted|position-1"),
         Value("scene.current", Kind::DynamicSelection, Section::General, "runtime scene filename or unique display name", false, true),

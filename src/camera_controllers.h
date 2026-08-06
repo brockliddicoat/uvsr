@@ -106,21 +106,23 @@ namespace uvsr
                 forwardedAction = GLFW_RELEASE;
 
             // Donut assigns roll-left to Z. UVSR reserves Z for the pixel zoom
-            // cycle, so X feeds that existing camera action. Space and either
-            // Shift key reuse Donut's up/down actions without retaining its
-            // former Shift sprint behavior.
+            // cycle, so X feeds that existing camera action. Donut's Q/E
+            // vertical convention is opposite UVSR's, so swap those actions.
+            // Space is retired and Shift stays suppressed instead of restoring
+            // Donut's former sprint behavior.
             int forwardedKey = key;
             if (key == GLFW_KEY_X)
                 forwardedKey = GLFW_KEY_Z;
             else if (key == GLFW_KEY_Z)
                 forwardedAction = GLFW_RELEASE;
-            else if (key == GLFW_KEY_SPACE)
+            else if (key == GLFW_KEY_Q)
                 forwardedKey = GLFW_KEY_E;
-            else if (key == GLFW_KEY_LEFT_SHIFT ||
-                key == GLFW_KEY_RIGHT_SHIFT)
-            {
+            else if (key == GLFW_KEY_E)
                 forwardedKey = GLFW_KEY_Q;
-            }
+            else if (key == GLFW_KEY_SPACE ||
+                key == GLFW_KEY_LEFT_SHIFT ||
+                key == GLFW_KEY_RIGHT_SHIFT)
+                forwardedAction = GLFW_RELEASE;
 
             FirstPersonCamera::KeyboardUpdate(
                 forwardedKey,
@@ -315,13 +317,10 @@ namespace uvsr
             {
             case GLFW_KEY_Q:
             case GLFW_KEY_E:
-            case GLFW_KEY_SPACE:
             case GLFW_KEY_A:
             case GLFW_KEY_D:
             case GLFW_KEY_W:
             case GLFW_KEY_S:
-            case GLFW_KEY_LEFT_SHIFT:
-            case GLFW_KEY_RIGHT_SHIFT:
             case GLFW_KEY_LEFT_CONTROL:
             case GLFW_KEY_RIGHT_CONTROL:
                 return true;
@@ -455,7 +454,7 @@ namespace uvsr
 
         // Derive a conservative dolly scale from the initial framing, then
         // carry that scale with the free-moving eye. Wheel, W/S dolly, A/D
-        // strafe, and Space/Shift vertical travel share smooth finite motion
+        // strafe, and Q/E vertical travel share smooth finite motion
         // without a fixed pivot limit.
         void ResetZoomReferenceDistance(float distance)
         {
@@ -534,13 +533,10 @@ namespace uvsr
                 m_StrafeLeft = pressed;
             else if (key == GLFW_KEY_D)
                 m_StrafeRight = pressed;
-            else if (key == GLFW_KEY_SPACE)
+            else if (key == GLFW_KEY_Q)
                 m_MoveUp = pressed;
-            else if (key == GLFW_KEY_LEFT_SHIFT ||
-                key == GLFW_KEY_RIGHT_SHIFT)
-            {
+            else if (key == GLFW_KEY_E)
                 m_MoveDown = pressed;
-            }
 
             // The parent remains translation-disabled, so it records arrow
             // look and mouse state but filters every movement key.

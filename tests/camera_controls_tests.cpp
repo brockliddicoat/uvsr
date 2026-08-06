@@ -159,18 +159,46 @@ int main()
     firstPerson.KeyboardUpdate(GLFW_KEY_W, 0, GLFW_RELEASE, 0);
 
     const float firstPersonVerticalStart = firstPerson.GetPosition().y;
+    firstPerson.KeyboardUpdate(GLFW_KEY_Q, 0, GLFW_PRESS, 0);
+    firstPerson.Animate(0.25f);
+    firstPerson.KeyboardUpdate(GLFW_KEY_Q, 0, GLFW_RELEASE, 0);
+    passed &= Check(
+        firstPerson.GetPosition().y > firstPersonVerticalStart,
+        "Q moves the first-person camera upward");
+    firstPerson.KeyboardUpdate(GLFW_KEY_E, 0, GLFW_PRESS, 0);
+    firstPerson.Animate(0.25f);
+    firstPerson.KeyboardUpdate(GLFW_KEY_E, 0, GLFW_RELEASE, 0);
+    passed &= Check(
+        NearlyEqual(firstPerson.GetPosition().y, firstPersonVerticalStart),
+        "E moves the first-person camera downward");
+
+    const float3 beforeRetiredSpace = firstPerson.GetPosition();
     firstPerson.KeyboardUpdate(GLFW_KEY_SPACE, 0, GLFW_PRESS, 0);
     firstPerson.Animate(0.25f);
     firstPerson.KeyboardUpdate(GLFW_KEY_SPACE, 0, GLFW_RELEASE, 0);
     passed &= Check(
-        firstPerson.GetPosition().y > firstPersonVerticalStart,
-        "Space moves the first-person camera upward");
-    firstPerson.KeyboardUpdate(GLFW_KEY_LEFT_SHIFT, 0, GLFW_PRESS, 0);
-    firstPerson.Animate(0.25f);
-    firstPerson.KeyboardUpdate(GLFW_KEY_LEFT_SHIFT, 0, GLFW_RELEASE, 0);
-    passed &= Check(
-        NearlyEqual(firstPerson.GetPosition().y, firstPersonVerticalStart),
-        "Shift moves the first-person camera downward");
+        all(firstPerson.GetPosition() == beforeRetiredSpace),
+        "Space no longer moves the first-person camera");
+
+    for (const int shiftKey :
+        { GLFW_KEY_LEFT_SHIFT, GLFW_KEY_RIGHT_SHIFT })
+    {
+        UvsrFirstPersonCamera shiftedFirstPerson(true);
+        shiftedFirstPerson.LookTo(float3(0.f), float3(1.f, 0.f, 0.f));
+        shiftedFirstPerson.KeyboardUpdate(
+            shiftKey, 0, GLFW_PRESS, 0);
+        shiftedFirstPerson.KeyboardUpdate(GLFW_KEY_W, 0, GLFW_PRESS, 0);
+        shiftedFirstPerson.Animate(1.f);
+        shiftedFirstPerson.KeyboardUpdate(GLFW_KEY_W, 0, GLFW_RELEASE, 0);
+        shiftedFirstPerson.KeyboardUpdate(
+            shiftKey, 0, GLFW_RELEASE, 0);
+        passed &= Check(
+            NearlyEqual(shiftedFirstPerson.GetPosition().x, 6.f) &&
+                NearlyEqual(shiftedFirstPerson.GetPosition().y, 0.f) &&
+                NearlyEqual(shiftedFirstPerson.GetPosition().z, 0.f),
+            "both Shift keys remain inert instead of moving vertically or "
+            "restoring Donut sprint");
+    }
 
     const float3 firstDirectionBeforeArrow = firstPerson.GetDir();
     firstPerson.KeyboardUpdate(GLFW_KEY_LEFT, 0, GLFW_PRESS, 0);
@@ -573,24 +601,22 @@ int main()
         float3(1.f, 0.f, 0.f));
     verticalCamera.ResetZoomReferenceDistance(10.f);
     const float3 verticalStart = verticalCamera.GetPosition();
-    verticalCamera.KeyboardUpdate(GLFW_KEY_SPACE, 0, GLFW_PRESS, 0);
+    verticalCamera.KeyboardUpdate(GLFW_KEY_Q, 0, GLFW_PRESS, 0);
     AnimateFrames(verticalCamera, 60);
-    verticalCamera.KeyboardUpdate(GLFW_KEY_SPACE, 0, GLFW_RELEASE, 0);
+    verticalCamera.KeyboardUpdate(GLFW_KEY_Q, 0, GLFW_RELEASE, 0);
     passed &= Check(
         verticalCamera.GetPosition().y > verticalStart.y &&
             NearlyEqual(verticalCamera.GetPosition().x, verticalStart.x) &&
             NearlyEqual(verticalCamera.GetPosition().z, verticalStart.z),
-        "Freelook Space moves world-up even when the camera is rolled");
+        "Freelook Q moves world-up even when the camera is rolled");
     AnimateFrames(verticalCamera, 180);
-    const float heightBeforeShift = verticalCamera.GetPosition().y;
-    verticalCamera.KeyboardUpdate(
-        GLFW_KEY_RIGHT_SHIFT, 0, GLFW_PRESS, 0);
+    const float heightBeforeDown = verticalCamera.GetPosition().y;
+    verticalCamera.KeyboardUpdate(GLFW_KEY_E, 0, GLFW_PRESS, 0);
     AnimateFrames(verticalCamera, 60);
-    verticalCamera.KeyboardUpdate(
-        GLFW_KEY_RIGHT_SHIFT, 0, GLFW_RELEASE, 0);
+    verticalCamera.KeyboardUpdate(GLFW_KEY_E, 0, GLFW_RELEASE, 0);
     passed &= Check(
-        verticalCamera.GetPosition().y < heightBeforeShift,
-        "either Shift key moves Freelook downward");
+        verticalCamera.GetPosition().y < heightBeforeDown,
+        "Freelook E moves world-down");
 
     verticalCamera.CancelPendingMotion();
     passed &= Check(
@@ -657,16 +683,22 @@ int main()
     UvsrThirdPersonCamera filteredTranslation;
     filteredTranslation.LookTo(float3(2.f, 3.f, 4.f), float3(0.f, 0.f, 1.f));
     const float3 filteredStart = filteredTranslation.GetPosition();
-    filteredTranslation.KeyboardUpdate(GLFW_KEY_Q, 0, GLFW_PRESS, 0);
+    filteredTranslation.KeyboardUpdate(GLFW_KEY_SPACE, 0, GLFW_PRESS, 0);
     AnimateFrames(filteredTranslation, 60);
-    filteredTranslation.KeyboardUpdate(GLFW_KEY_Q, 0, GLFW_RELEASE, 0);
+    filteredTranslation.KeyboardUpdate(GLFW_KEY_SPACE, 0, GLFW_RELEASE, 0);
     passed &= Check(all(filteredTranslation.GetPosition() == filteredStart),
-        "Freelook rejects Q vertical translation input");
-    filteredTranslation.KeyboardUpdate(GLFW_KEY_E, 0, GLFW_PRESS, 0);
-    AnimateFrames(filteredTranslation, 60);
-    filteredTranslation.KeyboardUpdate(GLFW_KEY_E, 0, GLFW_RELEASE, 0);
-    passed &= Check(all(filteredTranslation.GetPosition() == filteredStart),
-        "Freelook rejects E vertical translation input");
+        "Freelook rejects retired Space vertical translation input");
+    for (const int shiftKey :
+        { GLFW_KEY_LEFT_SHIFT, GLFW_KEY_RIGHT_SHIFT })
+    {
+        filteredTranslation.KeyboardUpdate(
+            shiftKey, 0, GLFW_PRESS, 0);
+        AnimateFrames(filteredTranslation, 60);
+        filteredTranslation.KeyboardUpdate(
+            shiftKey, 0, GLFW_RELEASE, 0);
+        passed &= Check(all(filteredTranslation.GetPosition() == filteredStart),
+            "Freelook rejects both retired Shift translation inputs");
+    }
 
     UvsrThirdPersonCamera unlimitedDolly;
     unlimitedDolly.LookTo(float3(0.f, 0.f, -10.f), float3(0.f, 0.f, 1.f));

@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-08-04.1`.
+UI reference version: `2026-08-05.6`.
 
 ## Purpose
 
@@ -20,7 +20,7 @@ The top-level drawers are:
 
 1. General
 2. Representation
-3. Visibility
+3. Diffuse
 4. Buffers
 5. Statistics
 6. Aliasing
@@ -79,7 +79,7 @@ code.
 A reset icon restores the smallest coherent ownership group. A preset reset
 must restore every value that defines that preset. Editing a preset-owned value
 must preserve its origin while the reset icon communicates that the value has
-changed. The Visibility profile selector continues to show its originating Low,
+changed. The Diffuse profile selector continues to show its originating Low,
 Medium, High, or Ultra recipe and appends **(Custom)** when an owned value
 differs. Its adjacent circular reset restores the complete High recipe, while
 each owned control can return to its originating recipe value.
@@ -90,7 +90,7 @@ Use the established UVSR helpers for drawer bodies, deferred combos, animated
 tree and toggle regions, reset icons, tooltips, and footer actions. Every
 dropdown uses ImGui's native integrated-arrow trigger presentation; deferred
 and immediate dropdowns differ only in when their mutation is applied. Do not
-paint a second background or custom arrow over the native trigger. Visibility,
+paint a second background or custom arrow over the native trigger. Diffuse,
 Aliasing, Debug, and Advanced groups retain animated disclosure. Every retained
 setting has a concise hover explanation, and dropdown width must leave its
 label and reset lane visible. Maintain balanced ImGui ID, style, disabled, tree,
@@ -165,7 +165,7 @@ their owned settings directly during UI composition.
 
 ## Statistics Presentation
 
-Keep the six general values on one dash-separated summary line. The labeled
+Keep the six general values on one slash-separated summary line. The labeled
 Effect selector shows one retained renderer effect at a time and keeps its reset
 beside the label. Complete Renderer uses a striped two-column table for the full
 retained stage list; an ordinary stage includes the complete frame for context.
@@ -188,12 +188,17 @@ input shows a blue `Success` or saturated-crimson `Error` message until editing
 resumes. Never add a floating result window above the command row. Up and Down continue
 to recall command history. A long or multiline result may expose a trailing
 details button; only an explicit click may open its bounded, scrollable,
-selectable read-only popup. The catalog contains 137 entries: 133 values and
-four actions.
+selectable read-only popup. The catalog contains 141 entries: 137 values and
+four actions. A `list` result uses `/` between each row's supported verbs and
+value domain.
 
-Escape toggles Settings unless an active edit or popup owns it. `/` toggles the
-command interface when text input does not already own the key. M, F, V, and Z
-shortcuts must respect active text/popup ownership.
+Escape or the grave-accent/tilde key toggles Settings unless an active edit or
+popup owns it. The physical grave-accent key works with or without Shift so a
+US-layout `~` chord remains valid. `/` toggles the command interface when text
+input does not already own the key. M, F, V, and Z shortcuts must respect active
+text/popup ownership. Q moves the camera up and E moves it down; Space and Shift
+must not retain vertical-motion behavior, and Shift must not restore Donut's
+sprint path.
 
 ## Renderer Boundary
 
@@ -205,7 +210,13 @@ usable.
 Controls must remain decoupled unless their actual resource contract requires a
 dependency. In particular:
 
-- Visibility changes only visibility-owned state and resources.
+- Diffuse changes only Screen-Space Visibility-owned state and resources.
+- Adaptive Sync changes only process presentation state. VSync remains
+  disabled. Off suppresses the windowed DXGI Present allow-tearing flag; Vendor
+  Agnostic and Nvidia Exclusive request the same tearing-compatible path, with
+  the latter offered only on NVIDIA adapters. Windows, the driver, and the
+  display determine actual variable-refresh operation, which UVSR cannot enable
+  or confirm directly.
 - Representation owns shared BLAS/TLAS lifetime and build policy. A consumer
   may read only a coherent ready TLAS and must release its bindings before
   hierarchy invalidation or reset.
@@ -262,6 +273,13 @@ and CTest suite before handoff.
 Use the exact candidate executable and a bundled scene. Exercise:
 
 - opening, closing, scrolling, and resetting Settings in Amp and OG;
+- toggling Settings with Escape, grave accent, and shifted tilde while
+  preserving text-input ownership;
+- Q/E vertical camera motion with Space/Shift confirmed inert;
+- all three Adaptive Sync choices, reset behavior, and capability/vendor
+  unavailable states;
+- the Diffuse, Occlusion, Illumination, and three estimator labels in both
+  skins;
 - every changed control at both endpoints and its unavailable state;
 - Representation rebuild/refit transitions and staged status;
 - all four Screen Space and Ratio Estimator enable combinations, including the
@@ -289,6 +307,12 @@ The UI handoff includes:
 
 ## Reference Revision History
 
+- `2026-08-05.6`: Replaced hyphen field separators with slash separators in
+  Amp and OG performance summaries and command-interface `list` rows.
+- `2026-08-05.5`: Renamed the Visibility drawer and its Ambient Occlusion,
+  Indirect Diffuse, and estimator choices to Diffuse, Occlusion, Illumination,
+  and the three Bitmask names; added Adaptive Sync presentation policy; moved
+  vertical camera input to Q/E; and added grave-accent/tilde Settings access.
 - `2026-08-05.4`: Removed fractional shadow rates and both private ratio
   histories, made final-color TAA the only temporal accumulator, reduced both
   Visibility and ray-traced noise choices to Permutated White Noise and Void

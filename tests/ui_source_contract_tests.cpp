@@ -251,15 +251,15 @@ namespace
             },
             {
                 "const bool representationOpen = DrawCollapsingHeader(",
-                "const bool indirectLightingOpen = DrawCollapsingHeader(",
+                "const bool diffuseOpen = DrawCollapsingHeader(",
                 "##RepresentationBody",
                 "Representation"
             },
             {
-                "const bool indirectLightingOpen = DrawCollapsingHeader(",
+                "const bool diffuseOpen = DrawCollapsingHeader(",
                 "const bool buffersOpen = DrawCollapsingHeader(",
-                "##VisibilityBody",
-                "Visibility"
+                "##DiffuseBody",
+                "Diffuse"
             },
             {
                 "const bool buffersOpen = DrawCollapsingHeader(",
@@ -313,6 +313,10 @@ namespace
                 drawer.end,
                 drawer.label);
             const std::string compact = Compact(section);
+            Require(
+                ContainsQuotedLiteral(section, drawer.label),
+                std::string(drawer.label) +
+                    " drawer must retain its exact visible header label.");
             RequireContains(
                 compact,
                 "BeginDrawerBody(\"" + std::string(drawer.body) +
@@ -340,9 +344,9 @@ namespace
     {
         const std::string_view visibility = ExtractSection(
             viewer,
-            "const bool indirectLightingOpen = DrawCollapsingHeader(",
+            "const bool diffuseOpen = DrawCollapsingHeader(",
             "const bool buffersOpen = DrawCollapsingHeader(",
-            "Visibility drawer");
+            "Diffuse drawer");
         const std::string_view noiseLabels = ExtractSection(
             visibility,
             "static constexpr const char* NoiseLabels[] = {",
@@ -395,12 +399,24 @@ namespace
         RequireOrdered(
             visibility,
             {
-                "\"Ambient Occlusion##Visibility\"",
-                "\"Indirect Diffuse##Visibility\"",
+                "\"Occlusion###Ambient Occlusion##Visibility\"",
+                "\"Illumination###Indirect Diffuse##Visibility\"",
                 "\"Sampling##Visibility\"",
                 "\"Reconstruction##Visibility\""
             },
-            "Visibility effect grouping");
+            "Diffuse effect grouping");
+        RequireExactStrings(
+            ExtractSection(
+                visibility,
+                "static constexpr const char* EstimatorLabels[] = {",
+                "};",
+                "Diffuse estimator labels"),
+            {
+                "Bitmask Approximation",
+                "Bitmask Directional Visibility",
+                "Bitmask Cosine Visibility"
+            },
+            "Diffuse estimator labels");
         Require(
             CountOccurrences(visibility, "BeginAnimatedTreeNode(") == 4u,
             "Visibility must retain four animated effect groups.");
@@ -501,8 +517,8 @@ namespace
             "buffer precision labels");
         for (const std::string_view control : {
                 std::string_view("Profile##Buffers"),
-                std::string_view("\"Ambient Occlusion\""),
-                std::string_view("\"Indirect Diffuse\""),
+                std::string_view("\"Occlusion###Ambient Occlusion\""),
+                std::string_view("\"Illumination###Indirect Diffuse\""),
                 std::string_view("visibility.bufferPrecision.ambient"),
                 std::string_view("visibility.bufferPrecision.indirect"),
                 std::string_view("VisibilityBufferProfile") })
@@ -517,10 +533,34 @@ namespace
         {
             RequireAbsent(buffers, retired, "compact Buffers drawer");
         }
+        for (const std::string_view visibleRetiredTerm : {
+                std::string_view("\"Ambient Occlusion\""),
+                std::string_view("\"Indirect Diffuse\""),
+                std::string_view("ambient occlusion"),
+                std::string_view("indirect diffuse") })
+        {
+            RequireAbsent(
+                buffers,
+                visibleRetiredTerm,
+                "renamed Buffers UI");
+        }
     }
 
     void ValidateStatistics(std::string_view viewer)
     {
+        const std::string_view performanceBuilders = ExtractSection(
+            viewer,
+            "static std::string BuildPerformanceLine(",
+            "static double StepTowardByTenth(",
+            "performance summary builders");
+        Require(
+            CountOccurrences(performanceBuilders, "\" / \"") == 9u,
+            "Amp and OG performance summaries must use all nine slash "
+            "field separators.");
+        RequireAbsent(
+            performanceBuilders,
+            "\" - \"",
+            "slash-separated performance summaries");
         const std::string_view statistics = ExtractSection(
             viewer,
             "const bool statisticsOpen = DrawCollapsingHeader(",
@@ -529,7 +569,7 @@ namespace
         RequireContains(
             statistics,
             "BuildPerformanceLine(m_PerformanceStatValues)",
-            "dash-separated performance summary");
+            "slash-separated performance summary");
         RequireExactStrings(
             ExtractSection(
                 statistics,
@@ -1255,9 +1295,9 @@ namespace
             "UI renderer state");
         const std::string_view visibilityDrawer = ExtractSection(
             viewer,
-            "const bool indirectLightingOpen = DrawCollapsingHeader(",
+            "const bool diffuseOpen = DrawCollapsingHeader(",
             "const bool statisticsOpen = DrawCollapsingHeader(",
-            "Visibility drawer");
+            "Diffuse drawer");
         const std::string_view visibilityDispatcher = ExtractSection(
             viewer,
             "bool DispatchVisibilityCommandValue(",
@@ -1450,6 +1490,14 @@ namespace
             compactEnumCommandHelper,
             "candidate==current&&!allowSameValueMutation",
             "same-tier recipe command mutation contract");
+        RequireContains(
+            viewer,
+            "listing += \"] / \";",
+            "slash-separated command list rows");
+        RequireAbsent(
+            viewer,
+            "listing += \"] - \";",
+            "retired command list row separator");
 
         const std::string_view aliasingDispatcher = ExtractSection(
             viewer,
@@ -1494,8 +1542,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 140u,
-            "Settings command catalog must contain exactly 140 entries.");
+        Require(entries.size() == 141u,
+            "Settings command catalog must contain exactly 141 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -1509,8 +1557,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 136u,
-            "Settings command catalog must contain exactly 136 values.");
+        Require(valueCount == 137u,
+            "Settings command catalog must contain exactly 137 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -1520,6 +1568,7 @@ namespace
             "Settings command catalog must retain exactly four actions.");
 
         for (const std::string_view path : {
+                std::string_view("gpu.adaptive-sync"),
                 std::string_view("visibility.noise"),
                 std::string_view("anti-aliasing.taa.enabled"),
                 std::string_view("anti-aliasing.taa.jitter-sequence"),
@@ -1888,7 +1937,8 @@ namespace
     void ValidateUiSafety(
         std::string_view viewer,
         std::string_view donutAppOverride,
-        std::string_view imguiUiOverride)
+        std::string_view imguiUiOverride,
+        std::string_view cmakeSource)
     {
         const std::string_view visualTokens = ExtractSection(
             viewer,
@@ -1911,6 +1961,196 @@ namespace
             viewer,
             "tokens.errorText =",
             "skin-specific command failure color override");
+
+        const std::string_view keyboardUpdate = ExtractSection(
+            viewer,
+            "protected:\n    virtual bool KeyboardUpdate(",
+            "virtual bool KeyboardCharInput(",
+            "Settings keyboard shortcuts");
+        const std::string_view settingsShortcutOwnership = ExtractSection(
+            keyboardUpdate,
+            "const bool settingsShortcutOwnedByUi =",
+            "const bool plainCommandShortcut =",
+            "Settings shortcut ownership predicate");
+        const std::string compactSettingsShortcutOwnership =
+            Compact(settingsShortcutOwnership);
+        for (const std::string_view ownershipContract : {
+                std::string_view("ImGui::GetIO().WantTextInput"),
+                std::string_view("ImGui::IsAnyItemActive()"),
+                std::string_view(
+                    "ImGui::IsPopupOpen(nullptr,ImGuiPopupFlags_AnyPopup)") })
+        {
+            RequireContains(
+                compactSettingsShortcutOwnership,
+                ownershipContract,
+                "Settings shortcut ownership predicate");
+        }
+        const std::string_view settingsShortcut = ExtractSection(
+            keyboardUpdate,
+            "if ((key == GLFW_KEY_ESCAPE ||",
+            "const bool plainFlashlightShortcut =",
+            "Settings shortcut ownership gate");
+        const std::string compactSettingsShortcut = Compact(settingsShortcut);
+        for (const std::string_view shortcutContract : {
+                std::string_view("key==GLFW_KEY_ESCAPE"),
+                std::string_view("key==GLFW_KEY_GRAVE_ACCENT"),
+                std::string_view("action==GLFW_PRESS"),
+                std::string_view("!settingsShortcutOwnedByUi") })
+        {
+            RequireContains(
+                compactSettingsShortcut,
+                shortcutContract,
+                "Escape and tilde Settings shortcut gate");
+        }
+        RequireAbsent(
+            settingsShortcut,
+            "mods",
+            "shift-compatible grave-accent Settings shortcut");
+        RequireContains(
+            keyboardUpdate,
+            "m_ui.ShowUI = !m_ui.ShowUI;",
+            "Settings shortcut visibility toggle");
+        RequireContains(
+            viewer,
+            "ImGui::CalcTextSize(\n"
+            "                \"Bitmask Directional Visibility\")",
+            "Settings width sized for longest Diffuse estimator label");
+
+        const std::string_view generalDrawer = ExtractSection(
+            viewer,
+            "const bool generalOpen = DrawCollapsingHeader(",
+            "const bool representationOpen = DrawCollapsingHeader(",
+            "General drawer");
+        RequireOrdered(
+            generalDrawer,
+            {
+                "\"Graphics Adapter\"",
+                "\"Adaptive Sync\"",
+                "\"Camera Mode\""
+            },
+            "Adaptive Sync placement below Graphics Adapter");
+        for (const std::string_view adaptiveControlContract : {
+                std::string_view("AdaptiveSyncModeValues"),
+                std::string_view(
+                    "IsAdaptiveSyncModeAvailableForActiveAdapter"),
+                std::string_view("ImGui::BeginDisabled();"),
+                std::string_view(
+                    "Expose the shared Windows variable-refresh"),
+                std::string_view(
+                    "the driver and display decide whether it engages."),
+                std::string_view("VSync remains disabled"),
+                std::string_view(
+                    "both adaptive choices request the same"),
+                std::string_view("driver, and the display decide") })
+        {
+            RequireContains(
+                generalDrawer,
+                adaptiveControlContract,
+                "honest Adaptive Sync selector");
+        }
+        RequireAbsent(
+            generalDrawer,
+            "NVIDIA-only variable-refresh",
+            "shared-path Nvidia Exclusive explanation");
+
+        const std::string_view skyDrawer = ExtractSection(
+            viewer,
+            "const bool skyOpen = DrawCollapsingHeader(",
+            "const bool lightsOpen = DrawCollapsingHeader(",
+            "Sky drawer");
+        RequireContains(
+            skyDrawer,
+            "Disable it to isolate direct lights. Occlusion settings are",
+            "renamed Occlusion ambient-fill explanation");
+        RequireAbsent(
+            skyDrawer,
+            "Ambient-occlusion settings",
+            "renamed Occlusion ambient-fill explanation");
+
+        const std::string_view generalDispatcher = ExtractSection(
+            viewer,
+            "bool DispatchGeneralCommandValue(",
+            "bool DispatchRepresentationCommandValue(",
+            "General command dispatcher");
+        const std::string_view adaptiveDispatcher = ExtractSection(
+            generalDispatcher,
+            "if (path == \"gpu.adaptive-sync\")",
+            "if (path == \"camera.mode\")",
+            "Adaptive Sync command dispatcher");
+        RequireOrdered(
+            adaptiveDispatcher,
+            {
+                "{ \"off\", AdaptiveSyncMode::Off }",
+                "{ \"vendor-agnostic\", AdaptiveSyncMode::VendorAgnostic }",
+                "{ \"nvidia-exclusive\", AdaptiveSyncMode::NvidiaExclusive }",
+                "IsAdaptiveSyncModeAvailableForActiveAdapter(candidate)",
+                "ApplyAdaptiveSyncMode(candidate)"
+            },
+            "Adaptive Sync command behavior");
+        for (const std::string_view commandContract : {
+                std::string_view("operation"),
+                std::string_view("arguments"),
+                std::string_view("GetDefaultAdaptiveSyncMode()"),
+                std::string_view(
+                    "operation == CommandValueOperation::Get"),
+                std::string_view(
+                    "IsAdaptiveSyncModeAvailableForActiveAdapter(candidate)"),
+                std::string_view(
+                    "Nvidia Exclusive requires an NVIDIA graphics adapter."),
+                std::string_view(
+                    "Adaptive Sync requires DXGI tearing-present support.") })
+        {
+            RequireContains(
+                adaptiveDispatcher,
+                commandContract,
+                "Adaptive Sync get/set/reset and rejection command path");
+        }
+        for (const std::string_view presentContract : {
+                std::string_view("m_RequestedPresentAllowTearing = true"),
+                std::string_view("m_PresentAllowTearingSupported = false"),
+                std::string_view("SetPresentAllowTearing(bool enabled)"),
+                std::string_view(
+                    "m_PresentAllowTearingSupported = m_TearingSupported"),
+                std::string_view("m_RequestedPresentAllowTearing"),
+                std::string_view(
+                    "presentFlags |= DXGI_PRESENT_ALLOW_TEARING") })
+        {
+            RequireContains(
+                donutAppOverride,
+                presentContract,
+                "runtime Adaptive Sync Present policy");
+        }
+        const std::string_view dx12Present = ExtractSection(
+            donutAppOverride,
+            "@@ -576,7 +577,10 @@ bool DeviceManager_DX12::Present()",
+            "HRESULT result = m_SwapChain->Present",
+            "patched DX12 Present policy");
+        RequireContains(
+            Compact(dx12Present),
+            "+if(!m_DeviceParams.vsyncEnabled&&+m_FullScreenDesc.Windowed&&"
+            "+m_TearingSupported&&+m_RequestedPresentAllowTearing)",
+            "conjunctive DX12 Present tearing policy");
+        const std::string_view adaptiveStartup = ExtractSection(
+            viewer,
+            "const auto activeAdapter = std::find_if(",
+            "auto demo = std::make_shared<UvsrSceneViewer>(",
+            "Adaptive Sync startup policy");
+        RequireOrdered(
+            adaptiveStartup,
+            {
+                "DefaultAdaptiveSyncMode(",
+                "deviceManager->SetPresentAllowTearing("
+            },
+            "Adaptive Sync startup default application");
+        Require(
+            CountOccurrences(
+                cmakeSource,
+                "src/app/dx12/DeviceManager_DX12.cpp") == 2u,
+            "CMake must stage and compile the patched DX12 DeviceManager.");
+        RequireContains(
+            cmakeSource,
+            "list(FIND target_sources \"${relative_path}\" source_index)",
+            "target-relative Donut backend source replacement");
 
         const std::string_view resetIcon = ExtractSection(
             viewer,
@@ -2146,9 +2386,11 @@ int main(int argc, char** argv)
         root / "overrides" / "donut-app.patch");
     const std::string imguiUiOverride = ReadFile(
         root / "overrides" / "imgui-ui.patch");
+    const std::string cmakeSource = ReadFile(root / "CMakeLists.txt");
     if (viewer.empty() || catalog.empty() || temporalOptions.empty() ||
         temporalPass.empty() || shadowSettings.empty() ||
-        donutAppOverride.empty() || imguiUiOverride.empty())
+        donutAppOverride.empty() || imguiUiOverride.empty() ||
+        cmakeSource.empty())
     {
         std::cerr << "FAIL: could not read current UI contract sources\n";
         return 2;
@@ -2165,7 +2407,11 @@ int main(int argc, char** argv)
     ValidateScreenSpaceShadows(viewer, shadowSettings, catalog);
     ValidateCatalogAndDispatch(viewer, catalog);
     ValidateMaterialHistoryInvalidation(viewer);
-    ValidateUiSafety(viewer, donutAppOverride, imguiUiOverride);
+    ValidateUiSafety(
+        viewer,
+        donutAppOverride,
+        imguiUiOverride,
+        cmakeSource);
 
     if (g_FailureCount != 0)
     {
