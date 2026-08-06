@@ -121,9 +121,20 @@ namespace
     {
         RequireContains(
             settings,
-            "boolenabled=false;int32_tsampleratelog2=0;"
+            "boolenabled=false;boolapplytodiffuseibl=true;"
+                "boolapplytospecularibl=false;int32_tsampleratelog2=0;"
                 "floatraybias=0.002f;",
-            "sky visibility must default disabled at one sample and 0.002 bias");
+            "sky visibility must default disabled, diffuse-only, at one sample and 0.002 bias");
+        RequireContains(
+            settings,
+            "rayvisibilitymaxdistancemaxdistance="
+                "rayvisibilitymaxdistance::maximum;",
+            "sky visibility must default to the established Max reach");
+        RequireContains(
+            settings,
+            "returnsettings.applytodiffuseibl||"
+                "settings.applytospecularibl;",
+            "either selected IBL lobe must activate the producer");
         RequireContains(
             settings,
             "raytracedskyvisibilitynoisepattern::voidclusterbluenoise;"
@@ -145,6 +156,10 @@ namespace
             settings,
             "raytracedskyvisibilitymaximumraybias=0.1f;",
             "the ray-bias domain must remain bounded at 0.1 world units");
+        RequireContains(
+            settings,
+            "israyvisibilitymaxdistancesupported(settings.maxdistance)&&",
+            "configuration validation must reject unsupported max-distance modes");
         RequireContains(
             settings,
             "settings.raybias>=0.f&&settings.raybias"
@@ -277,12 +292,23 @@ namespace
             "disabled sample animation must hold producer phase zero");
         RequireContains(
             pass,
-            "constants.raydistance=std::max(scenediagonal*2.f,1.f);",
-            "ray distance must preserve the proven full-scene reach");
+            "constfloatraydistance=resolverayvisibilitymaxdistance("
+                "settings.maxdistance,scenediagonal);",
+            "ray distance must resolve the shared Max or finite reach");
+        RequireContains(
+            pass,
+            "if(std::isnan(raydistance))",
+            "an invalid scene extent must fail open before DXR receives a NaN TMax");
+        RequireContains(
+            pass,
+            "constants.raydistance=raydistance;",
+            "the validated distance must reach the sky-visibility constant buffer");
         RequireOrdered(
             pass,
             {
                 "if(!m_supported||!commandlist||!worldtlas||",
+                "return{};",
+                "if(std::isnan(raydistance))",
                 "return{};",
                 "if(!ensureresources(inputs))",
                 "return{};",
@@ -482,6 +508,8 @@ namespace
             representationSelection,
             "constboolraytracedskyvisibilityselected="
                 "m_ui.raytracedskyvisibility.enabled&&"
+                "hasraytracedskyvisibilityconsumer("
+                    "m_ui.raytracedskyvisibility)&&"
                 "supportsraytracedskyvisibility();",
             "sky visibility must select world representation independently");
         RequireContains(
@@ -506,12 +534,32 @@ namespace
                 "m_raytracedskyvisibilitypass&&"
                 "m_raytracedskyvisibilitypass->issupported()&&"
                 "worldrepresentationready&&"
+                "(skyvisibilitydiffuseiblavailable||"
+                    "skyvisibilityspeculariblavailable);",
+            "sky queries must run only for an available selected IBL consumer");
+        RequireContains(
+            viewer,
+            "constboolskyvisibilitydiffuseiblavailable="
+                "m_ui.raytracedskyvisibility.applytodiffuseibl&&"
                 "diffuseenvironment&&diffuseenvironmentscale>0.f;",
-            "sky queries must run only for an available diffuse IBL consumer");
+            "diffuse-only tracing must require a live diffuse environment");
+        RequireContains(
+            viewer,
+            "constboolskyvisibilityspeculariblavailable="
+                "m_ui.raytracedskyvisibility.applytospecularibl&&"
+                "globalenvironment&&globalenvironment->specularmap&&"
+                "globalenvironment->environmentbrdf&&"
+                "globalenvironment->specularscale>0.f;",
+            "specular-only tracing must require a complete specular environment");
         RequireAbsent(
             expectedContribution,
             "m_sunlight",
             "sky contribution must not depend on directional-light state");
+        Require(
+            CountOccurrences(
+                viewer,
+                "hasraytracedskyvisibilityconsumer(") >= 3u,
+            "neither mode must suppress pass creation, loading TLAS work, and frame dispatch");
 
         const std::string_view multisampleGate = ExtractSection(
             viewer,
@@ -589,7 +637,7 @@ namespace
             "the renderer must have exactly one sky-phase commit site");
     }
 
-    void ValidateDiffuseIblConsumers(
+    void ValidateIblConsumers(
         const std::string& deferredShader,
         const std::string& deferredMsaaShader,
         const std::string& deferredPass,
@@ -610,27 +658,33 @@ namespace
             RequireOrdered(
                 *shader,
                 {
-                    "environmentdiffuse=evaluatepbrenvironmentdiffuse(",
-                    "if(g_pbrdeferred.skyvisibilityenabled!=0u){",
-                    "constfloatskyvisibility="
+                    "constboolapplyskyvisibilitytodiffuseibl=",
+                    "constboolapplyskyvisibilitytospecularibl=",
+                    "if((needdiffuseenvironment&&"
+                        "applyskyvisibilitytodiffuseibl)||",
+                    "constfloatsampledskyvisibility="
                         "t_skyvisibility[pixelposition];",
-                    "environmentdiffuse*=isfinite(skyvisibility)?"
-                        "saturate(skyvisibility):1.0f;",
-                    "constboolneedspecularenvironment="
+                    "skyvisibility=isfinite(sampledskyvisibility)?"
+                        "saturate(sampledskyvisibility):1.0f;",
+                    "environmentdiffuse=evaluatepbrenvironmentdiffuse(",
+                    "if(applyskyvisibilitytodiffuseibl)",
+                    "environmentdiffuse*=skyvisibility;",
+                    "environmentspecular=evaluatepbrenvironmentspecular(",
+                    "if(applyskyvisibilitytospecularibl)",
+                    "environmentspecular*=skyvisibility;"
                 },
-                "each deferred shader must guard its full-resolution load and multiply only diffuse IBL");
+                "each deferred shader must load once and independently modulate both IBL lobes");
             Require(
                 CountOccurrences(*shader, "t_skyvisibility[") == 1u &&
                     CountOccurrences(*shader, "environmentdiffuse*=") == 1u &&
-                    CountOccurrences(*shader, "skyvisibility") == 6u,
-                "each deferred shader must contain one guarded sky load and one diffuse-IBL modulation site");
+                    CountOccurrences(*shader, "environmentspecular*=") == 1u,
+                "each deferred shader must contain one guarded sky load and one modulation site per IBL lobe");
         }
 
         RequireOrdered(
             deferredShader,
             {
-                "environmentdiffuse*=isfinite(skyvisibility)?"
-                    "saturate(skyvisibility):1.0f;",
+                "environmentdiffuse*=skyvisibility;",
                 "float3sourceradiance=max("
                     "directdiffuse+environmentdiffuse,0.0f);",
                 "float3diffuse=directdiffuse+",
@@ -641,27 +695,26 @@ namespace
         RequireOrdered(
             deferredMsaaShader,
             {
-                "environmentdiffuse*=isfinite(skyvisibility)?"
-                    "saturate(skyvisibility):1.0f;",
+                "environmentdiffuse*=skyvisibility;",
                 "float3diffuse=directdiffuse+",
                 "finallinearhdr=max(diffuse+specular+"
                     "gbuffer.material.emissive,0.0f);"
             },
             "sky-modulated diffuse IBL must feed the final per-sample MSAA image");
 
-        for (const std::string* shader :
-            { &deferredShader, &deferredMsaaShader })
-        {
-            const std::string_view specularSection = ExtractSection(
-                *shader,
-                "constboolneedspecularenvironment=",
-                "float3directdiffuse=0.0f;",
-                "deferred specular IBL section");
-            RequireAbsent(
-                specularSection,
-                "skyvisibility",
-                "sky visibility must not affect specular IBL");
-        }
+        const std::string_view sourceRadianceSection = ExtractSection(
+            deferredShader,
+            "float3sourceradiance=max(",
+            "#endif",
+            "diffuse GI source-radiance section");
+        RequireContains(
+            sourceRadianceSection,
+            "directdiffuse+environmentdiffuse",
+            "diffuse sky visibility must reach GI source radiance");
+        RequireAbsent(
+            sourceRadianceSection,
+            "environmentspecular",
+            "specular sky visibility must never enter GI source radiance");
         const std::string_view directSection = ExtractSection(
             deferredShader,
             "float3directdiffuse=0.0f;",
@@ -688,13 +741,19 @@ namespace
         RequireOrdered(
             compositeShader,
             {
+                "constboolapplyskyvisibilitytodiffuseibl=",
+                "constboolapplyskyvisibilitytospecularibl=",
+                "if(applyskyvisibilitytodiffuseibl||"
+                    "applyskyvisibilitytospecularibl)",
+                "constfloatsampledskyvisibility=t_skyvisibility[pixel];",
                 "float3environmentdiffuse="
                     "evaluatepbrenvironmentdiffuse(",
-                "if(g_visibility.skyvisibilityenabled!=0u){",
-                "constfloatskyvisibility=t_skyvisibility[pixel];",
-                "environmentdiffuse*=isfinite(skyvisibility)?"
-                    "saturate(skyvisibility):1.0f;",
+                "if(applyskyvisibilitytodiffuseibl)",
+                "environmentdiffuse*=skyvisibility;",
                 "float3environmentspecular=0.0f;",
+                "environmentspecular=evaluatepbrenvironmentspecular(",
+                "if(applyskyvisibilitytospecularibl)",
+                "environmentspecular*=skyvisibility;",
                 "float3screenspaceindirect=",
                 "composescreenspaceindirectlighting("
             },
@@ -702,17 +761,8 @@ namespace
         Require(
             CountOccurrences(compositeShader, "t_skyvisibility[") == 1u &&
                 CountOccurrences(compositeShader, "environmentdiffuse*=") == 1u &&
-                CountOccurrences(compositeShader, "skyvisibility") == 6u,
-            "the Visibility composite must contain one guarded sky load and one diffuse-IBL modulation site");
-        const std::string_view compositeSpecular = ExtractSection(
-            compositeShader,
-            "float3environmentspecular=0.0f;",
-            "float3screenspaceindirect=",
-            "Visibility specular IBL section");
-        RequireAbsent(
-            compositeSpecular,
-            "skyvisibility",
-            "sky visibility must not affect recomputed specular IBL");
+                CountOccurrences(compositeShader, "environmentspecular*=") == 1u,
+            "the Visibility composite must contain one guarded sky load and one modulation site per IBL lobe");
         const std::string_view indirectSection = ExtractSection(
             compositeShader,
             "float3screenspaceindirect=",
@@ -726,10 +776,13 @@ namespace
         const size_t modulationCount =
             CountOccurrences(deferredShader, "environmentdiffuse*=") +
             CountOccurrences(deferredMsaaShader, "environmentdiffuse*=") +
-            CountOccurrences(compositeShader, "environmentdiffuse*=");
+            CountOccurrences(compositeShader, "environmentdiffuse*=") +
+            CountOccurrences(deferredShader, "environmentspecular*=") +
+            CountOccurrences(deferredMsaaShader, "environmentspecular*=") +
+            CountOccurrences(compositeShader, "environmentspecular*=");
         Require(
-            modulationCount == 3u,
-            "the feature must have exactly three diffuse-IBL modulation sites");
+            modulationCount == 6u,
+            "the feature must have exactly one modulation site per IBL lobe and shader topology");
 
         Require(
             CountOccurrences(
@@ -740,11 +793,20 @@ namespace
             deferredPassHeader,
             "constdonut::engine::lightprobe*environment,"
                 "nvrhi::itexture*skyvisibility,"
+                "boolapplyskyvisibilitytodiffuseibl,"
+                "boolapplyskyvisibilitytospecularibl,"
                 "nvrhi::itexture*sourceradianceoutput,",
             "deferred lighting must accept sky visibility independently of directional visibility");
         RequireContains(
             deferredPass,
+            "constboolhasskyvisibilityconsumer="
+                "applyskyvisibilitytodiffuseibl||"
+                "applyskyvisibilitytospecularibl;",
+            "deferred lighting must accept either or both IBL consumers");
+        RequireContains(
+            deferredPass,
             "nvrhi::itexture*activeskyvisibility="
+                "hasskyvisibilityconsumer&&"
                 "isskyvisibilitytexturecompatible(skyvisibility,inputs)?"
                 "skyvisibility:nullptr;",
             "deferred lighting must reject incompatible or stale sky textures");
@@ -763,8 +825,19 @@ namespace
         }
         RequireContains(
             deferredPass,
-            "constants.skyvisibilityenabled=activeskyvisibility?1u:0u;",
-            "deferred loads must be disabled before binding fallback white");
+            "constants.skyvisibilityapplication=activeskyvisibility?",
+            "deferred application mode must be neutral before binding fallback white");
+        for (const std::string_view application : {
+                "uvsr_sky_visibility_apply_neither",
+                "uvsr_sky_visibility_apply_diffuse_ibl",
+                "uvsr_sky_visibility_apply_specular_ibl",
+                "uvsr_sky_visibility_apply_both_ibl" })
+        {
+            RequireContains(
+                deferredPass,
+                application,
+                "deferred lighting must encode all four sky-visibility application modes");
+        }
         RequireContains(
             deferredPass,
             "nvrhi::bindingsetitem::texture_srv(22,"
@@ -773,16 +846,25 @@ namespace
             "deferred lighting must bind white when sky visibility is unavailable");
         RequireContains(
             deferredConstants,
-            "uintskyvisibilityenabled;",
-            "the deferred constant block must carry a guarded-load availability flag");
+            "uintskyvisibilityapplication;",
+            "the deferred constant block must carry the four-state application mode");
 
         RequireContains(
             visibilityPassHeader,
-            "nvrhi::itexture*skyvisibility=nullptr;",
+            "nvrhi::itexture*skyvisibility=nullptr;"
+                "boolapplyskyvisibilitytodiffuseibl=false;"
+                "boolapplyskyvisibilitytospecularibl=false;",
             "the Visibility composite input set must carry sky visibility separately");
         RequireContains(
             visibilityPass,
+            "constboolhasskyvisibilityconsumer="
+                "inputs.applyskyvisibilitytodiffuseibl||"
+                "inputs.applyskyvisibilitytospecularibl;",
+            "the Visibility composite must accept either or both IBL consumers");
+        RequireContains(
+            visibilityPass,
             "nvrhi::itexture*activeskyvisibility="
+                "hasskyvisibilityconsumer&&"
                 "isskyvisibilitytexturecompatible(inputs.skyvisibility,"
                 "fullsize)?inputs.skyvisibility:nullptr;",
             "the Visibility composite must reject incompatible or stale sky textures");
@@ -806,8 +888,8 @@ namespace
             "the Visibility composite layout must bind t12 exactly once");
         RequireContains(
             visibilityPass,
-            "constants.skyvisibilityenabled=activeskyvisibility?1u:0u;",
-            "Visibility composite loads must be disabled before binding fallback white");
+            "constants.skyvisibilityapplication=activeskyvisibility?",
+            "Visibility application mode must be neutral before binding fallback white");
         RequireContains(
             visibilityPass,
             "nvrhi::bindingsetitem::texture_srv(12,"
@@ -816,8 +898,8 @@ namespace
             "the Visibility composite must bind white when sky visibility is unavailable");
         RequireContains(
             visibilityConstants,
-            "uintskyvisibilityenabled;",
-            "the Visibility constant block must carry a guarded-load availability flag");
+            "uintskyvisibilityapplication;",
+            "the Visibility constant block must carry the four-state application mode");
     }
 
     void ValidateSkyUiAndCommands(
@@ -838,9 +920,12 @@ namespace
                 "beginanimatedtoggleregion("
                     "\"##raytracedskyvisibilitycontrols\","
                     "skyvisibility.enabled&&skyvisibilityavailable)",
+                "\"diffuseibl##raytracedskyvisibility\"",
+                "\"specularibl##raytracedskyvisibility\"",
                 "\"samplesperpixel##raytracedskyvisibility\"",
                 "\"noisepattern##raytracedskyvisibility\"",
                 "\"animatesamples##raytracedskyvisibility\"",
+                "\"maxdistance##raytracedskyvisibility\"",
                 "\"raybias##raytracedskyvisibility\"",
                 "endanimatedtoggleregion();",
                 "enddrawerbody();"
@@ -866,9 +951,12 @@ namespace
             "imgui::checkbox(\"enable##raytracedskyvisibility\"",
             "Enable must remain visible while the dependent region is collapsed");
         for (const std::string_view hiddenControl : {
+                "diffuseibl##raytracedskyvisibility",
+                "specularibl##raytracedskyvisibility",
                 "samplesperpixel##raytracedskyvisibility",
                 "noisepattern##raytracedskyvisibility",
                 "animatesamples##raytracedskyvisibility",
+                "maxdistance##raytracedskyvisibility",
                 "raybias##raytracedskyvisibility" })
         {
             RequireAbsent(
@@ -884,9 +972,12 @@ namespace
 
         for (const std::string_view command : {
                 "sky.visibility.enabled",
+                "sky.visibility.diffuse-ibl",
+                "sky.visibility.specular-ibl",
                 "sky.visibility.samples-per-pixel",
                 "sky.visibility.noise-pattern",
                 "sky.visibility.animate-samples",
+                "sky.visibility.max-distance",
                 "sky.visibility.ray-bias" })
         {
             Require(
@@ -898,6 +989,10 @@ namespace
             {
                 "value(\"sky.visibility.enabled\",kind::boolean,"
                     "section::sky,\"on|off\")",
+                "value(\"sky.visibility.diffuse-ibl\",kind::boolean,"
+                    "section::sky,\"on|off\")",
+                "value(\"sky.visibility.specular-ibl\",kind::boolean,"
+                    "section::sky,\"on|off\")",
                 "value(\"sky.visibility.samples-per-pixel\",kind::enum,"
                     "section::sky,\"1|2|4|8|16|32|64\")",
                 "value(\"sky.visibility.noise-pattern\",kind::enum,"
@@ -905,10 +1000,12 @@ namespace
                     "void-cluster-blue-noise\")",
                 "value(\"sky.visibility.animate-samples\",kind::boolean,"
                     "section::sky,\"on|off\")",
+                "value(\"sky.visibility.max-distance\",kind::enum,"
+                    "section::sky,\"max|32m|16m|8m|4m|2m\")",
                 "value(\"sky.visibility.ray-bias\",kind::float,"
                     "section::sky,\"worldunits0..0.1\")"
             },
-            "the Sky command catalog must expose the five settings in UI order");
+            "the Sky command catalog must expose all eight settings in UI order");
 
         const std::string_view dispatcher = ExtractSection(
             viewer,
@@ -919,6 +1016,10 @@ namespace
             dispatcher,
             {
                 "path==\"sky.visibility.enabled\"",
+                "path==\"sky.visibility.diffuse-ibl\"",
+                "candidate.applytodiffuseibl,",
+                "path==\"sky.visibility.specular-ibl\"",
+                "candidate.applytospecularibl,",
                 "path==\"sky.visibility.samples-per-pixel\"",
                 "{\"1\",0},{\"2\",1},{\"4\",2},{\"8\",3},"
                     "{\"16\",4},{\"32\",5},{\"64\",6}",
@@ -930,6 +1031,10 @@ namespace
                     "raytracedskyvisibilitynoisepattern::"
                     "voidclusterbluenoise}",
                 "path==\"sky.visibility.animate-samples\"",
+                "path==\"sky.visibility.max-distance\"",
+                "{\"max\",rayvisibilitymaxdistance::maximum}",
+                "{\"32m\",rayvisibilitymaxdistance::meters32}",
+                "{\"2m\",rayvisibilitymaxdistance::meters2}",
                 "candidate.raybias,",
                 "raytracedskyvisibilitymaximumraybias,",
                 "israytracedskyvisibilityconfigurationsupported(candidate)",
@@ -990,7 +1095,7 @@ int main(int argc, char** argv)
         shader,
         shaderConfig);
     ValidateRendererIntegration(viewer);
-    ValidateDiffuseIblConsumers(
+    ValidateIblConsumers(
         deferredShader,
         deferredMsaaShader,
         deferredPass,

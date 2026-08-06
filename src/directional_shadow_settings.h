@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ray_visibility_max_distance.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -30,6 +32,8 @@ namespace uvsr
         bool hardShadows = false;
         int32_t sampleRateLog2 = 1;
         float rayBias = 0.002f;
+        RayVisibilityMaxDistance maxDistance =
+            RayVisibilityMaxDistance::Maximum;
         HeitzRatioEstimatorNoisePattern noisePattern =
             HeitzRatioEstimatorNoisePattern::VoidClusterBlueNoise;
         bool animateSamples = true;
@@ -84,6 +88,7 @@ namespace uvsr
                 settings.sampleRateLog2) &&
             IsHeitzRatioEstimatorNoisePatternSupported(
                 settings.noisePattern) &&
+            IsRayVisibilityMaxDistanceSupported(settings.maxDistance) &&
             settings.rayBias >= 0.f &&
             settings.rayBias <= HeitzRatioEstimatorMaximumRayBias;
     }

@@ -450,6 +450,8 @@ void PbrDeferredLightingPass::Render(
     const uvsr::DirectionalLightVisibilities& directionalLightVisibilities,
     const LightProbe* environment,
     nvrhi::ITexture* skyVisibility,
+    bool applySkyVisibilityToDiffuseIbl,
+    bool applySkyVisibilityToSpecularIbl,
     nvrhi::ITexture* sourceRadianceOutput,
     bool separateIndirect,
     bool writeSourceRadiance,
@@ -522,7 +524,11 @@ void PbrDeferredLightingPass::Render(
         directionalLightVisibilities.screenSpace);
     activeVisibilities.ratioEstimator = acceptVisibility(
         directionalLightVisibilities.ratioEstimator);
+    const bool hasSkyVisibilityConsumer =
+        applySkyVisibilityToDiffuseIbl ||
+        applySkyVisibilityToSpecularIbl;
     nvrhi::ITexture* activeSkyVisibility =
+        hasSkyVisibilityConsumer &&
         IsSkyVisibilityTextureCompatible(skyVisibility, inputs)
             ? skyVisibility
             : nullptr;
@@ -537,7 +543,13 @@ void PbrDeferredLightingPass::Render(
     constants.separateIndirect = separateIndirect ? 1 : 0;
     constants.lightingDebugView = lightingDebugView;
     constants.visibilityDebugView = visibilityDebugView;
-    constants.skyVisibilityEnabled = activeSkyVisibility ? 1u : 0u;
+    constants.skyVisibilityApplication = activeSkyVisibility
+        ? (applySkyVisibilityToDiffuseIbl
+            ? (applySkyVisibilityToSpecularIbl
+                ? UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL
+                : UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL)
+            : UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL)
+        : UVSR_SKY_VISIBILITY_APPLY_NEITHER;
     constants.directionalVisibilityLightIndices = int2(-1);
     constants.directionalVisibilityEncodings = uint2(
         uint32_t(uvsr::DirectionalLightVisibilityEncoding::ScalarR8Unorm));

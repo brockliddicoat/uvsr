@@ -222,6 +222,9 @@ namespace
 
         const RayTracedSkyVisibilitySettings settings;
         assert(!settings.enabled);
+        assert(settings.applyToDiffuseIbl);
+        assert(!settings.applyToSpecularIbl);
+        assert(HasRayTracedSkyVisibilityConsumer(settings));
         assert(settings.sampleRateLog2 == 0);
         assert(ResolveRayTracedSkyVisibilitySampleCount(
             settings.sampleRateLog2) == 1u);
@@ -229,7 +232,15 @@ namespace
             RayTracedSkyVisibilityNoisePattern::VoidClusterBlueNoise);
         assert(settings.animateSamples);
         assert(Near(settings.rayBias, 0.002f));
+        assert(settings.maxDistance ==
+            RayVisibilityMaxDistance::Maximum);
         assert(IsRayTracedSkyVisibilityConfigurationSupported(settings));
+
+        RayTracedSkyVisibilitySettings noConsumers = settings;
+        noConsumers.applyToDiffuseIbl = false;
+        noConsumers.applyToSpecularIbl = false;
+        assert(!HasRayTracedSkyVisibilityConsumer(noConsumers));
+        assert(IsRayTracedSkyVisibilityConfigurationSupported(noConsumers));
 
         constexpr std::array<std::string_view, 7> ExpectedLabels = {
             "1", "2", "4", "8", "16", "32", "64"
@@ -252,6 +263,44 @@ namespace
         assert(GetRayTracedSkyVisibilitySampleRateLabel(7).empty());
         assert(ResolveRayTracedSkyVisibilitySampleCount(-1) == 1u);
         assert(ResolveRayTracedSkyVisibilitySampleCount(7) == 1u);
+
+        constexpr std::array<RayVisibilityMaxDistance, 6> DistanceModes = {
+            RayVisibilityMaxDistance::Maximum,
+            RayVisibilityMaxDistance::Meters32,
+            RayVisibilityMaxDistance::Meters16,
+            RayVisibilityMaxDistance::Meters8,
+            RayVisibilityMaxDistance::Meters4,
+            RayVisibilityMaxDistance::Meters2
+        };
+        constexpr std::array<std::string_view, 6> DistanceLabels = {
+            "Max", "32m", "16m", "8m", "4m", "2m"
+        };
+        constexpr std::array<float, 5> FiniteDistances = {
+            32.f, 16.f, 8.f, 4.f, 2.f
+        };
+        for (size_t index = 0u; index < DistanceModes.size(); ++index)
+        {
+            assert(IsRayVisibilityMaxDistanceSupported(
+                DistanceModes[index]));
+            assert(GetRayVisibilityMaxDistanceLabel(
+                DistanceModes[index]) == DistanceLabels[index]);
+        }
+        assert(Near(ResolveRayVisibilityMaxDistance(
+            RayVisibilityMaxDistance::Maximum, 0.25f), 1.f));
+        assert(Near(ResolveRayVisibilityMaxDistance(
+            RayVisibilityMaxDistance::Maximum, 7.f), 14.f));
+        for (size_t index = 0u; index < FiniteDistances.size(); ++index)
+        {
+            assert(Near(ResolveRayVisibilityMaxDistance(
+                DistanceModes[index + 1u], 1000.f),
+                FiniteDistances[index]));
+        }
+        assert(!IsRayVisibilityMaxDistanceSupported(
+            RayVisibilityMaxDistance::Count));
+        assert(!IsRayVisibilityMaxDistanceSupported(
+            static_cast<RayVisibilityMaxDistance>(-1)));
+        assert(GetRayVisibilityMaxDistanceLabel(
+            RayVisibilityMaxDistance::Count).empty());
     }
 
     void TestConfigurationAndBiasValidation()
@@ -275,6 +324,13 @@ namespace
         assert(!IsRayTracedSkyVisibilityConfigurationSupported(settings));
         settings.noisePattern =
             static_cast<RayTracedSkyVisibilityNoisePattern>(-1);
+        assert(!IsRayTracedSkyVisibilityConfigurationSupported(settings));
+
+        settings = {};
+        settings.maxDistance = RayVisibilityMaxDistance::Count;
+        assert(!IsRayTracedSkyVisibilityConfigurationSupported(settings));
+        settings.maxDistance =
+            static_cast<RayVisibilityMaxDistance>(-1);
         assert(!IsRayTracedSkyVisibilityConfigurationSupported(settings));
 
         for (const float invalidBias : {

@@ -2,7 +2,7 @@
 
 ## Status
 
-- State: technically verified candidate awaiting product acceptance
+- State: technically verified extension awaiting exact-artifact product review
 - Coordinator: `/root`
 - Project/integration branch and worktree:
   `codex/ray-traced-sky-visibility` in
@@ -17,8 +17,10 @@
 
 Goal: add a standalone full-resolution current-frame ray-traced sky-visibility
 pass that estimates the cosine-weighted geometric-normal hemisphere visibility
-of each valid surface pixel and modulates diffuse IBL at both of its required
-consumption points without changing the proven Heitz shadow pass.
+of each valid surface pixel, supports independently applying that experimental
+scalar to diffuse IBL and specular IBL, and shares explicit maximum-distance
+modes with the proven Heitz shadow pass without changing either pass's default
+`Max` traversal behavior.
 
 Done when:
 
@@ -29,10 +31,18 @@ Done when:
       blue-noise choices, reverse-Z reconstruction, geometric-normal bias,
       representable-position offset, ray distance, and fail-open behavior
       without refactoring or behaviorally changing the shadow pass.
-- [x] Visibility affects only diffuse IBL before final-image composition and
-      before that diffuse IBL becomes GI source radiance; direct lighting,
-      direct shadows, specular IBL, emissive, ambient occlusion, and traced
-      indirect lighting remain unchanged.
+- [x] Independent Diffuse IBL and Specular IBL application toggles support
+      either, neither, or both consumers; defaults preserve the published
+      experiment with diffuse on and specular off whenever the global feature
+      is enabled.
+- [x] Visibility affects only the selected IBL consumers, before diffuse IBL
+      enters final composition and GI source radiance; direct lighting, direct
+      shadows, emissive, ambient occlusion, and traced indirect lighting remain
+      unchanged.
+- [x] Both sky visibility and ratio-estimator shadows expose `Max`, `32m`,
+      `16m`, `8m`, `4m`, and `2m` traversal modes. `Max` preserves the existing
+      scene-diagonal reference; finite modes are labeled bounded approximations
+      rather than exact sky visibility or exact sun visibility.
 - [x] Disabled or unavailable operation supplies exact white visibility, and
       the feature owns no temporal history, cache, denoiser, reconstruction,
       visibility bitmask, bent normal, spherical harmonics, adaptive schedule,
@@ -48,23 +58,25 @@ Done when:
 
 In scope:
 
-- UVSR-owned sky-visibility settings and command-catalog entries.
+- UVSR-owned sky-visibility settings, independent IBL consumer toggles, and
+  command-catalog entries.
+- One shared first-party ray-visibility distance mode used by sky visibility
+  and Heitz shadows while preserving their default resolved ray distance.
 - A separate full-resolution `R8_UNORM` output, compute shader, dispatch, timing,
   resize-safe lifetime, and white fallback.
 - Reuse of the existing consumer-neutral Representation/TLAS service.
-- Deferred diffuse-IBL consumption in both single-sample and MSAA paths, plus
-  the GI source-radiance path.
+- Deferred diffuse- and specular-IBL consumption in both single-sample and MSAA
+  paths, plus diffuse IBL in the GI source-radiance path.
 - Focused tests and durable renderer documentation.
 
 Non-goals:
 
-- Any changes to the Heitz ratio-estimator shadow algorithm, pass, resources,
-  settings, or directional-shadow composition.
+- Any changes to the Heitz ratio-estimator shadow algorithm, pass resources,
+  or directional-shadow composition beyond selecting the requested TMax.
 - Temporal accumulation, caching, denoising, reconstruction, visibility-bitmask
   integration, bent normals, spherical harmonics, adaptive scheduling, or
   shadowed-pixel-only tracing.
-- Direct lighting/shadows, specular IBL, emissive, AO, or traced-indirect-light
-  modulation.
+- Direct lighting/shadows, emissive, AO, or traced-indirect-light modulation.
 - Changes under `donut/`, release packaging, or unrelated renderer cleanup.
 
 Affected subsystems and paths:
@@ -115,8 +127,12 @@ asset/package contracts:
 - The sample-count domain is exactly `{1, 2, 4, 8, 16, 32, 64}`, default `1`.
 - Every sample is a cosine-weighted direction about the geometric normal; each
   contributes binary opaque-hit zero or miss one before arithmetic averaging.
-- The texture is consumed only as a multiplier on diffuse IBL at the two named
-  points and has no directional-shadow binding or dependency.
+- The texture is consumed only as an optional multiplier on independently
+  selected diffuse and specular IBL terms and has no directional-shadow binding
+  or dependency.
+- The cosine-weighted geometric-normal scalar is intentionally experimental
+  for specular IBL; it is not a roughness- or reflection-direction-resolved
+  specular visibility estimator.
 
 ## Assignment Summary
 
@@ -127,6 +143,9 @@ asset/package contracts:
 | `sky-tests` | `/root/verification_design` | Shared feature worktree | `efff7ec` | Two new sky test files only | Completed verification design and integrated producer API | Complete |
 | `integrate` | `/root` | Feature worktree | `efff7ec` | Renderer/UI/build/tests/docs; review all combined changes | Audit decisions and worker handoffs | Active |
 | `independent-review` | `/root/integration_review` | Read-only shared feature worktree | Candidate | None | Integrated candidate | Complete |
+| `tmax-shadow-audit` | `/root/tmax_shadow_audit` | Read-only shared feature worktree | `22195f3` | None | Published pass and Heitz contracts | Complete |
+| `ibl-consumer-audit` | `/root/ibl_consumer_audit` | Read-only shared feature worktree | `22195f3` | None | Published deferred/composite contracts | Complete |
+| `sky-sparse-audit` | `/root/sky_sparse_audit` | Read-only shared feature worktree | `22195f3` | None | Published pass and proposed extension | Complete |
 
 ## Assignment Contracts
 
@@ -292,31 +311,33 @@ asset/package contracts:
 
 ## Integration Order
 
-1. Freeze existing Heitz, TLAS, lighting, and UI contracts from audits.
-2. Add independent settings/constants/resource/pass/shader and focused math
-   tests.
-3. Bind and dispatch only when enabled and representation-ready; preserve white
-   on all inactive/failure paths.
-4. Consume the scalar factor at both diffuse-IBL-only sites in single-sample and
-   MSAA rendering.
-5. Add UI/command controls, shader/build registration, source contracts, and
-   durable documentation.
-6. Build, test, inspect runtime behavior, obtain independent review, repair, and
+1. Re-audit the published producer, Heitz TMax, lighting consumers, and sparse
+   failure edges against primary ray-query references.
+2. Add the shared distance mode and preserve scene-diagonal `Max` as the exact
+   default for both ray-query passes.
+3. Add independent diffuse/specular application settings; dispatch only when at
+   least one selected IBL consumer exists and preserve white on every inactive
+   or failure path.
+4. Consume the scalar only at the selected diffuse/specular IBL terms in
+   single-sample, MSAA, and screen-space composition paths.
+5. Extend UI/commands/tests/docs, review the combined diff, and repair every
+   substantiated sparse-edge finding.
+6. Build, test, inspect runtime behavior, obtain fresh independent review, and
    rerun affected evidence.
-7. Commit the exact verified candidate, reconcile this plan/roadmap, and use the
-   established GitHub integration path for `main`.
+7. Commit and push the exact replacement candidate, update draft PR #30, and
+   require product review of the new artifact before merge.
 
 ## Verification Plan
 
 | Acceptance Criterion | Evidence Required | Command Or Experiment | Result Or Artifact |
 | --- | --- | --- | --- |
 | Exact sample-count and averaging math | Deterministic unit/source contracts for 1 through 64 and binary hit/miss mean | Focused sky-visibility tests | Passed in Release CTest |
-| Shadow implementation unchanged | Zero diff in existing Heitz pass files plus passing Heitz tests | Diff and focused CTest | Passed; all named Heitz paths are unchanged |
-| Shader/pass/resource correctness | All variants compile/package; format, dispatch, resize, and failure paths inspected | Release build and source/runtime contracts | Build and contracts passed; live resize was stopped after unexpected input |
-| Diffuse IBL-only modulation | Single-sample/MSAA source contracts and visual A/B with excluded terms checked | Focused tests and runtime matrix | Contracts passed; live 1x and 4x MSAA rendering passed |
-| UI and defaults | Default-off, collapsed bottom-of-Sky layout and command round trip | UI tests and runtime inspection | Passed; default-off showed only Enable, then all four controls appeared |
-| Old result exact when inactive | Disabled and unavailable branch proof plus live off/on/off comparison | Runtime fallback matrix | Source proof passed; live disabled result returned immediately |
-| Integrated quality | Independent P0 through P3 rendering/lifetime review | Read-only reviewer handoff | Passed with no remaining findings after one fail-open repair |
+| Shared TMax contract | `Max` preserves the established expression; finite values map exactly and both passes reject NaN before DXR | Focused settings/source tests and independent review | Passed for sky and hard/soft Heitz paths; one sparse NaN fail-open repair added |
+| Shader/pass/resource correctness | All variants compile/package; format, dispatch, bindings, and failure paths inspected | Release build and source/runtime contracts | Build, exact shader-bundle verification, and contracts passed |
+| Independent IBL application | Neither/diffuse/specular/both source contracts cover single-sample, MSAA, composite, and GI-source isolation | Focused tests and independent review | Passed; only diffuse application reaches GI source radiance |
+| UI and defaults | Default-off collapsed layout, two application toggles, both distance domains, and command round trips | UI/catalog tests and source inspection | Passed; enabled defaults remain diffuse on and specular off |
+| Old result exact when inactive | Disabled, unavailable, incompatible, and neither branch proof | Source and focused fallback contracts | Passed; application mode is neutral and producer/TLAS/resolve/dispatch work is skipped for neither |
+| Integrated quality | Independent P0 through P3 rendering/lifetime review | Three read-only reviewer handoffs | Passed with no remaining P0 through P2 findings; the two P3 findings were repaired |
 
 ## Decisions
 
@@ -326,6 +347,8 @@ asset/package contracts:
 | 2026-08-06 | Freeze interfaces through read-only audits, then split new producer files and diffuse-IBL consumer files into disjoint writer leases. | The audits resolved the binding and fallback contracts; disjoint ownership now improves speed without competing edits, while renderer/TLAS/UI/build integration remains coordinator-owned. | Sky pass, lighting consumers, integration |
 | 2026-08-06 | Treat open PRs #10 and #11 as publication-order checks only. | They touch screen-space helper extraction and tests, not this ray-query producer or deferred IBL contract. | Integration/publication |
 | 2026-08-06 | Drive contribution history solely from the actual producer result. | The independent reviewer found that optimistic state could repeatedly reset AA when pipeline creation or binding failed; the dispatch gate now checks pass support and only a real result changes contribution state. | Fail-open integration |
+| 2026-08-06 | Preserve the published consumer defaults while exposing the requested experiment. | Global sky visibility remains off; when enabled, diffuse application defaults on and specular application defaults off. Either, neither, or both consumers may be selected, and neither avoids unnecessary traversal. | Settings, producer, lighting consumers |
+| 2026-08-06 | Use one shared six-value distance domain with `Max` as the compatibility reference. | Both passes already resolve `Max` as `max(sceneDiagonal * 2, 1)`; finite distances set TMax directly and are explicitly bounded approximations, not exact sky or sun visibility. | Sky visibility and Heitz shadows |
 
 ## Progress and Handoffs
 
@@ -338,12 +361,14 @@ asset/package contracts:
 | 2026-08-06 | `/root/integration_review` review | Complete | Combined working-tree candidate | High-risk shader, TLAS, binding, MSAA, fail-open, and diffuse-only review | No remaining P0 through P3 findings |
 | 2026-08-06 | `/root` automated verification | Complete | `build/bin/uvsr.exe`, SHA-256 `F1B4FED497E37B68833F2ED133112D92667162DC60F05C592ED11B1EC1EBCA7C` | Full Release build; 38 of 38 CTest; shader bundles; README counts; 1,260 Title Case checks; diff checks | Exact artifact live-smoked next |
 | 2026-08-06 | `/root` runtime smoke | Partial | Exact candidate at Sponza Benchmark Position 1 | Default off; 1 and 64 samples; both noise modes; fixed/animated toggle; off fallback; 4x MSAA independence | Stopped desktop automation after unexpected camera input during resize; leave exact build open for product review |
+| 2026-08-06 | Three extension auditors | Complete | Replacement working-tree candidate | TMax, IBL-consumer, and sparse-edge reviews against DXR, Heitz, Filament, Activision, and NVIDIA references | No P0 through P2 findings; coordinator repaired NaN TMax and stale-plan P3 findings |
+| 2026-08-06 | `/root` extension verification | Complete | `build/bin/uvsr.exe` before commit | Full Release build; 38 of 38 CTest; exact shader bundles; README counts; 1,261 Title Case checks; diff checks | Exact-build live matrix deferred because Cyberpunk 2077 was open on the target GPU; commit and rebuild exact SHA next |
 
 ## Risks and Escalation Triggers
 
-- The diffuse IBL value may feed final lighting and GI through shared code; the
-  factor must be applied once before both consumers without touching specular or
-  traced indirect terms.
+- The diffuse IBL value feeds final lighting and GI source radiance, while
+  specular IBL feeds final lighting only. Independent application must preserve
+  that split without touching direct, emissive, AO, or traced-indirect terms.
 - Ray-query availability, TLAS construction timing, resize, and first-frame
   failures must not leave stale or black visibility.
 - A full-resolution 64-ray mode is intentionally expensive; correctness and
@@ -352,8 +377,8 @@ asset/package contracts:
 
 Stop and ask the user if:
 
-- Correct diffuse-only placement requires a visible product tradeoff beyond the
-  stated scope.
+- Correct independent IBL-lobe placement requires a visible product tradeoff
+  beyond the stated experimental scope.
 - Publishing to `main` would require choosing between materially incompatible
   accepted work or bypassing an established integration owner.
 
@@ -361,9 +386,11 @@ Stop and ask the user if:
 
 - Final integrated commit: pending.
 - Verification summary: Release build, 38 of 38 CTest, shader bundles,
-  documentation validators, source invariants, and bounded runtime smoke passed;
-  live resize and product acceptance remain.
-- Independent review: complete with no remaining P0 through P3 findings.
+  documentation validators, source invariants, and independent sparse review
+  passed; the replacement application/distance matrix and product acceptance
+  remain for the exact committed artifact.
+- Independent review: complete with no remaining P0 through P2 findings; both
+  P3 findings were repaired and affected checks rerun.
 - Coming Soon/documentation update: active entry added; completion pending.
 - Pushed/PR/merged, or intentionally local: pending.
 - Remaining experiments or follow-ups: pending.

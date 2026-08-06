@@ -3643,6 +3643,8 @@ public:
     void EnsureRayTracedSkyVisibilityPass()
     {
         if (!m_ui.RayTracedSkyVisibility.enabled ||
+            !HasRayTracedSkyVisibilityConsumer(
+                m_ui.RayTracedSkyVisibility) ||
             m_RayTracedSkyVisibilityPass ||
             !SupportsRayTracedSkyVisibility())
         {
@@ -3831,6 +3833,8 @@ public:
                 (m_ui.DirectionalShadows.ratioEstimator.enabled &&
                     SupportsHeitzRatioEstimatorShadows()) ||
                 (m_ui.RayTracedSkyVisibility.enabled &&
+                    HasRayTracedSkyVisibilityConsumer(
+                        m_ui.RayTracedSkyVisibility) &&
                     SupportsRayTracedSkyVisibility());
             if (!worldRepresentationRequested ||
                 !m_WorldSpaceRepresentation ||
@@ -4119,6 +4123,8 @@ public:
             SupportsHeitzRatioEstimatorShadows();
         const bool rayTracedSkyVisibilitySelected =
             m_ui.RayTracedSkyVisibility.enabled &&
+            HasRayTracedSkyVisibilityConsumer(
+                m_ui.RayTracedSkyVisibility) &&
             SupportsRayTracedSkyVisibility();
         const bool worldRepresentationSelected =
             heitzRatioEstimatorSelected ||
@@ -4202,13 +4208,23 @@ public:
             globalEnvironment
                 ? globalEnvironment->diffuseScale
                 : 0.f;
+        const bool skyVisibilityDiffuseIblAvailable =
+            m_ui.RayTracedSkyVisibility.applyToDiffuseIbl &&
+            diffuseEnvironment &&
+            diffuseEnvironmentScale > 0.f;
+        const bool skyVisibilitySpecularIblAvailable =
+            m_ui.RayTracedSkyVisibility.applyToSpecularIbl &&
+            globalEnvironment &&
+            globalEnvironment->specularMap &&
+            globalEnvironment->environmentBrdf &&
+            globalEnvironment->specularScale > 0.f;
         const bool rayTracedSkyVisibilityExpectedToContribute =
             rayTracedSkyVisibilitySelected &&
             m_RayTracedSkyVisibilityPass &&
             m_RayTracedSkyVisibilityPass->IsSupported() &&
             worldRepresentationReady &&
-            diffuseEnvironment &&
-            diffuseEnvironmentScale > 0.f;
+            (skyVisibilityDiffuseIblAvailable ||
+                skyVisibilitySpecularIblAvailable);
         const bool runScreenSpaceVisibility =
             m_ui.HasActiveScreenSpaceVisibilityConsumer();
         const bool writeSourceRadiance = runScreenSpaceVisibility &&
@@ -4221,6 +4237,8 @@ public:
         HeitzRatioEstimatorShadowResult heitzShadowResult;
         RayTracedSkyVisibilityResult skyVisibilityResult;
         nvrhi::ITexture* skyVisibility = nullptr;
+        bool applySkyVisibilityToDiffuseIbl = false;
+        bool applySkyVisibilityToSpecularIbl = false;
         DirectionalLightVisibilities directionalVisibilities;
         MsaaVisibilityResolveOutputs closestSurfaceOutputs;
         bool closestSurfaceResolved = false;
@@ -4443,6 +4461,12 @@ public:
             skyVisibility = skyVisibilityResult
                 ? skyVisibilityResult.visibility
                 : nullptr;
+            applySkyVisibilityToDiffuseIbl =
+                skyVisibility &&
+                m_ui.RayTracedSkyVisibility.applyToDiffuseIbl;
+            applySkyVisibilityToSpecularIbl =
+                skyVisibility &&
+                m_ui.RayTracedSkyVisibility.applyToSpecularIbl;
             DeferredLightingPass::Inputs deferredInputs;
             deferredInputs.SetGBuffer(*m_RenderTargets);
             // Slot 14 carries the authored material ambient-occlusion
@@ -4496,6 +4520,8 @@ public:
                         directionalVisibilities,
                         globalEnvironment,
                         skyVisibility,
+                        applySkyVisibilityToDiffuseIbl,
+                        applySkyVisibilityToSpecularIbl,
                         m_RenderTargets
                             ->DirectDiffuseRadiance,
                         true,
@@ -4528,6 +4554,10 @@ public:
                     visibilityInputs.diffuseEnvironmentScale =
                         diffuseEnvironmentScale;
                     visibilityInputs.skyVisibility = skyVisibility;
+                    visibilityInputs.applySkyVisibilityToDiffuseIbl =
+                        applySkyVisibilityToDiffuseIbl;
+                    visibilityInputs.applySkyVisibilityToSpecularIbl =
+                        applySkyVisibilityToSpecularIbl;
                     if (globalEnvironment)
                     {
                         visibilityInputs.diffuseEnvironmentArrayIndex =
@@ -4578,6 +4608,8 @@ public:
                     directionalVisibilities,
                     globalEnvironment,
                     skyVisibility,
+                    applySkyVisibilityToDiffuseIbl,
+                    applySkyVisibilityToSpecularIbl,
                     m_RenderTargets->DirectDiffuseRadiance,
                     runScreenSpaceVisibility,
                     writeSourceRadiance,
@@ -4605,6 +4637,10 @@ public:
                     visibilityInputs.diffuseEnvironmentScale =
                         diffuseEnvironmentScale;
                     visibilityInputs.skyVisibility = skyVisibility;
+                    visibilityInputs.applySkyVisibilityToDiffuseIbl =
+                        applySkyVisibilityToDiffuseIbl;
+                    visibilityInputs.applySkyVisibilityToSpecularIbl =
+                        applySkyVisibilityToSpecularIbl;
                     if (globalEnvironment)
                     {
                         visibilityInputs.diffuseEnvironmentArrayIndex =
@@ -4765,6 +4801,8 @@ public:
                 directionalVisibilities,
                 globalEnvironment,
                 skyVisibility,
+                applySkyVisibilityToDiffuseIbl,
+                applySkyVisibilityToSpecularIbl,
                 nullptr,
                 deferredMsaaVisibilityPending,
                 false,
@@ -9989,9 +10027,12 @@ private:
         }
 
         if (path == "sky.visibility.enabled" ||
+            path == "sky.visibility.diffuse-ibl" ||
+            path == "sky.visibility.specular-ibl" ||
             path == "sky.visibility.samples-per-pixel" ||
             path == "sky.visibility.noise-pattern" ||
             path == "sky.visibility.animate-samples" ||
+            path == "sky.visibility.max-distance" ||
             path == "sky.visibility.ray-bias")
         {
             RayTracedSkyVisibilitySettings candidate =
@@ -10006,6 +10047,28 @@ private:
                     path,
                     candidate.enabled,
                     factoryDefaults.enabled,
+                    value,
+                    error);
+            }
+            else if (path == "sky.visibility.diffuse-ibl")
+            {
+                handled = ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.applyToDiffuseIbl,
+                    factoryDefaults.applyToDiffuseIbl,
+                    value,
+                    error);
+            }
+            else if (path == "sky.visibility.specular-ibl")
+            {
+                handled = ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.applyToSpecularIbl,
+                    factoryDefaults.applyToSpecularIbl,
                     value,
                     error);
             }
@@ -10063,6 +10126,27 @@ private:
                     value,
                     error);
             }
+            else if (path == "sky.visibility.max-distance")
+            {
+                static constexpr std::array<std::pair<std::string_view,
+                    RayVisibilityMaxDistance>, 6> Options = {{
+                        { "max", RayVisibilityMaxDistance::Maximum },
+                        { "32m", RayVisibilityMaxDistance::Meters32 },
+                        { "16m", RayVisibilityMaxDistance::Meters16 },
+                        { "8m", RayVisibilityMaxDistance::Meters8 },
+                        { "4m", RayVisibilityMaxDistance::Meters4 },
+                        { "2m", RayVisibilityMaxDistance::Meters2 }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.maxDistance,
+                    factoryDefaults.maxDistance,
+                    Options,
+                    value,
+                    error);
+            }
             else
             {
                 handled = ApplyCommandFloat(
@@ -10097,12 +10181,18 @@ private:
 
             const bool changed =
                 candidate.enabled != m_ui.RayTracedSkyVisibility.enabled ||
+                candidate.applyToDiffuseIbl !=
+                    m_ui.RayTracedSkyVisibility.applyToDiffuseIbl ||
+                candidate.applyToSpecularIbl !=
+                    m_ui.RayTracedSkyVisibility.applyToSpecularIbl ||
                 candidate.sampleRateLog2 !=
                     m_ui.RayTracedSkyVisibility.sampleRateLog2 ||
                 candidate.noisePattern !=
                     m_ui.RayTracedSkyVisibility.noisePattern ||
                 candidate.animateSamples !=
                     m_ui.RayTracedSkyVisibility.animateSamples ||
+                candidate.maxDistance !=
+                    m_ui.RayTracedSkyVisibility.maxDistance ||
                 candidate.rayBias != m_ui.RayTracedSkyVisibility.rayBias;
             m_ui.RayTracedSkyVisibility = candidate;
             if (changed)
@@ -10928,6 +11018,27 @@ private:
                 value,
                 error);
         }
+        else if (path == "shadows.ratio-estimator.max-distance")
+        {
+            static constexpr std::array<std::pair<std::string_view,
+                RayVisibilityMaxDistance>, 6> Options = {{
+                    { "max", RayVisibilityMaxDistance::Maximum },
+                    { "32m", RayVisibilityMaxDistance::Meters32 },
+                    { "16m", RayVisibilityMaxDistance::Meters16 },
+                    { "8m", RayVisibilityMaxDistance::Meters8 },
+                    { "4m", RayVisibilityMaxDistance::Meters4 },
+                    { "2m", RayVisibilityMaxDistance::Meters2 }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.maxDistance,
+                factoryDefaults.ratioEstimator.maxDistance,
+                Options,
+                value,
+                error);
+        }
         else if (path == "shadows.ratio-estimator.ray-bias")
         {
             handled = ApplyCommandFloat(
@@ -10987,6 +11098,8 @@ private:
                 m_ui.DirectionalShadows.ratioEstimator.noisePattern ||
             candidate.ratioEstimator.animateSamples !=
                 m_ui.DirectionalShadows.ratioEstimator.animateSamples ||
+            candidate.ratioEstimator.maxDistance !=
+                m_ui.DirectionalShadows.ratioEstimator.maxDistance ||
             candidate.ratioEstimator.rayBias !=
                 m_ui.DirectionalShadows.ratioEstimator.rayBias;
         m_ui.DirectionalShadows = candidate;
@@ -14846,6 +14959,35 @@ protected:
                     if (!softSamplingControlsEnabled)
                         ImGui::EndDisabled();
 
+                    int maxDistance =
+                        static_cast<int>(ratio.maxDistance);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (ImGui::Combo(
+                            "Max Distance##RatioEstimatorShadows",
+                            &maxDistance,
+                            RayVisibilityMaxDistanceLabels.data(),
+                            static_cast<int>(
+                                RayVisibilityMaxDistanceLabels.size())))
+                    {
+                        ratio.maxDistance =
+                            static_cast<RayVisibilityMaxDistance>(
+                                maxDistance);
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Max preserves the established scene-diagonal sun "
+                        "reference. Finite distances intentionally ignore "
+                        "farther blockers and are bounded visibility, not "
+                        "exact sun visibility.");
+                    if (DrawPresetResetIcon(
+                            "RatioEstimatorShadowMaxDistance",
+                            ratio.maxDistance !=
+                                ratioDefaults.maxDistance))
+                    {
+                        ratio.maxDistance = ratioDefaults.maxDistance;
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+
                     if (DrawSliderFloat(
                             "Ray Bias##RatioEstimatorShadows",
                             &ratio.rayBias,
@@ -17419,8 +17561,8 @@ protected:
                 m_app->ResetImageBasedLightingHistory();
             }
             ImGui::SetItemTooltip(
-                "Trace current-frame world-space sky visibility for diffuse "
-                "environment lighting only.");
+                "Trace current-frame world-space visibility for the selected "
+                "diffuse and/or specular environment-lighting consumers.");
             if (disableSkyVisibilityEnable)
                 ImGui::EndDisabled();
             if (DrawPresetResetIcon(
@@ -17435,6 +17577,47 @@ protected:
                     "##RayTracedSkyVisibilityControls",
                     skyVisibility.enabled && skyVisibilityAvailable))
             {
+                if (ImGui::Checkbox(
+                        "Diffuse IBL##RayTracedSkyVisibility",
+                        &skyVisibility.applyToDiffuseIbl))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Apply the scalar visibility to diffuse environment "
+                    "lighting before final composition and GI source "
+                    "radiance.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilityDiffuseIbl",
+                        skyVisibility.applyToDiffuseIbl !=
+                            skyVisibilityDefaults.applyToDiffuseIbl))
+                {
+                    skyVisibility.applyToDiffuseIbl =
+                        skyVisibilityDefaults.applyToDiffuseIbl;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
+                if (ImGui::Checkbox(
+                        "Specular IBL##RayTracedSkyVisibility",
+                        &skyVisibility.applyToSpecularIbl))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Experimentally apply the same cosine-weighted normal-"
+                    "hemisphere scalar to specular environment lighting. It "
+                    "is not a reflection-direction or roughness-resolved "
+                    "specular visibility estimate.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilitySpecularIbl",
+                        skyVisibility.applyToSpecularIbl !=
+                            skyVisibilityDefaults.applyToSpecularIbl))
+                {
+                    skyVisibility.applyToSpecularIbl =
+                        skyVisibilityDefaults.applyToSpecularIbl;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
                 int sampleRateLog2 = skyVisibility.sampleRateLog2;
                 const std::string_view sampleRateLabel =
                     GetRayTracedSkyVisibilitySampleRateLabel(
@@ -17511,6 +17694,35 @@ protected:
                 {
                     skyVisibility.animateSamples =
                         skyVisibilityDefaults.animateSamples;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
+                int maxDistance =
+                    static_cast<int>(skyVisibility.maxDistance);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (ImGui::Combo(
+                        "Max Distance##RayTracedSkyVisibility",
+                        &maxDistance,
+                        RayVisibilityMaxDistanceLabels.data(),
+                        static_cast<int>(
+                            RayVisibilityMaxDistanceLabels.size())))
+                {
+                    skyVisibility.maxDistance =
+                        static_cast<RayVisibilityMaxDistance>(
+                            maxDistance);
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Max preserves the established scene-diagonal reference. "
+                    "Finite distances intentionally ignore farther blockers "
+                    "and are bounded visibility, not exact sky visibility.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilityMaxDistance",
+                        skyVisibility.maxDistance !=
+                            skyVisibilityDefaults.maxDistance))
+                {
+                    skyVisibility.maxDistance =
+                        skyVisibilityDefaults.maxDistance;
                     m_app->ResetImageBasedLightingHistory();
                 }
 

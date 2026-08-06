@@ -53,7 +53,7 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 146u);
+    static_assert(UiSettingsCommandCatalog.size() == 150u);
     static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 12u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
         static_cast<std::uint8_t>(UiSettingsCommandVerb::Run));
@@ -65,9 +65,9 @@ int main()
         19u, // Visibility
         31u, // Anti-Aliasing
         4u,  // Debug
-        13u, // Sky
+        16u, // Sky
         23u, // Lights
-        6u,  // Directional Shadows
+        7u,  // Directional Shadows
         12u, // Screen-Space Directional Shadows
         21u, // Materials
         3u   // Footer
@@ -108,6 +108,7 @@ int main()
         "shadows.ratio-estimator.animate-samples",
         "shadows.ratio-estimator.enabled",
         "shadows.ratio-estimator.hard-shadows",
+        "shadows.ratio-estimator.max-distance",
         "shadows.ratio-estimator.noise-pattern",
         "shadows.ratio-estimator.ray-bias",
         "shadows.ratio-estimator.samples-per-pixel"
@@ -252,7 +253,10 @@ int main()
     requireDomain("representation.blas.update-mode", "rebuild|refit");
     requireDomain("representation.tlas.update-mode", "rebuild|refit");
     requireDomain("sky.visibility.enabled", "on|off");
+    requireDomain("sky.visibility.diffuse-ibl", "on|off");
+    requireDomain("sky.visibility.specular-ibl", "on|off");
     requireDomain("sky.visibility.animate-samples", "on|off");
+    requireDomain("sky.visibility.max-distance", "max|32m|16m|8m|4m|2m");
     requireDomain("sky.visibility.noise-pattern",
         "permutated-white-noise|void-cluster-blue-noise");
     requireDomain("sky.visibility.samples-per-pixel",
@@ -261,6 +265,8 @@ int main()
     requireDomain("shadows.ratio-estimator.enabled", "on|off");
     requireDomain("shadows.ratio-estimator.hard-shadows", "on|off");
     requireDomain("shadows.ratio-estimator.animate-samples", "on|off");
+    requireDomain("shadows.ratio-estimator.max-distance",
+        "max|32m|16m|8m|4m|2m");
     requireDomain("shadows.ratio-estimator.noise-pattern",
         "permutated-white-noise|void-cluster-blue-noise");
     requireDomain("shadows.ratio-estimator.samples-per-pixel",
@@ -312,13 +318,23 @@ int main()
         Kind::Float,
         Section::DirectionalShadows);
     requireKindAndSection(
+        "shadows.ratio-estimator.max-distance",
+        Kind::Enum,
+        Section::DirectionalShadows);
+    requireKindAndSection(
         "sky.visibility.enabled", Kind::Boolean, Section::Sky);
+    requireKindAndSection(
+        "sky.visibility.diffuse-ibl", Kind::Boolean, Section::Sky);
+    requireKindAndSection(
+        "sky.visibility.specular-ibl", Kind::Boolean, Section::Sky);
     requireKindAndSection(
         "sky.visibility.samples-per-pixel", Kind::Enum, Section::Sky);
     requireKindAndSection(
         "sky.visibility.noise-pattern", Kind::Enum, Section::Sky);
     requireKindAndSection(
         "sky.visibility.animate-samples", Kind::Boolean, Section::Sky);
+    requireKindAndSection(
+        "sky.visibility.max-distance", Kind::Enum, Section::Sky);
     requireKindAndSection(
         "sky.visibility.ray-bias", Kind::Float, Section::Sky);
 

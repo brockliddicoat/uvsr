@@ -342,6 +342,20 @@ namespace uvsr
             return {};
         }
 
+        const float rayDistance = ResolveRayVisibilityMaxDistance(
+            settings.maxDistance,
+            sceneDiagonal);
+        if (std::isnan(rayDistance))
+        {
+            if (!m_ReportedInvalidInput)
+            {
+                log::error(
+                    "Heitz ratio-estimator shadows received an invalid scene extent");
+                m_ReportedInvalidInput = true;
+            }
+            return {};
+        }
+
         const float3 propagationDirection =
             float3(light->GetDirection());
         const float directionLengthSquared =
@@ -401,7 +415,7 @@ namespace uvsr
         constants.hardShadows = stochastic ? 0u : 1u;
         constants.noisePattern =
             static_cast<uint32_t>(settings.noisePattern);
-        constants.rayDistance = std::max(sceneDiagonal * 2.f, 1.f);
+        constants.rayDistance = rayDistance;
         constants.denominatorEpsilon =
             RatioEstimatorDefaultDenominatorEpsilon;
         constants.depthQuantizationStep = GetDepthQuantizationStep(

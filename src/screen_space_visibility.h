@@ -197,6 +197,8 @@ namespace uvsr
         nvrhi::ITexture* gbufferEmissive = nullptr;
         nvrhi::ITexture* materialAmbientOcclusion = nullptr;
         nvrhi::ITexture* skyVisibility = nullptr;
+        bool applySkyVisibilityToDiffuseIbl = false;
+        bool applySkyVisibilityToSpecularIbl = false;
         nvrhi::ITexture* diffuseEnvironment = nullptr;
         float diffuseEnvironmentScale = 1.f;
         uint32_t diffuseEnvironmentArrayIndex = 0u;

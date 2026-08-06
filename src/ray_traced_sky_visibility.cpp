@@ -8,7 +8,7 @@
 #include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
 
-#include <algorithm>
+#include <cmath>
 #include <cstddef>
 
 using namespace donut;
@@ -320,6 +320,20 @@ namespace uvsr
             return {};
         }
 
+        const float rayDistance = ResolveRayVisibilityMaxDistance(
+            settings.maxDistance,
+            sceneDiagonal);
+        if (std::isnan(rayDistance))
+        {
+            if (!m_ReportedInvalidInput)
+            {
+                log::error(
+                    "Ray-traced sky visibility received an invalid scene extent");
+                m_ReportedInvalidInput = true;
+            }
+            return {};
+        }
+
         if (!EnsureResources(inputs))
         {
             if (!m_ReportedInvalidInput)
@@ -357,7 +371,7 @@ namespace uvsr
             settings.sampleRateLog2);
         constants.noisePattern =
             static_cast<uint32_t>(settings.noisePattern);
-        constants.rayDistance = std::max(sceneDiagonal * 2.f, 1.f);
+        constants.rayDistance = rayDistance;
         constants.depthQuantizationStep = GetDepthQuantizationStep(
             inputs.depth->getDesc().format);
         constants.rayBias = settings.rayBias;

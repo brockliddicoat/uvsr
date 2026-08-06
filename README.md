@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 75,038 non-blank source lines.
+**First-Party Lines of Code:** 75,681 non-blank source lines.
 
 **Third-Party Lines of Code:** 388,208 non-blank source lines.
 
-**Total Lines of Code:** 463,246 non-blank source lines.
+**Total Lines of Code:** 463,889 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -37,9 +37,12 @@ visibility, anti-aliasing, and shadow-rendering systems.
   specular IBL while preserving the selected environment background.
 - **Ray-Traced Sky Visibility.** An optional full-resolution current-frame
   ray-query pass averages 1, 2, 4, 8, 16, 32, or 64 cosine-weighted
-  geometric-normal hemisphere samples into scalar sky visibility. It modulates
-  diffuse IBL and its GI source radiance only. Disabled or unavailable
-  operation remains neutral white without private temporal history or denoising.
+  geometric-normal hemisphere samples into scalar sky visibility. Independent
+  Diffuse IBL and experimental Specular IBL toggles allow either, neither, or
+  both consumers; only diffuse application reaches GI source radiance. Max is
+  the scene-diagonal reference reach, while 32m through 2m are intentionally
+  bounded visibility. Disabled or unavailable operation remains neutral white
+  without private temporal history or denoising.
 - **Focused Directional Shadows.** Screen-space and Heitz Ratio-Estimator
   shadows have independent controls, including both-off and both-on operation.
   The ray-traced pass forms its matched RGB stochastic numerator and
@@ -47,7 +50,9 @@ visibility, anti-aliasing, and shadow-rendering systems.
   to the selected directional light. It includes a one-ray hard path,
   `1`-through-`64` sample rates, two emitter-noise patterns, independently
   animated sampling, and a `0.002` default world-space triangle-normal origin
-  bias. Final-color TAA is the only temporal accumulator, and both-on
+  bias. Its Max distance preserves scene-wide reference visibility; 32m through
+  2m intentionally ignore farther blockers and are not exact sun visibility.
+  Final-color TAA is the only temporal accumulator, and both-on
   composition keeps the strongest
   componentwise occlusion without double-darkening overlap.
 - **Shared World Representation.** A consumer-neutral Representation drawer
@@ -64,7 +69,7 @@ visibility, anti-aliasing, and shadow-rendering systems.
   thread/wave isolation remains a deliberate full-image diagnostic.
 - **Compact Runtime Surface.** The first-party build compiles 260 core shader
   tasks plus 46 Screen-Space Directional Shadow tasks, for 306 first-party and
-  382 integrated tasks after Donut's 76. Ten Settings drawers and 146 command
+  382 integrated tasks after Donut's 76. Ten Settings drawers and 150 command
   entries retain the active product controls without benchmark planners or
   dormant profiles.
 - **Source-Backed Optimization Decisions.** Retired shader families, rejected
@@ -97,9 +102,9 @@ This section summarizes stable work that is active but not yet merged into
 
 - **Ray-Traced Sky Visibility — In Development**
   (`codex/ray-traced-sky-visibility`). Adds an independent full-resolution
-  current-frame ray-query pass that modulates diffuse environment lighting only,
-  with white fallback preserving the existing result when disabled or
-  unavailable.
+  current-frame ray-query pass with independent diffuse/specular IBL application
+  and shared Max-through-2m visibility-distance controls. White fallback
+  preserves the existing result when disabled, unselected, or unavailable.
 - **Screen-Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidates shared
   depth, pixel-coordinate, and safe-normal helpers without changing equations,

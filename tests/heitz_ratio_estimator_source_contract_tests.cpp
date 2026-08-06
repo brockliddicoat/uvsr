@@ -339,6 +339,28 @@ int main(int argc, char** argv)
         "hard-shadow, integer-rate, and low geometric-bias defaults");
     RequireContains(
         settings,
+        "RayVisibilityMaxDistancemaxDistance="
+            "RayVisibilityMaxDistance::Maximum;",
+        "ratio-estimator shadows must default to the established Max reach");
+    RequireContains(
+        settings,
+        "IsRayVisibilityMaxDistanceSupported(settings.maxDistance)",
+        "ratio-estimator settings must reject unsupported max-distance modes");
+    RequireContains(
+        pass,
+        "constfloatrayDistance=ResolveRayVisibilityMaxDistance("
+            "settings.maxDistance,sceneDiagonal);",
+        "the Heitz pass must resolve the selected Max or finite TMax");
+    RequireContains(
+        pass,
+        "if(std::isnan(rayDistance))",
+        "an invalid scene extent must fail open before DXR receives a NaN TMax");
+    RequireContains(
+        pass,
+        "constants.rayDistance=rayDistance;",
+        "the validated distance must reach the Heitz constant buffer");
+    RequireContains(
+        settings,
         "\"1\",\"2\",\"4\",\"8\",\"16\",\"32\",\"64\"",
         "complete integer one-through-64 sample-rate domain");
     RequireAbsent(settings, "\"1/", "fractional sample-rate labels");
@@ -412,6 +434,14 @@ int main(int argc, char** argv)
         viewer,
         "\"AnimateSamples##RatioEstimatorShadows\"",
         "ratio-estimator sample-animation control");
+    RequireOrdered(
+        viewer,
+        {
+            "if(!softSamplingControlsEnabled)ImGui::EndDisabled();",
+            "\"MaxDistance##RatioEstimatorShadows\"",
+            "\"RayBias##RatioEstimatorShadows\""
+        },
+        "max distance must remain available in hard-shadow mode");
     for (const std::string_view removed : {
             "HeitzRatioEstimatorRequiresPrivateHistory",
             "shadowInputs.motionVectors",

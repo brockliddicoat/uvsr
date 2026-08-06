@@ -2,6 +2,7 @@
 #define UVSR_SCREEN_SPACE_VISIBILITY_CB_H
 
 #include <donut/shaders/view_cb.h>
+#include "sky_visibility_application.h"
 
 // Shared by visibility sampling, reconstruction, and composition.
 struct ScreenSpaceVisibilityConstants
@@ -44,7 +45,7 @@ struct ScreenSpaceVisibilityConstants
     uint specularEnvironmentArrayIndex;
     uint spatialFilter;
     uint lightingDebugView;
-    uint skyVisibilityEnabled;
+    uint skyVisibilityApplication;
 };
 
 #endif // UVSR_SCREEN_SPACE_VISIBILITY_CB_H

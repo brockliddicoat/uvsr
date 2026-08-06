@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ray_visibility_max_distance.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -27,8 +29,12 @@ namespace uvsr
     struct RayTracedSkyVisibilitySettings
     {
         bool enabled = false;
+        bool applyToDiffuseIbl = true;
+        bool applyToSpecularIbl = false;
         int32_t sampleRateLog2 = 0;
         float rayBias = 0.002f;
+        RayVisibilityMaxDistance maxDistance =
+            RayVisibilityMaxDistance::Maximum;
         RayTracedSkyVisibilityNoisePattern noisePattern =
             RayTracedSkyVisibilityNoisePattern::VoidClusterBlueNoise;
         bool animateSamples = true;
@@ -71,6 +77,13 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr bool
+        HasRayTracedSkyVisibilityConsumer(
+            const RayTracedSkyVisibilitySettings& settings)
+    {
+        return settings.applyToDiffuseIbl || settings.applyToSpecularIbl;
+    }
+
+    [[nodiscard]] inline constexpr bool
         IsRayTracedSkyVisibilityConfigurationSupported(
             const RayTracedSkyVisibilitySettings& settings)
     {
@@ -78,6 +91,7 @@ namespace uvsr
                 settings.sampleRateLog2) &&
             IsRayTracedSkyVisibilityNoisePatternSupported(
                 settings.noisePattern) &&
+            IsRayVisibilityMaxDistanceSupported(settings.maxDistance) &&
             settings.rayBias >= 0.f &&
             settings.rayBias <= RayTracedSkyVisibilityMaximumRayBias;
     }

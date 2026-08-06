@@ -71,6 +71,8 @@ public:
         const uvsr::DirectionalLightVisibilities& directionalLightVisibilities,
         const donut::engine::LightProbe* environment,
         nvrhi::ITexture* skyVisibility,
+        bool applySkyVisibilityToDiffuseIbl,
+        bool applySkyVisibilityToSpecularIbl,
         nvrhi::ITexture* sourceRadianceOutput,
         bool separateIndirect,
         bool writeSourceRadiance,

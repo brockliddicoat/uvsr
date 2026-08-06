@@ -154,6 +154,27 @@ requested topology.
 See [Temporal Aliasing Options](temporal-aa-options.md) for the retained
 history and coordinate contracts.
 
+## Sky
+
+Ray-Traced Sky Visibility is a default-off, full-resolution current-frame
+ray-query experiment. Its dependent controls remain collapsed until **Enable**
+is selected. **Diffuse IBL** defaults on and **Specular IBL** defaults off; the
+two application toggles support either, neither, or both. Diffuse application
+also affects diffuse IBL before it becomes GI source radiance. Specular
+application affects only specular IBL and is deliberately experimental: the
+cosine-weighted geometric-normal hemisphere scalar is not resolved for the
+view-dependent reflection direction or material roughness.
+
+**Samples Per Pixel** exposes 1, 2, 4, 8, 16, 32, and 64 current-frame samples.
+**Noise Pattern** selects Permutated White Noise or Void Cluster Blue Noise,
+and **Animate Samples** advances the private phase after a successful dispatch.
+**Max Distance** defaults to Max, which preserves the scene-diagonal reference
+reach. The `32m`, `16m`, `8m`, `4m`, and `2m` choices intentionally ignore
+farther occluders and are bounded visibility rather than exact sky visibility.
+**Ray Bias** retains the same geometric-normal origin-clearance policy as the
+ratio-estimator shadow pass. Disabled, unsupported, unavailable, and
+enabled-with-neither states supply white visibility and preserve the old image.
+
 ## Debug Drawer
 
 The Debug drawer and each animated effect group start expanded. Every group is
@@ -191,8 +212,11 @@ selected light before issuing a query. **Animate Samples** sits directly above
 the logarithmic **Samples Per Pixel** slider, which covers `1` through `64`.
 **Noise Pattern** selects Permutated White Noise or Void Cluster Blue Noise.
 Animated samples change the current-frame emitter set independently of TAA;
-final-color TAA is the only temporal accumulator. **Ray Bias** moves the origin
-along the view-facing raster triangle normal, defaults to `0.002` world units,
+final-color TAA is the only temporal accumulator. **Max Distance** defaults to
+the scene-diagonal Max reference. Its finite `32m` through `2m` modes are
+bounded visibility and intentionally not exact sun visibility. **Ray Bias**
+moves the origin along the view-facing raster triangle normal, defaults to
+`0.002` world units,
 and is applied once rather than as `TMin`; larger values can miss nearby blockers
 or detach contact shadows without changing ray count or reach. Ratio Estimator
 additionally requires

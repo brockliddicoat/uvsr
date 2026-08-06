@@ -102,6 +102,25 @@ void main(uint2 pixel : SV_DispatchThreadID)
             material,
             surface,
             g_Visibility.specularEnvironmentMipLevels);
+    float skyVisibility = 1.0f;
+    const bool applySkyVisibilityToDiffuseIbl =
+        g_Visibility.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL ||
+        g_Visibility.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+    const bool applySkyVisibilityToSpecularIbl =
+        g_Visibility.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL ||
+        g_Visibility.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+    if (applySkyVisibilityToDiffuseIbl ||
+        applySkyVisibilityToSpecularIbl)
+    {
+        const float sampledSkyVisibility = t_SkyVisibility[pixel];
+        skyVisibility = isfinite(sampledSkyVisibility)
+            ? saturate(sampledSkyVisibility)
+            : 1.0f;
+    }
 
     float3 environmentDiffuseResponse;
     if (g_Visibility.diffuseEnvironmentEnabled != 0u)
@@ -126,13 +145,8 @@ void main(uint2 pixel : SV_DispatchThreadID)
             preparedEnvironment,
             environmentDiffuseResponse,
             materialAmbientOcclusion);
-    if (g_Visibility.skyVisibilityEnabled != 0u)
-    {
-        const float skyVisibility = t_SkyVisibility[pixel];
-        environmentDiffuse *= isfinite(skyVisibility)
-            ? saturate(skyVisibility)
-            : 1.0f;
-    }
+    if (applySkyVisibilityToDiffuseIbl)
+        environmentDiffuse *= skyVisibility;
 
     float3 environmentSpecular = 0.0f;
     if (g_Visibility.specularEnvironmentEnabled != 0u &&
@@ -168,6 +182,8 @@ void main(uint2 pixel : SV_DispatchThreadID)
             prefilteredRadiance,
             environmentBrdf,
             combinedAmbientOcclusion);
+        if (applySkyVisibilityToSpecularIbl)
+            environmentSpecular *= skyVisibility;
     }
 
     // The traversal outputs irradiance. Apply the receiving diffuse BRDF once;

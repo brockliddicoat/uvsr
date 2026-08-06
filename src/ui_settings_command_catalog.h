@@ -195,9 +195,12 @@ namespace uvsr
         Value("sky.environment-background", Kind::Boolean, Section::Sky, "on|off"),
         Value("sky.ambient-fill.enabled", Kind::Boolean, Section::Sky, "on|off"),
         Value("sky.visibility.enabled", Kind::Boolean, Section::Sky, "on|off"),
+        Value("sky.visibility.diffuse-ibl", Kind::Boolean, Section::Sky, "on|off"),
+        Value("sky.visibility.specular-ibl", Kind::Boolean, Section::Sky, "on|off"),
         Value("sky.visibility.samples-per-pixel", Kind::Enum, Section::Sky, "1|2|4|8|16|32|64"),
         Value("sky.visibility.noise-pattern", Kind::Enum, Section::Sky, "permutated-white-noise|void-cluster-blue-noise"),
         Value("sky.visibility.animate-samples", Kind::Boolean, Section::Sky, "on|off"),
+        Value("sky.visibility.max-distance", Kind::Enum, Section::Sky, "max|32m|16m|8m|4m|2m"),
         Value("sky.visibility.ray-bias", Kind::Float, Section::Sky, "world units 0..0.1"),
 
         // Lights.
@@ -231,6 +234,7 @@ namespace uvsr
         Value("shadows.ratio-estimator.samples-per-pixel", Kind::Enum, Section::DirectionalShadows, "1|2|4|8|16|32|64"),
         Value("shadows.ratio-estimator.noise-pattern", Kind::Enum, Section::DirectionalShadows, "permutated-white-noise|void-cluster-blue-noise"),
         Value("shadows.ratio-estimator.animate-samples", Kind::Boolean, Section::DirectionalShadows, "on|off"),
+        Value("shadows.ratio-estimator.max-distance", Kind::Enum, Section::DirectionalShadows, "max|32m|16m|8m|4m|2m"),
         Value("shadows.ratio-estimator.ray-bias", Kind::Float, Section::DirectionalShadows, "world units 0..0.1"),
 
         // Screen-Space Directional Shadows.

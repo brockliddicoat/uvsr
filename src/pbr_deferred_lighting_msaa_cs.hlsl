@@ -241,6 +241,32 @@ bool ShadeDeferredSample(
             g_PbrDeferred.separateIndirect == 0 ||
             g_PbrDeferred.lightingDebugView == 4u ||
             g_PbrDeferred.lightingDebugView == 9u;
+        const bool needSpecularEnvironment =
+            g_PbrDeferred.separateIndirect == 0 ||
+            (g_PbrDeferred.lightingDebugView >= 6u &&
+                g_PbrDeferred.lightingDebugView <= 9u);
+        float skyVisibility = 1.0f;
+        const bool applySkyVisibilityToDiffuseIbl =
+            g_PbrDeferred.skyVisibilityApplication ==
+                UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL ||
+            g_PbrDeferred.skyVisibilityApplication ==
+                UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+        const bool applySkyVisibilityToSpecularIbl =
+            g_PbrDeferred.skyVisibilityApplication ==
+                UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL ||
+            g_PbrDeferred.skyVisibilityApplication ==
+                UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+        if ((needDiffuseEnvironment &&
+                applySkyVisibilityToDiffuseIbl) ||
+            (needSpecularEnvironment &&
+                applySkyVisibilityToSpecularIbl))
+        {
+            const float sampledSkyVisibility =
+                t_SkyVisibility[pixelPosition];
+            skyVisibility = isfinite(sampledSkyVisibility)
+                ? saturate(sampledSkyVisibility)
+                : 1.0f;
+        }
         if (needDiffuseEnvironment &&
             environmentProbe.diffuseScale > 0.0f)
         {
@@ -258,20 +284,10 @@ bool ShadeDeferredSample(
                 preparedEnvironment,
                 environmentDiffuseResponse,
                 gbuffer.ambientOcclusion);
-            if (g_PbrDeferred.skyVisibilityEnabled != 0u)
-            {
-                const float skyVisibility =
-                    t_SkyVisibility[pixelPosition];
-                environmentDiffuse *= isfinite(skyVisibility)
-                    ? saturate(skyVisibility)
-                    : 1.0f;
-            }
+            if (applySkyVisibilityToDiffuseIbl)
+                environmentDiffuse *= skyVisibility;
         }
 
-        const bool needSpecularEnvironment =
-            g_PbrDeferred.separateIndirect == 0 ||
-            (g_PbrDeferred.lightingDebugView >= 6u &&
-                g_PbrDeferred.lightingDebugView <= 9u);
         if (needSpecularEnvironment &&
             environmentProbe.specularScale > 0.0f &&
             preparedEnvironment.valid > 0.0f)
@@ -299,6 +315,8 @@ bool ShadeDeferredSample(
                 prefilteredEnvironment,
                 environmentBrdf,
                 gbuffer.ambientOcclusion);
+            if (applySkyVisibilityToSpecularIbl)
+                environmentSpecular *= skyVisibility;
         }
     }
 

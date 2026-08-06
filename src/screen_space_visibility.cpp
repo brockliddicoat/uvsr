@@ -799,7 +799,11 @@ namespace uvsr
             postProcessEnabled,
             packedEdgesEnabled,
             settings.bufferPrecision);
+        const bool hasSkyVisibilityConsumer =
+            inputs.applySkyVisibilityToDiffuseIbl ||
+            inputs.applySkyVisibilityToSpecularIbl;
         nvrhi::ITexture* activeSkyVisibility =
+            hasSkyVisibilityConsumer &&
             IsSkyVisibilityTextureCompatible(
                 inputs.skyVisibility,
                 fullSize)
@@ -882,7 +886,13 @@ namespace uvsr
                 1u)
             : 0u;
         constants.lightingDebugView = inputs.lightingDebugView;
-        constants.skyVisibilityEnabled = activeSkyVisibility ? 1u : 0u;
+        constants.skyVisibilityApplication = activeSkyVisibility
+            ? (inputs.applySkyVisibilityToDiffuseIbl
+                ? (inputs.applySkyVisibilityToSpecularIbl
+                    ? UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL
+                    : UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL)
+                : UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL)
+            : UVSR_SKY_VISIBILITY_APPLY_NEITHER;
 
         const float diffuseEnvironmentScale = std::max(
             std::isfinite(inputs.diffuseEnvironmentScale)

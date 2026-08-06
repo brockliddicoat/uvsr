@@ -488,15 +488,21 @@ int main(int argc, char** argv)
             "each deferred variant must evaluate diffuse IBL");
         RequireContains(
             *shader,
-            "if(g_pbrdeferred.skyvisibilityenabled!=0u)"
-                "{constfloatskyvisibility=t_skyvisibility[pixelposition];"
-                "environmentdiffuse*=isfinite(skyvisibility)?"
-                "saturate(skyvisibility):1.0f;}",
-            "each deferred variant must conditionally modulate diffuse IBL only");
+            "if(applyskyvisibilitytodiffuseibl)"
+                "environmentdiffuse*=skyvisibility;",
+            "each deferred variant must conditionally modulate diffuse IBL");
         RequireContains(
             *shader,
             "evaluatepbrenvironmentspecular(",
             "each deferred variant must evaluate specular IBL");
+        RequireContains(
+            *shader,
+            "if(applyskyvisibilitytospecularibl)"
+                "environmentspecular*=skyvisibility;",
+            "each deferred variant must conditionally modulate specular IBL");
+        Require(
+            CountOccurrences(*shader, "t_skyvisibility[") == 1u,
+            "each deferred variant must share one guarded sky-visibility load");
     }
     RequireContains(
         compositeShader,
@@ -524,11 +530,17 @@ int main(int argc, char** argv)
         "visibility composition must evaluate specular IBL");
     RequireContains(
         compositeShader,
-        "if(g_visibility.skyvisibilityenabled!=0u)"
-            "{constfloatskyvisibility=t_skyvisibility[pixel];"
-            "environmentdiffuse*=isfinite(skyvisibility)?"
-            "saturate(skyvisibility):1.0f;}",
-        "visibility composition must modulate only recomputed diffuse IBL");
+        "if(applyskyvisibilitytodiffuseibl)"
+            "environmentdiffuse*=skyvisibility;",
+        "visibility composition must modulate recomputed diffuse IBL independently");
+    RequireContains(
+        compositeShader,
+        "if(applyskyvisibilitytospecularibl)"
+            "environmentspecular*=skyvisibility;",
+        "visibility composition must modulate recomputed specular IBL independently");
+    Require(
+        CountOccurrences(compositeShader, "t_skyvisibility[") == 1u,
+        "visibility composition must share one guarded sky-visibility load");
 
     RequireContains(
         rendererSource,

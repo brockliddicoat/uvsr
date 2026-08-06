@@ -1542,8 +1542,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 146u,
-            "Settings command catalog must contain exactly 146 entries.");
+        Require(entries.size() == 150u,
+            "Settings command catalog must contain exactly 150 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -1557,8 +1557,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 142u,
-            "Settings command catalog must contain exactly 142 values.");
+        Require(valueCount == 146u,
+            "Settings command catalog must contain exactly 146 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -1591,9 +1591,12 @@ namespace
                 std::string_view("representation.blas.update-mode"),
                 std::string_view("representation.tlas.update-mode"),
                 std::string_view("sky.visibility.enabled"),
+                std::string_view("sky.visibility.diffuse-ibl"),
+                std::string_view("sky.visibility.specular-ibl"),
                 std::string_view("sky.visibility.samples-per-pixel"),
                 std::string_view("sky.visibility.noise-pattern"),
                 std::string_view("sky.visibility.animate-samples"),
+                std::string_view("sky.visibility.max-distance"),
                 std::string_view("sky.visibility.ray-bias"),
                 std::string_view("shadows.ratio-estimator.enabled"),
                 std::string_view(
@@ -1604,6 +1607,8 @@ namespace
                     "shadows.ratio-estimator.noise-pattern"),
                 std::string_view(
                     "shadows.ratio-estimator.animate-samples"),
+                std::string_view(
+                    "shadows.ratio-estimator.max-distance"),
                 std::string_view(
                     "shadows.ratio-estimator.ray-bias"),
                 std::string_view(
@@ -1822,6 +1827,24 @@ namespace
             "candidate.ratioEstimator.animateSamples,"
             "factoryDefaults.ratioEstimator.animateSamples",
             "ratio-estimator sample-animation command");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "candidate.ratioEstimator.maxDistance,"
+            "factoryDefaults.ratioEstimator.maxDistance",
+            "ratio-estimator max-distance command");
+        for (const std::string_view mapping : {
+                std::string_view(
+                    "{\"max\",RayVisibilityMaxDistance::Maximum}"),
+                std::string_view(
+                    "{\"32m\",RayVisibilityMaxDistance::Meters32}"),
+                std::string_view(
+                    "{\"2m\",RayVisibilityMaxDistance::Meters2}") })
+        {
+            RequireContains(
+                compactDirectionalShadowDispatcher,
+                mapping,
+                "ratio-estimator max-distance token and enum mapping");
+        }
         RequireContains(
             compactDirectionalShadowDispatcher,
             "candidate.ratioEstimator.enabled,"
@@ -2077,9 +2100,12 @@ namespace
                 "Show Environment Background",
                 "Ray-Traced Sky Visibility",
                 "Enable##RayTracedSkyVisibility",
+                "Diffuse IBL##RayTracedSkyVisibility",
+                "Specular IBL##RayTracedSkyVisibility",
                 "Samples Per Pixel##RayTracedSkyVisibility",
                 "Noise Pattern##RayTracedSkyVisibility",
                 "Animate Samples##RayTracedSkyVisibility",
+                "Max Distance##RayTracedSkyVisibility",
                 "Ray Bias##RayTracedSkyVisibility"
             },
             "bottom-of-Sky ray-traced visibility controls");
