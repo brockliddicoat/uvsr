@@ -1,16 +1,13 @@
-#include "heitz_ratio_estimator_shadows.h"
+#include "ray_traced_sky_visibility.h"
 
-#include "ratio_estimator_shared.h"
 #include "visibility_blue_noise.h"
 
 #include <donut/core/log.h>
 #include <donut/core/math/math.h>
 #include <donut/engine/CommonRenderPasses.h>
-#include <donut/engine/SceneGraph.h>
 #include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
 
-#include <algorithm>
 #include <cmath>
 #include <cstddef>
 
@@ -18,25 +15,23 @@ using namespace donut;
 using namespace donut::engine;
 using namespace donut::math;
 
-#include "heitz_ratio_estimator_shadows_cb.h"
+#include "ray_traced_sky_visibility_cb.h"
 
-static_assert(sizeof(HeitzRatioEstimatorShadowConstants) % 16u == 0u,
-    "Heitz shadow constants must preserve HLSL register alignment.");
+static_assert(sizeof(RayTracedSkyVisibilityConstants) % 16u == 0u,
+    "Ray-traced sky-visibility constants must preserve HLSL register alignment.");
 static_assert(offsetof(
-        HeitzRatioEstimatorShadowConstants,
-        directionToLightAndAngularRadius) == sizeof(PlanarViewConstants),
-    "Heitz shadow constants drifted after the view block.");
+        RayTracedSkyVisibilityConstants,
+        sampleSequencePhase) == sizeof(PlanarViewConstants),
+    "Ray-traced sky-visibility constants drifted after the view block.");
 static_assert(static_cast<uint32_t>(
-    uvsr::HeitzRatioEstimatorNoisePattern::PermutatedWhiteNoise) == 0u);
+    uvsr::RayTracedSkyVisibilityNoisePattern::PermutatedWhiteNoise) == 0u);
 static_assert(static_cast<uint32_t>(
-    uvsr::HeitzRatioEstimatorNoisePattern::VoidClusterBlueNoise) == 1u);
+    uvsr::RayTracedSkyVisibilityNoisePattern::VoidClusterBlueNoise) == 1u);
 
 namespace uvsr
 {
     namespace
     {
-        constexpr float Pi = 3.14159265358979323846f;
-
         bool HasFormatSupport(
             nvrhi::IDevice* device,
             nvrhi::Format format,
@@ -52,16 +47,12 @@ namespace uvsr
         }
 
         bool SameInputs(
-            const HeitzRatioEstimatorShadowInputs& left,
-            const HeitzRatioEstimatorShadowInputs& right)
+            const RayTracedSkyVisibilityInputs& left,
+            const RayTracedSkyVisibilityInputs& right)
         {
             return left.depth == right.depth &&
-                left.diffuse == right.diffuse &&
                 left.material == right.material &&
-                left.normals == right.normals &&
-                left.emissive == right.emissive &&
-                left.materialAmbientOcclusion ==
-                    right.materialAmbientOcclusion;
+                left.normals == right.normals;
         }
 
         float GetDepthQuantizationStep(nvrhi::Format format)
@@ -94,30 +85,28 @@ namespace uvsr
             nvrhi::TextureDesc description;
             description.width = width;
             description.height = height;
-            description.format = nvrhi::Format::RGBA16_FLOAT;
+            description.format = nvrhi::Format::R8_UNORM;
             description.dimension = nvrhi::TextureDimension::Texture2D;
             description.isUAV = true;
-            description.debugName =
-                "Heitz Shadows/RGB Ratio Modulation";
+            description.debugName = "Ray-Traced Sky Visibility";
             description.enableAutomaticStateTracking(
                 nvrhi::ResourceStates::ShaderResource);
             return device->createTexture(description);
         }
-
     }
 
-    bool HeitzRatioEstimatorShadowPass::IsDeviceSupported(
+    bool RayTracedSkyVisibilityPass::IsDeviceSupported(
         nvrhi::IDevice* device)
     {
         return device &&
             device->queryFeatureSupport(
                 nvrhi::Feature::RayTracingAccelStruct) &&
             device->queryFeatureSupport(nvrhi::Feature::RayQuery) &&
-            HasFormatSupport(device, nvrhi::Format::RGBA16_FLOAT, true) &&
+            HasFormatSupport(device, nvrhi::Format::R8_UNORM, true) &&
             HasFormatSupport(device, nvrhi::Format::R16_UNORM, false);
     }
 
-    HeitzRatioEstimatorShadowPass::HeitzRatioEstimatorShadowPass(
+    RayTracedSkyVisibilityPass::RayTracedSkyVisibilityPass(
         nvrhi::IDevice* device,
         const std::shared_ptr<ShaderFactory>& shaderFactory,
         const std::vector<uint16_t>* preparedBlueNoise)
@@ -127,7 +116,8 @@ namespace uvsr
         if (!m_Supported)
         {
             log::warning(
-                "Heitz ratio-estimator shadows require DXR 1.1 ray queries, RGBA16F UAV support, and R16_UNORM sampling");
+                "Ray-traced sky visibility requires DXR 1.1 ray queries, "
+                "R8_UNORM UAV support, and R16_UNORM sampling");
             return;
         }
 
@@ -154,7 +144,7 @@ namespace uvsr
         noiseDescription.initialState = nvrhi::ResourceStates::CopyDest;
         noiseDescription.keepInitialState = true;
         noiseDescription.debugName =
-            "Heitz Shadows/Void-Cluster Blue Noise";
+            "Ray-Traced Sky Visibility/Void-Cluster Blue Noise";
         m_BlueNoise = device->createTexture(noiseDescription);
 
         nvrhi::BindingLayoutDesc layoutDescription;
@@ -166,18 +156,15 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(2),
             nvrhi::BindingLayoutItem::Texture_SRV(3),
             nvrhi::BindingLayoutItem::Texture_SRV(4),
-            nvrhi::BindingLayoutItem::Texture_SRV(5),
-            nvrhi::BindingLayoutItem::Texture_SRV(6),
-            nvrhi::BindingLayoutItem::Texture_SRV(7),
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         };
         m_BindingLayout = device->createBindingLayout(layoutDescription);
 
         nvrhi::BufferDesc constantBufferDescription;
         constantBufferDescription.byteSize =
-            sizeof(HeitzRatioEstimatorShadowConstants);
+            sizeof(RayTracedSkyVisibilityConstants);
         constantBufferDescription.debugName =
-            "HeitzRatioEstimatorShadowConstants";
+            "RayTracedSkyVisibilityConstants";
         constantBufferDescription.isConstantBuffer = true;
         constantBufferDescription.isVolatile = true;
         constantBufferDescription.maxVersions =
@@ -186,7 +173,7 @@ namespace uvsr
             constantBufferDescription);
 
         m_Shader = shaderFactory->CreateShader(
-            "uvsr/heitz_ratio_estimator_shadows_cs.hlsl",
+            "uvsr/ray_traced_sky_visibility_cs.hlsl",
             "Generate",
             nullptr,
             nvrhi::ShaderType::Compute);
@@ -204,11 +191,11 @@ namespace uvsr
         {
             m_Supported = false;
             log::error(
-                "The Heitz ratio-estimator shadow pipeline could not be created");
+                "The ray-traced sky-visibility pipeline could not be created");
         }
     }
 
-    void HeitzRatioEstimatorShadowPass::UploadBlueNoise(
+    void RayTracedSkyVisibilityPass::UploadBlueNoise(
         nvrhi::ICommandList* commandList)
     {
         if (m_BlueNoiseUploaded || !commandList || !m_BlueNoise)
@@ -233,16 +220,13 @@ namespace uvsr
         m_BlueNoiseUpload.shrink_to_fit();
     }
 
-    bool HeitzRatioEstimatorShadowPass::EnsureResources(
-        const HeitzRatioEstimatorShadowInputs& inputs)
+    bool RayTracedSkyVisibilityPass::EnsureResources(
+        const RayTracedSkyVisibilityInputs& inputs)
     {
         const nvrhi::ITexture* textures[] = {
             inputs.depth,
-            inputs.diffuse,
             inputs.material,
-            inputs.normals,
-            inputs.emissive,
-            inputs.materialAmbientOcclusion
+            inputs.normals
         };
         if (!inputs.depth)
             return false;
@@ -259,29 +243,29 @@ namespace uvsr
                 return false;
             }
         }
-        const bool outputSizeMatches = m_OutputModulation &&
-            m_OutputModulation->getDesc().width == depthDescription.width &&
-            m_OutputModulation->getDesc().height == depthDescription.height;
+        const bool outputSizeMatches = m_OutputVisibility &&
+            m_OutputVisibility->getDesc().width == depthDescription.width &&
+            m_OutputVisibility->getDesc().height == depthDescription.height;
         if (outputSizeMatches)
             return true;
 
-        nvrhi::TextureHandle outputModulation = CreateOutputTexture(
+        nvrhi::TextureHandle outputVisibility = CreateOutputTexture(
             m_Device,
             depthDescription.width,
             depthDescription.height);
-        if (!outputModulation)
+        if (!outputVisibility)
             return false;
 
-        ClearBindingSets();
-        m_OutputModulation = outputModulation;
+        ClearBindingSet();
+        m_OutputVisibility = outputVisibility;
         return true;
     }
 
-    bool HeitzRatioEstimatorShadowPass::EnsureBindingSets(
-        const HeitzRatioEstimatorShadowInputs& inputs,
+    bool RayTracedSkyVisibilityPass::EnsureBindingSet(
+        const RayTracedSkyVisibilityInputs& inputs,
         nvrhi::rt::IAccelStruct* worldTlas)
     {
-        if (!worldTlas || !m_OutputModulation)
+        if (!worldTlas || !m_OutputVisibility)
             return false;
         if (m_BindingSet &&
             m_BoundTlas == worldTlas &&
@@ -290,26 +274,22 @@ namespace uvsr
             return true;
         }
 
-        ClearBindingSets();
+        ClearBindingSet();
         nvrhi::BindingSetDesc description;
         description.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
             nvrhi::BindingSetItem::RayTracingAccelStruct(0, worldTlas),
             nvrhi::BindingSetItem::Texture_SRV(1, inputs.depth),
-            nvrhi::BindingSetItem::Texture_SRV(2, inputs.diffuse),
-            nvrhi::BindingSetItem::Texture_SRV(3, inputs.material),
-            nvrhi::BindingSetItem::Texture_SRV(4, inputs.normals),
-            nvrhi::BindingSetItem::Texture_SRV(
-                5, inputs.materialAmbientOcclusion),
-            nvrhi::BindingSetItem::Texture_SRV(6, m_BlueNoise),
-            nvrhi::BindingSetItem::Texture_SRV(7, inputs.emissive),
-            nvrhi::BindingSetItem::Texture_UAV(0, m_OutputModulation)
+            nvrhi::BindingSetItem::Texture_SRV(2, inputs.material),
+            nvrhi::BindingSetItem::Texture_SRV(3, inputs.normals),
+            nvrhi::BindingSetItem::Texture_SRV(4, m_BlueNoise),
+            nvrhi::BindingSetItem::Texture_UAV(0, m_OutputVisibility)
         };
         m_BindingSet = m_Device->createBindingSet(
             description, m_BindingLayout);
         if (!m_BindingSet)
         {
-            ClearBindingSets();
+            ClearBindingSet();
             return false;
         }
 
@@ -318,25 +298,23 @@ namespace uvsr
         return true;
     }
 
-    HeitzRatioEstimatorShadowResult
-        HeitzRatioEstimatorShadowPass::Render(
-            nvrhi::ICommandList* commandList,
-            const HeitzRatioEstimatorShadowSettings& settings,
-            const IView& view,
-            const HeitzRatioEstimatorShadowInputs& inputs,
-            nvrhi::rt::IAccelStruct* worldTlas,
-            const DirectionalLight* light,
-            uint32_t samplingPhase,
-            float sceneDiagonal)
+    RayTracedSkyVisibilityResult RayTracedSkyVisibilityPass::Render(
+        nvrhi::ICommandList* commandList,
+        const RayTracedSkyVisibilitySettings& settings,
+        const IView& view,
+        const RayTracedSkyVisibilityInputs& inputs,
+        nvrhi::rt::IAccelStruct* worldTlas,
+        uint32_t samplingPhase,
+        float sceneDiagonal)
     {
-        if (!m_Supported || !commandList || !worldTlas || !light ||
-            !IsHeitzRatioEstimatorConfigurationSupported(settings))
+        if (!m_Supported || !commandList || !worldTlas ||
+            !IsRayTracedSkyVisibilityConfigurationSupported(settings))
         {
             if (!m_ReportedInvalidInput && m_Supported &&
-                commandList && worldTlas && light)
+                commandList && worldTlas)
             {
                 log::error(
-                    "Heitz ratio-estimator shadows received incomplete or unsupported inputs");
+                    "Ray-traced sky visibility received incomplete or unsupported inputs");
                 m_ReportedInvalidInput = true;
             }
             return {};
@@ -350,74 +328,50 @@ namespace uvsr
             if (!m_ReportedInvalidInput)
             {
                 log::error(
-                    "Heitz ratio-estimator shadows received an invalid scene extent");
+                    "Ray-traced sky visibility received an invalid scene extent");
                 m_ReportedInvalidInput = true;
             }
             return {};
         }
 
-        const float3 propagationDirection =
-            float3(light->GetDirection());
-        const float directionLengthSquared =
-            dot(propagationDirection, propagationDirection);
-        if (!(directionLengthSquared > 1e-12f) ||
-            !std::isfinite(directionLengthSquared))
-        {
-            return {};
-        }
-        const float3 directionToLight =
-            -propagationDirection /
-            std::sqrt(directionLengthSquared);
-        const float angularRadius =
-            std::clamp(light->angularSize, 0.f, 90.f) *
-            (Pi / 360.f);
-        const bool stochastic = !settings.hardShadows &&
-            angularRadius > 1e-6f;
-        const uint32_t sampleCount = stochastic
-            ? ResolveHeitzRatioEstimatorSampleCount(
-                settings.sampleRateLog2)
-            : 1u;
         if (!EnsureResources(inputs))
         {
             if (!m_ReportedInvalidInput)
             {
                 log::error(
-                    "Heitz ratio-estimator shadow textures were missing, mismatched, or could not be allocated");
+                    "Ray-traced sky-visibility textures were missing, "
+                    "mismatched, or could not be allocated");
                 m_ReportedInvalidInput = true;
             }
             return {};
         }
-        if (!EnsureBindingSets(inputs, worldTlas))
+        if (!EnsureBindingSet(inputs, worldTlas))
         {
             if (!m_ReportedInvalidInput)
             {
                 log::error(
-                    "Heitz ratio-estimator shadow binding-set creation failed");
+                    "Ray-traced sky-visibility binding-set creation failed");
                 m_ReportedInvalidInput = true;
             }
             return {};
         }
         m_ReportedInvalidInput = false;
-        if (stochastic && settings.noisePattern ==
-                HeitzRatioEstimatorNoisePattern::VoidClusterBlueNoise)
+        if (settings.noisePattern ==
+            RayTracedSkyVisibilityNoisePattern::VoidClusterBlueNoise)
         {
             UploadBlueNoise(commandList);
         }
 
-        HeitzRatioEstimatorShadowConstants constants = {};
+        RayTracedSkyVisibilityConstants constants = {};
         view.FillPlanarViewConstants(constants.view);
-        constants.directionToLightAndAngularRadius = float4(
-            directionToLight, angularRadius);
         constants.sampleSequencePhase = settings.animateSamples
             ? samplingPhase
             : 0u;
-        constants.sampleCount = sampleCount;
-        constants.hardShadows = stochastic ? 0u : 1u;
+        constants.sampleCount = ResolveRayTracedSkyVisibilitySampleCount(
+            settings.sampleRateLog2);
         constants.noisePattern =
             static_cast<uint32_t>(settings.noisePattern);
         constants.rayDistance = rayDistance;
-        constants.denominatorEpsilon =
-            RatioEstimatorDefaultDenominatorEpsilon;
         constants.depthQuantizationStep = GetDepthQuantizationStep(
             inputs.depth->getDesc().format);
         constants.rayBias = settings.rayBias;
@@ -427,7 +381,7 @@ namespace uvsr
         commandList->writeBuffer(
             m_ConstantBuffer, &constants, sizeof(constants));
 
-        commandList->beginMarker("Heitz RGB Ratio-Estimator Shadows");
+        commandList->beginMarker("Ray-Traced Sky Visibility");
         nvrhi::ComputeState state;
         state.pipeline = m_Pipeline;
         state.bindings = { m_BindingSet };
@@ -437,22 +391,17 @@ namespace uvsr
             div_ceil(viewExtent.width(), 8),
             div_ceil(viewExtent.height(), 8));
         commandList->endMarker();
-        return {
-            m_OutputModulation,
-            light,
-            true,
-            stochastic
-        };
+        return { m_OutputVisibility, true };
     }
 
-    void HeitzRatioEstimatorShadowPass::ResetBindingCache()
+    void RayTracedSkyVisibilityPass::ResetBindingCache()
     {
-        ClearBindingSets();
+        ClearBindingSet();
         m_BoundTlas = nullptr;
         m_BoundInputs = {};
     }
 
-    void HeitzRatioEstimatorShadowPass::ClearBindingSets()
+    void RayTracedSkyVisibilityPass::ClearBindingSet()
     {
         m_BindingSet = nullptr;
     }

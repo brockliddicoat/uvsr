@@ -25,6 +25,7 @@ Texture2D<float4> t_GBufferSpecular : register(t8);
 Texture2D<float> t_Depth : register(t9);
 TextureCubeArray t_SpecularEnvironment : register(t10);
 Texture2D t_EnvironmentBrdf : register(t11);
+Texture2D<float> t_SkyVisibility : register(t12);
 
 SamplerState s_DiffuseEnvironmentSampler : register(s0);
 SamplerState s_EnvironmentBrdfSampler : register(s1);
@@ -101,6 +102,25 @@ void main(uint2 pixel : SV_DispatchThreadID)
             material,
             surface,
             g_Visibility.specularEnvironmentMipLevels);
+    float skyVisibility = 1.0f;
+    const bool applySkyVisibilityToDiffuseIbl =
+        g_Visibility.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL ||
+        g_Visibility.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+    const bool applySkyVisibilityToSpecularIbl =
+        g_Visibility.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL ||
+        g_Visibility.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+    if (applySkyVisibilityToDiffuseIbl ||
+        applySkyVisibilityToSpecularIbl)
+    {
+        const float sampledSkyVisibility = t_SkyVisibility[pixel];
+        skyVisibility = isfinite(sampledSkyVisibility)
+            ? saturate(sampledSkyVisibility)
+            : 1.0f;
+    }
 
     float3 environmentDiffuseResponse;
     if (g_Visibility.diffuseEnvironmentEnabled != 0u)
@@ -125,6 +145,8 @@ void main(uint2 pixel : SV_DispatchThreadID)
             preparedEnvironment,
             environmentDiffuseResponse,
             materialAmbientOcclusion);
+    if (applySkyVisibilityToDiffuseIbl)
+        environmentDiffuse *= skyVisibility;
 
     float3 environmentSpecular = 0.0f;
     if (g_Visibility.specularEnvironmentEnabled != 0u &&
@@ -160,6 +182,8 @@ void main(uint2 pixel : SV_DispatchThreadID)
             prefilteredRadiance,
             environmentBrdf,
             combinedAmbientOcclusion);
+        if (applySkyVisibilityToSpecularIbl)
+            environmentSpecular *= skyVisibility;
     }
 
     // The traversal outputs irradiance. Apply the receiving diffuse BRDF once;

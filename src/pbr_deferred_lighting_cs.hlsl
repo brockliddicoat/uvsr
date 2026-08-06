@@ -37,6 +37,7 @@ Texture2D t_GBuffer3 : register(t12);
 Texture2D t_MaterialAmbientOcclusion : register(t14);
 Texture2D<float4> t_ScreenSpaceDirectionalVisibility : register(t20);
 Texture2D<float4> t_RatioEstimatorDirectionalVisibility : register(t21);
+Texture2D<float> t_SkyVisibility : register(t22);
 
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Output : register(u0);
 #if WRITE_SOURCE_RADIANCE
@@ -208,6 +209,32 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
             g_PbrDeferred.lightingDebugView == 4u ||
             g_PbrDeferred.lightingDebugView == 9u;
 #endif
+        const bool needSpecularEnvironment =
+            g_PbrDeferred.separateIndirect == 0 ||
+            (g_PbrDeferred.lightingDebugView >= 6u &&
+                g_PbrDeferred.lightingDebugView <= 9u);
+        float skyVisibility = 1.0f;
+        const bool applySkyVisibilityToDiffuseIbl =
+            g_PbrDeferred.skyVisibilityApplication ==
+                UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL ||
+            g_PbrDeferred.skyVisibilityApplication ==
+                UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+        const bool applySkyVisibilityToSpecularIbl =
+            g_PbrDeferred.skyVisibilityApplication ==
+                UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL ||
+            g_PbrDeferred.skyVisibilityApplication ==
+                UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+        if ((needDiffuseEnvironment &&
+                applySkyVisibilityToDiffuseIbl) ||
+            (needSpecularEnvironment &&
+                applySkyVisibilityToSpecularIbl))
+        {
+            const float sampledSkyVisibility =
+                t_SkyVisibility[pixelPosition];
+            skyVisibility = isfinite(sampledSkyVisibility)
+                ? saturate(sampledSkyVisibility)
+                : 1.0f;
+        }
         if (needDiffuseEnvironment &&
             environmentProbe.diffuseScale > 0.0f)
         {
@@ -225,12 +252,10 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                 preparedEnvironment,
                 environmentDiffuseResponse,
                 gbuffer.ambientOcclusion);
+            if (applySkyVisibilityToDiffuseIbl)
+                environmentDiffuse *= skyVisibility;
         }
 
-        const bool needSpecularEnvironment =
-            g_PbrDeferred.separateIndirect == 0 ||
-            (g_PbrDeferred.lightingDebugView >= 6u &&
-                g_PbrDeferred.lightingDebugView <= 9u);
         if (needSpecularEnvironment &&
             environmentProbe.specularScale > 0.0f &&
             preparedEnvironment.valid > 0.0f)
@@ -258,6 +283,8 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                 prefilteredEnvironment,
                 environmentBrdf,
                 gbuffer.ambientOcclusion);
+            if (applySkyVisibilityToSpecularIbl)
+                environmentSpecular *= skyVisibility;
         }
     }
 

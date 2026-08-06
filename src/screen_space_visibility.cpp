@@ -107,6 +107,25 @@ namespace
     {
         return 0x2000000000000000ull | uint64_t(consumer);
     }
+
+    bool IsSkyVisibilityTextureCompatible(
+        nvrhi::ITexture* texture,
+        uint2 fullSize)
+    {
+        if (!texture)
+            return false;
+
+        const nvrhi::TextureDesc& description = texture->getDesc();
+        return description.width == fullSize.x &&
+            description.height == fullSize.y &&
+            description.depth == 1u &&
+            description.arraySize == 1u &&
+            description.mipLevels == 1u &&
+            description.sampleCount == 1u &&
+            description.format == nvrhi::Format::R8_UNORM &&
+            description.dimension == nvrhi::TextureDimension::Texture2D &&
+            description.isShaderResource;
+    }
 }
 
 namespace uvsr
@@ -412,6 +431,7 @@ namespace uvsr
                     nvrhi::BindingLayoutItem::Texture_SRV(9),
                     nvrhi::BindingLayoutItem::Texture_SRV(10),
                     nvrhi::BindingLayoutItem::Texture_SRV(11),
+                    nvrhi::BindingLayoutItem::Texture_SRV(12),
                     nvrhi::BindingLayoutItem::Texture_UAV(0),
                     nvrhi::BindingLayoutItem::Sampler(0),
                     nvrhi::BindingLayoutItem::Sampler(1)
@@ -779,7 +799,17 @@ namespace uvsr
             postProcessEnabled,
             packedEdgesEnabled,
             settings.bufferPrecision);
-        const std::array<nvrhi::ITexture*, 12> inputTextures = {
+        const bool hasSkyVisibilityConsumer =
+            inputs.applySkyVisibilityToDiffuseIbl ||
+            inputs.applySkyVisibilityToSpecularIbl;
+        nvrhi::ITexture* activeSkyVisibility =
+            hasSkyVisibilityConsumer &&
+            IsSkyVisibilityTextureCompatible(
+                inputs.skyVisibility,
+                fullSize)
+                ? inputs.skyVisibility
+                : nullptr;
+        const std::array<nvrhi::ITexture*, 13> inputTextures = {
             inputs.depth,
             inputs.normals,
             inputs.sourceRadiance,
@@ -787,6 +817,7 @@ namespace uvsr
             inputs.gbufferSpecular,
             inputs.gbufferEmissive,
             inputs.materialAmbientOcclusion,
+            activeSkyVisibility,
             inputs.diffuseEnvironment,
             inputs.specularEnvironment,
             inputs.environmentBrdf,
@@ -855,6 +886,13 @@ namespace uvsr
                 1u)
             : 0u;
         constants.lightingDebugView = inputs.lightingDebugView;
+        constants.skyVisibilityApplication = activeSkyVisibility
+            ? (inputs.applySkyVisibilityToDiffuseIbl
+                ? (inputs.applySkyVisibilityToSpecularIbl
+                    ? UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL
+                    : UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL)
+                : UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL)
+            : UVSR_SKY_VISIBILITY_APPLY_NEITHER;
 
         const float diffuseEnvironmentScale = std::max(
             std::isfinite(inputs.diffuseEnvironmentScale)
@@ -1172,6 +1210,11 @@ namespace uvsr
                     inputs.environmentBrdf
                         ? inputs.environmentBrdf
                         : m_CommonPasses->m_BlackTexture.Get()),
+                nvrhi::BindingSetItem::Texture_SRV(
+                    12,
+                    activeSkyVisibility
+                        ? activeSkyVisibility
+                        : m_CommonPasses->m_WhiteTexture.Get()),
                 nvrhi::BindingSetItem::Sampler(
                     0, m_CommonPasses->m_LinearWrapSampler),
                 nvrhi::BindingSetItem::Sampler(

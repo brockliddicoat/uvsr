@@ -171,13 +171,18 @@ available to later ray-query features.
 
 The Shadows drawer contains two independent groups. Ratio-Estimator Ray-Traced
 Shadows exposes **Enabled**, **Hard Shadows**, **Animate Samples**, **Samples Per
-Pixel**, **Noise Pattern**, and **Ray Bias**. Soft sampling controls are disabled
-when explicit hard mode or a zero-extent emitter makes them irrelevant.
+Pixel**, **Noise Pattern**, **Max Distance**, and **Ray Bias**. Soft sampling
+controls are disabled when explicit hard mode or a zero-extent emitter makes
+them irrelevant; Max Distance remains available because it applies to both
+hard and soft queries.
 
 Factory defaults keep both shadow producers disabled, set the ratio estimator
 to two samples, keep hard mode off, enable sample animation, select Void Cluster
 Blue Noise, use a `0.002` triangle-normal bias, and give a zero-extent primary
-sun a `0.53` degree diameter. Commands use the prefixes
+sun a `0.53` degree diameter. Max preserves the established
+`max(sceneDiagonal * 2, 1)` reference reach. The `32m`, `16m`, `8m`, `4m`, and
+`2m` modes intentionally ignore farther blockers, so they are bounded
+visibility experiments rather than exact sun visibility. Commands use the prefixes
 `shadows.screen-space-directional.` and `shadows.ratio-estimator.`. Changing a
 shadow sampling setting resets only the renderer's ordinary final-color TAA
 state and deterministic sample phase; there is no pass-private history.

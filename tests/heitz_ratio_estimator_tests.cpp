@@ -264,6 +264,8 @@ namespace
         assert(!ratioSettings.hardShadows);
         assert(ratioSettings.sampleRateLog2 == 1);
         assert(Near(ratioSettings.rayBias, 0.002f));
+        assert(ratioSettings.maxDistance ==
+            RayVisibilityMaxDistance::Maximum);
         assert(ratioSettings.noisePattern ==
             HeitzRatioEstimatorNoisePattern::VoidClusterBlueNoise);
         assert(ratioSettings.animateSamples);
@@ -307,6 +309,12 @@ namespace
         assert(!IsHeitzRatioEstimatorConfigurationSupported(invalid));
         invalid = ratioSettings;
         invalid.noisePattern = HeitzRatioEstimatorNoisePattern::Count;
+        assert(!IsHeitzRatioEstimatorConfigurationSupported(invalid));
+        invalid = ratioSettings;
+        invalid.maxDistance = RayVisibilityMaxDistance::Count;
+        assert(!IsHeitzRatioEstimatorConfigurationSupported(invalid));
+        invalid.maxDistance =
+            static_cast<RayVisibilityMaxDistance>(-1);
         assert(!IsHeitzRatioEstimatorConfigurationSupported(invalid));
 
         constexpr std::array<std::string_view, 7> ExpectedLabels = {

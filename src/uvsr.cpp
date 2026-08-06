@@ -104,6 +104,7 @@
 #include "flashlight.h"
 #include "heitz_ratio_estimator_shadows.h"
 #include "pixel_zoom.h"
+#include "ray_traced_sky_visibility.h"
 #include "renderer_statistics.h"
 #include "scene_catalog.h"
 #include "scene_loading.h"
@@ -1141,6 +1142,7 @@ struct UIData
     DirectionalShadowSettings           DirectionalShadows;
     ScreenSpaceDirectionalShadowSettings       ScreenSpaceDirectionalShadows;
     WorldSpaceRepresentationSettings    Representation;
+    RayTracedSkyVisibilitySettings      RayTracedSkyVisibility;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
     bool                                ShaderReloadRequested = false;
     bool                                FlashlightEnabled =
@@ -1230,6 +1232,7 @@ enum class RendererTimingStage : uint32_t
     Geometry,
     MultisampleResolve,
     RatioEstimatorShadows,
+    SkyVisibility,
     DirectLighting,
     ScreenSpaceVisibility,
     MaterialPicking,
@@ -1354,6 +1357,8 @@ private:
                                         m_ScreenSpaceDirectionalShadowPass;
     std::unique_ptr<HeitzRatioEstimatorShadowPass>
                                         m_HeitzRatioEstimatorShadowPass;
+    std::unique_ptr<RayTracedSkyVisibilityPass>
+                                        m_RayTracedSkyVisibilityPass;
     std::unique_ptr<WorldSpaceRepresentation>
                                         m_WorldSpaceRepresentation;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
@@ -1410,6 +1415,11 @@ private:
     bool                                m_HeitzRatioEstimatorContributedLastFrame =
                                             false;
     bool                                m_HeitzRatioEstimatorDispatchedThisFrame =
+                                            false;
+    uint64_t                            m_RayTracedSkyVisibilityPhase = 0u;
+    bool                                m_RayTracedSkyVisibilityContributedLastFrame =
+                                            false;
+    bool                                m_RayTracedSkyVisibilityDispatchedThisFrame =
                                             false;
     bool                                m_HasAppliedAntiAliasingSettings =
         false;
@@ -1619,6 +1629,7 @@ public:
             m_TemporalAAPass->ResetHistory();
         m_AntiAliasingPhase = 0u;
         m_HeitzRatioEstimatorPhase = 0u;
+        m_RayTracedSkyVisibilityPhase = 0u;
     }
 
     void ApplyCameraPose(
@@ -1789,6 +1800,9 @@ public:
         m_ui.Representation = WorldSpaceRepresentationSettings{};
         if (m_HeitzRatioEstimatorShadowPass)
             m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+        m_ui.RayTracedSkyVisibility = RayTracedSkyVisibilitySettings{};
+        if (m_RayTracedSkyVisibilityPass)
+            m_RayTracedSkyVisibilityPass->ResetBindingCache();
         if (m_WorldSpaceRepresentation)
             m_WorldSpaceRepresentation->Reset();
         m_ui.ScreenSpaceVisibility = ScreenSpaceVisibilitySettings{};
@@ -2643,6 +2657,8 @@ public:
         if (m_PbrDeferredLightingPass) m_PbrDeferredLightingPass->ResetBindingCache();
         if (m_HeitzRatioEstimatorShadowPass)
             m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+        if (m_RayTracedSkyVisibilityPass)
+            m_RayTracedSkyVisibilityPass->ResetBindingCache();
         if (m_WorldSpaceRepresentation)
             m_WorldSpaceRepresentation->Reset();
         if (m_ScreenSpaceVisibilityPass)
@@ -3624,6 +3640,23 @@ public:
                 &m_PreparedVisibilityBlueNoise);
     }
 
+    void EnsureRayTracedSkyVisibilityPass()
+    {
+        if (!m_ui.RayTracedSkyVisibility.enabled ||
+            !HasRayTracedSkyVisibilityConsumer(
+                m_ui.RayTracedSkyVisibility) ||
+            m_RayTracedSkyVisibilityPass ||
+            !SupportsRayTracedSkyVisibility())
+        {
+            return;
+        }
+        m_RayTracedSkyVisibilityPass =
+            std::make_unique<RayTracedSkyVisibilityPass>(
+                GetDevice(),
+                m_ShaderFactory,
+                &m_PreparedVisibilityBlueNoise);
+    }
+
     void UpdateImageBasedLighting(nvrhi::ICommandList* commandList)
     {
         if (!m_ImageBasedLightingEnvironment)
@@ -3795,8 +3828,15 @@ public:
             break;
 
         case ScenePreparationStage::WorldRepresentation:
-            if (!m_ui.DirectionalShadows.ratioEstimator.enabled ||
-                !SupportsHeitzRatioEstimatorShadows() ||
+        {
+            const bool worldRepresentationRequested =
+                (m_ui.DirectionalShadows.ratioEstimator.enabled &&
+                    SupportsHeitzRatioEstimatorShadows()) ||
+                (m_ui.RayTracedSkyVisibility.enabled &&
+                    HasRayTracedSkyVisibilityConsumer(
+                        m_ui.RayTracedSkyVisibility) &&
+                    SupportsRayTracedSkyVisibility());
+            if (!worldRepresentationRequested ||
                 !m_WorldSpaceRepresentation ||
                 !m_WorldSpaceRepresentation->IsSupported() ||
                 m_WorldSpaceRepresentation->GetStatus().state ==
@@ -3812,6 +3852,7 @@ public:
                     ScenePreparationStage::RenderTargets;
             }
             break;
+        }
 
         case ScenePreparationStage::RenderTargets:
             if (PrepareLoadingRenderTargets(framebuffer))
@@ -3869,6 +3910,7 @@ public:
 
         EnsureScreenSpaceDirectionalShadowPass();
         EnsureHeitzRatioEstimatorShadowPass();
+        EnsureRayTracedSkyVisibilityPass();
 
         int windowWidth, windowHeight;
         GetDeviceManager()->GetWindowDimensions(windowWidth, windowHeight);
@@ -3966,6 +4008,8 @@ public:
 
                 if (m_HeitzRatioEstimatorShadowPass)
                     m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+                if (m_RayTracedSkyVisibilityPass)
+                    m_RayTracedSkyVisibilityPass->ResetBindingCache();
                 m_RenderTargets = nullptr;
                 m_BindingCache.Clear();
                 m_RenderTargets = std::make_unique<RenderTargets>();
@@ -3993,6 +4037,7 @@ public:
             {
                 m_ScreenSpaceDirectionalShadowPass.reset();
                 m_HeitzRatioEstimatorShadowPass.reset();
+                m_RayTracedSkyVisibilityPass.reset();
                 m_FlashlightDepthPass.reset();
                 // This pass owns shader handles and PSOs independently of the
                 // main pass set. Drop it before clearing the factory cache so
@@ -4063,10 +4108,12 @@ public:
 
         EnsureScreenSpaceDirectionalShadowPass();
         EnsureHeitzRatioEstimatorShadowPass();
+        EnsureRayTracedSkyVisibilityPass();
 
         m_CommandList->open();
         AdvanceRendererTimers();
         m_HeitzRatioEstimatorDispatchedThisFrame = false;
+        m_RayTracedSkyVisibilityDispatchedThisFrame = false;
         BeginRendererStage(RendererTimingStage::CompleteFrame);
         BeginRendererStage(RendererTimingStage::SceneSetup);
         m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());
@@ -4074,6 +4121,14 @@ public:
             m_ui.DirectionalShadows.ratioEstimator.enabled &&
             m_RenderTargets->GetSampleCount() == 1u &&
             SupportsHeitzRatioEstimatorShadows();
+        const bool rayTracedSkyVisibilitySelected =
+            m_ui.RayTracedSkyVisibility.enabled &&
+            HasRayTracedSkyVisibilityConsumer(
+                m_ui.RayTracedSkyVisibility) &&
+            SupportsRayTracedSkyVisibility();
+        const bool worldRepresentationSelected =
+            heitzRatioEstimatorSelected ||
+            rayTracedSkyVisibilitySelected;
         const uint64_t worldRepresentationGenerationBefore =
             m_WorldSpaceRepresentation
             ? m_WorldSpaceRepresentation->GetStatus().generation
@@ -4085,15 +4140,17 @@ public:
                 m_Scene.get(),
                 m_ui.Representation,
                 uint32_t(GetFrameIndex()),
-                heitzRatioEstimatorSelected);
-        if (m_HeitzRatioEstimatorShadowPass &&
-            m_WorldSpaceRepresentation &&
+                worldRepresentationSelected);
+        if (m_WorldSpaceRepresentation &&
             (m_WorldSpaceRepresentation->GetStatus().generation !=
                     worldRepresentationGenerationBefore ||
-                (heitzRatioEstimatorSelected &&
+                (worldRepresentationSelected &&
                     !worldRepresentationReady)))
         {
-            m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+            if (m_HeitzRatioEstimatorShadowPass)
+                m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+            if (m_RayTracedSkyVisibilityPass)
+                m_RayTracedSkyVisibilityPass->ResetBindingCache();
             ResetAntiAliasingState();
         }
 
@@ -4151,6 +4208,23 @@ public:
             globalEnvironment
                 ? globalEnvironment->diffuseScale
                 : 0.f;
+        const bool skyVisibilityDiffuseIblAvailable =
+            m_ui.RayTracedSkyVisibility.applyToDiffuseIbl &&
+            diffuseEnvironment &&
+            diffuseEnvironmentScale > 0.f;
+        const bool skyVisibilitySpecularIblAvailable =
+            m_ui.RayTracedSkyVisibility.applyToSpecularIbl &&
+            globalEnvironment &&
+            globalEnvironment->specularMap &&
+            globalEnvironment->environmentBrdf &&
+            globalEnvironment->specularScale > 0.f;
+        const bool rayTracedSkyVisibilityExpectedToContribute =
+            rayTracedSkyVisibilitySelected &&
+            m_RayTracedSkyVisibilityPass &&
+            m_RayTracedSkyVisibilityPass->IsSupported() &&
+            worldRepresentationReady &&
+            (skyVisibilityDiffuseIblAvailable ||
+                skyVisibilitySpecularIblAvailable);
         const bool runScreenSpaceVisibility =
             m_ui.HasActiveScreenSpaceVisibilityConsumer();
         const bool writeSourceRadiance = runScreenSpaceVisibility &&
@@ -4161,6 +4235,10 @@ public:
         m_RenderTargets->Clear(m_CommandList);
         ScreenSpaceDirectionalShadowResult screenSpaceShadowResult;
         HeitzRatioEstimatorShadowResult heitzShadowResult;
+        RayTracedSkyVisibilityResult skyVisibilityResult;
+        nvrhi::ITexture* skyVisibility = nullptr;
+        bool applySkyVisibilityToDiffuseIbl = false;
+        bool applySkyVisibilityToSpecularIbl = false;
         DirectionalLightVisibilities directionalVisibilities;
         MsaaVisibilityResolveOutputs closestSurfaceOutputs;
         bool closestSurfaceResolved = false;
@@ -4252,12 +4330,13 @@ public:
                 geometryPass.GetSubmittedTriangles();
             EndRendererStage(RendererTimingStage::Geometry);
 
-            const bool directionalVisibilityProducerEnabled =
+            const bool singleSurfaceVisibilityProducerEnabled =
                 m_ui.ScreenSpaceDirectionalShadows.enabled ||
-                heitzRatioEstimatorSelected;
+                heitzRatioEstimatorSelected ||
+                rayTracedSkyVisibilitySelected;
             if (m_RenderTargets->GetSampleCount() > 1u &&
                 (runScreenSpaceVisibility ||
-                    directionalVisibilityProducerEnabled ||
+                    singleSurfaceVisibilityProducerEnabled ||
                     m_ui.UsesLongTermTemporalAA()))
             {
                 resolveClosestMsaaSurface();
@@ -4342,6 +4421,52 @@ public:
                 m_HeitzRatioEstimatorContributedLastFrame =
                     heitzRatioEstimatorContributed;
             }
+            if (rayTracedSkyVisibilityExpectedToContribute &&
+                singleSurfaceInputsAvailable)
+            {
+                RayTracedSkyVisibilityInputs skyInputs;
+                skyInputs.depth = visibilityDepth;
+                skyInputs.material = closestSurfaceResolved
+                    ? closestSurfaceOutputs.material
+                    : m_RenderTargets->GBufferSpecular.Get();
+                skyInputs.normals = closestSurfaceResolved
+                    ? closestSurfaceOutputs.normals
+                    : m_RenderTargets->GBufferNormals.Get();
+                BeginRendererStage(RendererTimingStage::SkyVisibility);
+                skyVisibilityResult =
+                    m_RayTracedSkyVisibilityPass->Render(
+                        m_CommandList,
+                        m_ui.RayTracedSkyVisibility,
+                        *m_View,
+                        skyInputs,
+                        m_WorldSpaceRepresentation
+                            ->GetTopLevelAccelerationStructure(),
+                        uint32_t(m_RayTracedSkyVisibilityPhase),
+                        m_SceneDiagonal);
+                EndRendererStage(RendererTimingStage::SkyVisibility);
+            }
+            const bool rayTracedSkyVisibilityContributed =
+                bool(skyVisibilityResult);
+            m_RayTracedSkyVisibilityDispatchedThisFrame =
+                skyVisibilityResult.dispatched;
+            if (rayTracedSkyVisibilityContributed !=
+                m_RayTracedSkyVisibilityContributedLastFrame)
+            {
+                ResetAntiAliasingState();
+                InvalidateRendererStageTiming(
+                    RendererTimingStage::SkyVisibility);
+                m_RayTracedSkyVisibilityContributedLastFrame =
+                    rayTracedSkyVisibilityContributed;
+            }
+            skyVisibility = skyVisibilityResult
+                ? skyVisibilityResult.visibility
+                : nullptr;
+            applySkyVisibilityToDiffuseIbl =
+                skyVisibility &&
+                m_ui.RayTracedSkyVisibility.applyToDiffuseIbl;
+            applySkyVisibilityToSpecularIbl =
+                skyVisibility &&
+                m_ui.RayTracedSkyVisibility.applyToSpecularIbl;
             DeferredLightingPass::Inputs deferredInputs;
             deferredInputs.SetGBuffer(*m_RenderTargets);
             // Slot 14 carries the authored material ambient-occlusion
@@ -4394,6 +4519,9 @@ public:
                         visibilityDeferredInputs,
                         directionalVisibilities,
                         globalEnvironment,
+                        skyVisibility,
+                        applySkyVisibilityToDiffuseIbl,
+                        applySkyVisibilityToSpecularIbl,
                         m_RenderTargets
                             ->DirectDiffuseRadiance,
                         true,
@@ -4425,6 +4553,11 @@ public:
                         diffuseEnvironment;
                     visibilityInputs.diffuseEnvironmentScale =
                         diffuseEnvironmentScale;
+                    visibilityInputs.skyVisibility = skyVisibility;
+                    visibilityInputs.applySkyVisibilityToDiffuseIbl =
+                        applySkyVisibilityToDiffuseIbl;
+                    visibilityInputs.applySkyVisibilityToSpecularIbl =
+                        applySkyVisibilityToSpecularIbl;
                     if (globalEnvironment)
                     {
                         visibilityInputs.diffuseEnvironmentArrayIndex =
@@ -4474,6 +4607,9 @@ public:
                     deferredInputs,
                     directionalVisibilities,
                     globalEnvironment,
+                    skyVisibility,
+                    applySkyVisibilityToDiffuseIbl,
+                    applySkyVisibilityToSpecularIbl,
                     m_RenderTargets->DirectDiffuseRadiance,
                     runScreenSpaceVisibility,
                     writeSourceRadiance,
@@ -4500,6 +4636,11 @@ public:
                         diffuseEnvironment;
                     visibilityInputs.diffuseEnvironmentScale =
                         diffuseEnvironmentScale;
+                    visibilityInputs.skyVisibility = skyVisibility;
+                    visibilityInputs.applySkyVisibilityToDiffuseIbl =
+                        applySkyVisibilityToDiffuseIbl;
+                    visibilityInputs.applySkyVisibilityToSpecularIbl =
+                        applySkyVisibilityToSpecularIbl;
                     if (globalEnvironment)
                     {
                         visibilityInputs.diffuseEnvironmentArrayIndex =
@@ -4659,6 +4800,9 @@ public:
                 deferredMsaaInputs,
                 directionalVisibilities,
                 globalEnvironment,
+                skyVisibility,
+                applySkyVisibilityToDiffuseIbl,
+                applySkyVisibilityToSpecularIbl,
                 nullptr,
                 deferredMsaaVisibilityPending,
                 false,
@@ -4780,6 +4924,11 @@ public:
         {
             ++m_HeitzRatioEstimatorPhase;
         }
+        if (skyVisibilityResult.dispatched &&
+            m_ui.RayTracedSkyVisibility.animateSamples)
+        {
+            ++m_RayTracedSkyVisibilityPhase;
+        }
 
         if (m_ui.CopyScreenshotToClipboard)
         {
@@ -4878,6 +5027,8 @@ public:
         InvalidateRendererStageTiming(
             RendererTimingStage::RatioEstimatorShadows);
         InvalidateRendererStageTiming(
+            RendererTimingStage::SkyVisibility);
+        InvalidateRendererStageTiming(
             RendererTimingStage::CompleteFrame);
     }
 
@@ -4921,6 +5072,18 @@ public:
             m_ui.GetResolvedAntiAliasingSettings().rasterSampleCount == 1u;
     }
 
+    bool HasRayTracedSkyVisibilityHardwareSupport() const
+    {
+        return m_WorldSpaceRepresentation &&
+            m_WorldSpaceRepresentation->IsSupported() &&
+            RayTracedSkyVisibilityPass::IsDeviceSupported(GetDevice());
+    }
+
+    bool SupportsRayTracedSkyVisibility() const
+    {
+        return HasRayTracedSkyVisibilityHardwareSupport();
+    }
+
     const WorldSpaceRepresentationStatus&
         GetWorldSpaceRepresentationStatus() const
     {
@@ -4936,9 +5099,13 @@ public:
         WorldSpaceRepresentationInvalidation invalidation)
     {
         if (invalidation != WorldSpaceRepresentationInvalidation::None &&
-            m_HeitzRatioEstimatorShadowPass)
+            (m_HeitzRatioEstimatorShadowPass ||
+                m_RayTracedSkyVisibilityPass))
         {
-            m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+            if (m_HeitzRatioEstimatorShadowPass)
+                m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+            if (m_RayTracedSkyVisibilityPass)
+                m_RayTracedSkyVisibilityPass->ResetBindingCache();
             ResetAntiAliasingState();
         }
         if (m_WorldSpaceRepresentation)
@@ -4987,6 +5154,11 @@ public:
     [[nodiscard]] bool DidDispatchHeitzRatioEstimatorThisFrame() const
     {
         return m_HeitzRatioEstimatorDispatchedThisFrame;
+    }
+
+    [[nodiscard]] bool DidDispatchRayTracedSkyVisibilityThisFrame() const
+    {
+        return m_RayTracedSkyVisibilityDispatchedThisFrame;
     }
 
 };
@@ -9854,6 +10026,180 @@ private:
             return true;
         }
 
+        if (path == "sky.visibility.enabled" ||
+            path == "sky.visibility.diffuse-ibl" ||
+            path == "sky.visibility.specular-ibl" ||
+            path == "sky.visibility.samples-per-pixel" ||
+            path == "sky.visibility.noise-pattern" ||
+            path == "sky.visibility.animate-samples" ||
+            path == "sky.visibility.max-distance" ||
+            path == "sky.visibility.ray-bias")
+        {
+            RayTracedSkyVisibilitySettings candidate =
+                m_ui.RayTracedSkyVisibility;
+            const RayTracedSkyVisibilitySettings factoryDefaults;
+            bool handled = true;
+            if (path == "sky.visibility.enabled")
+            {
+                handled = ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.enabled,
+                    factoryDefaults.enabled,
+                    value,
+                    error);
+            }
+            else if (path == "sky.visibility.diffuse-ibl")
+            {
+                handled = ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.applyToDiffuseIbl,
+                    factoryDefaults.applyToDiffuseIbl,
+                    value,
+                    error);
+            }
+            else if (path == "sky.visibility.specular-ibl")
+            {
+                handled = ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.applyToSpecularIbl,
+                    factoryDefaults.applyToSpecularIbl,
+                    value,
+                    error);
+            }
+            else if (path == "sky.visibility.samples-per-pixel")
+            {
+                static constexpr std::array<
+                    std::pair<std::string_view, int32_t>, 7> Options = {{
+                        { "1", 0 },
+                        { "2", 1 },
+                        { "4", 2 },
+                        { "8", 3 },
+                        { "16", 4 },
+                        { "32", 5 },
+                        { "64", 6 }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.sampleRateLog2,
+                    factoryDefaults.sampleRateLog2,
+                    Options,
+                    value,
+                    error);
+            }
+            else if (path == "sky.visibility.noise-pattern")
+            {
+                static constexpr std::array<std::pair<std::string_view,
+                    RayTracedSkyVisibilityNoisePattern>, 2> Options = {{
+                        { "permutated-white-noise",
+                            RayTracedSkyVisibilityNoisePattern::
+                                PermutatedWhiteNoise },
+                        { "void-cluster-blue-noise",
+                            RayTracedSkyVisibilityNoisePattern::
+                                VoidClusterBlueNoise }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.noisePattern,
+                    factoryDefaults.noisePattern,
+                    Options,
+                    value,
+                    error);
+            }
+            else if (path == "sky.visibility.animate-samples")
+            {
+                handled = ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.animateSamples,
+                    factoryDefaults.animateSamples,
+                    value,
+                    error);
+            }
+            else if (path == "sky.visibility.max-distance")
+            {
+                static constexpr std::array<std::pair<std::string_view,
+                    RayVisibilityMaxDistance>, 6> Options = {{
+                        { "max", RayVisibilityMaxDistance::Maximum },
+                        { "32m", RayVisibilityMaxDistance::Meters32 },
+                        { "16m", RayVisibilityMaxDistance::Meters16 },
+                        { "8m", RayVisibilityMaxDistance::Meters8 },
+                        { "4m", RayVisibilityMaxDistance::Meters4 },
+                        { "2m", RayVisibilityMaxDistance::Meters2 }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.maxDistance,
+                    factoryDefaults.maxDistance,
+                    Options,
+                    value,
+                    error);
+            }
+            else
+            {
+                handled = ApplyCommandFloat(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.rayBias,
+                    factoryDefaults.rayBias,
+                    0.f,
+                    RayTracedSkyVisibilityMaximumRayBias,
+                    value,
+                    error);
+            }
+
+            if (!handled)
+                return false;
+            if (operation == CommandValueOperation::Get)
+                return true;
+            if (!IsRayTracedSkyVisibilityConfigurationSupported(candidate))
+            {
+                error =
+                    "The requested ray-traced sky visibility configuration is not supported.";
+                return false;
+            }
+            if (candidate.enabled &&
+                !m_app->SupportsRayTracedSkyVisibility())
+            {
+                error =
+                    "Ray-traced sky visibility requires DXR 1.1 support.";
+                return false;
+            }
+
+            const bool changed =
+                candidate.enabled != m_ui.RayTracedSkyVisibility.enabled ||
+                candidate.applyToDiffuseIbl !=
+                    m_ui.RayTracedSkyVisibility.applyToDiffuseIbl ||
+                candidate.applyToSpecularIbl !=
+                    m_ui.RayTracedSkyVisibility.applyToSpecularIbl ||
+                candidate.sampleRateLog2 !=
+                    m_ui.RayTracedSkyVisibility.sampleRateLog2 ||
+                candidate.noisePattern !=
+                    m_ui.RayTracedSkyVisibility.noisePattern ||
+                candidate.animateSamples !=
+                    m_ui.RayTracedSkyVisibility.animateSamples ||
+                candidate.maxDistance !=
+                    m_ui.RayTracedSkyVisibility.maxDistance ||
+                candidate.rayBias != m_ui.RayTracedSkyVisibility.rayBias;
+            m_ui.RayTracedSkyVisibility = candidate;
+            if (changed)
+                m_app->ResetImageBasedLightingHistory();
+            return true;
+        }
+
         bool handled = true;
         bool resetVisibilityHistory = false;
         bool resetTemporalHistory = false;
@@ -10672,6 +11018,27 @@ private:
                 value,
                 error);
         }
+        else if (path == "shadows.ratio-estimator.max-distance")
+        {
+            static constexpr std::array<std::pair<std::string_view,
+                RayVisibilityMaxDistance>, 6> Options = {{
+                    { "max", RayVisibilityMaxDistance::Maximum },
+                    { "32m", RayVisibilityMaxDistance::Meters32 },
+                    { "16m", RayVisibilityMaxDistance::Meters16 },
+                    { "8m", RayVisibilityMaxDistance::Meters8 },
+                    { "4m", RayVisibilityMaxDistance::Meters4 },
+                    { "2m", RayVisibilityMaxDistance::Meters2 }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.maxDistance,
+                factoryDefaults.ratioEstimator.maxDistance,
+                Options,
+                value,
+                error);
+        }
         else if (path == "shadows.ratio-estimator.ray-bias")
         {
             handled = ApplyCommandFloat(
@@ -10731,6 +11098,8 @@ private:
                 m_ui.DirectionalShadows.ratioEstimator.noisePattern ||
             candidate.ratioEstimator.animateSamples !=
                 m_ui.DirectionalShadows.ratioEstimator.animateSamples ||
+            candidate.ratioEstimator.maxDistance !=
+                m_ui.DirectionalShadows.ratioEstimator.maxDistance ||
             candidate.ratioEstimator.rayBias !=
                 m_ui.DirectionalShadows.ratioEstimator.rayBias;
         m_ui.DirectionalShadows = candidate;
@@ -14590,6 +14959,35 @@ protected:
                     if (!softSamplingControlsEnabled)
                         ImGui::EndDisabled();
 
+                    int maxDistance =
+                        static_cast<int>(ratio.maxDistance);
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (ImGui::Combo(
+                            "Max Distance##RatioEstimatorShadows",
+                            &maxDistance,
+                            RayVisibilityMaxDistanceLabels.data(),
+                            static_cast<int>(
+                                RayVisibilityMaxDistanceLabels.size())))
+                    {
+                        ratio.maxDistance =
+                            static_cast<RayVisibilityMaxDistance>(
+                                maxDistance);
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Max preserves the established scene-diagonal sun "
+                        "reference. Finite distances intentionally ignore "
+                        "farther blockers and are bounded visibility, not "
+                        "exact sun visibility.");
+                    if (DrawPresetResetIcon(
+                            "RatioEstimatorShadowMaxDistance",
+                            ratio.maxDistance !=
+                                ratioDefaults.maxDistance))
+                    {
+                        ratio.maxDistance = ratioDefaults.maxDistance;
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+
                     if (DrawSliderFloat(
                             "Ray Bias##RatioEstimatorShadows",
                             &ratio.rayBias,
@@ -15434,8 +15832,10 @@ protected:
                     const char* label, RendererTimingStage stage)
             {
                 const bool currentDispatchAvailable =
-                    stage != RendererTimingStage::RatioEstimatorShadows ||
-                    m_app->DidDispatchHeitzRatioEstimatorThisFrame();
+                    (stage != RendererTimingStage::RatioEstimatorShadows ||
+                        m_app->DidDispatchHeitzRatioEstimatorThisFrame()) &&
+                    (stage != RendererTimingStage::SkyVisibility ||
+                        m_app->DidDispatchRayTracedSkyVisibilityThisFrame());
                 const bool available =
                     currentDispatchAvailable &&
                     timings.IsAvailable(stage);
@@ -15472,6 +15872,8 @@ protected:
                             RendererTimingStage::MultisampleResolve },
                         { "Ratio-Estimator Ray Dispatch",
                             RendererTimingStage::RatioEstimatorShadows },
+                        { "Sky Visibility Ray Dispatch",
+                            RendererTimingStage::SkyVisibility },
                         { "Direct Lighting",
                             RendererTimingStage::DirectLighting },
                         { "Screen-Space Visibility",
@@ -15603,6 +16005,9 @@ protected:
                     drawRendererTiming(
                         "Ratio-Estimator Ray Dispatch",
                         RendererTimingStage::RatioEstimatorShadows);
+                    drawRendererTiming(
+                        "Sky Visibility Ray Dispatch",
+                        RendererTimingStage::SkyVisibility);
                     drawRendererTiming(
                         "Complete Renderer Frame",
                         RendererTimingStage::CompleteFrame);
@@ -17136,6 +17541,227 @@ protected:
             {
                 m_ui.ShowEnvironmentBackground = true;
                 m_app->ResetImageBasedLightingHistory();
+            }
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Ray-Traced Sky Visibility");
+            RayTracedSkyVisibilitySettings& skyVisibility =
+                m_ui.RayTracedSkyVisibility;
+            const RayTracedSkyVisibilitySettings skyVisibilityDefaults{};
+            const bool skyVisibilityAvailable =
+                m_app->SupportsRayTracedSkyVisibility();
+            const bool disableSkyVisibilityEnable =
+                !skyVisibilityAvailable && !skyVisibility.enabled;
+            if (disableSkyVisibilityEnable)
+                ImGui::BeginDisabled();
+            if (ImGui::Checkbox(
+                    "Enable##RayTracedSkyVisibility",
+                    &skyVisibility.enabled))
+            {
+                m_app->ResetImageBasedLightingHistory();
+            }
+            ImGui::SetItemTooltip(
+                "Trace current-frame world-space visibility for the selected "
+                "diffuse and/or specular environment-lighting consumers.");
+            if (disableSkyVisibilityEnable)
+                ImGui::EndDisabled();
+            if (DrawPresetResetIcon(
+                    "RayTracedSkyVisibilityEnabled",
+                    skyVisibility.enabled != skyVisibilityDefaults.enabled))
+            {
+                skyVisibility.enabled = skyVisibilityDefaults.enabled;
+                m_app->ResetImageBasedLightingHistory();
+            }
+
+            if (BeginAnimatedToggleRegion(
+                    "##RayTracedSkyVisibilityControls",
+                    skyVisibility.enabled && skyVisibilityAvailable))
+            {
+                if (ImGui::Checkbox(
+                        "Diffuse IBL##RayTracedSkyVisibility",
+                        &skyVisibility.applyToDiffuseIbl))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Apply the scalar visibility to diffuse environment "
+                    "lighting before final composition and GI source "
+                    "radiance.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilityDiffuseIbl",
+                        skyVisibility.applyToDiffuseIbl !=
+                            skyVisibilityDefaults.applyToDiffuseIbl))
+                {
+                    skyVisibility.applyToDiffuseIbl =
+                        skyVisibilityDefaults.applyToDiffuseIbl;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
+                if (ImGui::Checkbox(
+                        "Specular IBL##RayTracedSkyVisibility",
+                        &skyVisibility.applyToSpecularIbl))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Experimentally apply the same cosine-weighted normal-"
+                    "hemisphere scalar to specular environment lighting. It "
+                    "is not a reflection-direction or roughness-resolved "
+                    "specular visibility estimate.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilitySpecularIbl",
+                        skyVisibility.applyToSpecularIbl !=
+                            skyVisibilityDefaults.applyToSpecularIbl))
+                {
+                    skyVisibility.applyToSpecularIbl =
+                        skyVisibilityDefaults.applyToSpecularIbl;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
+                int sampleRateLog2 = skyVisibility.sampleRateLog2;
+                const std::string_view sampleRateLabel =
+                    GetRayTracedSkyVisibilitySampleRateLabel(
+                        sampleRateLog2);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (ImGui::SliderInt(
+                        "Samples Per Pixel##RayTracedSkyVisibility",
+                        &sampleRateLog2,
+                        RayTracedSkyVisibilityMinimumSampleRateLog2,
+                        RayTracedSkyVisibilityMaximumSampleRateLog2,
+                        sampleRateLabel.data(),
+                        ImGuiSliderFlags_AlwaysClamp))
+                {
+                    skyVisibility.sampleRateLog2 = sampleRateLog2;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Trace 1 through 64 cosine-weighted geometric-normal "
+                    "hemisphere rays per pixel and average their binary hits "
+                    "and misses in the current frame.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilitySamples",
+                        skyVisibility.sampleRateLog2 !=
+                            skyVisibilityDefaults.sampleRateLog2))
+                {
+                    skyVisibility.sampleRateLog2 =
+                        skyVisibilityDefaults.sampleRateLog2;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
+                static constexpr const char* NoisePatternLabels[] = {
+                    "Permutated White Noise",
+                    "Void Cluster Blue Noise"
+                };
+                int noisePattern =
+                    static_cast<int>(skyVisibility.noisePattern);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (ImGui::Combo(
+                        "Noise Pattern##RayTracedSkyVisibility",
+                        &noisePattern,
+                        NoisePatternLabels,
+                        static_cast<int>(std::size(NoisePatternLabels))))
+                {
+                    skyVisibility.noisePattern =
+                        static_cast<RayTracedSkyVisibilityNoisePattern>(
+                            noisePattern);
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Choose the current-frame hemisphere sampling sequence.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilityNoisePattern",
+                        skyVisibility.noisePattern !=
+                            skyVisibilityDefaults.noisePattern))
+                {
+                    skyVisibility.noisePattern =
+                        skyVisibilityDefaults.noisePattern;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
+                if (ImGui::Checkbox(
+                        "Animate Samples##RayTracedSkyVisibility",
+                        &skyVisibility.animateSamples))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Advance the independent hemisphere sample sequence after "
+                    "each successful dispatch, with or without TAA.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilityAnimateSamples",
+                        skyVisibility.animateSamples !=
+                            skyVisibilityDefaults.animateSamples))
+                {
+                    skyVisibility.animateSamples =
+                        skyVisibilityDefaults.animateSamples;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
+                int maxDistance =
+                    static_cast<int>(skyVisibility.maxDistance);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (ImGui::Combo(
+                        "Max Distance##RayTracedSkyVisibility",
+                        &maxDistance,
+                        RayVisibilityMaxDistanceLabels.data(),
+                        static_cast<int>(
+                            RayVisibilityMaxDistanceLabels.size())))
+                {
+                    skyVisibility.maxDistance =
+                        static_cast<RayVisibilityMaxDistance>(
+                            maxDistance);
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Max preserves the established scene-diagonal reference. "
+                    "Finite distances intentionally ignore farther blockers "
+                    "and are bounded visibility, not exact sky visibility.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilityMaxDistance",
+                        skyVisibility.maxDistance !=
+                            skyVisibilityDefaults.maxDistance))
+                {
+                    skyVisibility.maxDistance =
+                        skyVisibilityDefaults.maxDistance;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
+                if (DrawSliderFloat(
+                        "Ray Bias##RayTracedSkyVisibility",
+                        &skyVisibility.rayBias,
+                        0.f,
+                        RayTracedSkyVisibilityMaximumRayBias,
+                        "%.4f"))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Move the ray origin this many world units along the "
+                    "view-facing raster triangle normal. Larger values can "
+                    "detach contact occlusion.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilityRayBias",
+                        skyVisibility.rayBias !=
+                            skyVisibilityDefaults.rayBias))
+                {
+                    skyVisibility.rayBias =
+                        skyVisibilityDefaults.rayBias;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
+                const WorldSpaceRepresentationStatus& status =
+                    m_app->GetWorldSpaceRepresentationStatus();
+                if (status.state ==
+                        WorldSpaceRepresentationState::BuildingBlas ||
+                    status.state ==
+                        WorldSpaceRepresentationState::BuildingTlas)
+                {
+                    ImGui::TextDisabled(
+                        "Preparing world hierarchy: BLAS %u/%u.",
+                        status.builtBlasCount,
+                        status.totalBlasCount);
+                }
+                EndAnimatedToggleRegion();
             }
 
             EndDrawerBody();

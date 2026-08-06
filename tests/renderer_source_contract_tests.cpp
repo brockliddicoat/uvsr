@@ -1311,7 +1311,7 @@ int main(int argc, char** argv)
     }
     passed &= ExpectContains(
         viewer,
-        "directionalVisibilityProducerEnabled ||\n"
+        "singleSurfaceVisibilityProducerEnabled ||\n"
             "                    m_ui.UsesLongTermTemporalAA()",
         "temporal MSAA closest-surface resolve gate");
     passed &= ExpectContains(
