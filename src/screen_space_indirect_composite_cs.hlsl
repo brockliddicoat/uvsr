@@ -25,6 +25,7 @@ Texture2D<float4> t_GBufferSpecular : register(t8);
 Texture2D<float> t_Depth : register(t9);
 TextureCubeArray t_SpecularEnvironment : register(t10);
 Texture2D t_EnvironmentBrdf : register(t11);
+Texture2D<float> t_SkyVisibility : register(t12);
 
 SamplerState s_DiffuseEnvironmentSampler : register(s0);
 SamplerState s_EnvironmentBrdfSampler : register(s1);
@@ -125,6 +126,13 @@ void main(uint2 pixel : SV_DispatchThreadID)
             preparedEnvironment,
             environmentDiffuseResponse,
             materialAmbientOcclusion);
+    if (g_Visibility.skyVisibilityEnabled != 0u)
+    {
+        const float skyVisibility = t_SkyVisibility[pixel];
+        environmentDiffuse *= isfinite(skyVisibility)
+            ? saturate(skyVisibility)
+            : 1.0f;
+    }
 
     float3 environmentSpecular = 0.0f;
     if (g_Visibility.specularEnvironmentEnabled != 0u &&

@@ -196,6 +196,7 @@ namespace uvsr
         nvrhi::ITexture* gbufferSpecular = nullptr;
         nvrhi::ITexture* gbufferEmissive = nullptr;
         nvrhi::ITexture* materialAmbientOcclusion = nullptr;
+        nvrhi::ITexture* skyVisibility = nullptr;
         nvrhi::ITexture* diffuseEnvironment = nullptr;
         float diffuseEnvironmentScale = 1.f;
         uint32_t diffuseEnvironmentArrayIndex = 0u;
@@ -293,7 +294,7 @@ namespace uvsr
         std::unordered_map<uint64_t, Pipeline> m_AdvancedPipelines;
         std::unordered_map<uint64_t, nvrhi::BindingSetHandle>
             m_AdvancedBindingSets;
-        std::array<nvrhi::ITexture*, 12> m_BoundInputTextures{};
+        std::array<nvrhi::ITexture*, 13> m_BoundInputTextures{};
 
         dm::uint2 m_FullSize = dm::uint2::zero();
         dm::uint2 m_SamplingSize = dm::uint2::zero();

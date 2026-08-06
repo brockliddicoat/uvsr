@@ -70,6 +70,7 @@ public:
         const donut::render::DeferredLightingPass::Inputs& inputs,
         const uvsr::DirectionalLightVisibilities& directionalLightVisibilities,
         const donut::engine::LightProbe* environment,
+        nvrhi::ITexture* skyVisibility,
         nvrhi::ITexture* sourceRadianceOutput,
         bool separateIndirect,
         bool writeSourceRadiance,

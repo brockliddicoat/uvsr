@@ -64,6 +64,7 @@ Texture2D t_VisibilityComposite : register(t19);
 #endif
 Texture2D<float4> t_ScreenSpaceDirectionalVisibility : register(t20);
 Texture2D<float4> t_RatioEstimatorDirectionalVisibility : register(t21);
+Texture2D<float> t_SkyVisibility : register(t22);
 
 VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_Output : register(u0);
@@ -257,6 +258,14 @@ bool ShadeDeferredSample(
                 preparedEnvironment,
                 environmentDiffuseResponse,
                 gbuffer.ambientOcclusion);
+            if (g_PbrDeferred.skyVisibilityEnabled != 0u)
+            {
+                const float skyVisibility =
+                    t_SkyVisibility[pixelPosition];
+                environmentDiffuse *= isfinite(skyVisibility)
+                    ? saturate(skyVisibility)
+                    : 1.0f;
+            }
         }
 
         const bool needSpecularEnvironment =

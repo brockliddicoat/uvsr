@@ -399,6 +399,7 @@ if (UVSR_BUILD_APPLICATION)
         src/image_based_lighting_environment.cpp
         src/msaa_visibility_resolve.cpp
         src/pbr_deferred_lighting_pass.cpp
+        src/ray_traced_sky_visibility.cpp
         src/scene_catalog.cpp
         src/scene_loading.h
         src/screen_space_visibility.cpp
@@ -532,6 +533,25 @@ add_executable(
 add_test(
     NAME uvsr_heitz_ratio_estimator_source_contract
     COMMAND uvsr_heitz_ratio_estimator_source_contract_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_executable(
+    uvsr_ray_traced_sky_visibility_tests
+    tests/ray_traced_sky_visibility_tests.cpp
+    src/visibility_blue_noise.cpp)
+target_include_directories(
+    uvsr_ray_traced_sky_visibility_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(
+    NAME uvsr_sky_visibility_reference
+    COMMAND uvsr_ray_traced_sky_visibility_tests)
+
+add_executable(
+    uvsr_ray_traced_sky_visibility_source_contract_tests
+    tests/ray_traced_sky_visibility_source_contract_tests.cpp)
+add_test(
+    NAME uvsr_sky_visibility_source_contract
+    COMMAND uvsr_ray_traced_sky_visibility_source_contract_tests
         "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(
@@ -846,6 +866,7 @@ set(UVSR_APP_SHADERS
     fast_approximate_aa_ps
     backdrop_blur_ps
     heitz_ratio_estimator_shadows_cs_Generate
+    ray_traced_sky_visibility_cs_Generate
     screen_space_directional_shadows_cs
     screen_space_directional_shadows_debug_ps
     cmaa2_ComputeDispatchArgsCS

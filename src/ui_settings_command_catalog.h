@@ -194,6 +194,11 @@ namespace uvsr
         Value("sky.specular-ibl-strength", Kind::Float, Section::Sky, "float 0..4"),
         Value("sky.environment-background", Kind::Boolean, Section::Sky, "on|off"),
         Value("sky.ambient-fill.enabled", Kind::Boolean, Section::Sky, "on|off"),
+        Value("sky.visibility.enabled", Kind::Boolean, Section::Sky, "on|off"),
+        Value("sky.visibility.samples-per-pixel", Kind::Enum, Section::Sky, "1|2|4|8|16|32|64"),
+        Value("sky.visibility.noise-pattern", Kind::Enum, Section::Sky, "permutated-white-noise|void-cluster-blue-noise"),
+        Value("sky.visibility.animate-samples", Kind::Boolean, Section::Sky, "on|off"),
+        Value("sky.visibility.ray-bias", Kind::Float, Section::Sky, "world units 0..0.1"),
 
         // Lights.
         Value("light.selected", Kind::DynamicSelection, Section::Lights, "runtime editable-light index or unique name", true, true),

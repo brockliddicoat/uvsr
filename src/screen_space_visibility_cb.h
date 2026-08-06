@@ -44,7 +44,7 @@ struct ScreenSpaceVisibilityConstants
     uint specularEnvironmentArrayIndex;
     uint spatialFilter;
     uint lightingDebugView;
-    uint padding2;
+    uint skyVisibilityEnabled;
 };
 
 #endif // UVSR_SCREEN_SPACE_VISIBILITY_CB_H

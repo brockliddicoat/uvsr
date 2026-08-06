@@ -53,7 +53,7 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 141u);
+    static_assert(UiSettingsCommandCatalog.size() == 146u);
     static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 12u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
         static_cast<std::uint8_t>(UiSettingsCommandVerb::Run));
@@ -65,7 +65,7 @@ int main()
         19u, // Visibility
         31u, // Anti-Aliasing
         4u,  // Debug
-        8u,  // Sky
+        13u, // Sky
         23u, // Lights
         6u,  // Directional Shadows
         12u, // Screen-Space Directional Shadows
@@ -190,7 +190,7 @@ int main()
     }
 
     Require(names.size() == UiSettingsCommandCatalog.size(),
-        "the compact catalog must contain 141 unique controls");
+        "the compact catalog must contain 146 unique controls");
     Require(sectionCounts == ExpectedSectionCounts,
         "section counts must match the current UI");
     Require(actionCount == 4u,
@@ -251,6 +251,13 @@ int main()
         "fast-trace|balanced|fast-build");
     requireDomain("representation.blas.update-mode", "rebuild|refit");
     requireDomain("representation.tlas.update-mode", "rebuild|refit");
+    requireDomain("sky.visibility.enabled", "on|off");
+    requireDomain("sky.visibility.animate-samples", "on|off");
+    requireDomain("sky.visibility.noise-pattern",
+        "permutated-white-noise|void-cluster-blue-noise");
+    requireDomain("sky.visibility.samples-per-pixel",
+        "1|2|4|8|16|32|64");
+    requireDomain("sky.visibility.ray-bias", "world units 0..0.1");
     requireDomain("shadows.ratio-estimator.enabled", "on|off");
     requireDomain("shadows.ratio-estimator.hard-shadows", "on|off");
     requireDomain("shadows.ratio-estimator.animate-samples", "on|off");
@@ -304,6 +311,16 @@ int main()
         "shadows.ratio-estimator.ray-bias",
         Kind::Float,
         Section::DirectionalShadows);
+    requireKindAndSection(
+        "sky.visibility.enabled", Kind::Boolean, Section::Sky);
+    requireKindAndSection(
+        "sky.visibility.samples-per-pixel", Kind::Enum, Section::Sky);
+    requireKindAndSection(
+        "sky.visibility.noise-pattern", Kind::Enum, Section::Sky);
+    requireKindAndSection(
+        "sky.visibility.animate-samples", Kind::Boolean, Section::Sky);
+    requireKindAndSection(
+        "sky.visibility.ray-bias", Kind::Float, Section::Sky);
 
     Require(!Find("visibility.profile") &&
             !Find("visibility.sampling.noise-pattern") &&

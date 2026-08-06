@@ -258,6 +258,26 @@ namespace
             outputDesc.height,
             encoding);
     }
+
+    bool IsSkyVisibilityTextureCompatible(
+        nvrhi::ITexture* texture,
+        const DeferredLightingPass::Inputs& inputs)
+    {
+        if (!texture || !inputs.output)
+            return false;
+
+        const nvrhi::TextureDesc& textureDesc = texture->getDesc();
+        const nvrhi::TextureDesc& outputDesc = inputs.output->getDesc();
+        return textureDesc.width == outputDesc.width &&
+            textureDesc.height == outputDesc.height &&
+            textureDesc.depth == 1u &&
+            textureDesc.arraySize == 1u &&
+            textureDesc.mipLevels == 1u &&
+            textureDesc.sampleCount == 1u &&
+            textureDesc.format == nvrhi::Format::R8_UNORM &&
+            textureDesc.dimension == nvrhi::TextureDimension::Texture2D &&
+            textureDesc.isShaderResource;
+    }
 }
 
 PbrDeferredLightingPass::PbrDeferredLightingPass(
@@ -326,6 +346,7 @@ bool PbrDeferredLightingPass::PreparePipelinesStep()
             nvrhi::BindingLayoutItem::Texture_SRV(14),
             nvrhi::BindingLayoutItem::Texture_SRV(20),
             nvrhi::BindingLayoutItem::Texture_SRV(21),
+            nvrhi::BindingLayoutItem::Texture_SRV(22),
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         };
         if (writeSourceRadiance)
@@ -381,6 +402,7 @@ bool PbrDeferredLightingPass::PreparePipelinesStep()
                 nvrhi::BindingLayoutItem::Texture_SRV(17),
                 nvrhi::BindingLayoutItem::Texture_SRV(20),
                 nvrhi::BindingLayoutItem::Texture_SRV(21),
+                nvrhi::BindingLayoutItem::Texture_SRV(22),
                 nvrhi::BindingLayoutItem::Texture_UAV(0),
                 nvrhi::BindingLayoutItem::Sampler(1),
                 nvrhi::BindingLayoutItem::Sampler(2),
@@ -427,6 +449,7 @@ void PbrDeferredLightingPass::Render(
     const DeferredLightingPass::Inputs& inputs,
     const uvsr::DirectionalLightVisibilities& directionalLightVisibilities,
     const LightProbe* environment,
+    nvrhi::ITexture* skyVisibility,
     nvrhi::ITexture* sourceRadianceOutput,
     bool separateIndirect,
     bool writeSourceRadiance,
@@ -499,6 +522,10 @@ void PbrDeferredLightingPass::Render(
         directionalLightVisibilities.screenSpace);
     activeVisibilities.ratioEstimator = acceptVisibility(
         directionalLightVisibilities.ratioEstimator);
+    nvrhi::ITexture* activeSkyVisibility =
+        IsSkyVisibilityTextureCompatible(skyVisibility, inputs)
+            ? skyVisibility
+            : nullptr;
 
     commandList->beginMarker(
         msaa
@@ -510,6 +537,7 @@ void PbrDeferredLightingPass::Render(
     constants.separateIndirect = separateIndirect ? 1 : 0;
     constants.lightingDebugView = lightingDebugView;
     constants.visibilityDebugView = visibilityDebugView;
+    constants.skyVisibilityEnabled = activeSkyVisibility ? 1u : 0u;
     constants.directionalVisibilityLightIndices = int2(-1);
     constants.directionalVisibilityEncodings = uint2(
         uint32_t(uvsr::DirectionalLightVisibilityEncoding::ScalarR8Unorm));
@@ -710,6 +738,12 @@ void PbrDeferredLightingPass::Render(
                 21,
                 activeVisibilities.ratioEstimator.texture
                     ? activeVisibilities.ratioEstimator.texture
+                    : m_CommonPasses->m_WhiteTexture.Get()));
+        bindingSetDesc.bindings.push_back(
+            nvrhi::BindingSetItem::Texture_SRV(
+                22,
+                activeSkyVisibility
+                    ? activeSkyVisibility
                     : m_CommonPasses->m_WhiteTexture.Get()));
         bindingSetDesc.bindings.push_back(
             nvrhi::BindingSetItem::Texture_UAV(

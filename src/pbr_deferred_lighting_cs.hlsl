@@ -37,6 +37,7 @@ Texture2D t_GBuffer3 : register(t12);
 Texture2D t_MaterialAmbientOcclusion : register(t14);
 Texture2D<float4> t_ScreenSpaceDirectionalVisibility : register(t20);
 Texture2D<float4> t_RatioEstimatorDirectionalVisibility : register(t21);
+Texture2D<float> t_SkyVisibility : register(t22);
 
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Output : register(u0);
 #if WRITE_SOURCE_RADIANCE
@@ -225,6 +226,14 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                 preparedEnvironment,
                 environmentDiffuseResponse,
                 gbuffer.ambientOcclusion);
+            if (g_PbrDeferred.skyVisibilityEnabled != 0u)
+            {
+                const float skyVisibility =
+                    t_SkyVisibility[pixelPosition];
+                environmentDiffuse *= isfinite(skyVisibility)
+                    ? saturate(skyVisibility)
+                    : 1.0f;
+            }
         }
 
         const bool needSpecularEnvironment =

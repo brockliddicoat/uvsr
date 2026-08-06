@@ -1542,8 +1542,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 141u,
-            "Settings command catalog must contain exactly 141 entries.");
+        Require(entries.size() == 146u,
+            "Settings command catalog must contain exactly 146 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -1557,8 +1557,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 137u,
-            "Settings command catalog must contain exactly 137 values.");
+        Require(valueCount == 142u,
+            "Settings command catalog must contain exactly 142 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -1590,6 +1590,11 @@ namespace
                     "representation.bvh.build-preference"),
                 std::string_view("representation.blas.update-mode"),
                 std::string_view("representation.tlas.update-mode"),
+                std::string_view("sky.visibility.enabled"),
+                std::string_view("sky.visibility.samples-per-pixel"),
+                std::string_view("sky.visibility.noise-pattern"),
+                std::string_view("sky.visibility.animate-samples"),
+                std::string_view("sky.visibility.ray-bias"),
                 std::string_view("shadows.ratio-estimator.enabled"),
                 std::string_view(
                     "shadows.ratio-estimator.samples-per-pixel"),
@@ -2066,6 +2071,22 @@ namespace
             skyDrawer,
             "Ambient-occlusion settings",
             "renamed Occlusion ambient-fill explanation");
+        RequireOrdered(
+            skyDrawer,
+            {
+                "Show Environment Background",
+                "Ray-Traced Sky Visibility",
+                "Enable##RayTracedSkyVisibility",
+                "Samples Per Pixel##RayTracedSkyVisibility",
+                "Noise Pattern##RayTracedSkyVisibility",
+                "Animate Samples##RayTracedSkyVisibility",
+                "Ray Bias##RayTracedSkyVisibility"
+            },
+            "bottom-of-Sky ray-traced visibility controls");
+        RequireContains(
+            skyDrawer,
+            "skyVisibility.enabled && skyVisibilityAvailable",
+            "default-collapsed sky-visibility settings region");
 
         const std::string_view generalDispatcher = ExtractSection(
             viewer,

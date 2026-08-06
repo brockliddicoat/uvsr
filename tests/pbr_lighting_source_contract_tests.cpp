@@ -155,6 +155,10 @@ int main(int argc, char** argv)
             "ratio-estimator directional visibility must bind at t21");
         RequireContains(
             *shader,
+            "texture2d<float>t_skyvisibility:register(t22);",
+            "ray-traced sky visibility must bind independently at t22");
+        RequireContains(
+            *shader,
             "if(encoding==uvsr_directional_visibility_rgb_rgba16f)"
                 "{returnsaturate(encoded.rgb);}"
                 "returnsaturate(encoded.r).xxx;",
@@ -383,9 +387,10 @@ int main(int argc, char** argv)
         "each directional visibility slot needs one normal and one MSAA CPU "
         "layout entry");
     Require(
-        deferredPass.find("bindinglayoutitem::texture_srv(22)") ==
-            std::string::npos,
-        "unused directional visibility slots must not retain CPU layouts");
+        CountOccurrences(
+            deferredPass,
+            "bindinglayoutitem::texture_srv(22)") == 2u,
+        "sky visibility needs one normal and one MSAA CPU layout entry");
     RequireContains(
         deferredPass,
         "bindingsetitem::texture_srv(20,"
@@ -400,6 +405,12 @@ int main(int argc, char** argv)
             "activevisibilities.ratioestimator.texture:"
             "m_commonpasses->m_whitetexture.get())",
         "ratio-estimator directional visibility must fail open to white");
+    RequireContains(
+        deferredPass,
+        "bindingsetitem::texture_srv(22,"
+            "activeskyvisibility?activeskyvisibility:"
+            "m_commonpasses->m_whitetexture.get())",
+        "sky visibility must bind white when inactive or incompatible");
     Require(
         deferredPass.find("bindinglayoutitem::texture_srv(15)") ==
                 std::string::npos &&
@@ -477,6 +488,13 @@ int main(int argc, char** argv)
             "each deferred variant must evaluate diffuse IBL");
         RequireContains(
             *shader,
+            "if(g_pbrdeferred.skyvisibilityenabled!=0u)"
+                "{constfloatskyvisibility=t_skyvisibility[pixelposition];"
+                "environmentdiffuse*=isfinite(skyvisibility)?"
+                "saturate(skyvisibility):1.0f;}",
+            "each deferred variant must conditionally modulate diffuse IBL only");
+        RequireContains(
+            *shader,
             "evaluatepbrenvironmentspecular(",
             "each deferred variant must evaluate specular IBL");
     }
@@ -494,12 +512,23 @@ int main(int argc, char** argv)
         "visibility composition must bind the environment BRDF at t11");
     RequireContains(
         compositeShader,
+        "texture2d<float>t_skyvisibility:register(t12);",
+        "visibility composition must bind sky visibility at t12");
+    RequireContains(
+        compositeShader,
         "evaluatepbrenvironmentdiffuse(",
         "visibility composition must evaluate diffuse IBL");
     RequireContains(
         compositeShader,
         "evaluatepbrenvironmentspecular(",
         "visibility composition must evaluate specular IBL");
+    RequireContains(
+        compositeShader,
+        "if(g_visibility.skyvisibilityenabled!=0u)"
+            "{constfloatskyvisibility=t_skyvisibility[pixel];"
+            "environmentdiffuse*=isfinite(skyvisibility)?"
+            "saturate(skyvisibility):1.0f;}",
+        "visibility composition must modulate only recomputed diffuse IBL");
 
     RequireContains(
         rendererSource,

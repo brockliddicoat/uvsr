@@ -13,7 +13,7 @@ struct PbrDeferredLightingConstants
     int separateIndirect;
     uint lightingDebugView;
     uint visibilityDebugView;
-    uint padding0;
+    uint skyVisibilityEnabled;
 
     int2 directionalVisibilityLightIndices;
     uint2 directionalVisibilityEncodings;

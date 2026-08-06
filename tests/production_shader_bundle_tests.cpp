@@ -103,6 +103,7 @@ namespace
             "fast_approximate_aa_ps",
             "backdrop_blur_ps",
             "heitz_ratio_estimator_shadows_cs_Generate",
+            "ray_traced_sky_visibility_cs_Generate",
             "screen_space_directional_shadows_cs",
             "screen_space_directional_shadows_debug_ps",
             "cmaa2_ComputeDispatchArgsCS",
@@ -264,8 +265,8 @@ int main(int argc, char** argv)
             std::string("retired shader axis must remain absent: ") + axis);
     }
     passed &= Check(
-        CountShaderPermutations(config) == 259u,
-        "the production shader catalog must contain exactly 259 permutations");
+        CountShaderPermutations(config) == 260u,
+        "the production shader catalog must contain exactly 260 permutations");
     passed &= Check(
         CountOccurrences(
             config,
@@ -275,6 +276,14 @@ int main(int argc, char** argv)
                 config,
                 "heitz_ratio_estimator_shadows_cs.hlsl") == 1u,
         "production must package only the direct Heitz Generate dispatch");
+    passed &= Check(
+        CountOccurrences(
+            config,
+            "ray_traced_sky_visibility_cs.hlsl -T cs -E Generate") ==
+                1u &&
+            manifest.find("ray_traced_sky_visibility_cs_Generate") !=
+                std::string::npos,
+        "production must package one current-frame sky-visibility dispatch");
     passed &= Check(
         CountOccurrences(
             config,
@@ -331,8 +340,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 41u,
-        "production shader contract must enumerate exactly 41 files");
+        expectedFiles.size() == 42u,
+        "production shader contract must enumerate exactly 42 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;
