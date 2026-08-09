@@ -5,6 +5,7 @@
 #include "visibility_estimator_shared.h"
 #include "visibility_projection_shared.h"
 #include "screen_space_visibility_cb.h"
+#include "noise_sampling.hlsli"
 
 #ifndef VISIBILITY_ESTIMATOR
 #define VISIBILITY_ESTIMATOR 0
@@ -20,6 +21,19 @@
 #endif
 #ifndef OUTPUT_PACKED_EDGES
 #define OUTPUT_PACKED_EDGES 0
+#endif
+#ifndef OUTPUT_AO_HIT_DISTANCE
+#define OUTPUT_AO_HIT_DISTANCE 0
+#endif
+#ifndef OUTPUT_GI_HIT_DISTANCE
+#define OUTPUT_GI_HIT_DISTANCE 0
+#endif
+
+#if OUTPUT_AO_HIT_DISTANCE && !ENABLE_AO
+#error OUTPUT_AO_HIT_DISTANCE requires ENABLE_AO.
+#endif
+#if OUTPUT_GI_HIT_DISTANCE && !ENABLE_GI
+#error OUTPUT_GI_HIT_DISTANCE requires ENABLE_GI.
 #endif
 
 #if RUNTIME_SAMPLE_PARITY > 2
@@ -39,20 +53,32 @@ Texture2D<float4> t_Normals : register(t1);
 #if ENABLE_GI
 Texture2D<float4> t_SourceRadiance : register(t2);
 #endif
-Texture2DArray<float> t_VoidClusterNoise : register(t3);
+Texture2DArray<float> t_Noise : register(t3);
 #if ENABLE_AO
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 #endif
 #if ENABLE_GI
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 #endif
+#if OUTPUT_AO_HIT_DISTANCE
+VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientHitDistance : register(u2);
+#endif
 #if OUTPUT_PACKED_EDGES
 VK_IMAGE_FORMAT("r8ui") RWTexture2D<uint> u_PackedEdges : register(u3);
+#endif
+#if OUTPUT_GI_HIT_DISTANCE
+VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_IndirectHitDistance : register(u4);
 #endif
 
 static const float VisibilityPi = 3.14159265358979323846f;
 static const float VisibilityHalfPi = 1.57079632679489661923f;
 static const float VisibilityEpsilon = 1e-6f;
+static const float VisibilityHitDistanceMaximum = 65472.0f;
+static const float VisibilityHitDistanceMiss = 65504.0f;
+#if OUTPUT_GI_HIT_DISTANCE
+static const float3 VisibilitySignalLuminanceWeights =
+    float3(0.2126f, 0.7152f, 0.0722f);
+#endif
 
 // Bit i selects radial stratum i. Entry n contains the first n strata in the
 // 5-bit reversal sequence, so budgets remain nested while firstbitlow consumes
@@ -74,34 +100,6 @@ static const uint SchedulerDimension_SectorPhase = 1u;
 static const uint SchedulerDimension_OddSampleSide = 3u;
 static const uint SchedulerDimension_RadialNegative = 4u;
 static const uint SchedulerDimension_RadialPositive = 5u;
-
-static const uint2 VoidClusterTemporalSteps[5] = {
-    uint2(13u, 29u), uint2(31u, 11u),
-    uint2(23u, 19u), uint2(7u, 25u), uint2(29u, 15u)
-};
-
-uint VisibilityHash(uint value)
-{
-    value ^= value >> 16u;
-    value *= 0x7feb352du;
-    value ^= value >> 15u;
-    value *= 0x846ca68bu;
-    value ^= value >> 16u;
-    return value;
-}
-
-float PermutatedWhiteNoise(uint2 pixel, uint dimension, uint phase)
-{
-    // PCG's conventional output permutation gives the baseline option a
-    // deterministic white spectrum.
-    uint state = pixel.x + pixel.y * 65537u +
-        dimension * 747796405u + phase * 2891336453u + 1u;
-    state = state * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) *
-        277803737u;
-    word = (word >> 22u) ^ word;
-    return float((word >> 8u) & 0x00ffffffu) / 16777216.0f;
-}
 
 float VisibilityFastAcos(float value)
 {
@@ -128,27 +126,13 @@ float VisibilityRadialPower(float value, float exponent)
 
 float SchedulerRandom(uint2 samplingPixel, uint dimension, uint phase)
 {
-    // Scheduler selection remains a uniform runtime branch, so adding the
-    // baseline noise sequence does not create shader permutations.
-    if (g_Visibility.sampleScheduler == 0u)
-        return PermutatedWhiteNoise(samplingPixel, dimension, phase);
-
-    // Each semantic random dimension owns an independently optimized rank
-    // layer. Moving the layer toroidally preserves its spatial spectrum;
-    // changing the cycle offset prevents an exact 64-frame repetition.
-    // Dimension two belonged to the removed sample-budget planner. Compact
-    // the remaining layers without changing their sequences.
-    uint layer = dimension <= 1u ? dimension : min(dimension - 1u, 4u);
-    uint frameInCycle = phase & 63u;
-    uint cycle = phase >> 6u;
-    uint cycleHashX = VisibilityHash(
-        cycle ^ (dimension * 0x9e3779b9u) ^ 0x68bc21ebu);
-    uint cycleHashY = VisibilityHash(
-        cycle ^ (dimension * 0x85ebca6bu) ^ 0x02e5be93u);
-    uint2 cycleOffset = uint2(cycleHashX, cycleHashY) & 63u;
-    uint2 coordinate = (samplingPixel + cycleOffset +
-        VoidClusterTemporalSteps[layer] * frameInCycle) & 63u;
-    return t_VoidClusterNoise.Load(int4(coordinate, layer, 0));
+    return UVSRSamplePrecomputedNoise(
+        t_Noise,
+        g_Visibility.noisePattern,
+        samplingPixel,
+        uint2(g_Visibility.samplingResolution),
+        phase,
+        0x100u + dimension);
 }
 
 uint2 SamplingToFullPixel(uint2 samplingPixel)
@@ -359,6 +343,12 @@ void WriteEmptyVisibilityOutput(uint2 pixel)
 #if ENABLE_GI
     u_IndirectDiffuse[pixel] = 0.0f;
 #endif
+#if OUTPUT_AO_HIT_DISTANCE
+    u_AmbientHitDistance[pixel] = 0.0f;
+#endif
+#if OUTPUT_GI_HIT_DISTANCE
+    u_IndirectHitDistance[pixel] = 0.0f;
+#endif
 }
 
 [numthreads(8, 8, 1)]
@@ -448,7 +438,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         return;
     }
 
-    uint phase = g_Visibility.frameIndex;
+    uint phase = g_Visibility.sampleSequencePhase;
 #if RUNTIME_SAMPLE_PARITY > 0
     // The CPU clamps the count and selects a parity-matched shader. Keeping the
     // number in the cbuffer permits every 1-64 slider value to share one of two
@@ -465,6 +455,13 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         dispatchPixel, SchedulerDimension_SliceRotation, phase);
     float ambientVisibility = 1.0f;
     float3 indirectDiffuse = 0.0f;
+#if OUTPUT_AO_HIT_DISTANCE
+    float ambientHitDistanceSectorSum = 0.0f;
+#endif
+#if OUTPUT_GI_HIT_DISTANCE
+    float indirectHitDistanceWeightedSum = 0.0f;
+    float indirectHitDistanceWeight = 0.0f;
+#endif
     // A slice traces both negative and positive sides, so azimuth is sampled
     // once over [0, pi). Sampling [0, 2*pi) repeats the same unoriented axis
     // and aliases the six Activision temporal rotations to three.
@@ -671,6 +668,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 {
                     continue;
                 }
+#if OUTPUT_AO_HIT_DISTANCE || OUTPUT_GI_HIT_DISTANCE
+                const float frontLength = sqrt(frontLengthSquared);
+#endif
                 float3 directionToSample = frontDelta * rsqrt(frontLengthSquared);
                 float3 backDelta = ComputeBackDelta(
                     receiverPositionVS,
@@ -710,9 +710,15 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                     continue;
 
                 uint newlyCoveredBits = AccumulateOccluder(visibilityMask, candidateBits);
-                uint newSectorCount = 0u;
-#if ENABLE_GI
-                newSectorCount = countbits(newlyCoveredBits);
+#if ENABLE_GI || OUTPUT_AO_HIT_DISTANCE
+                uint newSectorCount = countbits(newlyCoveredBits);
+#endif
+#if OUTPUT_AO_HIT_DISTANCE
+                // Every mask bit has equal measure under the selected
+                // estimator. Newly covered bits bind each sector to its first
+                // sampled blocker without changing the resolved AO mask.
+                ambientHitDistanceSectorSum += float(newSectorCount) *
+                    min(frontLength, VisibilityHitDistanceMaximum);
 #endif
 
                 // Geometry reads above are shared by AO and GI. Source normal
@@ -749,14 +755,15 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 if (!any(weightedSource > 0.0f))
                     continue;
 
+                float3 indirectContribution;
 #if VISIBILITY_ESTIMATOR == VisibilityEstimator_UniformSolidAngle
-                sliceIndirectDiffuse += sourceRadiance *
+                indirectContribution = sourceRadiance *
                     ComputeGtUniformGiSampleWeight(
                         newSectorCount,
                         receiverCosine,
                         sourceCosine);
 #elif VISIBILITY_ESTIMATOR == VisibilityEstimator_CosineWeightedSolidAngle
-                sliceIndirectDiffuse += sourceRadiance *
+                indirectContribution = sourceRadiance *
                     ComputeGtCosineGiSampleWeight(
                         newSectorCount,
                         sliceMeasure.cosineSliceMass,
@@ -764,8 +771,28 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #else
                 float angularCoverage = float(newSectorCount) /
                     float(RadialVisibilitySectorCount);
-                sliceIndirectDiffuse += weightedSource * receiverCosine *
+                indirectContribution = weightedSource * receiverCosine *
                     angularCoverage;
+#endif
+                sliceIndirectDiffuse += indirectContribution;
+#if OUTPUT_GI_HIT_DISTANCE
+                // The common irradiance normalization cancels from this
+                // first moment. Matching NRD's luminance definition makes the
+                // single distance representative of the exact RGB terms that
+                // form this aggregate diffuse radiance signal.
+                float contributionWeight = dot(
+                    indirectContribution,
+                    VisibilitySignalLuminanceWeights);
+                if (contributionWeight > VisibilityEpsilon &&
+                    isfinite(contributionWeight))
+                {
+                    float contributionHitDistance = min(
+                        frontLength,
+                        VisibilityHitDistanceMaximum);
+                    indirectHitDistanceWeightedSum +=
+                        contributionWeight * contributionHitDistance;
+                    indirectHitDistanceWeight += contributionWeight;
+                }
 #endif
 #endif
             }
@@ -818,5 +845,46 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #if ENABLE_GI
     u_IndirectDiffuse[dispatchPixel] = float4(
         min(indirectDiffuse, 65504.0f), 0.0f);
+#endif
+#if OUTPUT_AO_HIT_DISTANCE
+    // Raw AO is M * visibleSectorCount / 32, where M is one for the
+    // projected and uniform estimators and cosineSliceMass for the cosine
+    // estimator. M is common to every sector and cancels from this expected
+    // first bounce distance. Uncovered sectors are censored misses at the
+    // configured trace reach.
+    uint ambientVisibleSectorCount = RadialVisibilitySectorCount -
+        countbits(visibilityMask.occludedBits);
+    float ambientTraceReach = min(
+        g_Visibility.radiusWorld,
+        VisibilityHitDistanceMaximum);
+    float ambientExpectedHitDistance =
+        (ambientHitDistanceSectorSum +
+            float(ambientVisibleSectorCount) * ambientTraceReach) /
+        float(RadialVisibilitySectorCount);
+#if VISIBILITY_ESTIMATOR == VisibilityEstimator_CosineWeightedSolidAngle
+    // A zero mass slice contributes no AO sample and therefore has no hit
+    // distance data, matching NRD's zero convention for a skipped lobe.
+    if (!(sliceMeasure.cosineSliceMass > VisibilityEpsilon) ||
+        !isfinite(sliceMeasure.cosineSliceMass))
+    {
+        ambientExpectedHitDistance = 0.0f;
+    }
+#endif
+    u_AmbientHitDistance[dispatchPixel] =
+        ambientExpectedHitDistance;
+#endif
+#if OUTPUT_GI_HIT_DISTANCE
+    float indirectHitDistance = 0.0f;
+    if (giSourcePotential &&
+        indirectHitDistanceWeight > VisibilityEpsilon &&
+        isfinite(indirectHitDistanceWeight) &&
+        isfinite(indirectHitDistanceWeightedSum))
+    {
+        indirectHitDistance = min(
+            indirectHitDistanceWeightedSum /
+                indirectHitDistanceWeight,
+            VisibilityHitDistanceMaximum);
+    }
+    u_IndirectHitDistance[dispatchPixel] = indirectHitDistance;
 #endif
 }

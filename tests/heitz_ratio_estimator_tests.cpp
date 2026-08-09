@@ -1,7 +1,5 @@
 #include "directional_shadow_settings.h"
 #include "ratio_estimator_shared.h"
-#include "screen_space_directional_shadows_settings.h"
-#include "visibility_blue_noise.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -13,85 +11,9 @@
 #include <cstdint>
 #include <limits>
 #include <string_view>
-#include <vector>
 
 namespace
 {
-    float Fraction(float value)
-    {
-        return value - std::floor(value);
-    }
-
-    float RadicalInverse(uint32_t index, uint32_t base)
-    {
-        const float inverseBase = 1.f / float(base);
-        float inversePower = inverseBase;
-        float result = 0.f;
-        while (index > 0u)
-        {
-            const uint32_t digit = index % base;
-            result += float(digit) * inversePower;
-            index /= base;
-            inversePower *= inverseBase;
-        }
-        return result;
-    }
-
-    float GoldenWeylPhase(uint32_t frameIndex)
-    {
-        const uint32_t phase = frameIndex * 0x9e3779b9u;
-        return float(phase >> 8u) * (1.f / 16777216.f);
-    }
-
-    float PermutatedWhiteNoise(
-        uint32_t x,
-        uint32_t y,
-        uint32_t dimension,
-        uint32_t phase)
-    {
-        uint32_t state = x + y * 65537u +
-            dimension * 747796405u + phase * 2891336453u + 1u;
-        state = state * 747796405u + 2891336453u;
-        uint32_t word = ((state >> ((state >> 28u) + 4u)) ^ state) *
-            277803737u;
-        word = (word >> 22u) ^ word;
-        return float((word >> 8u) & 0x00ffffffu) / 16777216.f;
-    }
-
-    float BlueNoise(
-        const std::vector<uint16_t>& noise,
-        uint32_t x,
-        uint32_t y,
-        uint32_t layer)
-    {
-        using namespace uvsr;
-        const size_t texel = size_t(y & 63u) * VisibilityBlueNoiseSize +
-            size_t(x & 63u);
-        return float(noise[
-            size_t(layer % VisibilityBlueNoiseLayerCount) *
-                VisibilityBlueNoiseTexelCount + texel]) / 65535.f;
-    }
-
-    std::array<float, 2> Sample2D(
-        const std::vector<uint16_t>& noise,
-        uint32_t x,
-        uint32_t y,
-        uint32_t sampleIndex,
-        uint32_t frameIndex)
-    {
-        const uint32_t sequenceIndex = sampleIndex + 1u;
-        return {
-            Fraction(
-                RadicalInverse(sequenceIndex, 2u) +
-                BlueNoise(noise, x, y, 0u) +
-                RadicalInverse(frameIndex + 1u, 5u)),
-            Fraction(
-                RadicalInverse(sequenceIndex, 3u) +
-                BlueNoise(noise, x, y, 1u) +
-                GoldenWeylPhase(frameIndex))
-        };
-    }
-
     bool Near(float actual, float expected, float tolerance = 1e-6f)
     {
         return std::abs(actual - expected) <= tolerance;
@@ -262,13 +184,15 @@ namespace
         const HeitzRatioEstimatorShadowSettings ratioSettings;
         assert(!ratioSettings.enabled);
         assert(!ratioSettings.hardShadows);
+        assert(ratioSettings.useRatioEstimator);
+        assert(!ratioSettings.outputHitDistance);
         assert(ratioSettings.sampleRateLog2 == 1);
         assert(Near(ratioSettings.rayBias, 0.002f));
         assert(ratioSettings.maxDistance ==
             RayVisibilityMaxDistance::Maximum);
-        assert(ratioSettings.noisePattern ==
-            HeitzRatioEstimatorNoisePattern::VoidClusterBlueNoise);
-        assert(ratioSettings.animateSamples);
+        const NoiseSettings defaultNoise;
+        assert(!ratioSettings.noise.specifyNoise);
+        assert(ratioSettings.noise.custom == defaultNoise);
         assert(IsHeitzRatioEstimatorConfigurationSupported(
             ratioSettings));
 
@@ -279,20 +203,19 @@ namespace
         assert(directionalSettings.ratioEstimator.rayBias ==
             ratioSettings.rayBias);
 
-        ScreenSpaceDirectionalShadowSettings screenSpace;
-        DirectionalShadowSettings rayTraced;
-        screenSpace.enabled = true;
-        assert(screenSpace.enabled &&
-            !rayTraced.ratioEstimator.enabled);
-        rayTraced.ratioEstimator.enabled = true;
-        assert(screenSpace.enabled &&
-            rayTraced.ratioEstimator.enabled);
-        screenSpace.enabled = false;
-        assert(!screenSpace.enabled &&
-            rayTraced.ratioEstimator.enabled);
-        rayTraced.ratioEstimator.enabled = false;
-        assert(!screenSpace.enabled &&
-            !rayTraced.ratioEstimator.enabled);
+        HeitzRatioEstimatorShadowSettings scalarSettings = ratioSettings;
+        scalarSettings.sampleRateLog2 = 6;
+        scalarSettings.useRatioEstimator = false;
+        assert(ResolveHeitzShadowTraceCount(
+            scalarSettings, true) == 1u);
+        scalarSettings.useRatioEstimator = true;
+        assert(ResolveHeitzShadowTraceCount(
+            scalarSettings, true) == 64u);
+        assert(ResolveHeitzShadowTraceCount(
+            scalarSettings, false) == 1u);
+        assert(HeitzShadowHitDistanceInvalid == 0.f);
+        assert(HeitzShadowHitDistanceMaximum == 65472.f);
+        assert(HeitzShadowHitDistanceMiss == 65504.f);
 
         HeitzRatioEstimatorShadowSettings invalid = ratioSettings;
         invalid.sampleRateLog2 = -1;
@@ -308,7 +231,11 @@ namespace
         invalid.rayBias = std::numeric_limits<float>::quiet_NaN();
         assert(!IsHeitzRatioEstimatorConfigurationSupported(invalid));
         invalid = ratioSettings;
-        invalid.noisePattern = HeitzRatioEstimatorNoisePattern::Count;
+        invalid.noise.custom.pattern = NoisePattern::Count;
+        assert(!IsHeitzRatioEstimatorConfigurationSupported(invalid));
+        invalid = ratioSettings;
+        invalid.noise.custom.resolution =
+            static_cast<NoiseResolution>(0u);
         assert(!IsHeitzRatioEstimatorConfigurationSupported(invalid));
         invalid = ratioSettings;
         invalid.maxDistance = RayVisibilityMaxDistance::Count;
@@ -387,95 +314,32 @@ namespace
         assert(UserBias * InterpolatedToFaceCosine < ReconstructionError);
     }
 
-    void TestBlueNoiseDirectionalEmitterSampling()
+    void TestNoiseInheritanceAndValidation()
     {
         using namespace uvsr;
 
-        const std::vector<uint16_t> noise = GenerateVisibilityBlueNoise();
-        assert(Near(RadicalInverse(1u, 2u), 0.5f));
-        assert(Near(RadicalInverse(2u, 2u), 0.25f));
-        assert(Near(RadicalInverse(1u, 3u), 1.f / 3.f));
-        assert(Near(RadicalInverse(2u, 3u), 2.f / 3.f));
-        assert(Near(GoldenWeylPhase(0u), 0.f));
+        NoiseSettings global;
+        global.pattern = NoisePattern::SpatialWhite;
+        global.resolution = NoiseResolution::Size512;
+        global.animate = false;
 
-        const auto held = Sample2D(noise, 17u, 29u, 3u, 11u);
-        const auto repeated = Sample2D(noise, 17u, 29u, 3u, 11u);
-        const auto advanced = Sample2D(noise, 17u, 29u, 3u, 12u);
-        assert(held == repeated);
-        assert(!Near(held[0], advanced[0]));
-        assert(!Near(held[1], advanced[1]));
+        HeitzRatioEstimatorShadowSettings settings;
+        assert(!settings.noise.specifyNoise);
+        assert(ResolveNoiseSettings(global, settings.noise) == global);
 
-        double radialMean = 0.0;
-        double azimuthCosMean = 0.0;
-        double azimuthSinMean = 0.0;
-        double layerZeroMean = 0.0;
-        double layerOneMean = 0.0;
-        for (uint32_t y = 0u; y < VisibilityBlueNoiseSize; ++y)
-        {
-            for (uint32_t x = 0u; x < VisibilityBlueNoiseSize; ++x)
-            {
-                const auto sample = Sample2D(noise, x, y, 0u, 0u);
-                assert(sample[0] >= 0.f && sample[0] < 1.f);
-                assert(sample[1] >= 0.f && sample[1] < 1.f);
-                radialMean += sample[0];
-                constexpr double TwoPi = 6.28318530717958647692;
-                azimuthCosMean += std::cos(TwoPi * sample[1]);
-                azimuthSinMean += std::sin(TwoPi * sample[1]);
-                layerZeroMean += BlueNoise(noise, x, y, 0u);
-                layerOneMean += BlueNoise(noise, x, y, 1u);
-            }
-        }
+        settings.noise.custom.pattern = NoisePattern::SpatialBlue;
+        settings.noise.custom.resolution = NoiseResolution::Size64;
+        settings.noise.custom.animate = true;
+        assert(ResolveNoiseSettings(global, settings.noise) == global);
 
-        const double reciprocalCount =
-            1.0 / double(VisibilityBlueNoiseTexelCount);
-        radialMean *= reciprocalCount;
-        azimuthCosMean *= reciprocalCount;
-        azimuthSinMean *= reciprocalCount;
-        layerZeroMean *= reciprocalCount;
-        layerOneMean *= reciprocalCount;
-        assert(std::abs(radialMean - 0.5) < 1e-3);
-        assert(std::abs(azimuthCosMean) < 1e-3);
-        assert(std::abs(azimuthSinMean) < 1e-3);
+        settings.noise.specifyNoise = true;
+        assert(ResolveNoiseSettings(global, settings.noise) ==
+            settings.noise.custom);
+        assert(ResolveNoiseSettings(global, settings.noise) != global);
+        assert(IsHeitzRatioEstimatorConfigurationSupported(settings));
 
-        double covariance = 0.0;
-        double layerZeroVariance = 0.0;
-        double layerOneVariance = 0.0;
-        for (uint32_t y = 0u; y < VisibilityBlueNoiseSize; ++y)
-        {
-            for (uint32_t x = 0u; x < VisibilityBlueNoiseSize; ++x)
-            {
-                const double zero =
-                    BlueNoise(noise, x, y, 0u) - layerZeroMean;
-                const double one =
-                    BlueNoise(noise, x, y, 1u) - layerOneMean;
-                covariance += zero * one;
-                layerZeroVariance += zero * zero;
-                layerOneVariance += one * one;
-            }
-        }
-        const double correlation = covariance /
-            std::sqrt(layerZeroVariance * layerOneVariance);
-        assert(std::abs(correlation) < 0.1);
-
-        constexpr float AngularRadius = 0.5f;
-        const float cosMaximum = std::cos(AngularRadius);
-        const float measuredCosTheta =
-            1.f + float(radialMean) * (cosMaximum - 1.f);
-        const float expectedCosTheta = 0.5f * (1.f + cosMaximum);
-        assert(Near(measuredCosTheta, expectedCosTheta, 1e-4f));
-    }
-
-    void TestPermutatedWhiteNoiseDirectionalEmitterSampling()
-    {
-        const float permutated = PermutatedWhiteNoise(
-            17u, 29u, 6u, 11u);
-        const float permutatedRepeated = PermutatedWhiteNoise(
-            17u, 29u, 6u, 11u);
-        const float permutatedAdvanced = PermutatedWhiteNoise(
-            17u, 29u, 6u, 12u);
-        assert(permutated == permutatedRepeated);
-        assert(permutated >= 0.f && permutated < 1.f);
-        assert(!Near(permutated, permutatedAdvanced));
+        settings.noise.custom.pattern = NoisePattern::Count;
+        assert(!IsHeitzRatioEstimatorConfigurationSupported(settings));
     }
 
     void TestHardReceiverEligibility()
@@ -516,8 +380,7 @@ int main()
     TestDefaultSettings();
     TestDivisionAfterMatchedCurrentFrameAccumulation();
     TestGeometricNormalRayBias();
-    TestBlueNoiseDirectionalEmitterSampling();
-    TestPermutatedWhiteNoiseDirectionalEmitterSampling();
+    TestNoiseInheritanceAndValidation();
     TestHardReceiverEligibility();
     return 0;
 }

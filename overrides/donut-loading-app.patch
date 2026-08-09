@@ -1,8 +1,8 @@
 diff --git a/include/donut/app/ApplicationBase.h b/include/donut/app/ApplicationBase.h
-index 32d3f24..2afd42d 100644
+index 32d3f24..81fd494 100644
 --- a/include/donut/app/ApplicationBase.h
 +++ b/include/donut/app/ApplicationBase.h
-@@ -41,8 +41,25 @@ namespace donut::app
+@@ -41,20 +41,41 @@ namespace donut::app
      class ApplicationBase : public IRenderPass
      {
      private:
@@ -14,6 +14,7 @@ index 32d3f24..2afd42d 100644
 +        };
 +
          std::atomic_bool m_SceneLoaded;
++        std::atomic_bool m_SceneLoadFinished = false;
          bool m_AllTexturesFinalized;
 +        bool m_HasSceneResources = false;
 +        SceneRetirementState m_SceneRetirementState =
@@ -28,7 +29,22 @@ index 32d3f24..2afd42d 100644
  
      protected:
          typedef IRenderPass Super;
-@@ -105,4 +122,4 @@ namespace donut::app
++
++        void WaitForSceneLoadingThread();
+ 
+         std::shared_ptr<engine::TextureCache> m_TextureCache;
+         std::unique_ptr<std::thread> m_SceneLoadingThread;
+         std::shared_ptr<engine::CommonRenderPasses> m_CommonPasses;
+ 
+         bool m_IsAsyncLoad;
+ 
+     public:
+         ApplicationBase(DeviceManager* deviceManager);
++        ~ApplicationBase() override;
+ 
+         virtual void SetLatewarpOptions() override { }
+         virtual void Render(nvrhi::IFramebuffer* framebuffer) override;
+@@ -105,4 +126,4 @@ namespace donut::app
      // searches for a given substring in the list of scenes, returns that name if found;
      // if not found, returns the first scene in the list.
      std::string FindPreferredScene(const std::vector<std::string>& available, const std::string& preferred);
@@ -36,11 +52,24 @@ index 32d3f24..2afd42d 100644
 \ No newline at end of file
 +}
 diff --git a/src/app/ApplicationBase.cpp b/src/app/ApplicationBase.cpp
-index 79d6d48..7a276ce 100644
+index 79d6d48..a26e0b2 100644
 --- a/src/app/ApplicationBase.cpp
 +++ b/src/app/ApplicationBase.cpp
-@@ -51,9 +51,18 @@ ApplicationBase::ApplicationBase(DeviceManager* deviceManager)
+@@ -51,9 +51,41 @@ ApplicationBase::ApplicationBase(DeviceManager* deviceManager)
  
++ApplicationBase::~ApplicationBase()
++{
++    WaitForSceneLoadingThread();
++}
++
++void ApplicationBase::WaitForSceneLoadingThread()
++{
++    if (m_SceneLoadingThread && m_SceneLoadingThread->joinable())
++        m_SceneLoadingThread->join();
++    m_SceneLoadingThread.reset();
++    m_SceneLoadFinished = false;
++}
++
  void ApplicationBase::Render(nvrhi::IFramebuffer* framebuffer)
  {
 +    // Scene switches retire the previous graphics work by polling a queue
@@ -48,6 +77,16 @@ index 79d6d48..7a276ce 100644
 +    // includes every old-scene and GUI submission from the preceding frame.
 +    if (ProcessPendingSceneRetirement(framebuffer))
 +        return;
++
++    // A worker completion is independent from its success result. Join a
++    // failed worker immediately so loading state clears and the application
++    // can retry or shut down without retaining a joinable thread.
++    if (m_SceneLoadingThread && m_SceneLoadFinished && !m_SceneLoaded)
++    {
++        WaitForSceneLoadingThread();
++        if (m_TextureCache)
++            m_TextureCache->Reset();
++    }
 +
      if (m_TextureCache)
      {
@@ -59,7 +98,18 @@ index 79d6d48..7a276ce 100644
  
          if (m_SceneLoaded && !anyTexturesProcessed)
              m_AllTexturesFinalized = true;
-@@ -103,6 +112,7 @@ void ApplicationBase::SceneLoaded()
+@@ -70,9 +102,8 @@ void ApplicationBase::Render(nvrhi::IFramebuffer* framebuffer)
+     if (m_SceneLoaded && m_SceneLoadingThread)
+     {
+-        m_SceneLoadingThread->join();
+-        m_SceneLoadingThread = nullptr;
++        WaitForSceneLoadingThread();
+ 
+         // SceneLoaded() would already get called from 
+         // BeginLoadingScene() in case of synchronous loads
+         SceneLoaded();
+     }
+@@ -103,6 +134,7 @@ void ApplicationBase::SceneLoaded()
          m_TextureCache->LoadingFinished();
      }
      m_SceneLoaded = true;
@@ -67,7 +117,7 @@ index 79d6d48..7a276ce 100644
  }
  
  void ApplicationBase::SetAsynchronousLoadingEnabled(bool enabled)
-@@ -112,7 +122,9 @@ void ApplicationBase::SetAsynchronousLoadingEnabled(bool enabled)
+@@ -112,7 +144,9 @@ void ApplicationBase::SetAsynchronousLoadingEnabled(bool enabled)
  
  bool ApplicationBase::IsSceneLoading() const
  {
@@ -78,7 +128,7 @@ index 79d6d48..7a276ce 100644
  }
  
  bool ApplicationBase::IsSceneLoaded() const
-@@ -122,25 +134,44 @@ bool ApplicationBase::IsSceneLoaded() const
+@@ -122,30 +156,62 @@ bool ApplicationBase::IsSceneLoaded() const
  
  void ApplicationBase::BeginLoadingScene(std::shared_ptr<IFileSystem> fs, const std::filesystem::path& sceneFileName)
  {
@@ -117,6 +167,7 @@ index 79d6d48..7a276ce 100644
 +    m_PendingSceneFileSystem.reset();
 +    m_PendingSceneFileName.clear();
 +    m_SceneRetirementState = SceneRetirementState::Idle;
++    m_SceneLoadFinished = false;
  
      if (m_IsAsyncLoad)
      {
@@ -127,15 +178,31 @@ index 79d6d48..7a276ce 100644
 +            [this, fs = std::move(fs),
 +             sceneFileName = std::move(sceneFileName)]()
 +            {
-+                m_SceneLoaded = LoadScene(fs, sceneFileName);
++                bool loaded = false;
++                try
++                {
++                    loaded = LoadScene(fs, sceneFileName);
++                }
++                catch (...)
++                {
++                    // Convert worker exceptions into the same retryable
++                    // terminal failure state as a false return value.
++                }
++                m_SceneLoaded = loaded;
++                m_SceneLoadFinished = true;
 +            });
      }
      else
      {
-@@ -149,6 +180,51 @@ void ApplicationBase::BeginLoadingScene(std::shared_ptr<IFileSystem> fs, const s
+-        m_SceneLoaded = LoadScene(fs, sceneFileName);
+-        SceneLoaded();
++        m_SceneLoaded = LoadScene(fs, sceneFileName);
++        if (m_SceneLoaded)
++            SceneLoaded();
      }
  }
  
+@@ -152,3 +218,48 @@ void ApplicationBase::BeginLoadingScene(std::shared_ptr<IFileSystem> fs, const s
 +bool ApplicationBase::ProcessPendingSceneRetirement(
 +    nvrhi::IFramebuffer* framebuffer)
 +{

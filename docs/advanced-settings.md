@@ -5,26 +5,36 @@ on every launch and are not persisted.
 
 ## Settings Drawers
 
-The Settings panel contains ten top-level drawers in this order:
+The Settings panel contains twelve top level drawers in this order:
 
 1. **General** selects the interface skin, graphics adapter, Adaptive Sync,
    camera, and scene.
-2. **Representation** configures the shared BVH, BLAS, and TLAS policies.
-3. **Diffuse** controls Occlusion, Illumination, sampling, and
+2. **Representation** controls whether ray traversal is allowed and configures
+   the shared BVH, BLAS, and TLAS policies.
+3. **Noise** defines the shared precomputed noise pattern, resolution, and
+   animation policy.
+4. **Diffuse** controls Occlusion, Illumination, sampling, and
    reconstruction.
-4. **Buffers** owns the two retained Visibility precision choices.
-5. **Statistics** reports a compact frame summary and a detailed selected effect.
-6. **Aliasing** independently enables the temporal, fast approximate,
+5. **Denoising** selects optional NVIDIA NRD processing for AO, GI, shadows,
+   and sky visibility.
+6. **Buffers** owns the two retained Visibility precision choices.
+7. **Statistics** reports a compact frame summary and a detailed selected effect.
+8. **Aliasing** independently enables the temporal, fast approximate,
    morphological, and multisample techniques.
-7. **Debug** combines world appearance and effect-specific information views.
-8. **Sky** configures the global environment and ambient fill.
-9. **Lights** edits scene lights and the camera flashlight.
-10. **Shadows** configures independent screen-space and ratio-estimator
-    directional shadows.
+9. **Debug** combines world appearance and effect specific information views.
+10. **Sky** configures the global environment, display exposure, and ambient
+    fill.
+11. **Lights** edits scene lights and the camera flashlight.
+12. **Shadows** configures ray traced sun shadows.
 
 Escape or `~` opens or closes Settings. A reset icon beside a control restores
 that control or group to its current factory value. Q moves the camera up, E
 moves it down, and the retired Space and Shift vertical bindings are inert.
+V restores an upright camera roll. A stationary held trackpad touch does not
+cancel that leveling motion; new camera-look movement or another real camera
+input does.
+The four footer actions are **Reset**, **Capture**, **Pixel Zoom**, and
+**Restart**; Capture copies the current frame to the clipboard.
 
 ## General
 
@@ -39,11 +49,29 @@ confirm that state. Systems without DXGI tearing-present support expose Off
 only. The reset restores Nvidia Exclusive on a supported NVIDIA adapter, Vendor
 Agnostic on any other supported adapter, and Off when the path is unsupported.
 
+During scene loading, the second status line shows `x/average` and updates every
+20 milliseconds.
+The `x` counter advances once every 20 milliseconds instead of depending on a
+loader stage, and the denominator is the completed-load average for that scene
+or the all-scene average when no scene-specific sample exists. `--` is shown
+until a completed load establishes a baseline, so a value beyond the
+denominator directly indicates a slower-than-usual load. The phase label is
+followed by the missing colon. Successful per-scene and all-scene aggregates
+are persisted in the current Windows user's local application data; failed
+imports never enter the average. A failed asynchronous import leaves loading
+state cleanly and exposes **Retry Scene Load** instead of leaving the counter
+running forever.
+
 ## Representation
 
-Representation owns UVSR's consumer-neutral world-space triangle hierarchy.
+Representation owns UVSR's consumer neutral world space triangle hierarchy.
+**Allow Ray Traversal** is the master permission for every ray traced effect.
+Turning it off stops sky visibility, sun shadows, flashlight shadows, and any
+other traversal consumer without clearing their individual settings. Turning it
+back on lets the selected effects resume from their stored configuration.
+
 **Bounding Volume Hierarchy** selects Fast Trace, Balanced, or Fast Build for
-acceleration-structure construction. **Bottom-Level Acceleration Structures**
+acceleration structure construction. **Bottom-Level Acceleration Structures**
 selects Rebuild or Refit for changed dynamic geometry. **Top-Level Acceleration
 Structure** selects Rebuild or Refit for changed instance transforms. A status
 line reports unsupported, inactive, BLAS construction, TLAS construction,
@@ -55,10 +83,35 @@ Changing the hierarchy preference or BLAS policy rebuilds both levels; changing
 only the TLAS policy preserves BLAS allocations. Reset and invalidation release
 consumer bindings before replacing acceleration structures.
 
+Opaque and alpha-tested triangle geometry participates in the shared
+representation. Ray queries evaluate the authored base-color alpha and cutoff
+before committing an alpha-tested candidate, so image-backed foliage and fences
+cast their cutout silhouette rather than the rectangular mesh card. Blended and
+transmissive material domains are excluded from these binary visibility
+queries.
+
+## Noise
+
+The Noise drawer defaults to **Spatiotemporal Blue**, **128x128**, and animated
+sampling. **Spatial White**, **Spatial Blue**, and **Spatiotemporal Blue** are
+precomputed `R8_UNORM` textures available at **64x64**, **128x128**, **256x256**,
+and **512x512**. Tiles are anchored to the center of each effect's local
+dispatch, so clipped work at one screen edge follows the same mapping as clipped
+work at another edge.
+
+Diffuse visibility, Ray Traced Shadows, Ray Traced Sky Visibility, and finite
+flashlight shadows inherit the drawer by default. The first three expose
+**Specify Noise**; enabling it reveals that effect's private Pattern,
+Resolution, and Animate Samples controls without changing another effect. AO
+and diffuse illumination share one visibility dispatch and therefore share one
+override. The flashlight always uses the global configuration and owns its own
+sample phase. See [Noise](noise.md) for assets, memory, phase, and provenance
+details.
+
 ## Diffuse
 
 Diffuse is independent from PBR, lights, sky, shadows, and anti-aliasing.
-Enabling or disabling it changes only the Screen-Space Visibility pass and its
+Enabling or disabling it changes only the Screen Space Visibility pass and its
 resources.
 
 The four quality recipes configure the supported route. The selector shows
@@ -70,12 +123,14 @@ originating recipe value.
 The main controls are:
 
 - full, half, or quarter resolution;
-- Occlusion enable and strength;
-- one-bounce Illumination enable and intensity;
+- Occlusion enable, strength from 0 through 8, and optional **Output Hit
+  Distance**;
+- one-bounce Illumination enable and intensity, with a factory intensity of 1;
 - **Bitmask Approximation**, **Bitmask Directional Visibility**, or **Bitmask
   Cosine Visibility** estimation;
-- Permutated White Noise or Void Cluster Blue Noise;
-- 1 through 64 samples, radius, thickness, and distribution;
+- an optional **Specify Noise** override for the shared AO/GI dispatch;
+- 1 through 64 samples, radius, thickness, and distribution from 0.25 through
+  8;
 - one direct-or-guide-aware reconstruction mode, labeled **Full Resolution** at
   full sampling resolution and **Guide-Aware Upsampling** at reduced resolution,
   plus **Packed Depth-Normal**, **Packed Slope-Aware**, or **Packed
@@ -89,9 +144,64 @@ after the first interaction, the user's disclosure choice is preserved. Every
 retained setting has a concise hover explanation, and dropdown widths preserve
 both the value and its visible label.
 
+The factory High recipe uses 16 samples. Illumination has its own **Output Hit
+Distance** control. Both hit outputs are off by default and allocate an R16
+physical distance texture only while requested. They do not trace extra
+samples, but they add a shader output, storage, and memory traffic. Selecting a
+denoiser does not silently enable either producer control.
+
 Diffuse has no private temporal accumulation, depth hierarchy, recursive
-diffuse bounces, resurrection history, benchmark planner, fused ambient-
-occlusion-only profile, or separate contrast/power axis.
+diffuse bounces, resurrection history, benchmark planner, fused ambient
+occlusion only profile, or separate contrast/power axis.
+
+## Denoising
+
+The Denoising drawer remains visible in every build, but processing is available
+only when UVSR is built with the optional NVIDIA NRD backend. Each signal starts
+with **Method: None**, while its stored controls start at **Balanced**, **Half**,
+and 16 history frames. Method selection is independent for each signal:
+
+- AO supports None or ReBLUR.
+- GI supports None, ReBLUR, or ReLAX.
+- Shadows supports None or SIGMA.
+- Sky Visibility supports None, ReBLUR, or ReLAX.
+
+Every active method exposes Performance, Balanced, Quality, and Ultra quality,
+plus Quarter, Half, and Full processing resolution. ReBLUR and ReLAX also expose
+history, disocclusion, and response controls. Shadows expose the SIGMA settings
+that NRD actually consumes: quality controls sun stabilization, disocclusion
+controls sun history rejection, and resolution controls both sources.
+Flashlight SIGMA is spatial only because reliable local light reprojection is
+not available; it keeps an independent signal state without exposing inactive
+history or response controls.
+
+NRD needs a noisy signal and physical hit distance data. AO, GI, sky
+visibility, sun shadows, and flashlight shadows therefore retain explicit
+**Output Hit Distance** switches with a default of off. Sky and sun also retain
+independent **Ratio Estimator** switches with a default of on. Sky ReBLUR or
+ReLAX and sun SIGMA consume the raw one ray producer route, so sky or sun
+denoising also requires its Ratio Estimator to be off. Changing a denoising
+choice never changes those producer switches. Missing data, an unsupported
+combination, or an unavailable backend leaves the raw signal in use and reports
+the reason.
+
+Statistics keeps each denoising dispatch separate from its producer. The
+Complete Renderer table and relevant effect table therefore report **Ambient
+Occlusion Denoise**, **Diffuse Illumination Denoise**, **Shadow Denoise**, and
+**Sky Visibility Denoise** independently from their raw trace or ray-dispatch
+cost.
+
+AO and GI keep their established aggregate estimators. AO's guide is the
+expected first bounce distance over the same equal measure sector mask, with
+visible sectors censored at the configured radius. GI's guide is the first
+bounce distance weighted by the NRD luminance of the exact RGB contributions
+that form raw GI. These matched first moments let NRD filter the original
+signals instead of substituting a different occlusion or illumination model.
+
+The normal build leaves NRD out. Enabling it requires both
+`UVSR_WITH_NRD=ON` and explicit acknowledgement with
+`UVSR_ACCEPT_NRD_LICENSE=ON` after reviewing NVIDIA's license. The packaged
+executable copies that license beside the optional backend.
 
 ## Buffers
 
@@ -156,24 +266,52 @@ history and coordinate contracts.
 
 ## Sky
 
-Ray-Traced Sky Visibility is a default-off, full-resolution current-frame
-ray-query experiment. Its dependent controls remain collapsed until **Enable**
-is selected. **Diffuse IBL** defaults on and **Specular IBL** defaults off; the
-two application toggles support either, neither, or both. Diffuse application
-also affects diffuse IBL before it becomes GI source radiance. Specular
-application affects only specular IBL and is deliberately experimental: the
-cosine-weighted geometric-normal hemisphere scalar is not resolved for the
-view-dependent reflection direction or material roughness.
+**Auto Exposure** is its own animated subsection. It starts expanded like the
+Aliasing technique sections, defaults off, and shows only **Enable** while off.
+When enabled, a GPU luminance histogram meters the median scene luminance,
+targets 18% middle gray, and adapts display exposure over time without changing
+scene lighting, ray effects, or their histories. **Maximum Brightening** and
+**Maximum Darkening** each span `0` through `16 EV`. Maximum Brightening
+defaults to `5 EV`, while Maximum Darkening defaults to `2 EV`.
+They bound how far the automatic target may raise or lower exposure from unity.
+**Exposure Compensation** is applied after that automatic bound and biases the
+result from `-18 EV` through `+8 EV`. **Adjustment Period** spans `0.05` through
+`5.00` seconds and sets the half-life of the remaining exposure-value
+difference; its default is `0.20` seconds. Adaptation interpolates in
+exposure-value space so equal bright and dark changes respond symmetrically.
 
-**Samples Per Pixel** exposes 1, 2, 4, 8, 16, 32, and 64 current-frame samples.
-**Noise Pattern** selects Permutated White Noise or Void Cluster Blue Noise,
-and **Animate Samples** advances the private phase after a successful dispatch.
-**Max Distance** defaults to Max, which preserves the scene-diagonal reference
+The automatic exposure pass runs after TAA and before the neutral AgX transform.
+When Auto Exposure is off, UVSR selects the exact established texture-only,
+buffer-free AgX presentation. No automatic exposure buffer or automatic shader
+permutation is used, so the disabled feature cannot change the rendered color.
+The enabled route differs by applying its bounded exposure multiplier to
+scene-linear input before the same established AgX transform; it does not
+replace that transform's clamps or output handling.
+
+Ray Traced Sky Visibility is off by default and traces the current frame at full
+resolution. Its independently collapsible section remains closable while the
+effect is enabled, matching the other effect sections. **Effect Diffuse** and
+**Effect Specular** both default on, so enabling sky
+visibility applies the same geometric visibility to the diffuse and specular
+environment response. Either application can still be disabled independently.
+Diffuse application also affects diffuse IBL before it becomes GI source
+radiance.
+
+**Ratio Estimator** defaults on and uses the selected 1, 2, 4, 8, 16, 32, or 64
+samples. Turning it off selects one raw stochastic visibility ray for a cleaner
+ReBLUR or ReLAX input. **Output Hit Distance** is independent, defaults off, and
+emits the nearest committed physical distance or the documented miss value.
+Both controls preserve the other sky settings.
+
+**Specify Noise** reveals a private pattern, resolution, and animation policy;
+otherwise this effect inherits the Noise drawer. Animated sampling advances its
+private phase only after a successful dispatch.
+**Max Distance** defaults to Max, which preserves the scene diagonal reference
 reach. The `32m`, `16m`, `8m`, `4m`, and `2m` choices intentionally ignore
 farther occluders and are bounded visibility rather than exact sky visibility.
-**Ray Bias** retains the same geometric-normal origin-clearance policy as the
-ratio-estimator shadow pass. Disabled, unsupported, unavailable, and
-enabled-with-neither states supply white visibility and preserve the old image.
+**Ray Bias** uses the same geometric normal origin clearance policy as ray
+traced sun shadows. Disabled, unsupported, unavailable, and enabled with neither
+IBL consumer states supply white visibility and preserve the old image.
 
 ## Debug Drawer
 
@@ -185,72 +323,110 @@ independently collapsible:
   Applied Indirect.
 - **Physically Based Lighting** selects Default or a concise information
   filter such as Surface Normals, Reflectance Response, or Specular Visibility.
-- **Screen-Space Shadows** selects Default, Thread Lanes, or Wave Groups.
 
 World appearance changes and information filters are separate state. A
 physically based lighting filter keeps Visibility running so its history and
 traced data remain valid, but ordinary Visibility lighting does not contaminate
 the filtered presentation. An explicit Visibility view takes precedence when
-both selectors are active. Shadow isolation remains a deliberate full-image
-diagnostic; the unhelpful edge overlay was removed.
+both selectors are active. The removed screen space directional shadow
+diagnostics do not remain as hidden main branch state.
+
+## Lights
+
+The flashlight is one analytical physical spot light in scene submission and
+deferred PBR. Its two lobe beam profile shapes that exact light; it does not add
+a duplicate hotspot light or a private raster shadow map. **Cast Shadows**
+defaults on and uses finite ray traced visibility from the surface toward the
+emitter. It respects Representation's **Allow Ray Traversal** master switch.
+
+The flashlight defaults to a 16 degree beam, 0.8 roundness, and a 2.86 degree
+full **Angular Size** at the one-metre reference distance. The selectable
+`0`-through-`20` degree angular size controls the analytical spherical emitter
+used by both direct-light energy and finite flashlight shadow rays, so its
+apparent size changes naturally with receiver distance. Positive size bounds
+near-field irradiance and converges to the same luminous-intensity inverse
+square result in the far field. `0` selects the exact point-light and hard
+center-ray branches. A positive size traces four animated, noise-shifted rays
+over the emitter's visible spherical cap and averages their visibility, which
+creates a distance-dependent fractional penumbra before optional SIGMA or TAA.
+The flashlight also uses a dedicated collision sphere whose radius covers both
+the camera collision radius and the analytical emitter. As the camera
+approaches a wall, predictive mount-direction and forward probes begin a cubic
+retraction fade at least 0.75 metres before contact. Larger collision radii and
+custom mount offsets expand that envelope. The solution uniformly retracts the
+light's full forward, horizontal, and vertical mount offset toward the camera
+instead of sliding an off-center mount along the surface. The physical sweep
+remains an immediate safety limit, the offset restores smoothly as clearance
+returns, and a final sphere sweep preserves continuous collision safety during
+camera motion. This prevents the offset light from crossing walls and keeps its
+near-wall beam footprint centered instead of collapsing as the camera presses
+closer. Independent
+**Horizontal Offset** and **Vertical Offset** controls cover `-40 cm` through
+`40 cm`. **Output Hit Distance** defaults off and supplies the physical blocker
+distance needed by SIGMA. Flashlight shadow data is matched to the exact
+flashlight instance before deferred lighting applies it.
 
 ## Shadows
 
-Screen-Space Directional Shadows and Ratio-Estimator Ray-Traced Shadows each
-have an independent **Enabled** control and both default off. Both can be off,
-either can run alone, or both can run together. Both-on takes the componentwise
-minimum visibility, preserving the strongest occlusion without multiplying two
-estimates of the same blocker. Every active producer requires a primary
-directional light.
+**Ray Traced Shadows** controls visibility for the primary directional sun and
+defaults off. The sun itself initializes with irradiance `8` and a `0.2`
+degree full angular size. A zero angular size or **Hard Shadows** selects one
+center ray.
 
-Screen Space exposes Default, Long, Maximum Validation, and Custom profiles
-plus its retained trace and filtering controls. Ratio Estimator uses matched
-RGB stochastic numerator and denominator sums and inline ray queries in one
-compute dispatch, with no private spatial or temporal denoiser. **Hard Shadows**
-takes an early one-center-ray path and rejects surfaces that cannot receive the
-selected light before issuing a query. **Animate Samples** sits directly above
-the logarithmic **Samples Per Pixel** slider, which covers `1` through `64`.
-**Noise Pattern** selects Permutated White Noise or Void Cluster Blue Noise.
-Animated samples change the current-frame emitter set independently of TAA;
-final-color TAA is the only temporal accumulator. **Max Distance** defaults to
-the scene-diagonal Max reference. Its finite `32m` through `2m` modes are
-bounded visibility and intentionally not exact sun visibility. **Ray Bias**
-moves the origin along the view-facing raster triangle normal, defaults to
-`0.002` world units,
-and is applied once rather than as `TMin`; larger values can miss nearby blockers
-or detach contact shadows without changing ray count or reach. Ratio Estimator
-additionally requires
-DirectX Raytracing 1.1 and
-single-sample deferred rendering. The Representation drawer reports its staged
-BVH/BLAS/TLAS readiness. A zero-extent directional emitter takes the hard path;
-a primary sun defaults to a `0.53` degree full diameter for physical penumbrae.
+**Ratio Estimator** defaults on. Its soft route uses matched RGB stochastic
+numerator and denominator sums in one inline ray query dispatch. Turning Ratio
+Estimator off uses one raw scalar stochastic ray, replicated for deferred PBR,
+which is the input expected by SIGMA. **Output Hit Distance** is independent,
+defaults off, and writes the nearest physical blocker distance. SIGMA needs both
+the raw route and hit output; choosing SIGMA in Denoising does not change either
+producer switch.
 
-See [Heitz Ratio-Estimator Shadows](heitz-ratio-estimator-shadows.md) for the
-mathematical contract, framework adaptations, and current ray-query limits.
+**Samples Per Pixel** covers `1` through `64` while Ratio Estimator is active.
+**Specify Noise** reveals this effect's private pattern, resolution, and Animate
+Samples controls; otherwise it inherits the Noise drawer. **Max Distance** defaults to
+the scene diagonal Max reference; finite `32m` through `2m` modes intentionally
+ignore farther blockers. **Ray Bias** moves the origin once along the view
+facing raster triangle normal, defaults to `0.002` world units, and can detach
+nearby contact shadows when raised. Ray traced sun shadows require DirectX
+Raytracing 1.1, a ready Representation hierarchy, and single sample deferred
+rendering.
 
-Sparse virtual shadow maps and diagnostic cascaded shadow maps are not part of
-the engine or production shader package. Their pre-removal source is preserved
-on the local `codex/svsm-csm-preserved` branch.
+All three material-aware ray-query effects use the same alpha-test candidate
+contract. Alpha-tested sun-shadow occluders commit only where base-color alpha
+passes the material cutoff; blended and transmissive materials do not become
+binary shadow blockers.
+
+See [Heitz Ratio Estimator Shadows](heitz-ratio-estimator-shadows.md) for the
+mathematical contract and the raw denoising route.
+
+Screen space directional shadows are absent from main. Their implementation is
+quarantined with the CSM and SVSM experiments on the local
+`codex/svsm-csm-preserved` branch and is not compiled or packaged by the normal
+renderer.
 
 ## Statistics
 
 Statistics condenses the six general values into one slash-separated line and
 shows one selected effect at a time in a labeled, striped two-column table. The
 selector contains **Complete
-Renderer**, **Scene Setup**, **Geometry**, **Direct Lighting**, **Screen-Space
+Renderer**, **Scene Setup**, **Geometry**, **Direct Lighting**, **Screen Space
 Visibility**, **Directional Shadows**, **Temporal Reconstructive**,
 **Fast Approximate**, **Conservative Morphological**, **Multisample Adaptive**,
 **Material Picking**,
-**Environment Background**, **Tone Mapping**, and **Output Blit**. Complete
+**Environment Background**, **Auto Exposure**, **Tone Mapping**, and **Output
+Blit**. Complete
 Renderer restores the full stage breakdown, including an available Closest
-Surface Resolve; selecting an ordinary stage keeps
-the complete frame beside it for context. Directional Shadows includes the
-screen-space breakdown plus the complete Ratio-Estimator Ray Dispatch timing.
+Surface Resolve. The multisample-only base-lighting pass that prepares Screen
+Space Visibility is reported separately as **Visibility Lighting Preparation**
+instead of being folded into either Direct Lighting or Visibility. Selecting an ordinary stage keeps
+the complete frame beside it for context. Directional Shadows includes
+**Shadow Ray Dispatch**, **Shadow Denoise**, **Sky Visibility Ray Dispatch**,
+and **Sky Visibility Denoise** as independent rows.
 Visibility, shadows, temporal
 reconstruction, and conservative morphology retain their measured stages,
 resource or history metrics, and active-work counts. Multisample reports its
 requested and hardware-resolved sample counts plus Geometry, Direct Lighting,
-and any active Closest Surface resolve. A timing appears only after its
+Visibility Lighting Preparation, and any active Closest Surface resolve. A timing appears only after its
 graphics-processor query completes; dormant or newly enabled work reports an
 explicit unavailable state instead of a fabricated zero.
 
@@ -267,10 +443,9 @@ with slashes and disappears as soon as typing begins. After Enter, that same
 input shows a blue `Success` or saturated-crimson `Error` result until the next
 command is typed; no floating result bar can cover Settings. When the complete result is
 longer than the input, a trailing details button deliberately opens a bounded,
-scrollable, selectable read-only view. The catalog mirrors the current
-UI-backed settings with 141 entries: 137 values and four actions. Type a section
-prefix such as
-`representation.`, `visibility.`, `anti-aliasing.taa.`, `anti-aliasing.fxaa.`,
+scrollable, selectable read only view. The catalog mirrors the current UI
+settings. Type a section prefix such as
+`representation.`, `noise.`, `visibility.`, `denoising.`, `anti-aliasing.taa.`, `anti-aliasing.fxaa.`,
 `anti-aliasing.cmaa2.`,
 `anti-aliasing.msaa.`, `debug.`, or `shadows.` and use completion to inspect the
 exact paths and accepted values. A `list` result uses `/` between each row's
@@ -282,9 +457,8 @@ same post-ImGui mutation boundary as visible controls.
 
 ## Build and Test
 
-The normal build uses one authoritative core manifest, `src/shaders.cfg`, plus
-the retained Screen-Space Directional Shadows manifest. Configure, build, and
-test from PowerShell:
+The normal build uses one authoritative first party shader manifest,
+`src/shaders.cfg`. Configure, build, and test from PowerShell:
 
 ```powershell
 cmake -S . -B build
@@ -292,23 +466,49 @@ cmake --build build --config Release --target uvsr
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The shader build contains 259 core tasks and 46 Screen-Space Directional Shadow
-tasks, for 305 first-party and 381 integrated tasks after Donut's 76.
-`uvsr_screen_space_directional_shadows` remains the only specialist renderer
-component target. Production/developer/factory manifest forks and
-shadow-technique component builds were removed.
+Screen space directional shadows have no main branch target or shader manifest.
+An NRD build is intentionally explicit:
+
+```powershell
+cmake -S . -B build-nrd -DUVSR_WITH_NRD=ON -DUVSR_ACCEPT_NRD_LICENSE=ON
+cmake --build build-nrd --config Release --target uvsr
+```
+
+The second option records that the builder reviewed and accepted NVIDIA's NRD
+license. A normal build keeps the backend unavailable while retaining the same
+settings and raw signal fallback contract.
 
 ## Runtime Validation
 
 Validate a candidate with the exact executable from its isolated build tree.
-At minimum, load a bundled scene and exercise Diffuse, each noise pattern,
+At minimum, load a bundled scene and exercise Diffuse, all four noise
+resolutions and three patterns, inheritance and each Specify Noise override,
 the independent AA toggles, Debug composition, sky, lights, the flashlight,
-all four directional-shadow enable combinations, Ratio Estimator on a
-single-sample target, and the Representation rebuild/refit choices. Exercise
-hard and soft shadows, 1- and 64-sample endpoints, zero and positive
-directional-light angular sizes, zero and default Ray Bias, temporal motion and
-disocclusion, and the Ratio-Estimator Ray Dispatch timing. Confirm the Ratio
-Estimator's unavailable
-explanation under MSAA. A launch alone is not verification; pair
+Ray Traced Shadows on a single sample target, and the Representation
+rebuild/refit choices. Confirm that **Allow Ray Traversal** stops sky, sun, and
+flashlight queries while preserving every individual setting. Exercise hard and
+soft sun shadows, both Ratio Estimator states, both Output Hit Distance states,
+1 and 64 sample endpoints, zero and positive directional light angular sizes,
+zero and default Ray Bias, cutout foliage in all three ray-query effects, and
+the separate Shadow Ray Dispatch and denoising timings. Confirm the unavailable
+explanation under MSAA. Confirm that disabled Auto Exposure shows only Enable
+and exactly matches the established manual AgX presentation. Enable it, compare
+its median-luminance adaptation across bright, dark, neutral, and saturated
+views, exercise both Maximum Brightening and Maximum Darkening endpoints,
+Exposure Compensation endpoints, and Adjustment Period endpoints, and verify
+equal-magnitude brightening and darkening changes settle symmetrically. For the
+flashlight, compare Angular Size zero, default, and maximum around a thin
+occluder, then approach a wall and confirm retraction starts well before
+contact, the entire mount offset moves smoothly toward the camera, the beam
+stays centered at contact, and the offset restores smoothly without crossing
+the surface. Hold a stationary trackpad touch while
+pressing V and confirm roll leveling completes; then confirm actual camera-look
+movement cancels it.
+
+On an NRD build, exercise every supported method, quality, resolution, and
+history endpoint. Verify that a missing hit output or an active sky/sun Ratio
+Estimator reports raw fallback without changing the producer setting. Confirm
+separate sun and flashlight SIGMA histories through motion and disocclusion.
+A launch alone is not verification; pair
 it with the Release build, complete CTest result, shader-package checks, and a
 record of the observed scene and settings.

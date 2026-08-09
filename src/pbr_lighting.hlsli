@@ -7,7 +7,33 @@
 
 static const float UVSR_MIN_LIGHT_DISTANCE_SQUARED = 1e-4f;
 
-PbrLightSample SamplePbrLight(LightConstants light, float3 surfacePosition, float visibility)
+float ResolveAnalyticalPositionalLightIntensity(
+    LightConstants light,
+    float inverseDistance,
+    float distanceSquared)
+{
+    // Radius zero is the exact point-light branch. Positive radii use the
+    // projected solid angle of a spherical emitter, which bounds near-field
+    // energy and converges to the same luminous-intensity inverse square law
+    // as distance becomes large relative to the emitter.
+    if (!(isfinite(light.radius) && light.radius > 0.0f))
+        return light.intensity / distanceSquared;
+
+    const float halfAngularSize = atan(min(
+        light.radius * inverseDistance,
+        1.0f));
+    const float solidAngleOverPi = halfAngularSize * halfAngularSize;
+    const float radianceTimesPi =
+        light.intensity / (light.radius * light.radius);
+    return radianceTimesPi * solidAngleOverPi;
+}
+
+PbrLightSample SamplePbrLight(
+    LightConstants light,
+    float3 surfacePosition,
+    float visibility,
+    bool useFlashlightProfile,
+    FlashlightBeamProfile flashlightProfile)
 {
     PbrLightSample sample = (PbrLightSample)0;
     sample.visibility = saturate(visibility);
@@ -30,7 +56,12 @@ PbrLightSample SamplePbrLight(LightConstants light, float3 surfacePosition, floa
     sample.directionToLight = surfaceToLight * inverseDistance;
 
     // Donut defines intensity for positional lights as luminous intensity.
-    // The point-source incident radiance therefore follows inverse-square falloff.
+    // Resolve the selected analytical emitter before range and beam weights.
+    const float incidentLightIntensity =
+        ResolveAnalyticalPositionalLightIntensity(
+            light,
+            inverseDistance,
+            distanceSquared);
     float rangeWeight = 1.0f;
     if (light.angularSizeOrInvRange > 0.0f)
     {
@@ -46,73 +77,43 @@ PbrLightSample SamplePbrLight(LightConstants light, float3 surfacePosition, floa
     if (light.lightType == LightType_Spot)
     {
         float3 lightDirection = PbrSafeNormalize(light.direction, float3(0.0f, -1.0f, 0.0f));
-        float cosTheta = dot(-sample.directionToLight, lightDirection);
-        float shapeExponent =
-            -light.radius - UVSR_FLASHLIGHT_SHAPE_RADIUS_TAG;
-        bool hasFlashlightShape =
-            light.radius <= -(
-                UVSR_FLASHLIGHT_SHAPE_RADIUS_TAG +
-                UVSR_FLASHLIGHT_MIN_SHAPE_EXPONENT) &&
-            isfinite(shapeExponent) &&
-            shapeExponent >
-                UVSR_FLASHLIGHT_MIN_SHAPE_EXPONENT + 1e-4f &&
-            shapeExponent <= UVSR_FLASHLIGHT_MAX_SHAPE_EXPONENT;
-        if (hasFlashlightShape)
+        const bool validFlashlightProfile =
+            useFlashlightProfile &&
+            flashlightProfile.active > 0.5f &&
+            isfinite(flashlightProfile.shapeExponent) &&
+            flashlightProfile.shapeExponent >=
+                UVSR_FLASHLIGHT_MIN_SHAPE_EXPONENT &&
+            flashlightProfile.shapeExponent <=
+                UVSR_FLASHLIGHT_MAX_SHAPE_EXPONENT &&
+            isfinite(flashlightProfile.spillInnerCosine) &&
+            isfinite(flashlightProfile.spillOuterCosine) &&
+            isfinite(flashlightProfile.spillWeight) &&
+            isfinite(flashlightProfile.hotspotWeight);
+        if (validFlashlightProfile)
         {
-            float3 beamRight =
-                float3(light.shadowChannel.yzw) /
-                UVSR_FLASHLIGHT_AXIS_QUANTIZATION;
-            beamRight -=
-                lightDirection * dot(beamRight, lightDirection);
-            float beamRightLengthSquared =
-                dot(beamRight, beamRight);
-            hasFlashlightShape =
-                all(isfinite(beamRight)) &&
-                isfinite(beamRightLengthSquared) &&
-                beamRightLengthSquared > 1e-6f;
-            if (hasFlashlightShape)
-            {
-                beamRight *= rsqrt(beamRightLengthSquared);
-                float3 beamUp =
-                    PbrSafeNormalize(
-                        cross(beamRight, lightDirection),
-                        float3(0.0f, 1.0f, 0.0f));
-                float3 rayFromLight = -sample.directionToLight;
-                float axialDistance =
-                    dot(rayFromLight, lightDirection);
-                float2 beamSlope = float2(
-                    dot(rayFromLight, beamRight),
-                    dot(rayFromLight, beamUp)) /
-                    max(axialDistance, UVSR_MIN_PDF);
-                float outerTangent =
-                    tan(light.outerAngle * 0.5f);
-                if (axialDistance > UVSR_MIN_PDF &&
-                    all(isfinite(beamSlope)) &&
-                    isfinite(outerTangent))
-                {
-                    if (any(abs(beamSlope) > outerTangent))
-                        return sample;
-                    float2 poweredSlope = pow(
-                        abs(beamSlope),
-                        float2(shapeExponent, shapeExponent));
-                    float shapedSlope = pow(
-                        poweredSlope.x + poweredSlope.y,
-                        rcp(shapeExponent));
-                    if (isfinite(shapedSlope))
-                        cosTheta = rsqrt(1.0f + shapedSlope * shapedSlope);
-                }
-            }
+            spotWeight = EvaluateFlashlightBeamProfile(
+                flashlightProfile,
+                lightDirection,
+                -sample.directionToLight);
         }
-        float cosInner = cos(light.innerAngle * 0.5f);
-        float cosOuter = cos(light.outerAngle * 0.5f);
-        spotWeight = saturate((cosTheta - cosOuter) / max(cosInner - cosOuter, UVSR_MIN_PDF));
+        else
+        {
+            const float cosTheta = dot(
+                -sample.directionToLight,
+                lightDirection);
+            const float cosInner = cos(light.innerAngle * 0.5f);
+            const float cosOuter = cos(light.outerAngle * 0.5f);
+            spotWeight = saturate(
+                (cosTheta - cosOuter) /
+                max(cosInner - cosOuter, UVSR_MIN_PDF));
+            spotWeight *= spotWeight * (3.0f - 2.0f * spotWeight);
+        }
         if (!(spotWeight > 0.0f))
             return sample;
-        spotWeight *= spotWeight * (3.0f - 2.0f * spotWeight);
     }
 
-    sample.incidentRadiance = max(light.color * light.intensity *
-        (rangeWeight * spotWeight / distanceSquared), 0.0f);
+    sample.incidentRadiance = max(light.color * incidentLightIntensity *
+        (rangeWeight * spotWeight), 0.0f);
     return sample;
 }
 

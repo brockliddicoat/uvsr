@@ -29,6 +29,11 @@ namespace uvsr
         [[nodiscard]] bool Empty() const { return m_Triangles.empty(); }
         [[nodiscard]] size_t GetTriangleCount() const { return m_Triangles.size(); }
 
+        // Matches the clearance intentionally retained by MoveSphere before
+        // first contact. Mounted-object recovery uses the same tolerance when
+        // deciding whether a validated target can be snapped exactly.
+        [[nodiscard]] static float GetSphereSeparationSkin(float radius);
+
         // Moves a sphere from start to desiredPosition with a continuous sweep.
         // The query cost is bounded by a small number of BVH traversals and is
         // independent of travel distance, which keeps long third-person orbit
@@ -37,6 +42,23 @@ namespace uvsr
         [[nodiscard]] donut::math::float3 MoveSphere(
             donut::math::float3 start,
             donut::math::float3 desiredPosition,
+            float radius) const;
+
+        // Returns the unobstructed fraction of the direct start-to-target
+        // sweep, stopping just before first contact without wall sliding.
+        // Empty or invalid queries fail open so collision cannot manufacture
+        // a shortened mount offset from unusable scene data.
+        [[nodiscard]] float GetSphereTravelFraction(
+            donut::math::float3 start,
+            donut::math::float3 desiredPosition,
+            float radius) const;
+
+        // Places a stationary sphere outside authored geometry. This is kept
+        // separate from MoveSphere so the camera's zero-cost idle path remains
+        // unchanged while mounted objects can repair a newly enlarged hitbox.
+        [[nodiscard]] donut::math::float3 ResolveSphere(
+            donut::math::float3 center,
+            donut::math::float3 movementHint,
             float radius) const;
 
     private:

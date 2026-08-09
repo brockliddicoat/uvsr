@@ -124,10 +124,25 @@ index 4a99d33..86c9625 100644
      m_SceneGraph = m_SceneTypeFactory->CreateGraph();
  
 diff --git a/src/engine/TextureCache.cpp b/src/engine/TextureCache.cpp
-index e4e105f..8154d2b 100644
+index e4e105f..635b1e7 100644
 --- a/src/engine/TextureCache.cpp
 +++ b/src/engine/TextureCache.cpp
-@@ -135,6 +135,7 @@ void TextureCache::Reset()
+@@ -130,12 +130,20 @@
+ void TextureCache::Reset()
+ {
+-	std::lock_guard<std::shared_mutex> guard(m_LoadedTexturesMutex);
+-
+-	m_LoadedTextures.clear();
++    {
++        std::lock_guard<std::shared_mutex> guard(m_LoadedTexturesMutex);
++        m_LoadedTextures.clear();
++    }
++
++    std::queue<std::shared_ptr<TextureData>> discardedFinalizations;
++    {
++        std::lock_guard<std::mutex> guard(m_TexturesToFinalizeMutex);
++        m_TexturesToFinalize.swap(discardedFinalizations);
++    }
  
      m_TexturesRequested = 0;
      m_TexturesLoaded = 0;
@@ -135,3 +150,4 @@ index e4e105f..8154d2b 100644
  }
  
  void TextureCache::SetGenerateMipmaps(bool generateMipmaps)
+ {

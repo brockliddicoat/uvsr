@@ -1,5 +1,4 @@
 #include "ray_traced_sky_visibility_settings.h"
-#include "visibility_blue_noise.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -11,7 +10,6 @@
 #include <cstdint>
 #include <limits>
 #include <string_view>
-#include <vector>
 
 namespace
 {
@@ -19,16 +17,6 @@ namespace
     {
         float x;
         float y;
-
-        bool operator==(const Float2& other) const
-        {
-            return x == other.x && y == other.y;
-        }
-
-        bool operator!=(const Float2& other) const
-        {
-            return !(*this == other);
-        }
     };
 
     struct Float3
@@ -39,7 +27,6 @@ namespace
     };
 
     constexpr float TwoPi = 6.28318530717958647692f;
-    constexpr float Uint24Scale = 1.f / 16777216.f;
 
     bool Near(float actual, float expected, float tolerance = 1e-6f)
     {
@@ -86,102 +73,6 @@ namespace
         return value * (1.f / std::sqrt(lengthSquared));
     }
 
-    float Fraction(float value)
-    {
-        return value - std::floor(value);
-    }
-
-    float RadicalInverse(uint32_t index, uint32_t base)
-    {
-        const float inverseBase = 1.f / float(base);
-        float inversePower = inverseBase;
-        float result = 0.f;
-        while (index > 0u)
-        {
-            const uint32_t digit = index % base;
-            result += float(digit) * inversePower;
-            index /= base;
-            inversePower *= inverseBase;
-        }
-        return result;
-    }
-
-    float GoldenWeylPhase(uint32_t frameIndex)
-    {
-        const uint32_t phase = frameIndex * 0x9e3779b9u;
-        return float(phase >> 8u) * Uint24Scale;
-    }
-
-    float PermutatedWhiteNoise(
-        uint32_t x,
-        uint32_t y,
-        uint32_t dimension,
-        uint32_t phase)
-    {
-        uint32_t state = x + y * 65537u +
-            dimension * 747796405u + phase * 2891336453u + 1u;
-        state = state * 747796405u + 2891336453u;
-        uint32_t word = ((state >> ((state >> 28u) + 4u)) ^ state) *
-            277803737u;
-        word = (word >> 22u) ^ word;
-        return float((word >> 8u) & 0x00ffffffu) * Uint24Scale;
-    }
-
-    float BlueNoise(
-        const std::vector<uint16_t>& noise,
-        uint32_t x,
-        uint32_t y,
-        uint32_t layer)
-    {
-        using namespace uvsr;
-        const size_t texel = size_t(y & 63u) * VisibilityBlueNoiseSize +
-            size_t(x & 63u);
-        return float(noise[
-            size_t(layer % VisibilityBlueNoiseLayerCount) *
-                VisibilityBlueNoiseTexelCount + texel]) / 65535.f;
-    }
-
-    uint32_t ResolvePhase(
-        const uvsr::RayTracedSkyVisibilitySettings& settings,
-        uint32_t requestedPhase)
-    {
-        return settings.animateSamples ? requestedPhase : 0u;
-    }
-
-    Float2 Sample2D(
-        const std::vector<uint16_t>& noise,
-        uvsr::RayTracedSkyVisibilityNoisePattern pattern,
-        uint32_t x,
-        uint32_t y,
-        uint32_t sampleIndex,
-        uint32_t phase)
-    {
-        using namespace uvsr;
-        const uint32_t firstDimension = sampleIndex * 2u;
-        if (pattern ==
-            RayTracedSkyVisibilityNoisePattern::PermutatedWhiteNoise)
-        {
-            return {
-                PermutatedWhiteNoise(
-                    x, y, firstDimension, phase),
-                PermutatedWhiteNoise(
-                    x, y, firstDimension + 1u, phase)
-            };
-        }
-
-        const uint32_t sequenceIndex = sampleIndex + 1u;
-        return {
-            Fraction(
-                RadicalInverse(sequenceIndex, 2u) +
-                BlueNoise(noise, x, y, 0u) +
-                RadicalInverse(phase + 1u, 5u)),
-            Fraction(
-                RadicalInverse(sequenceIndex, 3u) +
-                BlueNoise(noise, x, y, 1u) +
-                GoldenWeylPhase(phase))
-        };
-    }
-
     Float3 SampleCosineHemisphere(Float3 normal, Float2 sample)
     {
         normal = Normalize(normal);
@@ -223,14 +114,17 @@ namespace
         const RayTracedSkyVisibilitySettings settings;
         assert(!settings.enabled);
         assert(settings.applyToDiffuseIbl);
-        assert(!settings.applyToSpecularIbl);
+        assert(settings.applyToSpecularIbl);
+        assert(settings.useRatioEstimator);
+        assert(!settings.outputHitDistance);
         assert(HasRayTracedSkyVisibilityConsumer(settings));
         assert(settings.sampleRateLog2 == 0);
         assert(ResolveRayTracedSkyVisibilitySampleCount(
             settings.sampleRateLog2) == 1u);
-        assert(settings.noisePattern ==
-            RayTracedSkyVisibilityNoisePattern::VoidClusterBlueNoise);
-        assert(settings.animateSamples);
+        assert(ResolveRayTracedSkyVisibilityTraceCount(settings) == 1u);
+        const NoiseSettings defaultNoise;
+        assert(!settings.noise.specifyNoise);
+        assert(settings.noise.custom == defaultNoise);
         assert(Near(settings.rayBias, 0.002f));
         assert(settings.maxDistance ==
             RayVisibilityMaxDistance::Maximum);
@@ -263,6 +157,17 @@ namespace
         assert(GetRayTracedSkyVisibilitySampleRateLabel(7).empty());
         assert(ResolveRayTracedSkyVisibilitySampleCount(-1) == 1u);
         assert(ResolveRayTracedSkyVisibilitySampleCount(7) == 1u);
+
+        RayTracedSkyVisibilitySettings scalarSettings = settings;
+        scalarSettings.sampleRateLog2 = 6;
+        assert(ResolveRayTracedSkyVisibilityTraceCount(
+            scalarSettings) == 64u);
+        scalarSettings.useRatioEstimator = false;
+        assert(ResolveRayTracedSkyVisibilityTraceCount(
+            scalarSettings) == 1u);
+        assert(RayTracedSkyVisibilityHitDistanceInvalid == 0.f);
+        assert(RayTracedSkyVisibilityHitDistanceMaximum == 65472.f);
+        assert(RayTracedSkyVisibilityHitDistanceMiss == 65504.f);
 
         constexpr std::array<RayVisibilityMaxDistance, 6> DistanceModes = {
             RayVisibilityMaxDistance::Maximum,
@@ -320,10 +225,15 @@ namespace
         assert(!IsRayTracedSkyVisibilityConfigurationSupported(settings));
 
         settings = {};
-        settings.noisePattern = RayTracedSkyVisibilityNoisePattern::Count;
+        settings.noise.custom.pattern = NoisePattern::Count;
         assert(!IsRayTracedSkyVisibilityConfigurationSupported(settings));
-        settings.noisePattern =
-            static_cast<RayTracedSkyVisibilityNoisePattern>(-1);
+        settings.noise.custom.pattern =
+            static_cast<NoisePattern>(-1);
+        assert(!IsRayTracedSkyVisibilityConfigurationSupported(settings));
+
+        settings = {};
+        settings.noise.custom.resolution =
+            static_cast<NoiseResolution>(0u);
         assert(!IsRayTracedSkyVisibilityConfigurationSupported(settings));
 
         settings = {};
@@ -352,74 +262,32 @@ namespace
         assert(Near(std::max(UserBias, LargerDepthStep), LargerDepthStep));
     }
 
-    void TestDeterministicNoiseAndAnimationPolicy()
+    void TestNoiseInheritanceAndValidation()
     {
         using namespace uvsr;
 
-        const std::vector<uint16_t> noise = GenerateVisibilityBlueNoise();
-        assert(noise.size() == size_t(VisibilityBlueNoiseTexelCount) *
-            VisibilityBlueNoiseLayerCount);
-
+        NoiseSettings global;
+        global.pattern = NoisePattern::SpatialWhite;
+        global.resolution = NoiseResolution::Size256;
+        global.animate = false;
         RayTracedSkyVisibilitySettings settings;
-        for (const RayTracedSkyVisibilityNoisePattern pattern : {
-                RayTracedSkyVisibilityNoisePattern::PermutatedWhiteNoise,
-                RayTracedSkyVisibilityNoisePattern::VoidClusterBlueNoise })
-        {
-            settings.noisePattern = pattern;
-            const uint32_t heldPhase = ResolvePhase(settings, 11u);
-            const Float2 held = Sample2D(
-                noise, pattern, 17u, 29u, 3u, heldPhase);
-            const Float2 repeated = Sample2D(
-                noise, pattern, 17u, 29u, 3u, heldPhase);
-            const Float2 advanced = Sample2D(
-                noise,
-                pattern,
-                17u,
-                29u,
-                3u,
-                ResolvePhase(settings, 12u));
-            assert(held == repeated);
-            assert(held.x >= 0.f && held.x < 1.f);
-            assert(held.y >= 0.f && held.y < 1.f);
-            assert(held != advanced);
+        assert(!settings.noise.specifyNoise);
+        assert(ResolveNoiseSettings(global, settings.noise) == global);
 
-            settings.animateSamples = false;
-            const Float2 frozenA = Sample2D(
-                noise,
-                pattern,
-                17u,
-                29u,
-                3u,
-                ResolvePhase(settings, 11u));
-            const Float2 frozenB = Sample2D(
-                noise,
-                pattern,
-                17u,
-                29u,
-                3u,
-                ResolvePhase(settings, 999u));
-            const Float2 phaseZero = Sample2D(
-                noise, pattern, 17u, 29u, 3u, 0u);
-            assert(frozenA == frozenB);
-            assert(frozenA == phaseZero);
-            settings.animateSamples = true;
-        }
+        settings.noise.custom.pattern = NoisePattern::SpatialBlue;
+        settings.noise.custom.resolution = NoiseResolution::Size64;
+        settings.noise.custom.animate = true;
+        assert(ResolveNoiseSettings(global, settings.noise) == global);
 
-        const Float2 white = Sample2D(
-            noise,
-            RayTracedSkyVisibilityNoisePattern::PermutatedWhiteNoise,
-            17u,
-            29u,
-            3u,
-            11u);
-        const Float2 blue = Sample2D(
-            noise,
-            RayTracedSkyVisibilityNoisePattern::VoidClusterBlueNoise,
-            17u,
-            29u,
-            3u,
-            11u);
-        assert(white != blue);
+        settings.noise.specifyNoise = true;
+        assert(ResolveNoiseSettings(global, settings.noise) ==
+            settings.noise.custom);
+        assert(ResolveNoiseSettings(global, settings.noise) != global);
+        assert(IsRayTracedSkyVisibilityConfigurationSupported(settings));
+
+        settings.noise.custom.resolution =
+            static_cast<NoiseResolution>(1024u);
+        assert(!IsRayTracedSkyVisibilityConfigurationSupported(settings));
     }
 
     void TestCosineWeightedHemisphereMapping()
@@ -503,7 +371,7 @@ int main()
 {
     TestDefaultsAndExactSampleDomain();
     TestConfigurationAndBiasValidation();
-    TestDeterministicNoiseAndAnimationPolicy();
+    TestNoiseInheritanceAndValidation();
     TestCosineWeightedHemisphereMapping();
     TestBinaryMeanAndR8UnormStorage();
     return 0;

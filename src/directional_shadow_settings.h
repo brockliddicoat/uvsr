@@ -1,5 +1,6 @@
 #pragma once
 
+#include "noise_settings.h"
 #include "ray_visibility_max_distance.h"
 
 #include <array>
@@ -9,18 +10,14 @@
 
 namespace uvsr
 {
-    enum class HeitzRatioEstimatorNoisePattern : uint32_t
-    {
-        PermutatedWhiteNoise,
-        VoidClusterBlueNoise,
-        Count
-    };
-
     inline constexpr int32_t HeitzRatioEstimatorMinimumSampleRateLog2 = 0;
     inline constexpr int32_t HeitzRatioEstimatorMaximumSampleRateLog2 = 6;
     inline constexpr uint32_t HeitzRatioEstimatorMaximumSamplesPerPixel =
         1u << uint32_t(HeitzRatioEstimatorMaximumSampleRateLog2);
     inline constexpr float HeitzRatioEstimatorMaximumRayBias = 0.1f;
+    inline constexpr float HeitzShadowHitDistanceInvalid = 0.f;
+    inline constexpr float HeitzShadowHitDistanceMaximum = 65472.f;
+    inline constexpr float HeitzShadowHitDistanceMiss = 65504.f;
     inline constexpr std::array<std::string_view, 7>
         HeitzRatioEstimatorSampleRateLabels = {
             "1", "2", "4", "8", "16", "32", "64"
@@ -30,13 +27,13 @@ namespace uvsr
     {
         bool enabled = false;
         bool hardShadows = false;
+        bool useRatioEstimator = true;
+        bool outputHitDistance = false;
         int32_t sampleRateLog2 = 1;
         float rayBias = 0.002f;
         RayVisibilityMaxDistance maxDistance =
             RayVisibilityMaxDistance::Maximum;
-        HeitzRatioEstimatorNoisePattern noisePattern =
-            HeitzRatioEstimatorNoisePattern::VoidClusterBlueNoise;
-        bool animateSamples = true;
+        NoiseOverrideSettings noise;
     };
 
     struct DirectionalShadowSettings
@@ -53,20 +50,21 @@ namespace uvsr
                 HeitzRatioEstimatorMaximumSampleRateLog2;
     }
 
-    [[nodiscard]] inline constexpr bool
-        IsHeitzRatioEstimatorNoisePatternSupported(
-            HeitzRatioEstimatorNoisePattern noisePattern)
-    {
-        return noisePattern >=
-                HeitzRatioEstimatorNoisePattern::PermutatedWhiteNoise &&
-            noisePattern < HeitzRatioEstimatorNoisePattern::Count;
-    }
-
     [[nodiscard]] inline constexpr uint32_t
         ResolveHeitzRatioEstimatorSampleCount(int32_t sampleRateLog2)
     {
         return IsHeitzRatioEstimatorSampleRateSupported(sampleRateLog2)
             ? 1u << uint32_t(sampleRateLog2)
+            : 1u;
+    }
+
+    [[nodiscard]] inline constexpr uint32_t ResolveHeitzShadowTraceCount(
+        const HeitzRatioEstimatorShadowSettings& settings,
+        bool stochastic)
+    {
+        return stochastic && settings.useRatioEstimator
+            ? ResolveHeitzRatioEstimatorSampleCount(
+                settings.sampleRateLog2)
             : 1u;
     }
 
@@ -86,8 +84,7 @@ namespace uvsr
     {
         return IsHeitzRatioEstimatorSampleRateSupported(
                 settings.sampleRateLog2) &&
-            IsHeitzRatioEstimatorNoisePatternSupported(
-                settings.noisePattern) &&
+            IsValidNoiseSettings(settings.noise.custom) &&
             IsRayVisibilityMaxDistanceSupported(settings.maxDistance) &&
             settings.rayBias >= 0.f &&
             settings.rayBias <= HeitzRatioEstimatorMaximumRayBias;

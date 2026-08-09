@@ -1,0 +1,127 @@
+{
+  "algorithm": "uvsr-spectral-stbn-v1",
+  "seed": 1431720786,
+  "source": "First-party clean-room spectral construction based on the published STBN spatial/temporal objective.",
+  "assets": [
+    {
+      "file": "spatial-white-64x64x1-r8.bin",
+      "pattern": "Spatial White",
+      "width": 64,
+      "height": 64,
+      "layers": 1,
+      "format": "R8_UNORM",
+      "bytes": 4096,
+      "sha256": "fe4cb771dcf6631e45d10e416794abc6cb263143eb9b66626651994aa5125de8"
+    },
+    {
+      "file": "spatial-blue-64x64x1-r8.bin",
+      "pattern": "Spatial Blue",
+      "width": 64,
+      "height": 64,
+      "layers": 1,
+      "format": "R8_UNORM",
+      "bytes": 4096,
+      "sha256": "88d47915ec8a00a1e0e806440e91ee2c20db7aa22794eee8016e9fda30013e46"
+    },
+    {
+      "file": "spatiotemporal-blue-64x64x64-r8.bin",
+      "pattern": "Spatiotemporal Blue",
+      "width": 64,
+      "height": 64,
+      "layers": 64,
+      "format": "R8_UNORM",
+      "bytes": 262144,
+      "sha256": "c637a502c36359aeb0193d718a00ec286b0fe1c8499fb173631fad58f7c6c7fc"
+    },
+    {
+      "file": "spatial-white-128x128x1-r8.bin",
+      "pattern": "Spatial White",
+      "width": 128,
+      "height": 128,
+      "layers": 1,
+      "format": "R8_UNORM",
+      "bytes": 16384,
+      "sha256": "753043935f1cb58d35e4cf651e11397a7b1e18fa99296f627d2597f20ca2cc22"
+    },
+    {
+      "file": "spatial-blue-128x128x1-r8.bin",
+      "pattern": "Spatial Blue",
+      "width": 128,
+      "height": 128,
+      "layers": 1,
+      "format": "R8_UNORM",
+      "bytes": 16384,
+      "sha256": "f0c18c9d5869eb6d5afabecf7a3969efa41be7378e0429d1ddd8747bbb4d8ff1"
+    },
+    {
+      "file": "spatiotemporal-blue-128x128x64-r8.bin",
+      "pattern": "Spatiotemporal Blue",
+      "width": 128,
+      "height": 128,
+      "layers": 64,
+      "format": "R8_UNORM",
+      "bytes": 1048576,
+      "sha256": "bed4f4bf7705885db4af2becf8409cf688042d6709cbd8092ce0b316a64b63dc"
+    },
+    {
+      "file": "spatial-white-256x256x1-r8.bin",
+      "pattern": "Spatial White",
+      "width": 256,
+      "height": 256,
+      "layers": 1,
+      "format": "R8_UNORM",
+      "bytes": 65536,
+      "sha256": "e7e03f79f879fed6dac81b0dd4735ffc0c46f8c76ef0d89b4eb9ea4058625932"
+    },
+    {
+      "file": "spatial-blue-256x256x1-r8.bin",
+      "pattern": "Spatial Blue",
+      "width": 256,
+      "height": 256,
+      "layers": 1,
+      "format": "R8_UNORM",
+      "bytes": 65536,
+      "sha256": "c7eb79c2217d79da5a670bea361ab07a04f450babf7ea043c18557690052c972"
+    },
+    {
+      "file": "spatiotemporal-blue-256x256x64-r8.bin",
+      "pattern": "Spatiotemporal Blue",
+      "width": 256,
+      "height": 256,
+      "layers": 64,
+      "format": "R8_UNORM",
+      "bytes": 4194304,
+      "sha256": "da89bc55d2b825ee6d27899a45f1678ed99637c1527e5228eea4d4896c3056ae"
+    },
+    {
+      "file": "spatial-white-512x512x1-r8.bin",
+      "pattern": "Spatial White",
+      "width": 512,
+      "height": 512,
+      "layers": 1,
+      "format": "R8_UNORM",
+      "bytes": 262144,
+      "sha256": "3672e6338bdf1ac366387f0db8d336361dac292007b2b14da0c3ae5fba260ab5"
+    },
+    {
+      "file": "spatial-blue-512x512x1-r8.bin",
+      "pattern": "Spatial Blue",
+      "width": 512,
+      "height": 512,
+      "layers": 1,
+      "format": "R8_UNORM",
+      "bytes": 262144,
+      "sha256": "5d2618fd124f1c73a56d73a7ad45418c08e4b6d032896fd2b1f11b029aa9c4fb"
+    },
+    {
+      "file": "spatiotemporal-blue-512x512x64-r8.bin",
+      "pattern": "Spatiotemporal Blue",
+      "width": 512,
+      "height": 512,
+      "layers": 64,
+      "format": "R8_UNORM",
+      "bytes": 16777216,
+      "sha256": "c4292f0e2d3d57d49334bdfe665b4aeff8ddf86ca101a6cb5364dbf2fb00a703"
+    }
+  ]
+}

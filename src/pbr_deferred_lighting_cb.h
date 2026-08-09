@@ -2,10 +2,11 @@
 #define UVSR_PBR_DEFERRED_LIGHTING_CB_H
 
 #include <donut/shaders/deferred_lighting_cb.h>
+#include "flashlight_shared.h"
 #include "sky_visibility_application.h"
 
-#define UVSR_DIRECTIONAL_VISIBILITY_SCALAR_R8 0u
-#define UVSR_DIRECTIONAL_VISIBILITY_RGB_RGBA16F 1u
+#define UVSR_DIRECT_VISIBILITY_SCALAR_R8 0u
+#define UVSR_DIRECT_VISIBILITY_RGB_RGBA16F 1u
 
 struct PbrDeferredLightingConstants
 {
@@ -16,8 +17,13 @@ struct PbrDeferredLightingConstants
     uint visibilityDebugView;
     uint skyVisibilityApplication;
 
-    int2 directionalVisibilityLightIndices;
-    uint2 directionalVisibilityEncodings;
+    int2 directVisibilityLightIndices;
+    uint2 directVisibilityEncodings;
+
+    int flashlightLightIndex;
+    uint3 flashlightPadding;
+
+    FlashlightBeamProfile flashlightBeamProfile;
 };
 
 #endif // UVSR_PBR_DEFERRED_LIGHTING_CB_H

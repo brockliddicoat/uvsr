@@ -22,7 +22,7 @@ struct HeitzRatioEstimatorShadowConstants
 
     uint reverseDepth;
     uint floatDepth;
-    uint padding0;
+    uint useRatioEstimator;
     uint padding1;
 };
 

@@ -20,6 +20,15 @@ namespace donut::engine
 
 namespace uvsr
 {
+    inline constexpr uint32_t
+        MaximumRayVisibilityGeometryMapOffset = 0x00ffffffu;
+
+    [[nodiscard]] inline constexpr bool
+        IsRayVisibilityGeometryMapOffsetSupported(uint64_t offset)
+    {
+        return offset <= MaximumRayVisibilityGeometryMapOffset;
+    }
+
     enum class WorldSpaceRepresentationState : uint32_t
     {
         Unsupported,
@@ -68,6 +77,11 @@ namespace uvsr
             return IsReady() ? m_Tlas.Get() : nullptr;
         }
 
+        [[nodiscard]] nvrhi::IBuffer* GetGeometryIndexMap() const
+        {
+            return IsReady() ? m_GeometryIndexMap.Get() : nullptr;
+        }
+
         [[nodiscard]] bool IsSupported() const
         {
             return m_Status.accelerationStructuresSupported &&
@@ -93,6 +107,7 @@ namespace uvsr
             nvrhi::rt::AccelStructDesc description;
             nvrhi::rt::AccelStructHandle accelerationStructure;
             uint64_t topologySignature = 0u;
+            uint32_t geometryMapOffset = 0u;
             uint32_t lastSynchronizedFrameIndex = 0u;
             bool dynamic = false;
             bool built = false;
@@ -122,6 +137,9 @@ namespace uvsr
         std::vector<std::shared_ptr<donut::engine::MeshInstance>> m_Instances;
         std::vector<SourceInstanceTopology> m_SourceInstanceTopology;
         std::vector<InstanceSnapshot> m_InstanceSnapshots;
+        std::vector<uint32_t> m_GeometryIndexMapUpload;
+        nvrhi::BufferHandle m_GeometryIndexMap;
+        bool m_GeometryIndexMapUploaded = false;
         nvrhi::rt::AccelStructHandle m_Tlas;
         size_t m_NextBlas = 0u;
         WorldSpaceRepresentationStatus m_Status;

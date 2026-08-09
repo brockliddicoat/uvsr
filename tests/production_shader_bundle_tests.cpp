@@ -41,6 +41,23 @@ namespace
         return count;
     }
 
+    size_t CountExactLines(
+        const std::string& text,
+        std::string_view expected)
+    {
+        std::istringstream lines(text);
+        std::string line;
+        size_t count = 0u;
+        while (std::getline(lines, line))
+        {
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+            if (line == expected)
+                ++count;
+        }
+        return count;
+    }
+
     uint64_t CountShaderPermutations(const std::string& config)
     {
         std::istringstream lines(config);
@@ -99,13 +116,17 @@ namespace
         };
         constexpr const char* appShaders[] = {
             "agx_tonemapping_ps",
+            "auto_exposure_histogram_cs",
+            "auto_exposure_resolve_cs",
             "display_output_ps",
             "fast_approximate_aa_ps",
             "backdrop_blur_ps",
+            "denoising_prepare_cs",
+            "denoising_resolve_cs",
             "heitz_ratio_estimator_shadows_cs_Generate",
+            "ray_traced_flashlight_shadows_cs_GenerateVisibility",
+            "ray_traced_flashlight_shadows_cs_GenerateVisibilityAndHitDistance",
             "ray_traced_sky_visibility_cs_Generate",
-            "screen_space_directional_shadows_cs",
-            "screen_space_directional_shadows_debug_ps",
             "cmaa2_ComputeDispatchArgsCS",
             "cmaa2_DeferredColorApply2x2CS",
             "cmaa2_EdgesColor2x2CS",
@@ -187,7 +208,7 @@ int main(int argc, char** argv)
     constexpr const char* runtimeParityBundle =
         "screen_space_visibility_cs.hlsl -T cs -E main -D VISIBILITY_ESTIMATOR=1 -D ENABLE_AO=1 -D ENABLE_GI=1 -D RUNTIME_SAMPLE_PARITY={1,2}";
     passed &= Check(
-        CountOccurrences(config, runtimeParityBundle) == 1u,
+        CountExactLines(config, runtimeParityBundle) == 1u,
         "the runtime config must package compact even and odd visibility loops");
     passed &= Check(
         visibilitySource.find("#ifndef RUNTIME_SAMPLE_PARITY") !=
@@ -215,7 +236,9 @@ int main(int argc, char** argv)
         "assignment for trusted-odd counts");
     constexpr const char* forbiddenShaders[] = {
         "smaa",
-        "SMAA"
+        "SMAA",
+        "screen_space_directional_shadows",
+        "screen_space_directional_shadows_debug"
     };
     for (const char* shader : forbiddenShaders)
     {
@@ -265,8 +288,15 @@ int main(int argc, char** argv)
             std::string("retired shader axis must remain absent: ") + axis);
     }
     passed &= Check(
-        CountShaderPermutations(config) == 260u,
-        "the production shader catalog must contain exactly 260 permutations");
+        CountShaderPermutations(config) == 306u,
+        "the production shader catalog must contain exactly 306 permutations");
+    passed &= Check(
+        CountExactLines(
+            config,
+            "agx_tonemapping_ps.hlsl -T ps -E main "
+                "-D UVSR_UNITY_EXPOSURE={0,1}") == 1u &&
+            CountOccurrences(config, "agx_tonemapping_ps.hlsl") == 1u,
+        "production must package exposure-buffer and unity-exposure AgX paths");
     passed &= Check(
         CountOccurrences(
             config,
@@ -274,16 +304,91 @@ int main(int argc, char** argv)
                 1u &&
             CountOccurrences(
                 config,
-                "heitz_ratio_estimator_shadows_cs.hlsl") == 1u,
-        "production must package only the direct Heitz Generate dispatch");
+                "heitz_ratio_estimator_shadows_cs.hlsl") == 1u &&
+            config.find(
+                "heitz_ratio_estimator_shadows_cs.hlsl -T cs -E Generate "
+                "-D OUTPUT_HIT_DISTANCE={0,1}") != std::string::npos,
+        "production must package Heitz visibility with optional hit distance");
     passed &= Check(
         CountOccurrences(
             config,
             "ray_traced_sky_visibility_cs.hlsl -T cs -E Generate") ==
                 1u &&
+            config.find(
+                "ray_traced_sky_visibility_cs.hlsl -T cs -E Generate "
+                "-D OUTPUT_HIT_DISTANCE={0,1}") != std::string::npos &&
             manifest.find("ray_traced_sky_visibility_cs_Generate") !=
                 std::string::npos,
-        "production must package one current-frame sky-visibility dispatch");
+        "production must package sky visibility with optional hit distance");
+    passed &= Check(
+        CountOccurrences(
+            config,
+            "ray_traced_flashlight_shadows_cs.hlsl -T cs -E ") == 2u &&
+            CountOccurrences(
+                config,
+                "ray_traced_flashlight_shadows_cs.hlsl -T cs -E "
+                "GenerateVisibilityAndHitDistance") == 1u &&
+            manifest.find(
+                "ray_traced_flashlight_shadows_cs_GenerateVisibility") !=
+                std::string::npos &&
+            manifest.find(
+                "ray_traced_flashlight_shadows_cs_"
+                "GenerateVisibilityAndHitDistance") != std::string::npos,
+        "production must package flashlight visibility with optional hit "
+        "distance");
+    passed &= Check(
+        config.find(
+            "denoising_prepare_cs.hlsl -T cs -E main "
+            "-D DENOISING_SIGNAL_CLASS={0,1,2}") != std::string::npos &&
+            config.find(
+                "denoising_resolve_cs.hlsl -T cs -E main "
+                "-D DENOISING_SIGNAL_CLASS={0,1,2}") != std::string::npos &&
+            manifest.find("denoising_prepare_cs") != std::string::npos &&
+            manifest.find("denoising_resolve_cs") != std::string::npos,
+        "production must package all denoising prepare and resolve signal "
+        "classes");
+
+    constexpr const char* requiredVisibilityHitBundles[] = {
+        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=1 -D ENABLE_GI=0 "
+            "-D OUTPUT_AO_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=0 -D ENABLE_GI=1 "
+            "-D OUTPUT_GI_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR={0,2} -D ENABLE_AO=1 -D ENABLE_GI=1 "
+            "-D OUTPUT_AO_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR={0,2} -D ENABLE_AO=1 -D ENABLE_GI=1 "
+            "-D OUTPUT_GI_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR={0,2} -D ENABLE_AO=1 -D ENABLE_GI=1 "
+            "-D OUTPUT_AO_HIT_DISTANCE=1 -D OUTPUT_GI_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR=1 -D ENABLE_AO=1 -D ENABLE_GI=1 "
+            "-D RUNTIME_SAMPLE_PARITY={1,2} -D OUTPUT_AO_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR=1 -D ENABLE_AO=1 -D ENABLE_GI=1 "
+            "-D RUNTIME_SAMPLE_PARITY={1,2} -D OUTPUT_GI_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR=1 -D ENABLE_AO=1 -D ENABLE_GI=1 "
+            "-D RUNTIME_SAMPLE_PARITY={1,2} -D OUTPUT_AO_HIT_DISTANCE=1 "
+            "-D OUTPUT_GI_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=1 -D ENABLE_GI=0 "
+            "-D OUTPUT_PACKED_EDGES=1 -D OUTPUT_AO_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=0 -D ENABLE_GI=1 "
+            "-D OUTPUT_PACKED_EDGES=1 -D OUTPUT_GI_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=1 -D ENABLE_GI=1 "
+            "-D OUTPUT_PACKED_EDGES=1 -D OUTPUT_AO_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=1 -D ENABLE_GI=1 "
+            "-D OUTPUT_PACKED_EDGES=1 -D OUTPUT_GI_HIT_DISTANCE=1",
+        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=1 -D ENABLE_GI=1 "
+            "-D OUTPUT_PACKED_EDGES=1 -D OUTPUT_AO_HIT_DISTANCE=1 "
+            "-D OUTPUT_GI_HIT_DISTANCE=1"
+    };
+    for (const char* bundle : requiredVisibilityHitBundles)
+    {
+        passed &= Check(
+            config.find(bundle) != std::string::npos,
+            std::string("missing visibility hit-distance permutation: ") +
+                bundle);
+    }
+    passed &= Check(
+        CountOccurrences(config, "OUTPUT_AO_HIT_DISTANCE=1") == 8u &&
+            CountOccurrences(config, "OUTPUT_GI_HIT_DISTANCE=1") == 8u,
+        "AO and GI hit distance outputs must cover every reachable topology");
     passed &= Check(
         CountOccurrences(
             config,
@@ -340,8 +445,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 42u,
-        "production shader contract must enumerate exactly 42 files");
+        expectedFiles.size() == 46u,
+        "production shader contract must enumerate exactly 46 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

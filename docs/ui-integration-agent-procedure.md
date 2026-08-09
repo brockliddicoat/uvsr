@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-08-05.6`.
+UI reference version: `2026-08-09.2`.
 
 ## Purpose
 
@@ -20,14 +20,16 @@ The top-level drawers are:
 
 1. General
 2. Representation
-3. Diffuse
-4. Buffers
-5. Statistics
-6. Aliasing
-7. Debug
-8. Sky
-9. Lights
-10. Shadows
+3. Noise
+4. Diffuse
+5. Denoising
+6. Buffers
+7. Statistics
+8. Aliasing
+9. Debug
+10. Sky
+11. Lights
+12. Shadows
 
 The order is product behavior. Add a top-level drawer only when the feature has
 a distinct user goal and enough retained controls to justify it. Effect-specific
@@ -38,6 +40,8 @@ diagnostics belong in Debug, grouped under the effect they explain.
 - Use Title Case for visible drawer, section, and control headings.
 - Use the displayed product name **UVSR** and lowercase executable slug `uvsr`.
 - Prefer the shortest label that identifies the user's decision.
+- Prefer spaces to hyphens for ordinary two word copy. Preserve fixed product
+  names, code, command paths, and terms whose punctuation carries meaning.
 - Describe effect, units, range, and important side effects in a concise hover
   tooltip for every new or changed UVSR-owned control.
 - Keep dependent controls adjacent to their owner. Put uncommon implementation
@@ -84,6 +88,25 @@ Medium, High, or Ultra recipe and appends **(Custom)** when an owned value
 differs. Its adjacent circular reset restores the complete High recipe, while
 each owned control can return to its originating recipe value.
 
+Diffuse defaults to 16 samples through the High recipe and Illumination
+Intensity defaults to 1. Distribution and Occlusion Strength both expose their
+complete maximum of 8. Global Noise defaults to Spatiotemporal Blue, 128x128,
+with Animate Samples on. The default primary
+sun uses irradiance 8 and a 0.2 degree full angular size. Ray Traced Sky
+Visibility enables both Effect Diffuse and Effect Specular by default.
+Flashlight Beam Size defaults to 16 degrees, Beam Roundness to 0.8, and Angular
+Size to 2.86 degrees.
+
+Auto Exposure defaults off. Maximum Brightening defaults to 5 EV and Maximum
+Darkening defaults to 2 EV; both expose 0 through 16 EV. Exposure Compensation defaults to
+0 EV and exposes -18 through +8 EV. Adjustment Period defaults to 0.20 seconds
+and exposes 0.05 through 5.00 seconds.
+
+Denoising signal defaults are Method None, Quality Balanced, Resolution Half,
+and History 16. The chosen method never changes a producer's Output Hit
+Distance or Ratio Estimator setting. Those independent switches default off and
+on respectively.
+
 ## Control Composition
 
 Use the established UVSR helpers for drawer bodies, deferred combos, animated
@@ -91,31 +114,88 @@ tree and toggle regions, reset icons, tooltips, and footer actions. Every
 dropdown uses ImGui's native integrated-arrow trigger presentation; deferred
 and immediate dropdowns differ only in when their mutation is applied. Do not
 paint a second background or custom arrow over the native trigger. Diffuse,
-Aliasing, Debug, and Advanced groups retain animated disclosure. Every retained
+Denoising, Aliasing, Debug, Sky Visibility, and Shadows effect groups retain
+independent animated disclosure even while enabled. Every retained
 setting has a concise hover explanation, and dropdown width must leave its
 label and reset lane visible. Maintain balanced ImGui ID, style, disabled, tree,
 table, child, and popup lifetimes on every branch.
 
-Debug and its World, Visibility, Physically Based Lighting, and Screen-Space
-Shadows groups start expanded, then preserve user-owned disclosure state. Their
+Debug and its World, Visibility, and Physically Based Lighting groups start
+expanded, then preserve user owned disclosure state. Their
 ordinary rendering choices, including the initial World material choice, are
 labeled **Default**. Visibility Reconstruction starts collapsed for a full-
 resolution trace and expanded for a reduced-resolution trace; its stored manual
 state takes precedence after interaction.
 
-Representation's Bounding Volume Hierarchy, Bottom-Level Acceleration
+Representation begins with **Allow Ray Traversal**, the single master permission
+for every ray traced effect. Switching it off preserves every effect's stored
+settings. Bounding Volume Hierarchy, Bottom-Level Acceleration
 Structures, and Top-Level Acceleration Structure groups start expanded. Their
 dropdowns use deferred mutations because build policy can invalidate shared
 renderer resources. The read-only status names unsupported, inactive, BLAS
 construction, TLAS construction, ready, or failed state.
 
-Shadows exposes independent Screen-Space Directional Shadows and
-Ratio-Estimator Ray-Traced Shadows groups. Each group owns an **Enabled**
-control and preserves its stored values while inactive. Both producers may be
-off or active together; deferred PBR combines both-on visibility with a
-componentwise minimum. The ray-traced group directly explains missing
-directional-light, DXR 1.1, MSAA, hierarchy-readiness, zero-angular-size, and
-temporal-convergence conditions.
+Diffuse exposes independent **Output Hit Distance** controls inside Occlusion
+and Illumination. They preserve profile origin and do not become active merely
+because a denoising method is selected.
+
+Noise owns Pattern, Resolution, and Animate Samples for every stochastic effect.
+Pattern choices are **Spatial White**, **Spatial Blue**, and **Spatiotemporal
+Blue**; Resolution choices are **64x64**, **128x128**, **256x256**, and
+**512x512**. Diffuse visibility, Ray Traced Shadows, Ray Traced Sky Visibility,
+and finite flashlight shadows inherit these values. The first three retain
+their inherited values until their **Specify Noise** control is on.
+The hidden override values remain stored but inert. Its exact tooltip begins
+`Use custom noise sampling for this effect only` and states that no other
+effect's sampling changes. AO and GI share one Diffuse override because they
+share one dispatch.
+
+Denoising contains AO, GI, Shadows, and Sky Visibility groups. AO offers None
+or ReBLUR; GI and Sky Visibility offer None, ReBLUR, or ReLAX; Shadows offers
+None or SIGMA. An active method exposes Quality, Resolution, and a default
+closed Advanced group for History, Disocclusion, and Anti Lag. Missing producer
+data and an unavailable optional NRD build receive direct status copy while the
+raw signal remains active.
+
+Sky's Ray Traced Sky Visibility group exposes **Ratio Estimator** and **Output
+Hit Distance** independently. Ratio Estimator off is the one ray route accepted
+by ReBLUR or ReLAX. **Effect Diffuse** and **Effect Specular** default on. The
+group remains independently collapsible while enabled.
+
+Sky's **Auto Exposure** is a separate animated subsection with the DefaultOpen
+behavior used by Aliasing technique sections. It defaults disabled and submits
+only **Enable** while off. Enabling it reveals **Maximum Brightening** and
+**Maximum Darkening**, each spanning 0 through 16 EV with 5 EV and 2 EV defaults,
+respectively;
+**Exposure Compensation**, spanning -18 through +8 EV with a 0 EV default; and
+**Adjustment Period**, spanning 0.05 through 5.00 seconds with a 0.20 second
+default. The directional limits bound the automatic target first, then Exposure
+Compensation biases the bounded result. These controls change display mapping
+without changing physical lighting or effect history.
+
+Lights treats the flashlight as one analytical spot light. Horizontal and
+Vertical Offset cover minus 40 through plus 40 centimeters. Output Hit Distance
+belongs beside Cast Shadows. Beam Size and Beam Roundness retain 16 degrees and
+0.8 defaults. Angular Size spans 0 through 20 degrees and controls the finite
+spherical emitter used by direct-light energy and shadow rays. Zero keeps the
+exact point-light and hard center-ray branches. Positive size uses four
+noise-shifted finite-emitter rays. The offset emitter has its own collision
+sphere. Predictive probes along the mount and forward from the hard-safe emitter
+begin a cubic retraction fade at least 0.75 metres before a nearby wall. The
+result uniformly retracts the complete mount offset toward the camera rather
+than sliding its lateral offset along the wall. The hard collision limit remains
+immediate, the offset restores smoothly after clearance returns, a final safety
+sweep protects continuous camera movement, and aim is recomputed from the safe
+light position.
+
+Shadows exposes one **Ray Traced Shadows** group for the primary sun. It owns
+**Enabled**, **Ratio Estimator**, and **Output Hit Distance**, and preserves all
+stored values while inactive. Ratio Estimator off is the one ray route accepted
+by SIGMA. The group directly explains a missing directional light, DXR 1.1,
+MSAA, Representation readiness, zero angular size, producer data, and optional
+backend conditions. **Specify Noise** reveals its private Pattern, Resolution,
+and Animate Samples settings. Screen space directional shadow controls and debug
+state are absent from main.
 
 Temporal Reconstructive, Fast Approximate, Conservative Morphological, and
 Multisample Adaptive each show a Low, Medium, High, or Ultra **Quality** row
@@ -173,8 +253,14 @@ Visibility, Directional Shadows, Temporal Reconstructive, Fast Approximate,
 Conservative Morphological, and Multisample Adaptive use the same readable table language for their
 retained breakdowns. Completed query availability gates every timing. Dormant,
 unsupported, or newly enabled work displays `--` or a direct status instead of
-a fabricated zero. Never repopulate this panel with retired planners,
-benchmarks, shadow techniques, or shader taxonomies.
+a fabricated zero. Directional Shadows uses **Shadow Ray Dispatch**, **Shadow
+Denoise**, **Sky Visibility Ray Dispatch**, and **Sky Visibility Denoise**.
+Visibility keeps **Ambient Occlusion Denoise** and **Diffuse Illumination
+Denoise** separate from its trace. Multisample base lighting used only to feed
+Visibility appears as **Visibility Lighting Preparation**, separate from both
+**Direct Lighting** and **Screen Space Visibility**. Complete Renderer also
+exposes **Auto Exposure**. Never repopulate this panel with retired planners, benchmarks,
+shadow techniques, or shader taxonomies.
 
 ## Scrolling and Input
 
@@ -188,17 +274,19 @@ input shows a blue `Success` or saturated-crimson `Error` message until editing
 resumes. Never add a floating result window above the command row. Up and Down continue
 to recall command history. A long or multiline result may expose a trailing
 details button; only an explicit click may open its bounded, scrollable,
-selectable read-only popup. The catalog contains 141 entries: 137 values and
-four actions. A `list` result uses `/` between each row's supported verbs and
-value domain.
+selectable read only popup. The catalog mirrors all visible lighting,
+representation, producer, and denoising choices. A `list` result uses `/`
+between each row's supported verbs and value domain.
 
 Escape or the grave-accent/tilde key toggles Settings unless an active edit or
 popup owns it. The physical grave-accent key works with or without Shift so a
 US-layout `~` chord remains valid. `/` toggles the command interface when text
 input does not already own the key. M, F, V, and Z shortcuts must respect active
-text/popup ownership. Q moves the camera up and E moves it down; Space and Shift
-must not retain vertical-motion behavior, and Shift must not restore Donut's
-sprint path.
+text/popup ownership. V continues leveling camera roll under a stationary held
+trackpad touch; a new camera-look delta or another real camera input cancels
+that leveling. Q moves the camera up and E moves it down; Space and Shift must
+not retain vertical-motion behavior, and Shift must not restore Donut's sprint
+path.
 
 ## Renderer Boundary
 
@@ -210,28 +298,59 @@ usable.
 Controls must remain decoupled unless their actual resource contract requires a
 dependency. In particular:
 
-- Diffuse changes only Screen-Space Visibility-owned state and resources.
+- Diffuse changes only Screen Space Visibility owned state and resources.
+- Denoising reads explicit raw signals and physical hit distance outputs. It
+  never enables a producer, enables hit output, disables Ratio Estimator, or
+  changes a sampling recipe. Each signal falls back to raw output when its
+  selected optional backend route is unavailable.
 - Adaptive Sync changes only process presentation state. VSync remains
   disabled. Off suppresses the windowed DXGI Present allow-tearing flag; Vendor
   Agnostic and Nvidia Exclusive request the same tearing-compatible path, with
   the latter offered only on NVIDIA adapters. Windows, the driver, and the
   display determine actual variable-refresh operation, which UVSR cannot enable
   or confirm directly.
-- Representation owns shared BLAS/TLAS lifetime and build policy. A consumer
+- Representation owns shared BLAS/TLAS lifetime and build policy. **Allow Ray
+  Traversal** gates every ray query consumer without clearing its settings. A consumer
   may read only a coherent ready TLAS and must release its bindings before
-  hierarchy invalidation or reset.
+  hierarchy invalidation or reset. TLAS-only invalidation retains the
+  BLAS-coupled material geometry map; a new BLAS generation recreates and
+  uploads it.
+- Opaque and alpha-tested triangles are eligible for binary ray visibility.
+  Every ray-query consumer uses the shared material candidate helper, which
+  evaluates base-color alpha and cutoff before committing alpha-tested hits.
+  Blended and transmissive domains remain outside this hierarchy.
+- Global Noise changes only inheriting consumers. A custom override changes only
+  its owning effect. Either change resets the affected sample clock and required
+  downstream image history without resetting another effect's phase.
+- Auto Exposure meters the rendered HDR image and changes only the exposure
+  multiplier consumed by AgX. It never edits environment exposure, light
+  intensity, AO strength, GI intensity, or their histories. Maximum Brightening
+  and Maximum Darkening clamp the automatic EV target independently; Exposure
+  Compensation is applied afterward. Adjustment Period is an EV-space
+  half-life. When Auto Exposure is off, the renderer selects the exact
+  established texture-only, buffer-free AgX path; it binds no automatic
+  exposure buffer and cannot change color. The enabled route changes only the
+  scene-linear exposure multiplier before the same AgX clamps and output
+  handling.
 - TAA, Fast Approximate AA, CMAA2, and MSAA are independent states with
   deterministic pass order.
-- World appearance, Visibility views, Physically Based Lighting filters, and
-  shadow isolation are separate Debug states. A Physically Based Lighting
+- World appearance, Visibility views, and Physically Based Lighting filters are
+  separate Debug states. A Physically Based Lighting
   filter preserves Visibility execution but suppresses its ordinary composite;
   an explicit Visibility view wins. The retired Edge Overlay must not return as
   hidden shadow state.
-- Directional-shadow producers are independent. Both require a primary
-  directional light; Ratio Estimator additionally requires DXR 1.1, a ready
-  Representation hierarchy, and single-sample deferred rendering. Both-on
-  composition uses the componentwise minimum. Neither producer enables
-  unrelated lighting or anti-aliasing features.
+- Ray Traced Shadows requires a primary directional light, DXR 1.1, a ready
+  Representation hierarchy, and single sample deferred rendering. Ratio
+  Estimator and Output Hit Distance remain independent. Screen space
+  directional shadows are quarantined with the CSM and SVSM experiment rather
+  than compiled into main.
+- The flashlight remains one analytical spot light. Its ray traced visibility is
+  matched to that exact light, and its SIGMA history is independent from the
+  sun's history. A positive emitter radius uses four shared-noise rays, while a
+  dedicated sphere resolves penetration in the same static collision hierarchy
+  used by the camera. Near contact, the complete mount vector retracts uniformly
+  toward the camera, restores smoothly with available clearance, and receives a
+  final continuous-motion sweep before the beam aim is recomputed.
 
 Changing renderer topology must invalidate only the affected passes/history.
 Do not force a scene reload when a narrower pass or render-target refresh is
@@ -243,6 +362,16 @@ Loading keeps presenting frames while staged scene and renderer work proceeds.
 The UI must never expose a partially prepared renderer state as interactive.
 Errors name the unavailable feature and the missing condition in user language.
 Do not expose internal planner, factory-profile, or permutation terminology.
+The second loading line uses `phase: x/average`. The numerator advances every
+20 milliseconds independently of loader progress. The denominator
+is the completed-load average for the selected scene, then the all-scene average,
+or `--` when no history exists. This is elapsed-time context, not fabricated
+completion percentage. Only successful loads update the versioned per-user
+history. A failed asynchronous import must leave busy state, retain a safe
+splash presentation, and expose **Retry Scene Load** for the current selection.
+Importer exceptions follow that same retryable path. Closing the viewer waits
+for its worker before renderer-owned scene resources are destroyed, and a failed
+attempt discards deferred texture finalization before retrying.
 
 ## Pixel Zoom and Material Inspector
 
@@ -275,17 +404,38 @@ Use the exact candidate executable and a bundled scene. Exercise:
 - opening, closing, scrolling, and resetting Settings in Amp and OG;
 - toggling Settings with Escape, grave accent, and shifted tilde while
   preserving text-input ownership;
+- leveling camera roll with V while a stationary trackpad touch remains held,
+  then confirming a real camera-look delta cancels the leveling motion;
 - Q/E vertical camera motion with Space/Shift confirmed inert;
 - all three Adaptive Sync choices, reset behavior, and capability/vendor
   unavailable states;
 - the Diffuse, Occlusion, Illumination, and three estimator labels in both
   skins;
+- the Diffuse sample default, Distribution and Occlusion endpoints, and both
+  Output Hit Distance switches;
+- all global Noise patterns and resolutions, Animate Samples, inheritance, each
+  Specify Noise override, centered clipping, and override isolation;
+- all four Denoising groups, supported method lists, stored controls, missing
+  producer data, and optional backend unavailable state;
 - every changed control at both endpoints and its unavailable state;
-- Representation rebuild/refit transitions and staged status;
-- all four Screen Space and Ratio Estimator enable combinations, including the
-  Ratio Estimator's MSAA unavailable state;
+- Representation rebuild/refit transitions, staged status, and **Allow Ray
+  Traversal** with sky, sun, and flashlight effects selected;
+- both sun Ratio Estimator states, both Output Hit Distance states, and the
+  MSAA unavailable state;
+- flashlight ray traced shadows, horizontal and vertical offset endpoints,
+  beam and Angular Size defaults/endpoints, increasing penumbra width, early
+  near-wall onset, smooth uniform mount retraction, centered contact beam,
+  smooth offset restoration, final-sweep collision safety, and independent
+  SIGMA history;
+- alpha-tested foliage silhouettes under sun, sky, and flashlight ray queries;
+- Auto Exposure off with only Enable visible and exact color parity with the
+  established manual AgX path; then bright, dark, neutral, and saturated views
+  while enabled, both Maximum Brightening and Maximum Darkening endpoints, both
+  Exposure Compensation endpoints, both Adjustment Period endpoints, and
+  symmetric bright/dark settling;
 - affected dropdowns while their dependent layout is open and clipped;
-- scene loading and command completion;
+- scene loading with the colon, 20 ms numerator, and historical average
+  denominator, plus command completion;
 - Debug composition rather than each debug state only in isolation;
 - window resize, pixel zoom, material inspection, and shortcut focus; and
 - the renderer result and resource transition caused by each changed control.
@@ -307,6 +457,33 @@ The UI handoff includes:
 
 ## Reference Revision History
 
+- `2026-08-09.3`: Replaced the flashlight's contact-only mount correction with
+  an early cubic proximity fade using mount-direction and hard-safe forward
+  probes while retaining immediate physical collision limits.
+- `2026-08-09.2`: Added independent automatic brightening and darkening limits,
+  moved Auto Exposure into its own default-open disabled-first subsection,
+  restored the exact buffer-free manual AgX presentation while Auto Exposure is
+  off, kept V roll leveling active under stationary trackpad contact, and made
+  near-wall flashlight collision uniformly retract and smoothly restore the
+  complete mount offset. The earlier global AgX clamp removal and post-outset
+  `pow(2.2)` change were reverted as too broad and are not current behavior.
+- `2026-08-09.1`: Made flashlight Angular Size trace four visible-emitter rays,
+  added an emitter-aware collision sphere and post-collision aim, changed AgX
+  clamp/output handling globally while adding EV-space exposure adaptation,
+  added Adjustment Period, removed loading and flashlight shortcut annotations,
+  and changed the default Sun Irradiance to 8. Revision `2026-08-09.2` reverts
+  the global AgX presentation change while retaining the scoped adaptation.
+- `2026-08-08.1`: Added the Noise drawer and per-effect Specify Noise
+  inheritance, centered precomputed Spatial White/Spatial Blue/Spatiotemporal
+  Blue assets and resolutions, alpha-tested ray-query visibility, independently
+  collapsible effect sections, analytical flashlight Angular Size, Sky Auto
+  Exposure and Brightness, separated ray/denoise statistics, Capture footer
+  label, unit diffuse illumination, and historical 20 ms loading ticks.
+- `2026-08-06.1`: Added the Denoising drawer and explicit producer data
+  contract; added Allow Ray Traversal, raw sky and sun routes, ray traced
+  flashlight shadows and offsets, updated lighting and visibility defaults,
+  removed screen space directional shadows from main, and required loading
+  preparation progress to end in `x/100`.
 - `2026-08-05.6`: Replaced hyphen field separators with slash separators in
   Amp and OG performance summaries and command-interface `list` rows.
 - `2026-08-05.5`: Renamed the Visibility drawer and its Ambient Occlusion,
@@ -315,8 +492,8 @@ The UI handoff includes:
   vertical camera input to Q/E; and added grave-accent/tilde Settings access.
 - `2026-08-05.4`: Removed fractional shadow rates and both private ratio
   histories, made final-color TAA the only temporal accumulator, reduced both
-  Visibility and ray-traced noise choices to Permutated White Noise and Void
-  Cluster Blue Noise, moved Animate Samples directly above Samples Per Pixel,
+  Visibility and ray-traced noise choices to the two legacy spatial patterns,
+  moved Animate Samples directly above Samples Per Pixel,
   and replaced the rejected `TMin` policy with a low-default raster
   triangle-normal origin bias. This supersedes the shadow sampling and bias
   behavior recorded in revisions `2026-08-05.2` and `2026-08-05.3`.
@@ -335,7 +512,7 @@ The UI handoff includes:
 - `2026-08-04.1`: Added the Representation drawer and its BVH, BLAS, and TLAS
   policy/status contract; replaced the implicit screen-space shadow toggle with
   one directional-shadow Technique selector; and added the Ratio-Estimator
-  Ray-Traced Shadows group, command coverage, unavailable states, and
+  Ray Traced Shadows group, command coverage, unavailable states, and
   consumer-before-representation reset ordering.
 - `2026-08-03.8`: Moved Jitter Sequence into Temporal Advanced Algorithm,
   shortened its Halton/Sobol and Depth Validation labels, and unified every

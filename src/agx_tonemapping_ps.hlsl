@@ -5,6 +5,13 @@
 #pragma pack_matrix(row_major)
 
 Texture2D<float4> t_SceneColor : register(t0);
+#ifndef UVSR_UNITY_EXPOSURE
+#define UVSR_UNITY_EXPOSURE 0
+#endif
+
+#if !UVSR_UNITY_EXPOSURE
+Buffer<float> t_AutoExposure : register(t1);
+#endif
 
 static const float AGX_MIN_EV = -12.47393;
 static const float AGX_MAX_EV = 4.026069;
@@ -50,7 +57,13 @@ void main(
     // contrast tone scale -> output gamut. The final display-output pass owns
     // transfer encoding and dithering after any presentation AA.
     float4 sceneSample = t_SceneColor.Load(int3(position.xy, 0));
-    float3 color = saturate(AgxDefaultContrast(AgxLogEncode(sceneSample.rgb)));
+#if UVSR_UNITY_EXPOSURE
+    float3 color = saturate(AgxDefaultContrast(
+        AgxLogEncode(sceneSample.rgb)));
+#else
+    float3 color = saturate(AgxDefaultContrast(AgxLogEncode(
+        sceneSample.rgb * t_AutoExposure[1])));
+#endif
     color = saturate(mul(AGX_OUTSET, color));
     outputColor = float4(color, sceneSample.a);
 }

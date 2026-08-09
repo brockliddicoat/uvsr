@@ -62,8 +62,8 @@ Texture2D t_ResolvedBackground : register(t17);
 Texture2D t_VisibilityBaseLighting : register(t18);
 Texture2D t_VisibilityComposite : register(t19);
 #endif
-Texture2D<float4> t_ScreenSpaceDirectionalVisibility : register(t20);
-Texture2D<float4> t_RatioEstimatorDirectionalVisibility : register(t21);
+Texture2D<float4> t_FlashlightVisibility : register(t20);
+Texture2D<float4> t_SunVisibility : register(t21);
 Texture2D<float> t_SkyVisibility : register(t22);
 
 VK_IMAGE_FORMAT("rgba16f")
@@ -76,39 +76,39 @@ float GetRandom(float2 position)
     return g_Deferred.noisePattern[y][x];
 }
 
-float3 DecodeDirectionalLightVisibility(float4 encoded, uint encoding)
+float3 DecodeDirectLightVisibility(float4 encoded, uint encoding)
 {
     if (any(!isfinite(encoded)))
         return 1.0f;
-    if (encoding == UVSR_DIRECTIONAL_VISIBILITY_RGB_RGBA16F)
+    if (encoding == UVSR_DIRECT_VISIBILITY_RGB_RGBA16F)
     {
         return saturate(encoded.rgb);
     }
     return saturate(encoded.r).xxx;
 }
 
-float3 GetDirectionalLightVisibility(
+float3 GetDirectLightVisibility(
     uint lightIndex,
     int2 pixelPosition)
 {
     float3 visibility = 1.0f;
     if (int(lightIndex) ==
-        g_PbrDeferred.directionalVisibilityLightIndices.x)
+        g_PbrDeferred.directVisibilityLightIndices.x)
     {
         visibility = min(
             visibility,
-            DecodeDirectionalLightVisibility(
-                t_ScreenSpaceDirectionalVisibility[pixelPosition],
-                g_PbrDeferred.directionalVisibilityEncodings.x));
+            DecodeDirectLightVisibility(
+                t_FlashlightVisibility[pixelPosition],
+                g_PbrDeferred.directVisibilityEncodings.x));
     }
     if (int(lightIndex) ==
-        g_PbrDeferred.directionalVisibilityLightIndices.y)
+        g_PbrDeferred.directVisibilityLightIndices.y)
     {
         visibility = min(
             visibility,
-            DecodeDirectionalLightVisibility(
-                t_RatioEstimatorDirectionalVisibility[pixelPosition],
-                g_PbrDeferred.directionalVisibilityEncodings.y));
+            DecodeDirectLightVisibility(
+                t_SunVisibility[pixelPosition],
+                g_PbrDeferred.directVisibilityEncodings.y));
     }
     return visibility;
 }
@@ -411,17 +411,19 @@ bool ShadeDeferredSample(
         {
             LightConstants light =
                 g_Deferred.lights[lightIndex];
-            float3 directionalModulation =
-                GetDirectionalLightVisibility(
+            float3 directModulation =
+                GetDirectLightVisibility(
                 lightIndex,
                 pixelPosition);
-            if (!any(directionalModulation > 0.0f))
+            if (!any(directModulation > 0.0f))
                 continue;
 
             PbrLightSample lightSample = SamplePbrLight(
                 light,
                 surfaceWorldPosition,
-                1.0f);
+                1.0f,
+                int(lightIndex) == g_PbrDeferred.flashlightLightIndex,
+                g_PbrDeferred.flashlightBeamProfile);
             if (!HasPositiveFinitePbrSignal(
                     lightSample.incidentRadiance,
                     1.0f))
@@ -444,8 +446,8 @@ bool ShadeDeferredSample(
                     preparedMaterial,
                     preparedSurface,
                     lightSample);
-            directDiffuse += direct.diffuse * directionalModulation;
-            directSpecular += direct.specular * directionalModulation;
+            directDiffuse += direct.diffuse * directModulation;
+            directSpecular += direct.specular * directModulation;
         }
     }
 

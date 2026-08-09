@@ -122,6 +122,10 @@ int main(int argc, char** argv)
         root / "src/pbr_gbuffer_ps.hlsl"));
     const std::string shaderConfig = Compact(ReadFile(
         root / "src/shaders.cfg"));
+    const std::string materialVisibility = Compact(ReadFile(
+        root / "src/ray_traced_material_visibility.hlsli"));
+    const std::string materialVisibilityHeader = Compact(ReadFile(
+        root / "src/ray_traced_material_visibility.h"));
 
     RequireOrdered(
         shader,
@@ -140,11 +144,62 @@ int main(int argc, char** argv)
             "u_Output[pixelPosition]=float4(modulation,1.0f);"
         },
         "matched current-frame accumulation before guarded division");
+    RequireAbsent(
+        shader,
+        "RAY_FLAG_FORCE_OPAQUE",
+        "alpha-tested triangle traversal");
+    RequireOrdered(
+        shader,
+        {
+            "#ifOUTPUT_HIT_DISTANCERayQuery<"
+                "RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES>query;",
+            "#elseRayQuery<"
+                "RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH|"
+                "RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES>query;",
+            "while(query.Proceed()){"
+                "UVSR_COMMIT_COVERED_RAY_QUERY_CANDIDATE(query)}",
+            "query.CommittedRayT()"
+        },
+        "the hit permutation must retain the closest covered blocker while the raw path keeps ACCEPT_FIRST");
     RequireContains(
         shader,
-        "RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH|"
-            "RAY_FLAG_FORCE_OPAQUE|RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES",
-        "conservative first-hit inline shadow query");
+        "#include\"ray_traced_material_visibility.hlsli\"",
+        "shared alpha-tested material traversal helper");
+    RequireOrdered(
+        materialVisibility,
+        {
+            "constuintglobalGeometryIndex=t_RayGeometryIndexMap["
+                "geometryMapOffset+compactGeometryIndex];",
+            "constGeometryDatageometry="
+                "t_RayMaterialGeometries[globalGeometryIndex];",
+            "constMaterialConstantsmaterial="
+                "t_RayMaterials[geometry.materialIndex];",
+            "if(material.domain!=MaterialDomain_AlphaTested)returnfalse;",
+            "floatopacity=material.opacity;",
+            "MaterialFlags_UseOpacityTexture",
+            "NonUniformResourceIndex(material.opacityTextureIndex)",
+            "opacity*=opacityTexture.SampleLevel(",
+            ").r;",
+            "elseif((material.flags&"
+                "MaterialFlags_UseBaseOrDiffuseTexture)!=0",
+            "NonUniformResourceIndex(material.baseOrDiffuseTextureIndex)",
+            "opacity*=baseTexture.SampleLevel(",
+            ").a;",
+            "returnsaturate(opacity)>=material.alphaCutoff;"
+        },
+        "explicit opacity texture precedence before base alpha cutoff");
+    for (const std::string_view candidateContract : {
+            "CandidateInstanceContributionToHitGroupIndex()",
+            "CandidateGeometryIndex()",
+            "CandidatePrimitiveIndex()",
+            "CandidateTriangleBarycentrics()",
+            "CommitNonOpaqueTriangleHit();" })
+    {
+        RequireContains(
+            materialVisibility,
+            candidateContract,
+            "complete nonopaque triangle candidate evaluation");
+    }
     RequireContains(
         shader,
         "u_Output[pixelPosition]=1.0f;",
@@ -217,7 +272,10 @@ int main(int argc, char** argv)
     RequireOrdered(
         shader,
         {
-            "if(g_Heitz.hardShadows!=0u){",
+            "if(g_Heitz.hardShadows!=0u||"
+                "g_Heitz.useRatioEstimator==0u){",
+            "g_Heitz.hardShadows!=0u?HeitzLightCenterDirection():"
+                "HeitzSampleDirectionalEmitter(",
             "if(!CanEvaluatePbrDirectSurfacePrepared(",
             "u_Output[pixelPosition]=1.0f;",
             "constfloat3rayOrigin=HeitzPrepareRayOrigin(",
@@ -226,7 +284,7 @@ int main(int argc, char** argv)
             "channels[0]=t_GBufferDiffuse[pixelPosition];",
             "constPbrPreparedMaterialpreparedMaterial="
         },
-        "receiver-gated hard center-ray branch before soft material work");
+        "receiver gated hard or one ray scalar branch before ratio material work");
     RequireContains(
         shader,
         "constPbrGBufferSurfaceNormalssurfaceNormals="
@@ -237,32 +295,28 @@ int main(int argc, char** argv)
         "DecodeOctahedralNormal(",
         "hard-shadow-local G-buffer normal decoding");
 
-    RequireContains(
-        shader,
-        "frameIndex*0x9e3779b9u",
-        "integer golden-Weyl temporal rotation");
     RequireOrdered(
         shader,
         {
             "constuintphase=g_Heitz.sampleSequencePhase;",
+            "constuintfirstDimension=sampleIndex*2u;",
             "constuintsequenceIndex=sampleIndex+1u;",
-            "HeitzRadicalInverse(sequenceIndex,2u)+",
-            "HeitzBlueNoise(pixelPosition,0u)+",
-            "HeitzRadicalInverse(phase+1u,5u),",
-            "HeitzRadicalInverse(sequenceIndex,3u)+",
-            "HeitzBlueNoise(pixelPosition,1u)+",
-            "HeitzGoldenWeylPhase(phase)"
+            "constfloat2noiseShift=float2(",
+            "UVSRSamplePrecomputedNoise(t_Noise,g_Heitz.noisePattern,"
+                "dispatchPosition,dispatchExtent,phase,"
+                "0x200u+firstDimension)",
+            "UVSRSamplePrecomputedNoise(t_Noise,g_Heitz.noisePattern,"
+                "dispatchPosition,dispatchExtent,phase,"
+                "0x200u+firstDimension+1u)",
+            "HeitzRadicalInverse(sequenceIndex,2u),",
+            "HeitzRadicalInverse(sequenceIndex,3u))",
+            "+noiseShift)"
         },
-        "progressive independently shifted blue-noise emitter sequence");
+        "progressive low-discrepancy sequence shifted by shared precomputed noise");
     RequireContains(
         shader,
         "floatcosTheta=lerp(1.0f,cosMaximum,sample.x);",
         "uniform spherical-cap radial CDF mapping");
-    RequireContains(
-        shader,
-        "HeitzPermutatedWhiteNoise(",
-        "permutated white-noise emitter sampling");
-
     for (const std::string_view removed : {
             "HashedWhiteNoise",
             "HeitzHashedWhiteNoise",
@@ -286,12 +340,41 @@ int main(int argc, char** argv)
     RequireContains(
         pass,
         "nvrhi::BindingLayoutItem::Texture_SRV(7),"
+            "nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10),"
+            "nvrhi::BindingLayoutItem::StructuredBuffer_SRV(11),"
+            "nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),"
+            "nvrhi::BindingLayoutItem::Sampler(0),"
             "nvrhi::BindingLayoutItem::Texture_UAV(0)",
-        "compact one-output binding layout");
+        "material-aware base output binding layout");
+    RequireContains(
+        pass,
+        "pipelineDescription.bindingLayouts={"
+            "m_BindingLayouts[variant],m_BindlessLayout};",
+        "bindless material texture pipeline layout");
+    RequireContains(
+        pass,
+        "m_BoundMaterialVisibility!=materialVisibility",
+        "material resource identity binding-cache invalidation");
+    RequireContains(
+        pass,
+        "state.bindings={m_BindingSets[variant],"
+            "materialVisibility.descriptorTable};",
+        "live descriptor table dispatch binding");
+    RequireContains(
+        materialVisibilityHeader,
+        "geometryBuffer==other.geometryBuffer&&"
+            "materialBuffer==other.materialBuffer&&"
+            "geometryIndexMap==other.geometryIndexMap&&"
+            "descriptorTable==other.descriptorTable;",
+        "all material visibility resources participate in cache identity");
     RequireContains(
         passHeader,
-        "nvrhi::BindingSetHandlem_BindingSet;",
-        "single frame-local binding set");
+        "std::array<nvrhi::BindingSetHandle,2>m_BindingSets;",
+        "independent hit and no hit frame local binding sets");
+    RequireContains(
+        pass,
+        "nvrhi::BindingLayoutItem::Texture_UAV(1)",
+        "the hit permutation must bind its optional R16 output");
     RequireAbsent(
         passHeader,
         "ResetHistory",
@@ -313,10 +396,9 @@ int main(int argc, char** argv)
     RequireContains(
         pass,
         "HasFormatSupport(device,nvrhi::Format::RGBA16_FLOAT,true)&&"
-            "HasFormatSupport(device,nvrhi::Format::R16_UNORM,false)",
-        "minimal output and blue-noise format support gate");
+            "HasFormatSupport(device,nvrhi::Format::R8_UNORM,false)",
+        "minimal output and shared R8 noise format support gate");
     for (const std::string_view removed : {
-            "R16_FLOAT",
             "RawUnshadowed",
             "RawShadowed",
             "NoiseEstimate",
@@ -335,8 +417,34 @@ int main(int argc, char** argv)
 
     RequireContains(
         settings,
-        "boolhardShadows=false;int32_tsampleRateLog2=1;floatrayBias=0.002f;",
-        "hard-shadow, integer-rate, and low geometric-bias defaults");
+        "boolhardShadows=false;booluseRatioEstimator=true;"
+            "booloutputHitDistance=false;int32_tsampleRateLog2=1;"
+            "floatrayBias=0.002f;",
+        "soft ratio, disabled hit output, integer rate, and low geometric bias defaults");
+    RequireContains(
+        settings,
+        "returnstochastic&&settings.useRatioEstimator?"
+            "ResolveHeitzRatioEstimatorSampleCount("
+            "settings.sampleRateLog2):1u;",
+        "disabling the ratio estimator must select one stochastic sun ray");
+    RequireContains(
+        constants,
+        "uintuseRatioEstimator;",
+        "the shader constants must select ratio or matched scalar output");
+    RequireContains(
+        pass,
+        "nvrhi::Format::R16_FLOAT,"
+            "\"RayTracedSunShadows/HitDistance\"",
+        "requested hit output must allocate R16_FLOAT storage");
+    RequireContains(
+        shader,
+        "RWTexture2D<float>u_HitDistance:register(u1);",
+        "the hit permutation must expose a scalar distance UAV");
+    RequireContains(
+        shader,
+        "u_HitDistance[pixelPosition]=tracedRayCount!=0u?"
+            "nearestHitDistance:0.0f;",
+        "ratio output must distinguish invalid from miss and nearest blocker");
     RequireContains(
         settings,
         "RayVisibilityMaxDistancemaxDistance="
@@ -371,9 +479,14 @@ int main(int argc, char** argv)
             shaderConfig,
             "heitz_ratio_estimator_shadows_cs.hlsl-Tcs-EGenerate") != 1u)
     {
-        std::cerr << "FAIL: the shader catalog must package only Heitz Generate.\n";
+        std::cerr << "FAIL: the shader catalog must package one complete Heitz Generate permutation axis.\n";
         ++g_Failures;
     }
+    RequireContains(
+        shaderConfig,
+        "heitz_ratio_estimator_shadows_cs.hlsl-Tcs-EGenerate"
+            "-DOUTPUT_HIT_DISTANCE={0,1}",
+        "base and optional closest hit Heitz shader permutations");
     RequireAbsent(
         ratioHelper,
         "saturate(",
@@ -390,54 +503,76 @@ int main(int argc, char** argv)
         "single-sample renderer availability gate");
     RequireContains(
         viewer,
-        "\"Representation\",\"Configuretheworld-spacehierarchysharedbyray-traced\""
+        "\"Representation\",\"Configuretheworldspacehierarchysharedbyraytraced\""
             "\"techniques.\"",
         "visible Representation drawer contract");
     RequireContains(
         viewer,
-        "\"Enabled##ScreenSpaceShadows\"",
-        "independent screen-space enable control");
+        "\"AllowRayTraversal\",&representation.allowRayTraversal",
+        "ray traversal master control");
+    RequireAbsent(
+        viewer,
+        "ScreenSpaceDirectionalShadows",
+        "quarantined screen space directional shadows");
+    RequireContains(
+        viewer,
+        "\"RayTracedShadows##Shadows\"",
+        "public ray traced shadow group");
     RequireContains(
         viewer,
         "\"Enabled##RatioEstimatorShadows\"",
-        "independent ratio-estimator enable control");
+        "independent ray traced shadow enable control");
     RequireOrdered(
         viewer,
         {
-            "BeginRendererStage(RendererTimingStage::RatioEstimatorShadows);",
+            "if(shadowRayDispatchExpected){BeginRendererStage("
+                "RendererTimingStage::ShadowRayDispatch);}",
             "m_HeitzRatioEstimatorShadowPass->Render(",
-            "EndRendererStage(RendererTimingStage::RatioEstimatorShadows);"
+            "if(shadowRayDispatchExpected){EndRendererStage("
+                "RendererTimingStage::ShadowRayDispatch);}"
         },
-        "ray-dispatch-only statistics timing envelope");
+        "combined shadow-ray dispatch statistics timing envelope");
     RequireContains(
         viewer,
-        "\"Ratio-EstimatorRayDispatch\","
-            "RendererTimingStage::RatioEstimatorShadows",
-        "ratio-estimator cost in Statistics");
+        "\"ShadowRayDispatch\","
+            "RendererTimingStage::ShadowRayDispatch",
+        "shadow ray dispatch cost in Statistics");
     RequireContains(
         viewer,
-        "if(heitzShadowResult.dispatched&&heitzShadowResult.stochastic)",
+        "if(heitzShadowResult.dispatched&&"
+            "heitzShadowResult.stochastic&&shadowNoiseSettings.animate)",
         "TAA-independent stochastic phase commit");
     RequireContains(
         viewer,
-        "m_SunLight->angularSize=0.53f;",
+        "constexprfloatDefaultSunIrradiance=8.f;"
+            "constexprfloatDefaultSunAngularSizeDegrees=0.2f;",
+        "sun irradiance and angular-size defaults");
+    RequireContains(
+        viewer,
+        "m_SunLight->angularSize=DefaultSunAngularSizeDegrees;",
         "loaded primary sun angular-size default");
+    RequireContains(
+        viewer,
+        "m_SunLight->irradiance=DefaultSunIrradiance;",
+        "loaded primary sun irradiance default");
     RequireContains(
         viewer,
         "ImGui::SliderInt(\"SamplesPerPixel##RatioEstimatorShadows\"",
         "logarithmic integer sample-rate slider");
     RequireContains(
         viewer,
-        "\"NoisePattern##RatioEstimatorShadows\"",
-        "ratio-estimator noise-pattern control");
+        "\"SpecifyNoise##RatioEstimatorShadows\"",
+        "effect-local shared-noise override control");
     RequireContains(
         viewer,
-        "\"AnimateSamples##RatioEstimatorShadows\"",
-        "ratio-estimator sample-animation control");
+        "\"Usecustomnoisesamplingforthiseffectonly.This\""
+            "\"doesnotchangethenoisesamplingusedbyanyother\""
+            "\"effect.\"",
+        "effect-local noise override tooltip");
     RequireOrdered(
         viewer,
         {
-            "if(!softSamplingControlsEnabled)ImGui::EndDisabled();",
+            "if(!multipleSamplesEnabled)ImGui::EndDisabled();",
             "\"MaxDistance##RatioEstimatorShadows\"",
             "\"RayBias##RatioEstimatorShadows\""
         },

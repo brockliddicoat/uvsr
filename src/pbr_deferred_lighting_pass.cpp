@@ -48,19 +48,31 @@ static_assert(sizeof(PbrDeferredLightingConstants) % 16 == 0,
 static_assert(offsetof(PbrDeferredLightingConstants, separateIndirect) ==
     sizeof(DeferredLightingConstants),
     "The UVSR extension must follow Donut's deferred constants without padding drift.");
+static_assert(sizeof(FlashlightBeamProfile) == 48u,
+    "The flashlight profile must occupy three constant buffer registers.");
 static_assert(sizeof(PbrDeferredLightingConstants) ==
-    sizeof(DeferredLightingConstants) + 32,
-    "The UVSR deferred extension must occupy two constant-buffer registers.");
+    sizeof(DeferredLightingConstants) + 96,
+    "The UVSR deferred extension must occupy six constant buffer registers.");
 static_assert(offsetof(
         PbrDeferredLightingConstants,
-        directionalVisibilityLightIndices) ==
+        directVisibilityLightIndices) ==
     sizeof(DeferredLightingConstants) + 16u,
-    "The directional visibility indices must begin the second UVSR register.");
+    "The direct visibility indices must begin the second UVSR register.");
 static_assert(offsetof(
         PbrDeferredLightingConstants,
-        directionalVisibilityEncodings) ==
+        directVisibilityEncodings) ==
     sizeof(DeferredLightingConstants) + 24u,
-    "The directional visibility encodings must complete the second UVSR register.");
+    "The direct visibility encodings must complete the second UVSR register.");
+static_assert(offsetof(
+        PbrDeferredLightingConstants,
+        flashlightLightIndex) ==
+    sizeof(DeferredLightingConstants) + 32u,
+    "The flashlight index must begin the third UVSR register.");
+static_assert(offsetof(
+        PbrDeferredLightingConstants,
+        flashlightBeamProfile) ==
+    sizeof(DeferredLightingConstants) + 48u,
+    "The flashlight profile must begin the fourth UVSR register.");
 
 namespace
 {
@@ -230,17 +242,17 @@ namespace
         return true;
     }
 
-    bool IsDirectionalVisibilityTextureCompatible(
+    bool IsDirectVisibilityTextureCompatible(
         nvrhi::ITexture* texture,
         const DeferredLightingPass::Inputs& inputs,
-        uvsr::DirectionalLightVisibilityEncoding encoding)
+        uvsr::DirectLightVisibilityEncoding encoding)
     {
         if (!texture || !inputs.output)
             return false;
 
         const nvrhi::TextureDesc& textureDesc = texture->getDesc();
         const nvrhi::TextureDesc& outputDesc = inputs.output->getDesc();
-        return uvsr::IsDirectionalLightVisibilityTextureCompatible(
+        return uvsr::IsDirectLightVisibilityTextureCompatible(
             {
                 textureDesc.width,
                 textureDesc.height,
@@ -274,7 +286,9 @@ namespace
             textureDesc.arraySize == 1u &&
             textureDesc.mipLevels == 1u &&
             textureDesc.sampleCount == 1u &&
-            textureDesc.format == nvrhi::Format::R8_UNORM &&
+            (textureDesc.format == nvrhi::Format::R8_UNORM ||
+                textureDesc.format == nvrhi::Format::R16_FLOAT ||
+                textureDesc.format == nvrhi::Format::RGBA16_FLOAT) &&
             textureDesc.dimension == nvrhi::TextureDimension::Texture2D &&
             textureDesc.isShaderResource;
     }
@@ -447,7 +461,9 @@ void PbrDeferredLightingPass::Render(
     nvrhi::ICommandList* commandList,
     const ICompositeView& compositeView,
     const DeferredLightingPass::Inputs& inputs,
-    const uvsr::DirectionalLightVisibilities& directionalLightVisibilities,
+    const uvsr::DirectLightVisibilities& directLightVisibilities,
+    const Light* flashlight,
+    const FlashlightBeamProfile& flashlightBeamProfile,
     const LightProbe* environment,
     nvrhi::ITexture* skyVisibility,
     bool applySkyVisibilityToDiffuseIbl,
@@ -508,22 +524,22 @@ void PbrDeferredLightingPass::Render(
         return;
     }
 
-    uvsr::DirectionalLightVisibilities activeVisibilities;
+    uvsr::DirectLightVisibilities activeVisibilities;
     const auto acceptVisibility = [&](
-        const uvsr::DirectionalLightVisibility& visibility)
+        const uvsr::DirectLightVisibility& visibility)
     {
         return visibility.IsComplete() &&
-            IsDirectionalVisibilityTextureCompatible(
+            IsDirectVisibilityTextureCompatible(
                 visibility.texture,
                 inputs,
                 visibility.encoding)
             ? visibility
-            : uvsr::DirectionalLightVisibility{};
+            : uvsr::DirectLightVisibility{};
     };
-    activeVisibilities.screenSpace = acceptVisibility(
-        directionalLightVisibilities.screenSpace);
-    activeVisibilities.ratioEstimator = acceptVisibility(
-        directionalLightVisibilities.ratioEstimator);
+    activeVisibilities.flashlight = acceptVisibility(
+        directLightVisibilities.flashlight);
+    activeVisibilities.sun = acceptVisibility(
+        directLightVisibilities.sun);
     const bool hasSkyVisibilityConsumer =
         applySkyVisibilityToDiffuseIbl ||
         applySkyVisibilityToSpecularIbl;
@@ -550,9 +566,10 @@ void PbrDeferredLightingPass::Render(
                 : UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL)
             : UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL)
         : UVSR_SKY_VISIBILITY_APPLY_NEITHER;
-    constants.directionalVisibilityLightIndices = int2(-1);
-    constants.directionalVisibilityEncodings = uint2(
-        uint32_t(uvsr::DirectionalLightVisibilityEncoding::ScalarR8Unorm));
+    constants.directVisibilityLightIndices = int2(-1);
+    constants.directVisibilityEncodings = uint2(
+        uint32_t(uvsr::DirectLightVisibilityEncoding::ScalarR8Unorm));
+    constants.flashlightLightIndex = -1;
     deferredConstants.randomOffset = randomOffset;
     deferredConstants.noisePattern[0] = float4(0.059f, 0.529f, 0.176f, 0.647f);
     deferredConstants.noisePattern[1] = float4(0.765f, 0.294f, 0.882f, 0.412f);
@@ -600,21 +617,28 @@ void PbrDeferredLightingPass::Render(
             LightConstants& lightConstants =
                 deferredConstants.lights[deferredConstants.numLights];
             light->FillLightConstants(lightConstants);
-            if (uvsr::TargetsDirectionalLight(
-                    activeVisibilities.screenSpace, light.get()))
+            if (uvsr::TargetsDirectLight(
+                    activeVisibilities.flashlight, light.get()))
             {
-                constants.directionalVisibilityLightIndices.x =
+                constants.directVisibilityLightIndices.x =
                     int(deferredConstants.numLights);
-                constants.directionalVisibilityEncodings.x = uint32_t(
-                    activeVisibilities.screenSpace.encoding);
+                constants.directVisibilityEncodings.x = uint32_t(
+                    activeVisibilities.flashlight.encoding);
             }
-            if (uvsr::TargetsDirectionalLight(
-                    activeVisibilities.ratioEstimator, light.get()))
+            if (uvsr::TargetsDirectLight(
+                    activeVisibilities.sun, light.get()))
             {
-                constants.directionalVisibilityLightIndices.y =
+                constants.directVisibilityLightIndices.y =
                     int(deferredConstants.numLights);
-                constants.directionalVisibilityEncodings.y = uint32_t(
-                    activeVisibilities.ratioEstimator.encoding);
+                constants.directVisibilityEncodings.y = uint32_t(
+                    activeVisibilities.sun.encoding);
+            }
+            if (flashlight && light.get() == flashlight)
+            {
+                constants.flashlightLightIndex =
+                    int(deferredConstants.numLights);
+                constants.flashlightBeamProfile =
+                    flashlightBeamProfile;
             }
 
             if (light->shadowMap)
@@ -742,14 +766,14 @@ void PbrDeferredLightingPass::Render(
         bindingSetDesc.bindings.push_back(
             nvrhi::BindingSetItem::Texture_SRV(
                 20,
-                activeVisibilities.screenSpace.texture
-                    ? activeVisibilities.screenSpace.texture
+                activeVisibilities.flashlight.texture
+                    ? activeVisibilities.flashlight.texture
                     : m_CommonPasses->m_WhiteTexture.Get()));
         bindingSetDesc.bindings.push_back(
             nvrhi::BindingSetItem::Texture_SRV(
                 21,
-                activeVisibilities.ratioEstimator.texture
-                    ? activeVisibilities.ratioEstimator.texture
+                activeVisibilities.sun.texture
+                    ? activeVisibilities.sun.texture
                     : m_CommonPasses->m_WhiteTexture.Get()));
         bindingSetDesc.bindings.push_back(
             nvrhi::BindingSetItem::Texture_SRV(

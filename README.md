@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 75,681 non-blank source lines.
+**First-Party Lines of Code:** 88,563 non-blank source lines.
 
-**Third-Party Lines of Code:** 388,208 non-blank source lines.
+**Third-Party Lines of Code:** 387,603 non-blank source lines.
 
-**Total Lines of Code:** 463,889 non-blank source lines.
+**Total Lines of Code:** 476,166 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -16,50 +16,64 @@ with `tools/update_readme_line_counts.cmd --write`.
 <!-- uvsr-codebase-size:end -->
 
 UVSR is a focused DirectX 12 research renderer built on NVIDIA's pinned Donut
-framework and NVRHI. It ships with five ready-to-run research scenes, a
-production-oriented deferred PBR path, and several independently testable
-visibility, anti-aliasing, and shadow-rendering systems.
+framework and NVRHI. It ships with five ready to run research scenes, a
+production focused deferred PBR path, and several independently testable
+visibility, anti aliasing, shadow, and denoising systems.
 
 ## Renderer Highlights
 
-- **Unified Screen-Space Visibility.** AO and one-bounce indirect diffuse share
-  a current-frame stochastic traversal, exact runtime sample budget, and
-  guide-aware reconstruction. Permutated White Noise and Void Cluster Blue
-  Noise are available without a temporal-history, depth-
-  hierarchy, or recursive-bounce resource chain.
+- **Unified Screen Space Visibility.** AO and one bounce indirect diffuse share
+  a current frame stochastic traversal, exact runtime sample budget, and
+  guide aware reconstruction. Both effects default to 16 samples and may emit
+  physical hit distance for denoising. Distribution and occlusion controls
+  extend through `8`, and diffuse illumination defaults to unit intensity.
+- **Shared Precomputed Noise.** One Noise drawer provides Spatial White,
+  Spatial Blue, and 64-layer Spatiotemporal Blue `R8_UNORM` textures at 64x64
+  through 512x512. Effects inherit the centered global tile by default and may
+  opt into isolated **Specify Noise** overrides. Finite flashlight shadows use
+  the same global texture and animated sample clock.
 - **Physically Grounded Deferred Lighting.** UVSR uses a packed G-buffer,
   material-aware direct lighting, shared contribution gates, Lambert-convolved
   SH9 diffuse IBL, roughness-prefiltered GGX specular IBL, and a split-sum
-  environment BRDF. A fixed neutral AgX transform converts scene-linear HDR
-  radiance for display.
+  environment BRDF. Optional, default-off median-luminance Auto Exposure has
+  its own subsection with Exposure Compensation, Maximum Brightening, Maximum
+  Darkening, and Adjustment Period controls. Disabled exposure selects the
+  exact established texture-only AgX presentation path.
 - **Explicit Ambient Fill Gate.** The legacy hemispherical ambient term is
   removed. The Sky drawer's Ambient Fill setting explicitly gates diffuse and
   specular IBL while preserving the selected environment background.
-- **Ray-Traced Sky Visibility.** An optional full-resolution current-frame
-  ray-query pass averages 1, 2, 4, 8, 16, 32, or 64 cosine-weighted
-  geometric-normal hemisphere samples into scalar sky visibility. Independent
-  Diffuse IBL and experimental Specular IBL toggles allow either, neither, or
-  both consumers; only diffuse application reaches GI source radiance. Max is
-  the scene-diagonal reference reach, while 32m through 2m are intentionally
-  bounded visibility. Disabled or unavailable operation remains neutral white
-  without private temporal history or denoising.
-- **Focused Directional Shadows.** Screen-space and Heitz Ratio-Estimator
-  shadows have independent controls, including both-off and both-on operation.
-  The ray-traced pass forms its matched RGB stochastic numerator and
-  denominator in one current-frame dispatch and applies the bounded ratio only
-  to the selected directional light. It includes a one-ray hard path,
-  `1`-through-`64` sample rates, two emitter-noise patterns, independently
-  animated sampling, and a `0.002` default world-space triangle-normal origin
-  bias. Its Max distance preserves scene-wide reference visibility; 32m through
-  2m intentionally ignore farther blockers and are not exact sun visibility.
-  Final-color TAA is the only temporal accumulator, and both-on
-  composition keeps the strongest
-  componentwise occlusion without double-darkening overlap.
-- **Shared World Representation.** A consumer-neutral Representation drawer
-  owns the ray-query BVH, per-mesh BLAS build/update policy, TLAS transform
-  policy, staged construction, and explicit supported/building/ready state.
-- **Composable Anti-Aliasing.** TAA, Google Filament-based Fast Approximate AA,
-  CMAA2, and 2x through 16x deferred MSAA are independent, default-off
+- **Ray Traced Visibility.** Sky visibility supports either a correlated ratio
+  estimate or one scalar ray, and affects diffuse and specular IBL by default
+  when enabled. The primary sun uses the same explicit ratio choice under
+  **Ray Traced Shadows**. AO, GI, sky visibility, sun shadows, and flashlight
+  shadows each expose an independent **Output Hit Distance** switch. Sun, sky,
+  and flashlight ray queries honor alpha-tested cutouts while excluding blended
+  and transmissive materials from binary visibility.
+- **NVIDIA NRD Denoising.** The optional NRD 4.17.3 backend provides ReBLUR for
+  AO, ReBLUR or ReLAX for GI and sky visibility, and separate SIGMA signal
+  states for sun and flashlight shadows. Method, quality, and resolution remain
+  independent for each effect. ReBLUR and ReLAX also expose history,
+  disocclusion, and response. Sun SIGMA uses temporal stabilization, while
+  flashlight SIGMA is spatial only. Raw rendering remains unchanged when NRD is
+  not built or a required producer output is off.
+- **Physical Flashlight.** The camera flashlight is one analytical spot
+  light with an authored two lobe beam profile and full resolution ray traced
+  visibility. Horizontal and vertical offsets span minus 40 through plus 40
+  centimeters. Beam Size defaults to 16 degrees, Beam Roundness to `0.8`, and
+  selectable full Angular Size to 2.86 degrees. Positive size drives both its
+  finite direct-light energy and a four-ray visible-emitter shadow estimate;
+  zero is the exact point-light, hard-shadow branch. An emitter-aware collision
+  sphere keeps the light outside nearby geometry. A predictive proximity fade
+  begins at least 0.75 metres before contact and uniformly retracts the complete
+  camera offset as a wall approaches.
+- **Shared World Representation.** The Representation drawer owns the ray query
+  BVH and one **Allow Ray Traversal** master switch. Turning it off stops sky,
+  sun, and flashlight traversal without erasing their individual settings.
+- **Focused Sun Lighting.** The primary directional sun defaults to irradiance
+  `8` and angular size `0.2` degrees. Screen space directional shadows are
+  quarantined with the CSM and SVSM experiments rather than packaged by main.
+- **Composable Anti Aliasing.** TAA, Google Filament based Fast Approximate AA,
+  CMAA2, and 2x through 16x deferred MSAA are independent, default off
   controls. When combined, MSAA resolves scene-linear lighting before TAA,
   tone mapping, display-linear Fast Approximate AA, and CMAA2. TAA exposes all
   five Filament camera-jitter sequences plus an experimental Sobol 32 sequence
@@ -67,12 +81,11 @@ visibility, anti-aliasing, and shadow-rendering systems.
 - **Composable Debugging.** World appearance is independent from the
   Visibility and physically based lighting information filters. Shadow
   thread/wave isolation remains a deliberate full-image diagnostic.
-- **Compact Runtime Surface.** The first-party build compiles 260 core shader
-  tasks plus 46 Screen-Space Directional Shadow tasks, for 306 first-party and
-  382 integrated tasks after Donut's 76. Ten Settings drawers and 150 command
-  entries retain the active product controls without benchmark planners or
-  dormant profiles.
-- **Source-Backed Optimization Decisions.** Retired shader families, rejected
+- **Compact Runtime Surface.** The first party build compiles 306 shader
+  permutations, for 382 integrated permutations after Donut's 76. Twelve
+  Settings drawers and 184 command entries retain the active product controls
+  without benchmark planners or dormant profiles.
+- **Source Backed Optimization Decisions.** Retired shader families, rejected
   XeGTAO ports, Packed Depth and packed/fused ambient-occlusion-only paths,
   scheduler variants, and math approximations remain documented with controlled
   evidence instead of surviving as dormant runtime code.
@@ -100,18 +113,19 @@ conversion, or scene setup is required.
 This section summarizes stable work that is active but not yet merged into
 `main`. Experimental entries are not promises that the work will ship.
 
-- **Ray-Traced Sky Visibility — In Development**
-  (`codex/ray-traced-sky-visibility`). Adds an independent full-resolution
-  current-frame ray-query pass with independent diffuse/specular IBL application
-  and shared Max-through-2m visibility-distance controls. White fallback
-  preserves the existing result when disabled, unselected, or unavailable.
-- **Screen-Space Visibility Shared Shader Helpers — In Review**
+- **Main Lighting, Denoising, and Controls — In Development**
+  (`codex/main-lighting-denoising-controls`). Integrates the ray traversal
+  master switch, physical flashlight shadows, hit distance producers, ratio
+  choices, alpha-tested visibility, NVIDIA NRD, shared precomputed noise,
+  automatic display exposure, updated lighting defaults, and the loading
+  progress estimate while removing production screen space directional shadows.
+- **Screen Space Visibility Shared Shader Helpers — In Review**
   (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidates shared
-  depth, pixel-coordinate, and safe-normal helpers without changing equations,
+  depth, pixel coordinate, and safe normal helpers without changing equations,
   bindings, UI, or scenes.
-- **Visibility Degenerate-Path Test Coverage — In Review**
+- **Visibility Degenerate Path Test Coverage — In Review**
   (`devin/1784102780-visibility-test-coverage`, PR #11). Adds reference coverage
-  for degenerate clipping, radial-mask edge cases, and blue-noise rank fields
+  for degenerate clipping, radial mask edge cases, and blue noise rank fields
   without changing runtime rendering.
 
 ## Build and Run
@@ -142,6 +156,15 @@ git submodule update --init --recursive
 The first configure may download Microsoft's Direct3D 12 Agility SDK when it is
 not already cached.
 
+The default build keeps raw rendering available and leaves NRD processing off.
+After reviewing NVIDIA's RTX SDK license, configure an NRD enabled build with
+explicit acknowledgement:
+
+```powershell
+cmake -S . -B build-nrd -DUVSR_WITH_NRD=ON -DUVSR_ACCEPT_NRD_LICENSE=ON
+cmake --build build-nrd --config Release --target uvsr
+```
+
 Launch the exact executable produced by that build:
 
 ```powershell
@@ -157,8 +180,8 @@ Graphics Adapter**, which restarts the renderer on that device.
 
 **General > Adaptive Sync** selects **Off**, **Vendor Agnostic**, or **Nvidia
 Exclusive**. The enabled choices request UVSR's windowed DXGI
-tearing-compatible presentation path while VSync remains disabled; the
-Nvidia-exclusive choice is available only on NVIDIA adapters. Windows, the
+tearing compatible presentation path while VSync remains disabled; the
+Nvidia Exclusive choice is available only on NVIDIA adapters. Windows, the
 driver, and the display decide whether adaptive refresh actually engages.
 
 ### Useful Controls
@@ -176,8 +199,11 @@ driver, and the display decide whether adaptive refresh actually engages.
   closed and text input is not active.
 - Press **Z** or use **Zoom** to cycle through off, 2x, 3x, 4x, and 5x
   pixel inspection.
+- Use **Capture** in the Settings footer to copy the current frame to the
+  clipboard.
 - Press **V** to level camera roll with an exponential overshoot-and-settle
-  motion while preserving camera position and view direction.
+  motion while preserving camera position and view direction. A stationary
+  held trackpad gesture does not cancel the reset; real camera motion does.
 - Use **Q** to move the camera up and **E** to move it down. Space and Shift are
   not vertical-motion bindings.
 - Use **General > Camera Location > Position 1** for the standardized Sponza
@@ -220,9 +246,9 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-This includes the scene, camera, PBR, AA/UI, screen-space visibility,
-directional-shadow ratio-estimator, world-representation, environment,
-command-line, and runtime shader bundle contracts.
+This includes the scene, camera, PBR, AA/UI, screen space visibility, ray
+traced shadows, denoising, world representation, environment, command line,
+and runtime shader bundle contracts.
 
 ## Engineering Documentation
 
@@ -232,13 +258,15 @@ command-line, and runtime shader bundle contracts.
 - [PBR Foundation](docs/pbr-foundation.md) defines material inputs, G-buffer
   packing, lighting equations, IBL, contribution gates, validation, and
   extension points.
-- [Screen-Space Visibility](docs/screen-space-visibility.md) documents the
+- [Screen Space Visibility](docs/screen-space-visibility.md) documents the
   shared AO/GI traversal, estimators, reconstruction, memory contracts,
   supported quality profiles, and validation boundary.
-- [Heitz Ratio-Estimator Shadows](docs/heitz-ratio-estimator-shadows.md)
-  documents the single-dispatch matched RGB estimator, current-frame sampling,
-  hard-shadow path, ray-origin safety, independent composition, shared
+- [Heitz Ratio Estimator Shadows](docs/heitz-ratio-estimator-shadows.md)
+  documents the single dispatch matched RGB estimator, current frame sampling,
+  hard shadow path, ray origin safety, independent composition, shared
   BLAS/TLAS representation, and limits.
+- [Noise](docs/noise.md) defines global inheritance, effect overrides,
+  precomputed assets, centered sampling, temporal progression, and provenance.
 - [Temporal Aliasing Options](docs/temporal-aa-options.md) defines temporal,
   fast approximate, morphological, and multisample composition, history
   behavior, and coordinate conventions.
@@ -259,14 +287,14 @@ command-line, and runtime shader bundle contracts.
 
 - DirectX 12 is the production backend; DirectX 11 and Vulkan are disabled.
 - Deferred UVSR PBR is the only lighting path.
-- The renderer is uncapped, single-view, and opaque-focused. VSync, stereo,
-  bloom, translucent rendering, and animation playback are intentionally out of
-  scope.
+- The renderer is uncapped, single-view, and opaque/alpha-test focused. VSync,
+  stereo, bloom, translucent rendering, and animation playback are intentionally
+  out of scope.
 - IBL uses one infinite global environment. Local probe capture,
   parallax-corrected probe volumes, and probe blending are not implemented.
-- Screen-space and Heitz Ratio-Estimator directional shadows are independent;
-  both may be disabled or enabled together. The ray-traced producer currently
-  requires DXR 1.1 and single-sample deferred rendering.
+- Sun and flashlight shadows use ray traversal and require DXR 1.1 with single
+  sample deferred rendering. Screen space directional shadows are excluded
+  from the production target.
 
 The executable, repository slug, package names, and paths use lowercase
 `uvsr`; the displayed product name is uppercase **UVSR**.

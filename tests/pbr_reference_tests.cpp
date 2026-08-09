@@ -1,4 +1,4 @@
-#include "directional_light_visibility.h"
+#include "direct_light_visibility.h"
 #include "diffuse_environment_math.h"
 #include "pbr_material.h"
 #include "screen_space_indirect_composite_shared.h"
@@ -110,6 +110,22 @@ namespace
     {
         return incidentRadiance * bsdf * std::max(cosine, 0.f) *
             std::clamp(visibility, 0.f, 1.f);
+    }
+
+    float AnalyticalPositionalLightIntensity(
+        float luminousIntensity,
+        float distance,
+        float radius)
+    {
+        const float distanceSquared = distance * distance;
+        if (!(std::isfinite(radius) && radius > 0.f))
+            return luminousIntensity / distanceSquared;
+
+        const float halfAngularSize = std::atan(std::min(
+            radius / distance,
+            1.f));
+        return luminousIntensity / (radius * radius) *
+            halfAngularSize * halfAngularSize;
     }
 
     float IndirectComposite(
@@ -454,9 +470,9 @@ int main()
             blackPixels.data(), 8u, 4u).has_value(),
         "zero-energy lat-long input is rejected");
 
-    // Each directional visibility input applies only when its exact light
+    // Each direct visibility input applies only when its exact light
     // identity matches. Missing or unrelated visibility is white.
-    Require(!uvsr::DirectionalLightVisibility{}.IsComplete(),
+    Require(!uvsr::DirectLightVisibility{}.IsComplete(),
         "an empty visibility input is incomplete");
     int textureToken0 = 0;
     int lightToken0 = 0;
@@ -467,83 +483,83 @@ int main()
         &lightToken0);
     auto* light1 = reinterpret_cast<const donut::engine::Light*>(
         &lightToken1);
-    const uvsr::DirectionalLightVisibility factor0{
+    const uvsr::DirectLightVisibility factor0{
         texture0, light0
     };
-    const uvsr::DirectionalLightVisibilities factors{
+    const uvsr::DirectLightVisibilities factors{
         factor0,
         { texture0, light0,
-            uvsr::DirectionalLightVisibilityEncoding::RgbRgba16Float }
+            uvsr::DirectLightVisibilityEncoding::RgbRgba16Float }
     };
-    Require(factors.screenSpace.IsComplete() &&
-        factors.ratioEstimator.IsComplete(),
-        "screen-space and ratio-estimator slots are independently complete");
-    Require(uvsr::TargetsDirectionalLight(factor0, light0),
+    Require(factors.flashlight.IsComplete() &&
+        factors.sun.IsComplete(),
+        "flashlight and sun slots are independently complete");
+    Require(uvsr::TargetsDirectLight(factor0, light0),
         "pointer-identical light accepts its factor");
-    Require(!uvsr::TargetsDirectionalLight(factor0, light1),
+    Require(!uvsr::TargetsDirectLight(factor0, light1),
         "distinct light pointer rejects the factor");
-    Require(!uvsr::TargetsDirectionalLight(
-        uvsr::DirectionalLightVisibility{ texture0, nullptr },
+    Require(!uvsr::TargetsDirectLight(
+        uvsr::DirectLightVisibility{ texture0, nullptr },
         light0),
         "incomplete factor remains neutral");
-    Require(uvsr::ComposeDirectionalLightVisibility(
+    Require(uvsr::ComposeDirectLightVisibility(
         0.5f, 0.25f, true) == 0.25f,
         "matching visibility inputs select the strongest occlusion");
-    Require(uvsr::ComposeDirectionalLightVisibility(
+    Require(uvsr::ComposeDirectLightVisibility(
         0.25f, 0.f, false) == 0.25f,
         "unmatched visibility remains neutral");
-    Require(uvsr::ComposeDirectionalLightVisibility(
+    Require(uvsr::ComposeDirectLightVisibility(
         4.f, -1.f, true) == 0.f,
         "visibility factors clamp before composition");
     const Color combinedVisibility = {
-        uvsr::ComposeDirectionalLightVisibility(0.6f, 0.8f, true),
-        uvsr::ComposeDirectionalLightVisibility(0.6f, 0.4f, true),
-        uvsr::ComposeDirectionalLightVisibility(0.6f, 0.7f, true)
+        uvsr::ComposeDirectLightVisibility(0.6f, 0.8f, true),
+        uvsr::ComposeDirectLightVisibility(0.6f, 0.4f, true),
+        uvsr::ComposeDirectLightVisibility(0.6f, 0.7f, true)
     };
     Require(Near(combinedVisibility, Color{ 0.6f, 0.4f, 0.6f }),
         "both-on composition uses componentwise minimum, not multiplication");
 
-    const uvsr::DirectionalLightVisibilityTextureProperties
+    const uvsr::DirectLightVisibilityTextureProperties
         compatibleVisibilityTexture{
             1920u, 1080u, 1u, 1u, 1u, 1u,
             true, false, true, true
         };
-    Require(uvsr::IsDirectionalLightVisibilityTextureCompatible(
+    Require(uvsr::IsDirectLightVisibilityTextureCompatible(
         compatibleVisibilityTexture, 1920u, 1080u),
         "full-resolution R8 visibility texture is accepted");
     auto incompatibleVisibilityTexture = compatibleVisibilityTexture;
     incompatibleVisibilityTexture.width = 1919u;
-    Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(
+    Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
         incompatibleVisibilityTexture, 1920u, 1080u),
         "stale-sized visibility texture fails white");
     incompatibleVisibilityTexture = compatibleVisibilityTexture;
     incompatibleVisibilityTexture.r8Unorm = false;
-    Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(
+    Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
         incompatibleVisibilityTexture, 1920u, 1080u),
         "wrong-format visibility texture fails white");
     auto compatibleRgbVisibilityTexture = compatibleVisibilityTexture;
     compatibleRgbVisibilityTexture.r8Unorm = false;
     compatibleRgbVisibilityTexture.rgba16Float = true;
-    Require(uvsr::IsDirectionalLightVisibilityTextureCompatible(
+    Require(uvsr::IsDirectLightVisibilityTextureCompatible(
         compatibleRgbVisibilityTexture,
         1920u,
         1080u,
-        uvsr::DirectionalLightVisibilityEncoding::RgbRgba16Float),
+        uvsr::DirectLightVisibilityEncoding::RgbRgba16Float),
         "full-resolution RGBA16F RGB modulation texture is accepted");
-    Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(
+    Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
         compatibleRgbVisibilityTexture,
         1920u,
         1080u,
-        uvsr::DirectionalLightVisibilityEncoding::ScalarR8Unorm),
+        uvsr::DirectLightVisibilityEncoding::ScalarR8Unorm),
         "RGB modulation cannot masquerade as scalar R8 visibility");
     incompatibleVisibilityTexture = compatibleVisibilityTexture;
     incompatibleVisibilityTexture.sampleCount = 2u;
-    Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(
+    Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
         incompatibleVisibilityTexture, 1920u, 1080u),
         "multisampled visibility texture fails white");
     incompatibleVisibilityTexture = compatibleVisibilityTexture;
     incompatibleVisibilityTexture.shaderResource = false;
-    Require(!uvsr::IsDirectionalLightVisibilityTextureCompatible(
+    Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
         incompatibleVisibilityTexture, 1920u, 1080u),
         "non-SRV visibility texture fails white");
 
@@ -608,6 +624,24 @@ int main()
     const float pointAtFour = 12.f / (4.f * 4.f);
     Require(Near(pointAtOne / pointAtTwo, 4.f), "point light inverse-square at 2x");
     Require(Near(pointAtOne / pointAtFour, 16.f), "point light inverse-square at 4x");
+
+    const float exactPointEmitter =
+        AnalyticalPositionalLightIntensity(12.f, 2.f, 0.f);
+    Require(
+        exactPointEmitter == pointAtTwo,
+        "zero-radius analytical emitter preserves the exact point-light branch");
+    const float nearFiniteEmitter =
+        AnalyticalPositionalLightIntensity(12.f, 0.01f, 0.1f);
+    Require(
+        std::isfinite(nearFiniteEmitter) && nearFiniteEmitter > 0.f &&
+            nearFiniteEmitter < 12.f / (0.01f * 0.01f),
+        "positive-radius analytical emitter bounds near-field energy");
+    const float farFiniteEmitter =
+        AnalyticalPositionalLightIntensity(12.f, 100.f, 0.1f);
+    const float farPointEmitter = 12.f / (100.f * 100.f);
+    Require(
+        Near(farFiniteEmitter, farPointEmitter, 1e-7f),
+        "finite analytical emitter converges to inverse square in the far field");
 
     // Visibility is linear and independent from ambient occlusion.
     const float bsdf = DiffuseBrdf(0.5f, 0.f, normalFresnel);

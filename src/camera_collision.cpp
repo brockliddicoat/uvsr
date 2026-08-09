@@ -512,6 +512,43 @@ namespace uvsr
         return result;
     }
 
+    float CameraCollisionWorld::GetSphereSeparationSkin(float radius)
+    {
+        if (!std::isfinite(radius) || radius <= 0.f)
+            return 1e-5f;
+        return std::max(radius * 1e-3f, 1e-5f);
+    }
+
+    float CameraCollisionWorld::GetSphereTravelFraction(
+        float3 start,
+        float3 desiredPosition,
+        float radius) const
+    {
+        if (m_Triangles.empty() || !std::isfinite(radius) || radius <= 0.f ||
+            !all(dm::isfinite(start)) || !all(dm::isfinite(desiredPosition)))
+        {
+            return 1.f;
+        }
+
+        const float3 movement = desiredPosition - start;
+        const float movementLengthSquared = lengthSquared(movement);
+        if (!std::isfinite(movementLengthSquared) ||
+            movementLengthSquared <= 1e-12f)
+        {
+            return 1.f;
+        }
+
+        const SweepHit hit = FindEarliestHit(start, movement, radius);
+        if (!hit.hit)
+            return 1.f;
+
+        const float separationSkin = GetSphereSeparationSkin(radius);
+        return std::clamp(
+            hit.time - separationSkin / std::sqrt(movementLengthSquared),
+            0.f,
+            1.f);
+    }
+
     float3 CameraCollisionWorld::MoveSphere(
         float3 start,
         float3 desiredPosition,
@@ -531,7 +568,7 @@ namespace uvsr
         // resumes. A truly stationary camera returns above without touching
         // the BVH, keeping the idle-frame collision cost at zero.
         float3 position = ResolvePenetration(start, remainingMovement, radius);
-        const float separationSkin = std::max(radius * 1e-3f, 1e-5f);
+        const float separationSkin = GetSphereSeparationSkin(radius);
 
         for (uint32_t iteration = 0; iteration < MaxSlideIterations; ++iteration)
         {
@@ -557,5 +594,20 @@ namespace uvsr
         }
 
         return ResolvePenetration(position, remainingMovement, radius);
+    }
+
+    float3 CameraCollisionWorld::ResolveSphere(
+        float3 center,
+        float3 movementHint,
+        float radius) const
+    {
+        if (m_Triangles.empty() || radius <= 0.f ||
+            !all(dm::isfinite(center)) ||
+            !all(dm::isfinite(movementHint)))
+        {
+            return center;
+        }
+
+        return ResolvePenetration(center, movementHint, radius);
     }
 }

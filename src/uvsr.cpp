@@ -63,6 +63,7 @@
 #include <donut/core/string_utils.h>
 #include <donut/engine/BindingCache.h>
 #include <donut/engine/CommonRenderPasses.h>
+#include <donut/engine/DescriptorTableManager.h>
 #include <donut/engine/FramebufferFactory.h>
 #include <donut/engine/Scene.h>
 #include <donut/engine/ShaderFactory.h>
@@ -70,13 +71,11 @@
 #include <donut/engine/ThreadPool.h>
 #include <donut/engine/View.h>
 #include <donut/render/DeferredLightingPass.h>
-#include <donut/render/DepthPass.h>
 #include <donut/render/DrawStrategy.h>
 #include <donut/render/GBuffer.h>
 #include <donut/render/GBufferFillPass.h>
 #include <donut/render/GeometryPasses.h>
 #include <donut/render/PixelReadbackPass.h>
-#include <donut/render/PlanarShadowMap.h>
 #include <donut/app/ApplicationBase.h>
 #include <donut/app/UserInterfaceUtils.h>
 #include <donut/app/Camera.h>
@@ -93,17 +92,21 @@
 #include "image_based_lighting_background_pass.h"
 #include "image_based_lighting_environment.h"
 #include "image_based_lighting_shared.h"
-#include "screen_space_directional_shadows.h"
 #include "gpu_performance_monitor.h"
 #include "adaptive_sync.h"
+#include "auto_exposure.h"
 #include "camera_collision.h"
 #include "camera_controllers.h"
 #include "cmaa2.h"
 #include "command_line_options.h"
+#include "denoising_pass.h"
+#include "denoising_settings.h"
 #include "fast_approximate_aa.h"
 #include "flashlight.h"
 #include "heitz_ratio_estimator_shadows.h"
+#include "noise_texture_library.h"
 #include "pixel_zoom.h"
+#include "ray_traced_flashlight_shadows.h"
 #include "ray_traced_sky_visibility.h"
 #include "renderer_statistics.h"
 #include "scene_catalog.h"
@@ -117,7 +120,6 @@
 #include "ui_commands.h"
 #include "ui_settings_command_catalog.h"
 #include "ui_skin.h"
-#include "visibility_blue_noise.h"
 #include "world_space_representation.h"
 
 using namespace donut;
@@ -127,31 +129,6 @@ using namespace donut::vfs;
 using namespace donut::engine;
 using namespace donut::render;
 using namespace uvsr;
-
-#include <donut/shaders/light_cb.h>
-
-class FlashlightSpotLight final : public SpotLight
-{
-public:
-    float beamRoundness =
-        DefaultFlashlightSettings.beamRoundness;
-    float3 beamRight = float3(1.f, 0.f, 0.f);
-
-    void FillLightConstants(
-        LightConstants& lightConstants) const override
-    {
-        SpotLight::FillLightConstants(lightConstants);
-
-        lightConstants.radius =
-            EncodeFlashlightBeamShapeRadius(beamRoundness);
-        lightConstants.shadowChannel[1] =
-            EncodeFlashlightBeamAxisComponent(beamRight.x);
-        lightConstants.shadowChannel[2] =
-            EncodeFlashlightBeamAxisComponent(beamRight.y);
-        lightConstants.shadowChannel[3] =
-            EncodeFlashlightBeamAxisComponent(beamRight.z);
-    }
-};
 
 static bool g_RestartRequested = false;
 static int g_RestartAdapterIndex = -1;
@@ -178,6 +155,9 @@ constexpr float UiBackgroundBlurPixels = 4.f;
 constexpr float UiPanelShadowBlurPixels = 10.f;
 constexpr float UiPanelShadowOpacity = 0.34f;
 constexpr float UiPanelShadowOffsetYPixels = 3.f;
+constexpr float DefaultSunIrradiance = 8.f;
+constexpr float DefaultSunAngularSizeDegrees = 0.2f;
+constexpr float DefaultFlashlightRayBiasMeters = 0.002f;
 constexpr size_t UiBackdropRectCount = 5u;
 constexpr size_t UiMaterialTitleBackdropIndex = 2u;
 constexpr size_t UiMaterialBodyBackdropIndex = 3u;
@@ -954,13 +934,19 @@ class AgxToneMappingPass
 private:
     nvrhi::DeviceHandle m_Device;
     nvrhi::ShaderHandle m_PixelShader;
+    nvrhi::ShaderHandle m_UnityExposurePixelShader;
     nvrhi::ShaderHandle m_OutputPixelShader;
     nvrhi::BindingLayoutHandle m_BindingLayout;
+    nvrhi::BindingLayoutHandle m_TextureOnlyBindingLayout;
     nvrhi::BindingSetHandle m_BindingSet;
+    nvrhi::BindingSetHandle m_UnityExposureBindingSet;
     nvrhi::BindingSetHandle m_OutputBindingSet;
     nvrhi::GraphicsPipelineHandle m_Pipeline;
+    nvrhi::GraphicsPipelineHandle m_UnityExposurePipeline;
     nvrhi::GraphicsPipelineHandle m_OutputPipeline;
     nvrhi::ITexture* m_BoundSource = nullptr;
+    nvrhi::IBuffer* m_BoundExposure = nullptr;
+    nvrhi::ITexture* m_BoundUnityExposureSource = nullptr;
     nvrhi::ITexture* m_BoundOutputSource = nullptr;
     nvrhi::Format m_OutputFramebufferFormat =
         nvrhi::Format::UNKNOWN;
@@ -977,8 +963,22 @@ public:
         , m_CommonPasses(commonPasses)
         , m_FramebufferFactory(framebufferFactory)
     {
+        const std::vector<ShaderMacro> automaticExposureMacros = {
+            ShaderMacro("UVSR_UNITY_EXPOSURE", "0")
+        };
         m_PixelShader = shaderFactory->CreateShader(
-            "uvsr/agx_tonemapping_ps.hlsl", "main", nullptr, nvrhi::ShaderType::Pixel);
+            "uvsr/agx_tonemapping_ps.hlsl",
+            "main",
+            &automaticExposureMacros,
+            nvrhi::ShaderType::Pixel);
+        const std::vector<ShaderMacro> unityExposureMacros = {
+            ShaderMacro("UVSR_UNITY_EXPOSURE", "1")
+        };
+        m_UnityExposurePixelShader = shaderFactory->CreateShader(
+            "uvsr/agx_tonemapping_ps.hlsl",
+            "main",
+            &unityExposureMacros,
+            nvrhi::ShaderType::Pixel);
         m_OutputPixelShader = shaderFactory->CreateShader(
             "uvsr/display_output_ps.hlsl",
             "main",
@@ -988,9 +988,14 @@ public:
         nvrhi::BindingLayoutDesc layoutDesc;
         layoutDesc.visibility = nvrhi::ShaderType::Pixel;
         layoutDesc.bindings = {
-            nvrhi::BindingLayoutItem::Texture_SRV(0)
+            nvrhi::BindingLayoutItem::Texture_SRV(0),
+            nvrhi::BindingLayoutItem::TypedBuffer_SRV(1)
         };
         m_BindingLayout = device->createBindingLayout(layoutDesc);
+        layoutDesc.bindings = {
+            nvrhi::BindingLayoutItem::Texture_SRV(0)
+        };
+        m_TextureOnlyBindingLayout = device->createBindingLayout(layoutDesc);
 
         nvrhi::GraphicsPipelineDesc pipelineDesc;
         pipelineDesc.primType = nvrhi::PrimitiveType::TriangleStrip;
@@ -1002,22 +1007,72 @@ public:
         pipelineDesc.renderState.depthStencilState.stencilEnable = false;
         m_Pipeline = device->createGraphicsPipeline(
             pipelineDesc, framebufferFactory->GetFramebufferInfo());
+        pipelineDesc.PS = m_UnityExposurePixelShader;
+        pipelineDesc.bindingLayouts = { m_TextureOnlyBindingLayout };
+        m_UnityExposurePipeline = device->createGraphicsPipeline(
+            pipelineDesc, framebufferFactory->GetFramebufferInfo());
     }
 
-    void Render(
+    bool Render(
         nvrhi::ICommandList* commandList,
         const ICompositeView& compositeView,
-        nvrhi::ITexture* sourceTexture)
+        nvrhi::ITexture* sourceTexture,
+        nvrhi::IBuffer* exposureBuffer)
     {
-        if (!m_BindingSet || m_BoundSource != sourceTexture)
+        if (!commandList || !sourceTexture)
+            return false;
+
+        bool useAutomaticExposure = exposureBuffer && m_Pipeline;
+        nvrhi::IGraphicsPipeline* pipeline = useAutomaticExposure
+            ? m_Pipeline.Get()
+            : m_UnityExposurePipeline.Get();
+
+        nvrhi::IBindingSet* bindingSet = nullptr;
+        if (useAutomaticExposure)
         {
-            nvrhi::BindingSetDesc bindingSetDesc;
-            bindingSetDesc.bindings = {
-                nvrhi::BindingSetItem::Texture_SRV(0, sourceTexture)
-            };
-            m_BindingSet = m_Device->createBindingSet(bindingSetDesc, m_BindingLayout);
-            m_BoundSource = sourceTexture;
+            if (!m_BindingSet || m_BoundSource != sourceTexture ||
+                m_BoundExposure != exposureBuffer)
+            {
+                nvrhi::BindingSetDesc bindingSetDesc;
+                bindingSetDesc.bindings = {
+                    nvrhi::BindingSetItem::Texture_SRV(0, sourceTexture),
+                    nvrhi::BindingSetItem::TypedBuffer_SRV(
+                        1, exposureBuffer)
+                };
+                m_BindingSet = m_Device->createBindingSet(
+                    bindingSetDesc,
+                    m_BindingLayout);
+                m_BoundSource = sourceTexture;
+                m_BoundExposure = exposureBuffer;
+            }
+            bindingSet = m_BindingSet;
+            if (!bindingSet)
+            {
+                // Automatic exposure is optional. A transient descriptor
+                // failure must preserve the established texture-only AgX
+                // presentation instead of sending untone-mapped HDR onward.
+                useAutomaticExposure = false;
+                pipeline = m_UnityExposurePipeline.Get();
+            }
         }
+        if (!useAutomaticExposure)
+        {
+            if (!m_UnityExposureBindingSet ||
+                m_BoundUnityExposureSource != sourceTexture)
+            {
+                nvrhi::BindingSetDesc bindingSetDesc;
+                bindingSetDesc.bindings = {
+                    nvrhi::BindingSetItem::Texture_SRV(0, sourceTexture)
+                };
+                m_UnityExposureBindingSet = m_Device->createBindingSet(
+                    bindingSetDesc,
+                    m_TextureOnlyBindingLayout);
+                m_BoundUnityExposureSource = sourceTexture;
+            }
+            bindingSet = m_UnityExposureBindingSet;
+        }
+        if (!pipeline || !bindingSet)
+            return false;
 
         commandList->beginMarker("AgX Tone Mapping");
         for (uint32_t viewIndex = 0;
@@ -1026,9 +1081,9 @@ public:
         {
             const IView* view = compositeView.GetChildView(ViewType::PLANAR, viewIndex);
             nvrhi::GraphicsState state;
-            state.pipeline = m_Pipeline;
+            state.pipeline = pipeline;
             state.framebuffer = m_FramebufferFactory->GetFramebuffer(*view);
-            state.bindings = { m_BindingSet };
+            state.bindings = { bindingSet };
             state.viewport = view->GetViewportState();
             commandList->setGraphicsState(state);
 
@@ -1038,6 +1093,7 @@ public:
             commandList->draw(arguments);
         }
         commandList->endMarker();
+        return true;
     }
 
     bool RenderOutput(
@@ -1047,7 +1103,7 @@ public:
         nvrhi::ITexture* sourceTexture)
     {
         if (!commandList || !framebuffer || !sourceTexture ||
-            !m_OutputPixelShader || !m_BindingLayout)
+            !m_OutputPixelShader || !m_TextureOnlyBindingLayout)
         {
             return false;
         }
@@ -1066,7 +1122,7 @@ public:
                 nvrhi::PrimitiveType::TriangleStrip;
             pipelineDesc.VS = m_CommonPasses->m_FullscreenVS;
             pipelineDesc.PS = m_OutputPixelShader;
-            pipelineDesc.bindingLayouts = { m_BindingLayout };
+            pipelineDesc.bindingLayouts = { m_TextureOnlyBindingLayout };
             pipelineDesc.renderState.rasterState.setCullNone();
             pipelineDesc.renderState.depthStencilState.depthTestEnable =
                 false;
@@ -1091,7 +1147,7 @@ public:
             };
             m_OutputBindingSet = m_Device->createBindingSet(
                 bindingSetDesc,
-                m_BindingLayout);
+                m_TextureOnlyBindingLayout);
             m_BoundOutputSource = sourceTexture;
         }
         if (!m_OutputBindingSet)
@@ -1140,8 +1196,9 @@ struct UIData
     float                               TemporalAaSharpness =
         TemporalAaDefaultSharpness;
     DirectionalShadowSettings           DirectionalShadows;
-    ScreenSpaceDirectionalShadowSettings       ScreenSpaceDirectionalShadows;
+    DenoisingSettings                   Denoising;
     WorldSpaceRepresentationSettings    Representation;
+    NoiseSettings                       Noise;
     RayTracedSkyVisibilitySettings      RayTracedSkyVisibility;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
     bool                                ShaderReloadRequested = false;
@@ -1161,6 +1218,7 @@ struct UIData
     float                               EnvironmentExposureStops =
         GetImageBasedLightingSourceInfo(
             EnvironmentSource).defaultExposureStops;
+    AutoExposureSettings                AutoExposure;
     PbrLightingDebugView                LightingDebugView =
         PbrLightingDebugView::None;
     CameraMode                          Camera = CameraMode::ThirdPerson;
@@ -1231,12 +1289,18 @@ enum class RendererTimingStage : uint32_t
     SceneSetup,
     Geometry,
     MultisampleResolve,
-    RatioEstimatorShadows,
-    SkyVisibility,
+    ShadowRayDispatch,
+    ShadowDenoise,
+    SkyVisibilityRayDispatch,
+    SkyVisibilityDenoise,
     DirectLighting,
+    VisibilityLightingPreparation,
     ScreenSpaceVisibility,
+    AmbientOcclusionDenoise,
+    DiffuseIlluminationDenoise,
     MaterialPicking,
     EnvironmentBackground,
+    AutoExposure,
     ToneMapping,
     FastApproximate,
     OutputBlit,
@@ -1295,6 +1359,7 @@ private:
         MsaaVisibilityResolvePipelines,
         Visibility,
         VisibilityPipelines,
+        Denoising,
         TemporalAA,
         TemporalAAPipelines,
         FastApproximateAA,
@@ -1321,14 +1386,12 @@ private:
     std::shared_ptr<Scene>				m_Scene;
 	std::vector<std::pair<std::shared_ptr<Material>, Material>> m_OriginalMaterials;
     std::shared_ptr<ShaderFactory>      m_ShaderFactory;
+    nvrhi::BindingLayoutHandle          m_BindlessLayout;
+    std::shared_ptr<DescriptorTableManager>
+                                        m_DescriptorTable;
     std::shared_ptr<DirectionalLight>   m_SunLight;
-    std::shared_ptr<FlashlightSpotLight> m_Flashlight;
+    std::shared_ptr<SpotLight>           m_Flashlight;
     std::shared_ptr<SceneGraphNode>     m_FlashlightNode;
-    std::shared_ptr<FlashlightSpotLight> m_FlashlightHotspot;
-    std::shared_ptr<SceneGraphNode>     m_FlashlightHotspotNode;
-    std::shared_ptr<PlanarShadowMap>    m_FlashlightShadowMap;
-    std::shared_ptr<FramebufferFactory> m_FlashlightShadowFramebuffer;
-    std::unique_ptr<DepthPass>          m_FlashlightDepthPass;
     float                               m_FlashlightTransition = 0.f;
     float                               m_FlashlightSwayTime = 0.f;
     float3                              m_FlashlightAimDirection =
@@ -1338,6 +1401,15 @@ private:
                                             float3(0.f, 0.f, -1.f);
     float3                              m_FlashlightResolvedRight =
                                             float3(1.f, 0.f, 0.f);
+    float3                              m_FlashlightCameraPosition = 0.f;
+    float3                              m_FlashlightCollisionAnchor = 0.f;
+    float3                              m_FlashlightDesiredPosition = 0.f;
+    float                               m_FlashlightCollisionRadius = 0.f;
+    float                               m_FlashlightMountExtension = 1.f;
+    float                               m_FlashlightHardMountExtension = 1.f;
+    float                               m_FlashlightTargetMountExtension = 1.f;
+    bool                                m_FlashlightMountRecovery = false;
+    bool                                m_FlashlightCollisionInitialized = false;
     bool                                m_FlashlightAimInitialized = false;
     bool                                m_FlashlightPoseValid = false;
     std::vector<std::shared_ptr<Light>> m_SceneLightsWithoutFlashlight;
@@ -1352,16 +1424,19 @@ private:
                                         m_ImageBasedLightingEnvironment;
     std::unique_ptr<ImageBasedLightingBackgroundPass>
                                         m_ImageBasedLightingBackgroundPass;
+    std::unique_ptr<AutoExposurePass>   m_AutoExposurePass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
-    std::unique_ptr<ScreenSpaceDirectionalShadowPass>
-                                        m_ScreenSpaceDirectionalShadowPass;
     std::unique_ptr<HeitzRatioEstimatorShadowPass>
                                         m_HeitzRatioEstimatorShadowPass;
+    std::unique_ptr<RayTracedFlashlightShadowPass>
+                                        m_RayTracedFlashlightShadowPass;
     std::unique_ptr<RayTracedSkyVisibilityPass>
                                         m_RayTracedSkyVisibilityPass;
     std::unique_ptr<WorldSpaceRepresentation>
                                         m_WorldSpaceRepresentation;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
+    std::unique_ptr<NoiseTextureLibrary> m_NoiseTextureLibrary;
+    std::unique_ptr<DenoisingPass>       m_DenoisingPass;
     std::unique_ptr<TemporalAAPass> m_TemporalAAPass;
     std::unique_ptr<FastApproximateAAPass>
                                         m_FastApproximateAAPass;
@@ -1399,28 +1474,46 @@ private:
     CameraCollisionWorld                m_CameraCollisionWorld;
     std::optional<PreparedSceneCpuState> m_PendingSceneCpuState;
     std::optional<CameraCollisionWorld> m_RetiredCameraCollisionWorld;
-    std::vector<uint16_t>               m_PreparedVisibilityBlueNoise;
     BindingCache                        m_BindingCache;
     uint64_t                            m_SubmittedMainViewTriangles = 0u;
 
     float                               m_CameraVerticalFov = 60.f;
     float                               m_SceneDiagonal = 100.f;
     float                               m_CameraCollisionRadius = 0.1f;
+    float                               m_FrameDeltaSeconds = 0.f;
     uint2                               m_PickPosition = 0u;
     MaterialPickPurpose                 m_MaterialPickPurpose =
         MaterialPickPurpose::None;
     const Scene*                        m_MaterialPickScene = nullptr;
     uint64_t                            m_AntiAliasingPhase = 0u;
+    uint64_t                            m_ScreenSpaceVisibilityPhase = 0u;
     uint64_t                            m_HeitzRatioEstimatorPhase = 0u;
     bool                                m_HeitzRatioEstimatorContributedLastFrame =
                                             false;
     bool                                m_HeitzRatioEstimatorDispatchedThisFrame =
                                             false;
+    bool                                m_RayTracedFlashlightShadowDispatchedThisFrame =
+                                            false;
+    bool                                m_ShadowDenoisingDispatchedThisFrame =
+                                            false;
+    bool                                m_RayTracedFlashlightShadowContributedLastFrame =
+                                            false;
+    uint64_t                            m_RayTracedFlashlightShadowPhase = 0u;
     uint64_t                            m_RayTracedSkyVisibilityPhase = 0u;
     bool                                m_RayTracedSkyVisibilityContributedLastFrame =
                                             false;
     bool                                m_RayTracedSkyVisibilityDispatchedThisFrame =
                                             false;
+    bool                                m_RayTracedSkyVisibilityDenoisedThisFrame =
+                                            false;
+    bool                                m_AmbientOcclusionDenoisedThisFrame =
+                                            false;
+    bool                                m_DiffuseIlluminationDenoisedThisFrame =
+                                            false;
+    bool                                m_AutoExposureDispatchedThisFrame =
+                                             false;
+    bool                                m_VisibilityLightingPreparationDispatchedThisFrame =
+                                             false;
     bool                                m_HasAppliedAntiAliasingSettings =
         false;
     AntiAliasingSettings                m_AppliedAntiAliasingSettings;
@@ -1499,7 +1592,33 @@ public:
                 m_SceneDir.generic_string().c_str());
         }
 
-        m_TextureCache = std::make_shared<TextureCache>(GetDevice(), m_NativeFs, nullptr);
+        nvrhi::BindlessLayoutDesc bindlessLayoutDescription;
+        bindlessLayoutDescription.visibility = nvrhi::ShaderType::Compute;
+        bindlessLayoutDescription.firstSlot = 0u;
+        bindlessLayoutDescription.maxCapacity = 65536u;
+        bindlessLayoutDescription.registerSpaces = {
+            nvrhi::BindingLayoutItem::RawBuffer_SRV(1),
+            nvrhi::BindingLayoutItem::Texture_SRV(2)
+        };
+        m_BindlessLayout = GetDevice()->createBindlessLayout(
+            bindlessLayoutDescription);
+        if (m_BindlessLayout)
+        {
+            m_DescriptorTable =
+                std::make_shared<DescriptorTableManager>(
+                    GetDevice(),
+                    m_BindlessLayout);
+        }
+        else
+        {
+            log::warning(
+                "Bindless scene resources are unavailable; ray-traced "
+                "material visibility will remain disabled");
+        }
+        m_TextureCache = std::make_shared<TextureCache>(
+            GetDevice(),
+            m_NativeFs,
+            m_DescriptorTable);
 
         m_ShaderFactory = std::make_shared<ShaderFactory>(GetDevice(), m_RootFs, "/shaders");
         m_CommonPasses = std::make_shared<CommonRenderPasses>(GetDevice(), m_ShaderFactory);
@@ -1509,6 +1628,9 @@ public:
                 m_ShaderFactory,
                 m_CommonPasses,
                 mediaDir / "environments");
+        m_NoiseTextureLibrary = std::make_unique<NoiseTextureLibrary>(
+            GetDevice(),
+            mediaDir / "uvsr/noise");
 
         m_OpaqueDrawStrategy = std::make_shared<InstancedOpaqueDrawStrategy>();
 
@@ -1546,6 +1668,13 @@ public:
         else
             SetCurrentSceneName(sceneName);
 
+    }
+
+    ~UvsrSceneViewer() override
+    {
+        // The loader executes this derived class's LoadScene and must retire
+        // before any UvsrSceneViewer members are destroyed.
+        WaitForSceneLoadingThread();
     }
 
 	std::shared_ptr<vfs::IFileSystem> GetRootFs() const
@@ -1605,6 +1734,7 @@ public:
     bool ToggleFlashlight()
     {
         m_ui.FlashlightEnabled = !m_ui.FlashlightEnabled;
+        ResetAntiAliasingState();
         log::info(
             "Flashlight %s",
             m_ui.FlashlightEnabled ? "on" : "off");
@@ -1627,9 +1757,9 @@ public:
     {
         if (m_TemporalAAPass)
             m_TemporalAAPass->ResetHistory();
+        if (m_DenoisingPass)
+            m_DenoisingPass->RequestHistoryReset();
         m_AntiAliasingPhase = 0u;
-        m_HeitzRatioEstimatorPhase = 0u;
-        m_RayTracedSkyVisibilityPhase = 0u;
     }
 
     void ApplyCameraPose(
@@ -1664,8 +1794,14 @@ public:
             up,
             right);
 
+        // A preset jump is a teleport, not a traversable flashlight motion.
+        // Reinitialize the emitter at the new camera pose so the collision
+        // sweep cannot strand it against geometry between the two locations.
+        ResetFlashlightMotion();
         m_PreviousView.reset();
         ResetAntiAliasingState();
+        if (m_AutoExposurePass)
+            m_AutoExposurePass->Reset();
     }
 
     void ApplySponzaCameraPreset(const SponzaCameraPreset& preset)
@@ -1785,6 +1921,13 @@ public:
 		BeginLoadingScene(m_NativeFs, m_CurrentSceneName);
     }
 
+    void RetryCurrentSceneLoad()
+    {
+        if (IsSceneBusy() || m_CurrentSceneName.empty())
+            return;
+        BeginLoadingScene(m_NativeFs, m_CurrentSceneName);
+    }
+
     void ResetAllRendererSettings()
     {
         // Restore modes through their public setters first so material shader
@@ -1795,11 +1938,13 @@ public:
         m_ui.TemporalAaSharpenEnabled = false;
         m_ui.TemporalAaSharpness = TemporalAaDefaultSharpness;
         m_ui.DirectionalShadows = DirectionalShadowSettings{};
-        m_ui.ScreenSpaceDirectionalShadows =
-            ScreenSpaceDirectionalShadowSettings{};
+        m_ui.Denoising = DenoisingSettings{};
         m_ui.Representation = WorldSpaceRepresentationSettings{};
+        m_ui.Noise = NoiseSettings{};
         if (m_HeitzRatioEstimatorShadowPass)
             m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+        if (m_RayTracedFlashlightShadowPass)
+            m_RayTracedFlashlightShadowPass->ResetBindingCache();
         m_ui.RayTracedSkyVisibility = RayTracedSkyVisibilitySettings{};
         if (m_RayTracedSkyVisibilityPass)
             m_RayTracedSkyVisibilityPass->ResetBindingCache();
@@ -1812,8 +1957,6 @@ public:
         m_FlashlightTransition = 0.f;
         if (m_Flashlight)
             m_Flashlight->intensity = 0.f;
-        if (m_FlashlightHotspot)
-            m_FlashlightHotspot->intensity = 0.f;
         ResetFlashlightMotion();
         m_ui.ShowEnvironmentBackground = true;
         m_ui.EnableAmbientFill = true;
@@ -1826,7 +1969,14 @@ public:
         m_ui.EnvironmentExposureStops =
             GetImageBasedLightingSourceInfo(
                 m_ui.EnvironmentSource).defaultExposureStops;
+        m_ui.AutoExposure = AutoExposureSettings{};
+        if (m_AutoExposurePass)
+            m_AutoExposurePass->Reset();
         m_ui.LightingDebugView = PbrLightingDebugView::None;
+        m_ScreenSpaceVisibilityPhase = 0u;
+        m_HeitzRatioEstimatorPhase = 0u;
+        m_RayTracedFlashlightShadowPhase = 0u;
+        m_RayTracedSkyVisibilityPhase = 0u;
 
         // Recreate passes and material permutations from the restored state.
         m_ui.ShaderReloadRequested = true;
@@ -2083,6 +2233,15 @@ public:
             float3(0.f, 0.f, -1.f);
         m_FlashlightResolvedRight =
             float3(1.f, 0.f, 0.f);
+        m_FlashlightCameraPosition = 0.f;
+        m_FlashlightCollisionAnchor = 0.f;
+        m_FlashlightDesiredPosition = 0.f;
+        m_FlashlightCollisionRadius = 0.f;
+        m_FlashlightMountExtension = 1.f;
+        m_FlashlightHardMountExtension = 1.f;
+        m_FlashlightTargetMountExtension = 1.f;
+        m_FlashlightMountRecovery = false;
+        m_FlashlightCollisionInitialized = false;
         m_FlashlightAimInitialized = false;
         m_FlashlightPoseValid = false;
     }
@@ -2103,42 +2262,17 @@ public:
             settings.colorLinearRed,
             settings.colorLinearGreen,
             settings.colorLinearBlue);
-        const std::shared_ptr<IShadowMap> activeShadowMap =
-            settings.castShadows
-                ? m_FlashlightShadowMap
-                : nullptr;
-
         m_Flashlight->color = color;
         m_Flashlight->intensity =
-            lobes.spillIntensityCandela * emissionScale;
-        m_Flashlight->radius = FlashlightEmitterRadiusMeters;
-        m_Flashlight->beamRoundness =
-            settings.beamRoundness;
+            settings.peakIntensityCandela * emissionScale;
+        m_Flashlight->radius =
+            ResolveFlashlightEmitterRadiusMeters(
+                settings.angularSizeDegrees);
         m_Flashlight->range = settings.rangeMeters;
         m_Flashlight->innerAngle =
             lobes.spillInnerConeDegrees;
         m_Flashlight->outerAngle =
             lobes.spillOuterConeDegrees;
-        m_Flashlight->shadowMap = activeShadowMap;
-
-        if (m_FlashlightHotspot)
-        {
-            m_FlashlightHotspot->color = color;
-            m_FlashlightHotspot->intensity =
-                lobes.hotspotIntensityCandela * emissionScale;
-            m_FlashlightHotspot->radius =
-                FlashlightEmitterRadiusMeters;
-            m_FlashlightHotspot->beamRoundness =
-                settings.beamRoundness;
-            m_FlashlightHotspot->range = settings.rangeMeters;
-            m_FlashlightHotspot->innerAngle = std::max(
-                lobes.hotspotInnerConeDegrees,
-                0.5f);
-            m_FlashlightHotspot->outerAngle = std::max(
-                lobes.hotspotOuterConeDegrees,
-                1.f);
-            m_FlashlightHotspot->shadowMap = activeShadowMap;
-        }
     }
 
     void UpdateFlashlightAnimation(float elapsedSeconds)
@@ -2233,22 +2367,241 @@ public:
 
         const FlashlightMountPose mount =
             ResolveFlashlightMountPose(
-                settings.cameraLateralOffsetMeters);
-        const float3 flashlightPosition =
-            camera.GetPosition() +
+                settings.cameraHorizontalOffsetMeters,
+                settings.cameraVerticalOffsetMeters);
+        const float3 cameraPosition = camera.GetPosition();
+        const float3 desiredFlashlightPosition =
+            cameraPosition +
             cameraDirection *
                 mount.positionForwardMeters +
             cameraRight *
                 mount.positionRightMeters +
             cameraUp *
                 mount.positionUpMeters;
+        const float collisionRadius =
+            ResolveFlashlightCollisionRadiusMeters(
+                settings.angularSizeDegrees,
+                m_CameraCollisionRadius);
+        const bool collisionRadiusChanged =
+            !m_FlashlightCollisionInitialized ||
+            std::abs(collisionRadius - m_FlashlightCollisionRadius) >
+                1e-6f;
+        const bool collisionRadiusIncreased =
+            m_FlashlightCollisionInitialized &&
+            collisionRadius > m_FlashlightCollisionRadius + 1e-6f;
+        const bool desiredPositionChanged =
+            !m_FlashlightCollisionInitialized ||
+            lengthSquared(
+                desiredFlashlightPosition -
+                m_FlashlightDesiredPosition) > 1e-12f;
+        const bool cameraPositionChanged =
+            !m_FlashlightCollisionInitialized ||
+            lengthSquared(
+                cameraPosition -
+                m_FlashlightCameraPosition) > 1e-12f;
+
+        float3 collisionAnchor = m_FlashlightCollisionAnchor;
+        float hardMountExtension =
+            m_FlashlightHardMountExtension;
+        float targetMountExtension =
+            m_FlashlightTargetMountExtension;
+        if (collisionRadiusChanged || desiredPositionChanged ||
+            cameraPositionChanged)
+        {
+            collisionAnchor = m_CameraCollisionWorld.ResolveSphere(
+                cameraPosition,
+                desiredFlashlightPosition - cameraPosition,
+                collisionRadius);
+            const float3 mountVector =
+                desiredFlashlightPosition - collisionAnchor;
+            const float mountLengthSquared =
+                lengthSquared(mountVector);
+            const float mountLength = std::sqrt(
+                std::max(mountLengthSquared, 0.f));
+            const FlashlightMountRetractionRange retractionRange =
+                ResolveFlashlightMountRetractionRange(
+                    collisionRadius,
+                    mountLength);
+
+            float mountClearance =
+                retractionRange.farDistanceMeters;
+            hardMountExtension = 1.f;
+            if (mountLength > 1e-6f)
+            {
+                const float mountProbeDistance =
+                    mountLength + retractionRange.farDistanceMeters;
+                const float3 mountProbeEnd =
+                    collisionAnchor +
+                    mountVector * (mountProbeDistance / mountLength);
+                const float safeMountDistance =
+                    m_CameraCollisionWorld.GetSphereTravelFraction(
+                        collisionAnchor,
+                        mountProbeEnd,
+                        collisionRadius) * mountProbeDistance;
+                hardMountExtension = std::clamp(
+                    safeMountDistance / mountLength,
+                    0.f,
+                    1.f);
+                mountClearance = std::clamp(
+                    safeMountDistance - mountLength,
+                    0.f,
+                    retractionRange.farDistanceMeters);
+            }
+
+            const float3 hardSafeFlashlightPosition =
+                collisionAnchor + mountVector * hardMountExtension;
+            const float3 forwardProbeEnd =
+                hardSafeFlashlightPosition +
+                cameraDirection * retractionRange.farDistanceMeters;
+            const float forwardClearance =
+                m_CameraCollisionWorld.GetSphereTravelFraction(
+                    hardSafeFlashlightPosition,
+                    forwardProbeEnd,
+                    collisionRadius) *
+                retractionRange.farDistanceMeters;
+            const float proximityMountExtension =
+                ResolveFlashlightMountRetractionExtension(
+                    std::min(mountClearance, forwardClearance),
+                    retractionRange);
+            targetMountExtension = std::clamp(
+                std::min(
+                    hardMountExtension,
+                    proximityMountExtension),
+                0.f,
+                1.f);
+        }
+
+        const float previousMountExtension =
+            m_FlashlightMountExtension;
+        bool mountRecovery = m_FlashlightMountRecovery;
+        float mountExtension = m_FlashlightCollisionInitialized
+            ? (mountRecovery
+                ? 0.f
+                : AdvanceFlashlightMountExtension(
+                    previousMountExtension,
+                    targetMountExtension,
+                    elapsedSeconds))
+            : targetMountExtension;
+        mountExtension = std::min(
+            mountExtension,
+            hardMountExtension);
+        if (collisionRadiusIncreased)
+        {
+            mountExtension = std::min(
+                mountExtension,
+                previousMountExtension);
+        }
+        const bool mountExtensionChanged =
+            !m_FlashlightCollisionInitialized ||
+            std::abs(mountExtension - previousMountExtension) > 1e-6f;
+        float3 constrainedFlashlightPosition =
+            collisionAnchor +
+            (desiredFlashlightPosition - collisionAnchor) * mountExtension;
+        const bool constrainedPositionUnreached =
+            !m_FlashlightCollisionInitialized ||
+            lengthSquared(
+                constrainedFlashlightPosition -
+                m_FlashlightResolvedPosition) > 1e-12f;
+
+        float3 flashlightPosition = constrainedFlashlightPosition;
+        if (!m_FlashlightCollisionInitialized)
+        {
+            flashlightPosition = m_CameraCollisionWorld.ResolveSphere(
+                constrainedFlashlightPosition,
+                desiredFlashlightPosition - collisionAnchor,
+                collisionRadius);
+        }
+        else if (collisionRadiusChanged || desiredPositionChanged ||
+            cameraPositionChanged || mountExtensionChanged ||
+            constrainedPositionUnreached || mountRecovery)
+        {
+            float3 collisionStart = m_FlashlightResolvedPosition;
+            if (collisionRadiusChanged)
+            {
+                collisionStart = m_CameraCollisionWorld.ResolveSphere(
+                    collisionStart,
+                    constrainedFlashlightPosition - collisionStart,
+                    collisionRadius);
+            }
+            const float collisionArrivalTolerance =
+                CameraCollisionWorld::GetSphereSeparationSkin(
+                    collisionRadius) * 1.01f;
+            const auto reachedTarget =
+                [collisionArrivalTolerance](float3 position, float3 target)
+            {
+                return lengthSquared(position - target) <=
+                    collisionArrivalTolerance * collisionArrivalTolerance;
+            };
+            const auto recoverThroughAnchors =
+                [&](float3 start)
+                {
+                    const float3 previousAnchorPosition =
+                        m_CameraCollisionWorld.MoveSphere(
+                            start,
+                            m_FlashlightCollisionAnchor,
+                            collisionRadius);
+                    return m_CameraCollisionWorld.MoveSphere(
+                        previousAnchorPosition,
+                        collisionAnchor,
+                        collisionRadius);
+                };
+
+            if (mountRecovery)
+            {
+                flashlightPosition = recoverThroughAnchors(collisionStart);
+                if (reachedTarget(flashlightPosition, collisionAnchor))
+                {
+                    flashlightPosition = collisionAnchor;
+                    mountRecovery = false;
+                }
+            }
+            else
+            {
+                flashlightPosition = m_CameraCollisionWorld.MoveSphere(
+                    collisionStart,
+                    constrainedFlashlightPosition,
+                    collisionRadius);
+                if (reachedTarget(
+                        flashlightPosition,
+                        constrainedFlashlightPosition))
+                {
+                    flashlightPosition = constrainedFlashlightPosition;
+                }
+                else
+                {
+                    // Two individually safe mount rays can have a blocked
+                    // chord between them. Retract through the previous and
+                    // current camera anchors before restoring the new offset.
+                    mountExtension = 0.f;
+                    constrainedFlashlightPosition = collisionAnchor;
+                    mountRecovery = true;
+                    flashlightPosition =
+                        recoverThroughAnchors(collisionStart);
+                    if (reachedTarget(
+                            flashlightPosition,
+                            collisionAnchor))
+                    {
+                        flashlightPosition = collisionAnchor;
+                        mountRecovery = false;
+                    }
+                }
+            }
+        }
+        m_FlashlightCameraPosition = cameraPosition;
+        m_FlashlightCollisionAnchor = collisionAnchor;
+        m_FlashlightDesiredPosition = desiredFlashlightPosition;
+        m_FlashlightCollisionRadius = collisionRadius;
+        m_FlashlightMountExtension = mountExtension;
+        m_FlashlightHardMountExtension = hardMountExtension;
+        m_FlashlightTargetMountExtension = targetMountExtension;
+        m_FlashlightMountRecovery = mountRecovery;
+        m_FlashlightCollisionInitialized = true;
+
+        const float3 aimTarget =
+            cameraPosition +
+            cameraDirection * FlashlightAimConvergenceDistanceMeters;
         const float3 mountedDirection = normalize(
-            cameraDirection *
-                mount.directionForward +
-            cameraRight *
-                mount.directionRight +
-            cameraUp *
-                mount.directionUp);
+            aimTarget - flashlightPosition);
         float3 mountedRight =
             cameraRight -
             mountedDirection *
@@ -2332,7 +2685,7 @@ public:
     }
 
     static void SetFlashlightDirectionAndRoll(
-        const std::shared_ptr<FlashlightSpotLight>& light,
+        const std::shared_ptr<SpotLight>& light,
         const float3& direction,
         const float3& right)
     {
@@ -2386,42 +2739,10 @@ public:
             m_Flashlight->SetPosition(
                 double3(m_FlashlightResolvedPosition));
 
-        const double3 directionDelta =
-            double3(m_FlashlightResolvedDirection) -
-            m_Flashlight->GetDirection();
-        const float3 rightDelta =
-            m_FlashlightResolvedRight -
-            m_Flashlight->beamRight;
-        if (dot(directionDelta, directionDelta) > 1e-20 ||
-            lengthSquared(rightDelta) > 1e-12f)
-        {
-            SetFlashlightDirectionAndRoll(
-                m_Flashlight,
-                m_FlashlightResolvedDirection,
-                m_FlashlightResolvedRight);
-            SetFlashlightDirectionAndRoll(
-                m_FlashlightHotspot,
-                m_FlashlightResolvedDirection,
-                m_FlashlightResolvedRight);
-        }
-        m_Flashlight->beamRight =
-            m_FlashlightResolvedRight;
-
-        if (m_FlashlightHotspot)
-        {
-            const double3 hotspotPositionDelta =
-                double3(m_FlashlightResolvedPosition) -
-                m_FlashlightHotspot->GetPosition();
-            if (dot(
-                    hotspotPositionDelta,
-                    hotspotPositionDelta) > 1e-20)
-            {
-                m_FlashlightHotspot->SetPosition(
-                    double3(m_FlashlightResolvedPosition));
-            }
-            m_FlashlightHotspot->beamRight =
-                m_FlashlightResolvedRight;
-        }
+        SetFlashlightDirectionAndRoll(
+            m_Flashlight,
+            m_FlashlightResolvedDirection,
+            m_FlashlightResolvedRight);
     }
 
     void AttachFlashlightToScene()
@@ -2433,13 +2754,8 @@ public:
             return;
         }
 
-        m_Flashlight =
-            std::make_shared<FlashlightSpotLight>();
+        m_Flashlight = std::make_shared<SpotLight>();
         m_Flashlight->SetName(FlashlightPublicName);
-        m_FlashlightHotspot =
-            std::make_shared<FlashlightSpotLight>();
-        m_FlashlightHotspot->SetName(
-            "flashlight_lens_hotspot");
 
         m_FlashlightNode = std::make_shared<SceneGraphNode>();
         m_FlashlightNode->SetName(FlashlightPublicName);
@@ -2448,150 +2764,15 @@ public:
             m_Scene->GetSceneGraph()->GetRootNode(),
             m_FlashlightNode);
 
-        m_FlashlightHotspotNode =
-            std::make_shared<SceneGraphNode>();
-        m_FlashlightHotspotNode->SetName(
-            "flashlight_lens_hotspot");
-        m_FlashlightHotspotNode->SetLeaf(
-            m_FlashlightHotspot);
-        m_Scene->GetSceneGraph()->Attach(
-            m_Scene->GetSceneGraph()->GetRootNode(),
-            m_FlashlightHotspotNode);
-
         ApplyFlashlightPresentation();
         UpdateFlashlightTransform();
     }
 
-    void CreateFlashlightShadowResources()
-    {
-        if (!m_FlashlightShadowMap)
-        {
-            constexpr nvrhi::Format depthFormats[] = {
-                nvrhi::Format::D32,
-                nvrhi::Format::D16
-            };
-            const nvrhi::FormatSupport required =
-                nvrhi::FormatSupport::Texture |
-                nvrhi::FormatSupport::DepthStencil |
-                nvrhi::FormatSupport::ShaderLoad |
-                nvrhi::FormatSupport::ShaderSample;
-            const nvrhi::Format depthFormat =
-                nvrhi::utils::ChooseFormat(
-                    GetDevice(),
-                    required,
-                    depthFormats,
-                    std::size(depthFormats));
-            if (depthFormat == nvrhi::Format::UNKNOWN)
-            {
-                log::error(
-                    "Flashlight shadows are unavailable because the device "
-                    "supports no sampled depth format.");
-                m_FlashlightDepthPass.reset();
-                return;
-            }
-
-            m_FlashlightShadowMap =
-                std::make_shared<PlanarShadowMap>(
-                    GetDevice(),
-                    FlashlightShadowMapResolution,
-                    depthFormat);
-            m_FlashlightShadowMap->SetLitOutOfBounds(true);
-            m_FlashlightShadowMap->SetFalloffDistance(0.f);
-            m_FlashlightShadowFramebuffer =
-                std::make_shared<FramebufferFactory>(GetDevice());
-            m_FlashlightShadowFramebuffer->DepthTarget =
-                m_FlashlightShadowMap->GetTexture();
-        }
-
-        m_FlashlightDepthPass =
-            std::make_unique<DepthPass>(
-                GetDevice(),
-                m_CommonPasses);
-        DepthPass::CreateParameters parameters;
-        parameters.depthBias = FlashlightShadowDepthBias;
-        parameters.slopeScaledDepthBias =
-            FlashlightShadowSlopeScaledDepthBias;
-        parameters.trackLiveness = false;
-        m_FlashlightDepthPass->Init(
-            *m_ShaderFactory,
-            parameters);
-
-        ApplyFlashlightPresentation();
-    }
-
-    void RenderFlashlightShadow()
-    {
-        if (!ShouldRenderFlashlightShadow(
-                m_FlashlightTransition,
-                m_ui.Flashlight.castShadows) ||
-            !m_Flashlight ||
-            !m_FlashlightNode ||
-            !m_FlashlightShadowMap ||
-            !m_FlashlightShadowFramebuffer ||
-            !m_FlashlightDepthPass ||
-            !m_Scene ||
-            !m_OpaqueDrawStrategy)
-        {
-            return;
-        }
-
-        const float nearPlane = std::max(
-            FlashlightShadowNearPlaneMeters,
-            m_CameraCollisionRadius *
-                FlashlightShadowCollisionNearScale);
-        const float farPlane = std::max(
-            m_Flashlight->range,
-            nearPlane + 0.01f);
-        const float verticalFov = radians(std::clamp(
-            m_Flashlight->outerAngle +
-                FlashlightShadowFovPaddingDegrees,
-            1.f,
-            179.f));
-
-        daffine3 viewToWorld =
-            m_FlashlightNode->GetLocalToWorldTransform();
-        viewToWorld =
-            scaling(double3(1.0, 1.0, -1.0)) *
-            viewToWorld;
-        const affine3 worldToView =
-            affine3(inverse(viewToWorld));
-        const float4x4 projection = perspProjD3DStyle(
-            verticalFov,
-            1.f,
-            nearPlane,
-            farPlane);
-        const std::shared_ptr<PlanarView> shadowView =
-            m_FlashlightShadowMap->GetPlanarView();
-        shadowView->SetMatrices(worldToView, projection);
-        shadowView->UpdateCache();
-
-        const nvrhi::ITexture* shadowTexture =
-            m_FlashlightShadowMap->GetTexture();
-        const nvrhi::FormatInfo& shadowDepthInfo =
-            nvrhi::getFormatInfo(shadowTexture->getDesc().format);
-        m_CommandList->clearDepthStencilTexture(
-            m_FlashlightShadowMap->GetTexture(),
-            nvrhi::AllSubresources,
-            true,
-            1.f,
-            shadowDepthInfo.hasStencil,
-            0u);
-        DepthPass::Context context;
-        RenderCompositeView(
-            m_CommandList,
-            shadowView.get(),
-            shadowView.get(),
-            *m_FlashlightShadowFramebuffer,
-            m_Scene->GetSceneGraph()->GetRootNode(),
-            *m_OpaqueDrawStrategy,
-            *m_FlashlightDepthPass,
-            context,
-            "FlashlightShadow",
-            false);
-    }
-
     virtual void Animate(float fElapsedTimeSeconds) override
     {
+        m_FrameDeltaSeconds = std::isfinite(fElapsedTimeSeconds)
+            ? std::clamp(fElapsedTimeSeconds, 0.f, 1.f)
+            : 0.f;
         SynchronizeCameraInput();
 
         switch (m_ui.Camera)
@@ -2657,21 +2838,21 @@ public:
         if (m_PbrDeferredLightingPass) m_PbrDeferredLightingPass->ResetBindingCache();
         if (m_HeitzRatioEstimatorShadowPass)
             m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+        if (m_RayTracedFlashlightShadowPass)
+            m_RayTracedFlashlightShadowPass->ResetBindingCache();
         if (m_RayTracedSkyVisibilityPass)
             m_RayTracedSkyVisibilityPass->ResetBindingCache();
         if (m_WorldSpaceRepresentation)
             m_WorldSpaceRepresentation->Reset();
         if (m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetBindingCache();
+        if (m_AutoExposurePass)
+            m_AutoExposurePass->Reset();
         ResetAntiAliasingState();
         if (m_GBufferPass) m_GBufferPass->ResetBindingCache();
-        if (m_FlashlightDepthPass)
-            m_FlashlightDepthPass->ResetBindingCache();
         m_BindingCache.Clear();
         m_Flashlight.reset();
         m_FlashlightNode.reset();
-        m_FlashlightHotspot.reset();
-        m_FlashlightHotspotNode.reset();
         m_SceneLightsWithoutFlashlight.clear();
         m_EditableLights.clear();
         ResetFlashlightMotion();
@@ -2705,7 +2886,7 @@ public:
         m_PendingSceneCpuState.reset();
 
         std::unique_ptr<engine::Scene> scene = std::make_unique<engine::Scene>(GetDevice(),
-            *m_ShaderFactory, fs, m_TextureCache, nullptr, nullptr);
+            *m_ShaderFactory, fs, m_TextureCache, m_DescriptorTable, nullptr);
 
         const auto startTime = high_resolution_clock::now();
         const uint32_t workerCount = ResolveSceneLoadWorkerCount(
@@ -2736,14 +2917,6 @@ public:
             prepared.collisionWorld = BuildCameraCollisionWorld(
                 *scene,
                 prepared.collisionRadius);
-
-            if (m_PreparedVisibilityBlueNoise.empty())
-            {
-                m_PreparedVisibilityBlueNoise =
-                    GenerateVisibilityBlueNoise();
-                log::info(
-                    "Prepared visibility sampling ranks on the scene worker");
-            }
 
             if (m_ImageBasedLightingEnvironment &&
                 !m_ImageBasedLightingEnvironment->GetRadianceTexture())
@@ -2831,21 +3004,16 @@ public:
                 light->GetLightType() == LightType_Directional)
             {
                 m_SunLight = std::static_pointer_cast<DirectionalLight>(light);
-                if (m_SunLight->irradiance <= 0.f)
-                    m_SunLight->irradiance = 1.f;
-                if (!(m_SunLight->angularSize > 0.f) ||
-                    !std::isfinite(m_SunLight->angularSize))
-                {
-                    m_SunLight->angularSize = 0.53f;
-                }
+                m_SunLight->irradiance = DefaultSunIrradiance;
+                m_SunLight->angularSize = DefaultSunAngularSizeDegrees;
             }
         }
 
         if (!m_SunLight)
         {
             m_SunLight = std::make_shared<DirectionalLight>();
-            m_SunLight->angularSize = 0.53f;
-            m_SunLight->irradiance = 1.f;
+            m_SunLight->angularSize = DefaultSunAngularSizeDegrees;
+            m_SunLight->irradiance = DefaultSunIrradiance;
 
             auto node = std::make_shared<SceneGraphNode>();
             node->SetLeaf(m_SunLight);
@@ -2863,9 +3031,7 @@ public:
         for (const auto& light :
             m_Scene->GetSceneGraph()->GetLights())
         {
-            if (light &&
-                light != m_Flashlight &&
-                light != m_FlashlightHotspot)
+            if (light && light != m_Flashlight)
             {
                 m_SceneLightsWithoutFlashlight.push_back(light);
                 m_EditableLights.push_back(light);
@@ -3091,6 +3257,9 @@ public:
                 up);
         }
         m_ThirdPersonCamera.ResetZoomReferenceDistance(distance);
+        // Framing a picked node is another camera teleport. Start the mounted
+        // emitter at this new pose instead of sweeping it across the scene.
+        ResetFlashlightMotion();
     }
 
     std::shared_ptr<TextureCache> GetTextureCache()
@@ -3423,6 +3592,9 @@ public:
                 m_ShaderFactory,
                 m_CommonPasses,
                 m_RenderTargets->LdrFramebuffer);
+        m_AutoExposurePass = std::make_unique<AutoExposurePass>(
+            GetDevice(),
+            m_ShaderFactory);
     }
 
     void BeginRenderPassPreparation(bool waitForIbl)
@@ -3478,7 +3650,6 @@ public:
                 m_ShaderFactory,
                 m_RenderTargets->MaterialIDs,
                 nvrhi::Format::RGBA32_UINT);
-            CreateFlashlightShadowResources();
             m_RenderPassPreparationStage =
                 RenderPassPreparationStage::DeferredLighting;
             return false;
@@ -3519,7 +3690,6 @@ public:
                     GetDevice(),
                     m_ShaderFactory,
                     m_CommonPasses,
-                    &m_PreparedVisibilityBlueNoise,
                     true);
             m_RenderPassPreparationStage =
                 RenderPassPreparationStage::VisibilityPipelines;
@@ -3530,6 +3700,16 @@ public:
                 !m_ScreenSpaceVisibilityPass->PreparePipelinesStep())
             {
                 return false;
+            }
+            m_RenderPassPreparationStage =
+                RenderPassPreparationStage::Denoising;
+            return false;
+
+        case RenderPassPreparationStage::Denoising:
+            if (!m_DenoisingPass)
+            {
+                m_DenoisingPass = std::make_unique<DenoisingPass>(
+                    GetDevice(), m_ShaderFactory);
             }
             m_RenderPassPreparationStage =
                 RenderPassPreparationStage::TemporalAA;
@@ -3589,6 +3769,9 @@ public:
             return false;
 
         case RenderPassPreparationStage::ToneMapping:
+            m_AutoExposurePass = std::make_unique<AutoExposurePass>(
+                GetDevice(),
+                m_ShaderFactory);
             m_AgxToneMappingPass =
                 std::make_unique<AgxToneMappingPass>(
                     GetDevice(),
@@ -3612,22 +3795,10 @@ public:
         }
     }
 
-    void EnsureScreenSpaceDirectionalShadowPass()
-    {
-        if (m_ui.ScreenSpaceDirectionalShadows.enabled &&
-            !m_ScreenSpaceDirectionalShadowPass)
-        {
-            m_ScreenSpaceDirectionalShadowPass =
-                std::make_unique<ScreenSpaceDirectionalShadowPass>(
-                    GetDevice(),
-                    m_ShaderFactory,
-                    m_CommonPasses);
-        }
-    }
-
     void EnsureHeitzRatioEstimatorShadowPass()
     {
-        if (!m_ui.DirectionalShadows.ratioEstimator.enabled ||
+        if (!m_ui.Representation.allowRayTraversal ||
+            !m_ui.DirectionalShadows.ratioEstimator.enabled ||
             m_HeitzRatioEstimatorShadowPass ||
             !SupportsHeitzRatioEstimatorShadows())
         {
@@ -3637,12 +3808,32 @@ public:
             std::make_unique<HeitzRatioEstimatorShadowPass>(
                 GetDevice(),
                 m_ShaderFactory,
-                &m_PreparedVisibilityBlueNoise);
+                m_BindlessLayout);
+    }
+
+    void EnsureRayTracedFlashlightShadowPass()
+    {
+        if (!m_ui.Representation.allowRayTraversal ||
+            !m_ui.Flashlight.castShadows ||
+            !m_Flashlight ||
+            !ShouldSubmitFlashlight(m_FlashlightTransition) ||
+            m_RayTracedFlashlightShadowPass ||
+            !RayTracedFlashlightShadowPass::IsDeviceSupported(GetDevice()))
+        {
+            return;
+        }
+
+        m_RayTracedFlashlightShadowPass =
+            std::make_unique<RayTracedFlashlightShadowPass>(
+                GetDevice(),
+                m_ShaderFactory,
+                m_BindlessLayout);
     }
 
     void EnsureRayTracedSkyVisibilityPass()
     {
-        if (!m_ui.RayTracedSkyVisibility.enabled ||
+        if (!m_ui.Representation.allowRayTraversal ||
+            !m_ui.RayTracedSkyVisibility.enabled ||
             !HasRayTracedSkyVisibilityConsumer(
                 m_ui.RayTracedSkyVisibility) ||
             m_RayTracedSkyVisibilityPass ||
@@ -3654,7 +3845,7 @@ public:
             std::make_unique<RayTracedSkyVisibilityPass>(
                 GetDevice(),
                 m_ShaderFactory,
-                &m_PreparedVisibilityBlueNoise);
+                m_BindlessLayout);
     }
 
     void UpdateImageBasedLighting(nvrhi::ICommandList* commandList)
@@ -3773,7 +3964,8 @@ public:
         }
 
         if (needNewPasses || !m_GBufferPass ||
-            !m_MaterialIDPass || !m_AgxToneMappingPass)
+            !m_MaterialIDPass || !m_AutoExposurePass ||
+            !m_AgxToneMappingPass)
         {
             BeginRenderPassPreparation(true);
         }
@@ -3830,12 +4022,18 @@ public:
         case ScenePreparationStage::WorldRepresentation:
         {
             const bool worldRepresentationRequested =
-                (m_ui.DirectionalShadows.ratioEstimator.enabled &&
+                m_ui.Representation.allowRayTraversal &&
+                ((m_ui.DirectionalShadows.ratioEstimator.enabled &&
                     SupportsHeitzRatioEstimatorShadows()) ||
+                (m_ui.FlashlightEnabled &&
+                    m_ui.Flashlight.castShadows &&
+                    m_Flashlight &&
+                    RayTracedFlashlightShadowPass::IsDeviceSupported(
+                        GetDevice())) ||
                 (m_ui.RayTracedSkyVisibility.enabled &&
                     HasRayTracedSkyVisibilityConsumer(
                         m_ui.RayTracedSkyVisibility) &&
-                    SupportsRayTracedSkyVisibility());
+                    SupportsRayTracedSkyVisibility()));
             if (!worldRepresentationRequested ||
                 !m_WorldSpaceRepresentation ||
                 !m_WorldSpaceRepresentation->IsSupported() ||
@@ -3908,8 +4106,8 @@ public:
             return;
         }
 
-        EnsureScreenSpaceDirectionalShadowPass();
         EnsureHeitzRatioEstimatorShadowPass();
+        EnsureRayTracedFlashlightShadowPass();
         EnsureRayTracedSkyVisibilityPass();
 
         int windowWidth, windowHeight;
@@ -3929,14 +4127,8 @@ public:
         {
             // Local-light limits are deterministic: the user-controlled
             // flashlight is never silently dropped by a light-heavy scene.
-            lightingLights.reserve(sceneLights.size() + 2u);
+            lightingLights.reserve(sceneLights.size() + 1u);
             lightingLights.push_back(m_Flashlight);
-            if (m_ui.Flashlight.realisticLens &&
-                m_FlashlightHotspot &&
-                m_FlashlightHotspot->intensity > 0.f)
-            {
-                lightingLights.push_back(m_FlashlightHotspot);
-            }
             for (const auto& light : sceneLights)
             {
                 if (light)
@@ -3954,10 +4146,10 @@ public:
                 m_ui.GetResolvedAntiAliasingSettings().rasterSampleCount);
             const bool screenSpaceVisibilityResourcesRequired =
                 m_ui.HasActiveScreenSpaceVisibilityConsumer();
-            // The directional visibility producers consume a single coherent
-            // closest surface. Keep the resolve targets allocated for every
-            // deferred PBR MSAA topology so toggling screen-space shadows does
-            // not force an unrelated render-pass rebuild.
+            // Ray traced visibility producers consume one coherent closest
+            // surface. Keep the resolve targets allocated for every deferred
+            // PBR MSAA topology so toggling a producer does not force an
+            // unrelated render pass rebuild.
             const bool msaaClosestSurfaceResolveResourcesRequired =
                 sampleCount > 1u;
             const bool visibilityResourcesRequired =
@@ -3973,11 +4165,23 @@ public:
                         m_ui.DiffuseIblStrength));
             const bool temporalAARequired =
                 m_ui.UsesLongTermTemporalAA();
+            const bool denoisingMotionVectorsRequired =
+                m_DenoisingPass &&
+                m_DenoisingPass->IsOperational() &&
+                (m_ui.Denoising.ambientOcclusion.method !=
+                        DenoisingMethodChoice::None ||
+                    m_ui.Denoising.diffuseGi.method !=
+                        DenoisingMethodChoice::None ||
+                    m_ui.Denoising.shadows.method !=
+                        DenoisingMethodChoice::None ||
+                    m_ui.Denoising.skyVisibility.method !=
+                        DenoisingMethodChoice::None);
             const bool fastApproximateAARequired =
                 m_ui.UsesFastApproximateAA();
             const bool cmaa2Required = m_ui.UsesCmaa2();
             const bool motionVectorsRequired =
                 temporalAARequired ||
+                denoisingMotionVectorsRequired ||
                 (visibilityResourcesRequired && sampleCount > 1u);
 
             bool needNewPasses = false;
@@ -4008,6 +4212,8 @@ public:
 
                 if (m_HeitzRatioEstimatorShadowPass)
                     m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+                if (m_RayTracedFlashlightShadowPass)
+                    m_RayTracedFlashlightShadowPass->ResetBindingCache();
                 if (m_RayTracedSkyVisibilityPass)
                     m_RayTracedSkyVisibilityPass->ResetBindingCache();
                 m_RenderTargets = nullptr;
@@ -4035,10 +4241,10 @@ public:
 
             if (m_ui.ShaderReloadRequested)
             {
-                m_ScreenSpaceDirectionalShadowPass.reset();
                 m_HeitzRatioEstimatorShadowPass.reset();
+                m_RayTracedFlashlightShadowPass.reset();
                 m_RayTracedSkyVisibilityPass.reset();
-                m_FlashlightDepthPass.reset();
+                m_DenoisingPass.reset();
                 // This pass owns shader handles and PSOs independently of the
                 // main pass set. Drop it before clearing the factory cache so
                 // an explicit reload cannot retain the previous MSAA resolve.
@@ -4106,28 +4312,45 @@ public:
             m_ui.ShaderReloadRequested = false;
         }
 
-        EnsureScreenSpaceDirectionalShadowPass();
         EnsureHeitzRatioEstimatorShadowPass();
+        EnsureRayTracedFlashlightShadowPass();
         EnsureRayTracedSkyVisibilityPass();
 
         m_CommandList->open();
         AdvanceRendererTimers();
         m_HeitzRatioEstimatorDispatchedThisFrame = false;
+        m_RayTracedFlashlightShadowDispatchedThisFrame = false;
+        m_ShadowDenoisingDispatchedThisFrame = false;
         m_RayTracedSkyVisibilityDispatchedThisFrame = false;
+        m_RayTracedSkyVisibilityDenoisedThisFrame = false;
+        m_AmbientOcclusionDenoisedThisFrame = false;
+        m_DiffuseIlluminationDenoisedThisFrame = false;
+        m_AutoExposureDispatchedThisFrame = false;
+        m_VisibilityLightingPreparationDispatchedThisFrame = false;
         BeginRendererStage(RendererTimingStage::CompleteFrame);
         BeginRendererStage(RendererTimingStage::SceneSetup);
         m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());
         const bool heitzRatioEstimatorSelected =
+            m_ui.Representation.allowRayTraversal &&
             m_ui.DirectionalShadows.ratioEstimator.enabled &&
             m_RenderTargets->GetSampleCount() == 1u &&
             SupportsHeitzRatioEstimatorShadows();
+        const bool rayTracedFlashlightShadowSelected =
+            m_ui.Representation.allowRayTraversal &&
+            m_ui.Flashlight.castShadows &&
+            ShouldSubmitFlashlight(m_FlashlightTransition) &&
+            m_Flashlight &&
+            m_RayTracedFlashlightShadowPass &&
+            m_RayTracedFlashlightShadowPass->IsSupported();
         const bool rayTracedSkyVisibilitySelected =
+            m_ui.Representation.allowRayTraversal &&
             m_ui.RayTracedSkyVisibility.enabled &&
             HasRayTracedSkyVisibilityConsumer(
                 m_ui.RayTracedSkyVisibility) &&
             SupportsRayTracedSkyVisibility();
         const bool worldRepresentationSelected =
             heitzRatioEstimatorSelected ||
+            rayTracedFlashlightShadowSelected ||
             rayTracedSkyVisibilitySelected;
         const uint64_t worldRepresentationGenerationBefore =
             m_WorldSpaceRepresentation
@@ -4141,6 +4364,18 @@ public:
                 m_ui.Representation,
                 uint32_t(GetFrameIndex()),
                 worldRepresentationSelected);
+        RayTracedMaterialVisibilityInputs rayMaterialVisibility;
+        if (worldRepresentationReady && m_Scene)
+        {
+            rayMaterialVisibility.geometryBuffer =
+                m_Scene->GetGeometryBuffer();
+            rayMaterialVisibility.materialBuffer =
+                m_Scene->GetMaterialBuffer();
+            rayMaterialVisibility.geometryIndexMap =
+                m_WorldSpaceRepresentation->GetGeometryIndexMap();
+            rayMaterialVisibility.descriptorTable =
+                m_Scene->GetDescriptorTable();
+        }
         if (m_WorldSpaceRepresentation &&
             (m_WorldSpaceRepresentation->GetStatus().generation !=
                     worldRepresentationGenerationBefore ||
@@ -4149,6 +4384,8 @@ public:
         {
             if (m_HeitzRatioEstimatorShadowPass)
                 m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+            if (m_RayTracedFlashlightShadowPass)
+                m_RayTracedFlashlightShadowPass->ResetBindingCache();
             if (m_RayTracedSkyVisibilityPass)
                 m_RayTracedSkyVisibilityPass->ResetBindingCache();
             ResetAntiAliasingState();
@@ -4187,7 +4424,7 @@ public:
         {
             ResetAntiAliasingState();
             InvalidateRendererStageTiming(
-                RendererTimingStage::RatioEstimatorShadows);
+                RendererTimingStage::ShadowRayDispatch);
             m_HeitzRatioEstimatorContributedLastFrame =
                 heitzRatioEstimatorExpectedToContribute;
         }
@@ -4225,21 +4462,80 @@ public:
             worldRepresentationReady &&
             (skyVisibilityDiffuseIblAvailable ||
                 skyVisibilitySpecularIblAvailable);
-        const bool runScreenSpaceVisibility =
+        const bool screenSpaceVisibilityRequested =
             m_ui.HasActiveScreenSpaceVisibilityConsumer();
+        const NoiseSettings visibilityNoiseSettings = ResolveNoiseSettings(
+            m_ui.Noise,
+            m_ui.ScreenSpaceVisibility.noise);
+        const NoiseSettings shadowNoiseSettings = ResolveNoiseSettings(
+            m_ui.Noise,
+            m_ui.DirectionalShadows.ratioEstimator.noise);
+        const NoiseSettings skyNoiseSettings = ResolveNoiseSettings(
+            m_ui.Noise,
+            m_ui.RayTracedSkyVisibility.noise);
+        const NoiseSettings flashlightNoiseSettings = m_ui.Noise;
+        const bool rayTracedFlashlightShadowExpectedToContribute =
+            rayTracedFlashlightShadowSelected &&
+            worldRepresentationReady;
+        NoiseTextureBinding visibilityNoise;
+        NoiseTextureBinding shadowNoise;
+        NoiseTextureBinding skyNoise;
+        NoiseTextureBinding flashlightNoise;
+        if (m_NoiseTextureLibrary)
+        {
+            if (screenSpaceVisibilityRequested)
+            {
+                visibilityNoise = m_NoiseTextureLibrary->Resolve(
+                    m_CommandList,
+                    visibilityNoiseSettings);
+            }
+            if (heitzRatioEstimatorExpectedToContribute)
+            {
+                shadowNoise = m_NoiseTextureLibrary->Resolve(
+                    m_CommandList,
+                    shadowNoiseSettings);
+            }
+            if (rayTracedSkyVisibilityExpectedToContribute)
+            {
+                skyNoise = m_NoiseTextureLibrary->Resolve(
+                    m_CommandList,
+                    skyNoiseSettings);
+            }
+            if (rayTracedFlashlightShadowExpectedToContribute)
+            {
+                flashlightNoise = m_NoiseTextureLibrary->Resolve(
+                    m_CommandList,
+                    flashlightNoiseSettings);
+            }
+        }
+        const bool runScreenSpaceVisibility =
+            screenSpaceVisibilityRequested && bool(visibilityNoise);
         const bool writeSourceRadiance = runScreenSpaceVisibility &&
             m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
             (!submittedLights->empty() ||
                 (diffuseEnvironment && diffuseEnvironmentScale > 0.f));
 
         m_RenderTargets->Clear(m_CommandList);
-        ScreenSpaceDirectionalShadowResult screenSpaceShadowResult;
         HeitzRatioEstimatorShadowResult heitzShadowResult;
+        RayTracedFlashlightShadowResult flashlightShadowResult;
         RayTracedSkyVisibilityResult skyVisibilityResult;
+        ScreenSpaceVisibilityResult screenSpaceVisibilityResult;
         nvrhi::ITexture* skyVisibility = nullptr;
         bool applySkyVisibilityToDiffuseIbl = false;
         bool applySkyVisibilityToSpecularIbl = false;
-        DirectionalLightVisibilities directionalVisibilities;
+        DirectLightVisibilities directLightVisibilities;
+        const SpotLight* submittedFlashlight =
+            ShouldSubmitFlashlight(m_FlashlightTransition)
+                ? m_Flashlight.get()
+                : nullptr;
+        const FlashlightBeamProfile flashlightBeamProfile =
+            submittedFlashlight
+                ? ResolveFlashlightBeamProfile(
+                    m_ui.Flashlight,
+                    m_FlashlightResolvedRight.x,
+                    m_FlashlightResolvedRight.y,
+                    m_FlashlightResolvedRight.z)
+                : FlashlightBeamProfile{};
         MsaaVisibilityResolveOutputs closestSurfaceOutputs;
         bool closestSurfaceResolved = false;
 
@@ -4306,8 +4602,6 @@ public:
         bool deferredMsaaLightingPending = false;
         bool deferredMsaaVisibilityPending = false;
         m_SubmittedMainViewTriangles = 0u;
-        RenderFlashlightShadow();
-
         EndRendererStage(RendererTimingStage::SceneSetup);
 
         {
@@ -4331,8 +4625,8 @@ public:
             EndRendererStage(RendererTimingStage::Geometry);
 
             const bool singleSurfaceVisibilityProducerEnabled =
-                m_ui.ScreenSpaceDirectionalShadows.enabled ||
                 heitzRatioEstimatorSelected ||
+                rayTracedFlashlightShadowSelected ||
                 rayTracedSkyVisibilitySelected;
             if (m_RenderTargets->GetSampleCount() > 1u &&
                 (runScreenSpaceVisibility ||
@@ -4348,26 +4642,70 @@ public:
                 closestSurfaceResolved
                     ? closestSurfaceOutputs.depth
                     : m_RenderTargets->Depth.Get();
-            if (m_ui.ScreenSpaceDirectionalShadows.enabled &&
-                m_ScreenSpaceDirectionalShadowPass &&
-                singleSurfaceInputsAvailable)
+            const bool shadowRayDispatchExpected =
+                worldRepresentationReady &&
+                singleSurfaceInputsAvailable &&
+                ((rayTracedFlashlightShadowSelected &&
+                        submittedFlashlight &&
+                        flashlightNoise) ||
+                    (heitzRatioEstimatorSelected &&
+                        m_HeitzRatioEstimatorShadowPass));
+            if (shadowRayDispatchExpected)
             {
-                screenSpaceShadowResult = m_ScreenSpaceDirectionalShadowPass->Render(
-                    m_CommandList,
-                    m_ui.ScreenSpaceDirectionalShadows,
-                    *m_View,
-                    visibilityDepth,
-                    m_SunLight.get());
-                directionalVisibilities.screenSpace = {
-                    screenSpaceShadowResult.nearVisibility,
-                    screenSpaceShadowResult.light,
-                    DirectionalLightVisibilityEncoding::ScalarR8Unorm
-                };
+                BeginRendererStage(
+                    RendererTimingStage::ShadowRayDispatch);
+            }
+            if (rayTracedFlashlightShadowSelected &&
+                worldRepresentationReady &&
+                singleSurfaceInputsAvailable &&
+                submittedFlashlight &&
+                flashlightNoise)
+            {
+                RayTracedFlashlightShadowInputs shadowInputs;
+                shadowInputs.depth = visibilityDepth;
+                shadowInputs.material = closestSurfaceResolved
+                    ? closestSurfaceOutputs.material
+                    : m_RenderTargets->GBufferSpecular.Get();
+                shadowInputs.normals = closestSurfaceResolved
+                    ? closestSurfaceOutputs.normals
+                    : m_RenderTargets->GBufferNormals.Get();
+                flashlightShadowResult =
+                    m_RayTracedFlashlightShadowPass->Render(
+                        m_CommandList,
+                        *m_View,
+                        shadowInputs,
+                        rayMaterialVisibility,
+                        m_WorldSpaceRepresentation
+                            ->GetTopLevelAccelerationStructure(),
+                        submittedFlashlight,
+                        flashlightBeamProfile,
+                        flashlightNoiseSettings,
+                        flashlightNoise.texture,
+                        flashlightNoiseSettings.animate
+                            ? uint32_t(
+                                m_RayTracedFlashlightShadowPhase)
+                            : 0u,
+                        DefaultFlashlightRayBiasMeters,
+                        m_ui.Flashlight.outputHitDistance);
+            }
+            m_RayTracedFlashlightShadowDispatchedThisFrame =
+                flashlightShadowResult.dispatched;
+            const bool flashlightShadowContributed =
+                bool(flashlightShadowResult);
+            if (flashlightShadowContributed !=
+                m_RayTracedFlashlightShadowContributedLastFrame)
+            {
+                ResetAntiAliasingState();
+                InvalidateRendererStageTiming(
+                    RendererTimingStage::ShadowRayDispatch);
+                m_RayTracedFlashlightShadowContributedLastFrame =
+                    flashlightShadowContributed;
             }
             if (heitzRatioEstimatorSelected &&
                 m_HeitzRatioEstimatorShadowPass &&
                 worldRepresentationReady &&
-                singleSurfaceInputsAvailable)
+                singleSurfaceInputsAvailable &&
+                shadowNoise)
             {
                 HeitzRatioEstimatorShadowInputs shadowInputs;
                 shadowInputs.depth = visibilityDepth;
@@ -4387,26 +4725,22 @@ public:
                     closestSurfaceResolved
                         ? closestSurfaceOutputs.materialAmbientOcclusion
                         : m_RenderTargets->MaterialAmbientOcclusion.Get();
-                BeginRendererStage(
-                    RendererTimingStage::RatioEstimatorShadows);
                 heitzShadowResult =
                     m_HeitzRatioEstimatorShadowPass->Render(
                         m_CommandList,
                         m_ui.DirectionalShadows.ratioEstimator,
                         *m_View,
                         shadowInputs,
+                        rayMaterialVisibility,
                         m_WorldSpaceRepresentation
                             ->GetTopLevelAccelerationStructure(),
                         m_SunLight.get(),
-                        uint32_t(m_HeitzRatioEstimatorPhase),
+                        shadowNoiseSettings,
+                        shadowNoise.texture,
+                        shadowNoiseSettings.animate
+                            ? uint32_t(m_HeitzRatioEstimatorPhase)
+                            : 0u,
                         m_SceneDiagonal);
-                EndRendererStage(
-                    RendererTimingStage::RatioEstimatorShadows);
-                directionalVisibilities.ratioEstimator = {
-                    heitzShadowResult.modulation,
-                    heitzShadowResult.light,
-                    DirectionalLightVisibilityEncoding::RgbRgba16Float
-                };
             }
             const bool heitzRatioEstimatorContributed =
                 bool(heitzShadowResult);
@@ -4417,12 +4751,18 @@ public:
             {
                 ResetAntiAliasingState();
                 InvalidateRendererStageTiming(
-                    RendererTimingStage::RatioEstimatorShadows);
+                    RendererTimingStage::ShadowRayDispatch);
                 m_HeitzRatioEstimatorContributedLastFrame =
                     heitzRatioEstimatorContributed;
             }
+            if (shadowRayDispatchExpected)
+            {
+                EndRendererStage(
+                    RendererTimingStage::ShadowRayDispatch);
+            }
             if (rayTracedSkyVisibilityExpectedToContribute &&
-                singleSurfaceInputsAvailable)
+                singleSurfaceInputsAvailable &&
+                skyNoise)
             {
                 RayTracedSkyVisibilityInputs skyInputs;
                 skyInputs.depth = visibilityDepth;
@@ -4432,18 +4772,25 @@ public:
                 skyInputs.normals = closestSurfaceResolved
                     ? closestSurfaceOutputs.normals
                     : m_RenderTargets->GBufferNormals.Get();
-                BeginRendererStage(RendererTimingStage::SkyVisibility);
+                BeginRendererStage(
+                    RendererTimingStage::SkyVisibilityRayDispatch);
                 skyVisibilityResult =
                     m_RayTracedSkyVisibilityPass->Render(
                         m_CommandList,
                         m_ui.RayTracedSkyVisibility,
                         *m_View,
                         skyInputs,
+                        rayMaterialVisibility,
                         m_WorldSpaceRepresentation
                             ->GetTopLevelAccelerationStructure(),
-                        uint32_t(m_RayTracedSkyVisibilityPhase),
+                        skyNoiseSettings,
+                        skyNoise.texture,
+                        skyNoiseSettings.animate
+                            ? uint32_t(m_RayTracedSkyVisibilityPhase)
+                            : 0u,
                         m_SceneDiagonal);
-                EndRendererStage(RendererTimingStage::SkyVisibility);
+                EndRendererStage(
+                    RendererTimingStage::SkyVisibilityRayDispatch);
             }
             const bool rayTracedSkyVisibilityContributed =
                 bool(skyVisibilityResult);
@@ -4454,13 +4801,295 @@ public:
             {
                 ResetAntiAliasingState();
                 InvalidateRendererStageTiming(
-                    RendererTimingStage::SkyVisibility);
+                    RendererTimingStage::SkyVisibilityRayDispatch);
                 m_RayTracedSkyVisibilityContributedLastFrame =
                     rayTracedSkyVisibilityContributed;
             }
+
+            nvrhi::ITexture* visibilityNormalRoughness =
+                closestSurfaceResolved
+                    ? closestSurfaceOutputs.normals
+                    : m_RenderTargets->GBufferNormals.Get();
+            nvrhi::ITexture* visibilityMotionVectors =
+                closestSurfaceResolved
+                    ? closestSurfaceOutputs.motionVectors
+                    : m_RenderTargets->MotionVectors.Get();
+            const nvrhi::TextureDesc& visibilityDepthDescription =
+                visibilityDepth->getDesc();
+            const uint2 visibilityFullSize(
+                visibilityDepthDescription.width,
+                visibilityDepthDescription.height);
+            const auto makeDenoisingInputs =
+                [&](nvrhi::ITexture* rawSignal,
+                    nvrhi::ITexture* hitDistance,
+                    uint2 sourceSize = uint2::zero())
+            {
+                DenoisingInputs inputs;
+                inputs.rawSignal = rawSignal;
+                inputs.hitDistance = hitDistance;
+                inputs.depth = visibilityDepth;
+                inputs.normalRoughness = visibilityNormalRoughness;
+                inputs.motionVectors = visibilityMotionVectors;
+                inputs.currentView = m_View.get();
+                inputs.previousView = m_PreviousView.get();
+                inputs.signalSize = visibilityFullSize;
+                inputs.sourceSize = sourceSize;
+                inputs.frameDeltaSeconds = m_FrameDeltaSeconds;
+                inputs.frameIndex = GetFrameIndex();
+                return inputs;
+            };
+            const bool ambientOcclusionDenoisingReady =
+                runScreenSpaceVisibility &&
+                m_ui.ScreenSpaceVisibility.HasActiveAmbientOcclusion() &&
+                m_ui.ScreenSpaceVisibility.ambientOcclusion
+                    .outputHitDistance &&
+                m_ui.Denoising.ambientOcclusion.method !=
+                    DenoisingMethodChoice::None;
+            const bool diffuseGiDenoisingReady =
+                runScreenSpaceVisibility &&
+                m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
+                m_ui.ScreenSpaceVisibility.indirectDiffuse
+                    .outputHitDistance &&
+                m_ui.Denoising.diffuseGi.method !=
+                    DenoisingMethodChoice::None;
+            if (m_DenoisingPass)
+            {
+                if (!ambientOcclusionDenoisingReady)
+                {
+                    m_DenoisingPass->DisableSignal(
+                        DenoiserSignalType::AmbientOcclusion);
+                }
+                if (!diffuseGiDenoisingReady)
+                {
+                    m_DenoisingPass->DisableSignal(
+                        DenoiserSignalType::DiffuseGi);
+                }
+            }
+            const auto configureDiffuseDenoising =
+                [&](ScreenSpaceVisibilityInputs& inputs)
+            {
+                if (!m_DenoisingPass)
+                    return;
+
+                if (ambientOcclusionDenoisingReady)
+                {
+                    inputs.processAmbientOcclusion =
+                        [&](nvrhi::ICommandList* commandList,
+                            nvrhi::ITexture* rawSignal,
+                            nvrhi::ITexture* hitDistance,
+                            uint2 sourceSize,
+                            bool hitDistanceMatchesSignal)
+                        {
+                            DenoisingInputs denoisingInputs =
+                                makeDenoisingInputs(
+                                    rawSignal,
+                                    hitDistance,
+                                    sourceSize);
+                            denoisingInputs.hitDistanceNormalization =
+                                std::max(
+                                    m_ui.ScreenSpaceVisibility.sampling.radius,
+                                    0.001f);
+                            denoisingInputs.hitDistanceMatchesSignal =
+                                hitDistanceMatchesSignal;
+                            BeginRendererStage(
+                                RendererTimingStage::
+                                    AmbientOcclusionDenoise);
+                            const DenoisingResult result =
+                                m_DenoisingPass->ProcessAmbientOcclusion(
+                                    commandList,
+                                    m_ui.Denoising.ambientOcclusion,
+                                    denoisingInputs);
+                            EndRendererStage(
+                                RendererTimingStage::
+                                    AmbientOcclusionDenoise);
+                            m_AmbientOcclusionDenoisedThisFrame =
+                                result.denoised;
+                            return result.texture
+                                ? result.texture
+                                : rawSignal;
+                        };
+                }
+                if (diffuseGiDenoisingReady)
+                {
+                    inputs.processIndirectDiffuse =
+                        [&](nvrhi::ICommandList* commandList,
+                            nvrhi::ITexture* rawSignal,
+                            nvrhi::ITexture* hitDistance,
+                            uint2 sourceSize,
+                            bool hitDistanceMatchesSignal)
+                        {
+                            DenoisingInputs denoisingInputs =
+                                makeDenoisingInputs(
+                                    rawSignal,
+                                    hitDistance,
+                                    sourceSize);
+                            denoisingInputs.hitDistanceNormalization =
+                                std::max(
+                                    m_ui.ScreenSpaceVisibility.sampling.radius,
+                                    0.001f);
+                            denoisingInputs.hitDistanceMatchesSignal =
+                                hitDistanceMatchesSignal;
+                            BeginRendererStage(
+                                RendererTimingStage::
+                                    DiffuseIlluminationDenoise);
+                            const DenoisingResult result =
+                                m_DenoisingPass->ProcessDiffuseGi(
+                                    commandList,
+                                    m_ui.Denoising.diffuseGi,
+                                    denoisingInputs);
+                            EndRendererStage(
+                                RendererTimingStage::
+                                    DiffuseIlluminationDenoise);
+                            m_DiffuseIlluminationDenoisedThisFrame =
+                                result.denoised;
+                            return result.texture
+                                ? result.texture
+                                : rawSignal;
+                        };
+                }
+            };
+
+            nvrhi::ITexture* flashlightVisibility =
+                flashlightShadowResult.visibility;
+            const bool shadowDenoisingExpected =
+                m_DenoisingPass &&
+                (flashlightShadowResult ||
+                    (heitzShadowResult &&
+                        !m_ui.DirectionalShadows.ratioEstimator
+                            .hardShadows));
+            if (shadowDenoisingExpected)
+            {
+                BeginRendererStage(
+                    RendererTimingStage::ShadowDenoise);
+            }
+            if (m_DenoisingPass)
+            {
+                if (flashlightShadowResult)
+                {
+                    DenoisingInputs inputs = makeDenoisingInputs(
+                        flashlightShadowResult.visibility,
+                        flashlightShadowResult.hitDistance);
+                    inputs.hitDistanceNormalization = std::max(
+                        m_ui.Flashlight.rangeMeters, 0.001f);
+                    inputs.localLightPosition =
+                        float3(submittedFlashlight->GetPosition());
+                    inputs.localLightRadius =
+                        flashlightBeamProfile.emitterRadiusMeters;
+                    const DenoisingResult result =
+                        m_DenoisingPass->ProcessFlashlightShadow(
+                            m_CommandList,
+                            m_ui.Denoising.shadows,
+                            inputs);
+                    flashlightVisibility = result.texture;
+                    m_ShadowDenoisingDispatchedThisFrame =
+                        m_ShadowDenoisingDispatchedThisFrame ||
+                        result.denoised;
+                }
+                else
+                {
+                    m_DenoisingPass->DisableSignal(
+                        DenoiserSignalType::FlashlightShadow);
+                }
+            }
+            if (flashlightShadowResult && flashlightVisibility)
+            {
+                directLightVisibilities.flashlight = {
+                    flashlightVisibility,
+                    flashlightShadowResult.light,
+                    DirectLightVisibilityEncoding::ScalarR8Unorm
+                };
+            }
+
+            nvrhi::ITexture* sunVisibility =
+                heitzShadowResult.modulation;
+            bool sunVisibilityDenoised = false;
+            if (m_DenoisingPass)
+            {
+                if (heitzShadowResult &&
+                    !m_ui.DirectionalShadows.ratioEstimator.hardShadows)
+                {
+                    DenoisingInputs inputs = makeDenoisingInputs(
+                        heitzShadowResult.modulation,
+                        heitzShadowResult.hitDistance);
+                    inputs.hitDistanceNormalization =
+                        ResolveRayVisibilityMaxDistance(
+                            m_ui.DirectionalShadows.ratioEstimator.maxDistance,
+                            m_SceneDiagonal);
+                    inputs.hitDistanceMatchesSignal =
+                        !heitzShadowResult.ratioEstimator;
+                    inputs.lightDirectionWorld =
+                        -float3(m_SunLight->GetDirection());
+                    inputs.directionalTanAngularRadius = std::tan(
+                        radians(std::max(m_SunLight->angularSize, 0.f)) *
+                        0.5f);
+                    const DenoisingResult result =
+                        m_DenoisingPass->ProcessSunShadow(
+                            m_CommandList,
+                            m_ui.Denoising.shadows,
+                            inputs);
+                    sunVisibility = result.texture;
+                    sunVisibilityDenoised = result.denoised;
+                    m_ShadowDenoisingDispatchedThisFrame =
+                        m_ShadowDenoisingDispatchedThisFrame ||
+                        result.denoised;
+                }
+                else
+                {
+                    m_DenoisingPass->DisableSignal(
+                        DenoiserSignalType::SunShadow);
+                }
+            }
+            if (shadowDenoisingExpected)
+            {
+                EndRendererStage(
+                    RendererTimingStage::ShadowDenoise);
+            }
+            if (heitzShadowResult && sunVisibility)
+            {
+                directLightVisibilities.sun = {
+                    sunVisibility,
+                    heitzShadowResult.light,
+                    sunVisibilityDenoised
+                        ? DirectLightVisibilityEncoding::ScalarR8Unorm
+                        : DirectLightVisibilityEncoding::RgbRgba16Float
+                };
+            }
+
             skyVisibility = skyVisibilityResult
                 ? skyVisibilityResult.visibility
                 : nullptr;
+            if (m_DenoisingPass)
+            {
+                if (skyVisibilityResult)
+                {
+                    DenoisingInputs inputs = makeDenoisingInputs(
+                        skyVisibilityResult.visibility,
+                        skyVisibilityResult.hitDistance);
+                    inputs.hitDistanceNormalization =
+                        ResolveRayVisibilityMaxDistance(
+                            m_ui.RayTracedSkyVisibility.maxDistance,
+                            m_SceneDiagonal);
+                    inputs.hitDistanceMatchesSignal =
+                        !skyVisibilityResult.ratioEstimator;
+                    BeginRendererStage(
+                        RendererTimingStage::SkyVisibilityDenoise);
+                    const DenoisingResult result =
+                        m_DenoisingPass->ProcessSkyVisibility(
+                            m_CommandList,
+                            m_ui.Denoising.skyVisibility,
+                            inputs);
+                    EndRendererStage(
+                        RendererTimingStage::SkyVisibilityDenoise);
+                    skyVisibility = result.texture;
+                    m_RayTracedSkyVisibilityDenoisedThisFrame =
+                        result.denoised;
+                }
+                else
+                {
+                    m_DenoisingPass->DisableSignal(
+                        DenoiserSignalType::SkyVisibility);
+                }
+            }
             applySkyVisibilityToDiffuseIbl =
                 skyVisibility &&
                 m_ui.RayTracedSkyVisibility.applyToDiffuseIbl;
@@ -4512,12 +5141,14 @@ public:
                     visibilityDeferredInputs.output =
                         m_RenderTargets->BaseLighting;
                     BeginRendererStage(
-                        RendererTimingStage::ScreenSpaceVisibility);
+                        RendererTimingStage::VisibilityLightingPreparation);
                     m_PbrDeferredLightingPass->Render(
                         m_CommandList,
                         *m_View,
                         visibilityDeferredInputs,
-                        directionalVisibilities,
+                        directLightVisibilities,
+                        submittedFlashlight,
+                        flashlightBeamProfile,
                         globalEnvironment,
                         skyVisibility,
                         applySkyVisibilityToDiffuseIbl,
@@ -4529,6 +5160,9 @@ public:
                         uint32_t(m_ui.LightingDebugView),
                         uint32_t(m_ui.ScreenSpaceVisibility.debugView),
                         float2(0.f));
+                    EndRendererStage(
+                        RendererTimingStage::VisibilityLightingPreparation);
+                    m_VisibilityLightingPreparationDispatchedThisFrame = true;
 
                     ScreenSpaceVisibilityInputs
                         visibilityInputs;
@@ -4583,12 +5217,22 @@ public:
                     visibilityInputs.output =
                         m_RenderTargets
                             ->VisibilityComposite;
-                    m_ScreenSpaceVisibilityPass->Render(
+                    configureDiffuseDenoising(visibilityInputs);
+                    // Direct lighting above is a separate producer. Start the
+                    // visibility envelope only when the visibility pass does.
+                    BeginRendererStage(
+                        RendererTimingStage::ScreenSpaceVisibility);
+                    screenSpaceVisibilityResult =
+                        m_ScreenSpaceVisibilityPass->Render(
                         m_CommandList,
                         m_ui.ScreenSpaceVisibility,
                         *m_View,
                         visibilityInputs,
-                        uint32_t(GetFrameIndex()));
+                        visibilityNoiseSettings,
+                        visibilityNoise.texture,
+                        visibilityNoiseSettings.animate
+                            ? uint32_t(m_ScreenSpaceVisibilityPhase)
+                            : 0u);
                     EndRendererStage(
                         RendererTimingStage::ScreenSpaceVisibility);
                     deferredMsaaVisibilityPending = true;
@@ -4605,7 +5249,9 @@ public:
                     m_CommandList,
                     *m_View,
                     deferredInputs,
-                    directionalVisibilities,
+                    directLightVisibilities,
+                    submittedFlashlight,
+                    flashlightBeamProfile,
                     globalEnvironment,
                     skyVisibility,
                     applySkyVisibilityToDiffuseIbl,
@@ -4663,14 +5309,20 @@ public:
                     visibilityInputs.lightingDebugView =
                         uint32_t(m_ui.LightingDebugView);
                     visibilityInputs.output = m_RenderTargets->HdrColor;
+                    configureDiffuseDenoising(visibilityInputs);
                     BeginRendererStage(
                         RendererTimingStage::ScreenSpaceVisibility);
-                    m_ScreenSpaceVisibilityPass->Render(
+                    screenSpaceVisibilityResult =
+                        m_ScreenSpaceVisibilityPass->Render(
                         m_CommandList,
                         m_ui.ScreenSpaceVisibility,
                         *m_View,
                         visibilityInputs,
-                        uint32_t(GetFrameIndex()));
+                        visibilityNoiseSettings,
+                        visibilityNoise.texture,
+                        visibilityNoiseSettings.animate
+                            ? uint32_t(m_ScreenSpaceVisibilityPhase)
+                            : 0u);
                     EndRendererStage(
                         RendererTimingStage::ScreenSpaceVisibility);
                 }
@@ -4798,7 +5450,9 @@ public:
                 m_CommandList,
                 *m_View,
                 deferredMsaaInputs,
-                directionalVisibilities,
+                directLightVisibilities,
+                submittedFlashlight,
+                flashlightBeamProfile,
                 globalEnvironment,
                 skyVisibility,
                 applySkyVisibilityToDiffuseIbl,
@@ -4855,13 +5509,48 @@ public:
 
         }
 
+        const bool diagnosticExposureView =
+            m_ui.LightingDebugView != PbrLightingDebugView::None ||
+            m_ui.ScreenSpaceVisibility.debugView !=
+                VisibilityDebugView::FinalImage;
+        const bool autoExposureExpected =
+            m_ui.AutoExposure.enabled && !diagnosticExposureView;
+        if (autoExposureExpected)
+            BeginRendererStage(RendererTimingStage::AutoExposure);
+        nvrhi::IBuffer* autoExposureBuffer = nullptr;
+        if (autoExposureExpected && m_AutoExposurePass)
+        {
+            autoExposureBuffer = m_AutoExposurePass->Render(
+                m_CommandList,
+                *m_View,
+                antiAliasedTexture,
+                m_ui.AutoExposure,
+                m_FrameDeltaSeconds,
+                false);
+        }
+        else if (m_AutoExposurePass)
+        {
+            // Disabled and diagnostic frames select the texture-only AgX
+            // permutation. Its math is the exact pre-Auto-Exposure path.
+            m_AutoExposurePass->Reset();
+        }
+        if (autoExposureExpected)
+            EndRendererStage(RendererTimingStage::AutoExposure);
+        m_AutoExposureDispatchedThisFrame =
+            autoExposureExpected && m_AutoExposurePass &&
+            m_AutoExposurePass->DidDispatchThisFrame();
         nvrhi::ITexture* displayTexture = antiAliasedTexture;
         BeginRendererStage(RendererTimingStage::ToneMapping);
-        m_AgxToneMappingPass->Render(
-            m_CommandList, *m_View, antiAliasedTexture);
+        const bool toneMapped = m_AgxToneMappingPass &&
+            m_AgxToneMappingPass->Render(
+                m_CommandList,
+                *m_View,
+                antiAliasedTexture,
+                autoExposureBuffer);
         EndRendererStage(RendererTimingStage::ToneMapping);
 
-        displayTexture = m_RenderTargets->LdrColor;
+        if (toneMapped)
+            displayTexture = m_RenderTargets->LdrColor;
 
         if (antiAliasing.fastApproximateEnabled &&
             m_FastApproximateAAPass)
@@ -4901,14 +5590,6 @@ public:
                 displayTexture,
                 &m_BindingCache);
         }
-        if (screenSpaceShadowResult.HasDebugOutput() &&
-            m_ScreenSpaceDirectionalShadowPass)
-        {
-            m_ScreenSpaceDirectionalShadowPass->PresentDebug(
-                m_CommandList,
-                framebuffer,
-                screenSpaceShadowResult);
-        }
         EndRendererStage(RendererTimingStage::OutputBlit);
         EndRendererStage(RendererTimingStage::CompleteFrame);
         CompleteRendererTimerFrame();
@@ -4920,14 +5601,26 @@ public:
         if (temporalAaRenderedThisFrame)
             ++m_AntiAliasingPhase;
         if (heitzShadowResult.dispatched &&
-            heitzShadowResult.stochastic)
+            heitzShadowResult.stochastic &&
+            shadowNoiseSettings.animate)
         {
             ++m_HeitzRatioEstimatorPhase;
         }
+        if (flashlightShadowResult.dispatched &&
+            flashlightShadowResult.stochastic &&
+            flashlightNoiseSettings.animate)
+        {
+            ++m_RayTracedFlashlightShadowPhase;
+        }
         if (skyVisibilityResult.dispatched &&
-            m_ui.RayTracedSkyVisibility.animateSamples)
+            skyNoiseSettings.animate)
         {
             ++m_RayTracedSkyVisibilityPhase;
+        }
+        if (screenSpaceVisibilityResult.dispatched &&
+            visibilityNoiseSettings.animate)
+        {
+            ++m_ScreenSpaceVisibilityPhase;
         }
 
         if (m_ui.CopyScreenshotToClipboard)
@@ -4937,7 +5630,7 @@ public:
             SaveTextureToFile(GetDevice(), m_CommonPasses.get(), framebufferTexture,
                 nvrhi::ResourceStates::RenderTarget, screenshotPath.string().c_str());
             if (CopyBmpToClipboard(screenshotPath))
-                log::info("Screenshot copied to clipboard.");
+                log::info("Capture copied to clipboard.");
             else
                 log::error("Failed to copy screenshot to clipboard.");
             DeleteFileW(screenshotPath.c_str());
@@ -5025,11 +5718,52 @@ public:
     {
         ResetAntiAliasingState();
         InvalidateRendererStageTiming(
-            RendererTimingStage::RatioEstimatorShadows);
+            RendererTimingStage::ShadowRayDispatch);
         InvalidateRendererStageTiming(
-            RendererTimingStage::SkyVisibility);
+            RendererTimingStage::SkyVisibilityRayDispatch);
         InvalidateRendererStageTiming(
             RendererTimingStage::CompleteFrame);
+    }
+
+    void ResetNoiseSamplingHistory(
+        bool visibility,
+        bool shadows,
+        bool skyVisibility,
+        bool flashlight)
+    {
+        ResetAntiAliasingState();
+        if (visibility)
+        {
+            m_ScreenSpaceVisibilityPhase = 0u;
+            InvalidateRendererStageTiming(
+                RendererTimingStage::ScreenSpaceVisibility);
+        }
+        if (shadows)
+        {
+            m_HeitzRatioEstimatorPhase = 0u;
+            InvalidateRendererStageTiming(
+                RendererTimingStage::ShadowRayDispatch);
+        }
+        if (skyVisibility)
+        {
+            m_RayTracedSkyVisibilityPhase = 0u;
+            InvalidateRendererStageTiming(
+                RendererTimingStage::SkyVisibilityRayDispatch);
+        }
+        if (flashlight)
+        {
+            m_RayTracedFlashlightShadowPhase = 0u;
+            InvalidateRendererStageTiming(
+                RendererTimingStage::ShadowRayDispatch);
+        }
+        InvalidateRendererStageTiming(RendererTimingStage::CompleteFrame);
+    }
+
+    [[nodiscard]] uint64_t GetNoiseTextureResidentBytes() const
+    {
+        return m_NoiseTextureLibrary
+            ? m_NoiseTextureLibrary->GetResidentBytes()
+            : 0u;
     }
 
     const ScreenSpaceVisibilityTimings* GetScreenSpaceVisibilityTimings() const
@@ -5044,14 +5778,6 @@ public:
         return m_RenderTargets && m_RenderTargets->Depth
             ? m_RenderTargets->Depth->getDesc().sampleCount
             : 1u;
-    }
-
-    const ScreenSpaceDirectionalShadowTimings*
-        GetScreenSpaceDirectionalShadowTimings() const
-    {
-        return m_ScreenSpaceDirectionalShadowPass
-            ? &m_ScreenSpaceDirectionalShadowPass->GetTimings()
-            : nullptr;
     }
 
     bool HasPrimaryDirectionalLight() const
@@ -5100,10 +5826,13 @@ public:
     {
         if (invalidation != WorldSpaceRepresentationInvalidation::None &&
             (m_HeitzRatioEstimatorShadowPass ||
+                m_RayTracedFlashlightShadowPass ||
                 m_RayTracedSkyVisibilityPass))
         {
             if (m_HeitzRatioEstimatorShadowPass)
                 m_HeitzRatioEstimatorShadowPass->ResetBindingCache();
+            if (m_RayTracedFlashlightShadowPass)
+                m_RayTracedFlashlightShadowPass->ResetBindingCache();
             if (m_RayTracedSkyVisibilityPass)
                 m_RayTracedSkyVisibilityPass->ResetBindingCache();
             ResetAntiAliasingState();
@@ -5159,6 +5888,33 @@ public:
     [[nodiscard]] bool DidDispatchRayTracedSkyVisibilityThisFrame() const
     {
         return m_RayTracedSkyVisibilityDispatchedThisFrame;
+    }
+
+    [[nodiscard]] bool IsRendererStageActiveThisFrame(
+        RendererTimingStage stage) const
+    {
+        switch (stage)
+        {
+        case RendererTimingStage::ShadowRayDispatch:
+            return m_HeitzRatioEstimatorDispatchedThisFrame ||
+                m_RayTracedFlashlightShadowDispatchedThisFrame;
+        case RendererTimingStage::ShadowDenoise:
+            return m_ShadowDenoisingDispatchedThisFrame;
+        case RendererTimingStage::SkyVisibilityRayDispatch:
+            return m_RayTracedSkyVisibilityDispatchedThisFrame;
+        case RendererTimingStage::SkyVisibilityDenoise:
+            return m_RayTracedSkyVisibilityDenoisedThisFrame;
+        case RendererTimingStage::AmbientOcclusionDenoise:
+            return m_AmbientOcclusionDenoisedThisFrame;
+        case RendererTimingStage::DiffuseIlluminationDenoise:
+            return m_DiffuseIlluminationDenoisedThisFrame;
+        case RendererTimingStage::AutoExposure:
+            return m_AutoExposureDispatchedThisFrame;
+        case RendererTimingStage::VisibilityLightingPreparation:
+            return m_VisibilityLightingPreparationDispatchedThisFrame;
+        default:
+            return true;
+        }
     }
 
 };
@@ -6080,11 +6836,9 @@ private:
         double frameTimeSeconds = 0.0;
         std::string rendererName;
         GpuPerformanceMetrics gpuMetrics;
-        ScreenSpaceDirectionalShadowTimings screenSpaceShadowTimings;
         ScreenSpaceVisibilityTimings visibilityTimings;
         TemporalAATimings temporalAATimings;
         Cmaa2Timings cmaa2Timings;
-        bool hasScreenSpaceShadowTimings = false;
         bool hasVisibilityTimings = false;
         bool hasTemporalAATimings = false;
         bool hasCmaa2Timings = false;
@@ -6103,18 +6857,107 @@ private:
     double m_StatFrameTimeSum = 0.0;
     uint32_t m_StatFrameTimeCount = 0;
     std::array<std::string, 6> m_PerformanceStatValues;
-    ScreenSpaceDirectionalShadowTimings m_DisplayedScreenSpaceShadowTimings;
     ScreenSpaceVisibilityTimings m_DisplayedVisibilityTimings;
     TemporalAATimings m_DisplayedTemporalAATimings;
     Cmaa2Timings m_DisplayedCmaa2Timings;
     std::deque<StatSnapshot> m_StatUpdateQueue;
     bool m_HasAppliedStatSnapshot = false;
     bool m_HasGpuStatSnapshot = false;
-    bool m_HasScreenSpaceShadowStatSnapshot = false;
     bool m_HasVisibilityStatSnapshot = false;
     bool m_HasTemporalAAStatSnapshot = false;
     bool m_HasCmaa2StatSnapshot = false;
     bool m_WasSceneLoading = false;
+    bool m_SceneLoadFailed = false;
+    std::chrono::steady_clock::time_point m_SceneLoadCounterStart;
+    std::string m_SceneLoadHistoryKey;
+    SceneLoadTimingHistory m_AllSceneLoadTiming;
+    std::unordered_map<std::string, SceneLoadTimingHistory>
+        m_SceneLoadTimingByScene;
+
+    [[nodiscard]] static std::filesystem::path
+        GetSceneLoadTimingDatabasePath()
+    {
+        const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA");
+        if (!localAppData || localAppData[0] == L'\0')
+            return {};
+        return std::filesystem::path(localAppData) /
+            L"UVSR" / L"scene-load-history-v1.txt";
+    }
+
+    void LoadSceneLoadTimingDatabase()
+    {
+        const std::filesystem::path path =
+            GetSceneLoadTimingDatabasePath();
+        if (path.empty())
+            return;
+
+        std::ifstream input(path, std::ios::binary);
+        if (!input.is_open())
+            return;
+
+        SceneLoadTimingDatabase database;
+        if (!ReadSceneLoadTimingDatabase(input, database))
+        {
+            log::warning(
+                "Ignoring invalid scene loading history at %s",
+                path.generic_string().c_str());
+            return;
+        }
+        m_AllSceneLoadTiming = database.allScenes;
+        m_SceneLoadTimingByScene = std::move(database.byScene);
+    }
+
+    void SaveSceneLoadTimingDatabase() const
+    {
+        const std::filesystem::path path =
+            GetSceneLoadTimingDatabasePath();
+        if (path.empty())
+            return;
+
+        std::error_code error;
+        std::filesystem::create_directories(
+            path.parent_path(),
+            error);
+        if (error)
+        {
+            log::warning(
+                "Could not create scene loading history directory: %s",
+                error.message().c_str());
+            return;
+        }
+
+        std::filesystem::path temporaryPath = path;
+        temporaryPath += L".tmp";
+        std::ofstream output(
+            temporaryPath,
+            std::ios::binary | std::ios::trunc);
+        const SceneLoadTimingDatabase database = {
+            m_AllSceneLoadTiming,
+            m_SceneLoadTimingByScene
+        };
+        const bool serialized = output.is_open() &&
+            WriteSceneLoadTimingDatabase(output, database);
+        output.flush();
+        const bool flushed = output.good();
+        output.close();
+        if (!serialized || !flushed)
+        {
+            log::warning(
+                "Could not write scene loading history at %s",
+                temporaryPath.generic_string().c_str());
+            return;
+        }
+
+        if (!MoveFileExW(
+                temporaryPath.c_str(),
+                path.c_str(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        {
+            log::warning(
+                "Could not publish scene loading history (Win32 error %lu)",
+                GetLastError());
+        }
+    }
     std::unique_ptr<BackdropBlurPass> m_BackdropBlurPass;
     std::unique_ptr<PixelZoomPass> m_PixelZoomPass;
     uint32_t m_SettingsPanelMarginPixels = 10u;
@@ -9116,6 +9959,17 @@ private:
                 value,
                 error);
         }
+        else if (path == "representation.allow-ray-traversal")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.allowRayTraversal,
+                factoryDefaults.allowRayTraversal,
+                value,
+                error);
+        }
         else
         {
             handled = false;
@@ -9134,7 +9988,93 @@ private:
                     candidate);
             m_ui.Representation = candidate;
             m_app->InvalidateWorldSpaceRepresentation(invalidation);
+            m_app->ResetImageBasedLightingHistory();
         }
+        return true;
+    }
+
+    bool DispatchNoiseCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        NoiseSettings candidate = m_ui.Noise;
+        const NoiseSettings defaults;
+        bool handled = true;
+        if (path == "noise.pattern")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, NoisePattern>, 3> Options = {{
+                    { "spatial-white", NoisePattern::SpatialWhite },
+                    { "spatial-blue", NoisePattern::SpatialBlue },
+                    { "spatiotemporal-blue",
+                        NoisePattern::SpatiotemporalBlue }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.pattern,
+                defaults.pattern,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "noise.resolution")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, NoiseResolution>, 4> Options = {{
+                    { "64x64", NoiseResolution::Size64 },
+                    { "128x128", NoiseResolution::Size128 },
+                    { "256x256", NoiseResolution::Size256 },
+                    { "512x512", NoiseResolution::Size512 }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.resolution,
+                defaults.resolution,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "noise.animate-samples")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.animate,
+                defaults.animate,
+                value,
+                error);
+        }
+        else
+        {
+            handled = false;
+            error = "Internal Noise command binding is missing for '" +
+                std::string(path) + "'.";
+        }
+
+        if (!handled)
+            return false;
+        if (operation == CommandValueOperation::Get)
+            return true;
+        if (!IsValidNoiseSettings(candidate))
+        {
+            error = "The requested global noise configuration is invalid.";
+            return false;
+        }
+        m_ui.Noise = candidate;
+        m_app->ResetNoiseSamplingHistory(
+            !m_ui.ScreenSpaceVisibility.noise.specifyNoise,
+            !m_ui.DirectionalShadows.ratioEstimator.noise.specifyNoise,
+            !m_ui.RayTracedSkyVisibility.noise.specifyNoise,
+            true);
         return true;
     }
 
@@ -9208,19 +10148,65 @@ private:
                 candidate.estimator, defaults.estimator,
                 Options, value, error);
         }
-        else if (path == "visibility.noise")
+        else if (path == "visibility.specify-noise")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.noise.specifyNoise,
+                defaults.noise.specifyNoise,
+                value,
+                error);
+        }
+        else if (path == "visibility.noise-pattern")
         {
             static constexpr std::array<
-                std::pair<std::string_view, VisibilitySampleScheduler>, 2>
-                Options = {{
-                    { "permutated-white-noise",
-                        VisibilitySampleScheduler::PermutatedWhiteNoise },
-                    { "void-cluster-blue-noise",
-                        VisibilitySampleScheduler::VoidClusterBlueNoise }
+                std::pair<std::string_view, NoisePattern>, 3> Options = {{
+                    { "spatial-white", NoisePattern::SpatialWhite },
+                    { "spatial-blue", NoisePattern::SpatialBlue },
+                    { "spatiotemporal-blue",
+                        NoisePattern::SpatiotemporalBlue }
                 }};
-            handled = ApplyCommandEnum(operation, arguments, path,
-                candidate.sampling.scheduler, defaults.sampling.scheduler,
-                Options, value, error);
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.noise.custom.pattern,
+                defaults.noise.custom.pattern,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "visibility.noise-resolution")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, NoiseResolution>, 4> Options = {{
+                    { "64x64", NoiseResolution::Size64 },
+                    { "128x128", NoiseResolution::Size128 },
+                    { "256x256", NoiseResolution::Size256 },
+                    { "512x512", NoiseResolution::Size512 }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.noise.custom.resolution,
+                defaults.noise.custom.resolution,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "visibility.animate-samples")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.noise.custom.animate,
+                defaults.noise.custom.animate,
+                value,
+                error);
         }
         else if (path == "visibility.samples")
         {
@@ -9245,7 +10231,10 @@ private:
             handled = ApplyCommandFloat(operation, arguments, path,
                 candidate.sampling.stepDistributionExponent,
                 defaults.sampling.stepDistributionExponent,
-                0.25f, 4.f, value, error);
+                MinimumVisibilityStepDistributionExponent,
+                MaximumVisibilityStepDistributionExponent,
+                value,
+                error);
         }
         else if (path == "visibility.ao.enabled")
         {
@@ -9258,7 +10247,21 @@ private:
             handled = ApplyCommandFloat(operation, arguments, path,
                 candidate.ambientOcclusion.strength,
                 defaults.ambientOcclusion.strength,
-                0.f, 4.f, value, error);
+                MinimumVisibilityAmbientOcclusionStrength,
+                MaximumVisibilityAmbientOcclusionStrength,
+                value,
+                error);
+        }
+        else if (path == "visibility.ao.output-hit-distance")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.ambientOcclusion.outputHitDistance,
+                defaults.ambientOcclusion.outputHitDistance,
+                value,
+                error);
         }
         else if (path == "visibility.ao.precision")
         {
@@ -9278,6 +10281,17 @@ private:
             handled = ApplyCommandBool(operation, arguments, path,
                 candidate.indirectDiffuse.enabled,
                 defaults.indirectDiffuse.enabled, value, error);
+        }
+        else if (path == "visibility.gi.output-hit-distance")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.indirectDiffuse.outputHitDistance,
+                defaults.indirectDiffuse.outputHitDistance,
+                value,
+                error);
         }
         else if (path == "visibility.gi.intensity")
         {
@@ -9358,12 +10372,39 @@ private:
             return false;
         if (operation != CommandValueOperation::Get)
         {
-            if (path != "visibility.quality")
+            const bool noiseCommand =
+                path == "visibility.specify-noise" ||
+                path == "visibility.noise-pattern" ||
+                path == "visibility.noise-resolution" ||
+                path == "visibility.animate-samples";
+            if (noiseCommand)
+            {
+                if (!IsValidNoiseSettings(candidate.noise.custom))
+                {
+                    error = "The requested visibility noise configuration is invalid.";
+                    return false;
+                }
+                const NoiseSettings oldResolved = ResolveNoiseSettings(
+                    m_ui.Noise,
+                    m_ui.ScreenSpaceVisibility.noise);
+                const NoiseSettings newResolved = ResolveNoiseSettings(
+                    m_ui.Noise,
+                    candidate.noise);
+                m_ui.ScreenSpaceVisibility = candidate;
+                if (oldResolved != newResolved)
+                    m_app->ResetNoiseSamplingHistory(
+                        true, false, false, false);
+                return true;
+            }
+            if (path != "visibility.quality" &&
+                path != "visibility.ao.output-hit-distance" &&
+                path != "visibility.gi.output-hit-distance")
             {
                 MarkScreenSpaceVisibilityQualityCustom(candidate);
                 ReconcileScreenSpaceVisibilityQualityPreset(candidate);
             }
             m_ui.ScreenSpaceVisibility = candidate;
+            m_app->ResetImageBasedLightingHistory();
         }
         return true;
     }
@@ -9926,25 +10967,6 @@ private:
                 m_app->ResetImageBasedLightingHistory();
             return handled;
         }
-        if (path == "debug.shadows.isolation")
-        {
-            static constexpr std::array<std::pair<
-                std::string_view, ScreenSpaceShadowIsolationView>, 3>
-                Options = {{
-                    { "final", ScreenSpaceShadowIsolationView::None },
-                    { "thread-lanes", ScreenSpaceShadowIsolationView::Thread },
-                    { "wave-groups", ScreenSpaceShadowIsolationView::Wave }
-                }};
-            return ApplyCommandEnum(
-                operation,
-                arguments,
-                path,
-                m_ui.ScreenSpaceDirectionalShadows.isolationView,
-                ScreenSpaceShadowIsolationView::None,
-                Options,
-                value,
-                error);
-        }
         error = "Internal Debug command binding is missing for '" +
             std::string(path) + "'.";
         return false;
@@ -10029,8 +11051,12 @@ private:
         if (path == "sky.visibility.enabled" ||
             path == "sky.visibility.diffuse-ibl" ||
             path == "sky.visibility.specular-ibl" ||
+            path == "sky.visibility.ratio-estimator" ||
+            path == "sky.visibility.output-hit-distance" ||
             path == "sky.visibility.samples-per-pixel" ||
+            path == "sky.visibility.specify-noise" ||
             path == "sky.visibility.noise-pattern" ||
+            path == "sky.visibility.noise-resolution" ||
             path == "sky.visibility.animate-samples" ||
             path == "sky.visibility.max-distance" ||
             path == "sky.visibility.ray-bias")
@@ -10072,6 +11098,28 @@ private:
                     value,
                     error);
             }
+            else if (path == "sky.visibility.ratio-estimator")
+            {
+                handled = ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.useRatioEstimator,
+                    factoryDefaults.useRatioEstimator,
+                    value,
+                    error);
+            }
+            else if (path == "sky.visibility.output-hit-distance")
+            {
+                handled = ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.outputHitDistance,
+                    factoryDefaults.outputHitDistance,
+                    value,
+                    error);
+            }
             else if (path == "sky.visibility.samples-per-pixel")
             {
                 static constexpr std::array<
@@ -10094,23 +11142,52 @@ private:
                     value,
                     error);
             }
+            else if (path == "sky.visibility.specify-noise")
+            {
+                handled = ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.noise.specifyNoise,
+                    factoryDefaults.noise.specifyNoise,
+                    value,
+                    error);
+            }
             else if (path == "sky.visibility.noise-pattern")
             {
-                static constexpr std::array<std::pair<std::string_view,
-                    RayTracedSkyVisibilityNoisePattern>, 2> Options = {{
-                        { "permutated-white-noise",
-                            RayTracedSkyVisibilityNoisePattern::
-                                PermutatedWhiteNoise },
-                        { "void-cluster-blue-noise",
-                            RayTracedSkyVisibilityNoisePattern::
-                                VoidClusterBlueNoise }
+                static constexpr std::array<
+                    std::pair<std::string_view, NoisePattern>, 3> Options = {{
+                        { "spatial-white", NoisePattern::SpatialWhite },
+                        { "spatial-blue", NoisePattern::SpatialBlue },
+                        { "spatiotemporal-blue",
+                            NoisePattern::SpatiotemporalBlue }
                     }};
                 handled = ApplyCommandEnum(
                     operation,
                     arguments,
                     path,
-                    candidate.noisePattern,
-                    factoryDefaults.noisePattern,
+                    candidate.noise.custom.pattern,
+                    factoryDefaults.noise.custom.pattern,
+                    Options,
+                    value,
+                    error);
+            }
+            else if (path == "sky.visibility.noise-resolution")
+            {
+                static constexpr std::array<
+                    std::pair<std::string_view, NoiseResolution>, 4>
+                    Options = {{
+                        { "64x64", NoiseResolution::Size64 },
+                        { "128x128", NoiseResolution::Size128 },
+                        { "256x256", NoiseResolution::Size256 },
+                        { "512x512", NoiseResolution::Size512 }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.noise.custom.resolution,
+                    factoryDefaults.noise.custom.resolution,
                     Options,
                     value,
                     error);
@@ -10121,8 +11198,8 @@ private:
                     operation,
                     arguments,
                     path,
-                    candidate.animateSamples,
-                    factoryDefaults.animateSamples,
+                    candidate.noise.custom.animate,
+                    factoryDefaults.noise.custom.animate,
                     value,
                     error);
             }
@@ -10168,7 +11245,7 @@ private:
             if (!IsRayTracedSkyVisibilityConfigurationSupported(candidate))
             {
                 error =
-                    "The requested ray-traced sky visibility configuration is not supported.";
+                    "The requested ray traced sky visibility configuration is not supported.";
                 return false;
             }
             if (candidate.enabled &&
@@ -10179,24 +11256,50 @@ private:
                 return false;
             }
 
+            if (!IsValidNoiseSettings(candidate.noise.custom))
+            {
+                error =
+                    "The requested sky visibility noise configuration is invalid.";
+                return false;
+            }
+
             const bool changed =
                 candidate.enabled != m_ui.RayTracedSkyVisibility.enabled ||
                 candidate.applyToDiffuseIbl !=
                     m_ui.RayTracedSkyVisibility.applyToDiffuseIbl ||
                 candidate.applyToSpecularIbl !=
                     m_ui.RayTracedSkyVisibility.applyToSpecularIbl ||
+                candidate.useRatioEstimator !=
+                    m_ui.RayTracedSkyVisibility.useRatioEstimator ||
+                candidate.outputHitDistance !=
+                    m_ui.RayTracedSkyVisibility.outputHitDistance ||
                 candidate.sampleRateLog2 !=
                     m_ui.RayTracedSkyVisibility.sampleRateLog2 ||
-                candidate.noisePattern !=
-                    m_ui.RayTracedSkyVisibility.noisePattern ||
-                candidate.animateSamples !=
-                    m_ui.RayTracedSkyVisibility.animateSamples ||
+                candidate.noise !=
+                    m_ui.RayTracedSkyVisibility.noise ||
                 candidate.maxDistance !=
                     m_ui.RayTracedSkyVisibility.maxDistance ||
                 candidate.rayBias != m_ui.RayTracedSkyVisibility.rayBias;
+            const NoiseSettings oldResolved = ResolveNoiseSettings(
+                m_ui.Noise,
+                m_ui.RayTracedSkyVisibility.noise);
+            const NoiseSettings newResolved = ResolveNoiseSettings(
+                m_ui.Noise,
+                candidate.noise);
+            const bool noiseCommand =
+                path == "sky.visibility.specify-noise" ||
+                path == "sky.visibility.noise-pattern" ||
+                path == "sky.visibility.noise-resolution" ||
+                path == "sky.visibility.animate-samples";
             m_ui.RayTracedSkyVisibility = candidate;
             if (changed)
-                m_app->ResetImageBasedLightingHistory();
+            {
+                if (noiseCommand && oldResolved != newResolved)
+                    m_app->ResetNoiseSamplingHistory(
+                        false, false, true, false);
+                else if (!noiseCommand)
+                    m_app->ResetImageBasedLightingHistory();
+            }
             return true;
         }
 
@@ -10217,6 +11320,69 @@ private:
                 value,
                 error);
             resetVisibilityHistory = true;
+        }
+        else if (path == "sky.auto-exposure.enabled")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                m_ui.AutoExposure.enabled,
+                false,
+                value,
+                error);
+        }
+        else if (path == "sky.auto-exposure.exposure-compensation")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                m_ui.AutoExposure.exposureCompensationEV,
+                AutoExposureDefaultCompensationEV,
+                AutoExposureMinimumCompensationEV,
+                AutoExposureMaximumCompensationEV,
+                value,
+                error);
+        }
+        else if (path == "sky.auto-exposure.maximum-brightening")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                m_ui.AutoExposure.maximumBrighteningEV,
+                AutoExposureDefaultMaximumBrighteningEV,
+                AutoExposureMinimumMovementEV,
+                AutoExposureMaximumMovementEV,
+                value,
+                error);
+        }
+        else if (path == "sky.auto-exposure.maximum-darkening")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                m_ui.AutoExposure.maximumDarkeningEV,
+                AutoExposureDefaultMaximumDarkeningEV,
+                AutoExposureMinimumMovementEV,
+                AutoExposureMaximumMovementEV,
+                value,
+                error);
+        }
+        else if (path == "sky.auto-exposure.adjustment-period")
+        {
+            handled = ApplyCommandFloat(
+                operation,
+                arguments,
+                path,
+                m_ui.AutoExposure.adjustmentPeriodSeconds,
+                AutoExposureDefaultAdjustmentPeriodSeconds,
+                AutoExposureMinimumAdjustmentPeriodSeconds,
+                AutoExposureMaximumAdjustmentPeriodSeconds,
+                value,
+                error);
         }
         else if (path == "sky.diffuse-ibl")
         {
@@ -10310,6 +11476,163 @@ private:
                 m_app->ResetImageBasedLightingHistory();
         }
         return handled;
+    }
+
+    bool DispatchDenoisingCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        DenoisingSignalSettings* current = nullptr;
+        DenoisingEffect effect = DenoisingEffect::AmbientOcclusion;
+        std::string_view prefix;
+
+        if (path.rfind("denoising.ao.", 0u) == 0u)
+        {
+            current = &m_ui.Denoising.ambientOcclusion;
+            effect = DenoisingEffect::AmbientOcclusion;
+            prefix = "denoising.ao.";
+        }
+        else if (path.rfind("denoising.gi.", 0u) == 0u)
+        {
+            current = &m_ui.Denoising.diffuseGi;
+            effect = DenoisingEffect::DiffuseGi;
+            prefix = "denoising.gi.";
+        }
+        else if (path.rfind("denoising.shadows.", 0u) == 0u)
+        {
+            current = &m_ui.Denoising.shadows;
+            effect = DenoisingEffect::Shadows;
+            prefix = "denoising.shadows.";
+        }
+        else if (path.rfind("denoising.sky.", 0u) == 0u)
+        {
+            current = &m_ui.Denoising.skyVisibility;
+            effect = DenoisingEffect::SkyVisibility;
+            prefix = "denoising.sky.";
+        }
+        else
+        {
+            error = "Internal Denoising command binding is missing for '" +
+                std::string(path) + "'.";
+            return false;
+        }
+
+        DenoisingSignalSettings candidate = *current;
+        const DenoisingSignalSettings defaults;
+        const std::string_view property = path.substr(prefix.size());
+        bool handled = false;
+
+        if (property == "method")
+        {
+            if (effect == DenoisingEffect::AmbientOcclusion)
+            {
+                static constexpr std::array<std::pair<std::string_view,
+                    DenoisingMethodChoice>, 2> Options = {{
+                    { "none", DenoisingMethodChoice::None },
+                    { "reblur", DenoisingMethodChoice::Reblur }
+                }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path,
+                    candidate.method, defaults.method,
+                    Options, value, error);
+            }
+            else if (effect == DenoisingEffect::Shadows)
+            {
+                static constexpr std::array<std::pair<std::string_view,
+                    DenoisingMethodChoice>, 2> Options = {{
+                    { "none", DenoisingMethodChoice::None },
+                    { "sigma", DenoisingMethodChoice::Sigma }
+                }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path,
+                    candidate.method, defaults.method,
+                    Options, value, error);
+            }
+            else
+            {
+                static constexpr std::array<std::pair<std::string_view,
+                    DenoisingMethodChoice>, 3> Options = {{
+                    { "none", DenoisingMethodChoice::None },
+                    { "reblur", DenoisingMethodChoice::Reblur },
+                    { "relax", DenoisingMethodChoice::Relax }
+                }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path,
+                    candidate.method, defaults.method,
+                    Options, value, error);
+            }
+        }
+        else if (property == "quality")
+        {
+            static constexpr std::array<std::pair<std::string_view,
+                DenoisingQuality>, 4> Options = {{
+                { "performance", DenoisingQuality::Performance },
+                { "balanced", DenoisingQuality::Balanced },
+                { "quality", DenoisingQuality::Quality },
+                { "ultra", DenoisingQuality::Ultra }
+            }};
+            handled = ApplyCommandEnum(
+                operation, arguments, path,
+                candidate.quality, defaults.quality,
+                Options, value, error);
+        }
+        else if (property == "resolution")
+        {
+            static constexpr std::array<std::pair<std::string_view,
+                DenoisingResolution>, 3> Options = {{
+                { "quarter", DenoisingResolution::Quarter },
+                { "half", DenoisingResolution::Half },
+                { "full", DenoisingResolution::Full }
+            }};
+            handled = ApplyCommandEnum(
+                operation, arguments, path,
+                candidate.resolution, defaults.resolution,
+                Options, value, error);
+        }
+        else if (property == "history")
+        {
+            handled = ApplyCommandUnsigned(
+                operation, arguments, path,
+                candidate.historyLength, defaults.historyLength,
+                1u, 32u, value, error);
+        }
+        else if (property == "disocclusion")
+        {
+            handled = ApplyCommandFloat(
+                operation, arguments, path,
+                candidate.disocclusionThreshold,
+                defaults.disocclusionThreshold,
+                0.001f, 0.1f, value, error);
+        }
+        else if (property == "anti-lag")
+        {
+            handled = ApplyCommandFloat(
+                operation, arguments, path,
+                candidate.antiLagStrength,
+                defaults.antiLagStrength,
+                0.f, 1.f, value, error);
+        }
+
+        if (!handled)
+        {
+            if (error.empty())
+            {
+                error = "Internal Denoising command binding is missing for '" +
+                    std::string(path) + "'.";
+            }
+            return false;
+        }
+        if (operation == CommandValueOperation::Get)
+            return true;
+
+        candidate = SanitizeDenoisingSettings(effect, candidate);
+        *current = candidate;
+        m_app->ResetImageBasedLightingHistory();
+        return true;
     }
 
     std::shared_ptr<Light> GetDefaultCommandLight() const
@@ -10439,7 +11762,7 @@ private:
     };
 
     inline static constexpr std::array<
-        FlashlightFloatCommandBinding, 10> FlashlightFloatCommandBindings = {{
+        FlashlightFloatCommandBinding, 12> FlashlightFloatCommandBindings = {{
             {
                 "light.selected.flashlight.hotspot-size",
                 &FlashlightSettings::hotspotSize,
@@ -10477,6 +11800,12 @@ private:
                 FlashlightMaximumBeamSizeDegrees
             },
             {
+                "light.selected.flashlight.angular-size",
+                &FlashlightSettings::angularSizeDegrees,
+                FlashlightMinimumAngularSizeDegrees,
+                FlashlightMaximumAngularSizeDegrees
+            },
+            {
                 "light.selected.flashlight.beam-roundness",
                 &FlashlightSettings::beamRoundness,
                 0.f,
@@ -10495,10 +11824,16 @@ private:
                 FlashlightMaximumRangeMeters
             },
             {
-                "light.selected.flashlight.camera-offset",
-                &FlashlightSettings::cameraLateralOffsetMeters,
-                FlashlightMinimumCameraLateralOffsetMeters,
-                FlashlightMaximumCameraLateralOffsetMeters
+                "light.selected.flashlight.horizontal-offset",
+                &FlashlightSettings::cameraHorizontalOffsetMeters,
+                FlashlightMinimumCameraHorizontalOffsetMeters,
+                FlashlightMaximumCameraHorizontalOffsetMeters
+            },
+            {
+                "light.selected.flashlight.vertical-offset",
+                &FlashlightSettings::cameraVerticalOffsetMeters,
+                FlashlightMinimumCameraVerticalOffsetMeters,
+                FlashlightMaximumCameraVerticalOffsetMeters
             }
         }};
 
@@ -10512,7 +11847,7 @@ private:
         const std::string_view path = definition.name;
         if (path == "light.selected.flashlight.enabled")
         {
-            return ApplyCommandBool(
+            const bool handled = ApplyCommandBool(
                 operation,
                 arguments,
                 path,
@@ -10520,6 +11855,9 @@ private:
                 DefaultFlashlightEnabled,
                 value,
                 error);
+            if (handled && operation != CommandValueOperation::Get)
+                m_app->ResetImageBasedLightingHistory();
+            return handled;
         }
 
         FlashlightSettings candidate = m_ui.Flashlight;
@@ -10557,6 +11895,18 @@ private:
                 path,
                 candidate.castShadows,
                 defaults.castShadows,
+                value,
+                error);
+        }
+        else if (path ==
+            "light.selected.flashlight.output-hit-distance")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.outputHitDistance,
+                defaults.outputHitDistance,
                 value,
                 error);
         }
@@ -10600,7 +11950,10 @@ private:
             return false;
         }
         if (operation != CommandValueOperation::Get)
+        {
             m_ui.Flashlight = SanitizeFlashlightSettings(candidate);
+            m_app->ResetImageBasedLightingHistory();
+        }
         return true;
     }
 
@@ -10944,7 +12297,7 @@ private:
         const DirectionalShadowSettings factoryDefaults;
         bool handled = true;
 
-        if (path == "shadows.ratio-estimator.enabled")
+        if (path == "shadows.ray-traced.enabled")
         {
             handled = ApplyCommandBool(
                 operation,
@@ -10955,7 +12308,29 @@ private:
                 value,
                 error);
         }
-        else if (path == "shadows.ratio-estimator.samples-per-pixel")
+        else if (path == "shadows.ray-traced.ratio-estimator")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.useRatioEstimator,
+                factoryDefaults.ratioEstimator.useRatioEstimator,
+                value,
+                error);
+        }
+        else if (path == "shadows.ray-traced.output-hit-distance")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.outputHitDistance,
+                factoryDefaults.ratioEstimator.outputHitDistance,
+                value,
+                error);
+        }
+        else if (path == "shadows.ray-traced.samples-per-pixel")
         {
             static constexpr std::array<
                 std::pair<std::string_view, int32_t>, 7> Options = {{
@@ -10977,7 +12352,7 @@ private:
                 value,
                 error);
         }
-        else if (path == "shadows.ratio-estimator.hard-shadows")
+        else if (path == "shadows.ray-traced.hard-shadows")
         {
             handled = ApplyCommandBool(
                 operation,
@@ -10988,37 +12363,68 @@ private:
                 value,
                 error);
         }
-        else if (path == "shadows.ratio-estimator.noise-pattern")
-        {
-            static constexpr std::array<std::pair<std::string_view,
-                HeitzRatioEstimatorNoisePattern>, 2> Options = {{
-                    { "permutated-white-noise",
-                        HeitzRatioEstimatorNoisePattern::PermutatedWhiteNoise },
-                    { "void-cluster-blue-noise",
-                        HeitzRatioEstimatorNoisePattern::VoidClusterBlueNoise }
-                }};
-            handled = ApplyCommandEnum(
-                operation,
-                arguments,
-                path,
-                candidate.ratioEstimator.noisePattern,
-                factoryDefaults.ratioEstimator.noisePattern,
-                Options,
-                value,
-                error);
-        }
-        else if (path == "shadows.ratio-estimator.animate-samples")
+        else if (path == "shadows.ray-traced.specify-noise")
         {
             handled = ApplyCommandBool(
                 operation,
                 arguments,
                 path,
-                candidate.ratioEstimator.animateSamples,
-                factoryDefaults.ratioEstimator.animateSamples,
+                candidate.ratioEstimator.noise.specifyNoise,
+                factoryDefaults.ratioEstimator.noise.specifyNoise,
                 value,
                 error);
         }
-        else if (path == "shadows.ratio-estimator.max-distance")
+        else if (path == "shadows.ray-traced.noise-pattern")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, NoisePattern>, 3> Options = {{
+                    { "spatial-white", NoisePattern::SpatialWhite },
+                    { "spatial-blue", NoisePattern::SpatialBlue },
+                    { "spatiotemporal-blue",
+                        NoisePattern::SpatiotemporalBlue }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.noise.custom.pattern,
+                factoryDefaults.ratioEstimator.noise.custom.pattern,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.ray-traced.noise-resolution")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, NoiseResolution>, 4>
+                Options = {{
+                    { "64x64", NoiseResolution::Size64 },
+                    { "128x128", NoiseResolution::Size128 },
+                    { "256x256", NoiseResolution::Size256 },
+                    { "512x512", NoiseResolution::Size512 }
+                }};
+            handled = ApplyCommandEnum(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.noise.custom.resolution,
+                factoryDefaults.ratioEstimator.noise.custom.resolution,
+                Options,
+                value,
+                error);
+        }
+        else if (path == "shadows.ray-traced.animate-samples")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.ratioEstimator.noise.custom.animate,
+                factoryDefaults.ratioEstimator.noise.custom.animate,
+                value,
+                error);
+        }
+        else if (path == "shadows.ray-traced.max-distance")
         {
             static constexpr std::array<std::pair<std::string_view,
                 RayVisibilityMaxDistance>, 6> Options = {{
@@ -11039,7 +12445,7 @@ private:
                 value,
                 error);
         }
-        else if (path == "shadows.ratio-estimator.ray-bias")
+        else if (path == "shadows.ray-traced.ray-bias")
         {
             handled = ApplyCommandFloat(
                 operation,
@@ -11068,7 +12474,13 @@ private:
                 candidate.ratioEstimator))
         {
             error =
-                "The requested ratio-estimator shadow configuration is not supported.";
+                "The requested ratio estimator shadow configuration is not supported.";
+            return false;
+        }
+        if (!IsValidNoiseSettings(candidate.ratioEstimator.noise.custom))
+        {
+            error =
+                "The requested ray-traced shadow noise configuration is invalid.";
             return false;
         }
         if (candidate.ratioEstimator.enabled &&
@@ -11082,7 +12494,7 @@ private:
             !m_app->SupportsHeitzRatioEstimatorShadows())
         {
             error =
-                "Heitz ratio-estimator shadows require DXR 1.1 support and "
+                "Heitz ratio estimator shadows require DXR 1.1 support and "
                 "single-sample rendering.";
             return false;
         }
@@ -11092,321 +12504,40 @@ private:
                 m_ui.DirectionalShadows.ratioEstimator.enabled ||
             candidate.ratioEstimator.hardShadows !=
                 m_ui.DirectionalShadows.ratioEstimator.hardShadows ||
+            candidate.ratioEstimator.useRatioEstimator !=
+                m_ui.DirectionalShadows.ratioEstimator.useRatioEstimator ||
+            candidate.ratioEstimator.outputHitDistance !=
+                m_ui.DirectionalShadows.ratioEstimator.outputHitDistance ||
             candidate.ratioEstimator.sampleRateLog2 !=
                 m_ui.DirectionalShadows.ratioEstimator.sampleRateLog2 ||
-            candidate.ratioEstimator.noisePattern !=
-                m_ui.DirectionalShadows.ratioEstimator.noisePattern ||
-            candidate.ratioEstimator.animateSamples !=
-                m_ui.DirectionalShadows.ratioEstimator.animateSamples ||
+            candidate.ratioEstimator.noise !=
+                m_ui.DirectionalShadows.ratioEstimator.noise ||
             candidate.ratioEstimator.maxDistance !=
                 m_ui.DirectionalShadows.ratioEstimator.maxDistance ||
             candidate.ratioEstimator.rayBias !=
                 m_ui.DirectionalShadows.ratioEstimator.rayBias;
+        const NoiseSettings oldResolved = ResolveNoiseSettings(
+            m_ui.Noise,
+            m_ui.DirectionalShadows.ratioEstimator.noise);
+        const NoiseSettings newResolved = ResolveNoiseSettings(
+            m_ui.Noise,
+            candidate.ratioEstimator.noise);
+        const bool noiseCommand =
+            path == "shadows.ray-traced.specify-noise" ||
+            path == "shadows.ray-traced.noise-pattern" ||
+            path == "shadows.ray-traced.noise-resolution" ||
+            path == "shadows.ray-traced.animate-samples";
         m_ui.DirectionalShadows = candidate;
         if (changed)
-            m_app->ResetImageBasedLightingHistory();
-        return true;
-    }
-
-    static bool IsSameCommandScreenSpaceShadowConfiguration(
-        const ScreenSpaceDirectionalShadowSettings& left,
-        const ScreenSpaceDirectionalShadowSettings& right)
-    {
-        return left.length == right.length &&
-            left.surfaceThickness == right.surfaceThickness &&
-            left.bilinearThreshold == right.bilinearThreshold &&
-            left.shadowContrast == right.shadowContrast &&
-            left.hardShadowSamples == right.hardShadowSamples &&
-            left.fadeOutSamples == right.fadeOutSamples &&
-            left.ignoreEdgePixels == right.ignoreEdgePixels &&
-            left.usePrecisionOffset == right.usePrecisionOffset &&
-            left.bilinearSamplingOffsetMode ==
-                right.bilinearSamplingOffsetMode &&
-            left.useEarlyOut == right.useEarlyOut;
-    }
-
-    static void ReconcileCommandScreenSpaceShadowPreset(
-        ScreenSpaceDirectionalShadowSettings& settings)
-    {
-        static constexpr ScreenSpaceShadowPreset Presets[] = {
-            ScreenSpaceShadowPreset::Default,
-            ScreenSpaceShadowPreset::Long,
-            ScreenSpaceShadowPreset::MaximumValidation
-        };
-        for (const ScreenSpaceShadowPreset preset : Presets)
         {
-            ScreenSpaceDirectionalShadowSettings profileSettings = settings;
-            ApplyScreenSpaceShadowPreset(profileSettings, preset);
-            if (IsSameCommandScreenSpaceShadowConfiguration(
-                    settings, profileSettings))
-            {
-                settings.preset = preset;
-                return;
-            }
-        }
-        settings.preset = ScreenSpaceShadowPreset::Custom;
-    }
-
-    bool DispatchScreenSpaceShadowCommandValue(
-        const UiSettingsCommandDefinition& definition,
-        CommandValueOperation operation,
-        const std::vector<std::string>& arguments,
-        std::string& value,
-        std::string& error)
-    {
-        const std::string_view path = definition.name;
-        if (path != "shadows.screen-space-directional.enabled" &&
-            operation != CommandValueOperation::Get &&
-            !m_app->HasPrimaryDirectionalLight())
-        {
-            error =
-                "Screen-space directional shadow settings require a "
-                "primary directional light.";
-            return false;
-        }
-        ScreenSpaceDirectionalShadowSettings candidate =
-            m_ui.ScreenSpaceDirectionalShadows;
-        const ScreenSpaceDirectionalShadowSettings factoryDefaults;
-        bool handled = true;
-
-        if (path == "shadows.screen-space-directional.enabled")
-        {
-            handled = ApplyCommandBool(
-                operation,
-                arguments,
-                path,
-                candidate.enabled,
-                factoryDefaults.enabled,
-                value,
-                error);
-            if (handled && operation != CommandValueOperation::Get &&
-                candidate.enabled &&
-                !m_app->HasPrimaryDirectionalLight())
-            {
-                error =
-                    "Screen-space directional shadows require a "
-                    "primary directional light.";
-                return false;
-            }
-        }
-        else if (path == "shadows.screen-space-directional.profile")
-        {
-            static constexpr std::array<
-                std::pair<std::string_view, ScreenSpaceShadowPreset>, 4>
-                Options = {{
-                    { "default", ScreenSpaceShadowPreset::Default },
-                    { "long", ScreenSpaceShadowPreset::Long },
-                    {
-                        "maximum-validation",
-                        ScreenSpaceShadowPreset::MaximumValidation
-                    },
-                    { "custom", ScreenSpaceShadowPreset::Custom }
-                }};
-            ScreenSpaceShadowPreset selected = candidate.preset;
-            if (operation != CommandValueOperation::Get &&
-                selected != ScreenSpaceShadowPreset::Custom)
-            {
-                ScreenSpaceDirectionalShadowSettings profileSettings =
-                    candidate;
-                ApplyScreenSpaceShadowPreset(profileSettings, selected);
-                if (!IsSameCommandScreenSpaceShadowConfiguration(
-                        candidate, profileSettings))
-                {
-                    selected = ScreenSpaceShadowPreset::Custom;
-                }
-            }
-            handled = ApplyCommandEnum(
-                operation,
-                arguments,
-                path,
-                selected,
-                ScreenSpaceShadowPreset::Default,
-                Options,
-                value,
-                error);
-            if (handled && operation != CommandValueOperation::Get)
-                ApplyScreenSpaceShadowPreset(candidate, selected);
-        }
-        else if (path == "shadows.screen-space-directional.length")
-        {
-            static constexpr std::array<
-                std::pair<std::string_view, ScreenSpaceShadowLength>, 5>
-                Options = {{
-                    { "60", ScreenSpaceShadowLength::Pixels60 },
-                    { "120", ScreenSpaceShadowLength::Pixels120 },
-                    { "240", ScreenSpaceShadowLength::Pixels240 },
-                    { "480", ScreenSpaceShadowLength::Pixels480 },
-                    { "960", ScreenSpaceShadowLength::Pixels960 }
-                }};
-            handled = ApplyCommandEnum(
-                operation,
-                arguments,
-                path,
-                candidate.length,
-                factoryDefaults.length,
-                Options,
-                value,
-                error);
-        }
-        else if (path == "shadows.screen-space-directional.surface-thickness")
-        {
-            handled = ApplyCommandFloat(
-                operation,
-                arguments,
-                path,
-                candidate.surfaceThickness,
-                factoryDefaults.surfaceThickness,
-                0.f,
-                0.05f,
-                value,
-                error);
-        }
-        else if (path == "shadows.screen-space-directional.bilinear-threshold")
-        {
-            handled = ApplyCommandFloat(
-                operation,
-                arguments,
-                path,
-                candidate.bilinearThreshold,
-                factoryDefaults.bilinearThreshold,
-                0.f,
-                0.1f,
-                value,
-                error);
-        }
-        else if (path == "shadows.screen-space-directional.contrast")
-        {
-            handled = ApplyCommandFloat(
-                operation,
-                arguments,
-                path,
-                candidate.shadowContrast,
-                factoryDefaults.shadowContrast,
-                1.f,
-                16.f,
-                value,
-                error);
-        }
-        else if (path == "shadows.screen-space-directional.hard-samples")
-        {
-            static constexpr std::array<
-                std::pair<std::string_view, uint32_t>, 3> Options = {{
-                    { "0", 0u },
-                    { "4", 4u },
-                    { "8", 8u }
-                }};
-            handled = ApplyCommandEnum(
-                operation,
-                arguments,
-                path,
-                candidate.hardShadowSamples,
-                factoryDefaults.hardShadowSamples,
-                Options,
-                value,
-                error);
-        }
-        else if (path == "shadows.screen-space-directional.fade-samples")
-        {
-            static constexpr std::array<
-                std::pair<std::string_view, uint32_t>, 3> Options = {{
-                    { "0", 0u },
-                    { "8", 8u },
-                    { "16", 16u }
-                }};
-            handled = ApplyCommandEnum(
-                operation,
-                arguments,
-                path,
-                candidate.fadeOutSamples,
-                factoryDefaults.fadeOutSamples,
-                Options,
-                value,
-                error);
-        }
-        else if (path == "shadows.screen-space-directional.ignore-edge-pixels")
-        {
-            handled = ApplyCommandBool(
-                operation,
-                arguments,
-                path,
-                candidate.ignoreEdgePixels,
-                factoryDefaults.ignoreEdgePixels,
-                value,
-                error);
-        }
-        else if (path == "shadows.screen-space-directional.precision-offset")
-        {
-            handled = ApplyCommandBool(
-                operation,
-                arguments,
-                path,
-                candidate.usePrecisionOffset,
-                factoryDefaults.usePrecisionOffset,
-                value,
-                error);
-        }
-        else if (path == "shadows.screen-space-directional.bilinear-offset-mode")
-        {
-            handled = ApplyCommandBool(
-                operation,
-                arguments,
-                path,
-                candidate.bilinearSamplingOffsetMode,
-                factoryDefaults.bilinearSamplingOffsetMode,
-                value,
-                error);
-        }
-        else if (path == "shadows.screen-space-directional.early-out")
-        {
-            handled = ApplyCommandBool(
-                operation,
-                arguments,
-                path,
-                candidate.useEarlyOut,
-                factoryDefaults.useEarlyOut,
-                value,
-                error);
-        }
-        else
-        {
-            handled = false;
-            error =
-                "Internal screen-space directional shadow command binding is missing for '" +
-                std::string(path) + "'.";
-        }
-
-        if (!handled)
-            return false;
-        if (operation != CommandValueOperation::Get)
-        {
-            if (!IsScreenSpaceShadowConfigurationSupported(candidate))
-            {
-                error =
-                    "The requested screen-space directional shadow sample tuple is not supported "
-                    "or hard plus fade samples exceed the selected length.";
-                return false;
-            }
-            if (path != "shadows.screen-space-directional.profile" &&
-                operation == CommandValueOperation::Reset)
-            {
-                ReconcileCommandScreenSpaceShadowPreset(candidate);
-            }
-            else if (path != "shadows.screen-space-directional.profile")
-            {
-                candidate.preset = ScreenSpaceShadowPreset::Custom;
-            }
-            const bool changed =
-                !IsSameCommandScreenSpaceShadowConfiguration(
-                    m_ui.ScreenSpaceDirectionalShadows, candidate) ||
-                m_ui.ScreenSpaceDirectionalShadows.enabled !=
-                    candidate.enabled;
-            m_ui.ScreenSpaceDirectionalShadows = candidate;
-            if (changed)
+            if (noiseCommand && oldResolved != newResolved)
+                m_app->ResetNoiseSamplingHistory(
+                    false, true, false, false);
+            else if (!noiseCommand)
                 m_app->ResetImageBasedLightingHistory();
         }
         return true;
     }
-
 
     static bool IsCommandMaterialTransmissive(MaterialDomain domain)
     {
@@ -11958,6 +13089,9 @@ private:
         case UiSettingsCommandSection::Representation:
             return DispatchRepresentationCommandValue(
                 definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::Noise:
+            return DispatchNoiseCommandValue(
+                definition, operation, arguments, value, error);
         case UiSettingsCommandSection::Visibility:
             return DispatchVisibilityCommandValue(
                 definition, operation, arguments, value, error);
@@ -11976,8 +13110,8 @@ private:
         case UiSettingsCommandSection::DirectionalShadows:
             return DispatchDirectionalShadowCommandValue(
                 definition, operation, arguments, value, error);
-        case UiSettingsCommandSection::ScreenSpaceDirectionalShadows:
-            return DispatchScreenSpaceShadowCommandValue(
+        case UiSettingsCommandSection::Denoising:
+            return DispatchDenoisingCommandValue(
                 definition, operation, arguments, value, error);
         case UiSettingsCommandSection::Materials:
             return DispatchMaterialCommandValue(
@@ -12030,7 +13164,7 @@ private:
             value = "restored";
             return true;
         }
-        if (action == "screenshot")
+        if (action == "capture")
         {
             m_ui.CopyScreenshotToClipboard = true;
             value = "queued";
@@ -13225,14 +14359,6 @@ private:
             : m_DisplayedFrameTime;
         snapshot.gpuMetrics =
             QueryGpuPerformanceMetrics(rendererString);
-        if (const ScreenSpaceDirectionalShadowTimings* timings =
-                m_app->GetScreenSpaceDirectionalShadowTimings())
-        {
-            snapshot.screenSpaceShadowTimings = *timings;
-            snapshot.hasScreenSpaceShadowTimings =
-                m_ui.ScreenSpaceDirectionalShadows.enabled &&
-                timings->active && timings->available;
-        }
         if (const ScreenSpaceVisibilityTimings* timings =
                 m_app->GetScreenSpaceVisibilityTimings())
         {
@@ -13349,13 +14475,9 @@ private:
             m_HasGpuStatSnapshot = false;
         }
 
-        m_DisplayedScreenSpaceShadowTimings =
-            snapshot.screenSpaceShadowTimings;
         m_DisplayedVisibilityTimings = snapshot.visibilityTimings;
         m_DisplayedTemporalAATimings = snapshot.temporalAATimings;
         m_DisplayedCmaa2Timings = snapshot.cmaa2Timings;
-        m_HasScreenSpaceShadowStatSnapshot =
-            snapshot.hasScreenSpaceShadowTimings;
         m_HasVisibilityStatSnapshot = snapshot.hasVisibilityTimings;
         m_HasTemporalAAStatSnapshot = snapshot.hasTemporalAATimings;
         m_HasCmaa2StatSnapshot = snapshot.hasCmaa2Timings;
@@ -13442,6 +14564,7 @@ public:
             *(app->GetRootFs()), "/media/fonts/System/CodexUI-Semibold.ttf", 16.f);
 
         ImGui::GetIO().IniFilename = nullptr;
+        LoadSceneLoadTimingDatabase();
     }
 
     bool ShouldSuppressFullscreenShortcut() const override
@@ -13908,17 +15031,19 @@ protected:
                 m_StatUpdateQueue.clear();
                 for (std::string& value : m_PerformanceStatValues)
                     value.clear();
-                m_DisplayedScreenSpaceShadowTimings = {};
                 m_DisplayedVisibilityTimings = {};
                 m_DisplayedTemporalAATimings = {};
                 m_DisplayedCmaa2Timings = {};
                 m_HasAppliedStatSnapshot = false;
                 m_HasGpuStatSnapshot = false;
-                m_HasScreenSpaceShadowStatSnapshot = false;
                 m_HasVisibilityStatSnapshot = false;
                 m_HasTemporalAAStatSnapshot = false;
                 m_HasCmaa2StatSnapshot = false;
                 m_SettingsAppearance = 0.f;
+                m_SceneLoadCounterStart =
+                    std::chrono::steady_clock::now();
+                m_SceneLoadHistoryKey = m_app->GetCurrentSceneName();
+                m_SceneLoadFailed = false;
             }
 
             BeginFullScreenWindow();
@@ -13960,16 +15085,40 @@ protected:
                 m_app->IsSceneGpuUploadPending()
                     ? "Uploading mesh buffers in bounded chunks"
                     : "Importing and preparing scene data";
+            const uint64_t elapsedLoadMilliseconds = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() -
+                    m_SceneLoadCounterStart).count());
+            const uint64_t elapsedLoadTicks =
+                ResolveSceneLoadElapsedTicks(elapsedLoadMilliseconds);
+            uint64_t averageLoadTicks = 0u;
+            const auto sceneTiming = m_SceneLoadTimingByScene.find(
+                m_SceneLoadHistoryKey);
+            if (sceneTiming != m_SceneLoadTimingByScene.end())
+            {
+                averageLoadTicks = ResolveAverageSceneLoadTicks(
+                    sceneTiming->second);
+            }
+            if (averageLoadTicks == 0u)
+            {
+                averageLoadTicks = ResolveAverageSceneLoadTicks(
+                    m_AllSceneLoadTiming);
+            }
+            const std::string averageLoadLabel = averageLoadTicks > 0u
+                ? std::to_string(averageLoadTicks)
+                : "--";
             snprintf(
                 messageBuffer,
                 std::size(messageBuffer),
                 "Loading scene: %s, please wait%s\n"
-                "%s\n"
+                "%s: %llu/%s\n"
                 "Objects: %u/%u / Import steps: %llu/%llu / "
                 "Textures decoded: %u/%u / GPU ready: %u/%u",
                 sceneDisplayName.c_str(),
                 LoadingDots[loadingDotIndex],
                 loadingPhase,
+                static_cast<unsigned long long>(elapsedLoadTicks),
+                averageLoadLabel.c_str(),
                 objectsLoaded,
                 objectsTotal,
                 static_cast<unsigned long long>(importStepsCompleted),
@@ -13985,6 +15134,32 @@ protected:
             EndFullScreenWindow();
 
             return;
+        }
+        if (m_WasSceneLoading)
+        {
+            m_SceneLoadFailed = !m_app->IsSceneLoaded();
+            if (!m_SceneLoadFailed)
+            {
+                const uint64_t completedLoadMilliseconds =
+                    static_cast<uint64_t>(
+                        std::chrono::duration_cast<
+                            std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() -
+                            m_SceneLoadCounterStart).count());
+                RecordSceneLoadDuration(
+                    m_AllSceneLoadTiming,
+                    completedLoadMilliseconds);
+                if (!RecordBoundedSceneLoadDuration(
+                        m_SceneLoadTimingByScene,
+                        m_SceneLoadHistoryKey,
+                        completedLoadMilliseconds))
+                {
+                    log::warning(
+                        "Scene loading history rejected the key '%s'",
+                        m_SceneLoadHistoryKey.c_str());
+                }
+                SaveSceneLoadTimingDatabase();
+            }
         }
         m_WasSceneLoading = false;
 
@@ -14542,13 +15717,32 @@ protected:
         }
         ImGui::SetItemTooltip("Open the scene folder.");
 
+        if (m_SceneLoadFailed)
+        {
+            ImGui::PushStyleColor(
+                ImGuiCol_Text,
+                g_UiVisualTokens.errorText);
+            ImGui::TextWrapped(
+                "The selected scene could not be loaded.");
+            ImGui::PopStyleColor();
+            if (ImGui::Button(
+                    "Retry Scene Load",
+                    ImVec2(-FLT_MIN, 0.f)))
+            {
+                m_SceneLoadFailed = false;
+                m_app->RetryCurrentSceneLoad();
+            }
+            ImGui::SetItemTooltip(
+                "Retry loading the currently selected scene.");
+        }
+
         EndDrawerBody();
         }
         ImGui::Spacing();
 
         const bool representationOpen = DrawCollapsingHeader(
             "Representation",
-            "Configure the world-space hierarchy shared by ray-traced "
+            "Configure the world space hierarchy shared by ray traced "
             "techniques.");
         if (representationOpen)
         {
@@ -14561,6 +15755,26 @@ protected:
             const WorldSpaceRepresentationSettings representationDefaults{};
             const WorldSpaceRepresentationStatus& representationStatus =
                 m_app->GetWorldSpaceRepresentationStatus();
+            if (ImGui::Checkbox(
+                    "Allow Ray Traversal",
+                    &representation.allowRayTraversal))
+            {
+                m_app->ResetImageBasedLightingHistory();
+            }
+            ImGui::SetItemTooltip(
+                "Allow every ray traced effect to traverse the shared scene "
+                "representation. Individual effect settings are preserved "
+                "while traversal is off.");
+            if (DrawPresetResetIcon(
+                    "RepresentationAllowRayTraversal",
+                    representation.allowRayTraversal !=
+                        representationDefaults.allowRayTraversal))
+            {
+                representation.allowRayTraversal =
+                    representationDefaults.allowRayTraversal;
+                m_app->ResetImageBasedLightingHistory();
+            }
+
             const char* representationState = "Inactive";
             switch (representationStatus.state)
             {
@@ -14601,7 +15815,7 @@ protected:
             else
             {
                 ImGui::TextDisabled(
-                    "Builds lazily when a ray-traced technique needs it.");
+                    "Builds lazily when a ray traced technique needs it.");
             }
 
             if (BeginAnimatedTreeNode(
@@ -14804,13 +16018,157 @@ protected:
         }
         ImGui::Spacing();
 
+        const auto drawNoiseSettingsControls = [&] (
+            NoiseSettings& settings,
+            const NoiseSettings& defaults,
+            const char* identifier,
+            bool nestedResetIcons)
+        {
+            bool changed = false;
+            static constexpr const char* PatternLabels[] = {
+                "Spatial White",
+                "Spatial Blue",
+                "Spatiotemporal Blue"
+            };
+            static constexpr const char* ResolutionLabels[] = {
+                "64x64",
+                "128x128",
+                "256x256",
+                "512x512"
+            };
+            static constexpr NoiseResolution Resolutions[] = {
+                NoiseResolution::Size64,
+                NoiseResolution::Size128,
+                NoiseResolution::Size256,
+                NoiseResolution::Size512
+            };
+
+            const std::string patternLabel =
+                std::string("Noise Pattern##") + identifier;
+            int patternIndex = std::clamp(
+                static_cast<int>(settings.pattern),
+                0,
+                static_cast<int>(std::size(PatternLabels)) - 1);
+            SetNextLabeledControlWidth("Noise Pattern", settingsControlWidth);
+            if (ImGui::Combo(
+                    patternLabel.c_str(),
+                    &patternIndex,
+                    PatternLabels,
+                    static_cast<int>(std::size(PatternLabels))))
+            {
+                settings.pattern = static_cast<NoisePattern>(patternIndex);
+                changed = true;
+            }
+            ImGui::SetItemTooltip(
+                "Choose a precomputed R8 spatial or spatiotemporal noise "
+                "texture.");
+            const std::string patternReset =
+                std::string(identifier) + "NoisePattern";
+            const bool resetPattern = nestedResetIcons
+                ? DrawNestedDropdownResetIcon(
+                    patternReset.c_str(),
+                    settings.pattern != defaults.pattern)
+                : DrawPresetResetIcon(
+                    patternReset.c_str(),
+                    settings.pattern != defaults.pattern);
+            if (resetPattern)
+            {
+                settings.pattern = defaults.pattern;
+                changed = true;
+            }
+
+            int resolutionIndex = 0;
+            for (int index = 0;
+                index < static_cast<int>(std::size(Resolutions));
+                ++index)
+            {
+                if (settings.resolution == Resolutions[index])
+                    resolutionIndex = index;
+            }
+            const std::string resolutionLabel =
+                std::string("Noise Resolution##") + identifier;
+            SetNextLabeledControlWidth(
+                "Noise Resolution", settingsControlWidth);
+            if (ImGui::Combo(
+                    resolutionLabel.c_str(),
+                    &resolutionIndex,
+                    ResolutionLabels,
+                    static_cast<int>(std::size(ResolutionLabels))))
+            {
+                settings.resolution = Resolutions[resolutionIndex];
+                changed = true;
+            }
+            ImGui::SetItemTooltip(
+                "Choose the centered tile resolution used by this noise "
+                "texture.");
+            const std::string resolutionReset =
+                std::string(identifier) + "NoiseResolution";
+            const bool resetResolution = nestedResetIcons
+                ? DrawNestedDropdownResetIcon(
+                    resolutionReset.c_str(),
+                    settings.resolution != defaults.resolution)
+                : DrawPresetResetIcon(
+                    resolutionReset.c_str(),
+                    settings.resolution != defaults.resolution);
+            if (resetResolution)
+            {
+                settings.resolution = defaults.resolution;
+                changed = true;
+            }
+
+            const std::string animateLabel =
+                std::string("Animate Samples##") + identifier;
+            if (ImGui::Checkbox(animateLabel.c_str(), &settings.animate))
+                changed = true;
+            ImGui::SetItemTooltip(
+                "Advance the noise sequence after each successful effect "
+                "dispatch.");
+            const std::string animateReset =
+                std::string(identifier) + "NoiseAnimate";
+            if (DrawPresetResetIcon(
+                    animateReset.c_str(),
+                    settings.animate != defaults.animate))
+            {
+                settings.animate = defaults.animate;
+                changed = true;
+            }
+            return changed;
+        };
+
+        const bool noiseOpen = DrawCollapsingHeader(
+            "Noise",
+            "Configure the shared precomputed noise used by rendering effects.");
+        if (noiseOpen)
+        {
+            BeginDrawerBody("##NoiseBody", settingsControlWidth);
+            const NoiseSettings defaults;
+            if (drawNoiseSettingsControls(
+                    m_ui.Noise,
+                    defaults,
+                    "GlobalNoise",
+                    false))
+            {
+                m_app->ResetNoiseSamplingHistory(
+                    !m_ui.ScreenSpaceVisibility.noise.specifyNoise,
+                    !m_ui.DirectionalShadows.ratioEstimator.noise.specifyNoise,
+                    !m_ui.RayTracedSkyVisibility.noise.specifyNoise,
+                    true);
+            }
+            ImGui::TextDisabled(
+                "Resident texture memory: %.2f MiB",
+                double(m_app->GetNoiseTextureResidentBytes()) /
+                    (1024.0 * 1024.0));
+            EndDrawerBody();
+        }
+        ImGui::Spacing();
+
         const auto drawRatioEstimatorShadowControls = [&]()
         {
             if (BeginAnimatedTreeNode(
-                    "Ratio-Estimator Ray-Traced Shadows##Shadows",
+                    "Ray Traced Shadows##Shadows",
                     ImGuiTreeNodeFlags_DefaultOpen,
-                    "Configure correlated stochastic numerator and denominator "
-                    "estimates for the directional emitter."))
+                    "Configure ray traced visibility for the directional "
+                    "sun."))
             {
                 HeitzRatioEstimatorShadowSettings& ratio =
                     m_ui.DirectionalShadows.ratioEstimator;
@@ -14829,8 +16187,8 @@ protected:
                     m_app->ResetImageBasedLightingHistory();
                 }
                 ImGui::SetItemTooltip(
-                    "Trace world-space directional-shadow rays independently "
-                    "of the screen-space technique.");
+                    "Trace directional sun visibility through the shared "
+                    "world representation.");
                 if (disableRatioEnable)
                     ImGui::EndDisabled();
                 if (DrawPresetResetIcon(
@@ -14844,6 +16202,46 @@ protected:
                         "##RatioEstimatorShadowControls",
                         ratio.enabled && ratioAvailable))
                 {
+                    if (ImGui::Checkbox(
+                            "Ratio Estimator##RatioEstimatorShadows",
+                            &ratio.useRatioEstimator))
+                    {
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Use the established correlated material ratio "
+                        "estimate. Turn this off for one scalar stochastic "
+                        "shadow ray suitable for denoising.");
+                    if (DrawPresetResetIcon(
+                            "RatioEstimatorUseRatioEstimator",
+                            ratio.useRatioEstimator !=
+                                ratioDefaults.useRatioEstimator))
+                    {
+                        ratio.useRatioEstimator =
+                            ratioDefaults.useRatioEstimator;
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+
+                    if (ImGui::Checkbox(
+                            "Output Hit Distance##RatioEstimatorShadows",
+                            &ratio.outputHitDistance))
+                    {
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Output the physical closest blocker distance. This "
+                        "is required for shadow denoising and has no distance "
+                        "output cost while disabled.");
+                    if (DrawPresetResetIcon(
+                            "RatioEstimatorOutputHitDistance",
+                            ratio.outputHitDistance !=
+                                ratioDefaults.outputHitDistance))
+                    {
+                        ratio.outputHitDistance =
+                            ratioDefaults.outputHitDistance;
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+
                     if (ImGui::Checkbox(
                             "Hard Shadows##RatioEstimatorShadows",
                             &ratio.hardShadows))
@@ -14868,36 +16266,16 @@ protected:
                     const float angularSize = primaryLight
                         ? primaryLight->angularSize
                         : 0.f;
-                    const bool softSamplingControlsEnabled =
+                    const bool multipleSamplesEnabled =
+                        ratio.useRatioEstimator &&
                         !ratio.hardShadows && angularSize > 1e-4f;
-                    if (!softSamplingControlsEnabled)
-                        ImGui::BeginDisabled();
-                    if (ImGui::Checkbox(
-                            "Animate Samples##RatioEstimatorShadows",
-                            &ratio.animateSamples))
-                    {
-                        m_app->ResetImageBasedLightingHistory();
-                    }
-                    ImGui::SetItemTooltip(
-                        "Advance emitter samples after each stochastic shadow "
-                        "dispatch. This changes the frame-local sample set with "
-                        "or without TAA; only the renderer's final-color TAA "
-                        "may accumulate the result over time.");
-                    if (DrawPresetResetIcon(
-                            "RatioEstimatorShadowAnimateSamples",
-                            ratio.animateSamples !=
-                                ratioDefaults.animateSamples))
-                    {
-                        ratio.animateSamples =
-                            ratioDefaults.animateSamples;
-                        m_app->ResetImageBasedLightingHistory();
-                    }
-
                     int sampleRateLog2 = ratio.sampleRateLog2;
                     const std::string_view sampleRateLabel =
                         GetHeitzRatioEstimatorSampleRateLabel(
                             sampleRateLog2);
                     ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (!multipleSamplesEnabled)
+                        ImGui::BeginDisabled();
                     if (ImGui::SliderInt(
                             "Samples Per Pixel##RatioEstimatorShadows",
                             &sampleRateLog2,
@@ -14912,8 +16290,8 @@ protected:
                     ImGui::SetItemTooltip(
                         "Choose 1 through 64 matched rays per pixel. Every "
                         "numerator and denominator sample is evaluated in the "
-                        "current frame; this shadow pass keeps no private "
-                        "temporal history.");
+                        "current frame. The value is preserved while Ratio "
+                        "Estimator is off.");
                     if (DrawPresetResetIcon(
                             "RatioEstimatorShadowSamples",
                             ratio.sampleRateLog2 !=
@@ -14923,41 +16301,50 @@ protected:
                             ratioDefaults.sampleRateLog2;
                         m_app->ResetImageBasedLightingHistory();
                     }
+                    if (!multipleSamplesEnabled)
+                        ImGui::EndDisabled();
 
-                    static constexpr const char* NoisePatternLabels[] = {
-                        "Permutated White Noise",
-                        "Void Cluster Blue Noise"
-                    };
-                    int noisePattern =
-                        static_cast<int>(ratio.noisePattern);
-                    ImGui::SetNextItemWidth(settingsControlWidth);
-                    if (ImGui::Combo(
-                            "Noise Pattern##RatioEstimatorShadows",
-                            &noisePattern,
-                            NoisePatternLabels,
-                            static_cast<int>(
-                                std::size(NoisePatternLabels))))
+                    const NoiseSettings oldResolvedNoise =
+                        ResolveNoiseSettings(m_ui.Noise, ratio.noise);
+                    bool noiseOverrideChanged = false;
+                    if (ImGui::Checkbox(
+                            "Specify Noise##RatioEstimatorShadows",
+                            &ratio.noise.specifyNoise))
                     {
-                        ratio.noisePattern =
-                            static_cast<HeitzRatioEstimatorNoisePattern>(
-                                noisePattern);
-                        m_app->ResetImageBasedLightingHistory();
+                        noiseOverrideChanged = true;
                     }
                     ImGui::SetItemTooltip(
-                        "Choose the current-frame emitter-direction noise "
-                        "sequence.");
+                        "Use custom noise sampling for this effect only. This "
+                        "does not change the noise sampling used by any other "
+                        "effect.");
                     if (DrawPresetResetIcon(
-                            "RatioEstimatorShadowNoisePattern",
-                            ratio.noisePattern !=
-                                ratioDefaults.noisePattern))
+                            "RatioEstimatorShadowSpecifyNoise",
+                            ratio.noise.specifyNoise !=
+                                ratioDefaults.noise.specifyNoise))
                     {
-                        ratio.noisePattern =
-                            ratioDefaults.noisePattern;
-                        m_app->ResetImageBasedLightingHistory();
+                        ratio.noise.specifyNoise =
+                            ratioDefaults.noise.specifyNoise;
+                        noiseOverrideChanged = true;
                     }
-
-                    if (!softSamplingControlsEnabled)
-                        ImGui::EndDisabled();
+                    if (BeginAnimatedToggleRegion(
+                            "##RatioEstimatorShadowCustomNoise",
+                            ratio.noise.specifyNoise))
+                    {
+                        noiseOverrideChanged |= drawNoiseSettingsControls(
+                            ratio.noise.custom,
+                            ratioDefaults.noise.custom,
+                            "RatioEstimatorShadows",
+                            true);
+                        EndAnimatedToggleRegion();
+                    }
+                    const NoiseSettings newResolvedNoise =
+                        ResolveNoiseSettings(m_ui.Noise, ratio.noise);
+                    if (noiseOverrideChanged &&
+                        oldResolvedNoise != newResolvedNoise)
+                    {
+                        m_app->ResetNoiseSamplingHistory(
+                            false, true, false, false);
+                    }
 
                     int maxDistance =
                         static_cast<int>(ratio.maxDistance);
@@ -15049,10 +16436,11 @@ protected:
             ScreenSpaceVisibilitySettings& visibility =
                 m_ui.ScreenSpaceVisibility;
             const auto finishVisibilityEdit =
-                [](ScreenSpaceVisibilitySettings& settings)
+                [this](ScreenSpaceVisibilitySettings& settings)
             {
                 MarkScreenSpaceVisibilityQualityCustom(settings);
                 ReconcileScreenSpaceVisibilityQualityPreset(settings);
+                m_app->ResetImageBasedLightingHistory();
             };
             ScreenSpaceVisibilityQuality profileOrigin =
                 visibility.quality == ScreenSpaceVisibilityQuality::Custom
@@ -15067,7 +16455,7 @@ protected:
             if (ImGui::Checkbox("Enabled", &visibility.enabled))
                 finishVisibilityEdit(visibility);
             ImGui::SetItemTooltip(
-                "Enable screen-space occlusion and illumination. "
+                "Enable screen space occlusion and illumination. "
                 "Other lighting and material effects remain independent.");
             if (DrawPresetResetIcon(
                     "VisibilityEnabled",
@@ -15097,10 +16485,10 @@ protected:
                     profilePreview.c_str()))
             {
                 static constexpr const char* ProfileTooltips[] = {
-                    "Quarter-resolution Bitmask Approximation with eight samples, Void Cluster Blue Noise, joint-bilateral reconstruction, and 16-bit buffers.",
-                    "Half-resolution Bitmask Directional Visibility with eight samples, Void Cluster Blue Noise, joint-bilateral reconstruction, and 16-bit buffers.",
-                    "Full-resolution Bitmask Directional Visibility with twenty samples, Void Cluster Blue Noise, and 16-bit buffers.",
-                    "Full-resolution Bitmask Directional Visibility with forty-eight samples, Void Cluster Blue Noise, and 32-bit buffers."
+                    "Quarter resolution Bitmask Approximation with eight samples, the shared Noise configuration, joint bilateral reconstruction, and 16 bit buffers.",
+                    "Half resolution Bitmask Directional Visibility with eight samples, the shared Noise configuration, joint bilateral reconstruction, and 16 bit buffers.",
+                    "Full resolution Bitmask Directional Visibility with sixteen samples, the shared Noise configuration, and 16 bit buffers.",
+                    "Full resolution Bitmask Directional Visibility with forty eight samples, the shared Noise configuration, and 32 bit buffers."
                 };
                 for (int index = 0;
                     index < static_cast<int>(std::size(QualityLabels));
@@ -15112,10 +16500,11 @@ protected:
                         QualityLabels[index],
                         QualityLabels[index],
                         visibility.quality == selected,
-                        [settings = &visibility, selected]()
+                        [this, settings = &visibility, selected]()
                         {
                             ApplyScreenSpaceVisibilityQualityPreset(
                                 *settings, selected);
+                            m_app->ResetImageBasedLightingHistory();
                         });
                     ImGui::SetItemTooltip("%s", ProfileTooltips[index]);
                 }
@@ -15132,11 +16521,12 @@ protected:
                     "Restore the complete High profile."))
             {
                 QueueDeferredControlUiAction(
-                    [settings = &visibility]()
+                    [this, settings = &visibility]()
                     {
                         ApplyScreenSpaceVisibilityQualityPreset(
                             *settings,
                             ScreenSpaceVisibilityQuality::High);
+                        m_app->ResetImageBasedLightingHistory();
                     });
             }
 
@@ -15170,7 +16560,9 @@ protected:
             {
             if (ImGui::SliderFloat(
                     "Strength", &visibility.ambientOcclusion.strength,
-                    0.f, 4.f, "%.2f"))
+                    MinimumVisibilityAmbientOcclusionStrength,
+                    MaximumVisibilityAmbientOcclusionStrength,
+                    "%.2f"))
                 finishVisibilityEdit(visibility);
             ImGui::SetItemTooltip(
                 "Scale how strongly nearby occluders darken the final image.");
@@ -15182,6 +16574,24 @@ protected:
                 visibility.ambientOcclusion.strength =
                     profileDefaults.ambientOcclusion.strength;
                 finishVisibilityEdit(visibility);
+            }
+            if (ImGui::Checkbox(
+                    "Output Hit Distance##VisibilityAmbient",
+                    &visibility.ambientOcclusion.outputHitDistance))
+            {
+                m_app->ResetImageBasedLightingHistory();
+            }
+            ImGui::SetItemTooltip(
+                "Output a representative physical blocker distance for "
+                "ambient occlusion denoising. The distance path is omitted "
+                "when this is off.");
+            if (DrawPresetResetIcon(
+                    "VisibilityAmbientOutputHitDistance",
+                    visibility.ambientOcclusion.outputHitDistance))
+            {
+                visibility.ambientOcclusion.outputHitDistance =
+                    false;
+                m_app->ResetImageBasedLightingHistory();
             }
             EndAnimatedToggleRegion();
             }
@@ -15227,6 +16637,24 @@ protected:
                 visibility.indirectDiffuse.intensity =
                     profileDefaults.indirectDiffuse.intensity;
                 finishVisibilityEdit(visibility);
+            }
+            if (ImGui::Checkbox(
+                    "Output Hit Distance##VisibilityIndirect",
+                    &visibility.indirectDiffuse.outputHitDistance))
+            {
+                m_app->ResetImageBasedLightingHistory();
+            }
+            ImGui::SetItemTooltip(
+                "Output a representative physical hit distance for diffuse "
+                "illumination denoising. The distance path is omitted when "
+                "this is off.");
+            if (DrawPresetResetIcon(
+                    "VisibilityIndirectOutputHitDistance",
+                    visibility.indirectDiffuse.outputHitDistance))
+            {
+                visibility.indirectDiffuse.outputHitDistance =
+                    false;
+                m_app->ResetImageBasedLightingHistory();
             }
             EndAnimatedToggleRegion();
             }
@@ -15289,33 +16717,48 @@ protected:
                 finishVisibilityEdit(visibility);
             }
 
-            static constexpr const char* NoiseLabels[] = {
-                "Permutated White Noise",
-                "Void Cluster Blue Noise"
-            };
-            int scheduler =
-                static_cast<int>(visibility.sampling.scheduler);
-            SetNextLabeledControlWidth(
-                "Noise Pattern", settingsControlWidth);
-            if (ImGui::Combo(
-                    "Noise Pattern", &scheduler, NoiseLabels,
-                    static_cast<int>(std::size(NoiseLabels))))
+            const NoiseSettings oldResolvedNoise = ResolveNoiseSettings(
+                m_ui.Noise,
+                visibility.noise);
+            bool noiseOverrideChanged = false;
+            if (ImGui::Checkbox(
+                    "Specify Noise##Visibility",
+                    &visibility.noise.specifyNoise))
             {
-                visibility.sampling.scheduler =
-                    static_cast<VisibilitySampleScheduler>(scheduler);
-                finishVisibilityEdit(visibility);
+                noiseOverrideChanged = true;
             }
             ImGui::SetItemTooltip(
-                "Permutated White Noise is the baseline; Void Cluster Blue "
-                "Noise distributes error more evenly.");
-            if (DrawNestedDropdownResetIcon(
-                    "VisibilityNoise",
-                    visibility.sampling.scheduler !=
-                        profileDefaults.sampling.scheduler))
+                "Use custom noise sampling for this effect only. This does "
+                "not change the noise sampling used by any other effect. "
+                "Ambient occlusion and diffuse illumination share this one "
+                "visibility dispatch.");
+            if (DrawPresetResetIcon(
+                    "VisibilitySpecifyNoise",
+                    visibility.noise.specifyNoise !=
+                        profileDefaults.noise.specifyNoise))
             {
-                visibility.sampling.scheduler =
-                    profileDefaults.sampling.scheduler;
-                finishVisibilityEdit(visibility);
+                visibility.noise.specifyNoise =
+                    profileDefaults.noise.specifyNoise;
+                noiseOverrideChanged = true;
+            }
+            if (BeginAnimatedToggleRegion(
+                    "##VisibilityCustomNoise",
+                    visibility.noise.specifyNoise))
+            {
+                noiseOverrideChanged |= drawNoiseSettingsControls(
+                    visibility.noise.custom,
+                    profileDefaults.noise.custom,
+                    "Visibility",
+                    true);
+                EndAnimatedToggleRegion();
+            }
+            const NoiseSettings newResolvedNoise = ResolveNoiseSettings(
+                m_ui.Noise,
+                visibility.noise);
+            if (noiseOverrideChanged && oldResolvedNoise != newResolvedNoise)
+            {
+                m_app->ResetNoiseSamplingHistory(
+                    true, false, false, false);
             }
 
             int samples =
@@ -15370,7 +16813,9 @@ protected:
             if (ImGui::SliderFloat(
                     "Distribution",
                     &visibility.sampling.stepDistributionExponent,
-                    0.25f, 4.f, "%.2f"))
+                    MinimumVisibilityStepDistributionExponent,
+                    MaximumVisibilityStepDistributionExponent,
+                    "%.2f"))
                 finishVisibilityEdit(visibility);
             ImGui::SetItemTooltip(
                 "Bias samples toward the receiver or toward the trace edge.");
@@ -15516,6 +16961,294 @@ protected:
             EndDrawerBody();
         }
         ImGui::Spacing();
+        const bool denoisingOpen = DrawCollapsingHeader(
+            "Denoising",
+            "Choose NVIDIA NRD denoisers independently for occlusion, "
+            "illumination, shadows, and sky visibility.");
+        if (denoisingOpen)
+        {
+            BeginDrawerBody("##DenoisingBody", settingsControlWidth);
+#if UVSR_WITH_NRD
+            ImGui::TextWrapped(
+                "NVIDIA NRD is available in this build. Each signal keeps "
+                "an independent history and falls back to its raw result if "
+                "its required inputs are unavailable.");
+#else
+            ImGui::TextDisabled(
+                "NVIDIA NRD is not included in this build. Choices are "
+                "preserved, but raw results remain active until UVSR is "
+                "built with NRD support.");
+#endif
+
+            const auto drawDenoisingSignal =
+                [this, settingsControlWidth](
+                    const char* treeLabel,
+                    const char* identifier,
+                    const char* description,
+                    DenoisingEffect effect,
+                    DenoisingSignalSettings& signal,
+                    bool inputsReady,
+                    const char* readyMessage,
+                    const char* waitingMessage)
+            {
+                if (!BeginAnimatedTreeNode(
+                        treeLabel,
+                        ImGuiTreeNodeFlags_DefaultOpen,
+                        description))
+                {
+                    return;
+                }
+
+                const DenoisingSignalSettings defaults;
+                const std::string methodLabel =
+                    std::string("Method##Denoising") + identifier;
+                SetNextLabeledControlWidth(
+                    methodLabel.c_str(), settingsControlWidth);
+                if (BeginRoundedCombo(
+                        methodLabel.c_str(),
+                        GetDenoisingMethodLabel(signal.method)))
+                {
+                    static constexpr std::array<DenoisingMethodChoice, 4>
+                        Methods = {
+                            DenoisingMethodChoice::None,
+                            DenoisingMethodChoice::Reblur,
+                            DenoisingMethodChoice::Relax,
+                            DenoisingMethodChoice::Sigma
+                        };
+                    for (const DenoisingMethodChoice method : Methods)
+                    {
+                        if (!SupportsDenoisingMethod(effect, method))
+                            continue;
+                        DenoisingSignalSettings* const selected = &signal;
+                        DrawDeferredDropdownOption(
+                            GetDenoisingMethodLabel(method),
+                            GetDenoisingMethodLabel(method),
+                            signal.method == method,
+                            [this, selected, method]()
+                            {
+                                selected->method = method;
+                                m_app->ResetImageBasedLightingHistory();
+                            });
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "None keeps the raw signal. ReBLUR and ReLAX denoise "
+                    "diffuse signals; SIGMA denoises ray traced shadows.");
+                const std::string resetIdentifier =
+                    std::string("DenoisingSignal") + identifier;
+                if (DrawPresetResetIcon(
+                        resetIdentifier.c_str(),
+                        signal != defaults,
+                        "Restore this signal to its default settings."))
+                {
+                    signal = defaults;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
+                if (BeginAnimatedToggleRegion(
+                        (std::string("##DenoisingControls") + identifier)
+                            .c_str(),
+                        signal.method != DenoisingMethodChoice::None))
+                {
+                    const std::string qualityLabel =
+                        std::string("Quality##Denoising") + identifier;
+                    SetNextLabeledControlWidth(
+                        qualityLabel.c_str(), settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            qualityLabel.c_str(),
+                            GetDenoisingQualityLabel(signal.quality)))
+                    {
+                        static constexpr std::array<DenoisingQuality, 4>
+                            Qualities = {
+                                DenoisingQuality::Performance,
+                                DenoisingQuality::Balanced,
+                                DenoisingQuality::Quality,
+                                DenoisingQuality::Ultra
+                            };
+                        for (const DenoisingQuality quality : Qualities)
+                        {
+                            DenoisingSignalSettings* const selected = &signal;
+                            DrawDeferredDropdownOption(
+                                GetDenoisingQualityLabel(quality),
+                                GetDenoisingQualityLabel(quality),
+                                signal.quality == quality,
+                                [this, selected, quality]()
+                                {
+                                    selected->quality = quality;
+                                    m_app->ResetImageBasedLightingHistory();
+                                });
+                        }
+                        ImGui::EndCombo();
+                    }
+                    if (effect == DenoisingEffect::Shadows)
+                    {
+                        ImGui::SetItemTooltip(
+                            "For shadows, Quality controls sun temporal "
+                            "stabilization. Flashlight SIGMA is spatial only; "
+                            "Resolution is its cost and detail control.");
+                    }
+                    else
+                    {
+                        ImGui::SetItemTooltip(
+                            "Performance is the fastest preset. Balanced is "
+                            "the default; Quality and Ultra retain more "
+                            "spatial and temporal detail.");
+                    }
+
+                    const std::string resolutionLabel =
+                        std::string("Resolution##Denoising") + identifier;
+                    SetNextLabeledControlWidth(
+                        resolutionLabel.c_str(), settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            resolutionLabel.c_str(),
+                            GetDenoisingResolutionLabel(signal.resolution)))
+                    {
+                        static constexpr std::array<DenoisingResolution, 3>
+                            Resolutions = {
+                                DenoisingResolution::Quarter,
+                                DenoisingResolution::Half,
+                                DenoisingResolution::Full
+                            };
+                        for (const DenoisingResolution resolution : Resolutions)
+                        {
+                            DenoisingSignalSettings* const selected = &signal;
+                            DrawDeferredDropdownOption(
+                                GetDenoisingResolutionLabel(resolution),
+                                GetDenoisingResolutionLabel(resolution),
+                                signal.resolution == resolution,
+                                [this, selected, resolution]()
+                                {
+                                    selected->resolution = resolution;
+                                    m_app->ResetImageBasedLightingHistory();
+                                });
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SetItemTooltip(
+                        "Choose the internal denoising resolution. Half is "
+                        "the default balance of quality and cost.");
+
+                    if (effect != DenoisingEffect::Shadows)
+                    {
+                        int historyLength =
+                            static_cast<int>(signal.historyLength);
+                        const std::string historyLabel =
+                            std::string("History Length##Denoising") +
+                            identifier;
+                        if (ImGui::SliderInt(
+                                historyLabel.c_str(),
+                                &historyLength,
+                                1,
+                                32))
+                        {
+                            signal.historyLength =
+                                static_cast<uint32_t>(historyLength);
+                            m_app->ResetImageBasedLightingHistory();
+                        }
+                        ImGui::SetItemTooltip(
+                            "Set the maximum number of frames retained by the "
+                            "selected denoiser.");
+                    }
+
+                    const std::string disocclusionLabel =
+                        std::string("Disocclusion##Denoising") + identifier;
+                    if (ImGui::SliderFloat(
+                            disocclusionLabel.c_str(),
+                            &signal.disocclusionThreshold,
+                            0.001f,
+                            0.1f,
+                            "%.3f"))
+                    {
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+                    ImGui::SetItemTooltip(
+                        effect == DenoisingEffect::Shadows
+                            ? "Control sun SIGMA history rejection. "
+                                "Flashlight SIGMA has no temporal history."
+                            : "Control how readily history is rejected after "
+                                "surface motion or visibility changes.");
+
+                    if (effect != DenoisingEffect::Shadows)
+                    {
+                        const std::string antiLagLabel =
+                            std::string("Response##Denoising") + identifier;
+                        if (ImGui::SliderFloat(
+                                antiLagLabel.c_str(),
+                                &signal.antiLagStrength,
+                                0.f,
+                                1.f,
+                                "%.2f"))
+                        {
+                            m_app->ResetImageBasedLightingHistory();
+                        }
+                        ImGui::SetItemTooltip(
+                            "Increase responsiveness to sudden lighting "
+                            "changes; lower values favor stability.");
+                    }
+
+                    if (effect == DenoisingEffect::Shadows)
+                    {
+                        ImGui::TextDisabled(
+                            "Sun SIGMA uses temporal stabilization. Flashlight "
+                            "SIGMA is spatial only.");
+                    }
+
+                    if (inputsReady)
+                        ImGui::TextDisabled("%s", readyMessage);
+                    else
+                        ImGui::TextDisabled("%s", waitingMessage);
+                    EndAnimatedToggleRegion();
+                }
+                EndAnimatedTreeNode();
+            };
+
+            drawDenoisingSignal(
+                "Occlusion###Ambient Occlusion##Denoising",
+                "AmbientOcclusion",
+                "Denoise the ambient occlusion signal with ReBLUR.",
+                DenoisingEffect::AmbientOcclusion,
+                m_ui.Denoising.ambientOcclusion,
+                m_ui.ScreenSpaceVisibility.ambientOcclusion.outputHitDistance,
+                "Physical hit distance is ready.",
+                "Enable Output Hit Distance in Diffuse > Occlusion.");
+            drawDenoisingSignal(
+                "Illumination###Diffuse GI##Denoising",
+                "DiffuseGi",
+                "Denoise indirect diffuse illumination with ReBLUR or ReLAX.",
+                DenoisingEffect::DiffuseGi,
+                m_ui.Denoising.diffuseGi,
+                m_ui.ScreenSpaceVisibility.indirectDiffuse.outputHitDistance,
+                "Physical hit distance is ready.",
+                "Enable Output Hit Distance in Diffuse > Illumination.");
+            drawDenoisingSignal(
+                "Shadows##Denoising",
+                "Shadows",
+                "Denoise sun and flashlight visibility with independent SIGMA histories.",
+                DenoisingEffect::Shadows,
+                m_ui.Denoising.shadows,
+                (!m_ui.DirectionalShadows.ratioEstimator.useRatioEstimator &&
+                    !m_ui.DirectionalShadows.ratioEstimator.hardShadows &&
+                    m_ui.DirectionalShadows.ratioEstimator.outputHitDistance) ||
+                    m_ui.Flashlight.outputHitDistance,
+                "At least one shadow source has matched hit distance data.",
+                "For the sun, turn Hard Shadows and Ratio Estimator off, then "
+                "enable Output Hit Distance. For the flashlight, enable "
+                "Output Hit Distance.");
+            drawDenoisingSignal(
+                "Sky Visibility##Denoising",
+                "SkyVisibility",
+                "Denoise ray traced sky visibility with ReBLUR or ReLAX.",
+                DenoisingEffect::SkyVisibility,
+                m_ui.Denoising.skyVisibility,
+                !m_ui.RayTracedSkyVisibility.useRatioEstimator &&
+                    m_ui.RayTracedSkyVisibility.outputHitDistance,
+                "Matched sky visibility and hit distance are ready.",
+                "Disable Ratio Estimator and enable Output Hit Distance in Sky.");
+
+            EndDrawerBody();
+        }
+        ImGui::Spacing();
         const bool buffersOpen = DrawCollapsingHeader(
             "Buffers",
             "Configure the retained visibility buffer precision controls.");
@@ -15534,10 +17267,11 @@ protected:
             ApplyScreenSpaceVisibilityQualityPreset(
                 profileDefaults, profileOrigin);
             const auto finishBufferEdit =
-                [](ScreenSpaceVisibilitySettings& settings)
+                [this](ScreenSpaceVisibilitySettings& settings)
             {
                 MarkScreenSpaceVisibilityQualityCustom(settings);
                 ReconcileScreenSpaceVisibilityQualityPreset(settings);
+                m_app->ResetImageBasedLightingHistory();
             };
 
             const bool ambient16 =
@@ -15582,7 +17316,7 @@ protected:
                         BufferProfileLabels[index],
                         BufferProfileLabels[index],
                         index == bufferProfile,
-                        [settings = &visibility, index]()
+                        [this, settings = &visibility, index]()
                         {
                             ApplyVisibilityBufferPrecisionPreset(
                                 settings->bufferPrecision,
@@ -15591,6 +17325,7 @@ protected:
                             MarkScreenSpaceVisibilityQualityCustom(*settings);
                             ReconcileScreenSpaceVisibilityQualityPreset(
                                 *settings);
+                            m_app->ResetImageBasedLightingHistory();
                         });
                     ImGui::SetItemTooltip(
                         "%s", BufferProfileTooltips[index]);
@@ -15691,7 +17426,7 @@ protected:
                 "Scene Setup",
                 "Geometry",
                 "Direct Lighting",
-                "Screen-Space Visibility",
+                "Screen Space Visibility",
                 "Directional Shadows",
                 "Temporal Reconstructive",
                 "Fast Approximate",
@@ -15831,15 +17566,22 @@ protected:
                 [this, &timings, &drawMilliseconds](
                     const char* label, RendererTimingStage stage)
             {
-                const bool currentDispatchAvailable =
-                    (stage != RendererTimingStage::RatioEstimatorShadows ||
-                        m_app->DidDispatchHeitzRatioEstimatorThisFrame()) &&
-                    (stage != RendererTimingStage::SkyVisibility ||
-                        m_app->DidDispatchRayTracedSkyVisibilityThisFrame());
                 const bool available =
-                    currentDispatchAvailable &&
+                    m_app->IsRendererStageActiveThisFrame(stage) &&
                     timings.IsAvailable(stage);
                 drawMilliseconds(label, timings.Get(stage), available);
+            };
+            const auto drawScreenSpaceVisibilityTiming =
+                [this, &drawMilliseconds](const char* label)
+            {
+                const bool available =
+                    m_HasVisibilityStatSnapshot &&
+                    m_DisplayedVisibilityTimings.active &&
+                    m_DisplayedVisibilityTimings.available;
+                drawMilliseconds(
+                    label,
+                    m_DisplayedVisibilityTimings.CompleteEffectMs(),
+                    available);
             };
             const auto drawSelectedRendererTable =
                 [&beginStatisticsTable, &drawRendererTiming](
@@ -15870,18 +17612,30 @@ protected:
                         { "Geometry", RendererTimingStage::Geometry },
                         { "Closest Surface Resolve",
                             RendererTimingStage::MultisampleResolve },
-                        { "Ratio-Estimator Ray Dispatch",
-                            RendererTimingStage::RatioEstimatorShadows },
+                        { "Shadow Ray Dispatch",
+                            RendererTimingStage::ShadowRayDispatch },
+                        { "Shadow Denoise",
+                            RendererTimingStage::ShadowDenoise },
                         { "Sky Visibility Ray Dispatch",
-                            RendererTimingStage::SkyVisibility },
+                            RendererTimingStage::SkyVisibilityRayDispatch },
+                        { "Sky Visibility Denoise",
+                            RendererTimingStage::SkyVisibilityDenoise },
                         { "Direct Lighting",
                             RendererTimingStage::DirectLighting },
-                        { "Screen-Space Visibility",
+                        { "Visibility Lighting Preparation",
+                            RendererTimingStage::VisibilityLightingPreparation },
+                        { "Screen Space Visibility",
                             RendererTimingStage::ScreenSpaceVisibility },
+                        { "Ambient Occlusion Denoise",
+                            RendererTimingStage::AmbientOcclusionDenoise },
+                        { "Diffuse Illumination Denoise",
+                            RendererTimingStage::DiffuseIlluminationDenoise },
                         { "Material Picking",
                             RendererTimingStage::MaterialPicking },
                         { "Environment Background",
                             RendererTimingStage::EnvironmentBackground },
+                        { "Auto Exposure",
+                            RendererTimingStage::AutoExposure },
                         { "Tone Mapping", RendererTimingStage::ToneMapping },
                         { "Fast Approximate",
                             RendererTimingStage::FastApproximate },
@@ -15891,7 +17645,15 @@ protected:
                         std::size(CompleteRows) ==
                         static_cast<size_t>(RendererTimingStage::Count));
                     for (const auto& [label, stage] : CompleteRows)
-                        drawRendererTiming(label, stage);
+                    {
+                        if (stage ==
+                            RendererTimingStage::ScreenSpaceVisibility)
+                        {
+                            drawScreenSpaceVisibilityTiming(label);
+                        }
+                        else
+                            drawRendererTiming(label, stage);
+                    }
                     ImGui::EndTable();
                 }
                 break;
@@ -15904,9 +17666,20 @@ protected:
                     "Geometry", RendererTimingStage::Geometry);
                 break;
             case StatisticsEffect::DirectLighting:
-                drawSelectedRendererTable(
-                    "Direct Lighting",
-                    RendererTimingStage::DirectLighting);
+                if (beginStatisticsTable(
+                        "##DirectLightingStatistics", "Lighting Stage"))
+                {
+                    drawRendererTiming(
+                        "Direct Lighting",
+                        RendererTimingStage::DirectLighting);
+                    drawRendererTiming(
+                        "Visibility Lighting Preparation",
+                        RendererTimingStage::VisibilityLightingPreparation);
+                    drawRendererTiming(
+                        "Complete Renderer Frame",
+                        RendererTimingStage::CompleteFrame);
+                    ImGui::EndTable();
+                }
                 break;
             case StatisticsEffect::Visibility:
                 if (beginStatisticsTable(
@@ -15927,18 +17700,6 @@ protected:
                         available);
                     drawMilliseconds(
                         "Composition", visibility.compositionMs, available);
-                    const float namedStageMilliseconds =
-                        visibility.firstTraceMs +
-                        visibility.reconstructionMs +
-                        visibility.compositionMs;
-                    drawMilliseconds(
-                        "Named-Stage Total",
-                        namedStageMilliseconds,
-                        available);
-                    drawMilliseconds(
-                        "Unattributed Timer Difference",
-                        visibility.CompleteEffectMs() - namedStageMilliseconds,
-                        available);
                     drawMemory(
                         "Output Texture Memory",
                         visibility.outputTextureBytes,
@@ -15947,10 +17708,12 @@ protected:
                         "Working Texture Memory",
                         visibility.workingTextureBytes,
                         available);
-                    drawMemory(
-                        "Sampling Resource Memory",
-                        visibility.schedulerResourceBytes,
-                        available);
+                    drawRendererTiming(
+                        "Ambient Occlusion Denoise",
+                        RendererTimingStage::AmbientOcclusionDenoise);
+                    drawRendererTiming(
+                        "Diffuse Illumination Denoise",
+                        RendererTimingStage::DiffuseIlluminationDenoise);
                     drawCount(
                         "Dispatches",
                         visibility.activeDispatchCount,
@@ -15973,41 +17736,18 @@ protected:
                 if (beginStatisticsTable(
                         "##ShadowStatistics", "Shadow Metric"))
                 {
-                    const ScreenSpaceDirectionalShadowTimings& shadows =
-                        m_DisplayedScreenSpaceShadowTimings;
-                    const bool available =
-                        m_HasScreenSpaceShadowStatSnapshot;
-                    drawText(
-                        "Screen-Space Status",
-                        available ? "Active" :
-                            shadows.supported ? "Unavailable" : "Unsupported",
-                        true);
-                    drawMilliseconds(
-                        "Screen-Space Trace",
-                        shadows.traceMilliseconds,
-                        available);
-                    drawCount(
-                        "Screen-Space Dispatches",
-                        shadows.dispatchCount,
-                        available);
-                    drawCount(
-                        "Screen-Space Work Groups",
-                        shadows.totalGroups,
-                        available);
-                    drawCount(
-                        "Screen-Space Samples",
-                        shadows.sampleCount,
-                        available);
-                    drawMemory(
-                        "Screen-Space Output Memory",
-                        shadows.outputTextureBytes,
-                        available);
                     drawRendererTiming(
-                        "Ratio-Estimator Ray Dispatch",
-                        RendererTimingStage::RatioEstimatorShadows);
+                        "Shadow Ray Dispatch",
+                        RendererTimingStage::ShadowRayDispatch);
+                    drawRendererTiming(
+                        "Shadow Denoise",
+                        RendererTimingStage::ShadowDenoise);
                     drawRendererTiming(
                         "Sky Visibility Ray Dispatch",
-                        RendererTimingStage::SkyVisibility);
+                        RendererTimingStage::SkyVisibilityRayDispatch);
+                    drawRendererTiming(
+                        "Sky Visibility Denoise",
+                        RendererTimingStage::SkyVisibilityDenoise);
                     drawRendererTiming(
                         "Complete Renderer Frame",
                         RendererTimingStage::CompleteFrame);
@@ -16169,6 +17909,9 @@ protected:
                             "Direct Lighting",
                             RendererTimingStage::DirectLighting);
                         drawRendererTiming(
+                            "Visibility Lighting Preparation",
+                            RendererTimingStage::VisibilityLightingPreparation);
+                        drawRendererTiming(
                             "Closest Surface Resolve",
                             RendererTimingStage::MultisampleResolve);
                     }
@@ -16176,6 +17919,8 @@ protected:
                     {
                         drawMilliseconds("Geometry", 0.0, false);
                         drawMilliseconds("Direct Lighting", 0.0, false);
+                        drawMilliseconds(
+                            "Visibility Lighting Preparation", 0.0, false);
                         drawMilliseconds(
                             "Closest Surface Resolve", 0.0, false);
                     }
@@ -16196,8 +17941,20 @@ protected:
                     RendererTimingStage::EnvironmentBackground);
                 break;
             case StatisticsEffect::ToneMapping:
-                drawSelectedRendererTable(
-                    "Tone Mapping", RendererTimingStage::ToneMapping);
+                if (beginStatisticsTable(
+                        "##ToneMappingStatistics", "Graphics Stage"))
+                {
+                    drawRendererTiming(
+                        "Auto Exposure",
+                        RendererTimingStage::AutoExposure);
+                    drawRendererTiming(
+                        "Tone Mapping",
+                        RendererTimingStage::ToneMapping);
+                    drawRendererTiming(
+                        "Complete Renderer Frame",
+                        RendererTimingStage::CompleteFrame);
+                    ImGui::EndTable();
+                }
                 break;
             case StatisticsEffect::OutputBlit:
                 drawSelectedRendererTable(
@@ -17274,52 +19031,6 @@ protected:
             EndAnimatedTreeNode();
             }
 
-            if (BeginAnimatedTreeNode(
-                    "Screen-Space Shadows##Debug",
-                    ImGuiTreeNodeFlags_DefaultOpen,
-                    "Inspect how the directional-shadow trace groups work."))
-            {
-            ScreenSpaceDirectionalShadowSettings& shadows =
-                m_ui.ScreenSpaceDirectionalShadows;
-            static constexpr const char* IsolationLabels[] = {
-                "Default", "Thread Lanes", "Wave Groups"
-            };
-            int isolationView =
-                shadows.isolationView ==
-                    ScreenSpaceShadowIsolationView::Thread
-                ? 1
-                : shadows.isolationView ==
-                    ScreenSpaceShadowIsolationView::Wave
-                    ? 2
-                    : 0;
-            SetNextLabeledControlWidth(
-                "Isolation View", settingsControlWidth);
-            if (ImGui::Combo(
-                    "Isolation View",
-                    &isolationView,
-                    IsolationLabels,
-                    static_cast<int>(std::size(IsolationLabels))))
-            {
-                shadows.isolationView =
-                    isolationView == 1
-                    ? ScreenSpaceShadowIsolationView::Thread
-                    : isolationView == 2
-                        ? ScreenSpaceShadowIsolationView::Wave
-                        : ScreenSpaceShadowIsolationView::None;
-            }
-            ImGui::SetItemTooltip(
-                "Show the default image, individual thread lanes, or wave groups.");
-            if (DrawNestedDropdownResetIcon(
-                    "DebugShadowIsolation",
-                    shadows.isolationView !=
-                        ScreenSpaceShadowIsolationView::None))
-            {
-                shadows.isolationView =
-                    ScreenSpaceShadowIsolationView::None;
-            }
-            EndAnimatedTreeNode();
-            }
-
             EndDrawerBody();
         }
         ImGui::Spacing();
@@ -17420,6 +19131,122 @@ protected:
                 m_ui.EnvironmentExposureStops =
                     defaultEnvironmentExposure;
                 m_app->ResetImageBasedLightingHistory();
+            }
+
+            if (BeginAnimatedTreeNode(
+                    "Auto Exposure##Sky",
+                    ImGuiTreeNodeFlags_DefaultOpen,
+                    "Adapt display exposure without changing the established "
+                    "tonemapper or physical lighting."))
+            {
+                if (ImGui::Checkbox(
+                        "Enable##AutoExposure",
+                        &m_ui.AutoExposure.enabled))
+                {
+                    m_ui.AutoExposure =
+                        SanitizeAutoExposureSettings(m_ui.AutoExposure);
+                }
+                ImGui::SetItemTooltip(
+                    "Adapt display exposure to the median scene luminance. "
+                    "Lighting, ray effects, and their histories are unchanged.");
+                if (DrawPresetResetIcon(
+                        "Auto Exposure Enabled",
+                        m_ui.AutoExposure.enabled))
+                {
+                    m_ui.AutoExposure.enabled = false;
+                }
+                if (BeginAnimatedToggleRegion(
+                        "##AutoExposureControls",
+                        m_ui.AutoExposure.enabled))
+                {
+                    if (DrawSliderFloat(
+                            "Exposure Compensation",
+                            &m_ui.AutoExposure.exposureCompensationEV,
+                            AutoExposureMinimumCompensationEV,
+                            AutoExposureMaximumCompensationEV,
+                            "%+.2f EV"))
+                    {
+                        m_ui.AutoExposure =
+                            SanitizeAutoExposureSettings(m_ui.AutoExposure);
+                    }
+                    ImGui::SetItemTooltip(
+                        "Bias the bounded automatic exposure result in "
+                        "exposure-value stops.");
+                    if (DrawPresetResetIcon(
+                            "Auto Exposure Compensation",
+                            m_ui.AutoExposure.exposureCompensationEV !=
+                                AutoExposureDefaultCompensationEV))
+                    {
+                        m_ui.AutoExposure.exposureCompensationEV =
+                            AutoExposureDefaultCompensationEV;
+                    }
+                    if (DrawSliderFloat(
+                            "Maximum Brightening",
+                            &m_ui.AutoExposure.maximumBrighteningEV,
+                            AutoExposureMinimumMovementEV,
+                            AutoExposureMaximumMovementEV,
+                            "%.2f EV"))
+                    {
+                        m_ui.AutoExposure =
+                            SanitizeAutoExposureSettings(m_ui.AutoExposure);
+                    }
+                    ImGui::SetItemTooltip(
+                        "Limit how far automatic metering may raise exposure. "
+                        "Exposure Compensation is applied afterward.");
+                    if (DrawPresetResetIcon(
+                            "Auto Exposure Maximum Brightening",
+                            m_ui.AutoExposure.maximumBrighteningEV !=
+                                AutoExposureDefaultMaximumBrighteningEV))
+                    {
+                        m_ui.AutoExposure.maximumBrighteningEV =
+                            AutoExposureDefaultMaximumBrighteningEV;
+                    }
+                    if (DrawSliderFloat(
+                            "Maximum Darkening",
+                            &m_ui.AutoExposure.maximumDarkeningEV,
+                            AutoExposureMinimumMovementEV,
+                            AutoExposureMaximumMovementEV,
+                            "%.2f EV"))
+                    {
+                        m_ui.AutoExposure =
+                            SanitizeAutoExposureSettings(m_ui.AutoExposure);
+                    }
+                    ImGui::SetItemTooltip(
+                        "Limit how far automatic metering may lower exposure. "
+                        "Exposure Compensation is applied afterward.");
+                    if (DrawPresetResetIcon(
+                            "Auto Exposure Maximum Darkening",
+                            m_ui.AutoExposure.maximumDarkeningEV !=
+                                AutoExposureDefaultMaximumDarkeningEV))
+                    {
+                        m_ui.AutoExposure.maximumDarkeningEV =
+                            AutoExposureDefaultMaximumDarkeningEV;
+                    }
+                    if (DrawSliderFloat(
+                            "Adjustment Period",
+                            &m_ui.AutoExposure.adjustmentPeriodSeconds,
+                            AutoExposureMinimumAdjustmentPeriodSeconds,
+                            AutoExposureMaximumAdjustmentPeriodSeconds,
+                            "%.2f s"))
+                    {
+                        m_ui.AutoExposure =
+                            SanitizeAutoExposureSettings(m_ui.AutoExposure);
+                    }
+                    ImGui::SetItemTooltip(
+                        "Time to close half of the remaining exposure-value "
+                        "difference. Changes only display adaptation; lighting "
+                        "and effect histories are unchanged.");
+                    if (DrawPresetResetIcon(
+                            "Auto Exposure Adjustment Period",
+                            m_ui.AutoExposure.adjustmentPeriodSeconds !=
+                                AutoExposureDefaultAdjustmentPeriodSeconds))
+                    {
+                        m_ui.AutoExposure.adjustmentPeriodSeconds =
+                            AutoExposureDefaultAdjustmentPeriodSeconds;
+                    }
+                    EndAnimatedToggleRegion();
+                }
+                EndAnimatedTreeNode();
             }
 
             if (ImGui::Checkbox(
@@ -17544,7 +19371,12 @@ protected:
             }
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Ray-Traced Sky Visibility");
+            if (BeginAnimatedTreeNode(
+                    "Ray Traced Sky Visibility##Sky",
+                    ImGuiTreeNodeFlags_DefaultOpen,
+                    "Configure ray traced environment visibility. This effect "
+                    "section remains independently collapsible while enabled."))
+            {
             RayTracedSkyVisibilitySettings& skyVisibility =
                 m_ui.RayTracedSkyVisibility;
             const RayTracedSkyVisibilitySettings skyVisibilityDefaults{};
@@ -17561,8 +19393,8 @@ protected:
                 m_app->ResetImageBasedLightingHistory();
             }
             ImGui::SetItemTooltip(
-                "Trace current-frame world-space visibility for the selected "
-                "diffuse and/or specular environment-lighting consumers.");
+                "Trace current frame world space visibility for the selected "
+                "diffuse and specular environment lighting consumers.");
             if (disableSkyVisibilityEnable)
                 ImGui::EndDisabled();
             if (DrawPresetResetIcon(
@@ -17578,7 +19410,7 @@ protected:
                     skyVisibility.enabled && skyVisibilityAvailable))
             {
                 if (ImGui::Checkbox(
-                        "Diffuse IBL##RayTracedSkyVisibility",
+                        "Effect Diffuse##RayTracedSkyVisibility",
                         &skyVisibility.applyToDiffuseIbl))
                 {
                     m_app->ResetImageBasedLightingHistory();
@@ -17598,14 +19430,14 @@ protected:
                 }
 
                 if (ImGui::Checkbox(
-                        "Specular IBL##RayTracedSkyVisibility",
+                        "Effect Specular##RayTracedSkyVisibility",
                         &skyVisibility.applyToSpecularIbl))
                 {
                     m_app->ResetImageBasedLightingHistory();
                 }
                 ImGui::SetItemTooltip(
-                    "Experimentally apply the same cosine-weighted normal-"
-                    "hemisphere scalar to specular environment lighting. It "
+                    "Apply the same cosine weighted normal hemisphere "
+                    "visibility to specular environment lighting. It "
                     "is not a reflection-direction or roughness-resolved "
                     "specular visibility estimate.");
                 if (DrawPresetResetIcon(
@@ -17618,11 +19450,53 @@ protected:
                     m_app->ResetImageBasedLightingHistory();
                 }
 
+                if (ImGui::Checkbox(
+                        "Ratio Estimator##RayTracedSkyVisibility",
+                        &skyVisibility.useRatioEstimator))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Average the configured rays into the established sky "
+                    "visibility estimate. Turn this off for one matched "
+                    "stochastic ray suitable for denoising.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilityRatioEstimator",
+                        skyVisibility.useRatioEstimator !=
+                            skyVisibilityDefaults.useRatioEstimator))
+                {
+                    skyVisibility.useRatioEstimator =
+                        skyVisibilityDefaults.useRatioEstimator;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
+                if (ImGui::Checkbox(
+                        "Output Hit Distance##RayTracedSkyVisibility",
+                        &skyVisibility.outputHitDistance))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Output the physical closest blocker distance. This is "
+                    "required for sky visibility denoising and adds no hit "
+                    "distance cost while disabled.");
+                if (DrawPresetResetIcon(
+                        "RayTracedSkyVisibilityOutputHitDistance",
+                        skyVisibility.outputHitDistance !=
+                            skyVisibilityDefaults.outputHitDistance))
+                {
+                    skyVisibility.outputHitDistance =
+                        skyVisibilityDefaults.outputHitDistance;
+                    m_app->ResetImageBasedLightingHistory();
+                }
+
                 int sampleRateLog2 = skyVisibility.sampleRateLog2;
                 const std::string_view sampleRateLabel =
                     GetRayTracedSkyVisibilitySampleRateLabel(
                         sampleRateLog2);
                 ImGui::SetNextItemWidth(settingsControlWidth);
+                if (!skyVisibility.useRatioEstimator)
+                    ImGui::BeginDisabled();
                 if (ImGui::SliderInt(
                         "Samples Per Pixel##RayTracedSkyVisibility",
                         &sampleRateLog2,
@@ -17634,10 +19508,13 @@ protected:
                     skyVisibility.sampleRateLog2 = sampleRateLog2;
                     m_app->ResetImageBasedLightingHistory();
                 }
+                if (!skyVisibility.useRatioEstimator)
+                    ImGui::EndDisabled();
                 ImGui::SetItemTooltip(
-                    "Trace 1 through 64 cosine-weighted geometric-normal "
+                    "Trace 1 through 64 cosine weighted geometric normal "
                     "hemisphere rays per pixel and average their binary hits "
-                    "and misses in the current frame.");
+                    "and misses in the current frame. The value is preserved "
+                    "while Ratio Estimator is off.");
                 if (DrawPresetResetIcon(
                         "RayTracedSkyVisibilitySamples",
                         skyVisibility.sampleRateLog2 !=
@@ -17648,53 +19525,48 @@ protected:
                     m_app->ResetImageBasedLightingHistory();
                 }
 
-                static constexpr const char* NoisePatternLabels[] = {
-                    "Permutated White Noise",
-                    "Void Cluster Blue Noise"
-                };
-                int noisePattern =
-                    static_cast<int>(skyVisibility.noisePattern);
-                ImGui::SetNextItemWidth(settingsControlWidth);
-                if (ImGui::Combo(
-                        "Noise Pattern##RayTracedSkyVisibility",
-                        &noisePattern,
-                        NoisePatternLabels,
-                        static_cast<int>(std::size(NoisePatternLabels))))
-                {
-                    skyVisibility.noisePattern =
-                        static_cast<RayTracedSkyVisibilityNoisePattern>(
-                            noisePattern);
-                    m_app->ResetImageBasedLightingHistory();
-                }
-                ImGui::SetItemTooltip(
-                    "Choose the current-frame hemisphere sampling sequence.");
-                if (DrawPresetResetIcon(
-                        "RayTracedSkyVisibilityNoisePattern",
-                        skyVisibility.noisePattern !=
-                            skyVisibilityDefaults.noisePattern))
-                {
-                    skyVisibility.noisePattern =
-                        skyVisibilityDefaults.noisePattern;
-                    m_app->ResetImageBasedLightingHistory();
-                }
-
+                const NoiseSettings oldResolvedNoise = ResolveNoiseSettings(
+                    m_ui.Noise,
+                    skyVisibility.noise);
+                bool noiseOverrideChanged = false;
                 if (ImGui::Checkbox(
-                        "Animate Samples##RayTracedSkyVisibility",
-                        &skyVisibility.animateSamples))
+                        "Specify Noise##RayTracedSkyVisibility",
+                        &skyVisibility.noise.specifyNoise))
                 {
-                    m_app->ResetImageBasedLightingHistory();
+                    noiseOverrideChanged = true;
                 }
                 ImGui::SetItemTooltip(
-                    "Advance the independent hemisphere sample sequence after "
-                    "each successful dispatch, with or without TAA.");
+                    "Use custom noise sampling for this effect only. This "
+                    "does not change the noise sampling used by any other "
+                    "effect.");
                 if (DrawPresetResetIcon(
-                        "RayTracedSkyVisibilityAnimateSamples",
-                        skyVisibility.animateSamples !=
-                            skyVisibilityDefaults.animateSamples))
+                        "RayTracedSkyVisibilitySpecifyNoise",
+                        skyVisibility.noise.specifyNoise !=
+                            skyVisibilityDefaults.noise.specifyNoise))
                 {
-                    skyVisibility.animateSamples =
-                        skyVisibilityDefaults.animateSamples;
-                    m_app->ResetImageBasedLightingHistory();
+                    skyVisibility.noise.specifyNoise =
+                        skyVisibilityDefaults.noise.specifyNoise;
+                    noiseOverrideChanged = true;
+                }
+                if (BeginAnimatedToggleRegion(
+                        "##RayTracedSkyVisibilityCustomNoise",
+                        skyVisibility.noise.specifyNoise))
+                {
+                    noiseOverrideChanged |= drawNoiseSettingsControls(
+                        skyVisibility.noise.custom,
+                        skyVisibilityDefaults.noise.custom,
+                        "RayTracedSkyVisibility",
+                        true);
+                    EndAnimatedToggleRegion();
+                }
+                const NoiseSettings newResolvedNoise = ResolveNoiseSettings(
+                    m_ui.Noise,
+                    skyVisibility.noise);
+                if (noiseOverrideChanged &&
+                    oldResolvedNoise != newResolvedNoise)
+                {
+                    m_app->ResetNoiseSamplingHistory(
+                        false, false, true, false);
                 }
 
                 int maxDistance =
@@ -17762,6 +19634,8 @@ protected:
                         status.totalBlasCount);
                 }
                 EndAnimatedToggleRegion();
+            }
+            EndAnimatedTreeNode();
             }
 
             EndDrawerBody();
@@ -17844,9 +19718,12 @@ protected:
                                 return std::abs(left - right) > 1e-5f;
                             };
 
-                        ImGui::Checkbox(
-                            "Enabled (F)",
-                            &m_ui.FlashlightEnabled);
+                        if (ImGui::Checkbox(
+                                "Enabled",
+                                &m_ui.FlashlightEnabled))
+                        {
+                            m_app->ResetImageBasedLightingHistory();
+                        }
                         ImGui::SetItemTooltip(
                             "Turn the camera flashlight on or off. Plain F "
                             "uses the same setting.");
@@ -17857,13 +19734,17 @@ protected:
                         {
                             m_ui.FlashlightEnabled =
                                 DefaultFlashlightEnabled;
+                            m_app->ResetImageBasedLightingHistory();
                         }
-                        ImGui::Checkbox(
-                            "Cast Shadows",
-                            &flashlight.castShadows);
+                        if (ImGui::Checkbox(
+                                "Cast Shadows",
+                                &flashlight.castShadows))
+                        {
+                            m_app->ResetImageBasedLightingHistory();
+                        }
                         ImGui::SetItemTooltip(
-                            "Render geometry visibility for both flashlight "
-                            "beam lobes.");
+                            "Trace flashlight visibility through the shared "
+                            "scene representation.");
                         if (DrawPresetResetIcon(
                                 "Flashlight Cast Shadows",
                                 flashlight.castShadows !=
@@ -17871,6 +19752,32 @@ protected:
                         {
                             flashlight.castShadows =
                                 defaults.castShadows;
+                            m_app->ResetImageBasedLightingHistory();
+                        }
+                        if (BeginAnimatedToggleRegion(
+                                "##FlashlightShadowControls",
+                                flashlight.castShadows))
+                        {
+                            if (ImGui::Checkbox(
+                                    "Output Hit Distance##Flashlight",
+                                    &flashlight.outputHitDistance))
+                            {
+                                m_app->ResetImageBasedLightingHistory();
+                            }
+                            ImGui::SetItemTooltip(
+                                "Output the physical closest blocker distance "
+                                "used by shadow denoising. This adds a ray "
+                                "output only when enabled.");
+                            if (DrawPresetResetIcon(
+                                    "Flashlight Output Hit Distance",
+                                    flashlight.outputHitDistance !=
+                                        defaults.outputHitDistance))
+                            {
+                                flashlight.outputHitDistance =
+                                    defaults.outputHitDistance;
+                                m_app->ResetImageBasedLightingHistory();
+                            }
+                            EndAnimatedToggleRegion();
                         }
 
                         ImGui::Checkbox(
@@ -17878,9 +19785,7 @@ protected:
                             &flashlight.realisticLens);
                         ImGui::SetItemTooltip(
                             "Add a lens hotspot, bounded sway, and aim "
-                            "correction. This uses one extra local light, plus "
-                            "one extra shadow sample when Cast Shadows is "
-                            "enabled.");
+                            "correction inside one physical spot light.");
                         if (DrawPresetResetIcon(
                                 "Realistic Flashlight",
                                 flashlight.realisticLens !=
@@ -18011,6 +19916,29 @@ protected:
                                 defaults.beamSizeDegrees;
                         }
 
+                        bool angularSizeChanged = DrawSliderFloat(
+                            "Angular Size",
+                            &flashlight.angularSizeDegrees,
+                            FlashlightMinimumAngularSizeDegrees,
+                            FlashlightMaximumAngularSizeDegrees,
+                            "%.2f degrees");
+                        ImGui::SetItemTooltip(
+                            "Set the apparent diameter of the analytical "
+                            "spherical emitter at one metre. Its apparent "
+                            "size changes naturally with surface distance.");
+                        if (DrawPresetResetIcon(
+                                "Flashlight Angular Size",
+                                floatChanged(
+                                    flashlight.angularSizeDegrees,
+                                    defaults.angularSizeDegrees)))
+                        {
+                            flashlight.angularSizeDegrees =
+                                defaults.angularSizeDegrees;
+                            angularSizeChanged = true;
+                        }
+                        if (angularSizeChanged)
+                            m_app->ResetImageBasedLightingHistory();
+
                         DrawSliderFloat(
                             "Beam Roundness",
                             &flashlight.beamRoundness,
@@ -18109,34 +20037,58 @@ protected:
                                 defaults.colorLinearBlue;
                         }
 
-                        float cameraOffsetCentimeters =
-                            flashlight.cameraLateralOffsetMeters * 100.f;
+                        float horizontalOffsetCentimeters =
+                            flashlight.cameraHorizontalOffsetMeters * 100.f;
                         if (DrawSliderFloat(
-                                "Camera Offset",
-                                &cameraOffsetCentimeters,
-                                FlashlightMinimumCameraLateralOffsetMeters *
+                                "Horizontal Offset",
+                                &horizontalOffsetCentimeters,
+                                FlashlightMinimumCameraHorizontalOffsetMeters *
                                     100.f,
-                                FlashlightMaximumCameraLateralOffsetMeters *
+                                FlashlightMaximumCameraHorizontalOffsetMeters *
                                     100.f,
                                 "%.1f centimeters"))
                         {
-                            flashlight.cameraLateralOffsetMeters =
-                                cameraOffsetCentimeters * 0.01f;
+                            flashlight.cameraHorizontalOffsetMeters =
+                                horizontalOffsetCentimeters * 0.01f;
                         }
                         ImGui::SetItemTooltip(
-                            "Move the flashlight sideways from the camera. "
-                            "Larger offsets separate projected shadows farther "
-                            "from their casters; zero centers the emitter. The "
-                            "beam still converges on the camera aim at 6 m. "
-                            "Large offsets can intersect nearby geometry.");
+                            "Move the flashlight left or right from the camera "
+                            "by up to 40 centimeters.");
                         if (DrawPresetResetIcon(
-                                "Flashlight Camera Offset",
+                                "Flashlight Horizontal Offset",
                                 floatChanged(
-                                    flashlight.cameraLateralOffsetMeters,
-                                    defaults.cameraLateralOffsetMeters)))
+                                    flashlight.cameraHorizontalOffsetMeters,
+                                    defaults.cameraHorizontalOffsetMeters)))
                         {
-                            flashlight.cameraLateralOffsetMeters =
-                                defaults.cameraLateralOffsetMeters;
+                            flashlight.cameraHorizontalOffsetMeters =
+                                defaults.cameraHorizontalOffsetMeters;
+                        }
+
+                        float verticalOffsetCentimeters =
+                            flashlight.cameraVerticalOffsetMeters * 100.f;
+                        if (DrawSliderFloat(
+                                "Vertical Offset",
+                                &verticalOffsetCentimeters,
+                                FlashlightMinimumCameraVerticalOffsetMeters *
+                                    100.f,
+                                FlashlightMaximumCameraVerticalOffsetMeters *
+                                    100.f,
+                                "%.1f centimeters"))
+                        {
+                            flashlight.cameraVerticalOffsetMeters =
+                                verticalOffsetCentimeters * 0.01f;
+                        }
+                        ImGui::SetItemTooltip(
+                            "Move the flashlight down or up from the camera "
+                            "by up to 40 centimeters.");
+                        if (DrawPresetResetIcon(
+                                "Flashlight Vertical Offset",
+                                floatChanged(
+                                    flashlight.cameraVerticalOffsetMeters,
+                                    defaults.cameraVerticalOffsetMeters)))
+                        {
+                            flashlight.cameraVerticalOffsetMeters =
+                                defaults.cameraVerticalOffsetMeters;
                         }
 
                     }
@@ -18442,7 +20394,7 @@ protected:
         ImGui::Spacing();
 
         const bool shadowsOpen = DrawCollapsingHeader(
-            "Shadows", "Configure independent directional-shadow producers.");
+            "Shadows", "Configure ray traced direct light shadows.");
         if (shadowsOpen)
         {
             BeginDrawerBody(
@@ -18465,441 +20417,13 @@ protected:
             else if (!rayTracedShadowHardwareAvailable)
             {
                 ImGui::TextDisabled(
-                    "Ray-traced ratio estimation requires DXR 1.1 support.");
+                    "Ray traced shadows require DXR 1.1 support.");
             }
             else if (!rayTracedShadowsAvailable)
             {
                 ImGui::TextDisabled(
-                    "Ray-traced ratio estimation requires single-sample "
+                    "Ray traced shadows require single sample "
                     "rendering; disable MSAA to use it.");
-            }
-
-            if (BeginAnimatedTreeNode(
-                    "Screen-Space Directional Shadows##Shadows",
-                    ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                ScreenSpaceDirectionalShadowSettings& shadows =
-                    m_ui.ScreenSpaceDirectionalShadows;
-                const ScreenSpaceDirectionalShadowSettings shadowDefaults{};
-                const bool disableScreenSpaceEnable =
-                    !directionalVisibilityAvailable && !shadows.enabled;
-                if (disableScreenSpaceEnable)
-                    ImGui::BeginDisabled();
-                if (ImGui::Checkbox(
-                        "Enabled##ScreenSpaceShadows",
-                        &shadows.enabled))
-                {
-                    m_app->ResetImageBasedLightingHistory();
-                }
-                ImGui::SetItemTooltip(
-                    "Trace screen-space directional shadows independently "
-                    "of the ray-traced ratio estimator.");
-                if (disableScreenSpaceEnable)
-                    ImGui::EndDisabled();
-                if (DrawPresetResetIcon(
-                        "ScreenSpaceShadowEnabled",
-                        shadows.enabled != shadowDefaults.enabled))
-                {
-                    shadows.enabled = shadowDefaults.enabled;
-                    m_app->ResetImageBasedLightingHistory();
-                }
-                static constexpr auto isSameShadowConfiguration =
-                    [](const ScreenSpaceDirectionalShadowSettings& left,
-                        const ScreenSpaceDirectionalShadowSettings& right)
-                    {
-                        return left.length == right.length &&
-                            left.surfaceThickness ==
-                                right.surfaceThickness &&
-                            left.bilinearThreshold ==
-                                right.bilinearThreshold &&
-                            left.shadowContrast ==
-                                right.shadowContrast &&
-                            left.hardShadowSamples ==
-                                right.hardShadowSamples &&
-                            left.fadeOutSamples ==
-                                right.fadeOutSamples &&
-                            left.ignoreEdgePixels ==
-                                right.ignoreEdgePixels &&
-                            left.usePrecisionOffset ==
-                                right.usePrecisionOffset &&
-                            left.bilinearSamplingOffsetMode ==
-                                right.bilinearSamplingOffsetMode &&
-                            left.useEarlyOut == right.useEarlyOut;
-                    };
-                static constexpr auto reconcileShadowPreset =
-                    [](ScreenSpaceDirectionalShadowSettings& settings)
-                    {
-                        constexpr ScreenSpaceShadowPreset Presets[] = {
-                            ScreenSpaceShadowPreset::Default,
-                            ScreenSpaceShadowPreset::Long,
-                            ScreenSpaceShadowPreset::MaximumValidation
-                        };
-                        for (const ScreenSpaceShadowPreset preset : Presets)
-                        {
-                            ScreenSpaceDirectionalShadowSettings presetSettings =
-                                settings;
-                            ApplyScreenSpaceShadowPreset(
-                                presetSettings,
-                                preset);
-                            if (isSameShadowConfiguration(
-                                    settings,
-                                    presetSettings))
-                            {
-                                settings.preset = preset;
-                                return;
-                            }
-                        }
-                        settings.preset = ScreenSpaceShadowPreset::Custom;
-                    };
-                if (BeginAnimatedToggleRegion(
-                        "##ScreenSpaceShadowControls",
-                        shadows.enabled && directionalVisibilityAvailable))
-                {
-                    bool shadowCustomChanged = false;
-                    bool shadowResetApplied = false;
-                    static constexpr const char* PresetLabels[] = {
-                        "Default",
-                        "Long",
-                        "Maximum Validation",
-                        "Custom"
-                    };
-                    const int presetIndex = std::clamp(
-                        int(shadows.preset),
-                        0,
-                        int(std::size(PresetLabels)) - 1);
-                    ImGui::SetNextItemWidth(settingsControlWidth);
-                    if (BeginRoundedCombo(
-                            "Profile##ScreenSpaceShadows",
-                            PresetLabels[presetIndex]))
-                    {
-                        for (int index = 0;
-                            index < int(std::size(PresetLabels));
-                            ++index)
-                        {
-                            const ScreenSpaceShadowPreset preset =
-                                ScreenSpaceShadowPreset(index);
-                            DrawDeferredDropdownOption(
-                                PresetLabels[index],
-                                PresetLabels[index],
-                                shadows.preset == preset,
-                                [settings = &shadows, preset]()
-                                {
-                                    ApplyScreenSpaceShadowPreset(
-                                        *settings,
-                                        preset);
-                                });
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::SetItemTooltip(
-                        "Trade trace reach and cost: 60 pixels for Default, "
-                        "240 for Long, or 960 for Maximum Validation.");
-                    ScreenSpaceDirectionalShadowSettings defaultSettings =
-                        shadows;
-                    ApplyScreenSpaceShadowPreset(
-                        defaultSettings,
-                        ScreenSpaceShadowPreset::Default);
-                    if (DrawNestedDropdownResetIcon(
-                            "ScreenSpaceShadowProfile",
-                            shadows.preset !=
-                                    ScreenSpaceShadowPreset::Default ||
-                                !isSameShadowConfiguration(
-                                    shadows,
-                                    defaultSettings),
-                            "Reset every screen-space shadow setting to Default."))
-                    {
-                        QueueDeferredControlUiAction(
-                            [settings = &shadows]()
-                            {
-                                ApplyScreenSpaceShadowPreset(
-                                    *settings,
-                                    ScreenSpaceShadowPreset::Default);
-                            });
-                    }
-
-                    static constexpr const char* LengthLabels[] = {
-                        "60 pixels", "120 pixels", "240 pixels",
-                        "480 pixels", "960 pixels"
-                    };
-                    int lengthIndex = FindScreenSpaceShadowSupportedValue(
-                        ScreenSpaceShadowTraceReaches,
-                        GetScreenSpaceShadowTraceReach(shadows.length));
-                    lengthIndex = std::clamp(
-                        lengthIndex,
-                        0,
-                        int(std::size(LengthLabels)) - 1);
-                    ImGui::SetNextItemWidth(settingsControlWidth);
-                    if (BeginRoundedCombo(
-                            "Length##ScreenSpaceShadows",
-                            LengthLabels[lengthIndex]))
-                    {
-                        for (int index = 0;
-                            index < int(std::size(LengthLabels));
-                            ++index)
-                        {
-                            const ScreenSpaceShadowLength length =
-                                ScreenSpaceShadowLength(
-                                    ScreenSpaceShadowTraceReaches[size_t(index)]);
-                            DrawDeferredDropdownOption(
-                                LengthLabels[index],
-                                LengthLabels[index],
-                                shadows.length == length,
-                                [settings = &shadows, length]()
-                                {
-                                    settings->length = length;
-                                    settings->preset =
-                                        ScreenSpaceShadowPreset::Custom;
-                                });
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::SetItemTooltip(
-                        "Set the runtime screen-space trace reach.");
-                    if (DrawNestedDropdownResetIcon(
-                            "ScreenSpaceShadowLength",
-                            shadows.length != shadowDefaults.length))
-                    {
-                        const ScreenSpaceShadowLength defaultLength =
-                            shadowDefaults.length;
-                        QueueDeferredControlUiAction(
-                            [settings = &shadows, defaultLength]()
-                            {
-                                settings->length = defaultLength;
-                                reconcileShadowPreset(*settings);
-                            });
-                    }
-
-                    shadowCustomChanged |= DrawSliderFloat(
-                        "Surface Thickness##ScreenSpaceShadows",
-                        &shadows.surfaceThickness,
-                        0.f,
-                        0.05f,
-                        "%.4f");
-                    ImGui::SetItemTooltip(
-                        "Set nonlinear-depth occluder thickness.");
-                    if (DrawPresetResetIcon(
-                            "ScreenSpaceShadowSurfaceThickness",
-                            shadows.surfaceThickness !=
-                                shadowDefaults.surfaceThickness))
-                    {
-                        shadows.surfaceThickness =
-                            shadowDefaults.surfaceThickness;
-                        shadowResetApplied = true;
-                    }
-                    shadowCustomChanged |= DrawSliderFloat(
-                        "Bilinear Threshold##ScreenSpaceShadows",
-                        &shadows.bilinearThreshold,
-                        0.f,
-                        0.1f,
-                        "%.3f");
-                    ImGui::SetItemTooltip(
-                        "Set the relative depth discontinuity that disables "
-                        "interpolation.");
-                    if (DrawPresetResetIcon(
-                            "ScreenSpaceShadowBilinearThreshold",
-                            shadows.bilinearThreshold !=
-                                shadowDefaults.bilinearThreshold))
-                    {
-                        shadows.bilinearThreshold =
-                            shadowDefaults.bilinearThreshold;
-                        shadowResetApplied = true;
-                    }
-                    shadowCustomChanged |= DrawSliderFloat(
-                        "Shadow Contrast##ScreenSpaceShadows",
-                        &shadows.shadowContrast,
-                        1.f,
-                        16.f,
-                        "%.1f");
-                    ImGui::SetItemTooltip(
-                        "Set visibility transition contrast.");
-                    if (DrawPresetResetIcon(
-                            "ScreenSpaceShadowContrast",
-                            shadows.shadowContrast !=
-                                shadowDefaults.shadowContrast))
-                    {
-                        shadows.shadowContrast =
-                            shadowDefaults.shadowContrast;
-                        shadowResetApplied = true;
-                    }
-
-                    static constexpr const char* HardSampleLabels[] = {
-                        "0", "4", "8"
-                    };
-                    const int selectedHard =
-                        FindScreenSpaceShadowSupportedValue(
-                            ScreenSpaceShadowHardSampleCounts,
-                            shadows.hardShadowSamples);
-                    ImGui::SetNextItemWidth(settingsControlWidth);
-                    if (BeginRoundedCombo(
-                            "Hard Shadow Samples##ScreenSpaceShadows",
-                            selectedHard >= 0
-                                ? HardSampleLabels[selectedHard]
-                                : "Unsupported"))
-                    {
-                        for (int index = 0;
-                            index < int(std::size(HardSampleLabels));
-                            ++index)
-                        {
-                            const uint32_t value =
-                                ScreenSpaceShadowHardSampleCounts[size_t(index)];
-                            DrawDeferredDropdownOption(
-                                HardSampleLabels[index],
-                                HardSampleLabels[index],
-                                shadows.hardShadowSamples == value,
-                                [settings = &shadows, value]()
-                                {
-                                    settings->hardShadowSamples = value;
-                                    settings->preset =
-                                        ScreenSpaceShadowPreset::Custom;
-                                });
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::SetItemTooltip(
-                        "Set the runtime count of fully hard contact "
-                        "samples.");
-                    if (DrawNestedDropdownResetIcon(
-                            "ScreenSpaceShadowHardSamples",
-                            shadows.hardShadowSamples !=
-                                shadowDefaults.hardShadowSamples))
-                    {
-                        const uint32_t defaultHardShadowSamples =
-                            shadowDefaults.hardShadowSamples;
-                        QueueDeferredControlUiAction(
-                            [settings = &shadows,
-                                defaultHardShadowSamples]()
-                            {
-                                settings->hardShadowSamples =
-                                    defaultHardShadowSamples;
-                                reconcileShadowPreset(*settings);
-                            });
-                    }
-
-                    static constexpr const char* FadeSampleLabels[] = {
-                        "0", "8", "16"
-                    };
-                    const int selectedFade =
-                        FindScreenSpaceShadowSupportedValue(
-                            ScreenSpaceShadowFadeSampleCounts,
-                            shadows.fadeOutSamples);
-                    ImGui::SetNextItemWidth(settingsControlWidth);
-                    if (BeginRoundedCombo(
-                            "Fade-Out Samples##ScreenSpaceShadows",
-                            selectedFade >= 0
-                                ? FadeSampleLabels[selectedFade]
-                                : "Unsupported"))
-                    {
-                        for (int index = 0;
-                            index < int(std::size(FadeSampleLabels));
-                            ++index)
-                        {
-                            const uint32_t value =
-                                ScreenSpaceShadowFadeSampleCounts[size_t(index)];
-                            DrawDeferredDropdownOption(
-                                FadeSampleLabels[index],
-                                FadeSampleLabels[index],
-                                shadows.fadeOutSamples == value,
-                                [settings = &shadows, value]()
-                                {
-                                    settings->fadeOutSamples = value;
-                                    settings->preset =
-                                        ScreenSpaceShadowPreset::Custom;
-                                });
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::SetItemTooltip(
-                        "Set the runtime count of samples that soften "
-                        "the trace endpoint.");
-                    if (DrawNestedDropdownResetIcon(
-                            "ScreenSpaceShadowFade-OutSamples",
-                            shadows.fadeOutSamples !=
-                                shadowDefaults.fadeOutSamples))
-                    {
-                        const uint32_t defaultFadeOutSamples =
-                            shadowDefaults.fadeOutSamples;
-                        QueueDeferredControlUiAction(
-                            [settings = &shadows,
-                                defaultFadeOutSamples]()
-                            {
-                                settings->fadeOutSamples =
-                                    defaultFadeOutSamples;
-                                reconcileShadowPreset(*settings);
-                            });
-                    }
-
-                    shadowCustomChanged |= ImGui::Checkbox(
-                        "Ignore Edge Pixels##ScreenSpaceShadows",
-                        &shadows.ignoreEdgePixels);
-                    ImGui::SetItemTooltip(
-                        "Prevent detected depth-edge pixels from casting "
-                        "shadows.");
-                    if (DrawPresetResetIcon(
-                            "ScreenSpaceShadowIgnoreEdgePixels",
-                            shadows.ignoreEdgePixels !=
-                                shadowDefaults.ignoreEdgePixels))
-                    {
-                        shadows.ignoreEdgePixels =
-                            shadowDefaults.ignoreEdgePixels;
-                        shadowResetApplied = true;
-                    }
-                    shadowCustomChanged |= ImGui::Checkbox(
-                        "Precision Offset##ScreenSpaceShadows",
-                        &shadows.usePrecisionOffset);
-                    ImGui::SetItemTooltip(
-                        "Bias the ray origin slightly toward the near plane "
-                        "to compensate for depth quantization.");
-                    if (DrawPresetResetIcon(
-                            "ScreenSpaceShadowPrecisionOffset",
-                            shadows.usePrecisionOffset !=
-                                shadowDefaults.usePrecisionOffset))
-                    {
-                        shadows.usePrecisionOffset =
-                            shadowDefaults.usePrecisionOffset;
-                        shadowResetApplied = true;
-                    }
-                    shadowCustomChanged |= ImGui::Checkbox(
-                        "Bilinear Offset Mode##ScreenSpaceShadows",
-                        &shadows.bilinearSamplingOffsetMode);
-                    ImGui::SetItemTooltip(
-                        "Add a second depth candidate one pixel farther "
-                        "along the trace, allowing neighbor-only crossings.");
-                    if (DrawPresetResetIcon(
-                            "ScreenSpaceShadowBilinearOffsetMode",
-                            shadows.bilinearSamplingOffsetMode !=
-                                shadowDefaults.bilinearSamplingOffsetMode))
-                    {
-                        shadows.bilinearSamplingOffsetMode =
-                            shadowDefaults.bilinearSamplingOffsetMode;
-                        shadowResetApplied = true;
-                    }
-                    shadowCustomChanged |= ImGui::Checkbox(
-                        "Early Out##ScreenSpaceShadows",
-                        &shadows.useEarlyOut);
-                    ImGui::SetItemTooltip(
-                        shadows.isolationView ==
-                                ScreenSpaceShadowIsolationView::None
-                            ? "Skip depth-bound receivers, usually sky, when "
-                                "a complete wavefront can exit together."
-                            : "Keep tracing to preserve complete debug "
-                                "diagnostics.");
-                    if (DrawPresetResetIcon(
-                            "ScreenSpaceShadowEarlyOut",
-                            shadows.useEarlyOut !=
-                                shadowDefaults.useEarlyOut))
-                    {
-                        shadows.useEarlyOut =
-                            shadowDefaults.useEarlyOut;
-                        shadowResetApplied = true;
-                    }
-
-                    if (shadowCustomChanged)
-                        shadows.preset = ScreenSpaceShadowPreset::Custom;
-                    else if (shadowResetApplied)
-                        reconcileShadowPreset(shadows);
-                    EndAnimatedToggleRegion();
-                }
-                EndAnimatedTreeNode();
             }
 
             drawRatioEstimatorShadowControls();
@@ -18939,7 +20463,7 @@ protected:
             "Restore factory settings without changing the camera or scene.");
 
         ImGui::SameLine();
-        if (DrawCenteredActionButton("Screenshot", actionButtonWidth))
+        if (DrawCenteredActionButton("Capture", actionButtonWidth))
             m_ui.CopyScreenshotToClipboard = true;
         ImGui::SetItemTooltip("Copy the current frame to the clipboard.");
 
@@ -19481,6 +21005,11 @@ int WINAPI WinMain(
             uiData);
         if (!gui->Init(demo->GetShaderFactory()))
         {
+            // The scene worker executes UvsrSceneViewer::LoadScene and may
+            // still use the device. Destroy UI ownership and join that worker
+            // before shutting the device down on this initialization failure.
+            gui.reset();
+            demo.reset();
             deviceManager->Shutdown();
             delete deviceManager;
             return 1;

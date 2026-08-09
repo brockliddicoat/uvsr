@@ -364,6 +364,101 @@ int main()
             rollAt30Hz.GetUp(), rollAtIrregularRate.GetUp(), 2e-5f),
         "roll leveling is frame-rate invariant at 30, 60, 144, and irregular Hz");
 
+    UvsrFirstPersonCamera stationaryTrackpadCamera(true);
+    SetRolledPose(
+        stationaryTrackpadCamera,
+        rollTestPosition,
+        rollTestDirection,
+        InitialRollAngle);
+    stationaryTrackpadCamera.MousePosUpdate(640.0, 360.0);
+    stationaryTrackpadCamera.MouseButtonUpdate(
+        GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0);
+    stationaryTrackpadCamera.Animate(0.01f);
+    stationaryTrackpadCamera.KeyboardUpdate(
+        GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    for (int frame = 0; frame < 120; ++frame)
+    {
+        // Touchpads may replay the held cursor position every frame even when
+        // the pointer has not actually moved.
+        stationaryTrackpadCamera.MousePosUpdate(640.0, 360.0);
+        stationaryTrackpadCamera.Animate(0.01f);
+    }
+    stationaryTrackpadCamera.MouseButtonUpdate(
+        GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0);
+    passed &= Check(
+        all(stationaryTrackpadCamera.GetPosition() == rollTestPosition) &&
+            all(stationaryTrackpadCamera.GetDir() == rollTestDirection) &&
+            all(stationaryTrackpadCamera.GetUp() == rollTestLevelUp),
+        "a held stationary trackpad does not cancel V roll leveling");
+
+    UvsrFirstPersonCamera queuedTrackpadCamera(true);
+    SetRolledPose(
+        queuedTrackpadCamera,
+        rollTestPosition,
+        rollTestDirection,
+        InitialRollAngle);
+    queuedTrackpadCamera.MousePosUpdate(640.0, 360.0);
+    queuedTrackpadCamera.MouseButtonUpdate(
+        GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0);
+    queuedTrackpadCamera.Animate(0.01f);
+    queuedTrackpadCamera.MousePosUpdate(672.0, 376.0);
+    queuedTrackpadCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    const float3 queuedTrackpadDirection = queuedTrackpadCamera.GetDir();
+    for (int frame = 0; frame < 120; ++frame)
+    {
+        queuedTrackpadCamera.MousePosUpdate(672.0, 376.0);
+        queuedTrackpadCamera.Animate(0.01f);
+    }
+    queuedTrackpadCamera.MouseButtonUpdate(
+        GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0);
+    passed &= Check(
+        !NearlyEqual(
+            queuedTrackpadDirection,
+            rollTestDirection,
+            1e-4f) &&
+            all(queuedTrackpadCamera.GetPosition() == rollTestPosition) &&
+            all(queuedTrackpadCamera.GetDir() == queuedTrackpadDirection) &&
+            NearlyEqual(
+                dot(
+                    queuedTrackpadCamera.GetUp(),
+                    float3(0.f, 1.f, 0.f)),
+                std::sqrt(
+                    1.f - queuedTrackpadDirection.y *
+                        queuedTrackpadDirection.y),
+                2e-5f),
+        "V consumes a pre-key trackpad delta before leveling its new pose");
+
+    UvsrFirstPersonCamera movingTrackpadCamera(true);
+    SetRolledPose(
+        movingTrackpadCamera,
+        rollTestPosition,
+        rollTestDirection,
+        InitialRollAngle);
+    movingTrackpadCamera.MousePosUpdate(640.0, 360.0);
+    movingTrackpadCamera.MouseButtonUpdate(
+        GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0);
+    movingTrackpadCamera.Animate(0.01f);
+    movingTrackpadCamera.KeyboardUpdate(GLFW_KEY_V, 0, GLFW_PRESS, 0);
+    movingTrackpadCamera.Animate(0.12f);
+    const float3 directionBeforeTrackpadMotion =
+        movingTrackpadCamera.GetDir();
+    movingTrackpadCamera.MousePosUpdate(672.0, 376.0);
+    movingTrackpadCamera.Animate(0.01f);
+    const float3 directionAfterTrackpadMotion = movingTrackpadCamera.GetDir();
+    const float3 upAfterTrackpadMotion = movingTrackpadCamera.GetUp();
+    movingTrackpadCamera.MouseButtonUpdate(
+        GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0);
+    movingTrackpadCamera.Animate(0.5f);
+    passed &= Check(
+        !NearlyEqual(
+            directionAfterTrackpadMotion,
+            directionBeforeTrackpadMotion,
+            1e-4f) &&
+            all(movingTrackpadCamera.GetDir() ==
+                directionAfterTrackpadMotion) &&
+            all(movingTrackpadCamera.GetUp() == upAfterTrackpadMotion),
+        "actual held-trackpad motion cancels pending roll leveling");
+
     UvsrFirstPersonCamera repeatControl(true);
     UvsrFirstPersonCamera repeatCamera(true);
     UvsrFirstPersonCamera restartCamera(true);

@@ -84,6 +84,11 @@ namespace uvsr
                         GLFW_KEY_Z, 0, GLFW_RELEASE, 0);
                     FirstPersonCamera::KeyboardUpdate(
                         GLFW_KEY_C, 0, GLFW_RELEASE, 0);
+                    // Consume pointer motion queued before this key event so
+                    // ResetRoll captures the pose the user actually reached.
+                    // Later pointer motion still changes the pose and cancels
+                    // leveling through AdvanceRollLeveling.
+                    FirstPersonCamera::Animate(0.f);
                     ResetRoll();
                 }
                 return;
@@ -144,8 +149,6 @@ namespace uvsr
 
         void MousePosUpdate(double xpos, double ypos) override
         {
-            if (m_MouseLookActive)
-                CancelRollLeveling();
             FirstPersonCamera::MousePosUpdate(xpos, ypos);
         }
 

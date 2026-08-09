@@ -29,6 +29,7 @@ namespace uvsr
             BvhBuildPreference::FastTrace;
         BlasUpdateMode blasUpdateMode = BlasUpdateMode::Refit;
         TlasUpdateMode tlasUpdateMode = TlasUpdateMode::Refit;
+        bool allowRayTraversal = true;
     };
 
     enum class WorldSpaceRepresentationInvalidation : uint32_t

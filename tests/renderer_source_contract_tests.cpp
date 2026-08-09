@@ -63,6 +63,17 @@ namespace
         return false;
     }
 
+    bool ExpectFileAbsent(
+        const std::filesystem::path& path,
+        const char* contract)
+    {
+        if (!std::filesystem::exists(path))
+            return true;
+        std::cerr << "FAIL: " << contract << " must not exist at '"
+                  << path.generic_string() << "'.\n";
+        return false;
+    }
+
     bool ExpectOrdered(
         std::string_view source,
         std::string_view first,
@@ -110,6 +121,25 @@ int main(int argc, char** argv)
         root / "src/pbr_deferred_lighting_cs.hlsl");
     const std::string deferredConstants = ReadFile(
         root / "src/pbr_deferred_lighting_cb.h");
+    const std::string directLightVisibility = ReadFile(
+        root / "src/direct_light_visibility.h");
+    const std::string flashlight = ReadFile(root / "src/flashlight.h");
+    const std::string flashlightShared = ReadFile(
+        root / "src/flashlight_shared.h");
+    const std::string sceneLoading = ReadFile(
+        root / "src/scene_loading.h");
+    const std::string noiseSettings = ReadFile(
+        root / "src/noise_settings.h");
+    const std::string noiseTextureLibrary = ReadFile(
+        root / "src/noise_texture_library.cpp");
+    const std::string noiseTextureLibraryHeader = ReadFile(
+        root / "src/noise_texture_library.h");
+    const std::string directionalShadowSettings = ReadFile(
+        root / "src/directional_shadow_settings.h");
+    const std::string skyVisibilitySettings = ReadFile(
+        root / "src/ray_traced_sky_visibility_settings.h");
+    const std::string representationSettings = ReadFile(
+        root / "src/world_space_representation_settings.h");
     const std::string visibilityConstants = ReadFile(
         root / "src/screen_space_visibility_cb.h");
     const std::string imageBasedLighting = ReadFile(
@@ -120,6 +150,8 @@ int main(int argc, char** argv)
         root / "src/screen_space_visibility.cpp");
     const std::string visibilityPassHeader = ReadFile(
         root / "src/screen_space_visibility.h");
+    const std::string visibilityShader = ReadFile(
+        root / "src/screen_space_visibility_cs.hlsl");
     const std::string pbrDeferredLightingPass = ReadFile(
         root / "src/pbr_deferred_lighting_pass.cpp");
     const std::string pbrDeferredLightingPassHeader = ReadFile(
@@ -144,6 +176,8 @@ int main(int argc, char** argv)
         root / "src/heitz_ratio_estimator_shadows.cpp");
     const std::string donutLoadingOverride = ReadFile(
         root / "overrides/donut-loading.patch");
+    const std::string donutEngineOverride = ReadFile(
+        root / "overrides/donut-engine.patch");
     const std::string donutLoadingAppOverride = ReadFile(
         root / "overrides/donut-loading-app.patch");
     bool passed = true;
@@ -164,6 +198,234 @@ int main(int argc, char** argv)
         viewer,
         "if (snapshot.gpuMetrics.utilizationValid)",
         "utilization-scaled throughput validity gate");
+
+    passed &= ExpectContains(
+        representationSettings,
+        "bool allowRayTraversal = true;",
+        "ray traversal factory master gate");
+    passed &= ExpectContains(
+        viewer,
+        "\"Allow Ray Traversal\",\n"
+            "                    &representation.allowRayTraversal",
+        "Representation ray traversal toggle");
+    passed &= ExpectContains(
+        visibilityPassHeader,
+        "DefaultVisibilitySampleCount = 16u;",
+        "default diffuse sample count");
+    passed &= ExpectContains(
+        visibilityPassHeader,
+        "MaximumVisibilityStepDistributionExponent = 8.f;",
+        "diffuse distribution maximum");
+    passed &= ExpectContains(
+        visibilityPassHeader,
+        "MaximumVisibilityAmbientOcclusionStrength = 8.f;",
+        "ambient occlusion strength maximum");
+    passed &= ExpectContains(
+        visibilityPassHeader,
+        "bool outputHitDistance = false;",
+        "optional diffuse hit distance defaults");
+    passed &= ExpectContains(
+        visibilityPassHeader,
+        "ScreenSpaceAmbientOcclusionHitDistanceMatchesSignal = true;",
+        "matched ambient occlusion hit distance contract");
+    passed &= ExpectContains(
+        visibilityPassHeader,
+        "ScreenSpaceIndirectDiffuseHitDistanceMatchesSignal = true;",
+        "matched diffuse GI hit distance contract");
+    passed &= ExpectContains(
+        visibilityShader,
+        "ambientHitDistanceSectorSum += float(newSectorCount) *",
+        "ambient occlusion blocked sector first moment");
+    passed &= ExpectContains(
+        visibilityShader,
+        "float(ambientVisibleSectorCount) * ambientTraceReach",
+        "ambient occlusion censored visible sector distance");
+    passed &= ExpectContains(
+        visibilityShader,
+        "contributionWeight * contributionHitDistance",
+        "diffuse GI luminance weighted first moment");
+    passed &= ExpectContains(
+        viewer,
+        "denoisingInputs.hitDistanceMatchesSignal =\n"
+            "                                hitDistanceMatchesSignal;",
+        "diffuse denoising matched hit distance forwarding");
+    passed &= ExpectContains(
+        skyVisibilitySettings,
+        "bool applyToSpecularIbl = true;",
+        "specular IBL sky visibility default");
+    passed &= ExpectContains(
+        skyVisibilitySettings,
+        "bool useRatioEstimator = true;\n"
+            "        bool outputHitDistance = false;",
+        "sky estimator and optional hit distance defaults");
+    passed &= ExpectContains(
+        directionalShadowSettings,
+        "bool useRatioEstimator = true;\n"
+            "        bool outputHitDistance = false;",
+        "sun estimator and optional hit distance defaults");
+    passed &= ExpectContains(
+        flashlight,
+        "float beamSizeDegrees = 16.f;\n"
+            "        float angularSizeDegrees = 2.8641924f;\n"
+            "        float beamRoundness = 0.80f;",
+        "flashlight beam and analytical emitter defaults");
+    passed &= ExpectContains(
+        flashlight,
+        "ResolveFlashlightEmitterRadiusMeters(\n"
+            "        float angularSizeDegrees)",
+        "flashlight analytical angular-size conversion");
+    passed &= ExpectContains(
+        flashlight,
+        "FlashlightMinimumAngularSizeDegrees = 0.f;\n"
+            "    inline constexpr float FlashlightMaximumAngularSizeDegrees = 20.f;",
+        "flashlight Angular Size range");
+    passed &= ExpectContains(
+        flashlight,
+        "FlashlightMinimumCameraHorizontalOffsetMeters =\n"
+            "        -0.40f;",
+        "flashlight horizontal offset minimum");
+    passed &= ExpectContains(
+        flashlight,
+        "FlashlightMaximumCameraVerticalOffsetMeters =\n"
+            "        0.40f;",
+        "flashlight vertical offset maximum");
+    passed &= ExpectContains(
+        viewer,
+        "constexpr float DefaultSunIrradiance = 8.f;\n"
+            "constexpr float DefaultSunAngularSizeDegrees = 0.2f;",
+        "sun lighting defaults");
+    passed &= ExpectContains(
+        viewer,
+        "m_SunLight->irradiance = DefaultSunIrradiance;",
+        "scene sun irradiance initialization");
+    passed &= ExpectContains(
+        viewer,
+        "m_SunLight->angularSize = DefaultSunAngularSizeDegrees;",
+        "scene sun angular size initialization");
+    passed &= ExpectContains(
+        viewer,
+        "\"%s: %llu/%s\\n\"",
+        "loading current and average tick line with colon");
+    passed &= ExpectContains(
+        sceneLoading,
+        "SceneLoadCounterTickMilliseconds = 20u;",
+        "20 millisecond loading counter cadence");
+    passed &= ExpectContains(
+        sceneLoading,
+        "return elapsedMilliseconds / SceneLoadCounterTickMilliseconds;",
+        "one loading-count increment per 20 milliseconds");
+    passed &= ExpectContains(
+        viewer,
+        "ResolveSceneLoadElapsedTicks(elapsedLoadMilliseconds)",
+        "elapsed loading tick counter");
+    passed &= ExpectContains(
+        viewer,
+        "averageLoadTicks = ResolveAverageSceneLoadTicks(\n"
+            "                    sceneTiming->second);",
+        "per-scene average loading tick denominator");
+    passed &= ExpectContains(
+        viewer,
+        "averageLoadTicks = ResolveAverageSceneLoadTicks(\n"
+            "                    m_AllSceneLoadTiming);",
+        "global average loading tick fallback");
+    passed &= ExpectOrdered(
+        viewer,
+        "RecordSceneLoadDuration(\n"
+            "                    m_AllSceneLoadTiming,",
+        "RecordBoundedSceneLoadDuration(\n"
+            "                        m_SceneLoadTimingByScene,",
+        "completed loading duration history publication");
+    passed &= ExpectContains(
+        viewer,
+        "m_SceneLoadFailed = !m_app->IsSceneLoaded();",
+        "failed scene loads excluded from timing history");
+    passed &= ExpectOrdered(
+        viewer,
+        "RecordBoundedSceneLoadDuration(\n"
+            "                        m_SceneLoadTimingByScene,",
+        "SaveSceneLoadTimingDatabase();",
+        "successful scene loading history persistence");
+    passed &= ExpectContains(
+        sceneLoading,
+        "while (historyByScene.size() >=\n"
+            "                MaximumSceneLoadTimingEntries)",
+        "bounded scene loading history capacity enforcement");
+    passed &= ExpectContains(
+        viewer,
+        "L\"UVSR\" / L\"scene-load-history-v1.txt\"",
+        "versioned per-user scene loading history path");
+    passed &= ExpectAbsent(
+        viewer,
+        "%u/100",
+        "retired fixed loading denominator");
+    passed &= ExpectContains(
+        noiseSettings,
+        "NoisePattern pattern = NoisePattern::SpatiotemporalBlue;\n"
+            "        NoiseResolution resolution = NoiseResolution::Size128;",
+        "128x128 Spatiotemporal Blue global noise defaults");
+    passed &= ExpectContains(
+        noiseSettings,
+        "case NoisePattern::SpatiotemporalBlue:\n"
+            "            return 64u;",
+        "64-layer spatiotemporal noise depth");
+    passed &= ExpectContains(
+        noiseTextureLibraryHeader,
+        "static constexpr std::size_t CacheEntryCount = 12u;",
+        "three-pattern by four-resolution lazy noise cache");
+    passed &= ExpectContains(
+        noiseTextureLibrary,
+        "description.format = nvrhi::Format::R8_UNORM;",
+        "R8 precomputed noise textures");
+    passed &= ExpectContains(
+        viewer,
+        "m_NoiseTextureLibrary = std::make_unique<NoiseTextureLibrary>(\n"
+            "            GetDevice(),\n"
+            "            mediaDir / \"uvsr/noise\");",
+        "central packaged noise texture library");
+    passed &= ExpectContains(
+        viewer,
+        "const NoiseSettings visibilityNoiseSettings = ResolveNoiseSettings(\n"
+            "            m_ui.Noise,\n"
+            "            m_ui.ScreenSpaceVisibility.noise);",
+        "global-or-custom Visibility noise resolution");
+    passed &= ExpectContains(
+        viewer,
+        "const NoiseSettings shadowNoiseSettings = ResolveNoiseSettings(\n"
+            "            m_ui.Noise,\n"
+            "            m_ui.DirectionalShadows.ratioEstimator.noise);",
+        "global-or-custom shadow noise resolution");
+    passed &= ExpectContains(
+        viewer,
+        "const NoiseSettings skyNoiseSettings = ResolveNoiseSettings(\n"
+            "            m_ui.Noise,\n"
+            "            m_ui.RayTracedSkyVisibility.noise);",
+        "global-or-custom sky noise resolution");
+    passed &= ExpectAbsent(
+        viewer,
+        "m_PreparedVisibilityBlueNoise",
+        "retired worker-prepared noise vector");
+    passed &= ExpectAbsent(
+        viewer,
+        "GenerateVisibilityBlueNoise",
+        "retired runtime blue-noise generator");
+    passed &= ExpectFileAbsent(
+        root / "src/screen_space_directional_shadows.cpp",
+        "production screen space directional shadow source");
+    passed &= ExpectFileAbsent(
+        root / "src/screen_space_directional_shadows_cs.hlsl",
+        "production screen space directional shadow shader");
+    passed &= ExpectAbsent(
+        buildSystem,
+        "screen_space_directional_shadows",
+        "production screen space directional shadows");
+    passed &= ExpectContains(
+        buildSystem,
+        "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md",
+        "packaged third party notice source");
+    passed &= ExpectContains(
+        buildSystem,
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/THIRD_PARTY_NOTICES.md",
+        "packaged third party notice destination");
 
     const std::string_view representationInvalidation = ExtractSection(
         worldRepresentation,
@@ -287,13 +549,18 @@ int main(int argc, char** argv)
     passed &= ExpectContains(
         viewer,
         "m_SunLight.get(),\n"
-            "                        uint32_t(m_HeitzRatioEstimatorPhase),\n"
+            "                        shadowNoiseSettings,\n"
+            "                        shadowNoise.texture,\n"
+            "                        shadowNoiseSettings.animate\n"
+            "                            ? uint32_t(m_HeitzRatioEstimatorPhase)\n"
+            "                            : 0u,\n"
             "                        m_SceneDiagonal);",
-        "TAA-independent Heitz sampling phase input");
+        "resolved texture-backed Heitz sampling phase input");
     passed &= ExpectContains(
         viewer,
         "if (heitzShadowResult.dispatched &&\n"
-            "            heitzShadowResult.stochastic)",
+            "            heitzShadowResult.stochastic &&\n"
+            "            shadowNoiseSettings.animate)",
         "actual stochastic-dispatch phase commit");
     passed &= ExpectAbsent(
         viewer,
@@ -309,8 +576,9 @@ int main(int argc, char** argv)
         viewer,
         "const bool motionVectorsRequired =\n"
             "                temporalAARequired ||\n"
+            "                denoisingMotionVectorsRequired ||\n"
             "                (visibilityResourcesRequired && sampleCount > 1u);",
-        "runtime motion topology without Heitz history");
+        "runtime motion topology for temporal AA and denoising without private Heitz history");
     const std::string_view renderTargetReplacement = ExtractSection(
         viewer,
         "const bool antiAliasingTopologyChanged =",
@@ -326,8 +594,20 @@ int main(int argc, char** argv)
         "bool HeitzRatioEstimatorShadowPass::EnsureBindingSets(");
     passed &= ExpectContains(
         ensureHeitzResources,
-        "if (outputSizeMatches)",
-        "frame-local Heitz output resource fast path");
+        "const bool modulationSizeMatches = m_OutputModulation &&",
+        "independent Heitz modulation output reuse gate");
+    passed &= ExpectContains(
+        ensureHeitzResources,
+        "if (!modulationSizeMatches)",
+        "Heitz modulation output replacement gate");
+    passed &= ExpectContains(
+        ensureHeitzResources,
+        "if (outputHitDistance && !hitDistanceSizeMatches)",
+        "optional Heitz hit distance output replacement gate");
+    passed &= ExpectContains(
+        ensureHeitzResources,
+        "else if (!outputHitDistance && m_OutputHitDistance)",
+        "disabled Heitz hit distance output retirement");
     passed &= ExpectContains(
         ensureHeitzResources,
         "if (!outputModulation)",
@@ -342,8 +622,13 @@ int main(int argc, char** argv)
         "HeitzRatioEstimatorShadowResult");
     passed &= ExpectContains(
         ensureHeitzBindings,
-        "if (m_BindingSet &&",
-        "complete frame-local Heitz binding fast path");
+        "if (m_BindingSets[variant])\n"
+            "            return true;",
+        "per hit distance variant Heitz binding fast path");
+    passed &= ExpectContains(
+        ensureHeitzBindings,
+        "m_BindingSets[variant] = m_Device->createBindingSet(",
+        "per hit distance variant Heitz binding creation");
     passed &= ExpectContains(
         ensureHeitzBindings,
         "ClearBindingSets();",
@@ -379,6 +664,84 @@ int main(int argc, char** argv)
         "ProcessPendingSceneRetirement(framebuffer)",
         "ProcessRenderingThreadCommands(*m_CommonPasses, 4.f)",
         "scene retirement before texture finalization");
+    passed &= ExpectContains(
+        donutLoadingAppOverride,
+        "std::atomic_bool m_SceneLoadFinished = false;",
+        "async scene completion independent from success");
+    const std::string_view applicationBaseDestructor = ExtractSection(
+        donutLoadingAppOverride,
+        "ApplicationBase::~ApplicationBase()",
+        "void ApplicationBase::WaitForSceneLoadingThread()");
+    passed &= ExpectContains(
+        applicationBaseDestructor,
+        "WaitForSceneLoadingThread();",
+        "defensive base-destructor scene-worker join");
+    const std::string_view waitForSceneLoadingThread = ExtractSection(
+        donutLoadingAppOverride,
+        "void ApplicationBase::WaitForSceneLoadingThread()",
+        "void ApplicationBase::Render(");
+    passed &= ExpectOrdered(
+        waitForSceneLoadingThread,
+        "m_SceneLoadingThread->join();",
+        "m_SceneLoadingThread.reset();",
+        "scene-worker join before thread-handle release");
+    const std::string_view viewerDestructor = ExtractSection(
+        viewer,
+        "~UvsrSceneViewer() override",
+        "std::shared_ptr<vfs::IFileSystem> GetRootFs() const");
+    passed &= ExpectContains(
+        viewerDestructor,
+        "WaitForSceneLoadingThread();",
+        "derived scene-worker join before viewer member destruction");
+    const std::string_view failedGuiInitialization = ExtractSection(
+        viewer,
+        "if (!gui->Init(demo->GetShaderFactory()))",
+        "deviceManager->AddRenderPassToBack(demo.get());");
+    passed &= ExpectOrdered(
+        failedGuiInitialization,
+        "gui.reset();",
+        "demo.reset();",
+        "failed GUI initialization releases UI ownership before the viewer");
+    passed &= ExpectOrdered(
+        failedGuiInitialization,
+        "demo.reset();",
+        "deviceManager->Shutdown();",
+        "failed GUI initialization joins the scene worker before device shutdown");
+    passed &= ExpectOrdered(
+        failedGuiInitialization,
+        "deviceManager->Shutdown();",
+        "delete deviceManager;",
+        "failed GUI initialization shuts down before deleting the device manager");
+    const std::string_view failedAsyncSceneLoad = ExtractSection(
+        donutLoadingAppOverride,
+        "if (m_SceneLoadingThread && m_SceneLoadFinished && "
+            "!m_SceneLoaded)",
+        "// Leave most of each loading frame available to presentation and UI.");
+    passed &= ExpectOrdered(
+        failedAsyncSceneLoad,
+        "WaitForSceneLoadingThread();",
+        "m_TextureCache->Reset();",
+        "failed async scene loads joined before leaving busy state");
+    passed &= ExpectOrdered(
+        donutLoadingAppOverride,
+        "loaded = LoadScene(fs, sceneFileName);",
+        "catch (...)",
+        "async scene worker catches every exception");
+    passed &= ExpectOrdered(
+        donutLoadingAppOverride,
+        "catch (...)",
+        "m_SceneLoaded = loaded;",
+        "async scene failure publication after exception handling");
+    passed &= ExpectOrdered(
+        donutLoadingAppOverride,
+        "m_SceneLoaded = loaded;",
+        "m_SceneLoadFinished = true;",
+        "async scene result before completion publication");
+    passed &= ExpectOrdered(
+        donutEngineOverride,
+        "std::lock_guard<std::mutex> guard(m_TexturesToFinalizeMutex);",
+        "m_TexturesToFinalize.swap(discardedFinalizations);",
+        "pending texture finalizations cleared under their mutex");
     const std::string_view beginLoadingScene = ExtractSection(
         donutLoadingAppOverride,
         "void ApplicationBase::BeginLoadingScene(",
@@ -469,6 +832,20 @@ int main(int argc, char** argv)
         visibilityPass,
         "bool ScreenSpaceVisibilityPass::PreparePipelinesStep()",
         "one-step visibility pipeline preparation");
+    passed &= ExpectContains(
+        visibilityPassHeader,
+        "return firstTraceMs + reconstructionMs + compositionMs;",
+        "visibility effect cost excludes nested denoiser callbacks");
+    passed &= ExpectContains(
+        viewer,
+        "drawScreenSpaceVisibilityTiming(label);",
+        "complete renderer table uses exclusive visibility timing");
+    passed &= ExpectContains(
+        viewer,
+        "{ \"Visibility Lighting Preparation\",\n"
+            "                            RendererTimingStage::"
+            "VisibilityLightingPreparation }",
+        "multisample Visibility preparation has its own timing row");
     for (const std::string_view retiredVisibilitySurface : {
             std::string_view("ResetHistory"),
             std::string_view("Temporal"),
@@ -610,34 +987,39 @@ int main(int argc, char** argv)
         "case PreparedRadianceGpuStage::SpecularMipGeneration:",
         "per-mip staged IBL prefilter");
 
-    const std::string_view flashlightLightClass = ExtractSection(
-        viewer,
-        "class FlashlightSpotLight final : public SpotLight",
-        "static bool g_RestartRequested");
     passed &= ExpectContains(
-        flashlightLightClass,
-        "SpotLight::FillLightConstants(lightConstants);",
-        "first-party flashlight light-constant base fill");
+        flashlightShared,
+        "struct FlashlightBeamProfile",
+        "explicit first-party flashlight beam transport");
     passed &= ExpectContains(
-        flashlightLightClass,
-        "EncodeFlashlightBeamShapeRadius(beamRoundness)",
-        "flashlight beam-shape transport");
+        flashlightShared,
+        "static_assert(sizeof(FlashlightBeamProfile) == 48u",
+        "48-byte flashlight beam profile layout");
     passed &= ExpectContains(
-        flashlightLightClass,
-        "lightConstants.shadowChannel[1]",
-        "flashlight right-axis X transport");
+        flashlight,
+        "ResolveFlashlightBeamProfile(",
+        "flashlight profile construction");
     passed &= ExpectContains(
-        flashlightLightClass,
-        "lightConstants.shadowChannel[2]",
-        "flashlight right-axis Y transport");
+        deferredConstants,
+        "FlashlightBeamProfile flashlightBeamProfile;",
+        "deferred flashlight profile binding");
     passed &= ExpectContains(
-        flashlightLightClass,
-        "lightConstants.shadowChannel[3]",
-        "flashlight right-axis Z transport");
+        directLightVisibility,
+        "DirectLightVisibility flashlight;\n"
+            "        DirectLightVisibility sun;",
+        "independent flashlight and sun visibility slots");
     passed &= ExpectAbsent(
-        flashlightLightClass,
-        "lightConstants.shadowChannel[0]",
-        "existing shadow-channel ownership");
+        viewer,
+        "class FlashlightSpotLight",
+        "retired flashlight light subclass");
+    passed &= ExpectAbsent(
+        viewer,
+        "m_FlashlightHotspot",
+        "retired duplicate flashlight lobe");
+    passed &= ExpectAbsent(
+        viewer,
+        "m_FlashlightShadowMap",
+        "retired private flashlight shadow map");
 
     for (const std::string_view retiredEmissiveSourceSurface : {
             std::string_view("includeEmissive"),
@@ -728,70 +1110,81 @@ int main(int argc, char** argv)
         createPasses,
         "std::make_unique<PbrDeferredLightingPass>",
         "deferred PBR pass construction");
-    passed &= ExpectContains(
-        createPasses,
-        "&m_PreparedVisibilityBlueNoise",
-        "worker-prepared visibility sampling data");
 
-    const std::string_view ensureScreenSpaceShadows = ExtractSection(
-        viewer,
-        "void EnsureScreenSpaceDirectionalShadowPass()",
-        "void UpdateImageBasedLighting(");
-    passed &= ExpectContains(
-        ensureScreenSpaceShadows,
-        "m_ui.ScreenSpaceDirectionalShadows.enabled",
-        "lazy screen-space shadow construction gate");
-    passed &= ExpectContains(
-        ensureScreenSpaceShadows,
-        "std::make_unique<ScreenSpaceDirectionalShadowPass>",
-        "retained screen-space shadow construction");
     passed &= ExpectAbsent(
         refresh,
         "std::make_unique<PbrDeferredLightingPass>",
         "AA-only target refresh");
 
-    const std::string_view flashlightShadowResources = ExtractSection(
+    const std::string_view sunShadowLifetime = ExtractSection(
         viewer,
-        "void CreateFlashlightShadowResources()",
-        "void RenderFlashlightShadow()");
+        "void EnsureHeitzRatioEstimatorShadowPass()",
+        "void EnsureRayTracedFlashlightShadowPass()");
     passed &= ExpectContains(
-        flashlightShadowResources,
-        "std::make_shared<PlanarShadowMap>(",
-        "flashlight geometry shadow map");
+        sunShadowLifetime,
+        "!m_ui.Representation.allowRayTraversal",
+        "sun shadow ray-traversal master gate");
+    const std::string_view flashlightShadowLifetime = ExtractSection(
+        viewer,
+        "void EnsureRayTracedFlashlightShadowPass()",
+        "void EnsureRayTracedSkyVisibilityPass()");
     passed &= ExpectContains(
-        flashlightShadowResources,
-        "std::make_unique<DepthPass>(",
-        "flashlight opaque and alpha-tested depth pass");
+        flashlightShadowLifetime,
+        "!m_ui.Representation.allowRayTraversal",
+        "flashlight ray-traversal master gate");
+    passed &= ExpectContains(
+        flashlightShadowLifetime,
+        "std::make_unique<RayTracedFlashlightShadowPass>(",
+        "lazy ray traced flashlight shadow construction");
+    const std::string_view applyCameraPose = ExtractSection(
+        viewer,
+        "void ApplyCameraPose(",
+        "void ApplySponzaCameraPreset(");
+    passed &= ExpectOrdered(
+        applyCameraPose,
+        "m_StaticCamera.SetExactPose(",
+        "ResetFlashlightMotion();",
+        "camera teleport flashlight reset after all camera poses");
+    passed &= ExpectOrdered(
+        applyCameraPose,
+        "ResetFlashlightMotion();",
+        "m_PreviousView.reset();",
+        "camera teleport flashlight reset before view history");
+    const std::string_view pointThirdPersonCamera = ExtractSection(
+        viewer,
+        "void PointThirdPersonCameraAt(",
+        "std::shared_ptr<TextureCache> GetTextureCache()");
+    passed &= ExpectOrdered(
+        pointThirdPersonCamera,
+        "m_ThirdPersonCamera.ResetZoomReferenceDistance(distance);",
+        "ResetFlashlightMotion();",
+        "focus teleport flashlight collision-cache reset");
+    const std::string_view skyVisibilityLifetime = ExtractSection(
+        viewer,
+        "void EnsureRayTracedSkyVisibilityPass()",
+        "void UpdateImageBasedLighting(");
+    passed &= ExpectContains(
+        skyVisibilityLifetime,
+        "!m_ui.Representation.allowRayTraversal",
+        "sky visibility ray-traversal master gate");
     const std::string_view flashlightPresentation = ExtractSection(
         viewer,
         "void ApplyFlashlightPresentation()",
         "void UpdateFlashlightAnimation(float elapsedSeconds)");
     passed &= ExpectContains(
         flashlightPresentation,
-        "m_Flashlight->shadowMap = activeShadowMap;",
-        "flashlight spill-to-shadow association");
-    passed &= ExpectContains(
-        flashlightPresentation,
-        "m_FlashlightHotspot->shadowMap = activeShadowMap;",
-        "flashlight hotspot-to-shadow association");
-    passed &= ExpectContains(
-        flashlightPresentation,
         "ResolveFlashlightLobeSettings(settings)",
         "flashlight lobe settings resolution");
     passed &= ExpectContains(
         flashlightPresentation,
-        "m_FlashlightHotspot->range = settings.rangeMeters;",
-        "flashlight shared lobe range");
-    passed &= ExpectContains(
+        "m_Flashlight->radius =\n"
+            "            ResolveFlashlightEmitterRadiusMeters(\n"
+            "                settings.angularSizeDegrees);",
+        "selectable analytical flashlight emitter radius");
+    passed &= ExpectAbsent(
         flashlightPresentation,
-        "m_Flashlight->beamRoundness =\n"
-            "            settings.beamRoundness;",
-        "flashlight spill beam footprint");
-    passed &= ExpectContains(
-        flashlightPresentation,
-        "m_FlashlightHotspot->beamRoundness =\n"
-            "                settings.beamRoundness;",
-        "flashlight hotspot beam footprint");
+        "shadowMap",
+        "retired raster flashlight shadow association");
 
     const std::string_view flashlightAnimation = ExtractSection(
         viewer,
@@ -807,6 +1200,31 @@ int main(int argc, char** argv)
         "ApplyFlashlightPresentation();",
         "flashlight transition before presentation");
 
+    const std::string_view flashlightReset = ExtractSection(
+        viewer,
+        "void ResetFlashlightMotion()",
+        "void ApplyFlashlightPresentation()");
+    passed &= ExpectContains(
+        flashlightReset,
+        "m_FlashlightCollisionAnchor = 0.f;",
+        "flashlight collision anchor reset");
+    passed &= ExpectContains(
+        flashlightReset,
+        "m_FlashlightMountExtension = 1.f;",
+        "flashlight mount extension reset");
+    passed &= ExpectContains(
+        flashlightReset,
+        "m_FlashlightHardMountExtension = 1.f;",
+        "flashlight hard mount extension reset");
+    passed &= ExpectContains(
+        flashlightReset,
+        "m_FlashlightTargetMountExtension = 1.f;",
+        "flashlight target mount extension reset");
+    passed &= ExpectContains(
+        flashlightReset,
+        "m_FlashlightMountRecovery = false;",
+        "flashlight blocked-chord recovery reset");
+
     const std::string_view flashlightMotion = ExtractSection(
         viewer,
         "void UpdateFlashlightMotion(float elapsedSeconds)",
@@ -818,7 +1236,8 @@ int main(int argc, char** argv)
     passed &= ExpectContains(
         flashlightMotion,
         "ResolveFlashlightMountPose(\n"
-            "                settings.cameraLateralOffsetMeters);",
+            "                settings.cameraHorizontalOffsetMeters,\n"
+            "                settings.cameraVerticalOffsetMeters);",
         "flashlight configurable tested mount-pose resolution");
     passed &= ExpectContains(
         flashlightMotion,
@@ -832,16 +1251,143 @@ int main(int argc, char** argv)
         "flashlight off-axis vertical mount");
     passed &= ExpectContains(
         flashlightMotion,
-        "mount.directionForward +",
-        "flashlight converged forward aim");
+        "ResolveFlashlightCollisionRadiusMeters(",
+        "flashlight emitter-aware collision radius");
     passed &= ExpectContains(
         flashlightMotion,
-        "mount.directionRight +",
-        "flashlight converged horizontal aim");
+        "m_CameraCollisionWorld.ResolveSphere(",
+        "flashlight stationary overlap repair");
     passed &= ExpectContains(
         flashlightMotion,
-        "mount.directionUp);",
-        "flashlight converged vertical aim");
+        "m_CameraCollisionWorld.GetSphereTravelFraction(",
+        "flashlight predictive no-slide mount probes");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "ResolveFlashlightMountRetractionRange(",
+        "flashlight early proximity envelope");
+    const std::string_view flashlightProximityUpdate = ExtractSection(
+        flashlightMotion,
+        "if (collisionRadiusChanged || desiredPositionChanged ||\n"
+            "            cameraPositionChanged)",
+        "const float previousMountExtension =");
+    passed &= ExpectContains(
+        flashlightProximityUpdate,
+        "const float mountProbeDistance =",
+        "flashlight mount probe cached behind pose changes");
+    passed &= ExpectContains(
+        flashlightProximityUpdate,
+        "const float3 forwardProbeEnd =",
+        "flashlight forward probe cached behind pose changes");
+    passed &= ExpectAbsent(
+        flashlightProximityUpdate,
+        "AdvanceFlashlightMountExtension(",
+        "flashlight idle release remains outside collision probes");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "const float mountProbeDistance =",
+        "const float3 forwardProbeEnd =",
+        "flashlight mount probe before forward probe");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "const float3 forwardProbeEnd =",
+        "ResolveFlashlightMountRetractionExtension(",
+        "flashlight forward probe before spatial easing");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "hardSafeFlashlightPosition",
+        "cameraDirection * retractionRange.farDistanceMeters;",
+        "flashlight forward probe begins at the hard-safe emitter");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "std::min(\n"
+            "                    hardMountExtension,\n"
+            "                    proximityMountExtension)",
+        "flashlight proximity target bounded by hard collision limit");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "AdvanceFlashlightMountExtension(",
+        "flashlight bounded uniform mount restoration");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "(desiredFlashlightPosition - collisionAnchor) * mountExtension;",
+        "flashlight complete mount-vector retraction");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "m_CameraCollisionWorld.MoveSphere(",
+        "flashlight continuous collision sweep");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "CameraCollisionWorld::GetSphereSeparationSkin(",
+        "const auto reachedTarget =",
+        "flashlight arrival tolerance matches collision separation skin");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "flashlightPosition = constrainedFlashlightPosition;",
+        "flashlight validated mount target exact snap");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "cameraDirection * FlashlightAimConvergenceDistanceMeters;",
+        "flashlight post-collision convergence target");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "m_CameraCollisionWorld.ResolveSphere(",
+        "m_CameraCollisionWorld.GetSphereTravelFraction(",
+        "flashlight safe anchor before direct mount limit");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "m_CameraCollisionWorld.GetSphereTravelFraction(",
+        "AdvanceFlashlightMountExtension(",
+        "flashlight predictive limit before mount restoration");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "AdvanceFlashlightMountExtension(",
+        "mountExtension = std::min(\n"
+            "            mountExtension,\n"
+            "            hardMountExtension);",
+        "flashlight presentation extension defensively hard-clamped");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "if (collisionRadiusIncreased)\n"
+            "        {\n"
+            "            mountExtension = std::min(\n"
+            "                mountExtension,\n"
+            "                previousMountExtension);",
+        "flashlight radius growth cannot expand the mount");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "AdvanceFlashlightMountExtension(",
+        "float3 constrainedFlashlightPosition =",
+        "flashlight extension before complete-vector target");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "float3 constrainedFlashlightPosition =",
+        "flashlightPosition = m_CameraCollisionWorld.MoveSphere(",
+        "flashlight constrained target before final safety sweep");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "flashlightPosition = m_CameraCollisionWorld.MoveSphere(",
+        "const float3 mountedDirection = normalize(",
+        "flashlight collision before corrected aiming");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "start,\n"
+            "                            m_FlashlightCollisionAnchor,",
+        "previousAnchorPosition,\n"
+            "                        collisionAnchor,",
+        "flashlight blocked chord recovery through old and new anchors");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "mountExtension = 0.f;\n"
+            "                    constrainedFlashlightPosition = "
+            "collisionAnchor;\n"
+            "                    mountRecovery = true;\n"
+            "                    flashlightPosition =\n"
+            "                        recoverThroughAnchors(collisionStart);",
+        "flashlight blocked chord immediate full retraction");
+    passed &= ExpectContains(
+        flashlightMotion,
+        "m_FlashlightMountRecovery = mountRecovery;",
+        "flashlight blocked chord recovery persistence");
     passed &= ExpectContains(
         flashlightMotion,
         "m_FlashlightResolvedPosition = flashlightPosition;",
@@ -890,32 +1436,18 @@ int main(int argc, char** argv)
         "flashlight shared resolved position");
     passed &= ExpectContains(
         flashlightTransform,
-        "m_FlashlightHotspot->SetPosition(",
-        "flashlight hotspot position synchronization");
-    passed &= ExpectContains(
-        flashlightTransform,
         "SetFlashlightDirectionAndRoll(\n"
-            "                m_FlashlightHotspot,",
-        "flashlight hotspot direction-and-roll synchronization");
-    passed &= ExpectContains(
-        flashlightTransform,
-        "m_Flashlight->beamRight =\n"
-            "            m_FlashlightResolvedRight;",
-        "flashlight spill shape-basis publication");
-    passed &= ExpectContains(
-        flashlightTransform,
-        "m_FlashlightHotspot->beamRight =\n"
-            "                m_FlashlightResolvedRight;",
-        "flashlight hotspot shape-basis publication");
+            "            m_Flashlight,",
+        "single flashlight direction and roll publication");
 
     const std::string_view flashlightAttachment = ExtractSection(
         viewer,
         "void AttachFlashlightToScene()",
-        "void CreateFlashlightShadowResources()");
+        "virtual void Animate(float fElapsedTimeSeconds) override");
     passed &= ExpectContains(
         flashlightAttachment,
-        "std::make_shared<FlashlightSpotLight>()",
-        "first-party flashlight light construction");
+        "std::make_shared<SpotLight>()",
+        "ordinary flashlight spot-light construction");
     passed &= ExpectContains(
         flashlightAttachment,
         "m_Flashlight->SetName(FlashlightPublicName);",
@@ -924,39 +1456,10 @@ int main(int argc, char** argv)
         flashlightAttachment,
         "m_FlashlightNode->SetName(FlashlightPublicName);",
         "public flashlight node identifier");
-    passed &= ExpectContains(
-        flashlightAttachment,
-        "\"flashlight_lens_hotspot\"",
-        "hidden internal lens-lobe identifier");
-
-    const std::string_view flashlightShadowRender = ExtractSection(
+    passed &= ExpectAbsent(
         viewer,
         "void RenderFlashlightShadow()",
-        "virtual void Animate(float fElapsedTimeSeconds) override");
-    passed &= ExpectContains(
-        flashlightShadowRender,
-        "!ShouldRenderFlashlightShadow(",
-        "settled-off flashlight shadow work gate");
-    passed &= ExpectContains(
-        flashlightShadowRender,
-        "m_ui.Flashlight.castShadows",
-        "flashlight shadow setting gate");
-    passed &= ExpectContains(
-        flashlightShadowRender,
-        "FlashlightShadowCollisionNearScale",
-        "flashlight camera-collision near-plane margin");
-    passed &= ExpectContains(
-        flashlightShadowRender,
-        "m_CommandList->clearDepthStencilTexture(",
-        "flashlight depth-stencil clear");
-    passed &= ExpectAbsent(
-        flashlightShadowRender,
-        "m_FlashlightShadowMap->Clear(",
-        "unsafe generic flashlight clear");
-    passed &= ExpectContains(
-        flashlightShadowRender,
-        "\"FlashlightShadow\"",
-        "flashlight geometry shadow submission");
+        "retired private flashlight shadow render path");
 
     const std::string_view renderScene = ExtractSection(
         viewer,
@@ -1071,18 +1574,22 @@ int main(int argc, char** argv)
     passed &= ExpectOrdered(
         renderScene,
         "lightingLights.push_back(m_Flashlight);",
-        "lightingLights.push_back(m_FlashlightHotspot);",
-        "realistic flashlight lobe priority");
-    passed &= ExpectOrdered(
-        renderScene,
-        "lightingLights.push_back(m_FlashlightHotspot);",
         "for (const auto& light : sceneLights)",
         "flashlight light-limit priority");
     passed &= ExpectOrdered(
         renderScene,
-        "RenderFlashlightShadow();",
-        "deferredInputs.lights = submittedLights;",
-        "deferred flashlight shadow-before-lighting order");
+        "m_RayTracedFlashlightShadowPass->Render(",
+        "m_PbrDeferredLightingPass->Render(",
+        "ray traced flashlight shadow-before-lighting order");
+    passed &= ExpectOrdered(
+        renderScene,
+        "flashlightNoise = m_NoiseTextureLibrary->Resolve(",
+        "m_RayTracedFlashlightShadowPass->Render(",
+        "shared Noise resolution before flashlight shadow dispatch");
+    passed &= ExpectContains(
+        renderScene,
+        "m_RayTracedFlashlightShadowPhase",
+        "animated finite-emitter flashlight sample phase");
     passed &= ExpectContains(
         renderScene,
         "const auto& sceneLights =\n"
@@ -1099,8 +1606,8 @@ int main(int argc, char** argv)
         "active flashlight-prioritized light path");
     passed &= ExpectContains(
         renderScene,
-        "m_ui.Flashlight.realisticLens",
-        "realistic flashlight hotspot submission gate");
+        "directLightVisibilities.flashlight = {",
+        "flashlight visibility publication");
 
     const std::string_view loadScene = ExtractSection(
         viewer,
@@ -1133,10 +1640,6 @@ int main(int argc, char** argv)
         "m_PendingSceneCpuState.emplace(std::move(prepared));",
         "m_Scene = std::move(scene);",
         "complete CPU handoff publication");
-    passed &= ExpectContains(
-        loadScene,
-        "GenerateVisibilityBlueNoise();",
-        "worker visibility-rank preparation");
     passed &= ExpectContains(
         loadScene,
         "m_ImageBasedLightingEnvironment->PrepareRadiance(",
@@ -1213,9 +1716,8 @@ int main(int argc, char** argv)
         "selectable flashlight editor entry");
     passed &= ExpectContains(
         sceneLoaded,
-        "light != m_Flashlight &&\n"
-            "                light != m_FlashlightHotspot",
-        "scene-light list flashlight-lobe exclusion");
+        "if (light && light != m_Flashlight)",
+        "scene-light list flashlight exclusion");
     passed &= ExpectOrdered(
         sceneLoaded,
         "sceneInitialCamera->VerticalFovDegrees;",
@@ -1467,13 +1969,43 @@ int main(int argc, char** argv)
             "            BeginRendererStage(RendererTimingStage::DirectLighting);",
         "m_CommandList->resolveTexture(",
         "multisample color-resolve timing attribution");
-    passed &= ExpectOrdered(
+    const std::string_view msaaVisibilityPreparation = ExtractSection(
         viewer,
+        "if (runScreenSpaceVisibility &&\n"
+            "                    closestSurfaceResolved",
+        "deferredMsaaVisibilityPending = true;");
+    passed &= ExpectOrdered(
+        msaaVisibilityPreparation,
         "BeginRendererStage(\n"
-            "                        RendererTimingStage::ScreenSpaceVisibility);\n"
-            "                    m_PbrDeferredLightingPass->Render(",
+            "                        RendererTimingStage::"
+            "VisibilityLightingPreparation);",
+        "m_PbrDeferredLightingPass->Render(",
+        "multisample lighting-preparation timer start");
+    passed &= ExpectOrdered(
+        msaaVisibilityPreparation,
+        "m_PbrDeferredLightingPass->Render(",
+        "EndRendererStage(\n"
+            "                        RendererTimingStage::"
+            "VisibilityLightingPreparation);",
+        "multisample lighting-preparation timer end");
+    passed &= ExpectOrdered(
+        msaaVisibilityPreparation,
+        "EndRendererStage(\n"
+            "                        RendererTimingStage::"
+            "VisibilityLightingPreparation);",
+        "BeginRendererStage(\n"
+            "                        RendererTimingStage::ScreenSpaceVisibility);",
+        "multisample lighting excluded from Visibility timing");
+    passed &= ExpectOrdered(
+        msaaVisibilityPreparation,
+        "BeginRendererStage(\n"
+            "                        RendererTimingStage::ScreenSpaceVisibility);",
         "m_ScreenSpaceVisibilityPass->Render(",
-        "multisample Visibility preparation timing attribution");
+        "multisample Visibility timer start");
+    passed &= ExpectContains(
+        viewer,
+        "m_VisibilityLightingPreparationDispatchedThisFrame = true;",
+        "multisample Visibility preparation timing availability");
 
     const auto expectTriangleFormat =
         [&passed](uint64_t count, const char* expected)

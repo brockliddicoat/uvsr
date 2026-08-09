@@ -3,8 +3,14 @@
 #include <donut/shaders/binding_helpers.hlsli>
 #include <donut/shaders/gbuffer.hlsli>
 #include "heitz_ratio_estimator_shadows_cb.h"
+#include "noise_sampling.hlsli"
 #include "pbr_gbuffer.hlsli"
+#include "ray_traced_material_visibility.hlsli"
 #include "ratio_estimator_shared.h"
+
+#ifndef OUTPUT_HIT_DISTANCE
+#define OUTPUT_HIT_DISTANCE 0
+#endif
 
 cbuffer c_HeitzShadows : register(b0)
 {
@@ -17,14 +23,18 @@ Texture2D<float4> t_GBufferDiffuse : register(t2);
 Texture2D<float4> t_GBufferMaterial : register(t3);
 Texture2D<float4> t_GBufferNormals : register(t4);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t5);
-Texture2DArray<float> t_BlueNoise : register(t6);
+Texture2DArray<float> t_Noise : register(t6);
 Texture2D<float4> t_GBufferEmissive : register(t7);
 
 VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_Output : register(u0);
+#if OUTPUT_HIT_DISTANCE
+VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_HitDistance : register(u1);
+#endif
 
 static const float HeitzTwoPi = 6.28318530717958647692f;
-static const float HeitzUint24Scale = 1.0f / 16777216.0f;
+static const float HeitzHitDistanceMaximum = 65472.0f;
+static const float HeitzHitDistanceMiss = 65504.0f;
 
 bool HeitzInViewport(uint2 dispatchPosition)
 {
@@ -52,63 +62,32 @@ float HeitzRadicalInverse(uint index, uint base)
     return result;
 }
 
-float HeitzBlueNoise(int2 pixelPosition, uint layer)
-{
-    int2 coordinate = pixelPosition & 63;
-    return t_BlueNoise.Load(int4(
-        coordinate,
-        int(layer % 5u),
-        0));
-}
-
-float HeitzPermutatedWhiteNoise(
-    int2 pixelPosition,
-    uint dimension,
-    uint phase)
-{
-    uint state = uint(pixelPosition.x) +
-        uint(pixelPosition.y) * 65537u +
-        dimension * 747796405u + phase * 2891336453u + 1u;
-    state = state * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) *
-        277803737u;
-    word = (word >> 22u) ^ word;
-    return float((word >> 8u) & 0x00ffffffu) * HeitzUint24Scale;
-}
-
-float HeitzGoldenWeylPhase(uint frameIndex)
-{
-    const uint phase = frameIndex * 0x9e3779b9u;
-    return float(phase >> 8u) * HeitzUint24Scale;
-}
-
 float2 HeitzSample2D(
-    int2 pixelPosition,
+    uint2 dispatchPosition,
     uint sampleIndex)
 {
     const uint phase = g_Heitz.sampleSequencePhase;
     const uint firstDimension = sampleIndex * 2u;
-    if (g_Heitz.noisePattern == 0u)
-    {
-        return float2(
-            HeitzPermutatedWhiteNoise(
-                pixelPosition, firstDimension, phase),
-            HeitzPermutatedWhiteNoise(
-                pixelPosition, firstDimension + 1u, phase));
-    }
-    // Independent blue-noise Cranley-Patterson shifts preserve uniform solid
-    // angle while turning the progressive low-discrepancy sequence into a
-    // spatial blue-noise pattern. The integer Weyl phase avoids float drift
-    // on long runs and rotates that pattern only when progressive sampling is
-    // enabled.
     const uint sequenceIndex = sampleIndex + 1u;
+    const uint2 dispatchExtent = uint2(g_Heitz.view.viewportSize);
+    const float2 noiseShift = float2(
+        UVSRSamplePrecomputedNoise(
+            t_Noise,
+            g_Heitz.noisePattern,
+            dispatchPosition,
+            dispatchExtent,
+            phase,
+            0x200u + firstDimension),
+        UVSRSamplePrecomputedNoise(
+            t_Noise,
+            g_Heitz.noisePattern,
+            dispatchPosition,
+            dispatchExtent,
+            phase,
+            0x200u + firstDimension + 1u));
     return frac(float2(
-        HeitzRadicalInverse(sequenceIndex, 2u) +
-            HeitzBlueNoise(pixelPosition, 0u) +
-            HeitzRadicalInverse(phase + 1u, 5u),
-        HeitzRadicalInverse(sequenceIndex, 3u) +
-            HeitzBlueNoise(pixelPosition, 1u) +
-            HeitzGoldenWeylPhase(phase)));
+        HeitzRadicalInverse(sequenceIndex, 2u),
+        HeitzRadicalInverse(sequenceIndex, 3u)) + noiseShift);
 }
 
 float3 HeitzLightCenterDirection()
@@ -224,7 +203,8 @@ float3 HeitzPrepareRayOrigin(
 
 bool HeitzTraceVisibility(
     float3 rayOrigin,
-    float3 directionToLight)
+    float3 directionToLight,
+    out float hitDistance)
 {
     RayDesc ray;
     ray.Origin = rayOrigin;
@@ -234,15 +214,31 @@ bool HeitzTraceVisibility(
     ray.TMin = 0.0f;
     ray.TMax = g_Heitz.rayDistance;
 
+#if OUTPUT_HIT_DISTANCE
+    RayQuery<
+        RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+#else
     RayQuery<
         RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-        RAY_FLAG_FORCE_OPAQUE |
         RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+#endif
     query.TraceRayInline(t_WorldBvh, RAY_FLAG_NONE, 0xff, ray);
     while (query.Proceed())
     {
+        UVSR_COMMIT_COVERED_RAY_QUERY_CANDIDATE(query)
     }
-    return query.CommittedStatus() != COMMITTED_TRIANGLE_HIT;
+    const bool hit = query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+#if OUTPUT_HIT_DISTANCE
+    if (hit)
+        hitDistance = min(
+            query.CommittedRayT(),
+            HeitzHitDistanceMaximum);
+    else
+        hitDistance = HeitzHitDistanceMiss;
+#else
+    hitDistance = hit ? 0.0f : HeitzHitDistanceMiss;
+#endif
+    return !hit;
 }
 
 float3 HeitzEvaluateNormalizedResponse(
@@ -276,10 +272,13 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
     if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
     {
         u_Output[pixelPosition] = 1.0f;
+#if OUTPUT_HIT_DISTANCE
+        u_HitDistance[pixelPosition] = 0.0f;
+#endif
         return;
     }
 
-    // The hard path deliberately stops after the minimum surface data needed
+    // The scalar path deliberately stops after the minimum surface data needed
     // for a robust center ray. Diffuse, emissive, AO, material preparation,
     // emitter sampling, and ratio evaluation stay entirely in the soft path.
     const float4 packedMaterial = t_GBufferMaterial[pixelPosition];
@@ -291,6 +290,14 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
         g_Heitz.view,
         pixelCenter,
         depth);
+    if (!all(isfinite(surfacePosition)))
+    {
+        u_Output[pixelPosition] = 1.0f;
+#if OUTPUT_HIT_DISTANCE
+        u_HitDistance[pixelPosition] = 0.0f;
+#endif
+        return;
+    }
     const float3 viewIncident = GetIncidentVector(
         g_Heitz.view.cameraDirectionOrPosition,
         surfacePosition);
@@ -303,9 +310,13 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
     const PbrPreparedSurface preparedSurface = PreparePbrSurface(surface);
 
     [branch]
-    if (g_Heitz.hardShadows != 0u)
+    if (g_Heitz.hardShadows != 0u ||
+        g_Heitz.useRatioEstimator == 0u)
     {
-        const float3 directionToLight = HeitzLightCenterDirection();
+        const float3 directionToLight = g_Heitz.hardShadows != 0u
+            ? HeitzLightCenterDirection()
+            : HeitzSampleDirectionalEmitter(
+                HeitzSample2D(dispatchPosition, 0u));
         if (!CanEvaluatePbrDirectSurfacePrepared(
                 preparedSurface,
                 directionToLight))
@@ -313,6 +324,9 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
             // Deferred direct lighting is exactly zero for this light/surface,
             // so a visibility query cannot affect the final result.
             u_Output[pixelPosition] = 1.0f;
+#if OUTPUT_HIT_DISTANCE
+            u_HitDistance[pixelPosition] = 0.0f;
+#endif
             return;
         }
         const float3 rayOrigin = HeitzPrepareRayOrigin(
@@ -321,10 +335,15 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
             viewDirection,
             pixelCenter,
             depth);
+        float hitDistance;
         const float visible = float(HeitzTraceVisibility(
             rayOrigin,
-            directionToLight));
+            directionToLight,
+            hitDistance));
         u_Output[pixelPosition] = float4(visible.xxx, 1.0f);
+#if OUTPUT_HIT_DISTANCE
+        u_HitDistance[pixelPosition] = hitDistance;
+#endif
         return;
     }
 
@@ -349,13 +368,15 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
     const uint sampleCount = max(g_Heitz.sampleCount, 1u);
     float3 currentNumerator = 0.0f;
     float3 currentDenominator = 0.0f;
+    float nearestHitDistance = HeitzHitDistanceMiss;
+    uint tracedRayCount = 0u;
     [loop]
     for (uint sampleIndex = 0u;
         sampleIndex < sampleCount;
         ++sampleIndex)
     {
         const float3 directionToLight = HeitzSampleDirectionalEmitter(
-            HeitzSample2D(pixelPosition, sampleIndex));
+            HeitzSample2D(dispatchPosition, sampleIndex));
         const float3 contribution = HeitzEvaluateNormalizedResponse(
             preparedMaterial,
             preparedSurface,
@@ -367,8 +388,12 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
         // validity decision feed both estimates. Binary visibility is their
         // only difference.
         currentDenominator += contribution;
-        if (HeitzTraceVisibility(rayOrigin, directionToLight))
+        float hitDistance;
+        if (HeitzTraceVisibility(
+                rayOrigin, directionToLight, hitDistance))
             currentNumerator += contribution;
+        nearestHitDistance = min(nearestHitDistance, hitDistance);
+        ++tracedRayCount;
     }
 
     // Normalize both matched current-frame sums before the guarded division.
@@ -382,4 +407,9 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
         denominatorMean,
         g_Heitz.denominatorEpsilon));
     u_Output[pixelPosition] = float4(modulation, 1.0f);
+#if OUTPUT_HIT_DISTANCE
+    u_HitDistance[pixelPosition] = tracedRayCount != 0u
+        ? nearestHitDistance
+        : 0.0f;
+#endif
 }

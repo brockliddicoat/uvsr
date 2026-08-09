@@ -2,8 +2,14 @@
 
 #include <donut/shaders/binding_helpers.hlsli>
 #include <donut/shaders/gbuffer.hlsli>
+#include "noise_sampling.hlsli"
 #include "pbr_gbuffer.hlsli"
+#include "ray_traced_material_visibility.hlsli"
 #include "ray_traced_sky_visibility_cb.h"
+
+#ifndef OUTPUT_HIT_DISTANCE
+#define OUTPUT_HIT_DISTANCE 0
+#endif
 
 cbuffer c_RayTracedSkyVisibility : register(b0)
 {
@@ -14,12 +20,16 @@ RaytracingAccelerationStructure t_WorldBvh : register(t0);
 Texture2D<float> t_Depth : register(t1);
 Texture2D<float4> t_GBufferMaterial : register(t2);
 Texture2D<float4> t_GBufferNormals : register(t3);
-Texture2DArray<float> t_BlueNoise : register(t4);
+Texture2DArray<float> t_Noise : register(t4);
 
 RWTexture2D<float> u_Visibility : register(u0);
+#if OUTPUT_HIT_DISTANCE
+VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_HitDistance : register(u1);
+#endif
 
 static const float SkyVisibilityTwoPi = 6.28318530717958647692f;
-static const float SkyVisibilityUint24Scale = 1.0f / 16777216.0f;
+static const float SkyVisibilityHitDistanceMaximum = 65472.0f;
+static const float SkyVisibilityHitDistanceMiss = 65504.0f;
 
 bool SkyVisibilityInViewport(uint2 dispatchPosition)
 {
@@ -49,60 +59,33 @@ float SkyVisibilityRadicalInverse(uint index, uint base)
     return result;
 }
 
-float SkyVisibilityBlueNoise(int2 pixelPosition, uint layer)
-{
-    int2 coordinate = pixelPosition & 63;
-    return t_BlueNoise.Load(int4(
-        coordinate,
-        int(layer % 5u),
-        0));
-}
-
-float SkyVisibilityPermutatedWhiteNoise(
-    int2 pixelPosition,
-    uint dimension,
-    uint phase)
-{
-    uint state = uint(pixelPosition.x) +
-        uint(pixelPosition.y) * 65537u +
-        dimension * 747796405u + phase * 2891336453u + 1u;
-    state = state * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) *
-        277803737u;
-    word = (word >> 22u) ^ word;
-    return float((word >> 8u) & 0x00ffffffu) *
-        SkyVisibilityUint24Scale;
-}
-
-float SkyVisibilityGoldenWeylPhase(uint frameIndex)
-{
-    const uint phase = frameIndex * 0x9e3779b9u;
-    return float(phase >> 8u) * SkyVisibilityUint24Scale;
-}
-
 float2 SkyVisibilitySample2D(
-    int2 pixelPosition,
+    uint2 dispatchPosition,
     uint sampleIndex)
 {
     const uint phase = g_SkyVisibility.sampleSequencePhase;
     const uint firstDimension = sampleIndex * 2u;
-    if (g_SkyVisibility.noisePattern == 0u)
-    {
-        return float2(
-            SkyVisibilityPermutatedWhiteNoise(
-                pixelPosition, firstDimension, phase),
-            SkyVisibilityPermutatedWhiteNoise(
-                pixelPosition, firstDimension + 1u, phase));
-    }
-
     const uint sequenceIndex = sampleIndex + 1u;
+    const uint2 dispatchExtent =
+        uint2(g_SkyVisibility.view.viewportSize);
+    const float2 noiseShift = float2(
+        UVSRSamplePrecomputedNoise(
+            t_Noise,
+            g_SkyVisibility.noisePattern,
+            dispatchPosition,
+            dispatchExtent,
+            phase,
+            0x300u + firstDimension),
+        UVSRSamplePrecomputedNoise(
+            t_Noise,
+            g_SkyVisibility.noisePattern,
+            dispatchPosition,
+            dispatchExtent,
+            phase,
+            0x300u + firstDimension + 1u));
     return frac(float2(
-        SkyVisibilityRadicalInverse(sequenceIndex, 2u) +
-            SkyVisibilityBlueNoise(pixelPosition, 0u) +
-            SkyVisibilityRadicalInverse(phase + 1u, 5u),
-        SkyVisibilityRadicalInverse(sequenceIndex, 3u) +
-            SkyVisibilityBlueNoise(pixelPosition, 1u) +
-            SkyVisibilityGoldenWeylPhase(phase)));
+        SkyVisibilityRadicalInverse(sequenceIndex, 2u),
+        SkyVisibilityRadicalInverse(sequenceIndex, 3u)) + noiseShift);
 }
 
 float3 SkyVisibilitySafeGeometricNormal(
@@ -220,7 +203,8 @@ float3 SkyVisibilityPrepareRayOrigin(
 
 bool SkyVisibilityTrace(
     float3 rayOrigin,
-    float3 direction)
+    float3 direction,
+    out float hitDistance)
 {
     RayDesc ray;
     ray.Origin = rayOrigin;
@@ -228,15 +212,31 @@ bool SkyVisibilityTrace(
     ray.TMin = 0.0f;
     ray.TMax = g_SkyVisibility.rayDistance;
 
+#if OUTPUT_HIT_DISTANCE
+    RayQuery<
+        RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+#else
     RayQuery<
         RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-        RAY_FLAG_FORCE_OPAQUE |
         RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+#endif
     query.TraceRayInline(t_WorldBvh, RAY_FLAG_NONE, 0xff, ray);
     while (query.Proceed())
     {
+        UVSR_COMMIT_COVERED_RAY_QUERY_CANDIDATE(query)
     }
-    return query.CommittedStatus() != COMMITTED_TRIANGLE_HIT;
+    const bool hit = query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+#if OUTPUT_HIT_DISTANCE
+    if (hit)
+        hitDistance = min(
+            query.CommittedRayT(),
+            SkyVisibilityHitDistanceMaximum);
+    else
+        hitDistance = SkyVisibilityHitDistanceMiss;
+#else
+    hitDistance = hit ? 0.0f : SkyVisibilityHitDistanceMiss;
+#endif
+    return !hit;
 }
 
 [numthreads(8, 8, 1)]
@@ -250,6 +250,9 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
     if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
     {
         u_Visibility[pixelPosition] = 1.0f;
+#if OUTPUT_HIT_DISTANCE
+        u_HitDistance[pixelPosition] = 0.0f;
+#endif
         return;
     }
 
@@ -264,6 +267,14 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
         g_SkyVisibility.view,
         pixelCenter,
         depth);
+    if (!all(isfinite(surfacePosition)))
+    {
+        u_Visibility[pixelPosition] = 1.0f;
+#if OUTPUT_HIT_DISTANCE
+        u_HitDistance[pixelPosition] = 0.0f;
+#endif
+        return;
+    }
     const float3 viewIncident = GetIncidentVector(
         g_SkyVisibility.view.cameraDirectionOrPosition,
         surfacePosition);
@@ -280,6 +291,7 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
 
     const uint sampleCount = max(g_SkyVisibility.sampleCount, 1u);
     uint visibleSampleCount = 0u;
+    float nearestHitDistance = SkyVisibilityHitDistanceMiss;
     [loop]
     for (uint sampleIndex = 0u;
         sampleIndex < sampleCount;
@@ -287,11 +299,17 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
     {
         const float3 direction = SkyVisibilitySampleCosineHemisphere(
             geometricNormal,
-            SkyVisibilitySample2D(pixelPosition, sampleIndex));
-        if (SkyVisibilityTrace(rayOrigin, direction))
+            SkyVisibilitySample2D(dispatchPosition, sampleIndex));
+        float hitDistance;
+        if (SkyVisibilityTrace(rayOrigin, direction, hitDistance))
             ++visibleSampleCount;
+        else
+            nearestHitDistance = min(nearestHitDistance, hitDistance);
     }
 
     u_Visibility[pixelPosition] =
         float(visibleSampleCount) / float(sampleCount);
+#if OUTPUT_HIT_DISTANCE
+    u_HitDistance[pixelPosition] = nearestHitDistance;
+#endif
 }

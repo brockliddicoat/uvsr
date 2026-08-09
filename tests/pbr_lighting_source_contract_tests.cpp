@@ -1,4 +1,4 @@
-#include "directional_light_visibility.h"
+#include "direct_light_visibility.h"
 
 #include <array>
 #include <cctype>
@@ -124,45 +124,43 @@ int main(int argc, char** argv)
     Require(
         CountOccurrences(
             deferredShader,
-            "texture2d<float4>t_screenspacedirectionalvisibility") == 1u &&
+            "texture2d<float4>t_flashlightvisibility") == 1u &&
             CountOccurrences(
                 deferredShader,
-                "texture2d<float4>t_ratioestimatordirectionalvisibility") ==
-                1u,
-        "the single-sample deferred shader must declare both independent "
-        "directional visibility textures");
+                "texture2d<float4>t_sunvisibility") == 1u,
+        "the single-sample deferred shader must declare independent "
+        "flashlight and sun visibility textures");
     Require(
         CountOccurrences(
             deferredMsaaShader,
-            "texture2d<float4>t_screenspacedirectionalvisibility") == 1u &&
+            "texture2d<float4>t_flashlightvisibility") == 1u &&
             CountOccurrences(
                 deferredMsaaShader,
-                "texture2d<float4>t_ratioestimatordirectionalvisibility") ==
-                1u,
-        "the MSAA deferred shader must declare both independent directional "
-        "visibility textures");
+                "texture2d<float4>t_sunvisibility") == 1u,
+        "the MSAA deferred shader must declare independent flashlight and "
+        "sun visibility textures");
 
     for (const std::string* shader :
         { &deferredShader, &deferredMsaaShader })
     {
         RequireContains(
             *shader,
-            "texture2d<float4>t_screenspacedirectionalvisibility:register(t20);",
-            "screen-space directional visibility must bind at t20");
+            "texture2d<float4>t_flashlightvisibility:register(t20);",
+            "flashlight visibility must bind at t20");
         RequireContains(
             *shader,
-            "texture2d<float4>t_ratioestimatordirectionalvisibility:register(t21);",
-            "ratio-estimator directional visibility must bind at t21");
+            "texture2d<float4>t_sunvisibility:register(t21);",
+            "sun visibility must bind at t21");
         RequireContains(
             *shader,
             "texture2d<float>t_skyvisibility:register(t22);",
             "ray-traced sky visibility must bind independently at t22");
         RequireContains(
             *shader,
-            "if(encoding==uvsr_directional_visibility_rgb_rgba16f)"
+            "if(encoding==uvsr_direct_visibility_rgb_rgba16f)"
                 "{returnsaturate(encoded.rgb);}"
                 "returnsaturate(encoded.r).xxx;",
-            "directional visibility must decode RGB ratio modulation and "
+            "direct visibility must decode RGB ratio modulation and "
             "scalar R8 visibility from their explicit encoding");
         RequireContains(
             *shader,
@@ -170,21 +168,26 @@ int main(int argc, char** argv)
             "non-finite directional modulation must fail open to white");
         RequireContains(
             *shader,
-            "visibility=min(visibility,decodedirectionallightvisibility(",
-            "both exact-light inputs must combine by componentwise minimum");
+            "visibility=min(visibility,decodedirectlightvisibility(",
+            "exact-light inputs must combine by componentwise minimum");
         RequireContains(
             *shader,
-            "float3directionalmodulation=getdirectionallightvisibility("
+            "float3directmodulation=getdirectlightvisibility("
                 "lightindex,pixelposition);",
-            "each direct-light loop must use the combined exact-light "
+            "each direct-light loop must use the exact-light "
             "visibility inputs");
         Require(
             shader->find("register(t15)") == std::string::npos &&
                 shader->find("register(t16)") == std::string::npos &&
                 shader->find("getscreenshadowvisibility") ==
                     std::string::npos &&
+                shader->find("screenspacedirectionalvisibility") ==
+                    std::string::npos &&
+                shader->find("ratioestimatordirectionalvisibility") ==
+                    std::string::npos &&
                 shader->find("indirectspecular") == std::string::npos,
-            "unused inherited indirect-specular and screen-shadow inputs "
+            "unused inherited indirect-specular and retired directional "
+            "screen-shadow inputs "
             "must remain retired");
         RequireContains(
             *shader,
@@ -217,9 +220,15 @@ int main(int argc, char** argv)
         "MSAA information filters must use a black no-surface background");
     RequireContains(
         rendererSource,
-        "constboolrunscreenspacevisibility="
+        "constboolscreenspacevisibilityrequested="
             "m_ui.hasactivescreenspacevisibilityconsumer();",
         "PBR information filters must not disable Visibility execution");
+    RequireContains(
+        rendererSource,
+        "constboolrunscreenspacevisibility="
+            "screenspacevisibilityrequested&&bool(visibilitynoise);",
+        "Visibility execution must fail closed only when its resolved noise "
+        "asset is unavailable");
     RequireContains(
         compositeShader,
         "if(g_visibility.visibilitydebugview==0u&&"
@@ -310,6 +319,26 @@ int main(int argc, char** argv)
         "spotlights must retain finite-range attenuation");
     RequireContains(
         pbrLighting,
+        "if(!(isfinite(light.radius)&&light.radius>0.0f))"
+            "returnlight.intensity/distancesquared;",
+        "zero-radius analytical lights must preserve the exact point branch");
+    RequireContains(
+        pbrLighting,
+        "constfloathalfangularsize=atan(min("
+            "light.radius*inversedistance,1.0f));",
+        "positive-radius analytical lights must use projected angular size");
+    RequireContains(
+        pbrLighting,
+        "constfloatradiancetimespi="
+            "light.intensity/(light.radius*light.radius);",
+        "finite analytical lights must preserve luminous-intensity energy");
+    RequireContains(
+        pbrLighting,
+        "light.color*incidentlightintensity*"
+            "(rangeweight*spotweight)",
+        "analytical emitter energy must precede range and spot weights");
+    RequireContains(
+        pbrLighting,
         "spotweight*=spotweight*(3.0f-2.0f*spotweight);",
         "spotlights must retain a smooth cone edge");
     RequireContains(
@@ -318,44 +347,32 @@ int main(int argc, char** argv)
         "PBR lighting must consume the shared flashlight transport constants");
     RequireContains(
         flashlightShared,
-        "#defineuvsr_flashlight_shape_radius_tag1024.0f",
-        "the flashlight shape transport must retain its remote radius tag");
+        "structflashlightbeamprofile",
+        "the flashlight must use an explicit first-party beam profile");
     RequireContains(
         flashlightShared,
-        "#defineuvsr_flashlight_min_shape_exponent2.0f",
-        "the flashlight circle endpoint must remain exponent two");
+        "static_assert(sizeof(flashlightbeamprofile)==48u",
+        "the flashlight profile must occupy three constant registers");
     RequireContains(
         flashlightShared,
-        "#defineuvsr_flashlight_max_shape_exponent16.0f",
-        "the flashlight rounded-square endpoint must remain bounded");
+        "evaluateflashlightbeamprofile(",
+        "the shared profile must own the two-lobe beam response");
     RequireContains(
         pbrLighting,
-        "floatcostheta=dot(-sample.directiontolight,"
-            "lightdirection);",
-        "ordinary spotlights and the exact-circle endpoint must retain the "
-        "original cosine path");
+        "booluseflashlightprofile,"
+            "flashlightbeamprofileflashlightprofile)",
+        "the light sampler must receive explicit flashlight identity and "
+        "profile data");
     RequireContains(
         pbrLighting,
-        "shapeexponent>uvsr_flashlight_min_shape_exponent+1e-4f",
-        "only noncircular flashlight beams may enter shaped evaluation");
+        "if(validflashlightprofile)"
+            "{spotweight=evaluateflashlightbeamprofile(",
+        "only the exact valid flashlight profile may replace the ordinary "
+        "spot cone response");
     RequireContains(
         pbrLighting,
-        "float3(light.shadowchannel.yzw)/"
-            "uvsr_flashlight_axis_quantization",
-        "the shaped flashlight must decode its packed camera-right axis");
-    RequireContains(
-        pbrLighting,
-        "beamright-=lightdirection*dot(beamright,lightdirection);",
-        "the shaped flashlight must orthogonalize its transported basis");
-    RequireContains(
-        pbrLighting,
-        "float2poweredslope=pow(abs(beamslope),"
-            "float2(shapeexponent,shapeexponent));",
-        "the shaped flashlight must evaluate its bounded superellipse");
-    RequireContains(
-        pbrLighting,
-        "costheta=rsqrt(1.0f+shapedslope*shapedslope);",
-        "the superellipse distance must feed the existing cone falloff");
+        "floatcostheta=dot(-sample.directiontolight,lightdirection);",
+        "ordinary spotlights must retain their standard cosine cone path");
     for (const std::string* shader :
         { &deferredShader, &deferredMsaaShader })
     {
@@ -367,16 +384,21 @@ int main(int argc, char** argv)
     }
     RequireContains(
         rendererSource,
-        "lightconstants.shadowchannel[1]=",
-        "flashlight shape transport must start after shadowChannel.x");
+        "m_flashlight=std::make_shared<spotlight>();",
+        "the flashlight must be one ordinary scene spot light");
     RequireContains(
         rendererSource,
-        "lightconstants.shadowchannel[3]=",
-        "flashlight shape transport must fill only the unused axis lanes");
+        "resolveflashlightbeamprofile(",
+        "the renderer must publish the explicit beam profile separately");
     Require(
-        rendererSource.find("lightconstants.shadowchannel[0]=") ==
-            std::string::npos,
-        "flashlight shape transport must not overwrite shadowChannel.x");
+        rendererSource.find("flashlightspotlight") == std::string::npos &&
+            rendererSource.find("m_flashlighthotspot") == std::string::npos &&
+            rendererSource.find("m_flashlightshadowmap") ==
+                std::string::npos &&
+            rendererSource.find("lightconstants.shadowchannel[") ==
+                std::string::npos,
+        "the flashlight must not restore a subclass, duplicate lobe, private "
+        "shadow map, or shadow-channel transport");
     Require(
         CountOccurrences(
             deferredPass,
@@ -394,17 +416,17 @@ int main(int argc, char** argv)
     RequireContains(
         deferredPass,
         "bindingsetitem::texture_srv(20,"
-            "activevisibilities.screenspace.texture?"
-            "activevisibilities.screenspace.texture:"
+            "activevisibilities.flashlight.texture?"
+            "activevisibilities.flashlight.texture:"
             "m_commonpasses->m_whitetexture.get())",
-        "screen-space directional visibility must fail open to white");
+        "flashlight visibility must fail open to white");
     RequireContains(
         deferredPass,
         "bindingsetitem::texture_srv(21,"
-            "activevisibilities.ratioestimator.texture?"
-            "activevisibilities.ratioestimator.texture:"
+            "activevisibilities.sun.texture?"
+            "activevisibilities.sun.texture:"
             "m_commonpasses->m_whitetexture.get())",
-        "ratio-estimator directional visibility must fail open to white");
+        "sun visibility must fail open to white");
     RequireContains(
         deferredPass,
         "bindingsetitem::texture_srv(22,"
@@ -424,28 +446,28 @@ int main(int argc, char** argv)
         "screen-shadow bindings");
     RequireContains(
         deferredPass,
-        "constants.directionalvisibilitylightindices=int2(-1);",
+        "constants.directvisibilitylightindices=int2(-1);",
         "unmatched visibility slots must retain neutral light indices");
     RequireContains(
         deferredPass,
-        "uvsr::targetsdirectionallight("
-            "activevisibilities.screenspace,light.get())",
-        "the screen-space CPU adapter must use pointer-identical matching");
+        "uvsr::targetsdirectlight("
+            "activevisibilities.flashlight,light.get())",
+        "the flashlight CPU adapter must use pointer-identical matching");
     RequireContains(
         deferredPass,
-        "uvsr::targetsdirectionallight("
-            "activevisibilities.ratioestimator,light.get())",
-        "the ratio-estimator CPU adapter must use pointer-identical matching");
+        "uvsr::targetsdirectlight("
+            "activevisibilities.sun,light.get())",
+        "the sun CPU adapter must use pointer-identical matching");
     RequireContains(
         deferredPass,
-        "constants.directionalvisibilitylightindices.x="
+        "constants.directvisibilitylightindices.x="
             "int(deferredconstants.numlights);",
-        "the CPU adapter must publish the screen-space light index");
+        "the CPU adapter must publish the flashlight light index");
     RequireContains(
         deferredPass,
-        "constants.directionalvisibilitylightindices.y="
+        "constants.directvisibilitylightindices.y="
             "int(deferredconstants.numlights);",
-        "the CPU adapter must publish the ratio-estimator light index");
+        "the CPU adapter must publish the sun light index");
     RequireContains(
         deferredPassHeader,
         "std::array<pipeline,2>m_pipelines;",
@@ -544,36 +566,46 @@ int main(int argc, char** argv)
 
     RequireContains(
         rendererSource,
-        "directionallightvisibilitiesdirectionalvisibilities;",
-        "the renderer must retain two named independent producer slots");
+        "directlightvisibilitiesdirectlightvisibilities;",
+        "the renderer must retain named flashlight and sun producer slots");
     Require(
         CountOccurrences(
             rendererSource,
-            "{screenspaceshadowresult.nearvisibility,"
-                "screenspaceshadowresult.light,"
-                "directionallightvisibilityencoding::scalarr8unorm}") ==
+            "nvrhi::itexture*flashlightvisibility="
+                "flashlightshadowresult.visibility;") == 1u &&
+            CountOccurrences(
+                rendererSource,
+                "nvrhi::itexture*sunvisibility="
+                    "heitzshadowresult.modulation;") == 1u &&
+        CountOccurrences(
+            rendererSource,
+            "directlightvisibilities.flashlight={"
+                "flashlightvisibility,"
+                "flashlightshadowresult.light,"
+                "directlightvisibilityencoding::scalarr8unorm}") ==
                 1u &&
             CountOccurrences(
                 rendererSource,
-                "{heitzshadowresult.modulation,"
+                "directlightvisibilities.sun={"
+                    "sunvisibility,"
                     "heitzshadowresult.light,"
-                    "directionallightvisibilityencoding::rgbrgba16float}") ==
+                    "sunvisibilitydenoised?"
+                        "directlightvisibilityencoding::scalarr8unorm:"
+                        "directlightvisibilityencoding::rgbrgba16float}") ==
                 1u,
-        "each selected directional modulation must remain paired exactly "
-        "once with its pointer-identical light and encoding");
+        "each raw or denoised direct visibility must remain paired exactly "
+        "once with its pointer identical light and matching encoding");
     RequireContains(
         rendererSource,
-        "conststd::shared_ptr<ishadowmap>activeshadowmap="
-            "settings.castshadows?m_flashlightshadowmap:nullptr;",
-        "flashlight shadow association must honor the shadow setting");
-    RequireContains(
-        rendererSource,
-        "m_flashlight->shadowmap=activeshadowmap;",
-        "flashlight spill must submit its exact gated shadow map");
-    RequireContains(
-        rendererSource,
-        "m_flashlighthotspot->shadowmap=activeshadowmap;",
-        "flashlight hotspot must share the exact gated shadow map");
+        "m_raytracedflashlightshadowpass->render(",
+        "flashlight shadows must come from the ray traced visibility pass");
+    Require(
+        rendererSource.find("renderflashlightshadow()") ==
+                std::string::npos &&
+            rendererSource.find("planarshadowmap") == std::string::npos &&
+            rendererSource.find("m_flashlight->shadowmap=") ==
+                std::string::npos,
+        "the private raster flashlight shadow system must stay removed");
 
     // Every production lighting variant must retain the same environment
     // contract; imported variants belong in this explicit list.

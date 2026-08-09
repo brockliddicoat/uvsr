@@ -20,7 +20,7 @@ struct ScreenSpaceVisibilityConstants
     float ambientStrength;
     float indirectDiffuseIntensity;
     float spatialRadius;
-    uint frameIndex;
+    uint sampleSequencePhase;
 
     uint maximumSampleCount;
     uint sourceRadianceAvailable;
@@ -30,7 +30,7 @@ struct ScreenSpaceVisibilityConstants
     uint reverseDepth;
     uint orthographicProjection;
     uint resolutionScale;
-    uint sampleScheduler;
+    uint noisePattern;
 
     uint visibilityDebugView;
     uint packedEdgeMode;

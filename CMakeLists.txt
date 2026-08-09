@@ -2,53 +2,23 @@ cmake_minimum_required(VERSION 3.24)
 
 project(UVSR LANGUAGES CXX)
 
+include(FetchContent)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(UVSR_BUILD_APPLICATION
     "Build the UVSR application that integrates every enabled producer" ON)
-option(UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS
-    "Build the standalone screen-space directional-shadow component" ON)
+option(UVSR_WITH_NRD
+    "Build the optional NVIDIA NRD denoiser backend" OFF)
+option(UVSR_ACCEPT_NRD_LICENSE
+    "Acknowledge acceptance of NVIDIA's RTX SDK license for NRD" OFF)
 
-if (UVSR_BUILD_APPLICATION AND
-    NOT UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
+if (UVSR_WITH_NRD AND NOT UVSR_ACCEPT_NRD_LICENSE)
     message(FATAL_ERROR
-        "UVSR requires the screen-space directional-shadow component. Set "
-        "UVSR_BUILD_APPLICATION=OFF to build the component independently.")
-endif()
-
-if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
-    set(UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR
-        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bend_sss/upstream")
-    file(SHA256
-        "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}/bend_sss_cpu.h"
-        UVSR_SCREEN_SPACE_SHADOW_CPU_SHA256)
-    file(SHA256
-        "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}/bend_sss_gpu.h"
-        UVSR_SCREEN_SPACE_SHADOW_GPU_SHA256)
-    file(SHA256
-        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/licenses/Apache-2.0.txt"
-        UVSR_APACHE_2_LICENSE_SHA256)
-    if (NOT UVSR_SCREEN_SPACE_SHADOW_CPU_SHA256 STREQUAL
-            "23aae596dbb1b9bdae23d87ac85079b138426823c3153079f7a7dd36f603d02a")
-        message(FATAL_ERROR
-            "The vendored directional-shadow CPU planner changed; restore the released bytes.")
-    endif()
-    if (NOT UVSR_SCREEN_SPACE_SHADOW_GPU_SHA256 STREQUAL
-            "7fbe24bd2040a62536c31df6cd38a92cb22c172a9a419eed3c0af7df1d50a68c")
-        message(FATAL_ERROR
-            "The vendored directional-shadow GPU tracer changed; restore the released bytes.")
-    endif()
-    if (NOT UVSR_APACHE_2_LICENSE_SHA256 STREQUAL
-            "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30")
-        message(FATAL_ERROR
-            "The packaged Apache-2.0 license text changed; restore the complete license.")
-    endif()
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}/bend_sss_cpu.h"
-        "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}/bend_sss_gpu.h"
-        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/licenses/Apache-2.0.txt")
+        "UVSR_WITH_NRD requires UVSR_ACCEPT_NRD_LICENSE=ON after reviewing "
+        "https://github.com/NVIDIA-RTX/NRD/blob/792eff196afdd350fd9c3f862119017ccb438a0e/LICENSE.txt")
 endif()
 
 # Embed the exact source commit in the renderer title so the executable records
@@ -266,6 +236,44 @@ uvsr_replace_target_sources(
 target_include_directories(imgui BEFORE PUBLIC
     "${UVSR_IMGUI_OVERRIDE_DIR}")
 
+if (UVSR_WITH_NRD)
+    set(NRD_STATIC_LIBRARY ON CACHE BOOL "" FORCE)
+    set(NRD_NRI OFF CACHE BOOL "" FORCE)
+    set(NRD_EMBEDS_DXIL_SHADERS ON CACHE BOOL "" FORCE)
+    set(NRD_EMBEDS_DXBC_SHADERS OFF CACHE BOOL "" FORCE)
+    set(NRD_EMBEDS_SPIRV_SHADERS OFF CACHE BOOL "" FORCE)
+    set(NRD_SUPPORTS_VIEWPORT_OFFSET OFF CACHE BOOL "" FORCE)
+    set(NRD_SUPPORTS_CHECKERBOARD OFF CACHE BOOL "" FORCE)
+    set(NRD_SUPPORTS_HISTORY_CONFIDENCE OFF CACHE BOOL "" FORCE)
+    set(NRD_SUPPORTS_DISOCCLUSION_THRESHOLD_MIX OFF CACHE BOOL "" FORCE)
+    set(NRD_SUPPORTS_ANTIFIREFLY ON CACHE BOOL "" FORCE)
+    set(REBLUR_PERFORMANCE_MODE OFF CACHE BOOL "" FORCE)
+    set(NRD_NORMAL_ENCODING "4" CACHE STRING "" FORCE)
+    set(NRD_ROUGHNESS_ENCODING "1" CACHE STRING "" FORCE)
+
+    FetchContent_Declare(nrd
+        URL
+            "https://github.com/NVIDIA-RTX/NRD/archive/792eff196afdd350fd9c3f862119017ccb438a0e.zip"
+        URL_HASH
+            "SHA256=AD148D3653E7E4A149AF0D1608EC662EEB522144CF34F6A29F9DFD333933BAA8"
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_MakeAvailable(nrd)
+endif()
+
+add_library(uvsr_denoiser STATIC
+    src/denoiser_backend.cpp)
+target_include_directories(uvsr_denoiser
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(uvsr_denoiser PUBLIC nvrhi)
+target_compile_definitions(uvsr_denoiser
+    PUBLIC UVSR_WITH_NRD=$<BOOL:${UVSR_WITH_NRD}>)
+if (UVSR_WITH_NRD)
+    target_sources(uvsr_denoiser PRIVATE
+        src/nrd_denoiser_backend.cpp
+        src/nrd_denoiser_backend.h)
+    target_link_libraries(uvsr_denoiser PRIVATE NRD)
+endif()
+
 if (NVRHI_WITH_DX12)
     set(DONUT_D3D_AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.717.1-preview")
     set(DONUT_D3D_AGILITY_SDK_FETCH_DIR "" CACHE PATH
@@ -281,16 +289,11 @@ endif()
 set(UVSR_SHADER_STAGING_ROOT "${CMAKE_BINARY_DIR}/uvsr_shaders")
 set(UVSR_CORE_SHADER_STAGING_DIR
     "${UVSR_SHADER_STAGING_ROOT}/core")
-set(UVSR_SCREEN_SPACE_SHADOW_SHADER_STAGING_DIR
-    "${UVSR_SHADER_STAGING_ROOT}/screen_space_directional_shadow")
 include(donut/compileshaders.cmake)
 set(UVSR_SHADER_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders.cfg")
-set(UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/screen_space_directional_shadows_shaders.cfg")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${UVSR_SHADER_CONFIG}"
-    "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}")
+    "${UVSR_SHADER_CONFIG}")
 
 file(GLOB_RECURSE UVSR_SHADER_INPUTS
     CONFIGURE_DEPENDS
@@ -298,7 +301,6 @@ file(GLOB_RECURSE UVSR_SHADER_INPUTS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsli"
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/bend_sss/upstream/bend_sss_gpu.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/shaders/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/include/donut/shaders/*"
 )
@@ -365,40 +367,21 @@ uvsr_add_shader_bundle(
     "${UVSR_CORE_SHADER_STAGING_DIR}"
     UVSR_SHADER_COMPILE_STAMP)
 
-if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
-    uvsr_add_shader_bundle(
-        uvsr_screen_space_directional_shadow_shaders
-        "UVSR Screen-Space Directional Shadows"
-        "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}"
-        "${UVSR_SCREEN_SPACE_SHADOW_SHADER_STAGING_DIR}"
-        UVSR_SCREEN_SPACE_SHADOW_SHADER_COMPILE_STAMP)
-endif()
-
-if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
-    add_library(uvsr_screen_space_directional_shadows STATIC
-        src/screen_space_directional_shadows.cpp
-    )
-    target_include_directories(uvsr_screen_space_directional_shadows
-        PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
-        PRIVATE "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}")
-    target_link_libraries(uvsr_screen_space_directional_shadows
-        PUBLIC nvrhi
-        PRIVATE donut_render donut_app donut_engine)
-    add_dependencies(uvsr_screen_space_directional_shadows
-        uvsr_screen_space_directional_shadow_shaders)
-endif()
-
 if (UVSR_BUILD_APPLICATION)
     add_executable(uvsr WIN32
+        src/auto_exposure.cpp
         src/camera_collision.cpp
         src/cmaa2.cpp
+        src/denoising_pass.cpp
         src/fast_approximate_aa.cpp
         src/gpu_performance_monitor.cpp
         src/heitz_ratio_estimator_shadows.cpp
         src/image_based_lighting_background_pass.cpp
         src/image_based_lighting_environment.cpp
         src/msaa_visibility_resolve.cpp
+        src/noise_texture_library.cpp
         src/pbr_deferred_lighting_pass.cpp
+        src/ray_traced_flashlight_shadows.cpp
         src/ray_traced_sky_visibility.cpp
         src/scene_catalog.cpp
         src/scene_loading.h
@@ -407,7 +390,6 @@ if (UVSR_BUILD_APPLICATION)
         src/temporal_aa.cpp
         src/temporal_aa_core.cpp
         src/uvsr.cpp
-        src/visibility_blue_noise.cpp
         src/world_space_representation.cpp
     )
     target_include_directories(uvsr BEFORE PRIVATE
@@ -415,11 +397,11 @@ if (UVSR_BUILD_APPLICATION)
         "${UVSR_DONUT_APP_OVERRIDE_DIR}/include"
         "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}/include")
     target_link_libraries(uvsr PRIVATE
+        uvsr_denoiser
         donut_render
         donut_app
         donut_engine
-        dwmapi
-        uvsr_screen_space_directional_shadows)
+        dwmapi)
     target_compile_definitions(uvsr PRIVATE
         "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\"")
     set(UVSR_ENVIRONMENT_SOURCE_DIR
@@ -457,9 +439,45 @@ if (UVSR_BUILD_APPLICATION)
     )
     add_custom_target(uvsr_stage_environments
         DEPENDS "${UVSR_ENVIRONMENT_STAGE_STAMP}")
+
+    set(UVSR_NOISE_SOURCE_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise")
+    set(UVSR_NOISE_STAGE_DIR
+        "${CMAKE_BINARY_DIR}/media/uvsr/noise")
+    file(GLOB_RECURSE UVSR_NOISE_ASSETS
+        CONFIGURE_DEPENDS
+        LIST_DIRECTORIES false
+        "${UVSR_NOISE_SOURCE_DIR}/*")
+    list(SORT UVSR_NOISE_ASSETS)
+    string(JOIN "\n" UVSR_NOISE_ASSET_MANIFEST_CONTENT
+        ${UVSR_NOISE_ASSETS})
+    set(UVSR_NOISE_ASSET_MANIFEST
+        "${CMAKE_BINARY_DIR}/uvsr_noise_assets.manifest")
+    file(GENERATE
+        OUTPUT "${UVSR_NOISE_ASSET_MANIFEST}"
+        CONTENT "${UVSR_NOISE_ASSET_MANIFEST_CONTENT}\n")
+    set(UVSR_NOISE_STAGE_STAMP
+        "${UVSR_NOISE_STAGE_DIR}/.uvsr-stage.stamp")
+    add_custom_command(
+        OUTPUT "${UVSR_NOISE_STAGE_STAMP}"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory
+            "${UVSR_NOISE_STAGE_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${UVSR_NOISE_SOURCE_DIR}"
+            "${UVSR_NOISE_STAGE_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E touch
+            "${UVSR_NOISE_STAGE_STAMP}"
+        DEPENDS
+            ${UVSR_NOISE_ASSETS}
+            "${UVSR_NOISE_ASSET_MANIFEST}"
+        COMMENT "Staging the precomputed UVSR noise textures"
+        VERBATIM)
+    add_custom_target(uvsr_stage_noise
+        DEPENDS "${UVSR_NOISE_STAGE_STAMP}")
     add_dependencies(uvsr
         uvsr_shaders
-        uvsr_stage_environments)
+        uvsr_stage_environments
+        uvsr_stage_noise)
 endif()
 
 enable_testing()
@@ -518,8 +536,7 @@ add_test(NAME uvsr_pbr_reference COMMAND uvsr_pbr_tests)
 
 add_executable(
     uvsr_heitz_ratio_estimator_tests
-    tests/heitz_ratio_estimator_tests.cpp
-    src/visibility_blue_noise.cpp)
+    tests/heitz_ratio_estimator_tests.cpp)
 target_include_directories(
     uvsr_heitz_ratio_estimator_tests
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -537,8 +554,7 @@ add_test(
 
 add_executable(
     uvsr_ray_traced_sky_visibility_tests
-    tests/ray_traced_sky_visibility_tests.cpp
-    src/visibility_blue_noise.cpp)
+    tests/ray_traced_sky_visibility_tests.cpp)
 target_include_directories(
     uvsr_ray_traced_sky_visibility_tests
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -571,6 +587,27 @@ target_include_directories(
 add_test(
     NAME uvsr_flashlight_reference
     COMMAND uvsr_flashlight_tests)
+
+add_executable(
+    uvsr_ray_traced_flashlight_shadow_tests
+    tests/ray_traced_flashlight_shadow_tests.cpp)
+target_include_directories(
+    uvsr_ray_traced_flashlight_shadow_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(
+    NAME uvsr_ray_traced_flashlight_shadow_contract
+    COMMAND uvsr_ray_traced_flashlight_shadow_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_executable(
+    uvsr_denoiser_tests
+    tests/denoiser_backend_tests.cpp)
+target_link_libraries(
+    uvsr_denoiser_tests
+    PRIVATE uvsr_denoiser)
+add_test(
+    NAME uvsr_denoiser_reference
+    COMMAND uvsr_denoiser_tests)
 
 add_executable(uvsr_pbr_lighting_source_contract_tests
     tests/pbr_lighting_source_contract_tests.cpp)
@@ -613,21 +650,6 @@ add_test(
     NAME uvsr_diffuse_environment_asset_reference
     COMMAND uvsr_diffuse_environment_asset_tests)
 
-if (UVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS)
-    add_executable(uvsr_screen_space_directional_shadow_tests
-        tests/screen_space_directional_shadows_tests.cpp
-    )
-    target_link_libraries(uvsr_screen_space_directional_shadow_tests
-        PRIVATE uvsr_screen_space_directional_shadows)
-    target_include_directories(uvsr_screen_space_directional_shadow_tests
-        PRIVATE "${UVSR_SCREEN_SPACE_SHADOW_UPSTREAM_DIR}")
-    add_test(
-        NAME uvsr_screen_space_directional_shadow_reference
-        COMMAND uvsr_screen_space_directional_shadow_tests
-            "${CMAKE_CURRENT_SOURCE_DIR}"
-    )
-endif()
-
 add_executable(uvsr_temporal_aa_tests tests/temporal_aa_tests.cpp)
 target_include_directories(
     uvsr_temporal_aa_tests
@@ -661,6 +683,16 @@ add_test(NAME uvsr_camera_controls_reference COMMAND uvsr_camera_controls_tests)
 add_executable(uvsr_scene_loading_tests tests/scene_loading_tests.cpp)
 target_include_directories(uvsr_scene_loading_tests PRIVATE src)
 add_test(NAME uvsr_scene_loading_reference COMMAND uvsr_scene_loading_tests)
+
+add_executable(uvsr_auto_exposure_tests tests/auto_exposure_tests.cpp)
+target_include_directories(
+    uvsr_auto_exposure_tests
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/donut/nvrhi/include")
+add_test(
+    NAME uvsr_auto_exposure_reference
+    COMMAND uvsr_auto_exposure_tests "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(uvsr_sponza_camera_tests
     tests/sponza_camera_preset_tests.cpp
@@ -707,7 +739,6 @@ add_test(
 
 add_executable(uvsr_visibility_sampling_tests
     tests/visibility_sampling_reference_tests.cpp
-    src/visibility_blue_noise.cpp
 )
 target_include_directories(
     uvsr_visibility_sampling_tests
@@ -862,13 +893,17 @@ string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
 
 set(UVSR_APP_SHADERS
     agx_tonemapping_ps
+    auto_exposure_histogram_cs
+    auto_exposure_resolve_cs
     display_output_ps
     fast_approximate_aa_ps
     backdrop_blur_ps
+    denoising_prepare_cs
+    denoising_resolve_cs
     heitz_ratio_estimator_shadows_cs_Generate
+    ray_traced_flashlight_shadows_cs_GenerateVisibility
+    ray_traced_flashlight_shadows_cs_GenerateVisibilityAndHitDistance
     ray_traced_sky_visibility_cs_Generate
-    screen_space_directional_shadows_cs
-    screen_space_directional_shadows_debug_ps
     cmaa2_ComputeDispatchArgsCS
     cmaa2_DeferredColorApply2x2CS
     cmaa2_EdgesColor2x2CS
@@ -896,11 +931,6 @@ string(APPEND UVSR_RUNTIME_SHADER_MANIFEST_CONTENT
 file(GENERATE
     OUTPUT "${UVSR_RUNTIME_SHADER_MANIFEST}"
     CONTENT "${UVSR_RUNTIME_SHADER_MANIFEST_CONTENT}"
-)
-
-set(UVSR_SCREEN_SPACE_SHADOW_APP_SHADERS
-    screen_space_directional_shadows_cs
-    screen_space_directional_shadows_debug_ps
 )
 
 if (UVSR_BUILD_APPLICATION)
@@ -959,10 +989,6 @@ if (UVSR_BUILD_APPLICATION)
         "${UVSR_SHADER_CONFIG}"
         UVSR_APP_SHADERS
         "")
-    uvsr_require_shader_config_packaged(
-        "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}"
-        UVSR_APP_SHADERS
-        UVSR_SCREEN_SPACE_SHADOW_APP_SHADERS)
 
     set(UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES)
     set(UVSR_RUNTIME_SHADER_SOURCE_MANIFEST_ENTRIES)
@@ -985,9 +1011,6 @@ if (UVSR_BUILD_APPLICATION)
     endforeach()
     foreach(shader IN LISTS UVSR_APP_SHADERS)
         set(shader_staging_dir "${UVSR_CORE_SHADER_STAGING_DIR}")
-        if ("${shader}" IN_LIST UVSR_SCREEN_SPACE_SHADOW_APP_SHADERS)
-            set(shader_staging_dir "${UVSR_SCREEN_SPACE_SHADOW_SHADER_STAGING_DIR}")
-        endif()
         list(APPEND UVSR_RUNTIME_SHADER_PATH_MANIFEST_ENTRIES
             "uvsr/dxil/${shader}.bin")
         list(APPEND UVSR_RUNTIME_SHADER_SOURCE_MANIFEST_ENTRIES
@@ -1040,11 +1063,6 @@ if (UVSR_BUILD_APPLICATION)
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SyncRuntimeShaderBundle.cmake"
         "${SHADERMAKE_PATH}"
         "${SHADERMAKE_DXC_PATH}")
-    list(APPEND UVSR_RUNTIME_SHADER_TARGET_DEPENDENCIES
-        uvsr_screen_space_directional_shadow_shaders)
-    list(APPEND UVSR_RUNTIME_SHADER_FILE_DEPENDENCIES
-        "${UVSR_SCREEN_SPACE_SHADOW_SHADER_COMPILE_STAMP}"
-        "${UVSR_SCREEN_SPACE_SHADOW_SHADER_CONFIG}")
     add_custom_command(
         OUTPUT "${UVSR_RUNTIME_SHADER_STAGE_STAMP}"
         BYPRODUCTS ${UVSR_RUNTIME_SHADER_BYPRODUCTS}
@@ -1262,4 +1280,13 @@ if (UVSR_BUILD_APPLICATION)
             "${CMAKE_CURRENT_SOURCE_DIR}/third_party/google_filament_fxaa/ATTRIBUTION.md"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Google-Filament-FXAA-Attribution.md"
     )
+    if (UVSR_WITH_NRD)
+        add_custom_command(TARGET uvsr POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${nrd_SOURCE_DIR}/LICENSE.txt"
+                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/NRD-LICENSE.txt"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
+                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/THIRD_PARTY_NOTICES.md")
+    endif()
 endif()

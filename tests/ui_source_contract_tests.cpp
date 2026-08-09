@@ -251,15 +251,27 @@ namespace
             },
             {
                 "const bool representationOpen = DrawCollapsingHeader(",
-                "const bool diffuseOpen = DrawCollapsingHeader(",
+                "const auto drawNoiseSettingsControls = [&] (",
                 "##RepresentationBody",
                 "Representation"
             },
             {
+                "const bool noiseOpen = DrawCollapsingHeader(",
+                "const auto drawRatioEstimatorShadowControls = [&]()",
+                "##NoiseBody",
+                "Noise"
+            },
+            {
                 "const bool diffuseOpen = DrawCollapsingHeader(",
-                "const bool buffersOpen = DrawCollapsingHeader(",
+                "const bool denoisingOpen = DrawCollapsingHeader(",
                 "##DiffuseBody",
                 "Diffuse"
+            },
+            {
+                "const bool denoisingOpen = DrawCollapsingHeader(",
+                "const bool buffersOpen = DrawCollapsingHeader(",
+                "##DenoisingBody",
+                "Denoising"
             },
             {
                 "const bool buffersOpen = DrawCollapsingHeader(",
@@ -338,6 +350,146 @@ namespace
         }
     }
 
+    void ValidateRepresentation(
+        std::string_view viewer,
+        std::string_view catalog)
+    {
+        const std::string_view representation = ExtractSection(
+            viewer,
+            "const bool representationOpen = DrawCollapsingHeader(",
+            "const auto drawNoiseSettingsControls = [&] (",
+            "Representation drawer");
+        RequireContains(
+            representation,
+            "\"Allow Ray Traversal\"",
+            "ray traversal master toggle label");
+        RequireContains(
+            representation,
+            "&representation.allowRayTraversal",
+            "ray traversal master toggle state");
+        RequireContains(
+            catalog,
+            "representation.allow-ray-traversal",
+            "ray traversal master command");
+    }
+
+    void ValidateNoise(
+        std::string_view viewer,
+        std::string_view catalog)
+    {
+        const std::string_view controls = ExtractSection(
+            viewer,
+            "const auto drawNoiseSettingsControls = [&] (",
+            "const bool noiseOpen = DrawCollapsingHeader(",
+            "shared Noise controls");
+        RequireExactStrings(
+            ExtractSection(
+                controls,
+                "static constexpr const char* PatternLabels[] = {",
+                "};",
+                "Noise pattern labels"),
+            {
+                "Spatial White",
+                "Spatial Blue",
+                "Spatiotemporal Blue"
+            },
+            "Noise pattern labels");
+        RequireExactStrings(
+            ExtractSection(
+                controls,
+                "static constexpr const char* ResolutionLabels[] = {",
+                "};",
+                "Noise resolution labels"),
+            { "64x64", "128x128", "256x256", "512x512" },
+            "Noise resolution labels");
+        RequireOrdered(
+            controls,
+            {
+                "Noise Pattern##",
+                "Noise Resolution##",
+                "Animate Samples##"
+            },
+            "shared Noise control order");
+        RequireContains(
+            controls,
+            "Choose the centered tile resolution used by this noise",
+            "centered Noise tiling tooltip");
+
+        const std::string_view drawer = ExtractSection(
+            viewer,
+            "const bool noiseOpen = DrawCollapsingHeader(",
+            "const auto drawRatioEstimatorShadowControls = [&]()",
+            "Noise drawer");
+        RequireContains(
+            drawer,
+            "Configure the shared precomputed noise used by rendering effects.",
+            "shared Noise drawer description");
+        RequireOrdered(
+            drawer,
+            {
+                "drawNoiseSettingsControls(",
+                "m_ui.Noise,",
+                "\"GlobalNoise\"",
+                "m_app->ResetNoiseSamplingHistory("
+            },
+            "global Noise configuration and history reset");
+
+        for (const std::string_view label : {
+                std::string_view("Specify Noise##Visibility"),
+                std::string_view("Specify Noise##RatioEstimatorShadows"),
+                std::string_view(
+                    "Specify Noise##RayTracedSkyVisibility") })
+        {
+            RequireContains(viewer, label, "per-effect Specify Noise control");
+            const std::string quotedLabel =
+                "\"" + std::string(label) + "\"";
+            const std::string_view tooltipSection = ExtractSection(
+                viewer,
+                quotedLabel,
+                "if (DrawPresetResetIcon(",
+                "Specify Noise tooltip");
+            const std::vector<std::string> literals =
+                ParseQuotedStrings(tooltipSection);
+            std::string tooltip;
+            for (size_t index = 1u; index < literals.size(); ++index)
+                tooltip += literals[index];
+            constexpr std::string_view IsolationTooltip =
+                "Use custom noise sampling for this effect only. This does "
+                "not change the noise sampling used by any other effect.";
+            Require(
+                tooltip.rfind(IsolationTooltip, 0u) == 0u,
+                std::string(label) +
+                    " must use the exact cross-effect isolation tooltip.");
+        }
+        Require(
+            CountOccurrences(viewer, "drawNoiseSettingsControls(") == 4u,
+            "one global and three custom noise control groups must remain visible.");
+
+        const std::string compactCatalog = Compact(catalog);
+        for (const std::string_view command : {
+                std::string_view(
+                    "Value(\"noise.pattern\",Kind::Enum,Section::Noise,"
+                    "\"spatial-white|spatial-blue|spatiotemporal-blue\")"),
+                std::string_view(
+                    "Value(\"noise.resolution\",Kind::Enum,Section::Noise,"
+                    "\"64x64|128x128|256x256|512x512\")"),
+                std::string_view(
+                    "Value(\"noise.animate-samples\",Kind::Boolean,"
+                    "Section::Noise,\"on|off\")") })
+        {
+            RequireContains(
+                compactCatalog,
+                command,
+                "global Noise command domain");
+        }
+        for (const std::string_view legacyLabel : {
+                std::string_view("Permutated White Noise"),
+                std::string_view("Void Cluster Blue Noise") })
+        {
+            RequireAbsent(viewer, legacyLabel, "renamed Noise labels");
+        }
+    }
+
     void ValidateVisibility(
         std::string_view viewer,
         std::string_view catalog)
@@ -345,24 +497,8 @@ namespace
         const std::string_view visibility = ExtractSection(
             viewer,
             "const bool diffuseOpen = DrawCollapsingHeader(",
-            "const bool buffersOpen = DrawCollapsingHeader(",
+            "const bool denoisingOpen = DrawCollapsingHeader(",
             "Diffuse drawer");
-        const std::string_view noiseLabels = ExtractSection(
-            visibility,
-            "static constexpr const char* NoiseLabels[] = {",
-            "};",
-            "Visibility noise labels");
-        RequireExactStrings(
-            noiseLabels,
-            {
-                "Permutated White Noise",
-                "Void Cluster Blue Noise"
-            },
-            "Visibility noise labels");
-        RequireContains(
-            visibility,
-            "visibility.sampling.scheduler",
-            "Visibility noise selector");
         RequireContains(
             visibility,
             "MarkScreenSpaceVisibilityQualityCustom(settings)",
@@ -380,6 +516,14 @@ namespace
             visibility,
             "profilePreview += \" (Custom)\";",
             "Visibility custom-profile preview suffix");
+        RequireContains(
+            visibility,
+            "the shared Noise configuration",
+            "Visibility profiles inherit the shared Noise configuration");
+        RequireAbsent(
+            visibility,
+            "Spatial Blue noise",
+            "Visibility profiles must not promise a fixed Noise pattern");
         RequireContains(
             visibility,
             "profilePreview.c_str()",
@@ -439,9 +583,14 @@ namespace
             "Visibility controls must retain their hover guidance.");
         for (const std::string_view control : {
                 std::string_view("&visibility.ambientOcclusion.enabled"),
+                std::string_view(
+                    "&visibility.ambientOcclusion.outputHitDistance"),
                 std::string_view("&visibility.indirectDiffuse.enabled"),
                 std::string_view(
+                    "&visibility.indirectDiffuse.outputHitDistance"),
+                std::string_view(
                     "visibility.sampling.maximumSampleCount"),
+                std::string_view("&visibility.noise.specifyNoise"),
                 std::string_view("visibility.reconstruction.mode"),
                 std::string_view(
                     "&visibility.reconstruction.spatialEnabled") })
@@ -450,9 +599,24 @@ namespace
         }
         RequireContains(
             Compact(catalog),
-            "Value(\"visibility.noise\",Kind::Enum,Section::Visibility,"
-            "\"permutated-white-noise|void-cluster-blue-noise\")",
-            "Visibility noise command domain");
+            "Value(\"visibility.specify-noise\",Kind::Boolean,"
+            "Section::Visibility,\"on|off\")",
+            "Visibility custom noise command");
+        RequireContains(
+            Compact(catalog),
+            "Value(\"visibility.noise-resolution\",Kind::Enum,"
+            "Section::Visibility,\"64x64|128x128|256x256|512x512\")",
+            "Visibility custom noise resolution domain");
+        RequireContains(
+            Compact(catalog),
+            "Value(\"visibility.distribution\",Kind::Float,"
+            "Section::Visibility,\"float0.25..8\")",
+            "Visibility distribution command range");
+        RequireContains(
+            Compact(catalog),
+            "Value(\"visibility.ao.strength\",Kind::Float,"
+            "Section::Visibility,\"float0..8\")",
+            "ambient occlusion command range");
         for (const std::string_view reconstructionLabel : {
                 std::string_view("Full Resolution"),
                 std::string_view("Guide-Aware Upsampling"),
@@ -484,6 +648,80 @@ namespace
                 std::string_view("VisibilityBenchmark") })
         {
             RequireAbsent(visibility, retired, "cleaned Visibility drawer");
+        }
+    }
+
+    void ValidateDenoising(
+        std::string_view viewer,
+        std::string_view catalog)
+    {
+        const std::string_view denoising = ExtractSection(
+            viewer,
+            "const bool denoisingOpen = DrawCollapsingHeader(",
+            "const bool buffersOpen = DrawCollapsingHeader(",
+            "Denoising drawer");
+        RequireOrdered(
+            denoising,
+            {
+                "Occlusion###Ambient Occlusion##Denoising",
+                "Illumination###Diffuse GI##Denoising",
+                "Shadows##Denoising",
+                "Sky Visibility##Denoising"
+            },
+            "Denoising signal order");
+        Require(
+            CountOccurrences(denoising, "drawDenoisingSignal(") == 4u,
+            "Denoising must expose exactly four independent signal groups.");
+        for (const std::string_view contract : {
+                std::string_view("SupportsDenoisingMethod(effect, method)"),
+                std::string_view("GetDenoisingQualityLabel(signal.quality)"),
+                std::string_view(
+                    "GetDenoisingResolutionLabel(signal.resolution)"),
+                std::string_view("signal.historyLength"),
+                std::string_view("signal.disocclusionThreshold"),
+                std::string_view("signal.antiLagStrength") })
+        {
+            RequireContains(denoising, contract, "Denoising signal controls");
+        }
+        RequireContains(
+            denoising,
+            "m_ui.ScreenSpaceVisibility.ambientOcclusion.outputHitDistance",
+            "ambient occlusion hit distance readiness");
+        RequireContains(
+            denoising,
+            "m_ui.ScreenSpaceVisibility.indirectDiffuse.outputHitDistance",
+            "diffuse GI hit distance readiness");
+        RequireContains(
+            denoising,
+            "!m_ui.DirectionalShadows.ratioEstimator.useRatioEstimator",
+            "sun raw sample readiness");
+        RequireContains(
+            denoising,
+            "m_ui.Flashlight.outputHitDistance",
+            "flashlight hit distance readiness");
+        RequireContains(
+            denoising,
+            "!m_ui.RayTracedSkyVisibility.useRatioEstimator",
+            "sky raw sample readiness");
+        RequireContains(
+            denoising,
+            "#if UVSR_WITH_NRD",
+            "build-time NRD availability message");
+        RequireContains(
+            denoising,
+            "effect != DenoisingEffect::Shadows",
+            "unsupported SIGMA history and response control gate");
+        RequireContains(
+            denoising,
+            "Flashlight SIGMA is spatial only",
+            "flashlight SIGMA history disclosure");
+        for (const std::string_view path : {
+                std::string_view("denoising.ao.method"),
+                std::string_view("denoising.gi.method"),
+                std::string_view("denoising.shadows.method"),
+                std::string_view("denoising.sky.method") })
+        {
+            RequireContains(catalog, path, "Denoising command catalog");
         }
     }
 
@@ -581,7 +819,7 @@ namespace
                 "Scene Setup",
                 "Geometry",
                 "Direct Lighting",
-                "Screen-Space Visibility",
+                "Screen Space Visibility",
                 "Directional Shadows",
                 "Temporal Reconstructive",
                 "Fast Approximate",
@@ -618,10 +856,18 @@ namespace
                 "\"Scene Setup and Clears\"",
                 "\"Geometry\"",
                 "\"Closest Surface Resolve\"",
+                "\"Shadow Ray Dispatch\"",
+                "\"Shadow Denoise\"",
+                "\"Sky Visibility Ray Dispatch\"",
+                "\"Sky Visibility Denoise\"",
                 "\"Direct Lighting\"",
-                "\"Screen-Space Visibility\"",
+                "\"Visibility Lighting Preparation\"",
+                "\"Screen Space Visibility\"",
+                "\"Ambient Occlusion Denoise\"",
+                "\"Diffuse Illumination Denoise\"",
                 "\"Material Picking\"",
                 "\"Environment Background\"",
+                "\"Auto Exposure\"",
                 "\"Tone Mapping\"",
                 "\"Fast Approximate\"",
                 "\"Output Blit\""
@@ -635,11 +881,13 @@ namespace
         for (const std::string_view table : {
                 std::string_view("##CompleteRendererStatistics"),
                 std::string_view("##SelectedRendererStatistics"),
+                std::string_view("##DirectLightingStatistics"),
                 std::string_view("##VisibilityStatistics"),
                 std::string_view("##ShadowStatistics"),
                 std::string_view("##TemporalStatistics"),
                 std::string_view("##MorphologicalStatistics"),
-                std::string_view("##MultisampleStatistics") })
+                std::string_view("##MultisampleStatistics"),
+                std::string_view("##ToneMappingStatistics") })
         {
             RequireContains(statistics, table, "detailed Statistics table");
         }
@@ -685,6 +933,40 @@ namespace
             "RendererTimingStage::FastApproximate",
             "Fast Approximate renderer timing gate");
         RequireContains(
+            statistics,
+            "RendererTimingStage::VisibilityLightingPreparation",
+            "MSAA Visibility lighting-preparation timing row");
+        const std::string compactStatistics = Compact(statistics);
+        for (const std::string_view splitTiming : {
+                std::string_view(
+                    "{\"ShadowRayDispatch\","
+                    "RendererTimingStage::ShadowRayDispatch}"),
+                std::string_view(
+                    "{\"ShadowDenoise\","
+                    "RendererTimingStage::ShadowDenoise}"),
+                std::string_view(
+                    "{\"SkyVisibilityRayDispatch\","
+                    "RendererTimingStage::SkyVisibilityRayDispatch}"),
+                std::string_view(
+                    "{\"SkyVisibilityDenoise\","
+                    "RendererTimingStage::SkyVisibilityDenoise}"),
+                std::string_view(
+                    "{\"AmbientOcclusionDenoise\","
+                    "RendererTimingStage::AmbientOcclusionDenoise}"),
+                std::string_view(
+                    "{\"DiffuseIlluminationDenoise\","
+                    "RendererTimingStage::DiffuseIlluminationDenoise}") })
+        {
+            RequireContains(
+                compactStatistics,
+                splitTiming,
+                "separate ray-dispatch and denoising Statistics row");
+        }
+        RequireAbsent(
+            statistics,
+            "Ray Traced Shadow Dispatch",
+            "renamed Shadow Ray Dispatch Statistics row");
+        RequireContains(
             viewer,
             "m_DisplayedTemporalAATimings = snapshot.temporalAATimings;",
             "complete temporal timing snapshot retention");
@@ -715,10 +997,7 @@ namespace
         for (const std::string_view retainedBreakdown : {
                 std::string_view("First Trace"),
                 std::string_view("Reconstruction"),
-                std::string_view("Named-Stage Total"),
-                std::string_view("Unattributed Timer Difference"),
-                std::string_view("Sampling Resource Memory"),
-                std::string_view("Work Groups"),
+                std::string_view("Dispatches"),
                 std::string_view("Active History Memory"),
                 std::string_view("History Status"),
                 std::string_view("Minimum History Formats"),
@@ -1185,8 +1464,7 @@ namespace
             {
                 "\"World##Debug\"",
                 "\"Visibility##Debug\"",
-                "\"Physically Based Lighting##Debug\"",
-                "\"Screen-Space Shadows##Debug\""
+                "\"Physically Based Lighting##Debug\""
             },
             "effect-grouped Debug drawer");
 
@@ -1237,30 +1515,20 @@ namespace
                 "Environment Level"
             },
             "PBR information-filter labels");
-        RequireExactStrings(
-            ExtractSection(
-                debug,
-                "static constexpr const char* IsolationLabels[] = {",
-                "};",
-                "shadow isolation labels"),
-            { "Default", "Thread Lanes", "Wave Groups" },
-            "shadow isolation labels");
-
         for (const std::string_view state : {
                 std::string_view("m_ui.WhiteWorld"),
                 std::string_view(
                     "m_ui.ScreenSpaceVisibility.debugView"),
-                std::string_view("m_ui.LightingDebugView"),
-                std::string_view("shadows.isolationView") })
+                std::string_view("m_ui.LightingDebugView") })
         {
             RequireContains(debug, state, "composable Debug state");
         }
         Require(
-            CountOccurrences(debug, "BeginAnimatedTreeNode(") == 4u,
-            "Debug effects must retain four animated disclosures.");
+            CountOccurrences(debug, "BeginAnimatedTreeNode(") == 3u,
+            "Debug effects must retain three animated disclosures.");
         Require(
-            CountOccurrences(debug, "ImGuiTreeNodeFlags_DefaultOpen") == 5u,
-            "Debug and all four effect groups must start expanded.");
+            CountOccurrences(debug, "ImGuiTreeNodeFlags_DefaultOpen") == 4u,
+            "Debug and all three effect groups must start expanded.");
         RequireContains(
             debug,
             "can be combined with every effect-specific debug view.",
@@ -1269,15 +1537,12 @@ namespace
             debug,
             "Visibility remains enabled and can still be inspected.",
             "lighting and Visibility composability guidance");
-        RequireContains(
-            viewer,
-            "m_ScreenSpaceDirectionalShadowPass->PresentDebug(",
-            "shadow debug presentation");
         for (const std::string_view removedOverlaySurface : {
                 std::string_view("Edge Overlay"),
                 std::string_view("Overlay Opacity"),
                 std::string_view("edgeOverlay"),
-                std::string_view("DebugOverlayOpacity") })
+                std::string_view("DebugOverlayOpacity"),
+                std::string_view("Screen-Space Shadows##Debug") })
         {
             RequireAbsent(
                 debug,
@@ -1296,7 +1561,7 @@ namespace
         const std::string_view visibilityDrawer = ExtractSection(
             viewer,
             "const bool diffuseOpen = DrawCollapsingHeader(",
-            "const bool statisticsOpen = DrawCollapsingHeader(",
+            "const bool denoisingOpen = DrawCollapsingHeader(",
             "Diffuse drawer");
         const std::string_view visibilityDispatcher = ExtractSection(
             viewer,
@@ -1318,7 +1583,7 @@ namespace
             "singular deferred PBR path");
         RequireContains(
             Compact(viewer),
-            "constboolrunScreenSpaceVisibility="
+            "constboolscreenSpaceVisibilityRequested="
             "m_ui.HasActiveScreenSpaceVisibilityConsumer();",
             "Visibility runtime independence from lighting Debug filters");
         const std::string_view visibilityConsumer = ExtractSection(
@@ -1361,9 +1626,8 @@ namespace
         }
     }
 
-    void ValidateScreenSpaceShadows(
+    void ValidateRayTracedShadows(
         std::string_view viewer,
-        std::string_view shadowSettings,
         std::string_view catalog)
     {
         const std::string_view shadows = ExtractSection(
@@ -1371,62 +1635,65 @@ namespace
             "const bool shadowsOpen = DrawCollapsingHeader(",
             "constexpr float ActionButtonCount = 4.f;",
             "Shadows drawer");
+        const std::string_view shadowControls = ExtractSection(
+            viewer,
+            "const auto drawRatioEstimatorShadowControls = [&]()",
+            "const bool diffuseOpen = DrawCollapsingHeader(",
+            "Ray Traced Shadows controls");
         RequireContains(
-            shadows,
-            "Screen-Space Directional Shadows##Shadows",
-            "retained screen-space directional shadows");
+            shadowControls,
+            "Ray Traced Shadows##Shadows",
+            "public Ray Traced Shadows name");
         RequireContains(
             shadows,
             "m_app->HasPrimaryDirectionalLight()",
             "directional-light availability gate");
         RequireContains(
-            shadows,
-            "Enabled##ScreenSpaceShadows",
-            "independent screen-space shadow enable control");
-        RequireContains(
-            viewer,
+            shadowControls,
             "Enabled##RatioEstimatorShadows",
-            "independent ratio-estimator shadow enable control");
+            "ray traced shadow enable control");
         RequireAbsent(
             shadows,
             "Technique##DirectionalShadows",
             "retired exclusive directional-shadow selector");
         for (const std::string_view control : {
-                std::string_view("Profile##ScreenSpaceShadows"),
-                std::string_view("Length##ScreenSpaceShadows"),
-                std::string_view("Surface Thickness##ScreenSpaceShadows"),
-                std::string_view("Bilinear Threshold##ScreenSpaceShadows"),
-                std::string_view("Shadow Contrast##ScreenSpaceShadows"),
-                std::string_view("Hard Shadow Samples##ScreenSpaceShadows"),
-                std::string_view("Fade-Out Samples##ScreenSpaceShadows"),
-                std::string_view("Ignore Edge Pixels##ScreenSpaceShadows"),
-                std::string_view("Precision Offset##ScreenSpaceShadows"),
-                std::string_view("Bilinear Offset Mode##ScreenSpaceShadows"),
-                std::string_view("Early Out##ScreenSpaceShadows") })
+                std::string_view("Ratio Estimator##RatioEstimatorShadows"),
+                std::string_view(
+                    "Output Hit Distance##RatioEstimatorShadows"),
+                std::string_view("Hard Shadows##RatioEstimatorShadows"),
+                std::string_view("Samples Per Pixel##RatioEstimatorShadows"),
+                std::string_view("Specify Noise##RatioEstimatorShadows"),
+                std::string_view("Max Distance##RatioEstimatorShadows"),
+                std::string_view("Ray Bias##RatioEstimatorShadows") })
         {
-            RequireContains(shadows, control, "screen-space shadow control");
+            RequireContains(
+                shadowControls, control, "ray traced shadow control");
         }
+        RequireOrdered(
+            shadowControls,
+            {
+                "Ratio Estimator##RatioEstimatorShadows",
+                "Output Hit Distance##RatioEstimatorShadows",
+                "Samples Per Pixel##RatioEstimatorShadows",
+                "Specify Noise##RatioEstimatorShadows",
+                "##RatioEstimatorShadowCustomNoise",
+                "Max Distance##RatioEstimatorShadows"
+            },
+            "ray traced shadow control order");
+        RequireOrdered(
+            Compact(shadowControls),
+            {
+                "ResolveNoiseSettings(m_ui.Noise,ratio.noise)",
+                "&ratio.noise.specifyNoise",
+                "ratio.noise.custom,",
+                "ratioDefaults.noise.custom,",
+                "ResetNoiseSamplingHistory(false,true,false,false)"
+            },
+            "ray traced shadow custom noise isolation");
         RequireContains(
             shadows,
             "drawRatioEstimatorShadowControls();",
-            "ratio-estimator shadow control placement");
-        for (const std::string_view control : {
-                std::string_view("Hard Shadows##RatioEstimatorShadows"),
-                std::string_view("Samples Per Pixel##RatioEstimatorShadows"),
-                std::string_view("Noise Pattern##RatioEstimatorShadows"),
-                std::string_view("Animate Samples##RatioEstimatorShadows"),
-                std::string_view("Ray Bias##RatioEstimatorShadows") })
-        {
-            RequireContains(viewer, control, "ratio-estimator shadow control");
-        }
-        RequireOrdered(
-            viewer,
-            {
-                "Animate Samples##RatioEstimatorShadows",
-                "Samples Per Pixel##RatioEstimatorShadows",
-                "Noise Pattern##RatioEstimatorShadows"
-            },
-            "ratio-estimator sampling control order");
+            "ray traced shadow control placement");
         for (const std::string_view removedControl : {
                 std::string_view("Denoiser Radius##RatioEstimatorShadows"),
                 std::string_view("Origin Safety##RatioEstimatorShadows"),
@@ -1439,24 +1706,34 @@ namespace
         }
         RequireAbsent(shadows, "\"Isolation View\"", "Shadows drawer");
         RequireAbsent(shadows, "\"Edge Overlay\"", "Shadows drawer");
-        const std::string compactSettings = Compact(ExtractSection(
-            shadowSettings,
-            "struct ScreenSpaceDirectionalShadowSettings",
-            "[[nodiscard]] inline constexpr uint32_t",
-            "screen-space shadow defaults"));
-        RequireContains(
-            compactSettings,
-            "boolenabled=false;",
-            "screen-space shadows default");
-        RequireContains(
-            compactSettings,
-            "ScreenSpaceShadowIsolationViewisolationView="
-            "ScreenSpaceShadowIsolationView::None;",
-            "shadow isolation default");
         RequireAbsent(
-            compactSettings,
-            "edgeOverlay",
-            "retired shadow edge-overlay setting");
+            viewer,
+            "Screen-Space Directional Shadows",
+            "quarantined screen space directional shadows");
+        RequireAbsent(
+            viewer,
+            "Ratio Estimate Ray Traced Shadows",
+            "retired public shadow name");
+        for (const std::string_view path : {
+                std::string_view("shadows.ray-traced.enabled"),
+                std::string_view("shadows.ray-traced.ratio-estimator"),
+                std::string_view("shadows.ray-traced.output-hit-distance"),
+                std::string_view("shadows.ray-traced.samples-per-pixel"),
+                std::string_view("shadows.ray-traced.specify-noise"),
+                std::string_view("shadows.ray-traced.noise-pattern"),
+                std::string_view("shadows.ray-traced.noise-resolution"),
+                std::string_view("shadows.ray-traced.animate-samples") })
+        {
+            RequireContains(catalog, path, "Ray Traced Shadows command");
+        }
+        RequireAbsent(
+            catalog,
+            "shadows.ratio-estimator",
+            "retired shadow command prefix");
+        RequireAbsent(
+            catalog,
+            "shadows.screen-space-directional",
+            "quarantined screen space shadow commands");
 
         for (const std::string_view retiredTechnique : {
                 std::string_view("SparseVirtualShadowMap"),
@@ -1542,8 +1819,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 150u,
-            "Settings command catalog must contain exactly 150 entries.");
+        Require(entries.size() == 184u,
+            "Settings command catalog must contain exactly 184 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -1557,19 +1834,25 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 146u,
-            "Settings command catalog must contain exactly 146 values.");
+        Require(valueCount == 180u,
+            "Settings command catalog must contain exactly 180 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
                 "restart",
-                "screenshot"
+                "capture"
             },
             "Settings command catalog must retain exactly four actions.");
 
         for (const std::string_view path : {
                 std::string_view("gpu.adaptive-sync"),
-                std::string_view("visibility.noise"),
+                std::string_view("noise.pattern"),
+                std::string_view("noise.resolution"),
+                std::string_view("noise.animate-samples"),
+                std::string_view("visibility.specify-noise"),
+                std::string_view("visibility.noise-pattern"),
+                std::string_view("visibility.noise-resolution"),
+                std::string_view("visibility.animate-samples"),
                 std::string_view("anti-aliasing.taa.enabled"),
                 std::string_view("anti-aliasing.taa.jitter-sequence"),
                 std::string_view("anti-aliasing.taa.previous-depth"),
@@ -1585,34 +1868,65 @@ namespace
                 std::string_view("debug.world.materials"),
                 std::string_view("debug.visibility.view"),
                 std::string_view("debug.pbr.filter"),
-                std::string_view("debug.shadows.isolation"),
                 std::string_view(
                     "representation.bvh.build-preference"),
                 std::string_view("representation.blas.update-mode"),
                 std::string_view("representation.tlas.update-mode"),
+                std::string_view("representation.allow-ray-traversal"),
+                std::string_view("visibility.ao.output-hit-distance"),
+                std::string_view("visibility.gi.output-hit-distance"),
+                std::string_view("denoising.ao.method"),
+                std::string_view("denoising.gi.method"),
+                std::string_view("denoising.shadows.method"),
+                std::string_view("denoising.sky.method"),
                 std::string_view("sky.visibility.enabled"),
                 std::string_view("sky.visibility.diffuse-ibl"),
                 std::string_view("sky.visibility.specular-ibl"),
+                std::string_view("sky.visibility.ratio-estimator"),
+                std::string_view("sky.visibility.output-hit-distance"),
                 std::string_view("sky.visibility.samples-per-pixel"),
+                std::string_view("sky.visibility.specify-noise"),
                 std::string_view("sky.visibility.noise-pattern"),
+                std::string_view("sky.visibility.noise-resolution"),
                 std::string_view("sky.visibility.animate-samples"),
                 std::string_view("sky.visibility.max-distance"),
                 std::string_view("sky.visibility.ray-bias"),
-                std::string_view("shadows.ratio-estimator.enabled"),
+                std::string_view("sky.auto-exposure.enabled"),
                 std::string_view(
-                    "shadows.ratio-estimator.samples-per-pixel"),
+                    "sky.auto-exposure.exposure-compensation"),
                 std::string_view(
-                    "shadows.ratio-estimator.hard-shadows"),
+                    "sky.auto-exposure.maximum-brightening"),
                 std::string_view(
-                    "shadows.ratio-estimator.noise-pattern"),
+                    "sky.auto-exposure.maximum-darkening"),
+                std::string_view("sky.auto-exposure.adjustment-period"),
+                std::string_view("shadows.ray-traced.enabled"),
                 std::string_view(
-                    "shadows.ratio-estimator.animate-samples"),
+                    "shadows.ray-traced.ratio-estimator"),
                 std::string_view(
-                    "shadows.ratio-estimator.max-distance"),
+                    "shadows.ray-traced.output-hit-distance"),
                 std::string_view(
-                    "shadows.ratio-estimator.ray-bias"),
+                    "shadows.ray-traced.samples-per-pixel"),
                 std::string_view(
-                    "shadows.screen-space-directional.enabled") })
+                    "shadows.ray-traced.specify-noise"),
+                std::string_view(
+                    "shadows.ray-traced.hard-shadows"),
+                std::string_view(
+                    "shadows.ray-traced.noise-pattern"),
+                std::string_view(
+                    "shadows.ray-traced.noise-resolution"),
+                std::string_view(
+                    "shadows.ray-traced.animate-samples"),
+                std::string_view(
+                    "shadows.ray-traced.max-distance"),
+                std::string_view("shadows.ray-traced.ray-bias"),
+                std::string_view(
+                    "light.selected.flashlight.output-hit-distance"),
+                std::string_view(
+                    "light.selected.flashlight.angular-size"),
+                std::string_view(
+                    "light.selected.flashlight.horizontal-offset"),
+                std::string_view(
+                    "light.selected.flashlight.vertical-offset") })
         {
             Require(names.find(std::string(path)) != names.end(),
                 "Settings command catalog is missing " + std::string(path));
@@ -1625,16 +1939,13 @@ namespace
                 std::string_view("shadows.csm"),
                 std::string_view("debug.shadows.edge-overlay"),
                 std::string_view("debug.shadows.overlay-opacity"),
+                std::string_view("debug.shadows.isolation"),
                 std::string_view("shadows.directional.technique"),
-                std::string_view("shadows.ratio-estimator.filter-radius"),
-                std::string_view(
-                    "shadows.ratio-estimator.origin-safety-steps"),
-                std::string_view("shadows.ratio-estimator.noise-response"),
-                std::string_view("shadows.ratio-estimator.plane-rejection"),
-                std::string_view("shadows.ratio-estimator.normal-rejection"),
-                std::string_view("shadows.ratio-estimator.analytic-rejection"),
+                std::string_view("shadows.ratio-estimator"),
+                std::string_view("shadows.screen-space-directional"),
                 std::string_view("debug.visibility.indirect-diffuse-only"),
                 std::string_view("visibility.ao.power"),
+                std::string_view("sky.auto-exposure.brightness"),
                 std::string_view("buffers."),
                 std::string_view("statistics.") })
         {
@@ -1648,18 +1959,23 @@ namespace
         const std::string_view representationDispatcher = ExtractSection(
             viewer,
             "bool DispatchRepresentationCommandValue(",
-            "bool DispatchVisibilityCommandValue(",
+            "bool DispatchNoiseCommandValue(",
             "Representation command dispatcher");
+        const std::string_view noiseDispatcher = ExtractSection(
+            viewer,
+            "bool DispatchNoiseCommandValue(",
+            "bool DispatchVisibilityCommandValue(",
+            "Noise command dispatcher");
         const std::string_view directionalShadowDispatcher = ExtractSection(
             viewer,
             "bool DispatchDirectionalShadowCommandValue(",
-            "bool DispatchScreenSpaceShadowCommandValue(",
-            "Directional Shadow command dispatcher");
-        const std::string_view screenSpaceShadowDispatcher = ExtractSection(
-            viewer,
-            "bool DispatchScreenSpaceShadowCommandValue(",
             "bool DispatchMaterialCommandValue(",
-            "screen-space shadow command dispatcher");
+            "Directional Shadow command dispatcher");
+        const std::string_view denoisingDispatcher = ExtractSection(
+            viewer,
+            "bool DispatchDenoisingCommandValue(",
+            "bool DispatchFlashlightCommandValue(",
+            "Denoising command dispatcher");
 
         const std::map<std::string, std::string_view> dispatchers = {
             {
@@ -1679,6 +1995,10 @@ namespace
             {
                 "Representation",
                 representationDispatcher
+            },
+            {
+                "Noise",
+                noiseDispatcher
             },
             {
                 "Visibility",
@@ -1702,8 +2022,12 @@ namespace
                 "Sky",
                 ExtractSection(viewer,
                     "bool DispatchSkyCommandValue(",
-                    "bool DispatchLightCommandValue(",
+                    "bool DispatchDenoisingCommandValue(",
                     "Sky command dispatcher")
+            },
+            {
+                "Denoising",
+                denoisingDispatcher
             },
             {
                 "Lights",
@@ -1715,10 +2039,6 @@ namespace
             {
                 "DirectionalShadows",
                 directionalShadowDispatcher
-            },
-            {
-                "ScreenSpaceDirectionalShadows",
-                screenSpaceShadowDispatcher
             },
             {
                 "Materials",
@@ -1737,10 +2057,26 @@ namespace
                 "No value dispatcher exists for section " + entry.section);
             if (dispatcher != dispatchers.end())
             {
-                Require(
-                    ContainsQuotedLiteral(dispatcher->second, entry.name),
-                    "The " + entry.section + " dispatcher is missing " +
-                        entry.name);
+                if (entry.section == "Denoising")
+                {
+                    const size_t propertySeparator = entry.name.rfind('.');
+                    const std::string prefix = entry.name.substr(
+                        0u, propertySeparator + 1u);
+                    const std::string property = entry.name.substr(
+                        propertySeparator + 1u);
+                    Require(
+                        ContainsQuotedLiteral(dispatcher->second, prefix) &&
+                            ContainsQuotedLiteral(
+                                dispatcher->second, property),
+                        "The Denoising dispatcher is missing " + entry.name);
+                }
+                else
+                {
+                    Require(
+                        ContainsQuotedLiteral(dispatcher->second, entry.name),
+                        "The " + entry.section + " dispatcher is missing " +
+                            entry.name);
+                }
             }
         }
 
@@ -1772,6 +2108,37 @@ namespace
             compactRepresentationDispatcher,
             "m_app->InvalidateWorldSpaceRepresentation(invalidation)",
             "Representation command invalidation request");
+
+        const std::string compactNoiseDispatcher = Compact(noiseDispatcher);
+        for (const std::string_view mapping : {
+                std::string_view(
+                    "{\"spatial-white\",NoisePattern::SpatialWhite}"),
+                std::string_view(
+                    "{\"spatial-blue\",NoisePattern::SpatialBlue}"),
+                std::string_view(
+                    "{\"spatiotemporal-blue\","
+                    "NoisePattern::SpatiotemporalBlue}"),
+                std::string_view(
+                    "{\"64x64\",NoiseResolution::Size64}"),
+                std::string_view(
+                    "{\"128x128\",NoiseResolution::Size128}"),
+                std::string_view(
+                    "{\"256x256\",NoiseResolution::Size256}"),
+                std::string_view(
+                    "{\"512x512\",NoiseResolution::Size512}") })
+        {
+            RequireContains(
+                compactNoiseDispatcher,
+                mapping,
+                "Noise command token and enum mapping");
+        }
+        RequireContains(
+            compactNoiseDispatcher,
+            "m_app->ResetNoiseSamplingHistory("
+            "!m_ui.ScreenSpaceVisibility.noise.specifyNoise,"
+            "!m_ui.DirectionalShadows.ratioEstimator.noise.specifyNoise,"
+            "!m_ui.RayTracedSkyVisibility.noise.specifyNoise,true)",
+            "global Noise history isolation");
 
         const std::string compactDirectionalShadowDispatcher =
             Compact(directionalShadowDispatcher);
@@ -1819,14 +2186,24 @@ namespace
             "ratio-estimator hard-shadow command");
         RequireContains(
             compactDirectionalShadowDispatcher,
-            "candidate.ratioEstimator.noisePattern,"
-            "factoryDefaults.ratioEstimator.noisePattern",
+            "candidate.ratioEstimator.noise.custom.pattern,"
+            "factoryDefaults.ratioEstimator.noise.custom.pattern",
             "ratio-estimator noise-pattern command");
         RequireContains(
             compactDirectionalShadowDispatcher,
-            "candidate.ratioEstimator.animateSamples,"
-            "factoryDefaults.ratioEstimator.animateSamples",
+            "candidate.ratioEstimator.noise.custom.animate,"
+            "factoryDefaults.ratioEstimator.noise.custom.animate",
             "ratio-estimator sample-animation command");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "candidate.ratioEstimator.noise.custom.resolution,"
+            "factoryDefaults.ratioEstimator.noise.custom.resolution",
+            "ratio-estimator noise-resolution command");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "candidate.ratioEstimator.noise.specifyNoise,"
+            "factoryDefaults.ratioEstimator.noise.specifyNoise",
+            "ratio-estimator Specify Noise command");
         RequireContains(
             compactDirectionalShadowDispatcher,
             "candidate.ratioEstimator.maxDistance,"
@@ -1849,7 +2226,17 @@ namespace
             compactDirectionalShadowDispatcher,
             "candidate.ratioEstimator.enabled,"
             "factoryDefaults.ratioEstimator.enabled",
-            "independent ratio-estimator enable command");
+            "ray traced shadow enable command");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "candidate.ratioEstimator.useRatioEstimator,"
+            "factoryDefaults.ratioEstimator.useRatioEstimator",
+            "independent ratio estimator command");
+        RequireContains(
+            compactDirectionalShadowDispatcher,
+            "candidate.ratioEstimator.outputHitDistance,"
+            "factoryDefaults.ratioEstimator.outputHitDistance",
+            "optional sun hit distance command");
         RequireAbsent(
             compactDirectionalShadowDispatcher,
             "ScreenSpaceDirectionalShadows",
@@ -1863,16 +2250,36 @@ namespace
             "!m_app->SupportsHeitzRatioEstimatorShadows()",
             "ratio-estimator command device validation");
 
-        const std::string compactScreenSpaceShadowDispatcher =
-            Compact(screenSpaceShadowDispatcher);
+        const std::string compactDenoisingDispatcher =
+            Compact(denoisingDispatcher);
+        for (const std::string_view signal : {
+                std::string_view("denoising.ao."),
+                std::string_view("denoising.gi."),
+                std::string_view("denoising.shadows."),
+                std::string_view("denoising.sky.") })
+        {
+            RequireContains(
+                compactDenoisingDispatcher,
+                signal,
+                "Denoising signal command routing");
+        }
         RequireContains(
-            compactScreenSpaceShadowDispatcher,
-            "candidate.enabled,factoryDefaults.enabled",
-            "independent screen-space enable command");
-        RequireAbsent(
-            compactScreenSpaceShadowDispatcher,
-            "DirectionalShadowTechnique",
-            "retired screen-space technique synchronization");
+            compactDenoisingDispatcher,
+            "candidate=SanitizeDenoisingSettings(effect,candidate)",
+            "Denoising signal sanitization");
+        for (const std::string_view mapping : {
+                std::string_view(
+                    "{\"reblur\",DenoisingMethodChoice::Reblur}"),
+                std::string_view(
+                    "{\"relax\",DenoisingMethodChoice::Relax}"),
+                std::string_view(
+                    "{\"sigma\",DenoisingMethodChoice::Sigma}") })
+        {
+            RequireContains(
+                compactDenoisingDispatcher,
+                mapping,
+                "Denoising method command mapping");
+        }
 
         const std::string_view router = ExtractSection(
             viewer,
@@ -1883,13 +2290,14 @@ namespace
                 std::string_view("Ui"),
                 std::string_view("General"),
                 std::string_view("Representation"),
+                std::string_view("Noise"),
                 std::string_view("Visibility"),
+                std::string_view("Denoising"),
                 std::string_view("Aliasing"),
                 std::string_view("Debug"),
                 std::string_view("Sky"),
                 std::string_view("Lights"),
                 std::string_view("DirectionalShadows"),
-                std::string_view("ScreenSpaceDirectionalShadows"),
                 std::string_view("Materials") })
         {
             RequireContains(
@@ -2097,22 +2505,153 @@ namespace
         RequireOrdered(
             skyDrawer,
             {
+                "Environment Exposure",
+                "\"Auto Exposure##Sky\"",
+                "ImGuiTreeNodeFlags_DefaultOpen",
+                "\"Enable##AutoExposure\"",
+                "&m_ui.AutoExposure.enabled",
+                "##AutoExposureControls",
+                "\"Exposure Compensation\"",
+                "&m_ui.AutoExposure.exposureCompensationEV",
+                "AutoExposureMinimumCompensationEV",
+                "AutoExposureMaximumCompensationEV",
+                "\"%+.2f EV\"",
+                "\"Maximum Brightening\"",
+                "&m_ui.AutoExposure.maximumBrighteningEV",
+                "AutoExposureMinimumMovementEV",
+                "AutoExposureMaximumMovementEV",
+                "\"Maximum Darkening\"",
+                "&m_ui.AutoExposure.maximumDarkeningEV",
+                "AutoExposureMinimumMovementEV",
+                "AutoExposureMaximumMovementEV",
+                "\"Adjustment Period\"",
+                "&m_ui.AutoExposure.adjustmentPeriodSeconds",
+                "AutoExposureMinimumAdjustmentPeriodSeconds",
+                "AutoExposureMaximumAdjustmentPeriodSeconds",
+                "\"%.2f s\"",
+                "EndAnimatedToggleRegion();",
+                "EndAnimatedTreeNode();",
+                "\"Ambient Fill\""
+            },
+            "Sky Auto Exposure submenu and enabled-only control order");
+        RequireContains(
+            skyDrawer,
+            "if (BeginAnimatedTreeNode(\n"
+            "                    \"Auto Exposure##Sky\",\n"
+            "                    ImGuiTreeNodeFlags_DefaultOpen,",
+            "Auto Exposure submenu must start expanded like AA techniques");
+        RequireContains(
+            Compact(skyDrawer),
+            "if(BeginAnimatedToggleRegion(\"##AutoExposureControls\","
+                "m_ui.AutoExposure.enabled)){",
+            "Auto Exposure settings must stay hidden while Enable is off");
+        RequireContains(
+            skyDrawer,
+            "Adapt display exposure to the median scene luminance.",
+            "auto-exposure display-only explanation");
+        RequireContains(
+            skyDrawer,
+            "Exposure Compensation is applied afterward.",
+            "automatic movement limits exclude Exposure Compensation");
+        RequireContains(
+            skyDrawer,
+            "Time to close half of the remaining exposure-value ",
+            "Adjustment Period half-life explanation");
+        RequireOrdered(
+            skyDrawer,
+            {
                 "Show Environment Background",
-                "Ray-Traced Sky Visibility",
+                "Ray Traced Sky Visibility##Sky",
                 "Enable##RayTracedSkyVisibility",
-                "Diffuse IBL##RayTracedSkyVisibility",
-                "Specular IBL##RayTracedSkyVisibility",
+                "Effect Diffuse##RayTracedSkyVisibility",
+                "Effect Specular##RayTracedSkyVisibility",
+                "Ratio Estimator##RayTracedSkyVisibility",
+                "Output Hit Distance##RayTracedSkyVisibility",
                 "Samples Per Pixel##RayTracedSkyVisibility",
-                "Noise Pattern##RayTracedSkyVisibility",
-                "Animate Samples##RayTracedSkyVisibility",
+                "Specify Noise##RayTracedSkyVisibility",
                 "Max Distance##RayTracedSkyVisibility",
                 "Ray Bias##RayTracedSkyVisibility"
             },
             "bottom-of-Sky ray-traced visibility controls");
         RequireContains(
             skyDrawer,
+            "if (BeginAnimatedTreeNode(\n"
+            "                    \"Ray Traced Sky Visibility##Sky\"",
+            "independently collapsible sky-visibility effect section");
+        RequireContains(
+            skyDrawer,
             "skyVisibility.enabled && skyVisibilityAvailable",
-            "default-collapsed sky-visibility settings region");
+            "enabled sky-visibility settings region");
+        RequireOrdered(
+            skyDrawer,
+            {
+                "BeginAnimatedTreeNode(",
+                "RayTracedSkyVisibilitySettings& skyVisibility",
+                "EndAnimatedTreeNode();"
+            },
+            "sky visibility collapsibility independent of enabled state");
+        RequireAbsent(
+            skyDrawer,
+            "Diffuse IBL##RayTracedSkyVisibility",
+            "renamed Effect Diffuse control");
+        RequireAbsent(
+            skyDrawer,
+            "Specular IBL##RayTracedSkyVisibility",
+            "renamed Effect Specular control");
+
+        const std::string_view lightsDrawer = ExtractSection(
+            viewer,
+            "const bool lightsOpen = DrawCollapsingHeader(",
+            "const bool shadowsOpen = DrawCollapsingHeader(",
+            "Lights drawer");
+        RequireOrdered(
+            lightsDrawer,
+            {
+                "\"Beam Size\"",
+                "&flashlight.beamSizeDegrees",
+                "\"Angular Size\"",
+                "&flashlight.angularSizeDegrees",
+                "FlashlightMinimumAngularSizeDegrees",
+                "FlashlightMaximumAngularSizeDegrees"
+            },
+            "flashlight analytical Angular Size control");
+        RequireContains(
+            lightsDrawer,
+            "Set the apparent diameter of the analytical ",
+            "flashlight analytical emitter tooltip");
+        RequireContains(
+            lightsDrawer,
+            "ImGui::Checkbox(\n"
+                "                                \"Enabled\",\n"
+                "                                &m_ui.FlashlightEnabled)",
+            "flashlight enable label without redundant shortcut suffix");
+        RequireAbsent(
+            lightsDrawer,
+            "Enabled (F)",
+            "retired flashlight shortcut suffix");
+        RequireOrdered(
+            lightsDrawer,
+            {
+                "bool angularSizeChanged = DrawSliderFloat(",
+                "angularSizeChanged = true;",
+                "if (angularSizeChanged)",
+                "m_app->ResetImageBasedLightingHistory();"
+            },
+            "flashlight Angular Size UI history reset");
+
+        const std::string_view footer = ExtractSection(
+            viewer,
+            "constexpr float ActionButtonCount = 4.f;",
+            "EndSettingsScrollStability();",
+            "Settings footer actions");
+        RequireContains(
+            footer,
+            "DrawCenteredActionButton(\"Capture\", actionButtonWidth)",
+            "Capture footer action");
+        RequireAbsent(
+            footer,
+            "DrawCenteredActionButton(\"Screenshot\"",
+            "retired Screenshot footer label");
 
         const std::string_view generalDispatcher = ExtractSection(
             viewer,
@@ -2237,6 +2776,14 @@ namespace
             sceneFolder,
             "AddRectFilled",
             "scene folder double-composited backgrounds");
+        RequireOrdered(
+            sceneFolder,
+            {
+                "if (m_SceneLoadFailed)",
+                "\"Retry Scene Load\"",
+                "m_app->RetryCurrentSceneLoad();"
+            },
+            "failed scene load retry action");
         RequireAbsent(
             viewer,
             "folderOutline",
@@ -2427,16 +2974,14 @@ int main(int argc, char** argv)
         root / "src" / "temporal_aa_options.h");
     const std::string temporalPass = ReadFile(
         root / "src" / "temporal_aa.cpp");
-    const std::string shadowSettings = ReadFile(
-        root / "src" / "screen_space_directional_shadows_settings.h");
     const std::string donutAppOverride = ReadFile(
         root / "overrides" / "donut-app.patch");
     const std::string imguiUiOverride = ReadFile(
         root / "overrides" / "imgui-ui.patch");
     const std::string cmakeSource = ReadFile(root / "CMakeLists.txt");
     if (viewer.empty() || catalog.empty() || temporalOptions.empty() ||
-        temporalPass.empty() || shadowSettings.empty() ||
-        donutAppOverride.empty() || imguiUiOverride.empty() ||
+        temporalPass.empty() || donutAppOverride.empty() ||
+        imguiUiOverride.empty() ||
         cmakeSource.empty())
     {
         std::cerr << "FAIL: could not read current UI contract sources\n";
@@ -2444,14 +2989,17 @@ int main(int argc, char** argv)
     }
 
     ValidateDrawers(viewer);
+    ValidateRepresentation(viewer, catalog);
+    ValidateNoise(viewer, catalog);
     ValidateVisibility(viewer, catalog);
+    ValidateDenoising(viewer, catalog);
     ValidateBuffers(viewer);
     ValidateStatistics(viewer);
     ValidateTemporalTiming(temporalPass);
     ValidateAntiAliasing(viewer, temporalOptions);
     ValidateDebug(viewer);
     ValidateVisibilityPbrDecoupling(viewer);
-    ValidateScreenSpaceShadows(viewer, shadowSettings, catalog);
+    ValidateRayTracedShadows(viewer, catalog);
     ValidateCatalogAndDispatch(viewer, catalog);
     ValidateMaterialHistoryInvalidation(viewer);
     ValidateUiSafety(

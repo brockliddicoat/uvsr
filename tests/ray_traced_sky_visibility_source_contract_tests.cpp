@@ -117,14 +117,17 @@ namespace
         const std::string& passHeader,
         const std::string& pass,
         const std::string& shader,
-        const std::string& shaderConfig)
+        const std::string& shaderConfig,
+        const std::string& materialVisibility,
+        const std::string& materialVisibilityHeader)
     {
         RequireContains(
             settings,
             "boolenabled=false;boolapplytodiffuseibl=true;"
-                "boolapplytospecularibl=false;int32_tsampleratelog2=0;"
+                "boolapplytospecularibl=true;booluseratioestimator=true;"
+                "booloutputhitdistance=false;int32_tsampleratelog2=0;"
                 "floatraybias=0.002f;",
-            "sky visibility must default disabled, diffuse-only, at one sample and 0.002 bias");
+            "sky visibility must default disabled, apply to both IBL lobes, retain the ratio estimator, and avoid hit output");
         RequireContains(
             settings,
             "rayvisibilitymaxdistancemaxdistance="
@@ -137,9 +140,8 @@ namespace
             "either selected IBL lobe must activate the producer");
         RequireContains(
             settings,
-            "raytracedskyvisibilitynoisepattern::voidclusterbluenoise;"
-                "boolanimatesamples=true;",
-            "sky visibility must default to animated void-cluster blue noise");
+            "noiseoverridesettingsnoise;",
+            "sky visibility must default to the shared noise configuration");
         RequireContains(
             settings,
             "raytracedskyvisibilityminimumsampleratelog2=0;",
@@ -158,8 +160,15 @@ namespace
             "the ray-bias domain must remain bounded at 0.1 world units");
         RequireContains(
             settings,
-            "israyvisibilitymaxdistancesupported(settings.maxdistance)&&",
-            "configuration validation must reject unsupported max-distance modes");
+            "returnsettings.useratioestimator?"
+                "resolveraytracedskyvisibilitysamplecount("
+                "settings.sampleratelog2):1u;",
+            "disabling the ratio estimator must select exactly one trace");
+        RequireContains(
+            settings,
+            "isvalidnoisesettings(settings.noise.custom)&&"
+                "israyvisibilitymaxdistancesupported(settings.maxdistance)&&",
+            "configuration validation must reject invalid custom noise and max-distance modes");
         RequireContains(
             settings,
             "settings.raybias>=0.f&&settings.raybias"
@@ -211,12 +220,17 @@ namespace
         RequireContains(
             pass,
             "hasformatsupport(device,nvrhi::format::r8_unorm,true)&&"
-                "hasformatsupport(device,nvrhi::format::r16_unorm,false)",
-            "the pass must gate its R8 UAV and R16 blue-noise formats");
+                "hasformatsupport(device,nvrhi::format::r8_unorm,false)",
+            "the pass must gate its R8 UAV and shared R8 noise format");
         RequireContains(
             pass,
-            "description.format=nvrhi::format::r8_unorm;",
+            "nvrhi::format::r8_unorm,\"raytracedskyvisibility\"",
             "the visibility output must use scalar R8_UNORM storage");
+        RequireContains(
+            pass,
+            "nvrhi::format::r16_float,"
+                "\"raytracedskyvisibility/hitdistance\"",
+            "requested hit distance output must use scalar R16_FLOAT storage");
         RequireContains(
             pass,
             "description.dimension=nvrhi::texturedimension::texture2d;",
@@ -250,10 +264,11 @@ namespace
                     "depthdescription.width",
                 "m_outputvisibility->getdesc().height=="
                     "depthdescription.height",
-                "createoutputtexture(m_device,depthdescription.width,"
-                    "depthdescription.height)",
-                "clearbindingset();",
-                "m_outputvisibility=outputvisibility;"
+                "nvrhi::format::r8_unorm,\"raytracedskyvisibility\"",
+                "m_outputvisibility=outputvisibility;",
+                "nvrhi::format::r16_float,"
+                    "\"raytracedskyvisibility/hitdistance\"",
+                "clearbindingsets();"
             },
             "the producer must validate exact full-resolution single-surface inputs before replacing its output");
         RequireContains(
@@ -263,8 +278,10 @@ namespace
             "the binding cache must track every producer input identity");
         RequireContains(
             pass,
-            "m_boundtlas==worldtlas&&sameinputs(m_boundinputs,inputs)",
-            "the binding cache must include TLAS identity");
+            "m_boundtlas!=worldtlas||!sameinputs(m_boundinputs,inputs)||"
+                "m_boundmaterialvisibility!=materialvisibility||"
+                "m_boundnoisetexture!=noisetexture",
+            "the binding cache must include every TLAS, material, and noise resource identity");
         RequireContains(
             pass,
             "nvrhi::bindinglayoutitem::raytracingaccelstruct(0)",
@@ -275,8 +292,29 @@ namespace
                 "nvrhi::bindinglayoutitem::texture_srv(2),"
                 "nvrhi::bindinglayoutitem::texture_srv(3),"
                 "nvrhi::bindinglayoutitem::texture_srv(4),"
+                "nvrhi::bindinglayoutitem::structuredbuffer_srv(10),"
+                "nvrhi::bindinglayoutitem::structuredbuffer_srv(11),"
+                "nvrhi::bindinglayoutitem::structuredbuffer_srv(12),"
+                "nvrhi::bindinglayoutitem::sampler(0),"
                 "nvrhi::bindinglayoutitem::texture_uav(0)",
-            "the producer must retain one compact current-frame binding layout");
+            "the producer must bind current-frame G-buffer and material visibility resources");
+        RequireContains(
+            pass,
+            "pipelinedescription.bindinglayouts={"
+                "m_bindinglayouts[variant],m_bindlesslayout};",
+            "the producer pipeline must include the scene bindless layout");
+        RequireContains(
+            pass,
+            "state.bindings={m_bindingsets[variant],"
+                "materialvisibility.descriptortable};",
+            "the producer dispatch must bind the live descriptor table");
+        RequireContains(
+            materialVisibilityHeader,
+            "geometrybuffer==other.geometrybuffer&&"
+                "materialbuffer==other.materialbuffer&&"
+                "geometryindexmap==other.geometryindexmap&&"
+                "descriptortable==other.descriptortable;",
+            "material visibility cache identity must include every bound resource");
         Require(
             CountOccurrences(pass, "commandlist->dispatch(") == 1u,
             "the producer must issue exactly one compute dispatch");
@@ -287,9 +325,8 @@ namespace
             "the pass must dispatch its 8x8 shader over the full view");
         RequireContains(
             pass,
-            "constants.samplesequencephase=settings.animatesamples?"
-                "samplingphase:0u;",
-            "disabled sample animation must hold producer phase zero");
+            "constants.samplesequencephase=samplingphase;",
+            "the renderer-resolved shared noise phase must reach the shader");
         RequireContains(
             pass,
             "constfloatraydistance=resolverayvisibilitymaxdistance("
@@ -306,15 +343,19 @@ namespace
         RequireOrdered(
             pass,
             {
-                "if(!m_supported||!commandlist||!worldtlas||",
+                "if(!m_supported||!commandlist||!materialvisibility||"
+                    "!worldtlas||!noisetexture||",
                 "return{};",
                 "if(std::isnan(raydistance))",
                 "return{};",
-                "if(!ensureresources(inputs))",
+                "if(!ensureresources(inputs,requestedhitdistance))",
                 "return{};",
-                "if(!ensurebindingset(inputs,worldtlas))",
+                "if(!ensurebindingset(inputs,materialvisibility,worldtlas,"
+                    "noisetexture,outputhitdistance))",
                 "return{};",
-                "return{m_outputvisibility,true};"
+                "return{m_outputvisibility,outputhitdistance?"
+                    "m_outputhitdistance.get():nullptr,true,"
+                    "settings.useratioestimator};"
             },
             "all unavailable or invalid producer states must return empty before publishing an output");
 
@@ -341,11 +382,70 @@ namespace
         RequireContains(
             shader,
             "rwtexture2d<float>u_visibility:register(u0);",
-            "the producer shader must write only scalar visibility");
+            "the producer shader must retain scalar visibility");
         RequireContains(
             shader,
-            "u_visibility[pixelposition]=1.0f;return;",
+            "rwtexture2d<float>u_hitdistance:register(u1);",
+            "the hit permutation must expose a scalar hit distance UAV");
+        RequireContains(
+            shader,
+            "u_visibility[pixelposition]=1.0f;",
             "invalid/background pixels must fail open to white");
+        RequireContains(
+            shader,
+            "u_hitdistance[pixelposition]=0.0f;",
+            "invalid/background pixels must encode hit distance zero");
+        RequireAbsent(
+            shader,
+            "ray_flag_force_opaque",
+            "alpha-tested geometry must remain nonopaque to inline traversal");
+        RequireOrdered(
+            shader,
+            {
+                "#ifoutput_hit_distancerayquery<"
+                    "ray_flag_skip_procedural_primitives>query;",
+                "#elserayquery<"
+                    "ray_flag_accept_first_hit_and_end_search|"
+                    "ray_flag_skip_procedural_primitives>query;",
+                "while(query.proceed()){"
+                    "uvsr_commit_covered_ray_query_candidate(query)}",
+                "query.committedrayt()"
+            },
+            "sky visibility must reject transparent candidates while retaining closest covered hit distance");
+        RequireOrdered(
+            materialVisibility,
+            {
+                "t_raygeometryindexmap[geometrymapoffset+"
+                    "compactgeometryindex]",
+                "t_raymaterialgeometries[globalgeometryindex]",
+                "t_raymaterials[geometry.materialindex]",
+                "material.domain!=materialdomain_alphatested",
+                "floatopacity=material.opacity;",
+                "materialflags_useopacitytexture",
+                "nonuniformresourceindex(material.opacitytextureindex)",
+                "opacity*=opacitytexture.samplelevel(",
+                ").r;",
+                "elseif((material.flags&"
+                    "materialflags_usebaseordiffusetexture)!=0",
+                "nonuniformresourceindex("
+                    "material.baseordiffusetextureindex)",
+                "opacity*=basetexture.samplelevel(",
+                ").a;",
+                "returnsaturate(opacity)>=material.alphacutoff;"
+            },
+            "explicit opacity texture must take precedence over base alpha");
+        for (const std::string_view candidateContract : {
+                "candidateinstancecontributiontohitgroupindex()",
+                "candidategeometryindex()",
+                "candidateprimitiveindex()",
+                "candidatetrianglebarycentrics()",
+                "commitnonopaquetrianglehit();" })
+        {
+            RequireContains(
+                materialVisibility,
+                candidateContract,
+                "complete alpha-tested candidate traversal contract");
+        }
         RequireContains(
             shader,
             "constpbrgbuffersurfacenormalssurfacenormals="
@@ -403,13 +503,15 @@ namespace
                 "ray.direction=direction;",
                 "ray.tmin=0.0f;",
                 "ray.tmax=g_skyvisibility.raydistance;",
-                "ray_flag_accept_first_hit_and_end_search|"
-                    "ray_flag_force_opaque|"
-                    "ray_flag_skip_procedural_primitives",
                 "query.tracerayinline(t_worldbvh,ray_flag_none,0xff,ray);",
-                "returnquery.committedstatus()!=committed_triangle_hit;"
+                "while(query.proceed()){"
+                    "uvsr_commit_covered_ray_query_candidate(query)}",
+                "constboolhit=query.committedstatus()=="
+                    "committed_triangle_hit;",
+                "query.committedrayt()",
+                "return!hit;"
             },
-            "the producer must retain the proven fail-open opaque first-hit ray query");
+            "the producer must evaluate nonopaque candidates and expose closest committed distance in the hit permutation");
         RequireOrdered(
             shader,
             {
@@ -418,26 +520,22 @@ namespace
                 "for(uintsampleindex=0u;sampleindex<samplecount;"
                     "++sampleindex)",
                 "skyvisibilitysamplecosinehemisphere(",
-                "skyvisibilitysample2d(pixelposition,sampleindex)",
-                "if(skyvisibilitytrace(rayorigin,direction))",
+                "skyvisibilitysample2d(dispatchposition,sampleindex)",
+                "if(skyvisibilitytrace(rayorigin,direction,hitdistance))",
                 "++visiblesamplecount;",
+                "elsenearesthitdistance=min(nearesthitdistance,hitdistance);",
                 "u_visibility[pixelposition]="
                     "float(visiblesamplecount)/float(samplecount);"
             },
-            "one binary sky query per sample must be averaged exactly once");
+            "one binary sky query per sample must be averaged once while retaining the closest covered blocker");
         Require(
             CountOccurrences(
                 shader,
-                "if(skyvisibilitytrace(rayorigin,direction))") == 1u,
+                "if(skyvisibilitytrace(rayorigin,direction,hitdistance))") == 1u,
             "the sampling loop must contain exactly one ray query");
-        RequireContains(
-            shader,
-            "skyvisibilitypermutatedwhitenoise(",
-            "the producer must retain permutated white noise");
-        RequireContains(
-            shader,
-            "skyvisibilitybluenoise(pixelposition,0u)",
-            "the producer must retain prepared void-cluster blue noise");
+        Require(
+            CountOccurrences(shader, "uvsrsampleprecomputednoise(") == 2u,
+            "the producer must draw both dimensions from shared precomputed noise");
         Require(
             CountOccurrences(shader, "g_skyvisibility.raybias") == 1u,
             "ray bias must affect origin clearance only");
@@ -485,7 +583,12 @@ namespace
             CountOccurrences(
                 shaderConfig,
                 "ray_traced_sky_visibility_cs.hlsl-tcs-egenerate") == 1u,
-            "the shader catalog must package exactly one sky-visibility Generate entry");
+            "the shader catalog must package one complete sky visibility Generate permutation axis");
+        RequireContains(
+            shaderConfig,
+            "ray_traced_sky_visibility_cs.hlsl-tcs-egenerate"
+                "-doutput_hit_distance={0,1}",
+            "the shader catalog must package the closest hit sky visibility permutation");
     }
 
     void ValidateRendererIntegration(const std::string& viewer)
@@ -507,17 +610,19 @@ namespace
         RequireContains(
             representationSelection,
             "constboolraytracedskyvisibilityselected="
+                "m_ui.representation.allowraytraversal&&"
                 "m_ui.raytracedskyvisibility.enabled&&"
                 "hasraytracedskyvisibilityconsumer("
                     "m_ui.raytracedskyvisibility)&&"
                 "supportsraytracedskyvisibility();",
-            "sky visibility must select world representation independently");
+            "sky visibility must select world representation through the shared ray traversal gate");
         RequireContains(
             representationSelection,
             "constboolworldrepresentationselected="
                 "heitzratioestimatorselected||"
+                "raytracedflashlightshadowselected||"
                 "raytracedskyvisibilityselected;",
-            "the shared TLAS consumer gate must be Heitz or sky visibility");
+            "the shared TLAS consumer gate must include every ray traversing visibility producer");
         RequireAbsent(
             representationSelection,
             "m_sunlight",
@@ -568,10 +673,10 @@ namespace
             "MSAA closest-surface resolve gate");
         RequireContains(
             multisampleGate,
-            "m_ui.screenspacedirectionalshadows.enabled||"
-                "heitzratioestimatorselected||"
+            "heitzratioestimatorselected||"
+                "raytracedflashlightshadowselected||"
                 "raytracedskyvisibilityselected;",
-            "MSAA must resolve a single full-resolution surface for sky visibility");
+            "MSAA must resolve a single full resolution surface for every ray traced visibility producer");
         RequireContains(
             multisampleGate,
             "resolveclosestmsaasurface();",
@@ -582,6 +687,11 @@ namespace
             "if(raytracedskyvisibilityexpectedtocontribute&&",
             "deferredlightingpass::inputsdeferredinputs;",
             "sky dispatch and publication");
+        const std::string_view skyTraceDispatch = ExtractSection(
+            viewer,
+            "if(raytracedskyvisibilityexpectedtocontribute&&",
+            "constboolraytracedskyvisibilitycontributed=",
+            "sky trace dispatch");
         RequireOrdered(
             dispatch,
             {
@@ -589,23 +699,29 @@ namespace
                 "skyinputs.depth=visibilitydepth;",
                 "skyinputs.material=closestsurfaceresolved",
                 "skyinputs.normals=closestsurfaceresolved",
-                "beginrendererstage(renderertimingstage::skyvisibility);",
+                "beginrendererstage("
+                    "renderertimingstage::skyvisibilityraydispatch);",
                 "skyvisibilityresult=m_raytracedskyvisibilitypass->render(",
+                "raymaterialvisibility,",
                 "m_worldspacerepresentation"
                     "->gettoplevelaccelerationstructure(),",
-                "uint32_t(m_raytracedskyvisibilityphase),",
+                "skynoisesettings,",
+                "skynoise.texture,",
+                "skynoisesettings.animate?"
+                    "uint32_t(m_raytracedskyvisibilityphase):0u,",
                 "m_scenediagonal);",
-                "endrendererstage(renderertimingstage::skyvisibility);",
+                "endrendererstage("
+                    "renderertimingstage::skyvisibilityraydispatch);",
                 "skyvisibility=skyvisibilityresult?"
                     "skyvisibilityresult.visibility:nullptr;"
             },
             "the current-frame producer must run after G-buffer resolve and publish only a valid result");
         RequireAbsent(
-            dispatch,
+            skyTraceDispatch,
             "m_sunlight",
             "the sky dispatch must not bind a directional light");
         RequireAbsent(
-            dispatch,
+            skyTraceDispatch,
             "directionalvisibilities",
             "the sky dispatch must not bind directional shadow visibility");
         RequireOrdered(
@@ -625,7 +741,7 @@ namespace
         RequireContains(
             phaseCommit,
             "if(skyvisibilityresult.dispatched&&"
-                "m_ui.raytracedskyvisibility.animatesamples)"
+                "skynoisesettings.animate)"
                 "{++m_raytracedskyvisibilityphase;}",
             "phase must advance only after an animated successful dispatch");
         RequireAbsent(
@@ -915,35 +1031,49 @@ namespace
             skyDrawer,
             {
                 "\"showenvironmentbackground\"",
-                "imgui::separatortext(\"ray-tracedskyvisibility\");",
+                "beginanimatedtreenode("
+                    "\"raytracedskyvisibility##sky\"",
                 "imgui::checkbox(\"enable##raytracedskyvisibility\"",
                 "beginanimatedtoggleregion("
                     "\"##raytracedskyvisibilitycontrols\","
                     "skyvisibility.enabled&&skyvisibilityavailable)",
-                "\"diffuseibl##raytracedskyvisibility\"",
-                "\"specularibl##raytracedskyvisibility\"",
+                "\"effectdiffuse##raytracedskyvisibility\"",
+                "\"effectspecular##raytracedskyvisibility\"",
+                "\"ratioestimator##raytracedskyvisibility\"",
+                "\"outputhitdistance##raytracedskyvisibility\"",
                 "\"samplesperpixel##raytracedskyvisibility\"",
-                "\"noisepattern##raytracedskyvisibility\"",
-                "\"animatesamples##raytracedskyvisibility\"",
+                "\"specifynoise##raytracedskyvisibility\"",
+                "\"##raytracedskyvisibilitycustomnoise\"",
+                "drawnoisesettingscontrols("
+                    "skyvisibility.noise.custom,"
+                    "skyvisibilitydefaults.noise.custom,"
+                    "\"raytracedskyvisibility\",true)",
                 "\"maxdistance##raytracedskyvisibility\"",
                 "\"raybias##raytracedskyvisibility\"",
                 "endanimatedtoggleregion();",
+                "endanimatedtreenode();",
                 "enddrawerbody();"
             },
             "the collapsed sky-visibility controls must be the final Sky drawer group in shadow-like order");
 
         const std::string_view featureGroup = ExtractSection(
             skyDrawer,
-            "imgui::separatortext(\"ray-tracedskyvisibility\");",
-            "enddrawerbody();",
+            "if(beginanimatedtreenode("
+                "\"raytracedskyvisibility##sky\"",
+            "endanimatedtreenode();",
             "sky-visibility UI group");
         Require(
-            CountOccurrences(featureGroup, "beginanimatedtoggleregion(") == 1u &&
-                CountOccurrences(featureGroup, "endanimatedtoggleregion();") == 1u,
-            "the dependent sky controls must use one balanced collapsed region");
+            CountOccurrences(featureGroup, "beginanimatedtoggleregion(") == 2u &&
+                CountOccurrences(featureGroup, "endanimatedtoggleregion();") == 2u,
+            "the effect and custom-noise controls must use balanced collapsed regions");
+        RequireContains(
+            featureGroup,
+            "sectionremainsindependentlycollapsiblewhileenabled.",
+            "the enabled sky visibility section must remain independently collapsible");
         const std::string_view enableOnly = ExtractSection(
             featureGroup,
-            "imgui::separatortext(\"ray-tracedskyvisibility\");",
+            "if(beginanimatedtreenode("
+                "\"raytracedskyvisibility##sky\"",
             "beginanimatedtoggleregion(",
             "always-visible sky enable row");
         RequireContains(
@@ -951,11 +1081,13 @@ namespace
             "imgui::checkbox(\"enable##raytracedskyvisibility\"",
             "Enable must remain visible while the dependent region is collapsed");
         for (const std::string_view hiddenControl : {
-                "diffuseibl##raytracedskyvisibility",
-                "specularibl##raytracedskyvisibility",
+                "effectdiffuse##raytracedskyvisibility",
+                "effectspecular##raytracedskyvisibility",
+                "ratioestimator##raytracedskyvisibility",
+                "outputhitdistance##raytracedskyvisibility",
                 "samplesperpixel##raytracedskyvisibility",
-                "noisepattern##raytracedskyvisibility",
-                "animatesamples##raytracedskyvisibility",
+                "specifynoise##raytracedskyvisibility",
+                "##raytracedskyvisibilitycustomnoise",
                 "maxdistance##raytracedskyvisibility",
                 "raybias##raytracedskyvisibility" })
         {
@@ -974,8 +1106,12 @@ namespace
                 "sky.visibility.enabled",
                 "sky.visibility.diffuse-ibl",
                 "sky.visibility.specular-ibl",
+                "sky.visibility.ratio-estimator",
+                "sky.visibility.output-hit-distance",
                 "sky.visibility.samples-per-pixel",
+                "sky.visibility.specify-noise",
                 "sky.visibility.noise-pattern",
+                "sky.visibility.noise-resolution",
                 "sky.visibility.animate-samples",
                 "sky.visibility.max-distance",
                 "sky.visibility.ray-bias" })
@@ -993,11 +1129,19 @@ namespace
                     "section::sky,\"on|off\")",
                 "value(\"sky.visibility.specular-ibl\",kind::boolean,"
                     "section::sky,\"on|off\")",
+                "value(\"sky.visibility.ratio-estimator\",kind::boolean,"
+                    "section::sky,\"on|off\")",
+                "value(\"sky.visibility.output-hit-distance\",kind::boolean,"
+                    "section::sky,\"on|off\")",
                 "value(\"sky.visibility.samples-per-pixel\",kind::enum,"
                     "section::sky,\"1|2|4|8|16|32|64\")",
+                "value(\"sky.visibility.specify-noise\",kind::boolean,"
+                    "section::sky,\"on|off\")",
                 "value(\"sky.visibility.noise-pattern\",kind::enum,"
-                    "section::sky,\"permutated-white-noise|"
-                    "void-cluster-blue-noise\")",
+                    "section::sky,\"spatial-white|spatial-blue|"
+                    "spatiotemporal-blue\")",
+                "value(\"sky.visibility.noise-resolution\",kind::enum,"
+                    "section::sky,\"64x64|128x128|256x256|512x512\")",
                 "value(\"sky.visibility.animate-samples\",kind::boolean,"
                     "section::sky,\"on|off\")",
                 "value(\"sky.visibility.max-distance\",kind::enum,"
@@ -1005,7 +1149,7 @@ namespace
                 "value(\"sky.visibility.ray-bias\",kind::float,"
                     "section::sky,\"worldunits0..0.1\")"
             },
-            "the Sky command catalog must expose all eight settings in UI order");
+            "the Sky command catalog must expose all twelve settings in UI order");
 
         const std::string_view dispatcher = ExtractSection(
             viewer,
@@ -1020,17 +1164,27 @@ namespace
                 "candidate.applytodiffuseibl,",
                 "path==\"sky.visibility.specular-ibl\"",
                 "candidate.applytospecularibl,",
+                "path==\"sky.visibility.ratio-estimator\"",
+                "candidate.useratioestimator,",
+                "path==\"sky.visibility.output-hit-distance\"",
+                "candidate.outputhitdistance,",
                 "path==\"sky.visibility.samples-per-pixel\"",
                 "{\"1\",0},{\"2\",1},{\"4\",2},{\"8\",3},"
                     "{\"16\",4},{\"32\",5},{\"64\",6}",
+                "path==\"sky.visibility.specify-noise\"",
+                "candidate.noise.specifynoise,",
                 "path==\"sky.visibility.noise-pattern\"",
-                "{\"permutated-white-noise\","
-                    "raytracedskyvisibilitynoisepattern::"
-                    "permutatedwhitenoise}",
-                "{\"void-cluster-blue-noise\","
-                    "raytracedskyvisibilitynoisepattern::"
-                    "voidclusterbluenoise}",
+                "{\"spatial-white\",noisepattern::spatialwhite}",
+                "{\"spatial-blue\",noisepattern::spatialblue}",
+                "{\"spatiotemporal-blue\","
+                    "noisepattern::spatiotemporalblue}",
+                "candidate.noise.custom.pattern,",
+                "path==\"sky.visibility.noise-resolution\"",
+                "{\"64x64\",noiseresolution::size64}",
+                "{\"512x512\",noiseresolution::size512}",
+                "candidate.noise.custom.resolution,",
                 "path==\"sky.visibility.animate-samples\"",
+                "candidate.noise.custom.animate,",
                 "path==\"sky.visibility.max-distance\"",
                 "{\"max\",rayvisibilitymaxdistance::maximum}",
                 "{\"32m\",rayvisibilitymaxdistance::meters32}",
@@ -1039,8 +1193,9 @@ namespace
                 "raytracedskyvisibilitymaximumraybias,",
                 "israytracedskyvisibilityconfigurationsupported(candidate)",
                 "candidate.enabled&&!m_app->supportsraytracedskyvisibility()",
+                "isvalidnoisesettings(candidate.noise.custom)",
                 "m_ui.raytracedskyvisibility=candidate;",
-                "m_app->resetimagebasedlightinghistory();"
+                "m_app->resetnoisesamplinghistory(false,false,true,false);"
             },
             "Sky commands must validate, round-trip, and reset the independent sample phase");
     }
@@ -1064,6 +1219,10 @@ int main(int argc, char** argv)
         root / "src/ray_traced_sky_visibility_cs.hlsl"));
     const std::string shaderConfig = Canonicalize(ReadSource(
         root / "src/shaders.cfg"));
+    const std::string materialVisibility = Canonicalize(ReadSource(
+        root / "src/ray_traced_material_visibility.hlsli"));
+    const std::string materialVisibilityHeader = Canonicalize(ReadSource(
+        root / "src/ray_traced_material_visibility.h"));
     const std::string viewer = Canonicalize(ReadSource(
         root / "src/uvsr.cpp"));
     const std::string deferredShader = Canonicalize(ReadSource(
@@ -1093,7 +1252,9 @@ int main(int argc, char** argv)
         passHeader,
         pass,
         shader,
-        shaderConfig);
+        shaderConfig,
+        materialVisibility,
+        materialVisibilityHeader);
     ValidateRendererIntegration(viewer);
     ValidateIblConsumers(
         deferredShader,

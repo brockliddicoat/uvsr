@@ -108,7 +108,8 @@ namespace uvsr
         bool BuildMeshDescription(
             const std::shared_ptr<MeshInfo>& mesh,
             const WorldSpaceRepresentationSettings& settings,
-            nvrhi::rt::AccelStructDesc& description)
+            nvrhi::rt::AccelStructDesc& description,
+            std::vector<uint32_t>& geometryIndices)
         {
             if (!mesh || mesh->type != MeshType::Triangles ||
                 !mesh->buffers || !mesh->buffers->indexBuffer ||
@@ -124,6 +125,7 @@ namespace uvsr
                 return false;
 
             description = nvrhi::rt::AccelStructDesc();
+            geometryIndices.clear();
             description.isTopLevel = false;
             description.debugName = "UVSR BLAS: " + mesh->name;
             description.buildFlags = GetBuildPreferenceFlags(
@@ -144,6 +146,15 @@ namespace uvsr
                     geometry->numIndices < 3u ||
                     geometry->numIndices % 3u != 0u ||
                     geometry->numVertices == 0u)
+                {
+                    continue;
+                }
+
+                const MaterialDomain domain = geometry->material
+                    ? geometry->material->domain
+                    : MaterialDomain::Count;
+                if (domain != MaterialDomain::Opaque &&
+                    domain != MaterialDomain::AlphaTested)
                 {
                     continue;
                 }
@@ -174,8 +185,12 @@ namespace uvsr
                     nvrhi::rt::GeometryDesc()
                         .setTriangles(triangles)
                         .setFlags(geometryFlags));
+                geometryIndices.push_back(
+                    uint32_t(geometry->globalGeometryIndex));
             }
-            return !description.bottomLevelGeometries.empty();
+            return !description.bottomLevelGeometries.empty() &&
+                description.bottomLevelGeometries.size() ==
+                    geometryIndices.size();
         }
 
         bool TransformsEqual(
@@ -213,6 +228,9 @@ namespace uvsr
         ++m_Status.generation;
         m_Tlas = nullptr;
         m_InstanceSnapshots.clear();
+        m_GeometryIndexMapUpload.clear();
+        m_GeometryIndexMap = nullptr;
+        m_GeometryIndexMapUploaded = false;
         m_SourceInstanceTopology.clear();
         m_Instances.clear();
         m_BlasRecords.clear();
@@ -277,6 +295,9 @@ namespace uvsr
         m_Status.state = WorldSpaceRepresentationState::Failed;
         m_Tlas = nullptr;
         m_InstanceSnapshots.clear();
+        m_GeometryIndexMapUpload.clear();
+        m_GeometryIndexMap = nullptr;
+        m_GeometryIndexMapUploaded = false;
         m_SourceInstanceTopology.clear();
         m_Instances.clear();
         m_BlasRecords.clear();
@@ -298,6 +319,9 @@ namespace uvsr
         ++m_Status.generation;
         m_Tlas = nullptr;
         m_InstanceSnapshots.clear();
+        m_GeometryIndexMapUpload.clear();
+        m_GeometryIndexMap = nullptr;
+        m_GeometryIndexMapUploaded = false;
         m_SourceInstanceTopology.clear();
         m_Instances.clear();
         m_BlasRecords.clear();
@@ -341,12 +365,25 @@ namespace uvsr
             if (found == meshIndices.end())
             {
                 nvrhi::rt::AccelStructDesc description;
-                if (!BuildMeshDescription(mesh, settings, description))
+                std::vector<uint32_t> geometryIndices;
+                if (!BuildMeshDescription(
+                        mesh,
+                        settings,
+                        description,
+                        geometryIndices))
                 {
                     log::warning(
                         "World-space representation skipped unsupported or empty mesh '%s'",
                         mesh->name.c_str());
                     continue;
+                }
+
+                if (!IsRayVisibilityGeometryMapOffsetSupported(
+                        m_GeometryIndexMapUpload.size()))
+                {
+                    Fail("the geometry index map exceeded the DXR 24-bit "
+                        "instance contribution limit");
+                    return false;
                 }
 
                 BlasRecord record;
@@ -355,7 +392,13 @@ namespace uvsr
                     mesh->isMorphTargetAnimationMesh;
                 record.topologySignature =
                     GetMeshTopologySignature(*mesh);
+                record.geometryMapOffset = uint32_t(
+                    m_GeometryIndexMapUpload.size());
                 record.description = std::move(description);
+                m_GeometryIndexMapUpload.insert(
+                    m_GeometryIndexMapUpload.end(),
+                    geometryIndices.begin(),
+                    geometryIndices.end());
                 const size_t index = m_BlasRecords.size();
                 meshIndices.emplace(mesh.get(), index);
                 m_BlasRecords.push_back(std::move(record));
@@ -366,6 +409,23 @@ namespace uvsr
         if (m_BlasRecords.empty() || m_Instances.empty())
         {
             Fail("the scene has no supported triangle instances");
+            return false;
+        }
+
+        nvrhi::BufferDesc geometryMapDescription;
+        geometryMapDescription.byteSize =
+            m_GeometryIndexMapUpload.size() * sizeof(uint32_t);
+        geometryMapDescription.structStride = sizeof(uint32_t);
+        geometryMapDescription.debugName =
+            "UVSR Ray Visibility Geometry Index Map";
+        geometryMapDescription.initialState =
+            nvrhi::ResourceStates::ShaderResource;
+        geometryMapDescription.keepInitialState = true;
+        m_GeometryIndexMap = m_Device->createBuffer(
+            geometryMapDescription);
+        if (!m_GeometryIndexMap)
+        {
+            Fail("the geometry index map buffer could not be created");
             return false;
         }
 
@@ -396,6 +456,17 @@ namespace uvsr
     {
         if (!commandList || m_NextBlas >= m_BlasRecords.size())
             return false;
+
+        if (!m_GeometryIndexMapUploaded)
+        {
+            if (!m_GeometryIndexMap || m_GeometryIndexMapUpload.empty())
+                return false;
+            commandList->writeBuffer(
+                m_GeometryIndexMap,
+                m_GeometryIndexMapUpload.data(),
+                m_GeometryIndexMapUpload.size() * sizeof(uint32_t));
+            m_GeometryIndexMapUploaded = true;
+        }
 
         BlasRecord& record = m_BlasRecords[m_NextBlas];
         if (!record.accelerationStructure)
@@ -440,15 +511,12 @@ namespace uvsr
         if (!commandList || m_Instances.empty())
             return false;
 
-        std::unordered_map<const MeshInfo*, nvrhi::rt::IAccelStruct*>
-            accelerationStructures;
+        std::unordered_map<const MeshInfo*, const BlasRecord*> records;
         for (const BlasRecord& record : m_BlasRecords)
         {
             if (!record.built || !record.accelerationStructure)
                 return false;
-            accelerationStructures.emplace(
-                record.mesh.get(),
-                record.accelerationStructure.Get());
+            records.emplace(record.mesh.get(), &record);
         }
 
         std::vector<nvrhi::rt::InstanceDesc> instanceDescriptions;
@@ -459,9 +527,9 @@ namespace uvsr
         {
             if (!instance || !instance->GetNode())
                 return false;
-            const auto found = accelerationStructures.find(
+            const auto found = records.find(
                 instance->GetMesh().get());
-            if (found == accelerationStructures.end())
+            if (found == records.end())
                 return false;
 
             nvrhi::rt::InstanceDesc description;
@@ -472,8 +540,9 @@ namespace uvsr
                 uint32_t(std::max(instance->GetInstanceIndex(), 0));
             description.setInstanceID(instanceId)
                 .setInstanceMask(0xffu)
-                .setInstanceContributionToHitGroupIndex(0u)
-                .setBLAS(found->second);
+                .setInstanceContributionToHitGroupIndex(
+                    found->second->geometryMapOffset)
+                .setBLAS(found->second->accelerationStructure);
             instanceDescriptions.push_back(description);
 
             InstanceSnapshot snapshot;
@@ -701,7 +770,7 @@ namespace uvsr
         uint32_t frameIndex,
         bool activeConsumer)
     {
-        if (!IsSupported())
+        if (!IsSupported() || !settings.allowRayTraversal)
             return false;
         if (!activeConsumer)
             return IsReady() && scene == m_Scene;

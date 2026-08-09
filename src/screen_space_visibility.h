@@ -1,5 +1,6 @@
 #pragma once
 
+#include "noise_settings.h"
 #include "screen_space_visibility_defaults.h"
 
 #include <donut/core/math/math.h>
@@ -7,6 +8,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -22,6 +24,21 @@ namespace donut::engine
 namespace uvsr
 {
     inline constexpr uint32_t ImplementedVisibilityEstimatorCount = 3;
+    inline constexpr uint32_t DefaultVisibilitySampleCount = 16u;
+    inline constexpr float VisibilityHitDistanceInvalid = 0.f;
+    inline constexpr float VisibilityHitDistanceMaximum = 65472.f;
+    inline constexpr float VisibilityHitDistanceMiss = 65504.f;
+    // AO uses the sector measure expected first bounce distance with misses
+    // censored at the configured reach. GI uses the luminance contribution
+    // weighted first bounce distance. Both preserve their raw aggregate.
+    inline constexpr bool
+        ScreenSpaceAmbientOcclusionHitDistanceMatchesSignal = true;
+    inline constexpr bool
+        ScreenSpaceIndirectDiffuseHitDistanceMatchesSignal = true;
+    inline constexpr float MinimumVisibilityStepDistributionExponent = 0.25f;
+    inline constexpr float MaximumVisibilityStepDistributionExponent = 8.f;
+    inline constexpr float MinimumVisibilityAmbientOcclusionStrength = 0.f;
+    inline constexpr float MaximumVisibilityAmbientOcclusionStrength = 8.f;
 
     enum class ScreenSpaceVisibilityQuality : uint32_t
     {
@@ -44,12 +61,6 @@ namespace uvsr
         Full,
         Half,
         Quarter
-    };
-
-    enum class VisibilitySampleScheduler : uint32_t
-    {
-        PermutatedWhiteNoise,
-        VoidClusterBlueNoise
     };
 
     enum class VisibilityDebugView : uint32_t
@@ -107,23 +118,23 @@ namespace uvsr
 
     struct SharedSamplingSettings
     {
-        uint32_t maximumSampleCount = 20;
+        uint32_t maximumSampleCount = DefaultVisibilitySampleCount;
         float radius = 3.0f;
         float thickness = 0.5f;
         float stepDistributionExponent = 2.0f;
-        VisibilitySampleScheduler scheduler =
-            VisibilitySampleScheduler::VoidClusterBlueNoise;
     };
 
     struct AmbientOcclusionSettings
     {
         bool enabled = true;
+        bool outputHitDistance = false;
         float strength = 1.0f;
     };
 
     struct IndirectDiffuseSettings
     {
         bool enabled = true;
+        bool outputHitDistance = false;
         float intensity = ScreenSpaceIndirectDiffuseReferenceIntensity;
     };
 
@@ -149,6 +160,7 @@ namespace uvsr
         VisibilityEstimator estimator =
             VisibilityEstimator::UniformSolidAngle;
         VisibilityResolution resolution = VisibilityResolution::Full;
+        NoiseOverrideSettings noise;
         SharedSamplingSettings sampling;
         AmbientOcclusionSettings ambientOcclusion;
         IndirectDiffuseSettings indirectDiffuse;
@@ -189,6 +201,13 @@ namespace uvsr
 
     struct ScreenSpaceVisibilityInputs
     {
+        using SignalProcessor = std::function<nvrhi::ITexture*(
+            nvrhi::ICommandList*,
+            nvrhi::ITexture*,
+            nvrhi::ITexture*,
+            dm::uint2,
+            bool)>;
+
         nvrhi::ITexture* depth = nullptr;
         nvrhi::ITexture* normals = nullptr;
         nvrhi::ITexture* sourceRadiance = nullptr;
@@ -210,6 +229,25 @@ namespace uvsr
         uint32_t lightingDebugView = 0u;
         nvrhi::ITexture* baseLighting = nullptr;
         nvrhi::ITexture* output = nullptr;
+        SignalProcessor processAmbientOcclusion;
+        SignalProcessor processIndirectDiffuse;
+    };
+
+    // These are the sampling resolution producer outputs before reconstruction
+    // and composition. Hit distances are R16_FLOAT when their independent
+    // setting is enabled and null otherwise. Match flags are true only when
+    // the corresponding texture exists and represents the same population as
+    // its raw aggregate signal.
+    struct ScreenSpaceVisibilityResult
+    {
+        nvrhi::ITexture* ambientVisibility = nullptr;
+        nvrhi::ITexture* indirectDiffuse = nullptr;
+        nvrhi::ITexture* ambientHitDistance = nullptr;
+        nvrhi::ITexture* indirectDiffuseHitDistance = nullptr;
+        dm::uint2 samplingSize = dm::uint2::zero();
+        bool ambientHitDistanceMatchesSignal = false;
+        bool indirectDiffuseHitDistanceMatchesSignal = false;
+        bool dispatched = false;
     };
 
     struct ScreenSpaceVisibilityTimings
@@ -222,7 +260,6 @@ namespace uvsr
         // Exact logical texel arithmetic, excluding API alignment/residency.
         uint64_t outputTextureBytes = 0u;
         uint64_t workingTextureBytes = 0u;
-        uint64_t schedulerResourceBytes = 0u;
         uint32_t activeSrvCount = 0u;
         uint32_t activeUavCount = 0u;
         uint32_t activeDispatchCount = 0u;
@@ -231,7 +268,11 @@ namespace uvsr
 
         [[nodiscard]] float CompleteEffectMs() const
         {
-            return effectEnvelopeMs;
+            // The envelope query intentionally remains available as a
+            // diagnostic, but it encloses optional denoiser callbacks. The
+            // user-facing effect cost is the sum of this pass's own GPU work
+            // so denoising can be reported independently.
+            return firstTraceMs + reconstructionMs + compositionMs;
         }
     };
 
@@ -242,7 +283,6 @@ namespace uvsr
             nvrhi::IDevice* device,
             const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
             std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses,
-            const std::vector<uint16_t>* preparedVoidClusterNoise = nullptr,
             bool deferPipelineCreation = false);
 
         [[nodiscard]] bool PreparePipelinesStep();
@@ -251,12 +291,14 @@ namespace uvsr
             return m_PipelinesReady;
         }
 
-        void Render(
+        ScreenSpaceVisibilityResult Render(
             nvrhi::ICommandList* commandList,
             const ScreenSpaceVisibilitySettings& settings,
             const donut::engine::ICompositeView& compositeView,
             const ScreenSpaceVisibilityInputs& inputs,
-            uint32_t frameIndex);
+            const NoiseSettings& noiseSettings,
+            nvrhi::ITexture* noiseTexture,
+            uint32_t sampleSequencePhase);
 
         void Deactivate();
         void ResetBindingCache();
@@ -286,6 +328,14 @@ namespace uvsr
         static constexpr uint32_t c_TimerLatency = 4;
         static constexpr uint32_t c_ConsumerVariantCount = 3;
 
+        struct TimerSlot
+        {
+            uint32_t submittedStageMask = 0u;
+            uint32_t resolvedStageMask = 0u;
+            std::array<float, static_cast<size_t>(Stage::Count)>
+                resolvedStageMilliseconds{};
+        };
+
         nvrhi::DeviceHandle m_Device;
         std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
         std::shared_ptr<donut::engine::CommonRenderPasses> m_CommonPasses;
@@ -305,16 +355,22 @@ namespace uvsr
         bool m_IndirectDiffuseResourcesEnabled = false;
         bool m_PostProcessResourcesEnabled = false;
         bool m_PackedEdgeResourcesEnabled = false;
+        bool m_AmbientHitDistanceResourcesEnabled = false;
+        bool m_IndirectHitDistanceResourcesEnabled = false;
         uint64_t m_BufferPrecisionConfigurationKey = 0u;
 
         nvrhi::TextureHandle m_RawAmbientVisibility;
         nvrhi::TextureHandle m_RawIndirectDiffuse;
+        nvrhi::TextureHandle m_RawAmbientHitDistance;
+        nvrhi::TextureHandle m_RawIndirectHitDistance;
         nvrhi::TextureHandle m_FinalAmbientVisibility;
         nvrhi::TextureHandle m_FinalIndirectDiffuse;
-        nvrhi::TextureHandle m_VoidClusterNoiseTexture;
         nvrhi::TextureHandle m_PackedEdgesTexture;
         nvrhi::TextureHandle m_DummyAmbientVisibility;
         nvrhi::TextureHandle m_DummyIndirectDiffuse;
+        nvrhi::ITexture* m_BoundCompositeAmbient = nullptr;
+        nvrhi::ITexture* m_BoundCompositeIndirect = nullptr;
+        nvrhi::ITexture* m_BoundNoiseTexture = nullptr;
 
         std::array<nvrhi::BindingSetHandle, c_ConsumerVariantCount>
             m_FilterBindingSets;
@@ -322,12 +378,9 @@ namespace uvsr
 
         std::array<std::array<nvrhi::TimerQueryHandle, c_TimerLatency>,
             static_cast<size_t>(Stage::Count)> m_TimerQueries;
-        std::array<std::array<bool, c_TimerLatency>,
-            static_cast<size_t>(Stage::Count)> m_TimerPending{};
+        std::array<TimerSlot, c_TimerLatency> m_TimerSlots{};
         std::array<bool, static_cast<size_t>(Stage::Count)> m_TimerActive{};
 
-        std::vector<uint16_t> m_VoidClusterNoiseUpload;
-        bool m_VoidClusterNoiseUploaded = false;
         uint32_t m_TimerFrame = 0u;
         bool m_TimerFrameWritable = true;
         ScreenSpaceVisibilityTimings m_Timings;
@@ -341,9 +394,10 @@ namespace uvsr
             bool indirectDiffuseEnabled,
             bool postProcessEnabled,
             bool packedEdgesEnabled,
+            bool ambientHitDistanceEnabled,
+            bool indirectHitDistanceEnabled,
             const VisibilityBufferPrecisionSettings& bufferPrecision);
         void ReleaseResources();
-        void UploadVoidClusterNoise(nvrhi::ICommandList* commandList);
         Pipeline& GetOrCreateAdvancedPipeline(
             uint64_t key,
             const char* shaderName,

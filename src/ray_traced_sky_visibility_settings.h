@@ -1,5 +1,6 @@
 #pragma once
 
+#include "noise_settings.h"
 #include "ray_visibility_max_distance.h"
 
 #include <array>
@@ -9,18 +10,15 @@
 
 namespace uvsr
 {
-    enum class RayTracedSkyVisibilityNoisePattern : uint32_t
-    {
-        PermutatedWhiteNoise,
-        VoidClusterBlueNoise,
-        Count
-    };
-
     inline constexpr int32_t RayTracedSkyVisibilityMinimumSampleRateLog2 = 0;
     inline constexpr int32_t RayTracedSkyVisibilityMaximumSampleRateLog2 = 6;
     inline constexpr uint32_t RayTracedSkyVisibilityMaximumSamplesPerPixel =
         1u << uint32_t(RayTracedSkyVisibilityMaximumSampleRateLog2);
     inline constexpr float RayTracedSkyVisibilityMaximumRayBias = 0.1f;
+    inline constexpr float RayTracedSkyVisibilityHitDistanceInvalid = 0.f;
+    inline constexpr float RayTracedSkyVisibilityHitDistanceMaximum =
+        65472.f;
+    inline constexpr float RayTracedSkyVisibilityHitDistanceMiss = 65504.f;
     inline constexpr std::array<std::string_view, 7>
         RayTracedSkyVisibilitySampleRateLabels = {
             "1", "2", "4", "8", "16", "32", "64"
@@ -30,14 +28,14 @@ namespace uvsr
     {
         bool enabled = false;
         bool applyToDiffuseIbl = true;
-        bool applyToSpecularIbl = false;
+        bool applyToSpecularIbl = true;
+        bool useRatioEstimator = true;
+        bool outputHitDistance = false;
         int32_t sampleRateLog2 = 0;
         float rayBias = 0.002f;
         RayVisibilityMaxDistance maxDistance =
             RayVisibilityMaxDistance::Maximum;
-        RayTracedSkyVisibilityNoisePattern noisePattern =
-            RayTracedSkyVisibilityNoisePattern::VoidClusterBlueNoise;
-        bool animateSamples = true;
+        NoiseOverrideSettings noise;
     };
 
     [[nodiscard]] inline constexpr bool
@@ -49,20 +47,21 @@ namespace uvsr
                 RayTracedSkyVisibilityMaximumSampleRateLog2;
     }
 
-    [[nodiscard]] inline constexpr bool
-        IsRayTracedSkyVisibilityNoisePatternSupported(
-            RayTracedSkyVisibilityNoisePattern noisePattern)
-    {
-        return noisePattern >=
-                RayTracedSkyVisibilityNoisePattern::PermutatedWhiteNoise &&
-            noisePattern < RayTracedSkyVisibilityNoisePattern::Count;
-    }
-
     [[nodiscard]] inline constexpr uint32_t
         ResolveRayTracedSkyVisibilitySampleCount(int32_t sampleRateLog2)
     {
         return IsRayTracedSkyVisibilitySampleRateSupported(sampleRateLog2)
             ? 1u << uint32_t(sampleRateLog2)
+            : 1u;
+    }
+
+    [[nodiscard]] inline constexpr uint32_t
+        ResolveRayTracedSkyVisibilityTraceCount(
+            const RayTracedSkyVisibilitySettings& settings)
+    {
+        return settings.useRatioEstimator
+            ? ResolveRayTracedSkyVisibilitySampleCount(
+                settings.sampleRateLog2)
             : 1u;
     }
 
@@ -89,8 +88,7 @@ namespace uvsr
     {
         return IsRayTracedSkyVisibilitySampleRateSupported(
                 settings.sampleRateLog2) &&
-            IsRayTracedSkyVisibilityNoisePatternSupported(
-                settings.noisePattern) &&
+            IsValidNoiseSettings(settings.noise.custom) &&
             IsRayVisibilityMaxDistanceSupported(settings.maxDistance) &&
             settings.rayBias >= 0.f &&
             settings.rayBias <= RayTracedSkyVisibilityMaximumRayBias;

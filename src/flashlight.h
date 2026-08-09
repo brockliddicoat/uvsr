@@ -14,11 +14,14 @@ namespace uvsr
     {
         bool realisticLens = true;
         bool castShadows = true;
+        bool outputHitDistance = false;
         float peakIntensityCandela = 600.f;
         float rangeMeters = 30.f;
-        float cameraLateralOffsetMeters = 0.20f;
-        float beamSizeDegrees = 25.f;
-        float beamRoundness = 0.70f;
+        float cameraHorizontalOffsetMeters = 0.17888544f;
+        float cameraVerticalOffsetMeters = -0.08944272f;
+        float beamSizeDegrees = 16.f;
+        float angularSizeDegrees = 2.8641924f;
+        float beamRoundness = 0.80f;
         float edgeSoftness = 0.60f;
         float colorLinearRed = 1.f;
         float colorLinearGreen = 0.80f;
@@ -63,12 +66,20 @@ namespace uvsr
     inline constexpr float FlashlightMaximumIntensityCandela = 4000.f;
     inline constexpr float FlashlightMinimumRangeMeters = 2.f;
     inline constexpr float FlashlightMaximumRangeMeters = 100.f;
-    inline constexpr float FlashlightMinimumCameraLateralOffsetMeters = 0.f;
-    inline constexpr float FlashlightDefaultCameraLateralOffsetMeters =
-        DefaultFlashlightSettings.cameraLateralOffsetMeters;
-    inline constexpr float FlashlightMaximumCameraLateralOffsetMeters = 0.40f;
+    inline constexpr float FlashlightMinimumCameraHorizontalOffsetMeters =
+        -0.40f;
+    inline constexpr float FlashlightMaximumCameraHorizontalOffsetMeters =
+        0.40f;
+    inline constexpr float FlashlightMinimumCameraVerticalOffsetMeters =
+        -0.40f;
+    inline constexpr float FlashlightMaximumCameraVerticalOffsetMeters =
+        0.40f;
     inline constexpr float FlashlightMinimumBeamSizeDegrees = 8.f;
     inline constexpr float FlashlightMaximumBeamSizeDegrees = 100.f;
+    inline constexpr float FlashlightMinimumAngularSizeDegrees = 0.f;
+    inline constexpr float FlashlightMaximumAngularSizeDegrees = 20.f;
+    inline constexpr float FlashlightAngularSizeReferenceDistanceMeters = 1.f;
+    inline constexpr float FlashlightMinimumCollisionRadiusMeters = 0.1f;
     inline constexpr float FlashlightMinimumHotspotSize = 0.20f;
     inline constexpr float FlashlightMaximumHotspotSize = 0.75f;
     inline constexpr float FlashlightMaximumHotspotStrength = 0.90f;
@@ -78,45 +89,100 @@ namespace uvsr
 
     inline constexpr float FlashlightTurnOnSeconds = 0.18f;
     inline constexpr float FlashlightTurnOffSeconds = 0.24f;
+    inline constexpr float FlashlightMountReleaseHalfLifeSeconds = 0.08f;
+    inline constexpr float FlashlightMountRetractionNearMeters = 0.05f;
+    inline constexpr float FlashlightMountRetractionFarMeters = 0.75f;
+    inline constexpr float FlashlightMountRetractionRadiusScale = 4.f;
+    inline constexpr float FlashlightMountRetractionLengthScale = 2.f;
     // Move the virtual emitter off the optical axis so occluders cannot hide
-    // their own projected shadows. This shoulder-scale mount can extend beyond
-    // the camera's collision envelope near close geometry. The converged aim
-    // keeps the broad beam centered at a practical indoor viewing distance.
+    // their own projected shadows. Its own emitter-aware collision sphere
+    // keeps the offset mount outside nearby geometry. Converged aim keeps the
+    // broad beam centered at a practical indoor distance after collision.
     inline constexpr float FlashlightCameraForwardOffsetMeters = 0.04f;
-    inline constexpr float FlashlightCameraRightOffsetMeters = 0.17888544f;
-    inline constexpr float FlashlightCameraDownOffsetMeters = 0.08944272f;
     inline constexpr float FlashlightAimConvergenceDistanceMeters = 6.f;
     inline constexpr float FlashlightMaximumAimLagDegrees = 5.f;
     // Every sway frequency below is an odd tenth of one radian per second.
     // Twenty pi seconds is therefore their shared phase-continuous period.
     inline constexpr float FlashlightSwayPeriodSeconds =
         62.831853071795864f;
-    inline constexpr float FlashlightEmitterRadiusMeters = 0.025f;
-    inline constexpr float FlashlightShadowNearPlaneMeters = 0.03f;
-    inline constexpr float FlashlightShadowCollisionNearScale = 0.25f;
-    inline constexpr float FlashlightShadowFovPaddingDegrees = 1.5f;
-    inline constexpr int FlashlightShadowMapResolution = 2048;
-    inline constexpr int FlashlightShadowDepthBias = 100;
-    inline constexpr float FlashlightShadowSlopeScaledDepthBias = 2.f;
+
+    struct FlashlightMountRetractionRange
+    {
+        float nearDistanceMeters = FlashlightMountRetractionNearMeters;
+        float farDistanceMeters = FlashlightMountRetractionFarMeters;
+    };
+
+    [[nodiscard]] inline FlashlightMountRetractionRange
+        ResolveFlashlightMountRetractionRange(
+            float collisionRadiusMeters,
+            float mountLengthMeters)
+    {
+        collisionRadiusMeters =
+            std::isfinite(collisionRadiusMeters) &&
+                collisionRadiusMeters > 0.f
+            ? collisionRadiusMeters
+            : FlashlightMinimumCollisionRadiusMeters;
+        mountLengthMeters =
+            std::isfinite(mountLengthMeters) && mountLengthMeters > 0.f
+            ? mountLengthMeters
+            : 0.f;
+
+        FlashlightMountRetractionRange result;
+        result.nearDistanceMeters = std::max(
+            FlashlightMountRetractionNearMeters,
+            collisionRadiusMeters * 0.5f);
+        result.farDistanceMeters = std::max(
+            FlashlightMountRetractionFarMeters,
+            std::max(
+                collisionRadiusMeters *
+                    FlashlightMountRetractionRadiusScale,
+                mountLengthMeters *
+                    FlashlightMountRetractionLengthScale));
+        result.farDistanceMeters = std::max(
+            result.farDistanceMeters,
+            result.nearDistanceMeters + 1e-4f);
+        return result;
+    }
+
+    [[nodiscard]] inline float ResolveFlashlightMountRetractionExtension(
+        float surfaceClearanceMeters,
+        const FlashlightMountRetractionRange& range)
+    {
+        if (!std::isfinite(surfaceClearanceMeters))
+            return 0.f;
+
+        const float denominator = std::max(
+            range.farDistanceMeters - range.nearDistanceMeters,
+            1e-4f);
+        const float normalizedClearance = std::clamp(
+            (surfaceClearanceMeters - range.nearDistanceMeters) /
+                denominator,
+            0.f,
+            1.f);
+        return normalizedClearance * normalizedClearance *
+            (3.f - 2.f * normalizedClearance);
+    }
 
     [[nodiscard]] inline FlashlightMountPose ResolveFlashlightMountPose(
-        float cameraLateralOffsetMeters)
+        float cameraHorizontalOffsetMeters,
+        float cameraVerticalOffsetMeters)
     {
-        const float sanitizedLateralOffsetMeters = std::clamp(
-            std::isfinite(cameraLateralOffsetMeters)
-                ? cameraLateralOffsetMeters
-                : FlashlightDefaultCameraLateralOffsetMeters,
-            FlashlightMinimumCameraLateralOffsetMeters,
-            FlashlightMaximumCameraLateralOffsetMeters);
-        const float lateralScale =
-            sanitizedLateralOffsetMeters /
-            FlashlightDefaultCameraLateralOffsetMeters;
+        const float sanitizedHorizontalOffsetMeters = std::clamp(
+            std::isfinite(cameraHorizontalOffsetMeters)
+                ? cameraHorizontalOffsetMeters
+                : DefaultFlashlightSettings.cameraHorizontalOffsetMeters,
+            FlashlightMinimumCameraHorizontalOffsetMeters,
+            FlashlightMaximumCameraHorizontalOffsetMeters);
+        const float sanitizedVerticalOffsetMeters = std::clamp(
+            std::isfinite(cameraVerticalOffsetMeters)
+                ? cameraVerticalOffsetMeters
+                : DefaultFlashlightSettings.cameraVerticalOffsetMeters,
+            FlashlightMinimumCameraVerticalOffsetMeters,
+            FlashlightMaximumCameraVerticalOffsetMeters);
 
         FlashlightMountPose result;
-        result.positionRightMeters =
-            FlashlightCameraRightOffsetMeters * lateralScale;
-        result.positionUpMeters =
-            -FlashlightCameraDownOffsetMeters * lateralScale;
+        result.positionRightMeters = sanitizedHorizontalOffsetMeters;
+        result.positionUpMeters = sanitizedVerticalOffsetMeters;
         result.positionForwardMeters =
             FlashlightCameraForwardOffsetMeters;
 
@@ -161,18 +227,30 @@ namespace uvsr
                 DefaultFlashlightSettings.rangeMeters),
             FlashlightMinimumRangeMeters,
             FlashlightMaximumRangeMeters);
-        result.cameraLateralOffsetMeters = std::clamp(
+        result.cameraHorizontalOffsetMeters = std::clamp(
             finiteOr(
-                settings.cameraLateralOffsetMeters,
-                DefaultFlashlightSettings.cameraLateralOffsetMeters),
-            FlashlightMinimumCameraLateralOffsetMeters,
-            FlashlightMaximumCameraLateralOffsetMeters);
+                settings.cameraHorizontalOffsetMeters,
+                DefaultFlashlightSettings.cameraHorizontalOffsetMeters),
+            FlashlightMinimumCameraHorizontalOffsetMeters,
+            FlashlightMaximumCameraHorizontalOffsetMeters);
+        result.cameraVerticalOffsetMeters = std::clamp(
+            finiteOr(
+                settings.cameraVerticalOffsetMeters,
+                DefaultFlashlightSettings.cameraVerticalOffsetMeters),
+            FlashlightMinimumCameraVerticalOffsetMeters,
+            FlashlightMaximumCameraVerticalOffsetMeters);
         result.beamSizeDegrees = std::clamp(
             finiteOr(
                 settings.beamSizeDegrees,
                 DefaultFlashlightSettings.beamSizeDegrees),
             FlashlightMinimumBeamSizeDegrees,
             FlashlightMaximumBeamSizeDegrees);
+        result.angularSizeDegrees = std::clamp(
+            finiteOr(
+                settings.angularSizeDegrees,
+                DefaultFlashlightSettings.angularSizeDegrees),
+            FlashlightMinimumAngularSizeDegrees,
+            FlashlightMaximumAngularSizeDegrees);
         result.beamRoundness = std::clamp(
             finiteOr(
                 settings.beamRoundness,
@@ -277,45 +355,105 @@ namespace uvsr
         return std::exp2(1.f + 3.f * (1.f - beamRoundness));
     }
 
-    [[nodiscard]] inline float EncodeFlashlightBeamShapeRadius(
-        float beamRoundness)
+    [[nodiscard]] inline float ResolveFlashlightEmitterRadiusMeters(
+        float angularSizeDegrees)
     {
-        return -(
-            UVSR_FLASHLIGHT_SHAPE_RADIUS_TAG +
-            ResolveFlashlightBeamShapeExponent(beamRoundness));
+        angularSizeDegrees = std::clamp(
+            std::isfinite(angularSizeDegrees)
+                ? angularSizeDegrees
+                : DefaultFlashlightSettings.angularSizeDegrees,
+            FlashlightMinimumAngularSizeDegrees,
+            FlashlightMaximumAngularSizeDegrees);
+        constexpr float DegreesToHalfRadians =
+            0.0087266462599716478846f;
+        return std::tan(
+            angularSizeDegrees * DegreesToHalfRadians) *
+            FlashlightAngularSizeReferenceDistanceMeters;
     }
 
-    [[nodiscard]] inline float DecodeFlashlightBeamShapeExponent(
-        float encodedRadius)
+    [[nodiscard]] inline float ResolveFlashlightCollisionRadiusMeters(
+        float angularSizeDegrees,
+        float cameraCollisionRadiusMeters)
     {
-        if (!std::isfinite(encodedRadius))
-            return UVSR_FLASHLIGHT_MIN_SHAPE_EXPONENT;
-        const float exponent =
-            -encodedRadius - UVSR_FLASHLIGHT_SHAPE_RADIUS_TAG;
+        const float safeCameraRadius =
+            std::isfinite(cameraCollisionRadiusMeters) &&
+                cameraCollisionRadiusMeters > 0.f
+            ? cameraCollisionRadiusMeters
+            : FlashlightMinimumCollisionRadiusMeters;
+        return std::max(
+            std::max(
+                safeCameraRadius,
+                FlashlightMinimumCollisionRadiusMeters),
+            ResolveFlashlightEmitterRadiusMeters(angularSizeDegrees));
+    }
+
+    [[nodiscard]] inline FlashlightBeamProfile ResolveFlashlightBeamProfile(
+        const FlashlightSettings& untrustedSettings,
+        float beamRightX,
+        float beamRightY,
+        float beamRightZ)
+    {
+        const FlashlightSettings settings =
+            SanitizeFlashlightSettings(untrustedSettings);
+        const FlashlightLobeSettings lobes =
+            ResolveFlashlightLobeSettings(settings);
+        constexpr float DegreesToHalfRadians =
+            0.0087266462599716478846f;
+
+        FlashlightBeamProfile profile{};
+        profile.beamRightX = beamRightX;
+        profile.beamRightY = beamRightY;
+        profile.beamRightZ = beamRightZ;
+        profile.shapeExponent =
+            ResolveFlashlightBeamShapeExponent(settings.beamRoundness);
+        profile.spillInnerCosine = std::cos(
+            lobes.spillInnerConeDegrees * DegreesToHalfRadians);
+        profile.spillOuterCosine = std::cos(
+            lobes.spillOuterConeDegrees * DegreesToHalfRadians);
+        profile.spillWeight = settings.realisticLens
+            ? 1.f - settings.hotspotStrength
+            : 1.f;
+        profile.hotspotWeight = settings.realisticLens
+            ? settings.hotspotStrength
+            : 0.f;
+        profile.hotspotInnerCosine = std::cos(
+            lobes.hotspotInnerConeDegrees * DegreesToHalfRadians);
+        profile.hotspotOuterCosine = std::cos(
+            lobes.hotspotOuterConeDegrees * DegreesToHalfRadians);
+        profile.emitterRadiusMeters =
+            ResolveFlashlightEmitterRadiusMeters(
+                settings.angularSizeDegrees);
+        profile.active = 1.f;
+        return profile;
+    }
+
+    [[nodiscard]] inline float AdvanceFlashlightMountExtension(
+        float current,
+        float target,
+        float deltaSeconds)
+    {
+        current = std::isfinite(current)
+            ? std::clamp(current, 0.f, 1.f)
+            : 0.f;
+        target = std::isfinite(target)
+            ? std::clamp(target, 0.f, 1.f)
+            : 0.f;
+
+        // The collision lookahead already eases retraction spatially before
+        // contact, so decreases follow that validated envelope without adding
+        // temporal lag. Restoring the authored offset uses a frame-rate-
+        // independent half-life to avoid a visible pop.
+        if (target <= current)
+            return target;
+        if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.f)
+            return current;
+
+        const float blend = 1.f - std::exp2(
+            -deltaSeconds / FlashlightMountReleaseHalfLifeSeconds);
         return std::clamp(
-            exponent,
-            UVSR_FLASHLIGHT_MIN_SHAPE_EXPONENT,
-            UVSR_FLASHLIGHT_MAX_SHAPE_EXPONENT);
-    }
-
-    [[nodiscard]] inline int EncodeFlashlightBeamAxisComponent(
-        float component)
-    {
-        component = std::clamp(
-            std::isfinite(component) ? component : 0.f,
-            -1.f,
-            1.f);
-        return int(std::lround(
-            component * UVSR_FLASHLIGHT_AXIS_QUANTIZATION));
-    }
-
-    [[nodiscard]] inline float DecodeFlashlightBeamAxisComponent(
-        int component)
-    {
-        return std::clamp(
-            float(component) / UVSR_FLASHLIGHT_AXIS_QUANTIZATION,
-            -1.f,
-            1.f);
+            current + (target - current) * blend,
+            current,
+            target);
     }
 
     [[nodiscard]] inline float AdvanceFlashlightTransition(
@@ -353,13 +491,6 @@ namespace uvsr
     [[nodiscard]] inline bool ShouldSubmitFlashlight(float transition)
     {
         return GetFlashlightEmissionScale(transition) > 0.f;
-    }
-
-    [[nodiscard]] inline bool ShouldRenderFlashlightShadow(
-        float transition,
-        bool castShadows = true)
-    {
-        return castShadows && ShouldSubmitFlashlight(transition);
     }
 
     [[nodiscard]] inline float GetFlashlightAimCorrectionBlend(

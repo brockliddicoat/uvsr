@@ -1,6 +1,7 @@
 #pragma once
 
-#include "directional_light_visibility.h"
+#include "direct_light_visibility.h"
+#include "flashlight_shared.h"
 
 #include <donut/core/math/math.h>
 #include <donut/engine/BindingCache.h>
@@ -68,7 +69,9 @@ public:
         nvrhi::ICommandList* commandList,
         const donut::engine::ICompositeView& compositeView,
         const donut::render::DeferredLightingPass::Inputs& inputs,
-        const uvsr::DirectionalLightVisibilities& directionalLightVisibilities,
+        const uvsr::DirectLightVisibilities& directLightVisibilities,
+        const donut::engine::Light* flashlight,
+        const FlashlightBeamProfile& flashlightBeamProfile,
         const donut::engine::LightProbe* environment,
         nvrhi::ITexture* skyVisibility,
         bool applySkyVisibilityToDiffuseIbl,
