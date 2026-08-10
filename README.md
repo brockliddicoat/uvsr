@@ -2,7 +2,7 @@
 
 **Unified Visibility Stochastic Rendering Engine**
 
-[![License: Polyform Noncommercial 1.0.0](https://img.shields.io/badge/license-Polyform_Noncommercial_1.0.0-2f81f7)](LICENSE.md)
+[![License: Polyform Noncommercial](https://img.shields.io/badge/license-Polyform_Noncommercial-2f81f7)](LICENSE.md)
 ![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C?logo=cplusplus&logoColor=white)
 ![HLSL](https://img.shields.io/badge/HLSL-shaders-0078D4?logo=microsoft&logoColor=white)
 [![Engineering Docs](https://img.shields.io/badge/docs-engineering-2ea44f?logo=readthedocs&logoColor=white)](#engineering-documentation)
@@ -126,7 +126,7 @@ build variants and the complete validation workflow are documented below.
 ## Licensing
 
 - **Community Use:** UVSR's first-party code is source-available under the
-  [Polyform Noncommercial License 1.0.0](LICENSE.md). Noncommercial use and
+  [Polyform Noncommercial License](LICENSE.md). Noncommercial use and
   modification are welcome; when sharing, preserve the license and Required
   Notice.
 - **Commercial Use:** Commercial use or sublicensing requires a separate
