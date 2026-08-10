@@ -1,7 +1,5 @@
 ![UVSR Engine banner](assets/branding/uvsr-banner.png)
 
-# UVSR
-
 **Unified Visibility Stochastic Rendering Engine**
 
 [![License: Polyform Noncommercial](https://img.shields.io/badge/license-Polyform_Noncommercial-2f81f7)](LICENSE.md)
