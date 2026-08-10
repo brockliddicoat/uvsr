@@ -1,0 +1,44 @@
+name: Legal Inventory
+
+on:
+  pull_request:
+    paths:
+      - "LICENSE"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "legal/**"
+      - "src/third_party/**"
+      - "third_party/**"
+      - "tools/check_legal_inventory.py"
+      - ".github/workflows/legal-inventory.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "LICENSE"
+      - "README.md"
+      - "CONTRIBUTING.md"
+      - "legal/**"
+      - "src/third_party/**"
+      - "third_party/**"
+      - "tools/check_legal_inventory.py"
+      - ".github/workflows/legal-inventory.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Set Up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Check Legal Inventory
+        run: python tools/check_legal_inventory.py

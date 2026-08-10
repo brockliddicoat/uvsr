@@ -1,5 +1,14 @@
 # Google Filament Anti-Aliasing Attribution
 
+## Record
+
+- Relationship: Adapted Implementation
+- Status: Current
+- Confidence: Confirmed
+- Upstream: [Google Filament](https://github.com/google/filament)
+- Revision: `47c86eec22e56d75897e16651eb4d2abd64fc29a`
+- Governing Terms: Apache License 2.0
+
 UVSR's Fast Approximate anti-aliasing shader is an independently expressed,
 modified HLSL adaptation of the PC-console FXAA path distributed by Google
 Filament at commit `47c86eec22e56d75897e16651eb4d2abd64fc29a`:
@@ -45,8 +54,8 @@ greatest minimum toroidal distance to the points already chosen. UVSR stores
 only the generated coordinate table; it does not bundle the generator code.
 
 Google Filament is licensed under the Apache License, Version 2.0. The complete
-license is distributed as `licenses/Apache-2.0.txt` in UVSR binary packages and
-as `third_party/licenses/Apache-2.0.txt` in the source tree.
+license is available at [Apache-2.0.txt](../licenses/Apache-2.0.txt) and is
+distributed as `licenses/Apache-2.0.txt` in UVSR binary packages.
 
 ## G3D Notice
 
@@ -54,9 +63,9 @@ G3D Innovation Engine, <http://casual-effects.com/g3d>
 
 Copyright 2000-2018, Morgan McGuire. All rights reserved.
 
-Available under the BSD License. The complete BSD 2-Clause text is distributed
-as `licenses/BSD-2-Clause.txt` in UVSR binary packages and as
-`third_party/licenses/BSD-2-Clause.txt` in the source tree.
+Available under the BSD License. The complete BSD 2-Clause text is available at
+[BSD-2-Clause.txt](../licenses/BSD-2-Clause.txt) and is distributed as
+`licenses/BSD-2-Clause.txt` in UVSR binary packages.
 
 ## NVIDIA FXAA Notice
 
@@ -75,3 +84,23 @@ LOSS OF BUSINESS PROFITS, BUSINESS INTERRUPTION, LOSS OF BUSINESS INFORMATION,
 OR ANY OTHER PECUNIARY LOSS) ARISING OUT OF THE USE OF OR INABILITY TO USE
 THIS SOFTWARE, EVEN IF NVIDIA HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
 DAMAGES.
+
+## UVSR Relationship
+
+The Filament FXAA path was translated and modified, while Filament's temporal
+jitter definitions were adapted to UVSR's DirectX 12 camera contract. The G3D
+and NVIDIA material below is indirect lineage carried by Filament rather than
+evidence that UVSR independently fetched those implementations. The Sobol table
+is generated data and does not include its generator source.
+
+## Evidence
+
+- Fast Approximate anti-aliasing shader: `src/fast_approximate_aa_ps.hlsl`
+- Temporal anti-aliasing reference data: `src/temporal_aa_reference.h`
+- Commit `a9a3dd10d7c8cf21e23c6642f1f93f4a7142192f`
+
+## Commercial Clearance
+
+Filament's Apache terms and the complete G3D and NVIDIA notices must remain
+with redistributed adaptations. This record does not grant rights beyond those
+upstream terms.

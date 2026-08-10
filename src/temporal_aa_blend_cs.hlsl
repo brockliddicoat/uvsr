@@ -3,7 +3,7 @@
 // This code is licensed under the MIT License (MIT).
 //
 // Portions are adapted from Microsoft DirectX Graphics Samples and distributed
-// under third_party/microsoft_directx_graphics_samples/LICENSE.txt. UVSR
+// under legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt. UVSR
 // adaptations cover NVRHI, RGBA16F motion validity, arbitrary dimensions,
 // infinite reverse-Z depth, and the compile-time experiment dimensions below.
 //

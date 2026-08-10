@@ -10,7 +10,7 @@
 //
 // Adapted from Microsoft DirectX Graphics Samples for UVSR's RGBA16F scene
 // target and arbitrary output dimensions. Distributed under
-// third_party/microsoft_directx_graphics_samples/LICENSE.txt.
+// legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt.
 //
 
 #ifndef TAA_SHARPEN_INPUT_PREMULTIPLIED

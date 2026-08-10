@@ -659,11 +659,11 @@ int main(int argc, char** argv)
         const std::string fastApproximateShader = ReadTextFile(
             sourceDirectory / "fast_approximate_aa_ps.hlsl");
         const std::string fastApproximateAttribution = ReadTextFile(
-            sourceDirectory.parent_path() / "third_party" /
-                "google_filament_fxaa" / "ATTRIBUTION.md");
+            sourceDirectory.parent_path() / "legal" / "sources" /
+                "google-filament-fxaa.md");
         const std::string bsdLicense = ReadTextFile(
-            sourceDirectory.parent_path() / "third_party" /
-                "licenses" / "BSD-2-Clause.txt");
+            sourceDirectory.parent_path() / "legal" / "licenses" /
+                "BSD-2-Clause.txt");
         const std::string shaderManifest = ReadTextFile(
             sourceDirectory / "shaders.cfg");
         const auto lacksRetiredTaaText = [](const std::string& text)

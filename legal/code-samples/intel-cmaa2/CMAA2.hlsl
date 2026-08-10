@@ -264,7 +264,7 @@ lpfloat3 LoadSourceColor( uint2 pixelPos, int2 offset, int sampleIndex )
 // R11G11B10 conversion code below is from Microsoft DirectX Graphics Samples.
 // Copyright (c) Microsoft. MIT license. Author: James Stanard.
 // The complete permission notice is stored in
-// third_party/microsoft_directx_graphics_samples/LICENSE.txt.
+// legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt.
 //
 // The standard 32-bit HDR color format.  Each float has a 5-bit exponent and no sign bit.
 uint Pack_R11G11B10_FLOAT( float3 rgb )

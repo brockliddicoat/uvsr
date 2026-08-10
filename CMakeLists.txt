@@ -301,6 +301,7 @@ file(GLOB_RECURSE UVSR_SHADER_INPUTS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsli"
+    "${CMAKE_CURRENT_SOURCE_DIR}/legal/code-samples/*.hlsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/shaders/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/include/donut/shaders/*"
 )
@@ -337,6 +338,7 @@ function(uvsr_add_shader_bundle
             --binaryBlob
             --outputExt .bin
             -I "${CMAKE_CURRENT_SOURCE_DIR}/donut/include"
+            -I "${CMAKE_CURRENT_SOURCE_DIR}"
             -D TARGET_D3D12
             --compiler "${SHADERMAKE_DXC_PATH}"
             --shaderModel 6_5
@@ -1268,25 +1270,83 @@ if (UVSR_BUILD_APPLICATION)
             "${UVSR_UI_HEADER_FONT_SOURCE}"
             "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI-Semibold.ttf"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/microsoft_directx_graphics_samples/LICENSE.txt"
+            "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/UVSR-PolyForm-Noncommercial-1.0.0.md"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Microsoft-DirectX-Graphics-Samples.txt"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/licenses/Apache-2.0.txt"
+            "${CMAKE_CURRENT_SOURCE_DIR}/legal/licenses/Apache-2.0.txt"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Apache-2.0.txt"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/licenses/BSD-2-Clause.txt"
+            "${CMAKE_CURRENT_SOURCE_DIR}/legal/licenses/BSD-2-Clause.txt"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/BSD-2-Clause.txt"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/google_filament_fxaa/ATTRIBUTION.md"
+            "${CMAKE_CURRENT_SOURCE_DIR}/legal/licenses/Intel-CMAA2-Apache-2.0.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Intel-CMAA2-Apache-2.0.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/legal/licenses/IOLITE-AgX-MIT.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/IOLITE-AgX-MIT.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/legal/sources/google-filament-fxaa.md"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Google-Filament-FXAA-Attribution.md"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/donut/LICENSE.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/NVIDIA-Donut-MIT.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/donut/ThirdPartyLicenses.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Donut-Third-Party-Licenses.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/donut/nvrhi/LICENSE.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/NVIDIA-NVRHI-MIT.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/donut/ShaderMake/LICENSE.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/NVIDIA-ShaderMake-MIT.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/donut/thirdparty/imgui/LICENSE.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Dear-ImGui-MIT.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/geist/LICENSE.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Geist-OFL-1.1.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/intel_sponza/LICENSE.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Intel-PBR-Sponza.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/bistro_interior_retextured/LICENSE.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Amazon-Lumberyard-Bistro.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/san_miguel_retextured/LICENSE.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/San-Miguel-2.1.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/blender_classroom/LICENSE.txt"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Blender-Classroom-CC0-1.0.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/environments/README.md"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Poly-Haven-Environments.md"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/legal/documentation/THIRD-PARTY-NOTICES.md"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/THIRD-PARTY-NOTICES.md"
     )
+    if (EXISTS "${DirectX-Headers_SOURCE_DIR}/LICENSE")
+        add_custom_command(TARGET uvsr POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${DirectX-Headers_SOURCE_DIR}/LICENSE"
+                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Microsoft-DirectX-Headers-MIT.txt")
+    endif()
+    if (EXISTS "${DONUT_D3D_AGILITY_SDK_PATH}/LICENSE.txt")
+        add_custom_command(TARGET uvsr POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${DONUT_D3D_AGILITY_SDK_PATH}/LICENSE.txt"
+                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Microsoft-D3D12-Agility-SDK-Terms.txt"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${DONUT_D3D_AGILITY_SDK_PATH}/LICENSE-CODE.txt"
+                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Microsoft-D3D12-Agility-SDK-Code-MIT.txt")
+    endif()
     if (UVSR_WITH_NRD)
         add_custom_command(TARGET uvsr POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${nrd_SOURCE_DIR}/LICENSE.txt"
                 "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/NRD-LICENSE.txt"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
-                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/THIRD_PARTY_NOTICES.md")
+        )
     endif()
 endif()
