@@ -12313,7 +12313,7 @@ private:
             !m_app->SupportsHeitzRatioEstimatorShadows())
         {
             error =
-                "Heitz ratio estimator shadows require DXR 1.1 support and "
+                "Correlated ratio sun shadows require DXR 1.1 support and "
                 "single-sample rendering.";
             return false;
         }
@@ -20771,7 +20771,7 @@ int WINAPI WinMain(
     const char* apiName = nvrhi::utils::GraphicsAPIToString(
         deviceManager->GetGraphicsAPI());
     const std::string windowTitle =
-        "UVSR Renderer " + std::string(apiName) +
+        "UVSR Engine " + std::string(apiName) +
         " (" + std::string(UVSR_GIT_COMMIT) + ")";
     if (!deviceManager->CreateWindowDeviceAndSwapChain(
             deviceParams,

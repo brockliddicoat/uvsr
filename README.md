@@ -1,13 +1,13 @@
 # UVSR
 
-**Unified Visibility Stochastic Rendering**
+**Unified Visibility Stochastic Rendering Engine**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 88,233 non-blank source lines.
+**First-Party Lines of Code:** 88,249 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,603 non-blank source lines.
 
-**Total Lines of Code:** 475,836 non-blank source lines.
+**Total Lines of Code:** 475,852 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -18,26 +18,25 @@ with `tools/update_readme_line_counts.cmd --write`.
 UVSR is a focused DirectX 12 research renderer built on NVIDIA's pinned Donut
 framework and NVRHI. It ships with five ready-to-run research scenes, a
 production-focused deferred PBR path, and independently testable visibility,
-anti-aliasing, shadow, and denoising systems.
+anti-aliasing, shadow, and diagnostic systems.
 
 ## Renderer Highlights
 
-- **Unified Screen-Space Visibility.** Stochastic AO and one-bounce diffuse GI
-  share traversal, exact sample budgets, noise, and reconstruction; each can
-  emit physical hit distance.
-- **DXR 1.1 Visibility.** Inline ray queries drive sky, sun, and finite
-  flashlight visibility with alpha-tested cutouts. Sky and sun also expose
-  correlated ratio estimation.
-- **NVIDIA NRD.** Optional ReBLUR, ReLAX, and SIGMA paths independently denoise
-  AO, GI, sky visibility, sun shadows, and flashlight shadows.
+- **Visibility-Bitmask AO and GI.** A 32-sector mask converts finite-thickness
+  screen-space samples into ambient visibility and one-bounce diffuse
+  transport; newly claimed sectors prevent double-counting.
+- **DXR 1.1 Visibility.** Material-aware inline ray queries drive sun, sky, and
+  flashlight visibility with alpha-tested cutouts.
 - **Deferred PBR.** A packed G-buffer feeds material-aware lighting, SH9 diffuse
   IBL, and prefiltered GGX specular IBL; median-luminance exposure feeds AgX.
 - **Composable Anti-Aliasing.** Deferred 2x-16x MSAA, TAA with Filament and
   Sobol jitter, display-linear Fast Approximate AA, and CMAA2 can be combined.
 - **Noise Research Stack.** Deterministic white, blue, and 64-layer
   spatiotemporal blue-noise textures support global and per-effect sampling.
-- **Physical Flashlight.** A two-lobe analytical emitter provides finite
-  ray-traced penumbrae, animated sampling, and a collision-safe camera mount.
+- **Physical Diagnostic Flashlight.** A dedicated scene spot light uses shared
+  runtime profile data for its two-lobe beam and finite-emitter ray-traced
+  shadows; photometry, color, shape, emitter size, collision-aware mount, and
+  motion are tunable.
 - **Shared Ray Representation.** One BLAS/TLAS system and master traversal gate
   serve every ray-query effect without erasing individual settings.
 - **Explicit Lighting Gates.** Ambient Fill and contribution gates make direct
@@ -50,31 +49,27 @@ anti-aliasing, shadow, and denoising systems.
 - **Compact Runtime Surface.** The build retains 306 first-party shader
   permutations, twelve Settings drawers, and 184 commands without dormant
   experiments.
-- **Five Packaged Scenes.** Sponza Decorated, Sponza Plain, Bistro Interior,
-  San Miguel, and Classroom Interior need no separate downloads or conversion.
+- **GitHub-Safe Scene Packaging.** Five scenes ship ready-to-run; the Bistro and
+  San Miguel repacks copy glTF buffer views byte-for-byte into standard external
+  buffers below GitHub's per-file limit, with no runtime reconstruction.
 - **Extensive Documentation.** The [engineering library](#engineering-documentation)
   records architecture, equations, validation, provenance, negative results,
   and restoration boundaries.
 
+### Ratio Estimators
+
+- **Sun Shadows.** Matched visible and unshadowed RGB material responses reduce
+  current-frame soft-shadow variance without private history.
+- **Sky Visibility.** A separate 1-64-sample cosine-hemisphere visible-ray ratio
+  drives diffuse and specular environment lighting.
+
+Both retain raw single-ray routes and use material-aware DXR 1.1 queries.
+
 ## Coming Soon
 
-This section summarizes stable work that is active but not yet merged into
-`main`. Experimental entries are not promises that the work will ship.
-
-- **Main Lighting, Denoising, and Controls — In Development**
-  (`codex/main-lighting-denoising-controls`). Integrates the ray traversal
-  master switch, physical flashlight shadows, hit distance producers, ratio
-  choices, alpha-tested visibility, NVIDIA NRD, shared precomputed noise,
-  automatic display exposure, updated lighting defaults, and the loading
-  progress estimate while removing production screen space directional shadows.
-- **Screen Space Visibility Shared Shader Helpers — In Review**
-  (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidates shared
-  depth, pixel coordinate, and safe normal helpers without changing equations,
-  bindings, UI, or scenes.
-- **Visibility Degenerate Path Test Coverage — In Review**
-  (`devin/1784102780-visibility-test-coverage`, PR #11). Adds reference coverage
-  for degenerate clipping, radial mask edge cases, and blue noise rank fields
-  without changing runtime rendering.
+No renderer feature is currently announced for integration. Local experiments
+and uncommitted candidates remain under evaluation and are not commitments to
+ship.
 
 ## Build and Run
 
@@ -92,9 +87,8 @@ ctest --test-dir build -C Release --output-on-failure
 .\build\bin\uvsr.exe
 ```
 
-The first configure may download Microsoft's Direct3D 12 Agility SDK. The
-normal build leaves optional NVIDIA NRD processing disabled; its license-gated
-build flags and the complete validation workflow are documented below.
+The first configure may download Microsoft's Direct3D 12 Agility SDK. Optional
+build variants and the complete validation workflow are documented below.
 
 ## Engineering Documentation
 
@@ -107,10 +101,9 @@ build flags and the complete validation workflow are documented below.
 - [Screen Space Visibility](docs/screen-space-visibility.md) documents the
   shared AO/GI traversal, estimators, reconstruction, memory contracts,
   supported quality profiles, and validation boundary.
-- [Heitz Ratio Estimator Shadows](docs/heitz-ratio-estimator-shadows.md)
-  documents the single dispatch matched RGB estimator, current frame sampling,
-  hard shadow path, ray origin safety, independent composition, shared
-  BLAS/TLAS representation, and limits.
+- [Ratio Estimation](docs/ratio-estimation.md) distinguishes correlated sun
+  shadow estimation from the sky visible-ray ratio and documents their
+  sampling, single-ray routes, ray safety, composition, and limits.
 - [Noise Sampling and Asset Provenance](docs/noise.md) defines global
   inheritance, effect overrides, precomputed assets, centered sampling,
   temporal progression, and provenance.

@@ -1,4 +1,4 @@
-# Heitz Ratio Estimator Shadows
+# A Fast and Stable Visibility Ratio Estimator for Correlated Spherical Integrals
 
 ## Record
 
@@ -18,7 +18,7 @@ resource, sampling, and UI implementation is first-party.
 
 ## Evidence
 
-- [Design Documentation](../../docs/heitz-ratio-estimator-shadows.md)
+- [Design Documentation](../../docs/ratio-estimation.md)
 - [Implementation](../../src/heitz_ratio_estimator_shadows.cpp)
 - [Compute Shader](../../src/heitz_ratio_estimator_shadows_cs.hlsl)
 - Commit `ca4bd62bf4c052791103dbd49e0dc48e301fdddf`

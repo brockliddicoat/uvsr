@@ -185,6 +185,23 @@ int main(int argc, char** argv)
     bool passed = true;
 
     passed &= ExpectContains(
+        viewer,
+        "\"UVSR Engine \" + std::string(apiName)",
+        "runtime window title");
+    passed &= ExpectAbsent(
+        viewer,
+        "\"UVSR Renderer \"",
+        "retired runtime window title");
+    passed &= ExpectAbsent(
+        viewer,
+        "\"Heitz ratio estimator shadows require",
+        "person-named visible ratio estimator error");
+    passed &= ExpectAbsent(
+        heitzShadows,
+        "\"Heitz ratio estimator shadow",
+        "person-named visible ratio estimator logs");
+
+    passed &= ExpectContains(
         gpuPerformanceMonitorHeader,
         "bool utilizationValid = false;",
         "graphics utilization validity transport");

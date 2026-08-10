@@ -134,7 +134,7 @@ namespace uvsr
         if (!m_Supported)
         {
             log::warning(
-                "Heitz ratio estimator shadows require DXR 1.1 ray queries, RGBA16F UAV support, and R8_UNORM sampling");
+                "Correlated ratio sun shadows require DXR 1.1 ray queries, RGBA16F UAV support, and R8_UNORM sampling");
             return;
         }
 
@@ -223,7 +223,7 @@ namespace uvsr
         {
             m_Supported = false;
             log::error(
-                "The Heitz ratio estimator shadow pipeline could not be created");
+                "The correlated ratio sun shadow pipeline could not be created");
         }
     }
 
@@ -384,7 +384,7 @@ namespace uvsr
                 commandList && worldTlas && light)
             {
                 log::error(
-                    "Heitz ratio estimator shadows received incomplete or unsupported inputs");
+                    "Correlated ratio sun shadows received incomplete or unsupported inputs");
                 m_ReportedInvalidInput = true;
             }
             return {};
@@ -398,7 +398,7 @@ namespace uvsr
             if (!m_ReportedInvalidInput)
             {
                 log::error(
-                    "Heitz ratio estimator shadows received an invalid scene extent");
+                    "Correlated ratio sun shadows received an invalid scene extent");
                 m_ReportedInvalidInput = true;
             }
             return {};
@@ -439,7 +439,7 @@ namespace uvsr
             if (!m_ReportedInvalidInput)
             {
                 log::error(
-                    "Heitz ratio estimator shadow textures were missing, mismatched, or could not be allocated");
+                    "Correlated ratio sun shadow textures were missing, mismatched, or could not be allocated");
                 m_ReportedInvalidInput = true;
             }
             return {};
@@ -463,7 +463,7 @@ namespace uvsr
             if (!m_ReportedInvalidInput)
             {
                 log::error(
-                    "Heitz ratio estimator shadow binding set creation failed");
+                    "Correlated ratio sun shadow binding set creation failed");
                 m_ReportedInvalidInput = true;
             }
             return {};

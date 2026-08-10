@@ -65,7 +65,7 @@ license decision before it should be strengthened.
 
 ## Current Algorithms and Reference Material
 
-- [Heitz Ratio Estimator Shadows](heitz-ratio-estimator-shadows.md)
+- [A Fast and Stable Visibility Ratio Estimator for Correlated Spherical Integrals](heitz-ratio-estimator-shadows.md)
 - [Demofox Blue-Noise Soft Shadows](demofox-blue-noise-soft-shadows.md)
 - [NVIDIA Spatiotemporal Blue Noise](nvidia-spatiotemporal-blue-noise.md)
 - [Screen-Space Indirect Lighting With Visibility Bitmask](screen-space-indirect-lighting-visibility-bitmask.md)

@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
 START_MARKER = "<!-- uvsr-codebase-size:start -->"
 END_MARKER = "<!-- uvsr-codebase-size:end -->"
-TAGLINE = "**Unified Visibility Stochastic Rendering**"
+TAGLINE = "**Unified Visibility Stochastic Rendering Engine**"
 
 FIRST_PARTY_SUFFIXES = {
     ".bat",

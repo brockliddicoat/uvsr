@@ -71,9 +71,9 @@ centering experiment is documented in
 
 Direct visibility has separate fixed slots for the exact flashlight and primary
 sun pointers. The flashlight slot consumes its finite ray traced scalar
-visibility. The sun slot consumes either the RGB Heitz ratio or a raw scalar
-visibility replicated across RGB. A mismatched or unavailable producer falls
-back to neutral white. Each selected visibility is multiplied once into both
+visibility. The sun slot consumes either the correlated RGB ratio or a raw
+scalar visibility replicated across RGB. A mismatched or unavailable producer
+falls back to neutral white. Each selected visibility is multiplied once into both
 the diffuse and specular contribution of its source light.
 
 When Shadows selects SIGMA and the required raw visibility plus physical hit

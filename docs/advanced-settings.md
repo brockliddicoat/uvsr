@@ -417,7 +417,7 @@ contract. Alpha-tested sun-shadow occluders commit only where base-color alpha
 passes the material cutoff; blended and transmissive materials do not become
 binary shadow blockers.
 
-See [Heitz Ratio Estimator Shadows](heitz-ratio-estimator-shadows.md) for the
+See [Ratio Estimation](ratio-estimation.md) for the
 mathematical contract and the raw denoising route.
 
 Screen space directional shadows are absent from main. Their implementation is

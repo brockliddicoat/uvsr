@@ -1,13 +1,46 @@
-# Heitz Ratio Estimator Shadows
+# Ratio Estimation
 
-UVSR's public **Ray Traced Shadows** feature includes the correlated stochastic
-shadow estimator described in Eric Heitz, Stephen Hill, and Morgan McGuire's
-[2018 paper](https://casual-effects.com/research/Heitz2018Shadow/Heitz2018Shadow.pdf)
-and [SIGGRAPH talk](https://casual-effects.com/research/Heitz2018Shadow/Heitz2018SIGGRAPHTalk.pdf).
-The UI keeps the technique name out of the main group label and exposes Ratio
-Estimator as an independent producer choice.
+UVSR exposes **Ratio Estimator** as an independent producer choice for
+ray-traced sun shadows and sky visibility. Both are current-frame multisample
+estimators, but they resolve different quantities and are not interchangeable.
 
-## Technique Contract
+## Estimator Families
+
+- **Sun Shadows.** Correlated visible and unshadowed RGB material responses
+  share every sample except binary ray visibility. This is UVSR's
+  variance-reduction adaptation of the estimator described in Eric Heitz,
+  Stephen Hill, and Morgan McGuire's
+  [2018 paper](https://casual-effects.com/research/Heitz2018Shadow/Heitz2018Shadow.pdf)
+  and [SIGGRAPH talk](https://casual-effects.com/research/Heitz2018Shadow/Heitz2018SIGGRAPHTalk.pdf).
+- **Sky Visibility.** A separate cosine-hemisphere estimator resolves
+  `visibleSampleCount / sampleCount` and applies that geometric visibility to
+  the selected diffuse and specular environment-lighting consumers.
+
+Both settings offer 1, 2, 4, 8, 16, 32, or 64 samples while Ratio Estimator is
+on. Turning it off selects each producer's raw single-ray route. Neither
+producer owns private temporal history.
+
+## Sky Visibility Contract
+
+Sky visibility runs at full resolution in the current frame and samples the
+cosine-weighted hemisphere around the geometric normal. With Ratio Estimator
+on, the selected 1 through 64 rays resolve `visibleSampleCount / sampleCount`
+into scalar geometric visibility. Turning it off traces one raw stochastic ray.
+
+Opaque and alpha-tested candidates use the shared material-aware traversal
+contract. The ray origin uses geometric-normal clearance, the selected
+nonnegative **Ray Bias**, and a representable-position nudge. **Max Distance**
+selects either the scene-diagonal reference or a finite bounded approximation;
+**Output Hit Distance** independently records the nearest committed blocker.
+
+The resolved scalar modulates only the selected diffuse and specular
+environment-lighting consumers. Diffuse application also affects environment
+radiance before it becomes the GI source. The estimator does not alter direct
+lights, direct shadows, emissive, or AO, and it does not directly multiply the
+traced-indirect output. Its single scalar is not roughness- or
+reflection-direction-resolved specular visibility.
+
+## Directional Shadow Contract
 
 With **Ratio Estimator** on, one compute dispatch accumulates matched RGB
 estimates of the unshadowed response `U_N` and visible response `S_N`. Each pair
@@ -27,7 +60,7 @@ The matched numerator and denominator remain in registers and are divided in
 the current dispatch. The ratio route owns no private spatial filter or temporal
 history. Final image TAA can still accumulate the completed frame.
 
-## Raw Denoising Route
+## Single-Ray Shadow Route
 
 Turning **Ratio Estimator** off selects one stochastic scalar visibility ray for
 a positive angular size. The scalar is replicated across RGB so the same direct
@@ -84,7 +117,7 @@ in any of the three effects.
 ## Softness and Sampling
 
 The light's **Angular Size** is a full angular diameter in degrees. UVSR's
-primary sun initializes to `0.2 deg` and irradiance `10`. The ray tracer converts
+primary sun initializes to `0.2 deg` and irradiance `8`. The ray tracer converts
 half the angular size to a cone radius and samples directions uniformly over
 that cone.
 

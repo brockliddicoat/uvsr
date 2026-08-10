@@ -18,7 +18,7 @@ image, or numeric preset is identified as copied.
 
 ## Evidence
 
-- [Ratio Estimator Documentation](../../docs/heitz-ratio-estimator-shadows.md)
+- [Ratio Estimator Documentation](../../docs/ratio-estimation.md)
 - [Ratio Estimator Shader](../../src/heitz_ratio_estimator_shadows_cs.hlsl)
 
 ## Commercial Clearance
