@@ -22,48 +22,43 @@ anti-aliasing, shadow, and diagnostic systems.
 
 ## Renderer Highlights
 
-- **Visibility-Bitmask AO and GI.** A 32-sector mask converts finite-thickness
+- **Visibility-Bitmask AO and GI:** A 32-sector mask converts finite-thickness
   screen-space samples into ambient visibility and one-bounce diffuse
   transport; newly claimed sectors prevent double-counting.
-- **DXR 1.1 Visibility.** Material-aware inline ray queries drive sun, sky, and
+- **DXR Implementation:** Material-aware inline ray queries drive sun, sky, and
   flashlight visibility with alpha-tested cutouts.
-- **Deferred PBR.** A packed G-buffer feeds material-aware lighting, SH9 diffuse
+- **Ratio Estimators:** Correlated visible and unshadowed RGB responses reduce
+  current-frame ray-traced sun-shadow variance; sky visibility separately uses
+  a 1-64-sample cosine-hemisphere visible-ray ratio for environment lighting.
+- **Deferred PBR:** A packed G-buffer feeds material-aware lighting, SH9 diffuse
   IBL, and prefiltered GGX specular IBL; median-luminance exposure feeds AgX.
-- **Composable Anti-Aliasing.** Deferred 2x-16x MSAA, TAA with Filament and
+- **Composable Anti-Aliasing:** Deferred 2x-16x MSAA, TAA with Filament and
   Sobol jitter, display-linear Fast Approximate AA, and CMAA2 can be combined.
-- **Noise Research Stack.** Deterministic white, blue, and 64-layer
+- **Noise Research Stack:** Deterministic white, blue, and 64-layer
   spatiotemporal blue-noise textures support global and per-effect sampling.
-- **Physical Diagnostic Flashlight.** A dedicated scene spot light uses shared
+- **Physical Diagnostic Flashlight:** A dedicated scene spot light uses shared
   runtime profile data for its two-lobe beam and finite-emitter ray-traced
   shadows; photometry, color, shape, emitter size, collision-aware mount, and
   motion are tunable.
-- **Shared Ray Representation.** One BLAS/TLAS system and master traversal gate
+- **Shared Ray Representation:** One BLAS/TLAS system and master traversal gate
   serve every ray-query effect without erasing individual settings.
-- **Explicit Lighting Gates.** Ambient Fill and contribution gates make direct
+- **Explicit Lighting Gates:** Ambient Fill and contribution gates make direct
   and environment composition inspectable without hidden fallback lighting.
-- **Composable Debugging.** Lighting, visibility, buffer inspection, and
+- **Composable Debugging:** Lighting, visibility, buffer inspection, and
   thread/wave diagnostics remain independently selectable.
-- **Deterministic Verification.** Reference tests and source contracts cover
+- **Deterministic Verification:** Reference tests and source contracts cover
   estimators, noise, PBR, anti-aliasing, resources, and the packaged shader
   bundle.
-- **Compact Runtime Surface.** The build retains 306 first-party shader
+- **Compact Runtime Surface:** The build retains 306 first-party shader
   permutations, twelve Settings drawers, and 184 commands without dormant
   experiments.
-- **GitHub-Safe Scene Packaging.** Five scenes ship ready-to-run; the Bistro and
-  San Miguel repacks copy glTF buffer views byte-for-byte into standard external
-  buffers below GitHub's per-file limit, with no runtime reconstruction.
-- **Extensive Documentation.** The [engineering library](#engineering-documentation)
+- **Five Packaged Scenes:** Sponza Decorated, Sponza Plain, Bistro Interior,
+  San Miguel, and Classroom Interior ship ready-to-run; Bistro and San Miguel
+  copy glTF buffer views byte-for-byte into standard external buffers below
+  GitHub's per-file limit, with no runtime reconstruction.
+- **Extensive Documentation:** The [engineering library](#engineering-documentation)
   records architecture, equations, validation, provenance, negative results,
   and restoration boundaries.
-
-### Ratio Estimators
-
-- **Sun Shadows.** Matched visible and unshadowed RGB material responses reduce
-  current-frame soft-shadow variance without private history.
-- **Sky Visibility.** A separate 1-64-sample cosine-hemisphere visible-ray ratio
-  drives diffuse and specular environment lighting.
-
-Both retain raw single-ray routes and use material-aware DXR 1.1 queries.
 
 ## Coming Soon
 
@@ -125,12 +120,12 @@ build variants and the complete validation workflow are documented below.
 
 ## Licensing
 
-- **Community Use.** UVSR's first-party code is source-available under the
+- **Community Use:** UVSR's first-party code is source-available under the
   [Polyform Noncommercial License 1.0.0](LICENSE.md). Noncommercial use and
   modification are welcome; when sharing, preserve the license and Required
   Notice.
-- **Commercial Use.** Commercial use or sublicensing requires a separate
+- **Commercial Use:** Commercial use or sublicensing requires a separate
   written agreement. [Contact the UVSR project](mailto:brockliddicoat@gmail.com).
-- **Legal Details.** Third-party material remains under its own terms. See the
+- **Legal Details:** Third-party material remains under its own terms. See the
   [Legal Guide](legal/README.md) for the full scope, documentation registry,
   commercial-readiness notes, and contributor agreement.
