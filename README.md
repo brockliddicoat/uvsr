@@ -22,7 +22,7 @@ with `tools/update_readme_line_counts.cmd --write`.
 
 ## Renderer Highlights
 
-- **Visibility Bitmask AO and GI:** A 32-sector mask converts finite-thickness
+- **Visibility Bitmask Diffuse Lighting:** A 32-sector mask converts finite-thickness
   screen-space samples into ambient visibility and one-bounce diffuse
   transport; newly claimed sectors prevent double-counting.
 - **DXR Implementation:** Material-aware inline ray queries drive sun, sky, and
@@ -94,7 +94,7 @@ build variants and the complete validation workflow are documented below.
   packing, lighting equations, IBL, contribution gates, validation, and
   extension points.
 - [Screen Space Visibility](docs/screen-space-visibility.md) documents the
-  shared AO/GI traversal, estimators, reconstruction, memory contracts,
+  shared diffuse traversal, estimators, reconstruction, memory contracts,
   supported quality profiles, and validation boundary.
 - [Ratio Estimation](docs/ratio-estimation.md) distinguishes correlated sun
   shadow estimation from the sky visible-ray ratio and documents their
