@@ -406,7 +406,7 @@ def replace_block(text: str, block: str) -> str:
             raise RuntimeError("README has an incomplete or duplicate line-count block")
         start = text.index(START_MARKER)
         end = text.index(END_MARKER, start) + len(END_MARKER)
-        text = text[:start].rstrip("\n") + "\n\n" + text[end:].lstrip("\n")
+        return text[:start] + block + text[end:]
 
     anchor = TAGLINE + "\n"
     if text.count(anchor) != 1:
@@ -446,6 +446,14 @@ def self_test() -> None:
     inserted = replace_block(fixture, render_block(LineCounts(10, 20)))
     if inserted.count(START_MARKER) != 1 or "30 non-blank" not in inserted:
         raise RuntimeError("README block fixture failed")
+    positioned_fixture = (
+        f"# UVSR\n\n{TAGLINE}\n\nProject introduction.\n\n"
+        f"{render_block(LineCounts(1, 2))}\n\nBody\n"
+    )
+    replaced = replace_block(positioned_fixture, render_block(LineCounts(10, 20)))
+    if (replaced.index("Project introduction.") > replaced.index(START_MARKER)
+            or "30 non-blank" not in replaced):
+        raise RuntimeError("README positioned-block fixture failed")
     with tempfile.TemporaryDirectory(prefix="uvsr-line-count-self-test-") as temp:
         temp_root = Path(temp)
         fixture = temp_root / "fixture.txt"

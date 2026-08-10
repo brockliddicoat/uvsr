@@ -2,17 +2,22 @@
 
 **Unified Visibility Stochastic Rendering Engine**
 
-<!-- uvsr-codebase-size:start -->
+[![License: Polyform Noncommercial 1.0.0](https://img.shields.io/badge/license-Polyform_Noncommercial_1.0.0-2f81f7)](LICENSE.md)
+![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C?logo=cplusplus&logoColor=white)
+![HLSL](https://img.shields.io/badge/HLSL-shaders-0078D4?logo=microsoft&logoColor=white)
+[![Engineering Docs](https://img.shields.io/badge/docs-engineering-2ea44f?logo=readthedocs&logoColor=white)](#engineering-documentation)
+
 UVSR is a focused DirectX 12 research renderer built on NVIDIA's pinned Donut
 framework and NVRHI. It ships with five ready-to-run research scenes, a
 production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
-**First-Party Lines of Code:** 88,249 non-blank source lines.
+<!-- uvsr-codebase-size:start -->
+**First-Party Lines of Code:** 88,257 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,603 non-blank source lines.
 
-**Total Lines of Code:** 475,852 non-blank source lines.
+**Total Lines of Code:** 475,860 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
