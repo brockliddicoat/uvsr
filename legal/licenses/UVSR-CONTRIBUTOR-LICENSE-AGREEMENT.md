@@ -4,10 +4,11 @@ Version 1.0.0, effective August 9, 2026
 
 Thank you for contributing to UVSR. This Contributor License Agreement
 ("Agreement") is a legally binding agreement between the adult individual
-accepting it ("You") and Brock Liddicoat ("Project Steward," "We," or "Us").
-It documents rights needed to accept, maintain, publicly license, and
-commercially license contributions without taking ownership away from their
-authors.
+accepting it ("You") and the person or legal entity that controls the official
+UVSR repository and accepts Contributions on the project's behalf ("Project
+Steward," "We," or "Us"). It documents rights needed to accept, maintain,
+publicly license, and commercially license contributions without taking
+ownership away from their authors.
 
 ## 1. Acceptance and Capacity
 
@@ -17,10 +18,10 @@ authenticated signing flow.
 
 This automated Agreement is only for an adult who personally Controls the
 rights being granted. Do not accept it for employer-owned, client-owned,
-entity-owned, or minor-owned work. Contact
-[brockliddicoat@gmail.com](mailto:brockliddicoat@gmail.com) for a separately
-reviewed entity, employer, guardian, or other authorized-owner agreement before
-submitting that work.
+entity-owned, or minor-owned work. [Contact the UVSR
+project](mailto:brockliddicoat@gmail.com) for a separately reviewed entity,
+employer, guardian, or other authorized-owner agreement before submitting that
+work.
 
 ## 2. Definitions
 
@@ -31,8 +32,8 @@ associated with the GitHub identity used to accept this Agreement. Material
 conspicuously marked "Not a Contribution" before submission is excluded.
 
 "UVSR" means the software, documentation, assets, and other material maintained
-in the `brockliddicoat/uvsr` repository or a successor repository designated by
-the Project Steward.
+in the [official UVSR repository](https://github.com/brockliddicoat/uvsr) or a
+successor repository designated by the Project Steward.
 
 "Control" means rights You personally own or hold in Your individual capacity
 and can license without acting for an employer, client, entity, minor, or other
@@ -110,8 +111,8 @@ as needed to preserve the parties' intent, and the remaining provisions remain
 effective. We may transfer this Agreement with UVSR only if the recipient
 accepts Our obligations under it.
 
-Questions and formal notices may be sent to
-[brockliddicoat@gmail.com](mailto:brockliddicoat@gmail.com).
+Questions and formal notices may be sent through the
+[project contact](mailto:brockliddicoat@gmail.com).
 
 ## 9. Template Attribution
 
@@ -119,7 +120,7 @@ The structure of this Agreement is informed by the Harmony Contributor
 Agreement Template, Version 1.0, licensed under CC BY 3.0. UVSR uses a copyright
 license rather than an assignment and follows Harmony's Option Five outbound
 licensing model. See the
-[Harmony source record](../sources/harmony-contributor-agreement.md).
+[Harmony source record](../documentation/harmony-contributor-agreement.md).
 
 This repository document has not been represented as a substitute for advice
 from a qualified lawyer. The Project Steward should obtain counsel review

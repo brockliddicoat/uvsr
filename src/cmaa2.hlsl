@@ -34,4 +34,4 @@ cbuffer UvsrCmaa2Constants : register(b0)
 // black edge at the right/bottom boundary.
 #define CMAA2_CLAMP_SOURCE_LOADS_TO_VIEWPORT 1
 
-#include <legal/code-samples/intel-cmaa2/CMAA2.hlsl>
+#include <legal/samples/intel-cmaa2/CMAA2.hlsl>

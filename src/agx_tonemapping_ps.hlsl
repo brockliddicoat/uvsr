@@ -21,7 +21,7 @@
 // SOFTWARE.
 //
 // UVSR adapts Benjamin Wrensch's Minimal AgX Implementation. Its constants in
-// turn trace to Troy Sobotka's AgX work. See legal/sources/agx-display-transform.md.
+// turn trace to Troy Sobotka's AgX work. See legal/documentation/agx-display-transform.md.
 //
 // UVSR AgX display transform. The RGBA16F intermediate stays display-linear
 // and undithered so presentation AA classifies exactly the visible tone-mapped

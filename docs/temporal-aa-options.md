@@ -161,7 +161,7 @@ one appends **(Custom)** to the selected Quality recipe; its reset returns to th
 selected recipe value.
 
 The pinned source, UVSR modifications, G3D BSD terms, and NVIDIA notice are
-recorded in `legal/sources/google-filament-fxaa.md`. The runtime
+recorded in `legal/documentation/google-filament-fxaa.md`. The runtime
 package includes that attribution plus the shared Apache 2.0 and BSD 2-Clause
 license texts.
 

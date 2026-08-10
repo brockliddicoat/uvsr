@@ -1,19 +1,19 @@
-# PolyForm Noncommercial 1.0.0
+# Polyform Noncommercial 1.0.0
 
 ## Record
 
 - Relationship: Incorporated Upstream Material
 - Status: Current project-license foundation
 - Confidence: Confirmed
-- Upstream: [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) and [Versioned Source Text](https://github.com/polyformproject/polyform-licenses/blob/1.0.0/PolyForm-Noncommercial-1.0.0.md)
+- Upstream: [Polyform Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) and [Versioned Source Text](https://github.com/polyformproject/polyform-licenses/blob/1.0.0/PolyForm-Noncommercial-1.0.0.md)
 - Revision: Version 1.0.0
-- Governing Terms: The PolyForm project's license-text reuse policy and the exact PolyForm Noncommercial terms reproduced in UVSR's `LICENSE`
+- Governing Terms: The Polyform project's license-text reuse policy and the exact Polyform Noncommercial terms reproduced in UVSR's `LICENSE`
 
 ## UVSR Relationship
 
 UVSR reproduces the version 1.0.0 license body and prepends its own permitted
 `Required Notice:` line. The body is hash-checked to prevent silent alteration.
-PolyForm is the source of the license text, not an author, sponsor, or endorser
+Polyform is the source of the license text, not an author, sponsor, or endorser
 of UVSR, and the final repository license controls only rights UVSR can grant.
 
 ## Evidence

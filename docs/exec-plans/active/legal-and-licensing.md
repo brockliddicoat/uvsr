@@ -2,9 +2,9 @@
 
 ## Status
 
-- State: active; repository work is verified, while hosted CLA enforcement is
-  waiting on the governing-law choice, counsel review, and an authorized test
-  pull request
+- State: active; the requested naming and README follow-up is local and under
+  verification, while hosted CLA enforcement is waiting on the governing-law
+  choice, counsel review, and an authorized test pull request
 - Coordinator: `/root`
 - Project/integration branch and worktree: `codex/legal-and-licensing` in `work/legal-and-licensing`
 - Base commit: `7202ff958d2ed5ffa5a54f7374c1d15c772307a5`
@@ -18,7 +18,8 @@ Goal: reorganize repository legal material, document substantial external source
 
 Done when:
 
-- [x] The top-level `third_party` material is reorganized under `legal/` with clear license, code-sample, and source-documentation sections.
+- [x] The top-level `third_party` material is reorganized under `legal/` with
+  clear `licenses`, `samples`, and combined `documentation` sections.
 - [x] Every substantial identified source has a concise record classifying conceptual influence, implementation reference, adaptation, or incorporated code/assets and identifying governing terms.
 - [x] UVSR's first-party license clearly permits credited noncommercial use and reserves commercial use for a separate written agreement without overriding third-party terms.
 - [x] The README contains a short accurate licensing summary and commercial contact link.
@@ -132,7 +133,7 @@ Public contracts:
 | CLA is functional | Valid configuration and documented activation boundary | App installation, metadata validation, and live ruleset inspection | App installed only for UVSR; enforcement pending counsel, a signing Gist, a test pull request, and the source-specific rule |
 | Documentation headings conform | Full in-scope heading scan and repository validator | `tools/check_document_title_case.py` | Passed; 1,665 headings and bold lead-ins |
 | Build and packaging remain coherent | Release build, shader bundle, notices, and tests | CMake Release build, package hashes, and CTest | Passed after repairing one task-introduced contract expectation; final run passed 40 of 40 tests |
-| Changes are scoped | Clean task worktree except task-owned diff | `git status` and diff review | Pending final staged-diff review |
+| Changes are scoped | Clean task worktree except task-owned diff | `git status` and diff review | Passed; final diff contains only the naming, layout, identity, README, packaging, and supporting contract updates |
 
 ## Decisions
 
@@ -140,9 +141,13 @@ Public contracts:
 | --- | --- | --- | --- |
 | 2026-08-09 | Work from live remote `main` in an isolated branch/worktree. | The original checkout diverges from GitHub and contains unrelated work. | All |
 | 2026-08-09 | Keep all subagents read-only; coordinator is the sole writer. | License, folder, README, and workflow decisions are tightly coupled shared hotspots. | All |
-| 2026-08-09 | Use the unmodified PolyForm Noncommercial License 1.0.0 instead of Sentry's FSL. | PolyForm matches the requested noncommercial boundary. FSL permits broader commercial use and automatically changes each release to MIT or Apache 2.0 after two years. | LIC-1, INT-1 |
+| 2026-08-09 | Use the unmodified Polyform Noncommercial License 1.0.0 instead of Sentry's FSL. | Polyform matches the requested noncommercial boundary. FSL permits broader commercial use and automatically changes each release to MIT or Apache 2.0 after two years. | LIC-1, INT-1 |
 | 2026-08-09 | Describe commercial licensing as separately available, not as a present dual license. | No standard commercial agreement exists yet, and third-party rights cannot be sublicensed by UVSR. | LIC-1, INT-1 |
 | 2026-08-09 | Install hosted CLA Assistant only for UVSR, but do not collect signatures or enforce its status yet. | The CLA still needs a governing-law choice and qualified review; GitHub cannot safely require the status until a test pull request establishes the exact app-produced check. | CLA-1, INT-1 |
+| 2026-08-09 | Merge source records into `legal/documentation`, shorten `code-samples` to `samples`, and lowercase nonconventional documentation filenames. | The follow-up requests one compact documentation area and calmer, consistent filenames. Conventional `README.md` and upstream-controlled filenames retain their established casing. | INT-1 |
+| 2026-08-09 | Use `Polyform` in UVSR-authored wording while preserving `PolyForm` in the hash-verified official license body and its case-sensitive upstream URL. | Project presentation follows the requested spelling without silently modifying the standard license text. | INT-1 |
+| 2026-08-09 | Replace the displayed personal name with the role-based UVSR Project Steward and project contact. | The email remains the contact destination, while CLA enforcement stays disabled until counsel confirms that the counterparty and controller remain sufficiently identified. | INT-1 |
+| 2026-08-09 | Make Licensing the final README section and delete Project Boundaries. | The follow-up explicitly retires that boundary summary and prioritizes legal information at the end. | INT-1 |
 
 ## Progress and Handoffs
 
@@ -150,10 +155,11 @@ Public contracts:
 | --- | --- | --- | --- | --- | --- |
 | 2026-08-09 | `/root` | Active | Isolated branch at `7202ff9` | Repository, remote, worktree, and PR preflight complete | Begin research and inventory |
 | 2026-08-09 | Research agents | Complete | License, provenance, and CLA handoffs | Primary-source review and independent consistency review complete | Integrate and verify |
-| 2026-08-09 | Provenance agent | Complete | `legal/sources/README.md` plus 50 records | Legal inventory, local links, and scoped title validation passed | Ownership released |
+| 2026-08-09 | Provenance agent | Complete | `legal/documentation/README.md` plus 50 records | Legal inventory, local links, and scoped title validation passed | Ownership released |
 | 2026-08-09 | `/root` | Active | Release candidate `build-legal/bin/uvsr.exe` | Release build passed; packaged project license and notices verified; final CTest run passed 40 of 40 tests | Complete staged review and publish branch |
 | 2026-08-09 | Independent technical reviewer | Complete | Combined task diff and `build-legal/bin` | No P0, P1, or P2 findings; relocated shader dependency and all 21 packaged notices verified | Ownership released |
 | 2026-08-09 | `/root` | Active | Implementation commit `aafab82b470ade2e554e1817b1469fbbd8963a17` | Remote branch verified at the same commit; no pull request created | Await governing-law choice and hosted activation authority |
+| 2026-08-09 | `/root` | Complete | Local naming and identity follow-up; rebuilt `build-legal/bin/uvsr.exe` | Release build and final 40-of-40 CTest run passed; legal inventory, 1,665-heading audit, line counts, source/package links, exact package casing, license hash, and diff checks passed | Local and uncommitted; independent final audit found no P0, P1, or P2 issues |
 
 ## Risks and Escalation Triggers
 
@@ -180,8 +186,9 @@ Stop and ask the user if:
 - Independent review: legal-language and technical reviews passed with no
   remaining P0, P1, or P2 findings; counsel/activation boundaries remain
 - Coming Soon/documentation update: no roadmap entry planned; this is repository governance work
-- Pushed/PR/merged, or intentionally local: pushed
-  `codex/legal-and-licensing`; no pull request or merge created
+- Pushed/PR/merged, or intentionally local: original implementation is pushed
+  to `codex/legal-and-licensing`; current naming follow-up is intentionally
+  local and uncommitted pending verification
 - Remaining experiments or follow-ups: choose governing law, obtain qualified
   review, publish the versioned signing Gist, exercise CLA Assistant on an
   authorized test pull request, and then require its app-specific check

@@ -2,7 +2,7 @@
 
 UVSR contains, adapts, links, downloads, or packages third-party material under
 its own terms. The UVSR license does not replace those terms. In the source
-distribution, `legal/sources/README.md` records revisions, relationships, and
+distribution, `legal/documentation/README.md` records revisions, relationships, and
 reuse boundaries; exact license texts are kept under `legal/licenses/` or
 beside the relevant dependency or asset.
 
@@ -14,7 +14,7 @@ beside the relevant dependency or asset.
   UVSR's MiniEngine-derived TAA portions retain Microsoft's MIT notice.
 - UVSR's Fast Approximate shader follows Google Filament's Apache-licensed
   adaptation lineage through G3D and NVIDIA FXAA; preserve the notices in
-  `legal/sources/google-filament-fxaa.md` from the source distribution.
+  `legal/documentation/google-filament-fxaa.md` from the source distribution.
 - UVSR's AgX shader adapts Benjamin Wrensch's MIT-licensed Minimal AgX
   Implementation; preserve the Missing Deadlines copyright and MIT terms.
 
@@ -42,4 +42,4 @@ License 1.1. Segoe UI font redistribution is not granted by this repository.
 
 Before redistributing a binary or media bundle, audit the exact build output
 and include every applicable license and notice. The source distribution's
-`legal/documentation/COMMERCIAL-LICENSING.md` records known clearance gaps.
+`legal/documentation/commercial-licensing.md` records known clearance gaps.

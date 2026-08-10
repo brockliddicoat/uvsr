@@ -301,7 +301,7 @@ file(GLOB_RECURSE UVSR_SHADER_INPUTS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsli"
-    "${CMAKE_CURRENT_SOURCE_DIR}/legal/code-samples/*.hlsl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/legal/samples/*.hlsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/shaders/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/include/donut/shaders/*"
 )
@@ -1271,7 +1271,7 @@ if (UVSR_BUILD_APPLICATION)
             "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI-Semibold.ttf"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/UVSR-PolyForm-Noncommercial-1.0.0.md"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/UVSR-Polyform-Noncommercial-1.0.0.md"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Microsoft-DirectX-Graphics-Samples.txt"
@@ -1288,7 +1288,7 @@ if (UVSR_BUILD_APPLICATION)
             "${CMAKE_CURRENT_SOURCE_DIR}/legal/licenses/IOLITE-AgX-MIT.txt"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/IOLITE-AgX-MIT.txt"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/legal/sources/google-filament-fxaa.md"
+            "${CMAKE_CURRENT_SOURCE_DIR}/legal/documentation/google-filament-fxaa.md"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Google-Filament-FXAA-Attribution.md"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/donut/LICENSE.txt"
@@ -1324,8 +1324,8 @@ if (UVSR_BUILD_APPLICATION)
             "${CMAKE_CURRENT_SOURCE_DIR}/assets/environments/README.md"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Poly-Haven-Environments.md"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/legal/documentation/THIRD-PARTY-NOTICES.md"
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/THIRD-PARTY-NOTICES.md"
+            "${CMAKE_CURRENT_SOURCE_DIR}/legal/documentation/third-party-notices.md"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/third-party-notices.md"
     )
     if (EXISTS "${DirectX-Headers_SOURCE_DIR}/LICENSE")
         add_custom_command(TARGET uvsr POST_BUILD

@@ -18,7 +18,7 @@ notices remain part of the incorporated material.
 
 ## Evidence
 
-- [Vendored CMAA2 Shader](../code-samples/intel-cmaa2/CMAA2.hlsl)
+- [Vendored CMAA2 Shader](../samples/intel-cmaa2/CMAA2.hlsl)
 - [Host Adapter](../../src/cmaa2.cpp)
 - [Wrapper Shader](../../src/cmaa2.hlsl)
 - Commits `58813cb94054738fc25ff2493444fbdb3dce7d98` and `a9a3dd10d7c8cf21e23c6642f1f93f4a7142192f`

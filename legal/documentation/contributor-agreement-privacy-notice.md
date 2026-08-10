@@ -4,11 +4,10 @@ Version 1.0.0, effective August 9, 2026
 
 ## Controller and Contact
 
-Brock Liddicoat administers UVSR's copy of contributor-agreement records and
-can be reached at
-[brockliddicoat@gmail.com](mailto:brockliddicoat@gmail.com). GitHub and CLA
-Assistant separately control data they process for their own services under
-their terms.
+The UVSR Project Steward administers UVSR's copy of contributor-agreement
+records and can be reached through the
+[project contact](mailto:brockliddicoat@gmail.com). GitHub and CLA Assistant
+separately control data they process for their own services under their terms.
 
 ## Information Collected
 
@@ -43,7 +42,7 @@ personal data in a public pull-request comment.
 ## Access, Correction, and Deletion
 
 To request a copy, correction, or deletion of UVSR-controlled agreement data,
-email [brockliddicoat@gmail.com](mailto:brockliddicoat@gmail.com). Some records
+use the [project contact](mailto:brockliddicoat@gmail.com). Some records
 may need to be retained to establish licenses already relied upon, comply with
 law, resolve disputes, or protect legal claims. Requests concerning data
 controlled by GitHub or CLA Assistant must also be directed to that provider.
