@@ -3,7 +3,7 @@ name: Legal Inventory
 on:
   pull_request:
     paths:
-      - "LICENSE"
+      - "LICENSE.md"
       - "README.md"
       - "CONTRIBUTING.md"
       - "legal/**"
@@ -15,7 +15,7 @@ on:
     branches:
       - main
     paths:
-      - "LICENSE"
+      - "LICENSE.md"
       - "README.md"
       - "CONTRIBUTING.md"
       - "legal/**"

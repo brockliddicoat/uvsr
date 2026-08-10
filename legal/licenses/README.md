@@ -2,7 +2,7 @@
 
 ## First-Party Terms
 
-- The repository-root [LICENSE](../../LICENSE) contains UVSR's controlling
+- The repository-root [project license](../../LICENSE.md) contains UVSR's controlling
   Polyform Noncommercial License 1.0.0 and required attribution notice.
 - The [UVSR Contributor License Agreement](UVSR-CONTRIBUTOR-LICENSE-AGREEMENT.md)
   covers contributions accepted through the repository's CLA check. It does

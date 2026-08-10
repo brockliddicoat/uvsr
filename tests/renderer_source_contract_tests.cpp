@@ -436,6 +436,10 @@ int main(int argc, char** argv)
         "packaged third party notice destination");
     passed &= ExpectContains(
         buildSystem,
+        "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE.md",
+        "packaged UVSR public license source");
+    passed &= ExpectContains(
+        buildSystem,
         "licenses/UVSR-Polyform-Noncommercial-1.0.0.md",
         "packaged UVSR public license");
     passed &= ExpectContains(

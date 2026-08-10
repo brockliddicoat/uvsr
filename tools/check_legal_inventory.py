@@ -34,13 +34,13 @@ def normalized_bytes(path: Path) -> bytes:
 
 
 def check_license() -> None:
-    data = normalized_bytes(ROOT / "LICENSE")
+    data = normalized_bytes(ROOT / "LICENSE.md")
     try:
         notice, body = data.split(b"\n\n", 1)
     except ValueError as error:
-        raise RuntimeError("LICENSE must contain a notice and license body") from error
+        raise RuntimeError("LICENSE.md must contain a notice and license body") from error
     if notice.decode("utf-8") != REQUIRED_NOTICE:
-        fail("LICENSE Required Notice differs from the approved attribution")
+        fail("LICENSE.md Required Notice differs from the approved attribution")
     digest = hashlib.sha256(body).hexdigest()
     if digest != POLYFORM_BODY_SHA256:
         fail(

@@ -7,7 +7,7 @@
 - Confidence: Confirmed
 - Upstream: [Polyform Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/) and [Versioned Source Text](https://github.com/polyformproject/polyform-licenses/blob/1.0.0/PolyForm-Noncommercial-1.0.0.md)
 - Revision: Version 1.0.0
-- Governing Terms: The Polyform project's license-text reuse policy and the exact Polyform Noncommercial terms reproduced in UVSR's `LICENSE`
+- Governing Terms: The Polyform project's license-text reuse policy and the exact Polyform Noncommercial terms reproduced in UVSR's `LICENSE.md`
 
 ## UVSR Relationship
 
@@ -18,7 +18,7 @@ of UVSR, and the final repository license controls only rights UVSR can grant.
 
 ## Evidence
 
-- [UVSR Public License](../../LICENSE)
+- [UVSR Public License](../../LICENSE.md)
 - [License Inventory](../licenses/README.md)
 - [Body And Notice Integrity Check](../../tools/check_legal_inventory.py)
 

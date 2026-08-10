@@ -1270,7 +1270,7 @@ if (UVSR_BUILD_APPLICATION)
             "${UVSR_UI_HEADER_FONT_SOURCE}"
             "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI-Semibold.ttf"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+            "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE.md"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/UVSR-Polyform-Noncommercial-1.0.0.md"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt"

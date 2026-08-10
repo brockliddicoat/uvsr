@@ -32,7 +32,7 @@ Done when:
 In scope:
 
 - Repository license and contributor terms.
-- `README.md`, top-level `LICENSE`, `legal/`, affected build/reference paths, and `.github/` contribution automation.
+- `README.md`, top-level `LICENSE.md`, `legal/`, affected build/reference paths, and `.github/` contribution automation.
 - Historical provenance research sufficient to create one durable record per substantial source.
 
 Non-goals:
@@ -44,7 +44,7 @@ Non-goals:
 
 Affected subsystems and paths:
 
-- `README.md`, `LICENSE`, `legal/**`, `src/third_party/**`, `.github/**`, and references to `third_party/**`.
+- `README.md`, `LICENSE.md`, `legal/**`, `src/third_party/**`, `.github/**`, and references to `third_party/**`.
 
 Shared hotspots reserved for the coordinator:
 
@@ -128,12 +128,12 @@ Public contracts:
 
 | Acceptance criterion | Evidence required | Command/experiment | Result/artifact |
 | --- | --- | --- | --- |
-| Folder and links are coherent | No stale tracked `third_party/` paths; Markdown links resolve | Repository search and link checker | Passed; 61 source-distribution Markdown files and four packaged Markdown files checked |
+| Folder and links are coherent | No stale tracked `third_party/` paths; Markdown links resolve | Repository search and link checker | Passed; current README, license, legal, and control-guide links resolve |
 | Terms match stated intent | Independent legal-language consistency review | Text review against source license terms | Passed with counsel and activation boundaries retained |
 | CLA is functional | Valid configuration and documented activation boundary | App installation, metadata validation, and live ruleset inspection | App installed only for UVSR; enforcement pending counsel, a signing Gist, a test pull request, and the source-specific rule |
-| Documentation headings conform | Full in-scope heading scan and repository validator | `tools/check_document_title_case.py` | Passed; 1,665 headings and bold lead-ins |
-| Build and packaging remain coherent | Release build, shader bundle, notices, and tests | CMake Release build, package hashes, and CTest | Passed after repairing one task-introduced contract expectation; final run passed 40 of 40 tests |
-| Changes are scoped | Clean task worktree except task-owned diff | `git status` and diff review | Passed; final diff contains only the naming, layout, identity, README, packaging, and supporting contract updates |
+| Documentation headings conform | Full in-scope heading scan and repository validator | `tools/check_document_title_case.py` | Passed; 1,686 headings and bold lead-ins |
+| Build and packaging remain coherent | Release build, shader bundle, notices, and tests | CMake Release build, package hashes, and CTest | Passed; Release build and final 40-of-40 CTest run succeed with `LICENSE.md` packaging |
+| Changes are scoped | Clean task worktree except task-owned diff | `git status` and diff review | Passed; final diff contains only the license-rendering, README, control-guide, packaging, and supporting contract updates |
 
 ## Decisions
 
@@ -148,6 +148,8 @@ Public contracts:
 | 2026-08-09 | Use `Polyform` in UVSR-authored wording while preserving `PolyForm` in the hash-verified official license body and its case-sensitive upstream URL. | Project presentation follows the requested spelling without silently modifying the standard license text. | INT-1 |
 | 2026-08-09 | Replace the displayed personal name with the role-based UVSR Project Steward and project contact. | The email remains the contact destination, while CLA enforcement stays disabled until counsel confirms that the counterparty and controller remain sufficiently identified. | INT-1 |
 | 2026-08-09 | Make Licensing the final README section and delete Project Boundaries. | The follow-up explicitly retires that boundary summary and prioritizes legal information at the end. | INT-1 |
+| 2026-08-09 | Rename the root license to `LICENSE.md` without changing its blob. | GitHub officially recognizes that filename and can render its Markdown instead of exposing raw heading syntax. | INT-1 |
+| 2026-08-09 | Replace README control narration and deep feature prose with a linked full control guide, compact build/test path, and 14-item graphics feature map. | The repository front page should orient graphics programmers quickly and route detail into the engineering library. | INT-1 |
 
 ## Progress and Handoffs
 
@@ -159,7 +161,8 @@ Public contracts:
 | 2026-08-09 | `/root` | Active | Release candidate `build-legal/bin/uvsr.exe` | Release build passed; packaged project license and notices verified; final CTest run passed 40 of 40 tests | Complete staged review and publish branch |
 | 2026-08-09 | Independent technical reviewer | Complete | Combined task diff and `build-legal/bin` | No P0, P1, or P2 findings; relocated shader dependency and all 21 packaged notices verified | Ownership released |
 | 2026-08-09 | `/root` | Active | Implementation commit `aafab82b470ade2e554e1817b1469fbbd8963a17` | Remote branch verified at the same commit; no pull request created | Await governing-law choice and hosted activation authority |
-| 2026-08-09 | `/root` | Complete | Local naming and identity follow-up; rebuilt `build-legal/bin/uvsr.exe` | Release build and final 40-of-40 CTest run passed; legal inventory, 1,665-heading audit, line counts, source/package links, exact package casing, license hash, and diff checks passed | Local and uncommitted; independent final audit found no P0, P1, or P2 issues |
+| 2026-08-09 | `/root` | Complete | Naming and identity commit `597e05a7ca1343970bed1bbfc10cea8249f0b15c` | Release build and final 40-of-40 CTest run passed; legal inventory, 1,665-heading audit, line counts, source/package links, exact package casing, license hash, and diff checks passed | Pushed to `origin/codex/legal-and-licensing`; no pull request created |
+| 2026-08-09 | `/root` | Complete | GitHub presentation follow-up | Root-license blob preserved through `LICENSE.md`; compact README, complete controls guide, Release build, legal/title/link/count checks, and 40-of-40 CTest pass | Independent final review found no P0, P1, or P2 issues; user authorized a direct commit and push to `origin/main` |
 
 ## Risks and Escalation Triggers
 
@@ -178,17 +181,18 @@ Stop and ask the user if:
 
 ## Completion
 
-- Final integrated commit: implementation commit
-  `aafab82b470ade2e554e1817b1469fbbd8963a17`; this plan checkpoint follows it
+- Publication baseline: live `origin/main` merge commit
+  `18dc0853a2ddd664675de94b09470caf0482c869`; its file tree matches the naming
+  and identity checkpoint used for this presentation follow-up
 - Verification summary: Release build and final 40-of-40 CTest run passed;
-  legal inventory, title casing, local links, package contents, and line counts
-  passed
+  legal inventory, 1,686-heading audit, local links, package contents, and line
+  counts passed
 - Independent review: legal-language and technical reviews passed with no
   remaining P0, P1, or P2 findings; counsel/activation boundaries remain
 - Coming Soon/documentation update: no roadmap entry planned; this is repository governance work
-- Pushed/PR/merged, or intentionally local: original implementation is pushed
-  to `codex/legal-and-licensing`; current naming follow-up is intentionally
-  local and uncommitted pending verification
+- Publication scope: the user authorized the README/license presentation
+  follow-up for a direct commit and push to `origin/main`; no pull request is
+  required
 - Remaining experiments or follow-ups: choose governing law, obtain qualified
   review, publish the versioned signing Gist, exercise CLA Assistant on an
   authorized test pull request, and then require its app-specific check

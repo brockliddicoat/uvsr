@@ -7,7 +7,7 @@ the controlling license texts or legal advice.
 ## Community Use
 
 First-party UVSR material is source-available under the
-[Polyform Noncommercial License 1.0.0](../LICENSE). You may use, study, change,
+[Polyform Noncommercial License 1.0.0](../LICENSE.md). You may use, study, change,
 and share it for permitted noncommercial purposes. Keep the license and this
 Required Notice with every copy you share or redistribute:
 

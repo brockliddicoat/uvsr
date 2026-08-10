@@ -3,6 +3,25 @@
 UVSR exposes one focused DirectX 12 renderer. Settings begin at factory defaults
 on every launch and are not persisted.
 
+## Keyboard and Interface Controls
+
+- **Escape** or **~** opens and closes Settings.
+- **/** opens the command interface. Enter applies, Tab completes, Up and Down
+  recall history, and Escape cancels the active edit.
+- **M** opens or closes the material editor for the surface at screen center.
+- **F** toggles the camera flashlight while the command interface is closed and
+  text input is inactive.
+- **Z** or the **Pixel Zoom** footer action cycles Off, 2x, 3x, 4x, and 5x.
+- In **Freelook**, **W/S** dollies forward and backward, **A/D** strafes, and
+  **Q/E** moves vertically. Space and Shift are not movement modifiers.
+- The **arrow keys** look left, right, up, and down; **X/C** rolls; and **V**
+  restores upright roll.
+- Hold the **left mouse button** and drag to look. The mouse wheel dollies
+  forward and backward. Stationary trackpad contact does not cancel motion; a
+  real camera input does.
+- **Capture** copies the current frame to the clipboard. The other footer
+  actions reset settings, control pixel zoom, and restart the renderer.
+
 ## Settings Drawers
 
 The Settings panel contains twelve top level drawers in this order:
@@ -27,16 +46,15 @@ The Settings panel contains twelve top level drawers in this order:
 11. **Lights** edits scene lights and the camera flashlight.
 12. **Shadows** configures ray traced sun shadows.
 
-Escape or `~` opens or closes Settings. A reset icon beside a control restores
-that control or group to its current factory value. Q moves the camera up, E
-moves it down, and the retired Space and Shift vertical bindings are inert.
-V restores an upright camera roll. A stationary held trackpad touch does not
-cancel that leveling motion; new camera-look movement or another real camera
-input does.
-The four footer actions are **Reset**, **Capture**, **Pixel Zoom**, and
-**Restart**; Capture copies the current frame to the clipboard.
+A reset icon beside a control restores that control or group to its current
+factory value.
 
 ## General
+
+**Interface Skin** selects **Amp** or **OG**. Amp uses UVSR's animated, blurred
+floating panels; OG uses stock ImGui presentation with immediate transitions
+for automation. **Camera Location > Position 1** selects the standardized
+Sponza view used by project validation and performance work.
 
 **Graphics Adapter** selects the DirectX 12 device and restarts UVSR when it
 changes. **Adaptive Sync** follows it directly and offers **Off**, **Vendor

@@ -66,6 +66,7 @@ PRESERVED_WORDS = frozenset(
         "DirectX",
         "DX11",
         "DXIL",
+        "DXR",
         "FXAA",
         "GGX",
         "G3D",
