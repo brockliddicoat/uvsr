@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-08-09.2`.
+UI reference version: `2026-08-09.7`.
 
 ## Purpose
 
@@ -33,7 +33,8 @@ The top-level drawers are:
 
 The order is product behavior. Add a top-level drawer only when the feature has
 a distinct user goal and enough retained controls to justify it. Effect-specific
-diagnostics belong in Debug, grouped under the effect they explain.
+rendering views and output diagnostics belong in Debug, grouped under the effect
+they explain.
 
 ## Visual and Copy System
 
@@ -95,7 +96,7 @@ with Animate Samples on. The default primary
 sun uses irradiance 8 and a 0.2 degree full angular size. Ray Traced Sky
 Visibility enables both Effect Diffuse and Effect Specular by default.
 Flashlight Beam Size defaults to 16 degrees, Beam Roundness to 0.8, and Angular
-Size to 2.86 degrees.
+Size to 2.86 degrees. Its factory Color is pure linear white.
 
 Auto Exposure defaults off. Maximum Brightening defaults to 5 EV and Maximum
 Darkening defaults to 2 EV; both expose 0 through 16 EV. Exposure Compensation defaults to
@@ -180,13 +181,15 @@ belongs beside Cast Shadows. Beam Size and Beam Roundness retain 16 degrees and
 spherical emitter used by direct-light energy and shadow rays. Zero keeps the
 exact point-light and hard center-ray branches. Positive size uses four
 noise-shifted finite-emitter rays. The offset emitter has its own collision
-sphere. Predictive probes along the mount and forward from the hard-safe emitter
-begin a cubic retraction fade at least 0.75 metres before a nearby wall. The
-result uniformly retracts the complete mount offset toward the camera rather
-than sliding its lateral offset along the wall. The hard collision limit remains
-immediate, the offset restores smoothly after clearance returns, a final safety
-sweep protects continuous camera movement, and aim is recomputed from the safe
-light position.
+sphere, sized to the larger of the camera collision radius and analytical
+emitter radius. The authored mount is repaired on initialization or radius
+change and swept continuously as the camera moves. Collision may stop or slide
+the emitter, but scene depth must not scale the camera offset, select a receiver,
+or retarget the beam. Sway is applied afterward to direction only and cannot
+alter collision or physical position. The factory Color is pure linear white.
+The removed receiver-driven camera-centering controls and diagnostics are
+recorded in
+[Flashlight Camera Centering v1](postmortem/flashlight-camera-centering-v1.md).
 
 Shadows exposes one **Ray Traced Shadows** group for the primary sun. It owns
 **Enabled**, **Ratio Estimator**, and **Output Hit Distance**, and preserves all
@@ -346,11 +349,11 @@ dependency. In particular:
   than compiled into main.
 - The flashlight remains one analytical spot light. Its ray traced visibility is
   matched to that exact light, and its SIGMA history is independent from the
-  sun's history. A positive emitter radius uses four shared-noise rays, while a
-  dedicated sphere resolves penetration in the same static collision hierarchy
-  used by the camera. Near contact, the complete mount vector retracts uniformly
-  toward the camera, restores smoothly with available clearance, and receives a
-  final continuous-motion sweep before the beam aim is recomputed.
+  sun's history. A positive emitter radius uses four shared-noise rays. A
+  dedicated sphere resolves penetration and continuously sweeps the authored
+  mount through the same static collision hierarchy used by the camera.
+  Collision safety is independent from receiver depth and lens sway; no
+  camera-centering controller or receiver feedback is retained.
 
 Changing renderer topology must invalidate only the affected passes/history.
 Do not force a scene reload when a narrower pass or render-target refresh is
@@ -423,10 +426,10 @@ Use the exact candidate executable and a bundled scene. Exercise:
 - both sun Ratio Estimator states, both Output Hit Distance states, and the
   MSAA unavailable state;
 - flashlight ray traced shadows, horizontal and vertical offset endpoints,
-  beam and Angular Size defaults/endpoints, increasing penumbra width, early
-  near-wall onset, smooth uniform mount retraction, centered contact beam,
-  smooth offset restoration, final-sweep collision safety, and independent
-  SIGMA history;
+  beam and Angular Size defaults/endpoints, increasing penumbra width, pure-white
+  Color reset, initial overlap repair, radius growth at contact, fast-motion and
+  sliding collision safety, scene-depth-independent mount and aim across rows of
+  pillars, direction-only sway, and independent SIGMA history;
 - alpha-tested foliage silhouettes under sun, sky, and flashlight ray queries;
 - Auto Exposure off with only Enable visible and exact color parity with the
   established manual AgX path; then bright, dark, neutral, and saturated views
@@ -457,9 +460,28 @@ The UI handoff includes:
 
 ## Reference Revision History
 
+- `2026-08-09.7`: Removed the rejected flashlight camera-centering experiment,
+  including receiver rays, proximity retraction, temporal controls, optical
+  state, recovery state, and Camera Movement Diagnostics. Retained only the
+  emitter-aware collision sphere and continuous sweep for wall safety, plus the
+  pure-white factory Color. Revisions `2026-08-09.3` through `2026-08-09.6` are
+  historical experiment records and do not describe current behavior.
+- `2026-08-09.6`: Added configurable flashlight Time to Action and Adjustment
+  Speed, made materially different receiver depths earn independent evidence,
+  reset stale optical state when the receiver changes, removed released receiver
+  aim carry, and added cached Camera Movement Diagnostics.
+- `2026-08-09.5`: Added temporal stability for flashlight receiver-depth
+  discontinuities, coupled the transient aim to the final mount extension,
+  locked physical retraction independently from lens sway, and changed the
+  factory beam color to pure white.
+- `2026-08-09.4`: Replaced the rejected fixed-distance flashlight proximity
+  fade with camera-center receiver feedback, distance-proportional physical
+  mount retraction, emitter-to-receiver visibility validation, and exact
+  receiver aiming.
 - `2026-08-09.3`: Replaced the flashlight's contact-only mount correction with
   an early cubic proximity fade using mount-direction and hard-safe forward
-  probes while retaining immediate physical collision limits.
+  probes while retaining immediate physical collision limits. Revision
+  `2026-08-09.4` supersedes this rejected behavior.
 - `2026-08-09.2`: Added independent automatic brightening and darkening limits,
   moved Auto Exposure into its own default-open disabled-first subsection,
   restored the exact buffer-free manual AgX presentation while Auto Exposure is

@@ -349,18 +349,21 @@ square result in the far field. `0` selects the exact point-light and hard
 center-ray branches. A positive size traces four animated, noise-shifted rays
 over the emitter's visible spherical cap and averages their visibility, which
 creates a distance-dependent fractional penumbra before optional SIGMA or TAA.
+Its factory color is pure linear white; the Color control remains available for
+intentional tinting.
 The flashlight also uses a dedicated collision sphere whose radius covers both
-the camera collision radius and the analytical emitter. As the camera
-approaches a wall, predictive mount-direction and forward probes begin a cubic
-retraction fade at least 0.75 metres before contact. Larger collision radii and
-custom mount offsets expand that envelope. The solution uniformly retracts the
-light's full forward, horizontal, and vertical mount offset toward the camera
-instead of sliding an off-center mount along the surface. The physical sweep
-remains an immediate safety limit, the offset restores smoothly as clearance
-returns, and a final sphere sweep preserves continuous collision safety during
-camera motion. This prevents the offset light from crossing walls and keeps its
-near-wall beam footprint centered instead of collapsing as the camera presses
-closer. Independent
+the camera collision radius and the analytical emitter. The authored camera
+mount is swept continuously through the static collision hierarchy, and a
+stationary overlap is repaired when the emitter radius changes. This prevents
+the light volume from crossing a wall without using scene depth to retract the
+mount or retarget the beam. Lens sway is applied afterward to direction only
+and cannot change the collision solution or resolved light position.
+
+The rejected receiver-driven centering work, including its depth probes,
+temporal controls, diagnostics, observed pillar sticking, and future
+investigation notes, is preserved in
+[Flashlight Camera Centering v1](postmortem/flashlight-camera-centering-v1.md).
+Independent
 **Horizontal Offset** and **Vertical Offset** controls cover `-40 cm` through
 `40 cm`. **Output Hit Distance** defaults off and supplies the physical blocker
 distance needed by SIGMA. Flashlight shadow data is matched to the exact
@@ -498,12 +501,15 @@ views, exercise both Maximum Brightening and Maximum Darkening endpoints,
 Exposure Compensation endpoints, and Adjustment Period endpoints, and verify
 equal-magnitude brightening and darkening changes settle symmetrically. For the
 flashlight, compare Angular Size zero, default, and maximum around a thin
-occluder, then approach a wall and confirm retraction starts well before
-contact, the entire mount offset moves smoothly toward the camera, the beam
-stays centered at contact, and the offset restores smoothly without crossing
-the surface. Hold a stationary trackpad touch while
-pressing V and confirm roll leveling completes; then confirm actual camera-look
-movement cancels it.
+occluder. Approach a wall head-on and along a corner, then change Angular Size
+at contact; verify the emitter sphere never crosses the collision surface and
+that moving away restores the authored offset. Pan across rows of pillars and
+confirm scene-depth changes do not retract the mount or retarget the beam.
+Change Sway and confirm it changes only beam direction, never the physical
+mount position. Reset Color and confirm the beam returns to pure white.
+restores smoothly without crossing the surface. Hold a stationary trackpad
+touch while pressing V and confirm roll leveling completes; then confirm actual
+camera-look movement cancels it.
 
 On an NRD build, exercise every supported method, quality, resolution, and
 history endpoint. Verify that a missing hit output or an active sky/sun Ratio

@@ -1401,14 +1401,8 @@ private:
                                             float3(0.f, 0.f, -1.f);
     float3                              m_FlashlightResolvedRight =
                                             float3(1.f, 0.f, 0.f);
-    float3                              m_FlashlightCameraPosition = 0.f;
-    float3                              m_FlashlightCollisionAnchor = 0.f;
     float3                              m_FlashlightDesiredPosition = 0.f;
     float                               m_FlashlightCollisionRadius = 0.f;
-    float                               m_FlashlightMountExtension = 1.f;
-    float                               m_FlashlightHardMountExtension = 1.f;
-    float                               m_FlashlightTargetMountExtension = 1.f;
-    bool                                m_FlashlightMountRecovery = false;
     bool                                m_FlashlightCollisionInitialized = false;
     bool                                m_FlashlightAimInitialized = false;
     bool                                m_FlashlightPoseValid = false;
@@ -2233,14 +2227,8 @@ public:
             float3(0.f, 0.f, -1.f);
         m_FlashlightResolvedRight =
             float3(1.f, 0.f, 0.f);
-        m_FlashlightCameraPosition = 0.f;
-        m_FlashlightCollisionAnchor = 0.f;
         m_FlashlightDesiredPosition = 0.f;
         m_FlashlightCollisionRadius = 0.f;
-        m_FlashlightMountExtension = 1.f;
-        m_FlashlightHardMountExtension = 1.f;
-        m_FlashlightTargetMountExtension = 1.f;
-        m_FlashlightMountRecovery = false;
         m_FlashlightCollisionInitialized = false;
         m_FlashlightAimInitialized = false;
         m_FlashlightPoseValid = false;
@@ -2386,222 +2374,52 @@ public:
             !m_FlashlightCollisionInitialized ||
             std::abs(collisionRadius - m_FlashlightCollisionRadius) >
                 1e-6f;
-        const bool collisionRadiusIncreased =
-            m_FlashlightCollisionInitialized &&
-            collisionRadius > m_FlashlightCollisionRadius + 1e-6f;
         const bool desiredPositionChanged =
             !m_FlashlightCollisionInitialized ||
             lengthSquared(
                 desiredFlashlightPosition -
                 m_FlashlightDesiredPosition) > 1e-12f;
-        const bool cameraPositionChanged =
-            !m_FlashlightCollisionInitialized ||
-            lengthSquared(
-                cameraPosition -
-                m_FlashlightCameraPosition) > 1e-12f;
 
-        float3 collisionAnchor = m_FlashlightCollisionAnchor;
-        float hardMountExtension =
-            m_FlashlightHardMountExtension;
-        float targetMountExtension =
-            m_FlashlightTargetMountExtension;
-        if (collisionRadiusChanged || desiredPositionChanged ||
-            cameraPositionChanged)
+        float3 flashlightPosition = m_FlashlightResolvedPosition;
+        if (!m_FlashlightCollisionInitialized)
         {
-            collisionAnchor = m_CameraCollisionWorld.ResolveSphere(
+            const float3 collisionStart =
+                m_CameraCollisionWorld.ResolveSphere(
                 cameraPosition,
                 desiredFlashlightPosition - cameraPosition,
                 collisionRadius);
-            const float3 mountVector =
-                desiredFlashlightPosition - collisionAnchor;
-            const float mountLengthSquared =
-                lengthSquared(mountVector);
-            const float mountLength = std::sqrt(
-                std::max(mountLengthSquared, 0.f));
-            const FlashlightMountRetractionRange retractionRange =
-                ResolveFlashlightMountRetractionRange(
-                    collisionRadius,
-                    mountLength);
-
-            float mountClearance =
-                retractionRange.farDistanceMeters;
-            hardMountExtension = 1.f;
-            if (mountLength > 1e-6f)
-            {
-                const float mountProbeDistance =
-                    mountLength + retractionRange.farDistanceMeters;
-                const float3 mountProbeEnd =
-                    collisionAnchor +
-                    mountVector * (mountProbeDistance / mountLength);
-                const float safeMountDistance =
-                    m_CameraCollisionWorld.GetSphereTravelFraction(
-                        collisionAnchor,
-                        mountProbeEnd,
-                        collisionRadius) * mountProbeDistance;
-                hardMountExtension = std::clamp(
-                    safeMountDistance / mountLength,
-                    0.f,
-                    1.f);
-                mountClearance = std::clamp(
-                    safeMountDistance - mountLength,
-                    0.f,
-                    retractionRange.farDistanceMeters);
-            }
-
-            const float3 hardSafeFlashlightPosition =
-                collisionAnchor + mountVector * hardMountExtension;
-            const float3 forwardProbeEnd =
-                hardSafeFlashlightPosition +
-                cameraDirection * retractionRange.farDistanceMeters;
-            const float forwardClearance =
-                m_CameraCollisionWorld.GetSphereTravelFraction(
-                    hardSafeFlashlightPosition,
-                    forwardProbeEnd,
-                    collisionRadius) *
-                retractionRange.farDistanceMeters;
-            const float proximityMountExtension =
-                ResolveFlashlightMountRetractionExtension(
-                    std::min(mountClearance, forwardClearance),
-                    retractionRange);
-            targetMountExtension = std::clamp(
-                std::min(
-                    hardMountExtension,
-                    proximityMountExtension),
-                0.f,
-                1.f);
-        }
-
-        const float previousMountExtension =
-            m_FlashlightMountExtension;
-        bool mountRecovery = m_FlashlightMountRecovery;
-        float mountExtension = m_FlashlightCollisionInitialized
-            ? (mountRecovery
-                ? 0.f
-                : AdvanceFlashlightMountExtension(
-                    previousMountExtension,
-                    targetMountExtension,
-                    elapsedSeconds))
-            : targetMountExtension;
-        mountExtension = std::min(
-            mountExtension,
-            hardMountExtension);
-        if (collisionRadiusIncreased)
-        {
-            mountExtension = std::min(
-                mountExtension,
-                previousMountExtension);
-        }
-        const bool mountExtensionChanged =
-            !m_FlashlightCollisionInitialized ||
-            std::abs(mountExtension - previousMountExtension) > 1e-6f;
-        float3 constrainedFlashlightPosition =
-            collisionAnchor +
-            (desiredFlashlightPosition - collisionAnchor) * mountExtension;
-        const bool constrainedPositionUnreached =
-            !m_FlashlightCollisionInitialized ||
-            lengthSquared(
-                constrainedFlashlightPosition -
-                m_FlashlightResolvedPosition) > 1e-12f;
-
-        float3 flashlightPosition = constrainedFlashlightPosition;
-        if (!m_FlashlightCollisionInitialized)
-        {
-            flashlightPosition = m_CameraCollisionWorld.ResolveSphere(
-                constrainedFlashlightPosition,
-                desiredFlashlightPosition - collisionAnchor,
+            flashlightPosition = m_CameraCollisionWorld.MoveSphere(
+                collisionStart,
+                desiredFlashlightPosition,
                 collisionRadius);
         }
-        else if (collisionRadiusChanged || desiredPositionChanged ||
-            cameraPositionChanged || mountExtensionChanged ||
-            constrainedPositionUnreached || mountRecovery)
+        else if (collisionRadiusChanged || desiredPositionChanged)
         {
             float3 collisionStart = m_FlashlightResolvedPosition;
             if (collisionRadiusChanged)
             {
                 collisionStart = m_CameraCollisionWorld.ResolveSphere(
                     collisionStart,
-                    constrainedFlashlightPosition - collisionStart,
+                    desiredFlashlightPosition - collisionStart,
                     collisionRadius);
             }
-            const float collisionArrivalTolerance =
-                CameraCollisionWorld::GetSphereSeparationSkin(
-                    collisionRadius) * 1.01f;
-            const auto reachedTarget =
-                [collisionArrivalTolerance](float3 position, float3 target)
-            {
-                return lengthSquared(position - target) <=
-                    collisionArrivalTolerance * collisionArrivalTolerance;
-            };
-            const auto recoverThroughAnchors =
-                [&](float3 start)
-                {
-                    const float3 previousAnchorPosition =
-                        m_CameraCollisionWorld.MoveSphere(
-                            start,
-                            m_FlashlightCollisionAnchor,
-                            collisionRadius);
-                    return m_CameraCollisionWorld.MoveSphere(
-                        previousAnchorPosition,
-                        collisionAnchor,
-                        collisionRadius);
-                };
-
-            if (mountRecovery)
-            {
-                flashlightPosition = recoverThroughAnchors(collisionStart);
-                if (reachedTarget(flashlightPosition, collisionAnchor))
-                {
-                    flashlightPosition = collisionAnchor;
-                    mountRecovery = false;
-                }
-            }
-            else
-            {
-                flashlightPosition = m_CameraCollisionWorld.MoveSphere(
-                    collisionStart,
-                    constrainedFlashlightPosition,
-                    collisionRadius);
-                if (reachedTarget(
-                        flashlightPosition,
-                        constrainedFlashlightPosition))
-                {
-                    flashlightPosition = constrainedFlashlightPosition;
-                }
-                else
-                {
-                    // Two individually safe mount rays can have a blocked
-                    // chord between them. Retract through the previous and
-                    // current camera anchors before restoring the new offset.
-                    mountExtension = 0.f;
-                    constrainedFlashlightPosition = collisionAnchor;
-                    mountRecovery = true;
-                    flashlightPosition =
-                        recoverThroughAnchors(collisionStart);
-                    if (reachedTarget(
-                            flashlightPosition,
-                            collisionAnchor))
-                    {
-                        flashlightPosition = collisionAnchor;
-                        mountRecovery = false;
-                    }
-                }
-            }
+            flashlightPosition = m_CameraCollisionWorld.MoveSphere(
+                collisionStart,
+                desiredFlashlightPosition,
+                collisionRadius);
         }
-        m_FlashlightCameraPosition = cameraPosition;
-        m_FlashlightCollisionAnchor = collisionAnchor;
+
         m_FlashlightDesiredPosition = desiredFlashlightPosition;
         m_FlashlightCollisionRadius = collisionRadius;
-        m_FlashlightMountExtension = mountExtension;
-        m_FlashlightHardMountExtension = hardMountExtension;
-        m_FlashlightTargetMountExtension = targetMountExtension;
-        m_FlashlightMountRecovery = mountRecovery;
         m_FlashlightCollisionInitialized = true;
 
-        const float3 aimTarget =
-            cameraPosition +
-            cameraDirection * FlashlightAimConvergenceDistanceMeters;
+        // Collision may displace the emitter, but it never drives the authored
+        // camera mount or aim. This keeps wall safety independent from scene
+        // depth, surface selection, and the intentional direction-only sway.
         const float3 mountedDirection = normalize(
-            aimTarget - flashlightPosition);
+            cameraDirection * mount.directionForward +
+            cameraRight * mount.directionRight +
+            cameraUp * mount.directionUp);
         float3 mountedRight =
             cameraRight -
             mountedDirection *
@@ -2966,6 +2784,7 @@ public:
 
         m_CameraCollisionWorld = std::move(
             m_PendingSceneCpuState->collisionWorld);
+        ResetFlashlightMotion();
         m_SceneDiagonal = m_PendingSceneCpuState->sceneDiagonal;
         m_CameraCollisionRadius =
             m_PendingSceneCpuState->collisionRadius;

@@ -124,6 +124,8 @@ int main(int argc, char** argv)
     const std::string directLightVisibility = ReadFile(
         root / "src/direct_light_visibility.h");
     const std::string flashlight = ReadFile(root / "src/flashlight.h");
+    const std::string cameraCollision = ReadFile(
+        root / "src/camera_collision.cpp");
     const std::string flashlightShared = ReadFile(
         root / "src/flashlight_shared.h");
     const std::string sceneLoading = ReadFile(
@@ -269,6 +271,12 @@ int main(int argc, char** argv)
             "        float angularSizeDegrees = 2.8641924f;\n"
             "        float beamRoundness = 0.80f;",
         "flashlight beam and analytical emitter defaults");
+    passed &= ExpectContains(
+        flashlight,
+        "float colorLinearRed = 1.f;\n"
+            "        float colorLinearGreen = 1.f;\n"
+            "        float colorLinearBlue = 1.f;",
+        "flashlight pure-white factory beam color");
     passed &= ExpectContains(
         flashlight,
         "ResolveFlashlightEmitterRadiusMeters(\n"
@@ -1181,6 +1189,14 @@ int main(int argc, char** argv)
             "            ResolveFlashlightEmitterRadiusMeters(\n"
             "                settings.angularSizeDegrees);",
         "selectable analytical flashlight emitter radius");
+    passed &= ExpectContains(
+        flashlightPresentation,
+        "const float3 color(\n"
+            "            settings.colorLinearRed,\n"
+            "            settings.colorLinearGreen,\n"
+            "            settings.colorLinearBlue);\n"
+            "        m_Flashlight->color = color;",
+        "flashlight sanitized color reaches the analytical light");
     passed &= ExpectAbsent(
         flashlightPresentation,
         "shadowMap",
@@ -1200,30 +1216,52 @@ int main(int argc, char** argv)
         "ApplyFlashlightPresentation();",
         "flashlight transition before presentation");
 
+    const std::string_view resetAllRendererSettings = ExtractSection(
+        viewer,
+        "void ResetAllRendererSettings()",
+        "void SynchronizeCameraInput()");
+    passed &= ExpectContains(
+        resetAllRendererSettings,
+        "m_ui.Flashlight = DefaultFlashlightSettings;",
+        "global reset restores the pure-white flashlight defaults");
+    passed &= ExpectContains(
+        viewer,
+        "flashlight.colorLinearRed =\n"
+            "                                defaults.colorLinearRed;\n"
+            "                            flashlight.colorLinearGreen =\n"
+            "                                defaults.colorLinearGreen;\n"
+            "                            flashlight.colorLinearBlue =\n"
+            "                                defaults.colorLinearBlue;",
+        "flashlight Color reset restores every pure-white channel");
+
     const std::string_view flashlightReset = ExtractSection(
         viewer,
         "void ResetFlashlightMotion()",
         "void ApplyFlashlightPresentation()");
     passed &= ExpectContains(
         flashlightReset,
-        "m_FlashlightCollisionAnchor = 0.f;",
-        "flashlight collision anchor reset");
+        "m_FlashlightDesiredPosition = 0.f;",
+        "flashlight collision target reset");
     passed &= ExpectContains(
         flashlightReset,
-        "m_FlashlightMountExtension = 1.f;",
-        "flashlight mount extension reset");
+        "m_FlashlightCollisionRadius = 0.f;",
+        "flashlight collision radius reset");
     passed &= ExpectContains(
         flashlightReset,
-        "m_FlashlightHardMountExtension = 1.f;",
-        "flashlight hard mount extension reset");
-    passed &= ExpectContains(
-        flashlightReset,
-        "m_FlashlightTargetMountExtension = 1.f;",
-        "flashlight target mount extension reset");
-    passed &= ExpectContains(
-        flashlightReset,
-        "m_FlashlightMountRecovery = false;",
-        "flashlight blocked-chord recovery reset");
+        "m_FlashlightCollisionInitialized = false;",
+        "flashlight collision cache reset");
+    for (const std::string_view retiredState : {
+            std::string_view("Receiver"),
+            std::string_view("MountExtension"),
+            std::string_view("MountAdjustment"),
+            std::string_view("MountRecovery"),
+            std::string_view("PendingAction") })
+    {
+        passed &= ExpectAbsent(
+            flashlightReset,
+            retiredState,
+            "retired flashlight centering state remains absent from reset");
+    }
 
     const std::string_view flashlightMotion = ExtractSection(
         viewer,
@@ -1259,143 +1297,58 @@ int main(int argc, char** argv)
         "flashlight stationary overlap repair");
     passed &= ExpectContains(
         flashlightMotion,
-        "m_CameraCollisionWorld.GetSphereTravelFraction(",
-        "flashlight predictive no-slide mount probes");
-    passed &= ExpectContains(
-        flashlightMotion,
-        "ResolveFlashlightMountRetractionRange(",
-        "flashlight early proximity envelope");
-    const std::string_view flashlightProximityUpdate = ExtractSection(
-        flashlightMotion,
-        "if (collisionRadiusChanged || desiredPositionChanged ||\n"
-            "            cameraPositionChanged)",
-        "const float previousMountExtension =");
-    passed &= ExpectContains(
-        flashlightProximityUpdate,
-        "const float mountProbeDistance =",
-        "flashlight mount probe cached behind pose changes");
-    passed &= ExpectContains(
-        flashlightProximityUpdate,
-        "const float3 forwardProbeEnd =",
-        "flashlight forward probe cached behind pose changes");
-    passed &= ExpectAbsent(
-        flashlightProximityUpdate,
-        "AdvanceFlashlightMountExtension(",
-        "flashlight idle release remains outside collision probes");
-    passed &= ExpectOrdered(
-        flashlightMotion,
-        "const float mountProbeDistance =",
-        "const float3 forwardProbeEnd =",
-        "flashlight mount probe before forward probe");
-    passed &= ExpectOrdered(
-        flashlightMotion,
-        "const float3 forwardProbeEnd =",
-        "ResolveFlashlightMountRetractionExtension(",
-        "flashlight forward probe before spatial easing");
-    passed &= ExpectOrdered(
-        flashlightMotion,
-        "hardSafeFlashlightPosition",
-        "cameraDirection * retractionRange.farDistanceMeters;",
-        "flashlight forward probe begins at the hard-safe emitter");
-    passed &= ExpectContains(
-        flashlightMotion,
-        "std::min(\n"
-            "                    hardMountExtension,\n"
-            "                    proximityMountExtension)",
-        "flashlight proximity target bounded by hard collision limit");
-    passed &= ExpectContains(
-        flashlightMotion,
-        "AdvanceFlashlightMountExtension(",
-        "flashlight bounded uniform mount restoration");
-    passed &= ExpectContains(
-        flashlightMotion,
-        "(desiredFlashlightPosition - collisionAnchor) * mountExtension;",
-        "flashlight complete mount-vector retraction");
+        "m_CameraCollisionWorld.ResolveSphere(\n"
+            "                cameraPosition,\n"
+            "                desiredFlashlightPosition - cameraPosition,",
+        "flashlight activation begins from a camera-side safe sphere");
     passed &= ExpectContains(
         flashlightMotion,
         "m_CameraCollisionWorld.MoveSphere(",
         "flashlight continuous collision sweep");
     passed &= ExpectOrdered(
         flashlightMotion,
-        "CameraCollisionWorld::GetSphereSeparationSkin(",
-        "const auto reachedTarget =",
-        "flashlight arrival tolerance matches collision separation skin");
+        "const float3 collisionStart =\n"
+            "                m_CameraCollisionWorld.ResolveSphere(",
+        "flashlightPosition = m_CameraCollisionWorld.MoveSphere(\n"
+            "                collisionStart,\n"
+            "                desiredFlashlightPosition,",
+        "first activation repairs the camera-side start before sweeping to the mount");
     passed &= ExpectContains(
         flashlightMotion,
-        "flashlightPosition = constrainedFlashlightPosition;",
-        "flashlight validated mount target exact snap");
+        "const float3 mountedDirection = normalize(\n"
+            "            cameraDirection * mount.directionForward +",
+        "flashlight collision does not rewrite the authored camera aim");
     passed &= ExpectContains(
         flashlightMotion,
-        "cameraDirection * FlashlightAimConvergenceDistanceMeters;",
-        "flashlight post-collision convergence target");
-    passed &= ExpectOrdered(
-        flashlightMotion,
-        "m_CameraCollisionWorld.ResolveSphere(",
-        "m_CameraCollisionWorld.GetSphereTravelFraction(",
-        "flashlight safe anchor before direct mount limit");
-    passed &= ExpectOrdered(
-        flashlightMotion,
-        "m_CameraCollisionWorld.GetSphereTravelFraction(",
-        "AdvanceFlashlightMountExtension(",
-        "flashlight predictive limit before mount restoration");
-    passed &= ExpectOrdered(
-        flashlightMotion,
-        "AdvanceFlashlightMountExtension(",
-        "mountExtension = std::min(\n"
-            "            mountExtension,\n"
-            "            hardMountExtension);",
-        "flashlight presentation extension defensively hard-clamped");
-    passed &= ExpectContains(
-        flashlightMotion,
-        "if (collisionRadiusIncreased)\n"
-            "        {\n"
-            "            mountExtension = std::min(\n"
-            "                mountExtension,\n"
-            "                previousMountExtension);",
-        "flashlight radius growth cannot expand the mount");
-    passed &= ExpectOrdered(
-        flashlightMotion,
-        "AdvanceFlashlightMountExtension(",
-        "float3 constrainedFlashlightPosition =",
-        "flashlight extension before complete-vector target");
-    passed &= ExpectOrdered(
-        flashlightMotion,
-        "float3 constrainedFlashlightPosition =",
-        "flashlightPosition = m_CameraCollisionWorld.MoveSphere(",
-        "flashlight constrained target before final safety sweep");
+        "m_FlashlightDesiredPosition = desiredFlashlightPosition;\n"
+            "        m_FlashlightCollisionRadius = collisionRadius;\n"
+            "        m_FlashlightCollisionInitialized = true;",
+        "flashlight collision cache persists only physical inputs");
+    for (const std::string_view retiredFeedback : {
+            std::string_view("GetRayTravelFraction"),
+            std::string_view("GetSphereTravelFraction"),
+            std::string_view("receiver"),
+            std::string_view("Receiver"),
+            std::string_view("mountExtension"),
+            std::string_view("MountExtension"),
+            std::string_view("MountAdjustment"),
+            std::string_view("MountRecovery"),
+            std::string_view("proximity") })
+    {
+        passed &= ExpectAbsent(
+            flashlightMotion,
+            retiredFeedback,
+            "retired flashlight receiver-driven centering stays absent");
+    }
     passed &= ExpectOrdered(
         flashlightMotion,
         "flashlightPosition = m_CameraCollisionWorld.MoveSphere(",
-        "const float3 mountedDirection = normalize(",
-        "flashlight collision before corrected aiming");
-    passed &= ExpectOrdered(
-        flashlightMotion,
-        "start,\n"
-            "                            m_FlashlightCollisionAnchor,",
-        "previousAnchorPosition,\n"
-            "                        collisionAnchor,",
-        "flashlight blocked chord recovery through old and new anchors");
-    passed &= ExpectContains(
-        flashlightMotion,
-        "mountExtension = 0.f;\n"
-            "                    constrainedFlashlightPosition = "
-            "collisionAnchor;\n"
-            "                    mountRecovery = true;\n"
-            "                    flashlightPosition =\n"
-            "                        recoverThroughAnchors(collisionStart);",
-        "flashlight blocked chord immediate full retraction");
-    passed &= ExpectContains(
-        flashlightMotion,
-        "m_FlashlightMountRecovery = mountRecovery;",
-        "flashlight blocked chord recovery persistence");
-    passed &= ExpectContains(
-        flashlightMotion,
         "m_FlashlightResolvedPosition = flashlightPosition;",
-        "flashlight shared off-axis position");
+        "flashlight collision resolves before position publication");
     passed &= ExpectContains(
         flashlightMotion,
         "m_FlashlightResolvedDirection = mountedDirection;",
-        "simple flashlight converged camera aim");
+        "simple flashlight authored camera aim");
     passed &= ExpectContains(
         flashlightMotion,
         "m_FlashlightResolvedRight = mountedRight;",
@@ -1416,6 +1369,18 @@ int main(int argc, char** argv)
         flashlightMotion,
         "ResolveFlashlightSwayOffset(",
         "realistic flashlight bounded sway");
+    const std::string_view flashlightSway = ExtractSection(
+        flashlightMotion,
+        "m_FlashlightSwayTime = AdvanceFlashlightSwayTime(",
+        "m_FlashlightPoseValid = true;");
+    passed &= ExpectAbsent(
+        flashlightSway,
+        "m_FlashlightResolvedPosition",
+        "flashlight sway cannot change physical mount position");
+    passed &= ExpectAbsent(
+        flashlightSway,
+        "m_CameraCollisionWorld",
+        "flashlight sway cannot affect physical collision");
     passed &= ExpectContains(
         flashlightMotion,
         "beamRight -=\n"
@@ -1660,6 +1625,11 @@ int main(int argc, char** argv)
     passed &= ExpectOrdered(
         sceneLoadedHandoff,
         "m_CameraCollisionWorld = std::move(",
+        "ResetFlashlightMotion();",
+        "new collision world invalidates flashlight collision cache");
+    passed &= ExpectOrdered(
+        sceneLoadedHandoff,
+        "ResetFlashlightMotion();",
         "m_Scene->BeginLoadingBuffers();",
         "prepared collision installation before bounded upload");
     passed &= ExpectContains(

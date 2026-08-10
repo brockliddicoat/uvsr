@@ -59,15 +59,15 @@ angle to keep the near field finite while converging to the authored luminous
 intensity's inverse square result in the far field. Zero radius preserves the
 exact point-light energy and hard center ray. A positive radius traces four
 noise-shifted directions over the emitter's visible spherical cap and averages
-their visibility. A dedicated emitter-aware collision sphere sweeps through the
-camera collision hierarchy. Predictive sweeps along the mount and forward from
-the hard-safe emitter create a cubic proximity fade beginning at least 0.75
-metres before contact. The result uniformly retracts the full flashlight mount
-vector toward the camera rather than sliding its horizontal or vertical offset
-along the surface. The physical sweep remains an immediate upper bound, the
-offset restores smoothly when clearance returns, a final sphere sweep protects
-continuous camera motion, and beam aim is recomputed from the resulting safe
-position.
+their visibility. The factory beam color is pure linear white. A dedicated
+emitter-aware collision sphere sweeps the authored mount through the camera
+collision hierarchy and resolves stationary overlap when the radius changes.
+Collision may stop or slide the emitter to keep it outside geometry, but it
+does not sample receiver depth, scale the camera offset, or retarget the
+authored beam. Lens sway remains a later direction-only presentation effect and
+cannot feed back into collision or light position. The rejected receiver-driven
+centering experiment is documented in
+[Flashlight Camera Centering v1](postmortem/flashlight-camera-centering-v1.md).
 
 Direct visibility has separate fixed slots for the exact flashlight and primary
 sun pointers. The flashlight slot consumes its finite ray traced scalar

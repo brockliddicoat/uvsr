@@ -242,6 +242,8 @@ int main()
         "section counts must match the current UI");
     Require(actionCount == 4u,
         "only open-folder, reset, capture, and restart actions remain");
+    Require(UiSettingsCommandCatalog.size() - actionCount == 180u,
+        "the compact catalog must contain 180 values");
     Require(dynamicCount == 49u,
         "runtime lights and materials must retain their 49 dynamic controls");
     Require(dynamicSelections == ExpectedDynamicSelections,
@@ -482,6 +484,9 @@ int main()
         "sky.auto-exposure.adjustment-period", Kind::Float, Section::Sky);
     requireKindAndSection(
         "light.selected.flashlight.angular-size", Kind::Float, Section::Lights);
+    Require(!Find("light.selected.flashlight.adjustment-speed") &&
+            !Find("light.selected.flashlight.time-to-action"),
+        "retired flashlight camera-centering controls must remain absent");
 
     const UiSettingsCommandDefinition* capture = Find("capture");
     Require(capture && capture->kind == Kind::Action &&

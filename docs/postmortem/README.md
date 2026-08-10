@@ -11,6 +11,10 @@ implementation wholesale.
 - [Engine Cutdown Archive](engine-cutdowns/README.md) keeps the dated shader and
   renderer cutdown reports, complete removal inventories, and restoration
   boundaries.
+- [Flashlight Camera Centering v1](flashlight-camera-centering-v1.md) records the
+  rejected proximity- and receiver-driven mount experiment, the persistent
+  column-edge lurching that ended it, and the evidence required for a future
+  screen-space successor.
 - [Native-Resolution Analytical/Reconstructive Temporal Anti-Aliasing v1](native-resolution-analytical-reconstructive-temporal-anti-aliasing-v1.md)
   records the retired temporal anti-aliasing
   experiment and the required order for a smaller successor.

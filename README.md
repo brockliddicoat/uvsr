@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 88,563 non-blank source lines.
+**First-Party Lines of Code:** 88,013 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,603 non-blank source lines.
 
-**Total Lines of Code:** 476,166 non-blank source lines.
+**Total Lines of Code:** 475,616 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -60,12 +60,16 @@ visibility, anti aliasing, shadow, and denoising systems.
   light with an authored two lobe beam profile and full resolution ray traced
   visibility. Horizontal and vertical offsets span minus 40 through plus 40
   centimeters. Beam Size defaults to 16 degrees, Beam Roundness to `0.8`, and
-  selectable full Angular Size to 2.86 degrees. Positive size drives both its
+  selectable full Angular Size to 2.86 degrees; its factory beam color is pure
+  linear white. Positive size drives both its
   finite direct-light energy and a four-ray visible-emitter shadow estimate;
   zero is the exact point-light, hard-shadow branch. An emitter-aware collision
-  sphere keeps the light outside nearby geometry. A predictive proximity fade
-  begins at least 0.75 metres before contact and uniformly retracts the complete
-  camera offset as a wall approaches.
+  sphere continuously sweeps the authored camera mount and repairs overlap when
+  its radius changes, keeping the emitter outside nearby geometry. Collision
+  may stop or slide the emitter, but scene depth never retracts the mount or
+  retargets the beam. Lens sway remains direction-only. The rejected
+  receiver-driven centering experiment is documented in
+  [Flashlight Camera Centering v1](docs/postmortem/flashlight-camera-centering-v1.md).
 - **Shared World Representation.** The Representation drawer owns the ray query
   BVH and one **Allow Ray Traversal** master switch. Turning it off stops sky,
   sun, and flashlight traversal without erasing their individual settings.

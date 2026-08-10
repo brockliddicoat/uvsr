@@ -108,111 +108,6 @@ int main()
     assert(afterReversal < beforeReversal);
     assert(afterReversal > 0.f);
 
-    const float defaultMountLength = std::sqrt(
-        FlashlightCameraForwardOffsetMeters *
-            FlashlightCameraForwardOffsetMeters +
-        DefaultFlashlightSettings.cameraHorizontalOffsetMeters *
-            DefaultFlashlightSettings.cameraHorizontalOffsetMeters +
-        DefaultFlashlightSettings.cameraVerticalOffsetMeters *
-            DefaultFlashlightSettings.cameraVerticalOffsetMeters);
-    const FlashlightMountRetractionRange defaultRetractionRange =
-        ResolveFlashlightMountRetractionRange(
-            FlashlightMinimumCollisionRadiusMeters,
-            defaultMountLength);
-    assert(Near(
-        defaultRetractionRange.nearDistanceMeters,
-        0.05f));
-    assert(Near(
-        defaultRetractionRange.farDistanceMeters,
-        0.75f));
-    const FlashlightMountRetractionRange largeMountRetractionRange =
-        ResolveFlashlightMountRetractionRange(0.4f, 1.f);
-    assert(Near(
-        largeMountRetractionRange.nearDistanceMeters,
-        0.2f));
-    assert(Near(
-        largeMountRetractionRange.farDistanceMeters,
-        2.f));
-
-    const float retractionSpan =
-        defaultRetractionRange.farDistanceMeters -
-        defaultRetractionRange.nearDistanceMeters;
-    assert(ResolveFlashlightMountRetractionExtension(
-        defaultRetractionRange.nearDistanceMeters,
-        defaultRetractionRange) == 0.f);
-    assert(ResolveFlashlightMountRetractionExtension(
-        defaultRetractionRange.farDistanceMeters,
-        defaultRetractionRange) == 1.f);
-    assert(Near(
-        ResolveFlashlightMountRetractionExtension(
-            defaultRetractionRange.nearDistanceMeters +
-                retractionSpan * 0.25f,
-            defaultRetractionRange),
-        0.15625f));
-    assert(Near(
-        ResolveFlashlightMountRetractionExtension(
-            defaultRetractionRange.nearDistanceMeters +
-                retractionSpan * 0.5f,
-            defaultRetractionRange),
-        0.5f));
-    assert(Near(
-        ResolveFlashlightMountRetractionExtension(
-            defaultRetractionRange.nearDistanceMeters +
-                retractionSpan * 0.75f,
-            defaultRetractionRange),
-        0.84375f));
-    assert(ResolveFlashlightMountRetractionExtension(
-        std::numeric_limits<float>::quiet_NaN(),
-        defaultRetractionRange) == 0.f);
-
-    assert(Near(
-        AdvanceFlashlightMountExtension(
-            0.f,
-            1.f,
-            FlashlightMountReleaseHalfLifeSeconds),
-        0.5f));
-    assert(AdvanceFlashlightMountExtension(1.f, 0.35f, 0.f) ==
-        0.35f);
-    assert(AdvanceFlashlightMountExtension(
-        0.8f,
-        0.2f,
-        std::numeric_limits<float>::quiet_NaN()) == 0.2f);
-    assert(AdvanceFlashlightMountExtension(-1.f, 2.f, 0.f) == 0.f);
-    assert(AdvanceFlashlightMountExtension(
-        std::numeric_limits<float>::quiet_NaN(),
-        1.f,
-        0.f) == 0.f);
-    assert(AdvanceFlashlightMountExtension(
-        1.f,
-        std::numeric_limits<float>::quiet_NaN(),
-        1.f) == 0.f);
-
-    float monotonicMountExtension = 0.f;
-    for (int step = 0; step < 60; ++step)
-    {
-        const float nextMountExtension = AdvanceFlashlightMountExtension(
-            monotonicMountExtension,
-            1.f,
-            1.f / 60.f);
-        assert(nextMountExtension >= monotonicMountExtension);
-        assert(nextMountExtension >= 0.f && nextMountExtension <= 1.f);
-        monotonicMountExtension = nextMountExtension;
-    }
-
-    const float wholeMountRelease = AdvanceFlashlightMountExtension(
-        0.2f,
-        0.9f,
-        0.24f);
-    float partitionedMountRelease = 0.2f;
-    for (int step = 0; step < 24; ++step)
-    {
-        partitionedMountRelease = AdvanceFlashlightMountExtension(
-            partitionedMountRelease,
-            0.9f,
-            0.01f);
-    }
-    assert(Near(wholeMountRelease, partitionedMountRelease, 2e-5f));
-
     assert(!ShouldSubmitFlashlight(0.f));
     assert(ShouldSubmitFlashlight(1.f));
 
@@ -257,8 +152,8 @@ int main()
     assert(Near(DefaultFlashlightSettings.swayDegrees, 0.20f));
     assert(Near(DefaultFlashlightSettings.aimCorrectionSeconds, 0.05f));
     assert(Near(DefaultFlashlightSettings.colorLinearRed, 1.f));
-    assert(Near(DefaultFlashlightSettings.colorLinearGreen, 0.80f));
-    assert(Near(DefaultFlashlightSettings.colorLinearBlue, 0.65f));
+    assert(Near(DefaultFlashlightSettings.colorLinearGreen, 1.f));
+    assert(Near(DefaultFlashlightSettings.colorLinearBlue, 1.f));
     const float defaultEmitterRadius = ResolveFlashlightEmitterRadiusMeters(
         DefaultFlashlightSettings.angularSizeDegrees);
     assert(Near(defaultEmitterRadius, 0.025f, 1e-6f));
@@ -438,9 +333,9 @@ int main()
     assert(invalidVerticalFlashlightMount.positionUpMeters ==
         DefaultFlashlightSettings.cameraVerticalOffsetMeters);
 
-    assert(DefaultFlashlightSettings.colorLinearRed >=
+    assert(DefaultFlashlightSettings.colorLinearRed ==
         DefaultFlashlightSettings.colorLinearGreen);
-    assert(DefaultFlashlightSettings.colorLinearGreen >=
+    assert(DefaultFlashlightSettings.colorLinearGreen ==
         DefaultFlashlightSettings.colorLinearBlue);
 
     FlashlightSettings realisticSettings =

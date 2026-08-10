@@ -2080,6 +2080,21 @@ namespace
             }
         }
 
+        const std::string_view lightsDispatcher =
+            dispatchers.at("Lights");
+        RequireContains(
+            lightsDispatcher,
+            "FlashlightFloatCommandBinding, 12>",
+            "flashlight Float command binding count");
+        RequireAbsent(
+            lightsDispatcher,
+            "light.selected.flashlight.adjustment-speed",
+            "retired flashlight Adjustment Speed command");
+        RequireAbsent(
+            lightsDispatcher,
+            "light.selected.flashlight.time-to-action",
+            "retired flashlight Time to Action command");
+
         const std::string compactRepresentationDispatcher =
             Compact(representationDispatcher);
         for (const std::string_view mapping : {
@@ -2638,6 +2653,17 @@ namespace
                 "m_app->ResetImageBasedLightingHistory();"
             },
             "flashlight Angular Size UI history reset");
+        for (const std::string_view retiredMovementUi : {
+                std::string_view("\"Adjustment Speed\""),
+                std::string_view("\"Time to Action\""),
+                std::string_view(
+                    "\"Camera Movement Diagnostics##Flashlight\"") })
+        {
+            RequireAbsent(
+                lightsDrawer,
+                retiredMovementUi,
+                "retired flashlight camera-centering UI stays absent");
+        }
 
         const std::string_view footer = ExtractSection(
             viewer,

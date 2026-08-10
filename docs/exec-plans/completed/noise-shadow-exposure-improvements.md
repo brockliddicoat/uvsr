@@ -2,7 +2,7 @@
 
 ## Status
 
-- State: second follow-up repair in progress after product rejection
+- State: complete, technically verified, and product accepted for canonical integration
 - Coordinator: `/root`
 - Project branch and worktree: `codex/main-lighting-denoising-controls` at
   `C:/Users/brock/OneDrive/Documents/uvsr/work/main-lighting-denoising-controls`
@@ -59,9 +59,13 @@ Done when:
       the established AgX/manual presentation path exact while disabled.
 - [x] Pressing `V` begins camera roll reset while a stationary trackpad gesture
       remains held, without suppressing real subsequent camera movement.
-- [x] Near-wall flashlight collision retracts the complete forward, horizontal,
-      and vertical mount offset toward the camera instead of sliding the lateral
-      components along the wall.
+- [x] The rejected receiver-driven flashlight centering experiment is removed
+      end to end and documented with enough implementation history, failure
+      analysis, and future instrumentation guidance to support a new approach.
+- [x] Only emitter-aware overlap repair and continuous sphere collision remain
+      in flashlight-to-camera movement; receiver rays, proximity retraction,
+      temporal controls, movement diagnostics, and compatibility aliases are
+      absent. The pure-white factory beam remains.
 
 ## Scope
 
@@ -119,6 +123,10 @@ Shared hotspots reserved for the coordinator:
 | Second follow-up documentation | `/root/followup_docs` | Three renderer and UI documents | Complete | Current exposure, camera, and collision behavior |
 | Second follow-up independent review | `/root/exposure_source_review`, `/root/flashlight_camera_review` | Read-only production source | Complete | Failure-path, collision-recovery, and input-order review |
 | Final proximity and publication review | `/root/exposure_source_review`, `/root/flashlight_camera_review`, `/root/exposure_ui_tests` | Read-only production source and live GitHub state | Complete | Early smooth retraction, safety/cache contracts, and explicit feature-branch push target |
+| Receiver-feedback follow-up review | `/root/exposure_source_review`, `/root/flashlight_camera_review`, `/root/exposure_ui_tests` | Read-only flashlight geometry, source, and focused tests | Complete | Exact receiver feedback, bounded visibility state, collision recovery, and regression coverage |
+| Depth-discontinuity stability review | `/root/exposure_source_review`, `/root/flashlight_camera_review`, `/root/exposure_ui_tests` | Read-only temporal response, receiver visibility, sway isolation, white default, and focused tests | Complete | Frozen final reviews found no P0 through P2 issue after optical misses gained a distinct temporal retraction state |
+| Pillar-transition stabilization | `/root` | Flashlight settings, receiver controller, commands, UI, shared documentation, integration, build, and runtime | In Progress | Sustained-input gating, stale-state repair, response controls, cached diagnostics, builds, and automated checks are complete; replacement runtime and product acceptance remain |
+| Pillar-transition tests and review | `/root/exposure_ui_tests`, `/root/exposure_source_review`, `/root/flashlight_camera_review` | Focused tests followed by frozen read-only source review | Complete | Target-specific timing/state contracts and two independent frozen reviews pass with no P0 through P2 finding |
 
 Workers retain disjoint file leases and release ownership through a distilled
 handoff. The coordinator remains the only integrator and build/runtime operator.
@@ -167,6 +175,13 @@ handoff. The coordinator remains the only integrator and build/runtime operator.
 | 2026-08-09 | Bound only automatic exposure correction with independent Maximum Brightening and Maximum Darkening magnitudes, then apply Exposure Compensation afterward. | This keeps intentional bias independent from safety limits and matches the separation used by NVIDIA RTXPT and Unreal exposure controls. The adjustable hard range remains RTXPT's `-16 EV` through `+16 EV`, while conservative `+5 EV` and `-2 EV` defaults follow NVIDIA RTX Remix and make the safeguards useful without setup. |
 | 2026-08-09 | Compute a no-slide mount-extension limit from a camera-centered safe anchor before the ordinary continuous flashlight sweep. | The camera collision solver intentionally preserves tangential motion, which kept the flashlight right/down offset against a frontal wall. Scaling the complete mount by first contact retracts every component together without changing camera sliding. |
 | 2026-08-09 | Replace contact-only flashlight correction with a cubic proximity envelope from `0.05` through at least `0.75` metres, scaled for the hitbox and mount length. | The default mount's four-centimetre forward component crossed the old transition in less than one frame at normal camera speed. Extended mount and hard-safe forward sweeps start the correction earlier while preserving the physical hard limit and final sweep. |
+| 2026-08-09 | Supersede the rejected cubic proximity envelope with camera-center receiver feedback and the exact `d / 6` physical mount law. | The fixed lookahead still began too late and combined an abrupt target drop with fixed six-metre aim. Measuring the actual camera-ray receiver continuously starts correction at the authored convergence distance, centers the beam on that receiver, and retracts the complete mount in the same proportion. |
+| 2026-08-09 | Apply a 200 ms inward and 80 ms outward half-life to receiver-driven mount changes, then derive transient aim from the final extension. | A raw depth discontinuity across a pillar could move most of the off-axis mount in one frame. The asymmetric response limits a one-frame 60 Hz near pulse to 5.61 percent while persistent geometry still converges continuously; using the same final extension for aim prevents a parallax snap. Hard collision and recovery remain immediate. |
+| 2026-08-09 | Keep sway direction-only and change the factory flashlight color to pure linear white. | Receiver sampling, collision, and physical mount position must remain deterministic for a camera pose regardless of the cosmetic lens sway phase. A neutral white factory color avoids an unwanted warm tint while preserving the existing Color control. |
+| 2026-08-09 | Require 100 ms of target-specific continuous soft inward evidence by default, expose 0 through 500 ms Time to Action and 0.25x through 4.00x Adjustment Speed, and keep hard collision outside that controller. | The 200 ms filter still moved on the first pillar sample, so repeated short hits accumulated as visible sticking. A separate confirmation phase rejects transient geometry completely, and materially different depths cannot inherit an already-confirmed target or pending dwell. The speed multiplier lets users tune sustained inward and outward response without weakening physical safety. |
+| 2026-08-09 | Prevalidate every changed receiver and clear exact receiver aim on release before applying the temporal response. | Reusing Occluded Retraction across different columns pulled inward on clear surfaces, while open-space aim correction could remain attached to a departed pillar. These are state-lifetime defects rather than response-speed choices. |
+| 2026-08-09 | Expose a default-closed, read-only Camera Movement Diagnostics group backed only by cached controller state. | Receiver, delay, target, visibility, recovery, collision, and aim state are useful for human tuning, but diagnostics must not add rays or alter renderer behavior. |
+| 2026-08-09 | Reject and remove every receiver-driven or proximity-driven flashlight camera-centering approach. | Product review still observed harsh face-to-face lurching and sticking across rows of columns after proximity probes, `d / 6` receiver scaling, connected visibility, asymmetric filtering, target-specific delay, and diagnostics. The stable retained boundary is physical emitter collision only; the complete failure record is in `docs/postmortem/flashlight-camera-centering-v1.md`. |
 | 2026-08-09 | Publish only to `origin/codex/main-lighting-denoising-controls` after final verification. | Live `origin/main` still equals the feature base, but the local branch incorrectly tracks `origin/main`; an explicit feature ref avoids a direct canonical push and does not create or merge a PR. |
 
 ## Progress and Handoffs
@@ -196,6 +211,20 @@ handoff. The coordinator remains the only integrator and build/runtime operator.
 | 2026-08-09 | Final independent review | Complete | Frozen flashlight and camera review found no P0 through P2 issue after radius-growth and idle-cache contracts were added to the focused source tests |
 | 2026-08-09 | Final combined verification | Complete | Standard and NRD Release builds each compiled all 306 first-party shader tasks and passed all 40 tests; exact noise assets, loading lifetime, exposure color, collision, UI, command, packaging, line-count, and document contracts pass |
 | 2026-08-09 | Final replacement runtime smoke | Complete | The exact NRD executable launched as PID `52564`, exposed a responsive `UVSR Renderer D3D12 (51bad6a)` window, and ran at High priority; visual acceptance of the smoother early wall transition remains pending before canonical integration |
+| 2026-08-09 | Receiver-feedback product review | Complete | Product review rejected the fixed-lookahead artifact because its mount still lurched around one metre and its beam centered too late and too weakly |
+| 2026-08-09 | Receiver-feedback implementation | Complete | Added a specialized camera-center point ray, proportional `d / 6` complete-mount retraction, exact receiver aiming, immediate inward coupling, tolerance-stepped outward validation, blocked-idle caching, damped restoration, and phased collision recovery |
+| 2026-08-09 | Receiver-feedback combined verification | Complete | Standard and NRD Release builds compiled all 306 shader tasks and passed all 40 tests; focused receiver, collision, recovery, cache, UI, asset, line-count, and package contracts pass |
+| 2026-08-09 | Receiver-feedback independent review | Complete | Three frozen read-only reviews found no remaining P0 through P2 issue after blocked-idle, stale recovery-state, second-leg progress, and radius-change waypoint repairs |
+| 2026-08-09 | Depth-discontinuity stability implementation | Complete | Added 200 ms inward and 80 ms outward mount response, final-extension-coupled aim, temporal optical retraction around corners, explicit sway isolation, and a pure-white factory beam |
+| 2026-08-09 | Depth-discontinuity stability independent review | Complete | Frozen reviews found and repaired initialization bypass, immediate optical-zero collapse, nonzero corner stalling, and equal-extension cache termination; final source and focused-test reviews report no remaining P0 through P2 issue |
+| 2026-08-09 | Depth-discontinuity stability combined verification | Complete | Standard and NRD Release applications each compiled all 306 shader tasks and passed all 40 tests; focused contracts and frozen independent reviews pass, and the replacement runtime is responsive |
+| 2026-08-09 | Pillar-transition product review | Complete | Product review rejected the remaining harsh, sticky response while panning across rows of columns and requested configurable adjustment speed, configurable time to action, and useful movement diagnostics |
+| 2026-08-09 | Pillar-transition implementation | Complete | Added a target-specific continuous-evidence gate with a 100 ms default, a 0.25x through 4.00x speed multiplier, receiver-state prevalidation, released-aim reset, and cached raw/accepted/pending diagnostics |
+| 2026-08-09 | Pillar-transition focused verification | Complete | Direct flashlight, renderer, UI, and command tests cover accepted/pending targets, one-frame 4 m to 1 m discontinuities, alternating 1 m/2 m targets, exact threshold overflow, 30/60/120 Hz partitioning, speed endpoints, hard safety, and diagnostics |
+| 2026-08-09 | Pillar-transition independent review | Complete | Two frozen read-only reviews found no P0 through P2 defect after materially different depths gained independent evidence and diagnostics gained reachable hard-limit and exact aim states |
+| 2026-08-09 | Pillar-transition combined verification | Complete | Standard and NRD Release builds each compiled all 306 shader tasks and passed all 40 tests; README line counts, document Title Case, package contracts, asset provenance, and diff hygiene pass |
+| 2026-08-09 | Final flashlight centering product review | Complete | Product review rejected the configurable pillar-transition candidate because the beam still appeared to teleport between nearer column faces and remained sticky despite slower response and target-specific delay |
+| 2026-08-09 | Flashlight camera-centering rollback | Complete | Removed receiver/proximity movement, temporal and recovery state, commands, controls, and diagnostics; retained camera-side overlap repair plus continuous emitter sweep, pure-white defaults, and finite-emitter shadows. Standard and NRD Release each passed all 40 tests, the 306-task shader bundle passed, and the repaired initialization path passed a frozen independent review. |
 
 ## Risks and Stop Conditions
 
@@ -215,20 +244,22 @@ handoff. The coordinator remains the only integrator and build/runtime operator.
 
 ## Completion
 
-- Final integrated commit: the authorized
-  `origin/codex/main-lighting-denoising-controls` feature-branch tip; no direct
-  canonical push, pull request, or merge is authorized
+- Published feature checkpoint: `f892c17e33c007db69ca10f055bd7e59301b37d0`
+  on `origin/codex/main-lighting-denoising-controls`; this completed record
+  accompanies the fast-forward integration into `origin/main`
 - Exact NRD executable:
   `C:/Users/brock/OneDrive/Documents/uvsr/work/main-lighting-denoising-controls/build-nrd-final/bin/uvsr.exe`
 - NRD executable SHA-256:
-  `C57A500F0C93F6FC52206BD934D7469E23799E0D756A5974CF5F1EC38BA2CC1E`
+  `A10FBB14CDCF1965AD3FBCDAEB40146EA998A3A474B4D717BF51F1BA1571A1E6`
 - Exact standard executable:
   `C:/Users/brock/OneDrive/Documents/uvsr/work/main-lighting-denoising-controls/build/bin/uvsr.exe`
 - Standard executable SHA-256:
-  `7B3E118781A91AF225B4F31BF247E7D761C3995A32481AC7D098E2B9762476FF`
-- Runtime smoke: the replacement NRD artifact is running responsively as PID
-  `52564`; product visual acceptance remains pending.
-- Publication target: `origin/codex/main-lighting-denoising-controls`
-- Plan archive: pending product visual acceptance and canonical integration of
-  the replacement candidate
+  `936037A99EC041A0C2453243B411C7AA50DEBF9B61D9B2C84E2725AF777AF4C1`
+- Runtime smoke: the collision-only rollback NRD artifact is responsive as PID `43184`
+  with a High-priority `UVSR Renderer D3D12 (51bad6a)` window; the user accepted
+  the replacement's wall safety, pure-white default, and removal of rejected
+  camera-centering behavior.
+- Publication target: `origin/main` by fast-forward
+- Plan archive: complete in
+  `docs/exec-plans/completed/noise-shadow-exposure-improvements.md`
 - Predecessor reconciliation: complete

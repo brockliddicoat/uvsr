@@ -24,8 +24,8 @@ namespace uvsr
         float beamRoundness = 0.80f;
         float edgeSoftness = 0.60f;
         float colorLinearRed = 1.f;
-        float colorLinearGreen = 0.80f;
-        float colorLinearBlue = 0.65f;
+        float colorLinearGreen = 1.f;
+        float colorLinearBlue = 1.f;
         float hotspotSize = 0.40f;
         float hotspotStrength = 0.70f;
         float swayDegrees = 0.20f;
@@ -86,18 +86,13 @@ namespace uvsr
     inline constexpr float FlashlightMaximumSwayDegrees = 2.f;
     inline constexpr float FlashlightMinimumAimCorrectionSeconds = 0.01f;
     inline constexpr float FlashlightMaximumAimCorrectionSeconds = 0.50f;
-
     inline constexpr float FlashlightTurnOnSeconds = 0.18f;
     inline constexpr float FlashlightTurnOffSeconds = 0.24f;
-    inline constexpr float FlashlightMountReleaseHalfLifeSeconds = 0.08f;
-    inline constexpr float FlashlightMountRetractionNearMeters = 0.05f;
-    inline constexpr float FlashlightMountRetractionFarMeters = 0.75f;
-    inline constexpr float FlashlightMountRetractionRadiusScale = 4.f;
-    inline constexpr float FlashlightMountRetractionLengthScale = 2.f;
     // Move the virtual emitter off the optical axis so occluders cannot hide
     // their own projected shadows. Its own emitter-aware collision sphere
-    // keeps the offset mount outside nearby geometry. Converged aim keeps the
-    // broad beam centered at a practical indoor distance after collision.
+    // keeps the offset mount outside nearby geometry. The authored direction
+    // converges toward the camera axis at a practical indoor distance without
+    // using collision or scene depth to retarget the beam.
     inline constexpr float FlashlightCameraForwardOffsetMeters = 0.04f;
     inline constexpr float FlashlightAimConvergenceDistanceMeters = 6.f;
     inline constexpr float FlashlightMaximumAimLagDegrees = 5.f;
@@ -105,63 +100,6 @@ namespace uvsr
     // Twenty pi seconds is therefore their shared phase-continuous period.
     inline constexpr float FlashlightSwayPeriodSeconds =
         62.831853071795864f;
-
-    struct FlashlightMountRetractionRange
-    {
-        float nearDistanceMeters = FlashlightMountRetractionNearMeters;
-        float farDistanceMeters = FlashlightMountRetractionFarMeters;
-    };
-
-    [[nodiscard]] inline FlashlightMountRetractionRange
-        ResolveFlashlightMountRetractionRange(
-            float collisionRadiusMeters,
-            float mountLengthMeters)
-    {
-        collisionRadiusMeters =
-            std::isfinite(collisionRadiusMeters) &&
-                collisionRadiusMeters > 0.f
-            ? collisionRadiusMeters
-            : FlashlightMinimumCollisionRadiusMeters;
-        mountLengthMeters =
-            std::isfinite(mountLengthMeters) && mountLengthMeters > 0.f
-            ? mountLengthMeters
-            : 0.f;
-
-        FlashlightMountRetractionRange result;
-        result.nearDistanceMeters = std::max(
-            FlashlightMountRetractionNearMeters,
-            collisionRadiusMeters * 0.5f);
-        result.farDistanceMeters = std::max(
-            FlashlightMountRetractionFarMeters,
-            std::max(
-                collisionRadiusMeters *
-                    FlashlightMountRetractionRadiusScale,
-                mountLengthMeters *
-                    FlashlightMountRetractionLengthScale));
-        result.farDistanceMeters = std::max(
-            result.farDistanceMeters,
-            result.nearDistanceMeters + 1e-4f);
-        return result;
-    }
-
-    [[nodiscard]] inline float ResolveFlashlightMountRetractionExtension(
-        float surfaceClearanceMeters,
-        const FlashlightMountRetractionRange& range)
-    {
-        if (!std::isfinite(surfaceClearanceMeters))
-            return 0.f;
-
-        const float denominator = std::max(
-            range.farDistanceMeters - range.nearDistanceMeters,
-            1e-4f);
-        const float normalizedClearance = std::clamp(
-            (surfaceClearanceMeters - range.nearDistanceMeters) /
-                denominator,
-            0.f,
-            1.f);
-        return normalizedClearance * normalizedClearance *
-            (3.f - 2.f * normalizedClearance);
-    }
 
     [[nodiscard]] inline FlashlightMountPose ResolveFlashlightMountPose(
         float cameraHorizontalOffsetMeters,
@@ -425,35 +363,6 @@ namespace uvsr
                 settings.angularSizeDegrees);
         profile.active = 1.f;
         return profile;
-    }
-
-    [[nodiscard]] inline float AdvanceFlashlightMountExtension(
-        float current,
-        float target,
-        float deltaSeconds)
-    {
-        current = std::isfinite(current)
-            ? std::clamp(current, 0.f, 1.f)
-            : 0.f;
-        target = std::isfinite(target)
-            ? std::clamp(target, 0.f, 1.f)
-            : 0.f;
-
-        // The collision lookahead already eases retraction spatially before
-        // contact, so decreases follow that validated envelope without adding
-        // temporal lag. Restoring the authored offset uses a frame-rate-
-        // independent half-life to avoid a visible pop.
-        if (target <= current)
-            return target;
-        if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.f)
-            return current;
-
-        const float blend = 1.f - std::exp2(
-            -deltaSeconds / FlashlightMountReleaseHalfLifeSeconds);
-        return std::clamp(
-            current + (target - current) * blend,
-            current,
-            target);
     }
 
     [[nodiscard]] inline float AdvanceFlashlightTransition(
