@@ -1,0 +1,24 @@
+{
+  "name": {
+    "title": "Legal Name",
+    "type": "string",
+    "githubKey": "name",
+    "required": true
+  },
+  "email": {
+    "title": "Email Address",
+    "type": "string",
+    "githubKey": "email",
+    "required": true
+  },
+  "ownership": {
+    "title": "I am an adult and personally own or hold in my individual capacity the rights I grant.",
+    "type": "boolean",
+    "required": true
+  },
+  "agreement": {
+    "title": "I have read and agree to the UVSR Contributor License Agreement.",
+    "type": "boolean",
+    "required": true
+  }
+}

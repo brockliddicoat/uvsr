@@ -697,10 +697,10 @@ Agent policy version: `2026-08-03.1`.
 - Treat UVSR source, tests, tools, root build/launch scripts, and the final
   first-party additions in dependency override patches as first-party code.
   Treat the retained source in the pinned Donut dependency, its recursive
-  dependencies, and `src/third_party/`, less lines replaced by UVSR overrides,
-  as third-party code. Documentation, assets, licenses, binaries, and generated
-  build output are outside both totals. The counter is the authoritative
-  implementation of this boundary.
+  dependencies, and `legal/code-samples/`, less lines replaced by UVSR
+  overrides, as third-party code. Documentation, assets, licenses, binaries,
+  and generated build output are outside both totals. The counter is the
+  authoritative implementation of this boundary.
 - Refresh the README totals after any counted source, dependency, or override
   change and before every commit, push, pull request, or merge. Run
   `tools/update_readme_line_counts.cmd --check` after the refresh. The GitHub

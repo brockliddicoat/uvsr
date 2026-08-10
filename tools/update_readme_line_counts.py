@@ -148,10 +148,6 @@ def root_owned_files() -> list[Path]:
         if not encoded:
             continue
         relative = encoded.decode("utf-8")
-        if relative == "src/third_party" or relative.startswith(
-            "src/third_party/"
-        ):
-            continue
         path = ROOT / relative
         if path.is_file() and (
             path.name in FIRST_PARTY_BASENAMES
@@ -205,10 +201,7 @@ def pristine_third_party_files() -> list[Path]:
                 )
             files.append(path)
 
-    vendor_roots = (
-        ROOT / "src" / "third_party",
-        ROOT / "third_party",
-    )
+    vendor_roots = (ROOT / "legal" / "code-samples",)
     for vendor_root in vendor_roots:
         if not vendor_root.exists():
             continue

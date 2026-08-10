@@ -19,7 +19,7 @@ namespace
 {
     // Portions of the quality path are adapted from Microsoft DirectX Graphics
     // Samples and are distributed under
-    // third_party/microsoft_directx_graphics_samples/LICENSE.txt.
+    // legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt.
     //
     // The scalar defaults remain verbatim: maximum temporal lerp 1.0, speed
     // limit 64 pixels, and sharpness 0.5. The projection is an integration-only

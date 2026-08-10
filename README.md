@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 88,013 non-blank source lines.
+**First-Party Lines of Code:** 88,218 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,603 non-blank source lines.
 
-**Total Lines of Code:** 475,616 non-blank source lines.
+**Total Lines of Code:** 475,821 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -253,6 +253,18 @@ ctest --test-dir build -C Release --output-on-failure
 This includes the scene, camera, PBR, AA/UI, screen space visibility, ray
 traced shadows, denoising, world representation, environment, command line,
 and runtime shader bundle contracts.
+
+## Licensing
+
+- **Community Use.** UVSR's first-party code is source-available under the
+  [PolyForm Noncommercial License 1.0.0](LICENSE). Noncommercial use and
+  modification are welcome; when sharing, preserve the license and Required
+  Notice.
+- **Commercial Use.** Commercial use or sublicensing requires a separate
+  written agreement. [Contact Brock Liddicoat](mailto:brockliddicoat@gmail.com).
+- **Legal Details.** Third-party material remains under its own terms. See the
+  [Legal Guide](legal/README.md) for the full scope, source register,
+  commercial-readiness notes, and contributor agreement.
 
 ## Engineering Documentation
 

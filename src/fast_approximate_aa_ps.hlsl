@@ -8,8 +8,8 @@
 // Modified for UVSR's undithered, display-linear RGBA16F output after AgX.
 // Perceptual luma is reconstructed for every sample while the original linear
 // RGB is filtered; transfer encoding and dithering remain downstream.
-// Distributed with third_party/google_filament_fxaa/ATTRIBUTION.md and the
-// Apache-2.0 and BSD-2-Clause texts in third_party/licenses/.
+// Distributed with legal/sources/google-filament-fxaa.md and the Apache-2.0
+// and BSD-2-Clause texts in legal/licenses/.
 //
 // G3D Innovation Engine, http://casual-effects.com/g3d
 // Copyright 2000-2018, Morgan McGuire. All rights reserved.
