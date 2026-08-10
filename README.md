@@ -3,9 +3,9 @@
 **Unified Visibility Stochastic Rendering Engine**
 
 [![License: polyform noncommercial](https://img.shields.io/badge/license-polyform_noncommercial-8250DF?style=flat-square)](LICENSE.md)
-[![Engineering Docs](https://img.shields.io/badge/docs-engineering-1F6FEB?style=flat-square&logo=readthedocs&logoColor=white)](#engineering-documentation)
+[![Engineering Docs](https://img.shields.io/badge/docs-engineering-238636?style=flat-square&logo=readthedocs&logoColor=white)](#engineering-documentation)
 ![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square&logo=cplusplus&logoColor=white)
-![HLSL](https://img.shields.io/badge/HLSL-shaders-5C2D91?style=flat-square&logo=microsoft&logoColor=white)
+![HLSL](https://img.shields.io/badge/HLSL-shaders-C62828?style=flat-square&logo=microsoft&logoColor=white)
 
 UVSR is a focused DirectX 12 research renderer built on NVIDIA's pinned Donut
 framework and NVRHI. It ships with five ready-to-run research scenes, a
