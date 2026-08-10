@@ -24,7 +24,7 @@ Done when:
 - [x] The README contains a short accurate licensing summary and commercial contact link.
 - [ ] A pull-request contribution agreement check is configured with contributor-facing instructions.
 - [x] Links, heading casing, source records, build packaging, and relevant repository checks pass.
-- [ ] The final branch is committed and pushed to GitHub only under the user's stated GitHub authorization; no pull request or merge is implied.
+- [x] The final branch is committed and pushed to GitHub only under the user's stated GitHub authorization; no pull request or merge is implied.
 
 ## Scope
 
@@ -153,6 +153,7 @@ Public contracts:
 | 2026-08-09 | Provenance agent | Complete | `legal/sources/README.md` plus 50 records | Legal inventory, local links, and scoped title validation passed | Ownership released |
 | 2026-08-09 | `/root` | Active | Release candidate `build-legal/bin/uvsr.exe` | Release build passed; packaged project license and notices verified; final CTest run passed 40 of 40 tests | Complete staged review and publish branch |
 | 2026-08-09 | Independent technical reviewer | Complete | Combined task diff and `build-legal/bin` | No P0, P1, or P2 findings; relocated shader dependency and all 21 packaged notices verified | Ownership released |
+| 2026-08-09 | `/root` | Active | Implementation commit `aafab82b470ade2e554e1817b1469fbbd8963a17` | Remote branch verified at the same commit; no pull request created | Await governing-law choice and hosted activation authority |
 
 ## Risks and Escalation Triggers
 
@@ -171,14 +172,16 @@ Stop and ask the user if:
 
 ## Completion
 
-- Final integrated commit: pending
+- Final integrated commit: implementation commit
+  `aafab82b470ade2e554e1817b1469fbbd8963a17`; this plan checkpoint follows it
 - Verification summary: Release build and final 40-of-40 CTest run passed;
   legal inventory, title casing, local links, package contents, and line counts
   passed
 - Independent review: legal-language and technical reviews passed with no
   remaining P0, P1, or P2 findings; counsel/activation boundaries remain
 - Coming Soon/documentation update: no roadmap entry planned; this is repository governance work
-- Pushed/PR/merged, or intentionally local: pending
+- Pushed/PR/merged, or intentionally local: pushed
+  `codex/legal-and-licensing`; no pull request or merge created
 - Remaining experiments or follow-ups: choose governing law, obtain qualified
   review, publish the versioned signing Gist, exercise CLA Assistant on an
   authorized test pull request, and then require its app-specific check
