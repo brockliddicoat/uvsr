@@ -3,6 +3,11 @@
 **Unified Visibility Stochastic Rendering Engine**
 
 <!-- uvsr-codebase-size:start -->
+UVSR is a focused DirectX 12 research renderer built on NVIDIA's pinned Donut
+framework and NVRHI. It ships with five ready-to-run research scenes, a
+production-focused deferred PBR path, and independently testable visibility,
+anti-aliasing, shadow, and diagnostic systems.
+
 **First-Party Lines of Code:** 88,249 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,603 non-blank source lines.
@@ -15,14 +20,9 @@ assets, licenses, binaries, and generated build output are excluded. Regenerate
 with `tools/update_readme_line_counts.cmd --write`.
 <!-- uvsr-codebase-size:end -->
 
-UVSR is a focused DirectX 12 research renderer built on NVIDIA's pinned Donut
-framework and NVRHI. It ships with five ready-to-run research scenes, a
-production-focused deferred PBR path, and independently testable visibility,
-anti-aliasing, shadow, and diagnostic systems.
-
 ## Renderer Highlights
 
-- **Visibility-Bitmask AO and GI:** A 32-sector mask converts finite-thickness
+- **Visibility Bitmask AO and GI:** A 32-sector mask converts finite-thickness
   screen-space samples into ambient visibility and one-bounce diffuse
   transport; newly claimed sectors prevent double-counting.
 - **DXR Implementation:** Material-aware inline ray queries drive sun, sky, and
