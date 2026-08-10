@@ -110,7 +110,7 @@ int main(int argc, char** argv)
     const std::string cmaaHeader = ReadFile(root / "src/cmaa2.h");
     const std::string cmaaShader = ReadFile(root / "src/cmaa2.hlsl");
     const std::string cmaaVendoredShader = ReadFile(
-        root / "legal/code-samples/intel-cmaa2/CMAA2.hlsl");
+        root / "legal/samples/intel-cmaa2/CMAA2.hlsl");
     const std::string fastApproximate = ReadFile(
         root / "src/fast_approximate_aa.cpp");
     const std::string fastApproximateHeader = ReadFile(
@@ -428,15 +428,15 @@ int main(int argc, char** argv)
         "production screen space directional shadows");
     passed &= ExpectContains(
         buildSystem,
-        "${CMAKE_CURRENT_SOURCE_DIR}/legal/documentation/THIRD-PARTY-NOTICES.md",
+        "${CMAKE_CURRENT_SOURCE_DIR}/legal/documentation/third-party-notices.md",
         "packaged third party notice source");
     passed &= ExpectContains(
         buildSystem,
-        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/THIRD-PARTY-NOTICES.md",
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/third-party-notices.md",
         "packaged third party notice destination");
     passed &= ExpectContains(
         buildSystem,
-        "licenses/UVSR-PolyForm-Noncommercial-1.0.0.md",
+        "licenses/UVSR-Polyform-Noncommercial-1.0.0.md",
         "packaged UVSR public license");
     passed &= ExpectContains(
         buildSystem,
@@ -448,7 +448,7 @@ int main(int argc, char** argv)
         "packaged AgX implementation license");
     passed &= ExpectContains(
         buildSystem,
-        "legal/code-samples/*.hlsl",
+        "legal/samples/*.hlsl",
         "incorporated legal shader dependency tracking");
 
     const std::string_view representationInvalidation = ExtractSection(

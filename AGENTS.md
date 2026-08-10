@@ -697,7 +697,7 @@ Agent policy version: `2026-08-03.1`.
 - Treat UVSR source, tests, tools, root build/launch scripts, and the final
   first-party additions in dependency override patches as first-party code.
   Treat the retained source in the pinned Donut dependency, its recursive
-  dependencies, and `legal/code-samples/`, less lines replaced by UVSR
+  dependencies, and `legal/samples/`, less lines replaced by UVSR
   overrides, as third-party code. Documentation, assets, licenses, binaries,
   and generated build output are outside both totals. The counter is the
   authoritative implementation of this boundary.

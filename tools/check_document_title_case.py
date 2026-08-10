@@ -86,6 +86,7 @@ PRESERVED_WORDS = frozenset(
         "NVIDIA",
         "PBR",
         "PolyForm",
+        "Polyform",
         "PROV",
         "README",
         "README.md",

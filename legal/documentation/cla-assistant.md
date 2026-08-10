@@ -1,5 +1,22 @@
 # CLA Assistant Setup
 
+## Source Record
+
+- Relationship: Service Integration
+- Status: Current installation; hosted signing and merge enforcement are not
+  active
+- Confidence: Confirmed installation; remaining deployment state must be
+  verified on GitHub
+- Upstream: [Hosted CLA Assistant](https://cla-assistant.io) and
+  [CLA Assistant Source](https://github.com/cla-assistant/cla-assistant)
+- Revision: The hosted service revision is controlled externally; the current
+  source package identifies itself as version 1.8.3
+- Governing Terms: The self-hostable source is Apache License 2.0 with bundled
+  third-party terms; hosted-service terms, privacy practices, permissions, and
+  availability are separate
+
+## UVSR Relationship
+
 UVSR's planned enforcement uses the hosted
 [CLA Assistant](https://cla-assistant.io) GitHub App so every pull-request
 committer is covered before merge. Adults who personally control their work
@@ -75,3 +92,16 @@ confirm that the expected status is still emitted by the same GitHub App.
 Do not replace this setup with the archived CLA Assistant Lite action unless a
 separately reviewed migration is necessary. A DCO is also insufficient because
 it does not grant the commercial relicensing and sublicensing rights UVSR needs.
+
+## Evidence
+
+- [Signing Metadata Schema](cla-assistant-metadata.json)
+- [Contributor Agreement](../licenses/UVSR-CONTRIBUTOR-LICENSE-AGREEMENT.md)
+- [Contributor Privacy Notice](contributor-agreement-privacy-notice.md)
+
+## Commercial Clearance
+
+Before relying on the flow, activate the app, pin the exact public signing copy,
+require the correct app-produced status, test multi-author behavior, preserve
+signature exports, and review provider terms and privacy handling. An installed
+bot alone does not prove a valid agreement or expand third-party rights.

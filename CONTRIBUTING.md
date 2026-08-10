@@ -16,7 +16,7 @@ publish it under the community license and offer separate commercial licenses.
 
 The hosted agreement is limited to adults who personally control their work.
 For employer-, client-, entity-, or minor-owned work, contact
-[brockliddicoat@gmail.com](mailto:brockliddicoat@gmail.com) for a separate
+[contact the UVSR project](mailto:brockliddicoat@gmail.com) for a separate
 owner agreement before submitting.
 
 Bots cannot sign. Their identity, output license, and provenance must be

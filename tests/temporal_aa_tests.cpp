@@ -659,7 +659,7 @@ int main(int argc, char** argv)
         const std::string fastApproximateShader = ReadTextFile(
             sourceDirectory / "fast_approximate_aa_ps.hlsl");
         const std::string fastApproximateAttribution = ReadTextFile(
-            sourceDirectory.parent_path() / "legal" / "sources" /
+            sourceDirectory.parent_path() / "legal" / "documentation" /
                 "google-filament-fxaa.md");
         const std::string bsdLicense = ReadTextFile(
             sourceDirectory.parent_path() / "legal" / "licenses" /

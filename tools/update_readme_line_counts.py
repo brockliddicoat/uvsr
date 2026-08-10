@@ -201,7 +201,7 @@ def pristine_third_party_files() -> list[Path]:
                 )
             files.append(path)
 
-    vendor_roots = (ROOT / "legal" / "code-samples",)
+    vendor_roots = (ROOT / "legal" / "samples",)
     for vendor_root in vendor_roots:
         if not vendor_root.exists():
             continue

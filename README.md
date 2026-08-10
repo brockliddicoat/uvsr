@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 88,218 non-blank source lines.
+**First-Party Lines of Code:** 88,228 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,603 non-blank source lines.
 
-**Total Lines of Code:** 475,821 non-blank source lines.
+**Total Lines of Code:** 475,831 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -254,18 +254,6 @@ This includes the scene, camera, PBR, AA/UI, screen space visibility, ray
 traced shadows, denoising, world representation, environment, command line,
 and runtime shader bundle contracts.
 
-## Licensing
-
-- **Community Use.** UVSR's first-party code is source-available under the
-  [PolyForm Noncommercial License 1.0.0](LICENSE). Noncommercial use and
-  modification are welcome; when sharing, preserve the license and Required
-  Notice.
-- **Commercial Use.** Commercial use or sublicensing requires a separate
-  written agreement. [Contact Brock Liddicoat](mailto:brockliddicoat@gmail.com).
-- **Legal Details.** Third-party material remains under its own terms. See the
-  [Legal Guide](legal/README.md) for the full scope, source register,
-  commercial-readiness notes, and contributor agreement.
-
 ## Engineering Documentation
 
 - [Advanced Settings and Developer Workflows](docs/advanced-settings.md) covers
@@ -299,18 +287,14 @@ and runtime shader bundle contracts.
 - [Experiment Postmortems](docs/postmortem/) preserve retired work, negative
   results, reusable evidence, and explicit restart conditions.
 
-## Project Boundaries
+## Licensing
 
-- DirectX 12 is the production backend; DirectX 11 and Vulkan are disabled.
-- Deferred UVSR PBR is the only lighting path.
-- The renderer is uncapped, single-view, and opaque/alpha-test focused. VSync,
-  stereo, bloom, translucent rendering, and animation playback are intentionally
-  out of scope.
-- IBL uses one infinite global environment. Local probe capture,
-  parallax-corrected probe volumes, and probe blending are not implemented.
-- Sun and flashlight shadows use ray traversal and require DXR 1.1 with single
-  sample deferred rendering. Screen space directional shadows are excluded
-  from the production target.
-
-The executable, repository slug, package names, and paths use lowercase
-`uvsr`; the displayed product name is uppercase **UVSR**.
+- **Community Use.** UVSR's first-party code is source-available under the
+  [Polyform Noncommercial License 1.0.0](LICENSE). Noncommercial use and
+  modification are welcome; when sharing, preserve the license and Required
+  Notice.
+- **Commercial Use.** Commercial use or sublicensing requires a separate
+  written agreement. [Contact the UVSR project](mailto:brockliddicoat@gmail.com).
+- **Legal Details.** Third-party material remains under its own terms. See the
+  [Legal Guide](legal/README.md) for the full scope, documentation registry,
+  commercial-readiness notes, and contributor agreement.

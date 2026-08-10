@@ -3,7 +3,7 @@
 ## First-Party Terms
 
 - The repository-root [LICENSE](../../LICENSE) contains UVSR's controlling
-  PolyForm Noncommercial License 1.0.0 and required attribution notice.
+  Polyform Noncommercial License 1.0.0 and required attribution notice.
 - The [UVSR Contributor License Agreement](UVSR-CONTRIBUTOR-LICENSE-AGREEMENT.md)
   covers contributions accepted through the repository's CLA check. It does
   not change the license for using UVSR.
@@ -22,7 +22,7 @@
 
 Additional dependency and asset license files remain adjacent to their
 upstream source or asset, including `donut/LICENSE.txt`, nested Donut licenses,
-and license files under `assets/`. The [source register](../sources/README.md)
+and license files under `assets/`. The [documentation registry](../documentation/README.md)
 maps each substantial source to its controlling terms.
 
 ## Interpretation

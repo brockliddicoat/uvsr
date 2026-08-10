@@ -4,17 +4,17 @@
 
 UVSR is public so people can learn from it, experiment with it, improve it, and
 share noncommercial work with credit. The public license intentionally does not
-permit someone else to commercialize UVSR without Brock Liddicoat's
-participation. Commercial terms can instead reflect the actual product,
+permit someone else to commercialize UVSR without the project's participation.
+Commercial terms can instead reflect the actual product,
 support, risk, and value involved rather than imposing a one-size-fits-all fee.
 
-To discuss a commercial license, email
-[brockliddicoat@gmail.com](mailto:brockliddicoat@gmail.com).
+To discuss a commercial license,
+[contact the UVSR project](mailto:brockliddicoat@gmail.com).
 
 ## Rights UVSR Can Offer
 
-A commercial agreement can cover only first-party material owned or controlled
-by Brock Liddicoat and contribution rights validly granted to him. It cannot
+A commercial agreement can cover only first-party material controlled by the
+UVSR Project Steward and contribution rights validly granted to UVSR. It cannot
 override or sublicense third-party code, assets, fonts, tools, patents, or
 other rights. Commercial terms, pricing, support, indemnity, and permitted
 distribution require a separate signed agreement; none are promised by the

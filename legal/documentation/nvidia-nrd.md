@@ -28,7 +28,7 @@ alter or replace those terms.
 
 An NRD enabled build copies the exact fetched license to
 `bin/licenses/NRD-LICENSE.txt` and the consolidated attribution to
-`bin/THIRD_PARTY_NOTICES.md`. A distributor must still provide sufficiently
+`bin/third-party-notices.md`. A distributor must still provide sufficiently
 protective terms, distribute NRD only as an incorporated part of an
 application with material additional functionality, preserve every required
 notice and attribution, and comply with all other applicable terms. Packaged
@@ -43,7 +43,7 @@ material and is never relicensed under UVSR's project license.
 ## Evidence
 
 - [Build Configuration](../../CMakeLists.txt)
-- [Consolidated Notices](../documentation/THIRD-PARTY-NOTICES.md)
+- [Consolidated Notices](third-party-notices.md)
 - Commit `f892c17e33c007db69ca10f055bd7e59301b37d0`
 
 ## Commercial Clearance

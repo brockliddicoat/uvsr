@@ -1,10 +1,17 @@
-# Source Provenance Registry
+# Legal Documentation
 
-This directory records external projects, publications, assets, tools, and
-legal templates that materially influenced or entered UVSR. It distinguishes
-inspiration from recognizable implementation lineage and incorporated material.
-These records preserve evidence; they do not expand any upstream permission or
-replace legal advice.
+This directory combines UVSR's legal documentation with records of external
+projects, publications, assets, tools, and templates that materially influenced
+or entered UVSR. The source records distinguish inspiration from recognizable
+implementation lineage and incorporated material. They preserve evidence; they
+do not expand any upstream permission or replace legal advice.
+
+## Project Documentation
+
+- [Commercial Licensing](commercial-licensing.md)
+- [Contributor Agreement Privacy Notice](contributor-agreement-privacy-notice.md)
+- [Third-Party Notices](third-party-notices.md)
+- [CLA Assistant Setup and Source Record](cla-assistant.md)
 
 ## Relationship Taxonomy
 
@@ -96,6 +103,6 @@ license decision before it should be strengthened.
 
 ## Licensing and Contribution Infrastructure
 
-- [PolyForm Noncommercial 1.0.0](polyform-noncommercial-1.0.0.md)
+- [Polyform Noncommercial 1.0.0](polyform-noncommercial-1.0.0.md)
 - [Harmony Contributor Agreements](harmony-contributor-agreement.md)
 - [Hosted CLA Assistant](cla-assistant.md)
