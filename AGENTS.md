@@ -1,6 +1,6 @@
 # UVSR Agent Guide
 
-Agent policy version: `2026-08-03.1`.
+Agent policy version: `2026-08-11.1`.
 
 ## Product and Scope
 
@@ -381,11 +381,12 @@ Agent policy version: `2026-08-03.1`.
   three times when creating or replacing a baseline, run a fresh clean preflight
   immediately before each repeat, retain all three raw runs, and select the
   median by position-1 total GPU frame time as the primary run.
-  Record UVSR's stat-line TFLOPS, total frame/GPU time, feature time, GPU clock,
-  CPU and GPU temperature, live throttle reasons, and process memory. TFLOPS is
-  a current-clock-and-utilization indicator, so compare it only between
-  identical position-1 control workloads, never between different renderer
-  settings.
+  Record externally sampled current-clock TFLOPS, total frame/GPU time, feature
+  time, GPU clock, CPU and GPU temperature, live throttle reasons, and process
+  memory. UVSR no longer displays TFLOPS in its per-window summary, so obtain
+  capacity and utilization from the matched external telemetry sample. Compare
+  it only between identical position-1 control workloads, never between
+  different renderer settings.
 - Match and record the complete display/presentation state: active refresh rate
   for every display, primary-output identity, VRR/G-SYNC/FreeSync, VSync and
   frame caps, latency controls, HDR/color depth, desktop resolution/scaling,
@@ -424,8 +425,9 @@ Agent policy version: `2026-08-03.1`.
   without telemetry, then make one bounded follow-up preflight at a five-second
   requested cadence. P0 alone does not override the user's loaded acceptance
   rule: a run may remain usable when the full temperature/headroom gate passes,
-  no unexplained context or limiter exists, live Position-1 throughput stays at
-  or above 30 TFLOPS, and before/after controls agree. On other hardware,
+  no unexplained context or limiter exists, externally sampled Position-1
+  current-clock capacity stays at or above 30 TFLOPS, and before/after controls
+  agree. On other hardware,
   establish its own idle P-state, clock, and power band instead of copying
   these NVIDIA-specific values.
 - On Brock's current laptop, use CPU at or below 75 C and GPU at or below 55 C
@@ -457,15 +459,17 @@ Agent policy version: `2026-08-03.1`.
 - Keep cold-idle and loaded gates distinct. The 55 C temperature and 20 C
   headroom values are preflight requirements, not loaded measurement limits.
   During a measurement, require at least 5 C of live selected-GPU thermal
-  headroom and an inactive live limiter, then use the Position-1 clock, TFLOPS,
-  and frame-time bracket as the decisive throttling check. A hot memory junction
+  headroom and an inactive live limiter, then use the Position-1 clock,
+  externally sampled clock-capacity TFLOPS, and frame-time bracket as the
+  decisive throttling check. A hot memory junction
   below its reported limit is recorded but is not by itself proof of throttling.
 - If the host does not expose a live CPU temperature to the non-elevated,
   vendor-neutral monitor, `-AllowMissingCpuTemperature` may be used for a
   reduced-evidence preflight. It still requires unconstrained CPU performance,
   the practical background-load gate, a cool selected GPU with no live thermal
   limiter, AC power, and position-1 before/after controls within the established
-  clock, TFLOPS, and frame-time bands. Record CPU temperature as unknown; never
+  clock, external clock-capacity TFLOPS, and frame-time bands. Record CPU
+  temperature as unknown; never
   reinterpret it as cool or use this exception to accept a failed control.
 - Match telemetry to the exact adapter name shown by UVSR. On a hybrid or
   multi-GPU system, an unqualified vendor query is invalid evidence because it
@@ -478,16 +482,19 @@ Agent policy version: `2026-08-03.1`.
   is unavailable. On an adapter that genuinely does not expose it, agents may
   use `-AllowMissingGpuThermalLimiter` only after supplying the adapter's
   official limit with `-GpuThermalLimitC`, establishing a cold position-1 GPU
-  clock and TFLOPS band, and retaining the before-and-after control checks. The
+  clock and external clock-capacity band, and retaining the before-and-after
+  control checks. The
   reduced-evidence gate still requires a live temperature, sufficient headroom,
   and a live clock; document that the limiter state was unavailable. Because
   core, hotspot, and memory limits may differ, the supplied value must be the
   lowest official limit applicable to every live GPU sensor used by the gate.
-- On Brock's current laptop, treat a Position-1 stat-line result below 30 TFLOPS
-  as the practical throttling floor. At or above 30 TFLOPS is generally
+- On Brock's current laptop, treat externally sampled Position-1 current-clock
+  capacity below 30 TFLOPS as the practical throttling floor. At or above
+  30 TFLOPS is generally
   thermally usable unless a live limiter, inadequate headroom, or a badly
-  regressed control says otherwise. Still record a candidate whose TFLOPS,
-  steady GPU clock, or control frame time differs by more than 5 percent from
+  regressed control says otherwise. Still record a candidate whose externally
+  sampled clock capacity, steady GPU clock, or control frame time differs by
+  more than 5 percent from
   the cold baseline as a comparison-quality warning; do not label that variance
   thermal throttling while the machine-specific floor and limiter checks pass.
   Establish an equivalent floor empirically before using this rule on another
@@ -501,8 +508,9 @@ Agent policy version: `2026-08-03.1`.
   unavailable for every other adapter until that exact adapter has its own
   measured calibration. Also retain `raw ms * observed clock TFLOPS` as the
   smaller-is-better work index. Derive observed clock TFLOPS from the unsmoothed
-  graphics clock and shader-core count, never from UVSR's utilization-scaled
-  stat-line TFLOPS. Pair telemetry captured when the measured GPU frame was
+  graphics clock and shader-core count, never from a UI summary or a
+  utilization-scaled throughput display. Pair telemetry captured when the
+  measured GPU frame was
   issued, record its generation and age, and never substitute 100 percent when
   utilization is unavailable. Grade a same-workload estimate A near 38 to 47
   clock TFLOPS with at least 95 percent utilization, B from 30 to 38 clock
@@ -529,11 +537,11 @@ Agent policy version: `2026-08-03.1`.
   limiter state, telemetry age, paired-sample coverage, process load, warmup,
   cache state, and before/after controls; these support or reject the clock
   estimate and are never silently normalized away.
-- The renderer's current built-in normalization calibration is selected by
-  adapter name and therefore does not prove physical-GPU identity. An agent must
-  verify the current sample against the machine-local profile before accepting
-  the displayed estimate. On an unprofiled machine, or on a separate GPU with
-  the same model name, report built-in normalization as unavailable.
+- A normalization-tool calibration selected only by adapter name does not prove
+  physical-GPU identity. An agent must verify the current sample against the
+  machine-local profile before accepting an estimate. On an unprofiled machine,
+  or on a separate GPU with the same model name, report normalization as
+  unavailable.
 - Bracket a long experiment with the same position-1 control. If the post-run
   control fails the baseline band, remove official-score status from the
   measurements between the two controls and stop runtime work before repeating.
@@ -596,9 +604,10 @@ Agent policy version: `2026-08-03.1`.
   a quiet dip outside that window. Its `thermalGateReady` result proves only the
   resampled sensor, power, and process gate for the selected phase; it does not
   prove the position-1 baseline, adapter workload, matching power configuration,
-  or post-run control. It neither reads nor enforces the stat-line TFLOPS. On
-  Brock's current laptop, the benchmark procedure must separately reject a
-  Position-1 control below 30 TFLOPS. Run `-Phase Measurement` continuously for
+  or post-run control. It neither reads nor enforces the external clock-capacity
+  gate. On Brock's current laptop, the benchmark procedure must separately
+  reject a Position-1 control below 30 externally sampled current-clock TFLOPS.
+  Run `-Phase Measurement` continuously for
   every baseline, candidate, and bracket control with
   `-MeasurementDurationSeconds` covering the exact benchmark window and the
   exact renderer PID and path; add the exact PresentMon PID and path only when
@@ -688,9 +697,10 @@ Agent policy version: `2026-08-03.1`.
 ## Documentation
 
 - Keep the root file named `README.md`.
-- Keep the generated codebase-size block immediately below the UVSR tagline at
-  the top of `README.md`. It must report first-party, third-party, and combined
-  non-blank source-line totals. Generate it with
+- Keep the generated codebase-size block in the established top-of-README
+  position after the banner, tagline, badges, and compact introduction. It must
+  report first-party, third-party, and combined non-blank source-line totals.
+  Generate it with
   `tools/update_readme_line_counts.cmd --write` on Windows or
   `python3 tools/update_readme_line_counts.py --write` on other hosts; never
   hand-edit the values or remove the marker comments.

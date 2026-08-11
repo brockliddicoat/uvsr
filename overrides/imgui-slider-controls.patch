@@ -1,0 +1,413 @@
+diff --git a/imgui_widgets.cpp b/imgui_widgets.cpp
+index 18e6353..28f1c17 100644
+--- a/imgui_widgets.cpp
++++ b/imgui_widgets.cpp
+@@ -1345,6 +1345,11 @@
+     return ImGui::ColorConvertFloat4ToU32(bottom_color);
+ }
+ 
++static float GetUvsrAuthoredToggleTrackWidth()
++{
++    return IM_TRUNC(ImGui::GetFrameHeight() * 1.72f);
++}
++
+ static void RenderSubduedTreeNodeHighlight(
+     ImDrawList* draw_list,
+     ImRect bounding_box,
+@@ -1584,7 +1589,7 @@
+ 
+     const float row_height = GetFrameHeight();
+     const float toggle_height = ImMax(1.0f, row_height - 4.0f);
+-    const float toggle_width = IM_TRUNC(row_height * 1.72f);
++    const float toggle_width = GetUvsrAuthoredToggleTrackWidth();
+     const ImVec2 pos = window->DC.CursorPos;
+     const ImRect total_bb(
+         pos,
+@@ -3849,7 +3854,14 @@
+     const float grab_padding = 2.0f; // FIXME: Should be part of style.
+     const float slider_sz = (bb.Max[axis] - bb.Min[axis]) - grab_padding * 2.0f;
+     float grab_sz = style.GrabMinSize;
+-    if (!is_floating_point && v_range_f >= 0.0f)                         // v_range_f < 0 may happen on integer overflows
++    if (GImGui != NULL && !GImGui->UvsrStockWidgetRendering)
++    {
++        const float cross_axis_size = axis == ImGuiAxis_X
++            ? bb.GetHeight() - grab_padding * 2.0f
++            : bb.GetWidth() - grab_padding * 2.0f;
++        grab_sz = ImMax(1.0f, cross_axis_size);
++    }
++    else if (!is_floating_point && v_range_f >= 0.0f)                    // v_range_f < 0 may happen on integer overflows
+         grab_sz = ImMax(slider_sz / (v_range_f + 1), style.GrabMinSize); // For integer sliders: if possible have the grab size represent 1 unit
+     grab_sz = ImMin(grab_sz, slider_sz);
+     const float slider_usable_sz = slider_sz - grab_sz;
+@@ -4105,12 +4117,113 @@
+     grab_bb->Max[axis] += offset;
+ }
+ 
++struct UvsrSliderValueLane
++{
++    bool Usable;
++    ImRect TrackRect;
++    ImRect ValueRect;
++};
++
++static UvsrSliderValueLane ResolveUvsrSliderValueLane(
++    const ImRect& slider_bb,
++    const float frame_height)
++{
++    const float value_width =
++        GetUvsrAuthoredToggleTrackWidth() * 2.0f;
++    constexpr float BubbleGap = 2.0f;
++    const float track_width =
++        slider_bb.GetWidth() - value_width - BubbleGap;
++    if (track_width < frame_height)
++    {
++        return { false, slider_bb, ImRect() };
++    }
++    ImRect track_rect = slider_bb;
++    ImRect value_rect = slider_bb;
++    value_rect.Min.x = value_rect.Max.x - value_width;
++    track_rect.Max.x = value_rect.Min.x - BubbleGap;
++    return { true, track_rect, value_rect };
++}
++
++static double GetUvsrSliderNumericValue(
++    ImGuiDataType data_type,
++    const void* data)
++{
++    switch (data_type)
++    {
++    case ImGuiDataType_S8: return double(*(const ImS8*)data);
++    case ImGuiDataType_U8: return double(*(const ImU8*)data);
++    case ImGuiDataType_S16: return double(*(const ImS16*)data);
++    case ImGuiDataType_U16: return double(*(const ImU16*)data);
++    case ImGuiDataType_S32: return double(*(const ImS32*)data);
++    case ImGuiDataType_U32: return double(*(const ImU32*)data);
++    case ImGuiDataType_S64: return double(*(const ImS64*)data);
++    case ImGuiDataType_U64: return double(*(const ImU64*)data);
++    case ImGuiDataType_Float: return double(*(const float*)data);
++    case ImGuiDataType_Double: return *(const double*)data;
++    case ImGuiDataType_COUNT: break;
++    }
++    return 0.0;
++}
++
++static const char* GetUvsrSliderExactInputFormat(
++    ImGuiDataType data_type)
++{
++    if (data_type == ImGuiDataType_Float)
++        return "%.9g";
++    if (data_type == ImGuiDataType_Double)
++        return "%.17g";
++    return ImGui::DataTypeGetInfo(data_type)->PrintFmt;
++}
++
++static int CountUvsrNumericDigits(const char* text)
++{
++    int count = 0;
++    for (const char* cursor = text; *cursor != 0; ++cursor)
++        if (*cursor >= '0' && *cursor <= '9')
++            ++count;
++    return count;
++}
++
++static int FormatUvsrFourDigitSliderValue(
++    char* output,
++    size_t output_size,
++    ImGuiDataType data_type,
++    const void* data)
++{
++    double value = GetUvsrSliderNumericValue(data_type, data);
++    if (!(value >= -DBL_MAX && value <= DBL_MAX))
++        return ImFormatString(output, output_size, "----");
++    if (value == 0.0)
++        value = 0.0; // Normalize negative zero.
++
++    const double absolute_value = fabs(value);
++    const int integer_digits = absolute_value >= 1.0
++        ? int(floor(log10(absolute_value))) + 1
++        : 1;
++    const int fixed_precision = ImMax(0, 4 - integer_digits);
++    char fixed[64];
++    for (int precision = fixed_precision;
++        precision >= 0;
++        --precision)
++    {
++        ImFormatString(
++            fixed,
++            IM_ARRAYSIZE(fixed),
++            "%.*f",
++            precision,
++            value);
++        if (CountUvsrNumericDigits(fixed) == 4)
++            return ImFormatString(output, output_size, "%s", fixed);
++    }
++    return ImFormatString(output, output_size, "----");
++}
++
+ static ImU32 GetUvsrSliderTrackColor(
+     ImGuiContext& g,
+     bool hovered,
+-    ImGuiID id)
+-{
+-    const ImGuiCol stock_color = g.ActiveId == id
++    bool active)
++{
++    const ImGuiCol stock_color = active
+         ? ImGuiCol_FrameBgActive
+         : hovered
+             ? ImGuiCol_FrameBgHovered
+@@ -4118,7 +4231,7 @@
+     if (g.UvsrStockWidgetRendering)
+         return ImGui::GetColorU32(stock_color);
+     return ImGui::GetColorU32(
+-        g.ActiveId == id
++        active
+             ? g.UvsrSliderTrackActive
+             : hovered
+                 ? g.UvsrSliderTrackHovered
+@@ -4151,17 +4264,55 @@
+     if (format == NULL)
+         format = DataTypeGetInfo(data_type)->PrintFmt;
+ 
++    ImRect slider_bb = frame_bb;
++    if (!g.UvsrStockWidgetRendering)
++        slider_bb.Expand(ImVec2(0.0f, -2.0f));
++    const UvsrSliderValueLane value_lane =
++        g.UvsrStockWidgetRendering
++            ? UvsrSliderValueLane{ false, slider_bb, ImRect() }
++            : ResolveUvsrSliderValueLane(
++                slider_bb,
++                GetFrameHeight());
++
+     const bool hovered = ItemHoverable(frame_bb, id, g.LastItemData.ItemFlags);
++    const bool value_lane_hovered =
++        value_lane.Usable &&
++        hovered &&
++        IsMouseHoveringRect(
++            value_lane.ValueRect.Min,
++            value_lane.ValueRect.Max);
++    const bool track_hovered =
++        hovered &&
++        IsMouseHoveringRect(
++            value_lane.TrackRect.Min,
++            value_lane.TrackRect.Max);
+     bool temp_input_is_active = temp_input_allowed && TempInputIsActive(id);
+     if (!temp_input_is_active)
+     {
+-        // Tabbing or CTRL+click on Slider turns it into an input box
++        // Tabbing, CTRL+click, or a direct click in the authored value lane
++        // turns the slider into an exact-value input box.
+         const bool clicked = hovered && IsMouseClicked(0, ImGuiInputFlags_None, id);
+-        const bool make_active = (clicked || g.NavActivateId == id);
++        const bool direct_value_input =
++            clicked &&
++            value_lane_hovered &&
++            temp_input_allowed;
++        const bool ctrl_value_input =
++            clicked &&
++            g.IO.KeyCtrl &&
++            temp_input_allowed;
++        const bool make_active =
++            direct_value_input ||
++            ctrl_value_input ||
++            (clicked && track_hovered) ||
++            g.NavActivateId == id;
+         if (make_active && clicked)
+             SetKeyOwner(ImGuiKey_MouseLeft, id);
+         if (make_active && temp_input_allowed)
+-            if ((clicked && g.IO.KeyCtrl) || (g.NavActivateId == id && (g.NavActivateFlags & ImGuiActivateFlags_PreferInput)))
++            if (direct_value_input ||
++                ctrl_value_input ||
++                (g.NavActivateId == id &&
++                    (g.NavActivateFlags &
++                        ImGuiActivateFlags_PreferInput)))
+                 temp_input_is_active = true;
+ 
+         // Store initial value (not used by main lib but available as a convenience but some mods e.g. to revert)
+@@ -4181,17 +4332,105 @@
+     {
+         // Only clamp CTRL+Click input when ImGuiSliderFlags_ClampOnInput is set (generally via ImGuiSliderFlags_AlwaysClamp)
+         const bool clamp_enabled = (flags & ImGuiSliderFlags_ClampOnInput) != 0;
+-        return TempInputScalar(frame_bb, id, label, data_type, p_data, format, clamp_enabled ? p_min : NULL, clamp_enabled ? p_max : NULL);
++        if (value_lane.Usable)
++        {
++            const ImU32 frame_col =
++                GetUvsrSliderTrackColor(
++                    g,
++                    track_hovered,
++                    false);
++            RenderNavCursor(frame_bb, id);
++            RenderFrame(
++                value_lane.TrackRect.Min,
++                value_lane.TrackRect.Max,
++                frame_col,
++                true,
++                g.Style.FrameRounding);
++            // TempInputText() resubmits ItemSize() from the input rectangle.
++            // The lane is only a sub-rectangle of this already-submitted slider,
++            // so preserve the original item layout while keeping the merged ID.
++            const ImVec2 cursor_pos_backup = window->DC.CursorPos;
++            const ImVec2 cursor_pos_prev_line_backup = window->DC.CursorPosPrevLine;
++            const ImVec2 cursor_max_pos_backup = window->DC.CursorMaxPos;
++            const ImVec2 curr_line_size_backup = window->DC.CurrLineSize;
++            const ImVec2 prev_line_size_backup = window->DC.PrevLineSize;
++            const float curr_line_text_base_offset_backup = window->DC.CurrLineTextBaseOffset;
++            const float prev_line_text_base_offset_backup = window->DC.PrevLineTextBaseOffset;
++            const bool is_same_line_backup = window->DC.IsSameLine;
++            const bool is_set_pos_backup = window->DC.IsSetPos;
++            const bool value_changed = TempInputScalar(
++                value_lane.ValueRect,
++                id,
++                label,
++                data_type,
++                p_data,
++                GetUvsrSliderExactInputFormat(data_type),
++                clamp_enabled ? p_min : NULL,
++                clamp_enabled ? p_max : NULL);
++            window->DC.CursorPos = cursor_pos_backup;
++            window->DC.CursorPosPrevLine = cursor_pos_prev_line_backup;
++            window->DC.CursorMaxPos = cursor_max_pos_backup;
++            window->DC.CurrLineSize = curr_line_size_backup;
++            window->DC.PrevLineSize = prev_line_size_backup;
++            window->DC.CurrLineTextBaseOffset = curr_line_text_base_offset_backup;
++            window->DC.PrevLineTextBaseOffset = prev_line_text_base_offset_backup;
++            window->DC.IsSameLine = is_same_line_backup;
++            window->DC.IsSetPos = is_set_pos_backup;
++            return value_changed;
++        }
++        return TempInputScalar(
++            frame_bb,
++            id,
++            label,
++            data_type,
++            p_data,
++            g.UvsrStockWidgetRendering
++                ? format
++                : GetUvsrSliderExactInputFormat(data_type),
++            clamp_enabled ? p_min : NULL,
++            clamp_enabled ? p_max : NULL);
+     }
+ 
+     // Draw frame
+-    const ImU32 frame_col = GetUvsrSliderTrackColor(g, hovered, id);
+     RenderNavCursor(frame_bb, id);
+-    RenderFrame(frame_bb.Min, frame_bb.Max, frame_col, true, g.Style.FrameRounding);
++    if (value_lane.Usable)
++    {
++        const bool slider_active = g.ActiveId == id;
++        RenderFrame(
++            value_lane.TrackRect.Min,
++            value_lane.TrackRect.Max,
++            GetUvsrSliderTrackColor(
++                g,
++                track_hovered,
++                slider_active),
++            true,
++            g.Style.FrameRounding);
++        RenderFrame(
++            value_lane.ValueRect.Min,
++            value_lane.ValueRect.Max,
++            GetUvsrSliderTrackColor(
++                g,
++                value_lane_hovered,
++                false),
++            true,
++            g.Style.FrameRounding);
++    }
++    else
++    {
++        RenderFrame(
++            slider_bb.Min,
++            slider_bb.Max,
++            GetUvsrSliderTrackColor(
++                g,
++                hovered,
++                g.ActiveId == id),
++            true,
++            g.Style.FrameRounding);
++    }
+ 
+     // Slider behavior
+     ImRect grab_bb;
+-    const bool value_changed = SliderBehavior(frame_bb, id, data_type, p_data, p_min, p_max, format, flags, &grab_bb);
++    const bool value_changed = SliderBehavior(value_lane.TrackRect, id, data_type, p_data, p_min, p_max, format, flags, &grab_bb);
+     if (value_changed)
+         MarkItemEdited(id);
+     if (!g.UvsrStockWidgetRendering)
+@@ -4232,12 +4471,51 @@
+         }
+     }
+ 
+-    // Display value using user-provided display format so user can add prefix/suffix/decorations to the value.
++    // Ogg retains the caller's format. Authored sliders reserve a numeric-only
++    // four-digit presentation; exact input uses native round-trip text and
++    // never quantizes the stored value to this visual copy.
+     char value_buf[64];
+-    const char* value_buf_end = value_buf + DataTypeFormatString(value_buf, IM_ARRAYSIZE(value_buf), data_type, p_data, format);
++    const char* value_buf_end = value_buf +
++        (g.UvsrStockWidgetRendering
++            ? DataTypeFormatString(
++                value_buf,
++                IM_ARRAYSIZE(value_buf),
++                data_type,
++                p_data,
++                format)
++            : FormatUvsrFourDigitSliderValue(
++                value_buf,
++                IM_ARRAYSIZE(value_buf),
++                data_type,
++                p_data));
+     if (g.LogEnabled)
+         LogSetNextTextDecoration("{", "}");
+-    RenderTextClipped(frame_bb.Min, frame_bb.Max, value_buf, value_buf_end, NULL, ImVec2(0.5f, 0.5f));
++    if (g.UvsrStockWidgetRendering)
++    {
++        RenderTextClipped(frame_bb.Min, frame_bb.Max, value_buf, value_buf_end, NULL, ImVec2(0.5f, 0.5f));
++    }
++    else if (value_lane.Usable)
++    {
++        RenderTextClipped(
++            value_lane.ValueRect.Min +
++                ImVec2(style.FramePadding.x, 0.0f),
++            value_lane.ValueRect.Max -
++                ImVec2(style.FramePadding.x, 0.0f),
++            value_buf,
++            value_buf_end,
++            NULL,
++            ImVec2(1.0f, 0.5f));
++    }
++    else
++    {
++        RenderTextClipped(
++            slider_bb.Min,
++            slider_bb.Max,
++            value_buf,
++            value_buf_end,
++            NULL,
++            ImVec2(0.5f, 0.5f));
++    }
+ 
+     if (label_size.x > 0.0f)
+         RenderText(ImVec2(frame_bb.Max.x + style.ItemInnerSpacing.x, frame_bb.Min.y + style.FramePadding.y), label);
+@@ -4368,7 +4646,10 @@
+     }
+ 
+     // Draw frame
+-    const ImU32 frame_col = GetUvsrSliderTrackColor(g, hovered, id);
++    const ImU32 frame_col = GetUvsrSliderTrackColor(
++        g,
++        hovered,
++        g.ActiveId == id);
+     RenderNavCursor(frame_bb, id);
+     RenderFrame(frame_bb.Min, frame_bb.Max, frame_col, true, g.Style.FrameRounding);
+ 
+@@ -6738,7 +7019,8 @@
+         // RGB/HSV 0..255 Sliders
+         const float w_items = w_inputs - style.ItemInnerSpacing.x * (components - 1);
+ 
+-        const bool hide_prefix = (IM_TRUNC(w_items / components) <= CalcTextSize((flags & ImGuiColorEditFlags_Float) ? "M:0.000" : "M:000").x);
++        const bool hide_prefix = !g.UvsrStockWidgetRendering ||
++            (IM_TRUNC(w_items / components) <= CalcTextSize((flags & ImGuiColorEditFlags_Float) ? "M:0.000" : "M:000").x);
+         static const char* ids[4] = { "##X", "##Y", "##Z", "##W" };
+         static const char* fmt_table_int[3][4] =
+         {

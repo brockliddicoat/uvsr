@@ -22,7 +22,8 @@ struct BackdropBlurConstants
     float shadowOpacity;
 
     float shadowOffsetY;
-    float3 padding;
+    uint cornerMask;
+    float2 padding;
 };
 
 cbuffer c_BackdropBlur : register(b0)
@@ -73,13 +74,34 @@ float4 SampleGaussianBlur(float2 centerUv)
     return result / totalWeight;
 }
 
+float ResolveCornerRadius(
+    float2 localPosition,
+    float2 rectangleSize,
+    float cornerRadius,
+    uint cornerMask)
+{
+    const bool right = localPosition.x >= rectangleSize.x * 0.5;
+    const bool bottom = localPosition.y >= rectangleSize.y * 0.5;
+    const uint cornerBit = bottom
+        ? (right ? 0x8u : 0x4u)
+        : (right ? 0x2u : 0x1u);
+    return (cornerMask & cornerBit) != 0u
+        ? cornerRadius
+        : 0.0;
+}
+
 float RoundedRectangleMask(
     float2 localPosition,
     float2 rectangleSize,
-    float cornerRadius)
+    float cornerRadius,
+    uint cornerMask)
 {
     const float clampedRadius = min(
-        cornerRadius,
+        ResolveCornerRadius(
+            localPosition,
+            rectangleSize,
+            cornerRadius,
+            cornerMask),
         min(rectangleSize.x, rectangleSize.y) * 0.5);
     const float2 halfSize = rectangleSize * 0.5;
     const float2 centeredPosition =
@@ -97,10 +119,15 @@ float RoundedRectangleMask(
 float RoundedRectangleSignedDistance(
     float2 localPosition,
     float2 rectangleSize,
-    float cornerRadius)
+    float cornerRadius,
+    uint cornerMask)
 {
     const float clampedRadius = min(
-        cornerRadius,
+        ResolveCornerRadius(
+            localPosition,
+            rectangleSize,
+            cornerRadius,
+            cornerMask),
         min(rectangleSize.x, rectangleSize.y) * 0.5);
     const float2 halfSize = rectangleSize * 0.5;
     const float2 distanceToCorner =
@@ -132,7 +159,8 @@ void main(
         RoundedRectangleMask(
             windowPosition - g_BackdropBlur.panelMin,
             g_BackdropBlur.panelSize,
-            g_BackdropBlur.cornerRadius) *
+            g_BackdropBlur.cornerRadius,
+            g_BackdropBlur.cornerMask) *
         saturate(g_BackdropBlur.opacity);
 #elif COMPOSITE == 2
     const float2 panelPosition =
@@ -140,7 +168,8 @@ void main(
     const float panelDistance = RoundedRectangleSignedDistance(
         panelPosition,
         g_BackdropBlur.panelSize,
-        g_BackdropBlur.cornerRadius);
+        g_BackdropBlur.cornerRadius,
+        g_BackdropBlur.cornerMask);
     if (panelDistance <= 0.0)
         discard;
 
@@ -149,7 +178,8 @@ void main(
     const float shadowDistance = RoundedRectangleSignedDistance(
         shadowPosition,
         g_BackdropBlur.panelSize,
-        g_BackdropBlur.cornerRadius);
+        g_BackdropBlur.cornerRadius,
+        g_BackdropBlur.cornerMask);
     const float shadowCoverage =
         1.0 - smoothstep(
             -0.5,

@@ -78,7 +78,7 @@ int main(int argc, const char* const* argv)
         Require(plain == &simplified,
             "Sponza Plain must resolve the same simplified default camera");
         Require(simplifiedByLocation == &simplified,
-            "Benchmark Position 1 must be the sole stored camera preset");
+            "Position 1 must be the sole stored camera preset");
         Require(uvsr::SelectableSponzaCameraLocations.size() == 2 &&
             uvsr::SelectableSponzaCameraLocations[0] ==
                 uvsr::SponzaCameraLocation::Free &&
@@ -119,12 +119,12 @@ int main(int argc, const char* const* argv)
 
         Require(std::string(simplified.Id) ==
             "intel-pbr-sponza-courtyard-simplified-v1",
-            "Benchmark Position 1 must expose its stable identifier");
-        Require(std::string(simplified.Label) == "Benchmark Position 1" &&
+            "Position 1 must expose its stable identifier");
+        Require(std::string(simplified.Label) == "Position 1" &&
             std::string(uvsr::GetSponzaCameraLocationLabel(
                 uvsr::SponzaCameraLocation::SimplifiedApproximation)) ==
-                "Benchmark Position 1",
-            "the stored preset must expose the Benchmark Position 1 dropdown label");
+                "Position 1",
+            "the stored preset must expose the Position 1 dropdown label");
         Require(std::string(uvsr::GetSponzaCameraLocationLabel(
             uvsr::SponzaCameraLocation::Free)) == "Piloted",
             "a camera that leaves its recalled pose must display Piloted");

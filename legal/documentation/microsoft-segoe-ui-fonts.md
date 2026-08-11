@@ -12,9 +12,9 @@
 ## UVSR Relationship
 
 On Windows, CMake copies installed Segoe font files into build media under the
-names `CodexUI.ttf` and `CodexUI-Semibold.ttf`. These files are not checked into
-the repository. Renaming or copying an installed font does not create a new
-license or establish redistribution rights.
+names `CodexUI.ttf`, `CodexUI-Semibold.ttf`, and `CodexUI-Bold.ttf`. These files
+are not checked into the repository. Renaming or copying an installed font does
+not create a new license or establish redistribution rights.
 
 ## Evidence
 

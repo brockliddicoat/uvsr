@@ -211,6 +211,83 @@ int main()
             Near(settledFrame.scrollY, 980.f),
         "a consumed anchor delta is not applied twice");
 
+    const UiScrollAnchorCorrection outwardTopLock =
+        ResolveUiScrollAnchorCorrection(
+            18.f,
+            42.f,
+            980.f,
+            false,
+            1.f,
+            true,
+            false);
+    passed &= Check(
+        outwardTopLock.apply && Near(outwardTopLock.scrollY, 0.f),
+        "outward wheel input at the top wins over drawer anchor growth");
+    const UiScrollAnchorCorrection repeatedTopLock =
+        ResolveUiScrollAnchorCorrection(
+            outwardTopLock.scrollY,
+            42.f,
+            980.f,
+            false,
+            1.f,
+            true,
+            false);
+    passed &= Check(
+        !repeatedTopLock.apply && Near(repeatedTopLock.scrollY, 0.f),
+        "the top endpoint lock is idempotent on repeated frames");
+
+    const UiScrollAnchorCorrection outwardBottomLock =
+        ResolveUiScrollAnchorCorrection(
+            940.f,
+            -42.f,
+            920.f,
+            false,
+            -1.f,
+            false,
+            true);
+    passed &= Check(
+        outwardBottomLock.apply && Near(outwardBottomLock.scrollY, 920.f),
+        "outward wheel input at the bottom follows the current-frame maximum");
+    const UiScrollAnchorCorrection growingBottomLock =
+        ResolveUiScrollAnchorCorrection(
+            outwardBottomLock.scrollY,
+            -42.f,
+            1040.f,
+            false,
+            -1.f,
+            false,
+            true);
+    passed &= Check(
+        growingBottomLock.apply && Near(growingBottomLock.scrollY, 1040.f),
+        "a held bottom endpoint follows a changed current-frame maximum");
+    const UiScrollAnchorCorrection repeatedBottomLock =
+        ResolveUiScrollAnchorCorrection(
+            growingBottomLock.scrollY,
+            -42.f,
+            1040.f,
+            false,
+            -1.f,
+            false,
+            true);
+    passed &= Check(
+        !repeatedBottomLock.apply &&
+            Near(repeatedBottomLock.scrollY, 1040.f),
+        "the bottom endpoint lock is idempotent once the new maximum settles");
+
+    const UiScrollAnchorCorrection pendingTargetAtEndpoint =
+        ResolveUiScrollAnchorCorrection(
+            23.f,
+            42.f,
+            980.f,
+            true,
+            1.f,
+            true,
+            false);
+    passed &= Check(
+        !pendingTargetAtEndpoint.apply &&
+            Near(pendingTargetAtEndpoint.scrollY, 23.f),
+        "a pending ImGui target takes precedence over endpoint wheel locks");
+
     passed &= Check(
         !ShouldRetainUiViewportHeight(false, false, false),
         "layout animation alone does not pin the Settings viewport");
@@ -224,50 +301,10 @@ int main()
         ShouldRetainUiViewportHeight(false, false, true),
         "scrollbar dragging retains the Settings viewport");
 
-    UiComboPopupRollState popupRoll =
-        RequestUiComboPopupRollDown();
     passed &= Check(
-        IsUiComboPopupRollActive(popupRoll) &&
-            !IsUiComboPopupInteractionReady(popupRoll) &&
-            Near(GetUiComboPopupVisibleAmount(popupRoll), 0.f),
-        "a dropdown begins closed, rolling down, and non-interactive");
-    popupRoll = AdvanceUiComboPopupRoll(popupRoll, 1.f);
-    passed &= Check(
-        popupRoll.phase == UiComboPopupRollPhase::RollingDown &&
-            popupRoll.elapsedSeconds <=
-                UiComboPopupRollMaximumDeltaSeconds &&
-            GetUiComboPopupVisibleAmount(popupRoll) > 0.f &&
-            GetUiComboPopupVisibleAmount(popupRoll) < 1.f,
-        "a slow frame cannot skip the geometric dropdown roll");
-    for (int step = 0; step < 5; ++step)
-    {
-        popupRoll = AdvanceUiComboPopupRoll(
-            popupRoll,
-            UiComboPopupRollMaximumDeltaSeconds);
-    }
-    passed &= Check(
-        popupRoll.phase == UiComboPopupRollPhase::Open &&
-            IsUiComboPopupInteractionReady(popupRoll) &&
-            Near(GetUiComboPopupVisibleAmount(popupRoll), 1.f),
-        "the completed roll-down exposes a fully opaque interactive popup");
-    popupRoll = RequestUiComboPopupRollUp();
-    passed &= Check(
-        IsUiComboPopupRollActive(popupRoll) &&
-            !IsUiComboPopupInteractionReady(popupRoll) &&
-            Near(GetUiComboPopupVisibleAmount(popupRoll), 1.f),
-        "selection begins a fully visible but non-interactive roll-up");
-    for (int step = 0; step < 6; ++step)
-    {
-        popupRoll = AdvanceUiComboPopupRoll(
-            popupRoll,
-            UiComboPopupRollMaximumDeltaSeconds);
-    }
-    passed &= Check(
-        popupRoll.phase == UiComboPopupRollPhase::Closed &&
-            !IsUiComboPopupRollActive(popupRoll) &&
-            Near(GetUiComboPopupVisibleAmount(popupRoll), 0.f),
-        "the roll-up reaches a true hidden endpoint before popup closure");
-
+        UiDropdownSelectionSettleSeconds == 0.25,
+        "deferred dropdown selections retain the established quarter-second "
+        "settle interval");
     int dropdownIdleStart = -1;
     dropdownIdleStart = UpdateUiDropdownIdleStartFrame(
         dropdownIdleStart,
@@ -325,6 +362,89 @@ int main()
             58,
             UiDropdownSelectionSettleSeconds - 0.001),
         "the full dropdown selection-settle interval is required");
+
+    // An authored selection keeps composition non-idle for its retained
+    // roll-up even after the quarter-second request timer has elapsed. Once
+    // that exact popup transition disappears, one complete idle frame must be
+    // presented before the renderer-facing callback may run.
+    constexpr int authoredSelectionRequestFrame = 70;
+    int authoredPopupIdleStart = -1;
+    authoredPopupIdleStart = UpdateUiDropdownIdleStartFrame(
+        authoredPopupIdleStart,
+        authoredSelectionRequestFrame,
+        false);
+    passed &= Check(
+        authoredPopupIdleStart == -1 &&
+            !ShouldCommitDeferredDropdownActions(
+                authoredSelectionRequestFrame,
+                authoredSelectionRequestFrame,
+                authoredPopupIdleStart,
+                UiDropdownSelectionSettleSeconds),
+        "an authored popup roll cannot commit on its selection frame");
+    authoredPopupIdleStart = UpdateUiDropdownIdleStartFrame(
+        authoredPopupIdleStart,
+        authoredSelectionRequestFrame + 12,
+        false);
+    passed &= Check(
+        authoredPopupIdleStart == -1 &&
+            !ShouldCommitDeferredDropdownActions(
+                authoredSelectionRequestFrame + 12,
+                authoredSelectionRequestFrame,
+                authoredPopupIdleStart,
+                UiDropdownSelectionSettleSeconds + 0.05),
+        "an active roll-up keeps the deferred action blocked even after the "
+        "quarter-second request timer has elapsed");
+    authoredPopupIdleStart = UpdateUiDropdownIdleStartFrame(
+        authoredPopupIdleStart,
+        authoredSelectionRequestFrame + 13,
+        true);
+    passed &= Check(
+        authoredPopupIdleStart == authoredSelectionRequestFrame + 13 &&
+            !ShouldCommitDeferredDropdownActions(
+                authoredSelectionRequestFrame + 13,
+                authoredSelectionRequestFrame,
+                authoredPopupIdleStart,
+                UiDropdownSelectionSettleSeconds),
+        "the first fully idle frame after roll-up only arms the idle barrier");
+    authoredPopupIdleStart = UpdateUiDropdownIdleStartFrame(
+        authoredPopupIdleStart,
+        authoredSelectionRequestFrame + 14,
+        true);
+    passed &= Check(
+        ShouldCommitDeferredDropdownActions(
+            authoredSelectionRequestFrame + 14,
+            authoredSelectionRequestFrame,
+            authoredPopupIdleStart,
+            UiDropdownSelectionSettleSeconds),
+        "an authored choice commits only after roll-up, the full settle time, "
+        "and one presented idle frame");
+
+    constexpr int oggSelectionRequestFrame = 90;
+    int oggPopupIdleStart = UpdateUiDropdownIdleStartFrame(
+        -1,
+        oggSelectionRequestFrame,
+        false);
+    oggPopupIdleStart = UpdateUiDropdownIdleStartFrame(
+        oggPopupIdleStart,
+        oggSelectionRequestFrame + 1,
+        true);
+    passed &= Check(
+        oggPopupIdleStart == oggSelectionRequestFrame + 1 &&
+            !ShouldCommitDeferredDropdownActions(
+                oggSelectionRequestFrame + 1,
+                oggSelectionRequestFrame,
+                oggPopupIdleStart,
+                UiDropdownSelectionSettleSeconds),
+        "Ogg's immediate stock popup close still presents an idle endpoint "
+        "before commit");
+    passed &= Check(
+        ShouldCommitDeferredDropdownActions(
+            oggSelectionRequestFrame + 2,
+            oggSelectionRequestFrame,
+            oggPopupIdleStart,
+            UiDropdownSelectionSettleSeconds),
+        "Ogg shares the unchanged quarter-second and later-idle-frame commit "
+        "barrier despite having no popup roll");
 
     using TestDeferredQueue =
         DeferredUiActionQueue<int, std::function<void()>>;
@@ -480,162 +600,36 @@ int main()
             aliasingPresentation.Present(committedAliasing).method == 2,
         "canceling a staged Aliasing choice restores committed presentation");
 
-    using StructuralAliasingPresentation =
-        DeferredUiStructuralPresentation<TestAliasingSettings>;
-    using StructuralAliasingPhase =
-        DeferredUiStructuralPresentationPhase;
-
-    TestAliasingSettings structuralCommitted{ 0, 1, 41 };
-    StructuralAliasingPresentation structuralPresentation;
-    structuralPresentation.Stage(
-        structuralCommitted,
-        true,
-        100,
-        [](TestAliasingSettings& staged)
-        {
-            staged.method = 2;
-            staged.quality = 3;
-        });
     passed &= Check(
-        structuralPresentation.GetPhase() ==
-                StructuralAliasingPhase::AwaitPopupRollUp &&
-            structuralPresentation.ShowStructuralBody() &&
-            !structuralPresentation.ReadyForCommit() &&
-            structuralPresentation.
-                PresentSelectors(structuralCommitted).method == 2 &&
-            structuralPresentation.
-                PresentStructuralBody(structuralCommitted).method == 0 &&
-            structuralCommitted.method == 0,
-        "a structural Aliasing choice presents its selector while retaining the committed body through popup roll-up");
-
-    structuralPresentation.Advance(100, true, false);
+        Near(
+            ResolveUiOpenAmountAfterSubmissionGap(
+                false,
+                true,
+                false),
+            0.f) &&
+            Near(
+                ResolveUiOpenAmountAfterSubmissionGap(
+                    true,
+                    false,
+                    false),
+                0.f),
+        "a skipped drawer submission must restart a close or false-to-true "
+        "open transition at the closed endpoint");
     passed &= Check(
-        structuralPresentation.GetPhase() ==
-            StructuralAliasingPhase::AwaitPopupRollUp,
-        "the structural request frame cannot bypass popup roll-up");
-    passed &= Check(
-        !structuralPresentation.CommitTo(structuralCommitted) &&
-            structuralCommitted.method == 0,
-        "a structural choice cannot commit while its popup is rolling up");
-    structuralPresentation.Advance(101, true, false);
-    passed &= Check(
-        structuralPresentation.GetPhase() ==
-            StructuralAliasingPhase::AwaitPopupRollUp,
-        "an active popup transition holds the committed drawer body open");
-    structuralPresentation.Advance(101, false, true);
-    passed &= Check(
-        structuralPresentation.GetPhase() ==
-            StructuralAliasingPhase::AwaitPopupRollUp,
-        "a finished popup transition still waits for stable scrolling and layout before drawer collapse");
-    structuralPresentation.Advance(101, true, true);
-    passed &= Check(
-        structuralPresentation.GetPhase() ==
-                StructuralAliasingPhase::CollapseCommitted &&
-            !structuralPresentation.ShowStructuralBody() &&
-            !structuralPresentation.ReadyForCommit() &&
-            structuralPresentation.
-                PresentStructuralBody(structuralCommitted).method == 0,
-        "popup closure starts a separate collapse of the committed drawer body");
-
-    structuralPresentation.Advance(101, true, true);
-    passed &= Check(
-        structuralPresentation.GetPhase() ==
-            StructuralAliasingPhase::CollapseCommitted,
-        "the collapse phase must be composed for at least one later frame");
-    structuralPresentation.Advance(102, false, true);
-    passed &= Check(
-        structuralPresentation.GetPhase() ==
-            StructuralAliasingPhase::CollapseCommitted,
-        "an unstable committed layout cannot begin staged expansion");
-    structuralPresentation.Advance(102, true, true);
-    passed &= Check(
-        structuralPresentation.GetPhase() ==
-                StructuralAliasingPhase::ExpandStaged &&
-            structuralPresentation.ShowStructuralBody() &&
-            !structuralPresentation.ReadyForCommit() &&
-            structuralPresentation.
-                PresentStructuralBody(structuralCommitted).method == 2,
-        "a stable collapsed layout advances to the staged structural body");
-
-    structuralPresentation.Advance(102, true, true);
-    passed &= Check(
-        structuralPresentation.GetPhase() ==
-            StructuralAliasingPhase::ExpandStaged,
-        "the expansion phase must be composed for at least one later frame");
-    structuralPresentation.Advance(103, false, true);
-    passed &= Check(
-        !structuralPresentation.ReadyForCommit() &&
-            !structuralPresentation.CommitTo(structuralCommitted) &&
-            structuralCommitted.method == 0,
-        "an unstable staged layout remains blocked from renderer commit");
-    structuralPresentation.Advance(103, true, true);
-    passed &= Check(
-        structuralPresentation.GetPhase() ==
-                StructuralAliasingPhase::ReadyToCommit &&
-            structuralPresentation.ReadyForCommit(),
-        "only a stable staged layout becomes ready for renderer commit");
-
-    const int structuralLayoutBeforeCommit = aliasingLayoutSignature(
-        structuralPresentation.
-            PresentStructuralBody(structuralCommitted));
-    passed &= Check(
-        structuralPresentation.CommitTo(structuralCommitted) &&
-            structuralPresentation.GetPhase() ==
-                StructuralAliasingPhase::Inactive &&
-            aliasingLayoutSignature(
-                structuralPresentation.
-                    PresentStructuralBody(structuralCommitted)) ==
-                structuralLayoutBeforeCommit,
-        "structural commit resets its phase without a second Aliasing reflow");
-
-    TestAliasingSettings hiddenCommitted{ 0, 1, 57 };
-    StructuralAliasingPresentation hiddenPresentation;
-    hiddenPresentation.Stage(
-        hiddenCommitted,
-        true,
-        200,
-        [](TestAliasingSettings& staged)
-        {
-            staged.method = 1;
-        });
-    hiddenPresentation.SkipInvisibleAnimation(200);
-    passed &= Check(
-        hiddenPresentation.GetPhase() ==
-                StructuralAliasingPhase::ReadyToCommit &&
-            hiddenPresentation.ReadyForCommit() &&
-            hiddenPresentation.ShowStructuralBody() &&
-            hiddenPresentation.
-                PresentStructuralBody(hiddenCommitted).method == 1 &&
-            hiddenCommitted.method == 0,
-        "an invisible structural choice skips animation without applying renderer state");
-    hiddenPresentation.Cancel();
-    passed &= Check(
-        !hiddenPresentation.HasPending() &&
-            hiddenPresentation.GetPhase() ==
-                StructuralAliasingPhase::Inactive &&
-            hiddenPresentation.ReadyForCommit() &&
-            hiddenPresentation.
-                PresentStructuralBody(hiddenCommitted).method == 0,
-        "canceling hidden staged work restores the committed presentation");
-
-    TestAliasingSettings nonStructuralCommitted{ 0, 1, 63 };
-    StructuralAliasingPresentation nonStructuralPresentation;
-    nonStructuralPresentation.Stage(
-        nonStructuralCommitted,
-        false,
-        300,
-        [](TestAliasingSettings& staged)
-        {
-            staged.quality = 3;
-        });
-    passed &= Check(
-        nonStructuralPresentation.GetPhase() ==
-                StructuralAliasingPhase::ReadyToCommit &&
-            nonStructuralPresentation.ShowStructuralBody() &&
-            nonStructuralPresentation.
-                PresentStructuralBody(nonStructuralCommitted).quality == 3 &&
-            nonStructuralCommitted.quality == 1,
-        "a nonstructural choice uses the staged body without a false collapse");
+        Near(
+            ResolveUiOpenAmountAfterSubmissionGap(
+                true,
+                true,
+                true),
+            0.f) &&
+            Near(
+                ResolveUiOpenAmountAfterSubmissionGap(
+                    true,
+                    true,
+                    false),
+                1.f),
+        "a skipped submitted drawer preserves only a measured unchanged-open "
+        "endpoint");
 
     passed &= Check(
         Near(
@@ -693,6 +687,102 @@ int main()
                 true,
                 skippedMeasurement),
         "an offscreen body cannot complete initial measurement");
+
+    static_assert(
+        UiDisabledPresentationDurationSeconds == 0.280f,
+        "the authored disabled transition lasts 280 ms");
+    static_assert(
+        SmoothUiDisabledPresentation(0.5f) == 0.5f,
+        "the disabled easing helper remains constexpr");
+
+    passed &= Check(
+        Near(
+            AdvanceUiDisabledPresentation(0.f, false, 1.f / 60.f, true),
+            0.f) &&
+            Near(
+                AdvanceUiDisabledPresentation(1.f, true, 1.f / 60.f, true),
+                1.f) &&
+            Near(
+                AdvanceUiDisabledPresentation(0.99f, true, 1.f / 30.f, true),
+                1.f) &&
+            Near(
+                AdvanceUiDisabledPresentation(0.01f, false, 1.f / 30.f, true),
+                0.f),
+        "disabled presentation stays at and snaps exactly to its endpoints");
+
+    const auto advanceDisabledFor = [](
+        float deltaSeconds,
+        int frameCount)
+    {
+        float amount = 0.f;
+        for (int frame = 0; frame < frameCount; ++frame)
+        {
+            amount = AdvanceUiDisabledPresentation(
+                amount,
+                true,
+                deltaSeconds,
+                true);
+        }
+        return amount;
+    };
+    const float disabledAtThirtyHz = advanceDisabledFor(1.f / 30.f, 6);
+    const float disabledAtSixtyHz = advanceDisabledFor(1.f / 60.f, 12);
+    const float disabledAtOneTwentyHz = advanceDisabledFor(1.f / 120.f, 24);
+    passed &= Check(
+        Near(disabledAtThirtyHz, 0.2f / 0.280f) &&
+            Near(disabledAtThirtyHz, disabledAtSixtyHz) &&
+            Near(disabledAtSixtyHz, disabledAtOneTwentyHz),
+        "30, 60, and 120 Hz advance equally for the same elapsed time");
+
+    const float maximumStep = AdvanceUiDisabledPresentation(
+        0.f,
+        true,
+        1.f / 30.f,
+        true);
+    passed &= Check(
+        Near(
+            AdvanceUiDisabledPresentation(0.f, true, 1.f, true),
+            maximumStep) &&
+            Near(
+                AdvanceUiDisabledPresentation(0.4f, true, -1.f, true),
+                0.4f),
+        "disabled presentation clamps frame time to [0, 1/30] seconds");
+
+    constexpr float reversalStart = 0.6f;
+    const float reversingTowardEnabled = AdvanceUiDisabledPresentation(
+        reversalStart,
+        false,
+        1.f / 120.f,
+        true);
+    const float reversedTowardDisabled = AdvanceUiDisabledPresentation(
+        reversingTowardEnabled,
+        true,
+        1.f / 120.f,
+        true);
+    passed &= Check(
+        reversingTowardEnabled > 0.f &&
+            reversingTowardEnabled < reversalStart &&
+            Near(reversedTowardDisabled, reversalStart),
+        "reversing a disabled transition continues from its current amount");
+
+    passed &= Check(
+        Near(
+            AdvanceUiDisabledPresentation(0.25f, true, 0.f, false),
+            1.f) &&
+            Near(
+                AdvanceUiDisabledPresentation(0.75f, false, 0.f, false),
+                0.f),
+        "motion-off disabled presentation snaps immediately to its target");
+
+    passed &= Check(
+        Near(SmoothUiDisabledPresentation(-1.f), 0.f) &&
+            Near(SmoothUiDisabledPresentation(0.f), 0.f) &&
+            Near(SmoothUiDisabledPresentation(0.25f), 0.15625f) &&
+            Near(SmoothUiDisabledPresentation(0.5f), 0.5f) &&
+            Near(SmoothUiDisabledPresentation(0.75f), 0.84375f) &&
+            Near(SmoothUiDisabledPresentation(1.f), 1.f) &&
+            Near(SmoothUiDisabledPresentation(2.f), 1.f),
+        "disabled presentation smoothstep is clamped and endpoint-stable");
 
     if (!passed)
         return 1;

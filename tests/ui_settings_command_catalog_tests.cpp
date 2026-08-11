@@ -53,13 +53,14 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 184u);
+    static_assert(UiSettingsCommandCatalog.size() == 193u);
     static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 13u);
+    static_assert(static_cast<std::uint8_t>(UiSettingsCommandKind::Float4) == 7u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
         static_cast<std::uint8_t>(UiSettingsCommandVerb::Run));
 
     constexpr std::array<std::size_t, 13> ExpectedSectionCounts = {
-        5u,  // UI
+        14u, // UI
         6u,  // General
         4u,  // Representation
         3u,  // Noise
@@ -237,13 +238,13 @@ int main()
     }
 
     Require(names.size() == UiSettingsCommandCatalog.size(),
-        "the compact catalog must contain 184 unique commands");
+        "the compact catalog must contain 193 unique commands");
     Require(sectionCounts == ExpectedSectionCounts,
         "section counts must match the current UI");
     Require(actionCount == 4u,
         "only open-folder, reset, capture, and restart actions remain");
-    Require(UiSettingsCommandCatalog.size() - actionCount == 180u,
-        "the compact catalog must contain 180 values");
+    Require(UiSettingsCommandCatalog.size() - actionCount == 189u,
+        "the compact catalog must contain 189 values");
     Require(dynamicCount == 49u,
         "runtime lights and materials must retain their 49 dynamic controls");
     Require(dynamicSelections == ExpectedDynamicSelections,
@@ -264,6 +265,23 @@ int main()
         Require(definition && definition->domain == domain,
             "command domain must exactly match its visible values");
     };
+    requireDomain(
+        "reset-settings",
+        "restore renderer and interface factory settings");
+    requireDomain("ui.skin", "amp|ogg");
+    requireDomain("ui.animations", "on|off");
+    requireDomain("ui.accent.main", "display rgb float3 0..1");
+    requireDomain("ui.accent.negative", "display rgb float3 0..1");
+    requireDomain("ui.accent.positive", "display rgb float3 0..1");
+    for (const std::string_view name : {
+            std::string_view("ui.accent.primary"),
+            std::string_view("ui.accent.secondary"),
+            std::string_view("ui.accent.tertiary"),
+            std::string_view("ui.accent.font"),
+            std::string_view("ui.accent.primary-background") })
+    {
+        requireDomain(name, "display rgba float4 0..1");
+    }
     requireDomain(
         "gpu.adaptive-sync",
         "off|vendor-agnostic|nvidia-exclusive");
@@ -388,6 +406,38 @@ int main()
         "representation.allow-ray-traversal",
         Kind::Boolean,
         Section::Representation);
+    requireKindAndSection("ui.skin", Kind::Enum, Section::Ui);
+    requireKindAndSection("ui.animations", Kind::Boolean, Section::Ui);
+    Require(
+        Find("ui.animations")->Supports(UiSettingsCommandVerb::Reset) &&
+            !Find("ui.animations")->dynamic,
+        "the Interface animation preference must be a resettable static value");
+    for (const std::string_view name : {
+            std::string_view("ui.accent.main"),
+            std::string_view("ui.accent.negative"),
+            std::string_view("ui.accent.positive") })
+    {
+        requireKindAndSection(name, Kind::Float3, Section::Ui);
+        const UiSettingsCommandDefinition* definition = Find(name);
+        Require(definition &&
+                definition->Supports(UiSettingsCommandVerb::Reset) &&
+                !definition->dynamic,
+            "interface accent colors must be resettable static values");
+    }
+    for (const std::string_view name : {
+            std::string_view("ui.accent.primary"),
+            std::string_view("ui.accent.secondary"),
+            std::string_view("ui.accent.tertiary"),
+            std::string_view("ui.accent.font"),
+            std::string_view("ui.accent.primary-background") })
+    {
+        requireKindAndSection(name, Kind::Float4, Section::Ui);
+        const UiSettingsCommandDefinition* definition = Find(name);
+        Require(definition &&
+                definition->Supports(UiSettingsCommandVerb::Reset) &&
+                !definition->dynamic,
+            "RGBA interface palette roles must be resettable static values");
+    }
     requireKindAndSection("noise.pattern", Kind::Enum, Section::Noise);
     requireKindAndSection("noise.resolution", Kind::Enum, Section::Noise);
     requireKindAndSection(
@@ -494,6 +544,9 @@ int main()
         "Capture must be the footer screenshot action");
 
     Require(!Find("visibility.profile") &&
+            !Find("ui.accent.primary-font") &&
+            !Find("ui.accent.secondary-font") &&
+            !Find("ui.accent.secondary-background") &&
             !Find("visibility.sampling.noise-pattern") &&
             !Find("visibility.reconstruction.method") &&
             !Find("visibility.buffers.preset") &&
