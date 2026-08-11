@@ -166,10 +166,6 @@ int main(int argc, char** argv)
         root / "src/temporal_aa.cpp");
     const std::string temporalAaPassHeader = ReadFile(
         root / "src/temporal_aa.h");
-    const std::string gpuPerformanceMonitor = ReadFile(
-        root / "src/gpu_performance_monitor.cpp");
-    const std::string gpuPerformanceMonitorHeader = ReadFile(
-        root / "src/gpu_performance_monitor.h");
     const std::string worldRepresentation = ReadFile(
         root / "src/world_space_representation.cpp");
     const std::string worldRepresentationHeader = ReadFile(
@@ -201,22 +197,41 @@ int main(int argc, char** argv)
         "\"Heitz ratio estimator shadow",
         "person-named visible ratio estimator logs");
 
-    passed &= ExpectContains(
-        gpuPerformanceMonitorHeader,
-        "bool utilizationValid = false;",
-        "graphics utilization validity transport");
-    passed &= ExpectContains(
-        gpuPerformanceMonitor,
-        "m_Metrics.utilizationValid = utilizationValid;",
-        "NVIDIA utilization validity publication");
-    passed &= ExpectContains(
-        gpuPerformanceMonitor,
-        "m_Metrics.utilizationValid = false;",
-        "Intel unavailable utilization publication");
-    passed &= ExpectContains(
+    for (const std::filesystem::path& removedHardwarePath : {
+            root / "src/gpu_performance_monitor.cpp",
+            root / "src/gpu_performance_monitor.h",
+            root / "tests/hardware_statistics_tests.cpp" })
+    {
+        passed &= ExpectFileAbsent(
+            removedHardwarePath,
+            "removed Hardware Performance support file");
+    }
+    for (const std::string_view removedHardwareBinding : {
+            std::string_view("HardwareCapabilities"),
+            std::string_view("QueryHardwareCapabilities"),
+            std::string_view("m_HardwareCapabilities"),
+            std::string_view("StatisticsEffect::Hardware"),
+            std::string_view("##HardwareStatistics") })
+    {
+        passed &= ExpectAbsent(
+            viewer,
+            removedHardwareBinding,
+            "removed Hardware Performance runtime binding");
+    }
+    for (const std::string_view removedHardwareBuildEntry : {
+            std::string_view("gpu_performance_monitor.cpp"),
+            std::string_view("hardware_statistics_tests.cpp"),
+            std::string_view("uvsr_hardware_statistics_tests") })
+    {
+        passed &= ExpectAbsent(
+            buildSystem,
+            removedHardwareBuildEntry,
+            "removed Hardware Performance build registration");
+    }
+    passed &= ExpectAbsent(
         viewer,
-        "if (snapshot.gpuMetrics.utilizationValid)",
-        "utilization-scaled throughput validity gate");
+        "snapshot.gpuMetrics",
+        "retired current-utilization header throughput");
 
     passed &= ExpectContains(
         representationSettings,
@@ -1184,7 +1199,7 @@ int main(int argc, char** argv)
     const std::string_view applyCameraPose = ExtractSection(
         viewer,
         "void ApplyCameraPose(",
-        "void ApplySponzaCameraPreset(");
+        "void ApplyCameraPreset(");
     passed &= ExpectOrdered(
         applyCameraPose,
         "m_StaticCamera.SetExactPose(",

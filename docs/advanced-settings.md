@@ -8,10 +8,10 @@ on every launch and are not persisted.
 - **Escape** or **~** opens and closes Settings.
 - **/** opens the command interface. Enter applies, Tab completes, Up and Down
   recall history, and Escape cancels the active edit.
-- **M** opens or closes the material editor for the surface at screen center.
+- **M** opens or closes the Material drawer for the surface at screen center.
 - **F** toggles the camera flashlight while the command interface is closed and
   text input is inactive.
-- **Z** or the **Pixel Zoom** footer action cycles Off, 2x, 3x, 4x, and 5x.
+- **Z** or **Zoom** cycles Off, 2x, 3x, 4x, and 5x pixel inspection.
 - In **Freelook**, **W/S** dollies forward and backward, **A/D** strafes, and
   **Q/E** moves vertically. Space and Shift are not movement modifiers.
 - The **arrow keys** look left, right, up, and down; **X/C** rolls; and **V**
@@ -24,10 +24,25 @@ on every launch and are not persisted.
 
 ## Settings Drawers
 
-The Settings panel contains twelve top level drawers in this order:
+Performance is an independently collapsible panel immediately above and fully
+detached from Settings. The panels use the same separation as adjacent
+top-level drawers, retain independent fully rounded silhouettes, and keep smooth
+authored opening and closing motion. It reports a compact per-window frame
+summary and selected renderer timings.
+The compact summary remains visible below the title when Performance is fully
+collapsed; only its selector and table close. The summary is vertically centered
+with equal top and bottom breathing room, and only its retained body fades toward
+an opaque surface during collapse so scene detail cannot overpower the line.
 
-1. **General** selects the interface skin, graphics adapter, Adaptive Sync,
-   camera, and scene.
+The menu uses one scaled 1x/2x/4x spacing ladder. At 100 percent display scale,
+1x is 4 pixels for adjacent drawers, the Performance-to-Settings gap, and footer
+button gaps, as well as the Settings-to-command-interface gap; 2x is 8 pixels
+for the Settings title-to-General inset and body padding; and 4x is 16 pixels
+for outer panel and command-interface margins.
+
+The Settings panel contains thirteen scrolling top level drawers in this order:
+
+1. **General** selects the graphics adapter, Adaptive Sync, camera, and scene.
 2. **Representation** controls whether ray traversal is allowed and configures
    the shared BVH, BLAS, and TLAS policies.
 3. **Noise** defines the shared precomputed noise pattern, resolution, and
@@ -37,24 +52,109 @@ The Settings panel contains twelve top level drawers in this order:
 5. **Denoising** selects optional NVIDIA NRD processing for AO, GI, shadows,
    and sky visibility.
 6. **Buffers** owns the two retained Visibility precision choices.
-7. **Statistics** reports a compact frame summary and a detailed selected effect.
-8. **Aliasing** independently enables the temporal, fast approximate,
+7. **Aliasing** independently enables the temporal, fast approximate,
    morphological, and multisample techniques.
-9. **Debug** combines world appearance and effect specific information views.
-10. **Sky** configures the global environment, display exposure, and ambient
+8. **Debug** combines world appearance and effect specific information views.
+9. **Sky** configures the global environment, display exposure, and ambient
     fill.
-11. **Lights** edits scene lights and the camera flashlight.
-12. **Shadows** configures ray traced sun shadows.
+10. **Lights** edits scene lights and the camera flashlight.
+11. **Shadows** configures ray traced sun shadows.
+12. **Material** selects and edits the surface under the center crosshair.
+13. **Interface** selects the skin and edits its RGBA accent, font, and
+    background roles.
 
-A reset icon beside a control restores that control or group to its current
-factory value.
+Escape or `~` opens or closes Settings. A reset icon beside a control restores
+that control or group to its current factory value. Q moves the camera up, E
+moves it down, and the retired Space and Shift vertical bindings are inert.
+V restores an upright camera roll. A stationary held trackpad touch does not
+cancel that leveling motion; new camera-look movement or another real camera
+input does.
+
+**Camera Location > Position 1** is the exact
+spawn view for every loaded scene. Press M to open or refresh the Material
+drawer's center selection; close it with the drawer header. Settings use the full
+available height until the slash command interface opens, then shrink smoothly
+above its bottom-centered two-axis entrance. Settings retain the same ordinary
+inset below the title as along the body sides and bottom. A late topmost-child
+opaque frame fills the complete rounded margin, including all four
+outer-to-inner corner wedges, while a shallow shadow remains above whichever
+ordinary drawer reaches the viewport edge. Performance uses the same filled
+frame and inner outline so its retained table lines terminate cleanly. The
+scrolling child and scrollbar still begin at General. Amp uses one shared corner
+radius for the panel frame, drawer bodies, controls, and scrollbar; the
+scrollbar keeps a one-pixel inset against the outline. At 100 percent scale its
+12-pixel channel produces a 10-pixel visible grab, the minimum standard geometry
+that preserves the shared 4-pixel radius.
+The fully visible command interface uses the same opaque body surface as the
+collapsed Performance summary; only its whole-window appearance transform
+changes opacity during entry and exit.
+The authored stack targets 23.44 font heights, exactly 20 percent narrower than
+the previous layout, but never contracts below its longest intentional control
+plus padding and the scrollbar.
+The four footer actions are **Reset**, **Capture**, **Zoom**, and
+**Restart**; Capture copies the current frame to the clipboard. Reset restores
+renderer settings, Adaptive Sync, Interface skin and colors, animation
+preference, and the default collapsed Complete Renderer Performance view. It
+preserves the camera, scene, active graphics adapter, and command history.
+
+## Interface
+
+The first Interface control is a **Disable Animations** toggle. Checking it
+moves every authored drawer, panel, slider, command-interface, and zoom
+transition directly to its current endpoint. **Interface Skin** selects Amp or
+Ogg. Amp owns the animated UVSR presentation; Ogg uses stock ImGui presentation
+and immediate endpoints. Performance and Settings use the same authored
+root-panel motion as the drawers in Amp.
+
+**Primary Accent** edits Amp's drawer and panel headers, footer buttons,
+selection details, checkmarks, and raised slider knobs. Ogg disables this row
+because stock ImGui does not have one honest primary-accent owner. **Secondary
+Accent** defaults to historical translucent Amp blue `#4296FA4F` and drives
+errors, negative state, and authored toggle-off knobs. **Tertiary Accent**
+defaults to the historically compensated source blue `#1E3757FF`; it was tuned
+to retain the accepted blue appearance over the light enabled track and drives
+success, positive state, Material status, and authored toggle-on knobs. Every
+editor includes alpha.
+
+The default-closed **Advanced Accents** group provides one **Font Color** for
+all authored copy and **Primary Background Color** for the menu body and resting
+closed controls. Hover, active, and strengthened body opacity are derived from
+the resting background. Ultra-bright Primary Accent surfaces automatically use
+a transparent dark depth gradient. Slider tracks follow Primary Background
+Color so the Primary Accent knob remains distinct.
+These interface choices are session-only and are restored by footer Reset or
+`/reset all`.
+
+Authored Primary Accent slider knobs retain a subtle raised depth surface. When
+a parent setting gates a slider, the control moves to the renderer's effective
+value without erasing the stored preference and eases into or out of grayscale
+over 280 milliseconds; enabling the parent moves it back to that preference.
+A fixed right-hand value bubble inside the existing control width is twice the
+authored toggle width and opens exact numeric input with one click. Its inactive
+copy has exactly four digit glyphs, excluding a minus sign or decimal point, so
+examples include `0.200`, `16.00`, `123.5`, and `1235`. This presentation never
+rounds the stored setting; active input uses undecorated native precision. It
+remains 2 pixels from the track bubble so both controls retain four inner
+fillets. Authored color components also omit `R:`, `G:`, `B:`, and `A:`
+prefixes. Ogg keeps stock ImGui slider and color-editor presentation.
+
+Authored combo options roll into view over 180 milliseconds and roll away after
+selection. A renderer-changing choice remains queued until that roll completes,
+the existing 250-millisecond settle expires, and one complete idle UI frame has
+been presented. Ogg retains immediate stock popup behavior.
+
+Interface color pickers use a hue wheel with separate rounded hue and
+transparency bars. They are constrained to the lane beginning at the Settings
+content-right edge and to the current Settings bottom edge. They inherit the
+same pixel-zoom scale and opacity as the managed stack, close as soon as the
+Settings body actually scrolls, and draw rounded bar markers plus the active hue
+or saturation/value cursor after every other picker element. Their background
+uses the configurable Primary Background RGB and scales its authored alpha so
+the factory Amp surface is opaque; generic popups keep their own style. Repeated
+wheel input beyond the top or bottom of Settings stays locked to that endpoint
+rather than adding a second scroll-anchor correction.
 
 ## General
-
-**Interface Skin** selects **Amp** or **OG**. Amp uses UVSR's animated, blurred
-floating panels; OG uses stock ImGui presentation with immediate transitions
-for automation. **Camera Location > Position 1** selects the standardized
-Sponza view used by project validation and performance work.
 
 **Graphics Adapter** selects the DirectX 12 device and restarts UVSR when it
 changes. **Adaptive Sync** follows it directly and offers **Off**, **Vendor
@@ -203,7 +303,7 @@ choice never changes those producer switches. Missing data, an unsupported
 combination, or an unavailable backend leaves the raw signal in use and reports
 the reason.
 
-Statistics keeps each denoising dispatch separate from its producer. The
+Performance keeps each denoising dispatch separate from its producer. The
 Complete Renderer table and relevant effect table therefore report **Ambient
 Occlusion Denoise**, **Diffuse Illumination Denoise**, **Shadow Denoise**, and
 **Sky Visibility Denoise** independently from their raw trace or ray-dispatch
@@ -349,6 +449,12 @@ the filtered presentation. An explicit Visibility view takes precedence when
 both selectors are active. The removed screen space directional shadow
 diagnostics do not remain as hidden main branch state.
 
+All three Debug selectors defer their renderer mutation until the native popup
+has closed, the 250-millisecond settle interval has elapsed, and one complete
+idle Settings frame has been presented. Selecting a White world mode therefore
+does not rewrite materials or recreate render passes inside the popup's click
+frame.
+
 ## Lights
 
 The flashlight is one analytical physical spot light in scene submission and
@@ -425,16 +531,22 @@ quarantined with the CSM and SVSM experiments on the local
 `codex/svsm-csm-preserved` branch and is not compiled or packaged by the normal
 renderer.
 
-## Statistics
+## Performance
 
-Statistics condenses the six general values into one slash-separated line and
-shows one selected effect at a time in a labeled, striped two-column table. The
-selector contains **Complete
-Renderer**, **Scene Setup**, **Geometry**, **Direct Lighting**, **Screen Space
+The detached Performance panel shows resolution, submitted triangles, frame
+time, and frame rate in one slash-separated line. Renderer identity remains in
+General. Amp draws the same opaque rounded inset frame around Performance and
+Settings after their content, so every corner wedge is filled and Performance
+table lines terminate at the inner outline. Its collapsed summary is centered
+inside balanced vertical padding while the retained body alone fades toward
+opaque as collapse progresses. The selector uses the same inset and width as
+ordinary long General controls and shows one selected view at a time in a
+labeled, striped two-column table. It contains **Complete Renderer**, **Scene
+Setup**, **Geometry**, **Direct Lighting**, **Screen Space
 Visibility**, **Directional Shadows**, **Temporal Reconstructive**,
 **Fast Approximate**, **Conservative Morphological**, **Multisample Adaptive**,
 **Material Picking**,
-**Environment Background**, **Auto Exposure**, **Tone Mapping**, and **Output
+**Environment Background**, **Tone Mapping**, and **Output
 Blit**. Complete
 Renderer restores the full stage breakdown, including an available Closest
 Surface Resolve. The multisample-only base-lighting pass that prepares Screen
@@ -461,8 +573,9 @@ Press `/` to open the command bar. Enter applies a command, Tab completes the
 current token, Up and Down browse history, and Escape cancels the active edit.
 The input reserves one row. Its empty guidance separates those instructions
 with slashes and disappears as soon as typing begins. After Enter, that same
-input shows a blue `Success` or saturated-crimson `Error` result until the next
-command is typed; no floating result bar can cover Settings. When the complete result is
+input shows `Success` in the configured positive accent or `Error` in the
+configured negative accent until the next command is typed; no floating result
+bar can cover Settings. When the complete result is
 longer than the input, a trailing details button deliberately opens a bounded,
 scrollable, selectable read only view. The catalog mirrors the current UI
 settings. Type a section prefix such as

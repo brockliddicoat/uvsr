@@ -9,9 +9,39 @@
 namespace uvsr
 {
     inline constexpr double UiDropdownSelectionSettleSeconds = 0.25;
-    inline constexpr float UiComboPopupRollDurationSeconds = 0.18f;
-    inline constexpr float UiComboPopupRollMaximumDeltaSeconds =
-        1.0f / 30.0f;
+    inline constexpr float UiDisabledPresentationDurationSeconds = 0.280f;
+
+    // Advances only the normalized presentation timeline. Per-ID storage,
+    // once-per-frame advancement, and submission-gap recovery belong to the
+    // caller so this math stays deterministic and independent of ImGui state.
+    [[nodiscard]] constexpr float AdvanceUiDisabledPresentation(
+        float linearAmount,
+        bool disabled,
+        float deltaSeconds,
+        bool motionEnabled)
+    {
+        const float target = disabled ? 1.f : 0.f;
+        if (!motionEnabled)
+            return target;
+
+        const float amount = std::clamp(linearAmount, 0.f, 1.f);
+        const float safeDeltaSeconds = std::clamp(
+            deltaSeconds,
+            0.f,
+            1.f / 30.f);
+        const float step =
+            safeDeltaSeconds / UiDisabledPresentationDurationSeconds;
+        return target > amount
+            ? std::min(target, amount + step)
+            : std::max(target, amount - step);
+    }
+
+    [[nodiscard]] constexpr float SmoothUiDisabledPresentation(
+        float linearAmount)
+    {
+        const float amount = std::clamp(linearAmount, 0.f, 1.f);
+        return amount * amount * (3.f - 2.f * amount);
+    }
 
     [[nodiscard]] constexpr bool
         ShouldPlaceUiResetInNestedDropdownGutter(
@@ -33,86 +63,6 @@ namespace uvsr
         const float safeButtonSize = std::max(0.f, buttonSize);
         return -safeIndentSpacing +
             (safeIndentSpacing - safeButtonSize) * 0.5f;
-    }
-
-    enum class UiComboPopupRollPhase
-    {
-        Closed,
-        RollingDown,
-        Open,
-        RollingUp
-    };
-
-    struct UiComboPopupRollState
-    {
-        UiComboPopupRollPhase phase = UiComboPopupRollPhase::Closed;
-        float elapsedSeconds = 0.f;
-    };
-
-    [[nodiscard]] constexpr float SmoothUiComboPopupRoll(float progress)
-    {
-        const float clamped = std::clamp(progress, 0.f, 1.f);
-        return clamped * clamped * (3.f - 2.f * clamped);
-    }
-
-    [[nodiscard]] constexpr UiComboPopupRollState
-        RequestUiComboPopupRollDown()
-    {
-        return { UiComboPopupRollPhase::RollingDown, 0.f };
-    }
-
-    [[nodiscard]] constexpr UiComboPopupRollState
-        RequestUiComboPopupRollUp()
-    {
-        return { UiComboPopupRollPhase::RollingUp, 0.f };
-    }
-
-    [[nodiscard]] constexpr bool IsUiComboPopupRollActive(
-        const UiComboPopupRollState& state)
-    {
-        return state.phase == UiComboPopupRollPhase::RollingDown ||
-            state.phase == UiComboPopupRollPhase::RollingUp;
-    }
-
-    [[nodiscard]] constexpr bool IsUiComboPopupInteractionReady(
-        const UiComboPopupRollState& state)
-    {
-        return state.phase == UiComboPopupRollPhase::Open;
-    }
-
-    [[nodiscard]] constexpr float GetUiComboPopupVisibleAmount(
-        const UiComboPopupRollState& state)
-    {
-        const float progress =
-            state.elapsedSeconds / UiComboPopupRollDurationSeconds;
-        if (state.phase == UiComboPopupRollPhase::RollingDown)
-            return SmoothUiComboPopupRoll(progress);
-        if (state.phase == UiComboPopupRollPhase::RollingUp)
-            return 1.f - SmoothUiComboPopupRoll(progress);
-        return state.phase == UiComboPopupRollPhase::Open ? 1.f : 0.f;
-    }
-
-    [[nodiscard]] constexpr UiComboPopupRollState AdvanceUiComboPopupRoll(
-        UiComboPopupRollState state,
-        float deltaSeconds)
-    {
-        if (!IsUiComboPopupRollActive(state))
-            return state;
-
-        state.elapsedSeconds = std::min(
-            UiComboPopupRollDurationSeconds,
-            state.elapsedSeconds + std::clamp(
-                deltaSeconds,
-                0.f,
-                UiComboPopupRollMaximumDeltaSeconds));
-        if (state.elapsedSeconds < UiComboPopupRollDurationSeconds)
-            return state;
-
-        state.phase =
-            state.phase == UiComboPopupRollPhase::RollingDown
-                ? UiComboPopupRollPhase::Open
-                : UiComboPopupRollPhase::Closed;
-        return state;
     }
 
     // Keep renderer-facing UI mutations keyed and ordered without coupling the
@@ -271,166 +221,6 @@ namespace uvsr
         std::optional<Value> m_Pending;
     };
 
-    enum class DeferredUiStructuralPresentationPhase
-    {
-        Inactive,
-        AwaitPopupRollUp,
-        CollapseCommitted,
-        ExpandStaged,
-        ReadyToCommit
-    };
-
-    // Sequence a staged structural choice through a clean collapse and expand
-    // before its renderer-facing commit. The request frame cannot advance its
-    // own phase, and each later phase waits for a stable composed layout. When
-    // the UI is invisible, the unobservable animation can be skipped without
-    // changing the staged value or bypassing the separate commit-frame guard.
-    template <typename Value>
-    class DeferredUiStructuralPresentation
-    {
-    public:
-        using Phase = DeferredUiStructuralPresentationPhase;
-
-        [[nodiscard]] bool HasPending() const
-        {
-            return m_Settings.HasPending();
-        }
-
-        [[nodiscard]] bool ReadyForCommit() const
-        {
-            return !HasPending() ||
-                m_Phase == Phase::ReadyToCommit;
-        }
-
-        [[nodiscard]] bool ShowStructuralBody() const
-        {
-            return m_Phase != Phase::CollapseCommitted;
-        }
-
-        [[nodiscard]] Phase GetPhase() const
-        {
-            return m_Phase;
-        }
-
-        [[nodiscard]] Value& PresentSelectors(Value& committed)
-        {
-            return m_Settings.Present(committed);
-        }
-
-        [[nodiscard]] const Value& PresentSelectors(
-            const Value& committed) const
-        {
-            return m_Settings.Present(committed);
-        }
-
-        [[nodiscard]] Value& PresentStructuralBody(Value& committed)
-        {
-            return m_Phase == Phase::AwaitPopupRollUp ||
-                    m_Phase == Phase::CollapseCommitted
-                ? committed
-                : m_Settings.Present(committed);
-        }
-
-        [[nodiscard]] const Value& PresentStructuralBody(
-            const Value& committed) const
-        {
-            return m_Phase == Phase::AwaitPopupRollUp ||
-                    m_Phase == Phase::CollapseCommitted
-                ? committed
-                : m_Settings.Present(committed);
-        }
-
-        template <typename Mutator>
-        void Stage(
-            Value& committed,
-            bool structural,
-            int frame,
-            Mutator&& mutator)
-        {
-            m_Settings.Stage(
-                committed,
-                std::forward<Mutator>(mutator));
-            if (structural)
-            {
-                m_Phase = Phase::AwaitPopupRollUp;
-                m_PhaseFrame = frame;
-            }
-            else if (m_Phase == Phase::Inactive)
-            {
-                m_Phase = Phase::ReadyToCommit;
-                m_PhaseFrame = frame;
-            }
-        }
-
-        void Advance(
-            int frame,
-            bool layoutStable,
-            bool popupTransitionIdle = true)
-        {
-            if (!HasPending() || frame <= m_PhaseFrame)
-            {
-                return;
-            }
-
-            if (m_Phase == Phase::AwaitPopupRollUp)
-            {
-                if (!popupTransitionIdle || !layoutStable)
-                    return;
-                m_Phase = Phase::CollapseCommitted;
-                m_PhaseFrame = frame;
-            }
-            else if (!layoutStable)
-            {
-                return;
-            }
-            else if (m_Phase == Phase::CollapseCommitted)
-            {
-                m_Phase = Phase::ExpandStaged;
-                m_PhaseFrame = frame;
-            }
-            else if (m_Phase == Phase::ExpandStaged)
-            {
-                m_Phase = Phase::ReadyToCommit;
-                m_PhaseFrame = frame;
-            }
-        }
-
-        void SkipInvisibleAnimation(int frame)
-        {
-            if (!HasPending())
-                return;
-            m_Phase = Phase::ReadyToCommit;
-            m_PhaseFrame = frame;
-        }
-
-        bool CommitTo(Value& committed)
-        {
-            if (m_Phase != Phase::ReadyToCommit)
-                return false;
-            if (!m_Settings.CommitTo(committed))
-                return false;
-            ResetPhase();
-            return true;
-        }
-
-        void Cancel()
-        {
-            m_Settings.Cancel();
-            ResetPhase();
-        }
-
-    private:
-        void ResetPhase()
-        {
-            m_Phase = Phase::Inactive;
-            m_PhaseFrame = -1;
-        }
-
-        DeferredUiPresentation<Value> m_Settings;
-        Phase m_Phase = Phase::Inactive;
-        int m_PhaseFrame = -1;
-    };
-
     struct UiDrawerHeightDeltas
     {
         float total = 0.f;
@@ -493,10 +283,12 @@ namespace uvsr
             float currentScrollY,
             float scrollDelta,
             float currentFrameScrollMaxY,
-            bool hasPendingScrollTarget)
+            bool hasPendingScrollTarget,
+            float wheelInput = 0.f,
+            bool wheelAtTop = false,
+            bool wheelAtBottom = false)
     {
-        if (hasPendingScrollTarget ||
-            (scrollDelta >= -0.01f && scrollDelta <= 0.01f))
+        if (hasPendingScrollTarget)
         {
             return { false, currentScrollY };
         }
@@ -505,6 +297,26 @@ namespace uvsr
             currentFrameScrollMaxY > 0.f
                 ? currentFrameScrollMaxY
                 : 0.f;
+        if (wheelInput > 0.001f && wheelAtTop)
+        {
+            return {
+                currentScrollY > 0.01f,
+                0.f
+            };
+        }
+        if (wheelInput < -0.001f && wheelAtBottom)
+        {
+            const float endpointDifference =
+                currentScrollY - maximumScrollY;
+            return {
+                endpointDifference > 0.01f ||
+                    endpointDifference < -0.01f,
+                maximumScrollY
+            };
+        }
+        if (scrollDelta >= -0.01f && scrollDelta <= 0.01f)
+            return { false, currentScrollY };
+
         const float requestedScrollY = currentScrollY + scrollDelta;
         return {
             true,
@@ -565,6 +377,21 @@ namespace uvsr
         float height = 0.f;
         bool valid = false;
     };
+
+    // A control that was not submitted for one or more frames must not infer
+    // motion from stale elapsed time. Preserve an unchanged open endpoint, but
+    // restart a newly opened or not-yet-measured body from the closed endpoint.
+    [[nodiscard]] constexpr float ResolveUiOpenAmountAfterSubmissionGap(
+        bool targetOpen,
+        bool previousTargetOpen,
+        bool needsInitialMeasurement)
+    {
+        return targetOpen &&
+                previousTargetOpen &&
+                !needsInitialMeasurement
+            ? 1.f
+            : 0.f;
+    }
 
     [[nodiscard]] constexpr bool NeedsInitialUiExpandedMeasurement(
         bool targetOpen,

@@ -14,7 +14,8 @@ namespace uvsr
         Float3,
         Enum,
         DynamicSelection,
-        Action
+        Action,
+        Float4
     };
 
     enum class UiSettingsCommandSection : std::uint8_t
@@ -107,7 +108,16 @@ namespace uvsr
     // One descriptor per control in the current Settings and Material Editor UI.
     inline constexpr auto UiSettingsCommandCatalog = std::array{
         // UI.
-        Value("ui.skin", Kind::Enum, Section::Ui, "amp|og"),
+        Value("ui.skin", Kind::Enum, Section::Ui, "amp|ogg"),
+        Value("ui.animations", Kind::Boolean, Section::Ui, "on|off"),
+        Value("ui.accent.main", Kind::Float3, Section::Ui, "display rgb float3 0..1"),
+        Value("ui.accent.negative", Kind::Float3, Section::Ui, "display rgb float3 0..1"),
+        Value("ui.accent.positive", Kind::Float3, Section::Ui, "display rgb float3 0..1"),
+        Value("ui.accent.primary", Kind::Float4, Section::Ui, "display rgba float4 0..1"),
+        Value("ui.accent.secondary", Kind::Float4, Section::Ui, "display rgba float4 0..1"),
+        Value("ui.accent.tertiary", Kind::Float4, Section::Ui, "display rgba float4 0..1"),
+        Value("ui.accent.font", Kind::Float4, Section::Ui, "display rgba float4 0..1"),
+        Value("ui.accent.primary-background", Kind::Float4, Section::Ui, "display rgba float4 0..1"),
         Value("ui.visible", Kind::Boolean, Section::Ui, "on|off"),
         Value("ui.settings-collapsed", Kind::Boolean, Section::Ui, "on|off"),
         Value("ui.zoom", Kind::Enum, Section::Ui, "off|2x|3x|4x|5x"),
@@ -312,7 +322,7 @@ namespace uvsr
         Value("material.selected.alpha-mask-texture-enabled", Kind::Boolean, Section::Materials, "on|off; requires an opacity texture", false, true),
 
         // Footer.
-        Action("reset-settings", Section::Footer, "restore renderer factory settings"),
+        Action("reset-settings", Section::Footer, "restore renderer and interface factory settings"),
         Action("capture", Section::Footer, "copy the current frame to the clipboard"),
         Action("restart", Section::Footer, "restart UVSR")
     };

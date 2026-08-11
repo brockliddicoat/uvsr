@@ -27,10 +27,10 @@ physical GPU. It is not a cross-GPU comparison technique.
   Prefer a host identity plus a persistent PCI or Plug and Play device identity.
   A DXGI adapter LUID is useful within the interval over which it remains
   stable. The adapter marketing name is descriptive evidence, not identity.
-- UVSR's current built-in calibration lookup uses the adapter name. A displayed
-  normalized estimate therefore does not establish physical-GPU identity by
-  itself. On any machine without a verified local profile, treat that estimate
-  as unavailable even if the adapter name matches a calibrated model.
+- A normalization-tool profile keyed only by adapter name does not establish
+  physical-GPU identity. On any machine without a verified local profile, treat
+  normalization as unavailable even if the adapter name matches a calibrated
+  model.
 - Two GPUs with the same marketing name are still different physical GPUs.
 - Never normalize a discrete GPU to an integrated GPU, one model to another,
   desktop silicon to laptop silicon, or one physical example of a model to
@@ -51,7 +51,7 @@ physical GPU. It is not a cross-GPU comparison technique.
 
 Establish a profile separately for each physical GPU and power/thermal mode:
 
-1. Select the stable UVSR control workload, normally Benchmark Position 1.
+1. Select the stable UVSR control workload, normally Position 1.
 2. Match the driver, HAGS state, display mode, power source, OS power mode,
    vendor performance mode, fan/thermal preset, renderer priority, scene,
    camera, resolution, graphics settings, and telemetry source.
@@ -128,9 +128,9 @@ telemetry is available. Record telemetry generation and age so a clock sample
 cannot be silently paired with the wrong frame.
 
 On the same GPU, an unsmoothed clock-capacity value derived from graphics clock
-and the fixed shader-core count produces the same ratio as MHz. UVSR's
-utilization-scaled stat-line TFLOPS does not: it combines clock and occupancy
-and must not be substituted for the observed graphics clock.
+and the fixed shader-core count produces the same ratio as MHz. UVSR does not
+expose cached peak capability in Performance; collect observed per-frame
+graphics-clock telemetry rather than substituting an advertised specification.
 
 ## Evidence Beyond Graphics Clock
 
@@ -233,7 +233,7 @@ normalization inputs.
 | Influence | Possible Effect | Treatment |
 | --- | --- | --- |
 | Telemetry polling interval and phase | Can alias with refresh cadence or miss short boost changes | Record cadence, generation, and sample age |
-| Statistics UI refresh and log flushing | Periodic formatting, file writes, or readbacks can create spikes | Match update rates and keep debug telemetry outside headline runs |
+| Performance drawer refresh and log flushing | Periodic formatting, file writes, or readbacks can create spikes | Match update rates and keep debug telemetry outside headline runs |
 | Timer-query latency and source-frame pairing | A current clock can be paired with an older GPU time | Preserve source frame, generation, and age |
 | Benchmark duration and starting phase | Short runs can overrepresent a periodic event | Use long fixed windows and report spike counts |
 | Warmup duration | Shader compilation, uploads, cache filling, and residency settle at different rates | Define and verify the exact warmup state |

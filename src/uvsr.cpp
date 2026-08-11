@@ -92,7 +92,6 @@
 #include "image_based_lighting_background_pass.h"
 #include "image_based_lighting_environment.h"
 #include "image_based_lighting_shared.h"
-#include "gpu_performance_monitor.h"
 #include "adaptive_sync.h"
 #include "auto_exposure.h"
 #include "camera_collision.h"
@@ -149,6 +148,7 @@ struct GpuAdapterChoice
     uint64_t dedicatedVideoMemory = 0;
     uint32_t vendorId = 0;
     uint32_t deviceId = 0;
+    bool usesSharedSystemMemory = false;
 };
 
 constexpr float UiBackgroundBlurPixels = 4.f;
@@ -158,10 +158,21 @@ constexpr float UiPanelShadowOffsetYPixels = 3.f;
 constexpr float DefaultSunIrradiance = 8.f;
 constexpr float DefaultSunAngularSizeDegrees = 0.2f;
 constexpr float DefaultFlashlightRayBiasMeters = 0.002f;
-constexpr size_t UiBackdropRectCount = 5u;
-constexpr size_t UiMaterialTitleBackdropIndex = 2u;
-constexpr size_t UiMaterialBodyBackdropIndex = 3u;
+constexpr size_t UiPerformanceTitleBackdropIndex = 0u;
+constexpr size_t UiPerformanceBodyBackdropIndex = 1u;
+constexpr size_t UiSettingsTitleBackdropIndex = 2u;
+constexpr size_t UiSettingsBodyBackdropIndex = 3u;
 constexpr size_t UiCommandBackdropIndex = 4u;
+constexpr size_t UiBackdropRectCount = 5u;
+constexpr uint32_t UiBackdropCornersAll = 0xFu;
+
+struct UiBackdropExclusionRect
+{
+    float minX = 0.f;
+    float minY = 0.f;
+    float maxX = 0.f;
+    float maxY = 0.f;
+};
 
 struct UiBackdropRect
 {
@@ -170,10 +181,13 @@ struct UiBackdropRect
     float maxX = 0.f;
     float maxY = 0.f;
     float rounding = 0.f;
+    uint32_t cornerMask = UiBackdropCornersAll;
     float opacity = 1.f;
     float shadowBlur = 0.f;
     float shadowOpacity = 0.f;
     float shadowOffsetY = 0.f;
+    std::vector<UiBackdropExclusionRect> compositeExclusions;
+    bool composite = true;
     bool visible = false;
 };
 
@@ -1183,6 +1197,8 @@ struct UIData
 {
     bool                                ShowUI = false;
     UiSkin                              Skin = DefaultUiSkin;
+    bool                                AnimationsEnabled = true;
+    UiAccentSettings                    Accents;
     std::array<UiBackdropRect, UiBackdropRectCount>
                                         BackdropRects;
     PixelZoomMode                       PixelZoom =
@@ -1224,7 +1240,7 @@ struct UIData
     CameraMode                          Camera = CameraMode::ThirdPerson;
     std::shared_ptr<Material>           SelectedMaterial;
     std::shared_ptr<SceneGraphNode>     SelectedNode;
-    bool                                ShowMaterialEditor = false;
+    bool                                ShowMaterialDrawer = false;
     bool                                CopyScreenshotToClipboard = false;
 
     [[nodiscard]] bool HasActiveScreenSpaceVisibilityConsumer() const
@@ -1334,7 +1350,7 @@ private:
     {
         None,
         FocusCameraAtCursor,
-        OpenCenterMaterialInspector
+        RefreshMaterialDrawerSelection
     };
 
     enum class ScenePreparationStage
@@ -1528,10 +1544,11 @@ private:
     uint64_t                            m_LoadingPresentationFrameCount = 0u;
     static constexpr uint64_t           c_SceneUploadBytesPerFrame =
                                             8ull * 1024ull * 1024ull;
-    SponzaCameraLocation                m_SponzaCameraLocation =
+    SponzaCameraLocation                m_CameraLocation =
         SponzaCameraLocation::SimplifiedApproximation;
-    bool                                m_SponzaCameraLocationsAvailable =
+    bool                                m_CameraLocationsAvailable =
                                             false;
+    std::optional<SponzaCameraPreset>   m_Position1CameraPreset;
 
     UIData&                             m_ui;
 
@@ -1736,15 +1753,15 @@ public:
     }
 
 
-    [[nodiscard]] bool HasSponzaCameraLocations() const
+    [[nodiscard]] bool HasCameraLocations() const
     {
-        return m_SponzaCameraLocationsAvailable;
+        return m_CameraLocationsAvailable;
     }
 
 
-    [[nodiscard]] SponzaCameraLocation GetSponzaCameraLocation() const
+    [[nodiscard]] SponzaCameraLocation GetCameraLocation() const
     {
-        return m_SponzaCameraLocation;
+        return m_CameraLocation;
     }
 
     void ResetAntiAliasingState()
@@ -1798,7 +1815,7 @@ public:
             m_AutoExposurePass->Reset();
     }
 
-    void ApplySponzaCameraPreset(const SponzaCameraPreset& preset)
+    void ApplyCameraPreset(const SponzaCameraPreset& preset)
     {
         ApplyCameraPose(
             preset.Position,
@@ -1832,47 +1849,46 @@ public:
             preset.VerticalFovDegrees);
     }
 
-    void SetSponzaCameraLocation(SponzaCameraLocation location)
+    void SetCameraLocation(SponzaCameraLocation location)
     {
-        if (!m_SponzaCameraLocationsAvailable)
+        if (!m_CameraLocationsAvailable)
             return;
 
         if (location == SponzaCameraLocation::Free)
         {
-            m_SponzaCameraLocation = location;
+            m_CameraLocation = location;
             log::info("Camera location is now Piloted");
             return;
         }
 
-        const SponzaCameraPreset* preset = FindSponzaCameraPreset(location);
-        if (!preset)
+        if (location != SponzaCameraLocation::SimplifiedApproximation ||
+            !m_Position1CameraPreset)
             return;
 
-        ApplySponzaCameraPreset(*preset);
-        m_SponzaCameraLocation = location;
+        ApplyCameraPreset(*m_Position1CameraPreset);
+        m_CameraLocation = location;
         log::info(
             "Applied camera location '%s' (%s)",
-            preset->Label,
-            preset->Id);
+            m_Position1CameraPreset->Label,
+            m_Position1CameraPreset->Id);
     }
 
-    void UpdateSponzaCameraLocationTracking()
+    void UpdateCameraLocationTracking()
     {
-        if (!m_SponzaCameraLocationsAvailable ||
-            m_SponzaCameraLocation == SponzaCameraLocation::Free)
+        if (!m_CameraLocationsAvailable ||
+            m_CameraLocation == SponzaCameraLocation::Free ||
+            !m_Position1CameraPreset)
         {
             return;
         }
 
-        const SponzaCameraPreset* preset =
-            FindSponzaCameraPreset(m_SponzaCameraLocation);
-        if (preset && !IsSponzaCameraAtPreset(
-            *preset,
+        if (!IsSponzaCameraAtPreset(
+            *m_Position1CameraPreset,
             m_ThirdPersonCamera.GetPosition(),
             m_ThirdPersonCamera.GetDir(),
             m_ThirdPersonCamera.GetUp()))
         {
-            m_SponzaCameraLocation = SponzaCameraLocation::Free;
+            m_CameraLocation = SponzaCameraLocation::Free;
             log::info("Camera location is now Piloted");
         }
     }
@@ -2611,7 +2627,7 @@ public:
                 // its look direction and dolly sensitivity stay unchanged.
                 m_ThirdPersonCamera.ApplyCollisionPosition(resolvedPosition);
             }
-            UpdateSponzaCameraLocationTracking();
+            UpdateCameraLocationTracking();
             break;
         }
 
@@ -2677,7 +2693,9 @@ public:
         m_SunLight.reset();
         m_ui.SelectedMaterial = nullptr;
         m_ui.SelectedNode = nullptr;
-        m_ui.ShowMaterialEditor = false;
+        m_ui.ShowMaterialDrawer = false;
+        m_CameraLocationsAvailable = false;
+        m_Position1CameraPreset.reset();
         m_MaterialPickPurpose = MaterialPickPurpose::None;
         m_MaterialPickScene = nullptr;
         m_OriginalMaterials.clear();
@@ -2860,15 +2878,7 @@ public:
         const SponzaCameraPreset* sceneDefaultCamera = FindStandardSponzaCameraPreset(
             *m_NativeFs,
             m_CurrentSceneName);
-        m_SponzaCameraLocationsAvailable = sceneDefaultCamera != nullptr;
-        if (m_SponzaCameraLocationsAvailable)
-        {
-            m_SponzaCameraLocation =
-                SponzaCameraLocation::SimplifiedApproximation;
-        }
-        const SponzaCameraPreset* sponzaCamera = m_SponzaCameraLocationsAvailable
-            ? FindSponzaCameraPreset(m_SponzaCameraLocation)
-            : nullptr;
+        const SponzaCameraPreset* sponzaCamera = sceneDefaultCamera;
         const SceneCatalogEntry* currentCatalogEntry =
             FindSceneCatalogEntry(m_SceneCatalog, m_CurrentSceneName);
         const SceneInitialCamera* sceneInitialCamera =
@@ -2898,7 +2908,7 @@ public:
 
         if (sponzaCamera)
         {
-            ApplySponzaCameraPreset(*sponzaCamera);
+            ApplyCameraPreset(*sponzaCamera);
             log::info(
                 "Applied standardized camera location '%s' (%s) to '%s' at %u x %u and %.1f degrees vertical FOV",
                 sponzaCamera->Label,
@@ -2931,6 +2941,29 @@ public:
             m_PivotCamera.LookTo(initialPosition, initialDirection, initialUp);
             m_StaticCamera.LookTo(initialPosition, initialDirection, initialUp);
         }
+
+        const float3 position1Direction =
+            normalize(m_ThirdPersonCamera.GetDir());
+        const float3 position1Up =
+            normalize(m_ThirdPersonCamera.GetUp());
+        const float3 position1Right =
+            normalize(cross(position1Direction, position1Up));
+        m_Position1CameraPreset = sponzaCamera
+            ? *sponzaCamera
+            : SponzaCameraPreset{
+                "position-1",
+                "Position 1",
+                m_ThirdPersonCamera.GetPosition(),
+                position1Direction,
+                position1Up,
+                position1Right,
+                m_CameraVerticalFov,
+                0u,
+                0u
+            };
+        m_CameraLocation =
+            SponzaCameraLocation::SimplifiedApproximation;
+        m_CameraLocationsAvailable = true;
 
         m_SceneFinishedLoading = true;
 
@@ -3101,14 +3134,14 @@ public:
         return m_Scene;
     }
 
-    void ToggleCenterMaterialInspector()
+    void SetMaterialDrawerVisible(bool visible, bool refreshSelection = true)
     {
         const bool centerPickPending =
             m_MaterialPickPurpose ==
-                MaterialPickPurpose::OpenCenterMaterialInspector;
-        if (m_ui.ShowMaterialEditor || centerPickPending)
+                MaterialPickPurpose::RefreshMaterialDrawerSelection;
+        if (!visible)
         {
-            m_ui.ShowMaterialEditor = false;
+            m_ui.ShowMaterialDrawer = false;
             if (centerPickPending)
             {
                 m_MaterialPickPurpose = MaterialPickPurpose::None;
@@ -3117,17 +3150,19 @@ public:
             return;
         }
 
+        m_ui.ShowUI = true;
+        m_ui.ShowMaterialDrawer = true;
+        if (!refreshSelection)
+            return;
         if (!m_Scene || IsSceneBusy())
             return;
 
         // Never reveal the previous click selection while a fresh center sample
-        // is pending. A miss therefore fails closed instead of reopening stale
-        // material data.
-        m_ui.ShowMaterialEditor = false;
+        // is pending. A miss leaves the drawer open with its aiming guidance.
         m_ui.SelectedMaterial = nullptr;
         m_ui.SelectedNode = nullptr;
         m_MaterialPickPurpose =
-            MaterialPickPurpose::OpenCenterMaterialInspector;
+            MaterialPickPurpose::RefreshMaterialDrawerSelection;
         m_MaterialPickScene = m_Scene.get();
     }
 
@@ -5157,10 +5192,10 @@ public:
         {
             m_MaterialPickPurpose = MaterialPickPurpose::None;
             m_MaterialPickScene = nullptr;
-            m_ui.ShowMaterialEditor = false;
+            m_ui.ShowMaterialDrawer = false;
         }
         if (m_MaterialPickPurpose ==
-            MaterialPickPurpose::OpenCenterMaterialInspector)
+            MaterialPickPurpose::RefreshMaterialDrawerSelection)
         {
             const nvrhi::TextureDesc& materialIdDesc =
                 m_RenderTargets->MaterialIDs->getDesc();
@@ -5494,10 +5529,8 @@ public:
             }
 
             if (completedPurpose ==
-                MaterialPickPurpose::OpenCenterMaterialInspector)
+                MaterialPickPurpose::RefreshMaterialDrawerSelection)
             {
-                m_ui.ShowMaterialEditor =
-                    m_ui.SelectedMaterial != nullptr;
                 if (m_ui.SelectedMaterial)
                 {
                     log::info(
@@ -5758,10 +5791,81 @@ namespace
         float shadowOpacity = 0.f;
 
         float shadowOffsetY = 0.f;
-        float3 padding;
+        uint32_t cornerMask = UiBackdropCornersAll;
+        float2 padding;
     };
 
     static_assert(sizeof(BackdropBlurConstants) == 80u);
+
+    static std::vector<UiBackdropExclusionRect>
+        ResolveBackdropCompositeRegions(
+            const UiBackdropExclusionRect& panel,
+            const std::vector<UiBackdropExclusionRect>& exclusions)
+    {
+        std::vector<UiBackdropExclusionRect> regions = { panel };
+        for (const UiBackdropExclusionRect& exclusion : exclusions)
+        {
+            std::vector<UiBackdropExclusionRect> nextRegions;
+            nextRegions.reserve(regions.size() * 4u);
+            for (const UiBackdropExclusionRect& region : regions)
+            {
+                const UiBackdropExclusionRect intersection = {
+                    std::max(region.minX, exclusion.minX),
+                    std::max(region.minY, exclusion.minY),
+                    std::min(region.maxX, exclusion.maxX),
+                    std::min(region.maxY, exclusion.maxY)
+                };
+                if (intersection.maxX <= intersection.minX ||
+                    intersection.maxY <= intersection.minY)
+                {
+                    nextRegions.push_back(region);
+                    continue;
+                }
+
+                const auto appendRegion =
+                    [&nextRegions](
+                        float minX,
+                        float minY,
+                        float maxX,
+                        float maxY)
+                    {
+                        if (maxX > minX && maxY > minY)
+                        {
+                            nextRegions.push_back({
+                                minX,
+                                minY,
+                                maxX,
+                                maxY
+                            });
+                        }
+                    };
+                appendRegion(
+                    region.minX,
+                    region.minY,
+                    region.maxX,
+                    intersection.minY);
+                appendRegion(
+                    region.minX,
+                    intersection.maxY,
+                    region.maxX,
+                    region.maxY);
+                appendRegion(
+                    region.minX,
+                    intersection.minY,
+                    intersection.minX,
+                    intersection.maxY);
+                appendRegion(
+                    intersection.maxX,
+                    intersection.minY,
+                    region.maxX,
+                    intersection.maxY);
+            }
+            regions = std::move(nextRegions);
+            if (regions.empty())
+                break;
+        }
+        return regions;
+    }
 
     class BackdropBlurPass
     {
@@ -5992,19 +6096,21 @@ namespace
         {
             const float clampedBlurPixels =
                 std::clamp(blurPixels, 0.f, 24.f);
-            const bool renderBackdrop =
-                clampedBlurPixels > 0.f;
-
             const bool hasVisibleBackdrop = std::any_of(
                 backdropRects.begin(),
                 backdropRects.end(),
                 [](const UiBackdropRect& rect)
                 {
                     return
+                        rect.composite &&
                         rect.visible &&
                         rect.maxX > rect.minX &&
-                        rect.maxY > rect.minY;
+                        rect.maxY > rect.minY &&
+                        rect.opacity > 0.f;
                 });
+            const bool renderBackdrop =
+                clampedBlurPixels > 0.f &&
+                hasVisibleBackdrop;
             const bool hasVisibleShadow = std::any_of(
                 backdropRects.begin(),
                 backdropRects.end(),
@@ -6018,8 +6124,7 @@ namespace
                         rect.shadowOpacity > 0.f &&
                         rect.opacity > 0.f;
                 });
-            if (!hasVisibleBackdrop ||
-                (!renderBackdrop && !hasVisibleShadow) ||
+            if ((!renderBackdrop && !hasVisibleShadow) ||
                 !EnsureResources(framebuffer))
             {
                 return;
@@ -6098,6 +6203,7 @@ namespace
                     backdropRect.maxX - backdropRect.minX,
                     backdropRect.maxY - backdropRect.minY);
                 constants.cornerRadius = backdropRect.rounding;
+                constants.cornerMask = backdropRect.cornerMask;
                 constants.opacity = backdropRect.opacity;
                 constants.shadowBlur = backdropRect.shadowBlur;
                 constants.shadowOpacity = backdropRect.shadowOpacity;
@@ -6145,7 +6251,9 @@ namespace
             {
                 for (const UiBackdropRect& backdropRect : backdropRects)
                 {
-                    if (!backdropRect.visible)
+                    if (!backdropRect.composite ||
+                        !backdropRect.visible ||
+                        backdropRect.opacity <= 0.f)
                         continue;
 
                     const float minX = std::clamp(
@@ -6173,6 +6281,7 @@ namespace
                         maxX - minX,
                         maxY - minY);
                     constants.cornerRadius = backdropRect.rounding;
+                    constants.cornerMask = backdropRect.cornerMask;
                     constants.opacity = backdropRect.opacity;
                     constants.shadowBlur = 0.f;
                     constants.shadowOpacity = 0.f;
@@ -6182,22 +6291,38 @@ namespace
                         &constants,
                         sizeof(constants));
 
-                    const nvrhi::Viewport panelViewport(
+                    const UiBackdropExclusionRect panel = {
                         minX,
-                        maxX,
                         minY,
-                        maxY,
-                        0.f,
-                        1.f);
-                    nvrhi::GraphicsState compositeState;
-                    compositeState.pipeline = m_CompositePipeline;
-                    compositeState.framebuffer = framebuffer;
-                    compositeState.bindings = { m_CompositeBindingSet };
-                    compositeState.viewport.addViewport(panelViewport);
-                    compositeState.viewport.addScissorRect(
-                        nvrhi::Rect(panelViewport));
-                    m_CommandList->setGraphicsState(compositeState);
-                    m_CommandList->draw(drawArguments);
+                        maxX,
+                        maxY
+                    };
+                    const std::vector<UiBackdropExclusionRect> regions =
+                        ResolveBackdropCompositeRegions(
+                            panel,
+                            backdropRect.compositeExclusions);
+                    for (const UiBackdropExclusionRect& region : regions)
+                    {
+                        const nvrhi::Viewport regionViewport(
+                            region.minX,
+                            region.maxX,
+                            region.minY,
+                            region.maxY,
+                            0.f,
+                            1.f);
+                        nvrhi::GraphicsState compositeState;
+                        compositeState.pipeline = m_CompositePipeline;
+                        compositeState.framebuffer = framebuffer;
+                        compositeState.bindings = {
+                            m_CompositeBindingSet
+                        };
+                        compositeState.viewport.addViewport(
+                            regionViewport);
+                        compositeState.viewport.addScissorRect(
+                            nvrhi::Rect(regionViewport));
+                        m_CommandList->setGraphicsState(compositeState);
+                        m_CommandList->draw(drawArguments);
+                    }
                 }
             }
 
@@ -6623,6 +6748,7 @@ private:
         ImVec4 drawerHeader;
         ImVec4 drawerHeaderHovered;
         ImVec4 drawerHeaderActive;
+        ImVec4 drawerHeaderText = ImVec4(0.94f, 0.95f, 0.98f, 1.f);
         ImVec4 drawerBackground;
         ImVec4 drawerFrame;
         ImVec4 drawerFrameHovered;
@@ -6630,21 +6756,26 @@ private:
         ImVec4 outlineTop;
         ImVec4 outlineBottom;
         ImVec4 panelBodySurface;
+        ImVec4 colorPickerSurface;
+        ImVec4 panelInsetFrame;
         ImVec4 settingsTitleSurface;
+        ImVec4 settingsTitleText = ImVec4(0.94f, 0.95f, 0.98f, 1.f);
         ImVec4 actionButton;
         ImVec4 actionButtonHovered;
         ImVec4 actionButtonActive;
-        float drawerRounding = 5.f;
+        ImVec4 actionButtonText = ImVec4(0.94f, 0.95f, 0.98f, 1.f);
+        float controlDisabledAlpha = 0.60f;
+        float drawerRounding = 4.f;
         float backdropShadowBlur = UiPanelShadowBlurPixels;
         float backdropShadowOpacity = UiPanelShadowOpacity;
         float backdropShadowOffsetY = UiPanelShadowOffsetYPixels;
-        float floatingPanelOpacity = 0.82f;
-        ImVec4 errorText = ImVec4(0.92f, 0.12f, 0.16f, 1.f);
-        // Match MaterialEditor's texture-filename accent in the staged Donut
-        // override so success has one deliberate product color everywhere.
-        ImVec4 successText = ImVec4(0.26f, 0.59f, 0.98f, 1.f);
+        ImVec4 errorText;
+        // Match MaterialEditor's explicitly supplied filename accent so
+        // success has one deliberate product color everywhere.
+        ImVec4 successText;
         bool drawControlOutlines = true;
         bool drawScrollEdgeFades = true;
+        bool sceneTranslucentHeaders = false;
     };
 
     struct StatSnapshot
@@ -6653,8 +6784,6 @@ private:
         int height = 0;
         uint64_t submittedTriangles = 0u;
         double frameTimeSeconds = 0.0;
-        std::string rendererName;
-        GpuPerformanceMetrics gpuMetrics;
         ScreenSpaceVisibilityTimings visibilityTimings;
         TemporalAATimings temporalAATimings;
         Cmaa2Timings cmaa2Timings;
@@ -6666,22 +6795,22 @@ private:
     std::shared_ptr<UvsrSceneViewer> m_app;
 
     std::shared_ptr<app::RegisteredFont> m_Font;
+    std::shared_ptr<app::RegisteredFont> m_HeaderFont;
     std::shared_ptr<engine::Light> m_SelectedLight;
     ImGuiID m_AdjustedSpaceFontBakedId = 0;
     float m_BaseSpaceAdvance = 0.f;
+    ImGuiID m_AdjustedHeaderSpaceFontBakedId = 0;
+    float m_BaseHeaderSpaceAdvance = 0.f;
     double m_DisplayedFrameTime = 0.0;
-    double m_DisplayedGpuBandwidthGBps = 0.0;
-    double m_DisplayedGpuTFlops = 0.0;
     double m_StatSnapshotElapsed = 0.0;
     double m_StatFrameTimeSum = 0.0;
     uint32_t m_StatFrameTimeCount = 0;
-    std::array<std::string, 6> m_PerformanceStatValues;
+    std::array<std::string, 4> m_PerformanceStatValues;
     ScreenSpaceVisibilityTimings m_DisplayedVisibilityTimings;
     TemporalAATimings m_DisplayedTemporalAATimings;
     Cmaa2Timings m_DisplayedCmaa2Timings;
     std::deque<StatSnapshot> m_StatUpdateQueue;
     bool m_HasAppliedStatSnapshot = false;
-    bool m_HasGpuStatSnapshot = false;
     bool m_HasVisibilityStatSnapshot = false;
     bool m_HasTemporalAAStatSnapshot = false;
     bool m_HasCmaa2StatSnapshot = false;
@@ -6779,15 +6908,16 @@ private:
     }
     std::unique_ptr<BackdropBlurPass> m_BackdropBlurPass;
     std::unique_ptr<PixelZoomPass> m_PixelZoomPass;
-    uint32_t m_SettingsPanelMarginPixels = 10u;
+    uint32_t m_SettingsPanelMarginPixels =
+        static_cast<uint32_t>(UiSpacingBasePixels * 4.f);
     float m_UiDisplayScale = 1.f;
     float m_SettingsAppearance = 0.f;
     PixelZoomMode m_RenderedPixelZoom = PixelZoomMode::Off;
     PixelZoomMode m_PendingPixelZoom = PixelZoomMode::Off;
     float m_PixelZoomVisibility = 0.f;
     float m_PixelZoomLevelTransition = 1.f;
-    float m_MaterialInspectorZoomPlacement = 0.f;
-    float m_MaterialInspectorAppearance = 0.f;
+    float m_MaterialDrawerAppearance = 0.f;
+    bool m_MaterialDrawerPresentationForceClosed = false;
     UiSkin m_ComposedUiSkin = DefaultUiSkin;
     bool m_CommandOpen = false;
     float m_CommandAppearance = 0.f;
@@ -6802,6 +6932,8 @@ private:
     CommandInterfaceLayout m_CommandLayout;
     bool m_SettingsCollapsed = false;
     std::optional<bool> m_SettingsCollapsedRequest;
+    std::optional<bool> m_PerformanceCollapsedRequest;
+    bool m_MaterialRevealRequested = false;
     int m_StatisticsEffect =
         static_cast<int>(StatisticsEffect::CompleteRenderer);
 
@@ -6826,7 +6958,9 @@ private:
 
     inline static std::vector<ImDrawList*>
         g_SettingsAppearanceDrawLists;
+    inline static ImDrawList* g_SettingsDecorationDrawList = nullptr;
     inline static UiVisualTokens g_UiVisualTokens;
+    inline static UiSpacingTokens g_UiSpacingTokens;
 
     static void TrackSettingsAppearanceDrawList(ImDrawList* drawList)
     {
@@ -6851,9 +6985,64 @@ private:
         backdropRect.maxX = windowPosition.x + windowSize.x;
         backdropRect.maxY = windowPosition.y + windowSize.y;
         backdropRect.rounding = rounding;
+        backdropRect.cornerMask = UiBackdropCornersAll;
+        backdropRect.composite = true;
         backdropRect.visible =
             windowSize.x > 0.f &&
             windowSize.y > 0.f;
+    }
+
+    static void CapturePanelSurfaceBackdrops(
+        UiBackdropRect& titleBackdrop,
+        UiBackdropRect& bodyBackdrop,
+        const ImVec2& windowPosition,
+        const ImVec2& windowSize,
+        float titleHeight,
+        bool expanded,
+        float titleRounding,
+        float bodyRounding)
+    {
+        constexpr float SurfaceInset = 0.5f;
+        const float minimumX = windowPosition.x + SurfaceInset;
+        const float maximumX =
+            windowPosition.x + windowSize.x - SurfaceInset;
+        const float minimumY = windowPosition.y + SurfaceInset;
+        const float maximumY =
+            windowPosition.y + windowSize.y - SurfaceInset;
+        const float titleMaximumY = std::clamp(
+            windowPosition.y + titleHeight,
+            minimumY,
+            maximumY);
+
+        titleBackdrop.minX = minimumX;
+        titleBackdrop.minY = minimumY;
+        titleBackdrop.maxX = maximumX;
+        titleBackdrop.maxY = titleMaximumY;
+        titleBackdrop.rounding = titleRounding;
+        titleBackdrop.cornerMask = UiBackdropCornersAll;
+        titleBackdrop.opacity = 1.f;
+        titleBackdrop.shadowBlur = 0.f;
+        titleBackdrop.shadowOpacity = 0.f;
+        titleBackdrop.shadowOffsetY = 0.f;
+        titleBackdrop.composite = true;
+        titleBackdrop.visible =
+            titleBackdrop.maxX > titleBackdrop.minX &&
+            titleBackdrop.maxY > titleBackdrop.minY;
+
+        bodyBackdrop.minX = minimumX;
+        bodyBackdrop.minY = titleMaximumY;
+        bodyBackdrop.maxX = maximumX;
+        bodyBackdrop.maxY = maximumY;
+        bodyBackdrop.rounding = bodyRounding;
+        bodyBackdrop.cornerMask = UiBackdropCornersAll;
+        bodyBackdrop.opacity = 1.f;
+        bodyBackdrop.shadowBlur = 0.f;
+        bodyBackdrop.shadowOpacity = 0.f;
+        bodyBackdrop.shadowOffsetY = 0.f;
+        bodyBackdrop.composite = true;
+        bodyBackdrop.visible = expanded &&
+            bodyBackdrop.maxX > bodyBackdrop.minX &&
+            bodyBackdrop.maxY > bodyBackdrop.minY + 0.5f;
     }
 
     static void ApplyWindowAppearance(
@@ -6896,59 +7085,6 @@ private:
         }
     }
 
-    static void ApplyCommandWindowAppearance(
-        ImDrawList* drawList,
-        float bottom,
-        float verticalScale,
-        float opacity)
-    {
-        if (!drawList)
-            return;
-
-        const float clampedScale =
-            std::clamp(verticalScale, 0.f, 1.f);
-        const float clampedOpacity =
-            std::clamp(opacity, 0.f, 1.f);
-        if (clampedScale >= 1.f && clampedOpacity >= 1.f)
-            return;
-
-        for (ImDrawVert& vertex : drawList->VtxBuffer)
-        {
-            vertex.pos.y =
-                bottom + (vertex.pos.y - bottom) * clampedScale;
-            const uint32_t alpha = (vertex.col >> 24u) & 0xffu;
-            const uint32_t fadedAlpha = static_cast<uint32_t>(
-                std::round(float(alpha) * clampedOpacity));
-            vertex.col =
-                (vertex.col & 0x00ffffffu) |
-                (fadedAlpha << 24u);
-        }
-        for (ImDrawCmd& command : drawList->CmdBuffer)
-        {
-            command.ClipRect.y =
-                bottom +
-                (command.ClipRect.y - bottom) * clampedScale;
-            command.ClipRect.w =
-                bottom +
-                (command.ClipRect.w - bottom) * clampedScale;
-        }
-    }
-
-    static void ApplyCommandBackdropAppearance(
-        UiBackdropRect& backdropRect,
-        float bottom,
-        float verticalScale,
-        float opacity)
-    {
-        const float clampedScale =
-            std::clamp(verticalScale, 0.f, 1.f);
-        backdropRect.minY =
-            bottom + (backdropRect.minY - bottom) * clampedScale;
-        backdropRect.maxY =
-            bottom + (backdropRect.maxY - bottom) * clampedScale;
-        backdropRect.opacity = std::clamp(opacity, 0.f, 1.f);
-    }
-
     static void ApplyBackdropAppearance(
         UiBackdropRect& backdropRect,
         const ImVec2& pivot,
@@ -6964,6 +7100,19 @@ private:
             pivot.x + (backdropRect.maxX - pivot.x) * clampedScale;
         backdropRect.maxY =
             pivot.y + (backdropRect.maxY - pivot.y) * clampedScale;
+        for (UiBackdropExclusionRect& exclusion :
+            backdropRect.compositeExclusions)
+        {
+            exclusion.minX =
+                pivot.x + (exclusion.minX - pivot.x) * clampedScale;
+            exclusion.minY =
+                pivot.y + (exclusion.minY - pivot.y) * clampedScale;
+            exclusion.maxX =
+                pivot.x + (exclusion.maxX - pivot.x) * clampedScale;
+            exclusion.maxY =
+                pivot.y + (exclusion.maxY - pivot.y) * clampedScale;
+        }
+        backdropRect.rounding *= clampedScale;
         backdropRect.opacity = std::clamp(opacity, 0.f, 1.f);
     }
 
@@ -6996,18 +7145,84 @@ private:
             outputAlpha);
     }
 
+    static ImVec4 MakeUiColor(
+        const UiRgbaColor& color,
+        float alphaMultiplier = 1.f)
+    {
+        return ImVec4(
+            std::clamp(color.red, 0.f, 1.f),
+            std::clamp(color.green, 0.f, 1.f),
+            std::clamp(color.blue, 0.f, 1.f),
+            std::clamp(color.alpha * alphaMultiplier, 0.f, 1.f));
+    }
+
+    static ImVec4 ScaleUiColor(
+        const UiRgbaColor& color,
+        float scale,
+        float alphaMultiplier = 1.f)
+    {
+        return ImVec4(
+            std::clamp(color.red * scale, 0.f, 1.f),
+            std::clamp(color.green * scale, 0.f, 1.f),
+            std::clamp(color.blue * scale, 0.f, 1.f),
+            std::clamp(color.alpha * alphaMultiplier, 0.f, 1.f));
+    }
+
+    static ImVec4 OffsetUiColor(
+        const UiRgbaColor& color,
+        float offset,
+        float alphaMultiplier = 1.f)
+    {
+        return ImVec4(
+            std::clamp(color.red + offset, 0.f, 1.f),
+            std::clamp(color.green + offset, 0.f, 1.f),
+            std::clamp(color.blue + offset, 0.f, 1.f),
+            std::clamp(color.alpha * alphaMultiplier, 0.f, 1.f));
+    }
+
+    static bool IsUltraBrightUiColor(const UiRgbaColor& color)
+    {
+        const float luminance =
+            color.red * 0.2126f +
+            color.green * 0.7152f +
+            color.blue * 0.0722f;
+        return luminance >= 0.68f;
+    }
+
     static void ApplyUiSkin(
         UiSkin skin,
+        const UiAccentSettings& accents,
+        bool animationsEnabled,
         float displayScale)
     {
-        const UiSkin resolvedSkin =
-            skin == UiSkin::Og ? UiSkin::Og : UiSkin::Amp;
+        const UiSkin resolvedSkin = skin == UiSkin::Count
+            ? UiSkin::Amp
+            : skin;
+        const UiSkinPalette* storedPalette =
+            FindUiSkinPalette(accents, resolvedSkin);
+        const UiSkinPalette* defaultPalette =
+            FindDefaultUiSkinPalette(resolvedSkin);
+        const UiSkinPalette& palette = storedPalette
+            ? *storedPalette
+            : defaultPalette
+                ? *defaultPalette
+                : DefaultUiAmpPalette;
+        const bool authoredSkin = resolvedSkin != UiSkin::Og;
+        const bool brightPrimaryAccent = authoredSkin &&
+            IsUltraBrightUiColor(palette.primaryAccent);
+        const bool brightPrimaryBackground = authoredSkin &&
+            IsUltraBrightUiColor(palette.primaryBackground);
+        const bool sceneTranslucentHeaders = authoredSkin &&
+            brightPrimaryAccent;
+
         ImGuiStyle style;
         ImGui::StyleColorsDark(&style);
         ImVec4* colors = style.Colors;
         UiVisualTokens tokens;
+        tokens.errorText = MakeUiColor(accents.secondaryAccent);
+        tokens.successText = MakeUiColor(accents.tertiaryAccent);
 
-        if (resolvedSkin == UiSkin::Og)
+        if (!authoredSkin)
         {
             style.ScrollbarRounding = 0.f;
             tokens.drawerHeader = colors[ImGuiCol_Header];
@@ -7015,6 +7230,7 @@ private:
                 colors[ImGuiCol_HeaderHovered];
             tokens.drawerHeaderActive =
                 colors[ImGuiCol_HeaderActive];
+            tokens.drawerHeaderText = colors[ImGuiCol_Text];
             tokens.drawerBackground = colors[ImGuiCol_ChildBg];
             tokens.drawerFrame = colors[ImGuiCol_FrameBg];
             tokens.drawerFrameHovered =
@@ -7023,148 +7239,227 @@ private:
                 colors[ImGuiCol_FrameBgActive];
             tokens.outlineTop = colors[ImGuiCol_Border];
             tokens.outlineBottom = colors[ImGuiCol_Border];
+            tokens.panelBodySurface = colors[ImGuiCol_WindowBg];
+            tokens.colorPickerSurface = colors[ImGuiCol_PopupBg];
+            tokens.panelInsetFrame = ImVec4(
+                colors[ImGuiCol_WindowBg].x,
+                colors[ImGuiCol_WindowBg].y,
+                colors[ImGuiCol_WindowBg].z,
+                1.f);
+            tokens.settingsTitleSurface =
+                colors[ImGuiCol_TitleBgActive];
+            tokens.settingsTitleText = colors[ImGuiCol_Text];
             tokens.actionButton = colors[ImGuiCol_Button];
             tokens.actionButtonHovered =
                 colors[ImGuiCol_ButtonHovered];
             tokens.actionButtonActive =
                 colors[ImGuiCol_ButtonActive];
+            tokens.actionButtonText = colors[ImGuiCol_Text];
             tokens.drawerRounding = style.ChildRounding;
             tokens.drawControlOutlines = false;
             tokens.drawScrollEdgeFades = false;
-            tokens.floatingPanelOpacity =
-                colors[ImGuiCol_WindowBg].w;
         }
         else
         {
-            style.WindowRounding = 8.f;
-            style.ChildRounding = 8.f;
-            style.PopupRounding = 8.f;
-            style.FrameRounding = 4.f;
-            style.GrabRounding = 4.f;
-            style.ScrollbarRounding = 8.f;
-            style.TabRounding = 4.f;
+            constexpr float SecondaryRestAlpha = 0.72f;
+            constexpr float AuthoredCornerRounding = 4.f;
+            style.WindowRounding = AuthoredCornerRounding;
+            style.ChildRounding = AuthoredCornerRounding;
+            style.PopupRounding = AuthoredCornerRounding;
+            style.FrameRounding = AuthoredCornerRounding;
+            style.GrabRounding = AuthoredCornerRounding;
+            style.ScrollbarRounding = AuthoredCornerRounding;
+            style.ScrollbarSize = 12.f;
+            style.TabRounding = AuthoredCornerRounding;
             style.WindowBorderSize = 1.f;
             style.DisabledAlpha = 0.38f;
-            colors[ImGuiCol_Text] =
-                ImVec4(0.94f, 0.95f, 0.98f, 1.f);
+
+            colors[ImGuiCol_Text] = MakeUiColor(palette.fontColor);
             colors[ImGuiCol_TextDisabled] =
-                ImVec4(0.58f, 0.59f, 0.61f, 1.f);
-            colors[ImGuiCol_WindowBg] =
-                ImVec4(0.018f, 0.018f, 0.018f, 0.60f);
+                ScaleUiColor(palette.fontColor, 0.62f);
+            colors[ImGuiCol_WindowBg] = MakeUiColor(
+                palette.primaryBackground,
+                0.60f / SecondaryRestAlpha);
             colors[ImGuiCol_ChildBg] =
                 ImVec4(0.f, 0.f, 0.f, 0.f);
-            colors[ImGuiCol_PopupBg] =
-                ImVec4(0.04f, 0.04f, 0.04f, 0.92f);
+            colors[ImGuiCol_PopupBg] = MakeUiColor(
+                palette.primaryBackground,
+                0.92f / SecondaryRestAlpha);
             colors[ImGuiCol_Border] =
                 ImVec4(0.15f, 0.15f, 0.15f, 0.92f);
             colors[ImGuiCol_FrameBg] =
-                ImVec4(0.018f, 0.018f, 0.018f, 0.72f);
-            colors[ImGuiCol_FrameBgHovered] =
-                ImVec4(0.13f, 0.13f, 0.14f, 0.76f);
-            colors[ImGuiCol_FrameBgActive] =
-                ImVec4(0.18f, 0.18f, 0.19f, 0.82f);
+                MakeUiColor(palette.primaryBackground);
+            colors[ImGuiCol_FrameBgHovered] = brightPrimaryBackground
+                ? ScaleUiColor(
+                    palette.primaryBackground,
+                    0.82f,
+                    0.76f / SecondaryRestAlpha)
+                : OffsetUiColor(
+                    palette.primaryBackground,
+                    0.112f,
+                    0.76f / SecondaryRestAlpha);
+            colors[ImGuiCol_FrameBgActive] = brightPrimaryBackground
+                ? ScaleUiColor(
+                    palette.primaryBackground,
+                    0.70f,
+                    0.82f / SecondaryRestAlpha)
+                : OffsetUiColor(
+                    palette.primaryBackground,
+                    0.162f,
+                    0.82f / SecondaryRestAlpha);
             colors[ImGuiCol_TitleBg] =
-                ImVec4(0.035f, 0.035f, 0.035f, 0.82f);
+                colors[ImGuiCol_FrameBg];
             colors[ImGuiCol_TitleBgActive] =
-                ImVec4(0.045f, 0.045f, 0.045f, 0.90f);
+                colors[ImGuiCol_FrameBgHovered];
             colors[ImGuiCol_TitleBgCollapsed] =
-                ImVec4(0.035f, 0.035f, 0.035f, 0.74f);
-            colors[ImGuiCol_ScrollbarBg] =
-                ImVec4(0.018f, 0.018f, 0.018f, 0.36f);
+                colors[ImGuiCol_FrameBg];
+            colors[ImGuiCol_ScrollbarBg] = MakeUiColor(
+                palette.primaryBackground,
+                0.36f / SecondaryRestAlpha);
             colors[ImGuiCol_ScrollbarGrab] =
                 ImVec4(0.66f, 0.67f, 0.69f, 0.13f);
             colors[ImGuiCol_ScrollbarGrabHovered] =
                 ImVec4(0.74f, 0.75f, 0.77f, 0.20f);
             colors[ImGuiCol_ScrollbarGrabActive] =
                 ImVec4(0.80f, 0.81f, 0.83f, 0.26f);
-            colors[ImGuiCol_CheckMark] =
-                ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
-            colors[ImGuiCol_SliderGrab] =
-                ImVec4(0.26f, 0.59f, 0.98f, 0.31f);
-            colors[ImGuiCol_SliderGrabActive] =
-                ImVec4(0.26f, 0.59f, 0.98f, 0.80f);
-            colors[ImGuiCol_Button] =
-                ImVec4(0.018f, 0.018f, 0.018f, 0.72f);
+            const ImVec4 opaquePrimaryAccent(
+                palette.primaryAccent.red,
+                palette.primaryAccent.green,
+                palette.primaryAccent.blue,
+                1.f);
+            colors[ImGuiCol_CheckMark] = opaquePrimaryAccent;
+            colors[ImGuiCol_Button] = colors[ImGuiCol_FrameBg];
             colors[ImGuiCol_ButtonHovered] =
-                ImVec4(0.13f, 0.13f, 0.14f, 0.76f);
+                colors[ImGuiCol_FrameBgHovered];
             colors[ImGuiCol_ButtonActive] =
-                ImVec4(0.18f, 0.18f, 0.19f, 0.82f);
-            colors[ImGuiCol_Header] =
-                ImVec4(0.30f, 0.31f, 0.33f, 0.92f);
-            colors[ImGuiCol_HeaderHovered] =
-                ImVec4(0.38f, 0.39f, 0.41f, 0.97f);
-            colors[ImGuiCol_HeaderActive] =
-                ImVec4(0.45f, 0.46f, 0.48f, 1.f);
+                colors[ImGuiCol_FrameBgActive];
             colors[ImGuiCol_ResizeGrip] =
                 ImVec4(0.48f, 0.49f, 0.51f, 0.28f);
             colors[ImGuiCol_ResizeGripHovered] =
                 ImVec4(0.60f, 0.61f, 0.63f, 0.62f);
             colors[ImGuiCol_ResizeGripActive] =
                 ImVec4(0.75f, 0.76f, 0.78f, 0.90f);
+
             tokens.drawerHeader =
-                ImVec4(0.26f, 0.59f, 0.98f, 0.31f);
-            tokens.drawerHeaderHovered =
-                ImVec4(0.26f, 0.59f, 0.98f, 0.48f);
-            tokens.drawerHeaderActive =
-                ImVec4(0.26f, 0.59f, 0.98f, 0.65f);
+                MakeUiColor(palette.primaryAccent);
+            if (brightPrimaryAccent)
+            {
+                // Ultra-bright custom Amp accents darken on interaction while
+                // retaining Amp's authored opacity curve.
+                tokens.drawerHeaderHovered = ScaleUiColor(
+                    palette.primaryAccent,
+                    0.82f,
+                    0.48f / 0.31f);
+                tokens.drawerHeaderActive = ScaleUiColor(
+                    palette.primaryAccent,
+                    0.70f,
+                    0.65f / 0.31f);
+            }
+            else
+            {
+                tokens.drawerHeaderHovered = MakeUiColor(
+                    palette.primaryAccent,
+                    0.48f / 0.31f);
+                tokens.drawerHeaderActive = MakeUiColor(
+                    palette.primaryAccent,
+                    0.65f / 0.31f);
+            }
+            tokens.drawerHeaderText =
+                MakeUiColor(palette.fontColor);
             tokens.drawerBackground =
-                ImVec4(0.66f, 0.67f, 0.69f, 0.13f);
+                ImVec4(
+                    0.66f,
+                    0.67f,
+                    0.69f,
+                    std::clamp(
+                        palette.primaryBackground.alpha *
+                            (0.13f / SecondaryRestAlpha),
+                        0.f,
+                        1.f));
             tokens.drawerFrame = colors[ImGuiCol_FrameBg];
             tokens.drawerFrameHovered =
                 colors[ImGuiCol_FrameBgHovered];
             tokens.drawerFrameActive =
                 colors[ImGuiCol_FrameBgActive];
             tokens.outlineTop =
-                ImVec4(0.88f, 0.90f, 0.94f, 0.10f);
+                ImVec4(0.005f, 0.006f, 0.008f, 0.14f);
             tokens.outlineBottom =
-                ImVec4(0.96f, 0.97f, 1.f, 0.30f);
-            tokens.actionButton =
-                ImVec4(0.66f, 0.67f, 0.69f, 0.13f);
+                ImVec4(0.88f, 0.90f, 0.94f, 0.070f);
+            tokens.panelBodySurface = MakeUiColor(
+                palette.primaryBackground,
+                0.92f / SecondaryRestAlpha);
+            tokens.colorPickerSurface = MakeUiColor(
+                palette.primaryBackground,
+                1.f / SecondaryRestAlpha);
+            tokens.panelInsetFrame = ImVec4(
+                tokens.panelBodySurface.x,
+                tokens.panelBodySurface.y,
+                tokens.panelBodySurface.z,
+                1.f);
+            tokens.settingsTitleSurface = sceneTranslucentHeaders
+                ? tokens.drawerHeader
+                : CompositeUiColorOver(
+                    tokens.drawerHeader,
+                    tokens.panelBodySurface);
+            tokens.settingsTitleText =
+                MakeUiColor(palette.fontColor);
+            tokens.actionButton = tokens.drawerHeader;
             tokens.actionButtonHovered =
-                ImVec4(0.74f, 0.75f, 0.77f, 0.20f);
+                tokens.drawerHeaderHovered;
             tokens.actionButtonActive =
-                ImVec4(0.80f, 0.81f, 0.83f, 0.26f);
+                tokens.drawerHeaderActive;
+            tokens.actionButtonText =
+                MakeUiColor(palette.fontColor);
+            tokens.drawerRounding = style.ChildRounding;
+            tokens.sceneTranslucentHeaders =
+                sceneTranslucentHeaders;
+            colors[ImGuiCol_Header] = tokens.drawerHeader;
+            colors[ImGuiCol_HeaderHovered] =
+                tokens.drawerHeaderHovered;
+            colors[ImGuiCol_HeaderActive] =
+                tokens.drawerHeaderActive;
+            colors[ImGuiCol_SliderGrab] =
+                tokens.drawerHeader;
+            colors[ImGuiCol_SliderGrabActive] =
+                tokens.drawerHeaderActive;
         }
-
-        tokens.panelBodySurface =
-            colors[ImGuiCol_WindowBg];
-        if (resolvedSkin == UiSkin::Amp)
-        {
-            tokens.panelBodySurface.w =
-                colors[ImGuiCol_PopupBg].w;
-        }
-        // ImGui does not paint WindowBg underneath a title bar. Precomposing
-        // the resting drawer blue over the effective Settings body surface
-        // makes the standalone title pixels match a resting drawer exactly.
-        tokens.settingsTitleSurface = CompositeUiColorOver(
-            tokens.drawerHeader,
-            tokens.panelBodySurface);
 
         const UiSkinBehavior behavior =
             GetUiSkinBehavior(resolvedSkin);
         ImGui::SetUvsrUiBehavior(
-            behavior.motionEnabled,
-            behavior.stockImGuiWidgets);
+            ResolveUiMotionEnabled(
+                resolvedSkin,
+                animationsEnabled),
+            behavior.stockImGuiWidgets,
+            tokens.sceneTranslucentHeaders);
+        ImGui::SetUvsrUiAccentColors(
+            MakeUiColor(accents.secondaryAccent),
+            MakeUiColor(accents.tertiaryAccent));
+        ImGui::SetUvsrSliderTrackColors(
+            tokens.drawerFrame,
+            tokens.drawerFrameHovered,
+            tokens.drawerFrameActive);
         const float safeDisplayScale =
             std::clamp(displayScale, 0.5f, 4.f);
         style.ScaleAllSizes(safeDisplayScale);
-        if (resolvedSkin == UiSkin::Amp)
+        const UiSpacingTokens spacing =
+            ResolveUiSpacingTokens(safeDisplayScale);
+        style.WindowPadding =
+            ImVec2(spacing.regular, spacing.regular);
+        style.ItemSpacing =
+            ImVec2(spacing.regular, spacing.tight);
+        style.ItemInnerSpacing =
+            ImVec2(spacing.tight, spacing.tight);
+        tokens.drawerRounding *= safeDisplayScale;
+        if (authoredSkin)
         {
-            // Preserve the authored Amp rounding and border pixels exactly,
-            // matching the renderer's established UI at every DPI scale.
-            style.WindowRounding = 8.f;
-            style.ChildRounding = 8.f;
-            style.PopupRounding = 8.f;
-            style.FrameRounding = 4.f;
-            style.GrabRounding = 4.f;
-            style.ScrollbarRounding = 8.f;
-            style.TabRounding = 4.f;
+            // Keep the authored edge stroke physically thin while radii scale
+            // with the rest of the controls instead of sharpening at high DPI.
             style.WindowBorderSize = 1.f;
+            style.CircleTessellationMaxError = 0.20f;
         }
-        else
-        {
-            tokens.drawerRounding *= safeDisplayScale;
-        }
+        tokens.controlDisabledAlpha = style.DisabledAlpha;
+        g_UiSpacingTokens = spacing;
         g_UiVisualTokens = tokens;
         ImGui::GetStyle() = style;
     }
@@ -7174,6 +7469,20 @@ private:
         ImGui::PushStyleColor(
             ImGuiCol_WindowBg,
             g_UiVisualTokens.panelBodySurface);
+    }
+
+    [[nodiscard]] static ImVec4 GetOpaquePanelBodySurface()
+    {
+        ImVec4 surface = g_UiVisualTokens.panelBodySurface;
+        surface.w = 1.f;
+        return surface;
+    }
+
+    static void PushOpaquePanelBodySurface()
+    {
+        ImGui::PushStyleColor(
+            ImGuiCol_WindowBg,
+            GetOpaquePanelBodySurface());
     }
     inline static constexpr float
         UiLayoutAnimationDurationSeconds = 0.18f;
@@ -7202,26 +7511,21 @@ private:
         return GetCommandInterfaceMinimumHeight();
     }
 
-    static constexpr float SettingsStatusLineSpacing = 2.f;
-
     static float GetSettingsCollapsedWindowHeight(
         const ImGuiStyle& style,
-        float fontSize,
-        bool hasPerformanceStatus,
-        bool splitOgPerformanceStatus)
+        float fontSize)
     {
-        return
-            fontSize + style.FramePadding.y * 2.f +
-            style.WindowPadding.y +
-            fontSize +
-            style.ItemSpacing.y +
-            1.f +
-            (hasPerformanceStatus
-                ? SettingsStatusLineSpacing + fontSize
-                    + (splitOgPerformanceStatus
-                        ? SettingsStatusLineSpacing + fontSize
-                        : 0.f)
-                : 0.f);
+        return fontSize + style.FramePadding.y * 2.f;
+    }
+
+    static float GetSettingsMinimumExpandedWindowHeight(
+        const ImGuiStyle& style,
+        float fontSize)
+    {
+        const float frameHeight =
+            fontSize + style.FramePadding.y * 2.f;
+        return frameHeight * 2.f +
+            style.WindowPadding.y * 2.f;
     }
 
     static float AdvanceUiLayoutAnimation(
@@ -7255,6 +7559,9 @@ private:
         bool preserveBottom = false;
         bool layoutAnimatingThisFrame = false;
         bool layoutAnimatingLastFrame = false;
+        float wheelInput = 0.f;
+        bool wheelAtTop = false;
+        bool wheelAtBottom = false;
         float scrollY = 0.f;
         float viewportTopScreenY = 0.f;
         float retainedViewportHeight = 0.f;
@@ -7264,6 +7571,7 @@ private:
         UiDrawerHeightDeltas drawerHeightDeltas;
         std::vector<SettingsScrollAnchorPosition> previousAnchors;
         std::vector<SettingsScrollAnchorPosition> currentAnchors;
+        std::vector<ImRect> translucentHeaderSupportRects;
         int lastFrame = -1;
     };
 
@@ -7332,15 +7640,29 @@ private:
         context.active = true;
         context.scrollY = ImGui::GetScrollY();
         const float scrollMaxY = ImGui::GetScrollMaxY();
-        context.preserveBottom =
+        const ImGuiContext* imguiContext =
+            ImGui::GetCurrentContext();
+        const bool settingsBodyConsumedWheel =
+            imguiContext &&
+            imguiContext->WheelingWindow ==
+                ImGui::GetCurrentWindow() &&
+            imguiContext->WheelingWindowScrolledFrame == frame;
+        context.wheelInput = settingsBodyConsumedWheel
+            ? ImGui::GetIO().MouseWheel
+            : 0.f;
+        context.wheelAtTop = context.scrollY <= 0.5f;
+        context.wheelAtBottom =
             scrollMaxY > 0.5f &&
             scrollMaxY - context.scrollY <=
                 std::max(1.f, ImGui::GetFrameHeight() * 0.5f);
+        context.preserveBottom =
+            context.wheelAtBottom;
         context.viewportTopScreenY =
             ImGui::GetCursorScreenPos().y + context.scrollY;
         context.layoutAnimatingThisFrame = false;
         context.drawerHeightDeltas = {};
         context.currentAnchors.clear();
+        context.translucentHeaderSupportRects.clear();
         context.rootDrawList = ImGui::GetWindowDrawList();
         context.rootDrawVertexStart =
             context.rootDrawList
@@ -7461,7 +7783,10 @@ private:
                 window->Scroll.y,
                 scrollDelta,
                 currentFrameScrollMaxY,
-                window->ScrollTarget.y < FLT_MAX);
+                window->ScrollTarget.y < FLT_MAX,
+                context.wheelInput,
+                context.wheelAtTop,
+                context.wheelAtBottom);
         if (correction.apply)
         {
             const float visualScrollDelta =
@@ -7507,6 +7832,12 @@ private:
                             command.ClipRect.w);
                     }
                 }
+                for (ImRect& headerRect :
+                    context.translucentHeaderSupportRects)
+                {
+                    headerRect.Min.y -= visualScrollDelta;
+                    headerRect.Max.y -= visualScrollDelta;
+                }
             }
         }
 
@@ -7533,10 +7864,11 @@ private:
 
     inline static DrawerAnimationContext g_DrawerAnimationContext;
 
-    static bool DrawCollapsingHeader(
+    bool DrawCollapsingHeader(
         const char* label,
         const char* tooltip,
-        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None)
+        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None,
+        bool forceClosedPresentation = false)
     {
         const ImGuiID headerId = ImGui::GetID(label);
         ImGuiStorage* storage = ImGui::GetStateStorage();
@@ -7544,6 +7876,8 @@ private:
             headerId ^ ImGuiID(0x4A9D31E7u);
         const ImGuiID frameKey =
             headerId ^ ImGuiID(0x71C6B42Du);
+        const ImGuiID targetKey =
+            headerId ^ ImGuiID(0x2F63C8B5u);
         const ImGuiID measuredHeightKey =
             headerId ^ ImGuiID(0xD14F83A9u);
         const ImGuiID measurementValidKey =
@@ -7557,26 +7891,57 @@ private:
         ImGui::PushStyleColor(
             ImGuiCol_HeaderActive,
             g_UiVisualTokens.drawerHeaderActive);
+        ImGui::PushStyleColor(
+            ImGuiCol_Text,
+            g_UiVisualTokens.drawerHeaderText);
         ImGui::PushStyleVar(
             ImGuiStyleVar_FrameRounding,
             ImGui::GetStyle().FrameRounding);
+        const bool useAuthoredHeaderFont =
+            m_ComposedUiSkin != UiSkin::Og;
+        if (useAuthoredHeaderFont)
+        {
+            ImGui::PushFont(GetActiveUiHeaderFont());
+            ApplyActiveUiHeaderWordSpacing();
+        }
         ImGuiStyle& style = ImGui::GetStyle();
         const float itemSpacingY = style.ItemSpacing.y;
         style.ItemSpacing.y = 0.f;
         const bool open = ImGui::CollapsingHeader(label, flags);
         style.ItemSpacing.y = itemSpacingY;
+        if (useAuthoredHeaderFont)
+        {
+            RestoreActiveUiHeaderWordSpacing();
+            ImGui::PopFont();
+        }
         ImGui::PopStyleVar();
-        ImGui::PopStyleColor(3);
+        ImGui::PopStyleColor(4);
+        if (g_UiVisualTokens.sceneTranslucentHeaders &&
+            g_SettingsScrollStabilityContext.active)
+        {
+            g_SettingsScrollStabilityContext
+                .translucentHeaderSupportRects.push_back(
+                    ImRect(
+                        ImGui::GetItemRectMin(),
+                        ImGui::GetItemRectMax()));
+        }
         ImGui::SetItemTooltip(tooltip);
         TrackSettingsScrollAnchor(
             headerId,
             ImGui::GetItemRectMin().y);
 
         const int frame = ImGui::GetFrameCount();
-        const int lastFrame = storage->GetInt(frameKey, -2);
-        float openAmount = storage->GetFloat(
-            amountKey,
-            open ? 1.f : 0.f);
+        const int lastFrame = forceClosedPresentation
+            ? frame - 2
+            : storage->GetInt(frameKey, -2);
+        const bool previousTargetOpen = forceClosedPresentation
+            ? false
+            : storage->GetBool(targetKey, open);
+        float openAmount = forceClosedPresentation
+            ? 0.f
+            : storage->GetFloat(
+                amountKey,
+                open ? 1.f : 0.f);
         const UiExpandedMeasurementState measurement = {
             storage->GetFloat(measuredHeightKey, 0.f),
             storage->GetBool(measurementValidKey, false)
@@ -7585,11 +7950,16 @@ private:
         const bool needsInitialMeasurement =
             ImGui::IsUvsrUiMotionEnabled() &&
             NeedsInitialUiExpandedMeasurement(open, measurement);
-        if (lastFrame < frame - 1)
+        if (!ImGui::IsUvsrUiMotionEnabled())
         {
-            openAmount = needsInitialMeasurement
-                ? 0.f
-                : open ? 1.f : 0.f;
+            openAmount = open ? 1.f : 0.f;
+        }
+        else if (lastFrame < frame - 1)
+        {
+            openAmount = ResolveUiOpenAmountAfterSubmissionGap(
+                open,
+                previousTargetOpen,
+                needsInitialMeasurement);
         }
         else if (needsInitialMeasurement)
         {
@@ -7605,6 +7975,7 @@ private:
         }
         storage->SetFloat(amountKey, openAmount);
         storage->SetInt(frameKey, frame);
+        storage->SetBool(targetKey, open);
         if (needsInitialMeasurement ||
             (openAmount > 0.f && openAmount < 1.f))
         {
@@ -7632,7 +8003,8 @@ private:
 
     static void BeginDrawerBody(
         const char* id,
-        float controlWidth)
+        float controlWidth,
+        float maximumHeight = 0.f)
     {
         const ImGuiStyle& style = ImGui::GetStyle();
         const ImGuiID measuredHeightKey =
@@ -7650,7 +8022,8 @@ private:
             ? SmoothUiLayoutAnimation(
                 g_DrawerAnimationContext.openAmount)
             : g_DrawerAnimationContext.targetOpen ? 1.f : 0.f;
-        const float animatedHeight =
+        const bool scrollableBody = maximumHeight > 0.f;
+        const float uncappedAnimatedHeight =
             !motionEnabled
                 ? 0.f
                 : g_DrawerAnimationContext.needsInitialMeasurement
@@ -7658,6 +8031,9 @@ private:
                 : std::max(
                     measuredHeight * easedAmount,
                     0.001f);
+        const float animatedHeight = scrollableBody && motionEnabled
+            ? std::min(uncappedAnimatedHeight, maximumHeight)
+            : uncappedAnimatedHeight;
         ImGui::PushStyleColor(
             ImGuiCol_ChildBg,
             g_UiVisualTokens.drawerBackground);
@@ -7672,7 +8048,9 @@ private:
             g_UiVisualTokens.drawerFrameActive);
         ImGui::PushStyleVar(
             ImGuiStyleVar_WindowPadding,
-            ImVec2(style.FramePadding.x, style.ItemSpacing.y));
+            ImVec2(
+                g_UiSpacingTokens.tight,
+                g_UiSpacingTokens.tight));
         ImGui::PushStyleVar(
             ImGuiStyleVar_ChildRounding,
             g_UiVisualTokens.drawerRounding);
@@ -7691,9 +8069,13 @@ private:
                 ImGuiChildFlags_AutoResizeY |
                 ImGuiChildFlags_AlwaysAutoResize;
         }
-        ImGuiWindowFlags childWindowFlags =
-            ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse;
+        ImGuiWindowFlags childWindowFlags = ImGuiWindowFlags_None;
+        if (!scrollableBody)
+        {
+            childWindowFlags |=
+                ImGuiWindowFlags_NoScrollbar |
+                ImGuiWindowFlags_NoScrollWithMouse;
+        }
         if (motionEnabled &&
             (g_DrawerAnimationContext.needsInitialMeasurement ||
             !g_DrawerAnimationContext.targetOpen ||
@@ -7701,16 +8083,23 @@ private:
         {
             childWindowFlags |= ImGuiWindowFlags_NoInputs;
         }
+        if (scrollableBody)
+        {
+            ImGui::SetNextWindowSizeConstraints(
+                ImVec2(0.f, 0.f),
+                ImVec2(FLT_MAX, maximumHeight));
+        }
         g_DrawerAnimationContext.bodyVisible =
             ImGui::BeginChild(
             id,
             ImVec2(0.f, animatedHeight),
             childFlags,
             childWindowFlags);
+        TrackSettingsDecorationDrawList(
+            ImGui::GetWindowDrawList(),
+            g_DrawerAnimationContext.bodyVisible);
         EnsureAnimatedChildLayoutSubmission(
             g_DrawerAnimationContext.bodyVisible);
-        TrackSettingsAppearanceDrawList(
-            ImGui::GetWindowDrawList());
         ImGui::PushItemWidth(controlWidth);
     }
 
@@ -7727,16 +8116,19 @@ private:
     }
 
     static void DrawDrawerBodyOutline(
+        ImDrawList* drawList,
         const ImVec2& minimum,
         const ImVec2& maximum,
-        float rounding)
+        float rounding,
+        float topGap,
+        bool intersectClipRect)
     {
-        if (!g_UiVisualTokens.drawControlOutlines)
+        if (!drawList ||
+            !g_UiVisualTokens.drawControlOutlines)
             return;
 
         constexpr float Thickness = 1.f;
         constexpr float Inset = Thickness * 0.5f;
-        constexpr float TopGap = 2.f;
 
         const ImVec2 outlineMinimum(
             minimum.x + Inset,
@@ -7746,18 +8138,20 @@ private:
             maximum.y - Inset);
         const float width = outlineMaximum.x - outlineMinimum.x;
         const float height = outlineMaximum.y - outlineMinimum.y;
-        if (width <= Thickness || height <= TopGap + Thickness)
+        if (width <= Thickness || height <= topGap + Thickness)
             return;
 
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const float clipTop = topGap > 0.f
+            ? outlineMinimum.y + topGap
+            : outlineMinimum.y - Thickness;
         drawList->PushClipRect(
             ImVec2(
                 outlineMinimum.x - Thickness,
-                outlineMinimum.y + TopGap),
+                clipTop),
             ImVec2(
                 outlineMaximum.x + Thickness,
                 outlineMaximum.y + Thickness),
-            true);
+            intersectClipRect);
         const int vertexStart = drawList->VtxBuffer.Size;
         drawList->AddRect(
             outlineMinimum,
@@ -7775,15 +8169,189 @@ private:
             ++vertexIndex)
         {
             ImDrawVert& vertex = drawList->VtxBuffer[vertexIndex];
+            const float coverage =
+                float((vertex.col & IM_COL32_A_MASK) >>
+                    IM_COL32_A_SHIFT) / 255.f;
             const float gradientPosition = std::clamp(
                 (vertex.pos.y - outlineMinimum.y) / gradientExtent,
                 0.f,
                 1.f);
-            vertex.col = ImGui::GetColorU32(LerpUiColor(
+            ImVec4 outlineColor = LerpUiColor(
                 g_UiVisualTokens.outlineTop,
                 g_UiVisualTokens.outlineBottom,
-                gradientPosition));
+                gradientPosition);
+            outlineColor.w *= coverage;
+            vertex.col = ImGui::GetColorU32(outlineColor);
         }
+    }
+
+    static void TrackSettingsDecorationDrawList(
+        ImDrawList* drawList,
+        bool visible)
+    {
+        TrackSettingsAppearanceDrawList(drawList);
+        if (drawList && visible)
+            g_SettingsDecorationDrawList = drawList;
+    }
+
+    static float ResolveRoundedRectRadius(
+        const ImRect& rectangle,
+        float requestedRadius)
+    {
+        return std::max(
+            0.f,
+            std::min({
+                requestedRadius,
+                rectangle.GetWidth() * 0.5f - 1.f,
+                rectangle.GetHeight() * 0.5f - 1.f
+            }));
+    }
+
+    static void DrawFilledRoundedInsetFrame(
+        ImDrawList* drawList,
+        const ImRect& outerRect,
+        const ImRect& innerRect,
+        float rounding)
+    {
+        if (!drawList ||
+            outerRect.GetWidth() <= 1.f ||
+            outerRect.GetHeight() <= 1.f ||
+            innerRect.Min.x <= outerRect.Min.x ||
+            innerRect.Min.y <= outerRect.Min.y ||
+            innerRect.Max.x >= outerRect.Max.x ||
+            innerRect.Max.y >= outerRect.Max.y ||
+            innerRect.GetWidth() <= 1.f ||
+            innerRect.GetHeight() <= 1.f)
+        {
+            return;
+        }
+
+        const float outerRadius = ResolveRoundedRectRadius(
+            outerRect,
+            rounding);
+        const float innerRadius = ResolveRoundedRectRadius(
+            innerRect,
+            rounding);
+        const ImU32 frameColor = ImGui::GetColorU32(
+            g_UiVisualTokens.panelInsetFrame);
+        if ((frameColor & IM_COL32_A_MASK) == 0u)
+            return;
+        const ImVec2 expandedOuterMinimum(
+            outerRect.Min.x - 1.f,
+            outerRect.Min.y - 1.f);
+        const ImVec2 expandedOuterMaximum(
+            outerRect.Max.x + 1.f,
+            outerRect.Max.y + 1.f);
+
+        // Draw the opaque exterior silhouette through four disjoint clips.
+        // The center is never painted, so already-submitted menu content stays
+        // intact. The four corner wedges below restore the rounded interior
+        // edge instead of leaving the rejected transparent square gaps.
+        drawList->PushClipRect(
+            expandedOuterMinimum,
+            expandedOuterMaximum,
+            false);
+        const auto drawOuterSurfaceThrough =
+            [&](const ImVec2& minimum, const ImVec2& maximum)
+            {
+                if (maximum.x <= minimum.x || maximum.y <= minimum.y)
+                    return;
+                drawList->PushClipRect(minimum, maximum, true);
+                drawList->AddRectFilled(
+                    outerRect.Min,
+                    outerRect.Max,
+                    frameColor,
+                    outerRadius,
+                    ImDrawFlags_RoundCornersAll);
+                drawList->PopClipRect();
+            };
+        drawOuterSurfaceThrough(
+            expandedOuterMinimum,
+            ImVec2(outerRect.Max.x + 1.f, innerRect.Min.y));
+        drawOuterSurfaceThrough(
+            ImVec2(outerRect.Min.x - 1.f, innerRect.Max.y),
+            expandedOuterMaximum);
+        drawOuterSurfaceThrough(
+            ImVec2(outerRect.Min.x - 1.f, innerRect.Min.y),
+            ImVec2(innerRect.Min.x, innerRect.Max.y));
+        drawOuterSurfaceThrough(
+            ImVec2(innerRect.Max.x, innerRect.Min.y),
+            ImVec2(outerRect.Max.x + 1.f, innerRect.Max.y));
+
+        if (innerRadius > 0.f)
+        {
+            const int cornerSegments = std::max(
+                3,
+                drawList->_CalcCircleAutoSegmentCount(innerRadius) / 4);
+            const auto drawInnerCornerWedge =
+                [&](const ImVec2& squareCorner,
+                    const ImVec2& arcCenter,
+                    float startAngle,
+                    float endAngle)
+                {
+                    std::vector<ImVec2> points;
+                    points.reserve(static_cast<size_t>(cornerSegments) + 2u);
+                    points.push_back(squareCorner);
+                    for (int segment = 0;
+                        segment <= cornerSegments;
+                        ++segment)
+                    {
+                        const float amount =
+                            float(segment) / float(cornerSegments);
+                        const float angle =
+                            startAngle + (endAngle - startAngle) * amount;
+                        points.emplace_back(
+                            arcCenter.x + std::cos(angle) * innerRadius,
+                            arcCenter.y + std::sin(angle) * innerRadius);
+                    }
+                    float twiceArea = 0.f;
+                    for (size_t index = 0;
+                        index < points.size();
+                        ++index)
+                    {
+                        const ImVec2& current = points[index];
+                        const ImVec2& next =
+                            points[(index + 1u) % points.size()];
+                        twiceArea +=
+                            current.x * next.y - current.y * next.x;
+                    }
+                    if (twiceArea < 0.f)
+                        std::reverse(points.begin(), points.end());
+                    drawList->AddConcavePolyFilled(
+                        points.data(),
+                        static_cast<int>(points.size()),
+                        frameColor);
+                };
+            drawInnerCornerWedge(
+                innerRect.Min,
+                ImVec2(
+                    innerRect.Min.x + innerRadius,
+                    innerRect.Min.y + innerRadius),
+                -IM_PI * 0.5f,
+                -IM_PI);
+            drawInnerCornerWedge(
+                ImVec2(innerRect.Max.x, innerRect.Min.y),
+                ImVec2(
+                    innerRect.Max.x - innerRadius,
+                    innerRect.Min.y + innerRadius),
+                -IM_PI * 0.5f,
+                0.f);
+            drawInnerCornerWedge(
+                innerRect.Max,
+                ImVec2(
+                    innerRect.Max.x - innerRadius,
+                    innerRect.Max.y - innerRadius),
+                0.f,
+                IM_PI * 0.5f);
+            drawInnerCornerWedge(
+                ImVec2(innerRect.Min.x, innerRect.Max.y),
+                ImVec2(
+                    innerRect.Min.x + innerRadius,
+                    innerRect.Max.y - innerRadius),
+                IM_PI * 0.5f,
+                IM_PI);
+        }
+        drawList->PopClipRect();
     }
 
     static void DrawSettingsScrollEdgeFades()
@@ -7813,7 +8381,6 @@ private:
         }
 
         ImVec4 edgeColor = style.Colors[ImGuiCol_WindowBg];
-        edgeColor.w = std::max(edgeColor.w, 0.82f);
         ImVec4 clearColor = edgeColor;
         clearColor.w = 0.f;
         const ImU32 clear = ImGui::GetColorU32(clearColor);
@@ -7858,6 +8425,88 @@ private:
                 edge,
                 edge);
         }
+    }
+
+    static void DrawSettingsFixedTopInsetShadow(
+        ImDrawList* drawList,
+        const ImRect& bodyRect,
+        float insetHeight,
+        float rounding,
+        bool intersectClipRect)
+    {
+        if (!drawList ||
+            !g_UiVisualTokens.drawControlOutlines ||
+            insetHeight <= 0.5f ||
+            bodyRect.GetWidth() <= 1.f ||
+            bodyRect.GetHeight() <= 1.f)
+        {
+            return;
+        }
+
+        const ImRect shadowRect(
+            bodyRect.Min,
+            ImVec2(
+                bodyRect.Max.x,
+                std::min(
+                    bodyRect.Max.y,
+                    bodyRect.Min.y + insetHeight)));
+        if (shadowRect.GetHeight() <= 0.5f)
+            return;
+
+        // Use the root body's effective corner radius for the shadow mask.
+        // A top-only rectangle as short as the inset would make ImDrawList
+        // clamp an 8 px root radius to 7 px and leave a dark corner wedge.
+        const float effectiveRounding = std::max(
+            0.f,
+            std::min({
+                rounding,
+                bodyRect.GetWidth() * 0.5f - 1.f,
+                bodyRect.GetHeight() * 0.5f - 1.f
+            }));
+        const ImRect shadowMaskRect(
+            bodyRect.Min,
+            ImVec2(
+                bodyRect.Max.x,
+                std::min(
+                    bodyRect.Max.y,
+                    bodyRect.Min.y + std::max(
+                        shadowRect.GetHeight(),
+                        effectiveRounding + 1.f))));
+        drawList->PushClipRect(
+            shadowRect.Min,
+            shadowRect.Max,
+            intersectClipRect);
+        const int vertexStart = drawList->VtxBuffer.Size;
+        drawList->AddRectFilled(
+            shadowMaskRect.Min,
+            shadowMaskRect.Max,
+            IM_COL32_WHITE,
+            effectiveRounding,
+            ImDrawFlags_RoundCornersTop);
+        const int vertexEnd = drawList->VtxBuffer.Size;
+        const float shadowHeight =
+            std::max(1.f, shadowRect.GetHeight());
+        for (int vertexIndex = vertexStart;
+            vertexIndex < vertexEnd;
+            ++vertexIndex)
+        {
+            ImDrawVert& vertex = drawList->VtxBuffer[vertexIndex];
+            const float coverage =
+                float((vertex.col & IM_COL32_A_MASK) >>
+                    IM_COL32_A_SHIFT) / 255.f;
+            const float distance = std::clamp(
+                (vertex.pos.y - shadowRect.Min.y) / shadowHeight,
+                0.f,
+                1.f);
+            const float falloff = 1.f - distance;
+            ImVec4 shadowColor(
+                0.005f,
+                0.006f,
+                0.008f,
+                0.24f * falloff * falloff * coverage);
+            vertex.col = ImGui::GetColorU32(shadowColor);
+        }
+        drawList->PopClipRect();
     }
 
     static void EndDrawerBody()
@@ -7906,9 +8555,12 @@ private:
                 renderedHeight);
         }
         DrawDrawerBodyOutline(
+            ImGui::GetWindowDrawList(),
             ImGui::GetItemRectMin(),
             ImGui::GetItemRectMax(),
-            ImGui::GetStyle().ChildRounding);
+            ImGui::GetStyle().ChildRounding,
+            2.f,
+            true);
         ImGui::PopStyleVar(3);
         ImGui::PopStyleColor(4);
     }
@@ -7943,6 +8595,8 @@ private:
             headerId ^ ImGuiID(0x5CB870A3u);
         const ImGuiID frameKey =
             headerId ^ ImGuiID(0x34A1F27Du);
+        const ImGuiID targetKey =
+            headerId ^ ImGuiID(0x47B2159Cu);
         const ImGuiID measuredHeightKey =
             headerId ^ ImGuiID(0x9D63E418u);
         const ImGuiID measurementValidKey =
@@ -7958,6 +8612,9 @@ private:
 
         const int frame = ImGui::GetFrameCount();
         const int lastFrame = storage->GetInt(frameKey, -2);
+        const bool previousTargetOpen = storage->GetBool(
+            targetKey,
+            open);
         const UiExpandedMeasurementState measurement = {
             storage->GetFloat(measuredHeightKey, 0.f),
             storage->GetBool(measurementValidKey, false)
@@ -7971,11 +8628,16 @@ private:
         float openAmount = storage->GetFloat(
             amountKey,
             open ? 1.f : 0.f);
-        if (lastFrame < frame - 1)
+        if (!ImGui::IsUvsrUiMotionEnabled())
         {
-            openAmount = needsInitialMeasurement
-                ? 0.f
-                : open ? 1.f : 0.f;
+            openAmount = open ? 1.f : 0.f;
+        }
+        else if (lastFrame < frame - 1)
+        {
+            openAmount = ResolveUiOpenAmountAfterSubmissionGap(
+                open,
+                previousTargetOpen,
+                needsInitialMeasurement);
         }
         else if (needsInitialMeasurement)
         {
@@ -7988,6 +8650,7 @@ private:
         }
         storage->SetFloat(amountKey, openAmount);
         storage->SetInt(frameKey, frame);
+        storage->SetBool(targetKey, open);
         if (needsInitialMeasurement ||
             (openAmount > 0.f && openAmount < 1.f))
         {
@@ -8046,9 +8709,10 @@ private:
             ImVec2(0.f, animatedHeight),
             childFlags,
             childWindowFlags);
+        TrackSettingsDecorationDrawList(
+            ImGui::GetWindowDrawList(),
+            bodyVisible);
         EnsureAnimatedChildLayoutSubmission(bodyVisible);
-        TrackSettingsAppearanceDrawList(
-            ImGui::GetWindowDrawList());
         // Own the transparent indentation gutter inside the animated child so
         // nested-dropdown reset buttons can draw and receive input there. The
         // child starts one indent earlier, while this internal indent preserves
@@ -8113,19 +8777,29 @@ private:
     struct UiToggleRegionAnimationState
     {
         float linearAmount = 0.f;
+        float disabledPresentationLinearAmount = 0.f;
         UiExpandedMeasurementState measurement;
         bool targetVisible = false;
         bool initialized = false;
         int lastSeenFrame = -1;
         int transitionFrame = -1;
         int advancedFrame = -1;
+        int disabledPresentationAdvancedFrame = -1;
     };
 
     struct UiToggleRegionAnimationContext
     {
         ImGuiID id = 0;
         bool bodyVisible = false;
-        bool freezeVisualValues = false;
+        bool ownsDisabledPresentationScope = false;
+    };
+
+    struct UiDisabledPresentationState
+    {
+        float linearAmount = 0.f;
+        bool initialized = false;
+        int lastSeenFrame = -1;
+        int advancedFrame = -1;
     };
 
     inline static std::unordered_map<
@@ -8134,16 +8808,79 @@ private:
         g_UiToggleRegionAnimationStates;
     inline static std::vector<UiToggleRegionAnimationContext>
         g_UiToggleRegionAnimationContexts;
+    inline static std::unordered_map<
+        ImGuiID,
+        UiDisabledPresentationState>
+        g_UiDisabledPresentationStates;
+    inline static int g_UiVisualDisabledScopeDepth = 0;
 
-    static bool FreezeAnimatedToggleVisualValues()
+    static float ResolveDisabledPresentationAmount(
+        UiDisabledPresentationState& state,
+        bool disabled)
     {
-        return std::any_of(
-            g_UiToggleRegionAnimationContexts.begin(),
-            g_UiToggleRegionAnimationContexts.end(),
-            [](const UiToggleRegionAnimationContext& context)
-            {
-                return context.freezeVisualValues;
-            });
+        const int frame = ImGui::GetFrameCount();
+        const bool submissionWasInterrupted =
+            state.lastSeenFrame >= 0 &&
+            state.lastSeenFrame < frame - 1;
+        const bool motionEnabled =
+            ImGui::IsUvsrUiMotionEnabled();
+        if (!state.initialized || submissionWasInterrupted)
+        {
+            state.linearAmount = disabled ? 1.f : 0.f;
+            state.initialized = true;
+            state.advancedFrame = frame;
+        }
+        else if (state.advancedFrame != frame)
+        {
+            state.linearAmount = AdvanceUiDisabledPresentation(
+                state.linearAmount,
+                disabled,
+                ImGui::GetIO().DeltaTime,
+                motionEnabled);
+            state.advancedFrame = frame;
+        }
+        state.lastSeenFrame = frame;
+        return SmoothUiDisabledPresentation(state.linearAmount);
+    }
+
+    static bool BeginVisuallyDisabledUiScope(
+        const char* id,
+        bool disabled)
+    {
+        UiDisabledPresentationState& state =
+            g_UiDisabledPresentationStates[ImGui::GetID(id)];
+        const float presentationAmount =
+            ResolveDisabledPresentationAmount(state, disabled);
+        const bool applyManualAlpha =
+            g_UiVisualDisabledScopeDepth == 0;
+        if (applyManualAlpha)
+        {
+            ImGui::PushStyleVar(
+                ImGuiStyleVar_Alpha,
+                ImGui::GetStyle().Alpha *
+                    (1.f +
+                        (g_UiVisualTokens.controlDisabledAlpha - 1.f) *
+                        presentationAmount));
+        }
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_DisabledAlpha,
+            1.f);
+        ImGui::PushUvsrDisabledPresentation(
+            presentationAmount);
+        ImGui::BeginDisabled(disabled);
+        ++g_UiVisualDisabledScopeDepth;
+        return applyManualAlpha;
+    }
+
+    static void EndVisuallyDisabledUiScope(bool manualAlphaApplied)
+    {
+        assert(g_UiVisualDisabledScopeDepth > 0);
+        --g_UiVisualDisabledScopeDepth;
+        ImGui::EndDisabled();
+        ImGui::PopUvsrDisabledPresentation();
+        ImGui::PopStyleVar();
+        if (manualAlphaApplied)
+            ImGui::PopStyleVar();
     }
 
     static bool BeginAnimatedToggleRegion(
@@ -8166,9 +8903,12 @@ private:
         if (!state.initialized || submissionWasInterrupted)
         {
             state.linearAmount = visible ? 1.f : 0.f;
+            state.disabledPresentationLinearAmount =
+                visible ? 0.f : 1.f;
             state.targetVisible = visible;
             state.initialized = true;
             state.transitionFrame = frame;
+            state.disabledPresentationAdvancedFrame = frame;
         }
         else if (state.targetVisible != visible)
         {
@@ -8186,9 +8926,22 @@ private:
         {
             state.targetVisible = visible;
             state.linearAmount = visible ? 1.f : 0.f;
+            state.disabledPresentationLinearAmount =
+                visible ? 0.f : 1.f;
             state.transitionFrame = frame;
             state.advancedFrame = frame;
+            state.disabledPresentationAdvancedFrame = frame;
             targetChangedThisFrame = false;
+        }
+        else if (state.disabledPresentationAdvancedFrame != frame)
+        {
+            state.disabledPresentationLinearAmount =
+                AdvanceUiDisabledPresentation(
+                    state.disabledPresentationLinearAmount,
+                    !state.targetVisible,
+                    ImGui::GetIO().DeltaTime,
+                    true);
+            state.disabledPresentationAdvancedFrame = frame;
         }
 
         const bool needsInitialMeasurement =
@@ -8228,6 +8981,9 @@ private:
 
         const float easedAmount =
             SmoothUiLayoutAnimation(state.linearAmount);
+        const float disabledPresentationAmount =
+            SmoothUiDisabledPresentation(
+                state.disabledPresentationLinearAmount);
         const float animatedHeight =
             !motionEnabled
                 ? 0.f
@@ -8246,15 +9002,24 @@ private:
         ImGui::PushStyleVar(
             ImGuiStyleVar_ChildRounding,
             0.f);
+        const bool applyManualDisabledAlpha =
+            g_UiVisualDisabledScopeDepth == 0;
         ImGui::PushStyleVar(
             ImGuiStyleVar_Alpha,
             ImGui::GetStyle().Alpha *
                 (needsInitialMeasurement
                     ? 0.f
-                    : easedAmount));
+                    : easedAmount) *
+                (applyManualDisabledAlpha
+                    ? 1.f +
+                        (g_UiVisualTokens.controlDisabledAlpha - 1.f) *
+                        disabledPresentationAmount
+                    : 1.f));
         ImGui::PushStyleVar(
             ImGuiStyleVar_DisabledAlpha,
             1.f);
+        ImGui::PushUvsrDisabledPresentation(
+            disabledPresentationAmount);
         ImGuiWindowFlags childWindowFlags =
             ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoScrollWithMouse;
@@ -8280,19 +9045,22 @@ private:
             ImVec2(0.f, animatedHeight),
             childFlags,
             childWindowFlags);
+        TrackSettingsDecorationDrawList(
+            ImGui::GetWindowDrawList(),
+            bodyVisible);
         EnsureAnimatedChildLayoutSubmission(bodyVisible);
-        TrackSettingsAppearanceDrawList(
-            ImGui::GetWindowDrawList());
         ImGui::PushItemWidth(inheritedItemWidth);
 
-        // Interaction is blocked during both directions, but DisabledAlpha is
-        // one so controls never take on the old gray gated appearance.
+        // Interaction is blocked during both directions. Opening controls stay
+        // visually steady until they become interactive; closing or otherwise
+        // gated controls ease through the independent disabled presentation.
         ImGui::BeginDisabled(
             !state.targetVisible || state.linearAmount < 1.f);
+        ++g_UiVisualDisabledScopeDepth;
         g_UiToggleRegionAnimationContexts.push_back({
             regionId,
             bodyVisible,
-            !state.targetVisible
+            true
         });
         return true;
     }
@@ -8306,7 +9074,13 @@ private:
         const float measuredHeight =
             std::max(0.f, ImGui::GetCursorPosY());
 
+        if (context.ownsDisabledPresentationScope)
+        {
+            assert(g_UiVisualDisabledScopeDepth > 0);
+            --g_UiVisualDisabledScopeDepth;
+        }
         ImGui::EndDisabled();
+        ImGui::PopUvsrDisabledPresentation();
         ImGui::PopItemWidth();
         ImGui::EndChild();
 
@@ -8560,12 +9334,6 @@ private:
             g_DeferredDropdownUiState.transitionComboId);
     }
 
-    static void FinishDeferredDropdownPopupTransition()
-    {
-        ImGui::FinishComboPopupTransition(
-            g_DeferredDropdownUiState.transitionComboId);
-    }
-
     static void FinishUnsubmittedDeferredDropdownPopupTransition()
     {
         const DeferredDropdownUiState& state =
@@ -8582,6 +9350,92 @@ private:
         // which advances its retained roll-up. Close only that originating
         // combo so its deferred action cannot remain stranded indefinitely.
         ImGui::FinishComboPopupTransition(state.transitionComboId);
+    }
+
+    static void DrawTranslucentHeaderPanelBodySurface(
+        ImDrawList* drawList,
+        const ImRect& bodyRect,
+        float rounding)
+    {
+        if (!drawList ||
+            bodyRect.GetWidth() <= 1.f ||
+            bodyRect.GetHeight() <= 1.f)
+        {
+            return;
+        }
+
+        std::vector<ImRect> exclusions =
+            g_SettingsScrollStabilityContext
+                .translucentHeaderSupportRects;
+        std::sort(
+            exclusions.begin(),
+            exclusions.end(),
+            [](const ImRect& left, const ImRect& right)
+            {
+                return left.Min.y < right.Min.y;
+            });
+
+        const ImU32 bodyColor = ImGui::GetColorU32(
+            g_UiVisualTokens.panelBodySurface);
+        const auto drawClippedSurface =
+            [&](const ImRect& clipRect)
+            {
+                if (clipRect.GetWidth() <= 0.f ||
+                    clipRect.GetHeight() <= 0.f)
+                {
+                    return;
+                }
+                drawList->PushClipRect(
+                    clipRect.Min,
+                    clipRect.Max,
+                    true);
+                drawList->AddRectFilled(
+                    bodyRect.Min,
+                    bodyRect.Max,
+                    bodyColor,
+                    rounding,
+                    ImDrawFlags_RoundCornersAll);
+                drawList->PopClipRect();
+            };
+
+        const float headerSupportInset = std::max(
+            1.f,
+            ImGui::GetStyle().FrameRounding);
+        float nextFullWidthY = bodyRect.Min.y;
+        for (ImRect exclusion : exclusions)
+        {
+            exclusion.Min.x += headerSupportInset;
+            exclusion.Min.y += headerSupportInset;
+            exclusion.Max.x -= headerSupportInset;
+            exclusion.Max.y -= headerSupportInset;
+            exclusion.ClipWith(bodyRect);
+            if (exclusion.GetWidth() <= 0.f ||
+                exclusion.GetHeight() <= 0.f ||
+                exclusion.Min.y < nextFullWidthY)
+            {
+                continue;
+            }
+
+            drawClippedSurface(ImRect(
+                ImVec2(bodyRect.Min.x, nextFullWidthY),
+                ImVec2(bodyRect.Max.x, exclusion.Min.y)));
+            drawClippedSurface(ImRect(
+                ImVec2(bodyRect.Min.x, exclusion.Min.y),
+                ImVec2(exclusion.Min.x, exclusion.Max.y)));
+            drawClippedSurface(ImRect(
+                ImVec2(exclusion.Max.x, exclusion.Min.y),
+                ImVec2(bodyRect.Max.x, exclusion.Max.y)));
+            nextFullWidthY = exclusion.Max.y;
+        }
+        drawClippedSurface(ImRect(
+            ImVec2(bodyRect.Min.x, nextFullWidthY),
+            bodyRect.Max));
+
+        ImGui::RenderFrameBorder(
+            bodyRect.Min,
+            bodyRect.Max,
+            rounding,
+            false);
     }
 
     static const char* GetDeferredDropdownPreview(ImGuiID comboId)
@@ -8640,35 +9494,26 @@ private:
     }
 
     static bool TryApplyDeferredDropdownUiActions(
-        bool compositionIdle,
-        bool immediate = false)
+        bool compositionIdle)
     {
         DeferredDropdownUiState& state =
             g_DeferredDropdownUiState;
         if (state.actions.Empty())
             return false;
 
-        if (!immediate)
-        {
-            const int frame = ImGui::GetFrameCount();
-            state.idleStartFrame = UpdateUiDropdownIdleStartFrame(
-                state.idleStartFrame,
+        const int frame = ImGui::GetFrameCount();
+        state.idleStartFrame = UpdateUiDropdownIdleStartFrame(
+            state.idleStartFrame,
+            frame,
+            compositionIdle);
+        if (!ShouldCommitDeferredDropdownActions(
                 frame,
-                compositionIdle);
-            if (!ShouldCommitDeferredDropdownActions(
-                    frame,
-                    state.requestFrame,
-                    state.idleStartFrame,
-                    ImGui::GetTime() - state.lastRequestTime))
-            {
-                return false;
-            }
-        }
-        else
+                state.requestFrame,
+                state.idleStartFrame,
+                ImGui::GetTime() - state.lastRequestTime))
         {
-            FinishDeferredDropdownPopupTransition();
+            return false;
         }
-
         DeferredUiActionQueue<ImGuiID, DeferredDropdownUiPayload> actions =
             std::move(state.actions);
         state = {};
@@ -8769,6 +9614,13 @@ private:
             : ImGui::GetFont();
     }
 
+    ImFont* GetActiveUiHeaderFont()
+    {
+        return m_HeaderFont && m_HeaderFont->GetScaledFont()
+            ? m_HeaderFont->GetScaledFont()
+            : GetActiveUiFont();
+    }
+
     void ApplyActiveUiWordSpacing()
     {
         ApplyWordSpacing(
@@ -8782,6 +9634,22 @@ private:
         ApplyWordSpacing(
             m_AdjustedSpaceFontBakedId,
             m_BaseSpaceAdvance,
+            false);
+    }
+
+    void ApplyActiveUiHeaderWordSpacing()
+    {
+        ApplyWordSpacing(
+            m_AdjustedHeaderSpaceFontBakedId,
+            m_BaseHeaderSpaceAdvance,
+            GetUiSkinBehavior(m_ComposedUiSkin).expandedWordSpacing);
+    }
+
+    void RestoreActiveUiHeaderWordSpacing()
+    {
+        ApplyWordSpacing(
+            m_AdjustedHeaderSpaceFontBakedId,
+            m_BaseHeaderSpaceAdvance,
             false);
     }
 
@@ -9014,6 +9882,113 @@ private:
         }
         current = candidate;
         value = FormatCommandFloat3(current);
+        return true;
+    }
+
+    static std::string FormatCommandUiColorRgb(
+        const UiRgbaColor& color)
+    {
+        return FormatCommandFloat(color.red) + " " +
+            FormatCommandFloat(color.green) + " " +
+            FormatCommandFloat(color.blue);
+    }
+
+    static std::string FormatCommandUiColorRgba(
+        const UiRgbaColor& color)
+    {
+        return FormatCommandUiColorRgb(color) + " " +
+            FormatCommandFloat(color.alpha);
+    }
+
+    static bool ApplyCommandUiColorRgb(
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string_view path,
+        UiRgbaColor& current,
+        const UiRgbaColor& defaultValue,
+        std::string& value,
+        std::string& error)
+    {
+        UiRgbaColor candidate = current;
+        if (operation == CommandValueOperation::Set)
+        {
+            if (arguments.size() != 3u ||
+                !TryParseCommandFloat(arguments[0], candidate.red) ||
+                !TryParseCommandFloat(arguments[1], candidate.green) ||
+                !TryParseCommandFloat(arguments[2], candidate.blue) ||
+                candidate.red < 0.f || candidate.red > 1.f ||
+                candidate.green < 0.f || candidate.green > 1.f ||
+                candidate.blue < 0.f || candidate.blue > 1.f)
+            {
+                error = std::string(path) +
+                    " expects three finite numbers from 0.000 through "
+                    "1.000.";
+                return false;
+            }
+        }
+        else if (operation == CommandValueOperation::Reset)
+        {
+            candidate = defaultValue;
+        }
+        else if (operation == CommandValueOperation::Toggle)
+        {
+            error = std::string(path) + " is not boolean.";
+            return false;
+        }
+        if (operation != CommandValueOperation::Get &&
+            candidate == current)
+        {
+            return RejectUnchangedCommandMutation(path, error);
+        }
+        current = candidate;
+        value = FormatCommandUiColorRgb(current);
+        return true;
+    }
+
+    static bool ApplyCommandUiColorRgba(
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string_view path,
+        UiRgbaColor& current,
+        const UiRgbaColor& defaultValue,
+        std::string& value,
+        std::string& error)
+    {
+        UiRgbaColor candidate = current;
+        if (operation == CommandValueOperation::Set)
+        {
+            if (arguments.size() != 4u ||
+                !TryParseCommandFloat(arguments[0], candidate.red) ||
+                !TryParseCommandFloat(arguments[1], candidate.green) ||
+                !TryParseCommandFloat(arguments[2], candidate.blue) ||
+                !TryParseCommandFloat(arguments[3], candidate.alpha) ||
+                candidate.red < 0.f || candidate.red > 1.f ||
+                candidate.green < 0.f || candidate.green > 1.f ||
+                candidate.blue < 0.f || candidate.blue > 1.f ||
+                candidate.alpha < 0.f || candidate.alpha > 1.f)
+            {
+                error = std::string(path) +
+                    " expects four finite numbers from 0.000 through "
+                    "1.000.";
+                return false;
+            }
+        }
+        else if (operation == CommandValueOperation::Reset)
+        {
+            candidate = defaultValue;
+        }
+        else if (operation == CommandValueOperation::Toggle)
+        {
+            error = std::string(path) + " is not boolean.";
+            return false;
+        }
+        if (operation != CommandValueOperation::Get &&
+            candidate == current)
+        {
+            return RejectUnchangedCommandMutation(path, error);
+        }
+        current = candidate;
+        value = FormatCommandUiColorRgba(current);
         return true;
     }
 
@@ -9365,9 +10340,10 @@ private:
         if (path == "ui.skin")
         {
             static constexpr std::array<
-                std::pair<std::string_view, UiSkin>, 2> Options = {{
+                std::pair<std::string_view, UiSkin>, 3> Options = {{
                 { "amp", UiSkin::Amp },
-                { "og", UiSkin::Og }
+                { "og", UiSkin::Og },
+                { "ogg", UiSkin::Og }
             }};
             return ApplyCommandEnum(
                 operation,
@@ -9376,6 +10352,124 @@ private:
                 m_ui.Skin,
                 DefaultUiSkin,
                 Options,
+                value,
+                error);
+        }
+        if (path == "ui.animations")
+        {
+            return ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                m_ui.AnimationsEnabled,
+                true,
+                value,
+                error);
+        }
+        if (path == "ui.accent.main")
+        {
+            UiSkinPalette* palette =
+                FindUiSkinPalette(m_ui.Accents, m_ui.Skin);
+            const UiSkinPalette* defaultPalette =
+                FindDefaultUiSkinPalette(m_ui.Skin);
+            if (!palette || !defaultPalette)
+            {
+                error =
+                    "ui.accent.main is unavailable while Ogg owns stock "
+                    "ImGui colors.";
+                return false;
+            }
+            return ApplyCommandUiColorRgb(
+                operation,
+                arguments,
+                path,
+                palette->primaryAccent,
+                defaultPalette->primaryAccent,
+                value,
+                error);
+        }
+        if (path == "ui.accent.negative")
+        {
+            return ApplyCommandUiColorRgb(
+                operation,
+                arguments,
+                path,
+                m_ui.Accents.secondaryAccent,
+                DefaultUiSecondaryAccent,
+                value,
+                error);
+        }
+        if (path == "ui.accent.positive")
+        {
+            return ApplyCommandUiColorRgb(
+                operation,
+                arguments,
+                path,
+                m_ui.Accents.tertiaryAccent,
+                DefaultUiTertiaryAccent,
+                value,
+                error);
+        }
+        if (path == "ui.accent.secondary")
+        {
+            return ApplyCommandUiColorRgba(
+                operation,
+                arguments,
+                path,
+                m_ui.Accents.secondaryAccent,
+                DefaultUiSecondaryAccent,
+                value,
+                error);
+        }
+        if (path == "ui.accent.tertiary")
+        {
+            return ApplyCommandUiColorRgba(
+                operation,
+                arguments,
+                path,
+                m_ui.Accents.tertiaryAccent,
+                DefaultUiTertiaryAccent,
+                value,
+                error);
+        }
+        if (path == "ui.accent.primary" ||
+            path == "ui.accent.font" ||
+            path == "ui.accent.primary-background")
+        {
+            UiSkinPalette* palette =
+                FindUiSkinPalette(m_ui.Accents, m_ui.Skin);
+            const UiSkinPalette* defaultPalette =
+                FindDefaultUiSkinPalette(m_ui.Skin);
+            if (!palette || !defaultPalette)
+            {
+                error = std::string(path) +
+                    " is unavailable while Ogg owns stock ImGui colors.";
+                return false;
+            }
+
+            UiRgbaColor* current = nullptr;
+            const UiRgbaColor* defaultValue = nullptr;
+            if (path == "ui.accent.primary")
+            {
+                current = &palette->primaryAccent;
+                defaultValue = &defaultPalette->primaryAccent;
+            }
+            else if (path == "ui.accent.font")
+            {
+                current = &palette->fontColor;
+                defaultValue = &defaultPalette->fontColor;
+            }
+            else
+            {
+                current = &palette->primaryBackground;
+                defaultValue = &defaultPalette->primaryBackground;
+            }
+            return ApplyCommandUiColorRgba(
+                operation,
+                arguments,
+                path,
+                *current,
+                *defaultValue,
                 value,
                 error);
         }
@@ -9434,18 +10528,38 @@ private:
         }
         if (path == "material-editor.visible")
         {
-            return ApplyCommandBool(
-                operation,
-                arguments,
-                path,
-                m_ui.ShowMaterialEditor,
-                false,
-                value,
-                error);
+            bool candidate = m_ui.ShowMaterialDrawer;
+            if (!ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate,
+                    false,
+                    value,
+                    error))
+            {
+                return false;
+            }
+            if (operation != CommandValueOperation::Get)
+                RequestMaterialDrawerVisible(candidate, candidate);
+            return true;
         }
         error = "Internal UI command binding is missing for '" +
             std::string(path) + "'.";
         return false;
+    }
+
+    void RequestMaterialDrawerVisible(
+        bool visible,
+        bool refreshSelection = true)
+    {
+        m_app->SetMaterialDrawerVisible(visible, refreshSelection);
+        m_MaterialRevealRequested = visible;
+        if (visible)
+        {
+            m_SettingsCollapsedRequest = false;
+            m_SettingsCollapsed = false;
+        }
     }
 
     const GpuAdapterChoice* GetActiveGpuAdapterChoice() const
@@ -9486,6 +10600,23 @@ private:
         m_ui.AdaptiveSync = mode;
         GetDeviceManager()->SetPresentAllowTearing(
             AdaptiveSyncRequestsPresentTearing(mode));
+    }
+
+    void ResetAllSettingsToFactoryDefaults()
+    {
+        // Renderer defaults own the rendering passes and Pixel Zoom. Restore
+        // the session-owned Interface and Performance settings here rather
+        // than replacing UIData, which would also erase the active adapter,
+        // scene-independent navigation state, and pending capture state.
+        m_app->ResetAllRendererSettings();
+        ApplyAdaptiveSyncMode(GetDefaultAdaptiveSyncMode());
+        m_ui.Skin = DefaultUiSkin;
+        m_ui.AnimationsEnabled = true;
+        m_ui.Accents = UiAccentSettings{};
+        m_StatisticsEffect =
+            static_cast<int>(StatisticsEffect::CompleteRenderer);
+        m_PerformanceCollapsedRequest = true;
+        ImGui::CloseUvsrColorPickerPopup();
     }
 
     bool DispatchGeneralCommandValue(
@@ -9627,7 +10758,7 @@ private:
         }
         if (path == "camera.location")
         {
-            if (!m_app->HasSponzaCameraLocations())
+            if (!m_app->HasCameraLocations())
             {
                 error =
                     "The current scene does not provide stored camera "
@@ -9644,7 +10775,7 @@ private:
                     }
                 }};
             SponzaCameraLocation candidate =
-                m_app->GetSponzaCameraLocation();
+                m_app->GetCameraLocation();
             if (!ApplyCommandEnum(
                     operation,
                     arguments,
@@ -9658,7 +10789,7 @@ private:
                 return false;
             }
             if (operation != CommandValueOperation::Get)
-                m_app->SetSponzaCameraLocation(candidate);
+                m_app->SetCameraLocation(candidate);
             return true;
         }
         if (path == "scene.current")
@@ -12979,7 +14110,7 @@ private:
         }
         if (action == "reset-settings")
         {
-            m_app->ResetAllRendererSettings();
+            ResetAllSettingsToFactoryDefaults();
             value = "restored";
             return true;
         }
@@ -13184,9 +14315,8 @@ private:
             if (topic == "skins")
             {
                 SetCommandResult(
-                    "Skins: Amp is the animated UVSR interface; OG is "
-                    "stock ImGui with UI animations disabled. "
-                    "Use /skin [amp|og].");
+                    "Skins: Amp is the animated UVSR interface; Ogg is stock "
+                    "ImGui with UI animations disabled. Use /skin [amp|ogg].");
             }
             else if (topic == "settings")
             {
@@ -13594,22 +14724,13 @@ private:
     {
         const bool commandMotionEnabled =
             ImGui::IsUvsrUiMotionEnabled();
-        m_CommandAppearance = commandMotionEnabled
-            ? AdvancePixelZoomVisibility(
-                m_CommandAppearance,
-                m_CommandOpen,
-                ImGui::GetIO().DeltaTime)
-            : m_CommandOpen ? 1.f : 0.f;
         if (!m_CommandOpen && m_CommandAppearance <= 0.f)
             return;
         const float commandAppearanceOpacity =
             commandMotionEnabled
                 ? SmoothPixelZoomVisibility(m_CommandAppearance)
                 : m_CommandAppearance;
-        const float commandAppearanceScale =
-            PixelZoomMinimumWindowScale +
-            (1.f - PixelZoomMinimumWindowScale) *
-                commandAppearanceOpacity;
+        const float commandAppearanceScale = commandAppearanceOpacity;
 
         const CommandInterfaceLayout& commandLayout =
             m_CommandLayout;
@@ -13636,7 +14757,10 @@ private:
 
         ImGui::PushFont(GetActiveUiFont());
         ApplyActiveUiWordSpacing();
-        PushPanelBodySurface();
+        // The command shell shares the compact Performance body's opaque
+        // surface. Its existing whole-window appearance transform still owns
+        // entry and exit opacity, so no other panel is affected.
+        PushOpaquePanelBodySurface();
 
         ImGui::SetNextWindowPos(
             ImVec2(
@@ -13771,14 +14895,17 @@ private:
             ImGui::GetWindowSize();
         const float commandWindowBottom =
             commandWindowPosition.y + commandWindowSize.y;
+        const ImVec2 commandAppearancePivot(
+            commandWindowPosition.x + commandWindowSize.x * 0.5f,
+            commandWindowBottom);
         UiBackdropRect& commandBackdrop =
             m_ui.BackdropRects[UiCommandBackdropIndex];
         CaptureCurrentWindowBackdrop(
             commandBackdrop,
             ImGui::GetStyle().WindowRounding);
-        ApplyCommandBackdropAppearance(
+        ApplyBackdropAppearance(
             commandBackdrop,
-            commandWindowBottom,
+            commandAppearancePivot,
             commandAppearanceScale,
             commandAppearanceOpacity);
         commandBackdrop.shadowBlur =
@@ -13791,340 +14918,1250 @@ private:
         ImGui::PopStyleColor();
         RestoreActiveUiWordSpacing();
         ImGui::PopFont();
-        ApplyCommandWindowAppearance(
+        ApplyWindowAppearance(
             commandWindowDrawList,
-            commandWindowBottom,
+            commandAppearancePivot,
             commandAppearanceScale,
             commandAppearanceOpacity);
     }
 
-    void DrawMaterialInspector(
-        int width,
-        int height,
-        bool uiMotionEnabled,
-        const ImGuiStyle& style)
+    void DrawPerformancePanelContents(
+        float settingsControlWidth,
+        const std::string& performanceLine)
     {
-        if (!IsMaterialInspectorPresentationActive(
-                m_ui.ShowMaterialEditor,
-                m_MaterialInspectorAppearance))
-        {
-            return;
-        }
+        ImGui::PushItemWidth(settingsControlWidth);
 
-        const bool zoomPresentationActive =
-            IsPixelZoomEnabled(m_RenderedPixelZoom) &&
-            m_PixelZoomVisibility > 0.f;
-        const float zoomPresentationOpacity =
-            uiMotionEnabled
-                ? SmoothPixelZoomVisibility(
-                    m_PixelZoomVisibility)
-                : m_PixelZoomVisibility;
-        const float zoomLevelTransitionScale =
-            uiMotionEnabled
-                ? ResolvePixelZoomLevelTransitionScale(
-                    m_PixelZoomLevelTransition)
-                : 1.f;
-        const float materialAppearanceOpacity =
-            uiMotionEnabled
-                ? SmoothPixelZoomVisibility(
-                    m_MaterialInspectorAppearance)
-                : m_MaterialInspectorAppearance;
-        const float materialAppearanceScale =
-            PixelZoomMinimumWindowScale +
-            (1.f - PixelZoomMinimumWindowScale) *
-                materialAppearanceOpacity;
+            const float summaryCursorX = ImGui::GetCursorPosX();
+            ImGui::SetCursorPosX(
+                summaryCursorX + g_UiSpacingTokens.tight);
 
-        const MaterialInspectorLayout layout =
-            ResolveMaterialInspectorLayout(
-                uint32_t(std::max(0, width)),
-                uint32_t(std::max(0, height)),
-                m_SettingsPanelMarginPixels,
-                m_MaterialInspectorZoomPlacement,
-                zoomPresentationActive,
-                zoomPresentationOpacity,
-                zoomLevelTransitionScale);
-        if (layout.panelWidth < style.WindowMinSize.x ||
-            layout.panelMaxHeight < style.WindowMinSize.y)
-        {
-            m_ui.ShowMaterialEditor = false;
-            m_MaterialInspectorAppearance = 0.f;
-            return;
-        }
-
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(
-            ImVec2(
-                viewport->Pos.x + layout.panelMinX,
-                viewport->Pos.y + layout.panelMinY),
-            ImGuiCond_Always);
-        ImGui::SetNextWindowSizeConstraints(
-            ImVec2(layout.panelWidth, 0.f),
-            ImVec2(layout.panelWidth, layout.panelMaxHeight));
-        PushPanelBodySurface();
-        ImGui::PushStyleColor(
-            ImGuiCol_TitleBg,
-            g_UiVisualTokens.settingsTitleSurface);
-        ImGui::PushStyleColor(
-            ImGuiCol_TitleBgActive,
-            g_UiVisualTokens.settingsTitleSurface);
-        ImGui::PushStyleColor(
-            ImGuiCol_TitleBgCollapsed,
-            g_UiVisualTokens.settingsTitleSurface);
-        ImGuiWindowFlags materialWindowFlags =
-            ImGuiWindowFlags_AlwaysAutoResize |
-            ImGuiWindowFlags_NoSavedSettings;
-        if (!m_ui.ShowMaterialEditor ||
-            m_MaterialInspectorAppearance < 1.f)
-        {
-            materialWindowFlags |= ImGuiWindowFlags_NoInputs;
-        }
-        const bool materialEditorVisible = ImGui::Begin(
-            "Materials",
-            nullptr,
-            materialWindowFlags);
-        ImGuiWindow* materialEditorWindow =
-            ImGui::GetCurrentWindow();
-        if (materialEditorWindow->WantCollapseToggle)
-        {
-            // The title triangle is the Materials panel close control. Consume
-            // ImGui's deferred native collapse request in the click frame so
-            // the complete body remains submitted while Amp's retained
-            // zoom-and-fade close presentation begins.
-            materialEditorWindow->WantCollapseToggle = false;
-            materialEditorWindow->Collapsed = false;
-            m_ui.ShowMaterialEditor = false;
-        }
-        ImDrawList* materialWindowDrawList =
-            ImGui::GetWindowDrawList();
-        const bool deferredMaterialInputBlocked =
-            HasDeferredDropdownUiActions();
-        if (deferredMaterialInputBlocked)
-        {
-            ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);
-            ImGui::BeginDisabled();
-        }
-        ImDrawList* materialControlsDrawList = nullptr;
-
-        if (materialEditorVisible)
-        {
-            auto material = m_ui.SelectedMaterial;
-            if (material)
+            const char* performanceTooltip =
+                "tris counts frustum-culled triangle instances submitted by "
+                "the main geometry pass; occluded, back-facing, and "
+                "alpha-discarded triangles can still be included.";
+            if (m_ComposedUiSkin == UiSkin::Og)
             {
-                ImGui::Text(
-                    "Material %d: %s",
-                    material->materialID,
-                    material->name.c_str());
-
-                static constexpr const char* MaterialDomainLabels[] = {
-                    "Opaque",
-                    "Alpha-tested",
-                    "Alpha-blended",
-                    "Transmissive",
-                    "Transmissive alpha-tested",
-                    "Transmissive alpha-blended"
-                };
-                static_assert(
-                    std::size(MaterialDomainLabels) ==
-                    size_t(MaterialDomain::Count));
-                const int materialDomainIndex = std::clamp(
-                    int(material->domain),
-                    0,
-                    int(MaterialDomain::Count) - 1);
-                const float materialControlWidth =
-                    ImGui::CalcItemWidth();
-                ImGui::SetNextItemWidth(materialControlWidth);
-                ImGui::PushID(material->materialID);
-                if (BeginRoundedCombo(
-                        "Material Domain",
-                        MaterialDomainLabels[materialDomainIndex]))
-                {
-                    for (int index = 0;
-                        index < int(MaterialDomain::Count);
-                        ++index)
-                    {
-                        const MaterialDomain candidate =
-                            MaterialDomain(index);
-                        DrawDeferredDropdownOption(
-                            MaterialDomainLabels[index],
-                            MaterialDomainLabels[index],
-                            material->domain == candidate,
-                            [app = m_app, material, candidate]()
-                            {
-                                material->domain = candidate;
-                                app->NotifyMaterialCommandChanged(material);
-                            });
-                    }
-                    ImGui::EndCombo();
-                }
-                ImGui::SetItemTooltip(
-                    "Choose how the selected surface is rendered.");
-                ImGui::PopID();
-
-                ImGui::PushStyleColor(
-                    ImGuiCol_ChildBg,
-                    g_UiVisualTokens.drawerBackground);
-                ImGui::PushStyleColor(
-                    ImGuiCol_FrameBg,
-                    g_UiVisualTokens.drawerFrame);
-                ImGui::PushStyleColor(
-                    ImGuiCol_FrameBgHovered,
-                    g_UiVisualTokens.drawerFrameHovered);
-                ImGui::PushStyleColor(
-                    ImGuiCol_FrameBgActive,
-                    g_UiVisualTokens.drawerFrameActive);
-                ImGui::PushStyleVar(
-                    ImGuiStyleVar_WindowPadding,
-                    ImVec2(style.FramePadding.x, style.ItemSpacing.y));
-                ImGui::PushStyleVar(
-                    ImGuiStyleVar_ChildRounding,
-                    g_UiVisualTokens.drawerRounding);
-                const bool materialControlsVisible =
-                    ImGui::BeginChild(
-                        "##MaterialControlsBody",
-                        ImVec2(0.f, 0.f),
-                        ImGuiChildFlags_AlwaysUseWindowPadding |
-                            ImGuiChildFlags_AutoResizeY |
-                            ImGuiChildFlags_AlwaysAutoResize,
-                        ImGuiWindowFlags_NoScrollbar |
-                            ImGuiWindowFlags_NoScrollWithMouse);
-                materialControlsDrawList =
-                    ImGui::GetWindowDrawList();
-                if (materialControlsVisible)
-                {
-                    ImGui::PushItemWidth(materialControlWidth);
-                    const bool materialChanged =
-                        donut::app::MaterialEditor(
-                            material.get(),
-                            false,
-                            false);
-                    if (materialChanged)
-                        m_app->NotifyMaterialCommandChanged(material);
-                    ImGui::PopItemWidth();
-                }
-                ImGui::EndChild();
-                ImGui::PopStyleVar(2);
-                ImGui::PopStyleColor(4);
+                const std::array<std::string, 2> ogPerformanceLines =
+                    BuildOgPerformanceLines(m_PerformanceStatValues);
+                ImGui::TextUnformatted(ogPerformanceLines[0].c_str());
+                ImGui::SetItemTooltip("%s", performanceTooltip);
+                ImGui::TextUnformatted(ogPerformanceLines[1].c_str());
+                ImGui::SetItemTooltip("%s", performanceTooltip);
             }
             else
             {
-                ImGui::TextDisabled(
-                    "Aim the center crosshair at an editable surface and press M.");
+                ImGui::TextUnformatted(performanceLine.c_str());
+                ImGui::SetItemTooltip("%s", performanceTooltip);
+            }
+            ImGui::SetCursorPosX(summaryCursorX);
+
+            static constexpr const char* StatisticsEffectLabels[] = {
+                "Complete Renderer",
+                "Scene Setup",
+                "Geometry",
+                "Direct Lighting",
+                "Screen Space Visibility",
+                "Directional Shadows",
+                "Temporal Reconstructive",
+                "Fast Approximate",
+                "Conservative Morphological",
+                "Multisample Adaptive",
+                "Material Picking",
+                "Environment Background",
+                "Tone Mapping",
+                "Output Blit"
+            };
+            static_assert(
+                std::size(StatisticsEffectLabels) ==
+                static_cast<size_t>(StatisticsEffect::Count));
+            m_StatisticsEffect = std::clamp(
+                m_StatisticsEffect,
+                0,
+                static_cast<int>(StatisticsEffect::Count) - 1);
+            if (BeginRoundedCombo(
+                    "##StatisticsEffect",
+                    StatisticsEffectLabels[m_StatisticsEffect]))
+            {
+                for (int index = 0;
+                    index < static_cast<int>(
+                        std::size(StatisticsEffectLabels));
+                    ++index)
+                {
+                    DrawDeferredDropdownOption(
+                        StatisticsEffectLabels[index],
+                        StatisticsEffectLabels[index],
+                        m_StatisticsEffect == index,
+                        [selected = &m_StatisticsEffect, index]()
+                        {
+                            *selected = index;
+                        });
+                    if (m_StatisticsEffect == index)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip(
+                "Choose the renderer timings shown below.");
+            const StatisticsEffect selectedEffect =
+                static_cast<StatisticsEffect>(m_StatisticsEffect);
+
+            const RendererTimings& timings =
+                m_app->GetRendererTimings();
+            static constexpr ImGuiTableFlags StatisticsTableFlags =
+                ImGuiTableFlags_BordersInnerH |
+                ImGuiTableFlags_RowBg |
+                ImGuiTableFlags_SizingStretchProp;
+            const auto beginStatisticsTable =
+                [](const char* identifier, const char* firstColumn)
+            {
+                if (!ImGui::BeginTable(
+                        identifier,
+                        2,
+                        StatisticsTableFlags))
+                    return false;
+                ImGui::TableSetupColumn(
+                    firstColumn,
+                    ImGuiTableColumnFlags_WidthStretch,
+                    3.f);
+                ImGui::TableSetupColumn(
+                    "Current",
+                    ImGuiTableColumnFlags_WidthStretch,
+                    1.35f);
+                ImGui::TableHeadersRow();
+                return true;
+            };
+            const auto beginStatisticsRow =
+                [](const char* label, bool available)
+            {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                if (available)
+                    ImGui::TextUnformatted(label);
+                else
+                    ImGui::TextDisabled("%s", label);
+                ImGui::TableSetColumnIndex(1);
+            };
+            const auto drawMilliseconds =
+                [&beginStatisticsRow](
+                    const char* label, double value, bool available)
+            {
+                beginStatisticsRow(label, available);
+                if (available)
+                    ImGui::Text("%.3f ms", value);
+                else
+                    ImGui::TextDisabled("--");
+            };
+            const auto drawCount =
+                [&beginStatisticsRow](
+                    const char* label, uint64_t value, bool available)
+            {
+                beginStatisticsRow(label, available);
+                if (available)
+                    ImGui::Text("%llu", static_cast<unsigned long long>(value));
+                else
+                    ImGui::TextDisabled("--");
+            };
+            const auto drawMemory =
+                [&beginStatisticsRow](
+                    const char* label, uint64_t bytes, bool available)
+            {
+                beginStatisticsRow(label, available);
+                if (available)
+                {
+                    constexpr double BytesPerMebibyte = 1024.0 * 1024.0;
+                    ImGui::Text(
+                        "%.2f MiB",
+                        double(bytes) / BytesPerMebibyte);
+                }
+                else
+                    ImGui::TextDisabled("--");
+            };
+            const auto drawText =
+                [&beginStatisticsRow](
+                    const char* label, const char* value, bool available)
+            {
+                beginStatisticsRow(label, available);
+                if (available)
+                    ImGui::TextUnformatted(value);
+                else
+                    ImGui::TextDisabled("--");
+            };
+            const auto drawRendererTiming =
+                [this, &timings, &drawMilliseconds](
+                    const char* label, RendererTimingStage stage)
+            {
+                const bool available =
+                    m_app->IsRendererStageActiveThisFrame(stage) &&
+                    timings.IsAvailable(stage);
+                drawMilliseconds(label, timings.Get(stage), available);
+            };
+            const auto drawScreenSpaceVisibilityTiming =
+                [this, &drawMilliseconds](const char* label)
+            {
+                const bool available =
+                    m_HasVisibilityStatSnapshot &&
+                    m_DisplayedVisibilityTimings.active &&
+                    m_DisplayedVisibilityTimings.available;
+                drawMilliseconds(
+                    label,
+                    m_DisplayedVisibilityTimings.CompleteEffectMs(),
+                    available);
+            };
+            const auto drawSelectedRendererTable =
+                [&beginStatisticsTable, &drawRendererTiming](
+                    const char* label, RendererTimingStage stage)
+            {
+                if (!beginStatisticsTable(
+                        "##SelectedRendererStatistics", "Graphics Stage"))
+                    return;
+                drawRendererTiming(label, stage);
+                drawRendererTiming(
+                    "Complete Renderer Frame",
+                    RendererTimingStage::CompleteFrame);
+                ImGui::EndTable();
+            };
+
+            switch (selectedEffect)
+            {
+            case StatisticsEffect::CompleteRenderer:
+                if (beginStatisticsTable(
+                        "##CompleteRendererStatistics", "Graphics Stage"))
+                {
+                    static constexpr std::pair<
+                        const char*, RendererTimingStage> CompleteRows[] = {
+                        { "Complete Renderer Frame",
+                            RendererTimingStage::CompleteFrame },
+                        { "Scene Setup and Clears",
+                            RendererTimingStage::SceneSetup },
+                        { "Geometry", RendererTimingStage::Geometry },
+                        { "Closest Surface Resolve",
+                            RendererTimingStage::MultisampleResolve },
+                        { "Shadow Ray Dispatch",
+                            RendererTimingStage::ShadowRayDispatch },
+                        { "Shadow Denoise",
+                            RendererTimingStage::ShadowDenoise },
+                        { "Sky Visibility Ray Dispatch",
+                            RendererTimingStage::SkyVisibilityRayDispatch },
+                        { "Sky Visibility Denoise",
+                            RendererTimingStage::SkyVisibilityDenoise },
+                        { "Direct Lighting",
+                            RendererTimingStage::DirectLighting },
+                        { "Visibility Lighting Preparation",
+                            RendererTimingStage::VisibilityLightingPreparation },
+                        { "Screen Space Visibility",
+                            RendererTimingStage::ScreenSpaceVisibility },
+                        { "Ambient Occlusion Denoise",
+                            RendererTimingStage::AmbientOcclusionDenoise },
+                        { "Diffuse Illumination Denoise",
+                            RendererTimingStage::DiffuseIlluminationDenoise },
+                        { "Material Picking",
+                            RendererTimingStage::MaterialPicking },
+                        { "Environment Background",
+                            RendererTimingStage::EnvironmentBackground },
+                        { "Auto Exposure",
+                            RendererTimingStage::AutoExposure },
+                        { "Tone Mapping", RendererTimingStage::ToneMapping },
+                        { "Fast Approximate",
+                            RendererTimingStage::FastApproximate },
+                        { "Output Blit", RendererTimingStage::OutputBlit }
+                    };
+                    static_assert(
+                        std::size(CompleteRows) ==
+                        static_cast<size_t>(RendererTimingStage::Count));
+                    for (const auto& [label, stage] : CompleteRows)
+                    {
+                        if (stage ==
+                            RendererTimingStage::ScreenSpaceVisibility)
+                        {
+                            drawScreenSpaceVisibilityTiming(label);
+                        }
+                        else
+                            drawRendererTiming(label, stage);
+                    }
+                    ImGui::EndTable();
+                }
+                break;
+            case StatisticsEffect::SceneSetup:
+                drawSelectedRendererTable(
+                    "Scene Setup", RendererTimingStage::SceneSetup);
+                break;
+            case StatisticsEffect::Geometry:
+                drawSelectedRendererTable(
+                    "Geometry", RendererTimingStage::Geometry);
+                break;
+            case StatisticsEffect::DirectLighting:
+                if (beginStatisticsTable(
+                        "##DirectLightingStatistics", "Lighting Stage"))
+                {
+                    drawRendererTiming(
+                        "Direct Lighting",
+                        RendererTimingStage::DirectLighting);
+                    drawRendererTiming(
+                        "Visibility Lighting Preparation",
+                        RendererTimingStage::VisibilityLightingPreparation);
+                    drawRendererTiming(
+                        "Complete Renderer Frame",
+                        RendererTimingStage::CompleteFrame);
+                    ImGui::EndTable();
+                }
+                break;
+            case StatisticsEffect::Visibility:
+                if (beginStatisticsTable(
+                        "##VisibilityStatistics", "Visibility Metric"))
+                {
+                    const ScreenSpaceVisibilityTimings& visibility =
+                        m_DisplayedVisibilityTimings;
+                    const bool available = m_HasVisibilityStatSnapshot;
+                    drawMilliseconds(
+                        "Complete Effect",
+                        visibility.CompleteEffectMs(),
+                        available);
+                    drawMilliseconds(
+                        "First Trace", visibility.firstTraceMs, available);
+                    drawMilliseconds(
+                        "Reconstruction",
+                        visibility.reconstructionMs,
+                        available);
+                    drawMilliseconds(
+                        "Composition", visibility.compositionMs, available);
+                    drawMemory(
+                        "Output Texture Memory",
+                        visibility.outputTextureBytes,
+                        available);
+                    drawMemory(
+                        "Working Texture Memory",
+                        visibility.workingTextureBytes,
+                        available);
+                    drawRendererTiming(
+                        "Ambient Occlusion Denoise",
+                        RendererTimingStage::AmbientOcclusionDenoise);
+                    drawRendererTiming(
+                        "Diffuse Illumination Denoise",
+                        RendererTimingStage::DiffuseIlluminationDenoise);
+                    drawCount(
+                        "Dispatches",
+                        visibility.activeDispatchCount,
+                        available);
+                    drawCount(
+                        "Read Resources",
+                        visibility.activeSrvCount,
+                        available);
+                    drawCount(
+                        "Write Resources",
+                        visibility.activeUavCount,
+                        available);
+                    drawRendererTiming(
+                        "Complete Renderer Frame",
+                        RendererTimingStage::CompleteFrame);
+                    ImGui::EndTable();
+                }
+                break;
+            case StatisticsEffect::Shadows:
+                if (beginStatisticsTable(
+                        "##ShadowStatistics", "Shadow Metric"))
+                {
+                    drawRendererTiming(
+                        "Shadow Ray Dispatch",
+                        RendererTimingStage::ShadowRayDispatch);
+                    drawRendererTiming(
+                        "Shadow Denoise",
+                        RendererTimingStage::ShadowDenoise);
+                    drawRendererTiming(
+                        "Sky Visibility Ray Dispatch",
+                        RendererTimingStage::SkyVisibilityRayDispatch);
+                    drawRendererTiming(
+                        "Sky Visibility Denoise",
+                        RendererTimingStage::SkyVisibilityDenoise);
+                    drawRendererTiming(
+                        "Complete Renderer Frame",
+                        RendererTimingStage::CompleteFrame);
+                    ImGui::EndTable();
+                }
+                break;
+            case StatisticsEffect::TemporalReconstructive:
+                if (beginStatisticsTable(
+                        "##TemporalStatistics", "Temporal Metric"))
+                {
+                    const TemporalAATimings& temporal =
+                        m_DisplayedTemporalAATimings;
+                    const bool available =
+                        m_ui.AntiAliasing.temporal.enabled &&
+                        m_HasTemporalAAStatSnapshot;
+                    drawMilliseconds(
+                        "Complete Effect",
+                        temporal.CompleteEffectMilliseconds(),
+                        available);
+                    drawMilliseconds(
+                        "History Blend",
+                        temporal.blendMilliseconds,
+                        available);
+                    drawMilliseconds(
+                        "Output",
+                        temporal.outputMilliseconds,
+                        available);
+                    drawMilliseconds(
+                        "Presentation Sharpen",
+                        temporal.presentationSharpenMilliseconds,
+                        available);
+                    drawMemory(
+                        "Active History Memory",
+                        temporal.activeHistoryTextureBytes,
+                        available);
+                    drawMemory(
+                        "Resident History Memory",
+                        temporal.residentHistoryTextureBytes,
+                        available);
+                    drawMemory(
+                        "Full-Quality History Memory",
+                        temporal.robustHistoryTextureBytes,
+                        available);
+                    drawMemory(
+                        "Minimum-Cost History Memory",
+                        temporal.minimumHistoryTextureBytes,
+                        available);
+                    drawText(
+                        "Effective Cost",
+                        GetTemporalAaCostModeLabel(
+                            temporal.effectiveCostMode),
+                        available);
+                    beginStatisticsRow(
+                        "Minimum History Formats", available);
+                    if (!available)
+                        ImGui::TextDisabled("--");
+                    else if (!temporal.minimumPathSupported)
+                        ImGui::TextDisabled("Unsupported");
+                    else
+                    {
+                        ImGui::Text(
+                            "%s + %s",
+                            temporal.minimumColorIsR11G11B10
+                                ? "R11G11B10" : "RGBA16F",
+                            temporal.minimumDepthIsR16
+                                ? "R16F" : "R32F");
+                    }
+                    drawText(
+                        "History Status",
+                        temporal.historyValid ? "Valid" : "Invalid",
+                        available);
+                    drawCount(
+                        "Accumulated Frames",
+                        temporal.accumulationCount,
+                        available);
+                    drawCount(
+                        "History Resets",
+                        temporal.historyResetCount,
+                        available);
+                    drawCount(
+                        "Dispatches", temporal.dispatchCount, available);
+                    drawCount(
+                        "History Color Samples",
+                        temporal.historyColorSamples,
+                        available);
+                    drawCount(
+                        "History Depth Gathers",
+                        temporal.historyDepthGathers,
+                        available);
+                    drawCount(
+                        "History Depth Samples",
+                        temporal.historyDepthSamples,
+                        available);
+                    drawRendererTiming(
+                        "Complete Renderer Frame",
+                        RendererTimingStage::CompleteFrame);
+                    ImGui::EndTable();
+                }
+                break;
+            case StatisticsEffect::FastApproximate:
+                drawSelectedRendererTable(
+                    "Fast Approximate",
+                    RendererTimingStage::FastApproximate);
+                break;
+            case StatisticsEffect::ConservativeMorphological:
+                if (beginStatisticsTable(
+                        "##MorphologicalStatistics", "Morphological Stage"))
+                {
+                    const Cmaa2Timings& morphological =
+                        m_DisplayedCmaa2Timings;
+                    const bool available =
+                        m_ui.AntiAliasing.cmaa2.enabled &&
+                        m_HasCmaa2StatSnapshot;
+                    drawMilliseconds(
+                        "Complete Effect",
+                        morphological.CompleteEffectMilliseconds(),
+                        available);
+                    drawMilliseconds(
+                        "Edge Detection",
+                        morphological.edgeMilliseconds,
+                        available);
+                    drawMilliseconds(
+                        "Candidate Processing",
+                        morphological.candidateMilliseconds,
+                        available);
+                    drawMilliseconds(
+                        "Apply",
+                        morphological.applyMilliseconds,
+                        available);
+                    drawRendererTiming(
+                        "Complete Renderer Frame",
+                        RendererTimingStage::CompleteFrame);
+                    ImGui::EndTable();
+                }
+                break;
+            case StatisticsEffect::Multisample:
+                if (beginStatisticsTable(
+                        "##MultisampleStatistics", "Multisample Metric"))
+                {
+                    const bool enabled = m_ui.AntiAliasing.msaa.enabled;
+                    const uint32_t requestedSamples =
+                        m_ui.AntiAliasing.msaa.sampleCount;
+                    const uint32_t activeSamples =
+                        m_app->GetActiveRasterSampleCount();
+                    const bool active = enabled && activeSamples > 1u;
+                    drawText(
+                        "Status",
+                        active ? "Active" :
+                            enabled ? "Format Unsupported" : "Disabled",
+                        true);
+                    drawCount(
+                        "Requested Samples", requestedSamples, enabled);
+                    drawCount("Active Samples", activeSamples, enabled);
+                    if (active)
+                    {
+                        drawRendererTiming(
+                            "Geometry", RendererTimingStage::Geometry);
+                        drawRendererTiming(
+                            "Direct Lighting",
+                            RendererTimingStage::DirectLighting);
+                        drawRendererTiming(
+                            "Visibility Lighting Preparation",
+                            RendererTimingStage::VisibilityLightingPreparation);
+                        drawRendererTiming(
+                            "Closest Surface Resolve",
+                            RendererTimingStage::MultisampleResolve);
+                    }
+                    else
+                    {
+                        drawMilliseconds("Geometry", 0.0, false);
+                        drawMilliseconds("Direct Lighting", 0.0, false);
+                        drawMilliseconds(
+                            "Visibility Lighting Preparation", 0.0, false);
+                        drawMilliseconds(
+                            "Closest Surface Resolve", 0.0, false);
+                    }
+                    drawRendererTiming(
+                        "Complete Renderer Frame",
+                        RendererTimingStage::CompleteFrame);
+                    ImGui::EndTable();
+                }
+                break;
+            case StatisticsEffect::MaterialPicking:
+                drawSelectedRendererTable(
+                    "Material Picking",
+                    RendererTimingStage::MaterialPicking);
+                break;
+            case StatisticsEffect::EnvironmentBackground:
+                drawSelectedRendererTable(
+                    "Environment Background",
+                    RendererTimingStage::EnvironmentBackground);
+                break;
+            case StatisticsEffect::ToneMapping:
+                if (beginStatisticsTable(
+                        "##ToneMappingStatistics", "Graphics Stage"))
+                {
+                    drawRendererTiming(
+                        "Auto Exposure",
+                        RendererTimingStage::AutoExposure);
+                    drawRendererTiming(
+                        "Tone Mapping",
+                        RendererTimingStage::ToneMapping);
+                    drawRendererTiming(
+                        "Complete Renderer Frame",
+                        RendererTimingStage::CompleteFrame);
+                    ImGui::EndTable();
+                }
+                break;
+            case StatisticsEffect::OutputBlit:
+                drawSelectedRendererTable(
+                    "Output Blit", RendererTimingStage::OutputBlit);
+                break;
+            default:
+                break;
+            }
+
+        ImGui::PopItemWidth();
+    }
+
+    void DrawGeneralDrawer(float settingsControlWidth)
+    {
+        const bool generalOpen = DrawCollapsingHeader(
+            "General",
+            "Show general renderer settings.",
+            ImGuiTreeNodeFlags_DefaultOpen);
+        if (!generalOpen)
+        {
+            ImGui::Spacing();
+            return;
+        }
+
+        BeginDrawerBody("##GeneralBody", settingsControlWidth);
+
+        if (!m_ui.GpuAdapterChoices.empty())
+        {
+            const GpuAdapterChoice* activeAdapter =
+                GetActiveGpuAdapterChoice();
+            const char* activeAdapterName = activeAdapter
+                ? activeAdapter->name.c_str()
+                : "Unknown adapter";
+
+            ImGui::TextUnformatted("Graphics Adapter");
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (BeginRoundedCombo(
+                    "##GraphicsAdapter",
+                    activeAdapterName))
+            {
+                for (const GpuAdapterChoice& adapter :
+                    m_ui.GpuAdapterChoices)
+                {
+                    const bool selected =
+                        adapter.adapterIndex ==
+                        m_ui.ActiveGpuAdapterIndex;
+                    DrawDeferredDropdownOption(
+                        adapter.name.c_str(),
+                        adapter.name.c_str(),
+                        selected,
+                        [this, adapterIndex = adapter.adapterIndex]()
+                        {
+                            g_RestartAdapterIndex = adapterIndex;
+                            g_RestartRequested = true;
+                            glfwSetWindowShouldClose(
+                                GetDeviceManager()->GetWindow(),
+                                GLFW_TRUE);
+                        });
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip(
+                "Choose the graphics processor. UVSR restarts after a "
+                "change.");
+        }
+
+        ImGui::TextUnformatted("Adaptive Sync");
+        if (DrawPresetResetIcon(
+                "Adaptive Sync",
+                m_ui.AdaptiveSync != GetDefaultAdaptiveSyncMode()))
+        {
+            QueueDeferredControlUiAction(
+                [this]()
+                {
+                    ApplyAdaptiveSyncMode(
+                        GetDefaultAdaptiveSyncMode());
+                });
+        }
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (BeginRoundedCombo(
+                "##AdaptiveSync",
+                AdaptiveSyncModeLabel(m_ui.AdaptiveSync).data()))
+        {
+            for (const AdaptiveSyncMode candidate :
+                AdaptiveSyncModeValues)
+            {
+                const bool available =
+                    IsAdaptiveSyncModeAvailableForActiveAdapter(candidate);
+                const bool selected = candidate == m_ui.AdaptiveSync;
+                if (!available)
+                    ImGui::BeginDisabled();
+                DrawDeferredDropdownOption(
+                    AdaptiveSyncModeLabel(candidate).data(),
+                    AdaptiveSyncModeLabel(candidate).data(),
+                    selected,
+                    [this, candidate]()
+                    {
+                        ApplyAdaptiveSyncMode(candidate);
+                    });
+                if (!available)
+                {
+                    ImGui::SetItemTooltip(
+                        GetDeviceManager()->
+                            IsPresentAllowTearingSupported()
+                            ? "Nvidia Exclusive is available only on NVIDIA "
+                                "graphics adapters."
+                            : "This mode requires DXGI tearing-present "
+                                "support on the active system.");
+                    ImGui::EndDisabled();
+                }
+                else
+                {
+                    switch (candidate)
+                    {
+                    case AdaptiveSyncMode::Off:
+                        ImGui::SetItemTooltip(
+                            "Suppress the DXGI Present allow-tearing flag.");
+                        break;
+                    case AdaptiveSyncMode::VendorAgnostic:
+                        ImGui::SetItemTooltip(
+                            "Request the generic Windows variable-refresh "
+                            "presentation path on any compatible adapter.");
+                        break;
+                    case AdaptiveSyncMode::NvidiaExclusive:
+                        ImGui::SetItemTooltip(
+                            "Expose the shared Windows variable-refresh "
+                            "request only when the active adapter is NVIDIA; "
+                            "the driver and display decide whether it engages.");
+                        break;
+                    case AdaptiveSyncMode::Count:
+                        break;
+                    }
+                }
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip(
+            "Control UVSR's windowed DXGI tearing-compatible Present policy. "
+            "VSync remains disabled; both adaptive choices request the same "
+            "Windows path, while Nvidia Exclusive is vendor-gated. Windows, "
+            "the driver, and the display decide whether adaptive refresh "
+            "actually engages, and UVSR cannot confirm it.");
+
+        ImGui::TextUnformatted("Camera Mode");
+        if (DrawPresetResetIcon(
+                "Camera Mode",
+                m_ui.Camera != CameraMode::ThirdPerson))
+        {
+            m_app->SetCameraMode(CameraMode::ThirdPerson);
+        }
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (BeginRoundedCombo(
+                "##Camera",
+                GetCameraModeLabel(m_ui.Camera)))
+        {
+            for (const CameraMode mode : SelectableCameraModes)
+            {
+                const bool selected = mode == m_ui.Camera;
+                DrawDeferredDropdownOption(
+                    GetCameraModeLabel(mode),
+                    GetCameraModeLabel(mode),
+                    selected,
+                    [this, mode]()
+                    {
+                        m_app->SetCameraMode(mode);
+                    });
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip(
+            "Choose Freelook or Locked. Q moves up, E moves down, X/C roll, "
+            "and V levels the roll.");
+
+        if (m_app->HasCameraLocations())
+        {
+            const SponzaCameraLocation location =
+                m_app->GetCameraLocation();
+            ImGui::TextUnformatted("Camera Location");
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            if (BeginRoundedCombo(
+                    "##CameraLocation",
+                    GetSponzaCameraLocationLabel(location)))
+            {
+                for (const SponzaCameraLocation candidate :
+                    SelectableSponzaCameraLocations)
+                {
+                    const bool selected = candidate == location;
+                    DrawDeferredDropdownOption(
+                        GetSponzaCameraLocationLabel(candidate),
+                        GetSponzaCameraLocationLabel(candidate),
+                        selected,
+                        [this, candidate]()
+                        {
+                            m_app->SetCameraLocation(candidate);
+                        });
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
             }
         }
 
-        if (deferredMaterialInputBlocked)
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const std::string currentScene =
+            m_app->GetCurrentSceneName();
+        const std::string currentSceneDisplayName =
+            m_app->GetCurrentSceneDisplayName();
+        const float folderButtonWidth = ImGui::GetFrameHeight();
+        ImGui::TextUnformatted("World Scenes");
+        ImGui::SetNextItemWidth(
+            -(folderButtonWidth + style.ItemSpacing.x));
+        if (BeginRoundedCombo(
+                "##Scene",
+                currentSceneDisplayName.c_str()))
         {
-            ImGui::EndDisabled();
-            ImGui::PopStyleVar();
+            const std::vector<SceneCatalogEntry>& scenes =
+                m_app->GetAvailableScenes();
+            for (const SceneCatalogEntry& scene : scenes)
+            {
+                ImGui::PushID(scene.FileName.c_str());
+                const bool selected =
+                    scene.FileName == currentScene;
+                DrawDeferredDropdownOption(
+                    scene.DisplayName.c_str(),
+                    scene.DisplayName.c_str(),
+                    selected,
+                    [this, sceneName = scene.FileName]()
+                    {
+                        m_app->SetCurrentSceneName(sceneName);
+                    });
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
         }
-        const ImVec2 materialWindowPosition =
-            ImGui::GetWindowPos();
-        const ImVec2 materialWindowSize =
-            ImGui::GetWindowSize();
-        const ImVec2 materialWindowCenter(
-            materialWindowPosition.x + materialWindowSize.x * 0.5f,
-            materialWindowPosition.y + materialWindowSize.y * 0.5f);
-        const float materialTitleHeight =
-            ImGui::GetFontSize() + style.FramePadding.y * 2.f;
-        UiBackdropRect& materialTitleBackdrop =
-            m_ui.BackdropRects[UiMaterialTitleBackdropIndex];
-        materialTitleBackdrop.minX =
-            materialWindowPosition.x + 0.5f;
-        materialTitleBackdrop.minY =
-            materialWindowPosition.y + 0.5f;
-        materialTitleBackdrop.maxX =
-            materialWindowPosition.x + materialWindowSize.x - 0.5f;
-        materialTitleBackdrop.maxY =
-            materialWindowPosition.y + materialTitleHeight - 0.5f;
-        materialTitleBackdrop.rounding = style.FrameRounding;
-        materialTitleBackdrop.visible =
-            materialTitleBackdrop.maxX > materialTitleBackdrop.minX &&
-            materialTitleBackdrop.maxY > materialTitleBackdrop.minY;
+        ImGui::SetItemTooltip("Load a different scene.");
 
-        UiBackdropRect& materialBodyBackdrop =
-            m_ui.BackdropRects[UiMaterialBodyBackdropIndex];
-        materialBodyBackdrop.minX =
-            materialWindowPosition.x + 0.5f;
-        materialBodyBackdrop.minY =
-            materialWindowPosition.y + materialTitleHeight - 1.f;
-        materialBodyBackdrop.maxX =
-            materialWindowPosition.x + materialWindowSize.x - 0.5f;
-        materialBodyBackdrop.maxY =
-            materialWindowPosition.y + materialWindowSize.y - 0.5f;
-        materialBodyBackdrop.rounding = style.WindowRounding;
-        materialBodyBackdrop.visible =
-            !ImGui::IsWindowCollapsed() &&
-            materialBodyBackdrop.maxX > materialBodyBackdrop.minX &&
-            materialBodyBackdrop.maxY > materialBodyBackdrop.minY;
-        for (size_t backdropIndex :
-            { UiMaterialTitleBackdropIndex,
-                UiMaterialBodyBackdropIndex })
+        ImGui::SameLine();
+        const bool openSceneFolderPressed = ImGui::Button(
+            "##OpenSceneFolder",
+            ImVec2(folderButtonWidth, ImGui::GetFrameHeight()));
+        const ImVec2 iconMinimum = ImGui::GetItemRectMin();
+        const ImVec2 iconMaximum = ImGui::GetItemRectMax();
+        if (openSceneFolderPressed)
         {
-            UiBackdropRect& backdrop =
-                m_ui.BackdropRects[backdropIndex];
-            ApplyBackdropAppearance(
-                backdrop,
-                materialWindowCenter,
-                materialAppearanceScale,
-                materialAppearanceOpacity);
-            backdrop.shadowBlur =
-                g_UiVisualTokens.backdropShadowBlur;
-            backdrop.shadowOpacity =
-                g_UiVisualTokens.backdropShadowOpacity;
-            backdrop.shadowOffsetY =
-                g_UiVisualTokens.backdropShadowOffsetY;
+            const std::filesystem::path sceneFolder =
+                m_app->GetSceneDir();
+            ShellExecuteW(
+                nullptr,
+                L"open",
+                sceneFolder.c_str(),
+                nullptr,
+                nullptr,
+                SW_SHOWNORMAL);
         }
-        ImGui::End();
-        ApplyWindowAppearance(
-            materialWindowDrawList,
-            materialWindowCenter,
-            materialAppearanceScale,
-            materialAppearanceOpacity);
-        if (materialControlsDrawList &&
-            materialControlsDrawList != materialWindowDrawList)
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const float iconWidth = iconMaximum.x - iconMinimum.x;
+        const float iconHeight = iconMaximum.y - iconMinimum.y;
+        const ImU32 iconColor = ImGui::GetColorU32(ImGuiCol_Text);
+        const ImVec2 folderBodyMinimum(
+            iconMinimum.x + iconWidth * 0.20f,
+            iconMinimum.y + iconHeight * 0.38f);
+        const ImVec2 folderBodyMaximum(
+            iconMaximum.x - iconWidth * 0.20f,
+            iconMaximum.y - iconHeight * 0.22f);
+        drawList->AddRect(
+            folderBodyMinimum,
+            folderBodyMaximum,
+            iconColor,
+            1.5f,
+            0,
+            1.5f);
+        drawList->AddLine(
+            folderBodyMinimum,
+            ImVec2(
+                folderBodyMinimum.x + iconWidth * 0.22f,
+                iconMinimum.y + iconHeight * 0.27f),
+            iconColor,
+            1.5f);
+        drawList->AddLine(
+            ImVec2(
+                folderBodyMinimum.x + iconWidth * 0.22f,
+                iconMinimum.y + iconHeight * 0.27f),
+            ImVec2(
+                folderBodyMinimum.x + iconWidth * 0.40f,
+                folderBodyMinimum.y),
+            iconColor,
+            1.5f);
+        ImGui::SetItemTooltip("Open the scene folder.");
+
+        if (m_SceneLoadFailed)
         {
-            ApplyWindowAppearance(
-                materialControlsDrawList,
-                materialWindowCenter,
-                materialAppearanceScale,
-                materialAppearanceOpacity);
+            ImGui::PushStyleColor(
+                ImGuiCol_Text,
+                g_UiVisualTokens.errorText);
+            ImGui::TextWrapped(
+                "The selected scene could not be loaded.");
+            ImGui::PopStyleColor();
+            if (ImGui::Button(
+                    "Retry Scene Load",
+                    ImVec2(-FLT_MIN, 0.f)))
+            {
+                m_SceneLoadFailed = false;
+                m_app->RetryCurrentSceneLoad();
+            }
+            ImGui::SetItemTooltip(
+                "Retry loading the currently selected scene.");
         }
-        ImGui::PopStyleColor(4);
+
+        EndDrawerBody();
+        ImGui::Spacing();
+    }
+
+    void DrawMaterialDrawer(float settingsControlWidth)
+    {
+        ImGui::SetNextItemOpen(
+            m_ui.ShowMaterialDrawer,
+            ImGuiCond_Always);
+        const bool materialBodyVisible = DrawCollapsingHeader(
+            "Material",
+            "Inspect and edit the surface under the center crosshair. Press M "
+            "to refresh the center selection.",
+            ImGuiTreeNodeFlags_None,
+            m_MaterialDrawerPresentationForceClosed);
+        m_MaterialDrawerPresentationForceClosed = false;
+        const bool targetOpen =
+            g_DrawerAnimationContext.targetOpen;
+        m_MaterialDrawerAppearance =
+            g_DrawerAnimationContext.openAmount;
+        if (targetOpen != m_ui.ShowMaterialDrawer)
+        {
+            RequestMaterialDrawerVisible(
+                targetOpen,
+                targetOpen);
+        }
+        if (m_MaterialRevealRequested && targetOpen)
+        {
+            ImGui::SetScrollHereY(0.f);
+            m_MaterialRevealRequested = false;
+        }
+
+        if (!materialBodyVisible)
+        {
+            ImGui::Spacing();
+            return;
+        }
+
+        BeginDrawerBody("##MaterialBody", settingsControlWidth);
+        auto material = m_ui.SelectedMaterial;
+        if (material)
+        {
+            ImGui::Text(
+                "Material %d: %s",
+                material->materialID,
+                material->name.c_str());
+
+            static constexpr const char* MaterialDomainLabels[] = {
+                "Opaque",
+                "Alpha-tested",
+                "Alpha-blended",
+                "Transmissive",
+                "Transmissive alpha-tested",
+                "Transmissive alpha-blended"
+            };
+            static_assert(
+                std::size(MaterialDomainLabels) ==
+                size_t(MaterialDomain::Count));
+            const int materialDomainIndex = std::clamp(
+                int(material->domain),
+                0,
+                int(MaterialDomain::Count) - 1);
+            ImGui::TextUnformatted("Material Domain");
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::PushID(material->materialID);
+            if (BeginRoundedCombo(
+                    "##MaterialDomain",
+                    MaterialDomainLabels[materialDomainIndex]))
+            {
+                for (int index = 0;
+                    index < int(MaterialDomain::Count);
+                    ++index)
+                {
+                    const MaterialDomain candidate =
+                        MaterialDomain(index);
+                    DrawDeferredDropdownOption(
+                        MaterialDomainLabels[index],
+                        MaterialDomainLabels[index],
+                        material->domain == candidate,
+                        [app = m_app, material, candidate]()
+                        {
+                            material->domain = candidate;
+                            app->NotifyMaterialCommandChanged(material);
+                        });
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SetItemTooltip(
+                "Choose how the selected surface is rendered.");
+            ImGui::PopID();
+
+            const ImGuiStyle& style = ImGui::GetStyle();
+            ImGui::PushStyleColor(
+                ImGuiCol_ChildBg,
+                g_UiVisualTokens.drawerBackground);
+            ImGui::PushStyleColor(
+                ImGuiCol_FrameBg,
+                g_UiVisualTokens.drawerFrame);
+            ImGui::PushStyleColor(
+                ImGuiCol_FrameBgHovered,
+                g_UiVisualTokens.drawerFrameHovered);
+            ImGui::PushStyleColor(
+                ImGuiCol_FrameBgActive,
+                g_UiVisualTokens.drawerFrameActive);
+            ImGui::PushStyleVar(
+                ImGuiStyleVar_WindowPadding,
+                ImVec2(
+                    g_UiSpacingTokens.tight,
+                    g_UiSpacingTokens.tight));
+            ImGui::PushStyleVar(
+                ImGuiStyleVar_ChildRounding,
+                g_UiVisualTokens.drawerRounding);
+            const bool materialControlsVisible =
+                ImGui::BeginChild(
+                    "##MaterialControlsBody",
+                    ImVec2(0.f, 0.f),
+                    ImGuiChildFlags_AlwaysUseWindowPadding |
+                        ImGuiChildFlags_AutoResizeY |
+                        ImGuiChildFlags_AlwaysAutoResize,
+                    ImGuiWindowFlags_NoScrollbar |
+                        ImGuiWindowFlags_NoScrollWithMouse);
+            if (materialControlsVisible)
+            {
+                ImGui::PushItemWidth(-FLT_MIN);
+                const bool materialChanged =
+                    donut::app::MaterialEditor(
+                        material.get(),
+                        false,
+                        false,
+                        float4(
+                            g_UiVisualTokens.successText.x,
+                            g_UiVisualTokens.successText.y,
+                            g_UiVisualTokens.successText.z,
+                            g_UiVisualTokens.successText.w));
+                if (materialChanged)
+                    m_app->NotifyMaterialCommandChanged(material);
+                ImGui::PopItemWidth();
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(4);
+        }
+        else
+        {
+            ImGui::TextWrapped(
+                "Aim the center crosshair at an editable surface, then press "
+                "M or refresh the selection.");
+        }
+
+        if (ImGui::Button(
+                "Refresh Center Material",
+                ImVec2(-FLT_MIN, 0.f)))
+        {
+            RequestMaterialDrawerVisible(true, true);
+        }
+        ImGui::SetItemTooltip(
+            "Select the editable material under the center crosshair.");
+        EndDrawerBody();
+        ImGui::Spacing();
+    }
+
+    void DrawInterfaceDrawer(float settingsControlWidth)
+    {
+        const bool interfaceOpen = DrawCollapsingHeader(
+            "Interface",
+            "Choose the interface skin and its live colors.",
+            ImGuiTreeNodeFlags_DefaultOpen);
+        if (!interfaceOpen)
+        {
+            ImGui::Spacing();
+            return;
+        }
+
+        BeginDrawerBody("##InterfaceBody", settingsControlWidth);
+
+        bool disableAnimations = !m_ui.AnimationsEnabled;
+        if (ImGui::Checkbox(
+                "Disable Animations",
+                &disableAnimations))
+        {
+            m_ui.AnimationsEnabled = !disableAnimations;
+        }
+        ImGui::SetItemTooltip(
+            "Enable or disable authored interface motion. Ogg remains "
+            "immediate regardless of this setting.");
+
+        ImGui::TextUnformatted("Interface Skin");
+        if (DrawPresetResetIcon(
+                "Interface Skin",
+                m_ui.Skin != DefaultUiSkin))
+        {
+            QueueDeferredControlUiAction(
+                [this]()
+                {
+                    m_ui.Skin = DefaultUiSkin;
+                });
+        }
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (BeginRoundedCombo(
+                "##UiSkin",
+                UiSkinLabel(m_ui.Skin).data()))
+        {
+            for (const UiSkin candidate : UiSkinValues)
+            {
+                const bool selected = candidate == m_ui.Skin;
+                DrawDeferredDropdownOption(
+                    UiSkinLabel(candidate).data(),
+                    UiSkinLabel(candidate).data(),
+                    selected,
+                    [this, candidate]()
+                    {
+                        m_ui.Skin = candidate;
+                    });
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip(
+            "Choose the complete interface appearance. Ogg uses standard "
+            "controls and disables interface motion for fast automated "
+            "experiments.");
+
+        const auto drawInterfaceColor =
+            [&](const char* label,
+                const char* id,
+                UiRgbaColor& color,
+                const UiRgbaColor& defaultColor,
+                const char* tooltip,
+                bool enabled = true)
+            {
+                if (!enabled)
+                    ImGui::BeginDisabled();
+                ImGui::TextUnformatted(label);
+                if (DrawPresetResetIcon(
+                        label,
+                        color != defaultColor))
+                {
+                    color = defaultColor;
+                }
+                float values[4] = {
+                    color.red,
+                    color.green,
+                    color.blue,
+                    color.alpha
+                };
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGuiColorEditFlags colorEditFlags =
+                    ImGuiColorEditFlags_Float |
+                    ImGuiColorEditFlags_DisplayRGB |
+                    ImGuiColorEditFlags_AlphaBar |
+                    ImGuiColorEditFlags_AlphaPreviewHalf;
+                if (!ImGui::IsUvsrStockWidgetRenderingEnabled())
+                    colorEditFlags |= ImGuiColorEditFlags_PickerHueWheel;
+                if (ImGui::ColorEdit4(
+                        id,
+                        values,
+                        colorEditFlags))
+                {
+                    color = {
+                        values[0],
+                        values[1],
+                        values[2],
+                        values[3]
+                    };
+                }
+                ImGui::SetItemTooltip("%s", tooltip);
+                if (!enabled)
+                    ImGui::EndDisabled();
+            };
+
+        UiSkinPalette unavailablePalette = DefaultUiAmpPalette;
+        UiSkinPalette* palette =
+            FindUiSkinPalette(m_ui.Accents, m_ui.Skin);
+        const UiSkinPalette* defaultPalette =
+            FindDefaultUiSkinPalette(m_ui.Skin);
+        UiSkinPalette& editablePalette = palette
+            ? *palette
+            : unavailablePalette;
+        const UiSkinPalette& resetPalette = defaultPalette
+            ? *defaultPalette
+            : DefaultUiAmpPalette;
+        const bool authoredPaletteAvailable =
+            palette != nullptr && defaultPalette != nullptr;
+        constexpr const char* StockColorTooltip =
+            "Ogg preserves stock ImGui colors and has no single authored "
+            "value for this role.";
+
+        drawInterfaceColor(
+            "Primary Accent",
+            "##UiPrimaryAccent",
+            editablePalette.primaryAccent,
+            resetPalette.primaryAccent,
+            authoredPaletteAvailable
+                ? "Set drawer headers, panel titles, footer buttons, "
+                    "selection details, and slider knobs for the active "
+                    "authored skin."
+                : StockColorTooltip,
+            authoredPaletteAvailable);
+        drawInterfaceColor(
+            "Secondary Accent",
+            "##UiSecondaryAccent",
+            m_ui.Accents.secondaryAccent,
+            DefaultUiSecondaryAccent,
+            "Set the secondary accent used by errors and disabled/off "
+            "toggle knobs. The Amp default is translucent blue.");
+        drawInterfaceColor(
+            "Tertiary Accent",
+            "##UiTertiaryAccent",
+            m_ui.Accents.tertiaryAccent,
+            DefaultUiTertiaryAccent,
+            "Set the tertiary accent used by success output, Material "
+            "status, and enabled/on toggle knobs. The Amp default is the "
+            "historically compensated blue source for a light track.");
+
+        ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+        if (BeginAnimatedTreeNode(
+                "Advanced Accents",
+                ImGuiTreeNodeFlags_None,
+                "Customize authored text and surface roles."))
+        {
+            drawInterfaceColor(
+                "Font Color",
+                "##UiFontColor",
+                editablePalette.fontColor,
+                resetPalette.fontColor,
+                authoredPaletteAvailable
+                    ? "Set all authored interface text, including drawer "
+                        "and panel titles."
+                    : StockColorTooltip,
+                authoredPaletteAvailable);
+            drawInterfaceColor(
+                "Primary Background Color",
+                "##UiPrimaryBackgroundColor",
+                editablePalette.primaryBackground,
+                resetPalette.primaryBackground,
+                authoredPaletteAvailable
+                    ? "Set the menu body, resting closed controls, and "
+                        "color picker background. Hover, active, body, and "
+                        "picker opacity are derived from this resting color."
+                    : StockColorTooltip,
+                authoredPaletteAvailable);
+            EndAnimatedTreeNode();
+        }
+
+        EndDrawerBody();
+        ImGui::Spacing();
     }
 
     static std::string BuildPerformanceLine(
-        const std::array<std::string, 6>& values)
+        const std::array<std::string, 4>& values)
     {
         return values[0] + " / " +
-            values[5] + " / " +
             values[3] + " / " +
-            values[4] + " / " +
             values[1] + " / " +
             values[2];
     }
 
     static std::array<std::string, 2> BuildOgPerformanceLines(
-        const std::array<std::string, 6>& values)
+        const std::array<std::string, 4>& values)
     {
         return {{
             values[0] + " / " +
-                values[5] + " / " +
                 values[3],
-            values[4] + " / " +
-                values[1] + " / " +
+            values[1] + " / " +
                 values[2]
         }};
-    }
-
-    static double StepTowardByTenth(
-        double current,
-        double target)
-    {
-        if (target > current)
-            return std::min(target, current + 0.1);
-        if (target < current)
-            return std::max(target, current - 0.1);
-        return current;
     }
 
     template <typename... Arguments>
@@ -14142,10 +16179,7 @@ private:
         destination = buffer;
     }
 
-    void QueueStatSnapshot(
-        int width,
-        int height,
-        const char* rendererString)
+    void QueueStatSnapshot(int width, int height)
     {
         constexpr double StatUpdateIntervalSeconds = 1.0 / 24.0;
         const double currentFrameTime = std::max(
@@ -14172,12 +16206,9 @@ private:
         snapshot.height = height;
         snapshot.submittedTriangles =
             m_app->GetSubmittedMainViewTriangles();
-        snapshot.rendererName = rendererString ? rendererString : "";
         snapshot.frameTimeSeconds = m_StatFrameTimeCount > 0
             ? m_StatFrameTimeSum / double(m_StatFrameTimeCount)
             : m_DisplayedFrameTime;
-        snapshot.gpuMetrics =
-            QueryGpuPerformanceMetrics(rendererString);
         if (const ScreenSpaceVisibilityTimings* timings =
                 m_app->GetScreenSpaceVisibilityTimings())
         {
@@ -14236,7 +16267,7 @@ private:
             "%d x %d",
             snapshot.width,
             snapshot.height);
-        m_PerformanceStatValues[5] =
+        m_PerformanceStatValues[3] =
             FormatTriangleCount(snapshot.submittedTriangles);
         if (m_DisplayedFrameTime > 0.0)
         {
@@ -14255,64 +16286,12 @@ private:
             m_PerformanceStatValues[2].clear();
         }
 
-        if (snapshot.gpuMetrics.valid)
-        {
-            m_DisplayedGpuBandwidthGBps =
-                snapshot.gpuMetrics.memoryBandwidthGBps;
-            FormatStatLine(
-                m_PerformanceStatValues[3],
-                "%.1f gb/s",
-                m_DisplayedGpuBandwidthGBps);
-
-            if (snapshot.gpuMetrics.utilizationValid)
-            {
-                const double targetTFlops =
-                    snapshot.gpuMetrics.gpuGFlops / 1000.0 *
-                    snapshot.gpuMetrics.gpuUtilization;
-                if (!m_HasGpuStatSnapshot)
-                    m_DisplayedGpuTFlops = targetTFlops;
-                else
-                    m_DisplayedGpuTFlops = StepTowardByTenth(
-                        m_DisplayedGpuTFlops,
-                        targetTFlops);
-                FormatStatLine(
-                    m_PerformanceStatValues[4],
-                    "%.1f tflops",
-                    m_DisplayedGpuTFlops);
-                m_HasGpuStatSnapshot = true;
-            }
-            else
-            {
-                m_PerformanceStatValues[4] = "-- tflops";
-                m_HasGpuStatSnapshot = false;
-            }
-        }
-        else
-        {
-            m_PerformanceStatValues[3] = "-- gb/s";
-            m_PerformanceStatValues[4] = "-- tflops";
-            m_HasGpuStatSnapshot = false;
-        }
-
         m_DisplayedVisibilityTimings = snapshot.visibilityTimings;
         m_DisplayedTemporalAATimings = snapshot.temporalAATimings;
         m_DisplayedCmaa2Timings = snapshot.cmaa2Timings;
         m_HasVisibilityStatSnapshot = snapshot.hasVisibilityTimings;
         m_HasTemporalAAStatSnapshot = snapshot.hasTemporalAATimings;
         m_HasCmaa2StatSnapshot = snapshot.hasCmaa2Timings;
-    }
-
-    static void PushPanelSliderTrackStyle()
-    {
-        ImGui::PushStyleColor(
-            ImGuiCol_FrameBg,
-            g_UiVisualTokens.drawerFrame);
-        ImGui::PushStyleColor(
-            ImGuiCol_FrameBgHovered,
-            g_UiVisualTokens.drawerFrameHovered);
-        ImGui::PushStyleColor(
-            ImGuiCol_FrameBgActive,
-            g_UiVisualTokens.drawerFrameActive);
     }
 
     static bool DrawSliderFloat(
@@ -14323,31 +16302,13 @@ private:
         const char* format = "%.3f",
         ImGuiSliderFlags flags = 0)
     {
-        const ImGuiID sliderId = ImGui::GetID(label);
-        ImGuiStorage* storage = ImGui::GetStateStorage();
-        const ImGuiID presentationValueKey =
-            sliderId ^ ImGuiID(0x2F81C6D9u);
-        const bool freezePresentation =
-            FreezeAnimatedToggleVisualValues();
-        float presentationValue = storage->GetFloat(
-            presentationValueKey,
-            *value);
-        float* submittedValue =
-            freezePresentation
-                ? &presentationValue
-                : value;
-        PushPanelSliderTrackStyle();
-        const bool changed = ImGui::SliderFloat(
+        return ImGui::SliderFloat(
             label,
-            submittedValue,
+            value,
             minimum,
             maximum,
             format,
             flags);
-        ImGui::PopStyleColor(3);
-        if (!freezePresentation)
-            storage->SetFloat(presentationValueKey, *value);
-        return changed && !freezePresentation;
     }
 
     static bool DrawCenteredActionButton(const char* label, float width)
@@ -14381,6 +16342,8 @@ public:
     {
         m_Font = CreateFontFromFile(
             *(app->GetRootFs()), "/media/fonts/System/CodexUI-Semibold.ttf", 16.f);
+        m_HeaderFont = CreateFontFromFile(
+            *(app->GetRootFs()), "/media/fonts/System/CodexUI-Bold.ttf", 16.f);
 
         ImGui::GetIO().IniFilename = nullptr;
         LoadSceneLoadTimingDatabase();
@@ -14414,39 +16377,12 @@ public:
 
         const float deltaTime = ImGui::GetIO().DeltaTime;
         const bool uiMotionEnabled =
-            GetUiSkinBehavior(m_ui.Skin).motionEnabled;
+            ResolveUiMotionEnabled(
+                m_ui.Skin,
+                m_ui.AnimationsEnabled);
         const bool pixelZoomRequestedByUi =
             IsPixelZoomEnabled(m_ui.PixelZoom);
-        const bool zoomPresentationActiveBeforeUpdate =
-            IsPixelZoomEnabled(m_RenderedPixelZoom) &&
-            m_PixelZoomVisibility > 0.f;
-        m_MaterialInspectorAppearance =
-            AdvanceMaterialInspectorAppearance(
-                m_MaterialInspectorAppearance,
-                m_ui.ShowMaterialEditor,
-                uiMotionEnabled,
-                deltaTime);
-        const bool materialInspectorPresentationActive =
-            IsMaterialInspectorPresentationActive(
-                m_ui.ShowMaterialEditor,
-                m_MaterialInspectorAppearance);
-        m_MaterialInspectorZoomPlacement =
-            AdvanceMaterialInspectorZoomPlacement(
-                m_MaterialInspectorZoomPlacement,
-                materialInspectorPresentationActive,
-                pixelZoomRequestedByUi,
-                zoomPresentationActiveBeforeUpdate,
-                uiMotionEnabled,
-                deltaTime);
-        const bool pixelZoomOpeningDelayed =
-            ShouldDelayPixelZoomForMaterialInspector(
-                materialInspectorPresentationActive,
-                pixelZoomRequestedByUi,
-                uiMotionEnabled,
-                m_MaterialInspectorZoomPlacement);
-        const bool pixelZoomRequested =
-            pixelZoomRequestedByUi &&
-            !pixelZoomOpeningDelayed;
+        const bool pixelZoomRequested = pixelZoomRequestedByUi;
         if (!uiMotionEnabled)
         {
             m_PixelZoomVisibility = pixelZoomRequested ? 1.f : 0.f;
@@ -14512,6 +16448,12 @@ public:
                 m_PendingPixelZoom = PixelZoomMode::Off;
             }
         }
+        m_CommandAppearance = uiMotionEnabled
+            ? AdvancePixelZoomVisibility(
+                m_CommandAppearance,
+                m_CommandOpen,
+                deltaTime)
+            : m_CommandOpen ? 1.f : 0.f;
         buildUI();
         DrawCommandInterface();
         const float pixelZoomOpacity =
@@ -14526,14 +16468,12 @@ public:
         const bool pixelZoomPassActive =
             IsPixelZoomEnabled(m_RenderedPixelZoom) &&
             pixelZoomOpacity > 0.f;
-        const float materialInspectorOpacity =
-            uiMotionEnabled
-                ? SmoothPixelZoomVisibility(
-                    m_MaterialInspectorAppearance)
-                : m_MaterialInspectorAppearance;
+        const float materialDrawerOpacity =
+            SmoothPixelZoomVisibility(m_MaterialDrawerAppearance) *
+            SmoothPixelZoomVisibility(m_SettingsAppearance);
         const float crosshairOpacity = std::max(
             pixelZoomRequested ? pixelZoomOpacity : 0.f,
-            materialInspectorOpacity);
+            materialDrawerOpacity);
         if (crosshairOpacity > 0.f)
         {
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -14613,12 +16553,13 @@ public:
                 zoomAreaLabel);
         }
         ImGui::Render();
-        if (m_PendingCommand)
+        if (m_PendingCommand &&
+            !HasDeferredDropdownUiActions())
         {
-            // A slash command is the newest input. Fast-forward and commit
-            // older deferred UI choices at the same safe composition barrier
-            // so they cannot resurface later and overwrite the command.
-            TryApplyDeferredDropdownUiActions(true, true);
+            // A slash command is the newest input. Let any older dropdown
+            // choice finish its roll-up, settle, and full idle presentation
+            // before applying the command so renderer mutation never interrupts
+            // either transaction. The command still wins by executing next.
             UiCommand command = std::move(*m_PendingCommand);
             m_PendingCommand.reset();
             ExecuteUiCommand(command);
@@ -14745,7 +16686,7 @@ protected:
             plainMaterialEditorShortcut &&
             !ImGui::GetIO().WantTextInput)
         {
-            m_app->ToggleCenterMaterialInspector();
+            RequestMaterialDrawerVisible(true, true);
             return true;
         }
 
@@ -14773,24 +16714,28 @@ protected:
     virtual void buildUI(void) override
     {
         g_SettingsAppearanceDrawLists.clear();
+        g_SettingsDecorationDrawList = nullptr;
         for (UiBackdropRect& backdropRect : m_ui.BackdropRects)
+        {
             backdropRect.visible = false;
+            backdropRect.compositeExclusions.clear();
+        }
 
         m_ComposedUiSkin = m_ui.Skin;
-        ApplyUiSkin(m_ComposedUiSkin, m_UiDisplayScale);
+        ApplyUiSkin(
+            m_ComposedUiSkin,
+            m_ui.Accents,
+            m_ui.AnimationsEnabled,
+            m_UiDisplayScale);
         const bool uiMotionEnabled =
             ImGui::IsUvsrUiMotionEnabled();
         int width, height;
         GetDeviceManager()->GetWindowDimensions(width, height);
         ImFont* activeUiFont = GetActiveUiFont();
-        const ImFont* scaledUiFont = activeUiFont;
-        const float panelReferenceFontSize = scaledUiFont
-            ? scaledUiFont->LegacySize
-            : ImGui::GetFontSize();
         m_SettingsPanelMarginPixels = static_cast<uint32_t>(
             std::max(
                 1.f,
-                std::round(panelReferenceFontSize * 0.6f)));
+                std::round(g_UiSpacingTokens.section)));
         const ImGuiViewport* mainViewport =
             ImGui::GetMainViewport();
         const UiCommandLayoutRect workRectangle = {
@@ -14808,26 +16753,46 @@ protected:
             GetCommandInterfaceReservedHeight();
         const float minimumCommandWidth =
             ImGui::GetStyle().WindowMinSize.x;
+        const float panelTitleMinimumHeight =
+            GetSettingsCollapsedWindowHeight(
+                ImGui::GetStyle(),
+                ImGui::GetFontSize());
+        const float performanceCollapsedHeight =
+            panelTitleMinimumHeight +
+            ImGui::GetStyle().WindowPadding.y * 2.f +
+            ImGui::GetFontSize() +
+            g_UiSpacingTokens.tight;
         const float minimumSettingsHeight =
             std::max(
-                GetSettingsCollapsedWindowHeight(
+                GetSettingsMinimumExpandedWindowHeight(
                     ImGui::GetStyle(),
-                    ImGui::GetFontSize(),
-                    true,
-                    true),
+                    ImGui::GetFontSize()),
                 ImGui::GetStyle().WindowMinSize.y);
+        const float panelSeparation =
+            g_UiSpacingTokens.tight;
+        const float minimumPanelStackHeight =
+            performanceCollapsedHeight +
+            panelSeparation +
+            minimumSettingsHeight;
         ImGui::PopFont();
         m_CommandLayout = ResolveCommandInterfaceLayout(
             workRectangle,
             float(m_SettingsPanelMarginPixels),
+            g_UiSpacingTokens.tight,
             260.f * m_UiDisplayScale,
             minimumCommandWidth,
             reservedCommandHeight,
             minimumCommandHeight,
-            minimumSettingsHeight);
-        const float settingsMaximumBottom =
+            minimumPanelStackHeight);
+        const float panelStackMaximumBottom =
             m_CommandLayout.fits
-                ? m_CommandLayout.settingsMaximumBottom
+                ? ResolveSettingsMaximumBottom(
+                    m_CommandLayout,
+                    workRectangle,
+                    float(m_SettingsPanelMarginPixels),
+                    uiMotionEnabled
+                        ? SmoothPixelZoomVisibility(m_CommandAppearance)
+                        : m_CommandAppearance)
                 : workRectangle.maxY -
                     float(m_SettingsPanelMarginPixels);
         const bool sceneLoading = m_app->IsSceneBusy();
@@ -14842,8 +16807,6 @@ protected:
                 CancelDeferredDropdownUiActions();
                 m_WasSceneLoading = true;
                 m_DisplayedFrameTime = 0.0;
-                m_DisplayedGpuBandwidthGBps = 0.0;
-                m_DisplayedGpuTFlops = 0.0;
                 m_StatSnapshotElapsed = 0.0;
                 m_StatFrameTimeSum = 0.0;
                 m_StatFrameTimeCount = 0;
@@ -14854,11 +16817,11 @@ protected:
                 m_DisplayedTemporalAATimings = {};
                 m_DisplayedCmaa2Timings = {};
                 m_HasAppliedStatSnapshot = false;
-                m_HasGpuStatSnapshot = false;
                 m_HasVisibilityStatSnapshot = false;
                 m_HasTemporalAAStatSnapshot = false;
                 m_HasCmaa2StatSnapshot = false;
                 m_SettingsAppearance = 0.f;
+                m_MaterialDrawerAppearance = 0.f;
                 m_SceneLoadCounterStart =
                     std::chrono::steady_clock::now();
                 m_SceneLoadHistoryKey = m_app->GetCurrentSceneName();
@@ -14992,15 +16955,7 @@ protected:
                 "Bitmask Directional Visibility").x +
             style.FramePadding.x * 2.f;
 
-        const char* rendererString = GetDeviceManager()->GetRendererString();
-        char rendererLine[256];
-        snprintf(
-            rendererLine,
-            std::size(rendererLine),
-            "Renderer: %s",
-            rendererString);
-
-        QueueStatSnapshot(width, height, rendererString);
+        QueueStatSnapshot(width, height);
         ApplyQueuedStatSnapshot();
         m_SettingsAppearance = uiMotionEnabled
             ? AdvancePixelZoomVisibility(
@@ -15021,38 +16976,20 @@ protected:
                         m_PendingPixelZoom,
                         m_PixelZoomVisibility,
                         m_PixelZoomLevelTransition);
-                const bool materialInspectorPlacementIdle =
-                    m_MaterialInspectorZoomPlacement <= 0.f ||
-                    m_MaterialInspectorZoomPlacement >= 1.f;
-                const bool materialInspectorAppearanceIdle =
-                    IsMaterialInspectorAppearanceIdle(
-                        m_ui.ShowMaterialEditor,
-                        m_MaterialInspectorAppearance);
                 const bool interactionIdle =
                     !ImGui::IsAnyItemActive() &&
                     std::abs(ImGui::GetIO().MouseWheel) <= 0.001f &&
                     !ImGui::IsMouseDragging(
                         ImGuiMouseButton_Left);
-                const bool dropdownPopupIdle =
-                    !IsDeferredDropdownPopupTransitionActive();
                 return settingsLayoutIdle &&
                     settingsScrollIdle &&
                     settingsAppearanceIdle &&
                     pixelZoomAppearanceIdle &&
-                    materialInspectorPlacementIdle &&
-                    materialInspectorAppearanceIdle &&
-                    dropdownPopupIdle &&
+                    !IsDeferredDropdownPopupTransitionActive() &&
                     interactionIdle;
             };
         if (!m_ui.ShowUI && m_SettingsAppearance <= 0.f)
         {
-            DrawMaterialInspector(
-                width,
-                height,
-                uiMotionEnabled,
-                style);
-            // Settings is hidden, but the independently composed material
-            // inspector may still own the active dropdown this frame.
             FinishUnsubmittedDeferredDropdownPopupTransition();
             const SettingsScrollStabilityContext& scrollContext =
                 g_SettingsScrollStabilityContext;
@@ -15062,8 +16999,7 @@ protected:
             TryApplyDeferredDropdownUiActions(
                 deferredDropdownCompositionIdle(
                     !recentLayoutAnimation,
-                    true),
-                !uiMotionEnabled);
+                    true));
             RestoreActiveUiWordSpacing();
             ImGui::PopFont();
             return;
@@ -15076,14 +17012,14 @@ protected:
                 settingsAppearanceOpacity;
         const std::string performanceLine =
             BuildPerformanceLine(m_PerformanceStatValues);
-        const std::array<std::string, 2> ogPerformanceLines =
-            BuildOgPerformanceLines(m_PerformanceStatValues);
 
         // Keep Settings independent of live status digits. At the current
-        // 20-pixel UI font, 29.3 font heights place the visible right border
-        // at the screenshot's marked boundary while retaining the resolution,
-        // triangle counter, and performance line.
-        constexpr float SettingsWindowWidthInFontHeights = 29.3f;
+        // 23.44 font heights is exactly 20 percent narrower than the previous
+        // panel while retaining the longest intentional control width. Root
+        // and drawer padding plus the authored scrollbar form a hard content
+        // floor; narrow viewports still cap the panel early enough to leave a
+        // functional ColorEdit picker lane on the right.
+        constexpr float SettingsWindowWidthInFontHeights = 23.44f;
         const float settingsPanelMarginPixels =
             float(m_SettingsPanelMarginPixels);
         const float availableWindowWidth =
@@ -15092,15 +17028,240 @@ protected:
                 workRectangle.maxX -
                     workRectangle.minX -
                     settingsPanelMarginPixels * 2.f);
+        const float colorPickerMinimumLaneWidth =
+            ImGui::GetFrameHeight() * 3.f +
+            style.ItemInnerSpacing.x * 2.f +
+            style.WindowPadding.x * 2.f;
+        const float settingsWindowMaximumWidth =
+            std::max(
+                1.f,
+                availableWindowWidth -
+                    colorPickerMinimumLaneWidth);
+        const float settingsWindowMinimumWidth =
+            settingsControlWidth +
+            style.WindowPadding.x * 4.f +
+            style.ScrollbarSize;
         const float settingsWindowWidth = std::min(
-            fontSize * SettingsWindowWidthInFontHeights,
-            availableWindowWidth);
-        const float settingsWindowTop =
+            std::max(
+                fontSize * SettingsWindowWidthInFontHeights,
+                settingsWindowMinimumWidth),
+            settingsWindowMaximumWidth);
+        const float performanceWindowTop =
             workRectangle.minY + settingsPanelMarginPixels;
+        const float performanceMaximumWindowHeight = std::max(
+            performanceCollapsedHeight,
+            ResolvePerformanceMaximumWindowHeight(
+                panelStackMaximumBottom,
+                performanceWindowTop,
+                minimumSettingsHeight,
+                panelSeparation));
+        ImGui::SetNextWindowPos(
+            ImVec2(
+                workRectangle.minX + settingsPanelMarginPixels,
+                performanceWindowTop),
+            ImGuiCond_Always);
+        ImGui::SetNextWindowSize(
+            ImVec2(settingsWindowWidth, 0.f),
+            ImGuiCond_Always);
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(settingsWindowWidth, performanceCollapsedHeight),
+            ImVec2(
+                settingsWindowWidth,
+                performanceMaximumWindowHeight));
+        ImGui::SetNextUvsrWindowCollapsedHeight(
+            performanceCollapsedHeight);
+        if (m_PerformanceCollapsedRequest)
+        {
+            ImGui::SetNextUvsrWindowCollapseTarget(
+                *m_PerformanceCollapsedRequest);
+            ImGui::SetNextWindowCollapsed(
+                *m_PerformanceCollapsedRequest,
+                ImGuiCond_Always);
+            m_PerformanceCollapsedRequest.reset();
+        }
+        else
+        {
+            ImGui::SetNextWindowCollapsed(true, ImGuiCond_Once);
+        }
+
+        PushPanelBodySurface();
+        ImGui::PushStyleColor(
+            ImGuiCol_TitleBg,
+            g_UiVisualTokens.settingsTitleSurface);
+        ImGui::PushStyleColor(
+            ImGuiCol_TitleBgActive,
+            g_UiVisualTokens.settingsTitleSurface);
+        ImGui::PushStyleColor(
+            ImGuiCol_TitleBgCollapsed,
+            g_UiVisualTokens.settingsTitleSurface);
+        ImGui::PushStyleColor(
+            ImGuiCol_Text,
+            g_UiVisualTokens.settingsTitleText);
+        ImGuiWindowFlags performanceWindowFlags =
+            ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoSavedSettings;
+        if (!m_ui.ShowUI ||
+            m_SettingsAppearance < 1.f)
+        {
+            performanceWindowFlags |= ImGuiWindowFlags_NoInputs;
+        }
+        const bool useAuthoredHeaderFont =
+            m_ComposedUiSkin != UiSkin::Og;
+        if (useAuthoredHeaderFont)
+        {
+            ImGui::PushFont(GetActiveUiHeaderFont());
+            ApplyActiveUiHeaderWordSpacing();
+        }
+        const bool performanceExpanded = ImGui::Begin(
+            "Performance",
+            nullptr,
+            performanceWindowFlags);
+        if (useAuthoredHeaderFont)
+        {
+            RestoreActiveUiHeaderWordSpacing();
+            ImGui::PopFont();
+        }
+        ImGui::PopStyleColor();
+        ImDrawList* performanceWindowDrawList =
+            ImGui::GetWindowDrawList();
+        const ImGuiWindow* performanceWindow =
+            ImGui::GetCurrentWindow();
+        const ImRect performanceBodyRect(
+            ImVec2(
+                performanceWindow->Pos.x + 0.5f,
+                performanceWindow->Pos.y +
+                    performanceWindow->TitleBarHeight),
+            ImVec2(
+                performanceWindow->Pos.x +
+                    performanceWindow->Size.x - 0.5f,
+                performanceWindow->Pos.y +
+                    performanceWindow->Size.y - 0.5f));
+        const ImRect performanceContentRect(
+            ImVec2(
+                performanceWindow->Pos.x + style.WindowPadding.x,
+                performanceWindow->Pos.y +
+                    performanceWindow->TitleBarHeight +
+                    style.WindowPadding.y),
+            ImVec2(
+                performanceWindow->Pos.x +
+                    performanceWindow->Size.x -
+                    style.WindowPadding.x,
+                performanceWindow->Pos.y +
+                    performanceWindow->Size.y -
+                    style.WindowPadding.y));
+        const float performanceCollapseRange =
+            performanceWindow->SizeFull.y -
+                performanceCollapsedHeight;
+        const bool performanceExpandedRangeKnown =
+            performanceCollapseRange > 0.5f;
+        const float performanceCollapseAmount =
+            performanceExpandedRangeKnown
+                ? std::clamp(
+                    (performanceWindow->SizeFull.y -
+                        performanceWindow->Size.y) /
+                        performanceCollapseRange,
+                    0.f,
+                    1.f)
+                // On the first default-collapsed frame ImGui has not measured
+                // the expanded auto-fit contents yet, so SizeFull equals the
+                // retained compact height. Treat that degenerate endpoint as
+                // fully collapsed instead of flashing the translucent body.
+                : performanceWindow->Size.y <=
+                    performanceCollapsedHeight + 0.5f
+                    ? 1.f
+                    : 0.f;
+        if (performanceCollapseAmount > 0.f)
+        {
+            // A compact Performance panel carries denser information than a
+            // title-only Settings panel. Fade only this retained body toward
+            // an opaque surface as it collapses so the stat line remains
+            // legible over bright scenes without changing any other panel.
+            ImVec4 compactBodyOverlay = GetOpaquePanelBodySurface();
+            compactBodyOverlay.w = performanceCollapseAmount;
+            performanceWindowDrawList->AddRectFilled(
+                performanceBodyRect.Min,
+                performanceBodyRect.Max,
+                ImGui::GetColorU32(compactBodyOverlay),
+                style.WindowRounding,
+                ImDrawFlags_RoundCornersAll);
+        }
+        if (performanceExpanded)
+        {
+            DrawPerformancePanelContents(
+                settingsControlWidth,
+                performanceLine);
+        }
+        else
+        {
+            const ImVec2 summaryTextSize = ImGui::CalcTextSize(
+                performanceLine.c_str());
+            const ImVec2 summaryMinimum(
+                performanceContentRect.Min.x +
+                    g_UiSpacingTokens.tight,
+                performanceBodyRect.Min.y +
+                    std::max(
+                        0.f,
+                        (performanceBodyRect.GetHeight() -
+                            summaryTextSize.y) * 0.5f));
+            const ImVec2 summaryMaximum(
+                performanceContentRect.Max.x,
+                performanceBodyRect.Max.y);
+            performanceWindowDrawList->PushClipRect(
+                summaryMinimum,
+                summaryMaximum,
+                true);
+            performanceWindowDrawList->AddText(
+                summaryMinimum,
+                ImGui::GetColorU32(ImGuiCol_Text),
+                performanceLine.c_str());
+            performanceWindowDrawList->PopClipRect();
+        }
+        DrawFilledRoundedInsetFrame(
+            performanceWindowDrawList,
+            performanceBodyRect,
+            performanceContentRect,
+            style.WindowRounding);
+        DrawSettingsFixedTopInsetShadow(
+            performanceWindowDrawList,
+            performanceContentRect,
+            g_UiSpacingTokens.tight,
+            style.WindowRounding,
+            false);
+        DrawDrawerBodyOutline(
+            performanceWindowDrawList,
+            performanceBodyRect.Min,
+            performanceBodyRect.Max,
+            style.WindowRounding,
+            0.f,
+            false);
+        DrawDrawerBodyOutline(
+            performanceWindowDrawList,
+            performanceContentRect.Min,
+            performanceContentRect.Max,
+            style.WindowRounding,
+            0.f,
+            false);
+        const bool performanceScrollIdle =
+            performanceWindow->ScrollTarget.y >= FLT_MAX;
+        const ImVec2 performanceWindowPosition =
+            ImGui::GetWindowPos();
+        const ImVec2 performanceWindowSize =
+            ImGui::GetWindowSize();
+        const bool performanceCollapseTransitionActive =
+            ImGui::IsCurrentUvsrWindowCollapseTransitionActive();
+        ImGui::End();
+        ImGui::PopStyleColor(4);
+
+        const float settingsWindowTop =
+            performanceWindowPosition.y +
+            performanceWindowSize.y +
+            panelSeparation;
         const float settingsMaximumWindowHeight =
             std::max(
                 1.f,
-                settingsMaximumBottom - settingsWindowTop);
+                panelStackMaximumBottom - settingsWindowTop);
         ImGui::SetNextWindowPos(
             ImVec2(
                 workRectangle.minX + settingsPanelMarginPixels,
@@ -15114,21 +17275,16 @@ protected:
             ImVec2(
                 settingsWindowWidth,
                 settingsMaximumWindowHeight));
-        const bool hasPerformanceStatus =
-            !m_PerformanceStatValues[1].empty();
-        const bool splitOgPerformanceStatus =
-            hasPerformanceStatus &&
-            m_ComposedUiSkin == UiSkin::Og;
         const float settingsCollapsedHeight =
             GetSettingsCollapsedWindowHeight(
                 style,
-                fontSize,
-                hasPerformanceStatus,
-                splitOgPerformanceStatus);
-        ImGui::SetNextSettingsWindowCollapsedHeight(
+                fontSize);
+        ImGui::SetNextUvsrWindowCollapsedHeight(
             settingsCollapsedHeight);
         if (m_SettingsCollapsedRequest)
         {
+            ImGui::SetNextUvsrWindowCollapseTarget(
+                *m_SettingsCollapsedRequest);
             ImGui::SetNextWindowCollapsed(
                 *m_SettingsCollapsedRequest,
                 ImGuiCond_Always);
@@ -15138,8 +17294,9 @@ protected:
         {
             ImGui::SetNextWindowCollapsed(false, ImGuiCond_Once);
         }
-        // WindowBg is absent beneath title bars. This precomposed Settings-only
-        // token reproduces the resting drawer blue over the body surface.
+        // WindowBg is absent beneath title bars. Authored dark skins use the
+        // body-composited token; an ultra-bright title intentionally retains
+        // the raw translucent header so the backdrop remains visible through it.
         PushPanelBodySurface();
         ImGui::PushStyleColor(
             ImGuiCol_TitleBg,
@@ -15150,58 +17307,50 @@ protected:
         ImGui::PushStyleColor(
             ImGuiCol_TitleBgCollapsed,
             g_UiVisualTokens.settingsTitleSurface);
+        ImGui::PushStyleColor(
+            ImGuiCol_Text,
+            g_UiVisualTokens.settingsTitleText);
         ImGuiWindowFlags settingsWindowFlags =
             ImGuiWindowFlags_AlwaysAutoResize |
             ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoScrollWithMouse;
+        if (g_UiVisualTokens.sceneTranslucentHeaders)
+            settingsWindowFlags |= ImGuiWindowFlags_NoBackground;
         if (!m_ui.ShowUI ||
             m_SettingsAppearance < 1.f)
         {
             settingsWindowFlags |= ImGuiWindowFlags_NoInputs;
         }
-        ImGui::Begin(
+        if (useAuthoredHeaderFont)
+        {
+            ImGui::PushFont(GetActiveUiHeaderFont());
+            ApplyActiveUiHeaderWordSpacing();
+        }
+        const bool settingsExpanded = ImGui::Begin(
             "Settings",
             nullptr,
             settingsWindowFlags);
+        if (useAuthoredHeaderFont)
+        {
+            RestoreActiveUiHeaderWordSpacing();
+            ImGui::PopFont();
+        }
+        ImGui::PopStyleColor();
         ImDrawList* settingsWindowDrawList =
             ImGui::GetWindowDrawList();
+        bool settingsScrollIdle = true;
+        bool settingsLayoutIdle = true;
+        g_SettingsScrollStabilityContext
+            .translucentHeaderSupportRects.clear();
 
-        ImGui::TextUnformatted(rendererLine);
-        if (hasPerformanceStatus)
+        if (settingsExpanded)
         {
-            ImGui::SetCursorPosY(
-                ImGui::GetCursorPosY() - style.ItemSpacing.y +
-                    SettingsStatusLineSpacing);
-            const char* performanceTooltip =
-                "tris counts frustum-culled triangle instances submitted by "
-                "the main geometry pass; occluded, back-facing, and "
-                "alpha-discarded triangles can still be included. "
-                "Bandwidth is the current theoretical limit. "
-                "Floating-point throughput is current-clock single-precision "
-                "peak scaled by graphics-processor utilization.";
-            if (splitOgPerformanceStatus)
-            {
-                ImGui::TextUnformatted(
-                    ogPerformanceLines[0].c_str());
-                ImGui::SetItemTooltip("%s", performanceTooltip);
-                ImGui::SetCursorPosY(
-                    ImGui::GetCursorPosY() - style.ItemSpacing.y +
-                        SettingsStatusLineSpacing);
-                ImGui::TextUnformatted(
-                    ogPerformanceLines[1].c_str());
-                ImGui::SetItemTooltip("%s", performanceTooltip);
-            }
-            else
-            {
-                ImGui::TextUnformatted(performanceLine.c_str());
-                ImGui::SetItemTooltip("%s", performanceTooltip);
-            }
-        }
-        ImGui::Separator();
-
+        // Let the root own the regular title-to-content inset. Keeping that
+        // space outside the scrolling child makes it persistent and starts the
+        // scrollbar at the same fixed top edge as General.
         const float settingsBodyMaxHeight = std::max(
             1.f,
-            settingsMaximumBottom -
+            panelStackMaximumBottom -
                 ImGui::GetCursorScreenPos().y - style.WindowPadding.y);
         PrepareSettingsScrollStability();
         const float settingsBodyMinimumHeight =
@@ -15215,9 +17364,31 @@ protected:
             ImVec2(0.f, 0.f),
             ImGuiChildFlags_AutoResizeY,
             ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        ImGuiWindow* settingsBodyWindow =
+            ImGui::GetCurrentWindow();
+        const SettingsScrollStabilityContext& previousScrollContext =
+            g_SettingsScrollStabilityContext;
+        const bool settingsScrolledThisFrame =
+            previousScrollContext.lastFrame ==
+                ImGui::GetFrameCount() - 1 &&
+            std::abs(
+                settingsBodyWindow->Scroll.y -
+                    previousScrollContext.lastScrollY) > 0.01f;
+        if (settingsScrolledThisFrame)
+            ImGui::CloseUvsrColorPickerPopup();
+        const float colorPickerMaximumBottom = std::min(
+            panelStackMaximumBottom,
+            settingsBodyWindow->ParentWindow->Pos.y +
+                settingsBodyWindow->ParentWindow->Size.y);
+        ImGui::PushUvsrColorPickerPopupContentRight(
+            settingsBodyWindow->InnerRect.Max.x,
+            colorPickerMaximumBottom,
+            g_UiVisualTokens.colorPickerSurface);
         ImDrawList* settingsBodyDrawList =
-            ImGui::GetWindowDrawList();
-        TrackSettingsAppearanceDrawList(settingsBodyDrawList);
+            settingsBodyWindow->DrawList;
+        TrackSettingsDecorationDrawList(
+            settingsBodyDrawList,
+            true);
         BeginSettingsScrollStability();
 
         // Keep the panel visually unchanged while a selection waits for its
@@ -15229,6 +17400,7 @@ protected:
         if (deferredDropdownInputBlocked)
         {
             ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);
+            ImGui::PushUvsrDisabledPresentation(0.f);
             ImGui::BeginDisabled();
         }
         // A same-frame anchor correction translates submitted vertices after
@@ -15241,323 +17413,11 @@ protected:
         if (settingsScrollInputBlocked)
         {
             ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);
+            ImGui::PushUvsrDisabledPresentation(0.f);
             ImGui::BeginDisabled();
         }
 
-        const bool generalOpen = DrawCollapsingHeader(
-            "General",
-            "Show general renderer settings.",
-            ImGuiTreeNodeFlags_DefaultOpen);
-        if (generalOpen)
-        {
-            BeginDrawerBody(
-                "##GeneralBody",
-                settingsControlWidth);
-
-            ImGui::TextUnformatted("Interface Skin");
-            if (DrawPresetResetIcon(
-                    "Interface Skin",
-                    m_ui.Skin != DefaultUiSkin))
-            {
-                QueueDeferredControlUiAction(
-                    [this]()
-                    {
-                        m_ui.Skin = DefaultUiSkin;
-                    });
-            }
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            if (BeginRoundedCombo(
-                    "##UiSkin",
-                    UiSkinLabel(m_ui.Skin).data()))
-            {
-                for (const UiSkin candidate : UiSkinValues)
-                {
-                    const bool selected = candidate == m_ui.Skin;
-                    DrawDeferredDropdownOption(
-                        UiSkinLabel(candidate).data(),
-                        UiSkinLabel(candidate).data(),
-                        selected,
-                        [this, candidate]()
-                        {
-                            m_ui.Skin = candidate;
-                        });
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::SetItemTooltip(
-                "Choose the complete interface appearance. OG uses standard "
-                "controls and disables interface motion for fast automated "
-                "experiments.");
-
-            if (!m_ui.GpuAdapterChoices.empty())
-            {
-            const GpuAdapterChoice* activeAdapter = nullptr;
-            for (const GpuAdapterChoice& adapter : m_ui.GpuAdapterChoices)
-            {
-                if (adapter.adapterIndex == m_ui.ActiveGpuAdapterIndex)
-                {
-                    activeAdapter = &adapter;
-                    break;
-                }
-            }
-
-            ImGui::TextUnformatted("Graphics Adapter");
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            const char* activeAdapterName = activeAdapter
-                ? activeAdapter->name.c_str()
-                : "Unknown adapter";
-            if (BeginRoundedCombo("##GraphicsAdapter", activeAdapterName))
-            {
-                for (const GpuAdapterChoice& adapter : m_ui.GpuAdapterChoices)
-                {
-                    const bool selected =
-                        adapter.adapterIndex == m_ui.ActiveGpuAdapterIndex;
-                    DrawDeferredDropdownOption(
-                        adapter.name.c_str(),
-                        adapter.name.c_str(),
-                        selected,
-                        [this, adapterIndex = adapter.adapterIndex]()
-                        {
-                            g_RestartAdapterIndex = adapterIndex;
-                            g_RestartRequested = true;
-                            glfwSetWindowShouldClose(
-                                GetDeviceManager()->GetWindow(),
-                                GLFW_TRUE);
-                        });
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::SetItemTooltip(
-                "Choose the graphics processor. UVSR restarts after a change.");
-        }
-
-        ImGui::TextUnformatted("Adaptive Sync");
-        if (DrawPresetResetIcon(
-                "Adaptive Sync",
-                m_ui.AdaptiveSync != GetDefaultAdaptiveSyncMode()))
-        {
-            QueueDeferredControlUiAction(
-                [this]()
-                {
-                    ApplyAdaptiveSyncMode(
-                        GetDefaultAdaptiveSyncMode());
-                });
-        }
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        if (BeginRoundedCombo(
-                "##AdaptiveSync",
-                AdaptiveSyncModeLabel(m_ui.AdaptiveSync).data()))
-        {
-            for (const AdaptiveSyncMode candidate : AdaptiveSyncModeValues)
-            {
-                const bool available =
-                    IsAdaptiveSyncModeAvailableForActiveAdapter(candidate);
-                const bool selected = candidate == m_ui.AdaptiveSync;
-                if (!available)
-                    ImGui::BeginDisabled();
-                DrawDeferredDropdownOption(
-                    AdaptiveSyncModeLabel(candidate).data(),
-                    AdaptiveSyncModeLabel(candidate).data(),
-                    selected,
-                    [this, candidate]()
-                    {
-                        ApplyAdaptiveSyncMode(candidate);
-                    });
-                if (!available)
-                {
-                    ImGui::SetItemTooltip(
-                        GetDeviceManager()->IsPresentAllowTearingSupported()
-                            ? "Nvidia Exclusive is available only on NVIDIA "
-                                "graphics adapters."
-                            : "This mode requires DXGI tearing-present "
-                                "support on the active system.");
-                    ImGui::EndDisabled();
-                }
-                else
-                {
-                    switch (candidate)
-                    {
-                    case AdaptiveSyncMode::Off:
-                        ImGui::SetItemTooltip(
-                            "Suppress the DXGI Present allow-tearing flag.");
-                        break;
-                    case AdaptiveSyncMode::VendorAgnostic:
-                        ImGui::SetItemTooltip(
-                            "Request the generic Windows variable-refresh "
-                            "presentation path on any compatible adapter.");
-                        break;
-                    case AdaptiveSyncMode::NvidiaExclusive:
-                        ImGui::SetItemTooltip(
-                            "Expose the shared Windows variable-refresh "
-                            "request only when the active adapter is NVIDIA; "
-                            "the driver and display decide whether it engages.");
-                        break;
-                    case AdaptiveSyncMode::Count:
-                        break;
-                    }
-                }
-                if (selected)
-                    ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::SetItemTooltip(
-            "Control UVSR's windowed DXGI tearing-compatible Present policy. "
-            "VSync remains disabled; both adaptive choices request the same "
-            "Windows path, while Nvidia Exclusive is vendor-gated. Windows, "
-            "the driver, and the display decide whether adaptive refresh "
-            "actually engages, and UVSR cannot confirm it.");
-
-        ImGui::TextUnformatted("Camera Mode");
-        if (DrawPresetResetIcon(
-                "Camera Mode",
-                m_ui.Camera != CameraMode::ThirdPerson))
-        {
-            m_app->SetCameraMode(CameraMode::ThirdPerson);
-        }
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        if (BeginRoundedCombo(
-                "##Camera", GetCameraModeLabel(m_ui.Camera)))
-        {
-            for (CameraMode mode : SelectableCameraModes)
-            {
-                const bool selected = mode == m_ui.Camera;
-                DrawDeferredDropdownOption(
-                    GetCameraModeLabel(mode),
-                    GetCameraModeLabel(mode),
-                    selected,
-                    [this, mode]()
-                    {
-                        m_app->SetCameraMode(mode);
-                    });
-                if (selected)
-                    ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::SetItemTooltip(
-            "Choose Freelook or Locked. Q moves up, E moves "
-            "down, X/C roll, and V levels the roll.");
-
-        if (m_app->HasSponzaCameraLocations())
-        {
-            ImGui::TextUnformatted("Camera Location");
-            const SponzaCameraLocation location =
-                m_app->GetSponzaCameraLocation();
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            if (BeginRoundedCombo(
-                    "##CameraLocation",
-                    GetSponzaCameraLocationLabel(location)))
-            {
-                for (SponzaCameraLocation candidate :
-                    SelectableSponzaCameraLocations)
-                {
-                    const bool selected = candidate == location;
-                    DrawDeferredDropdownOption(
-                        GetSponzaCameraLocationLabel(candidate),
-                        GetSponzaCameraLocationLabel(candidate),
-                        selected,
-                        [this, candidate]()
-                        {
-                            m_app->SetSponzaCameraLocation(candidate);
-                        });
-                    if (selected)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-        }
-
-        ImGui::TextUnformatted("World Scenes");
-        const std::string currentScene = m_app->GetCurrentSceneName();
-        const std::string currentSceneDisplayName = m_app->GetCurrentSceneDisplayName();
-        const float folderButtonWidth = ImGui::GetFrameHeight();
-        ImGui::SetNextItemWidth(-(folderButtonWidth + style.ItemSpacing.x));
-        const bool sceneComboOpen = BeginRoundedCombo(
-            "##Scene",
-            currentSceneDisplayName.c_str());
-        // UI convention: every UVSR-owned interactive control explains itself on hover.
-        ImGui::SetItemTooltip("Load a different scene.");
-        if (sceneComboOpen)
-        {
-            const std::vector<SceneCatalogEntry>& scenes = m_app->GetAvailableScenes();
-            for (const SceneCatalogEntry& scene : scenes)
-            {
-                ImGui::PushID(scene.FileName.c_str());
-                const bool is_selected = scene.FileName == currentScene;
-                DrawDeferredDropdownOption(
-                    scene.DisplayName.c_str(),
-                    scene.DisplayName.c_str(),
-                    is_selected,
-                    [this, sceneName = scene.FileName]()
-                    {
-                        m_app->SetCurrentSceneName(sceneName);
-                    });
-                if (is_selected)
-                    ImGui::SetItemDefaultFocus();
-                ImGui::PopID();
-            }
-            ImGui::EndCombo();
-        }
-
-        ImGui::SameLine();
-        // A single native button frame matches the neighboring scene combo.
-        // The previous two translucent fills composited into a darker surface.
-        const bool openSceneFolderPressed = ImGui::Button(
-            "##OpenSceneFolder",
-            ImVec2(folderButtonWidth, ImGui::GetFrameHeight()));
-        const ImVec2 iconMin = ImGui::GetItemRectMin();
-        const ImVec2 iconMax = ImGui::GetItemRectMax();
-        ImDrawList* folderDrawList = ImGui::GetWindowDrawList();
-        if (openSceneFolderPressed)
-        {
-            const std::filesystem::path sceneFolder = m_app->GetSceneDir();
-            ShellExecuteW(nullptr, L"open", sceneFolder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        }
-        {
-            const float iconWidth = iconMax.x - iconMin.x;
-            const float iconHeight = iconMax.y - iconMin.y;
-            const ImU32 iconColor = ImGui::GetColorU32(ImGuiCol_Text);
-            const ImVec2 bodyMin(iconMin.x + iconWidth * 0.20f, iconMin.y + iconHeight * 0.38f);
-            const ImVec2 bodyMax(iconMax.x - iconWidth * 0.20f, iconMax.y - iconHeight * 0.22f);
-            folderDrawList->AddRect(bodyMin, bodyMax, iconColor, 1.5f, 0, 1.5f);
-            folderDrawList->AddLine(
-                ImVec2(bodyMin.x, bodyMin.y),
-                ImVec2(bodyMin.x + iconWidth * 0.22f, iconMin.y + iconHeight * 0.27f),
-                iconColor, 1.5f);
-            folderDrawList->AddLine(
-                ImVec2(bodyMin.x + iconWidth * 0.22f, iconMin.y + iconHeight * 0.27f),
-                ImVec2(bodyMin.x + iconWidth * 0.40f, bodyMin.y),
-                iconColor, 1.5f);
-        }
-        ImGui::SetItemTooltip("Open the scene folder.");
-
-        if (m_SceneLoadFailed)
-        {
-            ImGui::PushStyleColor(
-                ImGuiCol_Text,
-                g_UiVisualTokens.errorText);
-            ImGui::TextWrapped(
-                "The selected scene could not be loaded.");
-            ImGui::PopStyleColor();
-            if (ImGui::Button(
-                    "Retry Scene Load",
-                    ImVec2(-FLT_MIN, 0.f)))
-            {
-                m_SceneLoadFailed = false;
-                m_app->RetryCurrentSceneLoad();
-            }
-            ImGui::SetItemTooltip(
-                "Retry loading the currently selected scene.");
-        }
-
-        EndDrawerBody();
-        }
-        ImGui::Spacing();
+        DrawGeneralDrawer(settingsControlWidth);
 
         const bool representationOpen = DrawCollapsingHeader(
             "Representation",
@@ -16088,23 +17948,35 @@ protected:
                     const bool multipleSamplesEnabled =
                         ratio.useRatioEstimator &&
                         !ratio.hardShadows && angularSize > 1e-4f;
-                    int sampleRateLog2 = ratio.sampleRateLog2;
-                    const std::string_view sampleRateLabel =
-                        GetHeitzRatioEstimatorSampleRateLabel(
-                            sampleRateLog2);
+                    int sampleRateLog2 = multipleSamplesEnabled
+                        ? ratio.sampleRateLog2
+                        : HeitzRatioEstimatorMinimumSampleRateLog2;
+                    int sampleRate = 1 << sampleRateLog2;
                     ImGui::SetNextItemWidth(settingsControlWidth);
-                    if (!multipleSamplesEnabled)
-                        ImGui::BeginDisabled();
+                    const bool sampleSliderManualDisabledAlpha =
+                        BeginVisuallyDisabledUiScope(
+                            "##RatioEstimatorSamplesDisabledPresentation",
+                            !multipleSamplesEnabled);
                     if (ImGui::SliderInt(
                             "Samples Per Pixel##RatioEstimatorShadows",
-                            &sampleRateLog2,
-                            HeitzRatioEstimatorMinimumSampleRateLog2,
-                            HeitzRatioEstimatorMaximumSampleRateLog2,
-                            sampleRateLabel.data(),
-                            ImGuiSliderFlags_AlwaysClamp))
+                            &sampleRate,
+                            1,
+                            1 << HeitzRatioEstimatorMaximumSampleRateLog2,
+                            "%d",
+                            ImGuiSliderFlags_AlwaysClamp |
+                                ImGuiSliderFlags_Logarithmic))
                     {
-                        ratio.sampleRateLog2 = sampleRateLog2;
-                        m_app->ResetImageBasedLightingHistory();
+                        const int candidateSampleRateLog2 = std::clamp(
+                            static_cast<int>(std::lround(std::log2(
+                                static_cast<double>(
+                                    std::max(1, sampleRate))))),
+                            HeitzRatioEstimatorMinimumSampleRateLog2,
+                            HeitzRatioEstimatorMaximumSampleRateLog2);
+                        if (candidateSampleRateLog2 != ratio.sampleRateLog2)
+                        {
+                            ratio.sampleRateLog2 = candidateSampleRateLog2;
+                            m_app->ResetImageBasedLightingHistory();
+                        }
                     }
                     ImGui::SetItemTooltip(
                         "Choose 1 through 64 matched rays per pixel. Every "
@@ -16120,8 +17992,8 @@ protected:
                             ratioDefaults.sampleRateLog2;
                         m_app->ResetImageBasedLightingHistory();
                     }
-                    if (!multipleSamplesEnabled)
-                        ImGui::EndDisabled();
+                    EndVisuallyDisabledUiScope(
+                        sampleSliderManualDisabledAlpha);
 
                     const NoiseSettings oldResolvedNoise =
                         ResolveNoiseSettings(m_ui.Noise, ratio.noise);
@@ -17229,563 +19101,6 @@ protected:
             EndDrawerBody();
         }
         ImGui::Spacing();
-        const bool statisticsOpen = DrawCollapsingHeader(
-            "Statistics",
-            "Inspect frame performance and the retained renderer effects.");
-        if (statisticsOpen)
-        {
-            BeginDrawerBody("##StatisticsBody", settingsControlWidth);
-
-            const std::string performanceLine =
-                BuildPerformanceLine(m_PerformanceStatValues);
-            ImGui::TextWrapped("%s", performanceLine.c_str());
-
-            static constexpr const char* StatisticsEffectLabels[] = {
-                "Complete Renderer",
-                "Scene Setup",
-                "Geometry",
-                "Direct Lighting",
-                "Screen Space Visibility",
-                "Directional Shadows",
-                "Temporal Reconstructive",
-                "Fast Approximate",
-                "Conservative Morphological",
-                "Multisample Adaptive",
-                "Material Picking",
-                "Environment Background",
-                "Tone Mapping",
-                "Output Blit"
-            };
-            static_assert(
-                std::size(StatisticsEffectLabels) ==
-                static_cast<size_t>(StatisticsEffect::Count));
-            static constexpr int DefaultStatisticsEffect =
-                static_cast<int>(StatisticsEffect::CompleteRenderer);
-            m_StatisticsEffect = std::clamp(
-                m_StatisticsEffect,
-                0,
-                static_cast<int>(StatisticsEffect::Count) - 1);
-            ImGui::TextUnformatted("Effect");
-            if (DrawPresetResetIcon(
-                    "StatisticsEffect",
-                    m_StatisticsEffect != DefaultStatisticsEffect))
-            {
-                m_StatisticsEffect = DefaultStatisticsEffect;
-            }
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            if (BeginRoundedCombo(
-                    "##StatisticsEffect",
-                    StatisticsEffectLabels[m_StatisticsEffect]))
-            {
-                for (int index = 0;
-                    index < static_cast<int>(
-                        std::size(StatisticsEffectLabels));
-                    ++index)
-                {
-                    DrawDeferredDropdownOption(
-                        StatisticsEffectLabels[index],
-                        StatisticsEffectLabels[index],
-                        m_StatisticsEffect == index,
-                        [selected = &m_StatisticsEffect, index]()
-                        {
-                            *selected = index;
-                        });
-                    if (m_StatisticsEffect == index)
-                        ImGui::SetItemDefaultFocus();
-                }
-                ImGui::EndCombo();
-            }
-            ImGui::SetItemTooltip(
-                "Choose the renderer effect whose graphics cost is shown below.");
-            const StatisticsEffect selectedEffect =
-                static_cast<StatisticsEffect>(m_StatisticsEffect);
-
-            const RendererTimings& timings =
-                m_app->GetRendererTimings();
-            static constexpr ImGuiTableFlags StatisticsTableFlags =
-                ImGuiTableFlags_BordersInnerH |
-                ImGuiTableFlags_RowBg |
-                ImGuiTableFlags_SizingStretchProp;
-            const auto beginStatisticsTable =
-                [](const char* identifier, const char* firstColumn)
-            {
-                if (!ImGui::BeginTable(
-                        identifier,
-                        2,
-                        StatisticsTableFlags))
-                    return false;
-                ImGui::TableSetupColumn(
-                    firstColumn,
-                    ImGuiTableColumnFlags_WidthStretch,
-                    3.f);
-                ImGui::TableSetupColumn(
-                    "Current",
-                    ImGuiTableColumnFlags_WidthStretch,
-                    1.35f);
-                ImGui::TableHeadersRow();
-                return true;
-            };
-            const auto beginStatisticsRow =
-                [](const char* label, bool available)
-            {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                if (available)
-                    ImGui::TextUnformatted(label);
-                else
-                    ImGui::TextDisabled("%s", label);
-                ImGui::TableSetColumnIndex(1);
-            };
-            const auto drawMilliseconds =
-                [&beginStatisticsRow](
-                    const char* label, double value, bool available)
-            {
-                beginStatisticsRow(label, available);
-                if (available)
-                    ImGui::Text("%.3f ms", value);
-                else
-                    ImGui::TextDisabled("--");
-            };
-            const auto drawCount =
-                [&beginStatisticsRow](
-                    const char* label, uint64_t value, bool available)
-            {
-                beginStatisticsRow(label, available);
-                if (available)
-                    ImGui::Text("%llu", static_cast<unsigned long long>(value));
-                else
-                    ImGui::TextDisabled("--");
-            };
-            const auto drawMemory =
-                [&beginStatisticsRow](
-                    const char* label, uint64_t bytes, bool available)
-            {
-                beginStatisticsRow(label, available);
-                if (available)
-                {
-                    constexpr double BytesPerMebibyte = 1024.0 * 1024.0;
-                    ImGui::Text(
-                        "%.2f MiB",
-                        double(bytes) / BytesPerMebibyte);
-                }
-                else
-                    ImGui::TextDisabled("--");
-            };
-            const auto drawText =
-                [&beginStatisticsRow](
-                    const char* label, const char* value, bool available)
-            {
-                beginStatisticsRow(label, available);
-                if (available)
-                    ImGui::TextUnformatted(value);
-                else
-                    ImGui::TextDisabled("--");
-            };
-            const auto drawRendererTiming =
-                [this, &timings, &drawMilliseconds](
-                    const char* label, RendererTimingStage stage)
-            {
-                const bool available =
-                    m_app->IsRendererStageActiveThisFrame(stage) &&
-                    timings.IsAvailable(stage);
-                drawMilliseconds(label, timings.Get(stage), available);
-            };
-            const auto drawScreenSpaceVisibilityTiming =
-                [this, &drawMilliseconds](const char* label)
-            {
-                const bool available =
-                    m_HasVisibilityStatSnapshot &&
-                    m_DisplayedVisibilityTimings.active &&
-                    m_DisplayedVisibilityTimings.available;
-                drawMilliseconds(
-                    label,
-                    m_DisplayedVisibilityTimings.CompleteEffectMs(),
-                    available);
-            };
-            const auto drawSelectedRendererTable =
-                [&beginStatisticsTable, &drawRendererTiming](
-                    const char* label, RendererTimingStage stage)
-            {
-                if (!beginStatisticsTable(
-                        "##SelectedRendererStatistics", "Graphics Stage"))
-                    return;
-                drawRendererTiming(label, stage);
-                drawRendererTiming(
-                    "Complete Renderer Frame",
-                    RendererTimingStage::CompleteFrame);
-                ImGui::EndTable();
-            };
-
-            switch (selectedEffect)
-            {
-            case StatisticsEffect::CompleteRenderer:
-                if (beginStatisticsTable(
-                        "##CompleteRendererStatistics", "Graphics Stage"))
-                {
-                    static constexpr std::pair<
-                        const char*, RendererTimingStage> CompleteRows[] = {
-                        { "Complete Renderer Frame",
-                            RendererTimingStage::CompleteFrame },
-                        { "Scene Setup and Clears",
-                            RendererTimingStage::SceneSetup },
-                        { "Geometry", RendererTimingStage::Geometry },
-                        { "Closest Surface Resolve",
-                            RendererTimingStage::MultisampleResolve },
-                        { "Shadow Ray Dispatch",
-                            RendererTimingStage::ShadowRayDispatch },
-                        { "Shadow Denoise",
-                            RendererTimingStage::ShadowDenoise },
-                        { "Sky Visibility Ray Dispatch",
-                            RendererTimingStage::SkyVisibilityRayDispatch },
-                        { "Sky Visibility Denoise",
-                            RendererTimingStage::SkyVisibilityDenoise },
-                        { "Direct Lighting",
-                            RendererTimingStage::DirectLighting },
-                        { "Visibility Lighting Preparation",
-                            RendererTimingStage::VisibilityLightingPreparation },
-                        { "Screen Space Visibility",
-                            RendererTimingStage::ScreenSpaceVisibility },
-                        { "Ambient Occlusion Denoise",
-                            RendererTimingStage::AmbientOcclusionDenoise },
-                        { "Diffuse Illumination Denoise",
-                            RendererTimingStage::DiffuseIlluminationDenoise },
-                        { "Material Picking",
-                            RendererTimingStage::MaterialPicking },
-                        { "Environment Background",
-                            RendererTimingStage::EnvironmentBackground },
-                        { "Auto Exposure",
-                            RendererTimingStage::AutoExposure },
-                        { "Tone Mapping", RendererTimingStage::ToneMapping },
-                        { "Fast Approximate",
-                            RendererTimingStage::FastApproximate },
-                        { "Output Blit", RendererTimingStage::OutputBlit }
-                    };
-                    static_assert(
-                        std::size(CompleteRows) ==
-                        static_cast<size_t>(RendererTimingStage::Count));
-                    for (const auto& [label, stage] : CompleteRows)
-                    {
-                        if (stage ==
-                            RendererTimingStage::ScreenSpaceVisibility)
-                        {
-                            drawScreenSpaceVisibilityTiming(label);
-                        }
-                        else
-                            drawRendererTiming(label, stage);
-                    }
-                    ImGui::EndTable();
-                }
-                break;
-            case StatisticsEffect::SceneSetup:
-                drawSelectedRendererTable(
-                    "Scene Setup", RendererTimingStage::SceneSetup);
-                break;
-            case StatisticsEffect::Geometry:
-                drawSelectedRendererTable(
-                    "Geometry", RendererTimingStage::Geometry);
-                break;
-            case StatisticsEffect::DirectLighting:
-                if (beginStatisticsTable(
-                        "##DirectLightingStatistics", "Lighting Stage"))
-                {
-                    drawRendererTiming(
-                        "Direct Lighting",
-                        RendererTimingStage::DirectLighting);
-                    drawRendererTiming(
-                        "Visibility Lighting Preparation",
-                        RendererTimingStage::VisibilityLightingPreparation);
-                    drawRendererTiming(
-                        "Complete Renderer Frame",
-                        RendererTimingStage::CompleteFrame);
-                    ImGui::EndTable();
-                }
-                break;
-            case StatisticsEffect::Visibility:
-                if (beginStatisticsTable(
-                        "##VisibilityStatistics", "Visibility Metric"))
-                {
-                    const ScreenSpaceVisibilityTimings& visibility =
-                        m_DisplayedVisibilityTimings;
-                    const bool available = m_HasVisibilityStatSnapshot;
-                    drawMilliseconds(
-                        "Complete Effect",
-                        visibility.CompleteEffectMs(),
-                        available);
-                    drawMilliseconds(
-                        "First Trace", visibility.firstTraceMs, available);
-                    drawMilliseconds(
-                        "Reconstruction",
-                        visibility.reconstructionMs,
-                        available);
-                    drawMilliseconds(
-                        "Composition", visibility.compositionMs, available);
-                    drawMemory(
-                        "Output Texture Memory",
-                        visibility.outputTextureBytes,
-                        available);
-                    drawMemory(
-                        "Working Texture Memory",
-                        visibility.workingTextureBytes,
-                        available);
-                    drawRendererTiming(
-                        "Ambient Occlusion Denoise",
-                        RendererTimingStage::AmbientOcclusionDenoise);
-                    drawRendererTiming(
-                        "Diffuse Illumination Denoise",
-                        RendererTimingStage::DiffuseIlluminationDenoise);
-                    drawCount(
-                        "Dispatches",
-                        visibility.activeDispatchCount,
-                        available);
-                    drawCount(
-                        "Read Resources",
-                        visibility.activeSrvCount,
-                        available);
-                    drawCount(
-                        "Write Resources",
-                        visibility.activeUavCount,
-                        available);
-                    drawRendererTiming(
-                        "Complete Renderer Frame",
-                        RendererTimingStage::CompleteFrame);
-                    ImGui::EndTable();
-                }
-                break;
-            case StatisticsEffect::Shadows:
-                if (beginStatisticsTable(
-                        "##ShadowStatistics", "Shadow Metric"))
-                {
-                    drawRendererTiming(
-                        "Shadow Ray Dispatch",
-                        RendererTimingStage::ShadowRayDispatch);
-                    drawRendererTiming(
-                        "Shadow Denoise",
-                        RendererTimingStage::ShadowDenoise);
-                    drawRendererTiming(
-                        "Sky Visibility Ray Dispatch",
-                        RendererTimingStage::SkyVisibilityRayDispatch);
-                    drawRendererTiming(
-                        "Sky Visibility Denoise",
-                        RendererTimingStage::SkyVisibilityDenoise);
-                    drawRendererTiming(
-                        "Complete Renderer Frame",
-                        RendererTimingStage::CompleteFrame);
-                    ImGui::EndTable();
-                }
-                break;
-            case StatisticsEffect::TemporalReconstructive:
-                if (beginStatisticsTable(
-                        "##TemporalStatistics", "Temporal Metric"))
-                {
-                    const TemporalAATimings& temporal =
-                        m_DisplayedTemporalAATimings;
-                    const bool available =
-                        m_ui.AntiAliasing.temporal.enabled &&
-                        m_HasTemporalAAStatSnapshot;
-                    drawMilliseconds(
-                        "Complete Effect",
-                        temporal.CompleteEffectMilliseconds(),
-                        available);
-                    drawMilliseconds(
-                        "History Blend",
-                        temporal.blendMilliseconds,
-                        available);
-                    drawMilliseconds(
-                        "Output",
-                        temporal.outputMilliseconds,
-                        available);
-                    drawMilliseconds(
-                        "Presentation Sharpen",
-                        temporal.presentationSharpenMilliseconds,
-                        available);
-                    drawMemory(
-                        "Active History Memory",
-                        temporal.activeHistoryTextureBytes,
-                        available);
-                    drawMemory(
-                        "Resident History Memory",
-                        temporal.residentHistoryTextureBytes,
-                        available);
-                    drawMemory(
-                        "Full-Quality History Memory",
-                        temporal.robustHistoryTextureBytes,
-                        available);
-                    drawMemory(
-                        "Minimum-Cost History Memory",
-                        temporal.minimumHistoryTextureBytes,
-                        available);
-                    drawText(
-                        "Effective Cost",
-                        GetTemporalAaCostModeLabel(
-                            temporal.effectiveCostMode),
-                        available);
-                    beginStatisticsRow(
-                        "Minimum History Formats", available);
-                    if (!available)
-                        ImGui::TextDisabled("--");
-                    else if (!temporal.minimumPathSupported)
-                        ImGui::TextDisabled("Unsupported");
-                    else
-                    {
-                        ImGui::Text(
-                            "%s + %s",
-                            temporal.minimumColorIsR11G11B10
-                                ? "R11G11B10" : "RGBA16F",
-                            temporal.minimumDepthIsR16
-                                ? "R16F" : "R32F");
-                    }
-                    drawText(
-                        "History Status",
-                        temporal.historyValid ? "Valid" : "Invalid",
-                        available);
-                    drawCount(
-                        "Accumulated Frames",
-                        temporal.accumulationCount,
-                        available);
-                    drawCount(
-                        "History Resets",
-                        temporal.historyResetCount,
-                        available);
-                    drawCount(
-                        "Dispatches", temporal.dispatchCount, available);
-                    drawCount(
-                        "History Color Samples",
-                        temporal.historyColorSamples,
-                        available);
-                    drawCount(
-                        "History Depth Gathers",
-                        temporal.historyDepthGathers,
-                        available);
-                    drawCount(
-                        "History Depth Samples",
-                        temporal.historyDepthSamples,
-                        available);
-                    drawRendererTiming(
-                        "Complete Renderer Frame",
-                        RendererTimingStage::CompleteFrame);
-                    ImGui::EndTable();
-                }
-                break;
-            case StatisticsEffect::FastApproximate:
-                drawSelectedRendererTable(
-                    "Fast Approximate",
-                    RendererTimingStage::FastApproximate);
-                break;
-            case StatisticsEffect::ConservativeMorphological:
-                if (beginStatisticsTable(
-                        "##MorphologicalStatistics", "Morphological Stage"))
-                {
-                    const Cmaa2Timings& morphological =
-                        m_DisplayedCmaa2Timings;
-                    const bool available =
-                        m_ui.AntiAliasing.cmaa2.enabled &&
-                        m_HasCmaa2StatSnapshot;
-                    drawMilliseconds(
-                        "Complete Effect",
-                        morphological.CompleteEffectMilliseconds(),
-                        available);
-                    drawMilliseconds(
-                        "Edge Detection",
-                        morphological.edgeMilliseconds,
-                        available);
-                    drawMilliseconds(
-                        "Candidate Processing",
-                        morphological.candidateMilliseconds,
-                        available);
-                    drawMilliseconds(
-                        "Apply",
-                        morphological.applyMilliseconds,
-                        available);
-                    drawRendererTiming(
-                        "Complete Renderer Frame",
-                        RendererTimingStage::CompleteFrame);
-                    ImGui::EndTable();
-                }
-                break;
-            case StatisticsEffect::Multisample:
-                if (beginStatisticsTable(
-                        "##MultisampleStatistics", "Multisample Metric"))
-                {
-                    const bool enabled = m_ui.AntiAliasing.msaa.enabled;
-                    const uint32_t requestedSamples =
-                        m_ui.AntiAliasing.msaa.sampleCount;
-                    const uint32_t activeSamples =
-                        m_app->GetActiveRasterSampleCount();
-                    const bool active = enabled && activeSamples > 1u;
-                    drawText(
-                        "Status",
-                        active ? "Active" :
-                            enabled ? "Format Unsupported" : "Disabled",
-                        true);
-                    drawCount(
-                        "Requested Samples", requestedSamples, enabled);
-                    drawCount("Active Samples", activeSamples, enabled);
-                    if (active)
-                    {
-                        drawRendererTiming(
-                            "Geometry", RendererTimingStage::Geometry);
-                        drawRendererTiming(
-                            "Direct Lighting",
-                            RendererTimingStage::DirectLighting);
-                        drawRendererTiming(
-                            "Visibility Lighting Preparation",
-                            RendererTimingStage::VisibilityLightingPreparation);
-                        drawRendererTiming(
-                            "Closest Surface Resolve",
-                            RendererTimingStage::MultisampleResolve);
-                    }
-                    else
-                    {
-                        drawMilliseconds("Geometry", 0.0, false);
-                        drawMilliseconds("Direct Lighting", 0.0, false);
-                        drawMilliseconds(
-                            "Visibility Lighting Preparation", 0.0, false);
-                        drawMilliseconds(
-                            "Closest Surface Resolve", 0.0, false);
-                    }
-                    drawRendererTiming(
-                        "Complete Renderer Frame",
-                        RendererTimingStage::CompleteFrame);
-                    ImGui::EndTable();
-                }
-                break;
-            case StatisticsEffect::MaterialPicking:
-                drawSelectedRendererTable(
-                    "Material Picking",
-                    RendererTimingStage::MaterialPicking);
-                break;
-            case StatisticsEffect::EnvironmentBackground:
-                drawSelectedRendererTable(
-                    "Environment Background",
-                    RendererTimingStage::EnvironmentBackground);
-                break;
-            case StatisticsEffect::ToneMapping:
-                if (beginStatisticsTable(
-                        "##ToneMappingStatistics", "Graphics Stage"))
-                {
-                    drawRendererTiming(
-                        "Auto Exposure",
-                        RendererTimingStage::AutoExposure);
-                    drawRendererTiming(
-                        "Tone Mapping",
-                        RendererTimingStage::ToneMapping);
-                    drawRendererTiming(
-                        "Complete Renderer Frame",
-                        RendererTimingStage::CompleteFrame);
-                    ImGui::EndTable();
-                }
-                break;
-            case StatisticsEffect::OutputBlit:
-                drawSelectedRendererTable(
-                    "Output Blit", RendererTimingStage::OutputBlit);
-                break;
-            default:
-                break;
-            }
-
-            EndDrawerBody();
-        }
-        ImGui::Spacing();
         const bool antiAliasingOpen = DrawCollapsingHeader(
             "Aliasing",
             "Enable temporal, fast approximate, morphological, and "
@@ -18739,17 +20054,35 @@ protected:
                 "White Detail",
                 "White Lighting"
             };
-            int worldMode = static_cast<int>(m_ui.WhiteWorld);
+            const int worldMode = std::clamp(
+                static_cast<int>(m_ui.WhiteWorld),
+                0,
+                static_cast<int>(std::size(WorldLabels)) - 1);
             SetNextLabeledControlWidth(
                 "Materials", settingsControlWidth);
-            if (ImGui::Combo(
+            if (BeginRoundedCombo(
                     "Materials",
-                    &worldMode,
-                    WorldLabels,
-                    static_cast<int>(std::size(WorldLabels))))
+                    WorldLabels[worldMode]))
             {
-                m_app->SetWhiteWorldMode(
-                    static_cast<WhiteWorldMode>(worldMode));
+                for (int index = 0;
+                    index < static_cast<int>(std::size(WorldLabels));
+                    ++index)
+                {
+                    const WhiteWorldMode candidate =
+                        static_cast<WhiteWorldMode>(index);
+                    const bool selected = candidate == m_ui.WhiteWorld;
+                    DrawDeferredDropdownOption(
+                        WorldLabels[index],
+                        WorldLabels[index],
+                        selected,
+                        [this, candidate]()
+                        {
+                            m_app->SetWhiteWorldMode(candidate);
+                        });
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
                 "Choose default scene materials or a white-world presentation. "
@@ -18774,20 +20107,38 @@ protected:
                 "Traced Indirect",
                 "Applied Indirect"
             };
-            int visibilityDebugView = static_cast<int>(
-                m_ui.ScreenSpaceVisibility.debugView);
+            const int visibilityDebugView = std::clamp(
+                static_cast<int>(m_ui.ScreenSpaceVisibility.debugView),
+                0,
+                static_cast<int>(std::size(VisibilityDebugLabels)) - 1);
             SetNextLabeledControlWidth(
                 "View##VisibilityDebug", settingsControlWidth);
-            if (ImGui::Combo(
+            if (BeginRoundedCombo(
                     "View##VisibilityDebug",
-                    &visibilityDebugView,
-                    VisibilityDebugLabels,
-                    static_cast<int>(
-                        std::size(VisibilityDebugLabels))))
+                    VisibilityDebugLabels[visibilityDebugView]))
             {
-                m_ui.ScreenSpaceVisibility.debugView =
-                    static_cast<VisibilityDebugView>(visibilityDebugView);
-                m_app->ResetImageBasedLightingHistory();
+                for (int index = 0;
+                    index < static_cast<int>(
+                        std::size(VisibilityDebugLabels));
+                    ++index)
+                {
+                    const VisibilityDebugView candidate =
+                        static_cast<VisibilityDebugView>(index);
+                    const bool selected =
+                        candidate == m_ui.ScreenSpaceVisibility.debugView;
+                    DrawDeferredDropdownOption(
+                        VisibilityDebugLabels[index],
+                        VisibilityDebugLabels[index],
+                        selected,
+                        [this, candidate]()
+                        {
+                            m_ui.ScreenSpaceVisibility.debugView = candidate;
+                            m_app->ResetImageBasedLightingHistory();
+                        });
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
                 "Show the default composite, ambient visibility, traced indirect "
@@ -18823,19 +20174,37 @@ protected:
                 "Specular Visibility",
                 "Environment Level"
             };
-            int lightingView =
-                static_cast<int>(m_ui.LightingDebugView);
+            const int lightingView = std::clamp(
+                static_cast<int>(m_ui.LightingDebugView),
+                0,
+                static_cast<int>(std::size(LightingLabels)) - 1);
             SetNextLabeledControlWidth(
                 "Information Filter", settingsControlWidth);
-            if (ImGui::Combo(
+            if (BeginRoundedCombo(
                     "Information Filter",
-                    &lightingView,
-                    LightingLabels,
-                    static_cast<int>(std::size(LightingLabels))))
+                    LightingLabels[lightingView]))
             {
-                m_ui.LightingDebugView =
-                    static_cast<PbrLightingDebugView>(lightingView);
-                m_app->ResetImageBasedLightingHistory();
+                for (int index = 0;
+                    index < static_cast<int>(std::size(LightingLabels));
+                    ++index)
+                {
+                    const PbrLightingDebugView candidate =
+                        static_cast<PbrLightingDebugView>(index);
+                    const bool selected =
+                        candidate == m_ui.LightingDebugView;
+                    DrawDeferredDropdownOption(
+                        LightingLabels[index],
+                        LightingLabels[index],
+                        selected,
+                        [this, candidate]()
+                        {
+                            m_ui.LightingDebugView = candidate;
+                            m_app->ResetImageBasedLightingHistory();
+                        });
+                    if (selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
                 "Choose which material or environment-lighting quantity is "
@@ -19309,26 +20678,40 @@ protected:
                     m_app->ResetImageBasedLightingHistory();
                 }
 
-                int sampleRateLog2 = skyVisibility.sampleRateLog2;
-                const std::string_view sampleRateLabel =
-                    GetRayTracedSkyVisibilitySampleRateLabel(
-                        sampleRateLog2);
+                int sampleRateLog2 = skyVisibility.useRatioEstimator
+                    ? skyVisibility.sampleRateLog2
+                    : RayTracedSkyVisibilityMinimumSampleRateLog2;
+                int sampleRate = 1 << sampleRateLog2;
                 ImGui::SetNextItemWidth(settingsControlWidth);
-                if (!skyVisibility.useRatioEstimator)
-                    ImGui::BeginDisabled();
+                const bool sampleSliderManualDisabledAlpha =
+                    BeginVisuallyDisabledUiScope(
+                        "##SkyVisibilitySamplesDisabledPresentation",
+                        !skyVisibility.useRatioEstimator);
                 if (ImGui::SliderInt(
                         "Samples Per Pixel##RayTracedSkyVisibility",
-                        &sampleRateLog2,
-                        RayTracedSkyVisibilityMinimumSampleRateLog2,
-                        RayTracedSkyVisibilityMaximumSampleRateLog2,
-                        sampleRateLabel.data(),
-                        ImGuiSliderFlags_AlwaysClamp))
+                        &sampleRate,
+                        1,
+                        1 << RayTracedSkyVisibilityMaximumSampleRateLog2,
+                        "%d",
+                        ImGuiSliderFlags_AlwaysClamp |
+                            ImGuiSliderFlags_Logarithmic))
                 {
-                    skyVisibility.sampleRateLog2 = sampleRateLog2;
-                    m_app->ResetImageBasedLightingHistory();
+                    const int candidateSampleRateLog2 = std::clamp(
+                        static_cast<int>(std::lround(std::log2(
+                            static_cast<double>(
+                                std::max(1, sampleRate))))),
+                        RayTracedSkyVisibilityMinimumSampleRateLog2,
+                        RayTracedSkyVisibilityMaximumSampleRateLog2);
+                    if (candidateSampleRateLog2 !=
+                        skyVisibility.sampleRateLog2)
+                    {
+                        skyVisibility.sampleRateLog2 =
+                            candidateSampleRateLog2;
+                        m_app->ResetImageBasedLightingHistory();
+                    }
                 }
-                if (!skyVisibility.useRatioEstimator)
-                    ImGui::EndDisabled();
+                EndVisuallyDisabledUiScope(
+                    sampleSliderManualDisabledAlpha);
                 ImGui::SetItemTooltip(
                     "Trace 1 through 64 cosine weighted geometric normal "
                     "hemisphere rays per pixel and average their binary hits "
@@ -20250,14 +21633,18 @@ protected:
         }
         ImGui::Spacing();
 
+        DrawMaterialDrawer(settingsControlWidth);
+        DrawInterfaceDrawer(settingsControlWidth);
+
         TrackSettingsScrollAnchor(
             ImGui::GetID("##SettingsFooterAnchor"),
             ImGui::GetCursorScreenPos().y);
         constexpr float ActionButtonCount = 4.f;
+        const float actionButtonGap = g_UiSpacingTokens.tight;
         const float actionButtonWidth = std::max(
             1.f,
             (ImGui::GetContentRegionAvail().x -
-                style.ItemSpacing.x * (ActionButtonCount - 1.f)) /
+                actionButtonGap * (ActionButtonCount - 1.f)) /
                 ActionButtonCount);
 
         const ImVec4 drawerBackgroundColor =
@@ -20275,18 +21662,24 @@ protected:
         ImGui::PushStyleColor(
             ImGuiCol_ButtonActive,
             drawerBackgroundActiveColor);
+        ImGui::PushStyleColor(
+            ImGuiCol_Text,
+            g_UiVisualTokens.actionButtonText);
 
         if (DrawCenteredActionButton("Reset", actionButtonWidth))
-            m_app->ResetAllRendererSettings();
+            ResetAllSettingsToFactoryDefaults();
+        const ImVec2 actionButtonRowMinimum =
+            ImGui::GetItemRectMin();
         ImGui::SetItemTooltip(
-            "Restore factory settings without changing the camera or scene.");
+            "Restore renderer and interface factory settings without changing "
+            "the camera, scene, or graphics adapter.");
 
-        ImGui::SameLine();
+        ImGui::SameLine(0.f, actionButtonGap);
         if (DrawCenteredActionButton("Capture", actionButtonWidth))
             m_ui.CopyScreenshotToClipboard = true;
         ImGui::SetItemTooltip("Copy the current frame to the clipboard.");
 
-        ImGui::SameLine();
+        ImGui::SameLine(0.f, actionButtonGap);
         if (DrawCenteredActionButton(
                 GetPixelZoomButtonLabel(m_ui.PixelZoom),
                 actionButtonWidth))
@@ -20298,140 +21691,270 @@ protected:
             "Cycle exact Off, 2x, 3x, 4x, and 5x pixel zoom. Z uses the "
             "same cycle.");
 
-        ImGui::SameLine();
+        ImGui::SameLine(0.f, actionButtonGap);
         if (DrawCenteredActionButton("Restart", actionButtonWidth))
         {
             g_RestartRequested = true;
             glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
         }
+        const ImVec2 actionButtonRowMaximum =
+            ImGui::GetItemRectMax();
+        if (g_UiVisualTokens.sceneTranslucentHeaders)
+        {
+            g_SettingsScrollStabilityContext
+                .translucentHeaderSupportRects.push_back(
+                    ImRect(
+                        actionButtonRowMinimum,
+                        actionButtonRowMaximum));
+        }
         ImGui::SetItemTooltip("Restart UVSR.");
-        ImGui::PopStyleColor(3);
+        ImGui::PopStyleColor(4);
 
         if (settingsScrollInputBlocked)
         {
             ImGui::EndDisabled();
+            ImGui::PopUvsrDisabledPresentation();
             ImGui::PopStyleVar();
         }
         if (deferredDropdownInputBlocked)
         {
             ImGui::EndDisabled();
+            ImGui::PopUvsrDisabledPresentation();
             ImGui::PopStyleVar();
         }
 
         EndSettingsScrollStability();
-        ImGuiWindow* settingsBodyWindow =
-            ImGui::GetCurrentWindow();
-        const bool settingsScrollIdle =
+        settingsScrollIdle =
             settingsBodyWindow->ScrollTarget.y >= FLT_MAX;
-        const bool settingsLayoutIdle =
+        settingsLayoutIdle =
             !g_SettingsScrollStabilityContext
                 .layoutAnimatingLastFrame;
         // Wheel motion is eased by the UI layer; this viewport fade keeps
         // partially clipped rows from popping into full contrast at either
         // edge while the settings list travels.
         DrawSettingsScrollEdgeFades();
+        const ImRect settingsBodyViewportRect(
+            settingsBodyWindow->Pos,
+            ImVec2(
+                settingsBodyWindow->Pos.x +
+                    settingsBodyWindow->Size.x,
+                settingsBodyWindow->Pos.y +
+                    settingsBodyWindow->Size.y));
+        const ImGuiWindow* settingsRootWindow =
+            settingsBodyWindow->ParentWindow;
+        const ImRect settingsRootBodyRect(
+            ImVec2(
+                settingsRootWindow->Pos.x + 0.5f,
+                settingsRootWindow->Pos.y +
+                    settingsRootWindow->TitleBarHeight),
+            ImVec2(
+                settingsRootWindow->Pos.x +
+                    settingsRootWindow->Size.x - 0.5f,
+                settingsRootWindow->Pos.y +
+                    settingsRootWindow->Size.y - 0.5f));
+        ImDrawList* settingsDecorationDrawList =
+            g_SettingsDecorationDrawList
+                ? g_SettingsDecorationDrawList
+                : settingsBodyDrawList;
+        // ImGui submits drawer child windows after their Settings parent. Put
+        // the shared viewport chrome on the last visible Settings child so the
+        // opaque ring and fixed shadow remain above whichever ordinary drawer
+        // reaches the viewport edge, without a General-specific paint path.
+        DrawFilledRoundedInsetFrame(
+            settingsDecorationDrawList,
+            settingsRootBodyRect,
+            settingsBodyViewportRect,
+            style.WindowRounding);
+        DrawSettingsFixedTopInsetShadow(
+            settingsDecorationDrawList,
+            settingsBodyViewportRect,
+            g_UiSpacingTokens.tight,
+            style.WindowRounding,
+            false);
+        DrawDrawerBodyOutline(
+            settingsDecorationDrawList,
+            settingsRootBodyRect.Min,
+            settingsRootBodyRect.Max,
+            style.WindowRounding,
+            0.f,
+            false);
+        DrawDrawerBodyOutline(
+            settingsDecorationDrawList,
+            settingsBodyViewportRect.Min,
+            settingsBodyViewportRect.Max,
+            style.WindowRounding,
+            0.f,
+            false);
+        ImGui::PopUvsrColorPickerPopupContentRight();
         ImGui::EndChild();
+        }
         const ImVec2 settingsWindowPosition =
             ImGui::GetWindowPos();
         const ImVec2 settingsWindowSize =
             ImGui::GetWindowSize();
-        const ImVec2 settingsWindowCenter(
-            settingsWindowPosition.x + settingsWindowSize.x * 0.5f,
-            settingsWindowPosition.y + settingsWindowSize.y * 0.5f);
-        const bool settingsCollapsed =
-            ImGui::IsWindowCollapsed();
-        m_SettingsCollapsed = settingsCollapsed;
         const float settingsTitleHeight =
             fontSize + style.FramePadding.y * 2.f;
+        const float rootBodyRounding =
+            style.WindowRounding;
+        const ImRect settingsBodyRect(
+            ImVec2(
+                settingsWindowPosition.x + 0.5f,
+                settingsWindowPosition.y + settingsTitleHeight),
+            ImVec2(
+                settingsWindowPosition.x +
+                    settingsWindowSize.x - 0.5f,
+                settingsWindowPosition.y +
+                    settingsWindowSize.y - 0.5f));
+        if (settingsExpanded &&
+            g_UiVisualTokens.sceneTranslucentHeaders)
+        {
+            DrawTranslucentHeaderPanelBodySurface(
+                settingsWindowDrawList,
+                settingsBodyRect,
+                rootBodyRounding);
+        }
+        if (!settingsExpanded &&
+            settingsBodyRect.GetHeight() >
+                style.WindowPadding.y * 2.f + 2.f)
+        {
+            const ImRect retainedSettingsContentRect(
+                ImVec2(
+                    settingsWindowPosition.x +
+                        style.WindowPadding.x,
+                    settingsWindowPosition.y +
+                        settingsTitleHeight +
+                        style.WindowPadding.y),
+                ImVec2(
+                    settingsWindowPosition.x +
+                        settingsWindowSize.x -
+                        style.WindowPadding.x,
+                    settingsWindowPosition.y +
+                        settingsWindowSize.y -
+                        style.WindowPadding.y));
+            DrawFilledRoundedInsetFrame(
+                settingsWindowDrawList,
+                settingsBodyRect,
+                retainedSettingsContentRect,
+                rootBodyRounding);
+            DrawSettingsFixedTopInsetShadow(
+                settingsWindowDrawList,
+                retainedSettingsContentRect,
+                g_UiSpacingTokens.tight,
+                rootBodyRounding,
+                false);
+            DrawDrawerBodyOutline(
+                settingsWindowDrawList,
+                settingsBodyRect.Min,
+                settingsBodyRect.Max,
+                rootBodyRounding,
+                0.f,
+                false);
+            DrawDrawerBodyOutline(
+                settingsWindowDrawList,
+                retainedSettingsContentRect.Min,
+                retainedSettingsContentRect.Max,
+                rootBodyRounding,
+                0.f,
+                false);
+        }
+        const bool settingsCollapsed =
+            ImGui::IsWindowCollapsed();
+        const bool settingsCollapseTransitionActive =
+            ImGui::IsCurrentUvsrWindowCollapseTransitionActive();
+        settingsLayoutIdle =
+            settingsLayoutIdle &&
+            !settingsCollapseTransitionActive;
+        m_SettingsCollapsed = settingsCollapsed;
         if (settingsCollapsed)
         {
-            UiBackdropRect& titleBackdrop =
-                m_ui.BackdropRects[0];
-            titleBackdrop.minX = settingsWindowPosition.x + 0.5f;
-            titleBackdrop.minY = settingsWindowPosition.y + 0.5f;
-            titleBackdrop.maxX =
-                settingsWindowPosition.x + settingsWindowSize.x - 0.5f;
-            titleBackdrop.maxY =
-                settingsWindowPosition.y + settingsTitleHeight - 0.5f;
-            titleBackdrop.rounding = style.FrameRounding;
-            titleBackdrop.visible =
-                titleBackdrop.maxX > titleBackdrop.minX &&
-                titleBackdrop.maxY > titleBackdrop.minY;
-
-            UiBackdropRect& statusBackdrop =
-                m_ui.BackdropRects[1];
-            statusBackdrop.minX = settingsWindowPosition.x + 0.5f;
-            statusBackdrop.minY =
-                settingsWindowPosition.y + settingsTitleHeight - 1.f;
-            statusBackdrop.maxX =
-                settingsWindowPosition.x + settingsWindowSize.x - 0.5f;
-            statusBackdrop.maxY =
-                settingsWindowPosition.y + settingsWindowSize.y - 0.5f;
-            statusBackdrop.rounding = std::min(
-                style.WindowRounding,
-                std::max(
-                    0.f,
-                    (settingsWindowSize.y -
-                        settingsTitleHeight + 1.f) * 0.15f));
-            statusBackdrop.visible =
-                statusBackdrop.maxX > statusBackdrop.minX &&
-                statusBackdrop.maxY > statusBackdrop.minY;
+            const bool materialPresentationWasActive =
+                m_ui.ShowMaterialDrawer ||
+                m_MaterialDrawerAppearance > 0.f;
+            if (m_ui.ShowMaterialDrawer)
+                RequestMaterialDrawerVisible(false, false);
+            m_MaterialDrawerAppearance = 0.f;
+            m_MaterialDrawerPresentationForceClosed =
+                m_MaterialDrawerPresentationForceClosed ||
+                materialPresentationWasActive;
         }
-        else
+        UiBackdropRect& performanceTitleBackdrop =
+            m_ui.BackdropRects[UiPerformanceTitleBackdropIndex];
+        UiBackdropRect& performanceBodyBackdrop =
+            m_ui.BackdropRects[UiPerformanceBodyBackdropIndex];
+        UiBackdropRect& settingsTitleBackdrop =
+            m_ui.BackdropRects[UiSettingsTitleBackdropIndex];
+        UiBackdropRect& settingsBodyBackdrop =
+            m_ui.BackdropRects[UiSettingsBodyBackdropIndex];
+        CapturePanelSurfaceBackdrops(
+            performanceTitleBackdrop,
+            performanceBodyBackdrop,
+            performanceWindowPosition,
+            performanceWindowSize,
+            settingsTitleHeight,
+            performanceWindowSize.y > settingsTitleHeight + 0.5f,
+            style.FrameRounding,
+            rootBodyRounding);
+        CapturePanelSurfaceBackdrops(
+            settingsTitleBackdrop,
+            settingsBodyBackdrop,
+            settingsWindowPosition,
+            settingsWindowSize,
+            settingsTitleHeight,
+            settingsWindowSize.y > settingsTitleHeight + 0.5f,
+            style.FrameRounding,
+            rootBodyRounding);
+        ImGui::End();
+
+        const ImVec2 panelStackCenter(
+            performanceWindowPosition.x +
+                performanceWindowSize.x * 0.5f,
+            (performanceWindowPosition.y +
+                settingsWindowPosition.y +
+                settingsWindowSize.y) * 0.5f);
+        if (g_UiVisualTokens.sceneTranslucentHeaders)
         {
-            // Match the two actual rounded surfaces drawn by the ImGui
-            // override. A single union rectangle would blur the empty upper
-            // corner wedges of the body between it and the title.
-            UiBackdropRect& titleBackdrop =
-                m_ui.BackdropRects[0];
-            titleBackdrop.minX = settingsWindowPosition.x + 0.5f;
-            titleBackdrop.minY = settingsWindowPosition.y + 0.5f;
-            titleBackdrop.maxX =
-                settingsWindowPosition.x + settingsWindowSize.x - 0.5f;
-            titleBackdrop.maxY =
-                settingsWindowPosition.y + settingsTitleHeight - 0.5f;
-            titleBackdrop.rounding = style.FrameRounding;
-            titleBackdrop.visible =
-                titleBackdrop.maxX > titleBackdrop.minX &&
-                titleBackdrop.maxY > titleBackdrop.minY;
-
-            UiBackdropRect& bodyBackdrop =
-                m_ui.BackdropRects[1];
-            bodyBackdrop.minX = settingsWindowPosition.x + 0.5f;
-            bodyBackdrop.minY =
-                settingsWindowPosition.y + settingsTitleHeight - 1.f;
-            bodyBackdrop.maxX =
-                settingsWindowPosition.x + settingsWindowSize.x - 0.5f;
-            bodyBackdrop.maxY =
-                settingsWindowPosition.y + settingsWindowSize.y - 0.5f;
-            bodyBackdrop.rounding = style.WindowRounding;
-            bodyBackdrop.visible =
-                bodyBackdrop.maxX > bodyBackdrop.minX &&
-                bodyBackdrop.maxY > bodyBackdrop.minY;
+            const float supportInset = std::max(
+                1.f,
+                style.FrameRounding);
+            for (const ImRect& headerRect :
+                g_SettingsScrollStabilityContext
+                    .translucentHeaderSupportRects)
+            {
+                const UiBackdropExclusionRect exclusion = {
+                    headerRect.Min.x + supportInset,
+                    headerRect.Min.y + supportInset,
+                    headerRect.Max.x - supportInset,
+                    headerRect.Max.y - supportInset
+                };
+                if (exclusion.maxX > exclusion.minX &&
+                    exclusion.maxY > exclusion.minY)
+                {
+                    settingsBodyBackdrop.compositeExclusions.push_back(
+                        exclusion);
+                }
+            }
         }
-        constexpr size_t settingsBackdropCount = 2u;
-        for (size_t backdropIndex = 0u;
-            backdropIndex < settingsBackdropCount;
+        TrackSettingsAppearanceDrawList(
+            ImGui::GetUvsrActiveColorPickerPopupDrawList());
+        for (size_t backdropIndex =
+                UiPerformanceTitleBackdropIndex;
+            backdropIndex <= UiSettingsBodyBackdropIndex;
             ++backdropIndex)
         {
-            UiBackdropRect& backdrop =
-                m_ui.BackdropRects[backdropIndex];
             ApplyBackdropAppearance(
-                backdrop,
-                settingsWindowCenter,
+                m_ui.BackdropRects[backdropIndex],
+                panelStackCenter,
                 settingsAppearanceScale,
                 settingsAppearanceOpacity);
-            backdrop.shadowBlur =
-                g_UiVisualTokens.backdropShadowBlur;
-            backdrop.shadowOpacity =
-                g_UiVisualTokens.backdropShadowOpacity;
-            backdrop.shadowOffsetY =
-                g_UiVisualTokens.backdropShadowOffsetY;
         }
-        ImGui::End();
+        ApplyWindowAppearance(
+            performanceWindowDrawList,
+            panelStackCenter,
+            settingsAppearanceScale,
+            settingsAppearanceOpacity);
         ApplyWindowAppearance(
             settingsWindowDrawList,
-            settingsWindowCenter,
+            panelStackCenter,
             settingsAppearanceScale,
             settingsAppearanceOpacity);
         for (ImDrawList* drawList :
@@ -20439,17 +21962,11 @@ protected:
         {
             ApplyWindowAppearance(
                 drawList,
-                settingsWindowCenter,
+                panelStackCenter,
                 settingsAppearanceScale,
                 settingsAppearanceOpacity);
         }
         ImGui::PopStyleColor(4);
-
-        DrawMaterialInspector(
-            width,
-            height,
-            uiMotionEnabled,
-            style);
 
         // Commit only after every UI window has finished composing. Any
         // synchronous renderer work then holds a previously presented stable
@@ -20458,9 +21975,9 @@ protected:
         FinishUnsubmittedDeferredDropdownPopupTransition();
         TryApplyDeferredDropdownUiActions(
             deferredDropdownCompositionIdle(
-                settingsLayoutIdle,
-                settingsScrollIdle),
-            !uiMotionEnabled);
+                settingsLayoutIdle &&
+                    !performanceCollapseTransitionActive,
+                settingsScrollIdle && performanceScrollIdle));
         RestoreActiveUiWordSpacing();
         ImGui::PopFont();
     }
@@ -20578,13 +22095,36 @@ bool SelectGraphicsAdapter(
             continue;
         }
 
+        nvrhi::RefCountPtr<ID3D12Device> testDevice;
         if (FAILED(D3D12CreateDevice(
                 adapter.dxgiAdapter,
                 deviceParams.featureLevel,
-                __uuidof(ID3D12Device),
-                nullptr)))
+                IID_PPV_ARGS(&testDevice))))
         {
             continue;
+        }
+
+        bool usesSharedSystemMemory = false;
+        D3D12_FEATURE_DATA_ARCHITECTURE1 architecture{};
+        architecture.NodeIndex = 0;
+        if (SUCCEEDED(testDevice->CheckFeatureSupport(
+                D3D12_FEATURE_ARCHITECTURE1,
+                &architecture,
+                sizeof(architecture))))
+        {
+            usesSharedSystemMemory = architecture.UMA != FALSE;
+        }
+        else
+        {
+            D3D12_FEATURE_DATA_ARCHITECTURE legacyArchitecture{};
+            legacyArchitecture.NodeIndex = 0;
+            if (SUCCEEDED(testDevice->CheckFeatureSupport(
+                    D3D12_FEATURE_ARCHITECTURE,
+                    &legacyArchitecture,
+                    sizeof(legacyArchitecture))))
+            {
+                usesSharedSystemMemory = legacyArchitecture.UMA != FALSE;
+            }
         }
 
         adapterChoices.push_back(GpuAdapterChoice{
@@ -20592,7 +22132,8 @@ bool SelectGraphicsAdapter(
             adapter.name,
             adapter.dedicatedVideoMemory,
             adapterDescription.VendorId,
-            adapterDescription.DeviceId
+            adapterDescription.DeviceId,
+            usesSharedSystemMemory
         });
 
         if (automaticSelection &&
@@ -20627,14 +22168,26 @@ bool SelectGraphicsAdapter(
         return false;
     }
 
-    log::info(
-        "Selected graphics adapter %d: %s "
-        "(PCI %04X:%04X, %llu MiB dedicated VRAM)",
-        selectedChoice->adapterIndex,
-        selectedChoice->name.c_str(),
-        selectedChoice->vendorId,
-        selectedChoice->deviceId,
-        static_cast<unsigned long long>(selectedChoice->dedicatedVideoMemory / (1024ull * 1024ull)));
+    if (selectedChoice->usesSharedSystemMemory)
+    {
+        log::info(
+            "Selected graphics adapter %d: %s (PCI %04X:%04X, shared / UMA)",
+            selectedChoice->adapterIndex,
+            selectedChoice->name.c_str(),
+            selectedChoice->vendorId,
+            selectedChoice->deviceId);
+    }
+    else
+    {
+        log::info(
+            "Selected graphics adapter %d: %s "
+            "(PCI %04X:%04X, %llu MiB dedicated VRAM)",
+            selectedChoice->adapterIndex,
+            selectedChoice->name.c_str(),
+            selectedChoice->vendorId,
+            selectedChoice->deviceId,
+            static_cast<unsigned long long>(selectedChoice->dedicatedVideoMemory / (1024ull * 1024ull)));
+    }
     return true;
 }
 

@@ -559,6 +559,35 @@ int main(int argc, char** argv)
         viewer,
         "ImGui::SliderInt(\"SamplesPerPixel##RatioEstimatorShadows\"",
         "logarithmic integer sample-rate slider");
+    RequireOrdered(
+        viewer,
+        {
+            "constboolmultipleSamplesEnabled=ratio.useRatioEstimator&&"
+                "!ratio.hardShadows&&angularSize>1e-4f;",
+            "intsampleRateLog2=multipleSamplesEnabled?"
+                "ratio.sampleRateLog2:"
+                "HeitzRatioEstimatorMinimumSampleRateLog2;",
+            "intsampleRate=1<<sampleRateLog2;",
+            "constboolsampleSliderManualDisabledAlpha="
+                "BeginVisuallyDisabledUiScope("
+                "\"##RatioEstimatorSamplesDisabledPresentation\","
+                "!multipleSamplesEnabled);",
+            "ImGui::SliderInt("
+                "\"SamplesPerPixel##RatioEstimatorShadows\","
+                "&sampleRate,",
+            "constintcandidateSampleRateLog2=std::clamp(",
+            "if(candidateSampleRateLog2!=ratio.sampleRateLog2)",
+            "ratio.sampleRateLog2=candidateSampleRateLog2;",
+            "m_app->ResetImageBasedLightingHistory();",
+            "if(DrawPresetResetIcon("
+                "\"RatioEstimatorShadowSamples\","
+                "ratio.sampleRateLog2!=ratioDefaults.sampleRateLog2))",
+            "EndVisuallyDisabledUiScope("
+                "sampleSliderManualDisabledAlpha);"
+        },
+        "gated sample slider presents the effective one-sample value locally, "
+        "uses nested-safe visual dimming, preserves the stored setting, and "
+        "only commits interactive changes");
     RequireContains(
         viewer,
         "\"SpecifyNoise##RatioEstimatorShadows\"",
@@ -572,7 +601,7 @@ int main(int argc, char** argv)
     RequireOrdered(
         viewer,
         {
-            "if(!multipleSamplesEnabled)ImGui::EndDisabled();",
+            "EndVisuallyDisabledUiScope(sampleSliderManualDisabledAlpha);",
             "\"MaxDistance##RatioEstimatorShadows\"",
             "\"RayBias##RatioEstimatorShadows\""
         },

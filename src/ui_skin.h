@@ -24,6 +24,119 @@ namespace uvsr
         UiSkin::Og
     };
 
+    struct UiRgbaColor
+    {
+        float red = 0.f;
+        float green = 0.f;
+        float blue = 0.f;
+        float alpha = 1.f;
+
+        [[nodiscard]] constexpr bool operator==(
+            const UiRgbaColor& other) const
+        {
+            return red == other.red &&
+                green == other.green &&
+                blue == other.blue &&
+                alpha == other.alpha;
+        }
+
+        [[nodiscard]] constexpr bool operator!=(
+            const UiRgbaColor& other) const
+        {
+            return !(*this == other);
+        }
+    };
+
+    struct UiSkinPalette
+    {
+        UiRgbaColor primaryAccent;
+        UiRgbaColor fontColor;
+        UiRgbaColor primaryBackground;
+
+        [[nodiscard]] constexpr bool operator==(
+            const UiSkinPalette& other) const
+        {
+            return primaryAccent == other.primaryAccent &&
+                fontColor == other.fontColor &&
+                primaryBackground == other.primaryBackground;
+        }
+
+        [[nodiscard]] constexpr bool operator!=(
+            const UiSkinPalette& other) const
+        {
+            return !(*this == other);
+        }
+    };
+
+    inline constexpr UiRgbaColor DefaultUiSecondaryAccent = {
+        0.26f,
+        0.59f,
+        0.98f,
+        0.31f
+    };
+    inline constexpr UiRgbaColor DefaultUiTertiaryAccent = {
+        0.117f,
+        0.217f,
+        0.342f,
+        1.f
+    };
+
+    inline constexpr UiSkinPalette DefaultUiAmpPalette = {
+        { 66.f / 255.f, 150.f / 255.f, 250.f / 255.f, 0.31f },
+        { 0.94f, 0.95f, 0.98f, 1.f },
+        { 0.018f, 0.018f, 0.018f, 0.72f }
+    };
+    struct UiAccentSettings
+    {
+        UiSkinPalette amp = DefaultUiAmpPalette;
+        UiRgbaColor secondaryAccent = DefaultUiSecondaryAccent;
+        UiRgbaColor tertiaryAccent = DefaultUiTertiaryAccent;
+    };
+
+    [[nodiscard]] constexpr const UiSkinPalette*
+        FindDefaultUiSkinPalette(UiSkin skin)
+    {
+        switch (skin)
+        {
+        case UiSkin::Amp:
+            return &DefaultUiAmpPalette;
+        case UiSkin::Og:
+        case UiSkin::Count:
+            return nullptr;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] inline UiSkinPalette* FindUiSkinPalette(
+        UiAccentSettings& settings,
+        UiSkin skin)
+    {
+        switch (skin)
+        {
+        case UiSkin::Amp:
+            return &settings.amp;
+        case UiSkin::Og:
+        case UiSkin::Count:
+            return nullptr;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] inline const UiSkinPalette* FindUiSkinPalette(
+        const UiAccentSettings& settings,
+        UiSkin skin)
+    {
+        switch (skin)
+        {
+        case UiSkin::Amp:
+            return &settings.amp;
+        case UiSkin::Og:
+        case UiSkin::Count:
+            return nullptr;
+        }
+        return nullptr;
+    }
+
     [[nodiscard]] constexpr std::string_view UiSkinLabel(UiSkin skin)
     {
         switch (skin)
@@ -31,7 +144,21 @@ namespace uvsr
         case UiSkin::Amp:
             return "Amp";
         case UiSkin::Og:
-            return "OG";
+            return "Ogg";
+        case UiSkin::Count:
+            break;
+        }
+        return {};
+    }
+
+    [[nodiscard]] constexpr std::string_view UiSkinCommandValue(UiSkin skin)
+    {
+        switch (skin)
+        {
+        case UiSkin::Amp:
+            return "amp";
+        case UiSkin::Og:
+            return "og";
         case UiSkin::Count:
             break;
         }
@@ -48,7 +175,7 @@ namespace uvsr
 
     // Behavior is deliberately separate from colors and dimensions. The
     // integration layer can change visual tokens without accidentally weakening
-    // the defining contract of OG: it alone is immediate and uses the stock
+    // the defining contract of Ogg: it alone is immediate and uses the stock
     // widget branches.
     [[nodiscard]] constexpr UiSkinBehavior GetUiSkinBehavior(UiSkin skin)
     {
@@ -67,6 +194,13 @@ namespace uvsr
         // safe while callers retain responsibility for validating stored enum
         // values before exposing them.
         return GetUiSkinBehavior(DefaultUiSkin);
+    }
+
+    [[nodiscard]] constexpr bool ResolveUiMotionEnabled(
+        UiSkin skin,
+        bool animationsEnabled)
+    {
+        return animationsEnabled && GetUiSkinBehavior(skin).motionEnabled;
     }
 
     namespace detail
@@ -135,7 +269,7 @@ namespace uvsr
 
         if (normalized == "amp")
             return UiSkin::Amp;
-        if (normalized == "og")
+        if (normalized == "ogg" || normalized == "og")
             return UiSkin::Og;
 
         return std::nullopt;

@@ -233,8 +233,142 @@ namespace
         return source.find(literal) != std::string_view::npos;
     }
 
+    void ValidateUiSpacing(
+        std::string_view viewer,
+        std::string_view uiCommandLayout)
+    {
+        const std::string compactLayout = Compact(uiCommandLayout);
+        RequireContains(
+            compactLayout,
+            "inlineconstexprfloatUiSpacingBasePixels=4.f;",
+            "four-pixel UI spacing base token");
+        RequireContains(
+            compactLayout,
+            "floattight=UiSpacingBasePixels;"
+            "floatregular=UiSpacingBasePixels*2.f;"
+            "floatsection=UiSpacingBasePixels*4.f;",
+            "4/8/16 unscaled UI spacing defaults");
+        RequireContains(
+            compactLayout,
+            "constfloattight=UiSpacingBasePixels*safeScale;"
+            "return{tight,tight*2.f,tight*4.f};",
+            "scale-preserving Tight, Regular, and Section spacing ratios");
+        RequireContains(
+            compactLayout,
+            "ResolveCommandInterfaceLayout("
+            "constUiCommandLayoutRect&workRectangle,floatmargin,"
+            "floatpanelToCommandGap,floatcompactWidth",
+            "command layout accepts a distinct panel-to-command gap directly "
+            "after the outer margin");
+        RequireContains(
+            compactLayout,
+            "constfloatsafePanelToCommandGap="
+            "std::max(0.f,panelToCommandGap);",
+            "negative panel-to-command gap clamp");
+        RequireContains(
+            compactLayout,
+            "result.settingsMaximumBottom=std::max("
+            "innerTop,result.top-safePanelToCommandGap);",
+            "Settings cap uses the independent clamped Tight gap");
+
+        const std::string_view skinSpacing = ExtractSection(
+            viewer,
+            "const float safeDisplayScale =",
+            "static void PushPanelBodySurface()",
+            "active-skin spacing application");
+        RequireContains(
+            Compact(skinSpacing),
+            "constUiSpacingTokensspacing="
+            "ResolveUiSpacingTokens(safeDisplayScale);"
+            "style.WindowPadding=ImVec2(spacing.regular,spacing.regular);"
+            "style.ItemSpacing=ImVec2(spacing.regular,spacing.tight);"
+            "style.ItemInnerSpacing=ImVec2(spacing.tight,spacing.tight);",
+            "Regular window/item X spacing and Tight item Y/inner spacing");
+
+        const std::string compactViewer = Compact(viewer);
+        RequireContains(
+            compactViewer,
+            "std::round(g_UiSpacingTokens.section)",
+            "Section-sized outer panel margin");
+        RequireContains(
+            compactViewer,
+            "constfloatpanelSeparation=g_UiSpacingTokens.tight;",
+            "Tight Performance-to-Settings gap");
+        RequireContains(
+            compactViewer,
+            "ResolveCommandInterfaceLayout("
+            "workRectangle,float(m_SettingsPanelMarginPixels),"
+            "g_UiSpacingTokens.tight,260.f*m_UiDisplayScale",
+            "Section-derived outer margin and Tight stack-to-command gap stay "
+            "distinct at the production call site");
+        RequireAbsent(
+            viewer,
+            "AddExactVerticalUiGap(",
+            "retired child-owned Settings title-to-General gap");
+        RequireContains(
+            compactViewer,
+            "constfloatactionButtonGap=g_UiSpacingTokens.tight;",
+            "Tight footer action-button gap");
+        const std::string_view interfaceDrawer = ExtractSection(
+            viewer,
+            "void DrawInterfaceDrawer(float settingsControlWidth)",
+            "static std::string BuildPerformanceLine(",
+            "final Interface drawer spacing");
+        Require(
+            CountOccurrences(interfaceDrawer, "ImGui::Spacing();") == 2u,
+            "collapsed and expanded Interface drawers must each emit exactly "
+            "one Tight ItemSpacing gap before the footer.");
+    }
+
     void ValidateDrawers(std::string_view viewer)
     {
+        const std::string_view generalDrawer = ExtractSection(
+            viewer,
+            "void DrawGeneralDrawer(float settingsControlWidth)",
+            "void DrawMaterialDrawer(float settingsControlWidth)",
+            "ordinary General drawer");
+        const std::string compactGeneralDrawer = Compact(generalDrawer);
+        RequireOrdered(
+            generalDrawer,
+            {
+                "const bool generalOpen = DrawCollapsingHeader(",
+                "\"General\"",
+                "ImGuiTreeNodeFlags_DefaultOpen",
+                "if (!generalOpen)",
+                "ImGui::Spacing();",
+                "return;",
+                "BeginDrawerBody(\"##GeneralBody\", settingsControlWidth);",
+                "EndDrawerBody();",
+                "ImGui::Spacing();"
+            },
+            "default-open General ordinary drawer skeleton");
+        Require(
+            CountOccurrences(
+                compactGeneralDrawer,
+                "DrawCollapsingHeader(") == 1u &&
+                CountOccurrences(
+                    compactGeneralDrawer,
+                    "BeginDrawerBody(") == 1u &&
+                CountOccurrences(
+                    compactGeneralDrawer,
+                    "EndDrawerBody();") == 1u &&
+                CountOccurrences(
+                    compactGeneralDrawer,
+                    "ImGui::Spacing();") == 2u,
+            "General must use exactly one ordinary header/body lifetime and "
+            "one runtime trailing gap on either branch.");
+        for (const std::string_view generalGeometryHack : {
+                std::string_view("ImGui::SetCursorPos"),
+                std::string_view("PushClipRect"),
+                std::string_view("ImGui::SetNextWindow"),
+                std::string_view("ImGui::BeginChild") })
+        {
+            RequireAbsent(
+                generalDrawer,
+                generalGeometryHack,
+                "General-specific root geometry and clipping");
+        }
+
         struct Drawer
         {
             std::string_view begin;
@@ -243,12 +377,6 @@ namespace
             std::string_view label;
         };
         const std::vector<Drawer> drawers = {
-            {
-                "const bool generalOpen = DrawCollapsingHeader(",
-                "const bool representationOpen = DrawCollapsingHeader(",
-                "##GeneralBody",
-                "General"
-            },
             {
                 "const bool representationOpen = DrawCollapsingHeader(",
                 "const auto drawNoiseSettingsControls = [&] (",
@@ -275,15 +403,9 @@ namespace
             },
             {
                 "const bool buffersOpen = DrawCollapsingHeader(",
-                "const bool statisticsOpen = DrawCollapsingHeader(",
+                "const bool antiAliasingOpen = DrawCollapsingHeader(",
                 "##BuffersBody",
                 "Buffers"
-            },
-            {
-                "const bool statisticsOpen = DrawCollapsingHeader(",
-                "const bool antiAliasingOpen = DrawCollapsingHeader(",
-                "##StatisticsBody",
-                "Statistics"
             },
             {
                 "const bool antiAliasingOpen = DrawCollapsingHeader(",
@@ -311,7 +433,7 @@ namespace
             },
             {
                 "const bool shadowsOpen = DrawCollapsingHeader(",
-                "constexpr float ActionButtonCount = 4.f;",
+                "DrawMaterialDrawer(settingsControlWidth);",
                 "##ShadowsBody",
                 "Shadows"
             }
@@ -347,6 +469,150 @@ namespace
                     "Diagnostic Cascaded Shadow Maps##Shadows") })
         {
             RequireAbsent(viewer, retiredDrawer, "cleaned Settings drawers");
+        }
+
+        const std::string_view settingsDrawers = ExtractSection(
+            viewer,
+            "DrawGeneralDrawer(settingsControlWidth);",
+            "constexpr float ActionButtonCount = 4.f;",
+            "Settings drawer order");
+        RequireOrdered(
+            settingsDrawers,
+            {
+                "DrawGeneralDrawer(settingsControlWidth);",
+                "const bool representationOpen = DrawCollapsingHeader(",
+                "const bool noiseOpen = DrawCollapsingHeader(",
+                "const bool diffuseOpen = DrawCollapsingHeader(",
+                "const bool denoisingOpen = DrawCollapsingHeader(",
+                "const bool buffersOpen = DrawCollapsingHeader(",
+                "const bool antiAliasingOpen = DrawCollapsingHeader(",
+                "const bool debugOpen = DrawCollapsingHeader(",
+                "const bool skyOpen = DrawCollapsingHeader(",
+                "const bool lightsOpen = DrawCollapsingHeader(",
+                "const bool shadowsOpen = DrawCollapsingHeader(",
+                "DrawMaterialDrawer(settingsControlWidth);",
+                "DrawInterfaceDrawer(settingsControlWidth);",
+                "TrackSettingsScrollAnchor("
+            },
+            "General-first Settings order with Material immediately before "
+            "the final Interface drawer");
+        Require(
+            CountOccurrences(
+                viewer,
+                "DrawGeneralDrawer(settingsControlWidth);") == 1u,
+            "Settings must submit the extracted General drawer exactly once.");
+        const std::string_view generalSubmissionScope = ExtractSection(
+            viewer,
+            "BeginSettingsScrollStability();",
+            "const bool representationOpen = DrawCollapsingHeader(",
+            "General Settings submission scope");
+        RequireOrdered(
+            generalSubmissionScope,
+            {
+                "BeginSettingsScrollStability();",
+                "const bool deferredDropdownInputBlocked =",
+                "ImGui::BeginDisabled();",
+                "const bool settingsScrollInputBlocked =",
+                "ImGui::BeginDisabled();",
+                "DrawGeneralDrawer(settingsControlWidth);"
+            },
+            "General remains first inside the shared deferred-input and scroll "
+            "stability scopes");
+        const std::string_view interfaceDrawer = ExtractSection(
+            viewer,
+            "void DrawInterfaceDrawer(float settingsControlWidth)",
+            "static std::string BuildPerformanceLine(",
+            "Interface drawer controls");
+        RequireOrdered(
+            interfaceDrawer,
+            {
+                "\"Interface\"",
+                "bool disableAnimations = !m_ui.AnimationsEnabled;",
+                "ImGui::Checkbox(",
+                "\"Disable Animations\"",
+                "&disableAnimations",
+                "m_ui.AnimationsEnabled = !disableAnimations;",
+                "\"Interface Skin\"",
+                "\"##UiSkin\"",
+                "for (const UiSkin candidate : UiSkinValues)",
+                "DrawDeferredDropdownOption(",
+                "UiSkinLabel(candidate).data(),",
+                "FindUiSkinPalette(m_ui.Accents, m_ui.Skin)",
+                "\"Primary Accent\"",
+                "editablePalette.primaryAccent",
+                "\"Secondary Accent\"",
+                "m_ui.Accents.secondaryAccent",
+                "\"Tertiary Accent\"",
+                "m_ui.Accents.tertiaryAccent",
+                "ImGui::SetNextItemOpen(false, ImGuiCond_Once);",
+                "\"Advanced Accents\"",
+                "\"Font Color\"",
+                "editablePalette.fontColor",
+                "\"Primary Background Color\"",
+                "editablePalette.primaryBackground"
+            },
+            "Interface starts with the inverse-bound animation checkbox, then owns "
+            "the skin, semantic colors, and two collapsed authored roles");
+        RequireContains(
+            interfaceDrawer,
+            "\"Set the menu body, resting closed controls, and \"\n"
+            "                        \"color picker background. Hover, active, body, and \"\n"
+            "                        \"picker opacity are derived from this resting color.\"",
+            "Primary Background tooltip ownership of the derived picker surface");
+        RequireAbsent(
+            interfaceDrawer,
+            "\"Enable Animations\"",
+            "Interface animation control has one stable inverse-bound label");
+        RequireContains(
+            viewer,
+            "bool                                AnimationsEnabled = true;",
+            "Interface animations default enabled on each launch");
+        for (const std::string_view colorFlag : {
+                std::string_view("ImGuiColorEditFlags_Float |"),
+                std::string_view("ImGuiColorEditFlags_DisplayRGB |"),
+                std::string_view("ImGuiColorEditFlags_AlphaBar |"),
+                std::string_view("ImGuiColorEditFlags_AlphaPreviewHalf") })
+        {
+            RequireContains(
+                interfaceDrawer,
+                colorFlag,
+                "RGBA Interface color editor flags");
+        }
+        RequireOrdered(
+            interfaceDrawer,
+            {
+                "ImGuiColorEditFlags colorEditFlags =",
+                "ImGuiColorEditFlags_AlphaPreviewHalf;",
+                "if (!ImGui::IsUvsrStockWidgetRenderingEnabled())",
+                "colorEditFlags |= ImGuiColorEditFlags_PickerHueWheel;",
+                "ImGui::ColorEdit4(",
+                "colorEditFlags)"
+            },
+            "authored Interface colors explicitly use the wheel picker while "
+            "Ogg preserves the stock picker preference");
+        RequireContains(
+            interfaceDrawer,
+            "const bool authoredPaletteAvailable =\n"
+            "            palette != nullptr && defaultPalette != nullptr;",
+            "Ogg disables primary and advanced authored palette roles");
+        Require(
+            CountOccurrences(
+                interfaceDrawer,
+                "authoredPaletteAvailable);") == 3u,
+            "Ogg must disable Primary Accent and both Advanced Accents "
+            "while leaving shared Secondary and Tertiary semantic colors live.");
+        for (const std::string_view retiredRole : {
+                std::string_view("primaryFont"),
+                std::string_view("secondaryFont"),
+                std::string_view("secondaryBackground"),
+                std::string_view("Primary Font Color"),
+                std::string_view("Secondary Font Color"),
+                std::string_view("Secondary Background Color") })
+        {
+            RequireAbsent(
+                interfaceDrawer,
+                retiredRole,
+                "retired split Interface palette role");
         }
     }
 
@@ -730,7 +996,7 @@ namespace
         const std::string_view buffers = ExtractSection(
             viewer,
             "const bool buffersOpen = DrawCollapsingHeader(",
-            "const bool statisticsOpen = DrawCollapsingHeader(",
+            "const bool antiAliasingOpen = DrawCollapsingHeader(",
             "Buffers drawer");
         RequireExactStrings(
             ExtractSection(
@@ -784,30 +1050,226 @@ namespace
         }
     }
 
-    void ValidateStatistics(std::string_view viewer)
+    void ValidatePerformance(std::string_view viewer)
     {
         const std::string_view performanceBuilders = ExtractSection(
             viewer,
             "static std::string BuildPerformanceLine(",
-            "static double StepTowardByTenth(",
+            "template <typename... Arguments>",
             "performance summary builders");
         Require(
-            CountOccurrences(performanceBuilders, "\" / \"") == 9u,
-            "Amp and OG performance summaries must use all nine slash "
-            "field separators.");
+            CountOccurrences(performanceBuilders, "\" / \"") == 5u,
+            "the one-line authored and two-line Ogg panel summaries must "
+            "retain all five slash field separators.");
         RequireAbsent(
             performanceBuilders,
             "\" - \"",
             "slash-separated performance summaries");
         const std::string_view statistics = ExtractSection(
             viewer,
-            "const bool statisticsOpen = DrawCollapsingHeader(",
-            "const bool antiAliasingOpen = DrawCollapsingHeader(",
-            "Statistics drawer");
+            "void DrawPerformancePanelContents(",
+            "void DrawGeneralDrawer(",
+            "Performance panel contents");
+        RequireAbsent(
+            statistics,
+            "DrawCollapsingHeader(",
+            "nested Performance drawer header");
         RequireContains(
             statistics,
-            "BuildPerformanceLine(m_PerformanceStatValues)",
-            "slash-separated performance summary");
+            "ImGui::TextUnformatted(performanceLine.c_str())",
+            "authored-skin Performance panel summary");
+        for (const std::string_view ogPanelContract : {
+                std::string_view("m_ComposedUiSkin == UiSkin::Og"),
+                std::string_view("ogPerformanceLines[0].c_str()"),
+                std::string_view("ogPerformanceLines[1].c_str()") })
+        {
+            RequireContains(
+                statistics,
+                ogPanelContract,
+                "Ogg two-line Performance panel summary");
+        }
+        RequireContains(
+            statistics,
+            "ImGui::SetItemTooltip(\"%s\", performanceTooltip)",
+            "Performance panel triangle-count explanation");
+
+        const std::string_view performanceRoot = ExtractSection(
+            viewer,
+            "const float performanceWindowTop =",
+            "const float settingsWindowTop =",
+            "top-level Performance window");
+        RequireOrdered(
+            performanceRoot,
+            {
+                "ResolvePerformanceMaximumWindowHeight(",
+                "ImVec2(settingsWindowWidth, performanceCollapsedHeight)",
+                "ImGui::SetNextUvsrWindowCollapsedHeight(",
+                "performanceCollapsedHeight);",
+                "if (m_PerformanceCollapsedRequest)",
+                "ImGui::SetNextUvsrWindowCollapseTarget(",
+                "*m_PerformanceCollapsedRequest);",
+                "ImGui::SetNextWindowCollapsed(",
+                "*m_PerformanceCollapsedRequest,",
+                "ImGuiCond_Always);",
+                "m_PerformanceCollapsedRequest.reset();",
+                "ImGui::SetNextWindowCollapsed(true, ImGuiCond_Once);",
+                "const bool performanceExpanded = ImGui::Begin(",
+                "\"Performance\"",
+                "if (performanceExpanded)",
+                "DrawPerformancePanelContents(",
+                "ImGui::IsCurrentUvsrWindowCollapseTransitionActive()",
+                "ImGui::End();"
+            },
+            "independently collapsible top-level Performance panel");
+        RequireAbsent(
+            performanceRoot,
+            "m_SettingsCollapsed",
+            "Performance collapse state independent of Settings");
+        RequireContains(
+            performanceRoot,
+            "const bool performanceScrollIdle =",
+            "detached Performance scroll-stability state");
+        const std::string_view performanceCollapseSurface = ExtractSection(
+            performanceRoot,
+            "const float performanceCollapseRange =",
+            "if (performanceExpanded)",
+            "Performance collapse-only body opacity");
+        RequireOrdered(
+            performanceCollapseSurface,
+            {
+                "performanceWindow->SizeFull.y -",
+                "performanceCollapsedHeight",
+                "const bool performanceExpandedRangeKnown =",
+                "performanceCollapseRange > 0.5f;",
+                "const float performanceCollapseAmount =",
+                "performanceExpandedRangeKnown",
+                "? std::clamp(",
+                "performanceWindow->SizeFull.y -",
+                "performanceWindow->Size.y",
+                "performanceWindow->Size.y <=",
+                "performanceCollapsedHeight + 0.5f",
+                "? 1.f",
+                ": 0.f;",
+                "if (performanceCollapseAmount > 0.f)",
+                "GetOpaquePanelBodySurface();",
+                "compactBodyOverlay.w = performanceCollapseAmount;",
+                "performanceWindowDrawList->AddRectFilled(",
+                "performanceBodyRect.Min,",
+                "performanceBodyRect.Max,",
+                "style.WindowRounding,",
+                "ImDrawFlags_RoundCornersAll);"
+            },
+            "only Performance derives an opaque same-RGB body overlay from its "
+            "live collapse size, including the first default-collapsed frame "
+            "whose expanded range has not been measured yet");
+        Require(
+            CountOccurrences(viewer, "compactBodyOverlay.w = ") == 1u &&
+                CountOccurrences(viewer, "performanceCollapseAmount") == 3u,
+            "the collapse-specific opacity overlay must remain unique to the "
+            "Performance root.");
+        const std::string_view collapsedPerformance = ExtractSection(
+            performanceRoot,
+            "else\n        {\n            const ImVec2 summaryTextSize =",
+            "DrawFilledRoundedInsetFrame(",
+            "collapsed Performance summary endpoint");
+        RequireOrdered(
+            collapsedPerformance,
+            {
+                "const ImVec2 summaryTextSize = ImGui::CalcTextSize(",
+                "performanceBodyRect.Min.y +",
+                "(performanceBodyRect.GetHeight() -",
+                "summaryTextSize.y) * 0.5f",
+                "performanceWindowDrawList->PushClipRect(",
+                "performanceWindowDrawList->AddText(",
+                "performanceLine.c_str());",
+                "performanceWindowDrawList->PopClipRect();"
+            },
+            "collapsed Performance directly paints its one-line summary beneath "
+            "the title");
+        for (const std::string_view expandedOnlyControl : {
+                std::string_view("DrawPerformancePanelContents("),
+                std::string_view("BeginRoundedCombo("),
+                std::string_view("BeginTable(") })
+        {
+            RequireAbsent(
+                collapsedPerformance,
+                expandedOnlyControl,
+                "collapsed Performance selector/table endpoint");
+        }
+        const std::string_view panelMinimumLayout = ExtractSection(
+            viewer,
+            "const float panelTitleMinimumHeight =",
+            "m_CommandLayout = ResolveCommandInterfaceLayout(",
+            "distinct root-panel collapsed heights");
+        RequireOrdered(
+            panelMinimumLayout,
+            {
+                "const float panelTitleMinimumHeight =",
+                "GetSettingsCollapsedWindowHeight(",
+                "const float performanceCollapsedHeight =",
+                "panelTitleMinimumHeight +",
+                "ImGui::GetStyle().WindowPadding.y * 2.f +",
+                "ImGui::GetFontSize() +",
+                "g_UiSpacingTokens.tight;",
+                "const float minimumPanelStackHeight =",
+                "performanceCollapsedHeight +",
+                "panelSeparation +",
+                "minimumSettingsHeight;"
+            },
+            "Performance reserves a summary row while Settings retains its "
+            "independent title-only endpoint");
+        RequireContains(
+            Compact(viewer),
+            "settingsScrollIdle&&performanceScrollIdle",
+            "deferred UI actions wait for both root-panel scroll states");
+
+        const std::string_view panelStack = ExtractSection(
+            viewer,
+            "const float performanceWindowTop =",
+            "ImDrawList* settingsBodyDrawList =",
+            "Performance and Settings root hierarchy");
+        RequireOrdered(
+            panelStack,
+            {
+                "const bool performanceExpanded = ImGui::Begin(",
+                "\"Performance\"",
+                "const float settingsWindowTop =",
+                "ImGui::Begin(\n            \"Settings\"",
+                "ImGui::BeginChild(\n            \"##SettingsBody\""
+            },
+            "detached Performance panel before the Settings window");
+        RequireContains(
+            panelStack,
+            "performanceWindowPosition.y +\n"
+            "            performanceWindowSize.y +\n"
+            "            panelSeparation;",
+            "Performance-to-Settings boundary uses one ordinary drawer gap");
+
+        const std::string_view settingsRoot = ExtractSection(
+            viewer,
+            "ImGui::Begin(\n            \"Settings\"",
+            "ImDrawList* settingsBodyDrawList =",
+            "Settings root without Performance content");
+        RequireAbsent(
+            settingsRoot,
+            "ImGui::TextUnformatted(performanceLine.c_str())",
+            "Performance summary detached from Settings");
+        RequireAbsent(
+            settingsRoot,
+            "ogPerformanceLines[0].c_str()",
+            "Ogg Performance first row detached from Settings");
+        RequireAbsent(
+            settingsRoot,
+            "ogPerformanceLines[1].c_str()",
+            "Ogg Performance second row detached from Settings");
+        RequireAbsent(
+            viewer,
+            "\"Renderer: %s\"",
+            "removed redundant Settings renderer identity");
+        RequireAbsent(
+            viewer,
+            "rendererLine",
+            "removed redundant Settings renderer buffer");
         RequireExactStrings(
             ExtractSection(
                 statistics,
@@ -830,7 +1292,16 @@ namespace
                 "Tone Mapping",
                 "Output Blit"
             },
-            "Statistics effect labels");
+            "Performance effect labels");
+        const std::string_view statisticsEffectEnum = ExtractSection(
+            viewer,
+            "enum class StatisticsEffect : int",
+            "struct UiVisualTokens",
+            "Performance selector enum");
+        RequireAbsent(
+            statisticsEffectEnum,
+            "Hardware",
+            "removed Hardware Performance selector value");
         RequireContains(
             Compact(statistics),
             "static_assert(std::size(StatisticsEffectLabels)=="
@@ -839,16 +1310,34 @@ namespace
         RequireContains(
             statistics,
             "switch (selectedEffect)",
-            "single-effect Statistics routing");
+            "single-effect Performance routing");
+        RequireAbsent(
+            statistics,
+            "ImGui::TextUnformatted(\"View\")",
+            "removed redundant Performance selector label");
         RequireOrdered(
             statistics,
             {
-                "ImGui::TextUnformatted(\"Effect\")",
-                "DrawPresetResetIcon(",
+                "ImGui::PushItemWidth(settingsControlWidth);",
+                "ImGui::SetCursorPosX(summaryCursorX);",
+                "m_StatisticsEffect = std::clamp(",
+                "if (BeginRoundedCombo(",
                 "\"##StatisticsEffect\"",
                 "ImGui::SetItemDefaultFocus()"
             },
-            "labeled Statistics selector and reset");
+            "unlabeled ordinary-width Performance selector");
+        RequireAbsent(
+            statistics,
+            "ImGui::SetNextItemWidth(-FLT_MIN);",
+            "Performance selector full-content-width override");
+        RequireAbsent(
+            statistics,
+            "statisticsResetLaneWidth",
+            "retired Performance selector reset lane");
+        RequireAbsent(
+            statistics,
+            "DrawPresetResetIcon(",
+            "retired same-row Performance selector reset icon");
         RequireOrdered(
             statistics,
             {
@@ -890,6 +1379,21 @@ namespace
                 std::string_view("##ToneMappingStatistics") })
         {
             RequireContains(statistics, table, "detailed Statistics table");
+        }
+        for (const std::string_view removedHardwareSurface : {
+                std::string_view("case StatisticsEffect::Hardware"),
+                std::string_view("##HardwareStatistics"),
+                std::string_view("m_HardwareCapabilities"),
+                std::string_view("hardware specifications"),
+                std::string_view("\"RAM Speed\""),
+                std::string_view("\"VRAM Speed\""),
+                std::string_view("\"GPU TFLOPS\""),
+                std::string_view("\"CPU TFLOPS\"") })
+        {
+            RequireAbsent(
+                statistics,
+                removedHardwareSurface,
+                "removed Hardware Performance view");
         }
         RequireContains(
             statistics,
@@ -1527,6 +2031,22 @@ namespace
             CountOccurrences(debug, "BeginAnimatedTreeNode(") == 3u,
             "Debug effects must retain three animated disclosures.");
         Require(
+            CountOccurrences(debug, "BeginRoundedCombo(") == 3u &&
+                CountOccurrences(
+                    debug,
+                    "DrawDeferredDropdownOption(") == 3u &&
+                CountOccurrences(debug, "ImGui::EndCombo();") == 3u,
+            "Debug effects must use exactly three deferred rounded combos.");
+        Require(
+            CountOccurrences(debug, "for (int index = 0;") == 3u &&
+                CountOccurrences(debug, "[this, candidate]()") == 3u,
+            "each Debug combo must enumerate candidates and capture the typed "
+            "candidate by value for deferred application.");
+        RequireAbsent(
+            debug,
+            "ImGui::Combo(",
+            "raw immediate Debug combo mutation");
+        Require(
             CountOccurrences(debug, "ImGuiTreeNodeFlags_DefaultOpen") == 4u,
             "Debug and all three effect groups must start expanded.");
         RequireContains(
@@ -1752,6 +2272,72 @@ namespace
         std::string_view viewer,
         std::string_view catalogSource)
     {
+        const std::string_view factoryReset = ExtractSection(
+            viewer,
+            "void ResetAllSettingsToFactoryDefaults()",
+            "bool DispatchGeneralCommandValue(",
+            "renderer and Interface factory reset");
+        RequireOrdered(
+            factoryReset,
+            {
+                "m_app->ResetAllRendererSettings();",
+                "ApplyAdaptiveSyncMode(GetDefaultAdaptiveSyncMode());",
+                "m_ui.Skin = DefaultUiSkin;",
+                "m_ui.AnimationsEnabled = true;",
+                "m_ui.Accents = UiAccentSettings{};",
+                "m_StatisticsEffect =",
+                "static_cast<int>(StatisticsEffect::CompleteRenderer);",
+                "m_PerformanceCollapsedRequest = true;",
+                "ImGui::CloseUvsrColorPickerPopup();"
+            },
+            "one factory-reset helper restores renderer, adapter-derived "
+            "Adaptive Sync, Interface defaults, and the compact Performance "
+            "endpoint before dismissing the picker");
+        for (const std::string_view preservedSessionState : {
+                std::string_view("m_ui = UIData{}"),
+                std::string_view("m_ui.ActiveGpuAdapterIndex ="),
+                std::string_view("m_ui.Camera ="),
+                std::string_view("m_ui.SelectedMaterial ="),
+                std::string_view("m_ui.SelectedNode ="),
+                std::string_view("m_ui.ShowUI ="),
+                std::string_view("m_SettingsCollapsedRequest ="),
+                std::string_view("m_CommandOpen ="),
+                std::string_view("m_CommandHistory.clear()") })
+        {
+            RequireAbsent(
+                factoryReset,
+                preservedSessionState,
+                "factory reset preserved scene, camera, adapter, Settings "
+                "shell, CLI, history, and material selection state");
+        }
+        Require(
+            CountOccurrences(
+                viewer,
+                "ResetAllSettingsToFactoryDefaults();") == 2u,
+            "the footer Reset and reset-settings command must be the only two "
+            "callers of the shared factory-reset helper.");
+        const std::string_view commandActions = ExtractSection(
+            viewer,
+            "bool DispatchCommandAction(",
+            "void AppendDynamicCommandValues(",
+            "Settings command actions");
+        RequireContains(
+            commandActions,
+            "if (action == \"reset-settings\")\n"
+            "        {\n"
+            "            ResetAllSettingsToFactoryDefaults();",
+            "reset-settings command shared factory-reset routing");
+        RequireContains(
+            viewer,
+            "if (DrawCenteredActionButton(\"Reset\", actionButtonWidth))\n"
+            "            ResetAllSettingsToFactoryDefaults();",
+            "footer Reset shared factory-reset routing");
+        RequireContains(
+            catalogSource,
+            "Action(\"reset-settings\", Section::Footer, "
+            "\"restore renderer and interface factory settings\")",
+            "reset-settings renderer-and-Interface catalog description");
+
         const std::string_view enumCommandHelper = ExtractSection(
             viewer,
             "static bool ApplyCommandEnum(",
@@ -1775,6 +2361,133 @@ namespace
             viewer,
             "listing += \"] - \";",
             "retired command list row separator");
+
+        const std::string_view uiDispatcher = ExtractSection(
+            viewer,
+            "bool DispatchUiCommandValue(",
+            "bool DispatchGeneralCommandValue(",
+            "UI command dispatcher");
+        const std::string_view uiSkinDispatcher = ExtractSection(
+            uiDispatcher,
+            "if (path == \"ui.skin\")",
+            "if (path == \"ui.visible\")",
+            "UI skin command dispatcher");
+        RequireOrdered(
+            uiSkinDispatcher,
+            {
+                "std::pair<std::string_view, UiSkin>, 3",
+                "{ \"amp\", UiSkin::Amp }",
+                "{ \"og\", UiSkin::Og }",
+                "{ \"ogg\", UiSkin::Og }",
+                "DefaultUiSkin",
+                "if (path == \"ui.animations\")",
+                "ApplyCommandBool(",
+                "m_ui.AnimationsEnabled,",
+                "true,"
+            },
+            "canonical skin commands followed by the default-enabled "
+            "Interface animation preference");
+        RequireContains(
+            catalogSource,
+            "Value(\"ui.skin\", Kind::Enum, Section::Ui, "
+            "\"amp|ogg\")",
+            "visible Amp/Ogg command domain");
+        RequireContains(
+            catalogSource,
+            "Value(\"ui.animations\", Kind::Boolean, Section::Ui, \"on|off\")",
+            "discoverable Interface animation command");
+        const std::string_view uiAccentDispatcher = ExtractSection(
+            uiDispatcher,
+            "if (path == \"ui.accent.main\")",
+            "if (path == \"ui.visible\")",
+            "UI accent command dispatcher");
+        RequireOrdered(
+            uiAccentDispatcher,
+            {
+                "if (path == \"ui.accent.main\")",
+                "FindUiSkinPalette(m_ui.Accents, m_ui.Skin)",
+                "FindDefaultUiSkinPalette(m_ui.Skin)",
+                "if (!palette || !defaultPalette)",
+                "ui.accent.main is unavailable while Ogg owns stock",
+                "ApplyCommandUiColorRgb(",
+                "palette->primaryAccent",
+                "defaultPalette->primaryAccent",
+                "if (path == \"ui.accent.negative\")",
+                "m_ui.Accents.secondaryAccent",
+                "DefaultUiSecondaryAccent",
+                "if (path == \"ui.accent.positive\")",
+                "m_ui.Accents.tertiaryAccent",
+                "DefaultUiTertiaryAccent",
+                "if (path == \"ui.accent.secondary\")",
+                "ApplyCommandUiColorRgba(",
+                "if (path == \"ui.accent.tertiary\")",
+                "if (path == \"ui.accent.primary\" ||",
+                "path == \"ui.accent.font\" ||",
+                "path == \"ui.accent.primary-background\")",
+                "current = &palette->primaryAccent;",
+                "current = &palette->fontColor;",
+                "current = &palette->primaryBackground;",
+                "*current,",
+                "*defaultValue,"
+            },
+            "legacy RGB aliases and canonical RGBA palette command routing");
+        for (const std::string_view accentPath : {
+                std::string_view("ui.accent.main"),
+                std::string_view("ui.accent.negative"),
+                std::string_view("ui.accent.positive") })
+        {
+            RequireContains(
+                catalogSource,
+                "Value(\"" + std::string(accentPath) +
+                    "\", Kind::Float3, Section::Ui, "
+                    "\"display rgb float3 0..1\")",
+                "Interface accent command catalog entry");
+        }
+        for (const std::string_view accentPath : {
+                std::string_view("ui.accent.primary"),
+                std::string_view("ui.accent.secondary"),
+                std::string_view("ui.accent.tertiary"),
+                std::string_view("ui.accent.font"),
+                std::string_view("ui.accent.primary-background") })
+        {
+            RequireContains(
+                catalogSource,
+                "Value(\"" + std::string(accentPath) +
+                    "\", Kind::Float4, Section::Ui, "
+                    "\"display rgba float4 0..1\")",
+                "canonical RGBA Interface command catalog entry");
+        }
+        RequireContains(
+            Compact(catalogSource),
+            "Action,Float4",
+            "Float4 command kind appended without renumbering stable kinds");
+
+        const std::string_view colorCommandHelpers = ExtractSection(
+            viewer,
+            "static std::string FormatCommandUiColorRgb(",
+            "static const UiSettingsCommandDefinition*",
+            "RGB and RGBA command helpers");
+        RequireOrdered(
+            colorCommandHelpers,
+            {
+                "FormatCommandUiColorRgb(color) + \" \" +",
+                "FormatCommandFloat(color.alpha)",
+                "static bool ApplyCommandUiColorRgb(",
+                "UiRgbaColor candidate = current;",
+                "arguments.size() != 3u",
+                "candidate.blue",
+                "current = candidate;",
+                "FormatCommandUiColorRgb(current)",
+                "static bool ApplyCommandUiColorRgba(",
+                "UiRgbaColor candidate = current;",
+                "arguments.size() != 4u",
+                "arguments[3], candidate.alpha",
+                "candidate.alpha < 0.f || candidate.alpha > 1.f",
+                "current = candidate;",
+                "FormatCommandUiColorRgba(current)"
+            },
+            "legacy RGB preserves stored alpha while canonical RGBA parses, "
+            "validates, stores, and formats alpha");
 
         const std::string_view aliasingDispatcher = ExtractSection(
             viewer,
@@ -1819,8 +2532,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 184u,
-            "Settings command catalog must contain exactly 184 entries.");
+        Require(entries.size() == 193u,
+            "Settings command catalog must contain exactly 193 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -1834,8 +2547,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 180u,
-            "Settings command catalog must contain exactly 180 values.");
+        Require(valueCount == 189u,
+            "Settings command catalog must contain exactly 189 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -2350,9 +3063,21 @@ namespace
 
         const std::string_view materialWindow = ExtractSection(
             viewer,
-            "if (materialEditorVisible)",
-            "if (deferredMaterialInputBlocked)",
+            "void DrawMaterialDrawer(float settingsControlWidth)",
+            "static std::string BuildPerformanceLine(",
             "Material editor mutation routing");
+        for (const std::string_view drawerContract : {
+                std::string_view("\"Material\""),
+                std::string_view(
+                    "BeginDrawerBody(\"##MaterialBody\", settingsControlWidth);"),
+                std::string_view("m_MaterialDrawerAppearance ="),
+                std::string_view("Refresh Center Material") })
+        {
+            RequireContains(
+                materialWindow,
+                drawerContract,
+                "embedded Material drawer contract");
+        }
         RequireContains(
             materialWindow,
             "[app = m_app, material, candidate]()",
@@ -2371,6 +3096,97 @@ namespace
             },
             "Material editor history invalidation");
 
+        const std::string_view drawerVisibility = ExtractSection(
+            viewer,
+            "void SetMaterialDrawerVisible(",
+            "const Material* GetOriginalMaterial(",
+            "Material drawer visibility contract");
+        RequireOrdered(
+            drawerVisibility,
+            {
+                "m_ui.ShowUI = true;",
+                "m_ui.ShowMaterialDrawer = true;",
+                "MaterialPickPurpose::RefreshMaterialDrawerSelection"
+            },
+            "open Material drawer and request center selection");
+        const std::string_view materialReveal = ExtractSection(
+            viewer,
+            "void RequestMaterialDrawerVisible(",
+            "const GpuAdapterChoice* GetActiveGpuAdapterChoice() const",
+            "Material drawer reveal contract");
+        RequireOrdered(
+            materialReveal,
+            {
+                "m_app->SetMaterialDrawerVisible(visible, refreshSelection);",
+                "m_MaterialRevealRequested = visible;",
+                "m_SettingsCollapsedRequest = false;",
+                "m_SettingsCollapsed = false;"
+            },
+            "Material opening must expand Settings and request reveal");
+        RequireOrdered(
+            materialWindow,
+            {
+                "m_MaterialRevealRequested && targetOpen",
+                "ImGui::SetScrollHereY(0.f);",
+                "m_MaterialRevealRequested = false;"
+            },
+            "Material opening must scroll the embedded drawer into view");
+        RequireContains(
+            viewer,
+            "bool m_MaterialDrawerPresentationForceClosed = false;",
+            "one-shot Material presentation reset state");
+        RequireOrdered(
+            materialWindow,
+            {
+                "DrawCollapsingHeader(",
+                "ImGuiTreeNodeFlags_None,",
+                "m_MaterialDrawerPresentationForceClosed);",
+                "m_MaterialDrawerPresentationForceClosed = false;",
+                "m_MaterialDrawerAppearance ="
+            },
+            "Material consumes its forced-closed presentation before reading "
+            "the new drawer state");
+        const std::string_view collapsedMaterialReset = ExtractSection(
+            viewer,
+            "const bool settingsCollapsed =",
+            "UiBackdropRect& performanceTitleBackdrop =",
+            "collapsed Settings Material reset");
+        RequireOrdered(
+            collapsedMaterialReset,
+            {
+                "if (settingsCollapsed)",
+                "const bool materialPresentationWasActive =",
+                "m_ui.ShowMaterialDrawer ||",
+                "m_MaterialDrawerAppearance > 0.f;",
+                "if (m_ui.ShowMaterialDrawer)",
+                "RequestMaterialDrawerVisible(false, false);",
+                "m_MaterialDrawerAppearance = 0.f;",
+                "m_MaterialDrawerPresentationForceClosed =",
+                "m_MaterialDrawerPresentationForceClosed ||",
+                "materialPresentationWasActive;"
+            },
+            "collapsing Settings immediately closes Material, clears its "
+            "crosshair appearance, and arms a closed next submission");
+        RequireContains(
+            viewer,
+            "SmoothPixelZoomVisibility(m_MaterialDrawerAppearance)",
+            "Material drawer crosshair visibility");
+        RequireOrdered(
+            viewer,
+            {
+                "const bool shadowsOpen = DrawCollapsingHeader(",
+                "DrawMaterialDrawer(settingsControlWidth);",
+                "DrawInterfaceDrawer(settingsControlWidth);",
+                "TrackSettingsScrollAnchor(\n"
+                "            ImGui::GetID(\"##SettingsFooterAnchor\")"
+            },
+            "Material immediately precedes the final Interface drawer and "
+            "Settings footer actions");
+        RequireContains(
+            viewer,
+            "ResolvePerformanceMaximumWindowHeight(",
+            "CLI-aware detached Performance window height cap");
+
         const std::string_view materialDispatcher = ExtractSection(
             viewer,
             "bool DispatchMaterialCommandValue(",
@@ -2387,8 +3203,12 @@ namespace
 
     void ValidateUiSafety(
         std::string_view viewer,
+        std::string_view uiAnimation,
         std::string_view donutAppOverride,
         std::string_view imguiUiOverride,
+        std::string_view imguiSliderOverride,
+        std::string_view imguiComboRollOverride,
+        std::string_view backdropBlurShader,
         std::string_view cmakeSource)
     {
         const std::string_view visualTokens = ExtractSection(
@@ -2398,20 +3218,2349 @@ namespace
             "UI visual tokens");
         RequireContains(
             visualTokens,
-            "ImVec4 errorText = ImVec4(0.92f, 0.12f, 0.16f, 1.f);",
-            "saturated command failure red");
+            "ImVec4 errorText;",
+            "dynamic semantic failure accent token");
         RequireContains(
             visualTokens,
-            "ImVec4 successText = ImVec4(0.26f, 0.59f, 0.98f, 1.f);",
-            "Material-accent command success blue");
+            "ImVec4 successText;",
+            "dynamic semantic success accent token");
+        RequireContains(
+            visualTokens,
+            "ImVec4 panelInsetFrame;",
+            "shared opaque root-panel inset frame token");
+        RequireContains(
+            visualTokens,
+            "ImVec4 colorPickerSurface;",
+            "skin-resolved scoped color-picker surface token");
+        RequireContains(
+            visualTokens,
+            "float controlDisabledAlpha = 0.60f;",
+            "skin-resolved authored control disabled opacity token");
+        RequireContains(
+            viewer,
+            "tokens.controlDisabledAlpha = style.DisabledAlpha;",
+            "active skin captures its disabled opacity before neutral root locks");
+        const std::string_view authoredCornerRounding = ExtractSection(
+            viewer,
+            "constexpr float AuthoredCornerRounding = 4.f;",
+            "const UiSkinBehavior behavior =",
+            "unified authored corner rounding");
+        RequireOrdered(
+            authoredCornerRounding,
+            {
+                "constexpr float AuthoredCornerRounding = 4.f;",
+                "style.WindowRounding = AuthoredCornerRounding;",
+                "style.ChildRounding = AuthoredCornerRounding;",
+                "style.PopupRounding = AuthoredCornerRounding;",
+                "style.FrameRounding = AuthoredCornerRounding;",
+                "style.GrabRounding = AuthoredCornerRounding;",
+                "style.ScrollbarRounding = AuthoredCornerRounding;",
+                "style.ScrollbarSize = 12.f;",
+                "style.TabRounding = AuthoredCornerRounding;",
+                "tokens.drawerRounding = style.ChildRounding;"
+            },
+            "one four-pixel authored radius for roots, drawers, popups, "
+            "controls, grabs, scrollbars, and tabs with a twelve-pixel channel");
+        RequireContains(
+            viewer,
+            "tokens.drawerRounding *= safeDisplayScale;",
+            "unified drawer radius display scaling");
+        RequireOrdered(
+            viewer,
+            {
+                "tokens.errorText = MakeUiColor(accents.secondaryAccent);",
+                "tokens.successText = MakeUiColor(accents.tertiaryAccent);",
+                "ImGui::SetUvsrUiAccentColors(",
+                "MakeUiColor(accents.secondaryAccent),",
+                "MakeUiColor(accents.tertiaryAccent));"
+            },
+            "one alpha-preserving secondary/tertiary route for product text "
+            "and semantic toggles");
         RequireContains(
             donutAppOverride,
-            "+    const ImVec4 filenameColor = ImVec4(0.26f, 0.59f, 0.98f, 1.0f);",
-            "staged Material texture-filename accent blue");
+            "+    const math::float4& positiveAccent)",
+            "Material editor RGBA positive-accent parameter");
+        RequireOrdered(
+            viewer,
+            {
+                "donut::app::MaterialEditor(",
+                "g_UiVisualTokens.successText.x,",
+                "g_UiVisualTokens.successText.y,",
+                "g_UiVisualTokens.successText.z,",
+                "g_UiVisualTokens.successText.w"
+            },
+            "dynamic RGBA positive accent reaches Material status text");
+
+        const std::string_view backdropSlots = ExtractSection(
+            viewer,
+            "constexpr size_t UiPerformanceTitleBackdropIndex",
+            "struct UiBackdropRect",
+            "named UI backdrop slots");
+        RequireOrdered(
+            backdropSlots,
+            {
+                "UiPerformanceTitleBackdropIndex = 0u;",
+                "UiPerformanceBodyBackdropIndex = 1u;",
+                "UiSettingsTitleBackdropIndex = 2u;",
+                "UiSettingsBodyBackdropIndex = 3u;",
+                "UiCommandBackdropIndex = 4u;",
+                "UiBackdropRectCount = 5u;",
+                "UiBackdropCornersAll = 0xFu;",
+                "struct UiBackdropExclusionRect"
+            },
+            "four independent root surfaces and fifth command backdrop slot");
+        RequireContains(
+            viewer,
+            "std::array<UiBackdropRect, UiBackdropRectCount>",
+            "backdrop storage sized by the five-slot contract");
+        RequireContains(
+            viewer,
+            "std::vector<UiBackdropExclusionRect> compositeExclusions;",
+            "header-support exclusion storage on each surface backdrop");
+        const std::string_view panelSurfaceBackdropCapture = ExtractSection(
+            viewer,
+            "static void CapturePanelSurfaceBackdrops(",
+            "static void ApplyWindowAppearance(",
+            "independent root title/body backdrop capture");
+        RequireOrdered(
+            panelSurfaceBackdropCapture,
+            {
+                "titleBackdrop.cornerMask = UiBackdropCornersAll;",
+                "titleBackdrop.shadowBlur = 0.f;",
+                "titleBackdrop.shadowOpacity = 0.f;",
+                "titleBackdrop.shadowOffsetY = 0.f;",
+                "titleBackdrop.composite = true;",
+                "bodyBackdrop.cornerMask = UiBackdropCornersAll;",
+                "bodyBackdrop.shadowBlur = 0.f;",
+                "bodyBackdrop.shadowOpacity = 0.f;",
+                "bodyBackdrop.shadowOffsetY = 0.f;",
+                "bodyBackdrop.composite = true;",
+                "bodyBackdrop.visible = expanded"
+            },
+            "each title/body blur surface is fully rounded, shadowless, and "
+            "independently visible");
+        const std::string_view panelBackdropRouting = ExtractSection(
+            viewer,
+            "UiBackdropRect& performanceTitleBackdrop =",
+            "ApplyWindowAppearance(\n"
+            "            performanceWindowDrawList",
+            "root surface backdrop and exclusion routing");
+        RequireOrdered(
+            panelBackdropRouting,
+            {
+                "UiPerformanceTitleBackdropIndex",
+                "UiPerformanceBodyBackdropIndex",
+                "UiSettingsTitleBackdropIndex",
+                "UiSettingsBodyBackdropIndex",
+                "CapturePanelSurfaceBackdrops(",
+                "performanceTitleBackdrop,",
+                "performanceBodyBackdrop,",
+                "CapturePanelSurfaceBackdrops(",
+                "settingsTitleBackdrop,",
+                "settingsBodyBackdrop,",
+                "if (g_UiVisualTokens.sceneTranslucentHeaders)",
+                "const float supportInset = std::max(",
+                "style.FrameRounding);",
+                "translucentHeaderSupportRects",
+                "settingsBodyBackdrop.compositeExclusions.push_back(",
+                "for (size_t backdropIndex =",
+                "UiPerformanceTitleBackdropIndex;",
+                "backdropIndex <= UiSettingsBodyBackdropIndex;",
+                "ApplyBackdropAppearance("
+            },
+            "four root surfaces compose independently while the Settings body "
+            "excludes authored translucent-header interiors from blur");
+        const std::string_view rootBodyRounding = ExtractSection(
+            viewer,
+            "const float rootBodyRounding =",
+            "ImGui::End();",
+            "skin-aware root-panel body rounding");
+        RequireOrdered(
+            rootBodyRounding,
+            {
+                "const float rootBodyRounding =",
+                "style.WindowRounding;",
+                "DrawTranslucentHeaderPanelBodySurface(",
+                "rootBodyRounding",
+                "DrawFilledRoundedInsetFrame(",
+                "settingsBodyRect,",
+                "retainedSettingsContentRect,",
+                "rootBodyRounding",
+                "CapturePanelSurfaceBackdrops(",
+                "style.FrameRounding,",
+                "rootBodyRounding",
+                "CapturePanelSurfaceBackdrops(",
+                "style.FrameRounding,",
+                "rootBodyRounding"
+            },
+            "root bodies and titles retain their semantic Window/Frame fields; "
+            "the authored skin resolves both to its unified radius");
+        const std::string_view fixedTopInsetShadow = ExtractSection(
+            viewer,
+            "static void DrawSettingsFixedTopInsetShadow(",
+            "static bool DrawPresetResetIcon(",
+            "fixed Settings top-inset shadow");
+        RequireOrdered(
+            fixedTopInsetShadow,
+            {
+                "bool intersectClipRect)",
+                "const ImRect shadowRect(",
+                "bodyRect.Min,",
+                "bodyRect.Min.y + insetHeight",
+                "const float effectiveRounding = std::max(",
+                "rounding,",
+                "bodyRect.GetWidth() * 0.5f - 1.f,",
+                "bodyRect.GetHeight() * 0.5f - 1.f",
+                "const ImRect shadowMaskRect(",
+                "bodyRect.Min.y + std::max(",
+                "shadowRect.GetHeight(),",
+                "effectiveRounding + 1.f",
+                "drawList->PushClipRect(",
+                "shadowRect.Min,",
+                "shadowRect.Max,",
+                "intersectClipRect);",
+                "drawList->AddRectFilled(",
+                "shadowMaskRect.Min,",
+                "shadowMaskRect.Max,",
+                "effectiveRounding,",
+                "ImDrawFlags_RoundCornersTop",
+                "0.24f * falloff * falloff * coverage",
+                "drawList->PopClipRect();"
+            },
+            "Settings clips a root-radius shadow mask to its fixed WindowPadding "
+            "inset without a radius-clamp corner wedge");
+        const std::string_view filledRoundedInsetFrame = ExtractSection(
+            viewer,
+            "static void DrawFilledRoundedInsetFrame(",
+            "static void DrawSettingsScrollEdgeFades()",
+            "opaque rounded root-panel inset frame");
+        RequireOrdered(
+            filledRoundedInsetFrame,
+            {
+                "const float outerRadius = ResolveRoundedRectRadius(",
+                "const float innerRadius = ResolveRoundedRectRadius(",
+                "g_UiVisualTokens.panelInsetFrame",
+                "(frameColor & IM_COL32_A_MASK) == 0u",
+                "drawOuterSurfaceThrough =",
+                "drawList->AddRectFilled(",
+                "ImDrawFlags_RoundCornersAll",
+                "_CalcCircleAutoSegmentCount(innerRadius)",
+                "drawInnerCornerWedge =",
+                "drawList->AddConcavePolyFilled(",
+                "drawList->PopClipRect();"
+            },
+            "the shared opaque frame fills four disjoint outer strips and the "
+            "four rounded inner-corner wedges without covering panel content");
+        Require(
+            CountOccurrences(
+                filledRoundedInsetFrame,
+                "drawOuterSurfaceThrough(") == 4u &&
+                CountOccurrences(
+                    filledRoundedInsetFrame,
+                    "drawInnerCornerWedge(") == 4u,
+            "the inset-frame helper must paint exactly four outer strips and "
+            "four inner corner wedges.");
+        RequireAbsent(
+            filledRoundedInsetFrame,
+            "!g_UiVisualTokens.drawControlOutlines",
+            "the opaque inset frame is shared by Amp and stock Ogg even though "
+            "Ogg keeps authored depth outlines disabled");
+        const std::string_view settingsDecorationTracking = ExtractSection(
+            viewer,
+            "static void TrackSettingsDecorationDrawList(",
+            "static float ResolveRoundedRectRadius(",
+            "last-visible Settings decoration draw-list tracking");
+        RequireOrdered(
+            settingsDecorationTracking,
+            {
+                "TrackSettingsAppearanceDrawList(drawList);",
+                "if (drawList && visible)",
+                "g_SettingsDecorationDrawList = drawList;"
+            },
+            "last visible Settings child owns late viewport decoration");
+        RequireContains(
+            viewer,
+            "g_SettingsDecorationDrawList = nullptr;",
+            "per-frame Settings decoration owner reset");
+        Require(
+            CountOccurrences(
+                viewer,
+                "TrackSettingsDecorationDrawList(") == 5u,
+            "Settings decoration tracking must cover its helper plus the root, "
+            "ordinary drawer, nested drawer, and animated toggle children.");
+        Require(
+            CountOccurrences(
+                viewer,
+                "TrackSettingsDecorationDrawList(\n"
+                "            ImGui::GetWindowDrawList(),\n"
+                "            g_DrawerAnimationContext.bodyVisible);\n"
+                "        EnsureAnimatedChildLayoutSubmission(") == 1u &&
+                CountOccurrences(
+                    viewer,
+                    "TrackSettingsDecorationDrawList(\n"
+                    "            ImGui::GetWindowDrawList(),\n"
+                    "            bodyVisible);\n"
+                    "        EnsureAnimatedChildLayoutSubmission(") == 2u,
+            "drawer decoration ownership must observe BeginChild visibility "
+            "before hidden animated children are forced through layout");
+        const std::string_view drawerBodyOutline = ExtractSection(
+            viewer,
+            "static void DrawDrawerBodyOutline(",
+            "static void DrawSettingsScrollEdgeFades()",
+            "drawer and Settings inner body outline");
+        RequireOrdered(
+            drawerBodyOutline,
+            {
+                "float topGap,",
+                "bool intersectClipRect)",
+                "const float clipTop = topGap > 0.f",
+                "? outlineMinimum.y + topGap",
+                ": outlineMinimum.y - Thickness;",
+                "drawList->PushClipRect(",
+                "clipTop),",
+                "intersectClipRect);",
+                "drawList->AddRect(",
+                "std::max(0.f, rounding - Inset),",
+                "ImDrawFlags_RoundCornersAll,",
+                "Thickness);"
+            },
+            "drawer outlines retain all four rounded corners, preserve the "
+            "zero-gap top antialias fringe, and explicitly choose whether the "
+            "current child clip may trim them");
+        const std::string_view performanceLateDecoration = ExtractSection(
+            viewer,
+            "ImDrawList* performanceWindowDrawList =",
+            "const bool performanceScrollIdle =",
+            "late Performance root-panel decoration");
+        RequireOrdered(
+            performanceLateDecoration,
+            {
+                "const ImRect performanceBodyRect(",
+                "const ImRect performanceContentRect(",
+                "if (performanceExpanded)",
+                "DrawPerformancePanelContents(",
+                "else",
+                "performanceWindowDrawList->AddText(",
+                "DrawFilledRoundedInsetFrame(",
+                "performanceBodyRect,",
+                "performanceContentRect,",
+                "DrawSettingsFixedTopInsetShadow(",
+                "performanceContentRect,",
+                "DrawDrawerBodyOutline(",
+                "performanceBodyRect.Min,",
+                "performanceBodyRect.Max,",
+                "DrawDrawerBodyOutline(",
+                "performanceContentRect.Min,",
+                "performanceContentRect.Max,"
+            },
+            "Performance submits its content first, then the opaque inset fill, "
+            "fixed shadow, outer outline, and inner outline");
+        const std::string_view settingsChildList = ExtractSection(
+            viewer,
+            "ImGui::BeginChild(\n            \"##SettingsBody\"",
+            "const ImVec2 settingsWindowPosition =",
+            "Settings scrolling child list");
+        RequireOrdered(
+            settingsChildList,
+            {
+                "ImDrawList* settingsBodyDrawList =",
+                "TrackSettingsDecorationDrawList(",
+                "DrawSettingsScrollEdgeFades();",
+                "const ImRect settingsBodyViewportRect(",
+                "const ImRect settingsRootBodyRect(",
+                "ImDrawList* settingsDecorationDrawList =",
+                "g_SettingsDecorationDrawList",
+                "? g_SettingsDecorationDrawList",
+                ": settingsBodyDrawList;",
+                "DrawFilledRoundedInsetFrame(",
+                "settingsDecorationDrawList,",
+                "settingsRootBodyRect,",
+                "settingsBodyViewportRect,",
+                "DrawSettingsFixedTopInsetShadow(",
+                "settingsDecorationDrawList,",
+                "settingsBodyViewportRect,",
+                "g_UiSpacingTokens.tight,",
+                "style.WindowRounding,",
+                "false);",
+                "DrawDrawerBodyOutline(",
+                "settingsDecorationDrawList,",
+                "settingsRootBodyRect.Min,",
+                "settingsRootBodyRect.Max,",
+                "style.WindowRounding,",
+                "0.f,",
+                "false);",
+                "DrawDrawerBodyOutline(",
+                "settingsDecorationDrawList,",
+                "settingsBodyViewportRect.Min,",
+                "settingsBodyViewportRect.Max,",
+                "style.WindowRounding,",
+                "0.f,",
+                "false);",
+                "ImGui::PopUvsrColorPickerPopupContentRight();",
+                "ImGui::EndChild();"
+            },
+            "the opaque inset fill, fixed shadow, outer outline, and complete "
+            "four-corner inner silhouette are drawn last on the last visible "
+            "Settings child list without InnerClipRect intersection, immediately "
+            "before EndChild");
+        const std::string_view retainedSettingsDecoration = ExtractSection(
+            viewer,
+            "if (!settingsExpanded &&",
+            "const bool settingsCollapsed =",
+            "retained collapsing Settings root decoration");
+        RequireOrdered(
+            retainedSettingsDecoration,
+            {
+                "const ImRect retainedSettingsContentRect(",
+                "DrawFilledRoundedInsetFrame(",
+                "settingsBodyRect,",
+                "retainedSettingsContentRect,",
+                "DrawSettingsFixedTopInsetShadow(",
+                "retainedSettingsContentRect,",
+                "DrawDrawerBodyOutline(",
+                "settingsBodyRect.Min,",
+                "settingsBodyRect.Max,",
+                "DrawDrawerBodyOutline(",
+                "retainedSettingsContentRect.Min,",
+                "retainedSettingsContentRect.Max,"
+            },
+            "the retained collapsing Settings body preserves the same fill, "
+            "shadow, outer-outline, and inner-outline order");
+        for (const std::string_view retiredBackdropContract : {
+                std::string_view("UiPanelStackBackdropIndex"),
+                std::string_view("UiPanelStackShadowBackdropIndex"),
+                std::string_view("UiPanelSeamBackdropIndex"),
+                std::string_view("CaptureStackedPanelBackdrop("),
+                std::string_view("CaptureStackedPanelBackdrops("),
+                std::string_view("CaptureStackedPanelSeamBackdrop") })
+        {
+            RequireAbsent(
+                viewer,
+                retiredBackdropContract,
+                "retired union-stack backdrop contract");
+        }
+        const std::string_view backdropRenderRouting = ExtractSection(
+            viewer,
+            "const bool hasVisibleBackdrop = std::any_of(",
+            "m_CommandList->endMarker();",
+            "backdrop exclusion render routing");
+        RequireOrdered(
+            backdropRenderRouting,
+            {
+                "ResolveBackdropCompositeRegions(",
+                "backdropRect.compositeExclusions",
+                "for (const UiBackdropExclusionRect& region : regions)",
+                "compositeState.viewport.addScissorRect("
+            },
+            "Settings-body blur excludes authored translucent-header interiors");
+        const std::string_view backdropConstants = ExtractSection(
+            viewer,
+            "struct alignas(16) BackdropBlurConstants",
+            "class BackdropBlurPass",
+            "CPU backdrop blur constant layout");
+        RequireOrdered(
+            backdropConstants,
+            {
+                "float shadowOffsetY = 0.f;",
+                "uint32_t cornerMask = UiBackdropCornersAll;",
+                "float2 padding;",
+                "static_assert(sizeof(BackdropBlurConstants) == 80u);"
+            },
+            "CPU backdrop corner-mask constant layout");
+        RequireContains(
+            viewer,
+            "constants.cornerMask = backdropRect.cornerMask;",
+            "backdrop corner-mask upload");
+        RequireOrdered(
+            backdropBlurShader,
+            {
+                "uint cornerMask;",
+                "float ResolveCornerRadius(",
+                "? (right ? 0x8u : 0x4u)",
+                ": (right ? 0x2u : 0x1u);",
+                "g_BackdropBlur.cornerMask"
+            },
+            "shader-side selective rounded-corner mask");
+
+        const std::string_view skinApplication = ExtractSection(
+            viewer,
+            "static void ApplyUiSkin(",
+            "static void PushPanelBodySurface()",
+            "UI skin application");
+        RequireOrdered(
+            skinApplication,
+            {
+                "bool animationsEnabled,",
+                "ImGui::SetUvsrUiBehavior(",
+                "ResolveUiMotionEnabled(",
+                "resolvedSkin,",
+                "animationsEnabled),"
+            },
+            "authored motion policy combines the skin and live Interface "
+            "animation preference");
+        Require(
+            CountOccurrences(viewer, "ResolveUiMotionEnabled(") == 2u,
+            "skin application and renderer transitions must share one "
+            "effective motion resolver");
+        RequireOrdered(
+            viewer,
+            {
+                "const bool uiMotionEnabled =",
+                "ResolveUiMotionEnabled(",
+                "m_ui.Skin,",
+                "m_ui.AnimationsEnabled);",
+                "ApplyUiSkin(",
+                "m_ComposedUiSkin,",
+                "m_ui.Accents,",
+                "m_ui.AnimationsEnabled,"
+            },
+            "renderer and composed ImGui motion both observe the same live "
+            "Interface preference");
+        const std::string_view uiColorHelpers = ExtractSection(
+            viewer,
+            "static ImVec4 MakeUiColor(",
+            "static void ApplyUiSkin(",
+            "RGBA UI color helpers");
+        Require(
+            CountOccurrences(
+                uiColorHelpers,
+                "color.alpha * alphaMultiplier") == 3u,
+            "direct, scaled, and offset UI colors must all propagate the "
+            "authored alpha multiplier.");
+        RequireContains(
+            uiColorHelpers,
+            "return luminance >= 0.68f;",
+            "structural scene-translucency remains active for an authored "
+            "ultra-bright Primary Accent RGB even at transparent alpha");
+        const std::string_view scrollEdgeFade = ExtractSection(
+            viewer,
+            "static void DrawSettingsScrollEdgeFades()",
+            "static void EndDrawerBody()",
+            "Settings scroll-edge alpha routing");
+        RequireOrdered(
+            scrollEdgeFade,
+            {
+                "ImVec4 edgeColor = style.Colors[ImGuiCol_WindowBg];",
+                "ImVec4 clearColor = edgeColor;",
+                "clearColor.w = 0.f;",
+                "color.w *= std::clamp("
+            },
+            "scroll-edge fades derive from actual panel alpha down to a "
+            "transparent endpoint");
+        RequireAbsent(
+            scrollEdgeFade,
+            "std::max(edgeColor.w",
+            "retired scroll-fade alpha floor");
+        for (const std::string_view paletteContract : {
+                std::string_view("const UiSkinPalette* storedPalette ="),
+                std::string_view(
+                    "FindUiSkinPalette(accents, resolvedSkin);"),
+                std::string_view("const UiSkinPalette* defaultPalette ="),
+                std::string_view(
+                    "FindDefaultUiSkinPalette(resolvedSkin);"),
+                std::string_view("const UiSkinPalette& palette = storedPalette"),
+                std::string_view(
+                    "const bool authoredSkin = resolvedSkin != UiSkin::Og;"),
+                std::string_view(
+                    "IsUltraBrightUiColor(palette.primaryAccent);"),
+                std::string_view(
+                    "const bool brightPrimaryBackground = authoredSkin &&"),
+                std::string_view(
+                    "IsUltraBrightUiColor(palette.primaryBackground);"),
+                std::string_view(
+                    "const bool sceneTranslucentHeaders = authoredSkin &&"),
+                std::string_view(
+                    "brightPrimaryAccent;"),
+                std::string_view(
+                    "colors[ImGuiCol_Text] = MakeUiColor(palette.fontColor);"),
+                std::string_view(
+                    "colors[ImGuiCol_FrameBg] =\n"
+                    "                MakeUiColor(palette.primaryBackground);"),
+                std::string_view(
+                    "const ImVec4 opaquePrimaryAccent("),
+                std::string_view(
+                    "colors[ImGuiCol_CheckMark] = opaquePrimaryAccent;"),
+                std::string_view(
+                    "tokens.drawerHeader =\n"
+                    "                MakeUiColor(palette.primaryAccent);"),
+                std::string_view(
+                    "ScaleUiColor(\n"
+                    "                    palette.primaryAccent,\n"
+                    "                    0.82f,\n"
+                    "                    0.48f / 0.31f);"),
+                std::string_view(
+                    "ScaleUiColor(\n"
+                    "                    palette.primaryAccent,\n"
+                    "                    0.70f,\n"
+                    "                    0.65f / 0.31f);"),
+                std::string_view(
+                    "tokens.drawerHeaderText =\n"
+                    "                MakeUiColor(palette.fontColor);"),
+                std::string_view(
+                    "tokens.drawerBackground =\n"
+                    "                ImVec4(\n"
+                    "                    0.66f,\n"
+                    "                    0.67f,\n"
+                    "                    0.69f,\n"
+                    "                    std::clamp(\n"
+                    "                        palette.primaryBackground.alpha *\n"
+                    "                            (0.13f / SecondaryRestAlpha),\n"
+                    "                        0.f,\n"
+                    "                        1.f));"),
+                std::string_view(
+                    "tokens.panelBodySurface = MakeUiColor(\n"
+                    "                palette.primaryBackground,"),
+                std::string_view(
+                    "tokens.colorPickerSurface = MakeUiColor(\n"
+                    "                palette.primaryBackground,\n"
+                    "                1.f / SecondaryRestAlpha);"),
+                std::string_view(
+                    "tokens.panelInsetFrame = ImVec4(\n"
+                    "                tokens.panelBodySurface.x,\n"
+                    "                tokens.panelBodySurface.y,\n"
+                    "                tokens.panelBodySurface.z,\n"
+                    "                1.f);"),
+                std::string_view(
+                    "tokens.settingsTitleText =\n"
+                    "                MakeUiColor(palette.fontColor);"),
+                std::string_view(
+                    "tokens.actionButtonText =\n"
+                    "                MakeUiColor(palette.fontColor);"),
+                std::string_view(
+                    "tokens.sceneTranslucentHeaders =\n"
+                    "                sceneTranslucentHeaders;") })
+        {
+            RequireContains(
+                skinApplication,
+                paletteContract,
+                "Amp RGBA role routing and ultra-bright custom transmission");
+        }
+        RequireContains(
+            skinApplication,
+            "tokens.colorPickerSurface = colors[ImGuiCol_PopupBg];",
+            "Ogg retains the stock popup background for its picker surface");
+        RequireContains(
+            skinApplication,
+            "tokens.panelInsetFrame = ImVec4(\n"
+            "                colors[ImGuiCol_WindowBg].x,\n"
+            "                colors[ImGuiCol_WindowBg].y,\n"
+            "                colors[ImGuiCol_WindowBg].z,\n"
+            "                1.f);",
+            "Ogg also supplies an opaque inset-frame color from stock WindowBg");
+        Require(
+            CountOccurrences(
+                skinApplication,
+                "tokens.panelInsetFrame = ImVec4(") == 2u,
+            "authored Amp and stock Ogg must share exactly one opaque inset-frame "
+            "token assignment each.");
+        RequireOrdered(
+            skinApplication,
+            {
+                "tokens.drawerHeader =",
+                "tokens.drawerHeaderHovered =",
+                "tokens.drawerHeaderActive ="
+            },
+            "Amp drawer resting-hover-active token order");
+        RequireOrdered(
+            skinApplication,
+            {
+                "colors[ImGuiCol_FrameBgHovered] = brightPrimaryBackground",
+                "? ScaleUiColor(\n"
+                "                    palette.primaryBackground,\n"
+                "                    0.82f,\n"
+                "                    0.76f / SecondaryRestAlpha)",
+                ": OffsetUiColor(\n"
+                "                    palette.primaryBackground,\n"
+                "                    0.112f,\n"
+                "                    0.76f / SecondaryRestAlpha);",
+                "colors[ImGuiCol_FrameBgActive] = brightPrimaryBackground",
+                "? ScaleUiColor(\n"
+                "                    palette.primaryBackground,\n"
+                "                    0.70f,\n"
+                "                    0.82f / SecondaryRestAlpha)",
+                ": OffsetUiColor(\n"
+                "                    palette.primaryBackground,\n"
+                "                    0.162f,\n"
+                "                    0.82f / SecondaryRestAlpha);"
+            },
+            "ultra-bright closed controls darken with calibrated alpha while "
+            "dark backgrounds retain positive hover and active offsets");
+        RequireOrdered(
+            skinApplication,
+            {
+                "if (brightPrimaryAccent)",
+                "tokens.drawerHeaderHovered = ScaleUiColor(\n"
+                    "                    palette.primaryAccent,\n"
+                    "                    0.82f,\n"
+                    "                    0.48f / 0.31f);",
+                "tokens.drawerHeaderActive = ScaleUiColor(\n"
+                    "                    palette.primaryAccent,\n"
+                    "                    0.70f,\n"
+                    "                    0.65f / 0.31f);",
+                "else",
+                "tokens.drawerHeaderHovered = MakeUiColor(\n"
+                    "                    palette.primaryAccent,\n"
+                    "                    0.48f / 0.31f);",
+                "tokens.drawerHeaderActive = MakeUiColor(\n"
+                    "                    palette.primaryAccent,\n"
+                    "                    0.65f / 0.31f);"
+            },
+            "ultra-bright custom Amp Primary Accents darken while ordinary Amp "
+            "accents retain the authored alpha curve");
+        Require(
+            CountOccurrences(
+                skinApplication,
+                "brightPrimaryBackground") == 3u,
+            "bright Primary Background detection must feed exactly the two "
+            "closed-control ternaries");
+        RequireOrdered(
+            skinApplication,
+            {
+                "tokens.actionButton = tokens.drawerHeader;",
+                "tokens.actionButtonHovered =\n"
+                "                tokens.drawerHeaderHovered;",
+                "tokens.actionButtonActive =\n"
+                "                tokens.drawerHeaderActive;",
+                "colors[ImGuiCol_Header] = tokens.drawerHeader;",
+                "colors[ImGuiCol_HeaderHovered] =",
+                "tokens.drawerHeaderHovered;",
+                "colors[ImGuiCol_HeaderActive] =",
+                "tokens.drawerHeaderActive;"
+            },
+            "Primary Accent routes through authored drawer headers, footer "
+            "actions, slider grabs, and selected/hovered popup rows");
+        RequireOrdered(
+            skinApplication,
+            {
+                "tokens.settingsTitleSurface = sceneTranslucentHeaders",
+                "? tokens.drawerHeader",
+                ": CompositeUiColorOver(",
+                "tokens.drawerHeader,",
+                "tokens.panelBodySurface);"
+            },
+            "an ultra-bright custom Amp title preserves raw scene-transmitting "
+            "Primary Accent while the ordinary title is precomposited");
+        const std::string_view translucentBodySurface = ExtractSection(
+            viewer,
+            "static void DrawTranslucentHeaderPanelBodySurface(",
+            "static const char* GetDeferredDropdownPreview(",
+            "translucent-header Settings body support complement");
+        RequireOrdered(
+            translucentBodySurface,
+            {
+                "std::vector<ImRect> exclusions =",
+                "translucentHeaderSupportRects;",
+                "const float headerSupportInset = std::max(",
+                "1.f,",
+                "ImGui::GetStyle().FrameRounding);",
+                "for (ImRect exclusion : exclusions)",
+                "exclusion.Min.x += headerSupportInset;",
+                "exclusion.Min.y += headerSupportInset;",
+                "exclusion.Max.x -= headerSupportInset;",
+                "exclusion.Max.y -= headerSupportInset;",
+                "nextFullWidthY = exclusion.Max.y;",
+                "ImGui::RenderFrameBorder("
+            },
+            "ultra-bright custom Amp Settings body excludes rounding-scaled header "
+            "support rectangles");
+        Require(
+            CountOccurrences(
+                translucentBodySurface,
+                "drawClippedSurface(ImRect(") == 4u,
+            "the authored body complement must paint above, beside, and after each "
+            "translucent header support rectangle.");
+        const std::string_view translucentSettingsWindow = ExtractSection(
+            viewer,
+            "ImGuiWindowFlags settingsWindowFlags =",
+            "const bool settingsCollapsed =",
+            "ultra-bright authored Settings root surface routing");
+        RequireOrdered(
+            translucentSettingsWindow,
+            {
+                "if (g_UiVisualTokens.sceneTranslucentHeaders)",
+                "settingsWindowFlags |= ImGuiWindowFlags_NoBackground;",
+                ".translucentHeaderSupportRects.clear();",
+                "if (settingsExpanded &&",
+                "g_UiVisualTokens.sceneTranslucentHeaders)",
+                "DrawTranslucentHeaderPanelBodySurface("
+            },
+            "ultra-bright custom Amp raw title and body-complement rendering");
+        const std::string_view footerSceneTransmission = ExtractSection(
+            viewer,
+            "const ImVec2 actionButtonRowMinimum =",
+            "ImGui::PopStyleColor(4);",
+            "translucent footer support exclusion");
+        RequireOrdered(
+            footerSceneTransmission,
+            {
+                "const ImVec2 actionButtonRowMinimum =",
+                "const ImVec2 actionButtonRowMaximum =",
+                "if (g_UiVisualTokens.sceneTranslucentHeaders)",
+                ".translucentHeaderSupportRects.push_back(",
+                "actionButtonRowMinimum,",
+                "actionButtonRowMaximum"
+            },
+            "an ultra-bright authored action row also reveals unblurred scene "
+            "content through its support exclusion");
+        const std::string_view translucentRootSeamSupport = ExtractSection(
+            imguiUiOverride,
+            "expanded_stacked_panel_body_rect = ImRect(",
+            "// Title bar",
+            "ultra-bright authored Settings title/body seam support");
+        RequireOrdered(
+            translucentRootSeamSupport,
+            {
+                "window->TitleBarHeight - 1.0f",
+                "AddRectFilled",
+                "ImDrawFlags_RoundCornersAll"
+            },
+            "ultra-bright authored root keeps a one-pixel fully rounded "
+            "title/body support overlap");
+
+        for (const std::string_view boldFontContract : {
+                std::string_view("UVSR_UI_BOLD_FONT_SOURCE"),
+                std::string_view("$ENV{WINDIR}/Fonts/segoeuib.ttf"),
+                std::string_view("CodexUI-Bold.ttf") })
+        {
+            RequireContains(
+                cmakeSource,
+                boldFontContract,
+                "staged bold authored-header font");
+        }
+        RequireContains(
+            viewer,
+            "std::shared_ptr<app::RegisteredFont> m_HeaderFont;",
+            "owned authored-header font");
+        RequireContains(
+            viewer,
+            "m_HeaderFont = CreateFontFromFile(",
+            "loaded authored-header font");
+        RequireContains(
+            viewer,
+            "\"/media/fonts/System/CodexUI-Bold.ttf\"",
+            "runtime authored-header font path");
+        const std::string_view collapsingHeader = ExtractSection(
+            viewer,
+            "bool DrawCollapsingHeader(",
+            "static void BeginDrawerBody(",
+            "bold collapsing-header typography");
+        RequireOrdered(
+            collapsingHeader,
+            {
+                "m_ComposedUiSkin != UiSkin::Og",
+                "ImGui::PushFont(GetActiveUiHeaderFont())",
+                "ApplyActiveUiHeaderWordSpacing();",
+                "ImGui::CollapsingHeader(label, flags)",
+                "RestoreActiveUiHeaderWordSpacing();",
+                "ImGui::PopFont();"
+            },
+            "bold authored collapsing-header typography");
+        Require(
+            CountOccurrences(
+                viewer,
+                "ImGui::PushFont(GetActiveUiHeaderFont())") == 3u,
+            "the Performance title, Settings title, and authored drawers must "
+            "each push the bold header font exactly once.");
+        const std::string_view performanceTitle = ExtractSection(
+            viewer,
+            "ImGuiWindowFlags performanceWindowFlags =",
+            "ImDrawList* performanceWindowDrawList =",
+            "bold Performance title");
+        RequireOrdered(
+            performanceTitle,
+            {
+                "ImGui::PushFont(GetActiveUiHeaderFont())",
+                "ApplyActiveUiHeaderWordSpacing();",
+                "ImGui::Begin(\n            \"Performance\"",
+                "RestoreActiveUiHeaderWordSpacing();",
+                "ImGui::PopFont();"
+            },
+            "bold authored Performance title");
+        const std::string_view settingsTitle = ExtractSection(
+            viewer,
+            "ImGuiWindowFlags settingsWindowFlags =",
+            "ImDrawList* settingsWindowDrawList =",
+            "bold Settings title");
+        RequireOrdered(
+            settingsTitle,
+            {
+                "ImGui::PushFont(GetActiveUiHeaderFont())",
+                "ApplyActiveUiHeaderWordSpacing();",
+                "ImGui::Begin(\n            \"Settings\"",
+                "RestoreActiveUiHeaderWordSpacing();",
+                "ImGui::PopFont();"
+            },
+            "bold authored Settings title");
+
+        const std::string_view layoutAnimationStep = ExtractSection(
+            viewer,
+            "UiLayoutAnimationDurationSeconds = 0.18f;",
+            "static float GetCommandInterfaceMinimumHeight()",
+            "authored drawer animation step");
+        RequireOrdered(
+            layoutAnimationStep,
+            {
+                "std::max(0.f, ImGui::GetIO().DeltaTime)",
+                "1.f / 30.f",
+                "animationDeltaTime /",
+                "UiLayoutAnimationDurationSeconds"
+            },
+            "authored drawer large-delta clamp");
+        const std::string_view advanceLayoutAnimation = ExtractSection(
+            viewer,
+            "static float AdvanceUiLayoutAnimation(",
+            "static float SmoothUiLayoutAnimation(",
+            "authored drawer animation advance");
+        RequireOrdered(
+            advanceLayoutAnimation,
+            {
+                "if (!ImGui::IsUvsrUiMotionEnabled())",
+                "return targetVisible ? 1.f : 0.f;",
+                "const float step = GetUiLayoutAnimationStep();",
+                "std::min(1.f, amount + step)",
+                "std::max(0.f, amount - step)"
+            },
+            "Ogg-immediate and reversible authored drawer advance");
+        RequireOrdered(
+            collapsingHeader,
+            {
+                "if (!ImGui::IsUvsrUiMotionEnabled())",
+                "openAmount = open ? 1.f : 0.f;",
+                "else if (lastFrame < frame - 1)",
+                "ResolveUiOpenAmountAfterSubmissionGap(",
+                "AdvanceUiLayoutAnimation(openAmount, open)"
+            },
+            "Ogg drawer endpoint resolves before submission-gap animation");
+        RequireOrdered(
+            collapsingHeader,
+            {
+                "bool forceClosedPresentation = false",
+                "const int lastFrame = forceClosedPresentation",
+                "? frame - 2",
+                "const bool previousTargetOpen = forceClosedPresentation",
+                "? false",
+                "float openAmount = forceClosedPresentation",
+                "? 0.f",
+                "else if (lastFrame < frame - 1)",
+                "ResolveUiOpenAmountAfterSubmissionGap("
+            },
+            "forced Material reset seeds a false-to-true submission gap from "
+            "the closed endpoint");
+        const std::string_view nestedDrawer = ExtractSection(
+            viewer,
+            "static bool BeginAnimatedTreeNode(",
+            "static void EndAnimatedTreeNode()",
+            "nested authored drawer animation");
+        RequireOrdered(
+            nestedDrawer,
+            {
+                "if (!ImGui::IsUvsrUiMotionEnabled())",
+                "openAmount = open ? 1.f : 0.f;",
+                "else if (lastFrame < frame - 1)",
+                "ResolveUiOpenAmountAfterSubmissionGap(",
+                "AdvanceUiLayoutAnimation(openAmount, open)"
+            },
+            "Ogg nested-drawer endpoint resolves before submission-gap animation");
+        const std::string_view rootCollapseOverride = ExtractSection(
+            imguiUiOverride,
+            "float uvsr_window_collapse_amount = -1.0f;",
+            "// Apply minimum/maximum window size constraints and final size",
+            "generic authored root collapse animation");
+        RequireOrdered(
+            rootCollapseOverride,
+            {
+                "if (last_frame < g.FrameCount - 1)",
+                "start_amount = collapse_amount;",
+                "if (window->WantCollapseToggle)",
+                "start_amount = collapse_amount;",
+                "uvsr_window_collapse_target >= 0",
+                "start_amount = collapse_amount;",
+                "constexpr float MaximumCollapseDelta = 1.0f / 30.0f;",
+                "ImMin(",
+                "ImMax(0.0f, g.IO.DeltaTime)",
+                "MaximumCollapseDelta",
+                "collapse_amount = ImLerp("
+            },
+            "generic root submission-gap, reversal, and delta-clamp contract");
+        RequireOrdered(
+            rootCollapseOverride,
+            {
+                "const float target_amount =",
+                "if (!g.UvsrUiMotionEnabled)",
+                "collapse_amount = target_amount;",
+                "start_amount = target_amount;",
+                "elapsed = 0.0f;",
+                "else if (collapse_amount != target_amount)"
+            },
+            "the animation master switch snaps an in-flight authored root "
+            "collapse to its target without taking the Ogg stock path");
+        Require(
+            CountOccurrences(
+                imguiUiOverride,
+                "UvsrWindowCollapseAmountKeySalt") == 3u,
+            "the authored-root collapse renderer and current-window query must "
+            "share one storage-key salt.");
+        const std::string_view rootCollapseQuery = ExtractSection(
+            imguiUiOverride,
+            "bool ImGui::IsCurrentUvsrWindowCollapseTransitionActive()",
+            "void ImGui::SetNextWindowBgAlpha(",
+            "current authored-root transition query");
+        RequireOrdered(
+            rootCollapseQuery,
+            {
+                "ImGuiWindow* window = g.CurrentWindow;",
+                "window == NULL",
+                "window->LastFrameActive != g.FrameCount",
+                "g.UvsrStockWidgetRendering",
+                "window->ID ^ UvsrWindowCollapseAmountKeySalt",
+                "collapse_amount > 0.0f && collapse_amount < 1.0f"
+            },
+            "active current authored-root transition query");
+        for (const std::string_view publicCollapseApi : {
+                std::string_view(
+                    "SetNextUvsrWindowCollapsedHeight(float collapsed_height);"),
+                std::string_view(
+                    "SetNextUvsrWindowCollapseTarget(bool collapsed);"),
+                std::string_view(
+                    "IsCurrentUvsrWindowCollapseTransitionActive();") })
+        {
+            RequireContains(
+                imguiUiOverride,
+                publicCollapseApi,
+                "generic authored-root collapse API");
+        }
+        Require(
+            CountOccurrences(
+                viewer,
+                "ImGui::SetNextUvsrWindowCollapsedHeight(") == 2u &&
+            CountOccurrences(
+                viewer,
+                "ImGui::IsCurrentUvsrWindowCollapseTransitionActive();") == 2u,
+            "Performance and Settings must both use and query generic root motion");
+        const std::string_view rootCompletionBarrier = ExtractSection(
+            viewer,
+            "const bool performanceCollapseTransitionActive =",
+            "RestoreActiveUiWordSpacing();",
+            "root transition commit barrier");
+        RequireOrdered(
+            rootCompletionBarrier,
+            {
+                "const bool performanceCollapseTransitionActive =",
+                "ImGui::IsCurrentUvsrWindowCollapseTransitionActive();",
+                "const bool settingsCollapseTransitionActive =",
+                "ImGui::IsCurrentUvsrWindowCollapseTransitionActive();",
+                "settingsLayoutIdle =",
+                "settingsLayoutIdle &&",
+                "!settingsCollapseTransitionActive;",
+                "settingsLayoutIdle &&",
+                "!performanceCollapseTransitionActive"
+            },
+            "deferred dropdown barrier includes both independent root transitions");
         RequireAbsent(
             viewer,
-            "tokens.errorText =",
-            "skin-specific command failure color override");
+            "ImGui::GetCursorPosY() - style.WindowPadding.y",
+            "retired Settings root top-padding cancellation");
+
+        const std::string_view visualDisabledScopes = ExtractSection(
+            viewer,
+            "struct UiDisabledPresentationState",
+            "static bool BeginAnimatedToggleRegion(",
+            "nested-safe visual disabled scopes");
+        RequireOrdered(
+            visualDisabledScopes,
+            {
+                "float linearAmount = 0.f;",
+                "bool initialized = false;",
+                "int lastSeenFrame = -1;",
+                "int advancedFrame = -1;",
+                "g_UiDisabledPresentationStates;",
+                "g_UiVisualDisabledScopeDepth = 0;",
+                "static float ResolveDisabledPresentationAmount(",
+                "const bool submissionWasInterrupted =",
+                "state.linearAmount = disabled ? 1.f : 0.f;",
+                "AdvanceUiDisabledPresentation(",
+                "ImGui::GetIO().DeltaTime,",
+                "motionEnabled);",
+                "return SmoothUiDisabledPresentation(state.linearAmount);",
+                "static bool BeginVisuallyDisabledUiScope(",
+                "const char* id,",
+                "bool disabled)",
+                "g_UiDisabledPresentationStates[ImGui::GetID(id)]",
+                "ResolveDisabledPresentationAmount(state, disabled);",
+                "g_UiVisualDisabledScopeDepth == 0;",
+                "ImGuiStyleVar_Alpha",
+                "g_UiVisualTokens.controlDisabledAlpha - 1.f",
+                "presentationAmount",
+                "ImGuiStyleVar_DisabledAlpha",
+                "1.f);",
+                "ImGui::PushUvsrDisabledPresentation(",
+                "presentationAmount);",
+                "ImGui::BeginDisabled(disabled);",
+                "++g_UiVisualDisabledScopeDepth;",
+                "static void EndVisuallyDisabledUiScope(bool manualAlphaApplied)",
+                "--g_UiVisualDisabledScopeDepth;",
+                "ImGui::EndDisabled();",
+                "ImGui::PopUvsrDisabledPresentation();",
+                "ImGui::PopStyleVar();",
+                "if (manualAlphaApplied)",
+                "ImGui::PopStyleVar();"
+            },
+            "per-ID gated presentation advances monotonically over the shared "
+            "timeline, while semantic disabling applies immediately and nested "
+            "scopes apply one visual multiplier");
+        RequireContains(
+            uiAnimation,
+            "UiDisabledPresentationDurationSeconds = 0.280f;",
+            "280 ms authored disabled-presentation duration");
+        RequireOrdered(
+            imguiUiOverride,
+            {
+                "static void ApplyDisabledGrayscale(ImVec4& color)",
+                "g.UvsrDisabledPresentationAmountStack.Size > 0",
+                "g.UvsrDisabledPresentationAmountStack.back()",
+                "ImLerp(color.x, luminance, amount)",
+                "GImGui->CurrentItemFlags & ImGuiItemFlags_Disabled",
+                "GImGui->UvsrDisabledPresentationAmountStack.Size > 0",
+                "GImGui->UvsrDisabledPresentationAmountStack.back() > 0.0f",
+                "ApplyDisabledGrayscale(c);",
+                "void ImGui::PushUvsrDisabledPresentation(float amount)",
+                "const float inherited =",
+                "ImMax(inherited, ImSaturate(amount))",
+                "void ImGui::PopUvsrDisabledPresentation()"
+            },
+            "the ImGui disabled-presentation scope is nested-safe, including "
+            "packed colors during re-enable fades, and drives authored grayscale "
+            "independently from semantic BeginDisabled");
+
+        const std::string_view toggleRegion = ExtractSection(
+            viewer,
+            "static bool BeginAnimatedToggleRegion(",
+            "static void EndAnimatedToggleRegion()",
+            "animated toggle-region visual gating");
+        RequireOrdered(
+            toggleRegion,
+            {
+                "state.disabledPresentationLinearAmount =",
+                "visible ? 0.f : 1.f;",
+                "if (!motionEnabled)",
+                "state.disabledPresentationLinearAmount =",
+                "visible ? 0.f : 1.f;",
+                "else if (state.disabledPresentationAdvancedFrame != frame)",
+                "AdvanceUiDisabledPresentation(",
+                "!state.targetVisible,",
+                "ImGui::GetIO().DeltaTime,",
+                "const float disabledPresentationAmount =",
+                "SmoothUiDisabledPresentation(",
+                "ImGuiStyleVar_Alpha",
+                "easedAmount",
+                "g_UiVisualTokens.controlDisabledAlpha",
+                "disabledPresentationAmount",
+                "ImGuiStyleVar_DisabledAlpha",
+                "1.f);",
+                "ImGui::PushUvsrDisabledPresentation(",
+                "disabledPresentationAmount);",
+                "ImGui::BeginDisabled(",
+                "!state.targetVisible || state.linearAmount < 1.f",
+                "++g_UiVisualDisabledScopeDepth;"
+            },
+            "toggle regions use the same 280 ms presentation amount while "
+            "blocking interaction immediately throughout opening and closing");
+        const std::string_view toggleRegionEnd = ExtractSection(
+            viewer,
+            "static void EndAnimatedToggleRegion()",
+            "static float GetUiHighlightFade(",
+            "animated toggle-region disabled-scope unwind");
+        RequireOrdered(
+            toggleRegionEnd,
+            {
+                "if (context.ownsDisabledPresentationScope)",
+                "assert(g_UiVisualDisabledScopeDepth > 0);",
+                "--g_UiVisualDisabledScopeDepth;",
+                "ImGui::EndDisabled();",
+                "ImGui::PopUvsrDisabledPresentation();"
+            },
+            "toggle-region disabled presentation unwinds after its immediate "
+            "semantic item scope");
+        RequireAbsent(
+            viewer,
+            "FreezeAnimatedToggleVisualValues",
+            "retired frozen toggle and slider presentation cache");
+        const std::string_view rootInputLocks = ExtractSection(
+            viewer,
+            "const bool deferredDropdownInputBlocked =",
+            "EndSettingsScrollStability();",
+            "input-only Settings root locks");
+        Require(
+            CountOccurrences(
+                rootInputLocks,
+                "ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, 1.f);") == 2u,
+            "deferred-action and scroll-stability root locks must suppress "
+            "input without visually dimming Settings.");
+        Require(
+            CountOccurrences(
+                rootInputLocks,
+                "ImGui::PushUvsrDisabledPresentation(0.f);") == 2u &&
+                CountOccurrences(
+                    rootInputLocks,
+                    "ImGui::PopUvsrDisabledPresentation();") == 2u,
+            "both root input-only locks explicitly preserve a zero authored "
+            "disabled-presentation amount and unwind it exactly once");
+
+        const std::string_view sliderWrapper = ExtractSection(
+            viewer,
+            "static bool DrawSliderFloat(",
+            "static bool DrawCenteredActionButton(",
+            "direct slider value submission");
+        RequireOrdered(
+            sliderWrapper,
+            {
+                "return ImGui::SliderFloat(",
+                "label,",
+                "value,",
+                "minimum,",
+                "maximum,",
+                "format,",
+                "flags);"
+            },
+            "slider wrapper submits the caller's live value directly while "
+            "the active skin supplies track colors globally");
+        for (const std::string_view retiredSliderCache : {
+                std::string_view("StateStorage"),
+                std::string_view("unordered_map"),
+                std::string_view("presentation") })
+        {
+            RequireAbsent(
+                sliderWrapper,
+                retiredSliderCache,
+                "retired UVSR-side slider presentation cache");
+        }
+
+        const std::string_view ratioSampleSlider = ExtractSection(
+            viewer,
+            "int sampleRateLog2 = multipleSamplesEnabled",
+            "const NoiseSettings oldResolvedNoise =",
+            "gated Heitz ratio-estimator sample slider");
+        RequireOrdered(
+            ratioSampleSlider,
+            {
+                "int sampleRateLog2 = multipleSamplesEnabled",
+                "? ratio.sampleRateLog2",
+                ": HeitzRatioEstimatorMinimumSampleRateLog2;",
+                "int sampleRate = 1 << sampleRateLog2;",
+                "BeginVisuallyDisabledUiScope(",
+                "\"##RatioEstimatorSamplesDisabledPresentation\"",
+                "!multipleSamplesEnabled);",
+                "\"Samples Per Pixel##RatioEstimatorShadows\"",
+                "&sampleRate,",
+                "1 << HeitzRatioEstimatorMaximumSampleRateLog2,",
+                "\"%d\"",
+                "ImGuiSliderFlags_Logarithmic",
+                "const int candidateSampleRateLog2 = std::clamp(",
+                "std::lround(std::log2(",
+                "std::max(1, sampleRate)",
+                "if (candidateSampleRateLog2 != ratio.sampleRateLog2)",
+                "ratio.sampleRateLog2 = candidateSampleRateLog2;",
+                "m_app->ResetImageBasedLightingHistory();",
+                "EndVisuallyDisabledUiScope(",
+                "sampleSliderManualDisabledAlpha);"
+            },
+            "the Heitz sample slider exposes the real power-of-two sample count "
+            "and maps accepted edits back to stored log2 configuration");
+        const std::string_view skySampleSlider = ExtractSection(
+            viewer,
+            "int sampleRateLog2 = skyVisibility.useRatioEstimator",
+            "if (DrawPresetResetIcon(\n"
+            "                        \"RayTracedSkyVisibilitySamples\"",
+            "gated sky-visibility sample slider");
+        RequireOrdered(
+            skySampleSlider,
+            {
+                "int sampleRateLog2 = skyVisibility.useRatioEstimator",
+                "? skyVisibility.sampleRateLog2",
+                ": RayTracedSkyVisibilityMinimumSampleRateLog2;",
+                "int sampleRate = 1 << sampleRateLog2;",
+                "const bool sampleSliderManualDisabledAlpha =",
+                "BeginVisuallyDisabledUiScope(",
+                "\"##SkyVisibilitySamplesDisabledPresentation\"",
+                "!skyVisibility.useRatioEstimator);",
+                "\"Samples Per Pixel##RayTracedSkyVisibility\"",
+                "&sampleRate,",
+                "1 << RayTracedSkyVisibilityMaximumSampleRateLog2,",
+                "\"%d\"",
+                "ImGuiSliderFlags_Logarithmic",
+                "const int candidateSampleRateLog2 = std::clamp(",
+                "std::lround(std::log2(",
+                "std::max(1, sampleRate)",
+                "if (candidateSampleRateLog2 !=",
+                "skyVisibility.sampleRateLog2)",
+                "skyVisibility.sampleRateLog2 =",
+                "candidateSampleRateLog2;",
+                "m_app->ResetImageBasedLightingHistory();",
+                "EndVisuallyDisabledUiScope(",
+                "sampleSliderManualDisabledAlpha);"
+            },
+            "the sky sample slider exposes the real power-of-two sample count, "
+            "presents the effective minimum locally while gated, and maps edits "
+            "back to stored log2 configuration");
+        Require(
+            CountOccurrences(viewer, "int sampleRate = 1 << sampleRateLog2;") ==
+                    2u &&
+                CountOccurrences(
+                    viewer,
+                    "static_cast<int>(std::lround(std::log2(") == 2u,
+            "exactly the two power-of-two controls must edit visible sample "
+            "counts and map them back to log2 storage.");
+        Require(
+            CountOccurrences(
+                viewer,
+                "BeginVisuallyDisabledUiScope(") == 3u,
+            "the visual disabled helper has one definition and exactly the two "
+            "effective-sample slider call sites");
+
+        const std::string_view checkboxOverride = ExtractSection(
+            imguiUiOverride,
+            "bool ImGui::Checkbox(const char* label, bool* v)",
+            "RenderFrame(bb.Min, bb.Max, GetColorU32(ImGuiCol_FrameBg)",
+            "authored toggle presentation");
+        RequireOrdered(
+            checkboxOverride,
+            {
+                "if (g.UvsrStockWidgetRendering)",
+                "bool completed_pending_value = false;",
+                "if (pending_value >= 0)",
+                "*v = resolved_value;",
+                "completed_pending_value = true;",
+                "stock_storage.SetInt(pending_value_key, -1);",
+                "const bool is_visible = ItemAdd(total_bb, id);",
+                "if (completed_pending_value)",
+                "MarkItemEdited(id);",
+                "if (!is_visible)",
+                "return completed_pending_value;"
+            },
+            "Ogg flushes a pending authored-toggle value after ItemAdd and "
+            "reports the completed change even when the stock item is clipped");
+        RequireOrdered(
+            checkboxOverride,
+            {
+                "if (g.UvsrStockWidgetRendering)",
+                "const bool visual_target =",
+                "const float target_position =",
+                "if (!g.UvsrUiMotionEnabled)",
+                "animated_position = target_position;",
+                "else",
+                "animated_position = ImLerp(",
+                "if (pending_value >= 0 &&",
+                "animated_position == target_position)",
+                "*v = visual_target;",
+                "pending_value = -1;"
+            },
+            "authored toggle motion snaps to the pending endpoint and commits "
+            "in the same frame when animations are disabled, while Ogg exits "
+            "through the stock branch");
+
+        for (const std::string_view toggleContract : {
+                std::string_view(
+                    "void ImGui::SetUvsrUiAccentColors("),
+                std::string_view(
+                    "g.UvsrNegativeAccent = ImVec4("),
+                std::string_view(
+                    "ImSaturate(negative_accent.w)"),
+                std::string_view(
+                    "g.UvsrPositiveAccent = ImVec4("),
+                std::string_view(
+                    "ImSaturate(positive_accent.w)"),
+                std::string_view("const float thumb_size ="),
+                std::string_view("const ImVec4 thumb_color = ImLerp("),
+                std::string_view("g.UvsrNegativeAccent,"),
+                std::string_view("g.UvsrPositiveAccent,") })
+        {
+            RequireContains(
+                imguiUiOverride,
+                toggleContract,
+                "dynamic RGBA semantic toggle-thumb contract");
+        }
+        RequireContains(
+            skinApplication,
+            "colors[ImGuiCol_SliderGrab] =\n"
+            "                tokens.drawerHeader;\n"
+            "            colors[ImGuiCol_SliderGrabActive] =\n"
+            "                tokens.drawerHeaderActive;",
+            "authored slider grabs use Primary Accent rest and active tokens");
+        RequireOrdered(
+            skinApplication,
+            {
+                "ImGui::SetUvsrSliderTrackColors(",
+                "tokens.drawerFrame,",
+                "tokens.drawerFrameHovered,",
+                "tokens.drawerFrameActive);"
+            },
+            "authored slider tracks use the ordinary drawer-frame states while "
+            "Primary Accent remains isolated to the grab");
+        RequireOrdered(
+            imguiSliderOverride,
+            {
+                "static ImU32 GetUvsrSliderTrackColor(",
+                "bool active)",
+                "const ImGuiCol stock_color = active",
+                "if (g.UvsrStockWidgetRendering)",
+                "return ImGui::GetColorU32(stock_color);",
+                "g.UvsrSliderTrackActive",
+                "g.UvsrSliderTrackHovered"
+            },
+            "Ogg retains stock slider tracks while authored sliders consume "
+            "the supplied drawer-frame states");
+        const std::string_view baseSliderTrackColor = ExtractSection(
+            imguiUiOverride,
+            "+static ImU32 GetUvsrSliderTrackColor(",
+            "// Note: p_data, p_min and p_max are _pointers_",
+            "base authored slider-track color routing");
+        RequireOrdered(
+            baseSliderTrackColor,
+            {
+                "g.UvsrSliderTrackActive",
+                "g.UvsrSliderTrackHovered",
+                ": g.UvsrSliderTrack);"
+            },
+            "authored slider track active, hover, and resting color routing");
+        RequireAbsent(
+            imguiSliderOverride,
+            "-                : g.UvsrSliderTrack);",
+            "slider override preservation of the authored resting track color");
+        RequireOrdered(
+            imguiSliderOverride,
+            {
+                "static float GetUvsrAuthoredToggleTrackWidth()",
+                "return IM_TRUNC(ImGui::GetFrameHeight() * 1.72f);",
+                "const float toggle_width = GetUvsrAuthoredToggleTrackWidth();",
+                "const float value_width =",
+                "GetUvsrAuthoredToggleTrackWidth() * 2.0f;"
+            },
+            "the authored slider value bubble is exactly twice the toggle width");
+        for (const std::string_view sliderContract : {
+                std::string_view("const float cross_axis_size ="),
+                std::string_view("grab_sz = ImMax(1.0f, cross_axis_size);"),
+                std::string_view(
+                    "slider_bb.Expand(ImVec2(0.0f, -2.0f));") })
+        {
+            RequireContains(
+                imguiSliderOverride,
+                sliderContract,
+                "uniform non-overlapping slider thumb contract");
+        }
+        const std::string_view sliderGrabAnimation = ExtractSection(
+            imguiUiOverride,
+            "+static void AnimateSliderGrab(",
+            "// Note: p_data, p_min and p_max are _pointers_",
+            "authored slider grab animation");
+        RequireOrdered(
+            sliderGrabAnimation,
+            {
+                "ImHashStr(",
+                "##SliderGrabAnimation",
+                "id);",
+                "##SliderGrabAnimationFrame",
+                "id);",
+                "!g.UvsrUiMotionEnabled",
+                "g.ActiveId == id",
+                "last_animation_frame < g.FrameCount - 1",
+                "else if (last_animation_frame != g.FrameCount)",
+                "const float delta_time = ImClamp(",
+                "1.0f / 30.0f",
+                "const float animation_half_life = 0.040f;",
+                "1.0f - ImPow(",
+                "animated_position = ImLerp(",
+                "storage.SetFloat(animation_key, animated_position);",
+                "storage.SetInt(animation_frame_key, g.FrameCount);"
+            },
+            "per-ID, frame-rate-independent 40 ms slider-grab motion with "
+            "active and skipped-submission snapping");
+        Require(
+            CountOccurrences(imguiUiOverride, "AnimateSliderGrab(") == 3u &&
+                CountOccurrences(
+                    imguiUiOverride,
+                    "GetRaisedFrameGradientBottomColor(grab_col)") == 2u,
+            "horizontal and vertical authored sliders must animate then render "
+            "their grabs with raised gradient depth.");
+        RequireOrdered(
+            imguiUiOverride,
+            {
+                "AnimateSliderGrab(",
+                "ImGuiAxis_X,",
+                "RenderGradientFrame(",
+                "GetRaisedFrameGradientBottomColor(grab_col)",
+                "style.GrabRounding,",
+                "true);"
+            },
+            "horizontal slider grab animation precedes raised rendering");
+        const std::string_view horizontalSliderGrab = ExtractSection(
+            imguiUiOverride,
+            "bool ImGui::SliderScalar(",
+            "// Display value using user-provided display format",
+            "authored-versus-stock horizontal slider grab");
+        RequireOrdered(
+            horizontalSliderGrab,
+            {
+                "if (!g.UvsrStockWidgetRendering)",
+                "AnimateSliderGrab(",
+                "ImGuiAxis_X,",
+                "if (g.UvsrStockWidgetRendering)",
+                "window->DrawList->AddRectFilled(",
+                "grab_col,",
+                "style.GrabRounding);",
+                "else",
+                "RenderGradientFrame(",
+                "GetRaisedFrameGradientBottomColor(grab_col)",
+                "true);"
+            },
+            "Ogg uses the exact upstream grab primitive while authored "
+            "horizontal sliders alone animate and render raised depth");
+        const std::string_view verticalSliderGrab = ExtractSection(
+            imguiUiOverride,
+            "const bool value_changed = SliderBehavior(frame_bb, id, data_type, "
+                "p_data, p_min, p_max, format, flags | "
+                "ImGuiSliderFlags_Vertical, &grab_bb);",
+            "// Display value using user-provided display format",
+            "authored-versus-stock vertical slider grab");
+        RequireOrdered(
+            verticalSliderGrab,
+            {
+                "if (!g.UvsrStockWidgetRendering)",
+                "AnimateSliderGrab(",
+                "ImGuiAxis_Y,",
+                "if (g.UvsrStockWidgetRendering)",
+                "window->DrawList->AddRectFilled(",
+                "grab_col,",
+                "style.GrabRounding);",
+                "else",
+                "RenderGradientFrame(",
+                "GetRaisedFrameGradientBottomColor(grab_col)",
+                "true);"
+            },
+            "Ogg uses the exact upstream grab primitive while authored "
+            "vertical sliders alone animate and render raised depth");
+
+        RequireAbsent(
+            imguiSliderOverride,
+            "UvsrSliderValueLabelPresentation",
+            "retired moving slider-label presentation state");
+        for (const std::string_view retiredSliderLabelState : {
+                std::string_view("##SliderValueLabelSide"),
+                std::string_view("##SliderValueLabelOpacity"),
+                std::string_view("##SliderValueLabelFrame") })
+        {
+            RequireAbsent(
+                imguiSliderOverride,
+                retiredSliderLabelState,
+                "retired per-ID slider-label animation state");
+        }
+        const std::string_view sliderValueLane = ExtractSection(
+            imguiSliderOverride,
+            "+struct UvsrSliderValueLane",
+            "static ImU32 GetUvsrSliderTrackColor(",
+            "authored fixed slider value lane");
+        RequireOrdered(
+            sliderValueLane,
+            {
+                "bool Usable;",
+                "ImRect TrackRect;",
+                "ImRect ValueRect;",
+                "static UvsrSliderValueLane ResolveUvsrSliderValueLane(",
+                "const float frame_height)",
+                "const float value_width =",
+                "GetUvsrAuthoredToggleTrackWidth() * 2.0f;",
+                "constexpr float BubbleGap = 2.0f;",
+                "slider_bb.GetWidth() - value_width - BubbleGap;",
+                "if (track_width < frame_height)",
+                "return { false, slider_bb, ImRect() };",
+                "value_rect.Min.x = value_rect.Max.x - value_width;",
+                "track_rect.Max.x = value_rect.Min.x - BubbleGap;",
+                "return { true, track_rect, value_rect };"
+            },
+            "authored sliders split their existing frame into a left track and "
+            "double-toggle-width right value bubble with an exact two-pixel gap "
+            "and a safe narrow-width fallback without increasing total width");
+        const std::string_view sliderNumericFormatting = ExtractSection(
+            imguiSliderOverride,
+            "+static const char* GetUvsrSliderExactInputFormat(",
+            "static ImU32 GetUvsrSliderTrackColor(",
+            "authored slider display and exact-input formatting");
+        RequireOrdered(
+            sliderNumericFormatting,
+            {
+                "GetUvsrSliderExactInputFormat(",
+                "if (data_type == ImGuiDataType_Float)",
+                "return \"%.9g\";",
+                "if (data_type == ImGuiDataType_Double)",
+                "return \"%.17g\";",
+                "return ImGui::DataTypeGetInfo(data_type)->PrintFmt;",
+                "static int CountUvsrNumericDigits(const char* text)",
+                "if (*cursor >= '0' && *cursor <= '9')",
+                "static int FormatUvsrFourDigitSliderValue(",
+                "if (!(value >= -DBL_MAX && value <= DBL_MAX))",
+                "ImFormatString(output, output_size, \"----\")",
+                "value = 0.0; // Normalize negative zero.",
+                "const int fixed_precision = ImMax(0, 4 - integer_digits);",
+                "for (int precision = fixed_precision;",
+                "precision >= 0;",
+                "--precision)",
+                "\"%.*f\"",
+                "precision,",
+                "if (CountUvsrNumericDigits(fixed) == 4)",
+                "ImFormatString(output, output_size, \"%s\", fixed)",
+                "ImFormatString(output, output_size, \"----\")"
+            },
+            "authored display text contains exactly four numeric glyphs, "
+            "excluding sign and decimal, or a letter-free overflow marker; "
+            "exact input retains native float, double, and integer precision");
+        const std::string_view authoredSliderFormatting = ExtractSection(
+            imguiSliderOverride,
+            "+static int FormatUvsrFourDigitSliderValue(",
+            "static ImU32 GetUvsrSliderTrackColor(",
+            "authored fixed-decimal slider formatter");
+        Require(
+            CountOccurrences(
+                authoredSliderFormatting,
+                "ImFormatString(") == 4u,
+            "the authored formatter must have only the nonfinite fallback, fixed "
+            "decimal candidate, accepted candidate, and overflow fallback output "
+            "paths; it must never introduce scientific notation or letters.");
+        Require(
+            CountOccurrences(
+                imguiSliderOverride,
+                "GetUvsrSliderExactInputFormat(data_type)") == 2u &&
+                CountOccurrences(
+                    imguiSliderOverride,
+                    "FormatUvsrFourDigitSliderValue(") == 2u,
+            "the exact-input formatter must serve both authored temp-input paths, "
+            "while the four-digit formatter serves only authored display text.");
+        RequireOrdered(
+            imguiSliderOverride,
+            {
+                "g.UvsrStockWidgetRendering",
+                "? DataTypeFormatString(",
+                ": FormatUvsrFourDigitSliderValue(",
+                "if (g.UvsrStockWidgetRendering)",
+                "RenderTextClipped(frame_bb.Min, frame_bb.Max",
+                "else if (value_lane.Usable)",
+                "value_lane.ValueRect.Min +"
+            },
+            "Ogg keeps caller-formatted centered text while authored sliders use "
+            "the four-digit formatter in the fixed right value bubble");
+        RequireOrdered(
+            imguiSliderOverride,
+            {
+                "const bool hide_prefix = !g.UvsrStockWidgetRendering ||",
+                "IM_TRUNC(w_items / components)",
+                "CalcTextSize((flags & ImGuiColorEditFlags_Float)"
+            },
+            "authored ColorEdit component fields always omit R/G/B/A prefixes "
+            "while Ogg retains the stock width-sensitive prefix rule");
+        RequireOrdered(
+            imguiSliderOverride,
+            {
+                "ImRect slider_bb = frame_bb;",
+                "slider_bb.Expand(ImVec2(0.0f, -2.0f));",
+                "const UvsrSliderValueLane value_lane =",
+                "ResolveUvsrSliderValueLane(",
+                "GetFrameHeight());",
+                "const bool value_lane_hovered =",
+                "IsMouseHoveringRect(",
+                "value_lane.ValueRect.Min,",
+                "value_lane.ValueRect.Max);",
+                "const bool track_hovered =",
+                "value_lane.TrackRect.Min,",
+                "value_lane.TrackRect.Max);",
+                "const bool direct_value_input =",
+                "value_lane_hovered &&",
+                "const bool make_active =",
+                "direct_value_input ||",
+                "ctrl_value_input ||",
+                "(clicked && track_hovered) ||",
+                "const ImVec2 cursor_pos_backup = window->DC.CursorPos;",
+                "const ImVec2 cursor_pos_prev_line_backup = window->DC.CursorPosPrevLine;",
+                "const ImVec2 cursor_max_pos_backup = window->DC.CursorMaxPos;",
+                "const ImVec2 curr_line_size_backup = window->DC.CurrLineSize;",
+                "const ImVec2 prev_line_size_backup = window->DC.PrevLineSize;",
+                "const float curr_line_text_base_offset_backup =",
+                "const float prev_line_text_base_offset_backup =",
+                "const bool is_same_line_backup = window->DC.IsSameLine;",
+                "const bool is_set_pos_backup = window->DC.IsSetPos;",
+                "const bool value_changed = TempInputScalar(",
+                "value_lane.ValueRect,",
+                "window->DC.CursorPos = cursor_pos_backup;",
+                "window->DC.CursorPosPrevLine = cursor_pos_prev_line_backup;",
+                "window->DC.CursorMaxPos = cursor_max_pos_backup;",
+                "window->DC.CurrLineSize = curr_line_size_backup;",
+                "window->DC.PrevLineSize = prev_line_size_backup;",
+                "window->DC.CurrLineTextBaseOffset =",
+                "window->DC.PrevLineTextBaseOffset =",
+                "window->DC.IsSameLine = is_same_line_backup;",
+                "window->DC.IsSetPos = is_set_pos_backup;",
+                "return value_changed;",
+                "if (value_lane.Usable)",
+                "RenderFrame(",
+                "value_lane.TrackRect.Min,",
+                "value_lane.TrackRect.Max,",
+                "g.Style.FrameRounding);",
+                "RenderFrame(",
+                "value_lane.ValueRect.Min,",
+                "value_lane.ValueRect.Max,",
+                "g.Style.FrameRounding);",
+                "else",
+                "RenderFrame(",
+                "slider_bb.Min,",
+                "slider_bb.Max,",
+                "SliderBehavior(value_lane.TrackRect,",
+                "if (g.UvsrStockWidgetRendering)",
+                "RenderTextClipped(frame_bb.Min, frame_bb.Max",
+                "else if (value_lane.Usable)",
+                "value_lane.ValueRect.Min +",
+                "ImVec2(1.0f, 0.5f)"
+            },
+            "authored value-lane clicks use only the compact visible lane, restore "
+            "the full slider's row layout after direct scalar input, render two "
+            "fully rounded faces or one safe fallback, drive only the left track, "
+            "and leave Ogg's centered stock text untouched");
+        RequireAbsent(
+            imguiSliderOverride,
+            "AddLine(",
+            "retired separator between the independently rounded slider faces");
+        RequireAbsent(
+            imguiSliderOverride,
+            "ImVec2(value_lane.ValueRect.Min.x, frame_bb.Min.y)",
+            "retired full-height slider value-lane hover rectangle");
+        RequireOrdered(
+            cmakeSource,
+            {
+                "overrides/imgui-ui.patch",
+                "overrides/imgui-slider-controls.patch",
+                "overrides/imgui-combo-roll.patch"
+            },
+            "UI, slider, and combo-roll overrides compose in dependency order");
+        for (const std::string_view retiredPatch : {
+                std::string_view("imgui-dropdown-roll.patch"),
+                std::string_view("imgui-runtime-policy.patch") })
+        {
+            RequireAbsent(
+                cmakeSource,
+                retiredPatch,
+                "retired dedicated ImGui override patch");
+        }
+
+        RequireOrdered(
+            imguiUiOverride,
+            {
+                "const bool uvsr_compact_popup = !g.UvsrStockWidgetRendering;",
+                "ImGuiStyleVar_ItemSpacing,",
+                "original_item_spacing_y * 0.25f",
+                "ImGuiStyleVar_WindowPadding,",
+                "g.Style.PopupRounding + original_item_spacing_y * 0.5f",
+                "BeginUvsrComboPopupHighlight(GetCurrentWindow(), g);"
+            },
+            "authored combo popups use compact scoped spacing and one shared "
+            "highlight layer before the later roll patch adds lifecycle state");
+        const std::string_view popupHighlight = ExtractSection(
+            imguiUiOverride,
+            "+static ImGuiID GetUvsrComboPopupHighlightKey(",
+            "bool ImGui::BeginCombo(const char* label",
+            "shared authored combo-popup highlight");
+        RequireOrdered(
+            popupHighlight,
+            {
+                "static void BeginUvsrComboPopupHighlight(",
+                "TargetPriority",
+                "window->DrawList->ChannelsSplit(2);",
+                "window->DrawList->ChannelsSetCurrent(1);",
+                "static void RegisterUvsrComboPopupHighlight(",
+                "priority <= storage.GetInt(priority_key, 0)",
+                "rect.Min - window->Pos",
+                "rect.Max - window->Pos",
+                "static void EndUvsrComboPopupHighlight(",
+                "const bool submission_was_interrupted =",
+                "!g.UvsrUiMotionEnabled",
+                "const float delta_time = ImClamp(",
+                "1.0f / 30.0f",
+                "const float half_life = 0.055f;",
+                "current_rect.Min = ImLerp(",
+                "current_rect.Max = ImLerp(",
+                "current_color = ImLerp(",
+                "window->DrawList->ChannelsSetCurrent(0);",
+                "window->DrawList->AddRectFilled(",
+                "current_rect.Min + window->Pos",
+                "g.Style.FrameRounding);",
+                "window->DrawList->ChannelsMerge();"
+            },
+            "one popup-scoped rounded fill glides between registered rows with "
+            "frame-rate-independent motion and a skipped-frame/master-switch snap");
+        const std::string_view comboSelectable = ExtractSection(
+            imguiUiOverride,
+            "+        const bool uvsr_combo_popup =",
+            "if (g.NavId == id)",
+            "combo-popup Selectable registration");
+        RequireOrdered(
+            comboSelectable,
+            {
+                "const bool uvsr_combo_popup =",
+                "!g.UvsrStockWidgetRendering",
+                "strncmp(window->Name, \"##Combo_\", 8) == 0;",
+                "const int priority = highlighted ? 2 : selected ? 1 : 0;",
+                "RegisterUvsrComboPopupHighlight(",
+                "held && highlighted",
+                "? ImGuiCol_HeaderActive",
+                "? ImGuiCol_HeaderHovered",
+                ": ImGuiCol_Header],",
+                "priority);",
+                "else if (highlighted || selected)",
+                "RenderFrame(bb.Min, bb.Max, col, false, 0.0f);"
+            },
+            "authored popup Selectables only register one shared target while "
+            "Ogg and non-combo Selectables retain stock rendering");
+        RequireAbsent(
+            comboSelectable,
+            "GetAnimatedHighlightAmount(",
+            "retired per-Selectable combo highlight animation");
+        const std::string_view highlightAnimation = ExtractSection(
+            imguiUiOverride,
+            "+static float GetAnimatedHighlightAmount(",
+            "+static ImVec4 LerpWidgetColor(",
+            "authored interaction highlight animation");
+        RequireOrdered(
+            highlightAnimation,
+            {
+                "if (!g.UvsrUiMotionEnabled)",
+                "return highlighted ? 1.0f : 0.0f;",
+                "##HighlightFadeAmount",
+                "##HighlightFadeFrame",
+                "amount = ImLerp(",
+                "ImSaturate(g.IO.DeltaTime * speed)",
+                "storage.SetFloat(amount_key, amount);"
+            },
+            "authored closed controls retain per-ID smooth hover motion and "
+            "snap immediately under the animation master switch");
+
+        RequireOrdered(
+            imguiComboRollOverride,
+            {
+                "IMGUI_API bool          IsComboPopupTransitionActive(ImGuiID combo_id);",
+                "IMGUI_API void          FinishComboPopupTransition(ImGuiID combo_id);",
+                "static constexpr float UvsrComboPopupRollDuration = 0.18f;",
+                "static constexpr float UvsrComboPopupMaximumDelta = 1.0f / 30.0f;",
+                "static float AdvanceComboPopupRollElapsed(",
+                "UvsrComboPopupMaximumDelta",
+                "static float SmoothComboPopupRoll(",
+                "progress * progress * (3.0f - 2.0f * progress);",
+                "static void ApplyComboPopupRollClip("
+            },
+            "the public exact-combo API and frame-rate-bounded 180 ms smooth "
+            "roll implementation are installed after the slider patch");
+        const std::string compactComboRoll = Compact(imguiComboRollOverride);
+        RequireContains(
+            compactComboRoll,
+            "UvsrComboPopupMaximumDelta));",
+            "combo roll DeltaTime cap");
+        RequireOrdered(
+            imguiComboRollOverride,
+            {
+                "static void ApplyComboPopupRollClip(ImGuiWindow* window)",
+                "##ComboPopupRollAmount",
+                "##ComboPopupRollFromBottom",
+                "for (int command_index = 0;",
+                "command.ClipRect.y = ImMax(",
+                "command.ClipRect.w = ImMin(",
+                "if (command.ClipRect.w < command.ClipRect.y)",
+                "command.ClipRect.w = command.ClipRect.y;"
+            },
+            "roll clipping preserves fixed popup layout and clamps every merged "
+            "draw command to a valid reveal boundary");
+        RequireOrdered(
+            imguiComboRollOverride,
+            {
+                "bool ImGui::IsComboPopupTransitionActive(ImGuiID combo_id)",
+                "ImHashStr(\"##ComboPopup\", 0, combo_id);",
+                "popup_data.PopupId != popup_id",
+                "##ComboPopupClosing",
+                "##ComboPopupInteractionReady",
+                "return true;",
+                "void ImGui::FinishComboPopupTransition(ImGuiID combo_id)",
+                "g.OpenPopupStack[popup_index].PopupId != popup_id",
+                "ClosePopupToLevel(popup_index, true);"
+            },
+            "the transition query and forced finish address only the exact "
+            "originating combo popup");
+        Require(
+            CountOccurrences(
+                imguiComboRollOverride,
+                "FinishComboPopupTransition(id);") == 2u,
+            "BeginCombo must finish an exact retained popup on both SkipItems "
+            "and clipped ItemAdd early returns.");
+        RequireOrdered(
+            imguiComboRollOverride,
+            {
+                "const bool same_popup_lifecycle =",
+                "popup_open_frame_key,",
+                "popup_data.OpenFrameCount;",
+                "if (popup_closing && !uvsr_roll_enabled)",
+                "ClosePopupToLevel(g.BeginPopupStack.Size, true);",
+                "popup_close_ready_frame >= 0 &&",
+                "g.FrameCount > popup_close_ready_frame",
+                "Preserve one fully rolled-up endpoint frame",
+                "popup_roll_amount =",
+                "1.0f - SmoothComboPopupRoll(popup_close_elapsed);",
+                "popup_interaction_ready = false;",
+                "next_popup_close_ready_frame = g.FrameCount;",
+                "popup_roll_amount =",
+                "SmoothComboPopupRoll(popup_open_elapsed);",
+                "popup_open_elapsed >= UvsrComboPopupRollDuration;",
+                "Latch the reveal",
+                "##ComboPopupRollFromBottom",
+                "popup_storage.SetInt(popup_closing_key, 0);"
+            },
+            "combo windows key retained roll state by popup lifecycle, present "
+            "one hidden close endpoint, and latch their reveal edge");
+        RequireOrdered(
+            imguiComboRollOverride,
+            {
+                "const bool popup_closing = storage.GetInt(",
+                "##ComboPopupClosing",
+                "##UvsrComboHighlightTargetFrame",
+                "if (!popup_closing)",
+                "##UvsrComboHighlightTargetPriority",
+                "0);"
+            },
+            "the clicked priority-two shared highlight target remains latched "
+            "while the popup rolls closed");
+        RequireOrdered(
+            imguiComboRollOverride,
+            {
+                "EndUvsrComboPopupHighlight(window, g);",
+                "ApplyComboPopupRollClip(window);",
+                "EndPopup();",
+                "if (uvsr_compact_popup)",
+                "PopStyleVar(2);"
+            },
+            "shared highlight channels merge before all popup commands are "
+            "roll-clipped and the native popup/style lifecycle ends");
+        RequireOrdered(
+            imguiComboRollOverride,
+            {
+                "const bool uvsr_combo_popup =",
+                "IsUvsrComboPopupWindow(window);",
+                "const bool uvsr_combo_roll_enabled =",
+                "uvsr_combo_popup && g.UvsrUiMotionEnabled;",
+                "const bool combo_popup_interaction_blocked =",
+                "##ComboPopupClosing",
+                "##ComboPopupInteractionReady",
+                "if (!combo_popup_interaction_blocked)",
+                "pressed = ButtonBehavior(",
+                "else if (g.ActiveId == id)",
+                "ClearActiveID();",
+                "if (!combo_popup_interaction_blocked && (flags & ImGuiSelectableFlags_SelectOnNav)",
+                "if (uvsr_combo_roll_enabled)",
+                "##ComboPopupClosing",
+                "##ComboPopupCloseElapsed",
+                "##ComboPopupCloseReadyFrame",
+                "##ComboPopupInteractionReady",
+                "else",
+                "CloseCurrentPopup();"
+            },
+            "opening and closing rolls discard mouse/nav input without replay, "
+            "while Ogg and motion-disabled authored popups close immediately");
+        for (const std::string_view retiredPopupContract : {
+                std::string_view("ComboPopupOpenAnimation"),
+                std::string_view("ComboPopupPendingSelectable"),
+                std::string_view("GetPopupSelectionHoverColor"),
+                std::string_view("GetSelectionGradientBottomColor"),
+                std::string_view("UiComboPopupRoll"),
+                std::string_view("DeferredUiStructuralPresentation"),
+                std::string_view("AwaitPopupRollUp") })
+        {
+            RequireAbsent(
+                imguiUiOverride,
+                retiredPopupContract,
+                "retired popup-roll predecessor state in the base UI override");
+            RequireAbsent(
+                imguiComboRollOverride,
+                retiredPopupContract,
+                "retired popup-roll replay or renderer-structural state");
+            RequireAbsent(
+                viewer,
+                retiredPopupContract,
+                "retired popup-roll application state");
+            RequireAbsent(
+                uiAnimation,
+                retiredPopupContract,
+                "retired opened-popup animation helper");
+        }
+        const std::string_view colorPickerScope = ExtractSection(
+            viewer,
+            "constexpr float SettingsWindowWidthInFontHeights = 23.44f;",
+            "ImDrawList* settingsBodyDrawList =",
+            "Settings color-picker lane and scope");
+        RequireOrdered(
+            colorPickerScope,
+            {
+                "constexpr float SettingsWindowWidthInFontHeights = 23.44f;",
+                "const float availableWindowWidth =",
+                "settingsPanelMarginPixels * 2.f",
+                "const float colorPickerMinimumLaneWidth =",
+                "ImGui::GetFrameHeight() * 3.f +",
+                "style.ItemInnerSpacing.x * 2.f +",
+                "style.WindowPadding.x * 2.f;",
+                "const float settingsWindowMaximumWidth =",
+                "availableWindowWidth -",
+                "colorPickerMinimumLaneWidth);",
+                "const float settingsWindowMinimumWidth =",
+                "settingsControlWidth +",
+                "style.WindowPadding.x * 4.f +",
+                "style.ScrollbarSize;",
+                "const float settingsWindowWidth = std::min(",
+                "fontSize * SettingsWindowWidthInFontHeights,",
+                "settingsWindowMinimumWidth),",
+                "settingsWindowMaximumWidth);",
+                "ImGui::BeginChild(",
+                "\"##SettingsBody\"",
+                "const bool settingsScrolledThisFrame =",
+                "previousScrollContext.lastFrame ==",
+                "ImGui::GetFrameCount() - 1",
+                "settingsBodyWindow->Scroll.y -",
+                "previousScrollContext.lastScrollY",
+                "if (settingsScrolledThisFrame)",
+                "ImGui::CloseUvsrColorPickerPopup();",
+                "const float colorPickerMaximumBottom = std::min(",
+                "panelStackMaximumBottom,",
+                "settingsBodyWindow->ParentWindow->Pos.y +",
+                "settingsBodyWindow->ParentWindow->Size.y);",
+                "ImGui::PushUvsrColorPickerPopupContentRight(",
+                "settingsBodyWindow->InnerRect.Max.x,",
+                "colorPickerMaximumBottom,",
+                "g_UiVisualTokens.colorPickerSurface);"
+            },
+            "the 20-percent-narrower Settings width keeps its text-safe content "
+            "floor, viewport/picker-lane cap, and scoped picker bottom bound");
+        RequireAbsent(
+            viewer,
+            "SettingsWindowWidthInFontHeights = 29.3f",
+            "retired pre-reduction Settings width");
+        RequireOrdered(
+            viewer,
+            {
+                "ImGui::PushUvsrColorPickerPopupContentRight(",
+                "DrawInterfaceDrawer(settingsControlWidth);",
+                "ImGui::PopUvsrColorPickerPopupContentRight();",
+                "ImGui::EndChild();"
+            },
+            "the picker placement scope encloses all Settings controls and "
+            "balances before ending the child");
+        RequireOrdered(
+            viewer,
+            {
+                "TrackSettingsAppearanceDrawList(\n"
+                "            ImGui::GetUvsrActiveColorPickerPopupDrawList());",
+                "for (ImDrawList* drawList :\n"
+                "            g_SettingsAppearanceDrawLists)",
+                "ApplyWindowAppearance("
+            },
+            "the active current-frame picker draw list joins the shared menu "
+            "appearance transform exactly once through deduplicated tracking");
+        const std::string_view settingsAppearanceTracking = ExtractSection(
+            viewer,
+            "static void TrackSettingsAppearanceDrawList(ImDrawList* drawList)",
+            "static void CaptureCurrentWindowBackdrop(",
+            "Settings appearance draw-list deduplication");
+        RequireOrdered(
+            settingsAppearanceTracking,
+            {
+                "if (drawList &&",
+                "std::find(",
+                "g_SettingsAppearanceDrawLists.begin(),",
+                "g_SettingsAppearanceDrawLists.end(),",
+                "drawList) == g_SettingsAppearanceDrawLists.end())",
+                "g_SettingsAppearanceDrawLists.push_back(drawList);"
+            },
+            "one draw list can receive the menu appearance transform at most "
+            "once per frame");
+        for (const std::string_view pickerApi : {
+                std::string_view(
+                    "PushUvsrColorPickerPopupContentRight(float content_right, "
+                    "float maximum_bottom, const ImVec4& popup_background);"),
+                std::string_view(
+                    "PopUvsrColorPickerPopupContentRight();"),
+                std::string_view(
+                    "ImDrawList*   GetUvsrActiveColorPickerPopupDrawList();"),
+                std::string_view(
+                    "CloseUvsrColorPickerPopup();") })
+        {
+            RequireContains(
+                imguiUiOverride,
+                pickerApi,
+                "public scoped color-picker popup placement API");
+        }
+        RequireOrdered(
+            imguiUiOverride,
+            {
+                "struct ImGuiUvsrColorPickerPopupScope",
+                "float                   ContentRight;",
+                "float                   MaximumBottom;",
+                "ImVec4                  PopupBackground;",
+                "ImVector<ImGuiUvsrColorPickerPopupScope> "
+                    "UvsrColorPickerPopupScopeStack;",
+                "ImGuiID                 UvsrActiveColorPickerPopupId = 0;",
+                "ImDrawList*             "
+                    "UvsrActiveColorPickerPopupDrawList = NULL;",
+                "int                     "
+                    "UvsrActiveColorPickerPopupDrawListFrame = -1;"
+            },
+            "picker scope owns its horizontal and vertical limits plus surface, "
+            "while exact popup identity and current-frame draw-list state remain "
+            "separate from generic popups");
+        const std::string_view colorPickerOverride = ExtractSection(
+            imguiUiOverride,
+            "void ImGui::PushUvsrColorPickerPopupContentRight(",
+            "// Edit colors components",
+            "scoped color-picker popup placement override");
+        RequireOrdered(
+            colorPickerOverride,
+            {
+                "const ImGuiUvsrColorPickerPopupScope scope = {",
+                "content_right,",
+                "maximum_bottom,",
+                "popup_background",
+                "g.UvsrColorPickerPopupScopeStack.push_back(scope);",
+                "void ImGui::PopUvsrColorPickerPopupContentRight()",
+                "g.UvsrColorPickerPopupScopeStack.pop_back();",
+                "ImDrawList* ImGui::GetUvsrActiveColorPickerPopupDrawList()",
+                "UvsrActiveColorPickerPopupDrawListFrame !=",
+                "context->FrameCount",
+                "return context->UvsrActiveColorPickerPopupDrawList;",
+                "void ImGui::CloseUvsrColorPickerPopup()",
+                "const ImGuiID popup_id =",
+                "context->UvsrActiveColorPickerPopupId;",
+                "context->UvsrActiveColorPickerPopupId = 0;",
+                "context->OpenPopupStack[popup_index].PopupId != popup_id",
+                "ClosePopupToLevel(popup_index, true);",
+                "static UvsrColorPickerPopupLayout ConfigureUvsrColorPickerPopup(",
+                "ImGui::GetPopupAllowedExtentRect(parent_window)",
+                "allowed.Max.y = ImMin(allowed.Max.y, maximum_bottom);",
+                "const float minimum_picker_width =",
+                "const float minimum_outer_width =",
+                "const float minimum_outer_height =",
+                "const float requested_x = ImClamp(",
+                "content_right,",
+                "const float available_width =",
+                "allowed.Max.x - requested_x",
+                "const float available_height =",
+                "allowed.Max.y - allowed.Min.y",
+                "available_width >= minimum_outer_width &&",
+                "available_height >= minimum_outer_height",
+                "if (!layout.HasUsableLane)",
+                "if (layout.HideSidePreview)",
+                "outer_width = ImMin(outer_width, available_width);",
+                "const ImVec2 outer_size(",
+                "ImMin(expected_outer_height, available_height));",
+                "const ImVec2 popup_position(",
+                "requested_x,",
+                "allowed.Max.y - outer_size.y",
+                "const float maximum_outer_height =",
+                "ImGui::SetNextWindowSizeConstraints(",
+                "ImVec2(outer_size.x, maximum_outer_height)",
+                "ImGui::SetNextWindowPos(popup_position, ImGuiCond_Always);"
+            },
+            "picker popup begins at content-right, shrinks before overlap, "
+            "clamps above the caller-owned menu-stack bottom, fails closed "
+            "without a usable two-axis lane, reports only the current frame's "
+            "draw list, and can close only its exact popup ID");
+        const std::string_view scopedColorPickerIntegration = ExtractSection(
+            imguiUiOverride,
+            "const ImVec2 picker_anchor =",
+            "EndPopup();",
+            "scoped ColorEdit4 picker popup");
+        RequireOrdered(
+            scopedColorPickerIntegration,
+            {
+                "g.UvsrColorPickerPopupScopeStack.Size > 0;",
+                "ConfigureUvsrColorPickerPopup(",
+                "scoped_picker_scope->ContentRight,",
+                "scoped_picker_scope->MaximumBottom,",
+                "(!scoped_picker_popup || picker_layout.HasUsableLane)",
+                "!picker_layout.HasUsableLane &&",
+                "IsPopupOpen(\"picker\")",
+                "ClosePopupToLevel(g.BeginPopupStack.Size, true);",
+                "const bool position_picker_popup =",
+                "PushStyleVar(ImGuiStyleVar_WindowMinSize",
+                "if (scoped_picker_popup)",
+                "PushStyleColor(",
+                "ImGuiCol_PopupBg,",
+                "scoped_picker_scope->PopupBackground);",
+                "const bool picker_popup_open = BeginPopup(\"picker\");",
+                "PopStyleColor();",
+                "g.UvsrActiveColorPickerPopupId =",
+                "g.CurrentWindow->PopupId;",
+                "g.UvsrActiveColorPickerPopupDrawList =",
+                "g.CurrentWindow->DrawList;",
+                "g.UvsrActiveColorPickerPopupDrawListFrame =",
+                "g.FrameCount;",
+                "picker_flags_to_forward",
+                "ImGuiColorEditFlags_AlphaBar",
+                "SetNextItemWidth(picker_layout.PickerWidth);",
+                "ColorPicker4(\"##picker\", col, picker_flags"
+            },
+            "ColorEdit4 forwards alpha-bar interaction through the scoped, "
+            "viewport-safe popup and applies the caller-owned surface only "
+            "around that picker BeginPopup");
+        Require(
+            CountOccurrences(
+                scopedColorPickerIntegration,
+                "scoped_picker_scope->PopupBackground") == 1u,
+            "the scoped surface color must affect exactly the picker popup, "
+            "without leaking into generic combo, context, or option popups.");
+        const std::string_view roundedPickerHelpers = ExtractSection(
+            imguiUiOverride,
+            "struct UvsrVerticalGradientStop",
+            "static void RenderArrowsForVerticalBar",
+            "rounded authored color-picker primitives");
+        RequireOrdered(
+            roundedPickerHelpers,
+            {
+                "static void AddUvsrRoundedVerticalGradient(",
+                "rounding = ImClamp(rounding, 0.0f, "
+                    "ImMin(width, height) * 0.5f);",
+                "const float fringe = "
+                    "(draw_list->Flags & ImDrawListFlags_AntiAliasedFill)",
+                "GetUvsrRoundedRectDistance(bounds, rounding, position);",
+                "GetUvsrVerticalGradientColor(stops, stops_count, "
+                    "gradient_position, coverage)",
+                "static void AddUvsrRoundedTriangle(",
+                "draw_list->PathBezierQuadraticCurveTo(",
+                "static void RenderUvsrRoundedMarkersForVerticalBar(",
+                "const ImVec2 left_outer_tip(",
+                "const ImVec2 right_outer_tip(",
+                "AddUvsrRoundedTriangle(",
+                "AddUvsrRoundedTriangle(",
+                "AddUvsrRoundedTriangle(",
+                "AddUvsrRoundedTriangle("
+            },
+            "authored picker gradients retain antialiased rounded coverage and "
+            "each vertical bar receives paired rounded black-and-white markers");
+        const std::string_view wheelPickerRendering = ExtractSection(
+            imguiUiOverride,
+            "const bool render_uvsr_wheel_with_bars =",
+            "// Render alpha bar",
+            "authored wheel picker and retained hue bar");
+        RequireOrdered(
+            wheelPickerRendering,
+            {
+                "g.UvsrColorPickerPopupScopeStack.Size > 0 &&",
+                "!g.UvsrStockWidgetRendering &&",
+                "(flags & ImGuiColorEditFlags_PickerHueWheel) != 0;",
+                "const float uvsr_bar_rounding = "
+                    "ImMin(style.FrameRounding, bars_width * 0.25f);",
+                "if (flags & ImGuiColorEditFlags_PickerHueWheel)",
+                "if (render_uvsr_wheel_with_bars)",
+                "UvsrVerticalGradientStop hue_stops[7];",
+                "hue_stops[hue_index].Position = "
+                    "(float)hue_index / 6.0f;",
+                "const ImRect hue_bar_bounds(",
+                "AddUvsrRoundedVerticalGradient(",
+                "IM_ARRAYSIZE(hue_stops),",
+                "uvsr_bar_rounding);",
+                "uvsr_hue_bar_line_y =",
+                "RenderFrameBorder(",
+                "hue_bar_bounds.Max,",
+                "uvsr_bar_rounding);"
+            },
+            "only an authored scoped hue-wheel picker adds a retained, rounded "
+            "seven-stop hue bar while Ogg and unscoped pickers remain upstream");
+        const std::string_view alphaBarRendering = ExtractSection(
+            imguiUiOverride,
+            "// Render alpha bar",
+            "if (render_uvsr_picker_cursors_last)",
+            "rounded authored alpha bar and stock fallback");
+        RequireOrdered(
+            alphaBarRendering,
+            {
+                "if (alpha_bar)",
+                "if (render_uvsr_wheel_with_bars)",
+                "RenderColorRectWithAlphaCheckerboard(",
+                "uvsr_bar_rounding);",
+                "const UvsrVerticalGradientStop alpha_stops[2]",
+                "AddUvsrRoundedVerticalGradient(",
+                "IM_ARRAYSIZE(alpha_stops),",
+                "uvsr_bar_rounding);",
+                "uvsr_alpha_bar_line_y =",
+                "RenderFrameBorder(bar1_bb.Min, bar1_bb.Max, "
+                    "uvsr_bar_rounding);",
+                "else",
+                "RenderColorRectWithAlphaCheckerboard(draw_list, "
+                    "bar1_bb.Min, bar1_bb.Max, 0,",
+                "draw_list->AddRectFilledMultiColor(",
+                "RenderFrameBorder(bar1_bb.Min, bar1_bb.Max, 0.0f);",
+                "RenderArrowsForVerticalBar("
+            },
+            "authored alpha preserves the checkerboard under a rounded gradient "
+            "and rounded border while the Ogg/unscoped path remains stock");
+        const std::string_view colorPickerCursorOverride = ExtractSection(
+            imguiUiOverride,
+            "const bool render_uvsr_picker_cursors_last =",
+            "EndGroup();",
+            "authored color-picker cursor layering");
+        RequireOrdered(
+            colorPickerCursorOverride,
+            {
+                "g.UvsrColorPickerPopupScopeStack.Size > 0 &&",
+                "!g.UvsrStockWidgetRendering;",
+                "if (!render_uvsr_picker_cursors_last)",
+                "if (alpha_bar)",
+                "if (render_uvsr_picker_cursors_last)",
+                "draw_list->PushClipRect(",
+                "window->OuterRectClipped.Min,",
+                "window->OuterRectClipped.Max,",
+                "if (render_uvsr_wheel_with_bars)",
+                "RenderUvsrRoundedMarkersForVerticalBar(",
+                "ImVec2(bar0_pos_x - 1.0f, uvsr_hue_bar_line_y)",
+                "if (alpha_bar)",
+                "RenderUvsrRoundedMarkersForVerticalBar(",
+                "ImVec2(bar1_pos_x - 1.0f, uvsr_alpha_bar_line_y)",
+                "draw_list->AddCircleFilled(",
+                "draw_list->AddCircle(",
+                "cursor_white",
+                "draw_list->PopClipRect();"
+            },
+            "authored scoped picker rounded bar markers precede the final wheel "
+            "and SV cursors inside the popup outer clip, while Ogg and unscoped "
+            "pickers retain the upstream marker and cursor order");
+        const std::string_view closedComboOverride = ExtractSection(
+            imguiUiOverride,
+            "bool ImGui::BeginCombo(const char* label",
+            "void ImGui::EndCombo()",
+            "closed combo presentation override");
+        RequireOrdered(
+            closedComboOverride,
+            {
+                "ItemSize(total_bb, style.FramePadding.y);",
+                "ItemAdd(total_bb, id, &bb)",
+                "GetAnimatedHighlightAmount(",
+                "hovered || popup_open",
+                "LerpWidgetColor(",
+                "ImRect visual_bb = bb;",
+                "if (!g.UvsrStockWidgetRendering)",
+                "visual_bb.Expand(ImVec2(0.0f, -2.0f));",
+                "RenderNavCursor(bb, id);",
+                "AddRectFilled(visual_bb.Min",
+                "popup_open\n"
+                "+                        ? ImGuiCol_ButtonActive",
+                "AddRectFilled(ImVec2(value_x2, visual_bb.Min.y), visual_bb.Max",
+                "RenderFrameBorder(visual_bb.Min, visual_bb.Max",
+                "style.FrameRounding);",
+                "g.TextShadowAlphaScale *= 0.55f;",
+                "visual_bb.Min.x + style.FramePadding.x",
+                "visual_bb.Max.y"
+            },
+            "closed authored combos preserve the full item/hit rectangle while "
+            "insetting only their visible frame by two pixels on each Y edge");
+        RequireAbsent(
+            closedComboOverride,
+            "visual_bb.Expand(ImVec2(-2.0f, 0.0f))",
+            "closed combo visual inset must not change its hit width");
 
         const std::string_view keyboardUpdate = ExtractSection(
             viewer,
@@ -2469,17 +5618,46 @@ namespace
 
         const std::string_view generalDrawer = ExtractSection(
             viewer,
-            "const bool generalOpen = DrawCollapsingHeader(",
-            "const bool representationOpen = DrawCollapsingHeader(",
+            "void DrawGeneralDrawer(float settingsControlWidth)",
+            "void DrawMaterialDrawer(float settingsControlWidth)",
             "General drawer");
         RequireOrdered(
             generalDrawer,
             {
                 "\"Graphics Adapter\"",
                 "\"Adaptive Sync\"",
-                "\"Camera Mode\""
+                "\"Camera Mode\"",
+                "\"Camera Location\"",
+                "\"World Scenes\"",
+                "\"##OpenSceneFolder\"",
+                "\"Retry Scene Load\""
             },
-            "Adaptive Sync placement below Graphics Adapter");
+            "complete General control order");
+        Require(
+            CountOccurrences(
+                generalDrawer,
+                "DrawDeferredDropdownOption(") == 5u,
+            "General must keep adapter, Adaptive Sync, camera, location, and "
+            "scene selection on the deferred dropdown path.");
+        RequireOrdered(
+            generalDrawer,
+            {
+                "[this, adapterIndex = adapter.adapterIndex]()",
+                "g_RestartAdapterIndex = adapterIndex;",
+                "g_RestartRequested = true;",
+                "glfwSetWindowShouldClose(",
+                "QueueDeferredControlUiAction(",
+                "ApplyAdaptiveSyncMode(",
+                "[this, candidate]()",
+                "ApplyAdaptiveSyncMode(candidate);",
+                "m_app->SetCameraMode(mode);",
+                "m_app->SetCameraLocation(candidate);",
+                "[this, sceneName = scene.FileName]()",
+                "m_app->SetCurrentSceneName(sceneName);",
+                "ShellExecuteW(",
+                "m_app->RetryCurrentSceneLoad();"
+            },
+            "General callback and restart semantics");
         for (const std::string_view adaptiveControlContract : {
                 std::string_view("AdaptiveSyncModeValues"),
                 std::string_view(
@@ -2823,12 +6001,279 @@ namespace
         RequireContains(
             nativeFrame,
             "RenderGradientFrameOutline(",
-            "Amp native-button gradient outline");
+            "carved native-frame gradient outline");
+        RequireContains(
+            nativeFrame,
+            "rounding,\n+        false);",
+            "default carved native-frame depth role");
+        const std::string_view outlineRenderer = ExtractSection(
+            imguiUiOverride,
+            "static void RenderGradientFrameOutline(",
+            "// Render a rectangle shaped with optional rounding and borders",
+            "raised and carved outline renderer");
+        for (const std::string_view depthContract : {
+                std::string_view("bool raised"),
+                std::string_view("bool dark_outline = false"),
+                std::string_view(
+                    "ImDrawFlags rounding_flags = ImDrawFlags_RoundCornersAll"),
+                std::string_view(
+                    "const ImVec4 raised_top(1.0f, 1.0f, 1.0f, 0.12f);"),
+                std::string_view(
+                    "const ImVec4 raised_bottom(0.01f, 0.012f, 0.016f, 0.10f);"),
+                std::string_view(
+                    "const ImVec4 carved_top(0.005f, 0.006f, 0.008f, 0.14f);"),
+                std::string_view(
+                    "const ImVec4 carved_bottom(0.88f, 0.90f, 0.94f, 0.070f);"),
+                std::string_view(
+                    "const ImVec4 bright_top(0.0f, 0.0f, 0.0f, 0.24f);"),
+                std::string_view(
+                    "const ImVec4 bright_bottom(0.16f, 0.17f, 0.19f, 0.32f);"),
+                std::string_view(
+                    "const ImVec4& top_color = dark_outline"),
+                std::string_view("? bright_top"),
+                std::string_view(": raised ? raised_top : carved_top;"),
+                std::string_view(
+                    "const ImVec4& bottom_color = dark_outline"),
+                std::string_view("? bright_bottom"),
+                std::string_view(": raised ? raised_bottom : carved_bottom;"),
+                std::string_view(
+                    "outline_color.w *= float((vertex.col & IM_COL32_A_MASK)"),
+                std::string_view(
+                    "IsUltraBrightFrameSurface(top_color)"),
+                std::string_view("? 0.025f"),
+                std::string_view(": 0.045f;"),
+                std::string_view("bottom_color.w *= 0.98f;") })
+        {
+            RequireContains(
+                outlineRenderer,
+                depthContract,
+                "subdued raised-versus-carved outline and subtle fill contract");
+        }
+        Require(
+            CountOccurrences(
+                imguiUiOverride,
+                "IsUltraBrightFrameSurface(top_color)") == 2u,
+            "core and widget raised gradients must both shade from their "
+            "actual surface luminance");
+        RequireContains(
+            imguiUiOverride,
+            "return surface.w > 0.0f && luminance >= 0.68f;",
+            "a zero-alpha packed surface must not select the automatic dark "
+            "outline");
+        const std::string_view gradientFrame = ExtractSection(
+            imguiUiOverride,
+            "void ImGui::RenderGradientFrame(",
+            "void ImGui::RenderFrameBorder(",
+            "semantic gradient-frame renderer");
+        RequireOrdered(
+            gradientFrame,
+            {
+                "bool raised",
+                "ImDrawFlags rounding_flags",
+                "AddRectFilled(",
+                "IM_COL32_WHITE",
+                "rounding_flags);",
+                "const float coverage =",
+                "fill_color.w *= coverage;",
+                "const bool dark_outline =",
+                "raised &&",
+                "IsUltraBrightFrameSurface(top_col);",
+                "RenderGradientFrameOutline(",
+                "raised,",
+                "dark_outline,",
+                "rounding_flags);"
+            },
+            "rounded AA-preserving semantic gradient-frame routing");
+        RequireContains(
+            imguiUiOverride,
+            "bool raised = false, "
+            "ImDrawFlags rounding_flags = ImDrawFlags_RoundCornersAll);",
+            "default-carved, automatic bright-outline, and selective-corner "
+            "gradient-frame API");
+        RequireAbsent(
+            imguiUiOverride,
+            "bool raised = false, bool dark_outline = false,",
+            "retired caller-selected bright-outline API");
+        RequireContains(
+            imguiUiOverride,
+            "GetRaisedFrameGradientBottomColor(header_color)",
+            "raised drawer-header tiny fill gradient");
+        RequireContains(
+            imguiUiOverride,
+            "GetRaisedFrameGradientBottomColor(title_bar_col)",
+            "raised Settings-title tiny fill gradient");
+        const std::string_view stackedPanelCorners = ExtractSection(
+            imguiUiOverride,
+            "const bool is_stacked_panel_title =",
+            "// Menu bar",
+            "independent root-panel corner routing");
+        RequireOrdered(
+            stackedPanelCorners,
+            {
+                "strcmp(window->Name, \"Settings\") == 0 || strcmp(window->Name, \"Performance\") == 0",
+                "ImDrawFlags_RoundCornersAll",
+                "expanded title and body as independent fully",
+                "window->TitleBarHeight - 1.0f",
+                "ImDrawFlags_RoundCornersAll",
+                "both anti-aliased side arcs inside the window clip",
+                "ImDrawFlags_RoundCornersAll",
+                "independent body's complete rounded depth outline",
+                "ImDrawFlags_RoundCornersAll"
+            },
+            "Performance and Settings keep fully rounded independent surfaces");
+        const std::string_view expandedStackedBody = ExtractSection(
+            imguiUiOverride,
+            "expanded_stacked_panel_body_rect = ImRect(",
+            "// Title bar",
+            "authored-versus-stock root body rounding");
+        RequireOrdered(
+            expandedStackedBody,
+            {
+                "expanded_stacked_panel_body_rect = ImRect(",
+                "window->WindowRounding,",
+                "ImDrawFlags_RoundCornersAll);",
+                "else",
+                "window_rounding",
+                "ImDrawFlags_RoundCornersBottom"
+            },
+            "Performance and Settings bodies use semantic WindowRounding while "
+            "ordinary windows retain the untouched stock window-rounding path");
+        RequireOrdered(
+            stackedPanelCorners,
+            {
+                "RenderGradientFrame(",
+                "collapsed_title_rect.Min,",
+                "style.FrameRounding",
+                "ImDrawFlags_RoundCornersAll",
+                "RenderGradientFrame(",
+                "title_fill_rect.Min,",
+                "style.FrameRounding,",
+                "ImDrawFlags_RoundCornersAll"
+            },
+            "collapsed and expanded authored root titles retain semantic "
+            "FrameRounding while sharing the authored body's resolved radius");
+        RequireOrdered(
+            stackedPanelCorners,
+            {
+                "if (has_retained_status_surface &&",
+                "!g.UvsrStockWidgetRendering)",
+                "window->WindowBorderSize = 0.0f;",
+                "RenderGradientFrameOutline(",
+                "retained_status_rect,",
+                "if (has_retained_status_surface &&",
+                "g.UvsrStockWidgetRendering)",
+                "RenderWindowOuterBorders(window);"
+            },
+            "authored compact Performance uses separate carved-body and raised-title "
+            "depth outlines while Ogg retains one stock outer border around its "
+            "title and summary");
+        RequireAbsent(
+            stackedPanelCorners,
+            "? ImDrawFlags_RoundCornersTop",
+            "retired seam-square Performance corner selection");
+        RequireAbsent(
+            stackedPanelCorners,
+            "? ImDrawFlags_RoundCornersBottom",
+            "retired seam-square Settings corner selection");
+        RequireContains(
+            viewer,
+            "const float settingsWindowTop =\n"
+            "            performanceWindowPosition.y +\n"
+            "            performanceWindowSize.y +\n"
+            "            panelSeparation;",
+            "Performance and Settings retain one exact ordinary drawer gap");
+        const std::string_view settingsScrollBegin = ExtractSection(
+            viewer,
+            "static void BeginSettingsScrollStability()",
+            "static void TrackSettingsScrollAnchor(",
+            "Settings wheel-owner capture");
+        RequireOrdered(
+            settingsScrollBegin,
+            {
+                "const ImGuiContext* imguiContext =",
+                "const bool settingsBodyConsumedWheel =",
+                "imguiContext->WheelingWindow ==",
+                "ImGui::GetCurrentWindow()",
+                "imguiContext->WheelingWindowScrolledFrame == frame;",
+                "context.wheelInput = settingsBodyConsumedWheel",
+                "? ImGui::GetIO().MouseWheel",
+                ": 0.f;"
+            },
+            "only wheel input actually consumed by the current Settings child "
+            "may lock its scroll endpoint");
+        const std::string_view scrollAnchorCorrection = ExtractSection(
+            uiAnimation,
+            "ResolveUiScrollAnchorCorrection(",
+            "// Retain the Settings viewport",
+            "scroll-anchor endpoint correction");
+        RequireOrdered(
+            scrollAnchorCorrection,
+            {
+                "if (hasPendingScrollTarget)",
+                "return { false, currentScrollY };",
+                "const float maximumScrollY =",
+                "if (wheelInput > 0.001f && wheelAtTop)",
+                "currentScrollY > 0.01f,",
+                "0.f",
+                "if (wheelInput < -0.001f && wheelAtBottom)",
+                "const float endpointDifference =",
+                "currentScrollY - maximumScrollY;",
+                "endpointDifference > 0.01f ||",
+                "endpointDifference < -0.01f,",
+                "maximumScrollY",
+                "if (scrollDelta >= -0.01f && scrollDelta <= 0.01f)",
+                "const float requestedScrollY = currentScrollY + scrollDelta;"
+            },
+            "pending targets win, outward endpoint wheels lock without a "
+            "second correction, and ordinary anchor deltas remain clamped");
+        const std::string_view settingsScrollbarInset = ExtractSection(
+            imguiUiOverride,
+            "const bool settings_body_scrollbar =",
+            "// V denote the main",
+            "Settings-only scrollbar inset");
+        RequireOrdered(
+            settingsScrollbarInset,
+            {
+                "!g.UvsrStockWidgetRendering",
+                "axis == ImGuiAxis_Y",
+                "strstr(window->Name, \"##SettingsBody\")",
+                "const float scrollbar_inset_x =",
+                "settings_body_scrollbar",
+                "? 1.0f",
+                ": ImClamp(",
+                "const float scrollbar_inset_y =",
+                "settings_body_scrollbar",
+                "? 1.0f",
+                ": ImClamp(",
+                "bb.Expand(ImVec2(",
+                "-scrollbar_inset_x,",
+                "-scrollbar_inset_y));"
+            },
+            "authored Settings scrollbar keeps one physical pixel of AA inset "
+            "on both axes while other scrollbars use stock inset math");
+        Require(
+            CountOccurrences(settingsScrollbarInset, "? 1.0f") == 2u &&
+                CountOccurrences(settingsScrollbarInset, "ImClamp(") == 2u,
+            "Settings must override exactly two one-pixel inset axes without "
+            "removing the two stock fallback calculations.");
+        RequireContains(
+            authoredCornerRounding,
+            "style.ScrollbarSize = 12.f;",
+            "authored twelve-pixel scrollbar frame producing a ten-pixel "
+            "visible Settings grab that preserves true four-pixel rounding");
+        RequireContains(
+            imguiUiOverride,
+            "RenderFrameBorder(\n"
+            "+        grab_rect.Min,\n"
+            "+        grab_rect.Max,\n"
+            "+        style.ScrollbarRounding,\n"
+            "+        false);",
+            "carved scrollbar depth role");
 
         const std::string_view commandHeight = ExtractSection(
             viewer,
             "static float GetCommandInterfaceMinimumHeight()",
-            "static constexpr float SettingsStatusLineSpacing",
+            "static float GetSettingsCollapsedWindowHeight(",
             "one-row command height");
         RequireContains(
             Compact(commandHeight),
@@ -2839,11 +6284,140 @@ namespace
             commandHeight,
             "return GetCommandInterfaceMinimumHeight();",
             "one-row command reserved height");
+        const std::string_view collapsedSettingsHeight = ExtractSection(
+            viewer,
+            "static float GetSettingsCollapsedWindowHeight(",
+            "static float GetSettingsMinimumExpandedWindowHeight(",
+            "title-only collapsed Settings height");
+        RequireContains(
+            Compact(collapsedSettingsHeight),
+            "returnfontSize+style.FramePadding.y*2.f;",
+            "title-only collapsed Settings height");
+        for (const std::string_view retiredStatusHeight : {
+                std::string_view("SettingsStatusLineSpacing"),
+                std::string_view("hasPerformanceStatus"),
+                std::string_view("splitOgPerformanceStatus"),
+                std::string_view("style.WindowPadding.y"),
+                std::string_view("style.ItemSpacing.y") })
+        {
+            RequireAbsent(
+                collapsedSettingsHeight,
+                retiredStatusHeight,
+                "collapsed Settings retained-status sizing");
+        }
+        const std::string_view expandedSettingsHeight = ExtractSection(
+            viewer,
+            "static float GetSettingsMinimumExpandedWindowHeight(",
+            "static float AdvanceUiLayoutAnimation(",
+            "expanded Settings minimum height");
+        RequireContains(
+            Compact(expandedSettingsHeight),
+            "constfloatframeHeight=fontSize+style.FramePadding.y*2.f;"
+            "returnframeHeight*2.f+style.WindowPadding.y*2.f;",
+            "expanded Settings title, one usable body row, and both root "
+            "padding edges");
+        const std::string_view settingsLayoutMinimum = ExtractSection(
+            viewer,
+            "const float minimumSettingsHeight =",
+            "const float panelStackMaximumBottom =",
+            "detached panel-stack CLI layout minimum");
+        RequireContains(
+            Compact(settingsLayoutMinimum),
+            "constfloatpanelSeparation=g_UiSpacingTokens.tight;",
+            "root panels use the Tight spacing token");
+        RequireOrdered(
+            settingsLayoutMinimum,
+            {
+                "GetSettingsMinimumExpandedWindowHeight(",
+                "const float minimumPanelStackHeight =",
+                "performanceCollapsedHeight +",
+                "panelSeparation +",
+                "minimumSettingsHeight;",
+                "ResolveCommandInterfaceLayout(",
+                "float(m_SettingsPanelMarginPixels),",
+                "g_UiSpacingTokens.tight,",
+                "260.f * m_UiDisplayScale,",
+                "minimumPanelStackHeight);"
+            },
+            "Performance summary endpoint, Tight panel-to-command gap, and "
+            "expanded-Settings stack reserve");
+        RequireContains(
+            Compact(viewer),
+            "ResolvePerformanceMaximumWindowHeight("
+            "panelStackMaximumBottom,performanceWindowTop,"
+            "minimumSettingsHeight,panelSeparation)",
+            "four-argument Performance height reserve including the ordinary gap");
+        RequireAbsent(
+            settingsLayoutMinimum,
+            "GetSettingsCollapsedWindowHeight(",
+            "collapsed-height coupling in the expanded Settings reserve");
+        const std::string_view settingsCollapsedUse = ExtractSection(
+            viewer,
+            "const float settingsCollapsedHeight =",
+            "if (m_SettingsCollapsedRequest)",
+            "title-only Settings collapse routing");
+        RequireOrdered(
+            settingsCollapsedUse,
+            {
+                "GetSettingsCollapsedWindowHeight(",
+                "ImGui::SetNextUvsrWindowCollapsedHeight("
+            },
+            "title-only Settings collapse routing");
+        const std::string_view settingsRootBody = ExtractSection(
+            viewer,
+            "const bool settingsExpanded = ImGui::Begin(",
+            "ImDrawList* settingsBodyDrawList =",
+            "Settings root and scrolling-child padding");
+        RequireOrdered(
+            settingsRootBody,
+            {
+                "\"Settings\"",
+                "if (settingsExpanded)",
+                "const float settingsBodyMaxHeight =",
+                "ImGui::GetCursorScreenPos().y - style.WindowPadding.y",
+                "ImGui::BeginChild(",
+                "\"##SettingsBody\""
+            },
+            "Settings preserves the root top margin, reserves the matching "
+            "bottom inset, and starts its scrolling child at General");
+        RequireAbsent(
+            settingsRootBody,
+            "ImGui::SetCursorPosY(",
+            "Settings root top-margin cancellation");
+        RequireAbsent(
+            settingsRootBody,
+            "AddExactVerticalUiGap(",
+            "child-owned title-to-General padding");
+        RequireAbsent(
+            settingsRootBody,
+            "ImGuiStyleVar_WindowPadding",
+            "root Settings WindowPadding override");
         const std::string_view commandInterface = ExtractSection(
             viewer,
             "void DrawCommandInterface()",
-            "void DrawMaterialInspector(",
+            "void DrawPerformancePanelContents(",
             "one-row command interface");
+        const std::string_view opaquePanelSurface = ExtractSection(
+            viewer,
+            "[[nodiscard]] static ImVec4 GetOpaquePanelBodySurface()",
+            "inline static constexpr float",
+            "shared compact-panel opaque surface");
+        RequireOrdered(
+            opaquePanelSurface,
+            {
+                "ImVec4 surface = g_UiVisualTokens.panelBodySurface;",
+                "surface.w = 1.f;",
+                "return surface;",
+                "static void PushOpaquePanelBodySurface()",
+                "ImGuiCol_WindowBg,",
+                "GetOpaquePanelBodySurface());"
+            },
+            "opaque compact-panel surface preserves body RGB while forcing "
+            "the resting endpoint opaque");
+        RequireContains(
+            commandInterface,
+            "PushOpaquePanelBodySurface();",
+            "CLI compact Performance surface parity");
         RequireContains(
             commandInterface,
             "m_CommandBuffer.front() == '\\0'",
@@ -2909,11 +6483,114 @@ namespace
             "renderer->RecallCommandHistory(data,"
             "data->EventKey==ImGuiKey_UpArrow);",
             "up-and-down command recall callback");
+        RequireContains(
+            Compact(commandInterface),
+            "constImVec2commandAppearancePivot("
+            "commandWindowPosition.x+commandWindowSize.x*0.5f,"
+            "commandWindowBottom);",
+            "bottom-center command appearance pivot");
+        RequireOrdered(
+            commandInterface,
+            {
+                "const float commandAppearanceScale = commandAppearanceOpacity;",
+                "const ImVec2 commandWindowPosition =",
+                "const ImVec2 commandWindowSize =",
+                "const float commandWindowBottom =",
+                "const ImVec2 commandAppearancePivot(",
+                "CaptureCurrentWindowBackdrop(",
+                "ApplyBackdropAppearance(",
+                "commandAppearancePivot,",
+                "commandAppearanceScale,",
+                "commandAppearanceOpacity);",
+                "ImGui::End();",
+                "ApplyWindowAppearance(",
+                "commandWindowDrawList,",
+                "commandAppearancePivot,",
+                "commandAppearanceScale,",
+                "commandAppearanceOpacity);"
+            },
+            "command draw vertices and backdrop scale uniformly around one "
+            "bottom-center pivot after retaining the full layout lane");
 
         Require(
             CountOccurrences(viewer, "ImGui::Selectable(") == 1u,
             "all Settings dropdown choices must route through the one "
             "deferred selection wrapper.");
+        const std::string_view deferredDropdownState = ExtractSection(
+            viewer,
+            "struct DeferredDropdownUiState",
+            "inline static DeferredDropdownUiState",
+            "originating combo-transition deferred dropdown state");
+        RequireOrdered(
+            deferredDropdownState,
+            {
+                "DeferredUiActionQueue<ImGuiID, DeferredDropdownUiPayload> actions;",
+                "ImGuiID transitionComboId = 0;",
+                "int transitionComboLastSubmittedFrame = -1;",
+                "double lastRequestTime = 0.0;",
+                "int requestFrame = -1;",
+                "int idleStartFrame = -1;"
+            },
+            "deferred dropdown exact transition identity and idle barrier state");
+        const std::string_view popupTransition = ExtractSection(
+            viewer,
+            "static void CancelDeferredDropdownUiActions()",
+            "static void DrawTranslucentHeaderPanelBodySurface(",
+            "originating combo transition lifecycle");
+        RequireOrdered(
+            popupTransition,
+            {
+                "static void CancelDeferredDropdownUiActions()",
+                "ImGui::FinishComboPopupTransition(",
+                "g_DeferredDropdownUiState.transitionComboId);",
+                "g_DeferredDropdownUiState = {};",
+                "static bool IsDeferredDropdownPopupTransitionActive()",
+                "return ImGui::IsComboPopupTransitionActive(",
+                "g_DeferredDropdownUiState.transitionComboId);",
+                "static void FinishUnsubmittedDeferredDropdownPopupTransition()",
+                "state.actions.Empty() ||",
+                "state.transitionComboId == 0 ||",
+                "state.transitionComboLastSubmittedFrame ==",
+                "ImGui::GetFrameCount()",
+                "ImGui::FinishComboPopupTransition(state.transitionComboId);"
+            },
+            "cancellation and an unsubmitted owner finish only the exact retained "
+            "combo transition instead of inferring popup dismissal");
+        for (const std::string_view retiredDismissalState : {
+                std::string_view("originatingComboId"),
+                std::string_view("originatingComboLastSubmittedFrame"),
+                std::string_view("popupDismissedFrame"),
+                std::string_view("IsDeferredDropdownPopupDismissed"),
+                std::string_view("ResolveUnsubmittedDeferredDropdownPopupDismissal") })
+        {
+            RequireAbsent(
+                viewer,
+                retiredDismissalState,
+                "retired inferred popup-dismissal state");
+        }
+        const std::string_view deferredQueue = ExtractSection(
+            viewer,
+            "static void QueueDeferredUiAction(",
+            "static bool TryApplyDeferredDropdownUiActions(",
+            "transition combo queue routing");
+        RequireOrdered(
+            deferredQueue,
+            {
+                "ImGuiID transitionComboId,",
+                "state.transitionComboId = transitionComboId;",
+                "state.transitionComboLastSubmittedFrame =",
+                "transitionComboId != 0",
+                "? ImGui::GetFrameCount()",
+                ": -1;",
+                "static void QueueDeferredControlUiAction(",
+                "ImGui::GetItemID(),",
+                "0,",
+                "static void QueueDeferredDropdownUiAction(",
+                "g_ActiveRoundedComboId,",
+                "g_ActiveRoundedComboId,"
+            },
+            "ordinary controls have no popup transition while dropdown actions "
+            "retain their exact originating combo");
         const std::string_view combo = ExtractSection(
             viewer,
             "static bool BeginRoundedCombo(",
@@ -2926,6 +6603,15 @@ namespace
             combo,
             "ImGui::BeginCombo(label, visiblePreview, flags);",
             "native integrated-arrow dropdown presentation");
+        RequireOrdered(
+            combo,
+            {
+                "if (open && deferredState.transitionComboId == comboId)",
+                "deferredState.transitionComboLastSubmittedFrame =",
+                "ImGui::GetFrameCount();"
+            },
+            "the exact open combo marks each frame that can advance its retained "
+            "roll transition");
         for (const std::string_view retiredDropdownDrawing : {
                 std::string_view("ImGuiComboFlags_NoArrowButton"),
                 std::string_view("AddRectFilled"),
@@ -2950,10 +6636,112 @@ namespace
             "static bool DrawDeferredDropdownOption(",
             "static void ApplyWordSpacing(",
             "deferred dropdown selection wrapper");
-        RequireContains(
+        RequireOrdered(
             dropdown,
-            "QueueDeferredDropdownUiAction(",
-            "deferred dropdown selection wrapper");
+            {
+                "const bool activated = ImGui::Selectable(label, selected);",
+                "if (!activated || selected)",
+                "return false;",
+                "QueueDeferredDropdownUiAction(",
+                "return true;"
+            },
+            "native Selectable semantics with redundant-selection suppression and "
+            "deferred mutation");
+        const std::string_view deferredCommit = ExtractSection(
+            viewer,
+            "static bool TryApplyDeferredDropdownUiActions(",
+            "static bool BeginRoundedCombo(",
+            "deferred dropdown commit barrier");
+        RequireOrdered(
+            deferredCommit,
+            {
+                "UpdateUiDropdownIdleStartFrame(",
+                "ShouldCommitDeferredDropdownActions(",
+                "return false;",
+                "std::move(state.actions)",
+                "state = {};",
+                "return actions.Drain("
+            },
+            "deferred dropdown idle-frame barrier and detached drain");
+        const std::string_view deferredComposition = ExtractSection(
+            viewer,
+            "const auto deferredDropdownCompositionIdle =",
+            "if (!m_ui.ShowUI && m_SettingsAppearance <= 0.f)",
+            "deferred dropdown composition gate");
+        RequireContains(
+            deferredComposition,
+            "!IsDeferredDropdownPopupTransitionActive()",
+            "the exact popup roll transition participates in the complete composition "
+            "barrier");
+        const std::string_view hiddenDeferredCommit = ExtractSection(
+            viewer,
+            "if (!m_ui.ShowUI && m_SettingsAppearance <= 0.f)",
+            "const float settingsAppearanceOpacity =",
+            "hidden Settings deferred commit");
+        RequireOrdered(
+            hiddenDeferredCommit,
+            {
+                "FinishUnsubmittedDeferredDropdownPopupTransition();",
+                "TryApplyDeferredDropdownUiActions(",
+                "deferredDropdownCompositionIdle("
+            },
+            "hidden Settings finishes an unsubmitted exact combo before the "
+            "ordinary deferred barrier");
+        RequireAbsent(
+            hiddenDeferredCommit,
+            "!uiMotionEnabled",
+            "skin-based immediate hidden-Settings dropdown commit");
+        const std::string_view finalDeferredCommit = ExtractSection(
+            viewer,
+            "// Commit only after every UI window has finished composing.",
+            "RestoreActiveUiWordSpacing();",
+            "final deferred dropdown commit");
+        RequireOrdered(
+            finalDeferredCommit,
+            {
+                "FinishUnsubmittedDeferredDropdownPopupTransition();",
+                "TryApplyDeferredDropdownUiActions(",
+                "deferredDropdownCompositionIdle("
+            },
+            "visible Settings finishes an unsubmitted exact combo only after "
+            "all root windows compose");
+        RequireAbsent(
+            finalDeferredCommit,
+            "!uiMotionEnabled",
+            "skin-based immediate visible dropdown commit");
+        Require(
+            CountOccurrences(
+                viewer,
+                "FinishUnsubmittedDeferredDropdownPopupTransition()") == 3u,
+            "popup transition finisher must have one definition and exactly "
+            "the hidden and visible composition calls.");
+        const std::string_view pendingCommandGate = ExtractSection(
+            viewer,
+            "ImGui::Render();\n        if (m_PendingCommand &&",
+            "if (pixelZoomPassActive && m_PixelZoomPass)",
+            "slash-command deferred dropdown ordering");
+        RequireOrdered(
+            pendingCommandGate,
+            {
+                "if (m_PendingCommand &&",
+                "!HasDeferredDropdownUiActions())",
+                "finish its roll-up, settle, and full idle presentation",
+                "UiCommand command = std::move(*m_PendingCommand);",
+                "m_PendingCommand.reset();",
+                "ExecuteUiCommand(command);"
+            },
+            "a newer slash command waits behind the complete dropdown roll, "
+            "quarter-second settle, and idle-frame transaction");
+        RequireAbsent(
+            pendingCommandGate,
+            "TryApplyDeferredDropdownUiActions(",
+            "slash-command immediate deferred-action bypass");
+        Require(
+            CountOccurrences(
+                viewer,
+                "TryApplyDeferredDropdownUiActions(") == 3u,
+            "the deferred commit helper must have one definition and only the "
+            "hidden and visible ordinary barrier calls.");
         RequireContains(
             viewer,
             "CancelDeferredDropdownUiActions();",
@@ -3000,27 +6788,41 @@ int main(int argc, char** argv)
         root / "src" / "temporal_aa_options.h");
     const std::string temporalPass = ReadFile(
         root / "src" / "temporal_aa.cpp");
+    const std::string uiAnimation = ReadFile(
+        root / "src" / "ui_animation.h");
+    const std::string uiCommandLayout = ReadFile(
+        root / "src" / "ui_command_layout.h");
     const std::string donutAppOverride = ReadFile(
         root / "overrides" / "donut-app.patch");
     const std::string imguiUiOverride = ReadFile(
         root / "overrides" / "imgui-ui.patch");
+    const std::string imguiSliderOverride = ReadFile(
+        root / "overrides" / "imgui-slider-controls.patch");
+    const std::string imguiComboRollOverride = ReadFile(
+        root / "overrides" / "imgui-combo-roll.patch");
+    const std::string backdropBlurShader = ReadFile(
+        root / "src" / "backdrop_blur_ps.hlsl");
     const std::string cmakeSource = ReadFile(root / "CMakeLists.txt");
     if (viewer.empty() || catalog.empty() || temporalOptions.empty() ||
-        temporalPass.empty() || donutAppOverride.empty() ||
-        imguiUiOverride.empty() ||
+        temporalPass.empty() || uiAnimation.empty() ||
+        uiCommandLayout.empty() ||
+        donutAppOverride.empty() || imguiUiOverride.empty() ||
+        imguiSliderOverride.empty() || imguiComboRollOverride.empty() ||
+        backdropBlurShader.empty() ||
         cmakeSource.empty())
     {
         std::cerr << "FAIL: could not read current UI contract sources\n";
         return 2;
     }
 
+    ValidateUiSpacing(viewer, uiCommandLayout);
     ValidateDrawers(viewer);
     ValidateRepresentation(viewer, catalog);
     ValidateNoise(viewer, catalog);
     ValidateVisibility(viewer, catalog);
     ValidateDenoising(viewer, catalog);
     ValidateBuffers(viewer);
-    ValidateStatistics(viewer);
+    ValidatePerformance(viewer);
     ValidateTemporalTiming(temporalPass);
     ValidateAntiAliasing(viewer, temporalOptions);
     ValidateDebug(viewer);
@@ -3030,8 +6832,12 @@ int main(int argc, char** argv)
     ValidateMaterialHistoryInvalidation(viewer);
     ValidateUiSafety(
         viewer,
+        uiAnimation,
         donutAppOverride,
         imguiUiOverride,
+        imguiSliderOverride,
+        imguiComboRollOverride,
+        backdropBlurShader,
         cmakeSource);
 
     if (g_FailureCount != 0)

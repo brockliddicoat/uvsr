@@ -33,7 +33,7 @@ const uvsr::SponzaCameraPreset& uvsr::GetDefaultSponzaCameraPreset()
     // view basis remains orthonormal instead of scaling the rendered image.
     static const SponzaCameraPreset preset{
         "intel-pbr-sponza-courtyard-simplified-v1",
-        "Benchmark Position 1",
+        "Position 1",
         donut::math::float3(11.f, 7.7f, -2.2f),
         donut::math::float3(-0.707106769f, 0.f, 0.707106769f),
         donut::math::float3(0.f, 1.f, 0.f),

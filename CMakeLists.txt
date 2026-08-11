@@ -183,8 +183,8 @@ set(UVSR_IMGUI_OVERRIDE_DIR
     "${CMAKE_BINARY_DIR}/uvsr_imgui_overrides")
 set(UVSR_IMGUI_PATCH_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-ui.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-dropdown-roll.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-runtime-policy.patch")
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-slider-controls.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-combo-roll.patch")
 uvsr_stage_patched_sources(
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/thirdparty/imgui"
     "${UVSR_IMGUI_PATCH_FILES}"
@@ -376,7 +376,6 @@ if (UVSR_BUILD_APPLICATION)
         src/cmaa2.cpp
         src/denoising_pass.cpp
         src/fast_approximate_aa.cpp
-        src/gpu_performance_monitor.cpp
         src/heitz_ratio_estimator_shadows.cpp
         src/image_based_lighting_background_pass.cpp
         src/image_based_lighting_environment.cpp
@@ -1236,10 +1235,17 @@ if (WIN32)
         message(FATAL_ERROR
             "Segoe UI Semibold or Bold was not found in the Windows font directory")
     endif()
+    file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/segoeuib.ttf"
+        UVSR_UI_BOLD_FONT_SOURCE)
+    if (NOT EXISTS "${UVSR_UI_BOLD_FONT_SOURCE}")
+        set(UVSR_UI_BOLD_FONT_SOURCE "${UVSR_UI_HEADER_FONT_SOURCE}")
+    endif()
 else()
     set(UVSR_UI_FONT_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
     set(UVSR_UI_HEADER_FONT_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
+    set(UVSR_UI_BOLD_FONT_SOURCE
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
 endif()
 
@@ -1269,6 +1275,9 @@ if (UVSR_BUILD_APPLICATION)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${UVSR_UI_HEADER_FONT_SOURCE}"
             "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI-Semibold.ttf"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${UVSR_UI_BOLD_FONT_SOURCE}"
+            "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI-Bold.ttf"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE.md"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/UVSR-Polyform-Noncommercial-1.0.0.md"

@@ -1,11 +1,11 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-08-09.7`.
+UI reference version: `2026-08-11.4`.
 
 ## Purpose
 
-This is the canonical reference for UVSR-owned Settings, Statistics, loading,
-command, pixel-zoom, and material-inspector UI. It defines the accepted visual
+This is the canonical reference for UVSR-owned Settings, Performance, loading,
+command, pixel-zoom, and Material drawer UI. It defines the accepted visual
 language, information hierarchy, control behavior, renderer boundary, and
 verification evidence. Amend this file instead of creating a competing guide.
 
@@ -15,8 +15,18 @@ reconcile the implementation before integration.
 
 ## Information Architecture
 
-Settings uses one title, one status block, one scrolling body, and one footer.
-The top-level drawers are:
+Performance is an independently collapsible top-level panel immediately above
+and fully detached from Settings. Separate it from Settings by the same vertical
+space used between adjacent top-level drawers. Both panels keep independent
+complete rounded silhouettes. Together they form one
+managed vertical stack that yields space to the command interface. Settings
+uses one title, one scrolling body, and one footer. Keep one ordinary
+`WindowPadding.y` inset between the title and first drawer, matching the side and
+bottom body margins. The root window owns that fixed leading inset. Begin the
+borderless scrolling child after it, with no duplicate gap inside the child, so
+General and the scrollbar share one top edge while scrolling cannot erase the
+margin or its carved depth line.
+Its top-level drawers are:
 
 1. General
 2. Representation
@@ -24,12 +34,13 @@ The top-level drawers are:
 4. Diffuse
 5. Denoising
 6. Buffers
-7. Statistics
-8. Aliasing
-9. Debug
-10. Sky
-11. Lights
-12. Shadows
+7. Aliasing
+8. Debug
+9. Sky
+10. Lights
+11. Shadows
+12. Material
+13. Interface
 
 The order is product behavior. Add a top-level drawer only when the feature has
 a distinct user goal and enough retained controls to justify it. Effect-specific
@@ -51,8 +62,60 @@ they explain.
   accepts input but has no runtime effect.
 - Do not use benchmark or developer language for normal product controls.
 
-Amp is the authored animated skin. OG uses stock ImGui widgets and reaches UI
-motion endpoints immediately. Both skins expose identical renderer state.
+### Spacing Scale
+
+Derive every managed menu margin from one 4-pixel base at 100 percent display
+scale. Scale that base with the UI, then use only these exact multiples:
+
+| Token | Ratio | 100 Percent Size | Managed Uses |
+| --- | ---: | ---: | --- |
+| Tight | 1x | 4 px | Adjacent drawers, Performance-to-Settings, Settings-to-command-interface, footer buttons, and compact internal padding |
+| Regular | 2x | 8 px | Settings title-to-General, side and bottom body insets, and ordinary compound-control spacing |
+| Section | 4x | 16 px | Viewport and command-interface outer margins |
+
+Do not derive a menu margin from font size, rounding, grab size, or control
+height. Header-to-body joins remain attached surfaces; frame padding, slider
+height, scrollbar width, radii, and one-pixel depth strokes are geometry rather
+than additional spacing tokens.
+
+Amp is the authored animated blue-accent skin. Ogg uses stock ImGui widgets and
+reaches UI motion endpoints immediately. Both skins expose identical renderer
+state. A user-edited ultra-bright Amp Primary Accent automatically selects the
+dark transparent depth polarity.
+
+Interface is the final drawer. Its first toggle disables or enables every
+authored UI animation; Ogg remains immediate regardless. It also owns the skin
+selector plus session-only RGBA editors. Amp Primary Accent drives drawer and
+panel headers, footer buttons, checkmarks, selection, and raised slider knobs;
+it is unavailable under Ogg. Shared Secondary Accent defaults to
+`#4296FA4F` and drives error, negative, and toggle-off presentation. Shared
+Tertiary Accent defaults to the historically light-track-compensated
+`#1E3757FF` and drives success, positive, Material status, and toggle-on
+presentation. The default-closed Advanced Accents group owns one Font Color for
+all authored copy and one Primary Background Color for the menu body, resting
+closed controls, and slider tracks. Role-state colors derive from these resting
+RGBA values, and ultra-bright Primary Accent surfaces select dark transparent
+depth automatically. Slider knobs remain raised. Footer Reset and `/reset all`
+restore renderer defaults, the dynamic Adaptive Sync default, Amp, enabled
+animations, every Interface color, and the collapsed Complete Renderer view.
+They preserve camera, scene, active adapter, and shell navigation state.
+
+Authored sliders render the Primary Accent knob as a restrained raised gradient
+with automatic bright-surface depth polarity. A semantically gated slider blocks
+input immediately but eases its grayscale presentation over 280 milliseconds;
+its stored preference is not erased. If the renderer's effective value changes
+because of that gate, the knob animates toward the effective value while direct
+mouse or navigation edits track immediately. A fixed right-hand value bubble
+inside the existing slider width uses exactly twice the authored toggle width
+and accepts exact input on one click. Its closed copy contains four numeric
+digit glyphs with no units, while active input retains native precision. A
+2-pixel gap separates its four inner fillets from the rounded track bubble.
+Authored ColorEdit component controls omit channel letter prefixes. Ogg retains
+stock slider rendering, centered value text, and stock ColorEdit labels.
+The scoped Amp Interface picker uses a hue wheel while retaining independently
+interactive vertical hue and transparency bars. Both bars, their borders, and
+their triangle markers use the common authored rounding; markers render above
+the bars and the wheel cursor renders last. Unscoped and Ogg pickers stay stock.
 
 ## Mandatory New-Element Intake Checklist
 
@@ -120,6 +183,13 @@ independent animated disclosure even while enabled. Every retained
 setting has a concise hover explanation, and dropdown width must leave its
 label and reset lane visible. Maintain balanced ImGui ID, style, disabled, tree,
 table, child, and popup lifetimes on every branch.
+
+Authored opened combo popups use compact, uniform option rows. Their selected,
+hovered, and navigation highlights use the same frame radius as closed controls.
+One popup-scoped surface moves smoothly between rows. Authored popups roll down
+or up over 180 milliseconds and retain a selected popup through its roll-up;
+Ogg retains stock immediate popup spacing and rendering. This popup-only
+presentation must not change the closed combo trigger or own renderer mutation.
 
 Debug and its World, Visibility, and Physically Based Lighting groups start
 expanded, then preserve user owned disclosure state. Their
@@ -232,25 +302,49 @@ camera.
 
 ## Dropdown and Layout Safety
 
-Dropdown popup motion uses the canonical full-alpha geometric roll. Input before
-roll-down completes is discarded, never replayed. Popup size and row layout stay
-fixed during the transition.
+The closed combo frame, preview, arrow, and reset ownership use UVSR's authored
+control presentation. Authored skins retain native popup position and selection
+semantics while a 180-millisecond geometric clip rolls options into or out of
+view. Input remains blocked behind the moving clip and is never replayed. One
+rounded popup-scoped surface glides between selected or hovered rows. Ogg keeps
+stock row geometry, rendering, and immediate dismissal. Popup presentation
+never owns renderer mutation.
 
-A dropdown that changes dependent layout uses
-`DeferredUiStructuralPresentation<T>` or an equivalent tested phase machine.
-Synchronize every dependent consumer, finish the originating popup transition,
-wait for composition and scroll layout to become idle, then commit through the
-shared deferred-action barrier. If an owner becomes hidden, clipped, or
-unsubmitted, explicitly finish or cancel its scoped transition.
+A dropdown that changes dependent layout or renderer resources queues its value,
+records its exact originating combo, waits for roll-up to finish, waits at least
+250 milliseconds for composition and scroll layout to become idle, presents one
+complete idle frame, then commits through the shared deferred-action barrier. A
+clipped, collapsed, or hidden owner finishes only its exact popup transition so
+the action cannot strand. Cancel queued work when its owner becomes invalid
+during a scene or process transition. World Materials, Visibility View, and the
+Physically Based Lighting Information Filter in Debug all use this path; in
+particular, selecting a White world mode must not rebuild materials or render
+passes in the native popup's selection frame.
 
 Independent controls that do not change layout or renderer topology can mutate
 their owned settings directly during UI composition.
 
-## Statistics Presentation
+## Performance Presentation
 
-Keep the six general values on one slash-separated summary line. The labeled
-Effect selector shows one retained renderer effect at a time and keeps its reset
-beside the label. Complete Renderer uses a striped two-column table for the full
+Keep Performance as an independent top-level panel immediately above Settings,
+with its own collapse state and the same smooth authored root-panel transition
+used by Settings in Amp. Ogg remains immediate. Keep resolution,
+submitted triangles, frame time, and frame rate on one slash-separated summary
+line inside Performance. Center that retained line vertically with equal top and
+bottom padding. As collapse progresses, composite only the Performance body
+toward an opaque version of its resting surface; do not change Settings or any
+ordinary drawer opacity.
+The fully visible command interface uses that same opaque compact-body surface;
+its existing whole-window appearance transform alone owns entry and exit fade.
+In Amp, submit an opaque rounded inset frame after Performance content and after
+the Settings scrolling child. The frame must fill all four outer-to-inner
+corner wedges, leave the interactive center untouched, draw the fixed top
+shadow above content, and finish with outer and inner depth outlines.
+Keep renderer identity in General. The compact unlabeled selector shows one
+retained renderer timing view at a time. Give it the same inset and fixed width
+as ordinary long General controls; do not reserve a same-row reset lane.
+Selecting **Complete Renderer** is the direct route back to the default view.
+Complete Renderer uses a striped two-column table for the full
 retained stage list; an ordinary stage includes the complete frame for context.
 Visibility, Directional Shadows, Temporal Reconstructive, Fast Approximate,
 Conservative Morphological, and Multisample Adaptive use the same readable table language for their
@@ -267,19 +361,57 @@ shadow techniques, or shader taxonomies.
 
 ## Scrolling and Input
 
-Settings has one scrolling body. Keep title/status/footer positions stable while
-drawers open, close, or animate. Same-frame scroll-anchor correction must block
+Settings has one scrolling body. Lay out the detached Performance and Settings
+panels with exactly one Tight top-level drawer gap while either panel opens or
+closes.
+At 100 percent scale, target 23.44 font heights for both authored root panels,
+exactly 20 percent narrower than the preceding layout. Enforce a lower bound
+that contains the longest intentional control, root and drawer padding, and the
+scrollbar, and retain the viewport/right-side picker-lane cap.
+Keep both root silhouettes fully rounded and keep the Settings title and footer
+positions stable while drawers animate. Cancel the root window's duplicate
+leading padding before the scrolling child begins; submit one explicit Regular
+gap inside the zero-padded child's clip rectangle before the first drawer.
+Use one authored corner radius for root bodies, drawer bodies, controls, and the
+Settings scrollbar. Use a 12-pixel authored channel at 100 percent scale and keep
+both axes of its grab one pixel inside the frame, yielding the minimum 10-pixel
+visible grab that meets the inset outline while retaining the true 4-pixel outer
+radius and 3-pixel inset-outline radius.
+Submit the opaque ring, fixed shadow, and depth outlines on the last visible
+Settings child draw list: nested child windows render after their parent, so a
+parent-only decoration is not a true foreground layer. General must use the same
+`DrawCollapsingHeader`, `BeginDrawerBody`, `EndDrawerBody`, and Tight spacing
+path as every ordinary drawer and must never own root chrome or clipping.
+Backdrop composites must follow the independent title and body silhouettes;
+they must not fill the panel gap, rounded-corner pockets, or exterior margins,
+and root panels must not cast blur into those empty areas. Same-frame
+scroll-anchor correction must block
 interaction until submitted geometry and hit rectangles agree. The command bar
-owns its permanently reserved one-row bottom lane; Settings must not overlap or
-resize that lane. Guidance belongs in the empty input hint and disappears when
-typing begins. Separate guidance with slashes. After submission, the same empty
-input shows a blue `Success` or saturated-crimson `Error` message until editing
-resumes. Never add a floating result window above the command row. Up and Down continue
+owns its permanently reserved one-row bottom lane; separate it from Settings by
+the same Tight gap used between Performance and Settings. Neither stacked panel
+may overlap or resize that lane. Its authored entrance scales uniformly from the
+bottom center, preserving both the bottom edge and horizontal center while its
+width and height expand together. Guidance belongs in the empty input hint and
+disappears when typing begins. Separate guidance with slashes. After submission, the same empty
+input shows `Success` with the configured positive accent or `Error` with the
+configured negative accent until editing resumes. Never add a floating result
+window above the command row. Up and Down continue
 to recall command history. A long or multiline result may expose a trailing
 details button; only an explicit click may open its bounded, scrollable,
 selectable read only popup. The catalog mirrors all visible lighting,
 representation, producer, and denoising choices. A `list` result uses `/`
 between each row's supported verbs and value domain.
+
+Clamp repeated outward wheel input at the Settings top or bottom to that exact
+endpoint before applying scroll-anchor correction. A pending navigation or
+programmatic scroll target still owns its frame. Constrain Interface color
+pickers to the lane beginning at the Settings content-right edge and to the
+current Settings-root bottom. Transform the active picker draw list exactly once
+with the managed stack appearance. Give only that picker a Primary
+Background-derived surface whose default authored alpha is opaque, without
+changing generic popup colors. Draw its active cursor last, and close only that
+picker immediately after an actual contiguous-frame Settings scroll change.
+Wheel input over the picker itself must remain picker input.
 
 Escape or the grave-accent/tilde key toggles Settings unless an active edit or
 popup owns it. The physical grave-accent key works with or without Shift so a
@@ -376,20 +508,22 @@ Importer exceptions follow that same retryable path. Closing the viewer waits
 for its worker before renderer-owned scene resources are destroyed, and a failed
 attempt discards deferred texture finalization before retrying.
 
-## Pixel Zoom and Material Inspector
+## Pixel Zoom and Material Drawer
 
-Pixel zoom uses exact integer texel replication. The material inspector follows
-the zoom panel's placement without owning its renderer texture. Their Amp
-transitions and OG endpoints must preserve stable hit testing, focus, and the
-reserved command lane.
+Pixel zoom uses exact integer texel replication. Material is a normal Settings
+drawer and does not own the zoom panel's placement or renderer texture. Opening
+Material forces the center crosshair, requests a center pick, and keeps aiming
+guidance visible after a miss. Its Amp transition and Ogg endpoint must preserve
+stable hit testing and focus.
 
-The M shortcut and title affordance close the same material-inspector state.
-Material picking must distinguish center inspection from camera-focus picking.
+The M shortcut opens or refreshes the Material drawer; the drawer header closes
+it. Material picking must distinguish center inspection from camera-focus
+picking.
 
 ## Required Checks
 
 After any Settings, animation, dropdown, scrolling, loading, pixel-zoom, or
-material-inspector change, run:
+Material drawer change, run:
 
 ```powershell
 cmake --build build --config Release --target uvsr_ui_source_contract_tests uvsr_ui_animation_tests uvsr_imgui_dropdown_roll_tests
@@ -404,7 +538,22 @@ and CTest suite before handoff.
 
 Use the exact candidate executable and a bundled scene. Exercise:
 
-- opening, closing, scrolling, and resetting Settings in Amp and OG;
+- opening, closing, scrolling, and resetting Performance and Settings in Amp
+  and Ogg, including all four independent collapse combinations,
+  intermediate authored-motion frames, and rapid direction reversal;
+- editing and resetting every Interface accent, switching skins to verify Amp
+  Primary Accent and advanced-role retention, confirming the Ogg
+  unavailable state, verifying Secondary/Tertiary routing through CLI, toggles,
+  and Material, and checking alpha at zero, half, and full opacity;
+- opening each Settings color picker at ordinary and narrow viewport widths to
+  confirm the hue wheel and rounded hue/transparency bars remain independent,
+  it may cover the scrollbar but never the Settings content, never extends below
+  Settings, shares stack zoom/opacity, closes on Settings wheel or scrollbar
+  movement, keeps picker-local wheel input, and draws markers and its cursor
+  above every picker element;
+- editing Amp Primary Accent to an ultra-bright translucent value over dark,
+  bright, and detailed scenes to confirm transmission and automatic dark depth
+  edges;
 - toggling Settings with Escape, grave accent, and shifted tilde while
   preserving text-input ownership;
 - leveling camera roll with V while a stationary trackpad touch remains held,
@@ -421,6 +570,11 @@ Use the exact candidate executable and a bundled scene. Exercise:
 - all four Denoising groups, supported method lists, stored controls, missing
   producer data, and optional backend unavailable state;
 - every changed control at both endpoints and its unavailable state;
+- disabling and re-enabling both sample-count gates while a nonminimum value is
+  stored, confirming the disabled value and knob move to one sample, the stored
+  preference returns on enable, the Primary Accent knob retains depth, the
+  grayscale treatment reverses smoothly, and its numeric lane accepts an exact
+  value without changing the control width;
 - Representation rebuild/refit transitions, staged status, and **Allow Ray
   Traversal** with sky, sun, and flashlight effects selected;
 - both sun Ratio Estimator states, both Output Hit Distance states, and the
@@ -436,7 +590,10 @@ Use the exact candidate executable and a bundled scene. Exercise:
   while enabled, both Maximum Brightening and Maximum Darkening endpoints, both
   Exposure Compensation endpoints, both Adjustment Period endpoints, and
   symmetric bright/dark settling;
-- affected dropdowns while their dependent layout is open and clipped;
+- affected dropdowns while their dependent layout is open and clipped, plus
+  World Materials from Default to every White mode while verifying that the
+  authored popup finishes roll-up and a stable Settings frame is presented
+  before material or render-pass work begins;
 - scene loading with the colon, 20 ms numerator, and historical average
   denominator, plus command completion;
 - Debug composition rather than each debug state only in isolation;
@@ -460,6 +617,74 @@ The UI handoff includes:
 
 ## Reference Revision History
 
+- `2026-08-11.4`: Forward-ported the accepted UI contract onto the UVSR Engine
+  mainline and retained the canonical dropdown-roll target and lifecycle name
+  required by current repository policy. This revision changes no UI behavior.
+
+- `2026-08-11.3`: Matched the command surface to compact Performance, restored
+  the Performance selector's ordinary control inset, replaced the scoped Amp
+  picker with a hue wheel plus rounded hue/transparency bars, removed the
+  unfinished Hardware view and backend, and made Reset restore Interface and
+  Performance defaults as well as renderer settings.
+
+- `2026-08-11.2`: Reduced the authored panel target width by 20 percent, narrowed
+  the Settings scrollbar without changing its fillet or inset, balanced and
+  opacity-stabilized the collapsed Performance summary, made color pickers obey
+  stack appearance and bottom bounds, use an opaque-strengthened Primary
+  Background, and close on Settings scrolling, matched the Settings-to-command
+  gap to the ordinary panel gap, and clamped repeated outward wheel input at
+  Settings endpoints.
+
+- `2026-08-11.1`: Unified authored panel, drawer, control, and scrollbar
+  rounding; made the Settings scrollbar flush with its outline; moved shared
+  Settings chrome above the last visible child; rebuilt General on the ordinary
+  drawer path; and expanded the Performance selector to the full content width.
+
+- `2026-08-10.7`: Added the fixed four-fillet Settings inner silhouette and
+  child-layer shadow continuation over General, split authored sliders into
+  toggle-width twin bubbles, and restored a transition-gated 180-millisecond
+  authored combo roll without moving renderer mutation into popup code.
+
+- `2026-08-10.6`: Matched root-body fillets to Window Rounding, added a fixed
+  clipped top-inset shadow, retained the Performance summary while collapsed,
+  made popup selection glide between compact rows, replaced moving slider copy
+  with a fixed exact-input lane, routed Primary Accent to raised slider knobs,
+  and eased gated presentation over 280 milliseconds.
+
+- `2026-08-10.5`: Made the Settings root own its persistent title-to-General
+  inset, aligned the child scrollbar with General, added the Interface animation
+  control, consolidated authored palettes to Primary Accent, Font Color, and
+  Primary Background Color, and rebuilt authored combo popups with compact
+  uniformly rounded option rows.
+- `2026-08-10.4`: Restored the ordinary drawer-sized Performance-to-Settings
+  gap, separated root backdrop silhouettes from empty margins, made Interface
+  the final drawer after General-led renderer controls, added alpha-aware
+  primary, semantic, font, and background roles, and constrained ColorEdit
+  pickers outside Settings content.
+- `2026-08-10.3`: Added the Interface drawer and live per-skin main plus shared
+  negative and positive accents, routed semantic colors through CLI, toggles,
+  and Material, made bright-header depth selection procedural, restored fully
+  rounded tangent root panels, removed the Settings top band, and gave
+  Performance the authored root-panel transition.
+- `2026-08-10.2`: Removed the gap between the detached Performance and Settings
+  panels, repaired authored opening and reversal motion, corrected scrollbar and
+  dark-surface depth polarity, added bright-surface darkening outlines and true
+  local Neo header translucency, restored opened selectors to stock ImGui
+  behavior, and added the footer-toned Noir skin.
+- `2026-08-10.1`: Detached Performance into its own independently collapsible
+  panel above Settings, made Material the final Settings drawer, renamed the
+  visible White and OG skins to Neo and Ogg while retaining command aliases,
+  restored rounded anti-aliased depth outlines, reduced cutout highlights, and
+  made Neo headers subtly scene-translucent.
+- `2026-08-09.9`: Renamed the root Statistics drawer to Performance, removed the
+  redundant renderer and loose status block above it, placed it directly beneath
+  the Settings title, restored carved dark-control and raised-header depth,
+  made White headers subtly translucent and graded, and gave authored headers
+  explicit bold type with pitch-black White copy.
+- `2026-08-09.8`: Added the White skin, embedded Material drawer with crosshair
+  ownership, fixed root Statistics and Hardware view, four-field per-window
+  status, uniform slider/toggle geometry, fixed-geometry dropdown fades, and
+  command-interface-dependent Settings height.
 - `2026-08-09.7`: Removed the rejected flashlight camera-centering experiment,
   including receiver rays, proximity retraction, temporal controls, optical
   state, recovery state, and Camera Movement Diagnostics. Retained only the

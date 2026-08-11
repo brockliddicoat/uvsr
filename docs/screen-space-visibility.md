@@ -142,7 +142,7 @@ Each method starts at None. Selecting a method does not enable Output Hit
 Distance, change the Diffuse recipe, or alter sampling. Missing distance data or
 an unavailable optional NRD backend leaves the raw signal in use.
 
-## Debug and Statistics
+## Debug and Performance
 
 The expanded-by-default Debug drawer's Visibility group selects **Default**, **Ambient
 Visibility**, **Traced Indirect**, or **Applied Indirect** while retaining the
@@ -151,7 +151,7 @@ executing but suppresses ordinary Visibility composition; an explicit
 Visibility view takes precedence when both selectors are active. No debug
 choice silently enables or disables material or lighting modes.
 
-Statistics reports First Trace, Reconstruction, Composition, their exclusive
+Performance reports First Trace, Reconstruction, Composition, their exclusive
 sum as Complete Effect, logical texture payloads, and active resource/dispatch
 counts in a labeled table only after every submitted stage query for one
 latency slot has completed. The named values publish as one snapshot; a stage

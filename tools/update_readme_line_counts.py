@@ -88,8 +88,8 @@ OVERRIDE_GROUPS = (
         ROOT / "donut" / "thirdparty" / "imgui",
         (
             ROOT / "overrides" / "imgui-ui.patch",
-            ROOT / "overrides" / "imgui-dropdown-roll.patch",
-            ROOT / "overrides" / "imgui-runtime-policy.patch",
+            ROOT / "overrides" / "imgui-slider-controls.patch",
+            ROOT / "overrides" / "imgui-combo-roll.patch",
         ),
     ),
 )

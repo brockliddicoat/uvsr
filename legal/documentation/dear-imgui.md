@@ -20,8 +20,8 @@ source; UVSR's settings model and visual composition are first-party.
 
 - [Build Integration](../../CMakeLists.txt)
 - [UI Patch](../../overrides/imgui-ui.patch)
-- [Dropdown Patch](../../overrides/imgui-dropdown-roll.patch)
-- [Runtime Policy Patch](../../overrides/imgui-runtime-policy.patch)
+- [Slider Controls Patch](../../overrides/imgui-slider-controls.patch)
+- [Combo Roll Patch](../../overrides/imgui-combo-roll.patch)
 
 ## Commercial Clearance
 

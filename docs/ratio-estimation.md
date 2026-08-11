@@ -184,9 +184,9 @@ Each direct visibility texture is matched to the exact light that produced it.
 Sun visibility uses the sun slot; flashlight visibility uses a separate slot
 and separate finite light query.
 
-## Statistics
+## Performance
 
-The Statistics drawer's Directional Shadows effect and Complete Renderer table
+The Performance panel's Directional Shadows view and Complete Renderer table
 use **Shadow Ray Dispatch** for the raw sun and flashlight query work and
 **Shadow Denoise** for the optional SIGMA work. Sky visibility has its own Ray
 Dispatch and Denoise rows. A timing is shown only after a completed GPU query;
