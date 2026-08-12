@@ -93,18 +93,23 @@ the previous layout, but never contracts below its longest intentional control
 plus padding and the scrollbar.
 The four footer actions are **Reset**, **Capture**, **Zoom**, and
 **Restart**; Capture copies the current frame to the clipboard. Reset restores
-renderer settings, Adaptive Sync, Interface skin and colors, animation
-preference, and the default collapsed Complete Renderer Performance view. It
+renderer settings, Adaptive Sync, Interface skin and colors, animation and
+visual-maximum preferences, and the default collapsed Complete Renderer
+Performance view. It
 preserves the camera, scene, active graphics adapter, and command history.
 
 ## Interface
 
-The first Interface control is a **Disable Animations** toggle. Checking it
-moves every authored drawer, panel, slider, command-interface, and zoom
-transition directly to its current endpoint. **Interface Skin** selects Amp or
-Ogg. Amp owns the animated UVSR presentation; Ogg uses stock ImGui presentation
-and immediate endpoints. Performance and Settings use the same authored
-root-panel motion as the drawers in Amp.
+The first Interface controls are **Disable Animations** and **Override Visual
+Maxes**. Disable Animations moves every authored drawer, panel, slider,
+command-interface, and zoom transition directly to its current endpoint.
+Override Visual Maxes defaults off. Enabling it lets exact numeric entry exceed
+a shortened visual track up to that setting's safe logical limit; pointer and
+navigation travel remain on the compact track. Disabling it again preserves an
+already entered supported value. **Interface Skin** selects Amp or Ogg. Amp
+owns the animated UVSR presentation; Ogg uses stock ImGui presentation and
+immediate endpoints. Performance and Settings use the same authored root-panel
+motion as the drawers in Amp.
 
 **Primary Accent** edits Amp's drawer and panel headers, footer buttons,
 selection details, checkmarks, and raised slider knobs. Ogg disables this row
@@ -122,8 +127,8 @@ closed controls. Hover, active, and strengthened body opacity are derived from
 the resting background. Ultra-bright Primary Accent surfaces automatically use
 a transparent dark depth gradient. Slider tracks follow Primary Background
 Color so the Primary Accent knob remains distinct.
-These interface choices are session-only and are restored by footer Reset or
-`/reset all`.
+These interface choices, including Override Visual Maxes, are session-only and
+are restored by footer Reset or `/reset all`.
 
 Authored Primary Accent slider knobs retain a subtle raised depth surface. When
 a parent setting gates a slider, the control moves to the renderer's effective
@@ -143,16 +148,24 @@ selection. A renderer-changing choice remains queued until that roll completes,
 the existing 250-millisecond settle expires, and one complete idle UI frame has
 been presented. Ogg retains immediate stock popup behavior.
 
-Interface color pickers use a hue wheel with separate rounded hue and
-transparency bars. They are constrained to the lane beginning at the Settings
-content-right edge and to the current Settings bottom edge. They inherit the
-same pixel-zoom scale and opacity as the managed stack, close as soon as the
-Settings body actually scrolls, and draw rounded bar markers plus the active hue
-or saturation/value cursor after every other picker element. Their background
-uses the configurable Primary Background RGB and scales its authored alpha so
-the factory Amp surface is opaque; generic popups keep their own style. Repeated
-wheel input beyond the top or bottom of Settings stays locked to that endpoint
-rather than adding a second scroll-anchor correction.
+Interface and Material color pickers use a hue wheel with a finely tessellated
+rounded saturation/value triangle. Three equal-width vertical bars accompany
+RGB colors: interactive hue plus unlabeled Current and Original comparisons.
+RGBA colors add an equally sized interactive transparency bar between hue and
+the comparisons. Hollow circles mark only the interactive vertical bars, while
+compact triangle-tip snap zones keep exact hue, white, and black pointer
+reachable without crowding the wheel.
+
+The popup uses the same full, opaque outer inset as Settings and Performance,
+then two translucent depth layers beneath its controls. The selector, bars,
+checkers, and comparison colors remain opaque at steady state so scene color
+cannot mix into the selected color. Pickers begin at the Settings content-right
+edge and sit flush with the current Settings bottom edge. Their body zooms and
+fades reversibly on open and close, while the rounded source pointer stays
+attached to the edited swatch. A Settings scroll requests the same animated
+close; disabling animations snaps to the endpoint. Generic and Ogg popups keep
+stock behavior. Repeated wheel input beyond the top or bottom of Settings stays
+locked to that endpoint rather than adding a second scroll-anchor correction.
 
 ## General
 
@@ -193,7 +206,8 @@ acceleration structure construction. **Bottom-Level Acceleration Structures**
 selects Rebuild or Refit for changed dynamic geometry. **Top-Level Acceleration
 Structure** selects Rebuild or Refit for changed instance transforms. A status
 line reports unsupported, inactive, BLAS construction, TLAS construction,
-ready, or failed state and the current structure counts.
+ready, or failed state and the current structure counts. Inactive is the
+subdued status itself rather than a second explanatory line.
 
 Construction is lazy until a ray-query consumer is selected. Initial loading
 builds one unique-mesh BLAS per presentation frame and then one coherent TLAS.
@@ -275,9 +289,11 @@ occlusion only profile, or separate contrast/power axis.
 ## Denoising
 
 The Denoising drawer remains visible in every build, but processing is available
-only when UVSR is built with the optional NVIDIA NRD backend. Each signal starts
-with **Method: None**, while its stored controls start at **Balanced**, **Half**,
-and 16 history frames. Method selection is independent for each signal:
+only when UVSR is built with the optional NVIDIA NRD backend. A build without
+NRD places its short availability note after the signal groups so it cannot
+push the controls away from the drawer header. Each signal starts with
+**Method: None**, while its stored controls start at **Balanced**, **Half**, and
+16 history frames. Method selection is independent for each signal:
 
 - AO supports None or ReBLUR.
 - GI supports None, ReBLUR, or ReLAX.
@@ -342,26 +358,28 @@ The four animated technique sections are **Temporal Reconstructive**, **Fast
 Approximate**, **Conservative Morphological**, and **Multisample Adaptive**.
 Each has an **Enable** control, a visible **Quality** selector with Low, Medium,
 High, and Ultra choices, and its own default-closed **Advanced** tree. Temporal
-Reconstructive also keeps **Cost** visible beside Quality. Temporal Advanced
-begins with an **Algorithm** group. Its first control is **Jitter Sequence**,
+Advanced opens directly on its current algorithm controls. Its first control is
+**Jitter Sequence**,
 with Rotated Grid 4, Uniform Helix 4, Halton 8, Halton 16, Halton 32, and Sobol
 32 choices. Filament Halton 16 is the factory default. The selector owns its
 own reset and does not make Quality or Cost Custom. Changing it restarts
 temporal history at phase zero. **Depth Validation** follows, with Stationary
 Bypass and Four-Texel Footprint choices. Reconstruction, history, motion, and
-rectification come next. The **Cost** group contains storage, weighting, motion
-trust, clipping, blending, and sharpening policies. Inherited dropdowns preview
+rectification come next. A default-closed **Cost** submenu is last. Its **Mode**
+selects Full Quality, Reduced, or Minimum, followed by storage, weighting,
+motion trust, clipping, blending, and sharpening policies. Inherited dropdowns preview
 their effective choice and list every concrete choice once; the adjacent reset
 icon reattaches a row to its recipe. Only Preset Sharpening retains an
 **(Automatic)** choice. History Frames displays 1 through 32 and History
 Strength displays 0 through 200 percent; neither exposes the internal
 inheritance value. Recipe-owned Algorithm changes append **(Custom)** to
 Quality, while Jitter Sequence remains independent and Cost changes append
-**(Custom)** to Cost. Each marker clears after its group returns to the selected
-recipe. Each top-level reset arrow restores its complete
-factory preset-and-owned-settings group. Choosing a named preset reapplies the
-complete group, and choosing a preset-equivalent Advanced value reattaches that
-row. Disabling the technique does not erase stored choices.
+**(Custom)** to the Cost Mode. Each marker clears after its group returns to the
+selected recipe. The Quality reset restores its complete factory
+preset-and-owned-settings group; the Cost Mode reset does the same for Cost.
+Choosing a named preset reapplies the complete group, and choosing a
+preset-equivalent Advanced value reattaches that row. Disabling the technique
+does not erase stored choices.
 
 Fast Approximate Quality owns Edge Sharpness, Relative Edge Threshold, and
 Minimum Edge Threshold. Low uses 2, 0.25, and 0.06; Medium uses 4, 0.1875, and
@@ -548,8 +566,11 @@ Visibility**, **Directional Shadows**, **Temporal Reconstructive**,
 **Material Picking**,
 **Environment Background**, **Tone Mapping**, and **Output
 Blit**. Complete
-Renderer restores the full stage breakdown, including an available Closest
-Surface Resolve. The multisample-only base-lighting pass that prepares Screen
+Renderer restores the available stage breakdown, including Closest Surface
+Resolve when active. Timing rows with no current measurement are omitted
+instead of displaying `--`; meaningful resource, count, format, and status rows
+retain their unavailable-state text. The multisample-only base-lighting pass
+that prepares Screen
 Space Visibility is reported separately as **Visibility Lighting Preparation**
 instead of being folded into either Direct Lighting or Visibility. Selecting an ordinary stage keeps
 the complete frame beside it for context. Directional Shadows includes
@@ -559,9 +580,9 @@ Visibility, shadows, temporal
 reconstruction, and conservative morphology retain their measured stages,
 resource or history metrics, and active-work counts. Multisample reports its
 requested and hardware-resolved sample counts plus Geometry, Direct Lighting,
-Visibility Lighting Preparation, and any active Closest Surface resolve. A timing appears only after its
-graphics-processor query completes; dormant or newly enabled work reports an
-explicit unavailable state instead of a fabricated zero.
+Visibility Lighting Preparation, and any active Closest Surface resolve. A
+timing appears only after its graphics-processor query completes; dormant or
+newly enabled timing work stays hidden instead of reporting a fabricated zero.
 
 There are no built-in benchmark runners, export schemas, thermal planners, or
 factory-experiment modes. Performance work should use an isolated build and an

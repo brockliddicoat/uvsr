@@ -166,7 +166,8 @@ set(UVSR_DONUT_APP_OVERRIDE_DIR
     "${CMAKE_BINARY_DIR}/uvsr_donut_app_overrides")
 set(UVSR_DONUT_APP_PATCH_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-app.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-loading-app.patch")
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-loading-app.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-app-ui-polish.patch")
 uvsr_stage_patched_sources(
     "${CMAKE_CURRENT_SOURCE_DIR}/donut"
     "${UVSR_DONUT_APP_PATCH_FILES}"
@@ -184,7 +185,9 @@ set(UVSR_IMGUI_OVERRIDE_DIR
 set(UVSR_IMGUI_PATCH_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-ui.patch"
     "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-slider-controls.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-combo-roll.patch")
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-combo-roll.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-ui-polish.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-tooltip-picker.patch")
 uvsr_stage_patched_sources(
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/thirdparty/imgui"
     "${UVSR_IMGUI_PATCH_FILES}"

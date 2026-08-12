@@ -53,14 +53,14 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 193u);
+    static_assert(UiSettingsCommandCatalog.size() == 194u);
     static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 13u);
     static_assert(static_cast<std::uint8_t>(UiSettingsCommandKind::Float4) == 7u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
         static_cast<std::uint8_t>(UiSettingsCommandVerb::Run));
 
     constexpr std::array<std::size_t, 13> ExpectedSectionCounts = {
-        14u, // UI
+        15u, // UI
         6u,  // General
         4u,  // Representation
         3u,  // Noise
@@ -238,13 +238,13 @@ int main()
     }
 
     Require(names.size() == UiSettingsCommandCatalog.size(),
-        "the compact catalog must contain 193 unique commands");
+        "the compact catalog must contain 194 unique commands");
     Require(sectionCounts == ExpectedSectionCounts,
         "section counts must match the current UI");
     Require(actionCount == 4u,
         "only open-folder, reset, capture, and restart actions remain");
-    Require(UiSettingsCommandCatalog.size() - actionCount == 189u,
-        "the compact catalog must contain 189 values");
+    Require(UiSettingsCommandCatalog.size() - actionCount == 190u,
+        "the compact catalog must contain 190 values");
     Require(dynamicCount == 49u,
         "runtime lights and materials must retain their 49 dynamic controls");
     Require(dynamicSelections == ExpectedDynamicSelections,
@@ -270,6 +270,7 @@ int main()
         "restore renderer and interface factory settings");
     requireDomain("ui.skin", "amp|ogg");
     requireDomain("ui.animations", "on|off");
+    requireDomain("ui.override-visual-maxes", "on|off");
     requireDomain("ui.accent.main", "display rgb float3 0..1");
     requireDomain("ui.accent.negative", "display rgb float3 0..1");
     requireDomain("ui.accent.positive", "display rgb float3 0..1");
@@ -408,10 +409,17 @@ int main()
         Section::Representation);
     requireKindAndSection("ui.skin", Kind::Enum, Section::Ui);
     requireKindAndSection("ui.animations", Kind::Boolean, Section::Ui);
+    requireKindAndSection(
+        "ui.override-visual-maxes", Kind::Boolean, Section::Ui);
     Require(
         Find("ui.animations")->Supports(UiSettingsCommandVerb::Reset) &&
             !Find("ui.animations")->dynamic,
         "the Interface animation preference must be a resettable static value");
+    Require(
+        Find("ui.override-visual-maxes")->Supports(
+            UiSettingsCommandVerb::Reset) &&
+            !Find("ui.override-visual-maxes")->dynamic,
+        "the visual-max override must be a resettable static value");
     for (const std::string_view name : {
             std::string_view("ui.accent.main"),
             std::string_view("ui.accent.negative"),

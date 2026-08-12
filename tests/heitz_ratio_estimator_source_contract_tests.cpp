@@ -557,7 +557,7 @@ int main(int argc, char** argv)
         "loaded primary sun irradiance default");
     RequireContains(
         viewer,
-        "ImGui::SliderInt(\"SamplesPerPixel##RatioEstimatorShadows\"",
+        "DrawSliderInt(\"SamplesPerPixel##RatioEstimatorShadows\"",
         "logarithmic integer sample-rate slider");
     RequireOrdered(
         viewer,
@@ -572,7 +572,7 @@ int main(int argc, char** argv)
                 "BeginVisuallyDisabledUiScope("
                 "\"##RatioEstimatorSamplesDisabledPresentation\","
                 "!multipleSamplesEnabled);",
-            "ImGui::SliderInt("
+            "DrawSliderInt("
                 "\"SamplesPerPixel##RatioEstimatorShadows\","
                 "&sampleRate,",
             "constintcandidateSampleRateLog2=std::clamp(",

@@ -65,6 +65,31 @@ namespace
         return compact;
     }
 
+    std::string AddedPatchLines(std::string_view patch)
+    {
+        std::string additions;
+        size_t cursor = 0u;
+        while (cursor < patch.size())
+        {
+            const size_t lineEnd = patch.find('\n', cursor);
+            const size_t length =
+                lineEnd == std::string_view::npos
+                    ? patch.size() - cursor
+                    : lineEnd - cursor;
+            const std::string_view line = patch.substr(cursor, length);
+            if (!line.empty() && line.front() == '+' &&
+                !(line.size() >= 3u && line.substr(0u, 3u) == "+++"))
+            {
+                additions.append(line.substr(1));
+                additions.push_back('\n');
+            }
+            if (lineEnd == std::string_view::npos)
+                break;
+            cursor = lineEnd + 1u;
+        }
+        return additions;
+    }
+
     std::string_view ExtractSection(
         std::string_view source,
         std::string_view begin,
@@ -532,6 +557,8 @@ namespace
                 "\"Disable Animations\"",
                 "&disableAnimations",
                 "m_ui.AnimationsEnabled = !disableAnimations;",
+                "\"Override Visual Maxes\"",
+                "&m_ui.OverrideVisualMaxes",
                 "\"Interface Skin\"",
                 "\"##UiSkin\"",
                 "for (const UiSkin candidate : UiSkinValues)",
@@ -567,6 +594,10 @@ namespace
             viewer,
             "bool                                AnimationsEnabled = true;",
             "Interface animations default enabled on each launch");
+        RequireContains(
+            viewer,
+            "bool                                OverrideVisualMaxes = false;",
+            "slider visual-maximum override default disabled on each launch");
         for (const std::string_view colorFlag : {
                 std::string_view("ImGuiColorEditFlags_Float |"),
                 std::string_view("ImGuiColorEditFlags_DisplayRGB |"),
@@ -582,7 +613,8 @@ namespace
             interfaceDrawer,
             {
                 "ImGuiColorEditFlags colorEditFlags =",
-                "ImGuiColorEditFlags_AlphaPreviewHalf;",
+                "ImGuiColorEditFlags_AlphaPreviewHalf |",
+                "ImGuiColorEditFlags_NoTooltip;",
                 "if (!ImGui::IsUvsrStockWidgetRenderingEnabled())",
                 "colorEditFlags |= ImGuiColorEditFlags_PickerHueWheel;",
                 "ImGui::ColorEdit4(",
@@ -637,6 +669,38 @@ namespace
             catalog,
             "representation.allow-ray-traversal",
             "ray traversal master command");
+
+        const std::string_view representationStatus = ExtractSection(
+            representation,
+            "const char* representationState = \"Inactive\";",
+            "if (representationStatus.totalBlasCount > 0u)",
+            "Representation status presentation");
+        RequireOrdered(
+            representationStatus,
+            {
+                "case WorldSpaceRepresentationState::Idle:",
+                "default:",
+                "if (representationStatus.state ==",
+                "WorldSpaceRepresentationState::Idle)",
+                "ImGui::TextDisabled(\"Status: Inactive\");",
+                "else",
+                "ImGui::Text(\"Status: %s\", representationState);"
+            },
+            "only the idle Representation state uses disabled status text");
+        Require(
+            CountOccurrences(
+                representationStatus,
+                "ImGui::TextDisabled(\"Status: Inactive\");") == 1u &&
+                CountOccurrences(
+                    representationStatus,
+                    "ImGui::Text(\"Status: %s\", representationState);") ==
+                    1u,
+            "Representation must keep one idle-only disabled status and one "
+            "ordinary presentation for every non-idle state.");
+        RequireAbsent(
+            representation,
+            "Builds lazily when a ray traced technique needs it.",
+            "retired Representation lazy-creation status text");
     }
 
     void ValidateNoise(
@@ -981,6 +1045,27 @@ namespace
             denoising,
             "Flashlight SIGMA is spatial only",
             "flashlight SIGMA history disclosure");
+        const std::string_view nrdDisabledFooter = ExtractSection(
+            denoising,
+            "#if !UVSR_WITH_NRD",
+            "EndDrawerBody();",
+            "NRD-disabled Denoising footer");
+        RequireExactStrings(
+            nrdDisabledFooter,
+            { "NRD is not actually included in this build" },
+            "NRD-disabled Denoising footer");
+        RequireOrdered(
+            denoising,
+            {
+                "\"Sky Visibility##Denoising\"",
+                "#if !UVSR_WITH_NRD",
+                "ImGui::TextDisabled(",
+                "\"NRD is not actually included in this build\");",
+                "#endif",
+                "EndDrawerBody();"
+            },
+            "the exact NRD-disabled message remains the final Denoising "
+            "drawer content");
         for (const std::string_view path : {
                 std::string_view("denoising.ao.method"),
                 std::string_view("denoising.gi.method"),
@@ -1092,6 +1177,34 @@ namespace
             statistics,
             "ImGui::SetItemTooltip(\"%s\", performanceTooltip)",
             "Performance panel triangle-count explanation");
+        RequireOrdered(
+            statistics,
+            {
+                "const StatisticsEffect selectedEffect =",
+                "const auto drawStatisticsTable =",
+                "[&](StatisticsEffect effect)",
+                "switch (effect)",
+                "ImGui::PushStyleVar(",
+                "ImGuiStyleVar_ItemSpacing,",
+                "ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));",
+                "for (int effectIndex = 0;",
+                "effectIndex < static_cast<int>(StatisticsEffect::Count);",
+                "ImGui::PushID(effectIndex);",
+                "BeginAnimatedToggleRegion(",
+                "\"##StatisticsTableRegion\"",
+                "UiToggleRegionOwner::Performance",
+                "drawStatisticsTable(",
+                "EndAnimatedToggleRegion();",
+                "ImGui::PopID();",
+                "ImGui::PopStyleVar();"
+            },
+            "all timing-table choices stay submitted under stable keys so the "
+            "old table rolls up while the new table rolls down without a "
+            "transient sibling gap");
+        Require(
+            CountOccurrences(statistics, "case StatisticsEffect::") == 14u,
+            "the keyed Performance table exchange must retain every timing "
+            "effect.");
 
         const std::string_view performanceRoot = ExtractSection(
             viewer,
@@ -1222,6 +1335,25 @@ namespace
             Compact(viewer),
             "settingsScrollIdle&&performanceScrollIdle",
             "deferred UI actions wait for both root-panel scroll states");
+        RequireContains(
+            Compact(viewer),
+            "!performanceCollapseTransitionActive&&"
+            "!g_PerformanceTableTransitionActive",
+            "deferred UI actions wait for the Performance table-height "
+            "exchange");
+        RequireOrdered(
+            viewer,
+            {
+                "g_PerformanceAppearanceDrawLists.clear();",
+                "g_PerformanceTableTransitionActive = false;",
+                "ApplyWindowAppearance(\n"
+                "            performanceWindowDrawList,",
+                "for (ImDrawList* drawList :\n"
+                "            g_PerformanceAppearanceDrawLists)",
+                "ApplyWindowAppearance("
+            },
+            "Performance animation children receive the root appearance "
+            "transform through their own per-frame draw-list set");
 
         const std::string_view panelStack = ExtractSection(
             viewer,
@@ -1309,8 +1441,8 @@ namespace
             "Statistics selector enum coverage");
         RequireContains(
             statistics,
-            "switch (selectedEffect)",
-            "single-effect Performance routing");
+            "switch (effect)",
+            "keyed single-effect Performance table renderer");
         RequireAbsent(
             statistics,
             "ImGui::TextUnformatted(\"View\")",
@@ -1404,6 +1536,71 @@ namespace
             "ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|"
             "ImGuiTableFlags_SizingStretchProp;",
             "striped Statistics table contract");
+        const std::string_view statisticsRowHelper = ExtractSection(
+            statistics,
+            "const auto beginStatisticsRow =",
+            "const auto drawMilliseconds =",
+            "Performance row helper");
+        RequireContains(
+            statisticsRowHelper,
+            "ImGui::TableNextRow();",
+            "Performance row helper advances the table only when invoked");
+        const std::string_view millisecondRows = ExtractSection(
+            statistics,
+            "const auto drawMilliseconds =",
+            "const auto drawCount =",
+            "Performance millisecond rows");
+        RequireOrdered(
+            millisecondRows,
+            {
+                "if (!available)",
+                "return;",
+                "beginStatisticsRow(label, true);",
+                "ImGui::Text(\"%.3f ms\", value);"
+            },
+            "unavailable millisecond rows return before TableNextRow can be "
+            "reached");
+        RequireAbsent(
+            millisecondRows,
+            "ImGui::TextDisabled(\"--\")",
+            "removed unavailable millisecond placeholders");
+        const std::vector<std::string_view> nonTimeRows = {
+            ExtractSection(
+                statistics,
+                "const auto drawCount =",
+                "const auto drawMemory =",
+                "Performance count rows"),
+            ExtractSection(
+                statistics,
+                "const auto drawMemory =",
+                "const auto drawText =",
+                "Performance memory rows"),
+            ExtractSection(
+                statistics,
+                "const auto drawText =",
+                "const auto drawRendererTiming =",
+                "Performance text rows")
+        };
+        for (const std::string_view nonTimeRow : nonTimeRows)
+        {
+            RequireOrdered(
+                nonTimeRow,
+                {
+                    "beginStatisticsRow(label, available);",
+                    "if (available)",
+                    "else",
+                    "ImGui::TextDisabled(\"--\");"
+                },
+                "unavailable non-time Performance row remains visible");
+            RequireAbsent(
+                nonTimeRow,
+                "if (!available)",
+                "non-time Performance rows must not be elided");
+        }
+        RequireContains(
+            statistics,
+            "\"Minimum History Formats\", available",
+            "non-time temporal format row remains visible when unavailable");
         RequireContains(
             statistics,
             "timings.IsAvailable(stage)",
@@ -1498,6 +1695,38 @@ namespace
             statistics,
             "const bool active = enabled && activeSamples > 1u;",
             "unsupported multisample timing rejection");
+        const std::string_view multisampleStatistics = ExtractSection(
+            statistics,
+            "case StatisticsEffect::Multisample:",
+            "case StatisticsEffect::MaterialPicking:",
+            "Multisample Performance table");
+        RequireOrdered(
+            multisampleStatistics,
+            {
+                "drawText(",
+                "\"Status\"",
+                "drawCount(",
+                "\"Requested Samples\"",
+                "drawCount(\"Active Samples\"",
+                "if (active)",
+                "\"Geometry\", RendererTimingStage::Geometry",
+                "\"Direct Lighting\"",
+                "\"Visibility Lighting Preparation\"",
+                "\"Closest Surface Resolve\"",
+                "\"Complete Renderer Frame\""
+            },
+            "Multisample keeps status and sample counts while submitting "
+            "effect timing rows only for an active multisample topology");
+        Require(
+            CountOccurrences(
+                multisampleStatistics,
+                "drawRendererTiming(") == 5u,
+            "Multisample must retain four active-only effect timings plus the "
+            "complete-frame timing.");
+        RequireAbsent(
+            multisampleStatistics,
+            "drawMilliseconds(",
+            "removed Multisample placeholder timing rows");
         for (const std::string_view retainedBreakdown : {
                 std::string_view("First Trace"),
                 std::string_view("Reconstruction"),
@@ -1561,12 +1790,16 @@ namespace
                 "\"Temporal Reconstructive##Aliasing\"",
                 "\"Enable##TemporalReconstructive\"",
                 "\"Quality##TemporalReconstructive\"",
-                "\"Cost\",",
                 "ImGui::SetNextItemOpen(false, ImGuiCond_Once);",
                 "\"Advanced##TemporalReconstructive\"",
-                "ImGui::SeparatorText(\"Algorithm\")",
                 "\"Jitter Sequence##TemporalReconstructive\"",
                 "\"Depth Validation\"",
+                "\"History Strength\"",
+                "ImGui::SetNextItemOpen(false, ImGuiCond_Once);",
+                "\"Cost##TemporalAdvancedCost\"",
+                "\"Mode##TemporalCost\"",
+                "\"History Storage\"",
+                "\"Output Sharpening\"",
                 "\"Fast Approximate##Aliasing\"",
                 "\"Enable##FastApproximate\"",
                 "\"Quality##FastApproximate\"",
@@ -1686,9 +1919,8 @@ namespace
             "                applyTemporalQualityPreset);",
             "Quality custom preview and group binding");
         RequireContains(
-            aliasing,
-            "temporalCostCustom,\n"
-            "                applyTemporalCostPreset);",
+            Compact(aliasing),
+            "temporalCostCustom,applyTemporalCostPreset);",
             "Cost custom preview and group binding");
         RequireContains(
             aliasing,
@@ -1706,9 +1938,8 @@ namespace
             "                        algorithmOverrides;",
             "Quality group Algorithm reset");
         RequireContains(
-            aliasing,
-            "aliasingDefaults.temporal.costMode ||\n"
-            "                    temporalCostCustom",
+            Compact(aliasing),
+            "aliasingDefaults.temporal.costMode||temporalCostCustom",
             "Cost group reset visibility");
         RequireContains(
             aliasing,
@@ -1724,7 +1955,9 @@ namespace
 
         Require(
             CountOccurrences(aliasing, "drawPresetEnum(") == 5u,
-            "Aliasing must expose four shared Quality rows and Cost; Jitter Sequence is independent inside Algorithm.");
+            "Aliasing must expose four shared Quality rows and the nested "
+            "Temporal Cost mode; Jitter Sequence remains independent in "
+            "Advanced.");
         for (const std::string_view recipeContract : {
                 std::string_view("MatchesFastApproximateAaQualityPreset"),
                 std::string_view("ApplyFastApproximateAaQualityPreset"),
@@ -1799,15 +2032,38 @@ namespace
         RequireOrdered(
             advanced,
             {
-                "ImGui::SeparatorText(\"Algorithm\")",
                 "\"Jitter Sequence##TemporalReconstructive\"",
                 "\"Depth Validation\"",
                 "\"Motion Source\"",
                 "\"History Strength\"",
-                "ImGui::SeparatorText(\"Cost\")",
-                "\"History Storage\""
+                "ImGui::SetNextItemOpen(false, ImGuiCond_Once);",
+                "\"Cost##TemporalAdvancedCost\"",
+                "ImGuiTreeNodeFlags_None",
+                "\"Mode##TemporalCost\"",
+                "\"History Storage\"",
+                "\"Output Sharpening\"",
+                "EndAnimatedTreeNode();",
+                "EndAnimatedTreeNode();"
             },
-            "Temporal Advanced section ordering");
+            "Temporal Advanced directly presents algorithm controls, then "
+            "ends with one initially closed Cost foldout");
+        RequireAbsent(
+            advanced,
+            "ImGui::SeparatorText(\"Algorithm\")",
+            "removed redundant Temporal Algorithm separator");
+        RequireAbsent(
+            advanced,
+            "ImGui::SeparatorText(\"Cost\")",
+            "Cost uses an animated foldout instead of a separator");
+        Require(
+            CountOccurrences(
+                advanced,
+                "\"Cost##TemporalAdvancedCost\"") == 1u &&
+                CountOccurrences(
+                    advanced,
+                    "\"Mode##TemporalCost\"") == 1u,
+            "Temporal Advanced must retain one stable Cost foldout and one "
+            "stable nested Mode control ID.");
         RequireContains(
             Compact(advanced),
             "constintselectedIndex=std::clamp("
@@ -1860,8 +2116,12 @@ namespace
             "retained Automatic provenance option");
         RequireContains(
             advanced,
-            "\"History Frames\", &historyFrames, 1, 32",
-            "intuitive history-frame range");
+            "&historyFrames,\n"
+                "                        1,\n"
+                "                        32,\n"
+                "                        1,\n"
+                "                        16",
+            "logical 32-frame limit with a practical 16-frame travel cap");
         RequireContains(
             advanced,
             "0.f,\n                    200.f,",
@@ -1875,14 +2135,15 @@ namespace
             "requested != -1.f &&\n                        (requested < 0.f || requested > 2.f)",
             "history-strength command rejects sentinel-adjacent values");
         Require(
-            CountOccurrences(aliasing, "BeginAnimatedTreeNode(") == 8u,
-            "Aliasing must expose four technique disclosures and one "
-            "Advanced disclosure for each technique.");
+            CountOccurrences(aliasing, "BeginAnimatedTreeNode(") == 9u,
+            "Aliasing must expose four technique disclosures, four Advanced "
+            "disclosures, and the nested Temporal Cost disclosure.");
         Require(
             CountOccurrences(
                 aliasing,
-                "ImGui::SetNextItemOpen(false, ImGuiCond_Once);") == 4u,
-            "every Aliasing Advanced disclosure must start collapsed.");
+                "ImGui::SetNextItemOpen(false, ImGuiCond_Once);") == 5u,
+            "every Aliasing Advanced disclosure and nested Temporal Cost "
+            "disclosure must start collapsed.");
 
         const std::string_view temporalSettings = ExtractSection(
             temporalOptions,
@@ -2284,6 +2545,7 @@ namespace
                 "ApplyAdaptiveSyncMode(GetDefaultAdaptiveSyncMode());",
                 "m_ui.Skin = DefaultUiSkin;",
                 "m_ui.AnimationsEnabled = true;",
+                "m_ui.OverrideVisualMaxes = false;",
                 "m_ui.Accents = UiAccentSettings{};",
                 "m_StatisticsEffect =",
                 "static_cast<int>(StatisticsEffect::CompleteRenderer);",
@@ -2383,10 +2645,15 @@ namespace
                 "if (path == \"ui.animations\")",
                 "ApplyCommandBool(",
                 "m_ui.AnimationsEnabled,",
-                "true,"
+                "true,",
+                "if (path == \"ui.override-visual-maxes\")",
+                "ApplyCommandBool(",
+                "m_ui.OverrideVisualMaxes,",
+                "false,"
             },
             "canonical skin commands followed by the default-enabled "
-            "Interface animation preference");
+            "animation preference and default-disabled visual-maximum "
+            "override");
         RequireContains(
             catalogSource,
             "Value(\"ui.skin\", Kind::Enum, Section::Ui, "
@@ -2396,6 +2663,11 @@ namespace
             catalogSource,
             "Value(\"ui.animations\", Kind::Boolean, Section::Ui, \"on|off\")",
             "discoverable Interface animation command");
+        RequireContains(
+            catalogSource,
+            "Value(\"ui.override-visual-maxes\", Kind::Boolean, Section::Ui, "
+            "\"on|off\")",
+            "discoverable slider visual-maximum override command");
         const std::string_view uiAccentDispatcher = ExtractSection(
             uiDispatcher,
             "if (path == \"ui.accent.main\")",
@@ -2532,8 +2804,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 193u,
-            "Settings command catalog must contain exactly 193 entries.");
+        Require(entries.size() == 194u,
+            "Settings command catalog must contain exactly 194 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -2547,8 +2819,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 189u,
-            "Settings command catalog must contain exactly 189 values.");
+        Require(valueCount == 190u,
+            "Settings command catalog must contain exactly 190 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -3047,6 +3319,29 @@ namespace
 
     void ValidateMaterialHistoryInvalidation(std::string_view viewer)
     {
+        const std::string_view frontEllipsis = ExtractSection(
+            viewer,
+            "struct FrontEllipsisText",
+            "struct StatSnapshot",
+            "Unicode-safe front ellipsis formatter");
+        RequireOrdered(
+            frontEllipsis,
+            {
+                "std::string display;",
+                "bool truncated = false;",
+                "FormatFrontEllipsisUtf8(",
+                "size_t maximumCodePoints)",
+                "while (cursor < end && codePointCount < maximumCodePoints)",
+                "ImTextCharFromUtf8(",
+                "cursor += byteCount > 0 ? byteCount : 1;",
+                "result.truncated = cursor < end;",
+                "result.display.assign(begin, cursor);",
+                "if (result.truncated)",
+                "result.display += \"...\";"
+            },
+            "front ellipsis counts complete UTF-8 code points and appends "
+            "three literal dots only when a 26th character exists");
+
         const std::string_view notification = ExtractSection(
             viewer,
             "void NotifyMaterialCommandChanged(",
@@ -3095,6 +3390,56 @@ namespace
                 "m_app->NotifyMaterialCommandChanged(material);"
             },
             "Material editor history invalidation");
+        RequireAbsent(
+            materialWindow,
+            "##MaterialControlsBody",
+            "retired duplicate translucent Material editor surface");
+        const std::string_view materialDrawerBody = ExtractSection(
+            materialWindow,
+            "void DrawMaterialDrawer(float settingsControlWidth)",
+            "void DrawInterfaceDrawer(float settingsControlWidth)",
+            "Material drawer body");
+        Require(
+            CountOccurrences(materialDrawerBody, "BeginDrawerBody(") == 1u &&
+                CountOccurrences(materialDrawerBody, "EndDrawerBody();") == 1u,
+            "Material uses only its ordinary drawer body around the editor.");
+        RequireOrdered(
+            materialDrawerBody,
+            {
+                "const FrontEllipsisText formattedMaterialName =",
+                "FormatFrontEllipsisUtf8(material->name, 25u);",
+                "const std::string materialPrefix =",
+                "\"Material \" + std::to_string(material->materialID) +",
+                "ImGui::BeginGroup();",
+                "ImGui::TextUnformatted(materialPrefix.c_str());",
+                "ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);",
+                "ImGui::TextColored(",
+                "g_UiVisualTokens.successText,",
+                "formattedMaterialName.display.c_str());",
+                "ImGui::EndGroup();",
+                "if (formattedMaterialName.truncated)",
+                "ImGui::SetItemTooltip(\"%s\", material->name.c_str());",
+                "ImGui::PushID(material->materialID);",
+                "const donut::app::MaterialEditorCallbacks materialCallbacks = {",
+                "&BeginMaterialEditorConditionalRegion,",
+                "&EndMaterialEditorConditionalRegion,",
+                "&DrawMaterialEditorTextureFilename,",
+                "&DrawMaterialEditorColorEdit3",
+                "&materialCallbacks);",
+                "ImGui::PopID();"
+            },
+            "Material names use a deterministic Unicode-safe 25-character "
+            "front cutoff, a default-color ID prefix, success-color name suffix, "
+            "truncated-only full-name tooltip, per-material ID scope, and one "
+            "callback bridge for conditional rows, filenames, and color edits");
+        RequireAbsent(
+            materialDrawerBody,
+            "fullMaterialLabel",
+            "retired monolithic Material label that colored the prefix");
+        RequireAbsent(
+            materialDrawerBody,
+            "ImGui::RenderTextEllipsis(",
+            "retired width-dependent Material label ellipsis");
 
         const std::string_view drawerVisibility = ExtractSection(
             viewer,
@@ -3205,12 +3550,20 @@ namespace
         std::string_view viewer,
         std::string_view uiAnimation,
         std::string_view donutAppOverride,
+        std::string_view donutAppUiPolishOverride,
         std::string_view imguiUiOverride,
         std::string_view imguiSliderOverride,
         std::string_view imguiComboRollOverride,
+        std::string_view imguiUiPolishOverride,
+        std::string_view imguiTooltipPickerOverride,
+        std::string_view imguiUpstream,
         std::string_view backdropBlurShader,
         std::string_view cmakeSource)
     {
+        const std::string donutAppUiPolishAdded =
+            AddedPatchLines(donutAppUiPolishOverride);
+        const std::string imguiTooltipPickerAdded =
+            AddedPatchLines(imguiTooltipPickerOverride);
         const std::string_view visualTokens = ExtractSection(
             viewer,
             "struct UiVisualTokens",
@@ -3280,6 +3633,106 @@ namespace
             donutAppOverride,
             "+    const math::float4& positiveAccent)",
             "Material editor RGBA positive-accent parameter");
+        RequireOrdered(
+            donutAppUiPolishAdded,
+            {
+                "struct MaterialEditorCallbacks",
+                "bool (*beginConditionalRegion)(const char* id, bool visible) = nullptr;",
+                "void (*endConditionalRegion)() = nullptr;",
+                "void (*drawTextureFilename)(const char* filename, const math::float4& color) = nullptr;",
+                "bool (*drawColorEdit3)(const char* label, float* color) = nullptr;",
+                "const MaterialEditorCallbacks* callbacks = nullptr);",
+                "const bool useConditionalRegions =",
+                "callbacks->beginConditionalRegion != nullptr &&",
+                "callbacks->endConditionalRegion != nullptr;",
+                "const auto drawTextureFilename =",
+                "callbacks->drawTextureFilename(",
+                "const auto drawColorEdit3 =",
+                "callbacks->drawColorEdit3 != nullptr",
+                "return callbacks->drawColorEdit3(label, color);",
+                "##MaterialSpecularGlossRegion",
+                "material->useSpecularGlossModel",
+                "##MaterialMetalRoughRegion",
+                "!material->useSpecularGlossModel",
+                "if (beginConditionalRegion(\"##MaterialOpacityRegion\", alphaBlended))",
+                "##MaterialAlphaCutoffRegion",
+                "##MaterialNormalScaleRegion",
+                "##MaterialOcclusionStrengthRegion",
+                "##MaterialTransmissionRegion"
+            },
+            "the first-party Donut bridge supplies seven balanced conditional "
+            "regions plus filename and ColorEdit3 callbacks with raw null-"
+            "callback fallbacks");
+        Require(
+            CountOccurrences(
+                donutAppUiPolishAdded,
+                "drawTextureFilename(material->") == 9u,
+            "Every one of the nine blue Material texture-name paths must use "
+            "the shared 25-character renderer.");
+        Require(
+            CountOccurrences(
+                donutAppUiPolishAdded,
+                "\n        endConditionalRegion();") == 7u,
+            "Each animated Material conditional region must close exactly once.");
+        Require(
+            CountOccurrences(
+                donutAppUiPolishAdded,
+                "update |= drawColorEdit3(") == 4u &&
+                CountOccurrences(
+                    donutAppUiPolishAdded,
+                    "ImGuiColorEditFlags_NoTooltip") == 4u,
+            "All four Material RGB routes must use the callback/fallback helper "
+            "and suppress the stock color-preview tooltip.");
+        RequireOrdered(
+            donutAppUiPolishAdded,
+            {
+                "##MaterialNormalScaleRegion",
+                "material->enableNormalTexture",
+                "const char* normalScaleLabel = \"Normal Scale\";",
+                "ImGui::CalcTextSize(normalScaleLabel).x +",
+                "ImGui::GetStyle().ItemInnerSpacing.x;",
+                "ImGui::GetContentRegionAvail().x - normalScaleLabelWidth;",
+                "ImGui::SetNextItemWidth(",
+                "normalScaleSliderWidth > 1.f ? normalScaleSliderWidth : 1.f);",
+                "update |= ImGui::SliderFloat(",
+                "normalScaleLabel,",
+                "&material->normalTextureScale,",
+                "-2.f,",
+                "2.f);"
+            },
+            "Normal Scale reserves its visible label width inside the Material "
+            "content lane and keeps the safe bounded slider in its conditional "
+            "region");
+        RequireAbsent(
+            donutAppUiPolishAdded,
+            "ImGui::Button(\"1.0\")",
+            "retired Material Normal Scale reset button");
+        const std::string_view materialCallbackBridge = ExtractSection(
+            viewer,
+            "static bool BeginMaterialEditorConditionalRegion(",
+            "static float GetUiHighlightFade(",
+            "UVSR Material editor callback bridge");
+        RequireOrdered(
+            materialCallbackBridge,
+            {
+                "BeginAnimatedToggleRegion(",
+                "UiToggleRegionOwner::Settings);",
+                "static void EndMaterialEditorConditionalRegion()",
+                "EndAnimatedToggleRegion();",
+                "static void DrawMaterialEditorTextureFilename(",
+                "FormatFrontEllipsisUtf8(fullFilename, 25u);",
+                "ImGui::TextColored(",
+                "if (formatted.truncated)",
+                "ImGui::SetItemTooltip(\"%s\", fullFilename.data());",
+                "static bool DrawMaterialEditorColorEdit3(",
+                "ImGuiColorEditFlags_DisplayRGB",
+                "if (!ImGui::IsUvsrStockWidgetRenderingEnabled())",
+                "flags |= ImGuiColorEditFlags_PickerHueWheel;",
+                "return ImGui::ColorEdit3(label, color, flags);"
+            },
+            "Material conditional rows reuse the reversible Settings timeline "
+            "while truncated filenames expose their full basename and every "
+            "Material RGB edit routes through the authored hue-wheel policy");
         RequireOrdered(
             viewer,
             {
@@ -3427,8 +3880,8 @@ namespace
                 "0.24f * falloff * falloff * coverage",
                 "drawList->PopClipRect();"
             },
-            "Settings clips a root-radius shadow mask to its fixed WindowPadding "
-            "inset without a radius-clamp corner wedge");
+            "root panels clip a radius-safe shadow mask to their caller-owned "
+            "fixed top inset without a corner wedge");
         const std::string_view filledRoundedInsetFrame = ExtractSection(
             viewer,
             "static void DrawFilledRoundedInsetFrame(",
@@ -3467,42 +3920,31 @@ namespace
             "Ogg keeps authored depth outlines disabled");
         const std::string_view settingsDecorationTracking = ExtractSection(
             viewer,
-            "static void TrackSettingsDecorationDrawList(",
-            "static float ResolveRoundedRectRadius(",
-            "last-visible Settings decoration draw-list tracking");
+            "static bool IsSettingsChildLaterInDrawOrder(",
+            "static void CaptureCurrentWindowBackdrop(",
+            "final visible Settings decoration draw-list resolution");
         RequireOrdered(
             settingsDecorationTracking,
             {
-                "TrackSettingsAppearanceDrawList(drawList);",
-                "if (drawList && visible)",
-                "g_SettingsDecorationDrawList = drawList;"
+                "const int popupOrder =",
+                "ImGuiWindowFlags_Popup",
+                "const int tooltipOrder =",
+                "ImGuiWindowFlags_Tooltip",
+                "candidate->BeginOrderWithinParent >",
+                "current->BeginOrderWithinParent;",
+                "static ImDrawList* ResolveFinalSettingsDecorationDrawList(",
+                "for (ImGuiWindow* child : window->DC.ChildWindows)",
+                "!child->Active || child->Hidden",
+                "IsSettingsChildLaterInDrawOrder(",
+                "ResolveFinalSettingsDecorationDrawList(finalVisibleChild)",
+                ": window->DrawList;"
             },
-            "last visible Settings child owns late viewport decoration");
-        RequireContains(
+            "late Settings chrome follows Dear ImGui's completed recursive "
+            "visible-child render order");
+        RequireAbsent(
             viewer,
-            "g_SettingsDecorationDrawList = nullptr;",
-            "per-frame Settings decoration owner reset");
-        Require(
-            CountOccurrences(
-                viewer,
-                "TrackSettingsDecorationDrawList(") == 5u,
-            "Settings decoration tracking must cover its helper plus the root, "
-            "ordinary drawer, nested drawer, and animated toggle children.");
-        Require(
-            CountOccurrences(
-                viewer,
-                "TrackSettingsDecorationDrawList(\n"
-                "            ImGui::GetWindowDrawList(),\n"
-                "            g_DrawerAnimationContext.bodyVisible);\n"
-                "        EnsureAnimatedChildLayoutSubmission(") == 1u &&
-                CountOccurrences(
-                    viewer,
-                    "TrackSettingsDecorationDrawList(\n"
-                    "            ImGui::GetWindowDrawList(),\n"
-                    "            bodyVisible);\n"
-                    "        EnsureAnimatedChildLayoutSubmission(") == 2u,
-            "drawer decoration ownership must observe BeginChild visibility "
-            "before hidden animated children are forced through layout");
+            "g_SettingsDecorationDrawList",
+            "retired mutable last-submitted Settings decoration owner");
         const std::string_view drawerBodyOutline = ExtractSection(
             viewer,
             "static void DrawDrawerBodyOutline(",
@@ -3545,7 +3987,12 @@ namespace
                 "performanceBodyRect,",
                 "performanceContentRect,",
                 "DrawSettingsFixedTopInsetShadow(",
-                "performanceContentRect,",
+                "performanceWindowDrawList,",
+                "performanceBodyRect,",
+                "std::max(",
+                "performanceContentRect.Min.y -",
+                "performanceBodyRect.Min.y +",
+                "g_UiSpacingTokens.tight),",
                 "DrawDrawerBodyOutline(",
                 "performanceBodyRect.Min,",
                 "performanceBodyRect.Max,",
@@ -3554,7 +4001,8 @@ namespace
                 "performanceContentRect.Max,"
             },
             "Performance submits its content first, then the opaque inset fill, "
-            "fixed shadow, outer outline, and inner outline");
+            "root-owned top-margin shadow with a shallow content cast, outer "
+            "outline, and inner outline");
         const std::string_view settingsChildList = ExtractSection(
             viewer,
             "ImGui::BeginChild(\n            \"##SettingsBody\"",
@@ -3564,22 +4012,25 @@ namespace
             settingsChildList,
             {
                 "ImDrawList* settingsBodyDrawList =",
-                "TrackSettingsDecorationDrawList(",
+                "TrackSettingsAppearanceDrawList(settingsBodyDrawList);",
                 "DrawSettingsScrollEdgeFades();",
                 "const ImRect settingsBodyViewportRect(",
                 "const ImRect settingsRootBodyRect(",
                 "ImDrawList* settingsDecorationDrawList =",
-                "g_SettingsDecorationDrawList",
-                "? g_SettingsDecorationDrawList",
-                ": settingsBodyDrawList;",
+                "ResolveFinalSettingsDecorationDrawList(settingsBodyWindow);",
+                "settingsDecorationDrawList->_Splitter._Count > 1",
+                "settingsDecorationDrawList->ChannelsMerge();",
                 "DrawFilledRoundedInsetFrame(",
                 "settingsDecorationDrawList,",
                 "settingsRootBodyRect,",
                 "settingsBodyViewportRect,",
                 "DrawSettingsFixedTopInsetShadow(",
                 "settingsDecorationDrawList,",
-                "settingsBodyViewportRect,",
-                "g_UiSpacingTokens.tight,",
+                "settingsRootBodyRect,",
+                "std::max(",
+                "settingsBodyViewportRect.Min.y -",
+                "settingsRootBodyRect.Min.y +",
+                "g_UiSpacingTokens.tight),",
                 "style.WindowRounding,",
                 "false);",
                 "DrawDrawerBodyOutline(",
@@ -3599,10 +4050,10 @@ namespace
                 "ImGui::PopUvsrColorPickerPopupContentRight();",
                 "ImGui::EndChild();"
             },
-            "the opaque inset fill, fixed shadow, outer outline, and complete "
-            "four-corner inner silhouette are drawn last on the last visible "
-            "Settings child list without InnerClipRect intersection, immediately "
-            "before EndChild");
+            "the opaque inset fill, root-owned top-margin shadow with a shallow "
+            "General cast, outer outline, and complete four-corner inner "
+            "silhouette are appended after merging the final visible "
+            "descendant's channels, immediately before EndChild");
         const std::string_view retainedSettingsDecoration = ExtractSection(
             viewer,
             "if (!settingsExpanded &&",
@@ -3616,7 +4067,12 @@ namespace
                 "settingsBodyRect,",
                 "retainedSettingsContentRect,",
                 "DrawSettingsFixedTopInsetShadow(",
-                "retainedSettingsContentRect,",
+                "settingsWindowDrawList,",
+                "settingsBodyRect,",
+                "std::max(",
+                "retainedSettingsContentRect.Min.y -",
+                "settingsBodyRect.Min.y +",
+                "g_UiSpacingTokens.tight),",
                 "DrawDrawerBodyOutline(",
                 "settingsBodyRect.Min,",
                 "settingsBodyRect.Max,",
@@ -3625,7 +4081,8 @@ namespace
                 "retainedSettingsContentRect.Max,"
             },
             "the retained collapsing Settings body preserves the same fill, "
-            "shadow, outer-outline, and inner-outline order");
+            "root-margin shadow geometry, outer-outline, and inner-outline "
+            "order");
         for (const std::string_view retiredBackdropContract : {
                 std::string_view("UiPanelStackBackdropIndex"),
                 std::string_view("UiPanelStackShadowBackdropIndex"),
@@ -3687,6 +4144,16 @@ namespace
             "static void ApplyUiSkin(",
             "static void PushPanelBodySurface()",
             "UI skin application");
+        RequireOrdered(
+            skinApplication,
+            {
+                "colors[ImGuiCol_Border] =\n"
+                "                ImVec4(0.15f, 0.15f, 0.15f, 0.92f);",
+                "colors[ImGuiCol_BorderShadow] =\n"
+                "                ImVec4(0.01f, 0.012f, 0.016f, 0.48f);"
+            },
+            "authored BorderShadow immediately follows Border with enough alpha "
+            "to keep the borderless picker swatch shadow visible");
         RequireOrdered(
             skinApplication,
             {
@@ -3811,9 +4278,7 @@ namespace
                     "tokens.panelBodySurface = MakeUiColor(\n"
                     "                palette.primaryBackground,"),
                 std::string_view(
-                    "tokens.colorPickerSurface = MakeUiColor(\n"
-                    "                palette.primaryBackground,\n"
-                    "                1.f / SecondaryRestAlpha);"),
+                    "tokens.colorPickerSurface = tokens.panelBodySurface;"),
                 std::string_view(
                     "tokens.panelInsetFrame = ImVec4(\n"
                     "                tokens.panelBodySurface.x,\n"
@@ -4161,6 +4626,30 @@ namespace
                 "AdvanceUiLayoutAnimation(openAmount, open)"
             },
             "Ogg nested-drawer endpoint resolves before submission-gap animation");
+        RequireOrdered(
+            collapsingHeader,
+            {
+                "ImGui::BeginUvsrTreeArrowCapture();",
+                "ImGui::CollapsingHeader(label, flags)",
+                "storage->SetFloat(amountKey, openAmount);",
+                "ImGui::EndUvsrTreeArrowCapture(",
+                "SmoothUiLayoutAnimation(openAmount),",
+                "ImGuiTreeNodeFlags_UpsideDownArrow"
+            },
+            "top-level drawer arrows rotate from the same reversible eased "
+            "timeline as their bodies");
+        RequireOrdered(
+            nestedDrawer,
+            {
+                "ImGui::BeginUvsrTreeArrowCapture();",
+                "ImGui::TreeNodeEx(",
+                "storage->SetFloat(amountKey, openAmount);",
+                "ImGui::EndUvsrTreeArrowCapture(",
+                "SmoothUiLayoutAnimation(openAmount),",
+                "ImGuiTreeNodeFlags_UpsideDownArrow"
+            },
+            "nested drawer arrows rotate from the same reversible eased "
+            "timeline as their bodies");
         const std::string_view rootCollapseOverride = ExtractSection(
             imguiUiOverride,
             "float uvsr_window_collapse_amount = -1.0f;",
@@ -4253,9 +4742,11 @@ namespace
                 "settingsLayoutIdle &&",
                 "!settingsCollapseTransitionActive;",
                 "settingsLayoutIdle &&",
-                "!performanceCollapseTransitionActive"
+                "!performanceCollapseTransitionActive &&",
+                "!g_PerformanceTableTransitionActive"
             },
-            "deferred dropdown barrier includes both independent root transitions");
+            "deferred dropdown barrier includes both root transitions and the "
+            "Performance table-height exchange");
         RequireAbsent(
             viewer,
             "ImGui::GetCursorPosY() - style.WindowPadding.y",
@@ -4365,6 +4856,33 @@ namespace
             },
             "toggle regions use the same 280 ms presentation amount while "
             "blocking interaction immediately throughout opening and closing");
+        RequireContains(
+            Compact(toggleRegion),
+            "constbooltransitionActive=targetChangedThisFrame||"
+            "needsInitialMeasurement||(state.linearAmount>0.f&&"
+            "state.linearAmount<1.f);",
+            "toggle transition activity excludes the steady hidden endpoint");
+        RequireOrdered(
+            toggleRegion,
+            {
+                "const bool transitionActive =",
+                "targetChangedThisFrame ||",
+                "needsInitialMeasurement ||",
+                "(state.linearAmount > 0.f &&",
+                "state.linearAmount < 1.f);",
+                "if (owner == UiToggleRegionOwner::Settings)",
+                "if (transitionActive)",
+                "MarkSettingsLayoutAnimationActive();",
+                "else if (transitionActive)",
+                "g_PerformanceTableTransitionActive = true;"
+            },
+            "only target changes, initial measurement, and strictly interior "
+            "progress hold the Settings or Performance commit barrier");
+        RequireAbsent(
+            Compact(toggleRegion),
+            "constbooltransitionActive=targetChangedThisFrame||"
+            "state.linearAmount<1.f;",
+            "regressed always-active hidden Performance transition predicate");
         const std::string_view toggleRegionEnd = ExtractSection(
             viewer,
             "static void EndAnimatedToggleRegion()",
@@ -4408,22 +4926,68 @@ namespace
 
         const std::string_view sliderWrapper = ExtractSection(
             viewer,
-            "static bool DrawSliderFloat(",
+            "bool DrawBoundedSliderFloat(",
             "static bool DrawCenteredActionButton(",
-            "direct slider value submission");
+            "logical and pointer-travel slider submission");
         RequireOrdered(
             sliderWrapper,
             {
-                "return ImGui::SliderFloat(",
+                "float logicalMinimum,",
+                "float logicalMaximum,",
+                "float travelMinimum,",
+                "float travelMaximum,",
+                "const ImGuiSliderFlags effectiveFlags =",
+                "flags |",
+                "(m_ui.OverrideVisualMaxes",
+                "? ImGuiSliderFlags_None",
+                ": ImGuiSliderFlags_AlwaysClamp);",
+                "ImGui::SliderFloat(",
                 "label,",
                 "value,",
-                "minimum,",
-                "maximum,",
+                "travelMinimum,",
+                "travelMaximum,",
                 "format,",
-                "flags);"
+                "effectiveFlags);",
+                "if (changed)",
+                "*value = std::clamp(",
+                "logicalMinimum,",
+                "logicalMaximum);",
+                "bool DrawSliderFloat(",
+                "return DrawBoundedSliderFloat(",
+                "bool DrawBoundedSliderInt(",
+                "const ImGuiSliderFlags effectiveFlags =",
+                "flags |",
+                "(m_ui.OverrideVisualMaxes",
+                "? ImGuiSliderFlags_None",
+                ": ImGuiSliderFlags_AlwaysClamp);",
+                "ImGui::SliderInt(",
+                "effectiveFlags);",
+                "if (changed)",
+                "*value = std::clamp(",
+                "logicalMinimum,",
+                "logicalMaximum);",
+                "bool DrawSliderInt(",
+                "return DrawBoundedSliderInt("
             },
-            "slider wrapper submits the caller's live value directly while "
-            "the active skin supplies track colors globally");
+            "slider wrappers add AlwaysClamp only while visual-max override is "
+            "off, preserve caller flags, and post-clamp accepted edits to the "
+            "logical safety range");
+        const std::string compactSliderWrapper = Compact(sliderWrapper);
+        Require(
+            CountOccurrences(
+                compactSliderWrapper,
+                "constImGuiSliderFlagseffectiveFlags=flags|"
+                "(m_ui.OverrideVisualMaxes?ImGuiSliderFlags_None:"
+                "ImGuiSliderFlags_AlwaysClamp);") == 2u,
+            "both slider wrappers must retain caller AlwaysClamp while "
+            "conditionally adding the default visual-track clamp.");
+        Require(
+            CountOccurrences(
+                compactSliderWrapper,
+                "*value=std::clamp(*value,logicalMinimum,logicalMaximum);") ==
+                2u,
+            "both slider wrappers must enforce logical limits after exact "
+            "numeric input.");
         for (const std::string_view retiredSliderCache : {
                 std::string_view("StateStorage"),
                 std::string_view("unordered_map"),
@@ -4434,6 +4998,142 @@ namespace
                 retiredSliderCache,
                 "retired UVSR-side slider presentation cache");
         }
+        const std::string compactSoftRangeSource = Compact(viewer);
+        for (const std::string_view softRangeCall : {
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"Strength\","
+                    "&visibility.ambientOcclusion.strength,"
+                    "MinimumVisibilityAmbientOcclusionStrength,"
+                    "MaximumVisibilityAmbientOcclusionStrength,"
+                    "MinimumVisibilityAmbientOcclusionStrength,2.f,\"%.2f\")"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"Intensity\","
+                    "&visibility.indirectDiffuse.intensity,"
+                    "0.f,16.f,0.f,4.f,\"%.2f\")"),
+                std::string_view(
+                    "DrawBoundedSliderInt(\"Samples\",&samples,"
+                    "1,64,1,48)"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"Radius\","
+                    "&visibility.sampling.radius,"
+                    "0.1f,10.f,0.1f,6.f,\"%.2f\")"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"Thickness\","
+                    "&visibility.sampling.thickness,"
+                    "0.01f,2.f,0.01f,1.f,\"%.2f\")"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"Distribution\","
+                    "&visibility.sampling.stepDistributionExponent,"
+                    "MinimumVisibilityStepDistributionExponent,"
+                    "MaximumVisibilityStepDistributionExponent,"
+                    "MinimumVisibilityStepDistributionExponent,4.f,\"%.2f\")"),
+                std::string_view(
+                    "DrawBoundedSliderInt(\"HistoryFrames\","
+                    "&historyFrames,1,32,1,16)"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"ExposureCompensation\","
+                    "&m_ui.AutoExposure.exposureCompensationEV,"
+                    "AutoExposureMinimumCompensationEV,"
+                    "AutoExposureMaximumCompensationEV,-8.f,8.f,\"%+.2fEV\")"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"MaximumBrightening\","
+                    "&m_ui.AutoExposure.maximumBrighteningEV,"
+                    "AutoExposureMinimumMovementEV,"
+                    "AutoExposureMaximumMovementEV,"
+                    "AutoExposureMinimumMovementEV,8.f,\"%.2fEV\")"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"MaximumDarkening\","
+                    "&m_ui.AutoExposure.maximumDarkeningEV,"
+                    "AutoExposureMinimumMovementEV,"
+                    "AutoExposureMaximumMovementEV,"
+                    "AutoExposureMinimumMovementEV,8.f,\"%.2fEV\")"),
+                std::string_view(
+                    "DrawBoundedSliderFloat("
+                    "\"DiffuseStrength##ImageBasedLighting\","
+                    "&m_ui.DiffuseIblStrength,0.f,4.f,0.f,2.f,\"%.2f\")"),
+                std::string_view(
+                    "DrawBoundedSliderFloat("
+                    "\"SpecularStrength##ImageBasedLighting\","
+                    "&m_ui.SpecularIblStrength,0.f,4.f,0.f,2.f,\"%.2f\")"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"Sway\","
+                    "&flashlight.swayDegrees,0.f,"
+                    "FlashlightMaximumSwayDegrees,0.f,1.f,\"%.2fdegrees\")"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"BeamSize\","
+                    "&flashlight.beamSizeDegrees,"
+                    "FlashlightMinimumBeamSizeDegrees,"
+                    "FlashlightMaximumBeamSizeDegrees,"
+                    "FlashlightMinimumBeamSizeDegrees,60.f,\"%.1fdegrees\")"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"AngularSize\","
+                    "&flashlight.angularSizeDegrees,"
+                    "FlashlightMinimumAngularSizeDegrees,"
+                    "FlashlightMaximumAngularSizeDegrees,"
+                    "FlashlightMinimumAngularSizeDegrees,10.f,\"%.2fdegrees\")"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"AngularSize\","
+                    "&light.angularSize,0.f,20.f,0.f,10.f)"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"InnerAngle\","
+                    "&light.innerAngle,0.f,180.f,0.f,90.f)"),
+                std::string_view(
+                    "DrawBoundedSliderFloat(\"OuterAngle\","
+                    "&light.outerAngle,0.f,180.f,0.f,90.f)") })
+        {
+            Require(
+                CountOccurrences(compactSoftRangeSource, softRangeCall) == 1u,
+                "every authored practical slider travel range must appear "
+                "exactly once.");
+        }
+        Require(
+            CountOccurrences(
+                compactSoftRangeSource,
+                "DrawBoundedSliderFloat(") == 18u &&
+                CountOccurrences(
+                    compactSoftRangeSource,
+                    "DrawBoundedSliderInt(") == 4u,
+            "the bounded-slider manifest must cover all 18 authored call "
+            "sites in addition to the two wrapper declarations and two "
+            "ordinary-wrapper forwards.");
+        Require(
+            CountOccurrences(viewer, "ImGui::SliderFloat(") == 1u &&
+                CountOccurrences(viewer, "ImGui::SliderInt(") == 1u &&
+                CountOccurrences(viewer, "ImGui::SliderScalar(") == 0u,
+            "every UVSR slider call site must route through the logical/travel "
+            "wrappers.");
+        RequireAbsent(
+            viewer,
+            "app::AzimuthElevationSliders(",
+            "Donut light-direction sliders that bypass visual-max policy");
+        const std::string_view lightDirectionSliders = ExtractSection(
+            viewer,
+            "bool DrawLightDirectionSliders(",
+            "static bool DrawCenteredActionButton(",
+            "bounded directional-light angle sliders");
+        RequireOrdered(
+            lightDirectionSliders,
+            {
+                "auto [azimuth, elevation] = GetCommandLightAngles(",
+                "bool changed = DrawSliderFloat(",
+                "\"Azimuth\"",
+                "&azimuth,",
+                "-180.f,",
+                "180.f,",
+                "\"%.1f deg\"",
+                "ImGuiSliderFlags_NoRoundToFormat);",
+                "changed |= DrawSliderFloat(",
+                "\"Elevation\"",
+                "&elevation,",
+                "-90.f,",
+                "90.f,",
+                "\"%.1f deg\"",
+                "ImGuiSliderFlags_NoRoundToFormat);",
+                "if (changed)",
+                "direction = MakeCommandLightDirection("
+            },
+            "Azimuth and Elevation retain their exact angle domains and "
+            "formatting while sharing Override Visual Maxes behavior");
 
         const std::string_view ratioSampleSlider = ExtractSection(
             viewer,
@@ -4932,11 +5632,17 @@ namespace
         RequireOrdered(
             cmakeSource,
             {
+                "overrides/donut-app.patch",
+                "overrides/donut-loading-app.patch",
+                "overrides/donut-app-ui-polish.patch",
                 "overrides/imgui-ui.patch",
                 "overrides/imgui-slider-controls.patch",
-                "overrides/imgui-combo-roll.patch"
+                "overrides/imgui-combo-roll.patch",
+                "overrides/imgui-ui-polish.patch",
+                "overrides/imgui-tooltip-picker.patch"
             },
-            "UI, slider, and combo-roll overrides compose in dependency order");
+            "Donut callback polish and ImGui tooltip/picker polish compose "
+            "after their prerequisite overrides");
         for (const std::string_view retiredPatch : {
                 std::string_view("imgui-dropdown-roll.patch"),
                 std::string_view("imgui-runtime-policy.patch") })
@@ -5203,8 +5909,8 @@ namespace
                 "const float availableWindowWidth =",
                 "settingsPanelMarginPixels * 2.f",
                 "const float colorPickerMinimumLaneWidth =",
-                "ImGui::GetFrameHeight() * 3.f +",
-                "style.ItemInnerSpacing.x * 2.f +",
+                "ImGui::GetFrameHeight() * 4.f * (1.f + 4.f * 0.08f) +",
+                "style.ItemInnerSpacing.x * 4.f +",
                 "style.WindowPadding.x * 2.f;",
                 "const float settingsWindowMaximumWidth =",
                 "availableWindowWidth -",
@@ -5233,10 +5939,17 @@ namespace
                 "ImGui::PushUvsrColorPickerPopupContentRight(",
                 "settingsBodyWindow->InnerRect.Max.x,",
                 "colorPickerMaximumBottom,",
-                "g_UiVisualTokens.colorPickerSurface);"
+                "g_UiVisualTokens.panelInsetFrame,",
+                "colorPickerContentLayer,",
+                "colorPickerControlLayer);"
             },
             "the 20-percent-narrower Settings width keeps its text-safe content "
-            "floor, viewport/picker-lane cap, and scoped picker bottom bound");
+            "floor, viewport/picker-lane cap, scoped bottom bound, opaque inset "
+            "popup surface, and two authored translucent picker layers");
+        RequireAbsent(
+            colorPickerScope,
+            "g_UiVisualTokens.colorPickerSurface,",
+            "retired non-inset picker popup surface route");
         RequireAbsent(
             viewer,
             "SettingsWindowWidthInFontHeights = 29.3f",
@@ -5264,21 +5977,25 @@ namespace
             "appearance transform exactly once through deduplicated tracking");
         const std::string_view settingsAppearanceTracking = ExtractSection(
             viewer,
-            "static void TrackSettingsAppearanceDrawList(ImDrawList* drawList)",
-            "static void CaptureCurrentWindowBackdrop(",
-            "Settings appearance draw-list deduplication");
+            "static void TrackAppearanceDrawList(",
+            "static bool IsSettingsChildLaterInDrawOrder(",
+            "panel appearance draw-list deduplication");
         RequireOrdered(
             settingsAppearanceTracking,
             {
                 "if (drawList &&",
                 "std::find(",
-                "g_SettingsAppearanceDrawLists.begin(),",
-                "g_SettingsAppearanceDrawLists.end(),",
-                "drawList) == g_SettingsAppearanceDrawLists.end())",
-                "g_SettingsAppearanceDrawLists.push_back(drawList);"
+                "drawLists.begin(),",
+                "drawLists.end(),",
+                "drawList) == drawLists.end())",
+                "drawLists.push_back(drawList);",
+                "static void TrackSettingsAppearanceDrawList(",
+                "g_SettingsAppearanceDrawLists,",
+                "static void TrackPerformanceAppearanceDrawList(",
+                "g_PerformanceAppearanceDrawLists,"
             },
-            "one draw list can receive the menu appearance transform at most "
-            "once per frame");
+            "one draw list can receive each owning panel's appearance transform "
+            "at most once per frame");
         for (const std::string_view pickerApi : {
                 std::string_view(
                     "PushUvsrColorPickerPopupContentRight(float content_right, "
@@ -5528,6 +6245,673 @@ namespace
             "authored scoped picker rounded bar markers precede the final wheel "
             "and SV cursors inside the popup outer clip, while Ogg and unscoped "
             "pickers retain the upstream marker and cursor order");
+
+        RequireOrdered(
+            imguiUiPolishOverride,
+            {
+                "PushUvsrColorPickerPopupContentRight(float content_right, "
+                    "float maximum_bottom, const ImVec4& popup_background, "
+                    "const ImVec4& content_layer, const ImVec4& picker_layer);",
+                "BeginUvsrTreeArrowCapture();",
+                "EndUvsrTreeArrowCapture(float open_amount, "
+                    "bool upside_down = false);"
+            },
+            "the final ordered override exposes scoped picker depth colors and "
+            "one-arrow drawer rotation capture");
+        const std::string_view treeArrowPolish = ExtractSection(
+            imguiUiPolishOverride,
+            "void ImGui::BeginUvsrTreeArrowCapture()",
+            "void ImGui::RenderBullet(",
+            "scoped drawer-arrow rotation override");
+        RequireOrdered(
+            treeArrowPolish,
+            {
+                "g.UvsrTreeArrowCapture = ImGuiUvsrTreeArrowCapture{};",
+                "g.UvsrTreeArrowCapture.Armed = true;",
+                "g.UvsrTreeArrowCapture.Frame = g.FrameCount;",
+                "void ImGui::EndUvsrTreeArrowCapture(",
+                "capture.Frame != g.FrameCount",
+                "capture.SourceDirection == ImGuiDir_Down",
+                "ImSaturate(open_amount)",
+                "upside_down ? -IM_PI * 0.5f : IM_PI * 0.5f",
+                "capture.DrawList->VtxBuffer[vertex_index]",
+                "const int vertex_start = draw_list->VtxBuffer.Size;",
+                "capture.Armed = false;",
+                "capture.SourceDirection = dir;",
+                "capture_rendered_arrow();"
+            },
+            "only the armed frame's next rendered arrow is captured, then its "
+            "authored vertices rotate continuously from upright to sideways");
+
+        const std::string_view pickerDepthPolish = ExtractSection(
+            imguiUiPolishOverride,
+            "struct ImGuiUvsrColorPickerPopupScope",
+            "static ImU32 GetUvsrSvSelectorColor(",
+            "scoped color-picker depth layers");
+        RequireOrdered(
+            pickerDepthPolish,
+            {
+                "ImVec4                  ContentLayer;",
+                "ImVec4                  PickerLayer;",
+                "const ImVec4& content_layer,",
+                "const ImVec4& picker_layer)",
+                "popup_background,",
+                "content_layer,",
+                "picker_layer",
+                "static ImRect GetUvsrColorPickerPopupContentBounds(",
+                "style.WindowPadding.x",
+                "style.WindowPadding.y",
+                "window->InnerRect.Min + inset,",
+                "window->InnerRect.Max - inset",
+                "static void DrawUvsrColorPickerPopupContentLayer(",
+                "window->DrawList->PushClipRect(",
+                "bounds.Min,",
+                "bounds.Max,",
+                "DrawUvsrColorPickerPopupContentLayer(",
+                "g.UvsrStockWidgetRendering ? NULL : g.CurrentWindow,",
+                "scoped_picker_scope->ContentLayer"
+            },
+            "the popup margin remains visible around an inset translucent "
+            "content layer on the same popup draw list");
+        RequireOrdered(
+            imguiUiPolishOverride,
+            {
+                "const ImRect picker_content_bounds =",
+                "GetUvsrColorPickerPopupContentBounds(window);",
+                "const ImVec2 layer_offset(",
+                "ImRect picker_layer_bounds(",
+                "picker_pos - layer_offset,",
+                "picker_pos.y + sv_picker_size",
+                "picker_layer_bounds.ClipWith(picker_content_bounds);",
+                "draw_list->PushClipRect(",
+                "picker_content_bounds.Min,",
+                "picker_content_bounds.Max,",
+                "ImGui::GetColorU32(picker_scope.PickerLayer)"
+            },
+            "the second translucent picker layer stays inside the full-padding "
+            "content layer and ends above the bottom component controls");
+
+        const std::string_view roundedSelectorPolish = ExtractSection(
+            imguiUiPolishOverride,
+            "struct UvsrRoundedTriangleSelector",
+            "static void AddUvsrRoundedCheckerboard(",
+            "full-gamut rounded SV triangle");
+        RequireOrdered(
+            roundedSelectorPolish,
+            {
+                "ImVec2 SharpVertices[3];",
+                "ImVec2 Center;",
+                "ImVector<ImVec2> Contour;",
+                "float EndpointSnapDistance = 1.0f;",
+                "static float GetUvsrRayPolygonBoundaryDistance(",
+                "static void BuildUvsrRoundedTriangleSelector(",
+                "ImMax(rounding, 0.0f) * 1.75f",
+                "minimum_edge_length * 0.20f",
+                "draw_list->_CalcCircleAutoSegmentCount(",
+                "selector.Contour.push_back(",
+                "entry * (inverse_amount * inverse_amount)",
+                "static ImVec2 MapUvsrSharpPointToRoundedTriangle(",
+                "rounded_boundary / sharp_boundary",
+                "static ImVec2 MapUvsrSvToRoundedTriangle(",
+                "selector.SharpVertices[2]",
+                "selector.SharpVertices[0]",
+                "selector.SharpVertices[1]",
+                "static bool MapUvsrRoundedTriangleToSv(",
+                "const ImVec2 endpoint_positions[3]",
+                "*saturation = 1.0f;",
+                "*value = 1.0f;",
+                "*saturation = 0.0f;",
+                "*value = 0.0f;",
+                "ImTriangleBarycentricCoords(",
+                "*value = ImSaturate(1.0f - black_weight);",
+                "? ImSaturate(hue_weight / *value)",
+                "static void AddUvsrRoundedTriangleSelector(",
+                "const float maximum_mesh_step = ImMax(",
+                "1.5f,",
+                "const int sections = ImClamp(",
+                "24,",
+                "192);",
+                "const int vertex_count = (sections + 1) * (sections + 2) / 2;",
+                "const int index_count = sections * sections * 3;",
+                "draw_list->PrimReserve(index_count, vertex_count);"
+            },
+            "a radial sharp-to-rounded triangle bijection retains exact hue, "
+            "black, and white endpoints while fine bounded tessellation avoids "
+            "coarse selector corners");
+        for (const std::string_view retiredSquareSelector : {
+                std::string_view("GetUvsrRoundedRectHorizontalSpan"),
+                std::string_view("MapUvsrSvToRoundedSelector"),
+                std::string_view("MapUvsrRoundedSelectorToSv"),
+                std::string_view("AddUvsrRoundedSvSelector"),
+                std::string_view("uvsr_selector_bounds"),
+                std::string_view("uvsr_selector_half_extent") })
+        {
+            RequireAbsent(
+                imguiUiPolishOverride,
+                retiredSquareSelector,
+                "retired rounded-square selector implementation");
+        }
+        RequireOrdered(
+            imguiUiPolishOverride,
+            {
+                "UvsrRoundedTriangleSelector uvsr_selector;",
+                "if (render_uvsr_wheel_with_bars)",
+                "BuildUvsrRoundedTriangleSelector(",
+                "triangle_pa,",
+                "triangle_pb,",
+                "triangle_pc,",
+                "style.FrameRounding,",
+                "ImMax(style.FrameRounding, draw_list->_FringeScale));",
+                "MapUvsrRoundedTriangleToSv(",
+                "const float color_control_alpha =",
+                "render_uvsr_wheel_with_bars ? 1.0f : style.Alpha;",
+                "AddUvsrRoundedTriangleSelector(",
+                "MapUvsrSvToRoundedTriangle(",
+                "TransformUvsrRoundedTrianglePoint(",
+                "else",
+                "Render the stock SV triangle rotated according to hue."
+            },
+            "authored scoped pickers allocate, interact with, and render the "
+            "rounded full-gamut triangle while stock and unscoped pickers "
+            "retain the upstream triangle");
+        RequireOrdered(
+            imguiUiPolishOverride,
+            {
+                "const float color_control_alpha =",
+                "render_uvsr_wheel_with_bars ? 1.0f : style.Alpha;",
+                "IM_F32_TO_INT8_SAT(color_control_alpha)",
+                "ImVec4 hue_color_f(1, 1, 1, color_control_alpha)",
+                "ImVec4(R, G, B, color_control_alpha)",
+                "AddUvsrRoundedTriangleSelector(",
+                "color_control_alpha,",
+                "AddUvsrRoundedCheckerboard(",
+                "color_control_alpha);",
+                "RenderUvsrRoundedMarkersForVerticalBar("
+            },
+            "translucent authored popup layers do not attenuate the steady-state "
+            "selector, bars, checker, previews, or markers");
+
+        const std::string_view synchronousTooltipPolish = ExtractSection(
+            imguiTooltipPickerAdded,
+            "static ImGuiID GetUvsrTooltipOwnerId()",
+            "struct ImGuiUvsrColorPickerPopupTransition",
+            "caller-scoped tooltip animation override");
+        RequireOrdered(
+            synchronousTooltipPolish,
+            {
+                "static void ResetUvsrTooltipAnimation(",
+                "state = ImGuiUvsrTooltipState();",
+                "static void UpdateUvsrTooltipAppearance(",
+                "if (!g.UvsrUiMotionEnabled)",
+                "state.FrameStartAppearance = state.Appearance;",
+                "state.LastAdvancedFrame = g.FrameCount;",
+                "constexpr float duration = 0.18f;",
+                "state.FrameStartAppearance + step",
+                "state.FrameStartAppearance - step",
+                "static void ApplyUvsrTooltipAppearance(",
+                "const ImVec2 pivot = tooltip_window->Pos;",
+                "vertex.pos = pivot + (vertex.pos - pivot) * scale;",
+                "(float)alpha * eased",
+                "static void SubmitUvsrItemTooltipV(",
+                "if (g.DragDropActive)",
+                "const ImGuiID owner_id = GetUvsrTooltipOwnerId();",
+                "ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);",
+                "if (!hovered && state.OwnerId != owner_id)",
+                "state.LastOwnerSeenFrame = g.FrameCount;",
+                "UpdateUvsrTooltipAppearance(state, hovered);",
+                "ImGui::BeginTooltipEx(",
+                "ImGuiTooltipFlags_OverridePrevious,",
+                "ImGui::TextV(fmt, args);",
+                "ImGui::EndTooltip();",
+                "ApplyUvsrTooltipAppearance(tooltip_window, state.Appearance);",
+                "state.LastSubmittedWindow = tooltip_window;",
+                "state.LastSubmittedFrame = g.FrameCount;",
+                "static void FinalizeUvsrTooltipAnimationFrame()",
+                "g.UvsrStockWidgetRendering ||",
+                "g.DragDropActive ||",
+                "state.LastOwnerSeenFrame != g.FrameCount",
+                "state.LastSubmittedFrame == g.FrameCount &&",
+                "g.TooltipPreviousWindow == state.LastSubmittedWindow",
+                "ImGui::SetWindowHiddenAndSkipItemsForCurrentFrame(",
+                "ResetUvsrTooltipAnimation(state);"
+            },
+            "authored item tooltips render synchronously in the caller's live "
+            "font/word-spacing scope, reversibly zoom and fade from a per-frame "
+            "baseline, and suppress only their exact late-drag submission");
+        RequireOrdered(
+            imguiTooltipPickerOverride,
+            {
+                "if (GImGui->UvsrStockWidgetRendering)",
+                "if (IsItemHovered(ImGuiHoveredFlags_ForTooltip))",
+                "SetTooltipV(fmt, args);",
+                "else",
+                "SubmitUvsrItemTooltipV(fmt, args);",
+                "void ImGui::SetItemTooltipV(",
+                "SubmitUvsrItemTooltipV(fmt, args);"
+            },
+            "both variadic item-tooltip entry points isolate authored synchronous "
+            "animation while stock policy keeps the ordinary SetTooltipV path");
+        Require(
+            CountOccurrences(
+                imguiTooltipPickerAdded,
+                "FinalizeUvsrTooltipAnimationFrame();") == 2u &&
+                CountOccurrences(
+                    imguiTooltipPickerAdded,
+                    "SubmitUvsrItemTooltipV") == 3u,
+            "The authored tooltip must have one EndFrame cleanup hook and two "
+            "caller-scoped SetItemTooltip submission routes.");
+        RequireOrdered(
+            imguiTooltipPickerAdded,
+            {
+                "struct ImGuiUvsrTooltipState",
+                "ImGuiID                 OwnerId = 0;",
+                "float                   Appearance = 0.0f;",
+                "float                   FrameStartAppearance = 0.0f;",
+                "int                     LastOwnerSeenFrame = -1;",
+                "int                     LastAdvancedFrame = -1;",
+                "ImGuiWindow*            LastSubmittedWindow = NULL;",
+                "int                     LastSubmittedFrame = -1;",
+                "ImGuiUvsrTooltipState   UvsrTooltipState;"
+            },
+            "one context-owned tooltip keeps only reversible appearance, owner, "
+            "stale-frame, and exact late-submission identity state");
+        for (const std::string_view retiredTooltipContract : {
+                std::string_view("##Tooltip_UvsrInteractive"),
+                std::string_view("InteractiveSubmission"),
+                std::string_view("QueueUvsrDirectTooltipV"),
+                std::string_view("QueueUvsrItemTooltipV"),
+                std::string_view("tooltip_inner_margin"),
+                std::string_view("SetNextWindowSize(tooltip_size"),
+                std::string_view("NoWindowHoverableCheck") })
+        {
+            RequireAbsent(
+                imguiTooltipPickerAdded,
+                retiredTooltipContract,
+                "retired fixed or interactive authored tooltip branch");
+        }
+        const std::string_view stockTooltipCore = ExtractSection(
+            imguiUpstream,
+            "bool ImGui::BeginTooltipEx(",
+            "void ImGui::EndTooltip()",
+            "stock tooltip window contract");
+        RequireOrdered(
+            stockTooltipCore,
+            {
+                "const bool is_dragdrop_tooltip =",
+                "const char* window_name_template =",
+                "ImGuiWindowFlags flags = ImGuiWindowFlags_Tooltip | "
+                    "ImGuiWindowFlags_NoInputs",
+                "ImGuiWindowFlags_AlwaysAutoResize;",
+                "Begin(window_name, NULL, flags | extra_window_flags);"
+            },
+            "the unchanged stock tooltip window remains non-interactive and "
+            "content auto-sized");
+        const std::string_view stockTooltipPlacement = ExtractSection(
+            imguiUpstream,
+            "// Position tooltip (always follows mouse + clamp within outer boundaries)",
+            "IM_ASSERT(0);",
+            "stock pointer-relative tooltip placement");
+        RequireOrdered(
+            stockTooltipPlacement,
+            {
+                "Position tooltip (always follows mouse + clamp within outer boundaries)",
+                "const ImVec2 ref_pos = NavCalcPreferredRefPos();",
+                "TOOLTIP_DEFAULT_OFFSET_MOUSE * scale",
+                "FindBestWindowPosForPopupEx(",
+                "ImGuiPopupPositionPolicy_Tooltip"
+            },
+            "authored synchronous tooltips inherit upstream pointer-relative, "
+            "viewport-clamped placement");
+
+        const std::string_view finalPickerLayout = ExtractSection(
+            imguiTooltipPickerOverride,
+            "bool AuthoredBarLayout;",
+            "static void AddUvsrRoundedPointerTriangle(",
+            "final three/four-bar picker layout");
+        RequireOrdered(
+            finalPickerLayout,
+            {
+                "bool AuthoredBarLayout;",
+                "int BarCount;",
+                "const ImRect& source_rect,",
+                "int authored_bar_count,",
+                "constexpr float authored_bar_ratio = 0.08f;",
+                "const bool authored_bar_layout = authored_bar_count >= 3;",
+                "const float authored_bar_count_f = (float)authored_bar_count;",
+                "const float normal_selector_size =",
+                "square_sz * 10.0f - style.ItemInnerSpacing.x * 2.0f;",
+                "normal_selector_size *",
+                "(1.0f + authored_bar_count_f * authored_bar_ratio) +",
+                "style.ItemInnerSpacing.x * authored_bar_count_f",
+                "const float minimum_selector_size = square_sz * 4.0f;",
+                "minimum_selector_size *",
+                "3.0f * (square_sz + style.ItemSpacing.y)",
+                "const float sv_picker_height = authored_bar_layout",
+                "layout.PickerWidth -",
+                "authored_bar_count_f * style.ItemInnerSpacing.x",
+                "const float requested_y = authored_bar_layout",
+                "allowed.Max.y - outer_size.y",
+                "if (authored_bar_layout)",
+                "ImGui::SetNextWindowSize(outer_size, ImGuiCond_Always);",
+                "ImGui::SetNextWindowPos(popup_position, ImGuiCond_Always);"
+            },
+            "the authored picker solves one selector plus three RGB or four RGBA "
+            "equal-width bars, reserves all input rows, uses an exact outer size, "
+            "and sits flush with the allowed bottom edge");
+
+        const std::string_view pickerTransitionState = ExtractSection(
+            imguiTooltipPickerAdded,
+            "struct ImGuiUvsrColorPickerPopupTransition",
+            "struct ImGuiUvsrTooltipState",
+            "retained picker transition state");
+        RequireOrdered(
+            pickerTransitionState,
+            {
+                "ImGuiID                 PopupId = 0;",
+                "int                     OpenFrame = -1;",
+                "float                   Amount = 0.0f;",
+                "float                   FrameStartAmount = 0.0f;",
+                "bool                    TargetOpen = false;",
+                "int                     ZeroFrame = -1;",
+                "int                     LastAdvancedFrame = -1;",
+                "int                     LastSubmittedFrame = -1;",
+                "bool                    RestoreFocus = false;",
+                "int                     ReopenFrame = -1;",
+                "ImRect                  SourceRect;"
+            },
+            "one exact picker identity retains reversible amount, close endpoint, "
+            "focus, submission, reopen, and source-pointer state");
+        const std::string_view pickerTransitionHelpers = ExtractSection(
+            imguiTooltipPickerAdded,
+            "static void ResetUvsrColorPickerPopupTransition(",
+            "bool AuthoredBarLayout;",
+            "retained picker transition helpers");
+        RequireOrdered(
+            pickerTransitionHelpers,
+            {
+                "BeginUvsrColorPickerPopupTransition(",
+                "transition.PopupId != popup_id || transition.OpenFrame != open_frame",
+                "transition.TargetOpen = true;",
+                "transition.Amount = g.UvsrUiMotionEnabled ? 0.0f : 1.0f;",
+                "if (transition.TargetOpen)",
+                "transition.SourceRect = source_rect;",
+                "AdvanceUvsrColorPickerPopupTransition(",
+                "transition.FrameStartAmount = transition.Amount;",
+                "transition.FrameStartAmount + step",
+                "transition.FrameStartAmount - step",
+                "transition.ZeroFrame = g.FrameCount;",
+                "ApplyUvsrColorPickerPopupTransition(",
+                "vertex.pos = pivot + (vertex.pos - pivot) * scale;",
+                "command.ClipRect = ImVec4("
+            },
+            "picker fade/zoom reverses from a once-per-frame baseline and "
+            "transforms both geometry and clip rectangles");
+        RequireOrdered(
+            imguiTooltipPickerOverride,
+            {
+                "picker_transition.PopupId == id &&",
+                "!picker_transition.TargetOpen &&",
+                "picker_transition.Amount > 0.0f &&",
+                "picker_transition.TargetOpen = true;",
+                "picker_transition.ReopenFrame = g.FrameCount;",
+                "static void ClosePopupToLevelImmediately(",
+                "transition.PopupId != 0 &&",
+                "remaining + 1 == g.OpenPopupStack.Size",
+                "transition.TargetOpen = false;",
+                "transition.RestoreFocus |= restore_focus_to_window_under_popup;",
+                "void ImGui::CommitUvsrColorPickerPopupClose()",
+                "ClosePopupToLevelImmediately(popup_index, transition.RestoreFocus);",
+                "transition = ImGuiUvsrColorPickerPopupTransition();",
+                "const int authored_bar_count = authored_bar_popup",
+                "? (alpha && (flags & ImGuiColorEditFlags_AlphaBar) != 0 ? 4 : 3)",
+                "const bool reversing_same_picker =",
+                "if (!reversing_same_picker)",
+                "g.ColorPickerRef = col_v4;",
+                "BeginUvsrColorPickerPopupTransition(",
+                "g.FrameCount > g.UvsrColorPickerPopupTransition.ZeroFrame",
+                "const bool picker_interaction_ready =",
+                "g.UvsrColorPickerPopupTransition.Amount >= 1.0f",
+                "EndPopup();",
+                "AdvanceUvsrColorPickerPopupTransition(g);",
+                "ApplyUvsrColorPickerPopupTransition("
+            },
+            "the exact authored picker can reverse a retained close without "
+            "resetting its reference color, defers physical close through a "
+            "visible zero frame, blocks transitional input, and transforms only "
+            "after popup composition");
+
+        const std::string_view finalPickerPointer = ExtractSection(
+            imguiTooltipPickerAdded,
+            "static void DrawUvsrColorPickerSourcePointer(",
+            "float EndpointSnapRadius = 1.0f;",
+            "rounded picker source pointer and popup integration");
+        RequireOrdered(
+            finalPickerPointer,
+            {
+                "const float tip_x = source_rect.Max.x +",
+                "const float base_x = popup_window->Pos.x + (fringe + 1.0f) * scale;",
+                "source_rect.GetCenter().y,",
+                "popup_top + style.PopupRounding + unscaled_arrow_half + fringe,",
+                "popup_bottom - style.PopupRounding - unscaled_arrow_half - fringe",
+                "ImGui::GetPopupAllowedExtentRect(parent_window)",
+                "allowed.Max.y = ImMin(allowed.Max.y, scope.MaximumBottom);",
+                "draw_list->PushClipRect(allowed.Min, allowed.Max, false);",
+                "AddUvsrRoundedPointerTriangle(",
+                "ImGui::GetColorU32(scope.PopupBackground)",
+                "const bool color_button_pressed =",
+                "ColorButton(\"##ColorButton\", col_v4, flags);",
+                "const ImRect picker_source_rect = g.LastItemData.Rect;",
+                "if (picker_layout.AuthoredBarLayout)",
+                "PushStyleVar(ImGuiStyleVar_PopupBorderSize, 0.0f);",
+                "if (picker_layout.HideSidePreview ||",
+                "picker_layout.AuthoredBarLayout)",
+                "DrawUvsrColorPickerSourcePointer(",
+                "transition_source_rect,"
+            },
+            "the authored popup captures its exact source swatch, suppresses "
+            "the stock side preview and border, and draws a rounded viewport-"
+            "clipped pointer back to that swatch");
+        RequireContains(
+            imguiTooltipPickerOverride,
+            "picker_flags |= ImGuiColorEditFlags_NoSidePreview;",
+            "authored three/four-bar picker suppresses the stock side preview");
+        RequireOrdered(
+            imguiTooltipPickerAdded,
+            {
+                "ImU32 ImGui::GetUvsrCarvedFrameOutlineColor(",
+                "const ImVec4 carved_top(0.005f, 0.006f, 0.008f, 0.14f);",
+                "const ImVec4 carved_bottom(0.88f, 0.90f, 0.94f, 0.070f);",
+                "vertex.col = ImGui::GetUvsrCarvedFrameOutlineColor(",
+                "static void AddUvsrCarvedRoundedPointerTriangle(",
+                "vertex.col = ImGui::GetUvsrCarvedFrameOutlineColor(",
+                "AddUvsrCarvedRoundedPointerTriangle(",
+                "ImGui::GetColorU32(scope.PopupBackground)"
+            },
+            "the picker body and source pointer share one carved frame palette "
+            "before the pointer receives its popup-surface interior");
+        RequireAbsent(
+            finalPickerPointer,
+            "ImGui::GetColorU32(ImGuiCol_Border)",
+            "retired opaque stock border on the authored picker pointer");
+
+        const std::string_view finalSelectorSnap = ExtractSection(
+            imguiTooltipPickerAdded,
+            "float EndpointSnapRadius = 1.0f;",
+            "static void RenderUvsrHollowMarkerForVerticalBar(",
+            "final rounded-selector snap affordances");
+        RequireOrdered(
+            finalSelectorSnap,
+            {
+                "float EndpointSnapRadius = 1.0f;",
+                "float EndpointMarkerRadius = 1.0f;",
+                "float BoundaryHitSlop = 1.0f;",
+                "float endpoint_snap_radius,",
+                "float endpoint_marker_radius,",
+                "float boundary_hit_slop)",
+                "selector.EndpointSnapRadius = ImMax(1.0f, endpoint_snap_radius);",
+                "selector.EndpointMarkerRadius = ImMax(1.0f, endpoint_marker_radius);",
+                "selector.BoundaryHitSlop = ImMax(1.0f, boundary_hit_slop);",
+                "selector.EndpointSnapRadius * selector.EndpointSnapRadius",
+                "selector.BoundaryHitSlop",
+                "static void RenderUvsrRoundedTriangleSnapPoints(",
+                "const float radius = selector.EndpointMarkerRadius;",
+                "for (const ImVec2& sharp_vertex : selector.SharpVertices)",
+                "MapUvsrSharpPointToRoundedTriangle(selector, sharp_vertex)",
+                "draw_list->AddCircle(",
+                "IM_COL32(24, 24, 24, alpha8)",
+                "draw_list->AddCircle(",
+                "IM_COL32(255, 255, 255, alpha8)"
+            },
+            "endpoint hit, visible marker, and ordinary rounded-boundary slop "
+            "use separate radii while retaining three hollow gamut targets");
+        RequireAbsent(
+            finalSelectorSnap,
+            "AddCircleFilled(",
+            "rounded selector snap points remain hollow");
+        const std::string_view finalVerticalMarker = ExtractSection(
+            imguiTooltipPickerAdded,
+            "static void RenderUvsrHollowMarkerForVerticalBar(",
+            "const ImU32 comparison_colors[2] =",
+            "final vertical bar marker and interaction routing");
+        RequireOrdered(
+            finalVerticalMarker,
+            {
+                "bar_bounds.GetWidth() * 0.5f - fringe * 2.0f",
+                "const ImVec2 center(bar_bounds.GetCenter().x, marker_y);",
+                "draw_list->AddCircle(",
+                "IM_COL32(24, 24, 24, alpha8)",
+                "draw_list->AddCircle(",
+                "IM_COL32(255, 255, 255, alpha8)",
+                "ref_col != NULL &&",
+                "flags |= ImGuiColorEditFlags_NoSidePreview;",
+                "const float authored_bar_count = alpha_bar ? 4.0f : 3.0f;",
+                "bars_width = sv_picker_size * authored_bar_ratio;",
+                "float bar2_pos_x =",
+                "float bar3_pos_x =",
+                "const float comparison_current_pos_x = alpha_bar ?",
+                "const float comparison_original_pos_x = alpha_bar ?",
+                "const float final_bar_pos_x = comparison_original_pos_x;",
+                "triangle_r * 0.25f,",
+                "style.GrabMinSize * 0.50f,",
+                "wheel_thickness * 0.75f",
+                "final_bar_pos_x + bars_width,",
+                "else if (initial_dist2 >=",
+                "value_changed = value_changed_h = true;",
+                "? final_bar_pos_x",
+                "RenderUvsrRoundedTriangleSnapPoints("
+            },
+            "selector endpoints are routed before the hue annulus, RGB and RGBA "
+            "pickers allocate three or four equal wheel-ring-width bars, and the "
+            "inner layer plus bottom inputs reach the computed final bar");
+        RequireAbsent(
+            finalVerticalMarker,
+            "AddCircleFilled(",
+            "authored hue and opacity indicators remain hollow circles");
+
+        const std::string_view comparisonBars = ExtractSection(
+            imguiTooltipPickerAdded,
+            "const ImU32 comparison_colors[2] =",
+            "const ImRect hue_bar_bounds(",
+            "display-only current and original color bars");
+        RequireOrdered(
+            comparisonBars,
+            {
+                "R,",
+                "G,",
+                "B,",
+                "ImSaturate(col[3])",
+                "reference_red,",
+                "reference_green,",
+                "reference_blue,",
+                "ImSaturate(ref_col[3])",
+                "comparison_current_pos_x,",
+                "comparison_original_pos_x",
+                "AddUvsrRoundedCheckerboard(",
+                "AddUvsrRoundedVerticalGradient(",
+                "RenderFrameBorder("
+            },
+            "unlabeled Current and Original values render as two opaque, "
+            "checker-backed comparison bars after hue and optional alpha");
+        for (const std::string_view retiredComparisonControl : {
+                std::string_view("Text(\"Current\")"),
+                std::string_view("Text(\"Original\")"),
+                std::string_view("InvisibleButton(\"##current"),
+                std::string_view("ColorButton(\"##current") })
+        {
+            RequireAbsent(
+                imguiTooltipPickerAdded,
+                retiredComparisonControl,
+                "retired labeled or interactive comparison preview");
+        }
+
+        const std::string_view authoredSwatch = ExtractSection(
+            imguiTooltipPickerOverride,
+            "const bool authored_color_swatch =",
+            "RenderNavCursor(bb, id);",
+            "authored color swatch surface");
+        RequireOrdered(
+            authoredSwatch,
+            {
+                "!g.UvsrStockWidgetRendering &&",
+                "g.UvsrColorPickerPopupScopeStack.Size > 0;",
+                "if (authored_color_swatch)",
+                "ImGuiCol_BorderShadow",
+                "shadow_color.w = ImMax(shadow_color.w, 0.42f);",
+                "const ImVec2 shadow_offset(",
+                "window->DrawList->AddRectFilled(",
+                "GetColorU32(shadow_color),",
+                "else if ((flags & ImGuiColorEditFlags_NoBorder) == 0)"
+            },
+            "only the authored scoped swatch receives an offset soft shadow "
+            "before its color surface");
+        RequireOrdered(
+            imguiTooltipPickerOverride,
+            {
+                "RenderNavCursor(bb, id);",
+                "if (!authored_color_swatch &&",
+                "(flags & ImGuiColorEditFlags_NoBorder) == 0)",
+                "RenderFrameBorder(bb.Min, bb.Max, rounding);"
+            },
+            "the authored color swatch suppresses only its perimeter while stock "
+            "and unscoped ColorButton borders remain unchanged");
+
+        const std::string_view roundedCheckerPolish = ExtractSection(
+            imguiUiPolishOverride,
+            "static void AddUvsrRoundedCheckerboard(",
+            "static void AddUvsrRoundedVerticalGradient(",
+            "shared rounded alpha checkerboard mask");
+        RequireOrdered(
+            roundedCheckerPolish,
+            {
+                "rounding = ImClamp(",
+                "const ImVec4 colors[2] =",
+                "ImVector<float> x_coordinates;",
+                "const float maximum_mesh_step = ImMax(fringe, 1.0f);",
+                "bounds.Min.x - fringe * 0.5f",
+                "bounds.Max.y + fringe * 0.5f",
+                "x_coordinates.Size * y_coordinates.Size",
+                "const float distance = GetUvsrRoundedRectDistance(",
+                "bounds,",
+                "rounding,",
+                "position);",
+                "color.w *= coverage;",
+                "draw_list->PrimWriteVtx("
+            },
+            "both checker colors share one rounded-rect distance mask instead "
+            "of assigning a brittle radius to the final partial cell, while "
+            "the per-cell mesh keeps checker seams hard and the edge transition "
+            "within the antialias fringe");
+        RequireOrdered(
+            imguiUiPolishOverride,
+            {
+                "AddUvsrRoundedCheckerboard(",
+                "bar1_bb,",
+                "uvsr_bar_rounding,",
+                "color_control_alpha);",
+                "const UvsrVerticalGradientStop alpha_stops[2]"
+            },
+            "the shared rounded checker is submitted before the retained "
+            "authored alpha gradient and border path");
         const std::string_view closedComboOverride = ExtractSection(
             imguiUiOverride,
             "bool ImGui::BeginCombo(const char* label",
@@ -5825,7 +7209,7 @@ namespace
         RequireOrdered(
             lightsDrawer,
             {
-                "bool angularSizeChanged = DrawSliderFloat(",
+                "bool angularSizeChanged = DrawBoundedSliderFloat(",
                 "angularSizeChanged = true;",
                 "if (angularSizeChanged)",
                 "m_app->ResetImageBasedLightingHistory();"
@@ -6010,7 +7394,7 @@ namespace
             imguiUiOverride,
             "static void RenderGradientFrameOutline(",
             "// Render a rectangle shaped with optional rounding and borders",
-            "raised and carved outline renderer");
+            "base raised and carved outline renderer");
         for (const std::string_view depthContract : {
                 std::string_view("bool raised"),
                 std::string_view("bool dark_outline = false"),
@@ -6038,6 +7422,7 @@ namespace
                 std::string_view(": raised ? raised_bottom : carved_bottom;"),
                 std::string_view(
                     "outline_color.w *= float((vertex.col & IM_COL32_A_MASK)"),
+                std::string_view("vertex.col = ImGui::GetColorU32(outline_color);"),
                 std::string_view(
                     "IsUltraBrightFrameSurface(top_color)"),
                 std::string_view("? 0.025f"),
@@ -6047,8 +7432,30 @@ namespace
             RequireContains(
                 outlineRenderer,
                 depthContract,
-                "subdued raised-versus-carved outline and subtle fill contract");
+                "base subdued raised-versus-carved outline and subtle fill contract");
         }
+        const std::string_view finalCarvedOutline = ExtractSection(
+            imguiTooltipPickerAdded,
+            "ImU32 ImGui::GetUvsrCarvedFrameOutlineColor(",
+            "static ImGuiID GetUvsrTooltipOwnerId()",
+            "final alpha-respecting carved outline override");
+        RequireOrdered(
+            finalCarvedOutline,
+            {
+                "ImU32 ImGui::GetUvsrCarvedFrameOutlineColor(",
+                "const ImVec4 carved_top(0.005f, 0.006f, 0.008f, 0.14f);",
+                "const ImVec4 carved_bottom(0.88f, 0.90f, 0.94f, 0.070f);",
+                "outline_color.w *= ImSaturate(coverage);",
+                "return GetColorU32(outline_color);",
+                "const float coverage =",
+                "if (!raised && !dark_outline)",
+                "vertex.col = ImGui::GetUvsrCarvedFrameOutlineColor(",
+                "gradient_position,",
+                "coverage);",
+                "continue;"
+            },
+            "carved reset/control outlines honor both antialias coverage and "
+            "the active global/style alpha conversion");
         Require(
             CountOccurrences(
                 imguiUiOverride,
@@ -6794,20 +8201,32 @@ int main(int argc, char** argv)
         root / "src" / "ui_command_layout.h");
     const std::string donutAppOverride = ReadFile(
         root / "overrides" / "donut-app.patch");
+    const std::string donutAppUiPolishOverride = ReadFile(
+        root / "overrides" / "donut-app-ui-polish.patch");
     const std::string imguiUiOverride = ReadFile(
         root / "overrides" / "imgui-ui.patch");
     const std::string imguiSliderOverride = ReadFile(
         root / "overrides" / "imgui-slider-controls.patch");
     const std::string imguiComboRollOverride = ReadFile(
         root / "overrides" / "imgui-combo-roll.patch");
+    const std::string imguiUiPolishOverride = ReadFile(
+        root / "overrides" / "imgui-ui-polish.patch");
+    const std::string imguiTooltipPickerOverride = ReadFile(
+        root / "overrides" / "imgui-tooltip-picker.patch");
+    const std::string imguiUpstream = ReadFile(
+        root / "donut" / "thirdparty" / "imgui" / "imgui.cpp");
     const std::string backdropBlurShader = ReadFile(
         root / "src" / "backdrop_blur_ps.hlsl");
     const std::string cmakeSource = ReadFile(root / "CMakeLists.txt");
     if (viewer.empty() || catalog.empty() || temporalOptions.empty() ||
         temporalPass.empty() || uiAnimation.empty() ||
         uiCommandLayout.empty() ||
-        donutAppOverride.empty() || imguiUiOverride.empty() ||
+        donutAppOverride.empty() || donutAppUiPolishOverride.empty() ||
+        imguiUiOverride.empty() ||
         imguiSliderOverride.empty() || imguiComboRollOverride.empty() ||
+        imguiUiPolishOverride.empty() ||
+        imguiTooltipPickerOverride.empty() ||
+        imguiUpstream.empty() ||
         backdropBlurShader.empty() ||
         cmakeSource.empty())
     {
@@ -6834,9 +8253,13 @@ int main(int argc, char** argv)
         viewer,
         uiAnimation,
         donutAppOverride,
+        donutAppUiPolishOverride,
         imguiUiOverride,
         imguiSliderOverride,
         imguiComboRollOverride,
+        imguiUiPolishOverride,
+        imguiTooltipPickerOverride,
+        imguiUpstream,
         backdropBlurShader,
         cmakeSource);
 

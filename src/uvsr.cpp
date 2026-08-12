@@ -1198,6 +1198,7 @@ struct UIData
     bool                                ShowUI = false;
     UiSkin                              Skin = DefaultUiSkin;
     bool                                AnimationsEnabled = true;
+    bool                                OverrideVisualMaxes = false;
     UiAccentSettings                    Accents;
     std::array<UiBackdropRect, UiBackdropRectCount>
                                         BackdropRects;
@@ -6778,6 +6779,39 @@ private:
         bool sceneTranslucentHeaders = false;
     };
 
+    struct FrontEllipsisText
+    {
+        std::string display;
+        bool truncated = false;
+    };
+
+    [[nodiscard]] static FrontEllipsisText FormatFrontEllipsisUtf8(
+        std::string_view source,
+        size_t maximumCodePoints)
+    {
+        const char* const begin = source.data();
+        const char* cursor = begin;
+        const char* const end = begin + source.size();
+        size_t codePointCount = 0;
+        while (cursor < end && codePointCount < maximumCodePoints)
+        {
+            unsigned int codePoint = 0;
+            const int byteCount = ImTextCharFromUtf8(
+                &codePoint,
+                cursor,
+                end);
+            cursor += byteCount > 0 ? byteCount : 1;
+            ++codePointCount;
+        }
+
+        FrontEllipsisText result;
+        result.truncated = cursor < end;
+        result.display.assign(begin, cursor);
+        if (result.truncated)
+            result.display += "...";
+        return result;
+    }
+
     struct StatSnapshot
     {
         int width = 0;
@@ -6958,20 +6992,84 @@ private:
 
     inline static std::vector<ImDrawList*>
         g_SettingsAppearanceDrawLists;
-    inline static ImDrawList* g_SettingsDecorationDrawList = nullptr;
+    inline static std::vector<ImDrawList*>
+        g_PerformanceAppearanceDrawLists;
+    inline static bool g_PerformanceTableTransitionActive = false;
     inline static UiVisualTokens g_UiVisualTokens;
     inline static UiSpacingTokens g_UiSpacingTokens;
 
-    static void TrackSettingsAppearanceDrawList(ImDrawList* drawList)
+    static void TrackAppearanceDrawList(
+        std::vector<ImDrawList*>& drawLists,
+        ImDrawList* drawList)
     {
         if (drawList &&
             std::find(
-                g_SettingsAppearanceDrawLists.begin(),
-                g_SettingsAppearanceDrawLists.end(),
-                drawList) == g_SettingsAppearanceDrawLists.end())
+                drawLists.begin(),
+                drawLists.end(),
+                drawList) == drawLists.end())
         {
-            g_SettingsAppearanceDrawLists.push_back(drawList);
+            drawLists.push_back(drawList);
         }
+    }
+
+    static void TrackSettingsAppearanceDrawList(ImDrawList* drawList)
+    {
+        TrackAppearanceDrawList(
+            g_SettingsAppearanceDrawLists,
+            drawList);
+    }
+
+    static void TrackPerformanceAppearanceDrawList(ImDrawList* drawList)
+    {
+        TrackAppearanceDrawList(
+            g_PerformanceAppearanceDrawLists,
+            drawList);
+    }
+
+    static bool IsSettingsChildLaterInDrawOrder(
+        const ImGuiWindow* candidate,
+        const ImGuiWindow* current)
+    {
+        if (!current)
+            return true;
+
+        const int popupOrder =
+            int(candidate->Flags & ImGuiWindowFlags_Popup) -
+            int(current->Flags & ImGuiWindowFlags_Popup);
+        if (popupOrder != 0)
+            return popupOrder > 0;
+
+        const int tooltipOrder =
+            int(candidate->Flags & ImGuiWindowFlags_Tooltip) -
+            int(current->Flags & ImGuiWindowFlags_Tooltip);
+        if (tooltipOrder != 0)
+            return tooltipOrder > 0;
+
+        return candidate->BeginOrderWithinParent >
+            current->BeginOrderWithinParent;
+    }
+
+    static ImDrawList* ResolveFinalSettingsDecorationDrawList(
+        ImGuiWindow* window)
+    {
+        if (!window)
+            return nullptr;
+
+        ImGuiWindow* finalVisibleChild = nullptr;
+        for (ImGuiWindow* child : window->DC.ChildWindows)
+        {
+            if (!child || !child->Active || child->Hidden)
+                continue;
+            if (IsSettingsChildLaterInDrawOrder(
+                    child,
+                    finalVisibleChild))
+            {
+                finalVisibleChild = child;
+            }
+        }
+        return finalVisibleChild
+            ? ResolveFinalSettingsDecorationDrawList(finalVisibleChild)
+            : window->DrawList;
     }
 
     static void CaptureCurrentWindowBackdrop(
@@ -7287,6 +7385,8 @@ private:
                 0.92f / SecondaryRestAlpha);
             colors[ImGuiCol_Border] =
                 ImVec4(0.15f, 0.15f, 0.15f, 0.92f);
+            colors[ImGuiCol_BorderShadow] =
+                ImVec4(0.01f, 0.012f, 0.016f, 0.48f);
             colors[ImGuiCol_FrameBg] =
                 MakeUiColor(palette.primaryBackground);
             colors[ImGuiCol_FrameBgHovered] = brightPrimaryBackground
@@ -7388,9 +7488,7 @@ private:
             tokens.panelBodySurface = MakeUiColor(
                 palette.primaryBackground,
                 0.92f / SecondaryRestAlpha);
-            tokens.colorPickerSurface = MakeUiColor(
-                palette.primaryBackground,
-                1.f / SecondaryRestAlpha);
+            tokens.colorPickerSurface = tokens.panelBodySurface;
             tokens.panelInsetFrame = ImVec4(
                 tokens.panelBodySurface.x,
                 tokens.panelBodySurface.y,
@@ -7907,6 +8005,7 @@ private:
         ImGuiStyle& style = ImGui::GetStyle();
         const float itemSpacingY = style.ItemSpacing.y;
         style.ItemSpacing.y = 0.f;
+        ImGui::BeginUvsrTreeArrowCapture();
         const bool open = ImGui::CollapsingHeader(label, flags);
         style.ItemSpacing.y = itemSpacingY;
         if (useAuthoredHeaderFont)
@@ -7976,6 +8075,9 @@ private:
         storage->SetFloat(amountKey, openAmount);
         storage->SetInt(frameKey, frame);
         storage->SetBool(targetKey, open);
+        ImGui::EndUvsrTreeArrowCapture(
+            SmoothUiLayoutAnimation(openAmount),
+            (flags & ImGuiTreeNodeFlags_UpsideDownArrow) != 0);
         if (needsInitialMeasurement ||
             (openAmount > 0.f && openAmount < 1.f))
         {
@@ -8095,9 +8197,7 @@ private:
             ImVec2(0.f, animatedHeight),
             childFlags,
             childWindowFlags);
-        TrackSettingsDecorationDrawList(
-            ImGui::GetWindowDrawList(),
-            g_DrawerAnimationContext.bodyVisible);
+        TrackSettingsAppearanceDrawList(ImGui::GetWindowDrawList());
         EnsureAnimatedChildLayoutSubmission(
             g_DrawerAnimationContext.bodyVisible);
         ImGui::PushItemWidth(controlWidth);
@@ -8183,15 +8283,6 @@ private:
             outlineColor.w *= coverage;
             vertex.col = ImGui::GetColorU32(outlineColor);
         }
-    }
-
-    static void TrackSettingsDecorationDrawList(
-        ImDrawList* drawList,
-        bool visible)
-    {
-        TrackSettingsAppearanceDrawList(drawList);
-        if (drawList && visible)
-            g_SettingsDecorationDrawList = drawList;
     }
 
     static float ResolveRoundedRectRadius(
@@ -8601,6 +8692,7 @@ private:
             headerId ^ ImGuiID(0x9D63E418u);
         const ImGuiID measurementValidKey =
             headerId ^ ImGuiID(0xC1A7095Fu);
+        ImGui::BeginUvsrTreeArrowCapture();
         const bool open = ImGui::TreeNodeEx(
             label,
             flags | ImGuiTreeNodeFlags_NoTreePushOnOpen);
@@ -8651,6 +8743,9 @@ private:
         storage->SetFloat(amountKey, openAmount);
         storage->SetInt(frameKey, frame);
         storage->SetBool(targetKey, open);
+        ImGui::EndUvsrTreeArrowCapture(
+            SmoothUiLayoutAnimation(openAmount),
+            (flags & ImGuiTreeNodeFlags_UpsideDownArrow) != 0);
         if (needsInitialMeasurement ||
             (openAmount > 0.f && openAmount < 1.f))
         {
@@ -8709,9 +8804,7 @@ private:
             ImVec2(0.f, animatedHeight),
             childFlags,
             childWindowFlags);
-        TrackSettingsDecorationDrawList(
-            ImGui::GetWindowDrawList(),
-            bodyVisible);
+        TrackSettingsAppearanceDrawList(ImGui::GetWindowDrawList());
         EnsureAnimatedChildLayoutSubmission(bodyVisible);
         // Own the transparent indentation gutter inside the animated child so
         // nested-dropdown reset buttons can draw and receive input there. The
@@ -8785,6 +8878,12 @@ private:
         int transitionFrame = -1;
         int advancedFrame = -1;
         int disabledPresentationAdvancedFrame = -1;
+    };
+
+    enum class UiToggleRegionOwner
+    {
+        Settings,
+        Performance
     };
 
     struct UiToggleRegionAnimationContext
@@ -8885,7 +8984,8 @@ private:
 
     static bool BeginAnimatedToggleRegion(
         const char* id,
-        bool visible)
+        bool visible,
+        UiToggleRegionOwner owner = UiToggleRegionOwner::Settings)
     {
         // BeginChild starts a fresh item-width stack. Carry the enclosing
         // drawer width into toggle regions instead of letting ImGui choose its
@@ -8966,16 +9066,23 @@ private:
         }
 
         state.lastSeenFrame = frame;
-        if (targetChangedThisFrame ||
+        const bool transitionActive =
+            targetChangedThisFrame ||
             needsInitialMeasurement ||
             (state.linearAmount > 0.f &&
-                state.linearAmount < 1.f))
+                state.linearAmount < 1.f);
+        if (owner == UiToggleRegionOwner::Settings)
         {
-            MarkSettingsLayoutAnimationActive();
+            if (transitionActive)
+                MarkSettingsLayoutAnimationActive();
+            TrackSettingsScrollAnchor(
+                regionId,
+                ImGui::GetCursorScreenPos().y);
         }
-        TrackSettingsScrollAnchor(
-            regionId,
-            ImGui::GetCursorScreenPos().y);
+        else if (transitionActive)
+        {
+            g_PerformanceTableTransitionActive = true;
+        }
         if (!state.targetVisible && state.linearAmount <= 0.f)
             return false;
 
@@ -9045,9 +9152,10 @@ private:
             ImVec2(0.f, animatedHeight),
             childFlags,
             childWindowFlags);
-        TrackSettingsDecorationDrawList(
-            ImGui::GetWindowDrawList(),
-            bodyVisible);
+        if (owner == UiToggleRegionOwner::Settings)
+            TrackSettingsAppearanceDrawList(ImGui::GetWindowDrawList());
+        else
+            TrackPerformanceAppearanceDrawList(ImGui::GetWindowDrawList());
         EnsureAnimatedChildLayoutSubmission(bodyVisible);
         ImGui::PushItemWidth(inheritedItemWidth);
 
@@ -9104,6 +9212,50 @@ private:
 
         ImGui::PopStyleVar(4);
         ImGui::PopStyleColor();
+    }
+
+    static bool BeginMaterialEditorConditionalRegion(
+        const char* id,
+        bool visible)
+    {
+        return BeginAnimatedToggleRegion(
+            id,
+            visible,
+            UiToggleRegionOwner::Settings);
+    }
+
+    static void EndMaterialEditorConditionalRegion()
+    {
+        EndAnimatedToggleRegion();
+    }
+
+    static void DrawMaterialEditorTextureFilename(
+        const char* filename,
+        const float4& color)
+    {
+        const std::string_view fullFilename =
+            filename != nullptr ? std::string_view(filename) : std::string_view();
+        const FrontEllipsisText formatted =
+            FormatFrontEllipsisUtf8(fullFilename, 25u);
+        ImGui::TextColored(
+            ImVec4(color.x, color.y, color.z, color.w),
+            "%s",
+            formatted.display.c_str());
+        if (formatted.truncated)
+            ImGui::SetItemTooltip("%s", fullFilename.data());
+    }
+
+    static bool DrawMaterialEditorColorEdit3(
+        const char* label,
+        float* color)
+    {
+        ImGuiColorEditFlags flags =
+            ImGuiColorEditFlags_Float |
+            ImGuiColorEditFlags_DisplayRGB |
+            ImGuiColorEditFlags_NoTooltip;
+        if (!ImGui::IsUvsrStockWidgetRenderingEnabled())
+            flags |= ImGuiColorEditFlags_PickerHueWheel;
+        return ImGui::ColorEdit3(label, color, flags);
     }
 
     static float GetUiHighlightFade(
@@ -10366,6 +10518,17 @@ private:
                 value,
                 error);
         }
+        if (path == "ui.override-visual-maxes")
+        {
+            return ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                m_ui.OverrideVisualMaxes,
+                false,
+                value,
+                error);
+        }
         if (path == "ui.accent.main")
         {
             UiSkinPalette* palette =
@@ -10612,6 +10775,7 @@ private:
         ApplyAdaptiveSyncMode(GetDefaultAdaptiveSyncMode());
         m_ui.Skin = DefaultUiSkin;
         m_ui.AnimationsEnabled = true;
+        m_ui.OverrideVisualMaxes = false;
         m_ui.Accents = UiAccentSettings{};
         m_StatisticsEffect =
             static_cast<int>(StatisticsEffect::CompleteRenderer);
@@ -15045,11 +15209,10 @@ private:
                 [&beginStatisticsRow](
                     const char* label, double value, bool available)
             {
-                beginStatisticsRow(label, available);
-                if (available)
-                    ImGui::Text("%.3f ms", value);
-                else
-                    ImGui::TextDisabled("--");
+                if (!available)
+                    return;
+                beginStatisticsRow(label, true);
+                ImGui::Text("%.3f ms", value);
             };
             const auto drawCount =
                 [&beginStatisticsRow](
@@ -15121,7 +15284,10 @@ private:
                 ImGui::EndTable();
             };
 
-            switch (selectedEffect)
+            const auto drawStatisticsTable =
+                [&](StatisticsEffect effect)
+            {
+            switch (effect)
             {
             case StatisticsEffect::CompleteRenderer:
                 if (beginStatisticsTable(
@@ -15439,15 +15605,6 @@ private:
                             "Closest Surface Resolve",
                             RendererTimingStage::MultisampleResolve);
                     }
-                    else
-                    {
-                        drawMilliseconds("Geometry", 0.0, false);
-                        drawMilliseconds("Direct Lighting", 0.0, false);
-                        drawMilliseconds(
-                            "Visibility Lighting Preparation", 0.0, false);
-                        drawMilliseconds(
-                            "Closest Surface Resolve", 0.0, false);
-                    }
                     drawRendererTiming(
                         "Complete Renderer Frame",
                         RendererTimingStage::CompleteFrame);
@@ -15487,6 +15644,29 @@ private:
             default:
                 break;
             }
+            };
+
+            ImGui::PushStyleVar(
+                ImGuiStyleVar_ItemSpacing,
+                ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));
+            for (int effectIndex = 0;
+                effectIndex < static_cast<int>(StatisticsEffect::Count);
+                ++effectIndex)
+            {
+                ImGui::PushID(effectIndex);
+                if (BeginAnimatedToggleRegion(
+                        "##StatisticsTableRegion",
+                        selectedEffect ==
+                            static_cast<StatisticsEffect>(effectIndex),
+                        UiToggleRegionOwner::Performance))
+                {
+                    drawStatisticsTable(
+                        static_cast<StatisticsEffect>(effectIndex));
+                    EndAnimatedToggleRegion();
+                }
+                ImGui::PopID();
+            }
+            ImGui::PopStyleVar();
 
         ImGui::PopItemWidth();
     }
@@ -15837,10 +16017,23 @@ private:
         auto material = m_ui.SelectedMaterial;
         if (material)
         {
-            ImGui::Text(
-                "Material %d: %s",
-                material->materialID,
-                material->name.c_str());
+            const FrontEllipsisText formattedMaterialName =
+                FormatFrontEllipsisUtf8(material->name, 25u);
+            const std::string materialPrefix =
+                "Material " + std::to_string(material->materialID) +
+                ":";
+            ImGui::BeginGroup();
+            ImGui::TextUnformatted(materialPrefix.c_str());
+            ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+            ImGui::TextColored(
+                g_UiVisualTokens.successText,
+                "%s",
+                formattedMaterialName.display.c_str());
+            ImGui::EndGroup();
+            if (formattedMaterialName.truncated)
+                ImGui::SetItemTooltip("%s", material->name.c_str());
+
+            ImGui::PushID(material->materialID);
 
             static constexpr const char* MaterialDomainLabels[] = {
                 "Opaque",
@@ -15859,7 +16052,6 @@ private:
                 int(MaterialDomain::Count) - 1);
             ImGui::TextUnformatted("Material Domain");
             ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::PushID(material->materialID);
             if (BeginRoundedCombo(
                     "##MaterialDomain",
                     MaterialDomainLabels[materialDomainIndex]))
@@ -15884,58 +16076,29 @@ private:
             }
             ImGui::SetItemTooltip(
                 "Choose how the selected surface is rendered.");
-            ImGui::PopID();
 
-            const ImGuiStyle& style = ImGui::GetStyle();
-            ImGui::PushStyleColor(
-                ImGuiCol_ChildBg,
-                g_UiVisualTokens.drawerBackground);
-            ImGui::PushStyleColor(
-                ImGuiCol_FrameBg,
-                g_UiVisualTokens.drawerFrame);
-            ImGui::PushStyleColor(
-                ImGuiCol_FrameBgHovered,
-                g_UiVisualTokens.drawerFrameHovered);
-            ImGui::PushStyleColor(
-                ImGuiCol_FrameBgActive,
-                g_UiVisualTokens.drawerFrameActive);
-            ImGui::PushStyleVar(
-                ImGuiStyleVar_WindowPadding,
-                ImVec2(
-                    g_UiSpacingTokens.tight,
-                    g_UiSpacingTokens.tight));
-            ImGui::PushStyleVar(
-                ImGuiStyleVar_ChildRounding,
-                g_UiVisualTokens.drawerRounding);
-            const bool materialControlsVisible =
-                ImGui::BeginChild(
-                    "##MaterialControlsBody",
-                    ImVec2(0.f, 0.f),
-                    ImGuiChildFlags_AlwaysUseWindowPadding |
-                        ImGuiChildFlags_AutoResizeY |
-                        ImGuiChildFlags_AlwaysAutoResize,
-                    ImGuiWindowFlags_NoScrollbar |
-                        ImGuiWindowFlags_NoScrollWithMouse);
-            if (materialControlsVisible)
-            {
-                ImGui::PushItemWidth(-FLT_MIN);
-                const bool materialChanged =
-                    donut::app::MaterialEditor(
-                        material.get(),
-                        false,
-                        false,
-                        float4(
-                            g_UiVisualTokens.successText.x,
-                            g_UiVisualTokens.successText.y,
-                            g_UiVisualTokens.successText.z,
-                            g_UiVisualTokens.successText.w));
-                if (materialChanged)
-                    m_app->NotifyMaterialCommandChanged(material);
-                ImGui::PopItemWidth();
-            }
-            ImGui::EndChild();
-            ImGui::PopStyleVar(2);
-            ImGui::PopStyleColor(4);
+            ImGui::PushItemWidth(-FLT_MIN);
+            const donut::app::MaterialEditorCallbacks materialCallbacks = {
+                &BeginMaterialEditorConditionalRegion,
+                &EndMaterialEditorConditionalRegion,
+                &DrawMaterialEditorTextureFilename,
+                &DrawMaterialEditorColorEdit3
+            };
+            const bool materialChanged =
+                donut::app::MaterialEditor(
+                    material.get(),
+                    false,
+                    false,
+                    float4(
+                        g_UiVisualTokens.successText.x,
+                        g_UiVisualTokens.successText.y,
+                        g_UiVisualTokens.successText.z,
+                        g_UiVisualTokens.successText.w),
+                    &materialCallbacks);
+            if (materialChanged)
+                m_app->NotifyMaterialCommandChanged(material);
+            ImGui::PopItemWidth();
+            ImGui::PopID();
         }
         else
         {
@@ -15980,6 +16143,13 @@ private:
         ImGui::SetItemTooltip(
             "Enable or disable authored interface motion. Ogg remains "
             "immediate regardless of this setting.");
+
+        ImGui::Checkbox(
+            "Override Visual Maxes",
+            &m_ui.OverrideVisualMaxes);
+        ImGui::SetItemTooltip(
+            "Allow numeric entry beyond a slider's visible track, up to "
+            "the setting's safe supported limits.");
 
         ImGui::TextUnformatted("Interface Skin");
         if (DrawPresetResetIcon(
@@ -16046,7 +16216,8 @@ private:
                     ImGuiColorEditFlags_Float |
                     ImGuiColorEditFlags_DisplayRGB |
                     ImGuiColorEditFlags_AlphaBar |
-                    ImGuiColorEditFlags_AlphaPreviewHalf;
+                    ImGuiColorEditFlags_AlphaPreviewHalf |
+                    ImGuiColorEditFlags_NoTooltip;
                 if (!ImGui::IsUvsrStockWidgetRenderingEnabled())
                     colorEditFlags |= ImGuiColorEditFlags_PickerHueWheel;
                 if (ImGui::ColorEdit4(
@@ -16294,7 +16465,42 @@ private:
         m_HasCmaa2StatSnapshot = snapshot.hasCmaa2Timings;
     }
 
-    static bool DrawSliderFloat(
+    bool DrawBoundedSliderFloat(
+        const char* label,
+        float* value,
+        float logicalMinimum,
+        float logicalMaximum,
+        float travelMinimum,
+        float travelMaximum,
+        const char* format = "%.3f",
+        ImGuiSliderFlags flags = 0)
+    {
+        assert(logicalMinimum <= travelMinimum);
+        assert(travelMinimum <= travelMaximum);
+        assert(travelMaximum <= logicalMaximum);
+        const ImGuiSliderFlags effectiveFlags =
+            flags |
+            (m_ui.OverrideVisualMaxes
+                ? ImGuiSliderFlags_None
+                : ImGuiSliderFlags_AlwaysClamp);
+        const bool changed = ImGui::SliderFloat(
+            label,
+            value,
+            travelMinimum,
+            travelMaximum,
+            format,
+            effectiveFlags);
+        if (changed)
+        {
+            *value = std::clamp(
+                *value,
+                logicalMinimum,
+                logicalMaximum);
+        }
+        return changed;
+    }
+
+    bool DrawSliderFloat(
         const char* label,
         float* value,
         float minimum,
@@ -16302,13 +16508,100 @@ private:
         const char* format = "%.3f",
         ImGuiSliderFlags flags = 0)
     {
-        return ImGui::SliderFloat(
+        return DrawBoundedSliderFloat(
             label,
             value,
             minimum,
             maximum,
+            minimum,
+            maximum,
             format,
             flags);
+    }
+
+    bool DrawBoundedSliderInt(
+        const char* label,
+        int* value,
+        int logicalMinimum,
+        int logicalMaximum,
+        int travelMinimum,
+        int travelMaximum,
+        const char* format = "%d",
+        ImGuiSliderFlags flags = 0)
+    {
+        assert(logicalMinimum <= travelMinimum);
+        assert(travelMinimum <= travelMaximum);
+        assert(travelMaximum <= logicalMaximum);
+        const ImGuiSliderFlags effectiveFlags =
+            flags |
+            (m_ui.OverrideVisualMaxes
+                ? ImGuiSliderFlags_None
+                : ImGuiSliderFlags_AlwaysClamp);
+        const bool changed = ImGui::SliderInt(
+            label,
+            value,
+            travelMinimum,
+            travelMaximum,
+            format,
+            effectiveFlags);
+        if (changed)
+        {
+            *value = std::clamp(
+                *value,
+                logicalMinimum,
+                logicalMaximum);
+        }
+        return changed;
+    }
+
+    bool DrawSliderInt(
+        const char* label,
+        int* value,
+        int minimum,
+        int maximum,
+        const char* format = "%d",
+        ImGuiSliderFlags flags = 0)
+    {
+        return DrawBoundedSliderInt(
+            label,
+            value,
+            minimum,
+            maximum,
+            minimum,
+            maximum,
+            format,
+            flags);
+    }
+
+    bool DrawLightDirectionSliders(
+        double3& direction,
+        bool directional)
+    {
+        auto [azimuth, elevation] = GetCommandLightAngles(
+            direction,
+            directional);
+        bool changed = DrawSliderFloat(
+            "Azimuth",
+            &azimuth,
+            -180.f,
+            180.f,
+            "%.1f deg",
+            ImGuiSliderFlags_NoRoundToFormat);
+        changed |= DrawSliderFloat(
+            "Elevation",
+            &elevation,
+            -90.f,
+            90.f,
+            "%.1f deg",
+            ImGuiSliderFlags_NoRoundToFormat);
+        if (changed)
+        {
+            direction = MakeCommandLightDirection(
+                azimuth,
+                elevation,
+                directional);
+        }
+        return changed;
     }
 
     static bool DrawCenteredActionButton(const char* label, float width)
@@ -16714,7 +17007,8 @@ protected:
     virtual void buildUI(void) override
     {
         g_SettingsAppearanceDrawLists.clear();
-        g_SettingsDecorationDrawList = nullptr;
+        g_PerformanceAppearanceDrawLists.clear();
+        g_PerformanceTableTransitionActive = false;
         for (UiBackdropRect& backdropRect : m_ui.BackdropRects)
         {
             backdropRect.visible = false;
@@ -17029,8 +17323,8 @@ protected:
                     workRectangle.minX -
                     settingsPanelMarginPixels * 2.f);
         const float colorPickerMinimumLaneWidth =
-            ImGui::GetFrameHeight() * 3.f +
-            style.ItemInnerSpacing.x * 2.f +
+            ImGui::GetFrameHeight() * 4.f * (1.f + 4.f * 0.08f) +
+            style.ItemInnerSpacing.x * 4.f +
             style.WindowPadding.x * 2.f;
         const float settingsWindowMaximumWidth =
             std::max(
@@ -17225,8 +17519,12 @@ protected:
             style.WindowRounding);
         DrawSettingsFixedTopInsetShadow(
             performanceWindowDrawList,
-            performanceContentRect,
-            g_UiSpacingTokens.tight,
+            performanceBodyRect,
+            std::max(
+                0.f,
+                performanceContentRect.Min.y -
+                    performanceBodyRect.Min.y +
+                    g_UiSpacingTokens.tight),
             style.WindowRounding,
             false);
         DrawDrawerBodyOutline(
@@ -17380,15 +17678,20 @@ protected:
             panelStackMaximumBottom,
             settingsBodyWindow->ParentWindow->Pos.y +
                 settingsBodyWindow->ParentWindow->Size.y);
+        ImVec4 colorPickerContentLayer =
+            g_UiVisualTokens.drawerBackground;
+        colorPickerContentLayer.w *= 0.72f;
+        ImVec4 colorPickerControlLayer =
+            g_UiVisualTokens.drawerBackground;
         ImGui::PushUvsrColorPickerPopupContentRight(
             settingsBodyWindow->InnerRect.Max.x,
             colorPickerMaximumBottom,
-            g_UiVisualTokens.colorPickerSurface);
+            g_UiVisualTokens.panelInsetFrame,
+            colorPickerContentLayer,
+            colorPickerControlLayer);
         ImDrawList* settingsBodyDrawList =
             settingsBodyWindow->DrawList;
-        TrackSettingsDecorationDrawList(
-            settingsBodyDrawList,
-            true);
+        TrackSettingsAppearanceDrawList(settingsBodyDrawList);
         BeginSettingsScrollStability();
 
         // Keep the panel visually unchanged while a selection waits for its
@@ -17476,7 +17779,13 @@ protected:
             default:
                 break;
             }
-            ImGui::Text("Status: %s", representationState);
+            if (representationStatus.state ==
+                WorldSpaceRepresentationState::Idle)
+            {
+                ImGui::TextDisabled("Status: Inactive");
+            }
+            else
+                ImGui::Text("Status: %s", representationState);
             if (representationStatus.totalBlasCount > 0u)
             {
                 ImGui::TextDisabled(
@@ -17490,11 +17799,6 @@ protected:
             {
                 ImGui::TextDisabled(
                     "Requires DirectX Raytracing 1.1 inline ray queries.");
-            }
-            else
-            {
-                ImGui::TextDisabled(
-                    "Builds lazily when a ray traced technique needs it.");
             }
 
             if (BeginAnimatedTreeNode(
@@ -17957,7 +18261,7 @@ protected:
                         BeginVisuallyDisabledUiScope(
                             "##RatioEstimatorSamplesDisabledPresentation",
                             !multipleSamplesEnabled);
-                    if (ImGui::SliderInt(
+                    if (DrawSliderInt(
                             "Samples Per Pixel##RatioEstimatorShadows",
                             &sampleRate,
                             1,
@@ -18249,10 +18553,13 @@ protected:
                     "##VisibilityAmbientControls",
                     visibility.ambientOcclusion.enabled))
             {
-            if (ImGui::SliderFloat(
-                    "Strength", &visibility.ambientOcclusion.strength,
+            if (DrawBoundedSliderFloat(
+                    "Strength",
+                    &visibility.ambientOcclusion.strength,
                     MinimumVisibilityAmbientOcclusionStrength,
                     MaximumVisibilityAmbientOcclusionStrength,
+                    MinimumVisibilityAmbientOcclusionStrength,
+                    2.f,
                     "%.2f"))
                 finishVisibilityEdit(visibility);
             ImGui::SetItemTooltip(
@@ -18313,10 +18620,14 @@ protected:
                     "##VisibilityIndirectControls",
                     visibility.indirectDiffuse.enabled))
             {
-            if (ImGui::SliderFloat(
+            if (DrawBoundedSliderFloat(
                     "Intensity",
                     &visibility.indirectDiffuse.intensity,
-                    0.f, 16.f, "%.2f"))
+                    0.f,
+                    16.f,
+                    0.f,
+                    4.f,
+                    "%.2f"))
                 finishVisibilityEdit(visibility);
             ImGui::SetItemTooltip(
                 "Scale the diffuse light gathered from nearby surfaces.");
@@ -18454,7 +18765,13 @@ protected:
 
             int samples =
                 static_cast<int>(visibility.sampling.maximumSampleCount);
-            if (ImGui::SliderInt("Samples", &samples, 1, 64))
+            if (DrawBoundedSliderInt(
+                    "Samples",
+                    &samples,
+                    1,
+                    64,
+                    1,
+                    48))
             {
                 visibility.sampling.maximumSampleCount =
                     static_cast<uint32_t>(samples);
@@ -18471,9 +18788,11 @@ protected:
                     profileDefaults.sampling.maximumSampleCount;
                 finishVisibilityEdit(visibility);
             }
-            if (ImGui::SliderFloat(
+            if (DrawBoundedSliderFloat(
                     "Radius", &visibility.sampling.radius,
-                    0.1f, 10.f, "%.2f"))
+                    0.1f, 10.f,
+                    0.1f, 6.f,
+                    "%.2f"))
                 finishVisibilityEdit(visibility);
             ImGui::SetItemTooltip(
                 "Set the world-space reach of nearby visibility samples.");
@@ -18486,9 +18805,11 @@ protected:
                     profileDefaults.sampling.radius;
                 finishVisibilityEdit(visibility);
             }
-            if (ImGui::SliderFloat(
+            if (DrawBoundedSliderFloat(
                     "Thickness", &visibility.sampling.thickness,
-                    0.01f, 2.f, "%.2f"))
+                    0.01f, 2.f,
+                    0.01f, 1.f,
+                    "%.2f"))
                 finishVisibilityEdit(visibility);
             ImGui::SetItemTooltip(
                 "Set the accepted thickness of potential occluding surfaces.");
@@ -18501,11 +18822,13 @@ protected:
                     profileDefaults.sampling.thickness;
                 finishVisibilityEdit(visibility);
             }
-            if (ImGui::SliderFloat(
+            if (DrawBoundedSliderFloat(
                     "Distribution",
                     &visibility.sampling.stepDistributionExponent,
                     MinimumVisibilityStepDistributionExponent,
                     MaximumVisibilityStepDistributionExponent,
+                    MinimumVisibilityStepDistributionExponent,
+                    4.f,
                     "%.2f"))
                 finishVisibilityEdit(visibility);
             ImGui::SetItemTooltip(
@@ -18623,7 +18946,7 @@ protected:
                         profileDefaults.reconstruction.spatialFilter;
                     finishVisibilityEdit(visibility);
                 }
-                if (ImGui::SliderFloat(
+                if (DrawSliderFloat(
                         "Radius##VisibilitySpatial",
                         &visibility.reconstruction.spatialRadius,
                         1.f, 8.f, "%.1f"))
@@ -18664,11 +18987,6 @@ protected:
                 "NVIDIA NRD is available in this build. Each signal keeps "
                 "an independent history and falls back to its raw result if "
                 "its required inputs are unavailable.");
-#else
-            ImGui::TextDisabled(
-                "NVIDIA NRD is not included in this build. Choices are "
-                "preserved, but raw results remain active until UVSR is "
-                "built with NRD support.");
 #endif
 
             const auto drawDenoisingSignal =
@@ -18827,7 +19145,7 @@ protected:
                         const std::string historyLabel =
                             std::string("History Length##Denoising") +
                             identifier;
-                        if (ImGui::SliderInt(
+                        if (DrawSliderInt(
                                 historyLabel.c_str(),
                                 &historyLength,
                                 1,
@@ -18844,7 +19162,7 @@ protected:
 
                     const std::string disocclusionLabel =
                         std::string("Disocclusion##Denoising") + identifier;
-                    if (ImGui::SliderFloat(
+                    if (DrawSliderFloat(
                             disocclusionLabel.c_str(),
                             &signal.disocclusionThreshold,
                             0.001f,
@@ -18864,7 +19182,7 @@ protected:
                     {
                         const std::string antiLagLabel =
                             std::string("Response##Denoising") + identifier;
-                        if (ImGui::SliderFloat(
+                        if (DrawSliderFloat(
                                 antiLagLabel.c_str(),
                                 &signal.antiLagStrength,
                                 0.f,
@@ -18936,6 +19254,11 @@ protected:
                     m_ui.RayTracedSkyVisibility.outputHitDistance,
                 "Matched sky visibility and hit distance are ready.",
                 "Disable Ratio Estimator and enable Output Hit Distance in Sky.");
+
+#if !UVSR_WITH_NRD
+            ImGui::TextDisabled(
+                "NRD is not actually included in this build");
+#endif
 
             EndDrawerBody();
         }
@@ -19237,27 +19560,6 @@ protected:
                     ui->TemporalAaSharpness =
                         TemporalAaDefaultSharpness;
                 };
-            drawPresetEnum(
-                "Cost",
-                aliasing.temporal.costMode,
-                CostLabels,
-                static_cast<int>(std::size(CostLabels)),
-                temporalCostCustom,
-                applyTemporalCostPreset);
-            ImGui::SetItemTooltip(
-                "Choose the retained history quality and processing cost. Cost "
-                "changes append (Custom). The circular arrow restores the "
-                "factory Cost and every Cost control.");
-            if (DrawPresetResetIcon(
-                    "TemporalCost",
-                    aliasing.temporal.costMode !=
-                        aliasingDefaults.temporal.costMode ||
-                    temporalCostCustom))
-            {
-                applyTemporalCostPreset(
-                    aliasingDefaults.temporal.costMode);
-            }
-
             ImGui::SetNextItemOpen(false, ImGuiCond_Once);
             if (BeginAnimatedTreeNode(
                     "Advanced##TemporalReconstructive",
@@ -19351,7 +19653,6 @@ protected:
                     }
                 };
 
-                ImGui::SeparatorText("Algorithm");
                 static constexpr const char* JitterSequenceLabels[] = {
                     "Rotated Grid 4",
                     "Uniform Helix 4",
@@ -19511,8 +19812,13 @@ protected:
                     aliasing.temporal.algorithmOverrides.historyFrames < 0
                     ? presetHistoryFrames
                     : aliasing.temporal.algorithmOverrides.historyFrames;
-                if (ImGui::SliderInt(
-                        "History Frames", &historyFrames, 1, 32))
+                if (DrawBoundedSliderInt(
+                        "History Frames",
+                        &historyFrames,
+                        1,
+                        32,
+                        1,
+                        16))
                 {
                     aliasing.temporal.algorithmOverrides.historyFrames =
                         historyFrames == presetHistoryFrames
@@ -19535,7 +19841,7 @@ protected:
                     : aliasing.temporal.algorithmOverrides.historyStrength;
                 float historyStrengthPercent =
                     resolvedHistoryStrength * 100.f;
-                if (ImGui::SliderFloat(
+                if (DrawSliderFloat(
                     "History Strength",
                     &historyStrengthPercent,
                     0.f,
@@ -19561,7 +19867,34 @@ protected:
                         -1.f;
                 }
 
-                ImGui::SeparatorText("Cost");
+                ImGui::SetNextItemOpen(false, ImGuiCond_Once);
+                if (BeginAnimatedTreeNode(
+                        "Cost##TemporalAdvancedCost",
+                        ImGuiTreeNodeFlags_None,
+                        "Tune retained history cost and output sharpening. "
+                        "This section is closed by default."))
+                {
+                drawPresetEnum(
+                    "Mode##TemporalCost",
+                    aliasing.temporal.costMode,
+                    CostLabels,
+                    static_cast<int>(std::size(CostLabels)),
+                    temporalCostCustom,
+                    applyTemporalCostPreset);
+                ImGui::SetItemTooltip(
+                    "Choose the retained history quality and processing "
+                    "cost. Cost changes append (Custom). The circular arrow "
+                    "restores the factory Cost and every Cost control.");
+                if (DrawPresetResetIcon(
+                        "TemporalCost",
+                        aliasing.temporal.costMode !=
+                            aliasingDefaults.temporal.costMode ||
+                        temporalCostCustom))
+                {
+                    applyTemporalCostPreset(
+                        aliasingDefaults.temporal.costMode);
+                }
+
                 static constexpr const char*
                     StorageLabels[] = { "Robust", "Compact" };
                 drawAdvancedEnum(
@@ -19666,7 +19999,7 @@ protected:
                         "##TemporalSharpenControls",
                         m_ui.TemporalAaSharpenEnabled))
                 {
-                    ImGui::SliderFloat(
+                    DrawSliderFloat(
                         "Sharpness",
                         &m_ui.TemporalAaSharpness,
                         TemporalAaMinimumSharpness,
@@ -19683,6 +20016,8 @@ protected:
                             TemporalAaDefaultSharpness;
                     }
                     EndAnimatedToggleRegion();
+                }
+                EndAnimatedTreeNode();
                 }
                 EndAnimatedTreeNode();
             }
@@ -19758,7 +20093,7 @@ protected:
                 SetNextLabeledControlWidth(
                     "Edge Sharpness##FastApproximate",
                     settingsControlWidth);
-                ImGui::SliderFloat(
+                DrawSliderFloat(
                     "Edge Sharpness##FastApproximate",
                     &aliasing.fastApproximate.edgeSharpness,
                     FastApproximateAaMinimumEdgeSharpness,
@@ -19778,7 +20113,7 @@ protected:
                 SetNextLabeledControlWidth(
                     "Relative Edge Threshold##FastApproximate",
                     settingsControlWidth);
-                ImGui::SliderFloat(
+                DrawSliderFloat(
                     "Relative Edge Threshold##FastApproximate",
                     &aliasing.fastApproximate.edgeThreshold,
                     FastApproximateAaMinimumEdgeThreshold,
@@ -19798,7 +20133,7 @@ protected:
                 SetNextLabeledControlWidth(
                     "Minimum Edge Threshold##FastApproximate",
                     settingsControlWidth);
-                ImGui::SliderFloat(
+                DrawSliderFloat(
                     "Minimum Edge Threshold##FastApproximate",
                     &aliasing.fastApproximate.darkEdgeThreshold,
                     FastApproximateAaMinimumDarkEdgeThreshold,
@@ -19881,7 +20216,7 @@ protected:
                 SetNextLabeledControlWidth(
                     "Edge Threshold##ConservativeMorphological",
                     settingsControlWidth);
-                ImGui::SliderFloat(
+                DrawSliderFloat(
                     "Edge Threshold##ConservativeMorphological",
                     &aliasing.cmaa2.edgeThreshold,
                     Cmaa2MinimumEdgeThreshold,
@@ -20347,11 +20682,13 @@ protected:
                         "##AutoExposureControls",
                         m_ui.AutoExposure.enabled))
                 {
-                    if (DrawSliderFloat(
+                    if (DrawBoundedSliderFloat(
                             "Exposure Compensation",
                             &m_ui.AutoExposure.exposureCompensationEV,
                             AutoExposureMinimumCompensationEV,
                             AutoExposureMaximumCompensationEV,
+                            -8.f,
+                            8.f,
                             "%+.2f EV"))
                     {
                         m_ui.AutoExposure =
@@ -20368,11 +20705,13 @@ protected:
                         m_ui.AutoExposure.exposureCompensationEV =
                             AutoExposureDefaultCompensationEV;
                     }
-                    if (DrawSliderFloat(
+                    if (DrawBoundedSliderFloat(
                             "Maximum Brightening",
                             &m_ui.AutoExposure.maximumBrighteningEV,
                             AutoExposureMinimumMovementEV,
                             AutoExposureMaximumMovementEV,
+                            AutoExposureMinimumMovementEV,
+                            8.f,
                             "%.2f EV"))
                     {
                         m_ui.AutoExposure =
@@ -20389,11 +20728,13 @@ protected:
                         m_ui.AutoExposure.maximumBrighteningEV =
                             AutoExposureDefaultMaximumBrighteningEV;
                     }
-                    if (DrawSliderFloat(
+                    if (DrawBoundedSliderFloat(
                             "Maximum Darkening",
                             &m_ui.AutoExposure.maximumDarkeningEV,
                             AutoExposureMinimumMovementEV,
                             AutoExposureMaximumMovementEV,
+                            AutoExposureMinimumMovementEV,
+                            8.f,
                             "%.2f EV"))
                     {
                         m_ui.AutoExposure =
@@ -20478,11 +20819,13 @@ protected:
                         "##DiffuseIblControls",
                         m_ui.EnableDiffuseIbl))
                 {
-                    if (DrawSliderFloat(
+                    if (DrawBoundedSliderFloat(
                             "Diffuse Strength##ImageBasedLighting",
                             &m_ui.DiffuseIblStrength,
                             0.f,
                             4.f,
+                            0.f,
+                            2.f,
                             "%.2f"))
                     {
                         m_app->ResetImageBasedLightingHistory();
@@ -20518,11 +20861,13 @@ protected:
                         "##SpecularIblControls",
                         m_ui.EnableSpecularIbl))
                 {
-                    if (DrawSliderFloat(
+                    if (DrawBoundedSliderFloat(
                             "Specular Strength##ImageBasedLighting",
                             &m_ui.SpecularIblStrength,
                             0.f,
                             4.f,
+                            0.f,
+                            2.f,
                             "%.2f"))
                     {
                         m_app->ResetImageBasedLightingHistory();
@@ -20687,7 +21032,7 @@ protected:
                     BeginVisuallyDisabledUiScope(
                         "##SkyVisibilitySamplesDisabledPresentation",
                         !skyVisibility.useRatioEstimator);
-                if (ImGui::SliderInt(
+                if (DrawSliderInt(
                         "Samples Per Pixel##RayTracedSkyVisibility",
                         &sampleRate,
                         1,
@@ -21039,11 +21384,13 @@ protected:
                                     defaults.hotspotStrength;
                             }
 
-                            DrawSliderFloat(
+                            DrawBoundedSliderFloat(
                                 "Sway",
                                 &flashlight.swayDegrees,
                                 0.f,
                                 FlashlightMaximumSwayDegrees,
+                                0.f,
+                                1.f,
                                 "%.2f degrees");
                             ImGui::SetItemTooltip(
                                 "Set the maximum subtle handheld aim motion. "
@@ -21099,11 +21446,13 @@ protected:
                                 defaults.peakIntensityCandela;
                         }
 
-                        DrawSliderFloat(
+                        DrawBoundedSliderFloat(
                             "Beam Size",
                             &flashlight.beamSizeDegrees,
                             FlashlightMinimumBeamSizeDegrees,
                             FlashlightMaximumBeamSizeDegrees,
+                            FlashlightMinimumBeamSizeDegrees,
+                            60.f,
                             "%.1f degrees");
                         ImGui::SetItemTooltip(
                             "Set the full horizontal and vertical outer beam "
@@ -21118,11 +21467,13 @@ protected:
                                 defaults.beamSizeDegrees;
                         }
 
-                        bool angularSizeChanged = DrawSliderFloat(
+                        bool angularSizeChanged = DrawBoundedSliderFloat(
                             "Angular Size",
                             &flashlight.angularSizeDegrees,
                             FlashlightMinimumAngularSizeDegrees,
                             FlashlightMaximumAngularSizeDegrees,
+                            FlashlightMinimumAngularSizeDegrees,
+                            10.f,
                             "%.2f degrees");
                         ImGui::SetItemTooltip(
                             "Set the apparent diameter of the analytical "
@@ -21203,11 +21554,19 @@ protected:
                             flashlight.colorLinearGreen,
                             flashlight.colorLinearBlue
                         };
+                        ImGuiColorEditFlags flashlightColorFlags =
+                            ImGuiColorEditFlags_Float |
+                            ImGuiColorEditFlags_DisplayRGB |
+                            ImGuiColorEditFlags_NoTooltip;
+                        if (!ImGui::IsUvsrStockWidgetRenderingEnabled())
+                        {
+                            flashlightColorFlags |=
+                                ImGuiColorEditFlags_PickerHueWheel;
+                        }
                         if (ImGui::ColorEdit3(
                                 "Color",
                                 flashlightColor,
-                                ImGuiColorEditFlags_Float |
-                                    ImGuiColorEditFlags_DisplayRGB))
+                                flashlightColorFlags))
                         {
                             flashlight.colorLinearRed =
                                 flashlightColor[0];
@@ -21376,10 +21735,19 @@ protected:
                     const auto drawLightColor =
                         [&](Light& light)
                         {
+                            ImGuiColorEditFlags lightColorFlags =
+                                ImGuiColorEditFlags_Float |
+                                ImGuiColorEditFlags_DisplayRGB |
+                                ImGuiColorEditFlags_NoTooltip;
+                            if (!ImGui::IsUvsrStockWidgetRenderingEnabled())
+                            {
+                                lightColorFlags |=
+                                    ImGuiColorEditFlags_PickerHueWheel;
+                            }
                             ImGui::ColorEdit3(
                                 "Color",
                                 &light.color.x,
-                                ImGuiColorEditFlags_Float);
+                                lightColorFlags);
                             ImGui::SetItemTooltip(
                                 "Set the selected light's color.");
                             if (DrawPresetResetIcon(
@@ -21395,7 +21763,7 @@ protected:
                         [&](Light& light, bool negative)
                         {
                             double3 direction = light.GetDirection();
-                            if (app::AzimuthElevationSliders(
+                            if (DrawLightDirectionSliders(
                                     direction, negative))
                             {
                                 light.SetDirection(direction);
@@ -21441,11 +21809,13 @@ protected:
                             light.irradiance =
                                 defaultLight.irradiance;
                         }
-                        if (DrawSliderFloat(
+                        if (DrawBoundedSliderFloat(
                                 "Angular Size",
                                 &light.angularSize,
                                 0.f,
-                                20.f))
+                                20.f,
+                                0.f,
+                                10.f))
                         {
                             m_app->ResetImageBasedLightingHistory();
                         }
@@ -21548,11 +21918,13 @@ protected:
                             light.intensity =
                                 defaultLight.intensity;
                         }
-                        DrawSliderFloat(
+                        DrawBoundedSliderFloat(
                             "Inner Angle",
                             &light.innerAngle,
                             0.f,
-                            180.f);
+                            180.f,
+                            0.f,
+                            90.f);
                         ImGui::SetItemTooltip(
                             "Set the full-bright spot cone angle.");
                         if (DrawPresetResetIcon(
@@ -21564,11 +21936,13 @@ protected:
                             light.innerAngle =
                                 defaultLight.innerAngle;
                         }
-                        DrawSliderFloat(
+                        DrawBoundedSliderFloat(
                             "Outer Angle",
                             &light.outerAngle,
                             0.f,
-                            180.f);
+                            180.f,
+                            0.f,
+                            90.f);
                         ImGui::SetItemTooltip(
                             "Set the outer spot cone angle.");
                         if (DrawPresetResetIcon(
@@ -21753,13 +22127,16 @@ protected:
                 settingsRootWindow->Pos.y +
                     settingsRootWindow->Size.y - 0.5f));
         ImDrawList* settingsDecorationDrawList =
-            g_SettingsDecorationDrawList
-                ? g_SettingsDecorationDrawList
-                : settingsBodyDrawList;
-        // ImGui submits drawer child windows after their Settings parent. Put
-        // the shared viewport chrome on the last visible Settings child so the
-        // opaque ring and fixed shadow remain above whichever ordinary drawer
-        // reaches the viewport edge, without a General-specific paint path.
+            ResolveFinalSettingsDecorationDrawList(settingsBodyWindow);
+        if (settingsDecorationDrawList &&
+            settingsDecorationDrawList->_Splitter._Count > 1)
+        {
+            settingsDecorationDrawList->ChannelsMerge();
+        }
+        // Dear ImGui submits a parent before its recursively ordered visible
+        // descendants. Append shared chrome to that completed final draw list
+        // so hidden measurement children and drawer submission order cannot
+        // move the fixed inset shadow behind General or another drawer.
         DrawFilledRoundedInsetFrame(
             settingsDecorationDrawList,
             settingsRootBodyRect,
@@ -21767,8 +22144,12 @@ protected:
             style.WindowRounding);
         DrawSettingsFixedTopInsetShadow(
             settingsDecorationDrawList,
-            settingsBodyViewportRect,
-            g_UiSpacingTokens.tight,
+            settingsRootBodyRect,
+            std::max(
+                0.f,
+                settingsBodyViewportRect.Min.y -
+                    settingsRootBodyRect.Min.y +
+                    g_UiSpacingTokens.tight),
             style.WindowRounding,
             false);
         DrawDrawerBodyOutline(
@@ -21838,8 +22219,12 @@ protected:
                 rootBodyRounding);
             DrawSettingsFixedTopInsetShadow(
                 settingsWindowDrawList,
-                retainedSettingsContentRect,
-                g_UiSpacingTokens.tight,
+                settingsBodyRect,
+                std::max(
+                    0.f,
+                    retainedSettingsContentRect.Min.y -
+                        settingsBodyRect.Min.y +
+                        g_UiSpacingTokens.tight),
                 rootBodyRounding,
                 false);
             DrawDrawerBodyOutline(
@@ -21952,6 +22337,15 @@ protected:
             panelStackCenter,
             settingsAppearanceScale,
             settingsAppearanceOpacity);
+        for (ImDrawList* drawList :
+            g_PerformanceAppearanceDrawLists)
+        {
+            ApplyWindowAppearance(
+                drawList,
+                panelStackCenter,
+                settingsAppearanceScale,
+                settingsAppearanceOpacity);
+        }
         ApplyWindowAppearance(
             settingsWindowDrawList,
             panelStackCenter,
@@ -21976,7 +22370,8 @@ protected:
         TryApplyDeferredDropdownUiActions(
             deferredDropdownCompositionIdle(
                 settingsLayoutIdle &&
-                    !performanceCollapseTransitionActive,
+                    !performanceCollapseTransitionActive &&
+                    !g_PerformanceTableTransitionActive,
                 settingsScrollIdle && performanceScrollIdle));
         RestoreActiveUiWordSpacing();
         ImGui::PopFont();

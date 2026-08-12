@@ -69,29 +69,107 @@ namespace
     struct TooltipObservation
     {
         bool submitted = false;
+        bool noInputs = false;
+        bool alwaysAutoResize = false;
+        bool hasVerticalScrollbar = false;
         ImVec2 windowSize;
+        ImVec2 windowPosition;
         ImVec2 contentSize;
+        ImVec2 mousePosition;
+        ImRect ownerRect;
+        ImRect visualBounds{
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX)
+        };
+        float maximumVertexAlpha = 0.0f;
+    };
+
+    struct TooltipDragObservation
+    {
+        bool retainedTooltipInactive = false;
+        bool retainedOwnerReset = false;
+        bool dragTooltipActive = false;
+        bool dragTooltipNoInputs = false;
     };
 
     struct ColorPickerObservation
     {
         bool popupOpen = false;
+        bool transitionRegistered = false;
+        bool transitionTargetOpen = false;
+        bool transitionInteractionReady = false;
+        bool transitionAtZeroEndpoint = false;
+        bool onlyPickerPopupOpen = false;
         ImGuiID popupId = 0;
+        int openPopupCount = 0;
+        int barCount = 0;
         float contentRight = 0.0f;
         float maximumBottom = 0.0f;
         float colorAlpha = 0.0f;
+        float transitionAmount = 0.0f;
+        float maximumVertexAlpha = 0.0f;
         bool requestedSurfaceApplied = false;
+        bool requestedContentLayerApplied = false;
+        bool requestedPickerLayerApplied = false;
         bool activeDrawListReported = false;
         bool activeDrawListMatchesPopup = false;
         bool finalCursorLayeredAndClipped = false;
         bool hueBarRoundedAndVisible = false;
         bool alphaBarRoundedAndVisible = false;
-        bool hueMarkerPairVisible = false;
-        bool alphaMarkerPairVisible = false;
+        bool alphaBarInteriorCovered = false;
+        bool alphaCheckerEdgeCoverageContinuous = false;
+        bool hueHollowMarkerVisible = false;
+        bool alphaHollowMarkerVisible = false;
+        bool currentBarVisible = false;
+        bool originalBarVisible = false;
+        bool bottomControlsSpanAllBars = false;
+        bool sourcePointerVisible = false;
+        bool sourcePointerTargetsSwatch = false;
+        bool sourcePointerTipAttached = false;
+        bool sourcePointerUsesCarvedFrame = false;
+        bool authoredPopupUsesCarvedFrameOnly = false;
+        bool popupFrameHalfPixelAligned = false;
+        bool contentFrameHalfPixelAligned = false;
+        bool selectorMarkerCursorClearance = false;
+        bool selectorEndpointExclusionObserved = false;
+        bool sourceSwatchShadowVisible = false;
+        bool sourceSwatchBorderless = false;
+        bool hueBarInteriorOpaque = false;
+        bool selectorVisualEndpointsFound = false;
+        int opaqueSelectorVertexCount = 0;
+        float wheelThickness = 0.0f;
+        float endpointSnapRadius = 0.0f;
+        float endpointMarkerRadius = 0.0f;
+        float drawListFringe = 0.0f;
+        float sourcePointerTipDistance = FLT_MAX;
+        float sourcePointerFrameMaximumAlpha = 0.0f;
+        float minimumMarkerCursorGap = FLT_MAX;
+        float requiredMarkerCursorGap = 0.0f;
         ImRect popupRect;
+        ImRect popupInnerRect;
         ImRect viewportRect;
+        ImRect sourceSwatchRect;
         ImRect hueBarRect;
         ImRect alphaBarRect;
+        ImRect currentBarRect;
+        ImRect originalBarRect;
+        ImRect selectorRect;
+        ImVec2 selectorCenter;
+        ImVec2 selectorCursorCenter;
+        ImRect visualBounds{
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX)
+        };
+        std::array<ImVec2, 3> selectorEndpoints{};
+        std::array<bool, 3> selectorEndpointMarkerVisible{};
+        ImRect contentLayerRect{
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX)
+        };
+        ImRect pickerLayerRect{
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX)
+        };
     };
 
     struct GradientFrameObservation
@@ -159,6 +237,94 @@ namespace
     bool Near(float left, float right)
     {
         return std::abs(left - right) <= 1e-5f;
+    }
+
+    ImVec2 Add(const ImVec2& left, const ImVec2& right)
+    {
+        return ImVec2(left.x + right.x, left.y + right.y);
+    }
+
+    ImVec2 Subtract(const ImVec2& left, const ImVec2& right)
+    {
+        return ImVec2(left.x - right.x, left.y - right.y);
+    }
+
+    ImVec2 Scale(const ImVec2& value, float amount)
+    {
+        return ImVec2(value.x * amount, value.y * amount);
+    }
+
+    float Cross(const ImVec2& first, const ImVec2& second)
+    {
+        return first.x * second.y - first.y * second.x;
+    }
+
+    float RayPolygonBoundaryDistance(
+        const ImVec2& center,
+        const ImVec2& direction,
+        const ImVec2* points,
+        int pointCount)
+    {
+        const float directionLengthSquared = ImLengthSqr(direction);
+        if (directionLengthSquared <= FLT_EPSILON || pointCount < 3)
+            return 0.0f;
+
+        const ImVec2 unitDirection = Scale(
+            direction,
+            1.0f / ImSqrt(directionLengthSquared));
+        float boundaryDistance = FLT_MAX;
+        for (int pointIndex = 0; pointIndex < pointCount; ++pointIndex)
+        {
+            const ImVec2 first = points[pointIndex];
+            const ImVec2 second = points[(pointIndex + 1) % pointCount];
+            const ImVec2 edge = Subtract(second, first);
+            const float denominator = Cross(unitDirection, edge);
+            if (ImAbs(denominator) <= FLT_EPSILON)
+                continue;
+
+            const ImVec2 delta = Subtract(first, center);
+            const float distance = Cross(delta, edge) / denominator;
+            const float edgeAmount =
+                Cross(delta, unitDirection) / denominator;
+            if (distance >= 0.0f &&
+                edgeAmount >= -0.0001f &&
+                edgeAmount <= 1.0001f)
+            {
+                boundaryDistance = ImMin(boundaryDistance, distance);
+            }
+        }
+        return boundaryDistance < FLT_MAX ? boundaryDistance : 0.0f;
+    }
+
+    ImVec2 MapRoundedSelectorPoint(
+        const ImVec2 (&sharpVertices)[3],
+        const ImVector<ImVec2>& contour,
+        const ImVec2& sharpPosition)
+    {
+        const ImVec2 center = Scale(
+            Add(Add(sharpVertices[0], sharpVertices[1]), sharpVertices[2]),
+            1.0f / 3.0f);
+        const ImVec2 direction = Subtract(sharpPosition, center);
+        if (ImLengthSqr(direction) <= FLT_EPSILON)
+            return center;
+        const float sharpBoundary = RayPolygonBoundaryDistance(
+            center,
+            direction,
+            sharpVertices,
+            3);
+        const float roundedBoundary = RayPolygonBoundaryDistance(
+            center,
+            direction,
+            contour.Data,
+            contour.Size);
+        if (sharpBoundary <= FLT_EPSILON ||
+            roundedBoundary <= FLT_EPSILON)
+        {
+            return sharpPosition;
+        }
+        return Add(
+            center,
+            Scale(direction, roundedBoundary / sharpBoundary));
     }
 
     float Luminance(ImU32 color)
@@ -300,42 +466,250 @@ namespace
                 coveredInterior);
     }
 
-    bool HasBlackAndWhiteMarkerVertices(
-        const ImDrawList& drawList,
-        const ImRect& region)
+    bool IsCheckerVertex(const ImDrawVert& vertex)
     {
-        constexpr ImU32 RgbMask = ~IM_COL32_A_MASK;
-        constexpr ImU32 BlackRgb = IM_COL32(0, 0, 0, 0);
-        constexpr ImU32 WhiteRgb = IM_COL32(255, 255, 255, 0);
-        bool hasBlack = false;
-        bool hasWhite = false;
-        for (const ImDrawVert& vertex : drawList.VtxBuffer)
-        {
-            if (!region.Contains(vertex.pos) || Alpha(vertex.col) < 0.5f)
-                continue;
-            const ImU32 rgb = vertex.col & RgbMask;
-            hasBlack |= rgb == BlackRgb;
-            hasWhite |= rgb == WhiteRgb;
-        }
-        return hasBlack && hasWhite;
+        const int red =
+            (vertex.col >> IM_COL32_R_SHIFT) & 0xff;
+        const int green =
+            (vertex.col >> IM_COL32_G_SHIFT) & 0xff;
+        const int blue =
+            (vertex.col >> IM_COL32_B_SHIFT) & 0xff;
+        return red == green && green == blue &&
+            (red == 128 || red == 204);
     }
 
-    bool HasVerticalBarMarkerPair(
+    float RoundedRectDistance(
+        const ImRect& bounds,
+        float rounding,
+        const ImVec2& position)
+    {
+        const ImVec2 center = bounds.GetCenter();
+        const ImVec2 size = bounds.GetSize();
+        const ImVec2 halfSize(size.x * 0.5f, size.y * 0.5f);
+        const ImVec2 roundedHalfSize(
+            ImMax(halfSize.x - rounding, 0.0f),
+            ImMax(halfSize.y - rounding, 0.0f));
+        const ImVec2 offset(
+            ImAbs(position.x - center.x) - roundedHalfSize.x,
+            ImAbs(position.y - center.y) - roundedHalfSize.y);
+        const ImVec2 outside(
+            ImMax(offset.x, 0.0f),
+            ImMax(offset.y, 0.0f));
+        return ImSqrt(ImLengthSqr(outside)) +
+            ImMin(ImMax(offset.x, offset.y), 0.0f) - rounding;
+    }
+
+    bool HasTightRoundedCheckerCoverage(
+        const ImDrawList& drawList,
+        const ImRect& rect,
+        float rounding)
+    {
+        if (rect.GetWidth() <= 0.0f ||
+            rect.GetHeight() <= 0.0f ||
+            rounding <= 1.0f)
+        {
+            return false;
+        }
+
+        bool coveredInside[8] = {};
+        bool clearOutside[8] = {};
+        const float leftCornerEnd = rect.Min.x + rounding;
+        const float rightCornerStart = rect.Max.x - rounding;
+        const float topCornerEnd = rect.Min.y + rounding;
+        const float bottomCornerStart = rect.Max.y - rounding;
+        for (const ImDrawVert& vertex : drawList.VtxBuffer)
+        {
+            if (!IsCheckerVertex(vertex) ||
+                vertex.pos.x < rect.Min.x - 1.5f ||
+                vertex.pos.x > rect.Max.x + 1.5f ||
+                vertex.pos.y < rect.Min.y - 1.5f ||
+                vertex.pos.y > rect.Max.y + 1.5f)
+            {
+                continue;
+            }
+
+            const float distance = RoundedRectDistance(
+                rect,
+                rounding,
+                vertex.pos);
+            const float alpha = Alpha(vertex.col);
+            const bool tightlyCovered =
+                distance >= -0.9f &&
+                distance <= -0.25f &&
+                alpha >= 0.70f;
+            const bool tightlyClear =
+                distance >= 0.25f &&
+                distance <= 0.9f &&
+                alpha <= 0.30f;
+            bool regions[8] = {
+                vertex.pos.x >= leftCornerEnd &&
+                    vertex.pos.x <= rightCornerStart,
+                vertex.pos.x >= leftCornerEnd &&
+                    vertex.pos.x <= rightCornerStart,
+                vertex.pos.y >= topCornerEnd &&
+                    vertex.pos.y <= bottomCornerStart,
+                vertex.pos.y >= topCornerEnd &&
+                    vertex.pos.y <= bottomCornerStart,
+                vertex.pos.x < leftCornerEnd &&
+                    vertex.pos.y < topCornerEnd,
+                vertex.pos.x > rightCornerStart &&
+                    vertex.pos.y < topCornerEnd,
+                vertex.pos.x < leftCornerEnd &&
+                    vertex.pos.y > bottomCornerStart,
+                vertex.pos.x > rightCornerStart &&
+                    vertex.pos.y > bottomCornerStart
+            };
+            regions[0] &= vertex.pos.y <= rect.Min.y + 1.5f;
+            regions[1] &= vertex.pos.y >= rect.Max.y - 1.5f;
+            regions[2] &= vertex.pos.x <= rect.Min.x + 1.5f;
+            regions[3] &= vertex.pos.x >= rect.Max.x - 1.5f;
+            for (int region = 0; region < IM_ARRAYSIZE(regions); ++region)
+            {
+                if (!regions[region])
+                    continue;
+                coveredInside[region] |= tightlyCovered;
+                clearOutside[region] |= tightlyClear;
+            }
+        }
+
+        for (int region = 0; region < IM_ARRAYSIZE(coveredInside); ++region)
+        {
+            if (!coveredInside[region] || !clearOutside[region])
+                return false;
+        }
+        return true;
+    }
+
+    bool HasHollowCircleMarker(
         const ImDrawList& drawList,
         const ImRect& bar,
         float markerY)
     {
-        const float markerHalfHeight =
-            float(int(bar.GetWidth() * 0.20f)) + 2.0f;
-        const ImRect leftMarkerRegion(
-            ImVec2(bar.Min.x - 3.5f, markerY - markerHalfHeight),
-            ImVec2(bar.Min.x - 0.1f, markerY + markerHalfHeight));
-        const ImRect rightMarkerRegion(
-            ImVec2(bar.Max.x + 0.1f, markerY - markerHalfHeight),
-            ImVec2(bar.Max.x + 3.5f, markerY + markerHalfHeight));
-        return
-            HasBlackAndWhiteMarkerVertices(drawList, leftMarkerRegion) &&
-            HasBlackAndWhiteMarkerVertices(drawList, rightMarkerRegion);
+        const ImVec2 center(bar.GetCenter().x, markerY);
+        const float maximumDistance = bar.GetWidth();
+        const float minimumDistance = ImMax(1.0f, bar.GetWidth() * 0.12f);
+        int darkVertices = 0;
+        int whiteVertices = 0;
+        bool centerFilledByMarker = false;
+        for (const ImDrawVert& vertex : drawList.VtxBuffer)
+        {
+            const int red =
+                (vertex.col >> IM_COL32_R_SHIFT) & 0xff;
+            const int green =
+                (vertex.col >> IM_COL32_G_SHIFT) & 0xff;
+            const int blue =
+                (vertex.col >> IM_COL32_B_SHIFT) & 0xff;
+            const bool dark = red == 24 && green == 24 && blue == 24;
+            const bool white = red == 255 && green == 255 && blue == 255;
+            if (!dark && !white)
+                continue;
+            const float distance = ImSqrt(ImLengthSqr(
+                Subtract(vertex.pos, center)));
+            if (distance <= 0.5f)
+                centerFilledByMarker = true;
+            if (distance < minimumDistance || distance > maximumDistance)
+                continue;
+            darkVertices += dark ? 1 : 0;
+            whiteVertices += white ? 1 : 0;
+        }
+        return !centerFilledByMarker &&
+            darkVertices >= 6 &&
+            whiteVertices >= 6;
+    }
+
+    bool HasHollowCircleMarkerAt(
+        const ImDrawList& drawList,
+        const ImVec2& center,
+        float markerRadius,
+        float fringe)
+    {
+        int darkVertices = 0;
+        int whiteVertices = 0;
+        for (const ImDrawVert& vertex : drawList.VtxBuffer)
+        {
+            const int red =
+                (vertex.col >> IM_COL32_R_SHIFT) & 0xff;
+            const int green =
+                (vertex.col >> IM_COL32_G_SHIFT) & 0xff;
+            const int blue =
+                (vertex.col >> IM_COL32_B_SHIFT) & 0xff;
+            const bool dark = red == 24 && green == 24 && blue == 24;
+            const bool white = red == 255 && green == 255 && blue == 255;
+            if (!dark && !white)
+                continue;
+            const float distance = ImSqrt(ImLengthSqr(
+                Subtract(vertex.pos, center)));
+            const float minimumRadius = dark
+                ? markerRadius + fringe * 1.90f
+                : markerRadius + fringe * 0.35f;
+            const float maximumRadius = dark
+                ? markerRadius + fringe * 2.65f
+                : markerRadius + fringe * 1.25f;
+            if (distance >= minimumRadius && distance <= maximumRadius)
+            {
+                darkVertices += dark ? 1 : 0;
+                whiteVertices += white ? 1 : 0;
+            }
+        }
+        return darkVertices >= 6 && whiteVertices >= 6;
+    }
+
+    bool HasCarvedOutlineCoverage(
+        const ImDrawList& drawList,
+        const ImRect& bounds,
+        float expectedEdgeDistance = 0.5f)
+    {
+        std::array<float, 4> edgeDistances = {
+            FLT_MAX, FLT_MAX, FLT_MAX, FLT_MAX
+        };
+        for (const ImDrawVert& vertex : drawList.VtxBuffer)
+        {
+            const float alpha = Alpha(vertex.col);
+            if (alpha <= 0.0f || alpha > 0.145f)
+                continue;
+            edgeDistances[0] = ImMin(
+                edgeDistances[0],
+                std::abs(vertex.pos.x - bounds.Min.x));
+            edgeDistances[1] = ImMin(
+                edgeDistances[1],
+                std::abs(vertex.pos.x - bounds.Max.x));
+            edgeDistances[2] = ImMin(
+                edgeDistances[2],
+                std::abs(vertex.pos.y - bounds.Min.y));
+            edgeDistances[3] = ImMin(
+                edgeDistances[3],
+                std::abs(vertex.pos.y - bounds.Max.y));
+        }
+        for (float distance : edgeDistances)
+        {
+            if (std::abs(distance - expectedEdgeDistance) > 0.15f)
+                return false;
+        }
+        return true;
+    }
+
+    bool HasComparisonBarCoverage(
+        const ImDrawList& drawList,
+        const ImRect& bar)
+    {
+        bool checker = false;
+        bool colorOverlay = false;
+        for (const ImDrawVert& vertex : drawList.VtxBuffer)
+        {
+            if (!bar.Contains(vertex.pos))
+                continue;
+            checker |= IsCheckerVertex(vertex) && Alpha(vertex.col) > 0.5f;
+            const int red =
+                (vertex.col >> IM_COL32_R_SHIFT) & 0xff;
+            const int green =
+                (vertex.col >> IM_COL32_G_SHIFT) & 0xff;
+            const int blue =
+                (vertex.col >> IM_COL32_B_SHIFT) & 0xff;
+            colorOverlay |=
+                !(red == green && green == blue) &&
+                Alpha(vertex.col) > 0.25f;
+        }
+        return checker && colorOverlay;
     }
 
     GradientFrameObservation ObserveGradientFrame(
@@ -463,6 +837,16 @@ namespace
         ImGuiIO& io = ImGui::GetIO();
         io.AddMousePosEvent(position.x, position.y);
         io.AddMouseButtonEvent(ImGuiMouseButton_Left, down);
+    }
+
+    void QueueMouseButton(
+        const ImVec2& position,
+        ImGuiMouseButton button,
+        bool down)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        io.AddMousePosEvent(position.x, position.y);
+        io.AddMouseButtonEvent(button, down);
     }
 
     ImVec2 Center(const ImRect& rect)
@@ -758,14 +1142,15 @@ namespace
     }
 
     TooltipObservation SubmitTooltipFrame(
-        bool stockWidgetRendering)
+        bool stockWidgetRendering,
+        bool submitTooltip = true,
+        bool motionEnabled = true)
     {
         static constexpr const char* TooltipText =
-            "UVSR tooltip policy regression text stays on one upstream "
-            "line but wraps across several lines in the Amp presentation";
+            "UVSR tooltip follows the mouse with stock typography.";
 
         ImGui::SetUvsrUiBehavior(
-            !stockWidgetRendering,
+            motionEnabled,
             stockWidgetRendering,
             false);
         ImGui::NewFrame();
@@ -782,23 +1167,99 @@ namespace
                 ImGuiWindowFlags_NoMove |
                 ImGuiWindowFlags_NoSavedSettings |
                 ImGuiWindowFlags_NoScrollbar);
-        ImGui::SetTooltip("%s", TooltipText);
-
-        TooltipObservation observation;
-        ImGuiWindow* tooltipWindow = GImGui->TooltipPreviousWindow;
-        if (tooltipWindow != nullptr)
-        {
-            observation.submitted = true;
-            observation.windowSize = tooltipWindow->SizeFull;
-            observation.contentSize = ImVec2(
-                tooltipWindow->DC.CursorMaxPos.x -
-                    tooltipWindow->DC.CursorStartPos.x,
-                tooltipWindow->DC.CursorMaxPos.y -
-                    tooltipWindow->DC.CursorStartPos.y);
-        }
+        ImGui::Button("Tooltip Owner", ImVec2(150.0f, 0.0f));
+        const ImRect ownerRect(
+            ImGui::GetItemRectMin(),
+            ImGui::GetItemRectMax());
+        if (submitTooltip)
+            ImGui::SetItemTooltip("%s", TooltipText);
 
         ImGui::End();
         ImGui::Render();
+
+        TooltipObservation observation;
+        observation.ownerRect = ownerRect;
+        observation.mousePosition = ImGui::GetIO().MousePos;
+        ImGuiWindow* tooltipWindow = GImGui->TooltipPreviousWindow;
+        if (tooltipWindow != nullptr &&
+            tooltipWindow->Active &&
+            !tooltipWindow->Hidden)
+        {
+            observation.submitted = true;
+            observation.noInputs =
+                (tooltipWindow->Flags & ImGuiWindowFlags_NoInputs) != 0;
+            observation.alwaysAutoResize =
+                (tooltipWindow->Flags &
+                    ImGuiWindowFlags_AlwaysAutoResize) != 0;
+            observation.hasVerticalScrollbar = tooltipWindow->ScrollbarY;
+            observation.windowSize = tooltipWindow->SizeFull;
+            observation.windowPosition = tooltipWindow->Pos;
+            observation.contentSize = tooltipWindow->ContentSize;
+            for (const ImDrawVert& vertex :
+                tooltipWindow->DrawList->VtxBuffer)
+            {
+                if (Alpha(vertex.col) <= 0.0f)
+                    continue;
+                observation.visualBounds.Add(vertex.pos);
+                observation.maximumVertexAlpha = ImMax(
+                    observation.maximumVertexAlpha,
+                    Alpha(vertex.col));
+            }
+        }
+        return observation;
+    }
+
+    TooltipDragObservation SubmitTooltipDragIsolationFrame()
+    {
+        ImGui::SetUvsrUiBehavior(true, false, false);
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(
+            ImVec2(30.0f, 210.0f),
+            ImGuiCond_Always);
+        ImGui::SetNextWindowSize(
+            ImVec2(240.0f, 60.0f),
+            ImGuiCond_Always);
+        ImGui::Begin(
+            "Tooltip Policy Test Owner",
+            nullptr,
+            ImGuiWindowFlags_NoResize |
+                ImGuiWindowFlags_NoMove |
+                ImGuiWindowFlags_NoSavedSettings |
+                ImGuiWindowFlags_NoScrollbar);
+        ImGui::Button("Tooltip Owner", ImVec2(150.0f, 0.0f));
+        ImGui::SetItemTooltip("Retained tooltip must yield to drag/drop.");
+        ImGuiWindow* retainedTooltip =
+            GImGui->UvsrTooltipState.LastSubmittedWindow;
+
+        GImGui->DragDropActive = true;
+        GImGui->DragDropSourceFrameCount = GImGui->FrameCount;
+        GImGui->DragDropMouseButton = ImGuiMouseButton_Left;
+        GImGui->DragDropWithinSource = true;
+        ImGui::SetTooltip("Upstream drag preview");
+        GImGui->DragDropWithinSource = false;
+
+        ImGui::End();
+        ImGui::Render();
+
+        TooltipDragObservation observation;
+        observation.retainedTooltipInactive =
+            retainedTooltip == nullptr ||
+            !retainedTooltip->Active ||
+            retainedTooltip->Hidden;
+        observation.retainedOwnerReset =
+            GImGui->UvsrTooltipState.OwnerId == 0;
+        for (ImGuiWindow* window : GImGui->Windows)
+        {
+            if (window->Name != nullptr &&
+                strncmp(window->Name, "##Tooltip_DragDrop_", 19) == 0 &&
+                window->Active)
+            {
+                observation.dragTooltipActive = true;
+                observation.dragTooltipNoInputs =
+                    (window->Flags & ImGuiWindowFlags_NoInputs) != 0;
+            }
+        }
+        ImGui::ClearDragDrop();
         return observation;
     }
 
@@ -1155,7 +1616,12 @@ namespace
         bool scoped = true,
         bool closeActivePicker = false,
         ImVec4 popupBackground =
-            ImVec4(0.17f, 0.29f, 0.41f, 0.93f))
+            ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+        ImVec4 contentLayer =
+            ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
+        ImVec4 pickerLayer =
+            ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
+        bool includeAlpha = true)
     {
         ColorPickerObservation observation;
         observation.maximumBottom = maximumBottom;
@@ -1191,7 +1657,9 @@ namespace
             ImGui::PushUvsrColorPickerPopupContentRight(
                 observation.contentRight,
                 maximumBottom,
-                popupBackground);
+                popupBackground,
+                contentLayer,
+                pickerLayer);
         }
         ImGui::PushID("##InterfacePrimaryColor");
         observation.popupId = ImGui::GetID("picker");
@@ -1203,17 +1671,79 @@ namespace
         }
         ImGui::PopID();
         ImGui::SetNextItemWidth(-FLT_MIN);
+        const int firstColorEditVertex =
+            ownerWindow->DrawList->VtxBuffer.Size;
+        const ImVec2 colorEditPosition = ImGui::GetCursorScreenPos();
+        const float colorEditWidth = ImGui::CalcItemWidth();
+        const float colorButtonSize = ImGui::GetFrameHeight();
+        observation.sourceSwatchRect = ImRect(
+            ImVec2(
+                colorEditPosition.x + colorEditWidth - colorButtonSize,
+                colorEditPosition.y),
+            ImVec2(
+                colorEditPosition.x + colorEditWidth,
+                colorEditPosition.y + colorButtonSize));
         ImGuiColorEditFlags pickerFlags =
             ImGuiColorEditFlags_Float |
-            ImGuiColorEditFlags_DisplayRGB |
-            ImGuiColorEditFlags_AlphaBar |
-            ImGuiColorEditFlags_AlphaPreviewHalf;
+            ImGuiColorEditFlags_DisplayRGB;
+        if (includeAlpha)
+        {
+            pickerFlags |= ImGuiColorEditFlags_AlphaBar |
+                ImGuiColorEditFlags_AlphaPreviewHalf;
+        }
         if (!ImGui::IsUvsrStockWidgetRenderingEnabled())
             pickerFlags |= ImGuiColorEditFlags_PickerHueWheel;
-        ImGui::ColorEdit4(
-            "##InterfacePrimaryColor",
-            color,
-            pickerFlags);
+        if (includeAlpha)
+        {
+            ImGui::ColorEdit4(
+                "##InterfacePrimaryColor",
+                color,
+                pickerFlags);
+        }
+        else
+        {
+            ImGui::ColorEdit3(
+                "##InterfacePrimaryColor",
+                color,
+                pickerFlags);
+        }
+        const int lastColorEditVertex =
+            ownerWindow->DrawList->VtxBuffer.Size;
+        const ImGuiUvsrColorPickerPopupTransition& transition =
+            GImGui->UvsrColorPickerPopupTransition;
+        if (transition.PopupId == observation.popupId &&
+            !transition.SourceRect.IsInverted())
+        {
+            observation.sourceSwatchRect = transition.SourceRect;
+        }
+        ImVec4 swatchShadowColor =
+            ImGui::GetStyle().Colors[ImGuiCol_BorderShadow];
+        swatchShadowColor.w = ImMax(swatchShadowColor.w, 0.42f);
+        const ImU32 expectedSwatchShadow =
+            ImGui::GetColorU32(swatchShadowColor);
+        const ImU32 frameBackground =
+            ImGui::GetColorU32(ImGuiCol_FrameBg);
+        bool swatchFrameVertexFound = false;
+        for (int vertexIndex = firstColorEditVertex;
+            vertexIndex < lastColorEditVertex;
+            ++vertexIndex)
+        {
+            const ImDrawVert& vertex =
+                ownerWindow->DrawList->VtxBuffer[vertexIndex];
+            if (vertex.col == expectedSwatchShadow &&
+                (vertex.pos.x > observation.sourceSwatchRect.Max.x + 0.1f ||
+                    vertex.pos.y >
+                        observation.sourceSwatchRect.Max.y + 0.1f))
+            {
+                observation.sourceSwatchShadowVisible = true;
+            }
+            if (vertex.col == frameBackground &&
+                observation.sourceSwatchRect.Contains(vertex.pos))
+            {
+                swatchFrameVertexFound = true;
+            }
+        }
+        observation.sourceSwatchBorderless = !swatchFrameVertexFound;
 
         char popupName[20];
         ImFormatString(
@@ -1222,9 +1752,6 @@ namespace
             "##Popup_%08x",
             observation.popupId);
         ImGuiWindow* popupWindow = ImGui::FindWindowByName(popupName);
-        observation.popupOpen = ImGui::IsPopupOpen(
-            observation.popupId,
-            ImGuiPopupFlags_None);
         if (popupWindow && popupWindow->Active)
         {
             observation.popupRect = ImRect(
@@ -1232,16 +1759,21 @@ namespace
                 ImVec2(
                     popupWindow->Pos.x + popupWindow->Size.x,
                     popupWindow->Pos.y + popupWindow->Size.y));
+            observation.popupInnerRect = popupWindow->InnerRect;
             const ImGuiStyle& style = ImGui::GetStyle();
-            const float squareSize = ImGui::GetFrameHeight();
             const float pickerWidth = ImMax(
                 1.0f,
                 popupWindow->Size.x - style.WindowPadding.x * 2.0f);
+            constexpr float AuthoredBarRatio = 0.08f;
+            const int authoredBarCount = includeAlpha ? 4 : 3;
+            observation.barCount = authoredBarCount;
             const float saturationValueSize = ImMax(
-                squareSize,
-                pickerWidth -
-                    2.0f *
-                        (squareSize + style.ItemInnerSpacing.x));
+                1.0f,
+                (pickerWidth -
+                    float(authoredBarCount) * style.ItemInnerSpacing.x) /
+                    (1.0f + float(authoredBarCount) * AuthoredBarRatio));
+            const float barWidth =
+                saturationValueSize * AuthoredBarRatio;
             const ImVec2 pickerPosition =
                 popupWindow->DC.CursorStartPos;
             const float hueBarX =
@@ -1249,26 +1781,92 @@ namespace
                     style.ItemInnerSpacing.x;
             const float alphaBarX =
                 pickerPosition.x + saturationValueSize +
-                squareSize +
+                barWidth +
                     2.0f * style.ItemInnerSpacing.x;
+            const float currentBarX = includeAlpha
+                ? alphaBarX + barWidth + style.ItemInnerSpacing.x
+                : alphaBarX;
+            const float originalBarX =
+                currentBarX + barWidth + style.ItemInnerSpacing.x;
             observation.hueBarRect = ImRect(
                 ImVec2(hueBarX, pickerPosition.y),
                 ImVec2(
-                    hueBarX + squareSize,
+                    hueBarX + barWidth,
                     pickerPosition.y + saturationValueSize));
-            observation.alphaBarRect = ImRect(
-                ImVec2(alphaBarX, pickerPosition.y),
+            if (includeAlpha)
+            {
+                observation.alphaBarRect = ImRect(
+                    ImVec2(alphaBarX, pickerPosition.y),
+                    ImVec2(
+                        alphaBarX + barWidth,
+                        pickerPosition.y + saturationValueSize));
+            }
+            observation.currentBarRect = ImRect(
+                ImVec2(currentBarX, pickerPosition.y),
                 ImVec2(
-                    alphaBarX + squareSize,
+                    currentBarX + barWidth,
                     pickerPosition.y + saturationValueSize));
-            observation.hueBarRoundedAndVisible =
-                HasRoundedBarCoverage(
+            observation.originalBarRect = ImRect(
+                ImVec2(originalBarX, pickerPosition.y),
+                ImVec2(
+                    originalBarX + barWidth,
+                    pickerPosition.y + saturationValueSize));
+            const float wheelThickness = saturationValueSize * 0.08f;
+            observation.wheelThickness = wheelThickness;
+            observation.drawListFringe = ImMax(
+                1.0f,
+                popupWindow->DrawList->_FringeScale);
+            const float wheelOuterRadius =
+                saturationValueSize * 0.5f -
+                popupWindow->DrawList->_FringeScale;
+            const float wheelInnerRadius =
+                wheelOuterRadius - wheelThickness;
+            observation.endpointMarkerRadius = ImMax(
+                popupWindow->DrawList->_FringeScale * 1.5f,
+                ImMin(
+                    wheelThickness * 0.28f,
+                    style.FrameRounding * 0.75f));
+            const float triangleRadius =
+                wheelInnerRadius -
+                observation.endpointMarkerRadius -
+                popupWindow->DrawList->_FringeScale * 3.0f;
+            observation.endpointSnapRadius = ImMin(
+                triangleRadius * 0.25f,
+                ImMax(
+                    style.GrabMinSize * 0.50f,
+                    wheelThickness * 0.75f));
+            const ImVec2 wheelCenter(
+                pickerPosition.x + saturationValueSize * 0.5f,
+                pickerPosition.y + saturationValueSize * 0.5f);
+            if (includeAlpha)
+            {
+                observation.alphaBarInteriorCovered = HasCoveredVertexNear(
                     *popupWindow->DrawList,
-                    observation.hueBarRect);
+                    0,
+                    popupWindow->DrawList->VtxBuffer.Size,
+                    ImVec2(
+                        (observation.alphaBarRect.Min.x +
+                            observation.alphaBarRect.Max.x) * 0.5f,
+                        ImLerp(
+                            observation.alphaBarRect.Min.y,
+                            observation.alphaBarRect.Max.y,
+                            0.25f)));
+                observation.alphaCheckerEdgeCoverageContinuous =
+                    HasTightRoundedCheckerCoverage(
+                        *popupWindow->DrawList,
+                        observation.alphaBarRect,
+                        ImMin(
+                            style.FrameRounding,
+                            observation.alphaBarRect.GetWidth() * 0.25f));
+            }
+            const bool authoredPicker =
+                scoped &&
+                !ImGui::IsUvsrStockWidgetRenderingEnabled();
             observation.alphaBarRoundedAndVisible =
-                HasRoundedBarCoverage(
-                    *popupWindow->DrawList,
-                    observation.alphaBarRect);
+                authoredPicker &&
+                includeAlpha &&
+                observation.alphaBarInteriorCovered &&
+                observation.alphaCheckerEdgeCoverageContinuous;
             float hue = 0.0f;
             float saturation = 0.0f;
             float value = 0.0f;
@@ -1279,63 +1877,404 @@ namespace
                 hue,
                 saturation,
                 value);
+            const ImU32 savedColor = ImGui::ColorConvertFloat4ToU32(
+                ImVec4(color[0], color[1], color[2], 0.0f));
+            if (savedColor == GImGui->ColorEditSavedColor)
+            {
+                if (saturation == 0.0f ||
+                    (hue == 0.0f && GImGui->ColorEditSavedHue == 1.0f))
+                {
+                    hue = GImGui->ColorEditSavedHue;
+                }
+                if (value == 0.0f)
+                    saturation = GImGui->ColorEditSavedSat;
+            }
+            const ImVec2 sharpVertices[3] = {
+                ImVec2(triangleRadius, 0.0f),
+                ImVec2(
+                    triangleRadius * -0.5f,
+                    triangleRadius * -0.866025f),
+                ImVec2(
+                    triangleRadius * -0.5f,
+                    triangleRadius * 0.866025f)
+            };
+            float minimumEdgeLength = FLT_MAX;
+            for (int vertexIndex = 0; vertexIndex < 3; ++vertexIndex)
+            {
+                minimumEdgeLength = ImMin(
+                    minimumEdgeLength,
+                    ImSqrt(ImLengthSqr(Subtract(
+                        sharpVertices[(vertexIndex + 1) % 3],
+                        sharpVertices[vertexIndex]))));
+            }
+            const float tangentDistance = ImClamp(
+                ImMax(style.FrameRounding, 0.0f) * 1.75f,
+                0.0f,
+                minimumEdgeLength * 0.20f);
+            const float hueCosine = ImCos(hue * 2.0f * IM_PI);
+            const float hueSine = ImSin(hue * 2.0f * IM_PI);
+            ImVector<ImVec2> roundedContour;
+            int cornerSections = ImClamp(
+                popupWindow->DrawList->_CalcCircleAutoSegmentCount(
+                    ImMax(style.FrameRounding, 1.0f)) / 3,
+                4,
+                24);
+            if ((cornerSections & 1) != 0)
+                ++cornerSections;
+            for (int vertexIndex = 0; vertexIndex < 3; ++vertexIndex)
+            {
+                const ImVec2 vertex = sharpVertices[vertexIndex];
+                const ImVec2 previous = sharpVertices[(vertexIndex + 2) % 3];
+                const ImVec2 next = sharpVertices[(vertexIndex + 1) % 3];
+                const ImVec2 entry = Add(
+                    vertex,
+                    Scale(
+                        Subtract(previous, vertex),
+                        tangentDistance / ImMax(
+                            ImSqrt(ImLengthSqr(Subtract(previous, vertex))),
+                            FLT_EPSILON)));
+                const ImVec2 exit = Add(
+                    vertex,
+                    Scale(
+                        Subtract(next, vertex),
+                        tangentDistance / ImMax(
+                            ImSqrt(ImLengthSqr(Subtract(next, vertex))),
+                            FLT_EPSILON)));
+                for (int section = 0; section <= cornerSections; ++section)
+                {
+                    const float amount =
+                        float(section) / float(cornerSections);
+                    const float inverseAmount = 1.0f - amount;
+                    roundedContour.push_back(Add(
+                        Add(
+                            Scale(entry, inverseAmount * inverseAmount),
+                            Scale(vertex, 2.0f * inverseAmount * amount)),
+                        Scale(exit, amount * amount)));
+                }
+            }
+            const ImVec2 sharpCursor = ImLerp(
+                ImLerp(
+                    sharpVertices[2],
+                    sharpVertices[0],
+                    ImSaturate(saturation)),
+                sharpVertices[1],
+                1.0f - ImSaturate(value));
+            const ImVec2 localCursor = MapRoundedSelectorPoint(
+                sharpVertices,
+                roundedContour,
+                sharpCursor);
+            observation.selectorCenter = wheelCenter;
+            observation.selectorCursorCenter = Add(wheelCenter, ImVec2(
+                localCursor.x * hueCosine - localCursor.y * hueSine,
+                localCursor.x * hueSine + localCursor.y * hueCosine));
+            observation.selectorRect = ImRect(
+                ImVec2(FLT_MAX, FLT_MAX),
+                ImVec2(-FLT_MAX, -FLT_MAX));
+            for (int vertexIndex = 0; vertexIndex < 3; ++vertexIndex)
+            {
+                const ImVec2 localEndpoint = MapRoundedSelectorPoint(
+                    sharpVertices,
+                    roundedContour,
+                    sharpVertices[vertexIndex]);
+                const ImVec2 endpoint = Add(wheelCenter, ImVec2(
+                    localEndpoint.x * hueCosine -
+                        localEndpoint.y * hueSine,
+                    localEndpoint.x * hueSine +
+                        localEndpoint.y * hueCosine));
+                observation.selectorEndpoints[vertexIndex] = endpoint;
+                observation.selectorRect.Add(endpoint);
+            }
             const float hueMarkerY = IM_ROUND(
                 pickerPosition.y + hue * saturationValueSize);
-            const float alphaMarkerY = IM_ROUND(
-                pickerPosition.y +
-                    (1.0f - ImSaturate(color[3])) *
-                        saturationValueSize);
-            observation.hueMarkerPairVisible =
-                HasVerticalBarMarkerPair(
+            observation.hueHollowMarkerVisible =
+                HasHollowCircleMarker(
                     *popupWindow->DrawList,
                     observation.hueBarRect,
                     hueMarkerY);
-            observation.alphaMarkerPairVisible =
-                HasVerticalBarMarkerPair(
+            if (includeAlpha)
+            {
+                const float alphaMarkerY = IM_ROUND(
+                    pickerPosition.y +
+                        (1.0f - ImSaturate(color[3])) *
+                            saturationValueSize);
+                observation.alphaHollowMarkerVisible =
+                    HasHollowCircleMarker(
+                        *popupWindow->DrawList,
+                        observation.alphaBarRect,
+                        alphaMarkerY);
+            }
+            observation.currentBarVisible =
+                HasComparisonBarCoverage(
                     *popupWindow->DrawList,
-                    observation.alphaBarRect,
-                    alphaMarkerY);
+                    observation.currentBarRect);
+            observation.originalBarVisible =
+                HasComparisonBarCoverage(
+                    *popupWindow->DrawList,
+                    observation.originalBarRect);
+            observation.bottomControlsSpanAllBars =
+                popupWindow->DC.CursorMaxPos.x >=
+                    observation.originalBarRect.Max.x - 1.0f;
+            observation.authoredPopupUsesCarvedFrameOnly =
+                Near(popupWindow->WindowBorderSize, 0.0f);
             const ImU32 expectedSurface = ImGui::GetColorU32(
                 popupBackground);
+            const ImVec4 expectedSurfaceColor =
+                ImGui::ColorConvertU32ToFloat4(expectedSurface);
+            const ImU32 expectedContentLayer = ImGui::GetColorU32(
+                contentLayer);
+            const ImU32 expectedPickerLayer = ImGui::GetColorU32(
+                pickerLayer);
+            const ImVec4 expectedPickerLayerColor =
+                ImGui::ColorConvertU32ToFloat4(expectedPickerLayer);
+            const ImVec2 expectedPickerLayerOffset(
+                ImMax(1.0f, style.ItemInnerSpacing.x * 0.5f),
+                ImMax(1.0f, style.ItemInnerSpacing.y * 0.5f));
+            observation.pickerLayerRect = ImRect(
+                Subtract(pickerPosition, expectedPickerLayerOffset),
+                Add(ImVec2(
+                    observation.originalBarRect.Max.x,
+                    pickerPosition.y + saturationValueSize),
+                    expectedPickerLayerOffset));
+            observation.pickerLayerRect.ClipWith(ImRect(
+                Add(popupWindow->InnerRect.Min, style.WindowPadding),
+                Subtract(popupWindow->InnerRect.Max, style.WindowPadding)));
+            observation.requestedPickerLayerApplied =
+                authoredPicker &&
+                expectedPickerLayerColor.w > 0.0f &&
+                observation.pickerLayerRect.GetWidth() > 1.0f &&
+                observation.pickerLayerRect.GetHeight() > 1.0f;
+            ImVec4 saturatedHueColor(0.0f, 0.0f, 0.0f, 1.0f);
+            ImGui::ColorConvertHSVtoRGB(
+                hue,
+                1.0f,
+                1.0f,
+                saturatedHueColor.x,
+                saturatedHueColor.y,
+                saturatedHueColor.z);
+            const ImU32 selectorEndpointColors[3] = {
+                ImGui::ColorConvertFloat4ToU32(saturatedHueColor),
+                IM_COL32(0, 0, 0, 255),
+                IM_COL32_WHITE
+            };
+            const ImVec2 theoreticalSelectorEndpoints[3] = {
+                observation.selectorEndpoints[0],
+                observation.selectorEndpoints[1],
+                observation.selectorEndpoints[2]
+            };
+            float selectorEndpointDistances[3] = {
+                FLT_MAX,
+                FLT_MAX,
+                FLT_MAX
+            };
+            ImRect sourcePointerBounds(
+                ImVec2(FLT_MAX, FLT_MAX),
+                ImVec2(-FLT_MAX, -FLT_MAX));
+            const ImVec2 expectedPointerTip(
+                observation.sourceSwatchRect.Max.x + ImMax(
+                    observation.drawListFringe,
+                    style.ItemInnerSpacing.x * 0.25f),
+                observation.sourceSwatchRect.GetCenter().y);
             for (const ImDrawVert& vertex : popupWindow->DrawList->VtxBuffer)
             {
+                const float vertexAlpha = Alpha(vertex.col);
+                observation.maximumVertexAlpha = ImMax(
+                    observation.maximumVertexAlpha,
+                    vertexAlpha);
+                if (vertexAlpha > 0.0f)
+                    observation.visualBounds.Add(vertex.pos);
                 observation.requestedSurfaceApplied |=
                     vertex.col == expectedSurface;
+                if (vertex.col == expectedContentLayer)
+                {
+                    observation.requestedContentLayerApplied = true;
+                    observation.contentLayerRect.Add(vertex.pos);
+                }
+                const ImVec4 vertexColor =
+                    ImGui::ColorConvertU32ToFloat4(vertex.col);
+                if (authoredPicker && vertex.col == expectedPickerLayer)
+                {
+                    observation.requestedPickerLayerApplied = true;
+                }
+                if (vertexAlpha >= 0.999f)
+                {
+                    if (ImLengthSqr(Subtract(vertex.pos, wheelCenter)) <
+                        triangleRadius * triangleRadius)
+                    {
+                        for (int endpointIndex = 0;
+                            endpointIndex < 3;
+                            ++endpointIndex)
+                        {
+                            if (vertex.col !=
+                                selectorEndpointColors[endpointIndex])
+                            {
+                                continue;
+                            }
+                            const float distanceSquared = ImLengthSqr(
+                                Subtract(
+                                    vertex.pos,
+                                    theoreticalSelectorEndpoints[
+                                        endpointIndex]));
+                            if (distanceSquared <
+                                selectorEndpointDistances[endpointIndex])
+                            {
+                                selectorEndpointDistances[endpointIndex] =
+                                    distanceSquared;
+                            }
+                        }
+                    }
+                    if (observation.hueBarRect.Contains(vertex.pos) &&
+                        vertex.pos.y > observation.hueBarRect.Min.y + 1.0f &&
+                        vertex.pos.y < observation.hueBarRect.Max.y - 1.0f)
+                    {
+                        observation.hueBarInteriorOpaque = true;
+                    }
+                    if (ImLengthSqr(Subtract(vertex.pos, wheelCenter)) <
+                        triangleRadius * triangleRadius * 0.56f)
+                    {
+                        ++observation.opaqueSelectorVertexCount;
+                    }
+                }
+                if (vertexAlpha > 0.0f &&
+                    vertex.pos.x < observation.popupRect.Min.x - 0.1f)
+                {
+                    sourcePointerBounds.Add(vertex.pos);
+                    observation.sourcePointerTipDistance = ImMin(
+                        observation.sourcePointerTipDistance,
+                        ImSqrt(ImLengthSqr(Subtract(
+                            vertex.pos,
+                            expectedPointerTip))));
+                    const ImVec4 pointerColor =
+                        ImGui::ColorConvertU32ToFloat4(vertex.col);
+                    const bool matchesSurfaceRgb =
+                        std::abs(pointerColor.x - expectedSurfaceColor.x) <=
+                            1.0f / 255.0f &&
+                        std::abs(pointerColor.y - expectedSurfaceColor.y) <=
+                            1.0f / 255.0f &&
+                        std::abs(pointerColor.z - expectedSurfaceColor.z) <=
+                            1.0f / 255.0f;
+                    if (!matchesSurfaceRgb &&
+                        pointerColor.w >= 0.06f &&
+                        pointerColor.w <= 0.145f)
+                    {
+                        observation.sourcePointerUsesCarvedFrame = true;
+                    }
+                    if (!matchesSurfaceRgb)
+                    {
+                        observation.sourcePointerFrameMaximumAlpha = ImMax(
+                            observation.sourcePointerFrameMaximumAlpha,
+                            pointerColor.w);
+                    }
+                }
             }
-            const ImRect popupOuterClip = popupWindow->OuterRectClipped;
-            ImVec4 finalCommandClip;
-            bool foundFinalCommand = false;
-            for (int commandIndex = popupWindow->DrawList->CmdBuffer.Size - 1;
-                commandIndex >= 0;
-                --commandIndex)
+            observation.hueBarRoundedAndVisible =
+                authoredPicker &&
+                observation.hueBarInteriorOpaque &&
+                observation.hueBarRect.GetWidth() > 0.0f &&
+                std::abs(
+                    observation.hueBarRect.GetWidth() -
+                        observation.wheelThickness) <= 0.01f;
+            observation.sourcePointerVisible =
+                !sourcePointerBounds.IsInverted();
+            observation.sourcePointerTipAttached =
+                observation.sourcePointerVisible &&
+                observation.sourcePointerTipDistance <=
+                    style.FrameRounding +
+                        observation.drawListFringe * 2.0f;
+            observation.sourcePointerTargetsSwatch =
+                observation.sourcePointerTipAttached &&
+                sourcePointerBounds.Min.x <=
+                    observation.sourceSwatchRect.Max.x +
+                        style.ItemInnerSpacing.x + style.FrameRounding + 1.0f &&
+                sourcePointerBounds.Min.y <=
+                    observation.sourceSwatchRect.GetCenter().y +
+                        style.FrameRounding + 1.0f &&
+                sourcePointerBounds.Max.y >=
+                    observation.sourceSwatchRect.GetCenter().y -
+                        style.FrameRounding - 1.0f;
+            observation.selectorVisualEndpointsFound =
+                selectorEndpointDistances[0] < FLT_MAX &&
+                selectorEndpointDistances[1] < FLT_MAX &&
+                selectorEndpointDistances[2] < FLT_MAX;
+            const float markerOuterRadius =
+                observation.endpointMarkerRadius +
+                    observation.drawListFringe * 2.0f;
+            const float cursorOuterRadius =
+                observation.wheelThickness * 0.40f +
+                    observation.drawListFringe * 2.0f;
+            observation.requiredMarkerCursorGap =
+                observation.drawListFringe;
+            observation.selectorMarkerCursorClearance = authoredPicker;
+            for (int endpointIndex = 0; endpointIndex < 3; ++endpointIndex)
             {
-                const ImDrawCmd& command =
-                    popupWindow->DrawList->CmdBuffer[commandIndex];
+                const ImVec2 endpoint =
+                    theoreticalSelectorEndpoints[endpointIndex];
+                const bool markerVisible = HasHollowCircleMarkerAt(
+                    *popupWindow->DrawList,
+                    endpoint,
+                    observation.endpointMarkerRadius,
+                    observation.drawListFringe);
+                observation.selectorEndpointMarkerVisible[endpointIndex] =
+                    markerVisible;
+                const float outerGap = ImSqrt(ImLengthSqr(Subtract(
+                    endpoint,
+                    observation.selectorCursorCenter))) -
+                    markerOuterRadius - cursorOuterRadius;
+                const bool excluded = outerGap <=
+                    observation.requiredMarkerCursorGap;
+                observation.selectorEndpointExclusionObserved |= excluded;
+                if (excluded)
+                {
+                    observation.selectorMarkerCursorClearance &=
+                        !markerVisible;
+                }
+                else
+                {
+                    observation.minimumMarkerCursorGap = ImMin(
+                        observation.minimumMarkerCursorGap,
+                        outerGap);
+                    observation.selectorMarkerCursorClearance &=
+                        markerVisible &&
+                        outerGap + 0.01f >=
+                            observation.requiredMarkerCursorGap;
+                }
+            }
+            observation.popupFrameHalfPixelAligned =
+                authoredPicker && HasCarvedOutlineCoverage(
+                    *popupWindow->DrawList,
+                    observation.popupRect);
+            observation.contentFrameHalfPixelAligned =
+                authoredPicker &&
+                observation.requestedContentLayerApplied &&
+                HasCarvedOutlineCoverage(
+                    *popupWindow->DrawList,
+                    ImRect(
+                        Add(
+                            popupWindow->InnerRect.Min,
+                            style.WindowPadding),
+                        Subtract(
+                            popupWindow->InnerRect.Max,
+                            style.WindowPadding)),
+                    0.0f);
+            const ImRect popupOuterClip = popupWindow->OuterRectClipped;
+            bool popupBodyClipCommandFound = false;
+            for (const ImDrawCmd& command :
+                popupWindow->DrawList->CmdBuffer)
+            {
                 if (command.ElemCount == 0)
                     continue;
-                finalCommandClip = command.ClipRect;
-                foundFinalCommand = true;
-                break;
-            }
-            bool finalOpaqueVertexIsWhite = false;
-            for (int vertexIndex = popupWindow->DrawList->VtxBuffer.Size - 1;
-                vertexIndex >= 0;
-                --vertexIndex)
-            {
-                const ImDrawVert& vertex =
-                    popupWindow->DrawList->VtxBuffer[vertexIndex];
-                if (Alpha(vertex.col) == 0)
-                    continue;
-                finalOpaqueVertexIsWhite = vertex.col == IM_COL32_WHITE;
-                break;
+                popupBodyClipCommandFound |=
+                    Near(command.ClipRect.x, popupOuterClip.Min.x) &&
+                    Near(command.ClipRect.y, popupOuterClip.Min.y) &&
+                    Near(command.ClipRect.z, popupOuterClip.Max.x) &&
+                    Near(command.ClipRect.w, popupOuterClip.Max.y);
             }
             observation.finalCursorLayeredAndClipped =
-                foundFinalCommand &&
-                finalOpaqueVertexIsWhite &&
-                Near(finalCommandClip.x, popupOuterClip.Min.x) &&
-                Near(finalCommandClip.y, popupOuterClip.Min.y) &&
-                Near(finalCommandClip.z, popupOuterClip.Max.x) &&
-                Near(finalCommandClip.w, popupOuterClip.Max.y);
+                popupBodyClipCommandFound &&
+                HasHollowCircleMarkerAt(
+                    *popupWindow->DrawList,
+                    observation.selectorCursorCenter,
+                    observation.wheelThickness * 0.40f,
+                    observation.drawListFringe);
         }
         ImDrawList* activePickerDrawList =
             ImGui::GetUvsrActiveColorPickerPopupDrawList();
@@ -1349,6 +2288,29 @@ namespace
             ImGui::PopUvsrColorPickerPopupContentRight();
         ImGui::End();
         ImGui::Render();
+        observation.popupOpen = ImGui::IsPopupOpen(
+            observation.popupId,
+            ImGuiPopupFlags_None);
+        observation.openPopupCount = GImGui->OpenPopupStack.Size;
+        observation.onlyPickerPopupOpen =
+            observation.openPopupCount == 1 &&
+            GImGui->OpenPopupStack[0].PopupId == observation.popupId;
+        observation.transitionRegistered =
+            transition.PopupId == observation.popupId;
+        observation.transitionTargetOpen =
+            observation.transitionRegistered && transition.TargetOpen;
+        observation.transitionAmount = observation.transitionRegistered
+            ? transition.Amount
+            : (observation.popupOpen ? 1.0f : 0.0f);
+        observation.transitionInteractionReady =
+            observation.popupOpen &&
+            (!observation.transitionRegistered ||
+                (transition.TargetOpen && transition.Amount >= 1.0f));
+        observation.transitionAtZeroEndpoint =
+            observation.transitionRegistered &&
+            !transition.TargetOpen &&
+            transition.Amount <= 0.0f &&
+            transition.ZeroFrame >= 0;
         return observation;
     }
 }
@@ -1950,10 +2912,132 @@ int main()
     ImGui::SetUvsrUiBehavior(true, false, false);
     float pickerColor[4] = { 0.25f, 0.50f, 0.75f, 0.78f };
     QueueMouse(outside, false);
-    SubmitColorPickerFrame(pickerColor, true);
+    const ColorPickerObservation openingPicker =
+        SubmitColorPickerFrame(pickerColor, true);
+    const float alphaBeforeOpeningInput = pickerColor[3];
     QueueMouse(outside, false);
-    const ColorPickerObservation positionedPicker =
+    const ColorPickerObservation openingPickerNext =
         SubmitColorPickerFrame(pickerColor, false);
+    QueueMouse(outside, false);
+    ColorPickerObservation positionedPicker =
+        SubmitColorPickerFrame(pickerColor, false);
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            !positionedPicker.transitionInteractionReady;
+        ++frame)
+    {
+        QueueMouse(outside, false);
+        positionedPicker = SubmitColorPickerFrame(pickerColor, false);
+    }
+    const ColorPickerObservation firstSettledPicker = positionedPicker;
+    QueueMouse(outside, false);
+    const ColorPickerObservation closingPicker =
+        SubmitColorPickerFrame(
+            pickerColor,
+            false,
+            480.0f,
+            270.0f,
+            330.0f,
+            true,
+            true);
+    QueueMouse(outside, false);
+    const ColorPickerObservation closingPickerNext =
+        SubmitColorPickerFrame(pickerColor, false);
+    QueueMouse(outside, false);
+    const ColorPickerObservation reversedPicker =
+        SubmitColorPickerFrame(pickerColor, true);
+    positionedPicker = reversedPicker;
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            !positionedPicker.transitionInteractionReady;
+        ++frame)
+    {
+        QueueMouse(outside, false);
+        positionedPicker = SubmitColorPickerFrame(pickerColor, false);
+    }
+    passed &= Check(
+        openingPicker.popupOpen &&
+            openingPicker.transitionRegistered &&
+            openingPicker.transitionTargetOpen &&
+            openingPicker.transitionAmount > 0.0f &&
+            openingPicker.transitionAmount < 1.0f &&
+            !openingPicker.transitionInteractionReady &&
+            openingPickerNext.transitionAmount >
+                openingPicker.transitionAmount &&
+            Near(pickerColor[3], alphaBeforeOpeningInput),
+        "the authored picker fades and zooms open while reporting its input "
+        "gate closed until the fully visible endpoint");
+    const bool pickerReversalContract =
+        firstSettledPicker.transitionInteractionReady &&
+            closingPicker.popupOpen &&
+            closingPicker.transitionRegistered &&
+            !closingPicker.transitionTargetOpen &&
+            closingPicker.transitionAmount <
+                firstSettledPicker.transitionAmount &&
+            closingPickerNext.transitionAmount <
+                closingPicker.transitionAmount &&
+            reversedPicker.transitionTargetOpen &&
+            reversedPicker.transitionAmount >
+                closingPickerNext.transitionAmount &&
+            positionedPicker.transitionInteractionReady;
+    if (!pickerReversalContract)
+    {
+        std::cerr << "picker reversal: settled="
+            << firstSettledPicker.transitionInteractionReady << ':'
+            << firstSettledPicker.transitionAmount
+            << " closing=" << closingPicker.popupOpen << '/'
+            << closingPicker.transitionRegistered << '/'
+            << closingPicker.transitionTargetOpen << ':'
+            << closingPicker.transitionAmount
+            << " next=" << closingPickerNext.popupOpen << '/'
+            << closingPickerNext.transitionTargetOpen << ':'
+            << closingPickerNext.transitionAmount
+            << " reversed=" << reversedPicker.popupOpen << '/'
+            << reversedPicker.transitionTargetOpen << ':'
+            << reversedPicker.transitionAmount
+            << " final=" << positionedPicker.popupOpen << '/'
+            << positionedPicker.transitionInteractionReady << ':'
+            << positionedPicker.transitionAmount << '\n';
+    }
+    passed &= Check(
+        pickerReversalContract,
+        "the retained picker reverses an in-flight fade and zoom without "
+        "resetting or closing the popup");
+    const bool pickerVisualTransitionContract =
+        openingPicker.maximumVertexAlpha <
+                firstSettledPicker.maximumVertexAlpha &&
+            openingPicker.visualBounds.GetWidth() <
+                firstSettledPicker.visualBounds.GetWidth() &&
+            closingPickerNext.maximumVertexAlpha <
+                closingPicker.maximumVertexAlpha &&
+            reversedPicker.maximumVertexAlpha >
+                closingPickerNext.maximumVertexAlpha;
+    if (!pickerVisualTransitionContract)
+    {
+        std::cerr << "picker visuals: opening="
+            << openingPicker.maximumVertexAlpha << ':'
+            << openingPicker.visualBounds.GetWidth()
+            << " settled=" << firstSettledPicker.maximumVertexAlpha << ':'
+            << firstSettledPicker.visualBounds.GetWidth()
+            << " closing=" << closingPicker.maximumVertexAlpha << ':'
+            << closingPicker.visualBounds.GetWidth()
+            << " next=" << closingPickerNext.maximumVertexAlpha << ':'
+            << closingPickerNext.visualBounds.GetWidth()
+            << " reversed=" << reversedPicker.maximumVertexAlpha << ':'
+            << reversedPicker.visualBounds.GetWidth() << '\n';
+    }
+    passed &= Check(
+        pickerVisualTransitionContract,
+        "picker transition observations cover synchronous fade and zoom on "
+        "both opening and reversible closing");
+    passed &= Check(
+        openingPicker.sourcePointerTipAttached &&
+            closingPicker.sourcePointerTipAttached &&
+            closingPickerNext.sourcePointerTipAttached &&
+            reversedPicker.sourcePointerTipAttached &&
+            positionedPicker.sourcePointerTipAttached,
+        "the rounded source pointer keeps its unscaled tip attached to the "
+        "edited swatch through open, close, and reversal");
     constexpr float PopupPositionTolerance = 1.0f;
     const bool pickerOutsideSettingsContent =
         positionedPicker.popupOpen &&
@@ -1972,27 +3056,102 @@ int main()
             positionedPicker.viewportRect.Max.x + PopupPositionTolerance &&
         positionedPicker.popupRect.Max.y <=
             positionedPicker.viewportRect.Max.y + PopupPositionTolerance;
-    const bool pickerAboveMenuStackBottom =
-        positionedPicker.popupRect.Max.y <=
-            positionedPicker.maximumBottom + PopupPositionTolerance;
+    const bool pickerFlushWithMenuStackBottom =
+        std::abs(
+            positionedPicker.popupRect.Max.y -
+                positionedPicker.maximumBottom) <=
+            PopupPositionTolerance;
     passed &= Check(
         pickerOutsideSettingsContent &&
             pickerInsideViewport &&
-            pickerAboveMenuStackBottom,
+            pickerFlushWithMenuStackBottom,
         "the scoped color-picker popup begins at Settings content-right and "
-        "remains clamped within both the viewport and menu-stack bottom");
+        "remains viewport-safe with its bottom exactly flush to the menu stack");
     passed &= Check(
         positionedPicker.requestedSurfaceApplied &&
             positionedPicker.activeDrawListReported &&
             positionedPicker.activeDrawListMatchesPopup,
         "the scoped picker alone receives its caller-owned surface and reports "
         "its current-frame draw list for the shared appearance transform");
+    const bool pickerHalfPixelFramesCorrect =
+        positionedPicker.popupFrameHalfPixelAligned &&
+            positionedPicker.contentFrameHalfPixelAligned;
+    passed &= Check(
+        pickerHalfPixelFramesCorrect,
+        "the authored popup and inset content outlines retain Settings-style "
+        "half-pixel bounds with complete outer anti-alias coverage");
+    const bool pickerDepthLayersCorrect =
+        positionedPicker.requestedContentLayerApplied &&
+            positionedPicker.requestedPickerLayerApplied &&
+            std::abs(
+                positionedPicker.contentLayerRect.Min.x -
+                    (positionedPicker.popupInnerRect.Min.x +
+                        ImGui::GetStyle().WindowPadding.x)) <=
+                PopupPositionTolerance &&
+            std::abs(
+                positionedPicker.contentLayerRect.Min.y -
+                    (positionedPicker.popupInnerRect.Min.y +
+                        ImGui::GetStyle().WindowPadding.y)) <=
+                PopupPositionTolerance &&
+            std::abs(
+                positionedPicker.contentLayerRect.Max.x -
+                    (positionedPicker.popupInnerRect.Max.x -
+                        ImGui::GetStyle().WindowPadding.x)) <=
+                PopupPositionTolerance &&
+            std::abs(
+                positionedPicker.contentLayerRect.Max.y -
+                    (positionedPicker.popupInnerRect.Max.y -
+                        ImGui::GetStyle().WindowPadding.y)) <=
+                PopupPositionTolerance &&
+            positionedPicker.pickerLayerRect.Min.x >=
+                positionedPicker.contentLayerRect.Min.x -
+                    PopupPositionTolerance &&
+            positionedPicker.pickerLayerRect.Min.y >=
+                positionedPicker.contentLayerRect.Min.y -
+                    PopupPositionTolerance &&
+            positionedPicker.pickerLayerRect.Max.x <=
+                positionedPicker.contentLayerRect.Max.x +
+                    PopupPositionTolerance &&
+            positionedPicker.pickerLayerRect.Max.y <
+                positionedPicker.contentLayerRect.Max.y;
+    if (!pickerDepthLayersCorrect)
+    {
+        std::cerr << "picker layers: content/picker="
+            << positionedPicker.requestedContentLayerApplied << '/'
+            << positionedPicker.requestedPickerLayerApplied
+            << " content=(" << positionedPicker.contentLayerRect.Min.x << ','
+            << positionedPicker.contentLayerRect.Min.y << ")-("
+            << positionedPicker.contentLayerRect.Max.x << ','
+            << positionedPicker.contentLayerRect.Max.y << ") inner=("
+            << positionedPicker.popupInnerRect.Min.x << ','
+            << positionedPicker.popupInnerRect.Min.y << ")-("
+            << positionedPicker.popupInnerRect.Max.x << ','
+            << positionedPicker.popupInnerRect.Max.y << ") picker=("
+            << positionedPicker.pickerLayerRect.Min.x << ','
+            << positionedPicker.pickerLayerRect.Min.y << ")-("
+            << positionedPicker.pickerLayerRect.Max.x << ','
+            << positionedPicker.pickerLayerRect.Max.y << ")\n";
+    }
+    passed &= Check(
+        pickerDepthLayersCorrect,
+        "the authored picker uses one full WindowPadding outer margin, then "
+        "a clipped inset content layer and selector layer that stops above "
+        "the bottom controls");
+    if (!positionedPicker.finalCursorLayeredAndClipped)
+    {
+        std::cerr << "picker final cursor layer: center=("
+            << positionedPicker.selectorCursorCenter.x << ','
+            << positionedPicker.selectorCursorCenter.y << ") radius="
+            << positionedPicker.wheelThickness * 0.40f
+            << " fringe=" << positionedPicker.drawListFringe << '\n';
+    }
     passed &= Check(
         positionedPicker.finalCursorLayeredAndClipped,
-        "authored picker cursors occupy the final popup draw layer while "
-        "remaining clipped to the popup outer rectangle");
+        "the authored selector cursor retains its final body layer and popup "
+        "clip before the attached source pointer is appended");
     passed &= Check(
-        positionedPicker.hueBarRect.GetWidth() > 0.0f &&
+        positionedPicker.barCount == 4 &&
+            positionedPicker.hueBarRect.GetWidth() > 0.0f &&
             positionedPicker.hueBarRect.GetHeight() > 0.0f &&
             positionedPicker.hueBarRect.Min.x >=
                 positionedPicker.popupRect.Min.x &&
@@ -2003,15 +3162,326 @@ int main()
             positionedPicker.alphaBarRect.Min.x >=
                 positionedPicker.popupRect.Min.x &&
             positionedPicker.alphaBarRect.Max.x <=
-                positionedPicker.popupRect.Max.x + PopupPositionTolerance,
-        "the viewport-fitted authored wheel retains separate hue and alpha bars");
+                positionedPicker.popupRect.Max.x + PopupPositionTolerance &&
+            std::abs(
+                positionedPicker.hueBarRect.GetWidth() -
+                    positionedPicker.wheelThickness) <=
+                PopupPositionTolerance &&
+            std::abs(
+                positionedPicker.alphaBarRect.GetWidth() -
+                    positionedPicker.wheelThickness) <=
+                PopupPositionTolerance &&
+            std::abs(
+                positionedPicker.currentBarRect.GetWidth() -
+                    positionedPicker.wheelThickness) <=
+                PopupPositionTolerance &&
+            std::abs(
+                positionedPicker.originalBarRect.GetWidth() -
+                    positionedPicker.wheelThickness) <=
+                PopupPositionTolerance,
+        "the viewport-fitted authored wheel retains four bars that exactly "
+        "match the wheel-ring thickness");
     passed &= Check(
-        positionedPicker.hueBarRoundedAndVisible &&
-            positionedPicker.alphaBarRoundedAndVisible &&
-            positionedPicker.hueMarkerPairVisible &&
-            positionedPicker.alphaMarkerPairVisible,
-        "the authored wheel renders both retained bars with rounded coverage "
-        "and paired black-and-white markers on both sides");
+        positionedPicker.hueBarRoundedAndVisible,
+        "the authored wheel renders the retained hue bar with rounded coverage");
+    passed &= Check(
+        positionedPicker.alphaBarRoundedAndVisible,
+        "the authored wheel renders the retained alpha bar with rounded coverage");
+    passed &= Check(
+        positionedPicker.alphaCheckerEdgeCoverageContinuous,
+        "the alpha checkerboard retains tight coverage at every straight edge "
+        "and rounded corner");
+    passed &= Check(
+        positionedPicker.hueHollowMarkerVisible,
+        "the authored hue bar renders one hollow black-and-white circle marker");
+    passed &= Check(
+        positionedPicker.alphaHollowMarkerVisible,
+        "the authored alpha bar renders one hollow black-and-white circle marker");
+    passed &= Check(
+        positionedPicker.endpointMarkerRadius > 0.0f &&
+            positionedPicker.endpointMarkerRadius <
+                positionedPicker.endpointSnapRadius,
+        "selector endpoint circles stay visibly smaller than their forgiving "
+        "full-gamut pointer snap zones");
+    const bool pickerMarkerClearanceCorrect =
+        positionedPicker.selectorMarkerCursorClearance &&
+            positionedPicker.minimumMarkerCursorGap + 0.01f >=
+                positionedPicker.requiredMarkerCursorGap;
+    passed &= Check(
+        pickerMarkerClearanceCorrect,
+        "visible selector endpoint markers keep one fringe of outer-stroke "
+        "clearance from the active selector cursor");
+    passed &= Check(
+        positionedPicker.currentBarVisible &&
+            positionedPicker.originalBarVisible &&
+            positionedPicker.bottomControlsSpanAllBars,
+        "unlabeled Current and Original comparison bars remain visible and "
+        "the bottom controls span through the fourth bar");
+    const bool pickerPointerCorrect =
+        positionedPicker.sourcePointerVisible &&
+            positionedPicker.sourcePointerTargetsSwatch &&
+            positionedPicker.sourcePointerUsesCarvedFrame &&
+            positionedPicker.sourcePointerFrameMaximumAlpha <= 0.145f &&
+            positionedPicker.authoredPopupUsesCarvedFrameOnly;
+    if (!pickerPointerCorrect)
+    {
+        std::cerr << "picker pointer: visible/target/frame/border="
+            << positionedPicker.sourcePointerVisible << '/'
+            << positionedPicker.sourcePointerTargetsSwatch << '/'
+            << positionedPicker.sourcePointerUsesCarvedFrame << '/'
+            << positionedPicker.authoredPopupUsesCarvedFrameOnly
+            << " alpha="
+            << positionedPicker.sourcePointerFrameMaximumAlpha << '\n';
+    }
+    passed &= Check(
+        pickerPointerCorrect,
+        "the authored picker uses the Settings-weight carved frame and a "
+        "rounded left pointer aimed at its source swatch");
+    passed &= Check(
+        positionedPicker.sourceSwatchShadowVisible &&
+            positionedPicker.sourceSwatchBorderless,
+        "the authored source swatch keeps Settings frame parity through a "
+        "borderless face and offset shadow");
+    passed &= Check(
+        positionedPicker.hueBarInteriorOpaque &&
+            positionedPicker.opaqueSelectorVertexCount > 32,
+        "the translucent authored popup retains fully opaque hue and "
+        "saturation/value color meshes at steady state");
+    passed &= Check(
+        positionedPicker.selectorVisualEndpointsFound,
+        "the rounded selector emits exact opaque hue, black, and white "
+        "visual endpoints");
+
+    QueueMouseButton(
+        Center(positionedPicker.hueBarRect),
+        ImGuiMouseButton_Right,
+        true);
+    const ColorPickerObservation pickerRightInsideDown =
+        SubmitColorPickerFrame(pickerColor, false);
+    QueueMouseButton(
+        Center(positionedPicker.hueBarRect),
+        ImGuiMouseButton_Right,
+        false);
+    const ColorPickerObservation pickerRightInsideUp =
+        SubmitColorPickerFrame(pickerColor, false);
+    passed &= Check(
+        pickerRightInsideDown.popupOpen &&
+            pickerRightInsideDown.transitionTargetOpen &&
+            pickerRightInsideDown.onlyPickerPopupOpen &&
+            pickerRightInsideUp.popupOpen &&
+            pickerRightInsideUp.transitionTargetOpen &&
+            pickerRightInsideUp.onlyPickerPopupOpen,
+        "right-clicking authored picker controls cannot create an options "
+        "popup or disturb the retained picker");
+
+    QueueMouseButton(
+        Center(positionedPicker.sourceSwatchRect),
+        ImGuiMouseButton_Right,
+        true);
+    const ColorPickerObservation pickerRightSourceDown =
+        SubmitColorPickerFrame(pickerColor, false);
+    QueueMouseButton(
+        Center(positionedPicker.sourceSwatchRect),
+        ImGuiMouseButton_Right,
+        false);
+    const ColorPickerObservation pickerRightSourceUp =
+        SubmitColorPickerFrame(pickerColor, false);
+    QueueMouse(outside, false);
+    const ColorPickerObservation pickerRightSourceReversed =
+        SubmitColorPickerFrame(pickerColor, true);
+    positionedPicker = pickerRightSourceReversed;
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            !positionedPicker.transitionInteractionReady;
+        ++frame)
+    {
+        QueueMouse(outside, false);
+        positionedPicker = SubmitColorPickerFrame(pickerColor, false);
+    }
+    passed &= Check(
+        pickerRightSourceDown.popupOpen &&
+            pickerRightSourceDown.transitionRegistered &&
+            !pickerRightSourceDown.transitionTargetOpen &&
+            pickerRightSourceDown.onlyPickerPopupOpen &&
+            pickerRightSourceUp.popupOpen &&
+            pickerRightSourceUp.onlyPickerPopupOpen &&
+            pickerRightSourceReversed.popupOpen &&
+            pickerRightSourceReversed.transitionTargetOpen &&
+            positionedPicker.transitionInteractionReady &&
+            positionedPicker.onlyPickerPopupOpen,
+        "right-clicking the source swatch cannot create options or bypass the "
+        "retained close, and an immediate reopen reverses that close");
+
+    const std::array<float, 4> comparisonBarBaseline = {
+        pickerColor[0],
+        pickerColor[1],
+        pickerColor[2],
+        pickerColor[3]
+    };
+    QueueMouse(Center(positionedPicker.currentBarRect), true);
+    SubmitColorPickerFrame(pickerColor, false);
+    QueueMouse(Center(positionedPicker.currentBarRect), false);
+    SubmitColorPickerFrame(pickerColor, false);
+    QueueMouse(Center(positionedPicker.originalBarRect), true);
+    SubmitColorPickerFrame(pickerColor, false);
+    QueueMouse(Center(positionedPicker.originalBarRect), false);
+    const ColorPickerObservation afterComparisonBars =
+        SubmitColorPickerFrame(pickerColor, false);
+    passed &= Check(
+        afterComparisonBars.popupOpen &&
+            Near(pickerColor[0], comparisonBarBaseline[0]) &&
+            Near(pickerColor[1], comparisonBarBaseline[1]) &&
+            Near(pickerColor[2], comparisonBarBaseline[2]) &&
+            Near(pickerColor[3], comparisonBarBaseline[3]),
+        "Current and Original are display-only bars with no hidden reset or "
+        "value mutation hit targets");
+
+    const ImVec2 saturatedDirection = Scale(
+        Subtract(
+            afterComparisonBars.selectorEndpoints[0],
+            afterComparisonBars.selectorRect.GetCenter()),
+        1.0f / ImMax(
+            ImSqrt(ImLengthSqr(Subtract(
+                afterComparisonBars.selectorEndpoints[0],
+                afterComparisonBars.selectorRect.GetCenter()))),
+            FLT_EPSILON));
+    const ImVec2 saturatedTopInput = Add(
+        afterComparisonBars.selectorEndpoints[0],
+        Scale(
+            saturatedDirection,
+            afterComparisonBars.endpointSnapRadius * 0.80f));
+    QueueMouse(saturatedTopInput, true);
+    const ColorPickerObservation saturatedPicker =
+        SubmitColorPickerFrame(pickerColor, false);
+    QueueMouse(saturatedTopInput, false);
+    const ColorPickerObservation afterSaturatedPicker =
+        SubmitColorPickerFrame(pickerColor, false);
+    float saturatedHue = 0.0f;
+    float saturatedAmount = 0.0f;
+    float saturatedValue = 0.0f;
+    ImGui::ColorConvertRGBtoHSV(
+        pickerColor[0],
+        pickerColor[1],
+        pickerColor[2],
+        saturatedHue,
+        saturatedAmount,
+        saturatedValue);
+    if (!(saturatedPicker.popupOpen &&
+        saturatedAmount >= 0.999f &&
+        saturatedValue >= 0.999f))
+    {
+        std::cerr << "rounded selector saturated endpoint: rect=("
+            << positionedPicker.selectorRect.Min.x << ','
+            << positionedPicker.selectorRect.Min.y << ")-("
+            << positionedPicker.selectorRect.Max.x << ','
+            << positionedPicker.selectorRect.Max.y << ") input=("
+            << saturatedTopInput.x << ',' << saturatedTopInput.y
+            << ") hsv=" << saturatedHue << ',' << saturatedAmount
+            << ',' << saturatedValue << '\n';
+    }
+    passed &= Check(
+        saturatedPicker.popupOpen &&
+            saturatedAmount >= 0.999f &&
+            saturatedValue >= 0.999f,
+        "the rounded selector keeps the fully saturated hue endpoint "
+        "pointer-reachable");
+
+    const ImVec2 whiteDirection = Scale(
+        Subtract(
+            afterSaturatedPicker.selectorEndpoints[2],
+            afterSaturatedPicker.selectorRect.GetCenter()),
+        1.0f / ImMax(
+            ImSqrt(ImLengthSqr(Subtract(
+                afterSaturatedPicker.selectorEndpoints[2],
+                afterSaturatedPicker.selectorRect.GetCenter()))),
+            FLT_EPSILON));
+    const ImVec2 whiteInput = Add(
+        afterSaturatedPicker.selectorEndpoints[2],
+        Scale(
+            whiteDirection,
+            afterSaturatedPicker.endpointSnapRadius * 0.80f));
+    QueueMouse(whiteInput, true);
+    const ColorPickerObservation whitePicker =
+        SubmitColorPickerFrame(pickerColor, false);
+    QueueMouse(whiteInput, false);
+    const ColorPickerObservation afterWhitePicker =
+        SubmitColorPickerFrame(pickerColor, false);
+    if (!(whitePicker.popupOpen &&
+        pickerColor[0] >= 0.999f &&
+        pickerColor[1] >= 0.999f &&
+        pickerColor[2] >= 0.999f))
+    {
+        std::cerr << "rounded selector white endpoint: input=("
+            << whiteInput.x << ',' << whiteInput.y << ") rgb="
+            << pickerColor[0] << ',' << pickerColor[1] << ','
+            << pickerColor[2] << '\n';
+    }
+    passed &= Check(
+        whitePicker.popupOpen &&
+            pickerColor[0] >= 0.999f &&
+            pickerColor[1] >= 0.999f &&
+            pickerColor[2] >= 0.999f,
+        "the rounded selector keeps exact white pointer-reachable");
+    const bool whiteEndpointMarkerExcluded =
+        afterWhitePicker.selectorEndpointExclusionObserved &&
+            afterWhitePicker.selectorMarkerCursorClearance;
+    if (!whiteEndpointMarkerExcluded)
+    {
+        std::cerr << "white endpoint marker exclusion: observed/contract="
+            << afterWhitePicker.selectorEndpointExclusionObserved << '/'
+            << afterWhitePicker.selectorMarkerCursorClearance
+            << " cursor=(" << afterWhitePicker.selectorCursorCenter.x << ','
+            << afterWhitePicker.selectorCursorCenter.y << ") endpoints=("
+            << afterWhitePicker.selectorEndpoints[0].x << ','
+            << afterWhitePicker.selectorEndpoints[0].y << ");("
+            << afterWhitePicker.selectorEndpoints[1].x << ','
+            << afterWhitePicker.selectorEndpoints[1].y << ");("
+            << afterWhitePicker.selectorEndpoints[2].x << ','
+            << afterWhitePicker.selectorEndpoints[2].y << ") visible="
+            << afterWhitePicker.selectorEndpointMarkerVisible[0] << ','
+            << afterWhitePicker.selectorEndpointMarkerVisible[1] << ','
+            << afterWhitePicker.selectorEndpointMarkerVisible[2] << '\n';
+    }
+    passed &= Check(
+        whiteEndpointMarkerExcluded,
+        "an endpoint marker is omitted whenever its rendered outer stroke "
+        "would enter the selector cursor's one-fringe exclusion gap");
+
+    const ImVec2 blackDirection = Scale(
+        Subtract(
+            afterWhitePicker.selectorEndpoints[1],
+            afterWhitePicker.selectorRect.GetCenter()),
+        1.0f / ImMax(
+            ImSqrt(ImLengthSqr(Subtract(
+                afterWhitePicker.selectorEndpoints[1],
+                afterWhitePicker.selectorRect.GetCenter()))),
+            FLT_EPSILON));
+    const ImVec2 blackInput = Add(
+        afterWhitePicker.selectorEndpoints[1],
+        Scale(
+            blackDirection,
+            afterWhitePicker.endpointSnapRadius * 0.80f));
+    QueueMouse(blackInput, true);
+    const ColorPickerObservation blackPicker =
+        SubmitColorPickerFrame(pickerColor, false);
+    QueueMouse(blackInput, false);
+    SubmitColorPickerFrame(pickerColor, false);
+    if (!(blackPicker.popupOpen &&
+        pickerColor[0] <= 0.001f &&
+        pickerColor[1] <= 0.001f &&
+        pickerColor[2] <= 0.001f))
+    {
+        std::cerr << "rounded selector black endpoint: input=("
+            << blackInput.x << ',' << blackInput.y << ") rgb="
+            << pickerColor[0] << ',' << pickerColor[1] << ','
+            << pickerColor[2] << '\n';
+    }
+    passed &= Check(
+        blackPicker.popupOpen &&
+            pickerColor[0] <= 0.001f &&
+            pickerColor[1] <= 0.001f &&
+            pickerColor[2] <= 0.001f,
+        "the rounded selector keeps exact black pointer-reachable");
 
     const ImVec2 alphaBarInput(
         (positionedPicker.alphaBarRect.Min.x +
@@ -2031,7 +3501,7 @@ int main()
         "the actual scoped ColorEdit4 popup alpha bar updates the stored alpha");
 
     QueueMouse(outside, false);
-    const ColorPickerObservation targetedClosedPicker =
+    const ColorPickerObservation targetedClosingPicker =
         SubmitColorPickerFrame(
             pickerColor,
             false,
@@ -2040,11 +3510,140 @@ int main()
             330.0f,
             true,
             true);
+    int zeroEndpointFrameCount =
+        targetedClosingPicker.transitionAtZeroEndpoint ? 1 : 0;
+    ColorPickerObservation targetedCloseProgress = targetedClosingPicker;
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            targetedCloseProgress.popupOpen &&
+            !targetedCloseProgress.transitionAtZeroEndpoint;
+        ++frame)
+    {
+        QueueMouse(outside, false);
+        targetedCloseProgress = SubmitColorPickerFrame(pickerColor, false);
+        zeroEndpointFrameCount +=
+            targetedCloseProgress.transitionAtZeroEndpoint ? 1 : 0;
+    }
+    QueueMouse(outside, false);
+    const ColorPickerObservation targetedClosedPicker =
+        SubmitColorPickerFrame(pickerColor, false);
     passed &= Check(
-        !targetedClosedPicker.popupOpen &&
+        targetedClosingPicker.popupOpen &&
+            !targetedClosingPicker.transitionTargetOpen &&
+            targetedClosingPicker.transitionAmount < 1.0f &&
+            targetedCloseProgress.popupOpen &&
+            targetedCloseProgress.transitionAtZeroEndpoint &&
+            zeroEndpointFrameCount == 1 &&
+            !targetedClosedPicker.popupOpen &&
+            !targetedClosedPicker.transitionRegistered &&
             !targetedClosedPicker.activeDrawListReported,
-        "the targeted picker close API dismisses the registered popup and "
-        "invalidates its current-frame draw-list report");
+        "the targeted picker close API retains the popup through fade and "
+        "zoom, submits exactly one zero endpoint, then commits dismissal");
+
+    float rgbPickerColor[4] = { 0.35f, 0.45f, 0.65f, 0.91f };
+    QueueMouse(outside, false);
+    ColorPickerObservation rgbPicker = SubmitColorPickerFrame(
+        rgbPickerColor,
+        true,
+        480.0f,
+        270.0f,
+        330.0f,
+        true,
+        false,
+        ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+        ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
+        ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
+        false);
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            !rgbPicker.transitionInteractionReady;
+        ++frame)
+    {
+        QueueMouse(outside, false);
+        rgbPicker = SubmitColorPickerFrame(
+            rgbPickerColor,
+            false,
+            480.0f,
+            270.0f,
+            330.0f,
+            true,
+            false,
+            ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+            ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
+            ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
+            false);
+    }
+    passed &= Check(
+        rgbPicker.popupOpen &&
+            rgbPicker.transitionInteractionReady &&
+            rgbPicker.barCount == 3 &&
+            rgbPicker.hueBarRoundedAndVisible &&
+            rgbPicker.alphaBarRect.GetWidth() == 0.0f &&
+            !rgbPicker.alphaBarRoundedAndVisible &&
+            !rgbPicker.alphaHollowMarkerVisible &&
+            rgbPicker.currentBarVisible &&
+            rgbPicker.originalBarVisible &&
+            rgbPicker.bottomControlsSpanAllBars,
+        "scoped ColorEdit3 uses exactly hue, Current, and Original bars while "
+        "ColorEdit4 retains the additional interactive alpha bar");
+    QueueMouse(outside, false);
+    SubmitColorPickerFrame(
+        rgbPickerColor,
+        false,
+        480.0f,
+        270.0f,
+        330.0f,
+        true,
+        true,
+        ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+        ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
+        ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
+        false);
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            GImGui->OpenPopupStack.Size > 0;
+        ++frame)
+    {
+        QueueMouse(outside, false);
+        SubmitColorPickerFrame(
+            rgbPickerColor,
+            false,
+            480.0f,
+            270.0f,
+            330.0f,
+            true,
+            false,
+            ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+            ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
+            ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
+            false);
+    }
+
+    ImGui::SetUvsrUiBehavior(false, false, false);
+    float noMotionPickerColor[4] = { 0.25f, 0.50f, 0.75f, 0.78f };
+    QueueMouse(outside, false);
+    const ColorPickerObservation noMotionPicker = SubmitColorPickerFrame(
+        noMotionPickerColor,
+        true);
+    QueueMouse(outside, false);
+    const ColorPickerObservation noMotionClosedPicker = SubmitColorPickerFrame(
+        noMotionPickerColor,
+        false,
+        480.0f,
+        270.0f,
+        330.0f,
+        true,
+        true);
+    passed &= Check(
+        noMotionPicker.popupOpen &&
+            noMotionPicker.transitionInteractionReady &&
+            noMotionPicker.transitionAmount >= 1.0f &&
+            noMotionPicker.maximumVertexAlpha >= 0.999f &&
+            !noMotionClosedPicker.popupOpen &&
+            !noMotionClosedPicker.transitionRegistered,
+        "disabling authored motion snaps picker opening and targeted closing "
+        "to their immediate endpoints");
+    ImGui::SetUvsrUiBehavior(true, false, false);
 
     float verticallyBlockedPickerColor[4] = {
         0.25f,
@@ -2106,15 +3705,20 @@ int main()
         stockPickerSurface);
     passed &= Check(
         oggScopedPicker.popupOpen &&
+            !oggScopedPicker.transitionRegistered &&
+            oggScopedPicker.transitionInteractionReady &&
             oggScopedPicker.requestedSurfaceApplied &&
             oggScopedPicker.activeDrawListMatchesPopup &&
+            !oggScopedPicker.requestedContentLayerApplied &&
+            !oggScopedPicker.requestedPickerLayerApplied &&
             !oggScopedPicker.finalCursorLayeredAndClipped &&
             !oggScopedPicker.hueBarRoundedAndVisible &&
             !oggScopedPicker.alphaBarRoundedAndVisible,
         "the scoped Ogg picker retains the stock PopupBg surface and upstream "
-        "square-bar/cursor rendering while still participating in safe placement");
+        "square-bar/cursor rendering without authored depth layers while still "
+        "participating in safe placement");
     QueueMouse(outside, false);
-    SubmitColorPickerFrame(
+    const ColorPickerObservation oggClosedPicker = SubmitColorPickerFrame(
         oggPickerColor,
         false,
         480.0f,
@@ -2123,6 +3727,11 @@ int main()
         true,
         true,
         stockPickerSurface);
+    passed &= Check(
+        !oggClosedPicker.popupOpen &&
+            !oggClosedPicker.transitionRegistered,
+        "the Ogg stock picker bypasses retained fade and zoom and dismisses "
+        "immediately");
 
     ImGui::SetUvsrUiBehavior(true, false, false);
     const ImVec4 scopedOnlySurface(0.61f, 0.07f, 0.43f, 0.89f);
@@ -2149,7 +3758,11 @@ int main()
         scopedOnlySurface);
     passed &= Check(
         unscopedPicker.popupOpen &&
+            !unscopedPicker.transitionRegistered &&
+            unscopedPicker.transitionInteractionReady &&
             !unscopedPicker.requestedSurfaceApplied &&
+            !unscopedPicker.requestedContentLayerApplied &&
+            !unscopedPicker.requestedPickerLayerApplied &&
             !unscopedPicker.activeDrawListReported &&
             !unscopedPicker.finalCursorLayeredAndClipped &&
             !unscopedPicker.hueBarRoundedAndVisible &&
@@ -2159,6 +3772,88 @@ int main()
     if (GImGui->OpenPopupStack.Size > 0)
         ImGui::ClosePopupToLevel(0, false);
     comboStyle.FrameRounding = originalComboFrameRounding;
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(180.0f, 100.0f), ImGuiCond_Always);
+    ImGui::Begin(
+        "Tree Arrow Rotation Test",
+        nullptr,
+        ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove);
+    ImDrawList* arrowDrawList = ImGui::GetWindowDrawList();
+    const int closedArrowStart = arrowDrawList->VtxBuffer.Size;
+    ImGui::BeginUvsrTreeArrowCapture();
+    ImGui::RenderArrow(
+        arrowDrawList,
+        ImVec2(42.0f, 52.0f),
+        IM_COL32_WHITE,
+        ImGuiDir_Right);
+    ImGui::EndUvsrTreeArrowCapture(0.0f);
+    const int closedArrowEnd = arrowDrawList->VtxBuffer.Size;
+    const int openArrowStart = arrowDrawList->VtxBuffer.Size;
+    ImGui::BeginUvsrTreeArrowCapture();
+    ImGui::RenderArrow(
+        arrowDrawList,
+        ImVec2(102.0f, 52.0f),
+        IM_COL32_WHITE,
+        ImGuiDir_Right);
+    ImGui::EndUvsrTreeArrowCapture(1.0f);
+    const int openArrowEnd = arrowDrawList->VtxBuffer.Size;
+    const auto vertexBounds =
+        [arrowDrawList](int firstVertex, int lastVertex)
+    {
+        ImRect bounds(
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX));
+        for (int vertexIndex = firstVertex;
+            vertexIndex < lastVertex;
+            ++vertexIndex)
+        {
+            bounds.Add(arrowDrawList->VtxBuffer[vertexIndex].pos);
+        }
+        return bounds;
+    };
+    const ImRect closedArrowBounds = vertexBounds(
+        closedArrowStart,
+        closedArrowEnd);
+    const ImRect openArrowBounds = vertexBounds(
+        openArrowStart,
+        openArrowEnd);
+    const ImVec2 closedArrowCenter = closedArrowBounds.GetCenter();
+    const ImVec2 openArrowCenter = openArrowBounds.GetCenter();
+    bool arrowVerticesRotated =
+        closedArrowEnd - closedArrowStart ==
+            openArrowEnd - openArrowStart &&
+        closedArrowEnd > closedArrowStart;
+    for (int vertexOffset = 0;
+        arrowVerticesRotated &&
+            closedArrowStart + vertexOffset < closedArrowEnd;
+        ++vertexOffset)
+    {
+        const ImVec2 closedPosition =
+            arrowDrawList->VtxBuffer[
+                closedArrowStart + vertexOffset].pos;
+        const ImVec2 openPosition =
+            arrowDrawList->VtxBuffer[
+                openArrowStart + vertexOffset].pos;
+        const ImVec2 closedOffset(
+            closedPosition.x - closedArrowCenter.x,
+            closedPosition.y - closedArrowCenter.y);
+        const ImVec2 openOffset(
+            openPosition.x - openArrowCenter.x,
+            openPosition.y - openArrowCenter.y);
+        arrowVerticesRotated &=
+            std::abs(openOffset.x + closedOffset.y) <= 0.05f &&
+            std::abs(openOffset.y - closedOffset.x) <= 0.05f;
+    }
+    ImGui::End();
+    ImGui::Render();
+    passed &= Check(
+        arrowVerticesRotated,
+        "the scoped drawer arrow capture rotates the authored vertices by "
+        "exactly 90 degrees between closed and open endpoints");
 
     ImGui::SetUvsrUiBehavior(false, true, false);
     passed &= Check(
@@ -2246,22 +3941,174 @@ int main()
     ImGui::End();
     ImGui::Render();
 
-    const TooltipObservation ampTooltip =
+    const ImGuiHoveredFlags originalTooltipHoverFlags =
+        comboStyle.HoverFlagsForTooltipMouse;
+    comboStyle.HoverFlagsForTooltipMouse = ImGuiHoveredFlags_None;
+    QueueMouse(outside, false);
+    const TooltipObservation tooltipOwnerProbe =
         SubmitTooltipFrame(false);
-    SubmitTooltipFrame(true);
+    const ImVec2 tooltipOwnerCenter = Center(tooltipOwnerProbe.ownerRect);
+    QueueMouse(tooltipOwnerCenter, false);
+    SubmitTooltipFrame(false);
+    QueueMouse(tooltipOwnerCenter, false);
+    const TooltipObservation authoredTooltipOpening =
+        SubmitTooltipFrame(false);
+    TooltipObservation authoredTooltip = authoredTooltipOpening;
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            authoredTooltip.maximumVertexAlpha < 0.999f;
+        ++frame)
+    {
+        QueueMouse(tooltipOwnerCenter, false);
+        authoredTooltip = SubmitTooltipFrame(false);
+    }
+    const bool authoredTooltipContract =
+        authoredTooltipOpening.submitted &&
+            authoredTooltip.submitted &&
+            authoredTooltip.noInputs &&
+            authoredTooltip.alwaysAutoResize &&
+            !authoredTooltip.hasVerticalScrollbar &&
+            authoredTooltipOpening.maximumVertexAlpha <
+                authoredTooltip.maximumVertexAlpha &&
+            authoredTooltipOpening.visualBounds.GetWidth() <
+                authoredTooltip.visualBounds.GetWidth();
+    if (!authoredTooltipContract)
+    {
+        std::cerr << "authored tooltip: opening="
+            << authoredTooltipOpening.submitted << '/'
+            << authoredTooltipOpening.noInputs << '/'
+            << authoredTooltipOpening.alwaysAutoResize << ':'
+            << authoredTooltipOpening.maximumVertexAlpha << ':'
+            << authoredTooltipOpening.visualBounds.GetWidth()
+            << " settled=" << authoredTooltip.submitted << '/'
+            << authoredTooltip.noInputs << '/'
+            << authoredTooltip.alwaysAutoResize << '/'
+            << authoredTooltip.hasVerticalScrollbar << ':'
+            << authoredTooltip.maximumVertexAlpha << ':'
+            << authoredTooltip.visualBounds.GetWidth() << '\n';
+    }
+    passed &= Check(
+        authoredTooltipContract,
+        "authored tooltips keep stock no-input auto-size semantics while fade "
+        "and zoom advance synchronously to the visible endpoint");
+
+    const ImVec2 tooltipOwnerLeft(
+        tooltipOwnerProbe.ownerRect.Min.x + 8.0f,
+        tooltipOwnerCenter.y);
+    const ImVec2 tooltipOwnerRight(
+        tooltipOwnerProbe.ownerRect.Max.x - 8.0f,
+        tooltipOwnerCenter.y);
+    QueueMouse(tooltipOwnerLeft, false);
+    const TooltipObservation leftFollowingTooltip =
+        SubmitTooltipFrame(false);
+    QueueMouse(tooltipOwnerRight, false);
+    const TooltipObservation rightFollowingTooltip =
+        SubmitTooltipFrame(false);
+    passed &= Check(
+        leftFollowingTooltip.submitted &&
+            rightFollowingTooltip.submitted &&
+            (std::abs(
+                    rightFollowingTooltip.windowPosition.x -
+                        leftFollowingTooltip.windowPosition.x) > 1.0f ||
+                std::abs(
+                    rightFollowingTooltip.windowPosition.y -
+                        leftFollowingTooltip.windowPosition.y) > 1.0f) &&
+            !ImRect(
+                leftFollowingTooltip.windowPosition,
+                Add(
+                    leftFollowingTooltip.windowPosition,
+                    leftFollowingTooltip.windowSize)).Contains(
+                        leftFollowingTooltip.mousePosition) &&
+            !ImRect(
+                rightFollowingTooltip.windowPosition,
+                Add(
+                    rightFollowingTooltip.windowPosition,
+                    rightFollowingTooltip.windowSize)).Contains(
+                        rightFollowingTooltip.mousePosition),
+        "authored tooltips follow and avoid the mouse through the stock popup "
+        "positioning path instead of occupying a fixed viewport slot");
+
+    QueueMouse(tooltipOwnerCenter, false);
     const TooltipObservation stockTooltip =
         SubmitTooltipFrame(true);
     passed &= Check(
-        ampTooltip.submitted &&
-            stockTooltip.submitted &&
-            stockTooltip.windowSize.x >
-                ampTooltip.windowSize.x + GImGui->FontSize &&
-            stockTooltip.contentSize.x >
-                ampTooltip.contentSize.x + GImGui->FontSize &&
-            ampTooltip.contentSize.y >
-                stockTooltip.contentSize.y + GImGui->FontSize,
-        "stock policy restores upstream auto-sized unwrapped tooltips while "
-        "custom policy retains UVSR's fixed wrapped tooltip");
+        stockTooltip.submitted &&
+            stockTooltip.noInputs &&
+            stockTooltip.alwaysAutoResize &&
+            !stockTooltip.hasVerticalScrollbar &&
+            std::abs(
+                stockTooltip.windowSize.x -
+                    authoredTooltip.windowSize.x) <= 1.0f &&
+            std::abs(
+                stockTooltip.windowSize.y -
+                    authoredTooltip.windowSize.y) <= 1.0f &&
+            std::abs(
+                stockTooltip.contentSize.x -
+                    authoredTooltip.contentSize.x) <= 1.0f &&
+            std::abs(
+                stockTooltip.contentSize.y -
+                    authoredTooltip.contentSize.y) <= 1.0f,
+        "stock and authored item tooltips share mouse-follow placement, "
+        "typography, auto-sizing, and no-input semantics");
+
+    QueueMouse(tooltipOwnerCenter, false);
+    TooltipObservation settledReversalTooltip =
+        SubmitTooltipFrame(false);
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            settledReversalTooltip.maximumVertexAlpha < 0.999f;
+        ++frame)
+    {
+        QueueMouse(tooltipOwnerCenter, false);
+        settledReversalTooltip = SubmitTooltipFrame(false);
+    }
+    QueueMouse(outside, false);
+    const TooltipObservation fadingTooltip =
+        SubmitTooltipFrame(false);
+    QueueMouse(outside, false);
+    const TooltipObservation fadingTooltipNext =
+        SubmitTooltipFrame(false);
+    QueueMouse(tooltipOwnerCenter, false);
+    const TooltipObservation reversedTooltip =
+        SubmitTooltipFrame(false);
+    passed &= Check(
+        settledReversalTooltip.submitted &&
+            fadingTooltip.submitted &&
+            fadingTooltipNext.submitted &&
+            reversedTooltip.submitted &&
+            fadingTooltip.maximumVertexAlpha <
+                settledReversalTooltip.maximumVertexAlpha &&
+            fadingTooltipNext.maximumVertexAlpha <
+                fadingTooltip.maximumVertexAlpha &&
+            fadingTooltipNext.visualBounds.GetWidth() <
+                fadingTooltip.visualBounds.GetWidth() &&
+            reversedTooltip.maximumVertexAlpha >
+                fadingTooltipNext.maximumVertexAlpha &&
+            reversedTooltip.visualBounds.GetWidth() >
+                fadingTooltipNext.visualBounds.GetWidth(),
+        "authored tooltip fade and zoom reverse continuously when the owner is "
+        "re-engaged mid-flight");
+
+    QueueMouse(tooltipOwnerCenter, false);
+    const TooltipObservation motionDisabledTooltip =
+        SubmitTooltipFrame(false, true, false);
+    passed &= Check(
+        motionDisabledTooltip.submitted &&
+            motionDisabledTooltip.noInputs &&
+            motionDisabledTooltip.maximumVertexAlpha >= 0.999f,
+        "disabling authored motion snaps the tooltip to its fully visible "
+        "stock-semantics endpoint");
+
+    const TooltipDragObservation dragTooltip =
+        SubmitTooltipDragIsolationFrame();
+    passed &= Check(
+        dragTooltip.retainedTooltipInactive &&
+            dragTooltip.retainedOwnerReset &&
+            dragTooltip.dragTooltipActive &&
+            dragTooltip.dragTooltipNoInputs,
+        "a live drag/drop preview replaces the retained authored tooltip and "
+        "keeps upstream non-interactive drag behavior");
+    comboStyle.HoverFlagsForTooltipMouse = originalTooltipHoverFlags;
 
 
     const ImVec4 collapsedSettingsBodyColor(

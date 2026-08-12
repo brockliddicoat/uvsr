@@ -83,8 +83,10 @@ reaches UI motion endpoints immediately. Both skins expose identical renderer
 state. A user-edited ultra-bright Amp Primary Accent automatically selects the
 dark transparent depth polarity.
 
-Interface is the final drawer. Its first toggle disables or enables every
-authored UI animation; Ogg remains immediate regardless. It also owns the skin
+Interface is the final drawer. Its first two toggles disable or enable every
+authored UI animation and opt exact numeric entry into values beyond compact
+visual tracks but within each setting's safe logical bounds; both preferences
+are session-only, and Ogg remains immediate regardless. It also owns the skin
 selector plus session-only RGBA editors. Amp Primary Accent drives drawer and
 panel headers, footer buttons, checkmarks, selection, and raised slider knobs;
 it is unavailable under Ogg. Shared Secondary Accent defaults to
@@ -97,7 +99,8 @@ closed controls, and slider tracks. Role-state colors derive from these resting
 RGBA values, and ultra-bright Primary Accent surfaces select dark transparent
 depth automatically. Slider knobs remain raised. Footer Reset and `/reset all`
 restore renderer defaults, the dynamic Adaptive Sync default, Amp, enabled
-animations, every Interface color, and the collapsed Complete Renderer view.
+animations, disabled visual-maximum override, every Interface color, and the
+collapsed Complete Renderer view.
 They preserve camera, scene, active adapter, and shell navigation state.
 
 Authored sliders render the Primary Accent knob as a restrained raised gradient
@@ -108,14 +111,25 @@ because of that gate, the knob animates toward the effective value while direct
 mouse or navigation edits track immediately. A fixed right-hand value bubble
 inside the existing slider width uses exactly twice the authored toggle width
 and accepts exact input on one click. Its closed copy contains four numeric
-digit glyphs with no units, while active input retains native precision. A
-2-pixel gap separates its four inner fillets from the rounded track bubble.
+digit glyphs with no units, while active input retains native precision. Exact
+input is clamped to the compact visual range by default. Override Visual Maxes
+allows values beyond that track up to the established safe logical range
+without extending pointer or navigation travel, and turning it off never
+silently reduces an accepted value. A 2-pixel gap separates its four inner
+fillets from the rounded track bubble.
 Authored ColorEdit component controls omit channel letter prefixes. Ogg retains
 stock slider rendering, centered value text, and stock ColorEdit labels.
-The scoped Amp Interface picker uses a hue wheel while retaining independently
-interactive vertical hue and transparency bars. Both bars, their borders, and
-their triangle markers use the common authored rounding; markers render above
-the bars and the wheel cursor renders last. Unscoped and Ogg pickers stay stock.
+The scoped Amp Interface and Material pickers use a hue wheel around an onto,
+rounded saturation/value triangle. RGB controls use three equal-width vertical
+bars for interactive hue and unlabeled Current and Original comparisons; RGBA
+controls insert an equally sized interactive transparency bar. Exact hue,
+white, and black remain pointer reachable through forgiving but visually compact
+tip snap zones. The outer frame uses one full Regular spacing token and the
+opaque panel-inset surface, followed by two translucent depth layers; selector,
+bar, checker, and comparison colors remain opaque at steady state. Hollow
+circles mark only hue and transparency. The rounded source pointer is emitted
+after the popup-body transform so its tip stays attached throughout reversible
+zoom and fade. Unscoped and Ogg pickers stay stock.
 
 ## Mandatory New-Element Intake Checklist
 
@@ -348,9 +362,10 @@ Complete Renderer uses a striped two-column table for the full
 retained stage list; an ordinary stage includes the complete frame for context.
 Visibility, Directional Shadows, Temporal Reconstructive, Fast Approximate,
 Conservative Morphological, and Multisample Adaptive use the same readable table language for their
-retained breakdowns. Completed query availability gates every timing. Dormant,
-unsupported, or newly enabled work displays `--` or a direct status instead of
-a fabricated zero. Directional Shadows uses **Shadow Ray Dispatch**, **Shadow
+retained breakdowns. Completed query availability gates every timing. Omit a
+timing row until it has a current measurement; retain `--`, Unsupported, or
+other direct unavailable text for meaningful non-time resource, count, format,
+and status rows. Directional Shadows uses **Shadow Ray Dispatch**, **Shadow
 Denoise**, **Sky Visibility Ray Dispatch**, and **Sky Visibility Denoise**.
 Visibility keeps **Ambient Occlusion Denoise** and **Diffuse Illumination
 Denoise** separate from its trace. Multisample base lighting used only to feed
@@ -379,7 +394,10 @@ visible grab that meets the inset outline while retaining the true 4-pixel outer
 radius and 3-pixel inset-outline radius.
 Submit the opaque ring, fixed shadow, and depth outlines on the last visible
 Settings child draw list: nested child windows render after their parent, so a
-parent-only decoration is not a true foreground layer. General must use the same
+parent-only decoration is not a true foreground layer. Anchor the shadow mask
+to the root body, span the real Regular top margin, and retain one Tight cast
+over the first General pixels; drawer open state must not move that geometry.
+General must use the same
 `DrawCollapsingHeader`, `BeginDrawerBody`, `EndDrawerBody`, and Tight spacing
 path as every ordinary drawer and must never own root chrome or clipping.
 Backdrop composites must follow the independent title and body silhouettes;
@@ -404,14 +422,17 @@ between each row's supported verbs and value domain.
 
 Clamp repeated outward wheel input at the Settings top or bottom to that exact
 endpoint before applying scroll-anchor correction. A pending navigation or
-programmatic scroll target still owns its frame. Constrain Interface color
-pickers to the lane beginning at the Settings content-right edge and to the
-current Settings-root bottom. Transform the active picker draw list exactly once
-with the managed stack appearance. Give only that picker a Primary
-Background-derived surface whose default authored alpha is opaque, without
-changing generic popup colors. Draw its active cursor last, and close only that
-picker immediately after an actual contiguous-frame Settings scroll change.
-Wheel input over the picker itself must remain picker input.
+programmatic scroll target still owns its frame. Constrain authored color
+pickers to the lane beginning at the Settings content-right edge and make their
+bottom exactly flush with the current Settings-root bottom. Apply the picker
+local zoom/fade transform once, then the managed-stack appearance once. Give
+only that picker the opaque panel-inset outer surface plus two translucent
+interior layers, without changing generic popup colors. Append the rounded
+source pointer after transforming the body so its tip remains fixed on the
+origin swatch. An actual contiguous-frame Settings scroll requests the same
+retained close transition, blocks picker input during the transition, and
+closes immediately only when authored motion is disabled. Wheel input over the
+picker itself must remain picker input.
 
 Escape or the grave-accent/tilde key toggles Settings unless an active edit or
 popup owns it. The physical grave-accent key works with or without Shift so a
@@ -545,12 +566,14 @@ Use the exact candidate executable and a bundled scene. Exercise:
   Primary Accent and advanced-role retention, confirming the Ogg
   unavailable state, verifying Secondary/Tertiary routing through CLI, toggles,
   and Material, and checking alpha at zero, half, and full opacity;
-- opening each Settings color picker at ordinary and narrow viewport widths to
-  confirm the hue wheel and rounded hue/transparency bars remain independent,
-  it may cover the scrollbar but never the Settings content, never extends below
-  Settings, shares stack zoom/opacity, closes on Settings wheel or scrollbar
-  movement, keeps picker-local wheel input, and draws markers and its cursor
-  above every picker element;
+- opening representative RGB and RGBA Settings and Material color pickers at
+  ordinary and narrow viewport widths to confirm the three- or four-bar layout,
+  unlabeled Current and Original comparisons, hollow hue/transparency markers,
+  compact full-gamut snap zones, opaque color surfaces, and the two translucent
+  depth layers; verify the popup may cover the scrollbar but never Settings
+  content, stays flush with the Settings bottom, retains its source attachment,
+  zooms and fades reversibly, closes on Settings wheel or scrollbar movement,
+  and preserves picker-local wheel input;
 - editing Amp Primary Accent to an ultra-bright translucent value over dark,
   bright, and detailed scenes to confirm transmission and automatic dark depth
   edges;

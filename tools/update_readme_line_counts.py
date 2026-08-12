@@ -82,6 +82,7 @@ OVERRIDE_GROUPS = (
         (
             ROOT / "overrides" / "donut-app.patch",
             ROOT / "overrides" / "donut-loading-app.patch",
+            ROOT / "overrides" / "donut-app-ui-polish.patch",
         ),
     ),
     OverrideGroup(
@@ -90,6 +91,8 @@ OVERRIDE_GROUPS = (
             ROOT / "overrides" / "imgui-ui.patch",
             ROOT / "overrides" / "imgui-slider-controls.patch",
             ROOT / "overrides" / "imgui-combo-roll.patch",
+            ROOT / "overrides" / "imgui-ui-polish.patch",
+            ROOT / "overrides" / "imgui-tooltip-picker.patch",
         ),
     ),
 )

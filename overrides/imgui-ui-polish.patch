@@ -1,0 +1,1054 @@
+diff --git a/imgui.h b/imgui.h
+index ad8c562..3273f2c 100644
+--- a/imgui.h
++++ b/imgui.h
+@@ -416,10 +416,12 @@ namespace ImGui
+     IMGUI_API void          SetUvsrSliderTrackColors(const ImVec4& normal, const ImVec4& hovered, const ImVec4& active); // UVSR extension: supply authored slider-track colors without changing shared FrameBg roles.
+     IMGUI_API void          PushUvsrDisabledPresentation(float amount); // UVSR extension: scope the authored disabled grayscale amount independently from semantic input blocking.
+     IMGUI_API void          PopUvsrDisabledPresentation();             // UVSR extension: end the current authored disabled-presentation scope.
+-    IMGUI_API void          PushUvsrColorPickerPopupContentRight(float content_right, float maximum_bottom, const ImVec4& popup_background); // UVSR extension: scope ColorEdit4 picker popups to Settings-adjacent bounds and a caller-owned surface.
++    IMGUI_API void          PushUvsrColorPickerPopupContentRight(float content_right, float maximum_bottom, const ImVec4& popup_background, const ImVec4& content_layer, const ImVec4& picker_layer); // UVSR extension: scope ColorEdit4 picker popups to Settings-adjacent bounds and caller-owned depth surfaces.
+     IMGUI_API void          PopUvsrColorPickerPopupContentRight();      // UVSR extension: end the current ColorEdit4 picker-popup placement scope.
+     IMGUI_API ImDrawList*   GetUvsrActiveColorPickerPopupDrawList();    // UVSR extension: return this frame's active scoped ColorEdit4 picker draw list, or NULL.
+     IMGUI_API void          CloseUvsrColorPickerPopup();                // UVSR extension: close only the active scoped ColorEdit4 picker popup.
++    IMGUI_API void          BeginUvsrTreeArrowCapture();                // UVSR extension: arm one drawer-tree arrow for post-layout rotation.
++    IMGUI_API void          EndUvsrTreeArrowCapture(float open_amount, bool upside_down = false); // UVSR extension: rotate the captured drawer-tree arrow to the supplied normalized state.
+     IMGUI_API bool          IsUvsrUiMotionEnabled();                    // UVSR extension: query the active presentation policy.
+     IMGUI_API bool          IsUvsrStockWidgetRenderingEnabled();        // UVSR extension: query whether upstream widget rendering is active.
+ 
+diff --git a/imgui_draw.cpp b/imgui_draw.cpp
+index 0a788fd..7883bd8 100644
+--- a/imgui_draw.cpp
++++ b/imgui_draw.cpp
+@@ -5839,6 +5839,54 @@ begin:
+ // - RenderColorRectWithAlphaCheckerboard()
+ //-----------------------------------------------------------------------------
+ 
++void ImGui::BeginUvsrTreeArrowCapture()
++{
++    ImGuiContext& g = *GImGui;
++    g.UvsrTreeArrowCapture = ImGuiUvsrTreeArrowCapture{};
++    g.UvsrTreeArrowCapture.Armed = true;
++    g.UvsrTreeArrowCapture.Frame = g.FrameCount;
++}
++
++void ImGui::EndUvsrTreeArrowCapture(float open_amount, bool upside_down)
++{
++    ImGuiContext& g = *GImGui;
++    const ImGuiUvsrTreeArrowCapture capture = g.UvsrTreeArrowCapture;
++    g.UvsrTreeArrowCapture = ImGuiUvsrTreeArrowCapture{};
++    if (capture.Frame != g.FrameCount ||
++        capture.DrawList == NULL ||
++        capture.VertexEnd <= capture.VertexStart)
++    {
++        return;
++    }
++
++    float source_angle = 0.0f;
++    if (capture.SourceDirection == ImGuiDir_Down)
++        source_angle = IM_PI * 0.5f;
++    else if (capture.SourceDirection == ImGuiDir_Up)
++        source_angle = -IM_PI * 0.5f;
++    else if (capture.SourceDirection == ImGuiDir_Left)
++        source_angle = IM_PI;
++    const float target_angle =
++        ImSaturate(open_amount) *
++        (upside_down ? -IM_PI * 0.5f : IM_PI * 0.5f);
++    const float rotation = target_angle - source_angle;
++    const float cosine = ImCos(rotation);
++    const float sine = ImSin(rotation);
++    const int vertex_end = ImMin(
++        capture.VertexEnd,
++        capture.DrawList->VtxBuffer.Size);
++    for (int vertex_index = ImMax(0, capture.VertexStart);
++        vertex_index < vertex_end;
++        ++vertex_index)
++    {
++        ImDrawVert& vertex = capture.DrawList->VtxBuffer[vertex_index];
++        const ImVec2 offset = vertex.pos - capture.Center;
++        vertex.pos = capture.Center + ImVec2(
++            offset.x * cosine - offset.y * sine,
++            offset.x * sine + offset.y * cosine);
++    }
++}
++
+ // Render an arrow aimed to be aligned with text (p_min is a position in the same space text would be positioned). To e.g. denote expanded/collapsed state
+ void ImGui::RenderArrow(ImDrawList* draw_list, ImVec2 pos, ImU32 col, ImGuiDir dir, float scale)
+ {
+@@ -5868,6 +5916,22 @@ void ImGui::RenderArrow(ImDrawList* draw_list, ImVec2 pos, ImU32 col, ImGuiDir d
+         IM_ASSERT(0);
+         break;
+     }
++    const int vertex_start = draw_list->VtxBuffer.Size;
++    const auto capture_rendered_arrow = [&]()
++    {
++        if (GImGui == NULL)
++            return;
++        ImGuiUvsrTreeArrowCapture& capture =
++            GImGui->UvsrTreeArrowCapture;
++        if (!capture.Armed || capture.Frame != GImGui->FrameCount)
++            return;
++        capture.Armed = false;
++        capture.DrawList = draw_list;
++        capture.VertexStart = vertex_start;
++        capture.VertexEnd = draw_list->VtxBuffer.Size;
++        capture.Center = center;
++        capture.SourceDirection = dir;
++    };
+     if (GImGui != NULL && GImGui->UvsrStockWidgetRendering)
+     {
+         draw_list->AddTriangleFilled(
+@@ -5875,6 +5939,7 @@ void ImGui::RenderArrow(ImDrawList* draw_list, ImVec2 pos, ImU32 col, ImGuiDir d
+             center + b,
+             center + c,
+             col);
++        capture_rendered_arrow();
+         return;
+     }
+     const ImVec2 points[3] = {
+@@ -5910,6 +5975,7 @@ void ImGui::RenderArrow(ImDrawList* draw_list, ImVec2 pos, ImU32 col, ImGuiDir d
+     draw_list->PathBezierQuadraticCurveTo(
+         points[2], move_toward(points[2], points[0]), 4);
+     draw_list->PathFillConvex(col);
++    capture_rendered_arrow();
+ }
+ 
+ void ImGui::RenderBullet(ImDrawList* draw_list, ImVec2 pos, ImU32 col)
+diff --git a/imgui_internal.h b/imgui_internal.h
+index 07ae460..f188636 100644
+--- a/imgui_internal.h
++++ b/imgui_internal.h
+@@ -2141,6 +2141,19 @@ struct ImGuiUvsrColorPickerPopupScope
+     float                   ContentRight;
+     float                   MaximumBottom;
+     ImVec4                  PopupBackground;
++    ImVec4                  ContentLayer;
++    ImVec4                  PickerLayer;
++};
++
++struct ImGuiUvsrTreeArrowCapture
++{
++    bool                    Armed = false;
++    ImDrawList*             DrawList = NULL;
++    int                     VertexStart = 0;
++    int                     VertexEnd = 0;
++    ImVec2                  Center = ImVec2(0.0f, 0.0f);
++    ImGuiDir                SourceDirection = ImGuiDir_None;
++    int                     Frame = -1;
+ };
+ 
+ struct ImGuiContext
+@@ -2165,6 +2178,7 @@ struct ImGuiContext
+     ImGuiID                 UvsrActiveColorPickerPopupId = 0;     // Exact active scoped ColorEdit4 picker popup, retained so an offscreen owner can close it.
+     ImDrawList*             UvsrActiveColorPickerPopupDrawList = NULL; // Active scoped picker draw list when submitted this frame.
+     int                     UvsrActiveColorPickerPopupDrawListFrame = -1; // Frame owning UvsrActiveColorPickerPopupDrawList.
++    ImGuiUvsrTreeArrowCapture UvsrTreeArrowCapture;             // One frame-scoped drawer arrow awaiting rotation by its owner's body timeline.
+     ImVector<ImFontAtlas*>  FontAtlases;                        // List of font atlases used by the context (generally only contains g.IO.Fonts aka the main font atlas)
+     ImFont*                 Font;                               // Currently bound font. (== FontStack.back().Font)
+     ImFontBaked*            FontBaked;                          // Currently bound font at currently bound size. (== Font->GetFontBaked(FontSize))
+diff --git a/imgui_widgets.cpp b/imgui_widgets.cpp
+index a483034..17b5f72 100644
+--- a/imgui_widgets.cpp
++++ b/imgui_widgets.cpp
+@@ -7031,7 +7031,9 @@ static void ColorEditRestoreHS(const float* col, float* H, float* S, float* V)
+ void ImGui::PushUvsrColorPickerPopupContentRight(
+     float content_right,
+     float maximum_bottom,
+-    const ImVec4& popup_background)
++    const ImVec4& popup_background,
++    const ImVec4& content_layer,
++    const ImVec4& picker_layer)
+ {
+     ImGuiContext& g = *GImGui;
+     IM_ASSERT(content_right >= -FLT_MAX && content_right <= FLT_MAX);
+@@ -7039,7 +7041,9 @@ void ImGui::PushUvsrColorPickerPopupContentRight(
+     const ImGuiUvsrColorPickerPopupScope scope = {
+         content_right,
+         maximum_bottom,
+-        popup_background
++        popup_background,
++        content_layer,
++        picker_layer
+     };
+     g.UvsrColorPickerPopupScopeStack.push_back(scope);
+ }
+@@ -7202,6 +7206,44 @@ static UvsrColorPickerPopupLayout ConfigureUvsrColorPickerPopup(
+     return layout;
+ }
+ 
++static ImRect GetUvsrColorPickerPopupContentBounds(ImGuiWindow* window)
++{
++    if (window == NULL)
++        return ImRect();
++
++    const ImGuiStyle& style = GImGui->Style;
++    const ImVec2 inset(
++        ImMax(0.0f, style.WindowPadding.x),
++        ImMax(0.0f, style.WindowPadding.y));
++    return ImRect(
++        window->InnerRect.Min + inset,
++        window->InnerRect.Max - inset);
++}
++
++static void DrawUvsrColorPickerPopupContentLayer(
++    ImGuiWindow* window,
++    const ImVec4& color)
++{
++    if (window == NULL || color.w <= 0.0f)
++        return;
++
++    const ImRect bounds = GetUvsrColorPickerPopupContentBounds(window);
++    if (bounds.GetWidth() <= 1.0f || bounds.GetHeight() <= 1.0f)
++        return;
++    window->DrawList->PushClipRect(bounds.Min, bounds.Max, true);
++    window->DrawList->AddRectFilled(
++        bounds.Min,
++        bounds.Max,
++        ImGui::GetColorU32(color),
++        ImClamp(
++            GImGui->Style.FrameRounding,
++            0.0f,
++            ImMin(
++                bounds.GetWidth(),
++                bounds.GetHeight()) * 0.5f));
++    window->DrawList->PopClipRect();
++}
++
+ // Edit colors components (each component in 0.0f..1.0f range).
+ // See enum ImGuiColorEditFlags_ for available options. e.g. Only access 3 floats if ImGuiColorEditFlags_NoAlpha flag is set.
+ // With typical options: Left-click on color square to open color picker. Right-click to open option menu. CTRL+Click over input fields to edit them and TAB to go to next item.
+@@ -7425,6 +7467,9 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
+         {
+             if (scoped_picker_popup)
+             {
++                DrawUvsrColorPickerPopupContentLayer(
++                    g.UvsrStockWidgetRendering ? NULL : g.CurrentWindow,
++                    scoped_picker_scope->ContentLayer);
+                 g.UvsrActiveColorPickerPopupId =
+                     g.CurrentWindow->PopupId;
+                 g.UvsrActiveColorPickerPopupDrawList =
+@@ -7585,6 +7630,618 @@ static float GetUvsrRoundedRectDistance(const ImRect& bounds, float rounding, co
+         ImMin(ImMax(offset.x, offset.y), 0.0f) - rounding;
+ }
+ 
++static ImU32 GetUvsrSvSelectorColor(
++    float hue,
++    float saturation,
++    float value,
++    float alpha)
++{
++    ImVec4 color(0.0f, 0.0f, 0.0f, alpha);
++    ImGui::ColorConvertHSVtoRGB(
++        hue,
++        ImSaturate(saturation),
++        ImSaturate(value),
++        color.x,
++        color.y,
++        color.z);
++    return ImGui::ColorConvertFloat4ToU32(color);
++}
++
++struct UvsrRoundedTriangleSelector
++{
++    ImVec2 SharpVertices[3];
++    ImVec2 Center;
++    ImVector<ImVec2> Contour;
++    float EndpointSnapDistance = 1.0f;
++};
++
++static float UvsrTriangleCross(const ImVec2& first, const ImVec2& second)
++{
++    return first.x * second.y - first.y * second.x;
++}
++
++static float GetUvsrRayPolygonBoundaryDistance(
++    const ImVec2& center,
++    const ImVec2& direction,
++    const ImVec2* points,
++    int point_count)
++{
++    const float direction_length_squared = ImLengthSqr(direction);
++    if (direction_length_squared <= FLT_EPSILON || point_count < 3)
++        return 0.0f;
++
++    const ImVec2 unit_direction = direction /
++        ImSqrt(direction_length_squared);
++    float boundary_distance = FLT_MAX;
++    for (int point_index = 0; point_index < point_count; ++point_index)
++    {
++        const ImVec2 first = points[point_index];
++        const ImVec2 second = points[(point_index + 1) % point_count];
++        const ImVec2 edge = second - first;
++        const float denominator = UvsrTriangleCross(unit_direction, edge);
++        if (ImAbs(denominator) <= FLT_EPSILON)
++            continue;
++
++        const ImVec2 delta = first - center;
++        const float distance = UvsrTriangleCross(delta, edge) / denominator;
++        const float edge_amount =
++            UvsrTriangleCross(delta, unit_direction) / denominator;
++        if (distance >= 0.0f &&
++            edge_amount >= -0.0001f &&
++            edge_amount <= 1.0001f)
++        {
++            boundary_distance = ImMin(boundary_distance, distance);
++        }
++    }
++    return boundary_distance < FLT_MAX ? boundary_distance : 0.0f;
++}
++
++static void BuildUvsrRoundedTriangleSelector(
++    UvsrRoundedTriangleSelector& selector,
++    ImDrawList* draw_list,
++    const ImVec2& hue_vertex,
++    const ImVec2& black_vertex,
++    const ImVec2& white_vertex,
++    float rounding,
++    float endpoint_snap_distance)
++{
++    selector.SharpVertices[0] = hue_vertex;
++    selector.SharpVertices[1] = black_vertex;
++    selector.SharpVertices[2] = white_vertex;
++    selector.Center =
++        (hue_vertex + black_vertex + white_vertex) / 3.0f;
++    selector.EndpointSnapDistance = ImMax(1.0f, endpoint_snap_distance);
++
++    float minimum_edge_length = FLT_MAX;
++    for (int vertex_index = 0; vertex_index < 3; ++vertex_index)
++    {
++        minimum_edge_length = ImMin(
++            minimum_edge_length,
++            ImSqrt(ImLengthSqr(
++                selector.SharpVertices[(vertex_index + 1) % 3] -
++                selector.SharpVertices[vertex_index])));
++    }
++    const float tangent_distance = ImClamp(
++        ImMax(rounding, 0.0f) * 1.75f,
++        0.0f,
++        minimum_edge_length * 0.20f);
++    if (tangent_distance <= FLT_EPSILON)
++    {
++        for (const ImVec2& vertex : selector.SharpVertices)
++            selector.Contour.push_back(vertex);
++        return;
++    }
++
++    int corner_sections = ImClamp(
++        draw_list->_CalcCircleAutoSegmentCount(ImMax(rounding, 1.0f)) / 3,
++        4,
++        24);
++    if ((corner_sections & 1) != 0)
++        ++corner_sections;
++    for (int vertex_index = 0; vertex_index < 3; ++vertex_index)
++    {
++        const ImVec2 vertex = selector.SharpVertices[vertex_index];
++        const ImVec2 previous =
++            selector.SharpVertices[(vertex_index + 2) % 3];
++        const ImVec2 next =
++            selector.SharpVertices[(vertex_index + 1) % 3];
++        const float previous_length = ImMax(
++            ImSqrt(ImLengthSqr(previous - vertex)),
++            FLT_EPSILON);
++        const float next_length = ImMax(
++            ImSqrt(ImLengthSqr(next - vertex)),
++            FLT_EPSILON);
++        const ImVec2 entry = vertex +
++            (previous - vertex) * (tangent_distance / previous_length);
++        const ImVec2 exit = vertex +
++            (next - vertex) * (tangent_distance / next_length);
++        for (int section = 0; section <= corner_sections; ++section)
++        {
++            const float amount =
++                (float)section / (float)corner_sections;
++            const float inverse_amount = 1.0f - amount;
++            selector.Contour.push_back(
++                entry * (inverse_amount * inverse_amount) +
++                vertex * (2.0f * inverse_amount * amount) +
++                exit * (amount * amount));
++        }
++    }
++}
++
++static ImVec2 MapUvsrSharpPointToRoundedTriangle(
++    const UvsrRoundedTriangleSelector& selector,
++    const ImVec2& sharp_position)
++{
++    const ImVec2 direction = sharp_position - selector.Center;
++    if (ImLengthSqr(direction) <= FLT_EPSILON)
++        return selector.Center;
++
++    const float sharp_boundary = GetUvsrRayPolygonBoundaryDistance(
++        selector.Center,
++        direction,
++        selector.SharpVertices,
++        IM_ARRAYSIZE(selector.SharpVertices));
++    const float rounded_boundary = GetUvsrRayPolygonBoundaryDistance(
++        selector.Center,
++        direction,
++        selector.Contour.Data,
++        selector.Contour.Size);
++    if (sharp_boundary <= FLT_EPSILON || rounded_boundary <= FLT_EPSILON)
++        return sharp_position;
++    return selector.Center +
++        direction * (rounded_boundary / sharp_boundary);
++}
++
++static ImVec2 MapUvsrSvToRoundedTriangle(
++    const UvsrRoundedTriangleSelector& selector,
++    float saturation,
++    float value)
++{
++    saturation = ImSaturate(saturation);
++    value = ImSaturate(value);
++    const ImVec2 sharp_position = ImLerp(
++        ImLerp(
++            selector.SharpVertices[2],
++            selector.SharpVertices[0],
++            saturation),
++        selector.SharpVertices[1],
++        1.0f - value);
++    return MapUvsrSharpPointToRoundedTriangle(selector, sharp_position);
++}
++
++static bool MapUvsrRoundedTriangleToSv(
++    const UvsrRoundedTriangleSelector& selector,
++    const ImVec2& position,
++    bool clamp_to_selector,
++    float* saturation,
++    float* value)
++{
++    const ImVec2 endpoint_positions[3] = {
++        MapUvsrSharpPointToRoundedTriangle(
++            selector,
++            selector.SharpVertices[0]),
++        MapUvsrSharpPointToRoundedTriangle(
++            selector,
++            selector.SharpVertices[1]),
++        MapUvsrSharpPointToRoundedTriangle(
++            selector,
++            selector.SharpVertices[2])
++    };
++    const float snap_distance_squared =
++        selector.EndpointSnapDistance * selector.EndpointSnapDistance;
++    if (ImLengthSqr(position - endpoint_positions[0]) <=
++        snap_distance_squared)
++    {
++        *saturation = 1.0f;
++        *value = 1.0f;
++        return true;
++    }
++    if (ImLengthSqr(position - endpoint_positions[1]) <=
++        snap_distance_squared)
++    {
++        *saturation = 0.0f;
++        *value = 0.0f;
++        return true;
++    }
++    if (ImLengthSqr(position - endpoint_positions[2]) <=
++        snap_distance_squared)
++    {
++        *saturation = 0.0f;
++        *value = 1.0f;
++        return true;
++    }
++
++    const ImVec2 direction = position - selector.Center;
++    const float position_distance = ImSqrt(ImLengthSqr(direction));
++    ImVec2 sharp_position = selector.Center;
++    if (position_distance > FLT_EPSILON)
++    {
++        const float rounded_boundary = GetUvsrRayPolygonBoundaryDistance(
++            selector.Center,
++            direction,
++            selector.Contour.Data,
++            selector.Contour.Size);
++        if (rounded_boundary <= FLT_EPSILON ||
++            (!clamp_to_selector &&
++                position_distance > rounded_boundary +
++                    selector.EndpointSnapDistance))
++        {
++            return false;
++        }
++        const float sharp_boundary = GetUvsrRayPolygonBoundaryDistance(
++            selector.Center,
++            direction,
++            selector.SharpVertices,
++            IM_ARRAYSIZE(selector.SharpVertices));
++        const float clamped_distance =
++            ImMin(position_distance, rounded_boundary);
++        sharp_position = selector.Center +
++            direction *
++                (clamped_distance / position_distance) *
++                (sharp_boundary / ImMax(rounded_boundary, FLT_EPSILON));
++    }
++
++    float hue_weight = 0.0f;
++    float black_weight = 0.0f;
++    float white_weight = 0.0f;
++    ImTriangleBarycentricCoords(
++        selector.SharpVertices[0],
++        selector.SharpVertices[1],
++        selector.SharpVertices[2],
++        sharp_position,
++        hue_weight,
++        black_weight,
++        white_weight);
++    hue_weight = ImMax(hue_weight, 0.0f);
++    black_weight = ImMax(black_weight, 0.0f);
++    white_weight = ImMax(white_weight, 0.0f);
++    const float weight_sum = ImMax(
++        hue_weight + black_weight + white_weight,
++        FLT_EPSILON);
++    hue_weight /= weight_sum;
++    black_weight /= weight_sum;
++    white_weight /= weight_sum;
++    *value = ImSaturate(1.0f - black_weight);
++    *saturation = *value > FLT_EPSILON
++        ? ImSaturate(hue_weight / *value)
++        : 0.0f;
++    return true;
++}
++
++static ImVec2 TransformUvsrRoundedTrianglePoint(
++    const ImVec2& local_position,
++    const ImVec2& origin,
++    float cosine,
++    float sine)
++{
++    return origin + ImVec2(
++        local_position.x * cosine - local_position.y * sine,
++        local_position.x * sine + local_position.y * cosine);
++}
++
++static void AddUvsrRoundedTriangleSelector(
++    ImDrawList* draw_list,
++    const UvsrRoundedTriangleSelector& selector,
++    const ImVec2& origin,
++    float cosine,
++    float sine,
++    float hue,
++    float alpha,
++    ImU32 border_color)
++{
++    float maximum_edge_length = 0.0f;
++    for (int vertex_index = 0; vertex_index < 3; ++vertex_index)
++    {
++        maximum_edge_length = ImMax(
++            maximum_edge_length,
++            ImSqrt(ImLengthSqr(
++                selector.SharpVertices[(vertex_index + 1) % 3] -
++                selector.SharpVertices[vertex_index])));
++    }
++    const float maximum_mesh_step = ImMax(
++        1.5f,
++        draw_list->_FringeScale * 1.5f);
++    const int sections = ImClamp(
++        (int)ImCeil(maximum_edge_length / maximum_mesh_step),
++        24,
++        192);
++    const int vertex_count = (sections + 1) * (sections + 2) / 2;
++    const int index_count = sections * sections * 3;
++    draw_list->PrimReserve(index_count, vertex_count);
++    const ImDrawIdx base_vertex = (ImDrawIdx)draw_list->_VtxCurrentIdx;
++    const ImVec2 white_pixel = draw_list->_Data->TexUvWhitePixel;
++    for (int hue_index = 0; hue_index <= sections; ++hue_index)
++    {
++        const float hue_weight =
++            (float)hue_index / (float)sections;
++        for (int black_index = 0;
++            black_index <= sections - hue_index;
++            ++black_index)
++        {
++            const float black_weight =
++                (float)black_index / (float)sections;
++            const float white_weight =
++                1.0f - hue_weight - black_weight;
++            const float value = hue_weight + white_weight;
++            const float saturation = value > FLT_EPSILON
++                ? hue_weight / value
++                : 0.0f;
++            const ImVec2 sharp_position =
++                selector.SharpVertices[0] * hue_weight +
++                selector.SharpVertices[1] * black_weight +
++                selector.SharpVertices[2] * white_weight;
++            const ImVec2 rounded_position =
++                MapUvsrSharpPointToRoundedTriangle(
++                    selector,
++                    sharp_position);
++            draw_list->PrimWriteVtx(
++                TransformUvsrRoundedTrianglePoint(
++                    rounded_position,
++                    origin,
++                    cosine,
++                    sine),
++                white_pixel,
++                GetUvsrSvSelectorColor(
++                    hue,
++                    saturation,
++                    value,
++                    alpha));
++        }
++    }
++    const auto row_start =
++        [sections](int hue_index)
++        {
++            return hue_index * (sections + 1) -
++                hue_index * (hue_index - 1) / 2;
++        };
++    for (int hue_index = 0; hue_index < sections; ++hue_index)
++    {
++        for (int black_index = 0;
++            black_index < sections - hue_index;
++            ++black_index)
++        {
++            const ImDrawIdx first = (ImDrawIdx)(
++                base_vertex + row_start(hue_index) + black_index);
++            const ImDrawIdx next_hue = (ImDrawIdx)(
++                base_vertex + row_start(hue_index + 1) + black_index);
++            const ImDrawIdx next_black = (ImDrawIdx)(first + 1);
++            draw_list->PrimWriteIdx(first);
++            draw_list->PrimWriteIdx(next_hue);
++            draw_list->PrimWriteIdx(next_black);
++            if (black_index + 1 < sections - hue_index)
++            {
++                const ImDrawIdx diagonal = (ImDrawIdx)(next_hue + 1);
++                draw_list->PrimWriteIdx(next_hue);
++                draw_list->PrimWriteIdx(diagonal);
++                draw_list->PrimWriteIdx(next_black);
++            }
++        }
++    }
++
++    ImVector<ImVec2> outline;
++    outline.reserve(selector.Contour.Size);
++    for (const ImVec2& point : selector.Contour)
++    {
++        outline.push_back(TransformUvsrRoundedTrianglePoint(
++            point,
++            origin,
++            cosine,
++            sine));
++    }
++    draw_list->AddPolyline(
++        outline.Data,
++        outline.Size,
++        border_color,
++        ImDrawFlags_Closed,
++        1.5f);
++}
++
++static void AddUvsrRoundedCheckerboard(
++    ImDrawList* draw_list,
++    const ImRect& bounds,
++    float rounding,
++    float alpha)
++{
++    const float width = bounds.GetWidth();
++    const float height = bounds.GetHeight();
++    if (width <= 0.0f || height <= 0.0f)
++        return;
++
++    rounding = ImClamp(rounding, 0.0f, ImMin(width, height) * 0.5f);
++    const int column_count = 2;
++    const int row_count = ImMax(
++        1,
++        (int)ImFloor(height / ImMax(width * 0.5f, 1.0f) + 0.5f));
++    const float fringe = (draw_list->Flags & ImDrawListFlags_AntiAliasedFill)
++        ? ImMax(draw_list->_FringeScale, 0.5f)
++        : 0.0f;
++    const ImVec4 colors[2] = {
++        ImVec4(0.80f, 0.80f, 0.80f, alpha),
++        ImVec4(0.50f, 0.50f, 0.50f, alpha)
++    };
++    const ImVec2 white_pixel = draw_list->_Data->TexUvWhitePixel;
++    for (int row = 0; row < row_count; ++row)
++    {
++        for (int column = 0; column < column_count; ++column)
++        {
++            const float cell_min_x = ImLerp(
++                bounds.Min.x,
++                bounds.Max.x,
++                (float)column / (float)column_count);
++            const float cell_max_x = ImLerp(
++                bounds.Min.x,
++                bounds.Max.x,
++                (float)(column + 1) / (float)column_count);
++            const float cell_min_y = ImLerp(
++                bounds.Min.y,
++                bounds.Max.y,
++                (float)row / (float)row_count);
++            const float cell_max_y = ImLerp(
++                bounds.Min.y,
++                bounds.Max.y,
++                (float)(row + 1) / (float)row_count);
++            const float mesh_min_x = cell_min_x -
++                (column == 0 ? fringe : 0.0f);
++            const float mesh_max_x = cell_max_x +
++                (column + 1 == column_count ? fringe : 0.0f);
++            const float mesh_min_y = cell_min_y -
++                (row == 0 ? fringe : 0.0f);
++            const float mesh_max_y = cell_max_y +
++                (row + 1 == row_count ? fringe : 0.0f);
++            ImVector<float> x_coordinates;
++            ImVector<float> y_coordinates;
++            AddUvsrSortedGradientCoordinate(x_coordinates, mesh_min_x);
++            AddUvsrSortedGradientCoordinate(x_coordinates, mesh_max_x);
++            AddUvsrSortedGradientCoordinate(y_coordinates, mesh_min_y);
++            AddUvsrSortedGradientCoordinate(y_coordinates, mesh_max_y);
++
++            const float maximum_mesh_step = ImMax(fringe, 1.0f);
++            const int x_sections = ImMax(
++                1,
++                (int)ImCeil(
++                    (cell_max_x - cell_min_x) / maximum_mesh_step));
++            const int y_sections = ImMax(
++                1,
++                (int)ImCeil(
++                    (cell_max_y - cell_min_y) / maximum_mesh_step));
++            for (int section = 0; section <= x_sections; ++section)
++            {
++                AddUvsrSortedGradientCoordinate(
++                    x_coordinates,
++                    ImLerp(
++                        cell_min_x,
++                        cell_max_x,
++                        (float)section / (float)x_sections));
++            }
++            for (int section = 0; section <= y_sections; ++section)
++            {
++                AddUvsrSortedGradientCoordinate(
++                    y_coordinates,
++                    ImLerp(
++                        cell_min_y,
++                        cell_max_y,
++                        (float)section / (float)y_sections));
++            }
++            if (fringe > 0.0f)
++            {
++                if (column == 0)
++                {
++                    AddUvsrSortedGradientCoordinate(
++                        x_coordinates,
++                        bounds.Min.x - fringe * 0.5f);
++                    AddUvsrSortedGradientCoordinate(
++                        x_coordinates,
++                        bounds.Min.x + fringe * 0.5f);
++                }
++                if (column + 1 == column_count)
++                {
++                    AddUvsrSortedGradientCoordinate(
++                        x_coordinates,
++                        bounds.Max.x - fringe * 0.5f);
++                    AddUvsrSortedGradientCoordinate(
++                        x_coordinates,
++                        bounds.Max.x + fringe * 0.5f);
++                }
++                if (row == 0)
++                {
++                    AddUvsrSortedGradientCoordinate(
++                        y_coordinates,
++                        bounds.Min.y - fringe * 0.5f);
++                    AddUvsrSortedGradientCoordinate(
++                        y_coordinates,
++                        bounds.Min.y + fringe * 0.5f);
++                }
++                if (row + 1 == row_count)
++                {
++                    AddUvsrSortedGradientCoordinate(
++                        y_coordinates,
++                        bounds.Max.y - fringe * 0.5f);
++                    AddUvsrSortedGradientCoordinate(
++                        y_coordinates,
++                        bounds.Max.y + fringe * 0.5f);
++                }
++            }
++            if (rounding > 0.0f)
++            {
++                const int arc_sections = ImClamp(
++                    draw_list->_CalcCircleAutoSegmentCount(rounding) / 4,
++                    2,
++                    8);
++                for (int section = 0; section <= arc_sections; ++section)
++                {
++                    const float angle =
++                        (float)section / (float)arc_sections * IM_PI * 0.5f;
++                    const float offset = rounding * (1.0f - ImCos(angle));
++                    const float left_x = bounds.Min.x + offset;
++                    const float right_x = bounds.Max.x - offset;
++                    const float top_y = bounds.Min.y + offset;
++                    const float bottom_y = bounds.Max.y - offset;
++                    if (left_x >= mesh_min_x && left_x <= mesh_max_x)
++                        AddUvsrSortedGradientCoordinate(x_coordinates, left_x);
++                    if (right_x >= mesh_min_x && right_x <= mesh_max_x)
++                        AddUvsrSortedGradientCoordinate(x_coordinates, right_x);
++                    if (top_y >= mesh_min_y && top_y <= mesh_max_y)
++                        AddUvsrSortedGradientCoordinate(y_coordinates, top_y);
++                    if (bottom_y >= mesh_min_y && bottom_y <= mesh_max_y)
++                        AddUvsrSortedGradientCoordinate(y_coordinates, bottom_y);
++                }
++            }
++
++            const int vertex_count =
++                x_coordinates.Size * y_coordinates.Size;
++            const int index_count =
++                (x_coordinates.Size - 1) *
++                (y_coordinates.Size - 1) * 6;
++            draw_list->PrimReserve(index_count, vertex_count);
++            const ImDrawIdx base_vertex =
++                (ImDrawIdx)draw_list->_VtxCurrentIdx;
++            for (int y_index = 0; y_index < y_coordinates.Size; ++y_index)
++            {
++                for (int x_index = 0; x_index < x_coordinates.Size; ++x_index)
++                {
++                    const ImVec2 position(
++                        x_coordinates[x_index],
++                        y_coordinates[y_index]);
++                    const float distance = GetUvsrRoundedRectDistance(
++                        bounds,
++                        rounding,
++                        position);
++                    const float coverage = fringe > 0.0f
++                        ? ImSaturate(0.5f - distance / fringe)
++                        : (distance <= 0.0f ? 1.0f : 0.0f);
++                    ImVec4 color = colors[(row + column) & 1];
++                    color.w *= coverage;
++                    draw_list->PrimWriteVtx(
++                        position,
++                        white_pixel,
++                        ImGui::ColorConvertFloat4ToU32(color));
++                }
++            }
++            for (int y_index = 0; y_index + 1 < y_coordinates.Size; ++y_index)
++            {
++                for (int x_index = 0; x_index + 1 < x_coordinates.Size; ++x_index)
++                {
++                    const ImDrawIdx top_left = (ImDrawIdx)(
++                        base_vertex +
++                        y_index * x_coordinates.Size +
++                        x_index);
++                    const ImDrawIdx top_right = (ImDrawIdx)(top_left + 1);
++                    const ImDrawIdx bottom_left = (ImDrawIdx)(
++                        top_left + x_coordinates.Size);
++                    const ImDrawIdx bottom_right =
++                        (ImDrawIdx)(bottom_left + 1);
++                    draw_list->PrimWriteIdx(top_left);
++                    draw_list->PrimWriteIdx(top_right);
++                    draw_list->PrimWriteIdx(bottom_right);
++                    draw_list->PrimWriteIdx(top_left);
++                    draw_list->PrimWriteIdx(bottom_right);
++                    draw_list->PrimWriteIdx(bottom_left);
++                }
++            }
++        }
++    }
++}
++
+ static void AddUvsrRoundedVerticalGradient(
+     ImDrawList* draw_list,
+     const ImRect& bounds,
+@@ -7855,6 +8512,51 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+     ImVec2 triangle_pa = ImVec2(triangle_r, 0.0f); // Hue point.
+     ImVec2 triangle_pb = ImVec2(triangle_r * -0.5f, triangle_r * -0.866025f); // Black point.
+     ImVec2 triangle_pc = ImVec2(triangle_r * -0.5f, triangle_r * +0.866025f); // White point.
++    UvsrRoundedTriangleSelector uvsr_selector;
++
++    if (render_uvsr_wheel_with_bars)
++    {
++        BuildUvsrRoundedTriangleSelector(
++            uvsr_selector,
++            draw_list,
++            triangle_pa,
++            triangle_pb,
++            triangle_pc,
++            style.FrameRounding,
++            ImMax(style.FrameRounding, draw_list->_FringeScale));
++        const ImGuiUvsrColorPickerPopupScope& picker_scope =
++            g.UvsrColorPickerPopupScopeStack.back();
++        const ImRect picker_content_bounds =
++            GetUvsrColorPickerPopupContentBounds(window);
++        const ImVec2 layer_offset(
++            ImMax(1.0f, style.ItemInnerSpacing.x * 0.5f),
++            ImMax(1.0f, style.ItemInnerSpacing.y * 0.5f));
++        ImRect picker_layer_bounds(
++            picker_pos - layer_offset,
++            ImVec2(
++                window->WorkRect.Max.x,
++                picker_pos.y + sv_picker_size) + layer_offset);
++        picker_layer_bounds.ClipWith(picker_content_bounds);
++        if (picker_layer_bounds.GetWidth() > 1.0f &&
++            picker_layer_bounds.GetHeight() > 1.0f)
++        {
++            draw_list->PushClipRect(
++                picker_content_bounds.Min,
++                picker_content_bounds.Max,
++                true);
++            draw_list->AddRectFilled(
++                picker_layer_bounds.Min,
++                picker_layer_bounds.Max,
++                ImGui::GetColorU32(picker_scope.PickerLayer),
++                ImClamp(
++                    style.FrameRounding,
++                    0.0f,
++                    ImMin(
++                        picker_layer_bounds.GetWidth(),
++                        picker_layer_bounds.GetHeight()) * 0.5f));
++            draw_list->PopClipRect();
++        }
++    }
+ 
+     float H = col[0], S = col[1], V = col[2];
+     float R = col[0], G = col[1], B = col[2];
+@@ -7897,7 +8599,35 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+             }
+             float cos_hue_angle = ImCos(-H * 2.0f * IM_PI);
+             float sin_hue_angle = ImSin(-H * 2.0f * IM_PI);
+-            if (ImTriangleContainsPoint(triangle_pa, triangle_pb, triangle_pc, ImRotate(initial_off, cos_hue_angle, sin_hue_angle)))
++            if (render_uvsr_wheel_with_bars)
++            {
++                float initial_saturation = 0.0f;
++                float initial_value = 0.0f;
++                const ImVec2 initial_selector_position = ImRotate(
++                    initial_off,
++                    cos_hue_angle,
++                    sin_hue_angle);
++                if (MapUvsrRoundedTriangleToSv(
++                        uvsr_selector,
++                        initial_selector_position,
++                        false,
++                        &initial_saturation,
++                        &initial_value))
++                {
++                    const ImVec2 current_selector_position = ImRotate(
++                        current_off,
++                        cos_hue_angle,
++                        sin_hue_angle);
++                    MapUvsrRoundedTriangleToSv(
++                        uvsr_selector,
++                        current_selector_position,
++                        true,
++                        &S,
++                        &V);
++                    value_changed = value_changed_sv = true;
++                }
++            }
++            else if (ImTriangleContainsPoint(triangle_pa, triangle_pb, triangle_pc, ImRotate(initial_off, cos_hue_angle, sin_hue_angle)))
+             {
+                 // Interacting with SV triangle
+                 ImVec2 current_off_unrotated = ImRotate(current_off, cos_hue_angle, sin_hue_angle);
+@@ -8074,15 +8804,19 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+         }
+     }
+ 
+-    const int style_alpha8 = IM_F32_TO_INT8_SAT(style.Alpha);
++    // The authored popup surface is translucent by design, but it must not
++    // attenuate the color-bearing controls rendered over it.
++    const float color_control_alpha =
++        render_uvsr_wheel_with_bars ? 1.0f : style.Alpha;
++    const int style_alpha8 = IM_F32_TO_INT8_SAT(color_control_alpha);
+     const ImU32 col_black = IM_COL32(0,0,0,style_alpha8);
+     const ImU32 col_white = IM_COL32(255,255,255,style_alpha8);
+     const ImU32 col_midgrey = IM_COL32(128,128,128,style_alpha8);
+     const ImU32 col_hues[6 + 1] = { IM_COL32(255,0,0,style_alpha8), IM_COL32(255,255,0,style_alpha8), IM_COL32(0,255,0,style_alpha8), IM_COL32(0,255,255,style_alpha8), IM_COL32(0,0,255,style_alpha8), IM_COL32(255,0,255,style_alpha8), IM_COL32(255,0,0,style_alpha8) };
+ 
+-    ImVec4 hue_color_f(1, 1, 1, style.Alpha); ColorConvertHSVtoRGB(H, 1, 1, hue_color_f.x, hue_color_f.y, hue_color_f.z);
++    ImVec4 hue_color_f(1, 1, 1, color_control_alpha); ColorConvertHSVtoRGB(H, 1, 1, hue_color_f.x, hue_color_f.y, hue_color_f.z);
+     ImU32 hue_color32 = ColorConvertFloat4ToU32(hue_color_f);
+-    ImU32 user_col32_striped_of_alpha = ColorConvertFloat4ToU32(ImVec4(R, G, B, style.Alpha)); // Important: this is still including the main rendering/style alpha!!
++    ImU32 user_col32_striped_of_alpha = ColorConvertFloat4ToU32(ImVec4(R, G, B, color_control_alpha));
+ 
+     const bool render_uvsr_picker_cursors_last =
+         g.UvsrColorPickerPopupScopeStack.Size > 0 &&
+@@ -8130,17 +8864,45 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+             draw_list->AddCircle(hue_cursor_pos, hue_cursor_rad, col_white, hue_cursor_segments);
+         }
+ 
+-        // Render SV triangle (rotated according to hue)
+-        ImVec2 tra = wheel_center + ImRotate(triangle_pa, cos_hue_angle, sin_hue_angle);
+-        ImVec2 trb = wheel_center + ImRotate(triangle_pb, cos_hue_angle, sin_hue_angle);
+-        ImVec2 trc = wheel_center + ImRotate(triangle_pc, cos_hue_angle, sin_hue_angle);
+-        ImVec2 uv_white = GetFontTexUvWhitePixel();
+-        draw_list->PrimReserve(3, 3);
+-        draw_list->PrimVtx(tra, uv_white, hue_color32);
+-        draw_list->PrimVtx(trb, uv_white, col_black);
+-        draw_list->PrimVtx(trc, uv_white, col_white);
+-        draw_list->AddTriangle(tra, trb, trc, col_midgrey, 1.5f);
+-        sv_cursor_pos = ImLerp(ImLerp(trc, tra, ImSaturate(S)), trb, ImSaturate(1 - V));
++        if (render_uvsr_wheel_with_bars)
++        {
++            AddUvsrRoundedTriangleSelector(
++                draw_list,
++                uvsr_selector,
++                wheel_center,
++                cos_hue_angle,
++                sin_hue_angle,
++                H,
++                color_control_alpha,
++                col_midgrey);
++            const ImVec2 local_cursor_position =
++                MapUvsrSvToRoundedTriangle(
++                    uvsr_selector,
++                    S,
++                    V);
++            sv_cursor_pos = TransformUvsrRoundedTrianglePoint(
++                local_cursor_position,
++                wheel_center,
++                cos_hue_angle,
++                sin_hue_angle);
++        }
++        else
++        {
++            // Render the stock SV triangle rotated according to hue.
++            ImVec2 tra = wheel_center + ImRotate(triangle_pa, cos_hue_angle, sin_hue_angle);
++            ImVec2 trb = wheel_center + ImRotate(triangle_pb, cos_hue_angle, sin_hue_angle);
++            ImVec2 trc = wheel_center + ImRotate(triangle_pc, cos_hue_angle, sin_hue_angle);
++            ImVec2 uv_white = GetFontTexUvWhitePixel();
++            draw_list->PrimReserve(3, 3);
++            draw_list->PrimVtx(tra, uv_white, hue_color32);
++            draw_list->PrimVtx(trb, uv_white, col_black);
++            draw_list->PrimVtx(trc, uv_white, col_white);
++            draw_list->AddTriangle(tra, trb, trc, col_midgrey, 1.5f);
++            sv_cursor_pos = ImLerp(
++                ImLerp(trc, tra, ImSaturate(S)),
++                trb,
++                ImSaturate(1 - V));
++        }
+         if (render_uvsr_wheel_with_bars)
+         {
+             UvsrVerticalGradientStop hue_stops[7];
+@@ -8199,14 +8961,11 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+         ImRect bar1_bb(bar1_pos_x, picker_pos.y, bar1_pos_x + bars_width, picker_pos.y + sv_picker_size);
+         if (render_uvsr_wheel_with_bars)
+         {
+-            RenderColorRectWithAlphaCheckerboard(
++            AddUvsrRoundedCheckerboard(
+                 draw_list,
+-                bar1_bb.Min,
+-                bar1_bb.Max,
+-                0,
+-                bar1_bb.GetWidth() / 2.0f,
+-                ImVec2(0.0f, 0.0f),
+-                uvsr_bar_rounding);
++                bar1_bb,
++                uvsr_bar_rounding,
++                color_control_alpha);
+             const UvsrVerticalGradientStop alpha_stops[2] = {
+                 { 0.0f, user_col32_striped_of_alpha },
+                 { 1.0f, user_col32_striped_of_alpha & ~IM_COL32_A_MASK }
+@@ -8246,7 +9005,7 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+                 ImVec2(bar0_pos_x - 1.0f, uvsr_hue_bar_line_y),
+                 ImVec2(bars_triangles_half_sz + 1.0f, bars_triangles_half_sz),
+                 bars_width + 2.0f,
+-                style.Alpha);
++                color_control_alpha);
+             if (alpha_bar)
+             {
+                 RenderUvsrRoundedMarkersForVerticalBar(
+@@ -8254,7 +9013,7 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+                     ImVec2(bar1_pos_x - 1.0f, uvsr_alpha_bar_line_y),
+                     ImVec2(bars_triangles_half_sz + 1.0f, bars_triangles_half_sz),
+                     bars_width + 2.0f,
+-                    style.Alpha);
++                    color_control_alpha);
+             }
+         }
+         if (has_hue_cursor)

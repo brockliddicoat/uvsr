@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 97,354 non-blank source lines.
+**First-Party Lines of Code:** 102,757 non-blank source lines.
 
-**Third-Party Lines of Code:** 387,560 non-blank source lines.
+**Third-Party Lines of Code:** 387,473 non-blank source lines.
 
-**Total Lines of Code:** 484,914 non-blank source lines.
+**Total Lines of Code:** 490,230 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -59,7 +59,7 @@ with `tools/update_readme_line_counts.cmd --write`.
   slash commands share one animated presentation; Ogg keeps stock ImGui
   behavior and immediate endpoints.
 - **Compact Runtime Surface:** The build retains 306 first-party shader
-  permutations, thirteen Settings drawers, and 193 commands without dormant
+  permutations, thirteen Settings drawers, and 194 commands without dormant
   experiments.
 - **Five Packaged Scenes:** Sponza Decorated, Sponza Plain, Bistro Interior,
   San Miguel, and Classroom Interior ship ready-to-run; Bistro and San Miguel
@@ -72,8 +72,7 @@ with `tools/update_readme_line_counts.cmd --write`.
 ## Coming Soon
 
 No renderer feature is currently announced for integration. Local experiments
-and uncommitted candidates remain under evaluation and are not commitments to
-ship.
+remain provisional until they are verified and accepted.
 
 ## Build and Run
 

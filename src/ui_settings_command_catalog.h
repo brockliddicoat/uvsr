@@ -110,6 +110,7 @@ namespace uvsr
         // UI.
         Value("ui.skin", Kind::Enum, Section::Ui, "amp|ogg"),
         Value("ui.animations", Kind::Boolean, Section::Ui, "on|off"),
+        Value("ui.override-visual-maxes", Kind::Boolean, Section::Ui, "on|off"),
         Value("ui.accent.main", Kind::Float3, Section::Ui, "display rgb float3 0..1"),
         Value("ui.accent.negative", Kind::Float3, Section::Ui, "display rgb float3 0..1"),
         Value("ui.accent.positive", Kind::Float3, Section::Ui, "display rgb float3 0..1"),

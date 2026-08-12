@@ -28,15 +28,16 @@ The normal Temporal Reconstructive surface contains:
 
 - **Enable**;
 - **Quality**: Low, Medium, High, or Ultra; and
-- **Cost**: Full Quality, Reduced, or Minimum.
+- a default-closed **Advanced** disclosure.
 
-The lower-level Wicked Engine-derived policies live under a default-closed,
-animated **Advanced** tree.
+The lower-level Wicked Engine-derived policies live directly under Advanced.
+Its final default-closed **Cost** submenu contains **Mode** with Full Quality,
+Reduced, and Minimum choices plus the cost-owned overrides.
 
 ## Jitter Sequence Contract
 
-The Jitter Sequence selector is the first control under Advanced's
-**Algorithm** section. It contains every pattern exposed by Google Filament at
+The Jitter Sequence selector is the first control under Advanced. It contains
+every pattern exposed by Google Filament at
 pinned revision `47c86eec22e56d75897e16651eb4d2abd64fc29a`:
 
 - **Rotated Grid 4**;
@@ -72,16 +73,15 @@ the
 [EGSR 2021 paper](https://diglib.eg.org/items/cd326c49-1f97-437b-8280-f989181e52e4)
 and [pinned author code](https://github.com/Andrew-Helmer/stochastic-generation/tree/f90b115806675035c8c727bab4575ca5ba1760b6).
 
-Jitter Sequence is grouped under Algorithm but remains independent from the
-Quality and Cost recipes. Its reset returns to Halton 16. A live sequence
+Jitter Sequence remains independent from the Quality and Cost recipes. Its
+reset returns to Halton 16. A live sequence
 change invalidates temporal history, clears the previous-view jitter basis,
 and restarts phase zero so samples from two distributions never share one
 accumulated history.
 
 ## Advanced Temporal Controls
 
-Advanced separates the retained policies into **Algorithm** and **Cost**.
-Algorithm begins with:
+Advanced begins directly with:
 
 - **Jitter Sequence**, with all six patterns described above;
 - **Depth Validation**, with Stationary Bypass and Four-Texel
@@ -91,8 +91,9 @@ Algorithm begins with:
 - history filter and rectification;
 - history frames and strength.
 
-Cost contains:
+The default-closed Cost submenu comes last and contains:
 
+- **Mode**: Full Quality, Reduced, or Minimum;
 - robust or compact history storage;
 - history weighting and motion trust;
 - rectification clipping and blend domain; and
@@ -106,12 +107,12 @@ icon reattaches that row to its recipe. Preset Sharpening alone keeps an
 Strength displays 0 through 200 percent. Explicit values override only their
 row. Changing a recipe-owned Algorithm control appends **(Custom)** to the
 selected Quality preview; Jitter Sequence remains independent. Changing a Cost
-control appends **(Custom)** to the selected Cost preview. Each marker
+control appends **(Custom)** to the selected Cost Mode preview. Each marker
 disappears when every control in its group returns to its recipe. The adjacent
-top-level reset arrow restores the factory Quality and its recipe-owned
-Algorithm group, or the factory Cost and its Cost group. Selecting any named
-preset, including the currently named Custom preset, reapplies it and clears its
-owned overrides. Selecting a preset-equivalent Advanced value likewise
+Quality reset restores the factory Quality and its recipe-owned controls; the
+Cost Mode reset restores the factory Cost and its Cost group. Selecting any
+named preset, including the currently named Custom preset, reapplies it and
+clears its owned overrides. Selecting a preset-equivalent Advanced value likewise
 reattaches that row unless it has a distinct **(Automatic)** choice. Disabling
 Temporal Reconstructive preserves the stored configuration.
 

@@ -1,0 +1,350 @@
+diff --git a/include/donut/app/UserInterfaceUtils.h b/include/donut/app/UserInterfaceUtils.h
+index 833b39e..d551218 100644
+--- a/include/donut/app/UserInterfaceUtils.h
++++ b/include/donut/app/UserInterfaceUtils.h
+@@ -36,6 +36,14 @@
+ 
+ namespace donut::app
+ {
++    struct MaterialEditorCallbacks
++    {
++        bool (*beginConditionalRegion)(const char* id, bool visible) = nullptr;
++        void (*endConditionalRegion)() = nullptr;
++        void (*drawTextureFilename)(const char* filename, const math::float4& color) = nullptr;
++        bool (*drawColorEdit3)(const char* label, float* color) = nullptr;
++    };
++
+     bool FileDialog(bool bOpen, const char* pFilters, std::string& fileName);
+     bool FolderDialog(const char* pTitle, const char* pDefaultFolder, std::string& outFolderName);
+     
+@@ -43,7 +51,8 @@
+         engine::Material* material,
+         bool allowMaterialDomainChanges,
+         bool showMaterialDomain,
+-        const math::float4& positiveAccent);
++        const math::float4& positiveAccent,
++        const MaterialEditorCallbacks* callbacks = nullptr);
+ 
+     bool LightEditor_Directional(engine::DirectionalLight& light);
+     bool LightEditor_Point(engine::PointLight& light);
+diff --git a/src/app/UserInterfaceUtils.cpp b/src/app/UserInterfaceUtils.cpp
+index b690098..f0fb3dc 100644
+--- a/src/app/UserInterfaceUtils.cpp
++++ b/src/app/UserInterfaceUtils.cpp
+@@ -173,11 +173,10 @@
+     engine::Material* material,
+     bool allowMaterialDomainChanges,
+     bool showMaterialDomain,
+-    const math::float4& positiveAccent)
++    const math::float4& positiveAccent,
++    const MaterialEditorCallbacks* callbacks)
+ {
+     bool update = false;
+-
+-    float itemWidth = ImGui::CalcItemWidth();
+ 
+     if (showMaterialDomain && allowMaterialDomainChanges)
+     {
+@@ -207,129 +206,227 @@
+         positiveAccent.y,
+         positiveAccent.z,
+         positiveAccent.w);
++    const bool useConditionalRegions =
++        callbacks != nullptr &&
++        callbacks->beginConditionalRegion != nullptr &&
++        callbacks->endConditionalRegion != nullptr;
++    const auto beginConditionalRegion =
++        [&](const char* id, bool visible)
++        {
++            return useConditionalRegions
++                ? callbacks->beginConditionalRegion(id, visible)
++                : visible;
++        };
++    const auto endConditionalRegion =
++        [&]()
++        {
++            if (useConditionalRegions)
++                callbacks->endConditionalRegion();
++        };
++    const auto drawTextureFilename =
++        [&](const std::string& fullPath)
++        {
++            const std::string filename = getShortTexturePath(fullPath);
++            if (callbacks != nullptr &&
++                callbacks->drawTextureFilename != nullptr)
++            {
++                callbacks->drawTextureFilename(
++                    filename.c_str(),
++                    positiveAccent);
++            }
++            else
++            {
++                ImGui::TextColored(
++                    filenameColor,
++                    "%s",
++                    filename.c_str());
++            }
++        };
++    const auto drawColorEdit3 =
++        [&](const char* label, float* color)
++        {
++            if (callbacks != nullptr &&
++                callbacks->drawColorEdit3 != nullptr)
++            {
++                return callbacks->drawColorEdit3(label, color);
++            }
++
++            return ImGui::ColorEdit3(
++                label,
++                color,
++                ImGuiColorEditFlags_Float |
++                    ImGuiColorEditFlags_NoTooltip);
++        };
+ 
+     update |= ImGui::Checkbox("Double-Sided", &material->doubleSided);
+     
+-    if (material->useSpecularGlossModel)
++    if (beginConditionalRegion(
++            "##MaterialSpecularGlossRegion",
++            material->useSpecularGlossModel))
+     {
+         if (material->baseOrDiffuseTexture)
+         {
+             update |= ImGui::Checkbox("Use Diffuse Texture", &material->enableBaseOrDiffuseTexture);
+             ImGui::SameLine();
+-            ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->baseOrDiffuseTexture->path).c_str());
+-        }
+-
+-        update |= ImGui::ColorEdit3(material->enableBaseOrDiffuseTexture ? "Diffuse Factor" : "Diffuse Color", material->baseOrDiffuseColor.data(), ImGuiColorEditFlags_Float);
++            drawTextureFilename(material->baseOrDiffuseTexture->path);
++        }
++
++        update |= drawColorEdit3(
++            material->enableBaseOrDiffuseTexture
++                ? "Diffuse Factor"
++                : "Diffuse Color",
++            material->baseOrDiffuseColor.data());
+ 
+         if (material->metalRoughOrSpecularTexture)
+         {
+             update |= ImGui::Checkbox("Use Specular Texture", &material->enableMetalRoughOrSpecularTexture);
+             ImGui::SameLine();
+-            ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->metalRoughOrSpecularTexture->path).c_str());
+-        }
+-
+-        update |= ImGui::ColorEdit3(material->enableMetalRoughOrSpecularTexture ? "Specular Factor" : "Specular Color", material->specularColor.data(), ImGuiColorEditFlags_Float);
++            drawTextureFilename(material->metalRoughOrSpecularTexture->path);
++        }
++
++        update |= drawColorEdit3(
++            material->enableMetalRoughOrSpecularTexture
++                ? "Specular Factor"
++                : "Specular Color",
++            material->specularColor.data());
+ 
+         float glossiness = 1.0f - material->roughness;
+         update |= ImGui::SliderFloat(material->enableMetalRoughOrSpecularTexture ? "Glossiness Factor" : "Glossiness", &glossiness, 0.f, 1.f);
+         material->roughness = 1.0f - glossiness;
+-    }
+-    else
++        endConditionalRegion();
++    }
++
++    if (beginConditionalRegion(
++            "##MaterialMetalRoughRegion",
++            !material->useSpecularGlossModel))
+     {
+         if (material->baseOrDiffuseTexture)
+         {
+             update |= ImGui::Checkbox("Use Base Color Texture", &material->enableBaseOrDiffuseTexture);
+             ImGui::SameLine();
+-            ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->baseOrDiffuseTexture->path).c_str());
+-        }
+-
+-        update |= ImGui::ColorEdit3(material->enableBaseOrDiffuseTexture ? "Base Color Factor" : "Base Color", material->baseOrDiffuseColor.data(), ImGuiColorEditFlags_Float);
++            drawTextureFilename(material->baseOrDiffuseTexture->path);
++        }
++
++        update |= drawColorEdit3(
++            material->enableBaseOrDiffuseTexture
++                ? "Base Color Factor"
++                : "Base Color",
++            material->baseOrDiffuseColor.data());
+ 
+         if (material->metalRoughOrSpecularTexture)
+         {
+             update |= ImGui::Checkbox("Use Metal-Rough Texture", &material->enableMetalRoughOrSpecularTexture);
+             ImGui::SameLine();
+-            ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->metalRoughOrSpecularTexture->path).c_str());
++            drawTextureFilename(material->metalRoughOrSpecularTexture->path);
+         }
+ 
+         update |= ImGui::SliderFloat(material->enableMetalRoughOrSpecularTexture ? "Metalness Factor" : "Metalness", &material->metalness, 0.f, 1.f);
+         update |= ImGui::SliderFloat(material->enableMetalRoughOrSpecularTexture ? "Roughness Factor" : "Roughness", &material->roughness, 0.f, 1.f);
+-    }
+-
+-    if (material->domain == MaterialDomain::AlphaBlended || material->domain == MaterialDomain::TransmissiveAlphaBlended)
++        endConditionalRegion();
++    }
++
++    const bool alphaBlended =
++        material->domain == MaterialDomain::AlphaBlended ||
++        material->domain == MaterialDomain::TransmissiveAlphaBlended;
++    if (beginConditionalRegion("##MaterialOpacityRegion", alphaBlended))
+     {
+         if (material->baseOrDiffuseTexture)
+             update |= ImGui::SliderFloat("Opacity Factor", &material->opacity, 0.f, 2.f);
+         else
+             update |= ImGui::SliderFloat("Opacity", &material->opacity, 0.f, 1.f);
+-    }
+-    else if (material->domain == MaterialDomain::AlphaTested || material->domain == MaterialDomain::TransmissiveAlphaTested)
+-    {
+-        if (material->baseOrDiffuseTexture)
+-            update |= ImGui::SliderFloat("Alpha Cutoff", &material->alphaCutoff, 0.f, 1.f);
++        endConditionalRegion();
++    }
++
++    const bool alphaTestedWithTexture =
++        (material->domain == MaterialDomain::AlphaTested ||
++            material->domain == MaterialDomain::TransmissiveAlphaTested) &&
++        material->baseOrDiffuseTexture != nullptr;
++    if (beginConditionalRegion(
++            "##MaterialAlphaCutoffRegion",
++            alphaTestedWithTexture))
++    {
++        update |= ImGui::SliderFloat("Alpha Cutoff", &material->alphaCutoff, 0.f, 1.f);
++        endConditionalRegion();
+     }
+ 
+     if (material->normalTexture)
+     {
+         update |= ImGui::Checkbox("Use Normal Texture", &material->enableNormalTexture);
+         ImGui::SameLine();
+-        ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->normalTexture->path).c_str());
+-    }
+-
+-    if (material->enableNormalTexture)
+-    {
+-        ImGui::SetNextItemWidth(itemWidth - 31.f);
+-        update |= ImGui::SliderFloat("##NormalTextureScale", &material->normalTextureScale, -2.f, 2.f);
+-        ImGui::SameLine(0.f, 5.f);
+-        ImGui::SetNextItemWidth(26.f);
+-        if (ImGui::Button("1.0"))
+-        {
+-            material->normalTextureScale = 1.f;
+-            update = true;
+-        }
+-        ImGui::SameLine();
+-        ImGui::Text("Normal Scale");
++        drawTextureFilename(material->normalTexture->path);
++    }
++
++    if (beginConditionalRegion(
++            "##MaterialNormalScaleRegion",
++            material->enableNormalTexture))
++    {
++        const char* normalScaleLabel = "Normal Scale";
++        const float normalScaleLabelWidth =
++            ImGui::CalcTextSize(normalScaleLabel).x +
++            ImGui::GetStyle().ItemInnerSpacing.x;
++        const float normalScaleSliderWidth =
++            ImGui::GetContentRegionAvail().x - normalScaleLabelWidth;
++        ImGui::SetNextItemWidth(
++            normalScaleSliderWidth > 1.f ? normalScaleSliderWidth : 1.f);
++        update |= ImGui::SliderFloat(
++            normalScaleLabel,
++            &material->normalTextureScale,
++            -2.f,
++            2.f);
++        endConditionalRegion();
+     }
+ 
+     if (material->occlusionTexture)
+     {
+         update |= ImGui::Checkbox("Use Occlusion Texture", &material->enableOcclusionTexture);
+         ImGui::SameLine();
+-        ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->occlusionTexture->path).c_str());
++        drawTextureFilename(material->occlusionTexture->path);
+     }
+     
+-    if (material->enableOcclusionTexture)
++    if (beginConditionalRegion(
++            "##MaterialOcclusionStrengthRegion",
++            material->enableOcclusionTexture))
++    {
+         update |= ImGui::SliderFloat("Occlusion Strength", &material->occlusionStrength, 0.f, 1.f);
++        endConditionalRegion();
++    }
+ 
+     if (material->emissiveTexture)
+     {
+         update |= ImGui::Checkbox("Use Emissive Texture", &material->enableEmissiveTexture);
+         ImGui::SameLine();
+-        ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->emissiveTexture->path).c_str());
++        drawTextureFilename(material->emissiveTexture->path);
+     }
+     
+-    update |= ImGui::ColorEdit3("Emissive Color", material->emissiveColor.data(), ImGuiColorEditFlags_Float);
++    update |= drawColorEdit3(
++        "Emissive Color",
++        material->emissiveColor.data());
+     update |= ImGui::SliderFloat("Emissive Intensity", &material->emissiveIntensity, 0.f, 1000.f, "%.3f", ImGuiSliderFlags_Logarithmic);
+ 
+-    if (material->domain == MaterialDomain::Transmissive ||
++    const bool transmissive =
++        material->domain == MaterialDomain::Transmissive ||
+         material->domain == MaterialDomain::TransmissiveAlphaTested ||
+-        material->domain == MaterialDomain::TransmissiveAlphaBlended)
++        material->domain == MaterialDomain::TransmissiveAlphaBlended;
++    if (beginConditionalRegion(
++            "##MaterialTransmissionRegion",
++            transmissive))
+     {
+         if (material->transmissionTexture)
+         {
+             update |= ImGui::Checkbox("Use Transmission Texture", &material->enableTransmissionTexture);
+             ImGui::SameLine();
+-            ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->transmissionTexture->path).c_str());
++            drawTextureFilename(material->transmissionTexture->path);
+         }
+ 
+         update |= ImGui::SliderFloat("Transmission Factor", &material->transmissionFactor, 0.f, 1.f);
++        endConditionalRegion();
+     }
+ 
+     if (material->opacityTexture)
+     {
+         update |= ImGui::Checkbox("Use Alpha Mask Texture", &material->enableOpacityTexture);
+         ImGui::SameLine();
+-        ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->opacityTexture->path).c_str());
++        drawTextureFilename(material->opacityTexture->path);
+     }
+     
+     return update;
+@@ -344,7 +441,7 @@
+         light.SetDirection(direction);
+         changed = true;
+     }
+-    changed |= ImGui::ColorEdit3("Color", &light.color.x, ImGuiColorEditFlags_Float);
++    changed |= ImGui::ColorEdit3("Color", &light.color.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoTooltip);
+     changed |= ImGui::SliderFloat("Irradiance", &light.irradiance, 0.f, 100.f, "%.2f", ImGuiSliderFlags_Logarithmic);
+     changed |= ImGui::SliderFloat("Angular Size", &light.angularSize, 0.1f, 20.f);
+     return changed;
+@@ -354,7 +451,7 @@
+ {
+     bool changed = false;
+     changed |= ImGui::SliderFloat("Radius", &light.radius, 0.01f, 1.f, "%.3f", ImGuiSliderFlags_Logarithmic);
+-    changed |= ImGui::ColorEdit3("Color", &light.color.x, ImGuiColorEditFlags_Float);
++    changed |= ImGui::ColorEdit3("Color", &light.color.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoTooltip);
+     changed |= ImGui::SliderFloat("Intensity", &light.intensity, 0.f, 100.f, "%.2f", ImGuiSliderFlags_Logarithmic);
+     return changed;
+ }
+@@ -369,7 +466,7 @@
+         changed = true;
+     }
+     changed |= ImGui::SliderFloat("Radius", &light.radius, 0.01f, 1.f, "%.3f", ImGuiSliderFlags_Logarithmic);
+-    changed |= ImGui::ColorEdit3("Color", &light.color.x, ImGuiColorEditFlags_Float);
++    changed |= ImGui::ColorEdit3("Color", &light.color.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoTooltip);
+     changed |= ImGui::SliderFloat("Intensity", &light.intensity, 0.f, 100.f, "%.2f", ImGuiSliderFlags_Logarithmic);
+     changed |= ImGui::SliderFloat("Inner Angle", &light.innerAngle, 0.f, 180.f);
+     changed |= ImGui::SliderFloat("Outer Angle", &light.outerAngle, 0.f, 180.f);
