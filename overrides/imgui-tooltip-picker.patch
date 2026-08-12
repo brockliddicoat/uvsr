@@ -1,8 +1,8 @@
 diff --git a/imgui.cpp b/imgui.cpp
-index 72dd594..8acbe97 100644
+index 72dd594..26fbd0e 100644
 --- a/imgui.cpp
 +++ b/imgui.cpp
-@@ -3884,19 +3884,34 @@
+@@ -3884,19 +3884,34 @@ bool ImGui::IsUltraBrightFrameSurface(ImU32 surface_col)
      return surface.w > 0.0f && luminance >= 0.68f;
  }
  
@@ -39,7 +39,7 @@ index 72dd594..8acbe97 100644
      const ImRect outline_box(
          bounding_box.Min + ImVec2(inset, inset),
          bounding_box.Max - ImVec2(inset, inset));
-@@ -3926,21 +3941,29 @@
+@@ -3926,21 +3941,29 @@ static void RenderGradientFrameOutline(
              (vertex.pos.y - outline_box.Min.y) / gradient_extent);
          const ImVec4 raised_top(1.0f, 1.0f, 1.0f, 0.12f);
          const ImVec4 raised_bottom(0.01f, 0.012f, 0.016f, 0.10f);
@@ -74,7 +74,30 @@ index 72dd594..8acbe97 100644
          vertex.col = ImGui::GetColorU32(outline_color);
      }
  }
-@@ -6073,6 +6096,8 @@
+@@ -4219,6 +4242,7 @@ ImGuiContext::ImGuiContext(ImFontAtlas* shared_font_atlas)
+     UvsrUiMotionEnabled = true;
+     UvsrStockWidgetRendering = false;
+     UvsrSceneTranslucentHeaders = false;
++    UvsrAuthoredWindowPadding = Style.WindowPadding;
+     UvsrNegativeAccent = ImVec4(1.0f, 0.2f, 0.3215686f, 1.0f);
+     UvsrPositiveAccent = ImVec4(0.545098f, 0.862745f, 0.0f, 1.0f);
+     UvsrSliderTrack = Style.Colors[ImGuiCol_FrameBg];
+@@ -5204,6 +5228,14 @@ void ImGui::SetUvsrUiBehavior(
+     g.UvsrSceneTranslucentHeaders = scene_translucent_headers;
+ }
+ 
++void ImGui::SetUvsrAuthoredWindowPadding(const ImVec2& window_padding)
++{
++    ImGuiContext& g = *GImGui;
++    g.UvsrAuthoredWindowPadding = ImVec2(
++        ImMax(window_padding.x, 0.0f),
++        ImMax(window_padding.y, 0.0f));
++}
++
+ void ImGui::SetUvsrUiAccentColors(
+     const ImVec4& negative_accent,
+     const ImVec4& positive_accent)
+@@ -6073,6 +6105,8 @@ static void ImGui::RenderDimmedBackgrounds()
      }
  }
  
@@ -83,7 +106,7 @@ index 72dd594..8acbe97 100644
  // This is normally called by Render(). You may want to call it directly if you want to avoid calling Render() but the gain will be very minimal.
  void ImGui::EndFrame()
  {
-@@ -6095,6 +6120,16 @@
+@@ -6095,6 +6129,16 @@ void ImGui::EndFrame()
          ErrorRecoveryTryToRecoverState(&g.StackSizesInNewFrame);
      ErrorCheckEndFrameSanityChecks();
      ErrorCheckEndFrameFinalizeErrorTooltip();
@@ -100,7 +123,7 @@ index 72dd594..8acbe97 100644
  
      // Notify Platform/OS when our Input Method Editor cursor has moved (e.g. CJK inputs using Microsoft IME)
      ImGuiPlatformImeData* ime_data = &g.PlatformImeData;
-@@ -7235,6 +7270,11 @@
+@@ -7235,6 +7279,11 @@ static void ImGui::RenderWindowOuterBorders(ImGuiWindow* window)
      const bool is_stacked_panel_window =
          !g.UvsrStockWidgetRendering &&
          (strcmp(window->Name, "Settings") == 0 || strcmp(window->Name, "Performance") == 0);
@@ -112,7 +135,7 @@ index 72dd594..8acbe97 100644
      if (border_size > 0.0f && (window->Flags & ImGuiWindowFlags_NoBackground) == 0)
      {
          if (!is_stacked_panel_window)
-@@ -7256,7 +7296,10 @@
+@@ -7256,7 +7305,10 @@ static void ImGui::RenderWindowOuterBorders(ImGuiWindow* window)
              window->DrawList,
              ImRect(window->Pos, window->Pos + window->Size),
              window->WindowRounding,
@@ -124,7 +147,7 @@ index 72dd594..8acbe97 100644
      }
      if (window->ResizeBorderHovered != -1 || window->ResizeBorderHeld != -1)
      {
-@@ -12442,6 +12485,133 @@
+@@ -12442,6 +12494,178 @@ void ImGui::SetScrollHereY(float center_y_ratio)
  // [SECTION] TOOLTIPS
  //-----------------------------------------------------------------------------
  
@@ -200,6 +223,54 @@ index 72dd594..8acbe97 100644
 +    }
 +}
 +
++static ImGuiWindow* SubmitUvsrAuthoredTooltipTextV(
++    const char* fmt,
++    va_list args)
++{
++    const char* text;
++    const char* text_end;
++    ImFormatStringToTempBufferV(&text, &text_end, fmt, args);
++
++    ImGuiContext& g = *GImGui;
++    constexpr float tooltip_inner_margin = 5.0f;
++    const ImVec2 tooltip_window_padding =
++        g.UvsrAuthoredWindowPadding;
++    const ImVec2 tooltip_size(
++        ImMin(
++            g.FontSize * 20.0f,
++            ImGui::GetMainViewport()->WorkSize.x * 0.42f),
++        ImMin(
++            g.FontSize * 4.75f,
++            ImGui::GetMainViewport()->WorkSize.y * 0.25f));
++    const float wrap_width = ImMax(
++        g.FontSize * 8.0f,
++        tooltip_size.x -
++            tooltip_window_padding.x * 2.0f -
++            tooltip_inner_margin * 2.0f);
++    ImGui::SetNextWindowSize(tooltip_size, ImGuiCond_Always);
++    ImGui::PushStyleVar(
++        ImGuiStyleVar_WindowPadding,
++        tooltip_window_padding);
++
++    if (!ImGui::BeginTooltipEx(
++            ImGuiTooltipFlags_OverridePrevious,
++            ImGuiWindowFlags_None))
++    {
++        ImGui::PopStyleVar();
++        return NULL;
++    }
++    ImGuiWindow* tooltip_window = ImGui::GetCurrentWindow();
++    ImGui::SetCursorPos(ImGui::GetCursorPos() + ImVec2(
++        tooltip_inner_margin,
++        tooltip_inner_margin));
++    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width);
++    ImGui::TextUnformatted(text, text_end);
++    ImGui::PopTextWrapPos();
++    ImGui::EndTooltip();
++    ImGui::PopStyleVar();
++    return tooltip_window;
++}
++
 +static void SubmitUvsrItemTooltipV(const char* fmt, va_list args)
 +{
 +    ImGuiContext& g = *GImGui;
@@ -222,13 +293,10 @@ index 72dd594..8acbe97 100644
 +        ResetUvsrTooltipAnimation(state);
 +        return;
 +    }
-+    if (!ImGui::BeginTooltipEx(
-+            ImGuiTooltipFlags_OverridePrevious,
-+            ImGuiWindowFlags_None))
++    ImGuiWindow* tooltip_window =
++        SubmitUvsrAuthoredTooltipTextV(fmt, args);
++    if (tooltip_window == NULL)
 +        return;
-+    ImGuiWindow* tooltip_window = ImGui::GetCurrentWindow();
-+    ImGui::TextV(fmt, args);
-+    ImGui::EndTooltip();
 +    ApplyUvsrTooltipAppearance(tooltip_window, state.Appearance);
 +    state.LastSubmittedWindow = tooltip_window;
 +    state.LastSubmittedFrame = g.FrameCount;
@@ -258,18 +326,20 @@ index 72dd594..8acbe97 100644
  bool ImGui::BeginTooltip()
  {
      return BeginTooltipEx(ImGuiTooltipFlags_None, ImGuiWindowFlags_None);
-@@ -12516,43 +12686,9 @@
+@@ -12516,43 +12740,14 @@ void ImGui::SetTooltip(const char* fmt, ...)
  
  void ImGui::SetTooltipV(const char* fmt, va_list args)
  {
 -    if (GImGui->UvsrStockWidgetRendering)
--    {
++    if (!GImGui->UvsrStockWidgetRendering)
+     {
 -        if (!BeginTooltipEx(ImGuiTooltipFlags_OverridePrevious, ImGuiWindowFlags_None))
 -            return;
 -        TextV(fmt, args);
 -        EndTooltip();
--        return;
--    }
++        SubmitUvsrAuthoredTooltipTextV(fmt, args);
+         return;
+     }
 -
 -    const char* text;
 -    const char* text_end;
@@ -303,7 +373,7 @@ index 72dd594..8acbe97 100644
      EndTooltip();
  }
  
-@@ -12562,15 +12698,25 @@
+@@ -12562,15 +12757,25 @@ void ImGui::SetItemTooltip(const char* fmt, ...)
  {
      va_list args;
      va_start(args, fmt);
@@ -333,7 +403,7 @@ index 72dd594..8acbe97 100644
  }
  
  
-@@ -12701,6 +12847,21 @@
+@@ -12701,6 +12906,21 @@ void ImGui::OpenPopupEx(ImGuiID id, ImGuiPopupFlags popup_flags)
      ImGuiWindow* parent_window = g.CurrentWindow;
      const int current_stack_size = g.BeginPopupStack.Size;
  
@@ -355,7 +425,7 @@ index 72dd594..8acbe97 100644
      if (popup_flags & ImGuiPopupFlags_NoOpenOverExistingPopup)
          if (IsPopupOpen((ImGuiID)0, ImGuiPopupFlags_AnyPopupId))
              return;
-@@ -12737,7 +12898,9 @@
+@@ -12737,7 +12957,9 @@ void ImGui::OpenPopupEx(ImGuiID id, ImGuiPopupFlags popup_flags)
          else
          {
              // Reopen: close child popups if any, then flag popup for open/reopen (set position, focus, init navigation)
@@ -365,7 +435,7 @@ index 72dd594..8acbe97 100644
              g.OpenPopupStack.push_back(popup_ref);
          }
  
-@@ -12811,7 +12974,7 @@
+@@ -12811,7 +13033,7 @@ void ImGui::ClosePopupsExceptModals()
          ClosePopupToLevel(popup_count_to_keep, true);
  }
  
@@ -374,7 +444,7 @@ index 72dd594..8acbe97 100644
  {
      ImGuiContext& g = *GImGui;
      IMGUI_DEBUG_LOG_POPUP("[popup] ClosePopupToLevel(%d), restore_under=%d\n", remaining, restore_focus_to_window_under_popup);
-@@ -12830,10 +12993,56 @@
+@@ -12830,10 +13052,56 @@ void ImGui::ClosePopupToLevel(int remaining, bool restore_focus_to_window_under_
          ImGuiWindow* popup_window = prev_popup.Window;
          ImGuiWindow* focus_window = (popup_window->Flags & ImGuiWindowFlags_ChildMenu) ? popup_window->ParentWindow : prev_popup.RestoreNavWindow;
          if (focus_window && !focus_window->WasActive)
@@ -382,7 +452,6 @@ index 72dd594..8acbe97 100644
 +            ImGui::FocusTopMostWindowUnderOne(popup_window, NULL, NULL, ImGuiFocusRequestFlags_RestoreFocusedChild); // Fallback
          else
 -            FocusWindow(focus_window, (g.NavLayer == ImGuiNavLayer_Main) ? ImGuiFocusRequestFlags_RestoreFocusedChild : ImGuiFocusRequestFlags_None);
--    }
 +            ImGui::FocusWindow(focus_window, (g.NavLayer == ImGuiNavLayer_Main) ? ImGuiFocusRequestFlags_RestoreFocusedChild : ImGuiFocusRequestFlags_None);
 +    }
 +}
@@ -426,7 +495,7 @@ index 72dd594..8acbe97 100644
 +            continue;
 +        ClosePopupToLevelImmediately(popup_index, transition.RestoreFocus);
 +        break;
-+    }
+     }
 +    transition = ImGuiUvsrColorPickerPopupTransition();
 +    g.UvsrActiveColorPickerPopupId = 0;
 +    g.UvsrActiveColorPickerPopupDrawList = NULL;
@@ -434,14 +503,40 @@ index 72dd594..8acbe97 100644
  }
  
  // Close the popup we have begin-ed into.
+diff --git a/imgui.h b/imgui.h
+index 3273f2c..0a9ae60 100644
+--- a/imgui.h
++++ b/imgui.h
+@@ -412,11 +412,12 @@ namespace ImGui
+     IMGUI_API void          StyleColorsLight(ImGuiStyle* dst = NULL);   // best used with borders and a custom, thicker font
+     IMGUI_API void          StyleColorsClassic(ImGuiStyle* dst = NULL); // classic imgui style
+     IMGUI_API void          SetUvsrUiBehavior(bool motion_enabled, bool stock_widget_rendering, bool scene_translucent_headers); // UVSR extension: select animation, stock-widget, and structural header-translucency policy at runtime.
++    IMGUI_API void          SetUvsrAuthoredWindowPadding(const ImVec2& window_padding); // UVSR extension: preserve the canonical authored window padding across zero-padding nested layout scopes.
+     IMGUI_API void          SetUvsrUiAccentColors(const ImVec4& negative_accent, const ImVec4& positive_accent); // UVSR extension: supply RGBA semantic toggle and product-status endpoints.
+     IMGUI_API void          SetUvsrSliderTrackColors(const ImVec4& normal, const ImVec4& hovered, const ImVec4& active); // UVSR extension: supply authored slider-track colors without changing shared FrameBg roles.
+     IMGUI_API void          PushUvsrDisabledPresentation(float amount); // UVSR extension: scope the authored disabled grayscale amount independently from semantic input blocking.
+     IMGUI_API void          PopUvsrDisabledPresentation();             // UVSR extension: end the current authored disabled-presentation scope.
+-    IMGUI_API void          PushUvsrColorPickerPopupContentRight(float content_right, float maximum_bottom, const ImVec4& popup_background, const ImVec4& content_layer, const ImVec4& picker_layer); // UVSR extension: scope ColorEdit4 picker popups to Settings-adjacent bounds and caller-owned depth surfaces.
++    IMGUI_API void          PushUvsrColorPickerPopupContentRight(float content_right, float maximum_bottom, const ImVec4& popup_surface, const ImVec4& outer_margin_layer, const ImVec4& content_layer, const ImVec4& picker_layer); // UVSR extension: scope ColorEdit4 picker popups to Settings-adjacent bounds with separate translucent depth surfaces and an opaque outer margin.
+     IMGUI_API void          PopUvsrColorPickerPopupContentRight();      // UVSR extension: end the current ColorEdit4 picker-popup placement scope.
+     IMGUI_API ImDrawList*   GetUvsrActiveColorPickerPopupDrawList();    // UVSR extension: return this frame's active scoped ColorEdit4 picker draw list, or NULL.
+     IMGUI_API void          CloseUvsrColorPickerPopup();                // UVSR extension: close only the active scoped ColorEdit4 picker popup.
 diff --git a/imgui_internal.h b/imgui_internal.h
-index f188636..45771fa 100644
+index f188636..cc950c5 100644
 --- a/imgui_internal.h
 +++ b/imgui_internal.h
-@@ -2145,6 +2145,32 @@
+@@ -2140,9 +2140,37 @@ struct ImGuiUvsrColorPickerPopupScope
+ {
+     float                   ContentRight;
+     float                   MaximumBottom;
+-    ImVec4                  PopupBackground;
++    ImVec4                  PopupSurface;
++    ImVec4                  OuterMarginLayer;
+     ImVec4                  ContentLayer;
      ImVec4                  PickerLayer;
- };
- 
++    ImVec2                  PopupPadding;
++};
++
 +struct ImGuiUvsrColorPickerPopupTransition
 +{
 +    ImGuiID                 PopupId = 0;
@@ -466,12 +561,18 @@ index f188636..45771fa 100644
 +    int                     LastAdvancedFrame = -1;
 +    ImGuiWindow*            LastSubmittedWindow = NULL;
 +    int                     LastSubmittedFrame = -1;
-+};
-+
+ };
+ 
  struct ImGuiUvsrTreeArrowCapture
- {
-     bool                    Armed = false;
-@@ -2175,9 +2201,12 @@
+@@ -2168,6 +2196,7 @@ struct ImGuiContext
+     bool                    UvsrUiMotionEnabled;                 // Runtime policy for UVSR-authored widget and window motion.
+     bool                    UvsrStockWidgetRendering;            // Runtime policy for upstream Dear ImGui widget presentation.
+     bool                    UvsrSceneTranslucentHeaders;         // Runtime policy for UVSR header surfaces that reveal the scene.
++    ImVec2                  UvsrAuthoredWindowPadding;            // Canonical authored window padding, independent of nested zero-padding layout scopes.
+     ImVec4                  UvsrNegativeAccent;                  // RGBA semantic error/off endpoint supplied by UVSR.
+     ImVec4                  UvsrPositiveAccent;                  // RGBA semantic success/on endpoint supplied by UVSR.
+     ImVec4                  UvsrSliderTrack;                     // RGBA authored slider-track resting color supplied by UVSR.
+@@ -2175,9 +2204,12 @@ struct ImGuiContext
      ImVec4                  UvsrSliderTrackActive;               // RGBA authored slider-track active color supplied by UVSR.
      ImVector<float>         UvsrDisabledPresentationAmountStack; // Scoped authored disabled grayscale amount, independent from semantic input blocking.
      ImVector<ImGuiUvsrColorPickerPopupScope> UvsrColorPickerPopupScopeStack; // Scoped placement and surface for ColorEdit4 picker popups.
@@ -484,7 +585,7 @@ index f188636..45771fa 100644
      ImGuiUvsrTreeArrowCapture UvsrTreeArrowCapture;             // One frame-scoped drawer arrow awaiting rotation by its owner's body timeline.
      ImVector<ImFontAtlas*>  FontAtlases;                        // List of font atlases used by the context (generally only contains g.IO.Fonts aka the main font atlas)
      ImFont*                 Font;                               // Currently bound font. (== FontStack.back().Font)
-@@ -3283,6 +3312,7 @@
+@@ -3283,6 +3315,7 @@ namespace ImGui
      IMGUI_API bool          BeginPopupMenuEx(ImGuiID id, const char* label, ImGuiWindowFlags extra_window_flags);
      IMGUI_API void          OpenPopupEx(ImGuiID id, ImGuiPopupFlags popup_flags = ImGuiPopupFlags_None);
      IMGUI_API void          ClosePopupToLevel(int remaining, bool restore_focus_to_window_under_popup);
@@ -492,7 +593,7 @@ index f188636..45771fa 100644
      IMGUI_API void          ClosePopupsOverWindow(ImGuiWindow* ref_window, bool restore_focus_to_window_under_popup);
      IMGUI_API void          ClosePopupsExceptModals();
      IMGUI_API bool          IsPopupOpen(ImGuiID id, ImGuiPopupFlags popup_flags);
-@@ -3558,6 +3588,7 @@
+@@ -3558,6 +3591,7 @@ namespace ImGui
      IMGUI_API void          RenderTextEllipsis(ImDrawList* draw_list, const ImVec2& pos_min, const ImVec2& pos_max, float ellipsis_max_x, const char* text, const char* text_end, const ImVec2* text_size_if_known);
      IMGUI_API void          RenderFrame(ImVec2 p_min, ImVec2 p_max, ImU32 fill_col, bool borders = true, float rounding = 0.0f);
      IMGUI_API bool          IsUltraBrightFrameSurface(ImU32 surface_col);
@@ -501,10 +602,34 @@ index f188636..45771fa 100644
      IMGUI_API void          RenderFrameBorder(ImVec2 p_min, ImVec2 p_max, float rounding = 0.0f, bool raised = false);
      IMGUI_API void          RenderColorRectWithAlphaCheckerboard(ImDrawList* draw_list, ImVec2 p_min, ImVec2 p_max, ImU32 fill_col, float grid_step, ImVec2 grid_off, float rounding = 0.0f, ImDrawFlags flags = 0);
 diff --git a/imgui_widgets.cpp b/imgui_widgets.cpp
-index 22f74c7..a00bb1a 100644
+index 22f74c7..c97d7a4 100644
 --- a/imgui_widgets.cpp
 +++ b/imgui_widgets.cpp
-@@ -7074,11 +7074,10 @@
+@@ -7031,7 +7031,8 @@ static void ColorEditRestoreHS(const float* col, float* H, float* S, float* V)
+ void ImGui::PushUvsrColorPickerPopupContentRight(
+     float content_right,
+     float maximum_bottom,
+-    const ImVec4& popup_background,
++    const ImVec4& popup_surface,
++    const ImVec4& outer_margin_layer,
+     const ImVec4& content_layer,
+     const ImVec4& picker_layer)
+ {
+@@ -7041,9 +7042,11 @@ void ImGui::PushUvsrColorPickerPopupContentRight(
+     const ImGuiUvsrColorPickerPopupScope scope = {
+         content_right,
+         maximum_bottom,
+-        popup_background,
++        popup_surface,
++        outer_margin_layer,
+         content_layer,
+-        picker_layer
++        picker_layer,
++        g.Style.WindowPadding
+     };
+     g.UvsrColorPickerPopupScopeStack.push_back(scope);
+ }
+@@ -7074,12 +7077,11 @@ void ImGui::CloseUvsrColorPickerPopup()
          return;
  
      const ImGuiID popup_id = context->UvsrActiveColorPickerPopupId;
@@ -513,12 +638,13 @@ index 22f74c7..a00bb1a 100644
 -    context->UvsrActiveColorPickerPopupId = 0;
      if (popup_id == 0)
          return;
-+
-+    context->UvsrColorPickerPopupTransition.ReopenFrame = -1;
  
++    context->UvsrColorPickerPopupTransition.ReopenFrame = -1;
++
      for (int popup_index = 0;
          popup_index < context->OpenPopupStack.Size;
-@@ -7091,11 +7090,96 @@
+         ++popup_index)
+@@ -7091,13 +7093,136 @@ void ImGui::CloseUvsrColorPickerPopup()
      }
  }
  
@@ -614,12 +740,52 @@ index 22f74c7..a00bb1a 100644
 +    int BarCount;
  };
  
++struct UvsrAuthoredColorPickerGeometry
++{
++    float SelectorSize;
++    float BarWidth;
++    float FirstBarOffset;
++};
++
++static float GetUvsrAuthoredPickerWidthForSelector(
++    float selector_size,
++    float inner_spacing)
++{
++    return ImCeil((selector_size * 4.0f + inner_spacing) / 3.0f);
++}
++
++static UvsrAuthoredColorPickerGeometry ResolveUvsrAuthoredColorPickerGeometry(
++    float picker_width,
++    float inner_spacing)
++{
++    const float items_width = ImMax(
++        picker_width - inner_spacing * 3.0f,
++        4.0f);
++    const float fourth_column_offset = ImClamp(
++        IM_TRUNC(items_width * 0.75f) + inner_spacing * 3.0f,
++        inner_spacing,
++        picker_width);
++    const float fourth_column_width = ImMax(
++        picker_width - fourth_column_offset,
++        4.0f);
++    const float bar_width = ImMax(
++        (fourth_column_width - inner_spacing * 3.0f) / 4.0f,
++        1.0f);
++    return {
++        ImMax(fourth_column_offset - inner_spacing, 1.0f),
++        bar_width,
++        fourth_column_offset
++    };
++}
++
  static UvsrColorPickerPopupLayout ConfigureUvsrColorPickerPopup(
-@@ -7105,25 +7189,47 @@
+     ImGuiWindow* parent_window,
+     const ImVec2& default_anchor,
+@@ -7105,25 +7230,45 @@ static UvsrColorPickerPopupLayout ConfigureUvsrColorPickerPopup(
      float maximum_bottom,
      float square_sz,
      bool has_visible_label,
-+    const ImRect& source_rect,
++    const ImVec2& popup_padding,
 +    int authored_bar_count,
      bool configure_window)
  {
@@ -632,15 +798,13 @@ index 22f74c7..a00bb1a 100644
 -        normal_picker_width +
 -        style.ItemInnerSpacing.x +
 -        square_sz * 3.0f;
-+    constexpr float authored_bar_ratio = 0.08f;
-+    const bool authored_bar_layout = authored_bar_count >= 3;
-+    const float authored_bar_count_f = (float)authored_bar_count;
++    const bool authored_bar_layout = authored_bar_count == 4;
 +    const float normal_selector_size =
 +        square_sz * 10.0f - style.ItemInnerSpacing.x * 2.0f;
 +    const float normal_picker_width = authored_bar_layout
-+        ? normal_selector_size *
-+                (1.0f + authored_bar_count_f * authored_bar_ratio) +
-+            style.ItemInnerSpacing.x * authored_bar_count_f
++        ? GetUvsrAuthoredPickerWidthForSelector(
++            normal_selector_size,
++            style.ItemInnerSpacing.x)
 +        : square_sz * 12.0f;
 +    const float normal_content_width = authored_bar_layout
 +        ? normal_picker_width
@@ -648,31 +812,33 @@ index 22f74c7..a00bb1a 100644
 +            style.ItemInnerSpacing.x +
 +            square_sz * 3.0f;
      const float normal_outer_width =
-         normal_content_width + style.WindowPadding.x * 2.0f;
+-        normal_content_width + style.WindowPadding.x * 2.0f;
 -    const float minimum_picker_width =
 -        square_sz * 3.0f + style.ItemInnerSpacing.x * 2.0f;
++        normal_content_width + popup_padding.x * 2.0f;
 +    const float minimum_selector_size = square_sz * 4.0f;
 +    const float minimum_picker_width = authored_bar_layout
-+        ? minimum_selector_size *
-+                (1.0f + authored_bar_count_f * authored_bar_ratio) +
-+            style.ItemInnerSpacing.x * authored_bar_count_f
++        ? GetUvsrAuthoredPickerWidthForSelector(
++            minimum_selector_size,
++            style.ItemInnerSpacing.x)
 +        : square_sz * 3.0f + style.ItemInnerSpacing.x * 2.0f;
      const float minimum_outer_width =
-         minimum_picker_width + style.WindowPadding.x * 2.0f;
+-        minimum_picker_width + style.WindowPadding.x * 2.0f;
 -    const float minimum_outer_height =
 -        square_sz * 3.0f + style.WindowPadding.y * 2.0f;
++        minimum_picker_width + popup_padding.x * 2.0f;
 +    float minimum_outer_height = authored_bar_layout
-+        ? style.WindowPadding.y * 2.0f +
++        ? popup_padding.y * 2.0f +
 +            minimum_selector_size +
 +            style.ItemSpacing.y +
 +            3.0f * (square_sz + style.ItemSpacing.y)
-+        : square_sz * 3.0f + style.WindowPadding.y * 2.0f;
-+    if (authored_bar_layout && has_visible_label)
++        : square_sz * 3.0f + popup_padding.y * 2.0f;
++    if (!authored_bar_layout && has_visible_label)
 +        minimum_outer_height += g.FontSize + style.ItemSpacing.y;
      const float requested_x = ImClamp(
          content_right,
          allowed.Min.x,
-@@ -7135,9 +7241,11 @@
+@@ -7135,9 +7280,11 @@ static UvsrColorPickerPopupLayout ConfigureUvsrColorPickerPopup(
  
      UvsrColorPickerPopupLayout layout = {
          normal_picker_width,
@@ -686,7 +852,21 @@ index 22f74c7..a00bb1a 100644
      };
      if (!layout.HasUsableLane)
          return layout;
-@@ -7158,11 +7266,16 @@
+@@ -7146,29 +7293,32 @@ static UvsrColorPickerPopupLayout ConfigureUvsrColorPickerPopup(
+     if (layout.HideSidePreview)
+     {
+         const float available_picker_width =
+-            available_width - style.WindowPadding.x * 2.0f;
++            available_width - popup_padding.x * 2.0f;
+         layout.PickerWidth = ImMin(
+             normal_picker_width,
+             available_picker_width);
+         outer_width =
+-            layout.PickerWidth + style.WindowPadding.x * 2.0f;
++            layout.PickerWidth + popup_padding.x * 2.0f;
+     }
+     outer_width = ImMin(outer_width, available_width);
+     if (!configure_window)
          return layout;
  
      // ColorPicker4 always emits RGB, HSV, and hexadecimal input rows here.
@@ -696,33 +876,37 @@ index 22f74c7..a00bb1a 100644
 -        layout.PickerWidth -
 -            (square_sz + style.ItemInnerSpacing.x));
 +    const float sv_picker_height = authored_bar_layout
-+        ? ImMax(
-+            1.0f,
-+            (layout.PickerWidth -
-+                authored_bar_count_f * style.ItemInnerSpacing.x) /
-+                (1.0f + authored_bar_count_f * authored_bar_ratio))
++        ? ResolveUvsrAuthoredColorPickerGeometry(
++            layout.PickerWidth,
++            style.ItemInnerSpacing.x).SelectorSize
 +        : ImMax(
 +            square_sz,
 +            layout.PickerWidth -
 +                (square_sz + style.ItemInnerSpacing.x));
      float expected_outer_height =
-         style.WindowPadding.y * 2.0f +
+-        style.WindowPadding.y * 2.0f +
++        popup_padding.y * 2.0f +
          sv_picker_height +
-@@ -7178,30 +7291,39 @@
+         style.ItemSpacing.y +
+         3.0f * (square_sz + style.ItemSpacing.y);
+-    if (has_visible_label)
++    if (!authored_bar_layout && has_visible_label)
+         expected_outer_height += g.FontSize + style.ItemSpacing.y;
+ 
+     const ImGuiID popup_id = parent_window->GetID("picker");
+@@ -7178,43 +7328,53 @@ static UvsrColorPickerPopupLayout ConfigureUvsrColorPickerPopup(
          IM_ARRAYSIZE(popup_name),
          "##Popup_%08x",
          popup_id);
 -    if (ImGuiWindow* popup_window = ImGui::FindWindowByName(popup_name))
--    {
++    if (!authored_bar_layout)
+     {
 -        if (popup_window->WasActive)
--        {
++        if (ImGuiWindow* popup_window = ImGui::FindWindowByName(popup_name))
+         {
 -            const ImVec2 auto_fit_size =
 -                ImGui::CalcWindowNextAutoFitSize(popup_window);
 -            expected_outer_height = auto_fit_size.y;
-+    if (!authored_bar_layout)
-+    {
-+        if (ImGuiWindow* popup_window = ImGui::FindWindowByName(popup_name))
-+        {
 +            if (popup_window->WasActive)
 +            {
 +                const ImVec2 auto_fit_size =
@@ -759,10 +943,74 @@ index 22f74c7..a00bb1a 100644
      ImGui::SetNextWindowPos(popup_position, ImGuiCond_Always);
      return layout;
  }
-@@ -7242,6 +7364,189 @@
-                 bounds.GetWidth(),
-                 bounds.GetHeight()) * 0.5f));
-     window->DrawList->PopClipRect();
+ 
+-static ImRect GetUvsrColorPickerPopupContentBounds(ImGuiWindow* window)
++static ImRect GetUvsrColorPickerPopupContentBounds(
++    ImGuiWindow* window,
++    const ImGuiUvsrColorPickerPopupScope& scope)
+ {
+     if (window == NULL)
+         return ImRect();
+ 
+-    const ImGuiStyle& style = GImGui->Style;
+     const ImVec2 inset(
+-        ImMax(0.0f, style.WindowPadding.x),
+-        ImMax(0.0f, style.WindowPadding.y));
++        ImMax(0.0f, scope.PopupPadding.x),
++        ImMax(0.0f, scope.PopupPadding.y));
+     return ImRect(
+         window->InnerRect.Min + inset,
+         window->InnerRect.Max - inset);
+@@ -7222,28 +7382,279 @@ static ImRect GetUvsrColorPickerPopupContentBounds(ImGuiWindow* window)
+ 
+ static void DrawUvsrColorPickerPopupContentLayer(
+     ImGuiWindow* window,
+-    const ImVec4& color)
++    const ImGuiUvsrColorPickerPopupScope& scope)
+ {
+-    if (window == NULL || color.w <= 0.0f)
++    if (window == NULL)
+         return;
+ 
+-    const ImRect bounds = GetUvsrColorPickerPopupContentBounds(window);
++    const ImRect bounds = GetUvsrColorPickerPopupContentBounds(window, scope);
+     if (bounds.GetWidth() <= 1.0f || bounds.GetHeight() <= 1.0f)
+         return;
+-    window->DrawList->PushClipRect(bounds.Min, bounds.Max, true);
++    if (scope.ContentLayer.w > 0.0f)
++    {
++        window->DrawList->PushClipRect(bounds.Min, bounds.Max, true);
++        window->DrawList->AddRectFilled(
++            bounds.Min,
++            bounds.Max,
++            ImGui::GetColorU32(scope.ContentLayer),
++            ImClamp(
++                GImGui->Style.FrameRounding,
++                0.0f,
++                ImMin(
++                    bounds.GetWidth(),
++                    bounds.GetHeight()) * 0.5f));
++        window->DrawList->PopClipRect();
++    }
++
++    constexpr float outer_margin_thickness = 2.0f;
++    const float outer_margin_inset = outer_margin_thickness * 0.5f;
++    const ImRect outer_margin_bounds(
++        window->Pos + ImVec2(outer_margin_inset, outer_margin_inset),
++        window->Pos + window->Size -
++            ImVec2(outer_margin_inset, outer_margin_inset));
++    if (scope.OuterMarginLayer.w > 0.0f &&
++        outer_margin_bounds.GetWidth() > outer_margin_thickness &&
++        outer_margin_bounds.GetHeight() > outer_margin_thickness)
++    {
++        window->DrawList->AddRect(
++            outer_margin_bounds.Min,
++            outer_margin_bounds.Max,
++            ImGui::GetColorU32(scope.OuterMarginLayer),
++            ImMax(0.0f, GImGui->Style.PopupRounding - outer_margin_inset),
++            0,
++            outer_margin_thickness);
++    }
 +    const float outline_inset = 0.5f;
 +    const ImRect outline_bounds(
 +        bounds.Min + ImVec2(outline_inset, outline_inset),
@@ -792,6 +1040,58 @@ index 22f74c7..a00bb1a 100644
 +    }
 +}
 +
++static void DrawUvsrColorPickerPopupControlLayer(
++    ImGuiWindow* window,
++    const ImGuiUvsrColorPickerPopupScope& scope,
++    float picker_width)
++{
++    if (window == NULL || scope.PickerLayer.w <= 0.0f)
++        return;
++
++    const ImGuiStyle& style = GImGui->Style;
++    const UvsrAuthoredColorPickerGeometry geometry =
++        ResolveUvsrAuthoredColorPickerGeometry(
++            picker_width,
++            style.ItemInnerSpacing.x);
++    const ImVec2 picker_position = window->DC.CursorPos;
++    const ImVec2 layer_offset(
++        ImMax(1.0f, style.ItemInnerSpacing.x * 0.5f),
++        ImMax(1.0f, style.ItemInnerSpacing.y * 0.5f));
++    ImRect layer_bounds(
++        picker_position - layer_offset,
++        picker_position + ImVec2(picker_width, geometry.SelectorSize) +
++            layer_offset);
++    const ImRect content_bounds =
++        GetUvsrColorPickerPopupContentBounds(window, scope);
++    layer_bounds.ClipWith(content_bounds);
++    if (layer_bounds.GetWidth() <= 1.0f ||
++        layer_bounds.GetHeight() <= 1.0f)
++    {
++        return;
++    }
++
++    window->DrawList->PushClipRect(
++        content_bounds.Min,
++        content_bounds.Max,
++        true);
+     window->DrawList->AddRectFilled(
+-        bounds.Min,
+-        bounds.Max,
+-        ImGui::GetColorU32(color),
++        layer_bounds.Min,
++        layer_bounds.Max,
++        ImGui::ColorConvertFloat4ToU32(scope.PickerLayer),
+         ImClamp(
+-            GImGui->Style.FrameRounding,
++            style.FrameRounding,
+             0.0f,
+-            ImMin(
+-                bounds.GetWidth(),
+-                bounds.GetHeight()) * 0.5f));
++            ImMin(layer_bounds.GetWidth(), layer_bounds.GetHeight()) * 0.5f));
+     window->DrawList->PopClipRect();
+ }
+ 
 +static void AddUvsrRoundedPointerTriangle(
 +    ImDrawList* draw_list,
 +    const ImVec2& tip,
@@ -920,11 +1220,12 @@ index 22f74c7..a00bb1a 100644
 +    const float rounding = ImMin(
 +        style.FrameRounding * scale,
 +        arrow_half * 0.75f);
-+    AddUvsrCarvedRoundedPointerTriangle(
++    AddUvsrRoundedPointerTriangle(
 +        draw_list,
 +        ImVec2(tip_x, source_rect.GetCenter().y),
 +        ImVec2(base_x, base_y - arrow_half),
 +        ImVec2(base_x, base_y + arrow_half),
++        ImGui::GetColorU32(scope.OuterMarginLayer),
 +        rounding);
 +    const float inner_inset = fringe * scale;
 +    AddUvsrRoundedPointerTriangle(
@@ -932,7 +1233,7 @@ index 22f74c7..a00bb1a 100644
 +        ImVec2(tip_x + inner_inset, source_rect.GetCenter().y),
 +        ImVec2(base_x + inner_inset, base_y - arrow_half + inner_inset),
 +        ImVec2(base_x + inner_inset, base_y + arrow_half - inner_inset),
-+        ImGui::GetColorU32(scope.PopupBackground),
++        ImGui::GetColorU32(scope.ContentLayer),
 +        ImMax(0.0f, rounding - inner_inset));
 +    for (int vertex_index = pointer_vertex_start;
 +        vertex_index < draw_list->VtxBuffer.Size;
@@ -946,23 +1247,86 @@ index 22f74c7..a00bb1a 100644
 +            (faded_alpha << IM_COL32_A_SHIFT);
 +    }
 +    draw_list->PopClipRect();
- }
- 
++}
++
  // Edit colors components (each component in 0.0f..1.0f range).
-@@ -7265,6 +7570,12 @@
-     const bool set_current_color_edit_id = (g.ColorEditCurrentID == 0);
+ // See enum ImGuiColorEditFlags_ for available options. e.g. Only access 3 floats if ImGuiColorEditFlags_NoAlpha flag is set.
+ // With typical options: Left-click on color square to open color picker. Right-click to open option menu. CTRL+Click over input fields to edit them and TAB to go to next item.
+@@ -7266,6 +7677,12 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
      if (set_current_color_edit_id)
          g.ColorEditCurrentID = window->IDStack.back();
-+
+ 
 +    const bool authored_scoped_color_edit =
 +        g.UvsrColorPickerPopupScopeStack.Size > 0 &&
 +        !g.UvsrStockWidgetRendering;
 +    if (authored_scoped_color_edit)
 +        flags |= ImGuiColorEditFlags_NoOptions;
- 
++
      // If we're not showing any slider there's no point in doing any HSV conversions
      const ImGuiColorEditFlags flags_untouched = flags;
-@@ -7405,8 +7716,28 @@
+     if (flags & ImGuiColorEditFlags_NoInputs)
+@@ -7291,6 +7708,13 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
+     const bool alpha = (flags & ImGuiColorEditFlags_NoAlpha) == 0;
+     const bool hdr = (flags & ImGuiColorEditFlags_HDR) != 0;
+     const int components = alpha ? 4 : 3;
++    const bool authored_disabled_alpha_component =
++        authored_scoped_color_edit &&
++        !alpha &&
++        (flags & ImGuiColorEditFlags_NoPicker) != 0 &&
++        (flags & ImGuiColorEditFlags_NoSmallPreview) != 0;
++    const int displayed_components =
++        authored_disabled_alpha_component ? 4 : components;
+     const float w_button = (flags & ImGuiColorEditFlags_NoSmallPreview) ? 0.0f : (square_sz + style.ItemInnerSpacing.x);
+     const float w_inputs = ImMax(w_full - w_button, 1.0f);
+     w_full = w_inputs + w_button;
+@@ -7317,10 +7741,11 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
+     if ((flags & (ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHSV)) != 0 && (flags & ImGuiColorEditFlags_NoInputs) == 0)
+     {
+         // RGB/HSV 0..255 Sliders
+-        const float w_items = w_inputs - style.ItemInnerSpacing.x * (components - 1);
++        const float w_items = w_inputs -
++            style.ItemInnerSpacing.x * (displayed_components - 1);
+ 
+         const bool hide_prefix = !g.UvsrStockWidgetRendering ||
+-            (IM_TRUNC(w_items / components) <= CalcTextSize((flags & ImGuiColorEditFlags_Float) ? "M:0.000" : "M:000").x);
++            (IM_TRUNC(w_items / displayed_components) <= CalcTextSize((flags & ImGuiColorEditFlags_Float) ? "M:0.000" : "M:000").x);
+         static const char* ids[4] = { "##X", "##Y", "##Z", "##W" };
+         static const char* fmt_table_int[3][4] =
+         {
+@@ -7337,14 +7762,30 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
+         const int fmt_idx = hide_prefix ? 0 : (flags & ImGuiColorEditFlags_DisplayHSV) ? 2 : 1;
+ 
+         float prev_split = 0.0f;
+-        for (int n = 0; n < components; n++)
++        float disabled_alpha_value = 0.0f;
++        for (int n = 0; n < displayed_components; n++)
+         {
+             if (n > 0)
+                 SameLine(0, style.ItemInnerSpacing.x);
+-            float next_split = IM_TRUNC(w_items * (n + 1) / components);
++            float next_split = IM_TRUNC(
++                w_items * (n + 1) / displayed_components);
+             SetNextItemWidth(ImMax(next_split - prev_split, 1.0f));
+             prev_split = next_split;
+ 
++            if (n == components)
++            {
++                BeginDisabled();
++                DragFloat(
++                    ids[n],
++                    &disabled_alpha_value,
++                    1.0f / 255.0f,
++                    0.0f,
++                    1.0f,
++                    fmt_table_float[fmt_idx][n]);
++                EndDisabled();
++                continue;
++            }
++
+             // FIXME: When ImGuiColorEditFlags_HDR flag is passed HS values snap in weird ways when SV values go below 0.
+             if (flags & ImGuiColorEditFlags_Float)
+             {
+@@ -7405,8 +7846,26 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
          UvsrColorPickerPopupLayout picker_layout = {
              square_sz * 12.0f,
              false,
@@ -974,9 +1338,7 @@ index 22f74c7..a00bb1a 100644
 +        const bool authored_bar_popup =
 +            authored_scoped_color_edit &&
 +            (flags & ImGuiColorEditFlags_PickerHueWheel) != 0;
-+        const int authored_bar_count = authored_bar_popup
-+            ? (alpha && (flags & ImGuiColorEditFlags_AlphaBar) != 0 ? 4 : 3)
-+            : 0;
++        const int authored_bar_count = authored_bar_popup ? 4 : 0;
 +        const bool reopen_closing_picker =
 +            authored_bar_popup &&
 +            g.UvsrColorPickerPopupTransition.PopupId == window->GetID("picker") &&
@@ -992,11 +1354,11 @@ index 22f74c7..a00bb1a 100644
          if (scoped_picker_popup)
          {
              picker_layout = ConfigureUvsrColorPickerPopup(
-@@ -7416,24 +7747,37 @@
+@@ -7416,24 +7875,37 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
                  scoped_picker_scope->MaximumBottom,
                  square_sz,
                  label != label_display_end,
-+                picker_source_rect,
++                scoped_picker_scope->PopupPadding,
 +                authored_bar_count,
                  false);
          }
@@ -1034,7 +1396,7 @@ index 22f74c7..a00bb1a 100644
          }
          if (!(flags & ImGuiColorEditFlags_NoOptions))
              OpenPopupOnItemClick("context", ImGuiPopupFlags_MouseButtonRight);
-@@ -7442,7 +7786,30 @@
+@@ -7442,7 +7914,30 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
              scoped_picker_popup &&
              picker_layout.HasUsableLane &&
              IsPopupOpen("picker");
@@ -1066,46 +1428,71 @@ index 22f74c7..a00bb1a 100644
          {
              picker_layout = ConfigureUvsrColorPickerPopup(
                  window,
-@@ -7451,8 +7818,12 @@
+@@ -7451,25 +7946,34 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
                  scoped_picker_scope->MaximumBottom,
                  square_sz,
                  label != label_display_end,
-+                picker_source_rect,
++                scoped_picker_scope->PopupPadding,
 +                authored_bar_count,
                  true);
              PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.0f, 1.0f));
 +            if (picker_layout.AuthoredBarLayout)
++            {
 +                PushStyleVar(ImGuiStyleVar_PopupBorderSize, 0.0f);
++                PushStyleVar(
++                    ImGuiStyleVar_WindowPadding,
++                    scoped_picker_scope->PopupPadding);
++            }
          }
          if (scoped_picker_popup)
              PushStyleColor(
-@@ -7461,8 +7832,8 @@
+                 ImGuiCol_PopupBg,
+-                scoped_picker_scope->PopupBackground);
++                scoped_picker_scope->PopupSurface);
          const bool picker_popup_open = BeginPopup("picker");
          if (scoped_picker_popup)
              PopStyleColor();
 -        if (position_picker_popup)
 -            PopStyleVar();
 +        if (submit_picker_popup)
-+            PopStyleVar(picker_layout.AuthoredBarLayout ? 2 : 1);
++            PopStyleVar(picker_layout.AuthoredBarLayout ? 3 : 1);
          if (picker_popup_open)
          {
              if (scoped_picker_popup)
-@@ -7480,19 +7851,44 @@
+             {
+                 DrawUvsrColorPickerPopupContentLayer(
+                     g.UvsrStockWidgetRendering ? NULL : g.CurrentWindow,
+-                    scoped_picker_scope->ContentLayer);
++                    *scoped_picker_scope);
+                 g.UvsrActiveColorPickerPopupId =
+                     g.CurrentWindow->PopupId;
+                 g.UvsrActiveColorPickerPopupDrawList =
+@@ -7480,19 +7984,53 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
              if (g.CurrentWindow->BeginCount == 1)
              {
                  picker_active_window = g.CurrentWindow;
+-                if (label != label_display_end)
 +                const bool picker_interaction_ready =
 +                    !picker_layout.AuthoredBarLayout ||
 +                    (g.UvsrColorPickerPopupTransition.TargetOpen &&
 +                        g.UvsrColorPickerPopupTransition.Amount >= 1.0f);
 +                if (!picker_interaction_ready)
 +                    PushItemFlag(ImGuiItemFlags_Disabled, true);
-                 if (label != label_display_end)
++                if (!picker_layout.AuthoredBarLayout &&
++                    label != label_display_end)
                  {
                      TextEx(label, label_display_end);
                      Spacing();
                  }
 -                ImGuiColorEditFlags picker_flags_to_forward = ImGuiColorEditFlags_DataTypeMask_ | ImGuiColorEditFlags_PickerMask_ | ImGuiColorEditFlags_InputMask_ | ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_AlphaBar;
++                if (picker_layout.AuthoredBarLayout &&
++                    !g.UvsrStockWidgetRendering)
++                {
++                    DrawUvsrColorPickerPopupControlLayer(
++                        g.CurrentWindow,
++                        *scoped_picker_scope,
++                        picker_layout.PickerWidth);
++                }
 +                ImGuiColorEditFlags picker_flags_to_forward = ImGuiColorEditFlags_DataTypeMask_ | ImGuiColorEditFlags_PickerMask_ | ImGuiColorEditFlags_InputMask_ | ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_NoAlpha | ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoOptions;
                  ImGuiColorEditFlags picker_flags = (flags_untouched & picker_flags_to_forward) | ImGuiColorEditFlags_DisplayMask_ | ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_AlphaPreviewHalf;
 -                if (picker_layout.HideSidePreview)
@@ -1137,7 +1524,7 @@ index 22f74c7..a00bb1a 100644
          }
      }
  
-@@ -7652,7 +8048,9 @@
+@@ -7652,7 +8190,9 @@ struct UvsrRoundedTriangleSelector
      ImVec2 SharpVertices[3];
      ImVec2 Center;
      ImVector<ImVec2> Contour;
@@ -1148,7 +1535,7 @@ index 22f74c7..a00bb1a 100644
  };
  
  static float UvsrTriangleCross(const ImVec2& first, const ImVec2& second)
-@@ -7703,14 +8101,18 @@
+@@ -7703,14 +8243,18 @@ static void BuildUvsrRoundedTriangleSelector(
      const ImVec2& black_vertex,
      const ImVec2& white_vertex,
      float rounding,
@@ -1169,7 +1556,7 @@ index 22f74c7..a00bb1a 100644
  
      float minimum_edge_length = FLT_MAX;
      for (int vertex_index = 0; vertex_index < 3; ++vertex_index)
-@@ -7828,7 +8230,7 @@
+@@ -7828,7 +8372,7 @@ static bool MapUvsrRoundedTriangleToSv(
              selector.SharpVertices[2])
      };
      const float snap_distance_squared =
@@ -1178,7 +1565,7 @@ index 22f74c7..a00bb1a 100644
      if (ImLengthSqr(position - endpoint_positions[0]) <=
          snap_distance_squared)
      {
-@@ -7864,7 +8266,7 @@
+@@ -7864,7 +8408,7 @@ static bool MapUvsrRoundedTriangleToSv(
          if (rounded_boundary <= FLT_EPSILON ||
              (!clamp_to_selector &&
                  position_distance > rounded_boundary +
@@ -1187,12 +1574,10 @@ index 22f74c7..a00bb1a 100644
          {
              return false;
          }
-@@ -8034,6 +8436,49 @@
-         border_color,
-         ImDrawFlags_Closed,
+@@ -8036,6 +8580,49 @@ static void AddUvsrRoundedTriangleSelector(
          1.5f);
-+}
-+
+ }
+ 
 +static void RenderUvsrRoundedTriangleSnapPoints(
 +    ImDrawList* draw_list,
 +    const UvsrRoundedTriangleSelector& selector,
@@ -1234,10 +1619,12 @@ index 22f74c7..a00bb1a 100644
 +            segments,
 +            fringe);
 +    }
- }
- 
++}
++
  static void AddUvsrRoundedCheckerboard(
-@@ -8347,84 +8792,32 @@
+     ImDrawList* draw_list,
+     const ImRect& bounds,
+@@ -8347,84 +8934,31 @@ static void AddUvsrRoundedVerticalGradient(
      }
  }
  
@@ -1289,15 +1676,13 @@ index 22f74c7..a00bb1a 100644
 -}
 -
 -static void RenderUvsrRoundedMarkersForVerticalBar(ImDrawList* draw_list, ImVec2 pos, ImVec2 half_sz, float bar_w, float alpha)
--{
 +    const ImRect& bar_bounds,
 +    float marker_y,
++    float radius,
 +    float alpha)
-+{
+ {
 +    const float fringe = ImMax(1.0f, draw_list->_FringeScale);
-+    const float radius = ImMax(
-+        fringe,
-+        bar_bounds.GetWidth() * 0.5f - fringe * 2.0f);
++    radius = ImMax(fringe, radius);
 +    const ImVec2 center(bar_bounds.GetCenter().x, marker_y);
 +    const int segments = draw_list->_CalcCircleAutoSegmentCount(
 +        radius + fringe);
@@ -1346,7 +1731,7 @@ index 22f74c7..a00bb1a 100644
  }
  
  static void RenderArrowsForVerticalBar(ImDrawList* draw_list, ImVec2 pos, ImVec2 half_sz, float bar_w, float alpha)
-@@ -8484,13 +8877,31 @@
+@@ -8484,13 +9018,38 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
      const bool render_uvsr_wheel_with_bars =
          g.UvsrColorPickerPopupScopeStack.Size > 0 &&
          !g.UvsrStockWidgetRendering &&
@@ -1358,68 +1743,105 @@ index 22f74c7..a00bb1a 100644
      float square_sz = GetFrameHeight();
      float bars_width = square_sz; // Arbitrary smallish width of Hue/Alpha picking bars
      float sv_picker_size = ImMax(bars_width * 1, width - (alpha_bar ? 2 : 1) * (bars_width + style.ItemInnerSpacing.x)); // Saturation/Value picking box
+-    float bar0_pos_x = picker_pos.x + sv_picker_size + style.ItemInnerSpacing.x;
++    UvsrAuthoredColorPickerGeometry authored_geometry = {};
 +    if (render_uvsr_wheel_with_bars)
 +    {
-+        constexpr float authored_bar_ratio = 0.08f;
-+        const float authored_bar_count = alpha_bar ? 4.0f : 3.0f;
-+        sv_picker_size = ImMax(
-+            1.0f,
-+            (width - authored_bar_count * style.ItemInnerSpacing.x) /
-+                (1.0f + authored_bar_count * authored_bar_ratio));
-+        bars_width = sv_picker_size * authored_bar_ratio;
++        authored_geometry = ResolveUvsrAuthoredColorPickerGeometry(
++            width,
++            style.ItemInnerSpacing.x);
++        sv_picker_size = authored_geometry.SelectorSize;
++        bars_width = authored_geometry.BarWidth;
 +    }
-     float bar0_pos_x = picker_pos.x + sv_picker_size + style.ItemInnerSpacing.x;
++    float bar0_pos_x = render_uvsr_wheel_with_bars
++        ? picker_pos.x + authored_geometry.FirstBarOffset
++        : picker_pos.x + sv_picker_size + style.ItemInnerSpacing.x;
      float bar1_pos_x = bar0_pos_x + bars_width + style.ItemInnerSpacing.x;
 +    float bar2_pos_x = bar1_pos_x + bars_width + style.ItemInnerSpacing.x;
 +    float bar3_pos_x = bar2_pos_x + bars_width + style.ItemInnerSpacing.x;
-+    const float comparison_current_pos_x = alpha_bar ? bar2_pos_x : bar1_pos_x;
-+    const float comparison_original_pos_x = alpha_bar ? bar3_pos_x : bar2_pos_x;
-+    const float final_bar_pos_x = comparison_original_pos_x;
++    const float comparison_current_pos_x = render_uvsr_wheel_with_bars
++        ? bar2_pos_x
++        : (alpha_bar ? bar2_pos_x : bar1_pos_x);
++    const float comparison_original_pos_x = render_uvsr_wheel_with_bars
++        ? bar3_pos_x
++        : (alpha_bar ? bar3_pos_x : bar2_pos_x);
++    const float final_bar_pos_x = render_uvsr_wheel_with_bars
++        ? bar3_pos_x
++        : comparison_original_pos_x;
      float bars_triangles_half_sz = IM_TRUNC(bars_width * 0.20f);
  
      float backup_initial_col[4];
-@@ -8508,7 +8919,15 @@
+@@ -8508,7 +9067,25 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
          picker_pos.y + sv_picker_size * 0.5f);
  
      // Note: the triangle is displayed rotated with triangle_pa pointing to Hue, but most coordinates stays unrotated for logic.
 -    float triangle_r = wheel_r_inner - (int)(sv_picker_size * 0.027f);
-+    const float endpoint_marker_radius = render_uvsr_wheel_with_bars
++    const float compact_marker_radius = render_uvsr_wheel_with_bars
 +        ? ImMax(
 +            draw_list->_FringeScale * 1.5f,
 +            ImMin(wheel_thickness * 0.28f, style.FrameRounding * 0.75f))
 +        : 1.0f;
 +    float triangle_r = wheel_r_inner -
 +        (render_uvsr_wheel_with_bars
-+            ? endpoint_marker_radius + draw_list->_FringeScale * 3.0f
++            ? compact_marker_radius + draw_list->_FringeScale * 3.0f
 +            : (int)(sv_picker_size * 0.027f));
++    const float endpoint_snap_radius = render_uvsr_wheel_with_bars
++        ? ImMin(
++            triangle_r * 0.25f,
++            ImMax(
++                style.GrabMinSize * 0.50f,
++                wheel_thickness * 0.75f))
++        : 1.0f;
++    const float authored_marker_radius = render_uvsr_wheel_with_bars
++        ? ImLerp(compact_marker_radius, endpoint_snap_radius, 0.5f)
++        : 1.0f;
      ImVec2 triangle_pa = ImVec2(triangle_r, 0.0f); // Hue point.
      ImVec2 triangle_pb = ImVec2(triangle_r * -0.5f, triangle_r * -0.866025f); // Black point.
      ImVec2 triangle_pc = ImVec2(triangle_r * -0.5f, triangle_r * +0.866025f); // White point.
-@@ -8523,7 +8942,13 @@
+@@ -8523,39 +9100,9 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
              triangle_pb,
              triangle_pc,
              style.FrameRounding,
 -            ImMax(style.FrameRounding, draw_list->_FringeScale));
-+            ImMin(
-+                triangle_r * 0.25f,
-+                ImMax(
-+                    style.GrabMinSize * 0.50f,
-+                    wheel_thickness * 0.75f)),
-+            endpoint_marker_radius,
-+            ImMax(1.0f, draw_list->_FringeScale));
-         const ImGuiUvsrColorPickerPopupScope& picker_scope =
-             g.UvsrColorPickerPopupScopeStack.back();
-         const ImRect picker_content_bounds =
-@@ -8534,7 +8959,7 @@
-         ImRect picker_layer_bounds(
-             picker_pos - layer_offset,
-             ImVec2(
+-        const ImGuiUvsrColorPickerPopupScope& picker_scope =
+-            g.UvsrColorPickerPopupScopeStack.back();
+-        const ImRect picker_content_bounds =
+-            GetUvsrColorPickerPopupContentBounds(window);
+-        const ImVec2 layer_offset(
+-            ImMax(1.0f, style.ItemInnerSpacing.x * 0.5f),
+-            ImMax(1.0f, style.ItemInnerSpacing.y * 0.5f));
+-        ImRect picker_layer_bounds(
+-            picker_pos - layer_offset,
+-            ImVec2(
 -                window->WorkRect.Max.x,
-+                final_bar_pos_x + bars_width,
-                 picker_pos.y + sv_picker_size) + layer_offset);
-         picker_layer_bounds.ClipWith(picker_content_bounds);
-         if (picker_layer_bounds.GetWidth() > 1.0f &&
-@@ -8589,18 +9014,12 @@
+-                picker_pos.y + sv_picker_size) + layer_offset);
+-        picker_layer_bounds.ClipWith(picker_content_bounds);
+-        if (picker_layer_bounds.GetWidth() > 1.0f &&
+-            picker_layer_bounds.GetHeight() > 1.0f)
+-        {
+-            draw_list->PushClipRect(
+-                picker_content_bounds.Min,
+-                picker_content_bounds.Max,
+-                true);
+-            draw_list->AddRectFilled(
+-                picker_layer_bounds.Min,
+-                picker_layer_bounds.Max,
+-                ImGui::GetColorU32(picker_scope.PickerLayer),
+-                ImClamp(
+-                    style.FrameRounding,
+-                    0.0f,
+-                    ImMin(
+-                        picker_layer_bounds.GetWidth(),
+-                        picker_layer_bounds.GetHeight()) * 0.5f));
+-            draw_list->PopClipRect();
+-        }
++            endpoint_snap_radius,
++            authored_marker_radius,
++            ImMax(1.0f, draw_list->_FringeScale));
+     }
+ 
+     float H = col[0], S = col[1], V = col[2];
+@@ -8589,18 +9136,12 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
              ImVec2 initial_off = g.IO.MouseClickedPos[0] - wheel_center;
              ImVec2 current_off = g.IO.MousePos - wheel_center;
              float initial_dist2 = ImLengthSqr(initial_off);
@@ -1442,7 +1864,7 @@ index 22f74c7..a00bb1a 100644
                  float initial_saturation = 0.0f;
                  float initial_value = 0.0f;
                  const ImVec2 initial_selector_position = ImRotate(
-@@ -8626,18 +9045,75 @@
+@@ -8626,18 +9167,75 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
                          &V);
                      value_changed = value_changed_sv = true;
                  }
@@ -1528,7 +1950,7 @@ index 22f74c7..a00bb1a 100644
              }
          }
          if (!(flags & ImGuiColorEditFlags_NoOptions))
-@@ -8753,7 +9229,11 @@
+@@ -8753,9 +9351,16 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
      bool value_changed_fix_hue_wrap = false;
      if ((flags & ImGuiColorEditFlags_NoInputs) == 0)
      {
@@ -1539,22 +1961,43 @@ index 22f74c7..a00bb1a 100644
 +                : (alpha_bar ? bar1_pos_x : bar0_pos_x)) +
 +                bars_width - picker_pos.x);
          ImGuiColorEditFlags sub_flags_to_forward = ImGuiColorEditFlags_DataTypeMask_ | ImGuiColorEditFlags_InputMask_ | ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_AlphaMask_ | ImGuiColorEditFlags_NoOptions | ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoSmallPreview;
-         ImGuiColorEditFlags sub_flags = (flags & sub_flags_to_forward) | ImGuiColorEditFlags_NoPicker;
+-        ImGuiColorEditFlags sub_flags = (flags & sub_flags_to_forward) | ImGuiColorEditFlags_NoPicker;
++        ImGuiColorEditFlags sub_flags =
++            (flags & sub_flags_to_forward) |
++            ImGuiColorEditFlags_NoPicker |
++            ImGuiColorEditFlags_NoSmallPreview;
          if (flags & ImGuiColorEditFlags_DisplayRGB || (flags & ImGuiColorEditFlags_DisplayMask_) == 0)
-@@ -8821,6 +9301,12 @@
+             if (ColorEdit4("##rgb", col, sub_flags | ImGuiColorEditFlags_DisplayRGB))
+             {
+@@ -8821,6 +9426,14 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
      const bool render_uvsr_picker_cursors_last =
          g.UvsrColorPickerPopupScopeStack.Size > 0 &&
          !g.UvsrStockWidgetRendering;
-+    const float sv_cursor_rad = value_changed_sv
-+        ? wheel_thickness * 0.55f
-+        : wheel_thickness * 0.40f;
++    const float sv_cursor_rad = render_uvsr_wheel_with_bars
++        ? authored_marker_radius
++        : (value_changed_sv
++            ? wheel_thickness * 0.55f
++            : wheel_thickness * 0.40f);
 +    const float sv_cursor_outer_radius = sv_cursor_rad + 2.0f;
 +    const int sv_cursor_segments =
 +        draw_list->_CalcCircleAutoSegmentCount(sv_cursor_rad);
      ImVec2 sv_cursor_pos;
      ImVec2 hue_cursor_pos;
      float hue_cursor_rad = 0.0f;
-@@ -8885,6 +9371,15 @@
+@@ -8854,7 +9467,11 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+         float cos_hue_angle = ImCos(H * 2.0f * IM_PI);
+         float sin_hue_angle = ImSin(H * 2.0f * IM_PI);
+         hue_cursor_pos = ImVec2(wheel_center.x + cos_hue_angle * (wheel_r_inner + wheel_r_outer) * 0.5f, wheel_center.y + sin_hue_angle * (wheel_r_inner + wheel_r_outer) * 0.5f);
+-        hue_cursor_rad = value_changed_h ? wheel_thickness * 0.65f : wheel_thickness * 0.55f;
++        hue_cursor_rad = render_uvsr_wheel_with_bars
++            ? authored_marker_radius
++            : (value_changed_h
++                ? wheel_thickness * 0.65f
++                : wheel_thickness * 0.55f);
+         hue_cursor_segments = draw_list->_CalcCircleAutoSegmentCount(hue_cursor_rad); // Lock segment count so the +1 one matches others.
+         has_hue_cursor = true;
+         if (!render_uvsr_picker_cursors_last)
+@@ -8885,6 +9502,15 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
                  wheel_center,
                  cos_hue_angle,
                  sin_hue_angle);
@@ -1570,7 +2013,7 @@ index 22f74c7..a00bb1a 100644
          }
          else
          {
-@@ -8945,8 +9440,6 @@
+@@ -8945,8 +9571,6 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
      }
  
      // Render cursor/preview circle (clamp S/V within 0..1 range because floating points colors may lead HSV values to be out of range)
@@ -1579,10 +2022,35 @@ index 22f74c7..a00bb1a 100644
      if (!render_uvsr_picker_cursors_last)
      {
          draw_list->AddCircleFilled(sv_cursor_pos, sv_cursor_rad, user_col32_striped_of_alpha, sv_cursor_segments);
-@@ -8990,6 +9483,68 @@
+@@ -8989,6 +9613,92 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+             RenderArrowsForVerticalBar(draw_list, ImVec2(bar1_pos_x - 1, bar1_line_y), ImVec2(bars_triangles_half_sz + 1, bars_triangles_half_sz), bars_width + 2.0f, style.Alpha);
          }
      }
- 
++    else if (render_uvsr_wheel_with_bars)
++    {
++        const ImRect disabled_alpha_bounds(
++            ImVec2(bar1_pos_x, picker_pos.y),
++            ImVec2(
++                bar1_pos_x + bars_width,
++                picker_pos.y + sv_picker_size));
++        const ImU32 disabled_alpha_color =
++            IM_COL32(112, 112, 112, 255);
++        const UvsrVerticalGradientStop disabled_alpha_stops[2] = {
++            { 0.0f, disabled_alpha_color },
++            { 1.0f, disabled_alpha_color }
++        };
++        AddUvsrRoundedVerticalGradient(
++            draw_list,
++            disabled_alpha_bounds,
++            disabled_alpha_stops,
++            IM_ARRAYSIZE(disabled_alpha_stops),
++            uvsr_bar_rounding);
++        RenderFrameBorder(
++            disabled_alpha_bounds.Min,
++            disabled_alpha_bounds.Max,
++            uvsr_bar_rounding);
++    }
++
 +    if (render_uvsr_wheel_with_bars)
 +    {
 +        float reference_red = ref_col[0];
@@ -1644,11 +2112,10 @@ index 22f74c7..a00bb1a 100644
 +                uvsr_bar_rounding);
 +        }
 +    }
-+
+ 
      if (render_uvsr_picker_cursors_last)
      {
-         const ImU32 cursor_dark = IM_COL32(24, 24, 24, 255);
-@@ -9000,19 +9555,27 @@
+@@ -9000,19 +9710,29 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
              false);
          if (render_uvsr_wheel_with_bars)
          {
@@ -1665,6 +2132,7 @@ index 22f74c7..a00bb1a 100644
 -                bars_width + 2.0f,
 +                hue_bar_bounds,
 +                uvsr_hue_bar_line_y,
++                authored_marker_radius,
                  color_control_alpha);
              if (alpha_bar)
              {
@@ -1681,10 +2149,11 @@ index 22f74c7..a00bb1a 100644
 -                    bars_width + 2.0f,
 +                    alpha_bar_bounds,
 +                    uvsr_alpha_bar_line_y,
++                    authored_marker_radius,
                      color_control_alpha);
              }
          }
-@@ -9076,7 +9639,22 @@
+@@ -9076,7 +9796,22 @@ bool ImGui::ColorButton(const char* desc_id, const ImVec4& col, ImGuiColorEditFl
      float rounding = ImMin(g.Style.FrameRounding, grid_step * 0.5f);
      ImRect bb_inner = bb;
      float off = 0.0f;
@@ -1708,7 +2177,7 @@ index 22f74c7..a00bb1a 100644
      {
          off = -0.75f; // The border (using Col_FrameBg) tends to look off when color is near-opaque and rounding is enabled. This offset seemed like a good middle ground to reduce those artifacts.
          bb_inner.Expand(off);
-@@ -9100,7 +9678,8 @@
+@@ -9100,7 +9835,8 @@ bool ImGui::ColorButton(const char* desc_id, const ImVec4& col, ImGuiColorEditFl
              window->DrawList->AddRectFilled(bb_inner.Min, bb_inner.Max, GetColorU32(col_source), rounding);
      }
      RenderNavCursor(bb, id);

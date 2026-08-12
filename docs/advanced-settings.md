@@ -121,12 +121,13 @@ to retain the accepted blue appearance over the light enabled track and drives
 success, positive state, Material status, and authored toggle-on knobs. Every
 editor includes alpha.
 
-The default-closed **Advanced Accents** group provides one **Font Color** for
-all authored copy and **Primary Background Color** for the menu body and resting
-closed controls. Hover, active, and strengthened body opacity are derived from
-the resting background. Ultra-bright Primary Accent surfaces automatically use
-a transparent dark depth gradient. Slider tracks follow Primary Background
-Color so the Primary Accent knob remains distinct.
+**Font Color** for all authored copy and **Primary Background Color** for the
+menu body and resting closed controls follow the three accent rows directly;
+there is no separate Advanced Accents submenu. Hover, active, and strengthened
+body opacity are derived from the resting background. Ultra-bright Primary
+Accent surfaces automatically use a transparent dark depth gradient. Slider
+tracks follow Primary Background Color so the Primary Accent knob remains
+distinct.
 These interface choices, including Override Visual Maxes, are session-only and
 are restored by footer Reset or `/reset all`.
 
@@ -148,24 +149,28 @@ selection. A renderer-changing choice remains queued until that roll completes,
 the existing 250-millisecond settle expires, and one complete idle UI frame has
 been presented. Ogg retains immediate stock popup behavior.
 
-Interface and Material color pickers use a hue wheel with a finely tessellated
-rounded saturation/value triangle. Three equal-width vertical bars accompany
-RGB colors: interactive hue plus unlabeled Current and Original comparisons.
-RGBA colors add an equally sized interactive transparency bar between hue and
-the comparisons. Hollow circles mark only the interactive vertical bars, while
-compact triangle-tip snap zones keep exact hue, white, and black pointer
-reachable without crowding the wheel.
+Every first-party Interface, Material, flashlight, and scene-light color editor
+uses one shared policy and the same authored popup. It has a hue wheel with a
+finely tessellated rounded saturation/value triangle and four equal vertical
+lanes aligned exactly to the fourth component column: hue, alpha, Current, and
+Original. RGB controls keep the alpha lane in the same position but render it
+as disabled neutral gray without reading or writing alpha. The RGB, HSV, and
+hex rows omit their redundant preview squares and fill the available width;
+visible control labels are not repeated as popup headings. One intermediate
+hollow-circle size is shared by wheel, selector, endpoint, hue-bar, and
+alpha-bar markers, while larger invisible snap zones keep exact hue, white, and
+black pointer reachable.
 
-The popup uses the same full, opaque outer inset as Settings and Performance,
-then two translucent depth layers beneath its controls. The selector, bars,
-checkers, and comparison colors remain opaque at steady state so scene color
-cannot mix into the selected color. Pickers begin at the Settings content-right
-edge and sit flush with the current Settings bottom edge. Their body zooms and
-fades reversibly on open and close, while the rounded source pointer stays
-attached to the edited swatch. A Settings scroll requests the same animated
-close; disabling animations snaps to the endpoint. Generic and Ogg popups keep
-stock behavior. Repeated wheel input beyond the top or bottom of Settings stays
-locked to that endpoint rather than adding a second scroll-anchor correction.
+The popup base and two interior depth layers are translucent. Only a two-pixel
+outer rim and the pointer frame are opaque; the selector, bars, checker, and
+comparison colors remain opaque at steady state so scene color cannot mix into
+the selected color. Pickers begin at the Settings content-right edge and sit
+flush with the current Settings bottom edge. Their body zooms and fades
+reversibly on open and close, while the rounded source pointer stays attached to
+the edited swatch. A Settings scroll requests the same animated close;
+disabling animations snaps to the endpoint. Generic and Ogg popups keep stock
+behavior. Repeated wheel input beyond the top or bottom of Settings stays locked
+to that endpoint rather than adding a second scroll-anchor correction.
 
 ## General
 

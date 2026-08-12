@@ -93,12 +93,13 @@ it is unavailable under Ogg. Shared Secondary Accent defaults to
 `#4296FA4F` and drives error, negative, and toggle-off presentation. Shared
 Tertiary Accent defaults to the historically light-track-compensated
 `#1E3757FF` and drives success, positive, Material status, and toggle-on
-presentation. The default-closed Advanced Accents group owns one Font Color for
-all authored copy and one Primary Background Color for the menu body, resting
-closed controls, and slider tracks. Role-state colors derive from these resting
-RGBA values, and ultra-bright Primary Accent surfaces select dark transparent
-depth automatically. Slider knobs remain raised. Footer Reset and `/reset all`
-restore renderer defaults, the dynamic Adaptive Sync default, Amp, enabled
+presentation. Font Color and Primary Background Color follow the three accent
+rows directly; do not place them in a separate Advanced Accents submenu. Font
+Color owns all authored copy, while Primary Background Color owns the menu body,
+resting closed controls, and slider tracks. Role-state colors derive from these
+resting RGBA values, and ultra-bright Primary Accent surfaces select dark
+transparent depth automatically. Slider knobs remain raised. Footer Reset and
+`/reset all` restore renderer defaults, the dynamic Adaptive Sync default, Amp, enabled
 animations, disabled visual-maximum override, every Interface color, and the
 collapsed Complete Renderer view.
 They preserve camera, scene, active adapter, and shell navigation state.
@@ -119,17 +120,21 @@ silently reduces an accepted value. A 2-pixel gap separates its four inner
 fillets from the rounded track bubble.
 Authored ColorEdit component controls omit channel letter prefixes. Ogg retains
 stock slider rendering, centered value text, and stock ColorEdit labels.
-The scoped Amp Interface and Material pickers use a hue wheel around an onto,
-rounded saturation/value triangle. RGB controls use three equal-width vertical
-bars for interactive hue and unlabeled Current and Original comparisons; RGBA
-controls insert an equally sized interactive transparency bar. Exact hue,
-white, and black remain pointer reachable through forgiving but visually compact
-tip snap zones. The outer frame uses one full Regular spacing token and the
-opaque panel-inset surface, followed by two translucent depth layers; selector,
-bar, checker, and comparison colors remain opaque at steady state. Hollow
-circles mark only hue and transparency. The rounded source pointer is emitted
-after the popup-body transform so its tip stays attached throughout reversible
-zoom and fade. Unscoped and Ogg pickers stay stock.
+All first-party color controls route through one UVSR-owned RGB/RGBA wrapper.
+The scoped Amp picker uses a hue wheel around a rounded saturation/value
+triangle and four equal vertical lanes aligned to the fourth
+component column: hue, alpha, Current, and Original. RGB renders the alpha lane
+as noninteractive neutral gray without accessing a fourth component. Popup RGB,
+HSV, and hex rows force `NoSmallPreview`, fill the available width, and never
+repeat a visible control label as a heading. Exact hue, white, and black remain
+pointer reachable through forgiving snap zones. One midpoint hollow-circle
+radius feeds selector endpoints, the active selector, wheel cursor, hue bar,
+and alpha bar without active-state growth. The popup base and two depth layers
+are translucent; only the two-pixel outer rim and pointer frame use the opaque
+panel-inset role. Selector, bar, checker, and comparison colors remain opaque
+at steady state. The rounded source pointer is emitted after the popup-body
+transform so its tip stays attached throughout reversible zoom and fade.
+Unscoped and Ogg pickers stay stock.
 
 ## Mandatory New-Element Intake Checklist
 
@@ -191,7 +196,12 @@ Use the established UVSR helpers for drawer bodies, deferred combos, animated
 tree and toggle regions, reset icons, tooltips, and footer actions. Every
 dropdown uses ImGui's native integrated-arrow trigger presentation; deferred
 and immediate dropdowns differ only in when their mutation is applied. Do not
-paint a second background or custom arrow over the native trigger. Diffuse,
+size authored hover tooltips from their text or nesting depth. The shared
+authored tooltip path fixes every outer window to at most 20 font heights by
+4.75 font heights, bounded by 42 percent of viewport width and 25 percent of
+viewport height, with a 5-pixel inner inset and shared wrapping. Do not bypass
+that path for a UVSR-owned control. Do not paint a second background or custom
+arrow over the native trigger. Diffuse,
 Denoising, Aliasing, Debug, Sky Visibility, and Shadows effect groups retain
 independent animated disclosure even while enabled. Every retained
 setting has a concise hover explanation, and dropdown width must leave its
@@ -426,8 +436,9 @@ programmatic scroll target still owns its frame. Constrain authored color
 pickers to the lane beginning at the Settings content-right edge and make their
 bottom exactly flush with the current Settings-root bottom. Apply the picker
 local zoom/fade transform once, then the managed-stack appearance once. Give
-only that picker the opaque panel-inset outer surface plus two translucent
-interior layers, without changing generic popup colors. Append the rounded
+only that picker a translucent popup base plus two translucent interior layers,
+then confine the opaque panel-inset role to its two-pixel outer rim and pointer
+frame without changing generic popup colors. Append the rounded
 source pointer after transforming the body so its tip remains fixed on the
 origin swatch. An actual contiguous-frame Settings scroll requests the same
 retained close transition, blocks picker input during the transition, and
@@ -562,18 +573,21 @@ Use the exact candidate executable and a bundled scene. Exercise:
 - opening, closing, scrolling, and resetting Performance and Settings in Amp
   and Ogg, including all four independent collapse combinations,
   intermediate authored-motion frames, and rapid direction reversal;
-- editing and resetting every Interface accent, switching skins to verify Amp
-  Primary Accent and advanced-role retention, confirming the Ogg
-  unavailable state, verifying Secondary/Tertiary routing through CLI, toggles,
-  and Material, and checking alpha at zero, half, and full opacity;
+- editing and resetting every Interface color, switching skins to verify Amp
+  Primary Accent and the directly visible Font/Background roles, confirming
+  the Ogg unavailable state, verifying Secondary/Tertiary routing through CLI,
+  toggles, and Material, and checking alpha at zero, half, and full opacity;
 - opening representative RGB and RGBA Settings and Material color pickers at
-  ordinary and narrow viewport widths to confirm the three- or four-bar layout,
-  unlabeled Current and Original comparisons, hollow hue/transparency markers,
-  compact full-gamut snap zones, opaque color surfaces, and the two translucent
-  depth layers; verify the popup may cover the scrollbar but never Settings
-  content, stays flush with the Settings bottom, retains its source attachment,
-  zooms and fades reversibly, closes on Settings wheel or scrollbar movement,
-  and preserves picker-local wheel input;
+  ordinary and narrow viewport widths to confirm the shared four-lane layout,
+  disabled gray RGB alpha lane, absent sub-row preview squares and popup title,
+  fourth-column bar alignment, shared intermediate marker size, opaque color
+  assets, translucent base/depth layers, and two-pixel opaque rim; verify the
+  popup may cover the scrollbar but never Settings content, stays flush with the
+  Settings bottom, retains its source attachment, zooms and fades reversibly,
+  closes on Settings wheel or scrollbar movement, and preserves picker-local
+  wheel input;
+- hovering short, long, top-level, and nested control copy to confirm every
+  authored tooltip keeps the same outer dimensions and five-pixel text inset;
 - editing Amp Primary Accent to an ultra-bright translucent value over dark,
   bright, and detailed scenes to confirm transmission and automatic dark depth
   edges;
@@ -639,6 +653,14 @@ The UI handoff includes:
 - confirmation that this reference was updated when normative behavior changed.
 
 ## Reference Revision History
+
+- `2026-08-12.1`: Restored uniform authored tooltip dimensions; routed every
+  first-party color editor through one RGB/RGBA policy; made all authored
+  pickers use four fourth-column-aligned lanes with a disabled RGB alpha lane;
+  removed subordinate preview squares, popup headings, and Advanced Accents;
+  restored a translucent popup base with only a two-pixel opaque rim; and
+  unified visible marker radii at the midpoint between the compact and prior
+  snap-circle sizes.
 
 - `2026-08-11.4`: Forward-ported the accepted UI contract onto the UVSR Engine
   mainline and retained the canonical dropdown-roll target and lifecycle name

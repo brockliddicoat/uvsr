@@ -74,10 +74,15 @@ namespace
         bool hasVerticalScrollbar = false;
         ImVec2 windowSize;
         ImVec2 windowPosition;
+        ImVec2 windowPadding;
         ImVec2 contentSize;
         ImVec2 mousePosition;
         ImRect ownerRect;
         ImRect visualBounds{
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX)
+        };
+        ImRect textBounds{
             ImVec2(FLT_MAX, FLT_MAX),
             ImVec2(-FLT_MAX, -FLT_MAX)
         };
@@ -111,12 +116,17 @@ namespace
         bool requestedSurfaceApplied = false;
         bool requestedContentLayerApplied = false;
         bool requestedPickerLayerApplied = false;
+        bool opaqueOuterMarginVisible = false;
+        bool opaqueOuterRimComplete = false;
+        bool translucentSurfaceCoversCenter = false;
+        bool opaqueOuterMarginCoversCenter = false;
         bool activeDrawListReported = false;
         bool activeDrawListMatchesPopup = false;
         bool finalCursorLayeredAndClipped = false;
         bool hueBarRoundedAndVisible = false;
         bool alphaBarRoundedAndVisible = false;
         bool alphaBarInteriorCovered = false;
+        bool disabledAlphaBarVisible = false;
         bool alphaCheckerEdgeCoverageContinuous = false;
         bool hueHollowMarkerVisible = false;
         bool alphaHollowMarkerVisible = false;
@@ -128,7 +138,6 @@ namespace
         bool sourcePointerTipAttached = false;
         bool sourcePointerUsesCarvedFrame = false;
         bool authoredPopupUsesCarvedFrameOnly = false;
-        bool popupFrameHalfPixelAligned = false;
         bool contentFrameHalfPixelAligned = false;
         bool selectorMarkerCursorClearance = false;
         bool selectorEndpointExclusionObserved = false;
@@ -136,6 +145,7 @@ namespace
         bool sourceSwatchBorderless = false;
         bool hueBarInteriorOpaque = false;
         bool selectorVisualEndpointsFound = false;
+        int subordinatePreviewSquareCount = 0;
         int opaqueSelectorVertexCount = 0;
         float wheelThickness = 0.0f;
         float endpointSnapRadius = 0.0f;
@@ -147,12 +157,33 @@ namespace
         float requiredMarkerCursorGap = 0.0f;
         ImRect popupRect;
         ImRect popupInnerRect;
+        ImVec2 popupWindowPadding;
         ImRect viewportRect;
         ImRect sourceSwatchRect;
         ImRect hueBarRect;
         ImRect alphaBarRect;
         ImRect currentBarRect;
         ImRect originalBarRect;
+        ImRect observedHueBarRect{
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX)
+        };
+        ImRect observedOriginalBarRect{
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX)
+        };
+        ImRect fourthRgbInputRect{
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX)
+        };
+        ImRect fourthHsvInputRect{
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX)
+        };
+        ImRect hexInputRect{
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX)
+        };
         ImRect selectorRect;
         ImVec2 selectorCenter;
         ImVec2 selectorCursorCenter;
@@ -166,7 +197,11 @@ namespace
             ImVec2(FLT_MAX, FLT_MAX),
             ImVec2(-FLT_MAX, -FLT_MAX)
         };
-        ImRect pickerLayerRect{
+        ImRect expectedPickerLayerRect{
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX)
+        };
+        ImRect observedPickerLayerRect{
             ImVec2(FLT_MAX, FLT_MAX),
             ImVec2(-FLT_MAX, -FLT_MAX)
         };
@@ -252,6 +287,228 @@ namespace
     ImVec2 Scale(const ImVec2& value, float amount)
     {
         return ImVec2(value.x * amount, value.y * amount);
+    }
+
+    bool HasSolidColorTriangleCentroidInRect(
+        const ImDrawList& drawList,
+        ImU32 color,
+        const ImRect& bounds)
+    {
+        for (const ImDrawCmd& command : drawList.CmdBuffer)
+        {
+            if (command.UserCallback != nullptr)
+                continue;
+            for (unsigned int element = 0;
+                element + 2 < command.ElemCount;
+                element += 3)
+            {
+                const unsigned int indexOffset =
+                    command.IdxOffset + element;
+                const unsigned int firstIndex =
+                    command.VtxOffset + drawList.IdxBuffer[indexOffset];
+                const unsigned int secondIndex =
+                    command.VtxOffset + drawList.IdxBuffer[indexOffset + 1];
+                const unsigned int thirdIndex =
+                    command.VtxOffset + drawList.IdxBuffer[indexOffset + 2];
+                if (firstIndex >= (unsigned int)drawList.VtxBuffer.Size ||
+                    secondIndex >= (unsigned int)drawList.VtxBuffer.Size ||
+                    thirdIndex >= (unsigned int)drawList.VtxBuffer.Size)
+                {
+                    continue;
+                }
+                const ImDrawVert& first = drawList.VtxBuffer[firstIndex];
+                const ImDrawVert& second = drawList.VtxBuffer[secondIndex];
+                const ImDrawVert& third = drawList.VtxBuffer[thirdIndex];
+                if (first.col != color ||
+                    second.col != color ||
+                    third.col != color)
+                {
+                    continue;
+                }
+                const ImVec2 centroid(
+                    (first.pos.x + second.pos.x + third.pos.x) / 3.0f,
+                    (first.pos.y + second.pos.y + third.pos.y) / 3.0f);
+                if (bounds.Contains(centroid))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    ImRect GetSolidColorTriangleBounds(
+        const ImDrawList& drawList,
+        ImU32 color,
+        const ImRect& centroidBounds)
+    {
+        ImRect bounds(
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX));
+        for (const ImDrawCmd& command : drawList.CmdBuffer)
+        {
+            if (command.UserCallback != nullptr)
+                continue;
+            for (unsigned int element = 0;
+                element + 2 < command.ElemCount;
+                element += 3)
+            {
+                const unsigned int indexOffset =
+                    command.IdxOffset + element;
+                const unsigned int indices[3] = {
+                    command.VtxOffset + drawList.IdxBuffer[indexOffset],
+                    command.VtxOffset + drawList.IdxBuffer[indexOffset + 1],
+                    command.VtxOffset + drawList.IdxBuffer[indexOffset + 2]
+                };
+                if (indices[0] >= (unsigned int)drawList.VtxBuffer.Size ||
+                    indices[1] >= (unsigned int)drawList.VtxBuffer.Size ||
+                    indices[2] >= (unsigned int)drawList.VtxBuffer.Size)
+                {
+                    continue;
+                }
+                const ImDrawVert& first = drawList.VtxBuffer[indices[0]];
+                const ImDrawVert& second = drawList.VtxBuffer[indices[1]];
+                const ImDrawVert& third = drawList.VtxBuffer[indices[2]];
+                if (first.col != color ||
+                    second.col != color ||
+                    third.col != color)
+                {
+                    continue;
+                }
+                const ImVec2 centroid(
+                    (first.pos.x + second.pos.x + third.pos.x) / 3.0f,
+                    (first.pos.y + second.pos.y + third.pos.y) / 3.0f);
+                if (!centroidBounds.Contains(centroid))
+                    continue;
+                bounds.Add(first.pos);
+                bounds.Add(second.pos);
+                bounds.Add(third.pos);
+            }
+        }
+        return bounds;
+    }
+
+    ImVector<ImRect> CollectWhitePixelTriangleComponents(
+        const ImDrawList& drawList)
+    {
+        ImVector<ImRect> components;
+        const ImVec2 whitePixel = drawList._Data->TexUvWhitePixel;
+        ImRect current(
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX));
+        unsigned int previousIndices[3] = {};
+        bool hasCurrent = false;
+        const auto finalizeCurrent = [&]()
+        {
+            if (!current.IsInverted())
+                components.push_back(current);
+            current = ImRect(
+                ImVec2(FLT_MAX, FLT_MAX),
+                ImVec2(-FLT_MAX, -FLT_MAX));
+            hasCurrent = false;
+        };
+
+        for (const ImDrawCmd& command : drawList.CmdBuffer)
+        {
+            if (command.UserCallback != nullptr)
+                continue;
+            for (unsigned int element = 0;
+                element + 2 < command.ElemCount;
+                element += 3)
+            {
+                const unsigned int indexOffset =
+                    command.IdxOffset + element;
+                unsigned int indices[3] = {
+                    command.VtxOffset + drawList.IdxBuffer[indexOffset],
+                    command.VtxOffset + drawList.IdxBuffer[indexOffset + 1],
+                    command.VtxOffset + drawList.IdxBuffer[indexOffset + 2]
+                };
+                bool validWhitePixelTriangle = true;
+                for (unsigned int index : indices)
+                {
+                    if (index >= (unsigned int)drawList.VtxBuffer.Size)
+                    {
+                        validWhitePixelTriangle = false;
+                        break;
+                    }
+                    const ImDrawVert& vertex = drawList.VtxBuffer[index];
+                    validWhitePixelTriangle &=
+                        Near(vertex.uv.x, whitePixel.x) &&
+                        Near(vertex.uv.y, whitePixel.y);
+                }
+                if (!validWhitePixelTriangle)
+                {
+                    if (hasCurrent)
+                        finalizeCurrent();
+                    continue;
+                }
+
+                bool connected = !hasCurrent;
+                if (hasCurrent)
+                {
+                    for (unsigned int index : indices)
+                    {
+                        for (unsigned int previousIndex : previousIndices)
+                            connected |= index == previousIndex;
+                    }
+                }
+                if (hasCurrent && !connected)
+                    finalizeCurrent();
+                for (unsigned int index : indices)
+                    current.Add(drawList.VtxBuffer[index].pos);
+                for (int index = 0; index < 3; ++index)
+                    previousIndices[index] = indices[index];
+                hasCurrent = true;
+            }
+        }
+        if (hasCurrent)
+            finalizeCurrent();
+        return components;
+    }
+
+    ImRect FindRightmostInputFrame(
+        const ImVector<ImRect>& components,
+        const ImRect& rowBand,
+        float rowHeight,
+        float minimumWidth)
+    {
+        ImRect best(
+            ImVec2(FLT_MAX, FLT_MAX),
+            ImVec2(-FLT_MAX, -FLT_MAX));
+        for (const ImRect& candidate : components)
+        {
+            if (!rowBand.Contains(candidate.GetCenter()) ||
+                candidate.GetHeight() < rowHeight * 0.70f ||
+                candidate.GetHeight() > rowHeight * 1.35f ||
+                candidate.GetWidth() < minimumWidth)
+            {
+                continue;
+            }
+            if (best.IsInverted() || candidate.Max.x > best.Max.x)
+                best = candidate;
+        }
+        return best;
+    }
+
+    int CountPreviewSizedFrames(
+        const ImVector<ImRect>& components,
+        const ImRect& rowBand,
+        float rowHeight,
+        float fourthColumnStart)
+    {
+        int count = 0;
+        for (const ImRect& candidate : components)
+        {
+            if (!rowBand.Contains(candidate.GetCenter()) ||
+                candidate.GetCenter().x < fourthColumnStart ||
+                candidate.GetHeight() < rowHeight * 0.70f ||
+                candidate.GetHeight() > rowHeight * 1.35f ||
+                candidate.GetWidth() < rowHeight * 0.70f ||
+                candidate.GetWidth() > rowHeight * 1.35f)
+            {
+                continue;
+            }
+            ++count;
+        }
+        return count;
     }
 
     float Cross(const ImVec2& first, const ImVec2& second)
@@ -578,43 +835,6 @@ namespace
                 return false;
         }
         return true;
-    }
-
-    bool HasHollowCircleMarker(
-        const ImDrawList& drawList,
-        const ImRect& bar,
-        float markerY)
-    {
-        const ImVec2 center(bar.GetCenter().x, markerY);
-        const float maximumDistance = bar.GetWidth();
-        const float minimumDistance = ImMax(1.0f, bar.GetWidth() * 0.12f);
-        int darkVertices = 0;
-        int whiteVertices = 0;
-        bool centerFilledByMarker = false;
-        for (const ImDrawVert& vertex : drawList.VtxBuffer)
-        {
-            const int red =
-                (vertex.col >> IM_COL32_R_SHIFT) & 0xff;
-            const int green =
-                (vertex.col >> IM_COL32_G_SHIFT) & 0xff;
-            const int blue =
-                (vertex.col >> IM_COL32_B_SHIFT) & 0xff;
-            const bool dark = red == 24 && green == 24 && blue == 24;
-            const bool white = red == 255 && green == 255 && blue == 255;
-            if (!dark && !white)
-                continue;
-            const float distance = ImSqrt(ImLengthSqr(
-                Subtract(vertex.pos, center)));
-            if (distance <= 0.5f)
-                centerFilledByMarker = true;
-            if (distance < minimumDistance || distance > maximumDistance)
-                continue;
-            darkVertices += dark ? 1 : 0;
-            whiteVertices += white ? 1 : 0;
-        }
-        return !centerFilledByMarker &&
-            darkVertices >= 6 &&
-            whiteVertices >= 6;
     }
 
     bool HasHollowCircleMarkerAt(
@@ -1144,15 +1364,21 @@ namespace
     TooltipObservation SubmitTooltipFrame(
         bool stockWidgetRendering,
         bool submitTooltip = true,
-        bool motionEnabled = true)
+        bool motionEnabled = true,
+        const char* tooltipText = nullptr,
+        bool nestedZeroWindowPadding = false)
     {
         static constexpr const char* TooltipText =
             "UVSR tooltip follows the mouse with stock typography.";
+        if (tooltipText == nullptr)
+            tooltipText = TooltipText;
 
         ImGui::SetUvsrUiBehavior(
             motionEnabled,
             stockWidgetRendering,
             false);
+        ImGui::SetUvsrAuthoredWindowPadding(
+            ImGui::GetStyle().WindowPadding);
         ImGui::NewFrame();
         ImGui::SetNextWindowPos(
             ImVec2(30.0f, 210.0f),
@@ -1167,12 +1393,20 @@ namespace
                 ImGuiWindowFlags_NoMove |
                 ImGuiWindowFlags_NoSavedSettings |
                 ImGuiWindowFlags_NoScrollbar);
+        if (nestedZeroWindowPadding)
+        {
+            ImGui::PushStyleVar(
+                ImGuiStyleVar_WindowPadding,
+                ImVec2(0.0f, 0.0f));
+        }
         ImGui::Button("Tooltip Owner", ImVec2(150.0f, 0.0f));
         const ImRect ownerRect(
             ImGui::GetItemRectMin(),
             ImGui::GetItemRectMax());
         if (submitTooltip)
-            ImGui::SetItemTooltip("%s", TooltipText);
+            ImGui::SetItemTooltip("%s", tooltipText);
+        if (nestedZeroWindowPadding)
+            ImGui::PopStyleVar();
 
         ImGui::End();
         ImGui::Render();
@@ -1194,13 +1428,21 @@ namespace
             observation.hasVerticalScrollbar = tooltipWindow->ScrollbarY;
             observation.windowSize = tooltipWindow->SizeFull;
             observation.windowPosition = tooltipWindow->Pos;
+            observation.windowPadding = tooltipWindow->WindowPadding;
             observation.contentSize = tooltipWindow->ContentSize;
+            const ImVec2 whitePixel =
+                tooltipWindow->DrawList->_Data->TexUvWhitePixel;
             for (const ImDrawVert& vertex :
                 tooltipWindow->DrawList->VtxBuffer)
             {
                 if (Alpha(vertex.col) <= 0.0f)
                     continue;
                 observation.visualBounds.Add(vertex.pos);
+                if (!Near(vertex.uv.x, whitePixel.x) ||
+                    !Near(vertex.uv.y, whitePixel.y))
+                {
+                    observation.textBounds.Add(vertex.pos);
+                }
                 observation.maximumVertexAlpha = ImMax(
                     observation.maximumVertexAlpha,
                     Alpha(vertex.col));
@@ -1608,20 +1850,25 @@ namespace
     }
 
     ColorPickerObservation SubmitColorPickerFrame(
-        float (&color)[4],
+        float* color,
         bool forceOpen,
         float displayWidth = 480.0f,
         float ownerWidth = 270.0f,
         float maximumBottom = 330.0f,
         bool scoped = true,
         bool closeActivePicker = false,
-        ImVec4 popupBackground =
+        ImVec4 popupSurface =
             ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+        ImVec4 outerMarginLayer =
+            ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
         ImVec4 contentLayer =
             ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
         ImVec4 pickerLayer =
             ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
-        bool includeAlpha = true)
+        bool includeAlpha = true,
+        const char* label = "##InterfacePrimaryColor",
+        bool nestedZeroWindowPadding = false,
+        float callerStyleAlpha = 1.0f)
     {
         ColorPickerObservation observation;
         observation.maximumBottom = maximumBottom;
@@ -1657,11 +1904,12 @@ namespace
             ImGui::PushUvsrColorPickerPopupContentRight(
                 observation.contentRight,
                 maximumBottom,
-                popupBackground,
+                popupSurface,
+                outerMarginLayer,
                 contentLayer,
                 pickerLayer);
         }
-        ImGui::PushID("##InterfacePrimaryColor");
+        ImGui::PushID(label);
         observation.popupId = ImGui::GetID("picker");
         if (forceOpen)
         {
@@ -1670,6 +1918,27 @@ namespace
                 ImGuiPopupFlags_None);
         }
         ImGui::PopID();
+        int nestedStyleVarCount = 0;
+        if (nestedZeroWindowPadding)
+        {
+            ImGui::PushStyleVar(
+                ImGuiStyleVar_WindowPadding,
+                ImVec2(0.0f, 0.0f));
+            ++nestedStyleVarCount;
+        }
+        if (callerStyleAlpha < 1.0f)
+        {
+            ImGui::PushStyleVar(
+                ImGuiStyleVar_Alpha,
+                ImClamp(callerStyleAlpha, 0.0f, 1.0f));
+            ++nestedStyleVarCount;
+        }
+        const ImU32 submittedSurfaceColor =
+            ImGui::GetColorU32(popupSurface);
+        const ImU32 submittedOuterMarginColor =
+            ImGui::GetColorU32(outerMarginLayer);
+        const ImU32 submittedContentLayerColor =
+            ImGui::GetColorU32(contentLayer);
         ImGui::SetNextItemWidth(-FLT_MIN);
         const int firstColorEditVertex =
             ownerWindow->DrawList->VtxBuffer.Size;
@@ -1696,17 +1965,19 @@ namespace
         if (includeAlpha)
         {
             ImGui::ColorEdit4(
-                "##InterfacePrimaryColor",
+                label,
                 color,
                 pickerFlags);
         }
         else
         {
             ImGui::ColorEdit3(
-                "##InterfacePrimaryColor",
+                label,
                 color,
                 pickerFlags);
         }
+        if (nestedStyleVarCount > 0)
+            ImGui::PopStyleVar(nestedStyleVarCount);
         const int lastColorEditVertex =
             ownerWindow->DrawList->VtxBuffer.Size;
         const ImGuiUvsrColorPickerPopupTransition& transition =
@@ -1760,47 +2031,49 @@ namespace
                     popupWindow->Pos.x + popupWindow->Size.x,
                     popupWindow->Pos.y + popupWindow->Size.y));
             observation.popupInnerRect = popupWindow->InnerRect;
+            observation.popupWindowPadding = popupWindow->WindowPadding;
             const ImGuiStyle& style = ImGui::GetStyle();
             const float pickerWidth = ImMax(
                 1.0f,
                 popupWindow->Size.x - style.WindowPadding.x * 2.0f);
-            constexpr float AuthoredBarRatio = 0.08f;
-            const int authoredBarCount = includeAlpha ? 4 : 3;
-            observation.barCount = authoredBarCount;
+            const float innerSpacing = style.ItemInnerSpacing.x;
+            const float itemsWidth = ImMax(
+                pickerWidth - innerSpacing * 3.0f,
+                4.0f);
+            const float fourthColumnOffset = ImClamp(
+                IM_TRUNC(itemsWidth * 0.75f) + innerSpacing * 3.0f,
+                innerSpacing,
+                pickerWidth);
+            const float fourthColumnWidth = ImMax(
+                pickerWidth - fourthColumnOffset,
+                4.0f);
+            const float barWidth = ImMax(
+                (fourthColumnWidth - innerSpacing * 3.0f) / 4.0f,
+                1.0f);
             const float saturationValueSize = ImMax(
-                1.0f,
-                (pickerWidth -
-                    float(authoredBarCount) * style.ItemInnerSpacing.x) /
-                    (1.0f + float(authoredBarCount) * AuthoredBarRatio));
-            const float barWidth =
-                saturationValueSize * AuthoredBarRatio;
+                fourthColumnOffset - innerSpacing,
+                1.0f);
+            observation.barCount = 4;
             const ImVec2 pickerPosition =
                 popupWindow->DC.CursorStartPos;
             const float hueBarX =
-                pickerPosition.x + saturationValueSize +
-                    style.ItemInnerSpacing.x;
+                pickerPosition.x + fourthColumnOffset;
             const float alphaBarX =
-                pickerPosition.x + saturationValueSize +
-                barWidth +
-                    2.0f * style.ItemInnerSpacing.x;
-            const float currentBarX = includeAlpha
-                ? alphaBarX + barWidth + style.ItemInnerSpacing.x
-                : alphaBarX;
+                hueBarX + barWidth + innerSpacing;
+            const float currentBarX =
+                alphaBarX + barWidth + innerSpacing;
             const float originalBarX =
-                currentBarX + barWidth + style.ItemInnerSpacing.x;
+                currentBarX + barWidth + innerSpacing;
             observation.hueBarRect = ImRect(
                 ImVec2(hueBarX, pickerPosition.y),
                 ImVec2(
                     hueBarX + barWidth,
                     pickerPosition.y + saturationValueSize));
-            if (includeAlpha)
-            {
-                observation.alphaBarRect = ImRect(
-                    ImVec2(alphaBarX, pickerPosition.y),
-                    ImVec2(
-                        alphaBarX + barWidth,
-                        pickerPosition.y + saturationValueSize));
-            }
+            observation.alphaBarRect = ImRect(
+                ImVec2(alphaBarX, pickerPosition.y),
+                ImVec2(
+                    alphaBarX + barWidth,
+                    pickerPosition.y + saturationValueSize));
             observation.currentBarRect = ImRect(
                 ImVec2(currentBarX, pickerPosition.y),
                 ImVec2(
@@ -1821,20 +2094,24 @@ namespace
                 popupWindow->DrawList->_FringeScale;
             const float wheelInnerRadius =
                 wheelOuterRadius - wheelThickness;
-            observation.endpointMarkerRadius = ImMax(
+            const float compactMarkerRadius = ImMax(
                 popupWindow->DrawList->_FringeScale * 1.5f,
                 ImMin(
                     wheelThickness * 0.28f,
                     style.FrameRounding * 0.75f));
             const float triangleRadius =
                 wheelInnerRadius -
-                observation.endpointMarkerRadius -
+                compactMarkerRadius -
                 popupWindow->DrawList->_FringeScale * 3.0f;
             observation.endpointSnapRadius = ImMin(
                 triangleRadius * 0.25f,
                 ImMax(
                     style.GrabMinSize * 0.50f,
                     wheelThickness * 0.75f));
+            observation.endpointMarkerRadius = ImLerp(
+                compactMarkerRadius,
+                observation.endpointSnapRadius,
+                0.5f);
             const ImVec2 wheelCenter(
                 pickerPosition.x + saturationValueSize * 0.5f,
                 pickerPosition.y + saturationValueSize * 0.5f);
@@ -1987,10 +2264,13 @@ namespace
             const float hueMarkerY = IM_ROUND(
                 pickerPosition.y + hue * saturationValueSize);
             observation.hueHollowMarkerVisible =
-                HasHollowCircleMarker(
+                HasHollowCircleMarkerAt(
                     *popupWindow->DrawList,
-                    observation.hueBarRect,
-                    hueMarkerY);
+                    ImVec2(
+                        observation.hueBarRect.GetCenter().x,
+                        hueMarkerY),
+                    observation.endpointMarkerRadius,
+                    observation.drawListFringe);
             if (includeAlpha)
             {
                 const float alphaMarkerY = IM_ROUND(
@@ -1998,10 +2278,13 @@ namespace
                         (1.0f - ImSaturate(color[3])) *
                             saturationValueSize);
                 observation.alphaHollowMarkerVisible =
-                    HasHollowCircleMarker(
+                    HasHollowCircleMarkerAt(
                         *popupWindow->DrawList,
-                        observation.alphaBarRect,
-                        alphaMarkerY);
+                        ImVec2(
+                            observation.alphaBarRect.GetCenter().x,
+                            alphaMarkerY),
+                        observation.endpointMarkerRadius,
+                        observation.drawListFringe);
             }
             observation.currentBarVisible =
                 HasComparisonBarCoverage(
@@ -2016,33 +2299,86 @@ namespace
                     observation.originalBarRect.Max.x - 1.0f;
             observation.authoredPopupUsesCarvedFrameOnly =
                 Near(popupWindow->WindowBorderSize, 0.0f);
-            const ImU32 expectedSurface = ImGui::GetColorU32(
-                popupBackground);
+            const ImU32 expectedSurface = submittedSurfaceColor;
             const ImVec4 expectedSurfaceColor =
                 ImGui::ColorConvertU32ToFloat4(expectedSurface);
-            const ImU32 expectedContentLayer = ImGui::GetColorU32(
-                contentLayer);
-            const ImU32 expectedPickerLayer = ImGui::GetColorU32(
-                pickerLayer);
-            const ImVec4 expectedPickerLayerColor =
-                ImGui::ColorConvertU32ToFloat4(expectedPickerLayer);
+            const ImU32 expectedContentLayer =
+                submittedContentLayerColor;
+            const ImU32 expectedOuterMargin =
+                submittedOuterMarginColor;
+            const ImU32 expectedPickerLayer =
+                ImGui::ColorConvertFloat4ToU32(pickerLayer);
             const ImVec2 expectedPickerLayerOffset(
                 ImMax(1.0f, style.ItemInnerSpacing.x * 0.5f),
                 ImMax(1.0f, style.ItemInnerSpacing.y * 0.5f));
-            observation.pickerLayerRect = ImRect(
+            observation.expectedPickerLayerRect = ImRect(
                 Subtract(pickerPosition, expectedPickerLayerOffset),
                 Add(ImVec2(
                     observation.originalBarRect.Max.x,
                     pickerPosition.y + saturationValueSize),
                     expectedPickerLayerOffset));
-            observation.pickerLayerRect.ClipWith(ImRect(
+            observation.expectedPickerLayerRect.ClipWith(ImRect(
                 Add(popupWindow->InnerRect.Min, style.WindowPadding),
                 Subtract(popupWindow->InnerRect.Max, style.WindowPadding)));
-            observation.requestedPickerLayerApplied =
-                authoredPicker &&
-                expectedPickerLayerColor.w > 0.0f &&
-                observation.pickerLayerRect.GetWidth() > 1.0f &&
-                observation.pickerLayerRect.GetHeight() > 1.0f;
+            const ImRect expectedContentLayerBounds(
+                Add(popupWindow->InnerRect.Min, style.WindowPadding),
+                Subtract(popupWindow->InnerRect.Max, style.WindowPadding));
+            observation.requestedPickerLayerApplied = false;
+            const ImVec4 originalColor = GImGui->ColorPickerRef;
+            const ImU32 expectedOriginalBarColor =
+                ImGui::ColorConvertFloat4ToU32(ImVec4(
+                    originalColor.x,
+                    originalColor.y,
+                    originalColor.z,
+                    includeAlpha ? ImSaturate(originalColor.w) : 1.0f));
+            const ImU32 hueStopColors[] = {
+                IM_COL32(255, 0, 0, 255),
+                IM_COL32(255, 255, 0, 255),
+                IM_COL32(0, 255, 0, 255),
+                IM_COL32(0, 255, 255, 255),
+                IM_COL32(0, 0, 255, 255),
+                IM_COL32(255, 0, 255, 255)
+            };
+            const float inputRowHeight = ImGui::GetFrameHeight();
+            const float firstInputRowY =
+                pickerPosition.y + saturationValueSize + style.ItemSpacing.y;
+            const float inputRowPitch =
+                inputRowHeight + style.ItemSpacing.y;
+            const ImRect rgbInputBand(
+                ImVec2(popupWindow->InnerRect.Min.x, firstInputRowY - 0.5f),
+                ImVec2(
+                    popupWindow->InnerRect.Max.x,
+                    firstInputRowY + inputRowHeight + 0.5f));
+            const ImRect hsvInputBand(
+                ImVec2(
+                    popupWindow->InnerRect.Min.x,
+                    firstInputRowY + inputRowPitch - 0.5f),
+                ImVec2(
+                    popupWindow->InnerRect.Max.x,
+                    firstInputRowY + inputRowPitch +
+                        inputRowHeight + 0.5f));
+            const ImRect hexInputBand(
+                ImVec2(
+                    popupWindow->InnerRect.Min.x,
+                    firstInputRowY + inputRowPitch * 2.0f - 0.5f),
+                ImVec2(
+                    popupWindow->InnerRect.Max.x,
+                    firstInputRowY + inputRowPitch * 2.0f +
+                        inputRowHeight + 0.5f));
+            const ImRect hueBarSearchRect(
+                Subtract(
+                    observation.hueBarRect.Min,
+                    ImVec2(style.ItemInnerSpacing.x, 0.5f)),
+                Add(
+                    observation.hueBarRect.Max,
+                    ImVec2(style.ItemInnerSpacing.x, 0.5f)));
+            const ImRect originalBarSearchRect(
+                Subtract(
+                    observation.originalBarRect.Min,
+                    ImVec2(style.ItemInnerSpacing.x, 0.5f)),
+                Add(
+                    observation.originalBarRect.Max,
+                    ImVec2(style.ItemInnerSpacing.x, 0.5f)));
             ImVec4 saturatedHueColor(0.0f, 0.0f, 0.0f, 1.0f);
             ImGui::ColorConvertHSVtoRGB(
                 hue,
@@ -2084,17 +2420,39 @@ namespace
                     observation.visualBounds.Add(vertex.pos);
                 observation.requestedSurfaceApplied |=
                     vertex.col == expectedSurface;
+                observation.opaqueOuterMarginVisible |=
+                    vertex.col == expectedOuterMargin &&
+                    observation.popupRect.Contains(vertex.pos) &&
+                    (vertex.pos.x <= observation.popupRect.Min.x + 2.5f ||
+                        vertex.pos.x >= observation.popupRect.Max.x - 2.5f ||
+                        vertex.pos.y <= observation.popupRect.Min.y + 2.5f ||
+                        vertex.pos.y >= observation.popupRect.Max.y - 2.5f);
                 if (vertex.col == expectedContentLayer)
                 {
                     observation.requestedContentLayerApplied = true;
-                    observation.contentLayerRect.Add(vertex.pos);
+                    if (expectedContentLayerBounds.Contains(vertex.pos))
+                        observation.contentLayerRect.Add(vertex.pos);
                 }
-                const ImVec4 vertexColor =
-                    ImGui::ColorConvertU32ToFloat4(vertex.col);
-                if (authoredPicker && vertex.col == expectedPickerLayer)
+                if (hueBarSearchRect.Contains(vertex.pos))
                 {
-                    observation.requestedPickerLayerApplied = true;
+                    for (ImU32 hueStopColor : hueStopColors)
+                    {
+                        if (vertex.col == hueStopColor)
+                        {
+                            observation.observedHueBarRect.Add(vertex.pos);
+                            break;
+                        }
+                    }
                 }
+                if (vertex.col == expectedOriginalBarColor &&
+                    originalBarSearchRect.Contains(vertex.pos))
+                {
+                    observation.observedOriginalBarRect.Add(vertex.pos);
+                }
+                observation.disabledAlphaBarVisible |=
+                    !includeAlpha &&
+                    observation.alphaBarRect.Contains(vertex.pos) &&
+                    vertex.col == IM_COL32(112, 112, 112, 255);
                 if (vertexAlpha >= 0.999f)
                 {
                     if (ImLengthSqr(Subtract(vertex.pos, wheelCenter)) <
@@ -2152,11 +2510,12 @@ namespace
                             1.0f / 255.0f &&
                         std::abs(pointerColor.z - expectedSurfaceColor.z) <=
                             1.0f / 255.0f;
-                    if (!matchesSurfaceRgb &&
-                        pointerColor.w >= 0.06f &&
-                        pointerColor.w <= 0.145f)
+                    if (vertex.col == expectedOuterMargin)
                     {
                         observation.sourcePointerUsesCarvedFrame = true;
+                        observation.sourcePointerFrameMaximumAlpha = ImMax(
+                            observation.sourcePointerFrameMaximumAlpha,
+                            pointerColor.w);
                     }
                     if (!matchesSurfaceRgb)
                     {
@@ -2166,13 +2525,159 @@ namespace
                     }
                 }
             }
+            observation.observedPickerLayerRect =
+                GetSolidColorTriangleBounds(
+                    *popupWindow->DrawList,
+                    expectedPickerLayer,
+                    observation.expectedPickerLayerRect);
+            constexpr float observedLayerEdgeTolerance = 1.5f;
+            observation.requestedPickerLayerApplied =
+                authoredPicker &&
+                !observation.observedPickerLayerRect.IsInverted() &&
+                std::abs(
+                    observation.observedPickerLayerRect.Min.x -
+                        observation.expectedPickerLayerRect.Min.x) <=
+                    observedLayerEdgeTolerance &&
+                std::abs(
+                    observation.observedPickerLayerRect.Min.y -
+                        observation.expectedPickerLayerRect.Min.y) <=
+                    observedLayerEdgeTolerance &&
+                std::abs(
+                    observation.observedPickerLayerRect.Max.x -
+                        observation.expectedPickerLayerRect.Max.x) <=
+                    observedLayerEdgeTolerance &&
+                std::abs(
+                    observation.observedPickerLayerRect.Max.y -
+                        observation.expectedPickerLayerRect.Max.y) <=
+                    observedLayerEdgeTolerance;
+            const ImVector<ImRect> whitePixelComponents =
+                CollectWhitePixelTriangleComponents(*popupWindow->DrawList);
+            observation.fourthRgbInputRect = FindRightmostInputFrame(
+                whitePixelComponents,
+                rgbInputBand,
+                inputRowHeight,
+                inputRowHeight * 1.5f);
+            observation.fourthHsvInputRect = FindRightmostInputFrame(
+                whitePixelComponents,
+                hsvInputBand,
+                inputRowHeight,
+                inputRowHeight * 1.5f);
+            observation.hexInputRect = FindRightmostInputFrame(
+                whitePixelComponents,
+                hexInputBand,
+                inputRowHeight,
+                inputRowHeight * 1.5f);
+            observation.subordinatePreviewSquareCount =
+                CountPreviewSizedFrames(
+                    whitePixelComponents,
+                    rgbInputBand,
+                    inputRowHeight,
+                    observation.hueBarRect.Min.x) +
+                CountPreviewSizedFrames(
+                    whitePixelComponents,
+                    hsvInputBand,
+                    inputRowHeight,
+                    observation.hueBarRect.Min.x) +
+                CountPreviewSizedFrames(
+                    whitePixelComponents,
+                    hexInputBand,
+                    inputRowHeight,
+                    observation.hueBarRect.Min.x);
+            const float centerInset = ImMax(
+                3.0f,
+                style.PopupRounding + 3.0f);
+            const ImRect popupCenter(
+                Add(
+                    observation.popupRect.Min,
+                    ImVec2(centerInset, centerInset)),
+                Subtract(
+                    observation.popupRect.Max,
+                    ImVec2(centerInset, centerInset)));
+            if (!popupCenter.IsInverted())
+            {
+                observation.translucentSurfaceCoversCenter =
+                    HasSolidColorTriangleCentroidInRect(
+                        *popupWindow->DrawList,
+                        expectedSurface,
+                        popupCenter);
+            }
+            constexpr float opaqueRimInteriorInset = 2.5f;
+            const ImRect rimInterior(
+                Add(
+                    observation.popupRect.Min,
+                    ImVec2(
+                        opaqueRimInteriorInset,
+                        opaqueRimInteriorInset)),
+                Subtract(
+                    observation.popupRect.Max,
+                    ImVec2(
+                        opaqueRimInteriorInset,
+                        opaqueRimInteriorInset)));
+            if (!rimInterior.IsInverted())
+            {
+                observation.opaqueOuterMarginCoversCenter =
+                    HasSolidColorTriangleCentroidInRect(
+                        *popupWindow->DrawList,
+                        expectedOuterMargin,
+                        rimInterior);
+            }
+            const float rimStraightInset = ImMax(
+                opaqueRimInteriorInset,
+                style.PopupRounding + 1.0f);
+            const ImRect topRimBand(
+                ImVec2(
+                    observation.popupRect.Min.x + rimStraightInset,
+                    observation.popupRect.Min.y),
+                ImVec2(
+                    observation.popupRect.Max.x - rimStraightInset,
+                    observation.popupRect.Min.y +
+                        opaqueRimInteriorInset));
+            const ImRect bottomRimBand(
+                ImVec2(
+                    observation.popupRect.Min.x + rimStraightInset,
+                    observation.popupRect.Max.y -
+                        opaqueRimInteriorInset),
+                ImVec2(
+                    observation.popupRect.Max.x - rimStraightInset,
+                    observation.popupRect.Max.y));
+            const ImRect leftRimBand(
+                ImVec2(
+                    observation.popupRect.Min.x,
+                    observation.popupRect.Min.y + rimStraightInset),
+                ImVec2(
+                    observation.popupRect.Min.x +
+                        opaqueRimInteriorInset,
+                    observation.popupRect.Max.y - rimStraightInset));
+            const ImRect rightRimBand(
+                ImVec2(
+                    observation.popupRect.Max.x -
+                        opaqueRimInteriorInset,
+                    observation.popupRect.Min.y + rimStraightInset),
+                ImVec2(
+                    observation.popupRect.Max.x,
+                    observation.popupRect.Max.y - rimStraightInset));
+            observation.opaqueOuterRimComplete =
+                authoredPicker &&
+                HasSolidColorTriangleCentroidInRect(
+                    *popupWindow->DrawList,
+                    expectedOuterMargin,
+                    topRimBand) &&
+                HasSolidColorTriangleCentroidInRect(
+                    *popupWindow->DrawList,
+                    expectedOuterMargin,
+                    bottomRimBand) &&
+                HasSolidColorTriangleCentroidInRect(
+                    *popupWindow->DrawList,
+                    expectedOuterMargin,
+                    leftRimBand) &&
+                HasSolidColorTriangleCentroidInRect(
+                    *popupWindow->DrawList,
+                    expectedOuterMargin,
+                    rightRimBand);
             observation.hueBarRoundedAndVisible =
                 authoredPicker &&
                 observation.hueBarInteriorOpaque &&
-                observation.hueBarRect.GetWidth() > 0.0f &&
-                std::abs(
-                    observation.hueBarRect.GetWidth() -
-                        observation.wheelThickness) <= 0.01f;
+                observation.hueBarRect.GetWidth() > 0.0f;
             observation.sourcePointerVisible =
                 !sourcePointerBounds.IsInverted();
             observation.sourcePointerTipAttached =
@@ -2199,8 +2704,7 @@ namespace
                 observation.endpointMarkerRadius +
                     observation.drawListFringe * 2.0f;
             const float cursorOuterRadius =
-                observation.wheelThickness * 0.40f +
-                    observation.drawListFringe * 2.0f;
+                observation.endpointMarkerRadius + 2.0f;
             observation.requiredMarkerCursorGap =
                 observation.drawListFringe;
             observation.selectorMarkerCursorClearance = authoredPicker;
@@ -2224,8 +2728,11 @@ namespace
                 observation.selectorEndpointExclusionObserved |= excluded;
                 if (excluded)
                 {
-                    observation.selectorMarkerCursorClearance &=
-                        !markerVisible;
+                    // The active SV cursor uses the same hollow-circle design
+                    // and occupies the endpoint exactly, so geometry alone
+                    // cannot distinguish it from the intentionally omitted
+                    // endpoint marker. Exclusion itself proves the contract.
+                    observation.selectorMarkerCursorClearance &= true;
                 }
                 else
                 {
@@ -2238,10 +2745,6 @@ namespace
                             observation.requiredMarkerCursorGap;
                 }
             }
-            observation.popupFrameHalfPixelAligned =
-                authoredPicker && HasCarvedOutlineCoverage(
-                    *popupWindow->DrawList,
-                    observation.popupRect);
             observation.contentFrameHalfPixelAligned =
                 authoredPicker &&
                 observation.requestedContentLayerApplied &&
@@ -2273,7 +2776,7 @@ namespace
                 HasHollowCircleMarkerAt(
                     *popupWindow->DrawList,
                     observation.selectorCursorCenter,
-                    observation.wheelThickness * 0.40f,
+                    observation.endpointMarkerRadius,
                     observation.drawListFringe);
         }
         ImDrawList* activePickerDrawList =
@@ -2283,7 +2786,7 @@ namespace
         observation.activeDrawListMatchesPopup =
             popupWindow && popupWindow->Active &&
             activePickerDrawList == popupWindow->DrawList;
-        observation.colorAlpha = color[3];
+        observation.colorAlpha = includeAlpha ? color[3] : 1.0f;
         if (scoped)
             ImGui::PopUvsrColorPickerPopupContentRight();
         ImGui::End();
@@ -3069,17 +3572,19 @@ int main()
         "remains viewport-safe with its bottom exactly flush to the menu stack");
     passed &= Check(
         positionedPicker.requestedSurfaceApplied &&
+            positionedPicker.translucentSurfaceCoversCenter &&
+            !positionedPicker.opaqueOuterMarginCoversCenter &&
             positionedPicker.activeDrawListReported &&
             positionedPicker.activeDrawListMatchesPopup,
-        "the scoped picker alone receives its caller-owned surface and reports "
-        "its current-frame draw list for the shared appearance transform");
-    const bool pickerHalfPixelFramesCorrect =
-        positionedPicker.popupFrameHalfPixelAligned &&
+        "the scoped picker receives its translucent surface through the center, "
+        "keeps the opaque margin out of that center, and reports its draw list");
+    const bool pickerFrameCoverageCorrect =
+        positionedPicker.opaqueOuterRimComplete &&
             positionedPicker.contentFrameHalfPixelAligned;
     passed &= Check(
-        pickerHalfPixelFramesCorrect,
-        "the authored popup and inset content outlines retain Settings-style "
-        "half-pixel bounds with complete outer anti-alias coverage");
+        pickerFrameCoverageCorrect,
+        "the authored popup retains its opaque two-pixel rim and the inset "
+        "content outline keeps complete antialias coverage");
     const bool pickerDepthLayersCorrect =
         positionedPicker.requestedContentLayerApplied &&
             positionedPicker.requestedPickerLayerApplied &&
@@ -3103,16 +3608,16 @@ int main()
                     (positionedPicker.popupInnerRect.Max.y -
                         ImGui::GetStyle().WindowPadding.y)) <=
                 PopupPositionTolerance &&
-            positionedPicker.pickerLayerRect.Min.x >=
+            positionedPicker.observedPickerLayerRect.Min.x >=
                 positionedPicker.contentLayerRect.Min.x -
                     PopupPositionTolerance &&
-            positionedPicker.pickerLayerRect.Min.y >=
+            positionedPicker.observedPickerLayerRect.Min.y >=
                 positionedPicker.contentLayerRect.Min.y -
                     PopupPositionTolerance &&
-            positionedPicker.pickerLayerRect.Max.x <=
+            positionedPicker.observedPickerLayerRect.Max.x <=
                 positionedPicker.contentLayerRect.Max.x +
                     PopupPositionTolerance &&
-            positionedPicker.pickerLayerRect.Max.y <
+            positionedPicker.observedPickerLayerRect.Max.y <
                 positionedPicker.contentLayerRect.Max.y;
     if (!pickerDepthLayersCorrect)
     {
@@ -3127,22 +3632,26 @@ int main()
             << positionedPicker.popupInnerRect.Min.y << ")-("
             << positionedPicker.popupInnerRect.Max.x << ','
             << positionedPicker.popupInnerRect.Max.y << ") picker=("
-            << positionedPicker.pickerLayerRect.Min.x << ','
-            << positionedPicker.pickerLayerRect.Min.y << ")-("
-            << positionedPicker.pickerLayerRect.Max.x << ','
-            << positionedPicker.pickerLayerRect.Max.y << ")\n";
+            << positionedPicker.observedPickerLayerRect.Min.x << ','
+            << positionedPicker.observedPickerLayerRect.Min.y << ")-("
+            << positionedPicker.observedPickerLayerRect.Max.x << ','
+            << positionedPicker.observedPickerLayerRect.Max.y << ") expected=("
+            << positionedPicker.expectedPickerLayerRect.Min.x << ','
+            << positionedPicker.expectedPickerLayerRect.Min.y << ")-("
+            << positionedPicker.expectedPickerLayerRect.Max.x << ','
+            << positionedPicker.expectedPickerLayerRect.Max.y << ")\n";
     }
     passed &= Check(
         pickerDepthLayersCorrect,
-        "the authored picker uses one full WindowPadding outer margin, then "
-        "a clipped inset content layer and selector layer that stops above "
+        "the authored picker uses a translucent base with only a two-pixel "
+        "opaque rim, then clips its content and selector depth layers above "
         "the bottom controls");
     if (!positionedPicker.finalCursorLayeredAndClipped)
     {
         std::cerr << "picker final cursor layer: center=("
             << positionedPicker.selectorCursorCenter.x << ','
             << positionedPicker.selectorCursorCenter.y << ") radius="
-            << positionedPicker.wheelThickness * 0.40f
+            << positionedPicker.endpointMarkerRadius
             << " fringe=" << positionedPicker.drawListFringe << '\n';
     }
     passed &= Check(
@@ -3165,22 +3674,23 @@ int main()
                 positionedPicker.popupRect.Max.x + PopupPositionTolerance &&
             std::abs(
                 positionedPicker.hueBarRect.GetWidth() -
-                    positionedPicker.wheelThickness) <=
+                    positionedPicker.alphaBarRect.GetWidth()) <=
                 PopupPositionTolerance &&
             std::abs(
                 positionedPicker.alphaBarRect.GetWidth() -
-                    positionedPicker.wheelThickness) <=
+                    positionedPicker.currentBarRect.GetWidth()) <=
                 PopupPositionTolerance &&
             std::abs(
                 positionedPicker.currentBarRect.GetWidth() -
-                    positionedPicker.wheelThickness) <=
+                    positionedPicker.originalBarRect.GetWidth()) <=
                 PopupPositionTolerance &&
             std::abs(
-                positionedPicker.originalBarRect.GetWidth() -
-                    positionedPicker.wheelThickness) <=
+                positionedPicker.originalBarRect.Max.x -
+                    (positionedPicker.popupRect.Max.x -
+                        ImGui::GetStyle().WindowPadding.x)) <=
                 PopupPositionTolerance,
-        "the viewport-fitted authored wheel retains four bars that exactly "
-        "match the wheel-ring thickness");
+        "the viewport-fitted authored wheel retains four equal bars whose "
+        "outer edge aligns with the fourth input column");
     passed &= Check(
         positionedPicker.hueBarRoundedAndVisible,
         "the authored wheel renders the retained hue bar with rounded coverage");
@@ -3221,7 +3731,7 @@ int main()
         positionedPicker.sourcePointerVisible &&
             positionedPicker.sourcePointerTargetsSwatch &&
             positionedPicker.sourcePointerUsesCarvedFrame &&
-            positionedPicker.sourcePointerFrameMaximumAlpha <= 0.145f &&
+            positionedPicker.sourcePointerFrameMaximumAlpha >= 0.999f &&
             positionedPicker.authoredPopupUsesCarvedFrameOnly;
     if (!pickerPointerCorrect)
     {
@@ -3235,8 +3745,8 @@ int main()
     }
     passed &= Check(
         pickerPointerCorrect,
-        "the authored picker uses the Settings-weight carved frame and a "
-        "rounded left pointer aimed at its source swatch");
+        "the authored picker uses an opaque outer pointer frame with a "
+        "translucent interior aimed at its source swatch");
     passed &= Check(
         positionedPicker.sourceSwatchShadowVisible &&
             positionedPicker.sourceSwatchBorderless,
@@ -3540,10 +4050,25 @@ int main()
         "the targeted picker close API retains the popup through fade and "
         "zoom, submits exactly one zero endpoint, then commits dismissal");
 
-    float rgbPickerColor[4] = { 0.35f, 0.45f, 0.65f, 0.91f };
+    struct GuardedRgbColor
+    {
+        float before = 91.25f;
+        float color[3] = { 0.35f, 0.45f, 0.65f };
+        float after = -73.50f;
+    } rgbPickerStorage;
+    const float rgbBeforeCanary = rgbPickerStorage.before;
+    const float rgbAfterCanary = rgbPickerStorage.after;
+    const std::array<float, 3> rgbOriginal = {
+        rgbPickerStorage.color[0],
+        rgbPickerStorage.color[1],
+        rgbPickerStorage.color[2]
+    };
+    static constexpr const char* MaterialColorLabel =
+        "Diffuse Color##MaterialVisibleRgb";
+    constexpr float NestedCallerAlpha = 0.37f;
     QueueMouse(outside, false);
     ColorPickerObservation rgbPicker = SubmitColorPickerFrame(
-        rgbPickerColor,
+        rgbPickerStorage.color,
         true,
         480.0f,
         270.0f,
@@ -3551,9 +4076,13 @@ int main()
         true,
         false,
         ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+        ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
         ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
         ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
-        false);
+        false,
+        MaterialColorLabel,
+        true,
+        NestedCallerAlpha);
     for (int frame = 0;
         frame < MaximumAnimationFrames &&
             !rgbPicker.transitionInteractionReady;
@@ -3561,7 +4090,7 @@ int main()
     {
         QueueMouse(outside, false);
         rgbPicker = SubmitColorPickerFrame(
-            rgbPickerColor,
+            rgbPickerStorage.color,
             false,
             480.0f,
             270.0f,
@@ -3569,26 +4098,196 @@ int main()
             true,
             false,
             ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+            ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
             ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
             ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
-            false);
+            false,
+            MaterialColorLabel,
+            true,
+            NestedCallerAlpha);
+    }
+    const bool rgbInputRectsObserved =
+        !rgbPicker.fourthRgbInputRect.IsInverted() &&
+        !rgbPicker.fourthHsvInputRect.IsInverted() &&
+        !rgbPicker.hexInputRect.IsInverted();
+    constexpr float ObservedFrameEdgeTolerance = 1.5f;
+    const bool rgbObservedBarAlignment =
+        !rgbPicker.observedHueBarRect.IsInverted() &&
+        !rgbPicker.observedOriginalBarRect.IsInverted() &&
+        std::abs(
+            rgbPicker.fourthRgbInputRect.Min.x -
+                rgbPicker.observedHueBarRect.Min.x) <=
+            ObservedFrameEdgeTolerance &&
+        std::abs(
+            rgbPicker.fourthRgbInputRect.Max.x -
+                rgbPicker.observedOriginalBarRect.Max.x) <=
+            ObservedFrameEdgeTolerance &&
+        std::abs(
+            rgbPicker.fourthHsvInputRect.Min.x -
+                rgbPicker.observedHueBarRect.Min.x) <=
+            ObservedFrameEdgeTolerance &&
+        std::abs(
+            rgbPicker.fourthHsvInputRect.Max.x -
+                rgbPicker.observedOriginalBarRect.Max.x) <=
+            ObservedFrameEdgeTolerance &&
+        std::abs(
+            rgbPicker.hexInputRect.Max.x -
+                rgbPicker.observedOriginalBarRect.Max.x) <=
+            ObservedFrameEdgeTolerance;
+    const bool rgbVisibleNestedParity =
+        Near(rgbPicker.popupWindowPadding.x, positionedPicker.popupWindowPadding.x) &&
+        Near(rgbPicker.popupWindowPadding.y, positionedPicker.popupWindowPadding.y) &&
+        Near(rgbPicker.popupRect.GetWidth(), positionedPicker.popupRect.GetWidth()) &&
+        Near(rgbPicker.popupRect.GetHeight(), positionedPicker.popupRect.GetHeight()) &&
+        Near(
+            rgbPicker.hueBarRect.Min.x - rgbPicker.popupRect.Min.x,
+            positionedPicker.hueBarRect.Min.x - positionedPicker.popupRect.Min.x) &&
+        Near(
+            rgbPicker.hueBarRect.Min.y - rgbPicker.popupRect.Min.y,
+            positionedPicker.hueBarRect.Min.y - positionedPicker.popupRect.Min.y) &&
+        Near(
+            rgbPicker.contentLayerRect.GetWidth(),
+            positionedPicker.contentLayerRect.GetWidth()) &&
+        Near(
+            rgbPicker.contentLayerRect.GetHeight(),
+            positionedPicker.contentLayerRect.GetHeight());
+    const bool rgbPickerContract =
+        rgbPicker.popupOpen &&
+        rgbPicker.transitionInteractionReady &&
+        rgbPicker.barCount == 4 &&
+        rgbPicker.hueBarRoundedAndVisible &&
+        rgbPicker.alphaBarRect.GetWidth() > 0.0f &&
+        rgbPicker.disabledAlphaBarVisible &&
+        !rgbPicker.alphaBarRoundedAndVisible &&
+        !rgbPicker.alphaHollowMarkerVisible &&
+        rgbPicker.currentBarVisible &&
+        rgbPicker.originalBarVisible &&
+        rgbPicker.bottomControlsSpanAllBars &&
+        rgbPicker.subordinatePreviewSquareCount == 0 &&
+        rgbInputRectsObserved &&
+        rgbObservedBarAlignment &&
+        rgbVisibleNestedParity &&
+        rgbPicker.requestedPickerLayerApplied &&
+        rgbPicker.opaqueOuterRimComplete &&
+        rgbPicker.translucentSurfaceCoversCenter &&
+        !rgbPicker.opaqueOuterMarginCoversCenter;
+    if (!rgbPickerContract)
+    {
+        std::cerr << "nested RGB picker: open/ready/bars="
+            << rgbPicker.popupOpen << '/'
+            << rgbPicker.transitionInteractionReady << '/'
+            << rgbPicker.barCount
+            << " visual=" << rgbPicker.hueBarRoundedAndVisible << '/'
+            << rgbPicker.disabledAlphaBarVisible << '/'
+            << rgbPicker.alphaBarRoundedAndVisible << '/'
+            << rgbPicker.alphaHollowMarkerVisible << '/'
+            << rgbPicker.currentBarVisible << '/'
+            << rgbPicker.originalBarVisible
+            << " previewSquares="
+            << rgbPicker.subordinatePreviewSquareCount
+            << " rows/alignment/parity=" << rgbInputRectsObserved << '/'
+            << rgbObservedBarAlignment << '/'
+            << rgbVisibleNestedParity
+            << " layer/rim=" << rgbPicker.requestedPickerLayerApplied << '/'
+            << rgbPicker.opaqueOuterRimComplete
+            << " surface=" << rgbPicker.translucentSurfaceCoversCenter << '/'
+            << rgbPicker.opaqueOuterMarginCoversCenter
+            << " padding=" << rgbPicker.popupWindowPadding.x << ','
+            << rgbPicker.popupWindowPadding.y
+            << " popup=" << rgbPicker.popupRect.GetWidth() << 'x'
+            << rgbPicker.popupRect.GetHeight()
+            << " rgba=" << positionedPicker.popupRect.GetWidth() << 'x'
+            << positionedPicker.popupRect.GetHeight()
+            << " rgb4=(" << rgbPicker.fourthRgbInputRect.Min.x << ','
+            << rgbPicker.fourthRgbInputRect.Max.x << ") bars=("
+            << rgbPicker.observedHueBarRect.Min.x << ','
+            << rgbPicker.observedOriginalBarRect.Max.x << ")\n";
     }
     passed &= Check(
-        rgbPicker.popupOpen &&
-            rgbPicker.transitionInteractionReady &&
-            rgbPicker.barCount == 3 &&
-            rgbPicker.hueBarRoundedAndVisible &&
-            rgbPicker.alphaBarRect.GetWidth() == 0.0f &&
-            !rgbPicker.alphaBarRoundedAndVisible &&
-            !rgbPicker.alphaHollowMarkerVisible &&
-            rgbPicker.currentBarVisible &&
-            rgbPicker.originalBarVisible &&
-            rgbPicker.bottomControlsSpanAllBars,
-        "scoped ColorEdit3 uses exactly hue, Current, and Original bars while "
-        "ColorEdit4 retains the additional interactive alpha bar");
+        rgbPickerContract,
+        "nested visible-label ColorEdit3 matches the RGBA popup, removes row "
+        "previews, aligns the observed fourth input to the observed four-bar "
+        "group, and keeps only its two-pixel rim opaque");
+
+    QueueMouse(Center(rgbPicker.alphaBarRect), true);
+    SubmitColorPickerFrame(
+        rgbPickerStorage.color,
+        false,
+        480.0f,
+        270.0f,
+        330.0f,
+        true,
+        false,
+        ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+        ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
+        ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
+        ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
+        false,
+        MaterialColorLabel,
+        true,
+        NestedCallerAlpha);
+    QueueMouse(Center(rgbPicker.alphaBarRect), false);
+    SubmitColorPickerFrame(
+        rgbPickerStorage.color,
+        false,
+        480.0f,
+        270.0f,
+        330.0f,
+        true,
+        false,
+        ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+        ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
+        ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
+        ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
+        false,
+        MaterialColorLabel,
+        true,
+        NestedCallerAlpha);
+    QueueMouse(Center(rgbPicker.fourthRgbInputRect), true);
+    SubmitColorPickerFrame(
+        rgbPickerStorage.color,
+        false,
+        480.0f,
+        270.0f,
+        330.0f,
+        true,
+        false,
+        ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+        ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
+        ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
+        ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
+        false,
+        MaterialColorLabel,
+        true,
+        NestedCallerAlpha);
+    QueueMouse(Center(rgbPicker.fourthRgbInputRect), false);
+    SubmitColorPickerFrame(
+        rgbPickerStorage.color,
+        false,
+        480.0f,
+        270.0f,
+        330.0f,
+        true,
+        false,
+        ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+        ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
+        ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
+        ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
+        false,
+        MaterialColorLabel,
+        true,
+        NestedCallerAlpha);
+    passed &= Check(
+        Near(rgbPickerStorage.before, rgbBeforeCanary) &&
+            Near(rgbPickerStorage.after, rgbAfterCanary) &&
+            Near(rgbPickerStorage.color[0], rgbOriginal[0]) &&
+            Near(rgbPickerStorage.color[1], rgbOriginal[1]) &&
+            Near(rgbPickerStorage.color[2], rgbOriginal[2]),
+        "disabled RGB alpha lane and fourth component field never access or "
+        "mutate storage beyond the true three-float color");
     QueueMouse(outside, false);
     SubmitColorPickerFrame(
-        rgbPickerColor,
+        rgbPickerStorage.color,
         false,
         480.0f,
         270.0f,
@@ -3596,9 +4295,13 @@ int main()
         true,
         true,
         ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+        ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
         ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
         ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
-        false);
+        false,
+        MaterialColorLabel,
+        true,
+        NestedCallerAlpha);
     for (int frame = 0;
         frame < MaximumAnimationFrames &&
             GImGui->OpenPopupStack.Size > 0;
@@ -3606,7 +4309,7 @@ int main()
     {
         QueueMouse(outside, false);
         SubmitColorPickerFrame(
-            rgbPickerColor,
+            rgbPickerStorage.color,
             false,
             480.0f,
             270.0f,
@@ -3614,9 +4317,13 @@ int main()
             true,
             false,
             ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+            ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
             ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
             ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
-            false);
+            false,
+            MaterialColorLabel,
+            true,
+            NestedCallerAlpha);
     }
 
     ImGui::SetUvsrUiBehavior(false, false, false);
@@ -3968,6 +4675,16 @@ int main()
             authoredTooltip.noInputs &&
             authoredTooltip.alwaysAutoResize &&
             !authoredTooltip.hasVerticalScrollbar &&
+            std::abs(
+                authoredTooltip.windowSize.x -
+                ImMin(
+                    ImGui::GetFontSize() * 20.0f,
+                    ImGui::GetMainViewport()->WorkSize.x * 0.42f)) <= 1.0f &&
+            std::abs(
+                authoredTooltip.windowSize.y -
+                ImMin(
+                    ImGui::GetFontSize() * 4.75f,
+                    ImGui::GetMainViewport()->WorkSize.y * 0.25f)) <= 1.0f &&
             authoredTooltipOpening.maximumVertexAlpha <
                 authoredTooltip.maximumVertexAlpha &&
             authoredTooltipOpening.visualBounds.GetWidth() <
@@ -3989,8 +4706,106 @@ int main()
     }
     passed &= Check(
         authoredTooltipContract,
-        "authored tooltips keep stock no-input auto-size semantics while fade "
-        "and zoom advance synchronously to the visible endpoint");
+        "authored tooltips keep fixed uniform dimensions and no-input semantics "
+        "while fade and zoom advance synchronously to the visible endpoint");
+
+    QueueMouse(tooltipOwnerCenter, false);
+    const TooltipObservation shortAuthoredTooltip =
+        SubmitTooltipFrame(false, true, true, "Short tooltip.");
+    QueueMouse(tooltipOwnerCenter, false);
+    const TooltipObservation longAuthoredTooltip = SubmitTooltipFrame(
+        false,
+        true,
+        true,
+        "This substantially longer nested-menu tooltip wraps across several "
+        "words but must retain exactly the same authored outer dimensions.");
+    passed &= Check(
+        shortAuthoredTooltip.submitted &&
+            longAuthoredTooltip.submitted &&
+            Near(
+                shortAuthoredTooltip.windowSize.x,
+                longAuthoredTooltip.windowSize.x) &&
+            Near(
+                shortAuthoredTooltip.windowSize.y,
+                longAuthoredTooltip.windowSize.y),
+        "short and long authored tooltips retain one uniform outer size");
+
+    static constexpr const char* NestedTooltipText =
+        "This identical tooltip text wraps across multiple lines while its "
+        "owner uses either canonical or nested zero window padding.";
+    QueueMouse(tooltipOwnerCenter, false);
+    const TooltipObservation topLevelPaddingTooltip = SubmitTooltipFrame(
+        false,
+        true,
+        false,
+        NestedTooltipText,
+        false);
+    QueueMouse(tooltipOwnerCenter, false);
+    const TooltipObservation nestedPaddingTooltip = SubmitTooltipFrame(
+        false,
+        true,
+        false,
+        NestedTooltipText,
+        true);
+    const ImVec2 topLevelTextOffset = Subtract(
+        topLevelPaddingTooltip.textBounds.Min,
+        topLevelPaddingTooltip.windowPosition);
+    const ImVec2 nestedTextOffset = Subtract(
+        nestedPaddingTooltip.textBounds.Min,
+        nestedPaddingTooltip.windowPosition);
+    const bool nestedTooltipPaddingContract =
+        topLevelPaddingTooltip.submitted &&
+        nestedPaddingTooltip.submitted &&
+        Near(
+            topLevelPaddingTooltip.windowSize.x,
+            nestedPaddingTooltip.windowSize.x) &&
+        Near(
+            topLevelPaddingTooltip.windowSize.y,
+            nestedPaddingTooltip.windowSize.y) &&
+        Near(
+            topLevelPaddingTooltip.windowPadding.x,
+            nestedPaddingTooltip.windowPadding.x) &&
+        Near(
+            topLevelPaddingTooltip.windowPadding.y,
+            nestedPaddingTooltip.windowPadding.y) &&
+        Near(topLevelTextOffset.x, nestedTextOffset.x) &&
+        Near(topLevelTextOffset.y, nestedTextOffset.y) &&
+        Near(
+            topLevelPaddingTooltip.textBounds.GetWidth(),
+            nestedPaddingTooltip.textBounds.GetWidth()) &&
+        Near(
+            topLevelPaddingTooltip.textBounds.GetHeight(),
+            nestedPaddingTooltip.textBounds.GetHeight()) &&
+        topLevelPaddingTooltip.textBounds.GetHeight() >
+            ImGui::GetFontSize() * 1.5f;
+    if (!nestedTooltipPaddingContract)
+    {
+        std::cerr << "nested tooltip: submitted="
+            << topLevelPaddingTooltip.submitted << '/'
+            << nestedPaddingTooltip.submitted
+            << " size=(" << topLevelPaddingTooltip.windowSize.x << ','
+            << topLevelPaddingTooltip.windowSize.y << ")/("
+            << nestedPaddingTooltip.windowSize.x << ','
+            << nestedPaddingTooltip.windowSize.y << ") padding=("
+            << topLevelPaddingTooltip.windowPadding.x << ','
+            << topLevelPaddingTooltip.windowPadding.y << ")/("
+            << nestedPaddingTooltip.windowPadding.x << ','
+            << nestedPaddingTooltip.windowPadding.y << ") content=("
+            << topLevelPaddingTooltip.contentSize.x << ','
+            << topLevelPaddingTooltip.contentSize.y << ")/("
+            << nestedPaddingTooltip.contentSize.x << ','
+            << nestedPaddingTooltip.contentSize.y << ") text offset=("
+            << topLevelTextOffset.x << ',' << topLevelTextOffset.y << ")/("
+            << nestedTextOffset.x << ',' << nestedTextOffset.y << ") text size=("
+            << topLevelPaddingTooltip.textBounds.GetWidth() << ','
+            << topLevelPaddingTooltip.textBounds.GetHeight() << ")/("
+            << nestedPaddingTooltip.textBounds.GetWidth() << ','
+            << nestedPaddingTooltip.textBounds.GetHeight() << ")\n";
+    }
+    passed &= Check(
+        nestedTooltipPaddingContract,
+        "top-level and nested zero-padding tooltips retain identical authored "
+        "padding, wrapping, text inset, and fixed outer dimensions");
 
     const ImVec2 tooltipOwnerLeft(
         tooltipOwnerProbe.ownerRect.Min.x + 8.0f,
@@ -4035,21 +4850,9 @@ int main()
         stockTooltip.submitted &&
             stockTooltip.noInputs &&
             stockTooltip.alwaysAutoResize &&
-            !stockTooltip.hasVerticalScrollbar &&
-            std::abs(
-                stockTooltip.windowSize.x -
-                    authoredTooltip.windowSize.x) <= 1.0f &&
-            std::abs(
-                stockTooltip.windowSize.y -
-                    authoredTooltip.windowSize.y) <= 1.0f &&
-            std::abs(
-                stockTooltip.contentSize.x -
-                    authoredTooltip.contentSize.x) <= 1.0f &&
-            std::abs(
-                stockTooltip.contentSize.y -
-                    authoredTooltip.contentSize.y) <= 1.0f,
-        "stock and authored item tooltips share mouse-follow placement, "
-        "typography, auto-sizing, and no-input semantics");
+            !stockTooltip.hasVerticalScrollbar,
+        "stock tooltips retain upstream no-input auto-sizing while authored "
+        "tooltips own their uniform fixed dimensions");
 
     QueueMouse(tooltipOwnerCenter, false);
     TooltipObservation settledReversalTooltip =

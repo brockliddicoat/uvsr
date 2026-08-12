@@ -7544,6 +7544,7 @@ private:
             ResolveUiSpacingTokens(safeDisplayScale);
         style.WindowPadding =
             ImVec2(spacing.regular, spacing.regular);
+        ImGui::SetUvsrAuthoredWindowPadding(style.WindowPadding);
         style.ItemSpacing =
             ImVec2(spacing.regular, spacing.tight);
         style.ItemInnerSpacing =
@@ -9245,17 +9246,42 @@ private:
             ImGui::SetItemTooltip("%s", fullFilename.data());
     }
 
-    static bool DrawMaterialEditorColorEdit3(
+    enum class UvsrColorEditChannels
+    {
+        Rgb,
+        Rgba
+    };
+
+    static bool DrawUvsrColorEdit(
         const char* label,
-        float* color)
+        float* color,
+        UvsrColorEditChannels channels)
     {
         ImGuiColorEditFlags flags =
             ImGuiColorEditFlags_Float |
             ImGuiColorEditFlags_DisplayRGB |
             ImGuiColorEditFlags_NoTooltip;
+        if (channels == UvsrColorEditChannels::Rgba)
+        {
+            flags |=
+                ImGuiColorEditFlags_AlphaBar |
+                ImGuiColorEditFlags_AlphaPreviewHalf;
+        }
         if (!ImGui::IsUvsrStockWidgetRenderingEnabled())
             flags |= ImGuiColorEditFlags_PickerHueWheel;
-        return ImGui::ColorEdit3(label, color, flags);
+        return channels == UvsrColorEditChannels::Rgba
+            ? ImGui::ColorEdit4(label, color, flags)
+            : ImGui::ColorEdit3(label, color, flags);
+    }
+
+    static bool DrawMaterialEditorColorEdit3(
+        const char* label,
+        float* color)
+    {
+        return DrawUvsrColorEdit(
+            label,
+            color,
+            UvsrColorEditChannels::Rgb);
     }
 
     static float GetUiHighlightFade(
@@ -16212,18 +16238,10 @@ private:
                     color.alpha
                 };
                 ImGui::SetNextItemWidth(-FLT_MIN);
-                ImGuiColorEditFlags colorEditFlags =
-                    ImGuiColorEditFlags_Float |
-                    ImGuiColorEditFlags_DisplayRGB |
-                    ImGuiColorEditFlags_AlphaBar |
-                    ImGuiColorEditFlags_AlphaPreviewHalf |
-                    ImGuiColorEditFlags_NoTooltip;
-                if (!ImGui::IsUvsrStockWidgetRenderingEnabled())
-                    colorEditFlags |= ImGuiColorEditFlags_PickerHueWheel;
-                if (ImGui::ColorEdit4(
+                if (DrawUvsrColorEdit(
                         id,
                         values,
-                        colorEditFlags))
+                        UvsrColorEditChannels::Rgba))
                 {
                     color = {
                         values[0],
@@ -16281,35 +16299,27 @@ private:
             "status, and enabled/on toggle knobs. The Amp default is the "
             "historically compensated blue source for a light track.");
 
-        ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-        if (BeginAnimatedTreeNode(
-                "Advanced Accents",
-                ImGuiTreeNodeFlags_None,
-                "Customize authored text and surface roles."))
-        {
-            drawInterfaceColor(
-                "Font Color",
-                "##UiFontColor",
-                editablePalette.fontColor,
-                resetPalette.fontColor,
-                authoredPaletteAvailable
-                    ? "Set all authored interface text, including drawer "
-                        "and panel titles."
-                    : StockColorTooltip,
-                authoredPaletteAvailable);
-            drawInterfaceColor(
-                "Primary Background Color",
-                "##UiPrimaryBackgroundColor",
-                editablePalette.primaryBackground,
-                resetPalette.primaryBackground,
-                authoredPaletteAvailable
-                    ? "Set the menu body, resting closed controls, and "
-                        "color picker background. Hover, active, body, and "
-                        "picker opacity are derived from this resting color."
-                    : StockColorTooltip,
-                authoredPaletteAvailable);
-            EndAnimatedTreeNode();
-        }
+        drawInterfaceColor(
+            "Font Color",
+            "##UiFontColor",
+            editablePalette.fontColor,
+            resetPalette.fontColor,
+            authoredPaletteAvailable
+                ? "Set all authored interface text, including drawer "
+                    "and panel titles."
+                : StockColorTooltip,
+            authoredPaletteAvailable);
+        drawInterfaceColor(
+            "Primary Background Color",
+            "##UiPrimaryBackgroundColor",
+            editablePalette.primaryBackground,
+            resetPalette.primaryBackground,
+            authoredPaletteAvailable
+                ? "Set the menu body, resting closed controls, and "
+                    "color picker background. Hover, active, body, and "
+                    "picker opacity are derived from this resting color."
+                : StockColorTooltip,
+            authoredPaletteAvailable);
 
         EndDrawerBody();
         ImGui::Spacing();
@@ -17322,9 +17332,11 @@ protected:
                 workRectangle.maxX -
                     workRectangle.minX -
                     settingsPanelMarginPixels * 2.f);
-        const float colorPickerMinimumLaneWidth =
-            ImGui::GetFrameHeight() * 4.f * (1.f + 4.f * 0.08f) +
-            style.ItemInnerSpacing.x * 4.f +
+        const float colorPickerMinimumSelectorWidth =
+            ImGui::GetFrameHeight() * 4.f;
+        const float colorPickerMinimumLaneWidth = std::ceil(
+            (colorPickerMinimumSelectorWidth * 4.f +
+                style.ItemInnerSpacing.x) / 3.f) +
             style.WindowPadding.x * 2.f;
         const float settingsWindowMaximumWidth =
             std::max(
@@ -17686,6 +17698,7 @@ protected:
         ImGui::PushUvsrColorPickerPopupContentRight(
             settingsBodyWindow->InnerRect.Max.x,
             colorPickerMaximumBottom,
+            g_UiVisualTokens.colorPickerSurface,
             g_UiVisualTokens.panelInsetFrame,
             colorPickerContentLayer,
             colorPickerControlLayer);
@@ -21554,19 +21567,10 @@ protected:
                             flashlight.colorLinearGreen,
                             flashlight.colorLinearBlue
                         };
-                        ImGuiColorEditFlags flashlightColorFlags =
-                            ImGuiColorEditFlags_Float |
-                            ImGuiColorEditFlags_DisplayRGB |
-                            ImGuiColorEditFlags_NoTooltip;
-                        if (!ImGui::IsUvsrStockWidgetRenderingEnabled())
-                        {
-                            flashlightColorFlags |=
-                                ImGuiColorEditFlags_PickerHueWheel;
-                        }
-                        if (ImGui::ColorEdit3(
+                        if (DrawUvsrColorEdit(
                                 "Color",
                                 flashlightColor,
-                                flashlightColorFlags))
+                                UvsrColorEditChannels::Rgb))
                         {
                             flashlight.colorLinearRed =
                                 flashlightColor[0];
@@ -21735,19 +21739,10 @@ protected:
                     const auto drawLightColor =
                         [&](Light& light)
                         {
-                            ImGuiColorEditFlags lightColorFlags =
-                                ImGuiColorEditFlags_Float |
-                                ImGuiColorEditFlags_DisplayRGB |
-                                ImGuiColorEditFlags_NoTooltip;
-                            if (!ImGui::IsUvsrStockWidgetRenderingEnabled())
-                            {
-                                lightColorFlags |=
-                                    ImGuiColorEditFlags_PickerHueWheel;
-                            }
-                            ImGui::ColorEdit3(
+                            DrawUvsrColorEdit(
                                 "Color",
                                 &light.color.x,
-                                lightColorFlags);
+                                UvsrColorEditChannels::Rgb);
                             ImGui::SetItemTooltip(
                                 "Set the selected light's color.");
                             if (DrawPresetResetIcon(
