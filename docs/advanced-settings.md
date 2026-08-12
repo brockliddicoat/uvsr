@@ -156,18 +156,26 @@ lanes aligned exactly to the fourth component column: hue, alpha, Current, and
 Original. RGB controls keep the alpha lane in the same position but render it
 as disabled neutral gray without reading or writing alpha. The RGB, HSV, and
 hex rows omit their redundant preview squares and fill the available width;
-visible control labels are not repeated as popup headings. One intermediate
-hollow-circle size is shared by wheel, selector, endpoint, hue-bar, and
-alpha-bar markers, while larger invisible snap zones keep exact hue, white, and
-black pointer reachable.
+visible control labels are not repeated as popup headings. The bright interior
+begins at ordinary window padding, while controls add one Tight spacing token
+on every side. This leaves a four-pixel bright margin at 100 percent scale
+without changing fourth-column alignment. One intermediate hollow-circle size is
+shared by wheel, selector, endpoint, hue-bar, and alpha-bar markers, while
+larger invisible snap zones keep exact hue, white, and black pointer reachable.
+The hue wheel has a clearly visible one-pixel white transparency gradient on
+both its inner and outer edges.
 
-The popup base and two interior depth layers are translucent. Only a two-pixel
-outer rim and the pointer frame are opaque; the selector, bars, checker, and
-comparison colors remain opaque at steady state so scene color cannot mix into
-the selected color. Pickers begin at the Settings content-right edge and sit
-flush with the current Settings bottom edge. Their body zooms and fades
-reversibly on open and close, while the rounded source pointer stays attached to
-the edited swatch. A Settings scroll requests the same animated close;
+The popup base and two interior depth layers are translucent. The complete
+outer-to-inner frame band and pointer frame use the same panel-inset color and
+inherited transparency as the Settings and Performance frames; the selector,
+bars, checker, and comparison colors remain opaque at steady state so scene
+color cannot mix into the selected color. Pickers begin at the Settings
+content-right edge and center vertically on the edited color row whenever
+space permits. They clamp at the Settings margins, including the existing
+Settings bottom edge. Their body zooms and fades reversibly
+on open and close, while the rounded source pointer targets the canonical
+Settings content edge at the edited swatch's vertical center. A Settings scroll
+requests the same animated close;
 disabling animations snaps to the endpoint. Generic and Ogg popups keep stock
 behavior. Repeated wheel input beyond the top or bottom of Settings stays locked
 to that endpoint rather than adding a second scroll-anchor correction.
@@ -572,9 +580,11 @@ Visibility**, **Directional Shadows**, **Temporal Reconstructive**,
 **Environment Background**, **Tone Mapping**, and **Output
 Blit**. Complete
 Renderer restores the available stage breakdown, including Closest Surface
-Resolve when active. Timing rows with no current measurement are omitted
-instead of displaying `--`; meaningful resource, count, format, and status rows
-retain their unavailable-state text. The multisample-only base-lighting pass
+Resolve when active. A timing row stays hidden until its first completed
+measurement. Once shown, it remains in that Performance view for the rest of
+the session and displays `--` with a zero unavailable value whenever no current
+measurement exists. Meaningful resource, count, format, and status rows retain
+their unavailable-state text. The multisample-only base-lighting pass
 that prepares Screen
 Space Visibility is reported separately as **Visibility Lighting Preparation**
 instead of being folded into either Direct Lighting or Visibility. Selecting an ordinary stage keeps
@@ -585,9 +595,9 @@ Visibility, shadows, temporal
 reconstruction, and conservative morphology retain their measured stages,
 resource or history metrics, and active-work counts. Multisample reports its
 requested and hardware-resolved sample counts plus Geometry, Direct Lighting,
-Visibility Lighting Preparation, and any active Closest Surface resolve. A
-timing appears only after its graphics-processor query completes; dormant or
-newly enabled timing work stays hidden instead of reporting a fabricated zero.
+Visibility Lighting Preparation, and any active Closest Surface resolve. These
+multisample timing rows follow the same appear-once retention rule after the
+feature becomes active.
 
 There are no built-in benchmark runners, export schemas, thermal planners, or
 factory-experiment modes. Performance work should use an isolated build and an

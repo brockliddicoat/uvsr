@@ -834,6 +834,10 @@ add_test(
 add_executable(uvsr_imgui_dropdown_roll_tests
     tests/imgui_dropdown_roll_tests.cpp
 )
+target_include_directories(
+    uvsr_imgui_dropdown_roll_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
 target_link_libraries(
     uvsr_imgui_dropdown_roll_tests
     PRIVATE imgui

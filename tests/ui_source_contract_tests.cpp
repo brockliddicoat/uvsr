@@ -585,9 +585,8 @@ namespace
             "retired Advanced Accents submenu");
         RequireContains(
             interfaceDrawer,
-            "\"Set the menu body, resting closed controls, and \"\n"
-            "                    \"color picker background. Hover, active, body, and \"\n"
-            "                    \"picker opacity are derived from this resting color.\"",
+            "\"Set menu body, resting controls, and picker background; \"\n"
+            "                    \"hover, active, body, and picker opacity derive from it.\"",
             "Primary Background tooltip ownership of the derived picker surface");
         RequireAbsent(
             interfaceDrawer,
@@ -1541,17 +1540,44 @@ namespace
         RequireOrdered(
             millisecondRows,
             {
-                "if (!available)",
+                "m_PerformanceTimingRows.Resolve(",
+                "performanceTimingViewId,",
+                "ImHashStr(label),",
+                "value,",
+                "available);",
+                "if (!rowState.IsVisible())",
                 "return;",
-                "beginStatisticsRow(label, true);",
-                "ImGui::Text(\"%.3f ms\", value);"
+                "beginStatisticsRow(label, rowState.HasMeasurement());",
+                "if (rowState.HasMeasurement())",
+                "ImGui::Text(\"%.3f ms\", rowState.milliseconds);",
+                "else",
+                "ImGui::TextDisabled(\"--\");"
             },
-            "unavailable millisecond rows return before TableNextRow can be "
-            "reached");
+            "a timing row appears after its first real measurement, remains "
+            "stable with a disabled placeholder, and treats unavailable data "
+            "as zero");
+        RequireContains(
+            viewer,
+            "uvsr::PerformanceTimingRowRetention m_PerformanceTimingRows;",
+            "session-owned Performance timing-row retention state");
+        RequireOrdered(
+            statistics,
+            {
+                "const auto drawStatisticsTable =",
+                "performanceTimingViewId = static_cast<uint32_t>(effect);",
+                "switch (effect)"
+            },
+            "Performance timing retention isolates identical row labels by "
+            "selected view");
+        const std::string_view sceneLoadingReset = ExtractSection(
+            viewer,
+            "const bool sceneLoading = m_app->IsSceneBusy();",
+            "BeginFullScreenWindow();",
+            "scene-loading Statistics reset");
         RequireAbsent(
-            millisecondRows,
-            "ImGui::TextDisabled(\"--\")",
-            "removed unavailable millisecond placeholders");
+            sceneLoadingReset,
+            "m_PerformanceTimingRows",
+            "scene loading must not forget once-observed Performance rows");
         const std::vector<std::string_view> nonTimeRows = {
             ExtractSection(
                 statistics,
@@ -1696,20 +1722,24 @@ namespace
                 "drawCount(",
                 "\"Requested Samples\"",
                 "drawCount(\"Active Samples\"",
-                "if (active)",
-                "\"Geometry\", RendererTimingStage::Geometry",
+                "\"Geometry\",",
+                "RendererTimingStage::Geometry,",
+                "active);",
                 "\"Direct Lighting\"",
+                "active);",
                 "\"Visibility Lighting Preparation\"",
+                "active);",
                 "\"Closest Surface Resolve\"",
+                "active);",
                 "\"Complete Renderer Frame\""
             },
-            "Multisample keeps status and sample counts while submitting "
-            "effect timing rows only for an active multisample topology");
+            "Multisample submits every retained timing identity each frame and "
+            "uses active topology only as current-measurement eligibility");
         Require(
             CountOccurrences(
                 multisampleStatistics,
                 "drawRendererTiming(") == 5u,
-            "Multisample must retain four active-only effect timings plus the "
+            "Multisample must retain four topology-eligible effect timings plus the "
             "complete-frame timing.");
         RequireAbsent(
             multisampleStatistics,
@@ -1897,9 +1927,8 @@ namespace
             "Jitter Sequence independent selection callback");
         RequireContains(
             aliasing,
-            "Recipe-owned Algorithm changes append (Custom). The circular \"\n"
-            "                \"arrow restores factory Quality and its owned Algorithm \"\n"
-            "                \"controls.",
+            "Choose Quality. Algorithm changes append (Custom); the arrow \"\n"
+            "                \"restores factory Quality and its Algorithm controls.",
             "Quality tooltip excludes independent Jitter Sequence ownership");
         RequireContains(
             aliasing,
@@ -2300,7 +2329,7 @@ namespace
             "Debug and all three effect groups must start expanded.");
         RequireContains(
             debug,
-            "can be combined with every effect-specific debug view.",
+            "every effect-specific debug view.",
             "world and information-filter composability guidance");
         RequireContains(
             debug,
@@ -3406,7 +3435,8 @@ namespace
                 "formattedMaterialName.display.c_str());",
                 "ImGui::EndGroup();",
                 "if (formattedMaterialName.truncated)",
-                "ImGui::SetItemTooltip(\"%s\", material->name.c_str());",
+                "FormatFrontEllipsisUtf8(material->name, 117u);",
+                "ImGui::SetItemTooltip(\"%s\", tooltip.display.c_str());",
                 "ImGui::PushID(material->materialID);",
                 "const donut::app::MaterialEditorCallbacks materialCallbacks = {",
                 "&BeginMaterialEditorConditionalRegion,",
@@ -3711,7 +3741,8 @@ namespace
                 "FormatFrontEllipsisUtf8(fullFilename, 25u);",
                 "ImGui::TextColored(",
                 "if (formatted.truncated)",
-                "ImGui::SetItemTooltip(\"%s\", fullFilename.data());",
+                "FormatFrontEllipsisUtf8(fullFilename, 117u);",
+                "ImGui::SetItemTooltip(\"%s\", tooltip.display.c_str());",
                 "enum class UvsrColorEditChannels",
                 "Rgb,",
                 "Rgba",
@@ -5922,10 +5953,12 @@ namespace
                 "settingsPanelMarginPixels * 2.f",
                 "const float colorPickerMinimumSelectorWidth =",
                 "ImGui::GetFrameHeight() * 4.f;",
+                "const float colorPickerPopupHorizontalPadding =",
+                "style.WindowPadding.x + style.ItemInnerSpacing.x;",
                 "const float colorPickerMinimumLaneWidth =",
                 "(colorPickerMinimumSelectorWidth * 4.f +",
                 "style.ItemInnerSpacing.x) / 3.f) +",
-                "style.WindowPadding.x * 2.f;",
+                "colorPickerPopupHorizontalPadding * 2.f;",
                 "const float settingsWindowMaximumWidth =",
                 "availableWindowWidth -",
                 "colorPickerMinimumLaneWidth);",
@@ -5959,8 +5992,8 @@ namespace
                 "colorPickerControlLayer);"
             },
             "the 20-percent-narrower Settings width keeps its text-safe content "
-            "floor, viewport/picker-lane cap, scoped bottom bound, translucent "
-            "popup surface, separate opaque rim, and two depth layers");
+            "floor, padded viewport/picker-lane cap, scoped bottom bound, "
+            "translucent popup surface, separate opaque rim, and two depth layers");
         RequireAbsent(
             viewer,
             "SettingsWindowWidthInFontHeights = 29.3f",
@@ -6087,14 +6120,17 @@ namespace
                 "ImMin(expected_outer_height, available_height));",
                 "const ImVec2 popup_position(",
                 "requested_x,",
-                "allowed.Max.y - outer_size.y",
+                "ImClamp(",
+                "default_anchor.y,",
+                "allowed.Min.y,",
+                "ImMax(allowed.Min.y, allowed.Max.y - outer_size.y)",
                 "const float maximum_outer_height =",
                 "ImGui::SetNextWindowSizeConstraints(",
                 "ImVec2(outer_size.x, maximum_outer_height)",
                 "ImGui::SetNextWindowPos(popup_position, ImGuiCond_Always);"
             },
-            "picker popup begins at content-right, shrinks before overlap, "
-            "clamps above the caller-owned menu-stack bottom, fails closed "
+            "picker popup begins at content-right, follows its source before "
+            "clamping at the caller-owned menu-stack bottom, fails closed "
             "without a usable two-axis lane, reports only the current frame's "
             "draw list, and can close only its exact popup ID");
         const std::string_view scopedColorPickerIntegration = ExtractSection(
@@ -6174,6 +6210,24 @@ namespace
             "const bool render_uvsr_wheel_with_bars =",
             "// Render alpha bar",
             "authored wheel picker and retained hue bar");
+        RequireOrdered(
+            imguiTooltipPickerAdded,
+            {
+                "static void RenderUvsrHueWheelEdgeOutlines(",
+                "const float fringe = ImMax(1.0f, draw_list->_FringeScale);",
+                "const float radii[2] = { inner_radius, outer_radius };",
+                "draw_list->AddCircle(",
+                "const float outline_alpha = ImLerp(",
+                "0.95f,",
+                "0.55f,",
+                "vertex.col = ImGui::GetColorU32(ImVec4(",
+                "outline_alpha * coverage));",
+                "RenderUvsrHueWheelEdgeOutlines(",
+                "wheel_r_inner,",
+                "wheel_r_outer);"
+            },
+            "the authored hue wheel adds visible one-pixel white transparency "
+            "gradients to both edges before drawing cursors");
         RequireOrdered(
             wheelPickerRendering,
             {
@@ -6480,14 +6534,20 @@ namespace
                 "const ImVec2 pivot = tooltip_window->Pos;",
                 "vertex.pos = pivot + (vertex.pos - pivot) * scale;",
                 "(float)alpha * eased",
-                "static ImGuiWindow* SubmitUvsrAuthoredTooltipTextV(",
+                "static void FormatUvsrBoundedTooltipTextV(",
                 "ImFormatStringToTempBufferV(&text, &text_end, fmt, args);",
+                "constexpr int maximum_code_points = 120;",
+                "constexpr int retained_code_points =",
+                "maximum_code_points - ellipsis_code_points;",
+                "output.append(\"...\");",
+                "static ImGuiWindow* SubmitUvsrAuthoredTooltipTextV(",
+                "FormatUvsrBoundedTooltipTextV(text, fmt, args);",
                 "constexpr float tooltip_inner_margin = 5.0f;",
                 "const ImVec2 tooltip_window_padding =",
                 "g.UvsrAuthoredWindowPadding;",
                 "g.FontSize * 20.0f,",
                 "ImGui::GetMainViewport()->WorkSize.x * 0.42f",
-                "g.FontSize * 4.75f,",
+                "g.FontSize * 7.0f,",
                 "ImGui::GetMainViewport()->WorkSize.y * 0.25f",
                 "tooltip_window_padding.x * 2.0f",
                 "ImGui::SetNextWindowSize(tooltip_size, ImGuiCond_Always);",
@@ -6498,7 +6558,7 @@ namespace
                 "ImGui::PopStyleVar();",
                 "ImGui::SetCursorPos(ImGui::GetCursorPos() + ImVec2(",
                 "ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width);",
-                "ImGui::TextUnformatted(text, text_end);",
+                "ImGui::TextUnformatted(text.begin(), text.end());",
                 "ImGui::EndTooltip();",
                 "ImGui::PopStyleVar();",
                 "static void SubmitUvsrItemTooltipV(",
@@ -6521,8 +6581,8 @@ namespace
                 "ImGui::SetWindowHiddenAndSkipItemsForCurrentFrame(",
                 "ResetUvsrTooltipAnimation(state);"
             },
-            "authored item tooltips share one fixed outer size, inset and wrap "
-            "policy while reversibly zooming and fading from a per-frame baseline");
+            "authored item tooltips cap Unicode text at 120 code points, share "
+            "one fixed outer size, inset and wrap policy, and reversibly animate");
         RequireAbsent(
             canonicalTooltipSubmission,
             "g.Style.WindowPadding",
@@ -6540,6 +6600,17 @@ namespace
             },
             "both variadic item-tooltip entry points isolate authored synchronous "
             "animation while stock policy keeps the ordinary SetTooltipV path");
+        RequireOrdered(
+            imguiTooltipPickerOverride,
+            {
+                "void ImGui::SetTooltipV(const char* fmt, va_list args)",
+                "if (!GImGui->UvsrStockWidgetRendering)",
+                "SubmitUvsrAuthoredTooltipTextV(fmt, args);",
+                "ImGuiTextBuffer text;",
+                "FormatUvsrBoundedTooltipTextV(text, fmt, args);",
+                "TextUnformatted(text.begin(), text.end());"
+            },
+            "stock and authored tooltip submission share the same 120-code-point cap");
         Require(
             CountOccurrences(
                 imguiTooltipPickerAdded,
@@ -6631,6 +6702,7 @@ namespace
                 "IM_TRUNC(items_width * 0.75f) + inner_spacing * 3.0f,",
                 "(fourth_column_width - inner_spacing * 3.0f) / 4.0f,",
                 "ImMax(fourth_column_offset - inner_spacing, 1.0f),",
+                "float source_center_y,",
                 "const ImVec2& popup_padding,",
                 "int authored_bar_count,",
                 "const bool authored_bar_layout = authored_bar_count == 4;",
@@ -6642,15 +6714,22 @@ namespace
                 "if (!authored_bar_layout && has_visible_label)",
                 "const float sv_picker_height = authored_bar_layout",
                 "ResolveUvsrAuthoredColorPickerGeometry(",
-                "const float requested_y = authored_bar_layout",
-                "allowed.Max.y - outer_size.y",
+                "const float requested_y = source_center_y - outer_size.y * 0.5f;",
+                "ImClamp(",
+                "requested_y,",
+                "allowed.Min.y,",
+                "ImMax(allowed.Min.y, allowed.Max.y - outer_size.y)",
                 "if (authored_bar_layout)",
                 "ImGui::SetNextWindowSize(outer_size, ImGuiCond_Always);",
                 "ImGui::SetNextWindowPos(popup_position, ImGuiCond_Always);"
             },
             "the authored picker derives four equal lanes from the fourth input "
             "column, suppresses visible-label height, uses captured popup padding, "
-            "and sits flush with the allowed bottom edge");
+            "and centers on its source until an allowed edge clamps it");
+        RequireAbsent(
+            finalPickerLayout,
+            "const float requested_y = authored_bar_layout",
+            "retired authored bottom-only picker placement");
 
         const std::string_view pickerTransitionState = ExtractSection(
             imguiTooltipPickerAdded,
@@ -6686,7 +6765,6 @@ namespace
                 "transition.PopupId != popup_id || transition.OpenFrame != open_frame",
                 "transition.TargetOpen = true;",
                 "transition.Amount = g.UvsrUiMotionEnabled ? 0.0f : 1.0f;",
-                "if (transition.TargetOpen)",
                 "transition.SourceRect = source_rect;",
                 "AdvanceUvsrColorPickerPopupTransition(",
                 "transition.FrameStartAmount = transition.Amount;",
@@ -6697,8 +6775,13 @@ namespace
                 "vertex.pos = pivot + (vertex.pos - pivot) * scale;",
                 "command.ClipRect = ImVec4("
             },
-            "picker fade/zoom reverses from a once-per-frame baseline and "
-            "transforms both geometry and clip rectangles");
+            "picker fade/zoom updates its source through retained close, "
+            "reverses from a once-per-frame baseline, and transforms both "
+            "geometry and clip rectangles");
+        RequireAbsent(
+            pickerTransitionHelpers,
+            "if (transition.TargetOpen)",
+            "stale closing-picker source latch");
         RequireOrdered(
             imguiTooltipPickerOverride,
             {
@@ -6740,7 +6823,7 @@ namespace
         RequireOrdered(
             finalPickerPointer,
             {
-                "const float tip_x = source_rect.Max.x +",
+                "const float tip_x = parent_window->WorkRect.Max.x +",
                 "const float base_x = popup_window->Pos.x + (fringe + 1.0f) * scale;",
                 "source_rect.GetCenter().y,",
                 "popup_top + style.PopupRounding + unscaled_arrow_half + fringe,",
@@ -6754,6 +6837,9 @@ namespace
                 "const bool color_button_pressed =",
                 "ColorButton(\"##ColorButton\", col_v4, flags);",
                 "const ImRect picker_source_rect = g.LastItemData.Rect;",
+                "picker_source_rect.GetCenter().y,",
+                "const ImRect transition_source_rect =",
+                "transition_source_rect.GetCenter().y,",
                 "if (picker_layout.AuthoredBarLayout)",
                 "PushStyleVar(ImGuiStyleVar_PopupBorderSize, 0.0f);",
                 "if (picker_layout.HideSidePreview ||",
@@ -6761,9 +6847,17 @@ namespace
                 "DrawUvsrColorPickerSourcePointer(",
                 "transition_source_rect,"
             },
-            "the authored popup captures its exact source swatch, suppresses "
-            "the stock side preview and border, and draws a rounded viewport-"
-            "clipped pointer back to that swatch");
+            "the authored popup captures its source row, suppresses the stock "
+            "side preview and border, and draws a rounded viewport-clipped "
+            "pointer to the canonical Settings content edge");
+        RequireAbsent(
+            finalPickerPointer,
+            "const float tip_x = source_rect.Max.x +",
+            "retired inset-sensitive pointer target");
+        RequireAbsent(
+            finalPickerPointer,
+            "transition_picker_anchor",
+            "retired below-swatch popup anchor");
         RequireContains(
             imguiTooltipPickerOverride,
             "picker_flags |= ImGuiColorEditFlags_NoSidePreview;",
@@ -6775,26 +6869,35 @@ namespace
                 "ImVec4                  OuterMarginLayer;",
                 "ImVec4                  ContentLayer;",
                 "ImVec4                  PickerLayer;",
+                "ImVec2                  FramePadding;",
                 "ImVec2                  PopupPadding;",
                 "const ImVec4& popup_surface,",
                 "const ImVec4& outer_margin_layer,",
-                "g.Style.WindowPadding",
-                "static ImRect GetUvsrColorPickerPopupContentBounds(",
-                "scope.PopupPadding.x",
-                "scope.PopupPadding.y",
-                "static void DrawUvsrColorPickerPopupContentLayer(",
-                "ImGui::GetColorU32(scope.ContentLayer)",
-                "constexpr float outer_margin_thickness = 2.0f;",
-                "ImGui::GetColorU32(scope.OuterMarginLayer)",
-                "outer_margin_thickness);",
+                "g.UvsrAuthoredWindowPadding,",
+                "g.UvsrAuthoredWindowPadding + g.Style.ItemInnerSpacing",
+                "static void DrawUvsrColorPickerInsetFrame(",
+                "const ImU32 frame_color = ImGui::GetColorU32(color);",
+                "draw_list->AddRectFilled(",
+                "const auto draw_inner_corner_wedge =",
+                "draw_list->AddConcavePolyFilled(",
                 "vertex.col = ImGui::GetUvsrCarvedFrameOutlineColor(",
+                "static ImRect GetUvsrColorPickerPopupContentBounds(",
+                "scope.FramePadding.x",
+                "scope.FramePadding.y",
+                "static void DrawUvsrColorPickerPopupContentLayer(",
+                "DrawUvsrColorPickerInsetFrame(",
+                "ImGui::GetColorU32(scope.ContentLayer)",
                 "ImGui::GetColorU32(scope.OuterMarginLayer)",
                 "ImGui::GetColorU32(scope.ContentLayer)",
                 "scoped_picker_scope->PopupSurface"
             },
-            "the picker captures canonical padding, keeps its base and depth "
-            "layers translucent, and confines the opaque role to a two-pixel "
-            "outer rim and pointer frame");
+            "the picker separates Regular frame padding from the Tight control "
+            "inset, fills the complete Settings-matched frame band, and keeps "
+            "the base and interior layers on their existing opacity paths");
+        RequireAbsent(
+            finalPickerPointer,
+            "ImGui::ColorConvertFloat4ToU32(scope.OuterMarginLayer)",
+            "caller-alpha-independent picker frame path");
         const std::string_view finalPickerPopupStyle = ExtractSection(
             imguiTooltipPickerOverride,
             "const bool submit_picker_popup =",
@@ -6824,13 +6927,13 @@ namespace
         RequireOrdered(
             finalPickerControlLayer,
             {
-                "ResolveUvsrAuthoredColorPickerGeometry(",
                 "GetUvsrColorPickerPopupContentBounds(window, scope);",
-                "layer_bounds.ClipWith(content_bounds);",
+                "content_bounds.Min,",
+                "content_bounds.Max,",
                 "ImGui::ColorConvertFloat4ToU32(scope.PickerLayer)"
             },
-            "the picker control layer uses the shared geometry and its supplied "
-            "alpha independently of a nested caller's live style alpha");
+            "the brightest picker layer fills the complete inner surface while "
+            "retaining its supplied alpha independently of caller alpha");
         RequireAbsent(
             finalPickerControlLayer,
             "ImGui::GetColorU32(scope.PickerLayer)",
@@ -6844,7 +6947,7 @@ namespace
             finalPickerContentSubmission,
             {
                 "DrawUvsrColorPickerPopupControlLayer(",
-                "picker_layout.PickerWidth);",
+                "*scoped_picker_scope);",
                 "value_changed |= ColorPicker4(\"##picker\""
             },
             "the authored control depth layer is submitted before its picker assets");
@@ -7216,13 +7319,13 @@ namespace
                     "IsAdaptiveSyncModeAvailableForActiveAdapter"),
                 std::string_view("ImGui::BeginDisabled();"),
                 std::string_view(
-                    "Expose the shared Windows variable-refresh"),
+                    "Request the shared Windows variable-refresh path"),
                 std::string_view(
-                    "the driver and display decide whether it engages."),
-                std::string_view("VSync remains disabled"),
+                    "whether it engages."),
+                std::string_view("VSync stays off"),
                 std::string_view(
-                    "both adaptive choices request the same"),
-                std::string_view("driver, and the display decide") })
+                    "controls adaptive refresh"),
+                std::string_view("which UVSR cannot verify") })
         {
             RequireContains(
                 generalDrawer,
@@ -7241,7 +7344,8 @@ namespace
             "Sky drawer");
         RequireContains(
             skyDrawer,
-            "Disable it to isolate direct lights. Occlusion settings are",
+            "Disable it to \"\n"
+            "                \"isolate direct lights; settings persist, and Occlusion",
             "renamed Occlusion ambient-fill explanation");
         RequireAbsent(
             skyDrawer,
@@ -7300,7 +7404,7 @@ namespace
             "automatic movement limits exclude Exposure Compensation");
         RequireContains(
             skyDrawer,
-            "Time to close half of the remaining exposure-value ",
+            "Set the half-life of exposure adaptation.",
             "Adjustment Period half-life explanation");
         RequireOrdered(
             skyDrawer,

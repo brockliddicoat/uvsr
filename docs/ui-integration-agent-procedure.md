@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-08-11.4`.
+UI reference version: `2026-08-12.3`.
 
 ## Purpose
 
@@ -55,7 +55,8 @@ they explain.
 - Prefer spaces to hyphens for ordinary two word copy. Preserve fixed product
   names, code, command paths, and terms whose punctuation carries meaning.
 - Describe effect, units, range, and important side effects in a concise hover
-  tooltip for every new or changed UVSR-owned control.
+  tooltip for every new or changed UVSR-owned control. Keep every rendered
+  tooltip at or below 120 Unicode code points.
 - Keep dependent controls adjacent to their owner. Put uncommon implementation
   policy in a default-closed **Advanced** tree.
 - Show unavailable state with a direct explanation; do not leave a control that
@@ -129,12 +130,17 @@ HSV, and hex rows force `NoSmallPreview`, fill the available width, and never
 repeat a visible control label as a heading. Exact hue, white, and black remain
 pointer reachable through forgiving snap zones. One midpoint hollow-circle
 radius feeds selector endpoints, the active selector, wheel cursor, hue bar,
-and alpha bar without active-state growth. The popup base and two depth layers
-are translucent; only the two-pixel outer rim and pointer frame use the opaque
-panel-inset role. Selector, bar, checker, and comparison colors remain opaque
-at steady state. The rounded source pointer is emitted after the popup-body
-transform so its tip stays attached throughout reversible zoom and fade.
-Unscoped and Ogg pickers stay stock.
+and alpha bar without active-state growth. Begin the bright popup interior at
+Regular padding, then inset all controls by one additional Tight token so four
+bright pixels remain on every side at 100 percent scale without changing the
+fourth-column lane geometry. Give both hue-wheel edges a visible one-pixel
+white transparency gradient. The popup base and two depth layers are
+translucent. Fill the complete outer-to-inner frame band and pointer frame with
+the same panel-inset role and inherited transparency used by the Settings and
+Performance frames. Selector, bar, checker, and comparison colors remain opaque
+at steady state. Emit the rounded source pointer after the popup-body transform so its tip
+stays on the canonical Settings content edge at the source row's vertical center
+throughout reversible zoom and fade. Unscoped and Ogg pickers stay stock.
 
 ## Mandatory New-Element Intake Checklist
 
@@ -198,9 +204,11 @@ dropdown uses ImGui's native integrated-arrow trigger presentation; deferred
 and immediate dropdowns differ only in when their mutation is applied. Do not
 size authored hover tooltips from their text or nesting depth. The shared
 authored tooltip path fixes every outer window to at most 20 font heights by
-4.75 font heights, bounded by 42 percent of viewport width and 25 percent of
-viewport height, with a 5-pixel inner inset and shared wrapping. Do not bypass
-that path for a UVSR-owned control. Do not paint a second background or custom
+7 font heights, bounded by 42 percent of viewport width and 25 percent of
+viewport height, with a 5-pixel inner inset and shared wrapping. It caps every
+rendered tooltip at 120 Unicode code points, using a three-dot suffix when
+needed. Do not bypass that path for a UVSR-owned control. Do not paint a second
+background or custom
 arrow over the native trigger. Diffuse,
 Denoising, Aliasing, Debug, Sky Visibility, and Shadows effect groups retain
 independent animated disclosure even while enabled. Every retained
@@ -373,9 +381,10 @@ retained stage list; an ordinary stage includes the complete frame for context.
 Visibility, Directional Shadows, Temporal Reconstructive, Fast Approximate,
 Conservative Morphological, and Multisample Adaptive use the same readable table language for their
 retained breakdowns. Completed query availability gates every timing. Omit a
-timing row until it has a current measurement; retain `--`, Unsupported, or
-other direct unavailable text for meaningful non-time resource, count, format,
-and status rows. Directional Shadows uses **Shadow Ray Dispatch**, **Shadow
+timing row until its first completed measurement, then retain that row for the
+session and display `--` with a zero unavailable value whenever its current
+query is absent. Retain `--`, Unsupported, or other direct unavailable text for
+meaningful non-time resource, count, format, and status rows. Directional Shadows uses **Shadow Ray Dispatch**, **Shadow
 Denoise**, **Sky Visibility Ray Dispatch**, and **Sky Visibility Denoise**.
 Visibility keeps **Ambient Occlusion Denoise** and **Diffuse Illumination
 Denoise** separate from its trace. Multisample base lighting used only to feed
@@ -433,17 +442,21 @@ between each row's supported verbs and value domain.
 Clamp repeated outward wheel input at the Settings top or bottom to that exact
 endpoint before applying scroll-anchor correction. A pending navigation or
 programmatic scroll target still owns its frame. Constrain authored color
-pickers to the lane beginning at the Settings content-right edge and make their
-bottom exactly flush with the current Settings-root bottom. Apply the picker
-local zoom/fade transform once, then the managed-stack appearance once. Give
-only that picker a translucent popup base plus two translucent interior layers,
-then confine the opaque panel-inset role to its two-pixel outer rim and pointer
-frame without changing generic popup colors. Append the rounded
-source pointer after transforming the body so its tip remains fixed on the
-origin swatch. An actual contiguous-frame Settings scroll requests the same
-retained close transition, blocks picker input during the transition, and
-closes immediately only when authored motion is disabled. Wheel input over the
-picker itself must remain picker input.
+pickers to the lane beginning at the Settings content-right edge and center each
+picker body vertically on the source row whenever space permits. Clamp that
+centered position at the Settings margins, including the existing Settings-root
+bottom limit, instead of locking every picker there.
+Apply the picker-local zoom/fade transform once, then the managed-stack
+appearance once. Give only that picker a translucent popup base plus two
+translucent interior layers. Fill its entire outer-to-inner frame band and
+pointer frame with the same inherited-alpha panel-inset role as Settings and
+Performance without changing generic popup colors. Append the rounded source pointer after transforming the
+body so its tip remains fixed on the canonical Settings content edge at the
+origin row's vertical center. An actual contiguous-frame Settings scroll requests the same
+retained close transition, updates one shared live source rectangle before both
+popup placement and pointer drawing, blocks picker input during the transition,
+and closes immediately only when authored motion is disabled. Wheel input over
+the picker itself must remain picker input.
 
 Escape or the grave-accent/tilde key toggles Settings unless an active edit or
 popup owns it. The physical grave-accent key works with or without Shift so a
@@ -581,13 +594,17 @@ Use the exact candidate executable and a bundled scene. Exercise:
   ordinary and narrow viewport widths to confirm the shared four-lane layout,
   disabled gray RGB alpha lane, absent sub-row preview squares and popup title,
   fourth-column bar alignment, shared intermediate marker size, opaque color
-  assets, translucent base/depth layers, and two-pixel opaque rim; verify the
-  popup may cover the scrollbar but never Settings content, stays flush with the
-  Settings bottom, retains its source attachment, zooms and fades reversibly,
+  assets, visible inner/outer hue-wheel gradients, four-sided bright control
+  margins, translucent base/depth layers, and the full Settings-matched frame
+  band; verify the popup may cover the scrollbar but never Settings content,
+  centers on high and middle source rows when space permits, clamps at the
+  Settings bottom for low rows, targets the canonical
+  content edge for inset swatches, zooms and fades reversibly,
   closes on Settings wheel or scrollbar movement, and preserves picker-local
   wheel input;
-- hovering short, long, top-level, and nested control copy to confirm every
-  authored tooltip keeps the same outer dimensions and five-pixel text inset;
+- hovering short, 120-character, over-limit dynamic, top-level, and nested
+  control copy to confirm every authored tooltip keeps the same outer dimensions,
+  five-pixel text inset, 120-code-point cap, and no vertical scrollbar;
 - editing Amp Primary Accent to an ultra-bright translucent value over dark,
   bright, and detailed scenes to confirm transmission and automatic dark depth
   edges;
@@ -653,6 +670,17 @@ The UI handoff includes:
 - confirmation that this reference was updated when normative behavior changed.
 
 ## Reference Revision History
+
+- `2026-08-12.3`: Centered the scoped picker body on its source row before
+  applying Settings-bound clamps, expanded the shared panel-inset role across
+  the full frame band, added a four-pixel bright control margin and visible
+  wheel-edge gradients, and retained once-observed Performance timing rows.
+
+- `2026-08-12.2`: Made the scoped picker frame opaque independently of caller
+  alpha, restored source-following vertical placement with the existing bottom
+  clamp, aimed inset-source pointers at the canonical Settings edge, expanded
+  popup padding, outlined both hue-wheel edges, and capped tooltips at 120
+  Unicode code points.
 
 - `2026-08-12.1`: Restored uniform authored tooltip dimensions; routed every
   first-party color editor through one RGB/RGBA policy; made all authored

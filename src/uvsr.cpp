@@ -119,6 +119,7 @@
 #include "ui_commands.h"
 #include "ui_settings_command_catalog.h"
 #include "ui_skin.h"
+#include "ui_performance_timing_rows.h"
 #include "world_space_representation.h"
 
 using namespace donut;
@@ -6840,6 +6841,7 @@ private:
     double m_StatFrameTimeSum = 0.0;
     uint32_t m_StatFrameTimeCount = 0;
     std::array<std::string, 4> m_PerformanceStatValues;
+    uvsr::PerformanceTimingRowRetention m_PerformanceTimingRows;
     ScreenSpaceVisibilityTimings m_DisplayedVisibilityTimings;
     TemporalAATimings m_DisplayedTemporalAATimings;
     Cmaa2Timings m_DisplayedCmaa2Timings;
@@ -9243,7 +9245,11 @@ private:
             "%s",
             formatted.display.c_str());
         if (formatted.truncated)
-            ImGui::SetItemTooltip("%s", fullFilename.data());
+        {
+            const FrontEllipsisText tooltip =
+                FormatFrontEllipsisUtf8(fullFilename, 117u);
+            ImGui::SetItemTooltip("%s", tooltip.display.c_str());
+        }
     }
 
     enum class UvsrColorEditChannels
@@ -15126,9 +15132,8 @@ private:
                 summaryCursorX + g_UiSpacingTokens.tight);
 
             const char* performanceTooltip =
-                "tris counts frustum-culled triangle instances submitted by "
-                "the main geometry pass; occluded, back-facing, and "
-                "alpha-discarded triangles can still be included.";
+                "tris counts main-pass triangles after frustum culling; "
+                "occluded, back-facing, or alpha-discarded ones may remain.";
             if (m_ComposedUiSkin == UiSkin::Og)
             {
                 const std::array<std::string, 2> ogPerformanceLines =
@@ -15197,6 +15202,7 @@ private:
 
             const RendererTimings& timings =
                 m_app->GetRendererTimings();
+            uint32_t performanceTimingViewId = 0u;
             static constexpr ImGuiTableFlags StatisticsTableFlags =
                 ImGuiTableFlags_BordersInnerH |
                 ImGuiTableFlags_RowBg |
@@ -15232,13 +15238,22 @@ private:
                 ImGui::TableSetColumnIndex(1);
             };
             const auto drawMilliseconds =
-                [&beginStatisticsRow](
+                [this, &beginStatisticsRow, &performanceTimingViewId](
                     const char* label, double value, bool available)
             {
-                if (!available)
+                const uvsr::PerformanceTimingRowState rowState =
+                    m_PerformanceTimingRows.Resolve(
+                        performanceTimingViewId,
+                        ImHashStr(label),
+                        value,
+                        available);
+                if (!rowState.IsVisible())
                     return;
-                beginStatisticsRow(label, true);
-                ImGui::Text("%.3f ms", value);
+                beginStatisticsRow(label, rowState.HasMeasurement());
+                if (rowState.HasMeasurement())
+                    ImGui::Text("%.3f ms", rowState.milliseconds);
+                else
+                    ImGui::TextDisabled("--");
             };
             const auto drawCount =
                 [&beginStatisticsRow](
@@ -15277,12 +15292,17 @@ private:
             };
             const auto drawRendererTiming =
                 [this, &timings, &drawMilliseconds](
-                    const char* label, RendererTimingStage stage)
+                    const char* label,
+                    RendererTimingStage stage,
+                    bool eligible = true)
             {
                 const bool available =
+                    eligible &&
                     m_app->IsRendererStageActiveThisFrame(stage) &&
                     timings.IsAvailable(stage);
-                drawMilliseconds(label, timings.Get(stage), available);
+                const double measuredValue =
+                    available ? timings.Get(stage) : 0.0;
+                drawMilliseconds(label, measuredValue, available);
             };
             const auto drawScreenSpaceVisibilityTiming =
                 [this, &drawMilliseconds](const char* label)
@@ -15313,6 +15333,7 @@ private:
             const auto drawStatisticsTable =
                 [&](StatisticsEffect effect)
             {
+            performanceTimingViewId = static_cast<uint32_t>(effect);
             switch (effect)
             {
             case StatisticsEffect::CompleteRenderer:
@@ -15617,20 +15638,22 @@ private:
                     drawCount(
                         "Requested Samples", requestedSamples, enabled);
                     drawCount("Active Samples", activeSamples, enabled);
-                    if (active)
-                    {
-                        drawRendererTiming(
-                            "Geometry", RendererTimingStage::Geometry);
-                        drawRendererTiming(
-                            "Direct Lighting",
-                            RendererTimingStage::DirectLighting);
-                        drawRendererTiming(
-                            "Visibility Lighting Preparation",
-                            RendererTimingStage::VisibilityLightingPreparation);
-                        drawRendererTiming(
-                            "Closest Surface Resolve",
-                            RendererTimingStage::MultisampleResolve);
-                    }
+                    drawRendererTiming(
+                        "Geometry",
+                        RendererTimingStage::Geometry,
+                        active);
+                    drawRendererTiming(
+                        "Direct Lighting",
+                        RendererTimingStage::DirectLighting,
+                        active);
+                    drawRendererTiming(
+                        "Visibility Lighting Preparation",
+                        RendererTimingStage::VisibilityLightingPreparation,
+                        active);
+                    drawRendererTiming(
+                        "Closest Surface Resolve",
+                        RendererTimingStage::MultisampleResolve,
+                        active);
                     drawRendererTiming(
                         "Complete Renderer Frame",
                         RendererTimingStage::CompleteFrame);
@@ -15812,9 +15835,9 @@ private:
                         break;
                     case AdaptiveSyncMode::NvidiaExclusive:
                         ImGui::SetItemTooltip(
-                            "Expose the shared Windows variable-refresh "
-                            "request only when the active adapter is NVIDIA; "
-                            "the driver and display decide whether it engages.");
+                            "Request the shared Windows variable-refresh path "
+                            "only on NVIDIA; the driver and display decide "
+                            "whether it engages.");
                         break;
                     case AdaptiveSyncMode::Count:
                         break;
@@ -15826,11 +15849,8 @@ private:
             ImGui::EndCombo();
         }
         ImGui::SetItemTooltip(
-            "Control UVSR's windowed DXGI tearing-compatible Present policy. "
-            "VSync remains disabled; both adaptive choices request the same "
-            "Windows path, while Nvidia Exclusive is vendor-gated. Windows, "
-            "the driver, and the display decide whether adaptive refresh "
-            "actually engages, and UVSR cannot confirm it.");
+            "Choose UVSR's windowed Present policy. VSync stays off; Windows "
+            "controls adaptive refresh, which UVSR cannot verify.");
 
         ImGui::TextUnformatted("Camera Mode");
         if (DrawPresetResetIcon(
@@ -16057,7 +16077,11 @@ private:
                 formattedMaterialName.display.c_str());
             ImGui::EndGroup();
             if (formattedMaterialName.truncated)
-                ImGui::SetItemTooltip("%s", material->name.c_str());
+            {
+                const FrontEllipsisText tooltip =
+                    FormatFrontEllipsisUtf8(material->name, 117u);
+                ImGui::SetItemTooltip("%s", tooltip.display.c_str());
+            }
 
             ImGui::PushID(material->materialID);
 
@@ -16210,9 +16234,8 @@ private:
             ImGui::EndCombo();
         }
         ImGui::SetItemTooltip(
-            "Choose the complete interface appearance. Ogg uses standard "
-            "controls and disables interface motion for fast automated "
-            "experiments.");
+            "Choose the interface appearance. Ogg uses standard controls and "
+            "disables interface motion for automated experiments.");
 
         const auto drawInterfaceColor =
             [&](const char* label,
@@ -16295,9 +16318,8 @@ private:
             "##UiTertiaryAccent",
             m_ui.Accents.tertiaryAccent,
             DefaultUiTertiaryAccent,
-            "Set the tertiary accent used by success output, Material "
-            "status, and enabled/on toggle knobs. The Amp default is the "
-            "historically compensated blue source for a light track.");
+            "Set success output, Material status, and enabled/on knobs. Amp "
+            "defaults to the compensated blue used for a light track.");
 
         drawInterfaceColor(
             "Font Color",
@@ -16315,9 +16337,8 @@ private:
             editablePalette.primaryBackground,
             resetPalette.primaryBackground,
             authoredPaletteAvailable
-                ? "Set the menu body, resting closed controls, and "
-                    "color picker background. Hover, active, body, and "
-                    "picker opacity are derived from this resting color."
+                ? "Set menu body, resting controls, and picker background; "
+                    "hover, active, body, and picker opacity derive from it."
                 : StockColorTooltip,
             authoredPaletteAvailable);
 
@@ -17334,10 +17355,12 @@ protected:
                     settingsPanelMarginPixels * 2.f);
         const float colorPickerMinimumSelectorWidth =
             ImGui::GetFrameHeight() * 4.f;
+        const float colorPickerPopupHorizontalPadding =
+            style.WindowPadding.x + style.ItemInnerSpacing.x;
         const float colorPickerMinimumLaneWidth = std::ceil(
             (colorPickerMinimumSelectorWidth * 4.f +
                 style.ItemInnerSpacing.x) / 3.f) +
-            style.WindowPadding.x * 2.f;
+            colorPickerPopupHorizontalPadding * 2.f;
         const float settingsWindowMaximumWidth =
             std::max(
                 1.f,
@@ -17757,9 +17780,9 @@ protected:
                 m_app->ResetImageBasedLightingHistory();
             }
             ImGui::SetItemTooltip(
-                "Allow every ray traced effect to traverse the shared scene "
-                "representation. Individual effect settings are preserved "
-                "while traversal is off.");
+                "Allow ray traced effects to traverse the shared scene "
+                "representation. Their settings stay stored while traversal "
+                "is off.");
             if (DrawPresetResetIcon(
                     "RepresentationAllowRayTraversal",
                     representation.allowRayTraversal !=
@@ -18205,9 +18228,9 @@ protected:
                         m_app->ResetImageBasedLightingHistory();
                     }
                     ImGui::SetItemTooltip(
-                        "Use the established correlated material ratio "
-                        "estimate. Turn this off for one scalar stochastic "
-                        "shadow ray suitable for denoising.");
+                        "Use the correlated material ratio estimate. Turn "
+                        "this off for one stochastic shadow ray suitable for "
+                        "denoising.");
                     if (DrawPresetResetIcon(
                             "RatioEstimatorUseRatioEstimator",
                             ratio.useRatioEstimator !=
@@ -18225,9 +18248,8 @@ protected:
                         m_app->ResetImageBasedLightingHistory();
                     }
                     ImGui::SetItemTooltip(
-                        "Output the physical closest blocker distance. This "
-                        "is required for shadow denoising and has no distance "
-                        "output cost while disabled.");
+                        "Output the physical closest blocker distance required "
+                        "by shadow denoising. Disabled adds no distance output.");
                     if (DrawPresetResetIcon(
                             "RatioEstimatorOutputHitDistance",
                             ratio.outputHitDistance !=
@@ -18245,9 +18267,9 @@ protected:
                         m_app->ResetImageBasedLightingHistory();
                     }
                     ImGui::SetItemTooltip(
-                        "Trace one center ray and skip emitter sampling, full "
-                        "material preparation, and ratio evaluation. The "
-                        "light's Angular Size is preserved for soft mode.");
+                        "Trace one center ray; skip emitter sampling, material "
+                        "setup, and ratio evaluation. Angular Size is kept for "
+                        "soft mode.");
                     if (DrawPresetResetIcon(
                             "RatioEstimatorHardShadows",
                             ratio.hardShadows !=
@@ -18296,10 +18318,9 @@ protected:
                         }
                     }
                     ImGui::SetItemTooltip(
-                        "Choose 1 through 64 matched rays per pixel. Every "
-                        "numerator and denominator sample is evaluated in the "
-                        "current frame. The value is preserved while Ratio "
-                        "Estimator is off.");
+                        "Choose 1 to 64 matched rays per pixel; all ratio "
+                        "samples run this frame. Stored while Ratio Estimator "
+                        "is off.");
                     if (DrawPresetResetIcon(
                             "RatioEstimatorShadowSamples",
                             ratio.sampleRateLog2 !=
@@ -18370,10 +18391,9 @@ protected:
                         m_app->ResetImageBasedLightingHistory();
                     }
                     ImGui::SetItemTooltip(
-                        "Max preserves the established scene-diagonal sun "
-                        "reference. Finite distances intentionally ignore "
-                        "farther blockers and are bounded visibility, not "
-                        "exact sun visibility.");
+                        "Max uses the scene diagonal. Finite distances ignore "
+                        "farther blockers and provide bounded, not exact, sun "
+                        "visibility.");
                     if (DrawPresetResetIcon(
                             "RatioEstimatorShadowMaxDistance",
                             ratio.maxDistance !=
@@ -18393,10 +18413,9 @@ protected:
                         m_app->ResetImageBasedLightingHistory();
                     }
                     ImGui::SetItemTooltip(
-                        "Move the ray origin this many world units along the "
-                        "view-facing raster triangle normal. This does not add "
-                        "rays or shorten their reach; larger values can detach "
-                        "contact shadows.");
+                        "Offset rays along the view-facing triangle normal "
+                        "without changing count or reach; large values may "
+                        "detach shadows.");
                     if (DrawPresetResetIcon(
                             "RatioEstimatorShadowRayBias",
                             ratio.rayBias != ratioDefaults.rayBias))
@@ -18493,10 +18512,10 @@ protected:
                     profilePreview.c_str()))
             {
                 static constexpr const char* ProfileTooltips[] = {
-                    "Quarter resolution Bitmask Approximation with eight samples, the shared Noise configuration, joint bilateral reconstruction, and 16 bit buffers.",
-                    "Half resolution Bitmask Directional Visibility with eight samples, the shared Noise configuration, joint bilateral reconstruction, and 16 bit buffers.",
+                    "Quarter-resolution Bitmask Approximation: 8 samples, shared Noise, joint bilateral reconstruction, 16-bit buffers.",
+                    "Half-resolution Bitmask Directional Visibility: 8 samples, shared Noise, joint bilateral reconstruction, 16-bit buffers.",
                     "Full resolution Bitmask Directional Visibility with sixteen samples, the shared Noise configuration, and 16 bit buffers.",
-                    "Full resolution Bitmask Directional Visibility with forty eight samples, the shared Noise configuration, and 32 bit buffers."
+                    "Full-resolution Bitmask Directional Visibility, 48 samples, shared Noise, and 32-bit buffers."
                 };
                 for (int index = 0;
                     index < static_cast<int>(std::size(QualityLabels));
@@ -18519,9 +18538,9 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Choose a complete diffuse recipe. Individual changes "
-                "retain the originating profile and append (Custom); the "
-                "circular arrow restores the complete High recipe.");
+                "Choose a diffuse profile. Changes retain it and append "
+                "(Custom); the circular arrow restores the complete High "
+                "profile.");
             if (DrawPresetResetIcon(
                     "VisibilityProfile",
                     !MatchesScreenSpaceVisibilityQualityPreset(
@@ -18593,9 +18612,8 @@ protected:
                 m_app->ResetImageBasedLightingHistory();
             }
             ImGui::SetItemTooltip(
-                "Output a representative physical blocker distance for "
-                "ambient occlusion denoising. The distance path is omitted "
-                "when this is off.");
+                "Output a physical blocker distance for ambient-occlusion "
+                "denoising. The distance path is omitted while off.");
             if (DrawPresetResetIcon(
                     "VisibilityAmbientOutputHitDistance",
                     visibility.ambientOcclusion.outputHitDistance))
@@ -18660,9 +18678,8 @@ protected:
                 m_app->ResetImageBasedLightingHistory();
             }
             ImGui::SetItemTooltip(
-                "Output a representative physical hit distance for diffuse "
-                "illumination denoising. The distance path is omitted when "
-                "this is off.");
+                "Output a physical hit distance for diffuse-illumination "
+                "denoising. The distance path is omitted while off.");
             if (DrawPresetResetIcon(
                     "VisibilityIndirectOutputHitDistance",
                     visibility.indirectDiffuse.outputHitDistance))
@@ -18744,9 +18761,7 @@ protected:
             }
             ImGui::SetItemTooltip(
                 "Use custom noise sampling for this effect only. This does "
-                "not change the noise sampling used by any other effect. "
-                "Ambient occlusion and diffuse illumination share this one "
-                "visibility dispatch.");
+                "not change the noise sampling used by any other effect.");
             if (DrawPresetResetIcon(
                     "VisibilitySpecifyNoise",
                     visibility.noise.specifyNoise !=
@@ -19106,9 +19121,9 @@ protected:
                     if (effect == DenoisingEffect::Shadows)
                     {
                         ImGui::SetItemTooltip(
-                            "For shadows, Quality controls sun temporal "
-                            "stabilization. Flashlight SIGMA is spatial only; "
-                            "Resolution is its cost and detail control.");
+                            "For shadows, Quality controls temporal stability. "
+                            "Flashlight SIGMA is spatial only; Resolution "
+                            "controls cost and detail.");
                     }
                     else
                     {
@@ -19538,10 +19553,8 @@ protected:
                 temporalQualityCustom,
                 applyTemporalQualityPreset);
             ImGui::SetItemTooltip(
-                "Choose the default reconstruction quality recipe. "
-                "Recipe-owned Algorithm changes append (Custom). The circular "
-                "arrow restores factory Quality and its owned Algorithm "
-                "controls.");
+                "Choose Quality. Algorithm changes append (Custom); the arrow "
+                "restores factory Quality and its Algorithm controls.");
             if (DrawPresetResetIcon(
                     "TemporalQuality",
                     aliasing.temporal.quality !=
@@ -19706,13 +19719,9 @@ protected:
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip(
-                    "Choose the subpixel camera pattern. Sobol 32 is a fixed "
-                    "seed-43 stochastic Sobol sequence. The seed produces the "
-                    "first point; each later point is chosen from 100 "
-                    "same-stratum candidates to maximize minimum toroidal "
-                    "separation. Its measured spacing advantage is only over "
-                    "matching Filament Halton prefixes. Changing this resets "
-                    "temporal history.");
+                    "Choose camera jitter. Sobol 32 uses fixed seed 43 and "
+                    "optimized toroidal spacing. Changes reset temporal "
+                    "history.");
                 if (DrawNestedDropdownResetIcon(
                         "TemporalJitterSequence",
                         aliasing.temporal.jitterSequence !=
@@ -19895,9 +19904,8 @@ protected:
                     temporalCostCustom,
                     applyTemporalCostPreset);
                 ImGui::SetItemTooltip(
-                    "Choose the retained history quality and processing "
-                    "cost. Cost changes append (Custom). The circular arrow "
-                    "restores the factory Cost and every Cost control.");
+                    "Choose retained-history quality and cost. Changes append "
+                    "(Custom); the arrow restores factory Cost and its controls.");
                 if (DrawPresetResetIcon(
                         "TemporalCost",
                         aliasing.temporal.costMode !=
@@ -20080,9 +20088,8 @@ protected:
                 fastApproximateQualityCustom,
                 applyFastApproximateQualityPreset);
             ImGui::SetItemTooltip(
-                "Choose the FXAA edge-filter recipe. Advanced changes append "
-                "(Custom). The circular arrow restores the factory Quality "
-                "and every FXAA control.");
+                "Choose FXAA Quality. Advanced changes append (Custom); the "
+                "arrow restores factory Quality and all FXAA controls.");
             if (DrawPresetResetIcon(
                     "FastApproximateQuality",
                     aliasing.fastApproximate.quality !=
@@ -20205,9 +20212,8 @@ protected:
                 cmaa2QualityCustom,
                 applyCmaa2QualityPreset);
             ImGui::SetItemTooltip(
-                "Choose the CMAA2 edge-detection recipe. Advanced changes "
-                "append (Custom). The circular arrow restores the factory "
-                "Quality and both CMAA2 controls.");
+                "Choose CMAA2 Quality. Advanced changes append (Custom); the "
+                "arrow restores factory Quality and both controls.");
             if (DrawPresetResetIcon(
                     "MorphologicalQuality",
                     aliasing.cmaa2.quality !=
@@ -20433,8 +20439,8 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Choose default scene materials or a white-world presentation. "
-                "This can be combined with every effect-specific debug view.");
+                "Choose default materials or white world. This combines with "
+                "every effect-specific debug view.");
             if (DrawNestedDropdownResetIcon(
                     "DebugWorld",
                     m_ui.WhiteWorld != WhiteWorldMode::Off))
@@ -20489,8 +20495,8 @@ protected:
                 ImGui::EndCombo();
             }
             ImGui::SetItemTooltip(
-                "Show the default composite, ambient visibility, traced indirect "
-                "light, or the indirect response after material application.");
+                "Show the composite, ambient visibility, traced indirect light, "
+                "or indirect response after material application.");
             if (DrawNestedDropdownResetIcon(
                     "DebugVisibility",
                     m_ui.ScreenSpaceVisibility.debugView !=
@@ -20775,9 +20781,8 @@ protected:
                             SanitizeAutoExposureSettings(m_ui.AutoExposure);
                     }
                     ImGui::SetItemTooltip(
-                        "Time to close half of the remaining exposure-value "
-                        "difference. Changes only display adaptation; lighting "
-                        "and effect histories are unchanged.");
+                        "Set the half-life of exposure adaptation. This affects "
+                        "only display adaptation, not lighting or effect histories.");
                     if (DrawPresetResetIcon(
                             "Auto Exposure Adjustment Period",
                             m_ui.AutoExposure.adjustmentPeriodSeconds !=
@@ -20798,10 +20803,9 @@ protected:
                 m_app->ResetImageBasedLightingHistory();
             }
             ImGui::SetItemTooltip(
-                "Enable physical diffuse and specular environment fill. "
-                "Disable it to isolate direct lights. Occlusion settings are "
-                "preserved, but Occlusion needs indirect light to "
-                "affect the beauty image.");
+                "Enable diffuse/specular environment fill. Disable it to "
+                "isolate direct lights; settings persist, and Occlusion "
+                "needs it.");
             if (DrawPresetResetIcon(
                     "Ambient Fill Enabled",
                     !m_ui.EnableAmbientFill))
@@ -20982,10 +20986,9 @@ protected:
                     m_app->ResetImageBasedLightingHistory();
                 }
                 ImGui::SetItemTooltip(
-                    "Apply the same cosine weighted normal hemisphere "
-                    "visibility to specular environment lighting. It "
-                    "is not a reflection-direction or roughness-resolved "
-                    "specular visibility estimate.");
+                    "Apply cosine-weighted normal-hemisphere visibility to "
+                    "specular lighting; it ignores reflection direction and "
+                    "roughness.");
                 if (DrawPresetResetIcon(
                         "RayTracedSkyVisibilitySpecularIbl",
                         skyVisibility.applyToSpecularIbl !=
@@ -21003,9 +21006,8 @@ protected:
                     m_app->ResetImageBasedLightingHistory();
                 }
                 ImGui::SetItemTooltip(
-                    "Average the configured rays into the established sky "
-                    "visibility estimate. Turn this off for one matched "
-                    "stochastic ray suitable for denoising.");
+                    "Average configured rays for sky visibility. Turn this off "
+                    "for one matched stochastic ray suitable for denoising.");
                 if (DrawPresetResetIcon(
                         "RayTracedSkyVisibilityRatioEstimator",
                         skyVisibility.useRatioEstimator !=
@@ -21023,9 +21025,8 @@ protected:
                     m_app->ResetImageBasedLightingHistory();
                 }
                 ImGui::SetItemTooltip(
-                    "Output the physical closest blocker distance. This is "
-                    "required for sky visibility denoising and adds no hit "
-                    "distance cost while disabled.");
+                    "Output the physical closest blocker distance for sky-"
+                    "visibility denoising. Disabled adds no hit-distance cost.");
                 if (DrawPresetResetIcon(
                         "RayTracedSkyVisibilityOutputHitDistance",
                         skyVisibility.outputHitDistance !=
@@ -21071,10 +21072,8 @@ protected:
                 EndVisuallyDisabledUiScope(
                     sampleSliderManualDisabledAlpha);
                 ImGui::SetItemTooltip(
-                    "Trace 1 through 64 cosine weighted geometric normal "
-                    "hemisphere rays per pixel and average their binary hits "
-                    "and misses in the current frame. The value is preserved "
-                    "while Ratio Estimator is off.");
+                    "Trace and average 1 to 64 cosine-weighted normal-hemisphere "
+                    "rays per pixel. Stored while Ratio Estimator is off.");
                 if (DrawPresetResetIcon(
                         "RayTracedSkyVisibilitySamples",
                         skyVisibility.sampleRateLog2 !=
@@ -21145,9 +21144,9 @@ protected:
                     m_app->ResetImageBasedLightingHistory();
                 }
                 ImGui::SetItemTooltip(
-                    "Max preserves the established scene-diagonal reference. "
-                    "Finite distances intentionally ignore farther blockers "
-                    "and are bounded visibility, not exact sky visibility.");
+                    "Max uses the scene diagonal. Finite distances ignore "
+                    "farther blockers and provide bounded, not exact, sky "
+                    "visibility.");
                 if (DrawPresetResetIcon(
                         "RayTracedSkyVisibilityMaxDistance",
                         skyVisibility.maxDistance !=
@@ -21168,9 +21167,8 @@ protected:
                     m_app->ResetImageBasedLightingHistory();
                 }
                 ImGui::SetItemTooltip(
-                    "Move the ray origin this many world units along the "
-                    "view-facing raster triangle normal. Larger values can "
-                    "detach contact occlusion.");
+                    "Offset the ray origin along the view-facing raster-"
+                    "triangle normal; large values can detach contact occlusion.");
                 if (DrawPresetResetIcon(
                         "RayTracedSkyVisibilityRayBias",
                         skyVisibility.rayBias !=
@@ -21490,8 +21488,8 @@ protected:
                             "%.2f degrees");
                         ImGui::SetItemTooltip(
                             "Set the apparent diameter of the analytical "
-                            "spherical emitter at one metre. Its apparent "
-                            "size changes naturally with surface distance.");
+                            "spherical emitter at one metre; apparent size "
+                            "varies with surface distance.");
                         if (DrawPresetResetIcon(
                                 "Flashlight Angular Size",
                                 floatChanged(
@@ -21815,9 +21813,8 @@ protected:
                             m_app->ResetImageBasedLightingHistory();
                         }
                         ImGui::SetItemTooltip(
-                            "Set the directional light's full angular diameter. "
-                            "Zero degrees is a zero-extent directional emitter "
-                            "with geometrically hard shadows.");
+                            "Set the directional light's angular diameter. Zero "
+                            "degrees creates a zero-extent emitter with hard shadows.");
                         if (DrawPresetResetIcon(
                                 "Light Angular Size",
                                 floatChanged(
