@@ -53,21 +53,22 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 194u);
-    static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 13u);
+    static_assert(UiSettingsCommandCatalog.size() == 209u);
+    static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 14u);
     static_assert(static_cast<std::uint8_t>(UiSettingsCommandKind::Float4) == 7u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
         static_cast<std::uint8_t>(UiSettingsCommandVerb::Run));
 
-    constexpr std::array<std::size_t, 13> ExpectedSectionCounts = {
+    constexpr std::array<std::size_t, 14> ExpectedSectionCounts = {
         15u, // UI
-        6u,  // General
+        7u,  // General
+        7u,  // Pathing
         4u,  // Representation
-        3u,  // Noise
+        4u,  // Noise
         24u, // Visibility
-        22u, // Denoising
+        27u, // Denoising
         31u, // Aliasing
-        3u,  // Debug
+        4u,  // Debug
         25u, // Sky
         26u, // Lights
         11u, // Directional Shadows
@@ -112,7 +113,17 @@ int main()
         "representation.allow-ray-traversal",
         "representation.tlas.update-mode"
     };
+    const std::set<std::string> ExpectedPathing = {
+        "pathing.max-bounces",
+        "pathing.nee",
+        "pathing.nee-candidates",
+        "pathing.rtxdi",
+        "pathing.russian-roulette-start",
+        "pathing.ser",
+        "pathing.solver"
+    };
     const std::set<std::string> ExpectedNoise = {
+        "noise.accumulate-samples",
         "noise.animate-samples",
         "noise.pattern",
         "noise.resolution"
@@ -139,7 +150,12 @@ int main()
         "denoising.sky.history",
         "denoising.sky.method",
         "denoising.sky.quality",
-        "denoising.sky.resolution"
+        "denoising.sky.resolution",
+        "denoising.path-tracing.firefly-filter",
+        "denoising.path-tracing.firefly-threshold",
+        "denoising.path-tracing.method",
+        "denoising.path-tracing.psr",
+        "denoising.path-tracing.stable-planes"
     };
     const std::set<std::string> ExpectedDirectionalShadows = {
         "shadows.ray-traced.animate-samples",
@@ -159,10 +175,11 @@ int main()
     std::set<std::string> dynamicSelections;
     std::set<std::string> visibility;
     std::set<std::string> representation;
+    std::set<std::string> pathing;
     std::set<std::string> noise;
     std::set<std::string> denoising;
     std::set<std::string> directionalShadows;
-    std::array<std::size_t, 13> sectionCounts{};
+    std::array<std::size_t, 14> sectionCounts{};
     std::size_t actionCount = 0u;
     std::size_t dynamicCount = 0u;
 
@@ -221,6 +238,8 @@ int main()
             visibility.insert(std::string(definition.name));
         if (definition.section == Section::Representation)
             representation.insert(std::string(definition.name));
+        if (definition.section == Section::Pathing)
+            pathing.insert(std::string(definition.name));
         if (definition.section == Section::Noise)
             noise.insert(std::string(definition.name));
         if (definition.section == Section::Denoising)
@@ -238,13 +257,13 @@ int main()
     }
 
     Require(names.size() == UiSettingsCommandCatalog.size(),
-        "the compact catalog must contain 194 unique commands");
+        "the compact catalog must contain 209 unique commands");
     Require(sectionCounts == ExpectedSectionCounts,
         "section counts must match the current UI");
     Require(actionCount == 4u,
         "only open-folder, reset, capture, and restart actions remain");
-    Require(UiSettingsCommandCatalog.size() - actionCount == 190u,
-        "the compact catalog must contain 190 values");
+    Require(UiSettingsCommandCatalog.size() - actionCount == 205u,
+        "the compact catalog must contain 205 values");
     Require(dynamicCount == 49u,
         "runtime lights and materials must retain their 49 dynamic controls");
     Require(dynamicSelections == ExpectedDynamicSelections,
@@ -253,6 +272,8 @@ int main()
         "Visibility commands must exactly mirror the direct UI settings");
     Require(representation == ExpectedRepresentation,
         "Representation commands must exactly mirror the direct UI settings");
+    Require(pathing == ExpectedPathing,
+        "Pathing commands must exactly mirror the transport policy drawer");
     Require(noise == ExpectedNoise,
         "Noise commands must exactly mirror the shared configuration drawer");
     Require(denoising == ExpectedDenoising,
@@ -286,11 +307,22 @@ int main()
     requireDomain(
         "gpu.adaptive-sync",
         "off|vendor-agnostic|nvidia-exclusive");
+    requireDomain("lighting.solution", "ray-marching|path-tracing");
+    requireDomain("pathing.solver", "rtx-pt|restir-pt|restir-gi");
+    requireDomain("pathing.nee", "uniform|power|nee-at");
+    requireDomain("pathing.max-bounces", "integer 1..96");
+    requireDomain(
+        "pathing.russian-roulette-start",
+        "integer 1..96 and no greater than max-bounces");
+    requireDomain("pathing.nee-candidates", "integer 1..63");
+    requireDomain("pathing.ser", "on|off");
+    requireDomain("pathing.rtxdi", "on|off");
     requireDomain("noise.pattern",
         "spatial-white|spatial-blue|spatiotemporal-blue");
     requireDomain("noise.resolution",
         "64x64|128x128|256x256|512x512");
     requireDomain("noise.animate-samples", "on|off");
+    requireDomain("noise.accumulate-samples", "on|off");
     requireDomain("visibility.specify-noise", "on|off");
     requireDomain("visibility.noise-pattern",
         "spatial-white|spatial-blue|spatiotemporal-blue");
@@ -366,9 +398,25 @@ int main()
     requireDomain("denoising.gi.method", "none|reblur|relax");
     requireDomain("denoising.shadows.method", "none|sigma");
     requireDomain("denoising.sky.method", "none|reblur|relax");
+    requireDomain(
+        "denoising.path-tracing.method",
+        "raw|stable-plane-resolve|nrd-reblur|nrd-relax");
+    requireDomain(
+        "denoising.path-tracing.stable-planes",
+        "integer 0..3");
+    requireDomain("denoising.path-tracing.psr", "on|off");
+    requireDomain(
+        "denoising.path-tracing.firefly-filter",
+        "on|off");
+    requireDomain(
+        "denoising.path-tracing.firefly-threshold",
+        "float 0.01..1000000");
     requireDomain("denoising.ao.quality",
         "performance|balanced|quality|ultra");
     requireDomain("denoising.sky.resolution", "quarter|half|full");
+    requireDomain(
+        "debug.path-tracing.view",
+        "final|albedo|geometric-normal|shading-normal|sample-count|retry-probability|stable-plane|direct-reservoir|indirect-reservoir");
     requireDomain("sky.auto-exposure.enabled", "on|off");
     requireDomain(
         "sky.auto-exposure.exposure-compensation",
@@ -407,6 +455,22 @@ int main()
         "representation.allow-ray-traversal",
         Kind::Boolean,
         Section::Representation);
+    requireKindAndSection(
+        "lighting.solution", Kind::Enum, Section::General);
+    requireKindAndSection(
+        "pathing.solver", Kind::Enum, Section::Pathing);
+    requireKindAndSection(
+        "pathing.nee", Kind::Enum, Section::Pathing);
+    requireKindAndSection(
+        "pathing.max-bounces", Kind::Integer, Section::Pathing);
+    requireKindAndSection(
+        "pathing.russian-roulette-start", Kind::Integer, Section::Pathing);
+    requireKindAndSection(
+        "pathing.nee-candidates", Kind::Integer, Section::Pathing);
+    requireKindAndSection(
+        "pathing.ser", Kind::Boolean, Section::Pathing);
+    requireKindAndSection(
+        "pathing.rtxdi", Kind::Boolean, Section::Pathing);
     requireKindAndSection("ui.skin", Kind::Enum, Section::Ui);
     requireKindAndSection("ui.animations", Kind::Boolean, Section::Ui);
     requireKindAndSection(
@@ -450,6 +514,8 @@ int main()
     requireKindAndSection("noise.resolution", Kind::Enum, Section::Noise);
     requireKindAndSection(
         "noise.animate-samples", Kind::Boolean, Section::Noise);
+    requireKindAndSection(
+        "noise.accumulate-samples", Kind::Boolean, Section::Noise);
     requireKindAndSection(
         "visibility.specify-noise", Kind::Boolean, Section::Visibility);
     requireKindAndSection(

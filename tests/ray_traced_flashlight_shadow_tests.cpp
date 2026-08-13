@@ -360,22 +360,25 @@ namespace
 
         const std::size_t opacityInitialization = materialVisibility.find(
             "float opacity = material.opacity;");
+        const std::size_t opacityPreference = materialVisibility.find(
+            "const bool useBaseAlphaTexture = !useOpacityTexture &&");
         const std::size_t opacityBranch = materialVisibility.find(
-            "if ((material.flags & MaterialFlags_UseOpacityTexture) != 0");
+            "if (useOpacityTexture)");
         const std::size_t opacitySample = materialVisibility.find(
             ").r;",
             opacityBranch);
         const std::size_t baseAlphaBranch = materialVisibility.find(
-            "else if ((material.flags & "
-                "MaterialFlags_UseBaseOrDiffuseTexture) != 0");
+            "else if (useBaseAlphaTexture)");
         const std::size_t baseAlphaSample = materialVisibility.find(
             ").a;",
             baseAlphaBranch);
         assert(opacityInitialization != std::string::npos);
+        assert(opacityPreference != std::string::npos);
         assert(opacityBranch != std::string::npos);
         assert(opacitySample != std::string::npos);
         assert(baseAlphaBranch != std::string::npos);
         assert(baseAlphaSample != std::string::npos);
+        assert(opacityPreference < opacityInitialization);
         assert(opacityInitialization < opacityBranch);
         assert(opacityBranch < opacitySample);
         assert(opacitySample < baseAlphaBranch);

@@ -54,6 +54,7 @@ Texture2D<float4> t_Normals : register(t1);
 Texture2D<float4> t_SourceRadiance : register(t2);
 #endif
 Texture2DArray<float> t_Noise : register(t3);
+Texture2D<uint> t_AttemptMask : register(t4);
 #if ENABLE_AO
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 #endif
@@ -140,6 +141,28 @@ uint2 SamplingToFullPixel(uint2 samplingPixel)
     uint scale = max(g_Visibility.resolutionScale, 1u);
     uint2 fullSize = uint2(g_Visibility.fullResolution);
     return min(samplingPixel * scale + scale / 2u, fullSize - 1u);
+}
+
+bool VisibilitySamplingFootprintRequested(uint2 samplingPixel)
+{
+    if (g_Visibility.attemptMaskEnabled == 0u)
+        return true;
+
+    const uint scale = max(g_Visibility.resolutionScale, 1u);
+    const uint2 fullSize = uint2(g_Visibility.fullResolution);
+    const uint2 footprintBegin = samplingPixel * scale;
+    const uint2 footprintEnd = min(footprintBegin + scale, fullSize);
+    [loop]
+    for (uint y = footprintBegin.y; y < footprintEnd.y; ++y)
+    {
+        [loop]
+        for (uint x = footprintBegin.x; x < footprintEnd.x; ++x)
+        {
+            if (t_AttemptMask[uint2(x, y)] != 0u)
+                return true;
+        }
+    }
+    return false;
 }
 
 float ProgressiveRadialSample(uint radialStratum, float rotation)
@@ -355,6 +378,8 @@ void WriteEmptyVisibilityOutput(uint2 pixel)
 void main(uint2 dispatchPixel : SV_DispatchThreadID)
 {
     if (any(dispatchPixel >= uint2(g_Visibility.samplingResolution)))
+        return;
+    if (!VisibilitySamplingFootprintRequested(dispatchPixel))
         return;
 
     uint2 receiverPixel = SamplingToFullPixel(dispatchPixel);

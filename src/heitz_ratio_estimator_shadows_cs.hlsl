@@ -25,6 +25,7 @@ Texture2D<float4> t_GBufferNormals : register(t4);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t5);
 Texture2DArray<float> t_Noise : register(t6);
 Texture2D<float4> t_GBufferEmissive : register(t7);
+Texture2D<uint> t_AttemptMask : register(t8);
 
 VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_Output : register(u0);
@@ -268,6 +269,11 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
     if (!HeitzInViewport(dispatchPosition))
         return;
     const int2 pixelPosition = HeitzPixelPosition(dispatchPosition);
+    if (g_Heitz.attemptMaskEnabled != 0u &&
+        t_AttemptMask[pixelPosition] == 0u)
+    {
+        return;
+    }
     const float4 normalChannels = t_GBufferNormals[pixelPosition];
     if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
     {

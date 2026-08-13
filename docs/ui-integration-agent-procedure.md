@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-08-12.3`.
+UI reference version: `2026-08-12.4`.
 
 ## Purpose
 
@@ -29,23 +29,37 @@ margin or its carved depth line.
 Its top-level drawers are:
 
 1. General
-2. Representation
-3. Noise
-4. Diffuse
-5. Denoising
-6. Buffers
-7. Aliasing
-8. Debug
-9. Sky
-10. Lights
-11. Shadows
-12. Material
-13. Interface
+2. Pathing
+3. Representation
+4. Noise
+5. Diffuse
+6. Denoising
+7. Buffers
+8. Aliasing
+9. Debug
+10. Sky
+11. Lights
+12. Shadows
+13. Material
+14. Interface
 
 The order is product behavior. Add a top-level drawer only when the feature has
 a distinct user goal and enough retained controls to justify it. Effect-specific
 rendering views and output diagnostics belong in Debug, grouped under the effect
 they explain.
+
+General begins with **Lighting Solution**. Pathing is submitted every frame but
+animates into view only for Path Tracing. Diffuse, Buffers, Aliasing, and
+Shadows are likewise always submitted and animate out for Path Tracing. Shared
+drawers keep their header and use stable independent body regions for
+solution-specific controls. Never erase inactive settings or force a disclosure
+closed merely because its lighting solution is not selected.
+
+Lighting Solution and solver changes use the ordinary deferred combo lifecycle.
+Renderer topology may change only after popup roll-up, the settle interval, and
+one complete idle composition frame. `DeferredUiStructuralPresentation` stays
+retired; whole-drawer and shared-body visibility use stable-ID animated toggle
+regions without creating a second mutation queue.
 
 ## Visual and Copy System
 
@@ -670,6 +684,11 @@ The UI handoff includes:
 - confirmation that this reference was updated when normative behavior changed.
 
 ## Reference Revision History
+
+- `2026-08-12.4`: Added Lighting Solution as the first General decision,
+  inserted the Pathing drawer, defined Lighting Solution drawer/body gating and
+  state retention, and kept renderer topology changes on the established
+  deferred combo barrier.
 
 - `2026-08-12.3`: Centered the scoped picker body on its source row before
   applying Settings-bound clamps, expanded the shared panel-inset role across

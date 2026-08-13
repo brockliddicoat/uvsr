@@ -185,7 +185,8 @@ namespace
                 "floatdepthquantizationstep;",
                 "floatraybias;",
                 "uintreversedepth;",
-                "uintfloatdepth;"
+                "uintfloatdepth;",
+                "uintattemptmaskenabled;"
             },
             "the producer constant block must carry only current-frame query state");
 
@@ -280,7 +281,8 @@ namespace
             pass,
             "m_boundtlas!=worldtlas||!sameinputs(m_boundinputs,inputs)||"
                 "m_boundmaterialvisibility!=materialvisibility||"
-                "m_boundnoisetexture!=noisetexture",
+                "m_boundnoisetexture!=noisetexture||"
+                "m_boundattemptmask!=attemptmask",
             "the binding cache must include every TLAS, material, and noise resource identity");
         RequireContains(
             pass,
@@ -292,6 +294,7 @@ namespace
                 "nvrhi::bindinglayoutitem::texture_srv(2),"
                 "nvrhi::bindinglayoutitem::texture_srv(3),"
                 "nvrhi::bindinglayoutitem::texture_srv(4),"
+                "nvrhi::bindinglayoutitem::texture_srv(5),"
                 "nvrhi::bindinglayoutitem::structuredbuffer_srv(10),"
                 "nvrhi::bindinglayoutitem::structuredbuffer_srv(11),"
                 "nvrhi::bindinglayoutitem::structuredbuffer_srv(12),"
@@ -344,14 +347,15 @@ namespace
             pass,
             {
                 "if(!m_supported||!commandlist||!materialvisibility||"
-                    "!worldtlas||!noisetexture||",
+                    "!worldtlas||!noisetexture||!sampleschedule||",
                 "return{};",
                 "if(std::isnan(raydistance))",
                 "return{};",
                 "if(!ensureresources(inputs,requestedhitdistance))",
                 "return{};",
                 "if(!ensurebindingset(inputs,materialvisibility,worldtlas,"
-                    "noisetexture,outputhitdistance))",
+                    "noisetexture,sampleschedule.attemptmask,"
+                    "outputhitdistance))",
                 "return{};",
                 "return{m_outputvisibility,outputhitdistance?"
                     "m_outputhitdistance.get():nullptr,true,"
@@ -375,6 +379,11 @@ namespace
             shader,
             "texture2d<float4>t_gbuffermaterial:register(t2);",
             "the producer shader must consume packed material normals");
+        RequireContains(
+            shader,
+            "if(g_skyvisibility.attemptmaskenabled!=0u&&"
+                "t_attemptmask[pixelposition]==0u){return;}",
+            "the sample mask must exit before sky surface and ray work");
         RequireContains(
             shader,
             "texture2d<float4>t_gbuffernormals:register(t3);",
@@ -420,13 +429,18 @@ namespace
                 "t_raymaterialgeometries[globalgeometryindex]",
                 "t_raymaterials[geometry.materialindex]",
                 "material.domain!=materialdomain_alphatested",
+                "constbooluseopacitytexture="
+                    "(material.flags&materialflags_useopacitytexture)!=0&&"
+                    "material.opacitytextureindex>=0;",
+                "constboolusebasealphatexture=!useopacitytexture&&"
+                    "(material.flags&materialflags_usebaseordiffusetexture)!=0&&"
+                    "material.baseordiffusetextureindex>=0;",
                 "floatopacity=material.opacity;",
-                "materialflags_useopacitytexture",
+                "if(useopacitytexture)",
                 "nonuniformresourceindex(material.opacitytextureindex)",
                 "opacity*=opacitytexture.samplelevel(",
                 ").r;",
-                "elseif((material.flags&"
-                    "materialflags_usebaseordiffusetexture)!=0",
+                "elseif(usebasealphatexture)",
                 "nonuniformresourceindex("
                     "material.baseordiffusetextureindex)",
                 "opacity*=basetexture.samplelevel(",
@@ -610,19 +624,25 @@ namespace
         RequireContains(
             representationSelection,
             "constboolraytracedskyvisibilityselected="
+                "!pathtracingselected&&"
                 "m_ui.representation.allowraytraversal&&"
                 "m_ui.raytracedskyvisibility.enabled&&"
                 "hasraytracedskyvisibilityconsumer("
                     "m_ui.raytracedskyvisibility)&&"
                 "supportsraytracedskyvisibility();",
-            "sky visibility must select world representation through the shared ray traversal gate");
+            "sky visibility must stay on the Ray Marching solution and select "
+            "world representation through the shared ray traversal gate");
         RequireContains(
             representationSelection,
             "constboolworldrepresentationselected="
                 "heitzratioestimatorselected||"
                 "raytracedflashlightshadowselected||"
-                "raytracedskyvisibilityselected;",
-            "the shared TLAS consumer gate must include every ray traversing visibility producer");
+                "raytracedskyvisibilityselected||"
+                "(pathtracingselected&&"
+                    "pathtracingscenedomainsupported&&"
+                    "m_ui.representation.allowraytraversal);",
+            "the shared TLAS consumer gate must include every ray traversing "
+            "visibility producer and complete path transport");
         RequireAbsent(
             representationSelection,
             "m_sunlight",
@@ -709,7 +729,7 @@ namespace
                 "skynoise.texture,",
                 "skynoisesettings.animate?"
                     "uint32_t(m_raytracedskyvisibilityphase):0u,",
-                "m_scenediagonal);",
+                "m_scenediagonal,lightingsampleschedule);",
                 "endrendererstage("
                     "renderertimingstage::skyvisibilityraydispatch);",
                 "skyvisibility=skyvisibilityresult?"

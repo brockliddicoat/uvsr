@@ -19,6 +19,7 @@ Texture2D<float> t_Depth : register(t1);
 Texture2D<float4> t_GBufferMaterial : register(t2);
 Texture2D<float4> t_GBufferNormals : register(t3);
 Texture2DArray<float> t_Noise : register(t4);
+Texture2D<uint> t_AttemptMask : register(t5);
 
 RWTexture2D<float> u_Visibility : register(u0);
 RWTexture2D<float> u_HitDistance : register(u1);
@@ -262,6 +263,11 @@ void GenerateVisibility(uint2 dispatchPosition : SV_DispatchThreadID)
         return;
     const int2 pixelPosition =
         FlashlightShadowPixelPosition(dispatchPosition);
+    if (g_FlashlightShadows.attemptMaskEnabled != 0u &&
+        t_AttemptMask[pixelPosition] == 0u)
+    {
+        return;
+    }
     const RayTracedFlashlightShadowEncoding result =
         FlashlightShadowEvaluate(pixelPosition, dispatchPosition);
     u_Visibility[pixelPosition] = result.visibility;
@@ -275,6 +281,11 @@ void GenerateVisibilityAndHitDistance(
         return;
     const int2 pixelPosition =
         FlashlightShadowPixelPosition(dispatchPosition);
+    if (g_FlashlightShadows.attemptMaskEnabled != 0u &&
+        t_AttemptMask[pixelPosition] == 0u)
+    {
+        return;
+    }
     const RayTracedFlashlightShadowEncoding result =
         FlashlightShadowEvaluate(pixelPosition, dispatchPosition);
     u_Visibility[pixelPosition] = result.visibility;

@@ -382,8 +382,11 @@ if (UVSR_BUILD_APPLICATION)
         src/heitz_ratio_estimator_shadows.cpp
         src/image_based_lighting_background_pass.cpp
         src/image_based_lighting_environment.cpp
+        src/lighting_accumulation_pass.cpp
         src/msaa_visibility_resolve.cpp
         src/noise_texture_library.cpp
+        src/path_tracing_pass.cpp
+        src/path_tracing_stable_plane_resolve_pass.cpp
         src/pbr_deferred_lighting_pass.cpp
         src/ray_traced_flashlight_shadows.cpp
         src/ray_traced_sky_visibility.cpp
@@ -583,6 +586,24 @@ target_include_directories(
 add_test(
     NAME uvsr_world_space_representation_settings_reference
     COMMAND uvsr_world_space_representation_settings_tests)
+
+add_executable(
+    uvsr_path_tracing_settings_tests
+    tests/path_tracing_settings_tests.cpp)
+target_include_directories(
+    uvsr_path_tracing_settings_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(
+    NAME uvsr_path_tracing_settings_reference
+    COMMAND uvsr_path_tracing_settings_tests)
+
+add_executable(
+    uvsr_path_tracing_source_contract_tests
+    tests/path_tracing_source_contract_tests.cpp)
+add_test(
+    NAME uvsr_path_tracing_source_contract
+    COMMAND uvsr_path_tracing_source_contract_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(uvsr_flashlight_tests tests/flashlight_tests.cpp)
 target_include_directories(
@@ -917,7 +938,11 @@ set(UVSR_APP_SHADERS
     cmaa2_EdgesColor2x2CS
     cmaa2_ProcessCandidatesCS
     image_based_lighting_background_ps
+    lighting_accumulation_cs
+    lighting_accumulation_prepare_cs
     msaa_visibility_resolve_cs
+    path_tracing_cs
+    path_tracing_stable_plane_resolve_cs
     pbr_deferred_lighting_cs
     pbr_deferred_lighting_msaa_cs
     pbr_gbuffer_ps

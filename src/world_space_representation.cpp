@@ -226,6 +226,7 @@ namespace uvsr
     void WorldSpaceRepresentation::Reset()
     {
         ++m_Status.generation;
+        ++m_Status.contentRevision;
         m_Tlas = nullptr;
         m_InstanceSnapshots.clear();
         m_GeometryIndexMapUpload.clear();
@@ -273,6 +274,7 @@ namespace uvsr
         }
 
         ++m_Status.generation;
+        ++m_Status.contentRevision;
         m_Tlas = nullptr;
         m_InstanceSnapshots.clear();
         if (m_BlasRecords.empty())
@@ -292,6 +294,7 @@ namespace uvsr
     void WorldSpaceRepresentation::Fail(const char* message)
     {
         ++m_Status.generation;
+        ++m_Status.contentRevision;
         m_Status.state = WorldSpaceRepresentationState::Failed;
         m_Tlas = nullptr;
         m_InstanceSnapshots.clear();
@@ -317,6 +320,7 @@ namespace uvsr
         const WorldSpaceRepresentationSettings& settings)
     {
         ++m_Status.generation;
+        ++m_Status.contentRevision;
         m_Tlas = nullptr;
         m_InstanceSnapshots.clear();
         m_GeometryIndexMapUpload.clear();
@@ -603,6 +607,7 @@ namespace uvsr
         m_InstanceSnapshots = std::move(snapshots);
         m_Status.instanceCount = uint32_t(m_Instances.size());
         m_Status.state = WorldSpaceRepresentationState::Ready;
+        ++m_Status.contentRevision;
         return true;
     }
 

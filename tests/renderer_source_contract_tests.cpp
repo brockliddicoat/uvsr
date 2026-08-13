@@ -39,6 +39,30 @@ namespace
             beginPosition, endPosition - beginPosition);
     }
 
+    std::string_view ExtractBalancedScope(
+        std::string_view source,
+        std::string_view anchor)
+    {
+        const size_t anchorPosition = source.find(anchor);
+        if (anchorPosition == std::string_view::npos)
+            return {};
+        const size_t openPosition = source.find('{', anchorPosition);
+        if (openPosition == std::string_view::npos)
+            return {};
+
+        size_t depth = 0u;
+        for (size_t position = openPosition; position < source.size(); ++position)
+        {
+            if (source[position] == '{')
+                ++depth;
+            else if (source[position] == '}' && --depth == 0u)
+                return source.substr(
+                    anchorPosition,
+                    position - anchorPosition + 1u);
+        }
+        return {};
+    }
+
     bool ExpectContains(
         std::string_view source,
         std::string_view required,
@@ -154,6 +178,18 @@ int main(int argc, char** argv)
         root / "src/screen_space_visibility.h");
     const std::string visibilityShader = ReadFile(
         root / "src/screen_space_visibility_cs.hlsl");
+    const std::string lightingAccumulation = ReadFile(
+        root / "src/lighting_accumulation_pass.cpp");
+    const std::string lightingAccumulationHeader = ReadFile(
+        root / "src/lighting_accumulation_pass.h");
+    const std::string lightingAccumulationPrepareShader = ReadFile(
+        root / "src/lighting_accumulation_prepare_cs.hlsl");
+    const std::string lightingAccumulationResolveShader = ReadFile(
+        root / "src/lighting_accumulation_cs.hlsl");
+    const std::string flashlightShadowPass = ReadFile(
+        root / "src/ray_traced_flashlight_shadows.cpp");
+    const std::string flashlightShadowShader = ReadFile(
+        root / "src/ray_traced_flashlight_shadows_cs.hlsl");
     const std::string pbrDeferredLightingPass = ReadFile(
         root / "src/pbr_deferred_lighting_pass.cpp");
     const std::string pbrDeferredLightingPassHeader = ReadFile(
@@ -582,14 +618,14 @@ int main(int argc, char** argv)
         worldRepresentationHeader,
         "uint64_t generation = 0u;",
         "world-representation consumer generation serial");
-    passed &= ExpectAbsent(
+    passed &= ExpectContains(
         worldRepresentationHeader,
-        "contentRevision",
-        "retired shadow-private content revision");
-    passed &= ExpectAbsent(
+        "uint64_t contentRevision = 0u;",
+        "shared dynamic-content revision");
+    passed &= ExpectContains(
         worldRepresentation,
-        "contentRevision",
-        "retired TLAS private-history publication revision");
+        "++m_Status.contentRevision;",
+        "dynamic-content revision publication");
     passed &= ExpectContains(
         viewer,
         "worldRepresentationGenerationBefore",
@@ -614,7 +650,8 @@ int main(int argc, char** argv)
             "                        shadowNoiseSettings.animate\n"
             "                            ? uint32_t(m_HeitzRatioEstimatorPhase)\n"
             "                            : 0u,\n"
-            "                        m_SceneDiagonal);",
+            "                        m_SceneDiagonal,\n"
+            "                        lightingSampleSchedule);",
         "resolved texture-backed Heitz sampling phase input");
     passed &= ExpectContains(
         viewer,
@@ -1504,6 +1541,306 @@ int main(int argc, char** argv)
         "m_AgxToneMappingPass->Render(",
         "m_FastApproximateAAPass->Render(",
         "Fast Approximate post-tone-map order");
+    for (const std::pair<std::string_view, std::string_view>& order : {
+            std::pair<std::string_view, std::string_view>{
+                "m_LightingAccumulationPass->PrepareAttempts(",
+                "m_RayTracedFlashlightShadowPass->Render(" },
+            { "m_LightingAccumulationPass->PrepareAttempts(",
+                "m_HeitzRatioEstimatorShadowPass->Render(" },
+            { "m_LightingAccumulationPass->PrepareAttempts(",
+                "m_RayTracedSkyVisibilityPass->Render(" },
+            { "m_LightingAccumulationPass->PrepareAttempts(",
+                "m_ScreenSpaceVisibilityPass->Render(" },
+            { "antiAliasedTexture = m_TemporalAAPass->Render(",
+                "m_LightingAccumulationPass->Resolve(" } })
+    {
+        passed &= ExpectOrdered(
+            renderScene,
+            order.first,
+            order.second,
+            "prepared ray-marching schedule producer/resolve order");
+    }
+    passed &= ExpectContains(
+        renderScene,
+        "m_LightingAccumulationPass->Resolve(\n"
+            "                m_CommandList,\n"
+            "                antiAliasedTexture,\n"
+            "                lightingSampleSchedule);",
+        "ray-marching accumulation consumes the selected scene-linear source");
+    passed &= ExpectContains(
+        renderScene,
+        "!pathTracingSelected &&\n"
+            "                !rayMarchingDiagnostic &&\n"
+            "                m_ui.AccumulateSamples &&\n"
+            "                rayMarchingProducerTopologyReady &&\n"
+            "                m_LightingAccumulationPass->IsValid()",
+        "disabled accumulation and diagnostic views bypass the full history system");
+    passed &= ExpectContains(
+        renderScene,
+        "const bool expectedProducersCompleted =\n"
+            "            (!screenSpaceVisibilityRequested ||\n"
+            "                screenSpaceVisibilityResult.dispatched) &&\n"
+            "            (!heitzRatioEstimatorExpectedToContribute ||\n"
+            "                heitzShadowResult.dispatched) &&\n"
+            "            (!rayTracedFlashlightShadowExpectedToContribute ||\n"
+            "                flashlightShadowResult.dispatched) &&\n"
+            "            (!rayTracedSkyVisibilityExpectedToContribute ||\n"
+            "                skyVisibilityResult.dispatched);",
+        "every expected lighting producer must complete before history commit");
+    passed &= ExpectContains(
+        renderScene,
+        "m_LightingAccumulationPass->CancelPreparedSchedule(\n"
+            "                lightingSampleSchedule);",
+        "producer failure cancels the prepared transaction");
+    passed &= ExpectContains(
+        lightingAccumulationHeader,
+        "struct LightingSampleSchedule",
+        "shared sample-schedule API");
+    passed &= ExpectContains(
+        lightingAccumulation,
+        "if (!accumulateSamples)\n"
+            "            return GetDisabledSchedule();",
+        "disabled accumulation bypasses full-resolution history allocation");
+    passed &= ExpectOrdered(
+        lightingAccumulation,
+        "if (!accumulateSamples)",
+        "EnsureResources(width, height)",
+        "disabled accumulation bypass must precede resource allocation");
+    passed &= ExpectContains(
+        lightingAccumulation,
+        "m_HistoryEpoch = m_PreparedHistoryEpoch;",
+        "resolve-only epoch commit");
+    passed &= ExpectContains(
+        lightingAccumulation,
+        "m_WriteIndex ^= 1u;",
+        "resolve-only history flip");
+    passed &= ExpectAbsent(
+        lightingAccumulationResolveShader,
+        "Random(",
+        "resolve-stage retry RNG");
+    passed &= ExpectContains(
+        lightingAccumulationPrepareShader,
+        "g_Accumulation.schedulingSerialLow",
+        "full scheduling serial low word");
+    passed &= ExpectContains(
+        lightingAccumulationPrepareShader,
+        "g_Accumulation.schedulingSerialHigh",
+        "full scheduling serial high word");
+    passed &= ExpectContains(
+        lightingAccumulationPrepareShader,
+        "Texture2D<float4> t_PreviousMean",
+        "prepare previous mean input");
+    passed &= ExpectContains(
+        lightingAccumulationPrepareShader,
+        "Texture2D<uint> t_PreviousCount",
+        "prepare previous count input");
+    passed &= ExpectContains(
+        visibilityShader,
+        "for (uint y = footprintBegin.y; y < footprintEnd.y; ++y)",
+        "reduced-resolution attempt-footprint row OR");
+    passed &= ExpectContains(
+        visibilityShader,
+        "for (uint x = footprintBegin.x; x < footprintEnd.x; ++x)",
+        "reduced-resolution attempt-footprint column OR");
+    passed &= ExpectContains(
+        flashlightShadowShader,
+        "g_FlashlightShadows.attemptMaskEnabled != 0u",
+        "finite-emitter flashlight sample attempt gate");
+    passed &= ExpectContains(
+        flashlightShadowPass,
+        "sampleSchedule.enabled && stochastic ? 1u : 0u",
+        "deterministic flashlight shadow ignores attempt mask");
+    passed &= ExpectContains(
+        flashlightShadowPass,
+        "m_BoundAttemptMask == attemptMask",
+        "flashlight binding cache tracks attempt mask identity");
+    passed &= ExpectOrdered(
+        renderScene,
+        "const bool pathTransportActive = bool(pathTracingResult);",
+        "if (!pathTracingSelected || !pathTransportActive)",
+        "path-tracing unavailable frames retain a live raster fallback");
+    passed &= ExpectOrdered(
+        renderScene,
+        "if (!pathTracingSelected || !pathTransportActive)",
+        "nvrhi::ITexture* sceneColor = pathTracingResult",
+        "the fallback raster completes before presentation selects scene color");
+    passed &= ExpectContains(
+        renderScene,
+        ": m_RenderTargets->HdrColor.Get();",
+        "path-tracing unavailable frames present the live raster fallback target");
+    passed &= ExpectContains(
+        viewer,
+        "PathTracingSceneDomainStatus GetPathTracingSceneDomainStatus() const",
+        "path transport exposes an explicit scene-domain capability policy");
+    passed &= ExpectContains(
+        viewer,
+        "material.domain != MaterialDomain::Opaque &&\n"
+            "                    material.domain != MaterialDomain::AlphaTested",
+        "path transport rejects unsupported physical material domains");
+    passed &= ExpectContains(
+        viewer,
+        "material.transmissionFactor > 0.f ||\n"
+            "                    material.enableSubsurfaceScattering ||\n"
+            "                    material.enableHair",
+        "unsupported transport material features force the live raster fallback");
+    passed &= ExpectContains(
+        renderScene,
+        "pathTracingSelected &&\n"
+            "            pathTracingSceneDomainSupported &&\n"
+            "            worldRepresentationReady",
+        "unsupported scene domains cannot dispatch partial path transport");
+    passed &= ExpectContains(
+        viewer,
+        "Path transport unavailable for transmissive, hair,",
+        "pathing drawer explains strict scene-domain fallback");
+    passed &= ExpectContains(
+        viewer,
+        "material.domain == MaterialDomain::AlphaBlended",
+        "blended decal geometry is classified separately from fatal domains");
+    passed &= ExpectContains(
+        viewer,
+        "Alpha-blended geometry is outside the transport",
+        "pathing drawer reports blended-geometry omission without disabling transport");
+    passed &= ExpectContains(
+        buildSystem,
+        "src/path_tracing_stable_plane_resolve_pass.cpp",
+        "stable-plane resolve production translation unit");
+    passed &= ExpectContains(
+        viewer,
+        "m_PathTracingPass->SetStablePlaneResolveSupported(\n"
+            "            m_PathTracingStablePlaneResolvePass->IsSupported());",
+        "app-composed stable signal and resolve pipeline capability");
+    passed &= ExpectOrdered(
+        renderScene,
+        "pathTracingResult = m_PathTracingPass->Render(",
+        "pathTracingResult.completedSignalCycle",
+        "stable reconstruction executes only after successful transport");
+    passed &= ExpectOrdered(
+        renderScene,
+        "pathTracingResult.completedSignalCycle",
+        "const bool pathTransportActive = bool(pathTracingResult);",
+        "stable reconstruction remains inside the shared command-list submission path");
+    passed &= ExpectContains(
+        renderScene,
+        "pathTracingResult.signalEpoch == m_LightingHistoryEpoch",
+        "stable resolve rejects transport signals from another history epoch");
+    passed &= ExpectContains(
+        renderScene,
+        "pathTracingResult.stablePlaneResolveActive =\n"
+            "                m_PathTracingStablePlaneResolvePass->Render(",
+        "stable resolve result reports actual dispatch rather than authored intent");
+    passed &= ExpectOrdered(
+        renderScene,
+        "bool stablePlaneResolvedThisFrame = false;",
+        "pathTracingResult.stablePlaneResolveActive =",
+        "stable resolve tracks whether this frame rebuilt its cached bindings");
+    passed &= ExpectOrdered(
+        renderScene,
+        "stablePlaneResolvedThisFrame =",
+        "if (m_PathTracingStablePlaneResolvePass &&\n"
+            "            !stablePlaneResolvedThisFrame)",
+        "inactive or failed stable resolve enters the binding-release path");
+    passed &= ExpectOrdered(
+        renderScene,
+        "!stablePlaneResolvedThisFrame)",
+        "m_PathTracingStablePlaneResolvePass->ResetBindingCache();",
+        "inactive or failed stable resolve releases cached full-resolution signal bindings");
+    passed &= ExpectOrdered(
+        viewer,
+        "m_PathTracingPass->ResetBindingCache();",
+        "m_PathTracingStablePlaneResolvePass->ResetBindingCache();",
+        "scene unload releases transport and stable-resolve binding ownership");
+    passed &= ExpectContains(
+        renderScene,
+        "Resolve failure is presentation-local. The transport dispatch",
+        "failed stable resolve keeps raw transport history and presentation valid");
+    const std::string_view rasterFallbackScope = ExtractBalancedScope(
+        renderScene,
+        "if (!pathTracingSelected || !pathTransportActive)");
+    passed &= ExpectContains(
+        rasterFallbackScope,
+        "GBufferFillPass::Context gbufferContext;",
+        "path-tracing fallback scope owns raster geometry");
+    passed &= ExpectAbsent(
+        rasterFallbackScope,
+        "m_MaterialPickPurpose",
+        "material picking remains outside the raster fallback scope");
+    passed &= ExpectAbsent(
+        rasterFallbackScope,
+        "nvrhi::ITexture* sceneColor",
+        "scene-color selection remains outside the raster fallback scope");
+    passed &= ExpectAbsent(
+        rasterFallbackScope,
+        "m_CommandList->close()",
+        "command-list close remains outside the raster fallback scope");
+    passed &= ExpectAbsent(
+        rasterFallbackScope,
+        "executeCommandList",
+        "command-list submission remains outside the raster fallback scope");
+
+    const std::string_view synchronizeLightingHistory = ExtractSection(
+        viewer,
+        "void SynchronizeLightingAccumulationHistory(",
+        "void ResetImageBasedLightingHistory()");
+    passed &= ExpectContains(
+        renderScene,
+        "SceneGraphNode::DirtyFlags::SubgraphContentUpdate",
+        "content-only geometry deformation invalidates retained lighting");
+    passed &= ExpectContains(
+        renderScene,
+        "sceneGraph->HasPendingTransformChanges() ||\n"
+            "                pendingContentChanges",
+        "instance, joint, and content-only geometry changes share the pre-refresh invalidation gate");
+    passed &= ExpectOrdered(
+        synchronizeLightingHistory,
+        "const FlashlightBeamProfile flashlightProfile =",
+        "const bool rayMarchingRayTraversalSelected =",
+        "flashlight profile invalidation applies to both lighting solutions");
+    passed &= ExpectContains(
+        synchronizeLightingHistory,
+        "HashLightingHistoryValue(signature, flashlightProfile);",
+        "retained lighting tracks the resolved flashlight beam profile");
+    passed &= ExpectOrdered(
+        synchronizeLightingHistory,
+        "LightConstants constants;",
+        "std::memset(&constants, 0, sizeof(constants));",
+        "static-light history hashing canonicalizes type-unused lanes");
+    passed &= ExpectOrdered(
+        synchronizeLightingHistory,
+        "std::memset(&constants, 0, sizeof(constants));",
+        "light->FillLightConstants(constants);",
+        "canonical light record initialization precedes Donut field filling");
+    passed &= ExpectContains(
+        synchronizeLightingHistory,
+        "m_ui.Lighting == LightingSolution::RayMarching &&\n"
+            "            m_ui.AccumulateSamples",
+        "ray-marching accumulation history compatibility scope");
+    passed &= ExpectContains(
+        synchronizeLightingHistory,
+        "antiAliasing.temporal.currentReconstruction",
+        "ray-marching accumulation tracks resolved temporal reconstruction");
+    passed &= ExpectContains(
+        synchronizeLightingHistory,
+        "signature, antiAliasing.rasterSampleCount",
+        "ray-marching accumulation tracks its raster source sample count");
+    for (const std::string_view requiredHistoryInput : {
+            std::string_view("worldStatus->contentRevision"),
+            std::string_view("hashNoiseSettings(visibilityNoiseSettings);"),
+            std::string_view("visibility.sampling.maximumSampleCount"),
+            std::string_view("directional.useRatioEstimator"),
+            std::string_view("skyVisibility.sampleRateLog2"),
+            std::string_view("flashlight.angularSizeDegrees"),
+            std::string_view("hashDenoisingSignal(m_ui.Denoising.shadows);"),
+            std::string_view("m_ui.EnableDiffuseIbl"),
+            std::string_view("m_ui.WhiteWorld"),
+            std::string_view("screenSpaceVisibilityReady"),
+            std::string_view("rayTracedSkyVisibilityReady") })
+    {
+        passed &= ExpectContains(
+            synchronizeLightingHistory,
+            requiredHistoryInput,
+            "upstream sample-schedule compatibility input");
+    }
     passed &= ExpectOrdered(
         renderScene,
         "m_FastApproximateAAPass->Render(",
@@ -1727,6 +2064,13 @@ int main(int argc, char** argv)
         "m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());",
         "ScenePreparationStage::RenderTargets;",
         "material-buffer refresh before renderer resources");
+    passed &= ExpectContains(
+        boundedSceneUpload,
+        "m_ui.Representation.allowRayTraversal &&\n"
+            "                ((m_ui.Lighting == LightingSolution::PathTracing &&\n"
+            "                    GetPathTracingSceneDomainStatus() !=\n"
+            "                        PathTracingSceneDomainStatus::Unsupported) ||",
+        "scene loading front-loads supported Path Tracing world representations");
 
     const std::string_view sceneLoaded = ExtractSection(
         viewer,

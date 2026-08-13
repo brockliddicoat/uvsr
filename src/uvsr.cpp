@@ -92,6 +92,7 @@
 #include "image_based_lighting_background_pass.h"
 #include "image_based_lighting_environment.h"
 #include "image_based_lighting_shared.h"
+#include "lighting_accumulation_pass.h"
 #include "adaptive_sync.h"
 #include "auto_exposure.h"
 #include "camera_collision.h"
@@ -104,6 +105,9 @@
 #include "flashlight.h"
 #include "heitz_ratio_estimator_shadows.h"
 #include "noise_texture_library.h"
+#include "path_tracing_pass.h"
+#include "path_tracing_settings.h"
+#include "path_tracing_stable_plane_resolve_pass.h"
 #include "pixel_zoom.h"
 #include "ray_traced_flashlight_shadows.h"
 #include "ray_traced_sky_visibility.h"
@@ -124,6 +128,7 @@
 
 using namespace donut;
 using namespace donut::math;
+#include <donut/shaders/light_cb.h>
 using namespace donut::app;
 using namespace donut::vfs;
 using namespace donut::engine;
@@ -132,6 +137,14 @@ using namespace uvsr;
 
 static bool g_RestartRequested = false;
 static int g_RestartAdapterIndex = -1;
+
+enum class PathTracingSceneDomainStatus : uint8_t
+{
+    Supported,
+    BlendedGeometryOmitted,
+    Unsupported
+};
+
 static void ApplyProcessPriority()
 {
     if (!SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS))
@@ -166,6 +179,28 @@ constexpr size_t UiSettingsBodyBackdropIndex = 3u;
 constexpr size_t UiCommandBackdropIndex = 4u;
 constexpr size_t UiBackdropRectCount = 5u;
 constexpr uint32_t UiBackdropCornersAll = 0xFu;
+
+static void HashLightingHistoryBytes(
+    uint64_t& signature,
+    const void* data,
+    size_t size)
+{
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    for (size_t byteIndex = 0; byteIndex < size; ++byteIndex)
+    {
+        signature ^= uint64_t(bytes[byteIndex]);
+        signature *= 1099511628211ull;
+    }
+}
+
+template<typename T>
+static void HashLightingHistoryValue(
+    uint64_t& signature,
+    const T& value)
+{
+    static_assert(std::is_trivially_copyable_v<T>);
+    HashLightingHistoryBytes(signature, &value, sizeof(value));
+}
 
 struct UiBackdropExclusionRect
 {
@@ -1209,6 +1244,10 @@ struct UIData
     int                                 ActiveGpuAdapterIndex = -1;
     AdaptiveSyncMode                    AdaptiveSync =
         AdaptiveSyncMode::Off;
+    LightingSolution                    Lighting =
+        LightingSolution::RayMarching;
+    PathTracingSettings                 PathTracing;
+    bool                                AccumulateSamples = false;
     AntiAliasingSettings                AntiAliasing;
     bool                                TemporalAaSharpenEnabled = false;
     float                               TemporalAaSharpness =
@@ -1247,6 +1286,9 @@ struct UIData
 
     [[nodiscard]] bool HasActiveScreenSpaceVisibilityConsumer() const
     {
+        if (Lighting != LightingSolution::RayMarching)
+            return false;
+
         const bool lightingConsumer = HasActiveScreenSpaceLightingConsumer(
             ScreenSpaceVisibility.enabled,
             ScreenSpaceVisibility.HasActiveAmbientOcclusion(),
@@ -1266,7 +1308,8 @@ struct UIData
     [[nodiscard]] bool
         HasActiveScreenSpaceVisibilityDebugConsumer() const
     {
-        return ScreenSpaceVisibility.HasActiveConsumer() &&
+        return Lighting == LightingSolution::RayMarching &&
+            ScreenSpaceVisibility.HasActiveConsumer() &&
             ScreenSpaceVisibility.debugView !=
                 VisibilityDebugView::FinalImage;
     }
@@ -1275,7 +1318,18 @@ struct UIData
         GetResolvedAntiAliasingSettings(
             const AntiAliasingSettings& settings) const
     {
-        return ResolveAntiAliasingSettings(settings);
+        ResolvedAntiAliasingSettings resolved =
+            ResolveAntiAliasingSettings(settings);
+        if (Lighting == LightingSolution::PathTracing)
+        {
+            // The path tracer produces a single scene-linear sample per pixel.
+            // Keep only presentation-space spatial AA from the retained Ray
+            // Marching settings; raster multisampling and temporal AA belong to
+            // the bypassed G-buffer path.
+            resolved.temporalEnabled = false;
+            resolved.rasterSampleCount = 1u;
+        }
+        return resolved;
     }
 
     [[nodiscard]] ResolvedAntiAliasingSettings
@@ -1306,6 +1360,7 @@ enum class RendererTimingStage : uint32_t
     CompleteFrame,
     SceneSetup,
     Geometry,
+    PathTransport,
     MultisampleResolve,
     ShadowRayDispatch,
     ShadowDenoise,
@@ -1446,6 +1501,11 @@ private:
                                         m_RayTracedSkyVisibilityPass;
     std::unique_ptr<WorldSpaceRepresentation>
                                         m_WorldSpaceRepresentation;
+    std::unique_ptr<PathTracingPass>     m_PathTracingPass;
+    std::unique_ptr<PathTracingStablePlaneResolvePass>
+                                        m_PathTracingStablePlaneResolvePass;
+    std::unique_ptr<LightingAccumulationPass>
+                                        m_LightingAccumulationPass;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
     std::unique_ptr<NoiseTextureLibrary> m_NoiseTextureLibrary;
     std::unique_ptr<DenoisingPass>       m_DenoisingPass;
@@ -1498,11 +1558,16 @@ private:
         MaterialPickPurpose::None;
     const Scene*                        m_MaterialPickScene = nullptr;
     uint64_t                            m_AntiAliasingPhase = 0u;
+    uint64_t                            m_LightingHistoryEpoch = 1u;
+    uint64_t                            m_LastLightingHistorySignature = 0u;
+    bool                                m_HasLightingHistorySignature = false;
     uint64_t                            m_ScreenSpaceVisibilityPhase = 0u;
     uint64_t                            m_HeitzRatioEstimatorPhase = 0u;
     bool                                m_HeitzRatioEstimatorContributedLastFrame =
                                             false;
     bool                                m_HeitzRatioEstimatorDispatchedThisFrame =
+                                            false;
+    bool                                m_PathTransportDispatchedThisFrame =
                                             false;
     bool                                m_RayTracedFlashlightShadowDispatchedThisFrame =
                                             false;
@@ -1651,6 +1716,20 @@ public:
         m_CommandList = GetDevice()->createCommandList();
         m_WorldSpaceRepresentation =
             std::make_unique<WorldSpaceRepresentation>(GetDevice());
+        m_PathTracingPass = std::make_unique<PathTracingPass>(
+            GetDevice(),
+            m_ShaderFactory,
+            m_BindlessLayout);
+        m_PathTracingStablePlaneResolvePass =
+            std::make_unique<PathTracingStablePlaneResolvePass>(
+                GetDevice(),
+                m_ShaderFactory);
+        m_PathTracingPass->SetStablePlaneResolveSupported(
+            m_PathTracingStablePlaneResolvePass->IsSupported());
+        m_LightingAccumulationPass =
+            std::make_unique<LightingAccumulationPass>(
+                GetDevice(),
+                m_ShaderFactory);
         for (auto& stageQueries : m_RendererTimerQueries)
         {
             for (nvrhi::TimerQueryHandle& query : stageQueries)
@@ -1946,6 +2025,9 @@ public:
         // permutations cannot retain state from the old setup.
         SetWhiteWorldMode(WhiteWorldMode::Off);
 
+        m_ui.Lighting = LightingSolution::RayMarching;
+        m_ui.PathTracing = PathTracingSettings{};
+        m_ui.AccumulateSamples = false;
         m_ui.AntiAliasing = AntiAliasingSettings{};
         m_ui.TemporalAaSharpenEnabled = false;
         m_ui.TemporalAaSharpness = TemporalAaDefaultSharpness;
@@ -1989,6 +2071,7 @@ public:
         m_HeitzRatioEstimatorPhase = 0u;
         m_RayTracedFlashlightShadowPhase = 0u;
         m_RayTracedSkyVisibilityPhase = 0u;
+        InvalidateLightingAccumulationHistory();
 
         // Recreate passes and material permutations from the restored state.
         m_ui.ShaderReloadRequested = true;
@@ -2680,6 +2763,18 @@ public:
             m_RayTracedSkyVisibilityPass->ResetBindingCache();
         if (m_WorldSpaceRepresentation)
             m_WorldSpaceRepresentation->Reset();
+        if (m_PathTracingPass)
+        {
+            m_PathTracingPass->ResetHistory();
+            m_PathTracingPass->ResetBindingCache();
+        }
+        if (m_PathTracingStablePlaneResolvePass)
+            m_PathTracingStablePlaneResolvePass->ResetBindingCache();
+        if (m_LightingAccumulationPass)
+        {
+            m_LightingAccumulationPass->ResetHistory();
+            m_LightingAccumulationPass->ResetBindingCache();
+        }
         if (m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetBindingCache();
         if (m_AutoExposurePass)
@@ -2826,6 +2921,13 @@ public:
 
     void CompleteSceneActivation()
     {
+
+        InvalidateLightingAccumulationHistory();
+        m_HasLightingHistorySignature = false;
+        if (m_PathTracingPass)
+            m_PathTracingPass->ResetHistory();
+        if (m_LightingAccumulationPass)
+            m_LightingAccumulationPass->ResetHistory();
 
         m_OriginalMaterials.clear();
         for (const auto& material : m_Scene->GetSceneGraph()->GetMaterials())
@@ -2979,7 +3081,7 @@ public:
         m_ui.WhiteWorld = mode;
 
         if (modeChanged)
-            ResetAntiAliasingState();
+            ResetImageBasedLightingHistory();
 
         const bool enabled = mode != WhiteWorldMode::Off;
         const bool preserveDetailMaps = mode == WhiteWorldMode::PreserveDetail;
@@ -3879,7 +3981,10 @@ public:
         {
             const bool worldRepresentationRequested =
                 m_ui.Representation.allowRayTraversal &&
-                ((m_ui.DirectionalShadows.ratioEstimator.enabled &&
+                ((m_ui.Lighting == LightingSolution::PathTracing &&
+                    GetPathTracingSceneDomainStatus() !=
+                        PathTracingSceneDomainStatus::Unsupported) ||
+                (m_ui.DirectionalShadows.ratioEstimator.enabled &&
                     SupportsHeitzRatioEstimatorShadows()) ||
                 (m_ui.FlashlightEnabled &&
                     m_ui.Flashlight.castShadows &&
@@ -3962,9 +4067,21 @@ public:
             return;
         }
 
-        EnsureHeitzRatioEstimatorShadowPass();
-        EnsureRayTracedFlashlightShadowPass();
-        EnsureRayTracedSkyVisibilityPass();
+        const bool pathTracingSelected =
+            m_ui.Lighting == LightingSolution::PathTracing;
+        const PathTracingSceneDomainStatus pathTracingSceneDomainStatus =
+            pathTracingSelected
+            ? GetPathTracingSceneDomainStatus()
+            : PathTracingSceneDomainStatus::Supported;
+        const bool pathTracingSceneDomainSupported =
+            pathTracingSceneDomainStatus !=
+                PathTracingSceneDomainStatus::Unsupported;
+        if (!pathTracingSelected)
+        {
+            EnsureHeitzRatioEstimatorShadowPass();
+            EnsureRayTracedFlashlightShadowPass();
+            EnsureRayTracedSkyVisibilityPass();
+        }
 
         int windowWidth, windowHeight;
         GetDeviceManager()->GetWindowDimensions(windowWidth, windowHeight);
@@ -3972,6 +4089,27 @@ public:
         nvrhi::Viewport renderViewport = windowViewport;
 
         UpdateFlashlightTransform();
+        bool lightingSceneContentChanged = false;
+        if (const std::shared_ptr<SceneGraph> sceneGraph =
+                m_Scene->GetSceneGraph())
+        {
+            const std::shared_ptr<SceneGraphNode>& root =
+                sceneGraph->GetRootNode();
+            const bool pendingContentChanges = root &&
+                (root->GetDirtyFlags() &
+                    SceneGraphNode::DirtyFlags::SubgraphContentUpdate) != 0u;
+            lightingSceneContentChanged =
+                sceneGraph->HasPendingStructureChanges() ||
+                sceneGraph->HasPendingTransformChanges() ||
+                pendingContentChanges;
+            for (const std::shared_ptr<Material>& material :
+                sceneGraph->GetMaterials())
+            {
+                lightingSceneContentChanged =
+                    lightingSceneContentChanged ||
+                    (material && material->dirty);
+            }
+        }
         m_Scene->RefreshSceneGraph(GetFrameIndex());
         const auto& sceneLights =
             m_SceneLightsWithoutFlashlight;
@@ -4022,6 +4160,7 @@ public:
             const bool temporalAARequired =
                 m_ui.UsesLongTermTemporalAA();
             const bool denoisingMotionVectorsRequired =
+                !pathTracingSelected &&
                 m_DenoisingPass &&
                 m_DenoisingPass->IsOperational() &&
                 (m_ui.Denoising.ambientOcclusion.method !=
@@ -4105,7 +4244,25 @@ public:
                 // main pass set. Drop it before clearing the factory cache so
                 // an explicit reload cannot retain the previous MSAA resolve.
                 m_MsaaVisibilityResolvePass.reset();
+                m_PathTracingStablePlaneResolvePass.reset();
+                m_PathTracingPass.reset();
+                m_LightingAccumulationPass.reset();
                 m_ShaderFactory->ClearCache();
+                m_PathTracingPass = std::make_unique<PathTracingPass>(
+                    GetDevice(),
+                    m_ShaderFactory,
+                    m_BindlessLayout);
+                m_PathTracingStablePlaneResolvePass =
+                    std::make_unique<PathTracingStablePlaneResolvePass>(
+                        GetDevice(),
+                        m_ShaderFactory);
+                m_PathTracingPass->SetStablePlaneResolveSupported(
+                    m_PathTracingStablePlaneResolvePass->IsSupported());
+                m_LightingAccumulationPass =
+                    std::make_unique<LightingAccumulationPass>(
+                        GetDevice(),
+                        m_ShaderFactory);
+                InvalidateLightingAccumulationHistory();
                 // Light-probe preprocessing owns shader handles too. Recreate
                 // it only for an explicit shader reload, not for resize or TAA
                 // pass recreation, so static IBL remains zero-work otherwise.
@@ -4168,12 +4325,16 @@ public:
             m_ui.ShaderReloadRequested = false;
         }
 
-        EnsureHeitzRatioEstimatorShadowPass();
-        EnsureRayTracedFlashlightShadowPass();
-        EnsureRayTracedSkyVisibilityPass();
+        if (!pathTracingSelected)
+        {
+            EnsureHeitzRatioEstimatorShadowPass();
+            EnsureRayTracedFlashlightShadowPass();
+            EnsureRayTracedSkyVisibilityPass();
+        }
 
         m_CommandList->open();
         AdvanceRendererTimers();
+        m_PathTransportDispatchedThisFrame = false;
         m_HeitzRatioEstimatorDispatchedThisFrame = false;
         m_RayTracedFlashlightShadowDispatchedThisFrame = false;
         m_ShadowDenoisingDispatchedThisFrame = false;
@@ -4187,11 +4348,13 @@ public:
         BeginRendererStage(RendererTimingStage::SceneSetup);
         m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());
         const bool heitzRatioEstimatorSelected =
+            !pathTracingSelected &&
             m_ui.Representation.allowRayTraversal &&
             m_ui.DirectionalShadows.ratioEstimator.enabled &&
             m_RenderTargets->GetSampleCount() == 1u &&
             SupportsHeitzRatioEstimatorShadows();
         const bool rayTracedFlashlightShadowSelected =
+            !pathTracingSelected &&
             m_ui.Representation.allowRayTraversal &&
             m_ui.Flashlight.castShadows &&
             ShouldSubmitFlashlight(m_FlashlightTransition) &&
@@ -4199,6 +4362,7 @@ public:
             m_RayTracedFlashlightShadowPass &&
             m_RayTracedFlashlightShadowPass->IsSupported();
         const bool rayTracedSkyVisibilitySelected =
+            !pathTracingSelected &&
             m_ui.Representation.allowRayTraversal &&
             m_ui.RayTracedSkyVisibility.enabled &&
             HasRayTracedSkyVisibilityConsumer(
@@ -4207,7 +4371,10 @@ public:
         const bool worldRepresentationSelected =
             heitzRatioEstimatorSelected ||
             rayTracedFlashlightShadowSelected ||
-            rayTracedSkyVisibilitySelected;
+            rayTracedSkyVisibilitySelected ||
+            (pathTracingSelected &&
+                pathTracingSceneDomainSupported &&
+                m_ui.Representation.allowRayTraversal);
         const uint64_t worldRepresentationGenerationBefore =
             m_WorldSpaceRepresentation
             ? m_WorldSpaceRepresentation->GetStatus().generation
@@ -4244,7 +4411,7 @@ public:
                 m_RayTracedFlashlightShadowPass->ResetBindingCache();
             if (m_RayTracedSkyVisibilityPass)
                 m_RayTracedSkyVisibilityPass->ResetBindingCache();
-            ResetAntiAliasingState();
+            ResetImageBasedLightingHistory();
         }
 
         const ResolvedAntiAliasingSettings antiAliasing =
@@ -4364,22 +4531,17 @@ public:
                     flashlightNoiseSettings);
             }
         }
-        const bool runScreenSpaceVisibility =
-            screenSpaceVisibilityRequested && bool(visibilityNoise);
+        const bool screenSpaceVisibilityReady =
+            screenSpaceVisibilityRequested &&
+            m_ScreenSpaceVisibilityPass &&
+            m_ScreenSpaceVisibilityPass->ArePipelinesReady() &&
+            bool(visibilityNoise);
+        const bool runScreenSpaceVisibility = screenSpaceVisibilityReady;
         const bool writeSourceRadiance = runScreenSpaceVisibility &&
             m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
             (!submittedLights->empty() ||
                 (diffuseEnvironment && diffuseEnvironmentScale > 0.f));
 
-        m_RenderTargets->Clear(m_CommandList);
-        HeitzRatioEstimatorShadowResult heitzShadowResult;
-        RayTracedFlashlightShadowResult flashlightShadowResult;
-        RayTracedSkyVisibilityResult skyVisibilityResult;
-        ScreenSpaceVisibilityResult screenSpaceVisibilityResult;
-        nvrhi::ITexture* skyVisibility = nullptr;
-        bool applySkyVisibilityToDiffuseIbl = false;
-        bool applySkyVisibilityToSpecularIbl = false;
-        DirectLightVisibilities directLightVisibilities;
         const SpotLight* submittedFlashlight =
             ShouldSubmitFlashlight(m_FlashlightTransition)
                 ? m_Flashlight.get()
@@ -4392,6 +4554,99 @@ public:
                     m_FlashlightResolvedRight.y,
                     m_FlashlightResolvedRight.z)
                 : FlashlightBeamProfile{};
+        const bool heitzStochasticRequested =
+            heitzRatioEstimatorExpectedToContribute &&
+            !m_ui.DirectionalShadows.ratioEstimator.hardShadows &&
+            m_SunLight &&
+            std::clamp(m_SunLight->angularSize, 0.f, 90.f) *
+                    0.0087266462599716478846f >
+                1e-6f;
+        const bool flashlightStochasticRequested =
+            rayTracedFlashlightShadowExpectedToContribute &&
+            submittedFlashlight &&
+            flashlightBeamProfile.emitterRadiusMeters > 0.f;
+        const bool skyVisibilityStochasticRequested =
+            rayTracedSkyVisibilityExpectedToContribute;
+        const bool screenSpaceVisibilityStochasticRequested =
+            screenSpaceVisibilityRequested;
+        const bool rayMarchingProducerTopologyReady =
+            (!screenSpaceVisibilityRequested ||
+                screenSpaceVisibilityReady) &&
+            (!heitzRatioEstimatorExpectedToContribute || shadowNoise) &&
+            (!rayTracedFlashlightShadowExpectedToContribute ||
+                (submittedFlashlight && flashlightNoise)) &&
+            (!rayTracedSkyVisibilityExpectedToContribute || skyNoise);
+        const bool rayMarchingDiagnostic =
+            m_ui.LightingDebugView != PbrLightingDebugView::None ||
+            m_ui.ScreenSpaceVisibility.debugView !=
+                VisibilityDebugView::FinalImage;
+
+        SynchronizeLightingAccumulationHistory(
+            uint32_t(windowWidth),
+            uint32_t(windowHeight),
+            *submittedLights,
+            worldRepresentationReady,
+            lightingSceneContentChanged,
+            temporalAaWillRender,
+            visibilityNoiseSettings,
+            shadowNoiseSettings,
+            skyNoiseSettings,
+            flashlightNoiseSettings,
+            screenSpaceVisibilityStochasticRequested,
+            screenSpaceVisibilityReady,
+            heitzRatioEstimatorSelected,
+            heitzStochasticRequested,
+            heitzRatioEstimatorExpectedToContribute && bool(shadowNoise),
+            rayTracedFlashlightShadowSelected,
+            flashlightStochasticRequested,
+            rayTracedFlashlightShadowExpectedToContribute &&
+                submittedFlashlight && bool(flashlightNoise),
+            rayTracedSkyVisibilitySelected,
+            skyVisibilityStochasticRequested,
+            rayTracedSkyVisibilityExpectedToContribute && bool(skyNoise));
+
+        LightingSampleSchedule lightingSampleSchedule;
+        bool lightingSampleSchedulePrepared = false;
+        if (m_LightingAccumulationPass)
+        {
+            lightingSampleSchedule =
+                m_LightingAccumulationPass->GetDisabledSchedule();
+            const bool prepareRayMarchingSchedule =
+                !pathTracingSelected &&
+                !rayMarchingDiagnostic &&
+                m_ui.AccumulateSamples &&
+                rayMarchingProducerTopologyReady &&
+                m_LightingAccumulationPass->IsValid();
+            if (prepareRayMarchingSchedule)
+            {
+                lightingSampleSchedule =
+                    m_LightingAccumulationPass->PrepareAttempts(
+                        m_CommandList,
+                        uint32_t(windowWidth),
+                        uint32_t(windowHeight),
+                        true,
+                        uint64_t(GetFrameIndex()),
+                        m_LightingHistoryEpoch);
+                lightingSampleSchedulePrepared =
+                    lightingSampleSchedule.token != 0u;
+                if (!lightingSampleSchedule)
+                {
+                    lightingSampleSchedule =
+                        m_LightingAccumulationPass
+                            ->GetDisabledSchedule();
+                }
+            }
+        }
+
+        m_RenderTargets->Clear(m_CommandList);
+        HeitzRatioEstimatorShadowResult heitzShadowResult;
+        RayTracedFlashlightShadowResult flashlightShadowResult;
+        RayTracedSkyVisibilityResult skyVisibilityResult;
+        ScreenSpaceVisibilityResult screenSpaceVisibilityResult;
+        nvrhi::ITexture* skyVisibility = nullptr;
+        bool applySkyVisibilityToDiffuseIbl = false;
+        bool applySkyVisibilityToSpecularIbl = false;
+        DirectLightVisibilities directLightVisibilities;
         MsaaVisibilityResolveOutputs closestSurfaceOutputs;
         bool closestSurfaceResolved = false;
 
@@ -4460,6 +4715,103 @@ public:
         m_SubmittedMainViewTriangles = 0u;
         EndRendererStage(RendererTimingStage::SceneSetup);
 
+        PathTracingResult pathTracingResult;
+        if (pathTracingSelected &&
+            pathTracingSceneDomainSupported &&
+            worldRepresentationReady &&
+            m_PathTracingPass &&
+            m_PathTracingPass->IsSupported())
+        {
+            PathTracingInputs pathInputs;
+            pathInputs.view = m_View.get();
+            pathInputs.width = uint32_t(windowWidth);
+            pathInputs.height = uint32_t(windowHeight);
+            pathInputs.materialVisibility = rayMaterialVisibility;
+            pathInputs.worldTlas = m_WorldSpaceRepresentation
+                ->GetTopLevelAccelerationStructure();
+            pathInputs.environment = m_ImageBasedLightingEnvironment
+                ? m_ImageBasedLightingEnvironment->GetRadianceTexture()
+                : nullptr;
+            pathInputs.environmentScale = m_ImageBasedLightingEnvironment
+                ? m_ImageBasedLightingEnvironment->GetRadianceScale()
+                : 0.f;
+            pathInputs.showEnvironmentBackground =
+                m_ui.ShowEnvironmentBackground;
+            pathInputs.noiseSettings = m_ui.Noise;
+            if (m_NoiseTextureLibrary)
+            {
+                const NoiseTextureBinding pathNoise =
+                    m_NoiseTextureLibrary->Resolve(
+                        m_CommandList,
+                        pathInputs.noiseSettings);
+                pathInputs.noiseTexture = pathNoise.texture;
+            }
+            pathInputs.lights = *submittedLights;
+            pathInputs.flashlight = submittedFlashlight;
+            pathInputs.flashlightProfile = flashlightBeamProfile;
+            pathInputs.samplingPhase = m_ui.Noise.animate
+                ? uint32_t(GetFrameIndex())
+                : 0u;
+            pathInputs.schedulingSerial = uint64_t(GetFrameIndex());
+            pathInputs.historyEpoch = m_LightingHistoryEpoch;
+            pathInputs.accumulateSamples = m_ui.AccumulateSamples;
+            pathInputs.settings =
+                SanitizePathTracingSettings(m_ui.PathTracing);
+            BeginRendererStage(RendererTimingStage::PathTransport);
+            pathTracingResult = m_PathTracingPass->Render(
+                m_CommandList,
+                pathInputs);
+            EndRendererStage(RendererTimingStage::PathTransport);
+            m_PathTransportDispatchedThisFrame =
+                pathTracingResult.dispatched;
+        }
+        bool stablePlaneResolvedThisFrame = false;
+        if (pathTracingResult &&
+            pathTracingResult.completedSignalCycle &&
+            pathTracingResult.signalEpoch == m_LightingHistoryEpoch &&
+            pathTracingResult.residualMean &&
+            pathTracingResult.diffuseSuffixMean &&
+            pathTracingResult.primaryNormalRoughness &&
+            pathTracingResult.primaryViewZ &&
+            m_PathTracingStablePlaneResolvePass &&
+            m_ui.PathTracing.debugView ==
+                PathTracingDebugView::FinalImage)
+        {
+            PathTracingStablePlaneResolveInputs resolveInputs;
+            resolveInputs.rawMean = pathTracingResult.rawMean;
+            resolveInputs.residualMean = pathTracingResult.residualMean;
+            resolveInputs.diffuseSuffixMean =
+                pathTracingResult.diffuseSuffixMean;
+            resolveInputs.primaryNormalRoughness =
+                pathTracingResult.primaryNormalRoughness;
+            resolveInputs.primaryViewZ = pathTracingResult.primaryViewZ;
+            resolveInputs.output = pathTracingResult.sceneLinearDisplay;
+            resolveInputs.stablePlaneCount = std::max(
+                m_ui.PathTracing.stablePlaneCount,
+                1u);
+            // Resolve failure is presentation-local. The transport dispatch
+            // and raw history remain valid and m_Display still contains this
+            // frame's raw preview.
+            pathTracingResult.stablePlaneResolveActive =
+                m_PathTracingStablePlaneResolvePass->Render(
+                    m_CommandList,
+                    resolveInputs);
+            stablePlaneResolvedThisFrame =
+                pathTracingResult.stablePlaneResolveActive;
+        }
+        if (m_PathTracingStablePlaneResolvePass &&
+            !stablePlaneResolvedThisFrame)
+        {
+            // The cached descriptor set owns strong references to every
+            // prior full-resolution signal and output. Release it as soon as
+            // the resolve is not executable so disabling the method, changing
+            // solver, resizing, or entering an incomplete cycle cannot retain
+            // an obsolete transport topology.
+            m_PathTracingStablePlaneResolvePass->ResetBindingCache();
+        }
+        const bool pathTransportActive = bool(pathTracingResult);
+
+        if (!pathTracingSelected || !pathTransportActive)
         {
         {
             GBufferFillPass::Context gbufferContext;
@@ -4542,7 +4894,8 @@ public:
                                 m_RayTracedFlashlightShadowPhase)
                             : 0u,
                         DefaultFlashlightRayBiasMeters,
-                        m_ui.Flashlight.outputHitDistance);
+                        m_ui.Flashlight.outputHitDistance,
+                        lightingSampleSchedule);
             }
             m_RayTracedFlashlightShadowDispatchedThisFrame =
                 flashlightShadowResult.dispatched;
@@ -4596,7 +4949,8 @@ public:
                         shadowNoiseSettings.animate
                             ? uint32_t(m_HeitzRatioEstimatorPhase)
                             : 0u,
-                        m_SceneDiagonal);
+                        m_SceneDiagonal,
+                        lightingSampleSchedule);
             }
             const bool heitzRatioEstimatorContributed =
                 bool(heitzShadowResult);
@@ -4644,7 +4998,8 @@ public:
                         skyNoiseSettings.animate
                             ? uint32_t(m_RayTracedSkyVisibilityPhase)
                             : 0u,
-                        m_SceneDiagonal);
+                        m_SceneDiagonal,
+                        lightingSampleSchedule);
                 EndRendererStage(
                     RendererTimingStage::SkyVisibilityRayDispatch);
             }
@@ -5088,7 +5443,8 @@ public:
                         visibilityNoise.texture,
                         visibilityNoiseSettings.animate
                             ? uint32_t(m_ScreenSpaceVisibilityPhase)
-                            : 0u);
+                            : 0u,
+                        lightingSampleSchedule);
                     EndRendererStage(
                         RendererTimingStage::ScreenSpaceVisibility);
                     deferredMsaaVisibilityPending = true;
@@ -5178,7 +5534,8 @@ public:
                         visibilityNoise.texture,
                         visibilityNoiseSettings.animate
                             ? uint32_t(m_ScreenSpaceVisibilityPhase)
-                            : 0u);
+                            : 0u,
+                        lightingSampleSchedule);
                     EndRendererStage(
                         RendererTimingStage::ScreenSpaceVisibility);
                 }
@@ -5187,6 +5544,30 @@ public:
                     m_ScreenSpaceVisibilityPass->Deactivate();
                 }
             }
+        }
+
+        }
+
+        const bool expectedProducersCompleted =
+            (!screenSpaceVisibilityRequested ||
+                screenSpaceVisibilityResult.dispatched) &&
+            (!heitzRatioEstimatorExpectedToContribute ||
+                heitzShadowResult.dispatched) &&
+            (!rayTracedFlashlightShadowExpectedToContribute ||
+                flashlightShadowResult.dispatched) &&
+            (!rayTracedSkyVisibilityExpectedToContribute ||
+                skyVisibilityResult.dispatched);
+        if (lightingSampleSchedulePrepared &&
+            lightingSampleSchedule.enabled &&
+            !expectedProducersCompleted)
+        {
+            // Preparation is transactional. A producer failure may leave a
+            // mixture of retained and current raw values, so this frame must
+            // not advance the shared mean/count history and the next frame
+            // must schedule every pixel again.
+            m_LightingAccumulationPass->CancelPreparedSchedule(
+                lightingSampleSchedule);
+            lightingSampleSchedulePrepared = false;
         }
 
         if (m_MaterialPickPurpose != MaterialPickPurpose::None &&
@@ -5252,7 +5633,8 @@ public:
             EndRendererStage(RendererTimingStage::MaterialPicking);
         }
 
-        if (m_ui.LightingDebugView == PbrLightingDebugView::None &&
+        if (!pathTransportActive &&
+            m_ui.LightingDebugView == PbrLightingDebugView::None &&
             !m_ui.HasActiveScreenSpaceVisibilityDebugConsumer() &&
             m_ui.ShowEnvironmentBackground &&
             m_ImageBasedLightingBackgroundPass &&
@@ -5268,16 +5650,22 @@ public:
             EndRendererStage(RendererTimingStage::EnvironmentBackground);
         }
 
-        nvrhi::ITexture* sceneColor =
-            m_RenderTargets->HdrColor;
+        // A successful path-transport dispatch owns the scene-linear source.
+        // Otherwise the complete raster path above produced HdrColor, keeping
+        // preparation and recoverable capability failures interactive.
+        nvrhi::ITexture* sceneColor = pathTracingResult
+            ? pathTracingResult.sceneLinearDisplay
+            : m_RenderTargets->HdrColor.Get();
         const bool renderDeferredMsaaLighting =
+            !pathTransportActive &&
             deferredMsaaLightingPending &&
             m_PbrDeferredLightingPass &&
             m_RenderTargets->ResolvedHdrColor &&
             m_RenderTargets->DeferredMsaaColor;
         if (renderDeferredMsaaLighting)
             BeginRendererStage(RendererTimingStage::DirectLighting);
-        if (m_RenderTargets->GetSampleCount() > 1u)
+        if (!pathTransportActive &&
+            m_RenderTargets->GetSampleCount() > 1u)
         {
             if (m_RenderTargets->ResolvedHdrColor)
             {
@@ -5365,10 +5753,25 @@ public:
 
         }
 
-        const bool diagnosticExposureView =
-            m_ui.LightingDebugView != PbrLightingDebugView::None ||
-            m_ui.ScreenSpaceVisibility.debugView !=
-                VisibilityDebugView::FinalImage;
+        if (lightingSampleSchedulePrepared &&
+            m_LightingAccumulationPass)
+        {
+            // Resolve the exact producer-side attempt mask against the actual
+            // scene-linear presentation source. Only this successful dispatch
+            // is allowed to advance the epoch and history write index.
+            const LightingAccumulationResult accumulationResult =
+                m_LightingAccumulationPass->Resolve(
+                m_CommandList,
+                antiAliasedTexture,
+                lightingSampleSchedule);
+            if (accumulationResult)
+                antiAliasedTexture = accumulationResult.sceneLinear;
+        }
+
+        const bool diagnosticExposureView = pathTracingSelected
+            ? m_ui.PathTracing.debugView !=
+                PathTracingDebugView::FinalImage
+            : rayMarchingDiagnostic;
         const bool autoExposureExpected =
             m_ui.AutoExposure.enabled && !diagnosticExposureView;
         if (autoExposureExpected)
@@ -5559,8 +5962,6 @@ public:
                 }
             }
         }
-
-    }
     }
 
     std::shared_ptr<ShaderFactory> GetShaderFactory()
@@ -5568,8 +5969,412 @@ public:
         return m_ShaderFactory;
     }
 
+    void InvalidateLightingAccumulationHistory()
+    {
+        ++m_LightingHistoryEpoch;
+        if (m_LightingHistoryEpoch == 0u)
+            m_LightingHistoryEpoch = 1u;
+    }
+
+    void SynchronizeLightingAccumulationHistory(
+        uint32_t width,
+        uint32_t height,
+        const std::vector<std::shared_ptr<Light>>& submittedLights,
+        bool worldRepresentationReady,
+        bool sceneContentChanged,
+        bool temporalAaWillRender,
+        const NoiseSettings& visibilityNoiseSettings,
+        const NoiseSettings& shadowNoiseSettings,
+        const NoiseSettings& skyNoiseSettings,
+        const NoiseSettings& flashlightNoiseSettings,
+        bool screenSpaceVisibilityRequested,
+        bool screenSpaceVisibilityReady,
+        bool heitzRatioEstimatorSelected,
+        bool heitzStochasticRequested,
+        bool heitzRatioEstimatorReady,
+        bool rayTracedFlashlightShadowSelected,
+        bool flashlightStochasticRequested,
+        bool rayTracedFlashlightShadowReady,
+        bool rayTracedSkyVisibilitySelected,
+        bool skyVisibilityStochasticRequested,
+        bool rayTracedSkyVisibilityReady)
+    {
+        uint64_t signature = 1469598103934665603ull;
+
+        if (m_View)
+        {
+            // Exclude temporal jitter. Path accumulation is invalidated by a
+            // physical camera change, not by presentation-only sample offsets.
+            const dm::affine3 worldToView = m_View->GetViewMatrix();
+            const dm::float4x4 viewToClip =
+                m_View->GetProjectionMatrix(false);
+            HashLightingHistoryValue(signature, worldToView);
+            HashLightingHistoryValue(signature, viewToClip);
+        }
+
+        HashLightingHistoryValue(signature, width);
+        HashLightingHistoryValue(signature, height);
+        const uintptr_t sceneIdentity =
+            reinterpret_cast<uintptr_t>(m_Scene.get());
+        HashLightingHistoryValue(signature, sceneIdentity);
+        HashLightingHistoryValue(signature, sceneContentChanged);
+        if (sceneContentChanged)
+        {
+            const uint64_t contentFrame = uint64_t(GetFrameIndex());
+            HashLightingHistoryValue(signature, contentFrame);
+        }
+
+        const SpotLight* submittedFlashlight =
+            ShouldSubmitFlashlight(m_FlashlightTransition)
+                ? m_Flashlight.get()
+                : nullptr;
+        const FlashlightBeamProfile flashlightProfile =
+            submittedFlashlight
+                ? ResolveFlashlightBeamProfile(
+                    m_ui.Flashlight,
+                    m_FlashlightResolvedRight.x,
+                    m_FlashlightResolvedRight.y,
+                    m_FlashlightResolvedRight.z)
+                : FlashlightBeamProfile{};
+        HashLightingHistoryValue(signature, flashlightProfile);
+
+        const bool rayMarchingRayTraversalSelected =
+            m_ui.Lighting == LightingSolution::RayMarching &&
+            (heitzRatioEstimatorSelected ||
+                rayTracedFlashlightShadowSelected ||
+                rayTracedSkyVisibilitySelected);
+        if (m_ui.Lighting == LightingSolution::PathTracing ||
+            rayMarchingRayTraversalSelected)
+        {
+            const WorldSpaceRepresentationStatus* worldStatus =
+                m_WorldSpaceRepresentation
+                    ? &m_WorldSpaceRepresentation->GetStatus()
+                    : nullptr;
+            const uint64_t worldContentRevision = worldStatus
+                ? worldStatus->contentRevision
+                : 0u;
+            HashLightingHistoryValue(signature, worldContentRevision);
+            if (!worldRepresentationReady)
+            {
+                // Without an authoritative geometry revision, conservatively
+                // invalidate every frame rather than retain stale transport.
+                const uint64_t frameIdentity = uint64_t(GetFrameIndex());
+                HashLightingHistoryValue(signature, frameIdentity);
+            }
+        }
+
+        const uint64_t lightCount = uint64_t(submittedLights.size());
+        HashLightingHistoryValue(signature, lightCount);
+        for (const std::shared_ptr<Light>& light : submittedLights)
+        {
+            const bool validLight = bool(light);
+            HashLightingHistoryValue(signature, validLight);
+            if (!light)
+                continue;
+
+            LightConstants constants;
+            // FillLightConstants writes only fields relevant to the concrete
+            // light type. Clear every lane before hashing so static lights
+            // produce a stable renderer-wide history signature.
+            std::memset(&constants, 0, sizeof(constants));
+            light->FillLightConstants(constants);
+            HashLightingHistoryValue(signature, constants);
+        }
+
+        const uintptr_t environmentIdentity =
+            reinterpret_cast<uintptr_t>(
+                m_ImageBasedLightingEnvironment
+                    ? m_ImageBasedLightingEnvironment->GetRadianceTexture()
+                    : nullptr);
+        const float environmentScale =
+            m_ImageBasedLightingEnvironment
+                ? m_ImageBasedLightingEnvironment->GetRadianceScale()
+                : 0.f;
+        HashLightingHistoryValue(signature, environmentIdentity);
+        HashLightingHistoryValue(signature, environmentScale);
+        HashLightingHistoryValue(signature, m_ui.EnvironmentSource);
+        HashLightingHistoryValue(signature, m_ui.EnvironmentExposureStops);
+        HashLightingHistoryValue(signature, m_ui.ShowEnvironmentBackground);
+        HashLightingHistoryValue(signature, m_ui.Lighting);
+        HashLightingHistoryValue(signature, m_ui.AccumulateSamples);
+
+        if (m_ui.AccumulateSamples ||
+            m_ui.Lighting == LightingSolution::PathTracing)
+        {
+            HashLightingHistoryValue(signature, m_ui.Noise.pattern);
+            HashLightingHistoryValue(signature, m_ui.Noise.resolution);
+            HashLightingHistoryValue(signature, m_ui.Noise.animate);
+        }
+
+        if (m_ui.Lighting == LightingSolution::RayMarching &&
+            m_ui.AccumulateSamples)
+        {
+            // Ray-marching accumulation consumes the resolved scene-linear
+            // source after TAA. Keep retained means compatible with every
+            // upstream anti-aliasing choice that can change that source.
+            const ResolvedAntiAliasingSettings antiAliasing =
+                m_ui.GetResolvedAntiAliasingSettings();
+            HashLightingHistoryValue(
+                signature, antiAliasing.temporalEnabled);
+            HashLightingHistoryValue(
+                signature, antiAliasing.rasterSampleCount);
+            if (antiAliasing.temporalEnabled)
+            {
+                HashLightingHistoryValue(
+                    signature, antiAliasing.temporalQuality);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.temporalCostMode);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.temporalJitterSequence);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.temporal.motionSource);
+                HashLightingHistoryValue(
+                    signature,
+                    antiAliasing.temporal.currentReconstruction);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.temporal.historyFilter);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.temporal.rectification);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.historyStorage);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.depthValidation);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.historyWeight);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.motionTrust);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.rectificationClip);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.blendDomain);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.sharpeningAllowed);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.historyFrames);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.historyStrength);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.optimizedCompute);
+                HashLightingHistoryValue(
+                    signature, antiAliasing.fusedOutput);
+                HashLightingHistoryValue(
+                    signature, m_ui.TemporalAaSharpenEnabled);
+                HashLightingHistoryValue(
+                    signature, m_ui.TemporalAaSharpness);
+            }
+
+            // Upstream scheduling may retain each stochastic producer's raw
+            // texture. Hash every behavior-affecting field individually so
+            // structure padding can never manufacture compatibility.
+            HashLightingHistoryValue(signature, temporalAaWillRender);
+
+            const auto hashNoiseSettings =
+                [&](const NoiseSettings& settings)
+                {
+                    HashLightingHistoryValue(signature, settings.pattern);
+                    HashLightingHistoryValue(signature, settings.resolution);
+                    HashLightingHistoryValue(signature, settings.animate);
+                };
+            hashNoiseSettings(visibilityNoiseSettings);
+            hashNoiseSettings(shadowNoiseSettings);
+            hashNoiseSettings(skyNoiseSettings);
+            hashNoiseSettings(flashlightNoiseSettings);
+
+            const ScreenSpaceVisibilitySettings& visibility =
+                m_ui.ScreenSpaceVisibility;
+            HashLightingHistoryValue(signature, visibility.enabled);
+            HashLightingHistoryValue(signature, visibility.quality);
+            HashLightingHistoryValue(
+                signature, visibility.qualityPresetOrigin);
+            HashLightingHistoryValue(signature, visibility.estimator);
+            HashLightingHistoryValue(signature, visibility.resolution);
+            HashLightingHistoryValue(
+                signature, visibility.sampling.maximumSampleCount);
+            HashLightingHistoryValue(
+                signature, visibility.sampling.radius);
+            HashLightingHistoryValue(
+                signature, visibility.sampling.thickness);
+            HashLightingHistoryValue(
+                signature,
+                visibility.sampling.stepDistributionExponent);
+            HashLightingHistoryValue(
+                signature, visibility.ambientOcclusion.enabled);
+            HashLightingHistoryValue(
+                signature,
+                visibility.ambientOcclusion.outputHitDistance);
+            HashLightingHistoryValue(
+                signature, visibility.ambientOcclusion.strength);
+            HashLightingHistoryValue(
+                signature, visibility.indirectDiffuse.enabled);
+            HashLightingHistoryValue(
+                signature,
+                visibility.indirectDiffuse.outputHitDistance);
+            HashLightingHistoryValue(
+                signature, visibility.indirectDiffuse.intensity);
+            HashLightingHistoryValue(
+                signature, visibility.reconstruction.mode);
+            HashLightingHistoryValue(
+                signature, visibility.reconstruction.spatialEnabled);
+            HashLightingHistoryValue(
+                signature, visibility.reconstruction.spatialFilter);
+            HashLightingHistoryValue(
+                signature, visibility.reconstruction.spatialRadius);
+            HashLightingHistoryValue(
+                signature, visibility.bufferPrecision.ambient);
+            HashLightingHistoryValue(
+                signature, visibility.bufferPrecision.indirect);
+            HashLightingHistoryValue(signature, visibility.debugView);
+
+            const HeitzRatioEstimatorShadowSettings& directional =
+                m_ui.DirectionalShadows.ratioEstimator;
+            HashLightingHistoryValue(signature, directional.enabled);
+            HashLightingHistoryValue(signature, directional.hardShadows);
+            HashLightingHistoryValue(
+                signature, directional.useRatioEstimator);
+            HashLightingHistoryValue(
+                signature, directional.outputHitDistance);
+            HashLightingHistoryValue(
+                signature, directional.sampleRateLog2);
+            HashLightingHistoryValue(signature, directional.rayBias);
+            HashLightingHistoryValue(signature, directional.maxDistance);
+
+            const RayTracedSkyVisibilitySettings& skyVisibility =
+                m_ui.RayTracedSkyVisibility;
+            HashLightingHistoryValue(signature, skyVisibility.enabled);
+            HashLightingHistoryValue(
+                signature, skyVisibility.applyToDiffuseIbl);
+            HashLightingHistoryValue(
+                signature, skyVisibility.applyToSpecularIbl);
+            HashLightingHistoryValue(
+                signature, skyVisibility.useRatioEstimator);
+            HashLightingHistoryValue(
+                signature, skyVisibility.outputHitDistance);
+            HashLightingHistoryValue(
+                signature, skyVisibility.sampleRateLog2);
+            HashLightingHistoryValue(signature, skyVisibility.rayBias);
+            HashLightingHistoryValue(signature, skyVisibility.maxDistance);
+
+            const FlashlightSettings& flashlight = m_ui.Flashlight;
+            HashLightingHistoryValue(signature, m_ui.FlashlightEnabled);
+            HashLightingHistoryValue(signature, flashlight.realisticLens);
+            HashLightingHistoryValue(signature, flashlight.castShadows);
+            HashLightingHistoryValue(
+                signature, flashlight.outputHitDistance);
+            HashLightingHistoryValue(
+                signature, flashlight.peakIntensityCandela);
+            HashLightingHistoryValue(signature, flashlight.rangeMeters);
+            HashLightingHistoryValue(
+                signature, flashlight.cameraHorizontalOffsetMeters);
+            HashLightingHistoryValue(
+                signature, flashlight.cameraVerticalOffsetMeters);
+            HashLightingHistoryValue(
+                signature, flashlight.beamSizeDegrees);
+            HashLightingHistoryValue(
+                signature, flashlight.angularSizeDegrees);
+            HashLightingHistoryValue(
+                signature, flashlight.beamRoundness);
+            HashLightingHistoryValue(signature, flashlight.edgeSoftness);
+            HashLightingHistoryValue(
+                signature, flashlight.colorLinearRed);
+            HashLightingHistoryValue(
+                signature, flashlight.colorLinearGreen);
+            HashLightingHistoryValue(
+                signature, flashlight.colorLinearBlue);
+            HashLightingHistoryValue(signature, flashlight.hotspotSize);
+            HashLightingHistoryValue(
+                signature, flashlight.hotspotStrength);
+            HashLightingHistoryValue(signature, flashlight.swayDegrees);
+            HashLightingHistoryValue(
+                signature, flashlight.aimCorrectionSeconds);
+
+            const auto hashDenoisingSignal =
+                [&](const DenoisingSignalSettings& settings)
+                {
+                    HashLightingHistoryValue(signature, settings.method);
+                    HashLightingHistoryValue(signature, settings.quality);
+                    HashLightingHistoryValue(signature, settings.resolution);
+                    HashLightingHistoryValue(
+                        signature, settings.historyLength);
+                    HashLightingHistoryValue(
+                        signature, settings.disocclusionThreshold);
+                    HashLightingHistoryValue(
+                        signature, settings.antiLagStrength);
+                };
+            hashDenoisingSignal(m_ui.Denoising.ambientOcclusion);
+            hashDenoisingSignal(m_ui.Denoising.diffuseGi);
+            hashDenoisingSignal(m_ui.Denoising.shadows);
+            hashDenoisingSignal(m_ui.Denoising.skyVisibility);
+            HashLightingHistoryValue(
+                signature,
+                m_DenoisingPass && m_DenoisingPass->IsOperational());
+
+            HashLightingHistoryValue(signature, m_ui.EnableAmbientFill);
+            HashLightingHistoryValue(signature, m_ui.EnableDiffuseIbl);
+            HashLightingHistoryValue(signature, m_ui.DiffuseIblStrength);
+            HashLightingHistoryValue(signature, m_ui.EnableSpecularIbl);
+            HashLightingHistoryValue(signature, m_ui.SpecularIblStrength);
+            HashLightingHistoryValue(signature, m_ui.WhiteWorld);
+            HashLightingHistoryValue(signature, m_ui.LightingDebugView);
+
+            HashLightingHistoryValue(
+                signature, screenSpaceVisibilityRequested);
+            HashLightingHistoryValue(
+                signature, screenSpaceVisibilityReady);
+            HashLightingHistoryValue(
+                signature, heitzRatioEstimatorSelected);
+            HashLightingHistoryValue(
+                signature, heitzStochasticRequested);
+            HashLightingHistoryValue(
+                signature, heitzRatioEstimatorReady);
+            HashLightingHistoryValue(
+                signature, rayTracedFlashlightShadowSelected);
+            HashLightingHistoryValue(
+                signature, flashlightStochasticRequested);
+            HashLightingHistoryValue(
+                signature, rayTracedFlashlightShadowReady);
+            HashLightingHistoryValue(
+                signature, rayTracedSkyVisibilitySelected);
+            HashLightingHistoryValue(
+                signature, skyVisibilityStochasticRequested);
+            HashLightingHistoryValue(
+                signature, rayTracedSkyVisibilityReady);
+            HashLightingHistoryValue(
+                signature, worldRepresentationReady);
+        }
+
+        if (m_ui.Lighting == LightingSolution::PathTracing)
+        {
+            const PathTracingSettings& pathing = m_ui.PathTracing;
+            HashLightingHistoryValue(signature, pathing.solver);
+            HashLightingHistoryValue(signature, pathing.neeMode);
+            HashLightingHistoryValue(signature, pathing.maxBounces);
+            HashLightingHistoryValue(signature, pathing.russianRouletteStart);
+            HashLightingHistoryValue(signature, pathing.neeCandidateCount);
+            HashLightingHistoryValue(signature, pathing.useSer);
+            HashLightingHistoryValue(signature, pathing.useRtxdi);
+            HashLightingHistoryValue(signature, pathing.reuseDirectReservoirs);
+            HashLightingHistoryValue(signature, pathing.reusePathReservoirs);
+            HashLightingHistoryValue(signature, pathing.reuseIndirectGiReservoirs);
+            HashLightingHistoryValue(signature, pathing.stablePlaneCount);
+            HashLightingHistoryValue(signature, pathing.usePsr);
+            HashLightingHistoryValue(signature, pathing.enableFireflyFilter);
+            HashLightingHistoryValue(signature, pathing.fireflyThreshold);
+            HashLightingHistoryValue(signature, pathing.denoiser);
+        }
+
+        if (!m_HasLightingHistorySignature ||
+            signature != m_LastLightingHistorySignature)
+        {
+            InvalidateLightingAccumulationHistory();
+            m_LastLightingHistorySignature = signature;
+            m_HasLightingHistorySignature = true;
+        }
+    }
+
     void ResetImageBasedLightingHistory()
     {
+        InvalidateLightingAccumulationHistory();
+        m_HasLightingHistorySignature = false;
         ResetAntiAliasingState();
         InvalidateRendererStageTiming(
             RendererTimingStage::ShadowRayDispatch);
@@ -5585,6 +6390,7 @@ public:
         bool skyVisibility,
         bool flashlight)
     {
+        InvalidateLightingAccumulationHistory();
         ResetAntiAliasingState();
         if (visibility)
         {
@@ -5667,12 +6473,85 @@ public:
     const WorldSpaceRepresentationStatus&
         GetWorldSpaceRepresentationStatus() const
     {
-        static const WorldSpaceRepresentationStatus unsupported = {
-            WorldSpaceRepresentationState::Unsupported
-        };
+        static const WorldSpaceRepresentationStatus unsupported = []
+        {
+            WorldSpaceRepresentationStatus status;
+            status.state = WorldSpaceRepresentationState::Unsupported;
+            return status;
+        }();
         return m_WorldSpaceRepresentation
             ? m_WorldSpaceRepresentation->GetStatus()
             : unsupported;
+    }
+
+    const PathTracingCapabilities& GetPathTracingCapabilities() const
+    {
+        static const PathTracingCapabilities unavailable;
+        return m_PathTracingPass
+            ? m_PathTracingPass->GetCapabilities()
+            : unavailable;
+    }
+
+    PathTracingSceneDomainStatus GetPathTracingSceneDomainStatus() const
+    {
+        if (!m_Scene)
+            return PathTracingSceneDomainStatus::Unsupported;
+
+        const std::shared_ptr<SceneGraph> sceneGraph =
+            m_Scene->GetSceneGraph();
+        if (!sceneGraph)
+            return PathTracingSceneDomainStatus::Unsupported;
+
+        bool blendedGeometryOmitted = false;
+
+        for (const std::shared_ptr<MeshInfo>& mesh : sceneGraph->GetMeshes())
+        {
+            if (!mesh || mesh->type != MeshType::Triangles ||
+                !mesh->buffers || !mesh->buffers->indexBuffer ||
+                !mesh->buffers->vertexBuffer ||
+                !mesh->buffers->hasAttribute(VertexAttribute::Position))
+            {
+                return PathTracingSceneDomainStatus::Unsupported;
+            }
+
+            for (const std::shared_ptr<MeshGeometry>& geometry :
+                mesh->geometries)
+            {
+                if (!geometry ||
+                    geometry->type != MeshGeometryPrimitiveType::Triangles ||
+                    geometry->numIndices < 3u ||
+                    geometry->numIndices % 3u != 0u ||
+                    geometry->numVertices == 0u ||
+                    !geometry->material)
+                {
+                    return PathTracingSceneDomainStatus::Unsupported;
+                }
+
+                const Material& material = *geometry->material;
+                if (material.transmissionFactor > 0.f ||
+                    material.enableSubsurfaceScattering ||
+                    material.enableHair)
+                {
+                    return PathTracingSceneDomainStatus::Unsupported;
+                }
+
+                if (material.domain == MaterialDomain::AlphaBlended)
+                {
+                    blendedGeometryOmitted = true;
+                    continue;
+                }
+
+                if (material.domain != MaterialDomain::Opaque &&
+                    material.domain != MaterialDomain::AlphaTested)
+                {
+                    return PathTracingSceneDomainStatus::Unsupported;
+                }
+            }
+        }
+
+        return blendedGeometryOmitted
+            ? PathTracingSceneDomainStatus::BlendedGeometryOmitted
+            : PathTracingSceneDomainStatus::Supported;
     }
 
     void InvalidateWorldSpaceRepresentation(
@@ -5689,7 +6568,7 @@ public:
                 m_RayTracedFlashlightShadowPass->ResetBindingCache();
             if (m_RayTracedSkyVisibilityPass)
                 m_RayTracedSkyVisibilityPass->ResetBindingCache();
-            ResetAntiAliasingState();
+            ResetImageBasedLightingHistory();
         }
         if (m_WorldSpaceRepresentation)
             m_WorldSpaceRepresentation->Invalidate(invalidation);
@@ -5749,6 +6628,14 @@ public:
     {
         switch (stage)
         {
+        case RendererTimingStage::PathTransport:
+            return m_PathTransportDispatchedThisFrame;
+        case RendererTimingStage::Geometry:
+        case RendererTimingStage::MultisampleResolve:
+        case RendererTimingStage::DirectLighting:
+        case RendererTimingStage::ScreenSpaceVisibility:
+        case RendererTimingStage::EnvironmentBackground:
+            return m_ui.Lighting == LightingSolution::RayMarching;
         case RendererTimingStage::ShadowRayDispatch:
             return m_HeitzRatioEstimatorDispatchedThisFrame ||
                 m_RayTracedFlashlightShadowDispatchedThisFrame;
@@ -6731,6 +7618,7 @@ private:
         CompleteRenderer,
         SceneSetup,
         Geometry,
+        PathTransport,
         DirectLighting,
         Visibility,
         Shadows,
@@ -8889,6 +9777,12 @@ private:
         Performance
     };
 
+    enum class UiToggleRegionVisualMode
+    {
+        FadeWithHeight,
+        ClipDuringCollapse
+    };
+
     struct UiToggleRegionAnimationContext
     {
         ImGuiID id = 0;
@@ -8988,7 +9882,9 @@ private:
     static bool BeginAnimatedToggleRegion(
         const char* id,
         bool visible,
-        UiToggleRegionOwner owner = UiToggleRegionOwner::Settings)
+        UiToggleRegionOwner owner = UiToggleRegionOwner::Settings,
+        UiToggleRegionVisualMode visualMode =
+            UiToggleRegionVisualMode::FadeWithHeight)
     {
         // BeginChild starts a fresh item-width stack. Carry the enclosing
         // drawer width into toggle regions instead of letting ImGui choose its
@@ -9091,6 +9987,11 @@ private:
 
         const float easedAmount =
             SmoothUiLayoutAnimation(state.linearAmount);
+        const float layoutAlpha =
+            visualMode == UiToggleRegionVisualMode::ClipDuringCollapse &&
+                !state.targetVisible
+                ? 1.f
+                : easedAmount;
         const float disabledPresentationAmount =
             SmoothUiDisabledPresentation(
                 state.disabledPresentationLinearAmount);
@@ -9119,7 +10020,7 @@ private:
             ImGui::GetStyle().Alpha *
                 (needsInitialMeasurement
                     ? 0.f
-                    : easedAmount) *
+                    : layoutAlpha) *
                 (applyManualDisabledAlpha
                     ? 1.f +
                         (g_UiVisualTokens.controlDisabledAlpha - 1.f) *
@@ -10823,6 +11724,33 @@ private:
         std::string& error)
     {
         const std::string_view path = definition.name;
+        if (path == "lighting.solution")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, LightingSolution>, 2> Options = {{
+                { "ray-marching", LightingSolution::RayMarching },
+                { "path-tracing", LightingSolution::PathTracing }
+            }};
+            LightingSolution candidate = m_ui.Lighting;
+            if (!ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate,
+                    LightingSolution::RayMarching,
+                    Options,
+                    value,
+                    error))
+            {
+                return false;
+            }
+            if (operation != CommandValueOperation::Get)
+            {
+                m_ui.Lighting = candidate;
+                m_app->ResetImageBasedLightingHistory();
+            }
+            return true;
+        }
         if (path == "gpu.adapter")
         {
             const auto active = std::find_if(
@@ -11038,6 +11966,123 @@ private:
         return false;
     }
 
+    bool DispatchPathingCommandValue(
+        const UiSettingsCommandDefinition& definition,
+        CommandValueOperation operation,
+        const std::vector<std::string>& arguments,
+        std::string& value,
+        std::string& error)
+    {
+        const std::string_view path = definition.name;
+        PathTracingSettings candidate = m_ui.PathTracing;
+        const PathTracingSettings defaults;
+        const PathTracingCapabilities& capabilities =
+            m_app->GetPathTracingCapabilities();
+        bool handled = true;
+
+        if (path == "pathing.solver")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, PathTracingSolver>, 3> Options = {{
+                { "rtx-pt", PathTracingSolver::RtxPt },
+                { "restir-pt", PathTracingSolver::RestirPt },
+                { "restir-gi", PathTracingSolver::RestirGi }
+            }};
+            PathTracingSolver solver = candidate.solver;
+            handled = ApplyCommandEnum(
+                operation, arguments, path, solver,
+                defaults.solver, Options, value, error);
+            if (handled && operation != CommandValueOperation::Get)
+                candidate = ApplyPathTracingSolverPreset(solver);
+        }
+        else if (path == "pathing.nee")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, PathTracingNeeMode>, 3> Options = {{
+                { "uniform", PathTracingNeeMode::Uniform },
+                { "power", PathTracingNeeMode::Power },
+                { "nee-at", PathTracingNeeMode::NeeAdaptiveTree }
+            }};
+            handled = ApplyCommandEnum(
+                operation, arguments, path, candidate.neeMode,
+                defaults.neeMode, Options, value, error);
+        }
+        else if (path == "pathing.max-bounces")
+        {
+            handled = ApplyCommandUnsigned(
+                operation, arguments, path, candidate.maxBounces,
+                defaults.maxBounces, PathTracingMinBounceCount,
+                PathTracingMaxBounceCount, value, error);
+            if (handled && operation != CommandValueOperation::Get)
+            {
+                candidate.russianRouletteStart = std::min(
+                    candidate.russianRouletteStart,
+                    candidate.maxBounces);
+            }
+        }
+        else if (path == "pathing.russian-roulette-start")
+        {
+            handled = ApplyCommandUnsigned(
+                operation, arguments, path,
+                candidate.russianRouletteStart,
+                defaults.russianRouletteStart,
+                PathTracingMinBounceCount,
+                candidate.maxBounces,
+                value, error);
+        }
+        else if (path == "pathing.nee-candidates")
+        {
+            handled = ApplyCommandUnsigned(
+                operation, arguments, path,
+                candidate.neeCandidateCount,
+                defaults.neeCandidateCount,
+                PathTracingMinNeeCandidateCount,
+                PathTracingMaxNeeCandidateCount,
+                value, error);
+        }
+        else if (path == "pathing.ser")
+        {
+            handled = ApplyCommandBool(
+                operation, arguments, path, candidate.useSer,
+                defaults.useSer, value, error);
+            if (handled && operation != CommandValueOperation::Get &&
+                candidate.useSer && !capabilities.serSupported)
+            {
+                error = "pathing.ser is unavailable because this build has no executable native SER path.";
+                return false;
+            }
+        }
+        else if (path == "pathing.rtxdi")
+        {
+            handled = ApplyCommandBool(
+                operation, arguments, path, candidate.useRtxdi,
+                defaults.useRtxdi, value, error);
+            if (handled && operation != CommandValueOperation::Get &&
+                candidate.useRtxdi &&
+                !capabilities.directReservoirSupported)
+            {
+                error = "pathing.rtxdi is unavailable because this build has no executable direct-light reservoir stage.";
+                return false;
+            }
+        }
+        else
+        {
+            handled = false;
+            error = "Internal Pathing command binding is missing for '" +
+                std::string(path) + "'.";
+        }
+
+        if (!handled)
+            return false;
+        if (operation != CommandValueOperation::Get)
+        {
+            candidate = SanitizePathTracingSettings(candidate);
+            m_ui.PathTracing = candidate;
+            m_app->ResetImageBasedLightingHistory();
+        }
+        return true;
+    }
+
     bool DispatchRepresentationCommandValue(
         const UiSettingsCommandDefinition& definition,
         CommandValueOperation operation,
@@ -11147,6 +12192,27 @@ private:
         std::string& error)
     {
         const std::string_view path = definition.name;
+        if (path == "noise.accumulate-samples")
+        {
+            bool candidate = m_ui.AccumulateSamples;
+            if (!ApplyCommandBool(
+                    operation,
+                    arguments,
+                    path,
+                    candidate,
+                    false,
+                    value,
+                    error))
+            {
+                return false;
+            }
+            if (operation != CommandValueOperation::Get)
+            {
+                m_ui.AccumulateSamples = candidate;
+                m_app->ResetImageBasedLightingHistory();
+            }
+            return true;
+        }
         NoiseSettings candidate = m_ui.Noise;
         const NoiseSettings defaults;
         bool handled = true;
@@ -12052,6 +13118,75 @@ private:
                 m_app->SetWhiteWorldMode(mode);
             return handled;
         }
+        if (path == "debug.path-tracing.view")
+        {
+            static constexpr std::array<std::pair<
+                std::string_view, PathTracingDebugView>, 9> Options = {{
+                    { "final", PathTracingDebugView::FinalImage },
+                    { "albedo", PathTracingDebugView::Albedo },
+                    { "geometric-normal",
+                        PathTracingDebugView::GeometricNormal },
+                    { "shading-normal",
+                        PathTracingDebugView::ShadingNormal },
+                    { "sample-count",
+                        PathTracingDebugView::SampleCount },
+                    { "retry-probability",
+                        PathTracingDebugView::RetryProbability },
+                    { "stable-plane",
+                        PathTracingDebugView::StablePlane },
+                    { "direct-reservoir",
+                        PathTracingDebugView::DirectReservoir },
+                    { "indirect-reservoir",
+                        PathTracingDebugView::IndirectReservoir }
+                }};
+            PathTracingDebugView candidate =
+                m_ui.PathTracing.debugView;
+            const bool handled = ApplyCommandEnum(
+                operation, arguments, path,
+                candidate,
+                PathTracingDebugView::FinalImage,
+                Options, value, error);
+            if (handled && operation != CommandValueOperation::Get)
+            {
+                const PathTracingCapabilities& capabilities =
+                    m_app->GetPathTracingCapabilities();
+                const PathTracingPipelineResolution pipelineResolution =
+                    capabilities.ResolvePipeline(m_ui.PathTracing);
+                const PathTracingSettings& effectiveSettings =
+                    pipelineResolution.effectiveSettings;
+                const bool directReservoirExecutable =
+                    pipelineResolution.executable &&
+                    effectiveSettings.useRtxdi;
+                const bool indirectReservoirExecutable =
+                    pipelineResolution.executable &&
+                    ((effectiveSettings.solver ==
+                            PathTracingSolver::RestirPt &&
+                        effectiveSettings.reusePathReservoirs &&
+                        capabilities.continuationSeedReservoirSupported &&
+                        capabilities.replayablePathSeedSupported) ||
+                    (effectiveSettings.solver ==
+                            PathTracingSolver::RestirGi &&
+                        effectiveSettings.reuseIndirectGiReservoirs &&
+                        capabilities.temporalGiCheckpointReuseSupported));
+                if (candidate ==
+                        PathTracingDebugView::DirectReservoir &&
+                    (!capabilities.directReservoirSupported ||
+                        !directReservoirExecutable))
+                {
+                    error = "debug.path-tracing.view=direct-reservoir is unavailable unless RTXDI Reservoir Stages is enabled and supported.";
+                    return false;
+                }
+                if (candidate ==
+                        PathTracingDebugView::IndirectReservoir &&
+                    !indirectReservoirExecutable)
+                {
+                    error = "debug.path-tracing.view=indirect-reservoir requires an executable ReSTIR PT seed-replay or ReSTIR GI checkpoint estimator.";
+                    return false;
+                }
+                m_ui.PathTracing.debugView = candidate;
+            }
+            return handled;
+        }
         if (path == "debug.visibility.view")
         {
             static constexpr std::array<std::pair<
@@ -12632,6 +13767,129 @@ private:
         std::string& error)
     {
         const std::string_view path = definition.name;
+        if (path.rfind("denoising.path-tracing.", 0u) == 0u)
+        {
+            PathTracingSettings candidate = m_ui.PathTracing;
+            const PathTracingSettings defaults;
+            const PathTracingCapabilities& capabilities =
+                m_app->GetPathTracingCapabilities();
+            bool handled = true;
+
+            if (path == "denoising.path-tracing.stable-planes")
+            {
+                handled = ApplyCommandUnsigned(
+                    operation, arguments, path,
+                    candidate.stablePlaneCount,
+                    defaults.stablePlaneCount,
+                    candidate.denoiser ==
+                            PathTracingDenoiser::StablePlaneResolve
+                        ? 1u
+                        : 0u,
+                    PathTracingMaxStablePlaneCount,
+                    value, error);
+                if (handled && candidate.denoiser ==
+                    PathTracingDenoiser::StablePlaneResolve)
+                {
+                    candidate.stablePlaneCount = std::max(
+                        candidate.stablePlaneCount,
+                        1u);
+                }
+                if (handled && operation != CommandValueOperation::Get &&
+                    candidate.denoiser ==
+                        PathTracingDenoiser::StablePlaneResolve &&
+                    !capabilities.CanUseStablePlaneResolve(candidate))
+                {
+                    error = "Stable Plane Resolve is available only for the RTX PT solver; this selection renders the raw path mean.";
+                    return false;
+                }
+            }
+            else if (path == "denoising.path-tracing.psr")
+            {
+                handled = ApplyCommandBool(
+                    operation, arguments, path, candidate.usePsr,
+                    defaults.usePsr, value, error);
+                if (handled && operation != CommandValueOperation::Get &&
+                    candidate.usePsr && !capabilities.psrSupported)
+                {
+                    error = "denoising.path-tracing.psr is unavailable because this build has no executable PSR stage.";
+                    return false;
+                }
+            }
+            else if (path ==
+                "denoising.path-tracing.firefly-filter")
+            {
+                handled = ApplyCommandBool(
+                    operation, arguments, path,
+                    candidate.enableFireflyFilter,
+                    defaults.enableFireflyFilter, value, error);
+            }
+            else if (path ==
+                "denoising.path-tracing.firefly-threshold")
+            {
+                handled = ApplyCommandFloat(
+                    operation, arguments, path,
+                    candidate.fireflyThreshold,
+                    defaults.fireflyThreshold,
+                    PathTracingMinFireflyThreshold,
+                    PathTracingMaxFireflyThreshold,
+                    value, error);
+            }
+            else if (path == "denoising.path-tracing.method")
+            {
+                static constexpr std::array<std::pair<
+                    std::string_view, PathTracingDenoiser>, 4> Options = {{
+                    { "raw", PathTracingDenoiser::Raw },
+                    { "stable-plane-resolve",
+                        PathTracingDenoiser::StablePlaneResolve },
+                    { "nrd-reblur", PathTracingDenoiser::NrdReblur },
+                    { "nrd-relax", PathTracingDenoiser::NrdRelax }
+                }};
+                handled = ApplyCommandEnum(
+                    operation, arguments, path, candidate.denoiser,
+                    defaults.denoiser, Options, value, error);
+                if (candidate.denoiser ==
+                    PathTracingDenoiser::StablePlaneResolve)
+                {
+                    candidate.stablePlaneCount = std::max(
+                        candidate.stablePlaneCount,
+                        1u);
+                }
+                if (handled && operation != CommandValueOperation::Get &&
+                    candidate.denoiser ==
+                        PathTracingDenoiser::StablePlaneResolve &&
+                    !capabilities.CanUseStablePlaneResolve(candidate))
+                {
+                    error = "Stable Plane Resolve is available only for executable RTX PT in this build; ReSTIR selections use raw output.";
+                    return false;
+                }
+                if (handled && operation != CommandValueOperation::Get &&
+                    (candidate.denoiser == PathTracingDenoiser::NrdReblur ||
+                        candidate.denoiser == PathTracingDenoiser::NrdRelax) &&
+                    !capabilities.nrdSupported)
+                {
+                    error = "No validated path-transport NRD adapter is available in this build.";
+                    return false;
+                }
+            }
+            else
+            {
+                handled = false;
+                error =
+                    "Internal Path Tracing Denoising command binding is missing for '" +
+                    std::string(path) + "'.";
+            }
+
+            if (!handled)
+                return false;
+            if (operation != CommandValueOperation::Get)
+            {
+                m_ui.PathTracing =
+                    SanitizePathTracingSettings(candidate);
+                m_app->ResetImageBasedLightingHistory();
+            }
+            return true;
+        }
+
         DenoisingSignalSettings* current = nullptr;
         DenoisingEffect effect = DenoisingEffect::AmbientOcclusion;
         std::string_view prefix;
@@ -14232,6 +15490,9 @@ private:
         case UiSettingsCommandSection::General:
             return DispatchGeneralCommandValue(
                 definition, operation, arguments, value, error);
+        case UiSettingsCommandSection::Pathing:
+            return DispatchPathingCommandValue(
+                definition, operation, arguments, value, error);
         case UiSettingsCommandSection::Representation:
             return DispatchRepresentationCommandValue(
                 definition, operation, arguments, value, error);
@@ -15154,6 +16415,7 @@ private:
                 "Complete Renderer",
                 "Scene Setup",
                 "Geometry",
+                "Path Transport",
                 "Direct Lighting",
                 "Screen Space Visibility",
                 "Directional Shadows",
@@ -15347,6 +16609,8 @@ private:
                         { "Scene Setup and Clears",
                             RendererTimingStage::SceneSetup },
                         { "Geometry", RendererTimingStage::Geometry },
+                        { "Path Transport",
+                            RendererTimingStage::PathTransport },
                         { "Closest Surface Resolve",
                             RendererTimingStage::MultisampleResolve },
                         { "Shadow Ray Dispatch",
@@ -15401,6 +16665,10 @@ private:
             case StatisticsEffect::Geometry:
                 drawSelectedRendererTable(
                     "Geometry", RendererTimingStage::Geometry);
+                break;
+            case StatisticsEffect::PathTransport:
+                drawSelectedRendererTable(
+                    "Path Transport", RendererTimingStage::PathTransport);
                 break;
             case StatisticsEffect::DirectLighting:
                 if (beginStatisticsTable(
@@ -15734,6 +17002,40 @@ private:
 
         BeginDrawerBody("##GeneralBody", settingsControlWidth);
 
+        ImGui::TextUnformatted("Lighting Solution");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (BeginRoundedCombo(
+                "##LightingSolution",
+                GetLightingSolutionLabel(m_ui.Lighting)))
+        {
+            static constexpr std::array<LightingSolution, 2> Solutions = {
+                LightingSolution::RayMarching,
+                LightingSolution::PathTracing
+            };
+            for (const LightingSolution solution : Solutions)
+            {
+                const bool selected = solution == m_ui.Lighting;
+                DrawDeferredDropdownOption(
+                    GetLightingSolutionLabel(solution),
+                    GetLightingSolutionLabel(solution),
+                    selected,
+                    [this, solution]()
+                    {
+                        if (m_ui.Lighting == solution)
+                            return;
+                        m_ui.Lighting = solution;
+                        m_app->ResetImageBasedLightingHistory();
+                    });
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip(
+            "Choose the scene-lighting pipeline. Ray Marching retains the "
+            "existing screen-space and selective ray-traced techniques; Path "
+            "Tracing uses the shared complete transport core.");
+
         if (!m_ui.GpuAdapterChoices.empty())
         {
             const GpuAdapterChoice* activeAdapter =
@@ -16020,6 +17322,293 @@ private:
             ImGui::SetItemTooltip(
                 "Retry loading the currently selected scene.");
         }
+
+        EndDrawerBody();
+        ImGui::Spacing();
+    }
+
+    void DrawPathingDrawer(float settingsControlWidth)
+    {
+        const bool pathingOpen = DrawCollapsingHeader(
+            "Pathing",
+            "Configure the shared path-transport solver.");
+        if (!pathingOpen)
+        {
+            ImGui::Spacing();
+            return;
+        }
+
+        BeginDrawerBody("##PathingBody", settingsControlWidth);
+        PathTracingSettings& settings = m_ui.PathTracing;
+        const PathTracingCapabilities& capabilities =
+            m_app->GetPathTracingCapabilities();
+        const PathTracingPipelineResolution pipelineResolution =
+            capabilities.ResolvePipeline(settings);
+        const PathTracingSettings& effectiveSettings =
+            pipelineResolution.effectiveSettings;
+
+        const WorldSpaceRepresentationStatus& representationStatus =
+            m_app->GetWorldSpaceRepresentationStatus();
+        const PathTracingSceneDomainStatus sceneDomainStatus =
+            m_app->GetPathTracingSceneDomainStatus();
+        if (sceneDomainStatus ==
+            PathTracingSceneDomainStatus::BlendedGeometryOmitted)
+        {
+            ImGui::TextDisabled(
+                "Alpha-blended geometry is outside the transport "
+                "domain and is omitted; opaque and alpha-tested geometry "
+                "continues through Path Tracing.");
+        }
+        if (!m_ui.Representation.allowRayTraversal)
+        {
+            ImGui::TextDisabled(
+                "Path transport unavailable: enable Allow Ray Traversal in "
+                "Representation.");
+        }
+        else if (sceneDomainStatus ==
+            PathTracingSceneDomainStatus::Unsupported)
+        {
+            ImGui::TextDisabled(
+                "Path transport unavailable for transmissive, hair, "
+                "subsurface, or non-triangle scene geometry; using the live "
+                "raster fallback.");
+        }
+        else if (representationStatus.state ==
+            WorldSpaceRepresentationState::BuildingBlas ||
+            representationStatus.state ==
+                WorldSpaceRepresentationState::BuildingTlas)
+        {
+            ImGui::TextDisabled(
+                "Preparing path transport: BLAS %u/%u.",
+                representationStatus.builtBlasCount,
+                representationStatus.totalBlasCount);
+        }
+        else if (representationStatus.state ==
+            WorldSpaceRepresentationState::Unsupported ||
+            representationStatus.state ==
+                WorldSpaceRepresentationState::Failed)
+        {
+            ImGui::TextDisabled(
+                "Path transport unavailable: DXR 1.1 inline ray queries and "
+                "a valid world hierarchy are required.");
+        }
+        else if (!capabilities.rayQuerySupported)
+        {
+            ImGui::TextDisabled(
+                "Path transport unavailable: required typed UAV formats are "
+                "not supported.");
+        }
+        else if ((capabilities.pipelineAvailabilityMask & 1u) == 0u)
+        {
+            ImGui::TextDisabled(
+                "Path transport unavailable: the baseline RTX PT pipeline "
+                "could not be initialized.");
+        }
+        else if (!capabilities.IsPipelineAvailable(settings))
+        {
+            ImGui::TextDisabled(
+                "Selected permutation unavailable; using executable %s / %s%s.",
+                GetPathTracingSolverLabel(effectiveSettings.solver),
+                GetPathTracingNeeModeLabel(effectiveSettings.neeMode),
+                effectiveSettings.useRtxdi ? " + RTXDI" : "");
+        }
+
+        ImGui::TextUnformatted("Solver Preset");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (BeginRoundedCombo(
+                "##PathTracingSolver",
+                GetPathTracingSolverLabel(settings.solver)))
+        {
+            static constexpr std::array<PathTracingSolver, 3> Solvers = {
+                PathTracingSolver::RtxPt,
+                PathTracingSolver::RestirPt,
+                PathTracingSolver::RestirGi
+            };
+            for (const PathTracingSolver solver : Solvers)
+            {
+                const bool selected = solver == settings.solver;
+                DrawDeferredDropdownOption(
+                    GetPathTracingSolverLabel(solver),
+                    GetPathTracingSolverLabel(solver),
+                    selected,
+                    [this, solver]()
+                    {
+                        m_ui.PathTracing =
+                            ApplyPathTracingSolverPreset(solver);
+                        m_app->ResetImageBasedLightingHistory();
+                    });
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip(
+            "Start from a UVSR-owned RTX PT, ReSTIR PT, or ReSTIR GI "
+            "transport configuration. The controls remain editable after the "
+            "preset is applied.");
+        const bool selectedSolverExecutable = pipelineResolution.executable &&
+            effectiveSettings.solver == settings.solver;
+        if (!selectedSolverExecutable)
+        {
+            ImGui::TextDisabled(
+                "%s estimator unavailable in this build;",
+                GetPathTracingSolverLabel(settings.solver));
+            ImGui::TextDisabled(
+                "rendering uses the closest executable transport solver.");
+            ImGui::SetItemTooltip(
+                "The preset remains selected so its editable preferences are "
+                "retained. The effective solver and NEE mode are reported above.");
+        }
+        else if (settings.solver == PathTracingSolver::RestirPt)
+        {
+            ImGui::TextDisabled(
+                "Seed-space path replay; no geometric reconnection.");
+            ImGui::SetItemTooltip(
+                "UVSR re-integrates deterministic continuation seeds from the "
+                "current pixel, its previous-frame sample, and one previous-frame "
+                "neighbor. This clean-room subset does not claim NVIDIA hybrid-"
+                "shift or RTXDI-Library parity.");
+        }
+        else if (settings.solver == PathTracingSolver::RestirGi)
+        {
+            ImGui::TextDisabled(
+                "Temporal GI checkpoints; no spatial reconnection.");
+            ImGui::SetItemTooltip(
+                "UVSR resamples the current and previous same-pixel complete "
+                "indirect checkpoints. This clean-room subset does not transform "
+                "secondary surfaces or claim NVIDIA RTXDI-Library parity.");
+        }
+
+        ImGui::TextUnformatted("Next-Event Estimation");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (BeginRoundedCombo(
+                "##PathTracingNee",
+                GetPathTracingNeeModeLabel(settings.neeMode)))
+        {
+            static constexpr std::array<PathTracingNeeMode, 3> Modes = {
+                PathTracingNeeMode::Uniform,
+                PathTracingNeeMode::Power,
+                PathTracingNeeMode::NeeAdaptiveTree
+            };
+            for (const PathTracingNeeMode mode : Modes)
+            {
+                const bool selected = mode == settings.neeMode;
+                PathTracingSettings candidate = settings;
+                candidate.neeMode = mode;
+                const PathTracingPipelineResolution candidateResolution =
+                    capabilities.ResolvePipeline(candidate);
+                const bool pipelineAvailable =
+                    candidateResolution.executable &&
+                    candidateResolution.effectiveSettings.solver ==
+                        candidate.solver &&
+                    candidateResolution.effectiveSettings.neeMode == mode;
+                ImGui::BeginDisabled(!pipelineAvailable);
+                DrawDeferredDropdownOption(
+                    GetPathTracingNeeModeLabel(mode),
+                    GetPathTracingNeeModeLabel(mode),
+                    selected,
+                    [this, mode]()
+                    {
+                        m_ui.PathTracing.neeMode = mode;
+                        m_app->ResetImageBasedLightingHistory();
+                    });
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+                ImGui::EndDisabled();
+                if (!pipelineAvailable)
+                {
+                    ImGui::SetItemTooltip(
+                        "This path-tracing shader permutation is unavailable; "
+                        "choose another NEE mode or solver.");
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        int maxBounces = int(settings.maxBounces);
+        if (DrawSliderInt(
+                "Max Bounces",
+                &maxBounces,
+                int(PathTracingMinBounceCount),
+                16))
+        {
+            settings.maxBounces = uint32_t(maxBounces);
+            settings.russianRouletteStart = std::min(
+                settings.russianRouletteStart,
+                settings.maxBounces);
+            m_app->ResetImageBasedLightingHistory();
+        }
+
+        int russianRouletteStart = int(settings.russianRouletteStart);
+        if (DrawSliderInt(
+                "Russian Roulette Start",
+                &russianRouletteStart,
+                int(PathTracingMinBounceCount),
+                int(settings.maxBounces)))
+        {
+            settings.russianRouletteStart =
+                uint32_t(russianRouletteStart);
+            m_app->ResetImageBasedLightingHistory();
+        }
+
+        int candidateCount = int(settings.neeCandidateCount);
+        if (DrawSliderInt(
+                "NEE Candidates",
+                &candidateCount,
+                int(PathTracingMinNeeCandidateCount),
+                16))
+        {
+            settings.neeCandidateCount = uint32_t(candidateCount);
+            m_app->ResetImageBasedLightingHistory();
+        }
+
+        const bool serPresentation = BeginVisuallyDisabledUiScope(
+            "##PathTracingSerUnavailable",
+            !capabilities.serSupported);
+        if (ImGui::Checkbox(
+                "Shader Execution Reordering",
+                &settings.useSer))
+        {
+            m_app->ResetImageBasedLightingHistory();
+        }
+        if (capabilities.serSupported)
+        {
+            ImGui::SetItemTooltip(
+                "Use native shader execution reordering for path traversal.");
+        }
+        else
+        {
+            ImGui::SetItemTooltip(
+                "Unavailable in this build: UVSR's current path shader target "
+                "does not provide the native HitObject SER path.");
+        }
+        EndVisuallyDisabledUiScope(serPresentation);
+
+        PathTracingSettings toggledRtxdiSettings = settings;
+        toggledRtxdiSettings.useRtxdi = !settings.useRtxdi;
+        const bool canToggleRtxdi = settings.useRtxdi ||
+            capabilities.directReservoirSupported &&
+                capabilities.IsPipelineAvailable(toggledRtxdiSettings);
+        const bool rtxdiPresentation = BeginVisuallyDisabledUiScope(
+            "##PathTracingRtxdiUnavailable",
+            !canToggleRtxdi);
+        if (ImGui::Checkbox("RTXDI Reservoir Stages", &settings.useRtxdi))
+        {
+            m_app->ResetImageBasedLightingHistory();
+        }
+        if (canToggleRtxdi)
+        {
+            ImGui::SetItemTooltip(
+                "Enable UVSR's shared direct-light reservoir stages for any "
+                "solver. The RTX PT preset starts with resampling disabled.");
+        }
+        else
+        {
+            ImGui::SetItemTooltip(
+                "Unavailable: this build has no executable direct-light "
+                "reservoir stage.");
+        }
+        EndVisuallyDisabledUiScope(rtxdiPresentation);
 
         EndDrawerBody();
         ImGui::Spacing();
@@ -17758,6 +19347,14 @@ protected:
 
         DrawGeneralDrawer(settingsControlWidth);
 
+        if (BeginAnimatedToggleRegion(
+                "##PathingDrawerVisibility",
+                m_ui.Lighting == LightingSolution::PathTracing))
+        {
+            DrawPathingDrawer(settingsControlWidth);
+            EndAnimatedToggleRegion();
+        }
+
         const bool representationOpen = DrawCollapsingHeader(
             "Representation",
             "Configure the world space hierarchy shared by ray traced "
@@ -17818,7 +19415,14 @@ protected:
             if (representationStatus.state ==
                 WorldSpaceRepresentationState::Idle)
             {
-                ImGui::TextDisabled("Status: Inactive");
+                if (m_ui.Lighting == LightingSolution::PathTracing &&
+                    !representation.allowRayTraversal)
+                {
+                    ImGui::TextDisabled(
+                        "Status: Path transport disabled by master traversal");
+                }
+                else
+                    ImGui::TextDisabled("Status: Inactive");
             }
             else
                 ImGui::Text("Status: %s", representationState);
@@ -18160,6 +19764,24 @@ protected:
         if (noiseOpen)
         {
             BeginDrawerBody("##NoiseBody", settingsControlWidth);
+            if (ImGui::Checkbox(
+                    "Accumulate Samples",
+                    &m_ui.AccumulateSamples))
+            {
+                m_app->ResetImageBasedLightingHistory();
+            }
+            ImGui::SetItemTooltip(
+                "Retain every finite successful sample, including black and "
+                "environment misses. Pixels with more successes are retried "
+                "less often; camera, lighting, geometry, material, environment, "
+                "resolution, solver, or shader changes reset all history.");
+            if (m_ui.Lighting == LightingSolution::PathTracing &&
+                !m_ui.AccumulateSamples)
+            {
+                ImGui::TextDisabled(
+                    "One-sample refresh: enable accumulation to converge.");
+            }
+
             const NoiseSettings defaults;
             if (drawNoiseSettingsControls(
                     m_ui.Noise,
@@ -18453,6 +20075,12 @@ protected:
             }
         };
 
+        if (BeginAnimatedToggleRegion(
+                "##DiffuseDrawerVisibility",
+                m_ui.Lighting == LightingSolution::RayMarching,
+                UiToggleRegionOwner::Settings,
+                UiToggleRegionVisualMode::ClipDuringCollapse))
+        {
         const bool diffuseOpen = DrawCollapsingHeader(
             "Diffuse",
             "Configure occlusion, illumination, sampling, "
@@ -19003,6 +20631,8 @@ protected:
             EndDrawerBody();
         }
         ImGui::Spacing();
+        EndAnimatedToggleRegion();
+        }
         const bool denoisingOpen = DrawCollapsingHeader(
             "Denoising",
             "Choose NVIDIA NRD denoisers independently for occlusion, "
@@ -19010,6 +20640,10 @@ protected:
         if (denoisingOpen)
         {
             BeginDrawerBody("##DenoisingBody", settingsControlWidth);
+            if (BeginAnimatedToggleRegion(
+                    "##RayMarchingDenoisingBody",
+                    m_ui.Lighting == LightingSolution::RayMarching))
+            {
 #if UVSR_WITH_NRD
             ImGui::TextWrapped(
                 "NVIDIA NRD is available in this build. Each signal keeps "
@@ -19287,10 +20921,199 @@ protected:
             ImGui::TextDisabled(
                 "NRD is not actually included in this build");
 #endif
+            EndAnimatedToggleRegion();
+            }
+
+            if (BeginAnimatedToggleRegion(
+                    "##PathTracingDenoisingBody",
+                    m_ui.Lighting == LightingSolution::PathTracing))
+            {
+                PathTracingSettings& pathing = m_ui.PathTracing;
+                const PathTracingCapabilities& capabilities =
+                    m_app->GetPathTracingCapabilities();
+
+                ImGui::TextUnformatted("Method");
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (BeginRoundedCombo(
+                        "##PathTracingDenoiser",
+                        GetPathTracingDenoiserLabel(pathing.denoiser)))
+                {
+                    static constexpr std::array<PathTracingDenoiser, 4>
+                        Methods = {
+                            PathTracingDenoiser::Raw,
+                            PathTracingDenoiser::StablePlaneResolve,
+                            PathTracingDenoiser::NrdReblur,
+                            PathTracingDenoiser::NrdRelax
+                        };
+                    for (const PathTracingDenoiser method : Methods)
+                    {
+                        const bool nrdMethod =
+                            method == PathTracingDenoiser::NrdReblur ||
+                            method == PathTracingDenoiser::NrdRelax;
+                        const bool stablePlaneMethod =
+                            method ==
+                                PathTracingDenoiser::StablePlaneResolve;
+                        PathTracingSettings methodSettings = pathing;
+                        methodSettings.denoiser = method;
+                        if (stablePlaneMethod)
+                        {
+                            methodSettings.stablePlaneCount = std::max(
+                                methodSettings.stablePlaneCount,
+                                1u);
+                        }
+                        const bool unavailable =
+                            (nrdMethod && !capabilities.nrdSupported) ||
+                            (stablePlaneMethod &&
+                                !capabilities.CanUseStablePlaneResolve(
+                                    methodSettings));
+                        const bool selected = method == pathing.denoiser;
+                        if (unavailable)
+                            ImGui::BeginDisabled();
+                        DrawDeferredDropdownOption(
+                            GetPathTracingDenoiserLabel(method),
+                            GetPathTracingDenoiserLabel(method),
+                            selected,
+                            [this, method]()
+                            {
+                                m_ui.PathTracing.denoiser = method;
+                                if (method == PathTracingDenoiser::
+                                    StablePlaneResolve)
+                                {
+                                    m_ui.PathTracing.stablePlaneCount =
+                                        std::max(
+                                            m_ui.PathTracing.
+                                                stablePlaneCount,
+                                            1u);
+                                }
+                                m_app->ResetImageBasedLightingHistory();
+                            });
+                        if (unavailable)
+                        {
+                            if (nrdMethod)
+                            {
+                                ImGui::SetItemTooltip(
+                                    "Unavailable: this build has no validated "
+                                    "path-transport NRD adapter.");
+                            }
+                            else
+                            {
+                                ImGui::SetItemTooltip(
+                                    pathing.solver == PathTracingSolver::RtxPt
+                                        ? "Unavailable: the transport signal "
+                                          "formats or spatial resolve pipeline "
+                                          "could not be initialized. Raw output "
+                                          "remains active."
+                                        : "Unavailable for ReSTIR PT/GI: the "
+                                          "selected reservoir candidate does not "
+                                          "yet persist a stable-plane identity. "
+                                          "Raw output remains active.");
+                            }
+                            ImGui::EndDisabled();
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+
+                const bool stablePlaneSelected = pathing.denoiser ==
+                    PathTracingDenoiser::StablePlaneResolve;
+                const bool stablePlaneAvailable =
+                    capabilities.CanUseStablePlaneResolve(pathing);
+                const bool stablePlanePresentation =
+                    BeginVisuallyDisabledUiScope(
+                        "##PathTracingStablePlanesUnavailable",
+                        !stablePlaneSelected || !stablePlaneAvailable);
+                int stablePlaneCount = int(std::max(
+                    pathing.stablePlaneCount,
+                    1u));
+                if (DrawSliderInt(
+                        "Stable Planes",
+                        &stablePlaneCount,
+                        1,
+                        int(PathTracingMaxStablePlaneCount)))
+                {
+                    pathing.stablePlaneCount = uint32_t(stablePlaneCount);
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                if (stablePlaneAvailable)
+                {
+                    ImGui::SetItemTooltip(
+                        "Use one merged path signal, two primary/indirect "
+                        "signals, or three primary/diffuse/specular signals "
+                        "in UVSR's spatial-only edge-aware resolve.");
+                }
+                else if (!stablePlaneSelected)
+                {
+                    ImGui::SetItemTooltip(
+                        "Select Stable Plane Resolve to configure one to "
+                        "three spatial reconstruction signals.");
+                }
+                else
+                {
+                    ImGui::SetItemTooltip(
+                        pathing.solver == PathTracingSolver::RtxPt
+                            ? "Unavailable: signal allocation or the resolve "
+                              "pipeline is unsupported; raw output is used."
+                            : "Unavailable for ReSTIR PT/GI until the winning "
+                              "candidate persists its plane identity; raw "
+                              "output is used.");
+                }
+                EndVisuallyDisabledUiScope(stablePlanePresentation);
+
+                const bool psrPresentation = BeginVisuallyDisabledUiScope(
+                    "##PathTracingPsrUnavailable",
+                    !capabilities.psrSupported);
+                if (ImGui::Checkbox(
+                        "Primary-Surface Replacement",
+                        &pathing.usePsr))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    capabilities.psrSupported
+                        ? "Enable primary-surface replacement."
+                        : "Unavailable: this build has no executable "
+                          "primary-surface replacement stage.");
+                EndVisuallyDisabledUiScope(psrPresentation);
+
+                if (ImGui::Checkbox(
+                        "Firefly Clamp (Biased)",
+                        &pathing.enableFireflyFilter))
+                {
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                ImGui::SetItemTooltip(
+                    "Clamp rare high-energy paths before reconstruction. This "
+                    "reduces fireflies but intentionally biases the result.");
+                if (BeginAnimatedToggleRegion(
+                        "##PathTracingFireflyThreshold",
+                        pathing.enableFireflyFilter))
+                {
+                    if (DrawSliderFloat(
+                            "Firefly Threshold",
+                            &pathing.fireflyThreshold,
+                            0.1f,
+                            100.f,
+                            "%.2f"))
+                    {
+                        m_app->ResetImageBasedLightingHistory();
+                    }
+                    EndAnimatedToggleRegion();
+                }
+
+                EndAnimatedToggleRegion();
+            }
 
             EndDrawerBody();
         }
         ImGui::Spacing();
+        if (BeginAnimatedToggleRegion(
+                "##BuffersDrawerVisibility",
+                m_ui.Lighting == LightingSolution::RayMarching,
+                UiToggleRegionOwner::Settings,
+                UiToggleRegionVisualMode::ClipDuringCollapse))
+        {
         const bool buffersOpen = DrawCollapsingHeader(
             "Buffers",
             "Configure the retained visibility buffer precision controls.");
@@ -19452,6 +21275,14 @@ protected:
             EndDrawerBody();
         }
         ImGui::Spacing();
+        EndAnimatedToggleRegion();
+        }
+        if (BeginAnimatedToggleRegion(
+                "##AliasingDrawerVisibility",
+                m_ui.Lighting == LightingSolution::RayMarching,
+                UiToggleRegionOwner::Settings,
+                UiToggleRegionVisualMode::ClipDuringCollapse))
+        {
         const bool antiAliasingOpen = DrawCollapsingHeader(
             "Aliasing",
             "Enable temporal, fast approximate, morphological, and "
@@ -20389,6 +22220,8 @@ protected:
             EndDrawerBody();
         }
         ImGui::Spacing();
+        EndAnimatedToggleRegion();
+        }
         const bool debugOpen = DrawCollapsingHeader(
             "Debug",
             "Combine world appearance and effect-specific information views.",
@@ -20450,6 +22283,10 @@ protected:
             EndAnimatedTreeNode();
             }
 
+            if (BeginAnimatedToggleRegion(
+                    "##RayMarchingDebugBody",
+                    m_ui.Lighting == LightingSolution::RayMarching))
+            {
             if (BeginAnimatedTreeNode(
                     "Visibility##Debug",
                     ImGuiTreeNodeFlags_DefaultOpen,
@@ -20571,6 +22408,97 @@ protected:
                 m_app->ResetImageBasedLightingHistory();
             }
             EndAnimatedTreeNode();
+            }
+
+            EndAnimatedToggleRegion();
+            }
+
+            if (BeginAnimatedToggleRegion(
+                    "##PathTracingDebugBody",
+                    m_ui.Lighting == LightingSolution::PathTracing))
+            {
+                if (BeginAnimatedTreeNode(
+                        "Transport##Debug",
+                        ImGuiTreeNodeFlags_DefaultOpen,
+                        "Inspect path-transport surfaces, histories, and "
+                        "reservoirs."))
+                {
+                    PathTracingSettings& pathing = m_ui.PathTracing;
+                    const PathTracingCapabilities& capabilities =
+                        m_app->GetPathTracingCapabilities();
+                    const PathTracingPipelineResolution pipelineResolution =
+                        capabilities.ResolvePipeline(pathing);
+                    const PathTracingSettings& effectiveSettings =
+                        pipelineResolution.effectiveSettings;
+                    const bool directReservoirExecutable =
+                        pipelineResolution.executable &&
+                        effectiveSettings.useRtxdi;
+                    const bool indirectReservoirExecutable =
+                        pipelineResolution.executable &&
+                        ((effectiveSettings.solver ==
+                                PathTracingSolver::RestirPt &&
+                            effectiveSettings.reusePathReservoirs &&
+                            capabilities.continuationSeedReservoirSupported &&
+                            capabilities.replayablePathSeedSupported) ||
+                        (effectiveSettings.solver ==
+                                PathTracingSolver::RestirGi &&
+                            effectiveSettings.reuseIndirectGiReservoirs &&
+                            capabilities.temporalGiCheckpointReuseSupported));
+                    ImGui::TextUnformatted("View");
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    if (BeginRoundedCombo(
+                            "##PathTracingDebugView",
+                            GetPathTracingDebugViewLabel(
+                                pathing.debugView)))
+                    {
+                        static constexpr std::array<
+                            PathTracingDebugView, 9> Views = {
+                                PathTracingDebugView::FinalImage,
+                                PathTracingDebugView::Albedo,
+                                PathTracingDebugView::GeometricNormal,
+                                PathTracingDebugView::ShadingNormal,
+                                PathTracingDebugView::SampleCount,
+                                PathTracingDebugView::RetryProbability,
+                                PathTracingDebugView::StablePlane,
+                                PathTracingDebugView::DirectReservoir,
+                                PathTracingDebugView::IndirectReservoir
+                            };
+                        for (const PathTracingDebugView view : Views)
+                        {
+                            const bool unavailable =
+                                (view ==
+                                    PathTracingDebugView::DirectReservoir &&
+                                     (!capabilities.directReservoirSupported ||
+                                        !directReservoirExecutable)) ||
+                                (view == PathTracingDebugView::IndirectReservoir &&
+                                    !indirectReservoirExecutable);
+                            const bool selected = view == pathing.debugView;
+                            if (unavailable)
+                                ImGui::BeginDisabled();
+                            DrawDeferredDropdownOption(
+                                GetPathTracingDebugViewLabel(view),
+                                GetPathTracingDebugViewLabel(view),
+                                selected,
+                                [this, view]()
+                                {
+                                    m_ui.PathTracing.debugView = view;
+                                });
+                            if (unavailable)
+                            {
+                                ImGui::SetItemTooltip(
+                                    "Unavailable: this transport quantity is "
+                                    "not produced by the executable estimator "
+                                    "in this build.");
+                                ImGui::EndDisabled();
+                            }
+                            if (selected)
+                                ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    EndAnimatedTreeNode();
+                }
+                EndAnimatedToggleRegion();
             }
 
             EndDrawerBody();
@@ -20796,6 +22724,10 @@ protected:
                 EndAnimatedTreeNode();
             }
 
+            if (BeginAnimatedToggleRegion(
+                    "##RayMarchingAmbientFill",
+                    m_ui.Lighting == LightingSolution::RayMarching))
+            {
             if (ImGui::Checkbox(
                     "Ambient Fill",
                     &m_ui.EnableAmbientFill))
@@ -20903,6 +22835,8 @@ protected:
 
                 EndAnimatedToggleRegion();
             }
+            EndAnimatedToggleRegion();
+            }
 
             if (ImGui::Checkbox(
                     "Show Environment Background",
@@ -20920,6 +22854,10 @@ protected:
                 m_app->ResetImageBasedLightingHistory();
             }
 
+            if (BeginAnimatedToggleRegion(
+                    "##RayMarchingSkyVisibility",
+                    m_ui.Lighting == LightingSolution::RayMarching))
+            {
             ImGui::Spacing();
             if (BeginAnimatedTreeNode(
                     "Ray Traced Sky Visibility##Sky",
@@ -21195,6 +23133,8 @@ protected:
             }
             EndAnimatedTreeNode();
             }
+            EndAnimatedToggleRegion();
+            }
 
             EndDrawerBody();
         }
@@ -21294,6 +23234,11 @@ protected:
                                 DefaultFlashlightEnabled;
                             m_app->ResetImageBasedLightingHistory();
                         }
+                        if (BeginAnimatedToggleRegion(
+                                "##RayMarchingFlashlightVisibility",
+                                m_ui.Lighting ==
+                                    LightingSolution::RayMarching))
+                        {
                         if (ImGui::Checkbox(
                                 "Cast Shadows",
                                 &flashlight.castShadows))
@@ -21336,6 +23281,8 @@ protected:
                                 m_app->ResetImageBasedLightingHistory();
                             }
                             EndAnimatedToggleRegion();
+                        }
+                        EndAnimatedToggleRegion();
                         }
 
                         ImGui::Checkbox(
@@ -21961,6 +23908,12 @@ protected:
         }
         ImGui::Spacing();
 
+        if (BeginAnimatedToggleRegion(
+                "##ShadowsDrawerVisibility",
+                m_ui.Lighting == LightingSolution::RayMarching,
+                UiToggleRegionOwner::Settings,
+                UiToggleRegionVisualMode::ClipDuringCollapse))
+        {
         const bool shadowsOpen = DrawCollapsingHeader(
             "Shadows", "Configure ray traced direct light shadows.");
         if (shadowsOpen)
@@ -21998,6 +23951,8 @@ protected:
             EndDrawerBody();
         }
         ImGui::Spacing();
+        EndAnimatedToggleRegion();
+        }
 
         DrawMaterialDrawer(settingsControlWidth);
         DrawInterfaceDrawer(settingsControlWidth);

@@ -132,7 +132,11 @@ namespace
             "cmaa2_EdgesColor2x2CS",
             "cmaa2_ProcessCandidatesCS",
             "image_based_lighting_background_ps",
+            "lighting_accumulation_cs",
+            "lighting_accumulation_prepare_cs",
             "msaa_visibility_resolve_cs",
+            "path_tracing_cs",
+            "path_tracing_stable_plane_resolve_cs",
             "pbr_deferred_lighting_cs",
             "pbr_deferred_lighting_msaa_cs",
             "pbr_gbuffer_ps",
@@ -288,8 +292,8 @@ int main(int argc, char** argv)
             std::string("retired shader axis must remain absent: ") + axis);
     }
     passed &= Check(
-        CountShaderPermutations(config) == 306u,
-        "the production shader catalog must contain exactly 306 permutations");
+        CountShaderPermutations(config) == 327u,
+        "the production shader catalog must contain exactly 327 permutations");
     passed &= Check(
         CountExactLines(
             config,
@@ -297,6 +301,28 @@ int main(int argc, char** argv)
                 "-D UVSR_UNITY_EXPOSURE={0,1}") == 1u &&
             CountOccurrences(config, "agx_tonemapping_ps.hlsl") == 1u,
         "production must package exposure-buffer and unity-exposure AgX paths");
+    passed &= Check(
+        CountExactLines(
+            config,
+            "lighting_accumulation_prepare_cs.hlsl -T cs -E main") == 1u &&
+            CountOccurrences(
+                config,
+                "lighting_accumulation_prepare_cs.hlsl") == 1u,
+        "production must package one transactional lighting-attempt prepare shader");
+    passed &= Check(
+        CountExactLines(
+            config,
+            "path_tracing_cs.hlsl -T cs -E main "
+                "-D UVSR_PT_SOLVER={0,1,2} "
+                "-D UVSR_PT_RTXDI={0,1} "
+                "-D UVSR_PT_NEE_MODE={0,1,2}") == 1u,
+        "production must package the complete solver, RTXDI, and NEE path-transport matrix");
+    passed &= Check(
+        CountExactLines(
+            config,
+            "path_tracing_stable_plane_resolve_cs.hlsl -T cs -E main") ==
+                1u,
+        "production must package one spatial stable-plane resolve shader");
     passed &= Check(
         CountOccurrences(
             config,
@@ -445,8 +471,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 46u,
-        "production shader contract must enumerate exactly 46 files");
+        expectedFiles.size() == 50u,
+        "production shader contract must enumerate exactly 50 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

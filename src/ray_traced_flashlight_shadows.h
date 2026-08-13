@@ -1,6 +1,7 @@
 #pragma once
 
 #include "flashlight_shared.h"
+#include "lighting_accumulation_pass.h"
 #include "noise_settings.h"
 #include "ray_traced_material_visibility.h"
 
@@ -73,7 +74,8 @@ namespace uvsr
             nvrhi::ITexture* noiseTexture,
             uint32_t samplingPhase,
             float rayBiasMeters,
-            bool outputHitDistance);
+            bool outputHitDistance,
+            const LightingSampleSchedule& sampleSchedule);
 
         void ResetBindingCache();
 
@@ -98,6 +100,7 @@ namespace uvsr
         RayTracedFlashlightShadowInputs m_BoundInputs;
         RayTracedMaterialVisibilityInputs m_BoundMaterialVisibility;
         nvrhi::ITexture* m_BoundNoiseTexture = nullptr;
+        nvrhi::ITexture* m_BoundAttemptMask = nullptr;
         bool m_Supported = false;
         bool m_HitDistanceSupported = false;
         bool m_ReportedInvalidInput = false;
@@ -110,6 +113,7 @@ namespace uvsr
             const RayTracedMaterialVisibilityInputs& materialVisibility,
             nvrhi::rt::IAccelStruct* worldTlas,
             nvrhi::ITexture* noiseTexture,
+            nvrhi::ITexture* attemptMask,
             bool outputHitDistance);
         void ClearBindingSets();
     };

@@ -16,6 +16,9 @@ struct RayTracedSkyVisibilityConstants
     float rayBias;
     uint reverseDepth;
     uint floatDepth;
+
+    uint attemptMaskEnabled;
+    uint3 padding0;
 };
 
 #endif // UVSR_RAY_TRACED_SKY_VISIBILITY_CB_H

@@ -15,7 +15,7 @@ struct ScreenSpaceVisibilityConstants
     float radiusWorld;
     float thicknessWorld;
     float stepDistributionExponent;
-    float padding0;
+    uint attemptMaskEnabled;
 
     float ambientStrength;
     float indirectDiffuseIntensity;

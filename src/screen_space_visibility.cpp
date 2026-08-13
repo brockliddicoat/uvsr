@@ -792,7 +792,8 @@ namespace uvsr
         const ScreenSpaceVisibilityInputs& inputs,
         const NoiseSettings& noiseSettings,
         nvrhi::ITexture* noiseTexture,
-        uint32_t sampleSequencePhase)
+        uint32_t sampleSequencePhase,
+        const LightingSampleSchedule& sampleSchedule)
     {
         if (!settings.HasActiveConsumer())
         {
@@ -806,6 +807,7 @@ namespace uvsr
             inputs.gbufferEmissive && inputs.materialAmbientOcclusion &&
             inputs.baseLighting && inputs.output);
         assert(IsValidNoiseSettings(noiseSettings) && noiseTexture);
+        assert(sampleSchedule && sampleSchedule.attemptMask);
         assert(compositeView.GetNumChildViews(ViewType::PLANAR) == 1);
 
         const IView* view = compositeView.GetChildView(ViewType::PLANAR, 0);
@@ -846,7 +848,7 @@ namespace uvsr
                 fullSize)
                 ? inputs.skyVisibility
                 : nullptr;
-        const std::array<nvrhi::ITexture*, 13> inputTextures = {
+        const std::array<nvrhi::ITexture*, 14> inputTextures = {
             inputs.depth,
             inputs.normals,
             inputs.sourceRadiance,
@@ -859,7 +861,8 @@ namespace uvsr
             inputs.specularEnvironment,
             inputs.environmentBrdf,
             inputs.baseLighting,
-            inputs.output
+            inputs.output,
+            sampleSchedule.attemptMask
         };
         if (inputTextures != m_BoundInputTextures ||
             noiseTexture != m_BoundNoiseTexture)
@@ -913,6 +916,7 @@ namespace uvsr
         constants.resolutionScale = resolutionScale;
         constants.noisePattern = static_cast<uint32_t>(
             noiseSettings.pattern);
+        constants.attemptMaskEnabled = sampleSchedule.enabled ? 1u : 0u;
         constants.visibilityDebugView = std::min(
             static_cast<uint32_t>(settings.debugView), 3u);
         constants.packedEdgeMode = packedEdgesEnabled
@@ -1029,6 +1033,7 @@ namespace uvsr
         if (indirectEnabled)
             traceLayout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(2));
         traceLayout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(3));
+        traceLayout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(4));
         if (ambientEnabled)
             traceLayout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(0));
         if (indirectEnabled)
@@ -1070,6 +1075,9 @@ namespace uvsr
             bindings.bindings.push_back(
                 nvrhi::BindingSetItem::Texture_SRV(
                     3, noiseTexture));
+            bindings.bindings.push_back(
+                nvrhi::BindingSetItem::Texture_SRV(
+                    4, sampleSchedule.attemptMask));
             if (ambientEnabled)
             {
                 bindings.bindings.push_back(

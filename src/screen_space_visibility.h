@@ -1,5 +1,6 @@
 #pragma once
 
+#include "lighting_accumulation_pass.h"
 #include "noise_settings.h"
 #include "screen_space_visibility_defaults.h"
 
@@ -298,7 +299,8 @@ namespace uvsr
             const ScreenSpaceVisibilityInputs& inputs,
             const NoiseSettings& noiseSettings,
             nvrhi::ITexture* noiseTexture,
-            uint32_t sampleSequencePhase);
+            uint32_t sampleSequencePhase,
+            const LightingSampleSchedule& sampleSchedule);
 
         void Deactivate();
         void ResetBindingCache();
@@ -346,7 +348,7 @@ namespace uvsr
         std::unordered_map<uint64_t, Pipeline> m_AdvancedPipelines;
         std::unordered_map<uint64_t, nvrhi::BindingSetHandle>
             m_AdvancedBindingSets;
-        std::array<nvrhi::ITexture*, 13> m_BoundInputTextures{};
+        std::array<nvrhi::ITexture*, 14> m_BoundInputTextures{};
 
         dm::uint2 m_FullSize = dm::uint2::zero();
         dm::uint2 m_SamplingSize = dm::uint2::zero();

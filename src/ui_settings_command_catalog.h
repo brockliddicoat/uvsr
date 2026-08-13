@@ -22,6 +22,7 @@ namespace uvsr
     {
         Ui,
         General,
+        Pathing,
         Representation,
         Noise,
         Visibility,
@@ -125,12 +126,22 @@ namespace uvsr
         Value("material-editor.visible", Kind::Boolean, Section::Ui, "on|off"),
 
         // General.
+        Value("lighting.solution", Kind::Enum, Section::General, "ray-marching|path-tracing"),
         Value("gpu.adapter", Kind::DynamicSelection, Section::General, "runtime adapter index or unique display name", false, true),
         Value("gpu.adaptive-sync", Kind::Enum, Section::General, "off|vendor-agnostic|nvidia-exclusive"),
         Value("camera.mode", Kind::Enum, Section::General, "freelook|locked"),
         Value("camera.location", Kind::Enum, Section::General, "piloted|position-1"),
         Value("scene.current", Kind::DynamicSelection, Section::General, "runtime scene filename or unique display name", false, true),
         Action("open-scene-folder", Section::General, "open the active scene directory"),
+
+        // Pathing.
+        Value("pathing.solver", Kind::Enum, Section::Pathing, "rtx-pt|restir-pt|restir-gi"),
+        Value("pathing.nee", Kind::Enum, Section::Pathing, "uniform|power|nee-at"),
+        Value("pathing.max-bounces", Kind::Integer, Section::Pathing, "integer 1..96"),
+        Value("pathing.russian-roulette-start", Kind::Integer, Section::Pathing, "integer 1..96 and no greater than max-bounces"),
+        Value("pathing.nee-candidates", Kind::Integer, Section::Pathing, "integer 1..63"),
+        Value("pathing.ser", Kind::Boolean, Section::Pathing, "on|off"),
+        Value("pathing.rtxdi", Kind::Boolean, Section::Pathing, "on|off"),
 
         // Representation.
         Value("representation.bvh.build-preference", Kind::Enum, Section::Representation, "fast-trace|balanced|fast-build"),
@@ -142,6 +153,7 @@ namespace uvsr
         Value("noise.pattern", Kind::Enum, Section::Noise, "spatial-white|spatial-blue|spatiotemporal-blue"),
         Value("noise.resolution", Kind::Enum, Section::Noise, "64x64|128x128|256x256|512x512"),
         Value("noise.animate-samples", Kind::Boolean, Section::Noise, "on|off"),
+        Value("noise.accumulate-samples", Kind::Boolean, Section::Noise, "on|off"),
 
         // Visibility.
         Value("visibility.enabled", Kind::Boolean, Section::Visibility, "on|off"),
@@ -192,6 +204,11 @@ namespace uvsr
         Value("denoising.sky.history", Kind::Integer, Section::Denoising, "integer 1..32"),
         Value("denoising.sky.disocclusion", Kind::Float, Section::Denoising, "float 0.001..0.1"),
         Value("denoising.sky.anti-lag", Kind::Float, Section::Denoising, "float 0..1"),
+        Value("denoising.path-tracing.stable-planes", Kind::Integer, Section::Denoising, "integer 0..3"),
+        Value("denoising.path-tracing.psr", Kind::Boolean, Section::Denoising, "on|off"),
+        Value("denoising.path-tracing.firefly-filter", Kind::Boolean, Section::Denoising, "on|off"),
+        Value("denoising.path-tracing.firefly-threshold", Kind::Float, Section::Denoising, "float 0.01..1000000"),
+        Value("denoising.path-tracing.method", Kind::Enum, Section::Denoising, "raw|stable-plane-resolve|nrd-reblur|nrd-relax"),
 
         // Anti-Aliasing.
         Value("anti-aliasing.taa.enabled", Kind::Boolean, Section::Aliasing, "on|off"),
@@ -230,6 +247,7 @@ namespace uvsr
         Value("debug.world.materials", Kind::Enum, Section::Debug, "scene|white|white-detail|white-lighting"),
         Value("debug.visibility.view", Kind::Enum, Section::Debug, "final|ambient-visibility|traced-indirect|applied-indirect"),
         Value("debug.pbr.filter", Kind::Enum, Section::Debug, "final|surface-normals|geometry-normals|normal-difference|diffuse-environment|environment-direction|reflected-environment|brdf-response|specular-environment|all-environment-light|specular-visibility|environment-level"),
+        Value("debug.path-tracing.view", Kind::Enum, Section::Debug, "final|albedo|geometric-normal|shading-normal|sample-count|retry-probability|stable-plane|direct-reservoir|indirect-reservoir"),
 
         // Sky.
         Value("sky.environment", Kind::Enum, Section::Sky, "day-kloppenheim-03|bright-overcast-snow-field-2|soft-day-farm-field|night-kloppenheim-07|starry-night-qwantani|legacy-quadrangle-cloudy"),

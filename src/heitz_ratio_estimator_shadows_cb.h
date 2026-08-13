@@ -23,7 +23,7 @@ struct HeitzRatioEstimatorShadowConstants
     uint reverseDepth;
     uint floatDepth;
     uint useRatioEstimator;
-    uint padding1;
+    uint attemptMaskEnabled;
 };
 
 #endif // UVSR_HEITZ_RATIO_ESTIMATOR_SHADOWS_CB_H

@@ -40,7 +40,10 @@ button gaps, as well as the Settings-to-command-interface gap; 2x is 8 pixels
 for the Settings title-to-General inset and body padding; and 4x is 16 pixels
 for outer panel and command-interface margins.
 
-The Settings panel contains thirteen scrolling top level drawers in this order:
+The Settings panel contains thirteen persistent scrolling top-level drawers in
+this order. Path Tracing inserts the conditional **Pathing** drawer immediately
+after General and smoothly removes the Ray Marching-only Diffuse, Buffers,
+Aliasing, and Shadows drawers from the active layout:
 
 1. **General** selects the graphics adapter, Adaptive Sync, camera, and scene.
 2. **Representation** controls whether ray traversal is allowed and configures
@@ -49,8 +52,9 @@ The Settings panel contains thirteen scrolling top level drawers in this order:
    animation policy.
 4. **Diffuse** controls Occlusion, Illumination, sampling, and
    reconstruction.
-5. **Denoising** selects optional NVIDIA NRD processing for AO, GI, shadows,
-   and sky visibility.
+5. **Denoising** selects Ray Marching NRD processing or the supported Path
+   Tracing raw/firefly controls and RTX PT spatial path-layer resolve, with
+   unavailable PT reconstruction choices capability-disabled.
 6. **Buffers** owns the two retained Visibility precision choices.
 7. **Aliasing** independently enables the temporal, fast approximate,
    morphological, and multisample techniques.
@@ -182,6 +186,12 @@ to that endpoint rather than adding a second scroll-anchor correction.
 
 ## General
 
+**Lighting Solution** is the first General control. **Ray Marching** preserves
+the established deferred renderer and is the factory default. **Path Tracing**
+selects zero-raster complete light transport and changes visible Settings
+topology only after the deferred dropdown has finished closing. The selection
+does not erase either solution's stored settings.
+
 **Graphics Adapter** selects the DirectX 12 device and restarts UVSR when it
 changes. **Adaptive Sync** follows it directly and offers **Off**, **Vendor
 Agnostic**, and **Nvidia Exclusive**. Off suppresses the windowed DXGI Present
@@ -206,6 +216,60 @@ imports never enter the average. A failed asynchronous import leaves loading
 state cleanly and exposes **Retry Scene Load** instead of leaving the counter
 running forever.
 
+## Pathing
+
+Pathing follows General and appears only while Path Tracing is selected. The
+drawer configures policies around one shared transport core:
+
+- **Solver** applies an editable **RTX PT**, **ReSTIR PT**, or **ReSTIR GI**
+  recipe. RTX PT is the reference Monte Carlo solver. ReSTIR PT executes
+  deterministic seed-space replay from the current path, the prior same-pixel
+  seed, and one prior-frame neighbor seed. ReSTIR GI executes current plus
+  prior same-pixel indirect-checkpoint resampling. The UI identifies both as
+  first-party clean-room subsets and states that geometric reconnection,
+  spatial GI transformation, and NVIDIA namesake parity are unavailable.
+- **Next Event Estimation** selects Uniform, Power, or NEE-AT light sampling.
+  Every strategy returns the light-selection probability that normalizes its
+  direct estimate. NEE-AT is UVSR's current-vertex adaptive tree; it is not a
+  claim of one-to-one NVIDIA behavior.
+- Zero-size analytic lights retain exact delta visibility. Positive-size
+  directional, point, and spot lights sample their angular disk or visible
+  sphere with a matching solid-angle PDF, and shadow rays stop at the sampled
+  emitter point. Reusable direct reservoirs persist the complete 32-bit emitter
+  sample seed and replay it at the receiving surface.
+- **Maximum Bounces**, **Russian Roulette Start**, and **NEE Candidates** bound
+  path length and direct-light work without selecting another material model.
+  Conventional RTX PT averages that many independent NEE estimates.
+- The **RTXDI Reservoir Stages** option selects UVSR's first-party RTXDI-like
+  direct-light reservoir for any requested preset. It replaces conventional NEE
+  at the primary hit; later path vertices retain conventional NEE. Compatible
+  previous-frame same-pixel and one-neighbor direct reuse is active when the
+  selected recipe requests it. This stage is orthogonal to ReSTIR PT path-seed
+  replay and ReSTIR GI indirect-checkpoint reuse, and every solver preset starts
+  with it disabled.
+- **Shader Execution Reordering** is disabled with an availability explanation.
+  The current Shader Model 6.5 RayQuery path has no native SER implementation
+  and does not pretend to reorder execution.
+
+Each solver/RTXDI/NEE combination has an independent packaged shader pipeline:
+three solvers times two RTXDI modes times three NEE modes produce 18 path
+variants. The complete production catalog contains 327 shader tasks in 50
+staged binaries. If an optional combination cannot initialize, a stored or
+preset request resolves through the same solver and NEE mode without RTXDI,
+the same solver with Uniform NEE, RTX PT with the requested NEE mode, and
+finally Uniform RTX PT. The selected recipe remains visible and the drawer
+reports the effective fallback. Only loss of the baseline Uniform RTX PT
+pipeline makes Path Tracing unavailable; preparation or recoverable failure
+presents the live Ray Marching fallback rather than freezing an old frame.
+
+The executable transport, direct reservoir, seed replay, and temporal GI
+checkpoints are independent first-party UVSR implementations, not copied,
+one-to-one, or certified NVIDIA SDK integrations. ReSTIR PT has no hybrid or
+geometric reconnection, and ReSTIR GI has no cross-pixel secondary-surface
+transform. See
+[Path Tracing Transport](path-tracing-transport.md) for the exact supported
+domain, preset boundary, and extension contract.
+
 ## Representation
 
 Representation owns UVSR's consumer neutral world space triangle hierarchy.
@@ -222,8 +286,10 @@ line reports unsupported, inactive, BLAS construction, TLAS construction,
 ready, or failed state and the current structure counts. Inactive is the
 subdued status itself rather than a second explanatory line.
 
-Construction is lazy until a ray-query consumer is selected. Initial loading
-builds one unique-mesh BLAS per presentation frame and then one coherent TLAS.
+Construction is lazy until a ray-query consumer is selected. Path Tracing is a
+continuous consumer and therefore keeps the representation ready. Initial
+loading builds one unique-mesh BLAS per presentation frame and then one
+coherent TLAS.
 Changing the hierarchy preference or BLAS policy rebuilds both levels; changing
 only the TLAS policy preserves BLAS allocations. Reset and invalidation release
 consumer bindings before replacing acceleration structures.
@@ -237,8 +303,29 @@ queries.
 
 ## Noise
 
-The Noise drawer defaults to **Spatiotemporal Blue**, **128x128**, and animated
-sampling. **Spatial White**, **Spatial Blue**, and **Spatiotemporal Blue** are
+The Noise drawer defaults to **Spatiotemporal Blue**, **128x128**, animated
+sampling, and **Accumulate Samples** off. Accumulate Samples is available in
+both lighting solutions. Successful scene-linear samples remain in a per-pixel
+mean, and pixels with more successes receive a progressively smaller retry
+probability driven by an unconditional frame serial rather than the optional
+Animate Samples phase. Any camera, geometry, material, light, environment,
+resolution, solution, solver, transport, scene, or shader change clears the
+history.
+
+For Ray Marching, a prepare shader creates the attempt mask before stochastic
+screen-space visibility, Heitz shadow, ray-traced flashlight, and ray-traced
+sky producers. Rejected pixels skip that guarded work, while required raster,
+deferred, anti-aliasing, and presentation passes continue. A matching resolve
+then commits only a finite attempted scene-linear result; rejected or invalid
+pixels preserve the prior mean and count exactly. Disabling accumulation
+bypasses the full-resolution Ray Marching accumulation history.
+
+With accumulation off, Path Tracing continuously replaces each pixel with a
+one-sample estimate. That is useful for immediate change feedback but can be
+very sparse in an environment-lit interior. Enable accumulation to converge a
+stationary view.
+
+**Spatial White**, **Spatial Blue**, and **Spatiotemporal Blue** are
 precomputed `R8_UNORM` textures available at **64x64**, **128x128**, **256x256**,
 and **512x512**. Tiles are anchored to the center of each effect's local
 dispatch, so clipped work at one screen edge follows the same mapping as clipped
@@ -301,10 +388,26 @@ occlusion only profile, or separate contrast/power axis.
 
 ## Denoising
 
-The Denoising drawer remains visible in every build, but processing is available
-only when UVSR is built with the optional NVIDIA NRD backend. A build without
-NRD places its short availability note after the signal groups so it cannot
-push the controls away from the drawer header. Each signal starts with
+The Denoising drawer remains visible in both lighting solutions. Ray Marching
+retains its AO, GI, Shadows, and Sky Visibility signal groups. Path Tracing
+replaces those groups with transport controls. **Raw (No Denoising)** and the
+explicitly biased **Firefly Clamp** plus threshold are executable. For RTX PT,
+**Stable Plane Resolve** exposes one to three clean-room spatial path layers:
+merged; primary-local versus indirect; or primary-local, diffuse suffix, and
+specular suffix. It becomes active only after a complete coherent signal cycle
+and falls back to the raw mean on unsupported formats, allocation, or resolve
+failure. ReSTIR PT/GI retain the selected preference but use raw output because
+their winning candidates do not yet persist a path-layer identity. The filter
+is spatial-only and intentionally biased; it is not NVIDIA Stable Planes
+parity. **Primary-Surface Replacement**, NRD ReBLUR, and NRD ReLAX remain
+disabled because no validated path-transport adapters exist. Inactive
+solution-specific values remain stored while their body is collapsed.
+
+For Ray Marching, NRD processing is available only when UVSR is built with the
+optional NVIDIA NRD backend and the selected signal provides its complete
+contract. A build without NRD places its short availability note after the
+signal groups so it cannot push the controls away from the drawer header. Each
+signal starts with
 **Method: None**, while its stored controls start at **Balanced**, **Half**, and
 16 history frames. Method selection is independent for each signal:
 
@@ -415,6 +518,16 @@ history and coordinate contracts.
 
 ## Sky
 
+Environment source, exposure, matching background, and Auto Exposure remain
+shared between lighting solutions. Path Tracing samples the raw infinite
+environment directly when a path misses. It does not currently use an
+environment next-event proposal. Path Tracing therefore hides the Ray
+Marching-only Ambient Fill and Ray Traced Sky Visibility groups rather than
+applying a second selective visibility technique to a complete path.
+**Show Environment Background** affects only a primary-ray miss in Path
+Tracing. Secondary misses retain environment radiance so hiding the visible
+background does not remove environment transport from reflected paths.
+
 **Auto Exposure** is its own animated subsection. It starts expanded like the
 Aliasing technique sections, defaults off, and shows only **Enable** while off.
 When enabled, a GPU luminance histogram meters the median scene luminance,
@@ -473,6 +586,16 @@ independently collapsible:
 - **Physically Based Lighting** selects Default or a concise information
   filter such as Surface Normals, Reflectance Response, or Specular Visibility.
 
+Path Tracing retains World and replaces the screen-space Visibility and
+deferred Physically Based Lighting groups with **Transport**. Transport selects
+Final Image, first-hit Albedo, Geometric Normal, Shading Normal, Sample Count,
+Retry Probability, Stable Plane, or Direct Reservoir. Stable Plane exposes only
+the shader's classification/debug data, not a reconstruction result. Indirect
+Reservoir displays the active ReSTIR PT seed-replay or ReSTIR GI checkpoint
+estimate and is disabled for RTX PT or when the selected subset's reuse policy
+is inactive. Direct Reservoir is meaningful only while its independent stage
+is active.
+
 World appearance changes and information filters are separate state. A
 physically based lighting filter keeps Visibility running so its history and
 traced data remain valid, but ordinary Visibility lighting does not contaminate
@@ -487,6 +610,11 @@ does not rewrite materials or recreate render passes inside the popup's click
 frame.
 
 ## Lights
+
+Physical scene-light and flashlight editing remains shared. Path Tracing hides
+Ray Marching-only selective visibility controls such as **Cast Shadows** and
+**Output Hit Distance** because complete transport traces light visibility as
+part of the estimator.
 
 The flashlight is one analytical physical spot light in scene submission and
 deferred PBR. Its two lobe beam profile shapes that exact light; it does not add
@@ -566,7 +694,8 @@ renderer.
 
 The detached Performance panel shows resolution, submitted triangles, frame
 time, and frame rate in one slash-separated line. Renderer identity remains in
-General. Amp draws the same opaque rounded inset frame around Performance and
+General. Path Tracing contributes an explicit Path Transport stage and
+solver/history resource rows while selected. Amp draws the same opaque rounded inset frame around Performance and
 Settings after their content, so every corner wedge is filled and Performance
 table lines terminate at the inner outline. Its collapsed summary is centered
 inside balanced vertical padding while the retained body alone fades toward
@@ -615,7 +744,8 @@ bar can cover Settings. When the complete result is
 longer than the input, a trailing details button deliberately opens a bounded,
 scrollable, selectable read only view. The catalog mirrors the current UI
 settings. Type a section prefix such as
-`representation.`, `noise.`, `visibility.`, `denoising.`, `anti-aliasing.taa.`, `anti-aliasing.fxaa.`,
+`lighting.`, `pathing.`, `representation.`, `noise.`, `visibility.`,
+`denoising.`, `anti-aliasing.taa.`, `anti-aliasing.fxaa.`,
 `anti-aliasing.cmaa2.`,
 `anti-aliasing.msaa.`, `debug.`, or `shadows.` and use completion to inspect the
 exact paths and accepted values. A `list` result uses `/` between each row's
@@ -677,6 +807,28 @@ mount position. Reset Color and confirm the beam returns to pure white.
 restores smoothly without crossing the surface. Hold a stationary trackpad
 touch while pressing V and confirm roll leveling completes; then confirm actual
 camera-look movement cancels it.
+
+Switch to Path Tracing and verify RTX PT over opaque and alpha-tested surfaces
+with Uniform, Power, and NEE-AT selection. Confirm NEE Candidates changes
+conventional direct-light work, RTXDI Reservoir Stages replaces primary NEE,
+and compatible previous-frame direct reuse survives only unchanged surfaces.
+ReSTIR PT must report seed-space replay, use the current path plus prior
+same-pixel and one-neighbor seeds, and disclose that geometric reconnection is
+unavailable. ReSTIR GI must report current plus prior same-pixel indirect
+checkpoints and disclose that spatial reconnection is unavailable. Confirm the
+Indirect Reservoir view follows the active subset and that combined estimates
+never become the next frame's persistent local record. Confirm Stable Plane
+Resolve executes in RTX PT with one, two, and three layers and that ReSTIR
+modes report raw fallback. Confirm SER, Primary-Surface Replacement, and path
+NRD remain disabled.
+Exercise the biased Firefly Clamp separately from the unclamped reference and
+verify every estimator-affecting change resets accumulation.
+
+With Ray Marching accumulation enabled, confirm the prepare mask reaches every
+guarded stochastic visibility producer before it dispatches and that a matching
+resolve alone advances the history write index. Rejected attempts and
+non-finite candidates must retain the prior mean and count; camera, light,
+geometry, and material motion must force an all-pixel restart.
 
 On an NRD build, exercise every supported method, quality, resolution, and
 history endpoint. Verify that a missing hit output or an active sky/sun Ratio

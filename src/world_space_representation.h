@@ -47,6 +47,11 @@ namespace uvsr
         uint32_t totalBlasCount = 0u;
         uint32_t instanceCount = 0u;
         uint64_t generation = 0u;
+        // Generation identifies allocation/binding changes. Content revision
+        // also advances when an in-place BLAS/TLAS update changes what rays
+        // can hit, so progressive consumers never retain stale samples merely
+        // because the acceleration-structure handles stayed the same.
+        uint64_t contentRevision = 0u;
         bool accelerationStructuresSupported = false;
         bool rayQueriesSupported = false;
     };

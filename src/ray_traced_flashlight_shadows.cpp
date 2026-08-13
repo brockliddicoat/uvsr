@@ -155,6 +155,7 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(2),
             nvrhi::BindingLayoutItem::Texture_SRV(3),
             nvrhi::BindingLayoutItem::Texture_SRV(4),
+            nvrhi::BindingLayoutItem::Texture_SRV(5),
             nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10),
             nvrhi::BindingLayoutItem::StructuredBuffer_SRV(11),
             nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
@@ -324,6 +325,7 @@ namespace uvsr
         const RayTracedMaterialVisibilityInputs& materialVisibility,
         nvrhi::rt::IAccelStruct* worldTlas,
         nvrhi::ITexture* noiseTexture,
+        nvrhi::ITexture* attemptMask,
         bool outputHitDistance)
     {
         if (!worldTlas || !materialVisibility || !noiseTexture ||
@@ -336,7 +338,8 @@ namespace uvsr
         const bool inputsMatch = m_BoundTlas == worldTlas &&
             SameInputs(m_BoundInputs, inputs) &&
             m_BoundMaterialVisibility == materialVisibility &&
-            m_BoundNoiseTexture == noiseTexture;
+            m_BoundNoiseTexture == noiseTexture &&
+            m_BoundAttemptMask == attemptMask;
         if (!inputsMatch)
         {
             ClearBindingSets();
@@ -344,6 +347,7 @@ namespace uvsr
             m_BoundInputs = {};
             m_BoundMaterialVisibility = {};
             m_BoundNoiseTexture = nullptr;
+            m_BoundAttemptMask = nullptr;
         }
 
         nvrhi::BindingSetHandle& selectedBindingSet = outputHitDistance
@@ -360,6 +364,7 @@ namespace uvsr
             nvrhi::BindingSetItem::Texture_SRV(2, inputs.material),
             nvrhi::BindingSetItem::Texture_SRV(3, inputs.normals),
             nvrhi::BindingSetItem::Texture_SRV(4, noiseTexture),
+            nvrhi::BindingSetItem::Texture_SRV(5, attemptMask),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
                 10, materialVisibility.geometryBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
@@ -388,6 +393,7 @@ namespace uvsr
         m_BoundInputs = inputs;
         m_BoundMaterialVisibility = materialVisibility;
         m_BoundNoiseTexture = noiseTexture;
+        m_BoundAttemptMask = attemptMask;
         return true;
     }
 
@@ -404,10 +410,12 @@ namespace uvsr
             nvrhi::ITexture* noiseTexture,
             uint32_t samplingPhase,
             float rayBiasMeters,
-            bool outputHitDistance)
+            bool outputHitDistance,
+            const LightingSampleSchedule& sampleSchedule)
     {
         const bool baseInputsPresent = m_Supported && commandList &&
-            materialVisibility && worldTlas && light && noiseTexture;
+            materialVisibility && worldTlas && light && noiseTexture &&
+            sampleSchedule;
         if (!baseInputsPresent ||
             (outputHitDistance && !m_HitDistanceSupported) ||
             !FlashlightBeamProfileIsValid(beamProfile) ||
@@ -465,6 +473,7 @@ namespace uvsr
                 materialVisibility,
                 worldTlas,
                 noiseTexture,
+                sampleSchedule.attemptMask,
                 outputHitDistance))
         {
             if (!m_ReportedInvalidInput)
@@ -499,6 +508,8 @@ namespace uvsr
             : 1u;
         constants.noisePattern =
             static_cast<uint32_t>(noiseSettings.pattern);
+        constants.attemptMaskEnabled =
+            sampleSchedule.enabled && stochastic ? 1u : 0u;
         commandList->writeBuffer(
             m_ConstantBuffer,
             &constants,
@@ -538,6 +549,7 @@ namespace uvsr
         m_BoundInputs = {};
         m_BoundMaterialVisibility = {};
         m_BoundNoiseTexture = nullptr;
+        m_BoundAttemptMask = nullptr;
     }
 
     void RayTracedFlashlightShadowPass::ClearBindingSets()

@@ -351,7 +351,7 @@ namespace
         const std::string_view generalDrawer = ExtractSection(
             viewer,
             "void DrawGeneralDrawer(float settingsControlWidth)",
-            "void DrawMaterialDrawer(float settingsControlWidth)",
+            "void DrawPathingDrawer(float settingsControlWidth)",
             "ordinary General drawer");
         const std::string compactGeneralDrawer = Compact(generalDrawer);
         RequireOrdered(
@@ -1035,7 +1035,7 @@ namespace
         const std::string_view nrdDisabledFooter = ExtractSection(
             denoising,
             "#if !UVSR_WITH_NRD",
-            "EndDrawerBody();",
+            "EndAnimatedToggleRegion();",
             "NRD-disabled Denoising footer");
         RequireExactStrings(
             nrdDisabledFooter,
@@ -1049,10 +1049,12 @@ namespace
                 "ImGui::TextDisabled(",
                 "\"NRD is not actually included in this build\");",
                 "#endif",
+                "EndAnimatedToggleRegion();",
+                "\"##PathTracingDenoisingBody\"",
                 "EndDrawerBody();"
             },
-            "the exact NRD-disabled message remains the final Denoising "
-            "drawer content");
+            "the exact NRD-disabled message remains the final Ray Marching "
+            "Denoising content before the Path Tracing body");
         for (const std::string_view path : {
                 std::string_view("denoising.ao.method"),
                 std::string_view("denoising.gi.method"),
@@ -1189,7 +1191,7 @@ namespace
             "old table rolls up while the new table rolls down without a "
             "transient sibling gap");
         Require(
-            CountOccurrences(statistics, "case StatisticsEffect::") == 14u,
+            CountOccurrences(statistics, "case StatisticsEffect::") == 15u,
             "the keyed Performance table exchange must retain every timing "
             "effect.");
 
@@ -1399,6 +1401,7 @@ namespace
                 "Complete Renderer",
                 "Scene Setup",
                 "Geometry",
+                "Path Transport",
                 "Direct Lighting",
                 "Screen Space Visibility",
                 "Directional Shadows",
@@ -2246,7 +2249,8 @@ namespace
             {
                 "\"World##Debug\"",
                 "\"Visibility##Debug\"",
-                "\"Physically Based Lighting##Debug\""
+                "\"Physically Based Lighting##Debug\"",
+                "\"Transport##Debug\""
             },
             "effect-grouped Debug drawer");
 
@@ -2301,32 +2305,38 @@ namespace
                 std::string_view("m_ui.WhiteWorld"),
                 std::string_view(
                     "m_ui.ScreenSpaceVisibility.debugView"),
-                std::string_view("m_ui.LightingDebugView") })
+                std::string_view("m_ui.LightingDebugView"),
+                std::string_view("m_ui.PathTracing.debugView") })
         {
             RequireContains(debug, state, "composable Debug state");
         }
         Require(
-            CountOccurrences(debug, "BeginAnimatedTreeNode(") == 3u,
-            "Debug effects must retain three animated disclosures.");
+            CountOccurrences(debug, "BeginAnimatedTreeNode(") == 4u,
+            "Debug effects must retain the shared world disclosure, the two "
+            "Ray Marching disclosures, and the Path Tracing disclosure.");
         Require(
-            CountOccurrences(debug, "BeginRoundedCombo(") == 3u &&
+            CountOccurrences(debug, "BeginRoundedCombo(") == 4u &&
                 CountOccurrences(
                     debug,
-                    "DrawDeferredDropdownOption(") == 3u &&
-                CountOccurrences(debug, "ImGui::EndCombo();") == 3u,
-            "Debug effects must use exactly three deferred rounded combos.");
+                    "DrawDeferredDropdownOption(") == 4u &&
+                CountOccurrences(debug, "ImGui::EndCombo();") == 4u,
+            "Debug effects must use exactly four deferred rounded combos.");
         Require(
             CountOccurrences(debug, "for (int index = 0;") == 3u &&
-                CountOccurrences(debug, "[this, candidate]()") == 3u,
-            "each Debug combo must enumerate candidates and capture the typed "
-            "candidate by value for deferred application.");
+                CountOccurrences(debug, "[this, candidate]()") == 3u &&
+                CountOccurrences(
+                    debug,
+                    "for (const PathTracingDebugView view : Views)") == 1u &&
+                CountOccurrences(debug, "[this, view]()") == 1u,
+            "each Debug combo must enumerate its typed candidates and capture "
+            "the candidate by value for deferred application.");
         RequireAbsent(
             debug,
             "ImGui::Combo(",
             "raw immediate Debug combo mutation");
         Require(
-            CountOccurrences(debug, "ImGuiTreeNodeFlags_DefaultOpen") == 4u,
-            "Debug and all three effect groups must start expanded.");
+            CountOccurrences(debug, "ImGuiTreeNodeFlags_DefaultOpen") == 5u,
+            "Debug and all four effect groups must start expanded.");
         RequireContains(
             debug,
             "every effect-specific debug view.",
@@ -2821,8 +2831,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 194u,
-            "Settings command catalog must contain exactly 194 entries.");
+        Require(entries.size() == 209u,
+            "Settings command catalog must contain exactly 209 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -2836,8 +2846,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 190u,
-            "Settings command catalog must contain exactly 190 values.");
+        Require(valueCount == 205u,
+            "Settings command catalog must contain exactly 205 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -2963,6 +2973,11 @@ namespace
             "bool DispatchRepresentationCommandValue(",
             "bool DispatchNoiseCommandValue(",
             "Representation command dispatcher");
+        const std::string_view pathingDispatcher = ExtractSection(
+            viewer,
+            "bool DispatchPathingCommandValue(",
+            "bool DispatchRepresentationCommandValue(",
+            "Pathing command dispatcher");
         const std::string_view noiseDispatcher = ExtractSection(
             viewer,
             "bool DispatchNoiseCommandValue(",
@@ -2991,12 +3006,16 @@ namespace
                 "General",
                 ExtractSection(viewer,
                     "bool DispatchGeneralCommandValue(",
-                    "bool DispatchRepresentationCommandValue(",
+                    "bool DispatchPathingCommandValue(",
                     "General command dispatcher")
             },
             {
                 "Representation",
                 representationDispatcher
+            },
+            {
+                "Pathing",
+                pathingDispatcher
             },
             {
                 "Noise",
@@ -3067,9 +3086,12 @@ namespace
                     const std::string property = entry.name.substr(
                         propertySeparator + 1u);
                     Require(
-                        ContainsQuotedLiteral(dispatcher->second, prefix) &&
-                            ContainsQuotedLiteral(
-                                dispatcher->second, property),
+                        ContainsQuotedLiteral(
+                            dispatcher->second, entry.name) ||
+                            (ContainsQuotedLiteral(
+                                dispatcher->second, prefix) &&
+                                ContainsQuotedLiteral(
+                                    dispatcher->second, property)),
                         "The Denoising dispatcher is missing " + entry.name);
                 }
                 else
@@ -4886,7 +4908,7 @@ namespace
                 "const float disabledPresentationAmount =",
                 "SmoothUiDisabledPresentation(",
                 "ImGuiStyleVar_Alpha",
-                "easedAmount",
+                "layoutAlpha",
                 "g_UiVisualTokens.controlDisabledAlpha",
                 "disabledPresentationAmount",
                 "ImGuiStyleVar_DisabledAlpha",
@@ -4899,6 +4921,59 @@ namespace
             },
             "toggle regions use the same 280 ms presentation amount while "
             "blocking interaction immediately throughout opening and closing");
+        RequireContains(
+            toggleRegion,
+            "UiToggleRegionVisualMode visualMode =\n"
+                "            UiToggleRegionVisualMode::FadeWithHeight",
+            "ordinary toggle regions retain height-coupled fading by default");
+        RequireContains(
+            Compact(toggleRegion),
+            "visualMode==UiToggleRegionVisualMode::ClipDuringCollapse&&"
+                "!state.targetVisible?1.f:easedAmount;",
+            "whole drawers remain opaque while their retained height clips closed");
+        RequireContains(
+            Compact(toggleRegion),
+            "needsInitialMeasurement?0.f:layoutAlpha",
+            "initial whole-drawer measurement remains visually hidden");
+        const std::string_view settingsDrawers = ExtractSection(
+            viewer,
+            "DrawGeneralDrawer(settingsControlWidth);",
+            "constexpr float ActionButtonCount = 4.f;",
+            "whole-drawer lighting-solution gates");
+        Require(
+            CountOccurrences(
+                settingsDrawers,
+                "UiToggleRegionVisualMode::ClipDuringCollapse") == 4u,
+            "exactly the four whole ray-marching drawers must clip rather than "
+            "fade during lighting-solution collapse.");
+        for (const std::string_view drawerId : {
+                std::string_view("##DiffuseDrawerVisibility"),
+                std::string_view("##BuffersDrawerVisibility"),
+                std::string_view("##AliasingDrawerVisibility"),
+                std::string_view("##ShadowsDrawerVisibility") })
+        {
+            const size_t drawerPosition = settingsDrawers.find(drawerId);
+            Require(
+                drawerPosition != std::string_view::npos,
+                std::string(drawerId) + " must retain its stable whole-drawer ID.");
+            if (drawerPosition == std::string_view::npos)
+                continue;
+            const std::string_view call = settingsDrawers.substr(
+                drawerPosition,
+                std::min<size_t>(260u, settingsDrawers.size() - drawerPosition));
+            RequireContains(
+                Compact(call),
+                "m_ui.Lighting==LightingSolution::RayMarching,"
+                    "UiToggleRegionOwner::Settings,"
+                    "UiToggleRegionVisualMode::ClipDuringCollapse",
+                std::string(drawerId) + " ray-marching clip gate");
+        }
+        RequireContains(
+            Compact(settingsDrawers),
+            "if(m_ui.Lighting==LightingSolution::PathTracing&&"
+                "!m_ui.AccumulateSamples){ImGui::TextDisabled("
+                "\"One-samplerefresh:enableaccumulationtoconverge.\");}",
+            "Path Tracing explains the intentionally noisy non-accumulating mode");
         RequireContains(
             Compact(toggleRegion),
             "constbooltransitionActive=targetChangedThisFrame||"
@@ -5256,9 +5331,10 @@ namespace
         Require(
             CountOccurrences(
                 viewer,
-                "BeginVisuallyDisabledUiScope(") == 3u,
-            "the visual disabled helper has one definition and exactly the two "
-            "effective-sample slider call sites");
+                "BeginVisuallyDisabledUiScope(") == 7u,
+            "the visual disabled helper has one definition, two effective-"
+            "sample slider call sites, and four capability-gated Path Tracing "
+            "call sites");
 
         const std::string_view checkboxOverride = ExtractSection(
             imguiUiOverride,
@@ -7274,11 +7350,12 @@ namespace
         const std::string_view generalDrawer = ExtractSection(
             viewer,
             "void DrawGeneralDrawer(float settingsControlWidth)",
-            "void DrawMaterialDrawer(float settingsControlWidth)",
+            "void DrawPathingDrawer(float settingsControlWidth)",
             "General drawer");
         RequireOrdered(
             generalDrawer,
             {
+                "\"Lighting Solution\"",
                 "\"Graphics Adapter\"",
                 "\"Adaptive Sync\"",
                 "\"Camera Mode\"",
@@ -7291,9 +7368,10 @@ namespace
         Require(
             CountOccurrences(
                 generalDrawer,
-                "DrawDeferredDropdownOption(") == 5u,
-            "General must keep adapter, Adaptive Sync, camera, location, and "
-            "scene selection on the deferred dropdown path.");
+                "DrawDeferredDropdownOption(") == 6u,
+            "General must keep Lighting Solution, adapter, Adaptive Sync, "
+            "camera, location, and scene selection on the deferred dropdown "
+            "path.");
         RequireOrdered(
             generalDrawer,
             {

@@ -21,6 +21,7 @@ Texture2D<float> t_Depth : register(t1);
 Texture2D<float4> t_GBufferMaterial : register(t2);
 Texture2D<float4> t_GBufferNormals : register(t3);
 Texture2DArray<float> t_Noise : register(t4);
+Texture2D<uint> t_AttemptMask : register(t5);
 
 RWTexture2D<float> u_Visibility : register(u0);
 #if OUTPUT_HIT_DISTANCE
@@ -246,6 +247,11 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
         return;
     const int2 pixelPosition =
         SkyVisibilityPixelPosition(dispatchPosition);
+    if (g_SkyVisibility.attemptMaskEnabled != 0u &&
+        t_AttemptMask[pixelPosition] == 0u)
+    {
+        return;
+    }
     const float4 normalChannels = t_GBufferNormals[pixelPosition];
     if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
     {

@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 105,106 non-blank source lines.
+**First-Party Lines of Code:** 115,620 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,466 non-blank source lines.
 
-**Total Lines of Code:** 492,572 non-blank source lines.
+**Total Lines of Code:** 503,086 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -30,8 +30,16 @@ with `tools/update_readme_line_counts.cmd --write`.
 - **Visibility Bitmask Diffuse Lighting:** A 32-sector mask converts finite-thickness
   screen-space samples into ambient visibility and one-bounce diffuse
   transport; newly claimed sectors prevent double-counting.
-- **DXR Implementation:** Material-aware inline ray queries drive sun, sky, and
-  flashlight visibility with alpha-tested cutouts.
+- **Shared DXR Transport:** Material-aware inline ray queries drive selective
+  sun, sky, and flashlight visibility plus zero-raster complete path transport
+  through the same alpha-tested world representation.
+- **Configurable Path Tracing:** Executable RTX PT plus first-party clean-room
+  ReSTIR PT seed-replay and ReSTIR GI temporal-checkpoint subsets share one
+  Lambert/GGX transport core with NEE, emissive and environment paths,
+  progressive accumulation, an optional direct reservoir, a clean-room
+  spatial path-layer resolve for RTX PT, and transport debug views. The
+  subsets do not claim NVIDIA parity, geometric reconnection, or a spatial GI
+  transform.
 - **Ratio Estimators:** Correlated visible and unshadowed RGB responses reduce
   current-frame ray-traced sun-shadow variance; sky visibility separately uses
   a 1-64-sample cosine-hemisphere visible-ray ratio for environment lighting.
@@ -58,9 +66,9 @@ with `tools/update_readme_line_counts.cmd --write`.
   Material and Interface drawers, deferred dropdowns, exact-input sliders, and
   slash commands share one animated presentation; Ogg keeps stock ImGui
   behavior and immediate endpoints.
-- **Compact Runtime Surface:** The build retains 306 first-party shader
-  permutations, thirteen Settings drawers, and 194 commands without dormant
-  experiments.
+- **Compact Runtime Surface:** The build retains 327 first-party shader
+  permutations in 50 staged shader binaries, fourteen Settings drawers, and
+  209 commands without dormant experiments.
 - **Five Packaged Scenes:** Sponza Decorated, Sponza Plain, Bistro Interior,
   San Miguel, and Classroom Interior ship ready-to-run; Bistro and San Miguel
   copy glTF buffer views byte-for-byte into standard external buffers below
@@ -68,11 +76,6 @@ with `tools/update_readme_line_counts.cmd --write`.
 - **Extensive Documentation:** The [engineering library](#engineering-documentation)
   records architecture, equations, validation, provenance, negative results,
   and restoration boundaries.
-
-## Coming Soon
-
-No renderer feature is currently announced for integration. Local experiments
-remain provisional until they are verified and accepted.
 
 ## Build and Run
 
@@ -101,6 +104,9 @@ build variants and the complete validation workflow are documented below.
 - [PBR Foundation](docs/pbr-foundation.md) defines material inputs, G-buffer
   packing, lighting equations, IBL, contribution gates, validation, and
   extension points.
+- [Path Tracing Transport](docs/path-tracing-transport.md) defines the supported
+  complete-transport boundary, shared integrator, solver policies, accumulation,
+  history invalidation, denoising, capability gates, and extension rules.
 - [Screen Space Visibility](docs/screen-space-visibility.md) documents the
   shared diffuse traversal, estimators, reconstruction, memory contracts,
   supported quality profiles, and validation boundary.

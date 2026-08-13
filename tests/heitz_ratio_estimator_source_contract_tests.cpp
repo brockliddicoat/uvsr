@@ -175,13 +175,18 @@ int main(int argc, char** argv)
             "constMaterialConstantsmaterial="
                 "t_RayMaterials[geometry.materialIndex];",
             "if(material.domain!=MaterialDomain_AlphaTested)returnfalse;",
+            "constbooluseOpacityTexture="
+                "(material.flags&MaterialFlags_UseOpacityTexture)!=0&&"
+                "material.opacityTextureIndex>=0;",
+            "constbooluseBaseAlphaTexture=!useOpacityTexture&&"
+                "(material.flags&MaterialFlags_UseBaseOrDiffuseTexture)!=0&&"
+                "material.baseOrDiffuseTextureIndex>=0;",
             "floatopacity=material.opacity;",
-            "MaterialFlags_UseOpacityTexture",
+            "if(useOpacityTexture)",
             "NonUniformResourceIndex(material.opacityTextureIndex)",
             "opacity*=opacityTexture.SampleLevel(",
             ").r;",
-            "elseif((material.flags&"
-                "MaterialFlags_UseBaseOrDiffuseTexture)!=0",
+            "elseif(useBaseAlphaTexture)",
             "NonUniformResourceIndex(material.baseOrDiffuseTextureIndex)",
             "opacity*=baseTexture.SampleLevel(",
             ").a;",
@@ -340,12 +345,27 @@ int main(int argc, char** argv)
     RequireContains(
         pass,
         "nvrhi::BindingLayoutItem::Texture_SRV(7),"
+            "nvrhi::BindingLayoutItem::Texture_SRV(8),"
             "nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10),"
             "nvrhi::BindingLayoutItem::StructuredBuffer_SRV(11),"
             "nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),"
             "nvrhi::BindingLayoutItem::Sampler(0),"
             "nvrhi::BindingLayoutItem::Texture_UAV(0)",
         "material-aware base output binding layout");
+    RequireContains(
+        shader,
+        "if(g_Heitz.attemptMaskEnabled!=0u&&"
+            "t_AttemptMask[pixelPosition]==0u){return;}",
+        "stochastic attempt mask must exit before G-buffer and ray work");
+    RequireContains(
+        pass,
+        "constants.attemptMaskEnabled="
+            "sampleSchedule.enabled&&stochastic?1u:0u;",
+        "every stochastic soft-sun mode must consume the attempt mask");
+    RequireContains(
+        pass,
+        "m_BoundAttemptMask!=attemptMask",
+        "attempt mask resource identity binding-cache invalidation");
     RequireContains(
         pass,
         "pipelineDescription.bindingLayouts={"

@@ -225,10 +225,15 @@ int main(int argc, char** argv)
         "PBR information filters must not disable Visibility execution");
     RequireContains(
         rendererSource,
-        "constboolrunscreenspacevisibility="
-            "screenspacevisibilityrequested&&bool(visibilitynoise);",
-        "Visibility execution must fail closed only when its resolved noise "
-        "asset is unavailable");
+        "constboolscreenspacevisibilityready="
+            "screenspacevisibilityrequested&&"
+            "m_screenspacevisibilitypass&&"
+            "m_screenspacevisibilitypass->arepipelinesready()&&"
+            "bool(visibilitynoise);"
+            "constboolrunscreenspacevisibility="
+            "screenspacevisibilityready;",
+        "Visibility execution must fail closed when its pass, pipelines, or "
+        "resolved noise asset are unavailable");
     RequireContains(
         compositeShader,
         "if(g_visibility.visibilitydebugview==0u&&"
@@ -252,10 +257,12 @@ int main(int argc, char** argv)
         "ordinary Visibility composition under a PBR filter");
     RequireContains(
         rendererSource,
-        "if(m_ui.lightingdebugview==pbrlightingdebugview::none&&"
+        "if(!pathtransportactive&&"
+            "m_ui.lightingdebugview==pbrlightingdebugview::none&&"
             "!m_ui.hasactivescreenspacevisibilitydebugconsumer()&&"
             "m_ui.showenvironmentbackground&&",
-        "information filters must use a black environment background");
+        "information filters must use a black environment background and only "
+        "a successful path-transport dispatch may suppress the raster background");
     RequireContains(
         compositeShader,
         "u_output[pixel]=g_visibility.visibilitydebugview==0u?"

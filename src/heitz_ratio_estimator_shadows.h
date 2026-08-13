@@ -1,6 +1,7 @@
 #pragma once
 
 #include "directional_shadow_settings.h"
+#include "lighting_accumulation_pass.h"
 #include "ray_traced_material_visibility.h"
 
 #include <nvrhi/nvrhi.h>
@@ -77,7 +78,8 @@ namespace uvsr
             const NoiseSettings& noiseSettings,
             nvrhi::ITexture* noiseTexture,
             uint32_t samplingPhase,
-            float sceneDiagonal);
+            float sceneDiagonal,
+            const LightingSampleSchedule& sampleSchedule);
 
         void ResetBindingCache();
 
@@ -98,6 +100,7 @@ namespace uvsr
         HeitzRatioEstimatorShadowInputs m_BoundInputs;
         RayTracedMaterialVisibilityInputs m_BoundMaterialVisibility;
         nvrhi::ITexture* m_BoundNoiseTexture = nullptr;
+        nvrhi::ITexture* m_BoundAttemptMask = nullptr;
         bool m_Supported = false;
         bool m_HitDistanceSupported = false;
         bool m_ReportedInvalidInput = false;
@@ -111,6 +114,7 @@ namespace uvsr
             const RayTracedMaterialVisibilityInputs& materialVisibility,
             nvrhi::rt::IAccelStruct* worldTlas,
             nvrhi::ITexture* noiseTexture,
+            nvrhi::ITexture* attemptMask,
             bool outputHitDistance);
         void ClearBindingSets();
     };
